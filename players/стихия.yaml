@@ -386,7 +386,7 @@ spellcasting:
   spell_yaml_paths:
   - ./Spells
   casting_ability: wis
-  save_dc_formula: 8 + prof + casting_mod + 1
+  save_dc_formula: 8 + prof + casting_mod
   spell_attack_formula: prof + casting_mod + 1
   cantrips:
     max: 5

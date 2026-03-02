@@ -118,6 +118,161 @@ class PlayerFeatureExecutionTests(unittest.TestCase):
         )
         self.assertEqual((compiled_bonus.get("uses") or {}).get("pool"), "tyrs_circlet_blessing")
 
+    def test_magic_item_ability_override_and_defenses_apply_on_normalize(self):
+        app = self._new_app()
+        app._magic_items_registry_payload = lambda: {
+            "gauntlets_of_lesser_hill_giant_strength": {
+                "id": "gauntlets_of_lesser_hill_giant_strength",
+                "requires_attunement": True,
+                "grants": {"ability_overrides": {"str": 17}},
+            },
+            "grom": {
+                "id": "grom",
+                "requires_attunement": True,
+                "grants": {
+                    "defenses": {"damage_resistances": ["lightning"]},
+                    "save_bonuses": {"con": 1},
+                },
+            },
+        }
+        normalized = app._normalize_player_profile(
+            {
+                "name": "стихия",
+                "abilities": {"str": 10, "con": 16},
+                "defenses": {"resistances": []},
+                "magic_items": {
+                    "attunement_slots": 3,
+                    "equipped": ["gauntlets_of_lesser_hill_giant_strength", "grom"],
+                    "attuned": ["gauntlets_of_lesser_hill_giant_strength", "grom"],
+                },
+            },
+            "stikhiya",
+        )
+        self.assertEqual(int((normalized.get("abilities") or {}).get("str") or 0), 17)
+        self.assertIn("lightning", (normalized.get("defenses") or {}).get("resistances") or [])
+        self.assertEqual(int(((normalized.get("defenses") or {}).get("save_bonuses") or {}).get("con") or 0), 1)
+
+    def test_magic_item_spell_save_dc_bonus_applies(self):
+        app = self._new_app()
+        app._magic_items_registry_payload = lambda: {
+            "matteh": {
+                "id": "matteh",
+                "requires_attunement": True,
+                "grants": {
+                    "modifiers": [
+                        {"id": "matteh_spell_save_dc_bonus", "target": "spell_save_dc", "effect": "spell_save_dc_bonus", "amount": 1}
+                    ]
+                },
+            }
+        }
+        normalized = app._normalize_player_profile(
+            {
+                "name": "Johnny",
+                "abilities": {"wis": 18},
+                "proficiency": {"bonus": 4},
+                "spellcasting": {"casting_ability": "wis", "save_dc_formula": "8 + prof + casting_mod"},
+                "magic_items": {
+                    "attunement_slots": 3,
+                    "equipped": ["matteh"],
+                    "attuned": ["matteh"],
+                },
+            },
+            "johnny",
+        )
+        self.assertEqual(app._compute_spell_save_dc(normalized), 17)
+
+    def test_requires_attunement_magic_item_does_not_apply_when_not_attuned(self):
+        app = self._new_app()
+        app._magic_items_registry_payload = lambda: {
+            "gauntlets_of_strength": {
+                "id": "gauntlets_of_strength",
+                "requires_attunement": True,
+                "grants": {"ability_overrides": {"str": 19}},
+            }
+        }
+        normalized = app._normalize_player_profile(
+            {
+                "name": "Dorian",
+                "abilities": {"str": 12},
+                "magic_items": {
+                    "equipped": ["gauntlets_of_strength"],
+                    "attuned": [],
+                },
+            },
+            "dorian",
+        )
+        self.assertEqual(int((normalized.get("abilities") or {}).get("str") or 0), 12)
+
+    def test_nature_speaker_necklace_pool_spell_requires_equipped_and_attuned(self):
+        app = self._new_app()
+        necklace_path = Path("Items/Magic_Items/nature_speaker_necklace.yaml")
+        self.assertTrue(necklace_path.exists(), "Expected magic item YAML missing: nature_speaker_necklace.yaml")
+        necklace = yaml.safe_load(necklace_path.read_text(encoding="utf-8"))
+        app._magic_items_registry_payload = lambda: {"nature_speaker_necklace": necklace}
+        base_profile = {
+            "name": "Johnny",
+            "resources": {
+                "pools": [
+                    {
+                        "id": "nature_speaker_necklace_speak_with_plants",
+                        "label": "Nature Speaker Necklace (Speak with Plants)",
+                        "current": 1,
+                        "max_formula": "1",
+                        "reset": "long_rest",
+                    }
+                ]
+            },
+        }
+        equipped_attuned = {
+            **base_profile,
+            "magic_items": {"equipped": ["nature_speaker_necklace"], "attuned": ["nature_speaker_necklace"]},
+        }
+        spells = app._player_pool_granted_spells(equipped_attuned)
+        self.assertTrue(any(str(entry.get("spell") or "") == "speak-with-plants" for entry in spells))
+
+        equipped_not_attuned = {
+            **base_profile,
+            "magic_items": {"equipped": ["nature_speaker_necklace"], "attuned": []},
+        }
+        blocked_spells = app._player_pool_granted_spells(equipped_not_attuned)
+        self.assertFalse(any(str(entry.get("spell") or "") == "speak-with-plants" for entry in blocked_spells))
+
+    def test_big_ass_axe_plus_1_resolves_damage_and_magic_bonus_from_item_yaml(self):
+        app = self._new_app()
+        axe_path = Path("Items/Magic_Items/big_ass_axe_plus_1.yaml")
+        self.assertTrue(axe_path.exists(), "Expected magic item YAML missing: big_ass_axe_plus_1.yaml")
+        item_data = yaml.safe_load(axe_path.read_text(encoding="utf-8"))
+        app._items_registry_payload = lambda: {"weapons": {"big_ass_axe_plus_1": item_data}}
+        normalized = app._normalize_player_profile(
+            {
+                "name": "Malagrou",
+                "abilities": {"str": 18},
+                "attacks": {"weapons": [{"id": "big_ass_axe_plus_1"}]},
+            },
+            "malagrou",
+        )
+        weapons = ((normalized.get("attacks") or {}).get("weapons") or [])
+        self.assertEqual(len(weapons), 1)
+        weapon = weapons[0]
+        self.assertEqual(str(weapon.get("name") or ""), "Big Ass Axe +1")
+        self.assertEqual(int(weapon.get("magic_bonus") or 0), 1)
+        self.assertEqual(str(((weapon.get("one_handed") or {}).get("damage_formula") or "")), "2d12 + 1 + str_mod")
+
+    def test_magic_item_with_empty_grants_is_ignored_without_errors(self):
+        app = self._new_app()
+        app._magic_items_registry_payload = lambda: {
+            "evil_eye": {"id": "evil_eye", "requires_attunement": True}
+        }
+        normalized = app._normalize_player_profile(
+            {
+                "name": "Vicnor",
+                "features": [],
+                "magic_items": {"equipped": ["evil_eye"], "attuned": ["evil_eye"]},
+            },
+            "vicnor",
+        )
+        self.assertEqual(normalized.get("features"), [])
+
     def test_recover_spell_slots_handler_respects_budget_and_caps(self):
         app = self._new_app()
         saved = {}

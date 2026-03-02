@@ -1,6 +1,7 @@
 format_version: 1
 id: bardiche_plus_2
 name: Bardiche (+2)
+requires_attunement: true
 type: weapon
 category: martial_melee
 attack_bonus: 2
@@ -10,6 +11,12 @@ damage:
     formula: 1d12 + 2
     type: force
 properties: [cleave, heavy, reach, two_handed]
+grants:
+  modifiers:
+    - id: bardiche_spell_save_dc_bonus
+      target: spell_save_dc
+      effect: spell_save_dc_bonus
+      amount: 1
 riders:
   - id: bardiche_push_on_hit
     trigger: on_hit

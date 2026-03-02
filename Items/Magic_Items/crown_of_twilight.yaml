@@ -1,0 +1,7 @@
+id: crown_of_twilight
+name: The Crown of Twilight
+requires_attunement: true
+grants:
+  defenses:
+    damage_immunities:
+      - radiant

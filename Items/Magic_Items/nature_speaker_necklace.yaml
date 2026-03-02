@@ -1,0 +1,11 @@
+id: nature_speaker_necklace
+name: Nature Speaker Necklace
+requires_attunement: true
+grants:
+  spells:
+    casts:
+      - spell: speak-with-plants
+        action_type: action
+        consumes:
+          pool: nature_speaker_necklace_speak_with_plants
+          cost: 1

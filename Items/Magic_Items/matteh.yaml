@@ -1,0 +1,9 @@
+id: matteh
+name: Matteh
+requires_attunement: true
+grants:
+  modifiers:
+    - id: matteh_spell_save_dc_bonus
+      target: spell_save_dc
+      effect: spell_save_dc_bonus
+      amount: 1
