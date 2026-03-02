@@ -2,7 +2,7 @@
 
 ## Primary format: one file per weapon
 
-Use one YAML file per weapon in this directory. The filename should match the id:
+Use one YAML file per **mundane** weapon in this directory. The filename should match the id:
 
 - `longsword.yaml` → `id: longsword`
 
@@ -52,7 +52,7 @@ They can coexist here and are ignored by the item loader when building weapon re
 
 ## How to add a new weapon
 
-1. Create `Items/Weapons/<weapon_id>.yaml`.
+1. For mundane weapons, create `Items/Weapons/<weapon_id>.yaml`. For magic weapons, use `Items/Magic_Items/<weapon_id>.yaml`.
 2. Set `id: <weapon_id>` in the file.
 3. Add fields (`name`, `category`, `damage`, `properties`, etc.) as needed.
 4. Restart/refresh the app so the registry cache sees the new file.

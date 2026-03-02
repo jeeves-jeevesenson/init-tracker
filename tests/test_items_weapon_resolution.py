@@ -68,6 +68,50 @@ class ItemsWeaponResolutionTests(unittest.TestCase):
 
             self.assertIn("dagger", second["weapons"])
 
+    def test_items_registry_loads_weapon_shaped_magic_items(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            items_dir = Path(tmp) / "Items"
+            weapons_dir = items_dir / "Weapons"
+            armor_dir = items_dir / "Armor"
+            magic_dir = items_dir / "Magic_Items"
+            weapons_dir.mkdir(parents=True, exist_ok=True)
+            armor_dir.mkdir(parents=True, exist_ok=True)
+            magic_dir.mkdir(parents=True, exist_ok=True)
+            (magic_dir / "inazuma.yaml").write_text(
+                "id: inazuma\ntype: weapon\nname: Inazuma\ndamage:\n  one_handed:\n    formula: 1d8\n    type: slashing\n",
+                encoding="utf-8",
+            )
+
+            with mock.patch.object(self.app, "_resolve_items_dir", return_value=items_dir):
+                registry = self.app._items_registry_payload()
+
+            self.assertIn("inazuma", registry["weapons"])
+            self.assertEqual(registry["weapons"]["inazuma"]["name"], "Inazuma")
+
+    def test_items_registry_prefers_weapons_directory_over_magic_items_on_duplicate_id(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            items_dir = Path(tmp) / "Items"
+            weapons_dir = items_dir / "Weapons"
+            armor_dir = items_dir / "Armor"
+            magic_dir = items_dir / "Magic_Items"
+            weapons_dir.mkdir(parents=True, exist_ok=True)
+            armor_dir.mkdir(parents=True, exist_ok=True)
+            magic_dir.mkdir(parents=True, exist_ok=True)
+            (weapons_dir / "inazuma.yaml").write_text(
+                "id: inazuma\ntype: weapon\nname: Inazuma Weapon Dir\ndamage:\n  one_handed:\n    formula: 1d8\n    type: slashing\n",
+                encoding="utf-8",
+            )
+            (magic_dir / "inazuma.yaml").write_text(
+                "id: inazuma\ntype: weapon\nname: Inazuma Magic Dir\ndamage:\n  one_handed:\n    formula: 2d6\n    type: lightning\n",
+                encoding="utf-8",
+            )
+
+            with mock.patch.object(self.app, "_resolve_items_dir", return_value=items_dir):
+                registry = self.app._items_registry_payload()
+
+            self.assertEqual(registry["weapons"]["inazuma"]["name"], "Inazuma Weapon Dir")
+            self.assertEqual(registry["weapons"]["inazuma"]["damage"]["one_handed"]["formula"], "1d8")
+
     def test_normalize_player_weapon_resolves_item_fields_fill_missing_only(self):
         registry = {
             "weapons": {
