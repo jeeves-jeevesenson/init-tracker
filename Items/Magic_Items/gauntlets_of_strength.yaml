@@ -1,0 +1,6 @@
+id: gauntlets_of_strength
+name: Gauntlets of Strength
+requires_attunement: true
+grants:
+  ability_overrides:
+    str: 19

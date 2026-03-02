@@ -118,6 +118,69 @@ class PlayerFeatureExecutionTests(unittest.TestCase):
         )
         self.assertEqual((compiled_bonus.get("uses") or {}).get("pool"), "tyrs_circlet_blessing")
 
+    def test_magic_item_ability_override_and_defenses_apply_on_normalize(self):
+        app = self._new_app()
+        app._magic_items_registry_payload = lambda: {
+            "gauntlets_of_lesser_hill_giant_strength": {
+                "id": "gauntlets_of_lesser_hill_giant_strength",
+                "requires_attunement": True,
+                "grants": {"ability_overrides": {"str": 17}},
+            },
+            "grom": {
+                "id": "grom",
+                "requires_attunement": True,
+                "grants": {
+                    "defenses": {"damage_resistances": ["lightning"]},
+                    "save_bonuses": {"con": 1},
+                },
+            },
+        }
+        normalized = app._normalize_player_profile(
+            {
+                "name": "стихия",
+                "abilities": {"str": 10, "con": 16},
+                "defenses": {"resistances": []},
+                "magic_items": {
+                    "attunement_slots": 3,
+                    "equipped": ["gauntlets_of_lesser_hill_giant_strength", "grom"],
+                    "attuned": ["gauntlets_of_lesser_hill_giant_strength", "grom"],
+                },
+            },
+            "stikhiya",
+        )
+        self.assertEqual(int((normalized.get("abilities") or {}).get("str") or 0), 17)
+        self.assertIn("lightning", (normalized.get("defenses") or {}).get("resistances") or [])
+        self.assertEqual(int(((normalized.get("defenses") or {}).get("save_bonuses") or {}).get("con") or 0), 1)
+
+    def test_magic_item_spell_save_dc_bonus_applies(self):
+        app = self._new_app()
+        app._magic_items_registry_payload = lambda: {
+            "matteh": {
+                "id": "matteh",
+                "requires_attunement": True,
+                "grants": {
+                    "modifiers": [
+                        {"id": "matteh_spell_save_dc_bonus", "target": "spell_save_dc", "effect": "spell_save_dc_bonus", "amount": 1}
+                    ]
+                },
+            }
+        }
+        normalized = app._normalize_player_profile(
+            {
+                "name": "Johnny",
+                "abilities": {"wis": 18},
+                "proficiency": {"bonus": 4},
+                "spellcasting": {"casting_ability": "wis", "save_dc_formula": "8 + prof + casting_mod"},
+                "magic_items": {
+                    "attunement_slots": 3,
+                    "equipped": ["matteh"],
+                    "attuned": ["matteh"],
+                },
+            },
+            "johnny",
+        )
+        self.assertEqual(app._compute_spell_save_dc(normalized), 17)
+
     def test_recover_spell_slots_handler_respects_budget_and_caps(self):
         app = self._new_app()
         saved = {}

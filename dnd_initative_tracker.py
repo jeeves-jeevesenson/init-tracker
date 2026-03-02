@@ -5694,6 +5694,86 @@ class InitiativeTracker(base.InitiativeTracker):
             )
         return active_features
 
+    def _apply_magic_item_grants_to_profile_sections(
+        self,
+        profile_name: str,
+        magic_items: Dict[str, Any],
+        abilities: Dict[str, Any],
+        defenses: Dict[str, Any],
+    ) -> None:
+        profile_stub = {"name": profile_name, "magic_items": dict(magic_items or {})}
+        active_features = self._active_magic_item_features(profile_stub)
+        if not active_features:
+            return
+
+        ability_aliases = {
+            "strength": "str",
+            "dexterity": "dex",
+            "constitution": "con",
+            "intelligence": "int",
+            "wisdom": "wis",
+            "charisma": "cha",
+        }
+        defense_keys = (
+            ("damage_resistances", "resistances"),
+            ("damage_immunities", "immunities"),
+            ("damage_vulnerabilities", "vulnerabilities"),
+            ("condition_immunities", "condition_immunities"),
+        )
+        existing_save_bonus_map = defenses.get("save_bonuses") if isinstance(defenses.get("save_bonuses"), dict) else {}
+        save_bonus_map: Dict[str, int] = {
+            str(key).strip().lower(): int(value)
+            for key, value in existing_save_bonus_map.items()
+            if str(key).strip()
+        }
+
+        for feature in active_features:
+            grants = feature.get("grants") if isinstance(feature.get("grants"), dict) else {}
+            if not grants:
+                continue
+
+            ability_overrides = grants.get("ability_overrides") if isinstance(grants.get("ability_overrides"), dict) else {}
+            for raw_key, raw_value in ability_overrides.items():
+                ability_key = ability_aliases.get(str(raw_key).strip().lower(), str(raw_key).strip().lower())
+                if ability_key not in ("str", "dex", "con", "int", "wis", "cha"):
+                    continue
+                try:
+                    abilities[ability_key] = int(raw_value)
+                except Exception:
+                    continue
+
+            defense_grants = grants.get("defenses") if isinstance(grants.get("defenses"), dict) else {}
+            for modern_key, legacy_key in defense_keys:
+                values = defense_grants.get(modern_key)
+                if not isinstance(values, list):
+                    values = defense_grants.get(legacy_key)
+                if not isinstance(values, list):
+                    continue
+                existing_values = defenses.get(legacy_key) if isinstance(defenses.get(legacy_key), list) else []
+                existing_normalized = {str(entry or "").strip().lower() for entry in existing_values if str(entry or "").strip()}
+                merged = list(existing_values)
+                for raw_value in values:
+                    value = str(raw_value or "").strip().lower()
+                    if not value or value in existing_normalized:
+                        continue
+                    existing_normalized.add(value)
+                    merged.append(value)
+                defenses[legacy_key] = merged
+
+            save_bonuses = grants.get("save_bonuses") if isinstance(grants.get("save_bonuses"), dict) else {}
+            for raw_key, raw_value in save_bonuses.items():
+                ability_key = ability_aliases.get(str(raw_key).strip().lower(), str(raw_key).strip().lower())
+                if ability_key not in ("str", "dex", "con", "int", "wis", "cha"):
+                    continue
+                try:
+                    bonus_value = int(raw_value)
+                except Exception:
+                    continue
+                save_bonus_map[ability_key] = int(save_bonus_map.get(ability_key, 0)) + int(bonus_value)
+
+        if save_bonus_map:
+            defenses["save_bonuses"] = save_bonus_map
+
     def _all_active_features(self, profile: Dict[str, Any]) -> List[Dict[str, Any]]:
         base_features = profile.get("features") if isinstance(profile.get("features"), list) else []
         merged: List[Dict[str, Any]] = [dict(entry) for entry in base_features if isinstance(entry, dict)]
@@ -8535,6 +8615,52 @@ class InitiativeTracker(base.InitiativeTracker):
                 setattr(combatant, "token_color", token_color)
             if token_border_color:
                 setattr(combatant, "token_border_color", token_border_color)
+            normalized_abilities = normalized.get("abilities") if isinstance(normalized.get("abilities"), dict) else {}
+            ability_mods: Dict[str, int] = {}
+            for key in ("str", "dex", "con", "int", "wis", "cha"):
+                try:
+                    score = int(normalized_abilities.get(key, 10))
+                except Exception:
+                    score = 10
+                ability_mods[key] = int((score - 10) // 2)
+            setattr(combatant, "ability_mods", ability_mods)
+            proficiency = normalized.get("proficiency") if isinstance(normalized.get("proficiency"), dict) else {}
+            try:
+                prof_bonus = int(proficiency.get("bonus") or 0)
+            except Exception:
+                prof_bonus = 0
+            proficient_saves = {
+                str(entry or "").strip().lower()
+                for entry in (proficiency.get("saves") if isinstance(proficiency.get("saves"), list) else [])
+                if str(entry or "").strip()
+            }
+            save_aliases = {
+                "strength": "str",
+                "dexterity": "dex",
+                "constitution": "con",
+                "intelligence": "int",
+                "wisdom": "wis",
+                "charisma": "cha",
+            }
+            normalized_defenses = normalized.get("defenses") if isinstance(normalized.get("defenses"), dict) else {}
+            raw_save_bonuses = normalized_defenses.get("save_bonuses") if isinstance(normalized_defenses.get("save_bonuses"), dict) else {}
+            save_bonuses: Dict[str, int] = {}
+            for raw_key, raw_value in raw_save_bonuses.items():
+                save_key = save_aliases.get(str(raw_key).strip().lower(), str(raw_key).strip().lower())
+                if save_key not in ("str", "dex", "con", "int", "wis", "cha"):
+                    continue
+                try:
+                    save_bonuses[save_key] = int(raw_value)
+                except Exception:
+                    continue
+            saving_throws: Dict[str, int] = {}
+            for key in ("str", "dex", "con", "int", "wis", "cha"):
+                base_value = int(ability_mods.get(key, 0))
+                if key in proficient_saves:
+                    base_value += int(prof_bonus)
+                base_value += int(save_bonuses.get(key, 0))
+                saving_throws[key] = int(base_value)
+            setattr(combatant, "saving_throws", saving_throws)
         summon_entries = normalized.get("summon_on_start", []) if isinstance(normalized, dict) else []
         if isinstance(summon_entries, list) and summon_entries:
             try:
@@ -12353,6 +12479,10 @@ class InitiativeTracker(base.InitiativeTracker):
                 self._oplog(f"Player YAML {name}: invalid identity.ip '{raw_ip}'.", level="warning")
             identity.pop("ip", None)
 
+        abilities = dict(abilities)
+        defenses = dict(defenses)
+        self._apply_magic_item_grants_to_profile_sections(name, magic_items, abilities, defenses)
+
         if fmt == 0:
             if "base_movement" in data and "base_movement" not in resources:
                 resources["base_movement"] = data.get("base_movement")
@@ -12838,7 +12968,31 @@ class InitiativeTracker(base.InitiativeTracker):
         result = self._evaluate_spell_formula(formula, variables)
         if result is None:
             return None
-        return int(math.floor(result))
+        return int(math.floor(result)) + int(self._spell_save_dc_bonus_from_profile(profile))
+
+    def _spell_save_dc_bonus_from_profile(self, profile: Dict[str, Any]) -> int:
+        if not isinstance(profile, dict):
+            return 0
+        raw_features = profile.get("features")
+        features = raw_features if isinstance(raw_features, list) else self._all_active_features(profile)
+        total_bonus = 0
+        for feature in features:
+            if not isinstance(feature, dict):
+                continue
+            grants = feature.get("grants") if isinstance(feature.get("grants"), dict) else {}
+            modifiers = grants.get("modifiers") if isinstance(grants.get("modifiers"), list) else []
+            for modifier in modifiers:
+                if not isinstance(modifier, dict):
+                    continue
+                effect = str(modifier.get("effect") or "").strip().lower()
+                target = str(modifier.get("target") or "").strip().lower()
+                if effect != "spell_save_dc_bonus" and target not in ("spell_save_dc", "spellcasting.save_dc", "save_dc"):
+                    continue
+                try:
+                    total_bonus += int(modifier.get("amount") or 0)
+                except Exception:
+                    continue
+        return int(total_bonus)
 
     def _resolve_player_ac(self, profile: Dict[str, Any], defenses: Any) -> Optional[int]:
         def to_int(value: Any, fallback: Optional[int] = None) -> Optional[int]:

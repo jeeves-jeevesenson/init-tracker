@@ -240,7 +240,7 @@ inventory:
   - name: Inazuma
     quantity: 1
     description: ''
-  - name: Gauntlets
+  - name: Gauntlets of Strength
     quantity: 1
     description: Attuned.
   - name: Boots of Haste
@@ -254,20 +254,20 @@ magic_items:
   attunement_slots: 3
   equipped:
   - inazuma
-  - gauntlets
+  - gauntlets_of_strength
   - boots_of_haste
   - ring_of_desert_sands
   - tyrs_circlet
   attuned:
   - inazuma
-  - gauntlets
+  - gauntlets_of_strength
   - boots_of_haste
   - tyrs_circlet
   items:
   - id: inazuma
     equipped: true
     attuned: true
-  - id: gauntlets
+  - id: gauntlets_of_strength
     equipped: true
     attuned: true
   - id: boots_of_haste

@@ -1,0 +1,6 @@
+id: gauntlets_of_lesser_hill_giant_strength
+name: Gauntlets of Lesser Hill Giant Strength
+requires_attunement: true
+grants:
+  ability_overrides:
+    str: 17

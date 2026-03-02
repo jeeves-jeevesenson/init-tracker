@@ -1,0 +1,9 @@
+id: grom
+name: гром
+requires_attunement: true
+grants:
+  defenses:
+    damage_resistances:
+      - lightning
+  save_bonuses:
+    con: 1

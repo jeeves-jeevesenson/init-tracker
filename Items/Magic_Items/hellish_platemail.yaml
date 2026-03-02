@@ -1,0 +1,10 @@
+id: hellish_platemail
+name: Hellish Platemail
+requires_attunement: true
+type: armor
+ac:
+  base_formula: '19'
+grants:
+  defenses:
+    damage_resistances:
+      - fire
