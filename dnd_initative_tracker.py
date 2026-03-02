@@ -5027,7 +5027,7 @@ class InitiativeTracker(base.InitiativeTracker):
         self._spell_dir_notice: Optional[str] = None
         self._spell_dir_signature: Optional[Tuple[int, int, Tuple[str, ...]]] = None
         self._items_registry_cache: Optional[Dict[str, Dict[str, Dict[str, Any]]]] = None
-        self._items_dir_signature: Optional[Tuple[Tuple[int, int, Tuple[str, ...]], Tuple[int, int, Tuple[str, ...]], Tuple[Tuple[str, int, int], ...], Tuple[Tuple[str, int, int], ...]]] = None
+        self._items_dir_signature: Optional[Tuple[Tuple[int, int, Tuple[str, ...]], Tuple[int, int, Tuple[str, ...]], Tuple[int, int, Tuple[str, ...]], Tuple[Tuple[str, int, int], ...], Tuple[Tuple[str, int, int], ...], Tuple[Tuple[str, int, int], ...]]] = None
         self._items_dir_cache: Optional[Path] = None
         self._wild_shape_known_by_player: Dict[str, List[str]] = {}
         self._player_yaml_cache_by_path: Dict[Path, Optional[Dict[str, Any]]] = {}
@@ -5455,13 +5455,17 @@ class InitiativeTracker(base.InitiativeTracker):
 
         weapons_dir = items_dir / "Weapons"
         armor_dir = items_dir / "Armor"
+        magic_dir = items_dir / "Magic_Items"
         weapon_files = sorted(list(weapons_dir.glob("*.yaml")) + list(weapons_dir.glob("*.yml"))) if weapons_dir.is_dir() else []
         armor_files = sorted(list(armor_dir.glob("*.yaml")) + list(armor_dir.glob("*.yml"))) if armor_dir.is_dir() else []
+        magic_files = sorted(list(magic_dir.glob("*.yaml")) + list(magic_dir.glob("*.yml"))) if magic_dir.is_dir() else []
         signature = (
             _directory_signature(weapons_dir, weapon_files) if weapons_dir.is_dir() else (0, 0, tuple()),
             _directory_signature(armor_dir, armor_files) if armor_dir.is_dir() else (0, 0, tuple()),
+            _directory_signature(magic_dir, magic_files) if magic_dir.is_dir() else (0, 0, tuple()),
             _files_signature(weapon_files),
             _files_signature(armor_files),
+            _files_signature(magic_files),
         )
         if isinstance(cached, dict) and signature == cached_signature:
             return cached
@@ -5538,6 +5542,42 @@ class InitiativeTracker(base.InitiativeTracker):
                     )
                     registry[bucket_key][item_id] = item_data
                     sources[bucket_key][item_id] = "per-item" if is_per_item else "catalog"
+
+        for path in magic_files:
+            try:
+                parsed = yaml.safe_load(path.read_text(encoding="utf-8")) if yaml is not None else None
+            except Exception as exc:
+                self._oplog(f"Items YAML parse failed for {path}: {exc}", level="warning")
+                continue
+            if not isinstance(parsed, dict):
+                continue
+            item_id = str(parsed.get("id") or "").strip().lower()
+            if not item_id:
+                continue
+
+            item_type = str(parsed.get("type") or "").strip().lower()
+            if item_type == "weapon" and isinstance(parsed.get("damage"), dict):
+                prior_source = sources["weapons"].get(item_id)
+                if prior_source and prior_source != "magic-item":
+                    self._oplog(
+                        f"Duplicate weapon id '{item_id}' in {path.name}; keeping Items/Weapons definition.",
+                        level="warning",
+                    )
+                else:
+                    registry["weapons"][item_id] = dict(parsed)
+                    sources["weapons"][item_id] = "magic-item"
+            if item_type == "armor":
+                ac_data = parsed.get("ac")
+                if isinstance(ac_data, dict) and any(k in ac_data for k in ("base_formula", "value", "ac", "formula")):
+                    prior_source = sources["armors"].get(item_id)
+                    if prior_source and prior_source != "magic-item":
+                        self._oplog(
+                            f"Duplicate armor id '{item_id}' in {path.name}; keeping Items/Armor definition.",
+                            level="warning",
+                        )
+                    else:
+                        registry["armors"][item_id] = dict(parsed)
+                        sources["armors"][item_id] = "magic-item"
 
         self._items_registry_cache = registry
         self._items_dir_signature = signature

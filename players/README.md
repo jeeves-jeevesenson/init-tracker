@@ -363,7 +363,7 @@ defenses:
 
 ### Attacks Section
 
-Combat attack modifiers and optional reusable weapon presets. Weapon presets can be fully embedded, or minimal (`id` + optional overrides) and resolved from `Items/Weapons/*.yaml` at runtime:
+Combat attack modifiers and optional reusable weapon presets. Weapon presets can be fully embedded, or minimal (`id` + optional overrides) and resolved from `Items/Weapons/*.yaml` and (for magic weapons) `Items/Magic_Items/*.yaml` at runtime:
 
 ```yaml
 attacks:
