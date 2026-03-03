@@ -4240,6 +4240,9 @@ __DAMAGE_TYPE_OPTIONS__
     if (!url) return;
     try {
       const target = new URL(url, location.origin);
+      if (target.href === location.href){
+        return;
+      }
       if (target.origin === location.origin){
         location.href = target.href;
       } else {
