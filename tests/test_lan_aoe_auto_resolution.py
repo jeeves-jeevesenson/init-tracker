@@ -154,8 +154,8 @@ class LanAoeAutoResolutionTests(unittest.TestCase):
         log_text = "\n".join(entry for _cid, entry in self.logs)
         self.assertIn("Frost Burst: Goblin save DEX FAIL", log_text)
         self.assertIn("Frost Burst: Orc save DEX PASS", log_text)
-        self.assertIn("Goblin save DEX FAIL (5 vs DC 14) -> 5 Cold damage", log_text)
-        self.assertIn("Orc save DEX PASS (15 vs DC 14) -> 4 Cold damage", log_text)
+        self.assertIn("Goblin save DEX FAIL (5 vs DC 14) -> 5 damage (5 Cold)", log_text)
+        self.assertIn("Orc save DEX PASS (15 vs DC 14) -> 4 damage (4 Cold)", log_text)
 
     def test_cast_aoe_broadcasts_spell_target_results_for_damage_popups(self):
         msg = {
@@ -237,8 +237,8 @@ class LanAoeAutoResolutionTests(unittest.TestCase):
         self.assertEqual(self.app.combatants[2].hp, 7)
         self.assertEqual(self.app.combatants[3].hp, 14)
         log_text = "\n".join(entry for _cid, entry in self.logs)
-        self.assertIn("Goblin save DEX FAIL (5 vs DC 14) -> 13 Cold damage", log_text)
-        self.assertIn("Orc save DEX PASS (15 vs DC 14) -> 6 Cold damage", log_text)
+        self.assertIn("Goblin save DEX FAIL (5 vs DC 14) -> 13 damage (13 Cold)", log_text)
+        self.assertIn("Orc save DEX PASS (15 vs DC 14) -> 6 damage (6 Cold)", log_text)
 
     def test_cast_aoe_manual_damage_applies_failed_save_push_without_caster_context(self):
         self.preset["name"] = "Thunderwave"
@@ -649,7 +649,49 @@ class LanAoeAutoResolutionTests(unittest.TestCase):
         self.assertEqual(self.app.combatants[2].hp, 15)
         self.assertEqual(self.app.combatants[4].hp, 20)
         log_text = "\n".join(entry for _cid, entry in self.logs)
-        self.assertIn("Companion SCULPT (auto) -> 0 Cold damage", log_text)
+        self.assertIn("Companion SCULPT (auto) -> 0 damage", log_text)
+
+    def test_cast_aoe_damage_overflow_trims_trailing_damage_types_in_log_and_payload(self):
+        self.preset["name"] = "Destructive Wave"
+        self.preset["mechanics"]["sequence"][0]["check"] = {"kind": "saving_throw", "ability": "constitution", "dc": 18}
+        self.preset["mechanics"]["sequence"][0]["outcomes"] = {
+            "fail": [
+                {"effect": "damage", "damage_type": "thunder", "dice": "1d1"},
+                {"effect": "damage", "damage_type": "radiant", "dice": "1d1"},
+            ],
+            "success": [],
+        }
+        self.app.combatants[2].hp = 1
+        msg = {
+            "type": "cast_aoe",
+            "cid": 1,
+            "_claimed_cid": 1,
+            "_ws_id": 55,
+            "spell_slug": "frost-burst",
+            "slot_level": 3,
+            "payload": {
+                "shape": "sphere",
+                "name": "Destructive Wave",
+                "radius_ft": 20,
+                "cx": 5,
+                "cy": 4,
+            },
+        }
+
+        with mock.patch("dnd_initative_tracker.random.randint", return_value=1):
+            self.app._lan_apply_action(msg)
+
+        self.assertNotIn(2, self.app.combatants)
+        log_text = "\n".join(entry for _cid, entry in self.logs)
+        self.assertIn("Destructive Wave: Goblin save CON FAIL (1 vs DC 18) -> 1 damage (1 Thunder)", log_text)
+        self.assertIn("overflow trimmed after target dropped to 0 HP", log_text)
+        popup_payloads = [
+            payload
+            for payload in self.broadcast_payloads
+            if payload.get("type") == "spell_target_result" and int(payload.get("target_cid") or 0) == 2
+        ]
+        self.assertTrue(popup_payloads)
+        self.assertEqual(popup_payloads[0].get("damage_entries"), [{"amount": 1, "type": "thunder"}])
         self.assertNotIn("Companion SCULPT (auto-success)", log_text)
 
     def test_sculpt_requires_feature_id_not_feature_name(self):
