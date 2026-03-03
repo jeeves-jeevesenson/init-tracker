@@ -16,6 +16,22 @@ class PlayerYamlValidityTests(unittest.TestCase):
         speed = ((data.get("vitals") or {}).get("speed") or {})
         self.assertEqual(set(speed.keys()), {"walk", "climb", "fly", "swim"})
 
+    def test_john_twilight_default_equipment_slots(self):
+        data = self._load("players/John_Twilight.yaml")
+        inventory = data.get("inventory") or {}
+        items = inventory.get("items") or []
+        by_id = {str((item or {}).get("id") or ""): (item or {}) for item in items if isinstance(item, dict)}
+        self.assertEqual(set(inventory.get("equipped") or []), {"hellish_platemail", "hellfire_battleaxe_plus_2", "crown_of_twilight"})
+        self.assertEqual(by_id.get("hellish_platemail", {}).get("equip_slot"), "armour")
+        self.assertEqual(by_id.get("crown_of_twilight", {}).get("equip_slot"), "head")
+        self.assertEqual(by_id.get("hellfire_battleaxe_plus_2", {}).get("slot"), "main_hand")
+        self.assertEqual(by_id.get("hellfire_battleaxe_plus_2", {}).get("equip_slot"), "off_hand")
+        self.assertTrue(all(bool(by_id.get(item_id, {}).get("equipped")) for item_id in ("hellish_platemail", "hellfire_battleaxe_plus_2", "crown_of_twilight")))
+        weapons = (((data.get("attacks") or {}).get("weapons")) or [])
+        battleaxe = next((entry for entry in weapons if (entry or {}).get("id") == "hellfire_battleaxe_plus_2"), {})
+        self.assertTrue(bool(battleaxe.get("main_hand")))
+        self.assertTrue(bool(battleaxe.get("off_hand")))
+
     def test_oldahhman_leveling_and_speed_schema(self):
         data = self._load("players/oldahhman.yaml")
         leveling = data.get("leveling") or {}
@@ -57,6 +73,11 @@ class PlayerYamlValidityTests(unittest.TestCase):
         self.assertTrue(by_name.get("Gauntlets of Lesser Hill Giant Strength", {}).get("equipped"))
         self.assertEqual(by_name.get("Bane Platemail +1", {}).get("slot"), "armour")
         self.assertTrue(by_name.get("Bane Platemail +1", {}).get("equipped"))
+    def test_malagrou_defaults_to_two_handed_axe_mode(self):
+        data = self._load("players/malagrou.yaml")
+        weapons = (((data.get("attacks") or {}).get("weapons")) or [])
+        axe = next((entry for entry in weapons if str((entry or {}).get("id") or "").strip() == "big_ass_axe_plus_1"), {})
+        self.assertEqual(str(axe.get("selected_mode") or "").strip().lower(), "two")
 
     def test_player_yaml_guardrails(self):
         valid_save_keys = {"STR", "DEX", "CON", "INT", "WIS", "CHA"}
