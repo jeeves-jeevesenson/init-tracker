@@ -7188,13 +7188,13 @@ __DAMAGE_TYPE_OPTIONS__
     const maxHp = Number(unit?.max_hp || unit?.hp || 0);
     const tempHp = Number(unit?.temp_hp || 0);
     manualOverrideStatus.textContent = `HP ${hp}/${maxHp} · Temp HP ${tempHp}`;
-    const claimedCid = activeControlledUnitCid();
+    const claimedCidForOverride = normalizeCid(unit?.cid, "manualOverride.claimedCid");
     const sendOverride = (payload) => {
-      if (claimedCid === null){
+      if (claimedCidForOverride === null){
         localToast("Claim a character first, matey.");
         return;
       }
-      send({...payload, cid: claimedCid});
+      send({...payload, cid: claimedCidForOverride});
     };
     manualOverrideHpControls.textContent = "";
     [
@@ -7216,7 +7216,7 @@ __DAMAGE_TYPE_OPTIONS__
     });
 
     manualOverrideSpellSlots.textContent = "";
-    const playerName = getClaimedPlayerName();
+    const playerName = String(unit?.name || "");
     const profile = getPlayerProfile(playerName);
     const slots = getSpellSlotLevels(profile).filter((entry) => entry.max > 0);
     if (!slots.length){
