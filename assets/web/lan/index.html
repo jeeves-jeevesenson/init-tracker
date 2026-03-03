@@ -2269,7 +2269,7 @@
       <button class="btn end-turn-top" id="endTurn">End Turn</button>
       <div class="spacer"></div>
       <button class="btn" id="planningBtn" type="button">Planning Mode</button>
-      <button class="btn" id="inventoryBtn" type="button" aria-pressed="false">Inventory</button>
+      <button class="btn" id="inventoryBtn" type="button" aria-pressed="true">Inventory</button>
       <button class="btn" id="planningAoeBtn" type="button">Place AoE</button>
       <button class="btn" id="planningChatBtn" type="button" aria-pressed="false">Chat</button>
       <button class="btn" id="spellLibraryBtn" type="button">Spellbook</button>
@@ -2911,7 +2911,7 @@
           <button class="btn hidden" id="dismountBtn">Dismount</button>
         </div>
       </div>
-      <div class="row hidden" id="inventoryRow">
+      <div class="row" id="inventoryRow">
         <div class="form-field">
           <label for="mainhandWeaponSelect">Mainhand</label>
           <select id="mainhandWeaponSelect">
@@ -4751,7 +4751,7 @@ __DAMAGE_TYPE_OPTIONS__
   let cachedOffhandWeaponValue = "";
   let weaponSelectionCharacterKey = "";
   let equipmentSyncStateKey = "";
-  let inventoryPanelOpen = false;
+  let inventoryPanelOpen = true;
   let pendingAttackResolve = null;
   let pendingActionAttackWeapon = null;
   let pendingMonkBonusAttackSequence = null;
@@ -19608,7 +19608,7 @@ __DAMAGE_TYPE_OPTIONS__
     }
   }
   if (inventoryBtn){
-    inventoryBtn.addEventListener("click", () => setInventoryPanelOpen(!inventoryPanelOpen));
+    inventoryBtn.addEventListener("click", () => setInventoryPanelOpen(true));
   }
   if (planningAoeBtn){
     planningAoeBtn.classList.toggle("hidden", !isPlanning);
