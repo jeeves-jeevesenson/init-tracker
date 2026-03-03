@@ -57,7 +57,7 @@ defenses:
     - id: plate_armor
       label: Plate Armor
       when: always
-      base_formula: '18'
+      base_formula: '19'
     bonuses:
     - label: 'Fighting Style: Defense'
       when: always
