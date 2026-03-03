@@ -196,6 +196,10 @@ class LanCastModalRegressionTests(unittest.TestCase):
         self.assertIn("pendingOpportunityAttack = true;", self.html)
         self.assertIn("opportunity_attack: !!pendingAttackResolve.opportunityAttack,", self.html)
 
+    def test_weapon_selection_key_uses_unicode_safe_normalized_name(self):
+        self.assertIn("const normalized = normalizeCharacterLookupKey(stripped || claimedName || \"\");", self.html)
+        self.assertIn("if (normalized) return normalized;", self.html)
+
 
 
     def test_aoe_cast_uses_cursor_follow_placement_mode(self):
