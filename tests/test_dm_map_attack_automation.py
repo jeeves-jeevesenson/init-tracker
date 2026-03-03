@@ -265,6 +265,34 @@ class DmMapAttackAutomationTests(unittest.TestCase):
             ],
         )
 
+    def test_resolve_map_attack_sequence_splits_blobbed_damage_types(self):
+        attacker = type("Combatant", (), {"cid": 1, "name": "Death Slaad"})()
+        target = type("Combatant", (), {"cid": 2, "name": "Knight", "ac": 15, "hp": 30})()
+        self.app.combatants = {1: attacker, 2: target}
+        attack_option = {
+            "name": "Elemental Claws",
+            "key": "elemental-claws",
+            "to_hit": 9,
+            "damage_entries": [{"formula": "2d6 + 5", "type": "slashing and fire damage"}],
+        }
+
+        with mock.patch("dnd_initative_tracker.random.randint", side_effect=[10]):
+            result = self.app._resolve_map_attack_sequence(
+                1,
+                2,
+                [{"attack_option": attack_option, "attack_key": "elemental-claws", "count": 1, "roll_mode": "normal"}],
+            )
+
+        self.assertTrue(result.get("ok"))
+        self.assertCountEqual(
+            result.get("damage_rolls"),
+            [
+                {"formula": "2d6 + 5", "type": "slashing", "count": 1},
+                {"formula": "2d6 + 5", "type": "fire", "count": 1},
+            ],
+        )
+        self.assertCountEqual(result.get("damage_types"), ["slashing", "fire"])
+
     def test_resolve_map_attack_sequence_stops_when_target_removed_mid_sequence(self):
         attacker = type("Combatant", (), {"cid": 1, "name": "Death Slaad"})()
         target = type("Combatant", (), {"cid": 2, "name": "Knight", "ac": 15, "hp": 30})()

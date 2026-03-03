@@ -15190,6 +15190,22 @@ class InitiativeTracker(base.InitiativeTracker):
             return max(0, min(10, int(raw)))
         return int(word_counts.get(raw, 0))
 
+    def _normalize_attack_damage_types(self, raw_type: Any) -> List[str]:
+        text = str(raw_type or "").strip().lower()
+        if not text:
+            return ["damage"]
+        canonical = self._canonical_damage_type(text)
+        if canonical:
+            return [canonical]
+        normalized: List[str] = []
+        for dtype in DAMAGE_TYPES:
+            token = str(dtype or "").strip().lower()
+            if not token:
+                continue
+            if re.search(rf"\b{re.escape(token)}\b", text) and token not in normalized:
+                normalized.append(token)
+        return normalized or [text]
+
     def _monster_attack_options_for_map(self, attacker: Any) -> Tuple[List[Dict[str, Any]], Dict[str, int]]:
         spec = getattr(attacker, "monster_spec", None)
         raw_data = getattr(spec, "raw_data", None) if spec is not None else None
@@ -15531,15 +15547,16 @@ class InitiativeTracker(base.InitiativeTracker):
                 if not isinstance(template, dict):
                     continue
                 formula = str(template.get("formula") or "").strip()
-                dtype = str(template.get("type") or "").strip().lower() or "damage"
+                entry_types = self._normalize_attack_damage_types(template.get("type"))
                 if not formula:
                     continue
-                if normal_hits > 0:
-                    damage_rolls_normal.append({"formula": formula, "type": dtype, "count": int(normal_hits)})
-                if int(block_crits) > 0:
-                    damage_rolls_crit.append({"formula": formula, "type": dtype, "count": int(block_crits)})
-                if dtype not in damage_types:
-                    damage_types.append(dtype)
+                for dtype in entry_types:
+                    if normal_hits > 0:
+                        damage_rolls_normal.append({"formula": formula, "type": dtype, "count": int(normal_hits)})
+                    if int(block_crits) > 0:
+                        damage_rolls_crit.append({"formula": formula, "type": dtype, "count": int(block_crits)})
+                    if dtype not in damage_types:
+                        damage_types.append(dtype)
             block_results.append(
                 {
                     "attack_key": str(block["attack_key"]),
