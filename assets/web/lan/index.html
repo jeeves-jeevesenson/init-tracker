@@ -1621,6 +1621,22 @@
       font-size:12px;
       padding:8px 2px;
     }
+    #inventoryModal .card{
+      width:min(1100px, 96vw);
+    }
+    .inventory-modal-header{
+      display:flex;
+      align-items:center;
+      justify-content:space-between;
+      gap:10px;
+      margin-bottom:8px;
+    }
+    .inventory-modal-header h2{
+      margin:0;
+    }
+    #inventoryModal .inventory-items-list{
+      max-height:none;
+    }
     @media (min-width: 980px){
       .inventory-layout{
         grid-template-columns: minmax(320px, 1fr) minmax(320px, 1fr);
@@ -2377,7 +2393,7 @@
       <button class="btn end-turn-top" id="endTurn">End Turn</button>
       <div class="spacer"></div>
       <button class="btn" id="planningBtn" type="button">Planning Mode</button>
-      <button class="btn" id="inventoryBtn" type="button" aria-pressed="true">Inventory</button>
+      <button class="btn" id="inventoryBtn" type="button" aria-pressed="false" aria-controls="inventoryModal" aria-expanded="false">Inventory</button>
       <button class="btn" id="planningAoeBtn" type="button">Place AoE</button>
       <button class="btn" id="planningChatBtn" type="button" aria-pressed="false">Chat</button>
       <button class="btn" id="spellLibraryBtn" type="button">Spellbook</button>
@@ -2992,6 +3008,83 @@
         </div>
       </div>
     </div>
+    <div class="modal" id="inventoryModal" aria-hidden="true">
+      <div class="card card-scroll">
+        <div class="inventory-modal-header">
+          <h2>Inventory</h2>
+          <button class="btn" id="inventoryCloseBtn" type="button">Close</button>
+        </div>
+        <div class="modal-body">
+          <div class="row" id="inventoryRow">
+            <div class="inventory-layout">
+              <div class="inventory-left-pane">
+                <div class="inventory-paper-doll">
+                  <div class="inventory-paper-doll-top">
+                    <h4>Equipment</h4>
+                    <div class="inventory-paper-doll-icon" aria-hidden="true">🛡️</div>
+                  </div>
+                  <div class="inventory-slot-grid">
+                    <div class="form-field">
+                      <label for="inventoryHeadSelect">Head</label>
+                      <select id="inventoryHeadSelect"><option value="">None</option></select>
+                    </div>
+                    <div class="form-field">
+                      <label for="inventoryCloakSelect">Cloak</label>
+                      <select id="inventoryCloakSelect"><option value="">None</option></select>
+                    </div>
+                    <div class="form-field">
+                      <label for="inventoryArmourSelect">Armour</label>
+                      <select id="inventoryArmourSelect"><option value="">None</option></select>
+                    </div>
+                    <div class="form-field">
+                      <label for="inventoryGlovesSelect">Gloves</label>
+                      <select id="inventoryGlovesSelect"><option value="">None</option></select>
+                    </div>
+                    <div class="form-field">
+                      <label for="inventoryBootsSelect">Boots</label>
+                      <select id="inventoryBootsSelect"><option value="">None</option></select>
+                    </div>
+                    <div class="form-field">
+                      <label for="inventoryAmuletSelect">Amulet</label>
+                      <select id="inventoryAmuletSelect"><option value="">None</option></select>
+                    </div>
+                    <div class="form-field">
+                      <label for="inventoryRingOneSelect">Ring 1</label>
+                      <select id="inventoryRingOneSelect"><option value="">None</option></select>
+                    </div>
+                    <div class="form-field">
+                      <label for="inventoryRingTwoSelect">Ring 2</label>
+                      <select id="inventoryRingTwoSelect"><option value="">None</option></select>
+                    </div>
+                    <div class="form-field">
+                      <label for="mainhandWeaponSelect">Main Hand</label>
+                      <select id="mainhandWeaponSelect">
+                        <option value="">Auto (first configured)</option>
+                      </select>
+                    </div>
+                    <div class="form-field">
+                      <label for="offhandWeaponSelect">Off-Hand</label>
+                      <select id="offhandWeaponSelect">
+                        <option value="">None</option>
+                      </select>
+                    </div>
+                  </div>
+                </div>
+              </div>
+              <div class="inventory-right-pane">
+                <div class="inventory-items-head">
+                  <h4>Backpack</h4>
+                  <div class="inventory-items-count" id="inventoryItemsCount">0 items</div>
+                </div>
+                <ul class="inventory-items-list" id="inventoryItemsList">
+                  <li class="inventory-items-empty">No items in inventory.</li>
+                </ul>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
   </div>
     </div>
   </div>
@@ -3017,73 +3110,6 @@
           <button class="btn mount hidden" id="mountBtn">Mount</button>
           <button class="btn end-turn-sheet hidden" id="endTurnSheet">End Turn</button>
           <button class="btn hidden" id="dismountBtn">Dismount</button>
-        </div>
-      </div>
-      <div class="row" id="inventoryRow">
-        <div class="inventory-layout">
-          <div class="inventory-left-pane">
-            <div class="inventory-paper-doll">
-              <div class="inventory-paper-doll-top">
-                <h4>Equipment</h4>
-                <div class="inventory-paper-doll-icon" aria-hidden="true">🛡️</div>
-              </div>
-              <div class="inventory-slot-grid">
-                <div class="form-field">
-                  <label for="inventoryHeadSelect">Head</label>
-                  <select id="inventoryHeadSelect"><option value="">None</option></select>
-                </div>
-                <div class="form-field">
-                  <label for="inventoryCloakSelect">Cloak</label>
-                  <select id="inventoryCloakSelect"><option value="">None</option></select>
-                </div>
-                <div class="form-field">
-                  <label for="inventoryArmourSelect">Armour</label>
-                  <select id="inventoryArmourSelect"><option value="">None</option></select>
-                </div>
-                <div class="form-field">
-                  <label for="inventoryGlovesSelect">Gloves</label>
-                  <select id="inventoryGlovesSelect"><option value="">None</option></select>
-                </div>
-                <div class="form-field">
-                  <label for="inventoryBootsSelect">Boots</label>
-                  <select id="inventoryBootsSelect"><option value="">None</option></select>
-                </div>
-                <div class="form-field">
-                  <label for="inventoryAmuletSelect">Amulet</label>
-                  <select id="inventoryAmuletSelect"><option value="">None</option></select>
-                </div>
-                <div class="form-field">
-                  <label for="inventoryRingOneSelect">Ring 1</label>
-                  <select id="inventoryRingOneSelect"><option value="">None</option></select>
-                </div>
-                <div class="form-field">
-                  <label for="inventoryRingTwoSelect">Ring 2</label>
-                  <select id="inventoryRingTwoSelect"><option value="">None</option></select>
-                </div>
-                <div class="form-field">
-                  <label for="mainhandWeaponSelect">Main Hand</label>
-                  <select id="mainhandWeaponSelect">
-                    <option value="">Auto (first configured)</option>
-                  </select>
-                </div>
-                <div class="form-field">
-                  <label for="offhandWeaponSelect">Off-Hand</label>
-                  <select id="offhandWeaponSelect">
-                    <option value="">None</option>
-                  </select>
-                </div>
-              </div>
-            </div>
-          </div>
-          <div class="inventory-right-pane">
-            <div class="inventory-items-head">
-              <h4>Backpack</h4>
-              <div class="inventory-items-count" id="inventoryItemsCount">0 items</div>
-            </div>
-            <ul class="inventory-items-list" id="inventoryItemsList">
-              <li class="inventory-items-empty">No items in inventory.</li>
-            </ul>
-          </div>
         </div>
       </div>
       <div class="row">
@@ -4524,6 +4550,8 @@ __DAMAGE_TYPE_OPTIONS__
   const castManualEntryBadge = document.getElementById("castManualEntryBadge");
   const planningBtn = document.getElementById("planningBtn");
   const inventoryBtn = document.getElementById("inventoryBtn");
+  const inventoryModal = document.getElementById("inventoryModal");
+  const inventoryCloseBtn = document.getElementById("inventoryCloseBtn");
   const inventoryRow = document.getElementById("inventoryRow");
   const planningAoeBtn = document.getElementById("planningAoeBtn");
   const planningChatBtn = document.getElementById("planningChatBtn");
@@ -4922,7 +4950,7 @@ __DAMAGE_TYPE_OPTIONS__
   let cachedOffhandWeaponValue = "";
   let weaponSelectionCharacterKey = "";
   let equipmentSyncStateKey = "";
-  let inventoryPanelOpen = true;
+  let inventoryPanelOpen = false;
   let inventoryLoadoutSelections = {
     head: "",
     cloak: "",
@@ -5672,12 +5700,17 @@ __DAMAGE_TYPE_OPTIONS__
   }
 
   function getClaimedInventoryItems(){
-    const profile = getPlayerProfile(getClaimedPlayerName());
-    const inventory = profile?.inventory;
+    const inventory = getClaimedInventory();
     if (!inventory || typeof inventory !== "object" || !Array.isArray(inventory.items)){
       return [];
     }
     return inventory.items.filter((entry) => entry && typeof entry === "object");
+  }
+
+  function getClaimedInventory(){
+    const profile = getPlayerProfile(getClaimedPlayerName());
+    const inventory = profile?.inventory;
+    return inventory && typeof inventory === "object" ? inventory : null;
   }
 
   function getInventoryItemValue(item){
@@ -5721,6 +5754,53 @@ __DAMAGE_TYPE_OPTIONS__
       }
     });
     return Array.from(new Set(matches));
+  }
+
+  function isInventoryItemEquipped(item, equippedSet){
+    if (!item || typeof item !== "object") return false;
+    const equipped = item.equipped;
+    if (typeof equipped === "boolean") return equipped;
+    if (typeof equipped === "number") return equipped !== 0;
+    if (typeof equipped === "string"){
+      const normalized = equipped.trim().toLowerCase();
+      if (normalized === "1" || normalized === "true" || normalized === "yes" || normalized === "on"){
+        return true;
+      }
+    }
+    const id = normalizeCharacterLookupKey(item.id);
+    const name = normalizeCharacterLookupKey(item.name);
+    return (id && equippedSet.has(id)) || (name && equippedSet.has(name));
+  }
+
+  function getEquippedInventoryDefaultsBySlot(){
+    const defaults = {
+      head: [],
+      cloak: [],
+      armour: [],
+      gloves: [],
+      boots: [],
+      amulet: [],
+      ring: [],
+    };
+    const inventory = getClaimedInventory();
+    const equippedSet = new Set(
+      Array.isArray(inventory?.equipped)
+        ? inventory.equipped.map((entry) => normalizeCharacterLookupKey(entry)).filter(Boolean)
+        : []
+    );
+    getClaimedInventoryItems().forEach((item) => {
+      if (!isInventoryItemEquipped(item, equippedSet)) return;
+      const value = getInventoryItemValue(item);
+      if (!value) return;
+      const matchedSlots = getInventoryItemMatchedSlots(item);
+      matchedSlots.forEach((slot) => {
+        if (!defaults[slot]) return;
+        if (!defaults[slot].includes(value)){
+          defaults[slot].push(value);
+        }
+      });
+    });
+    return defaults;
   }
 
   function buildInventorySlotOptions(slotKey){
@@ -5773,6 +5853,8 @@ __DAMAGE_TYPE_OPTIONS__
 
   function refreshInventorySlotSelectors(){
     const disabled = claimedCid === null || claimedCid === undefined;
+    const equippedDefaults = getEquippedInventoryDefaultsBySlot();
+    const usedRingDefaults = new Set();
     Object.entries(inventorySlotSelectEls).forEach(([slotKey, selectEl]) => {
       if (!selectEl) return;
       const current = String(inventoryLoadoutSelections[slotKey] || selectEl.value || "").trim();
@@ -5788,7 +5870,14 @@ __DAMAGE_TYPE_OPTIONS__
         option.textContent = entry.label;
         selectEl.appendChild(option);
       });
-      selectEl.value = options.some((entry) => entry.value === current) ? current : "";
+      const defaultPool = slotKey === "ring_one" || slotKey === "ring_two"
+        ? equippedDefaults.ring.filter((value) => !usedRingDefaults.has(value))
+        : (equippedDefaults[slotKey] || []);
+      const fallback = defaultPool.find((value) => options.some((entry) => entry.value === value)) || "";
+      selectEl.value = options.some((entry) => entry.value === current) ? current : fallback;
+      if ((slotKey === "ring_one" || slotKey === "ring_two") && selectEl.value){
+        usedRingDefaults.add(selectEl.value);
+      }
       selectEl.disabled = disabled;
       inventoryLoadoutSelections[slotKey] = selectEl.value;
     });
@@ -6046,11 +6135,13 @@ __DAMAGE_TYPE_OPTIONS__
 
   function setInventoryPanelOpen(open){
     inventoryPanelOpen = !!open;
-    if (inventoryRow){
-      inventoryRow.classList.toggle("hidden", !inventoryPanelOpen);
+    if (inventoryModal){
+      inventoryModal.classList.toggle("show", inventoryPanelOpen);
+      inventoryModal.setAttribute("aria-hidden", inventoryPanelOpen ? "false" : "true");
     }
     if (inventoryBtn){
       inventoryBtn.setAttribute("aria-pressed", inventoryPanelOpen ? "true" : "false");
+      inventoryBtn.setAttribute("aria-expanded", inventoryPanelOpen ? "true" : "false");
     }
   }
 
@@ -20168,6 +20259,18 @@ __DAMAGE_TYPE_OPTIONS__
     inventoryBtn.addEventListener("click", () => {
       setInventoryPanelOpen(true);
       refreshInventorySlotSelectors();
+    });
+  }
+  if (inventoryCloseBtn){
+    inventoryCloseBtn.addEventListener("click", () => {
+      setInventoryPanelOpen(false);
+    });
+  }
+  if (inventoryModal){
+    inventoryModal.addEventListener("click", (event) => {
+      if (event.target === inventoryModal){
+        setInventoryPanelOpen(false);
+      }
     });
   }
   if (planningAoeBtn){
