@@ -78,6 +78,7 @@ attacks:
     weapon_group: Martial Melee
     proficient: true
     equipped: true
+    selected_mode: two
     main_hand: true
     to_hit: 8
     magic_bonus: 1
