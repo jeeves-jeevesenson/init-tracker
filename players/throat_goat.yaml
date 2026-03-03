@@ -125,6 +125,11 @@ resources:
     current: 1
     max_formula: '1'
     reset: long_rest
+  - id: lone_gunslingers_poncho_shield
+    label: The Lone Gunslingers Poncho (Shield)
+    current: 3
+    max_formula: '3'
+    reset: long_rest
 features:
 - name: Beguiling Magic
   description: "Free rider after casting an Enchantment or Illusion spell with a spell slot (including Pact Magic slots). Arm for 20s, then pick a creature within 60 ft to save vs your spell DC (WIS) or become Charmed/Frightened for up to 1 minute with end-of-turn saves. 1/LR; if spent, restore by spending 1 Bardic Inspiration (no action)."
@@ -309,14 +314,23 @@ inventory:
   - name: Sword of Wounding
     quantity: 1
     description: ''
+  - name: The Lone Gunslingers Poncho
+    quantity: 1
+    description: Written on the inside of the cloak is the lyrics for the song "Cool
+      Water"
 magic_items:
   attunement_slots: 3
   equipped:
   - bahamuts_rebuking_claw
+  - the_lone_gunslingers_poncho
   attuned:
   - bahamuts_rebuking_claw
+  - the_lone_gunslingers_poncho
   items:
   - id: bahamuts_rebuking_claw
+    equipped: true
+    attuned: true
+  - id: the_lone_gunslingers_poncho
     equipped: true
     attuned: true
 notes: {}

@@ -1,0 +1,12 @@
+id: the_lone_gunslingers_poncho
+name: The Lone Gunslingers Poncho
+description: Written on the inside of the cloak is the lyrics for the song "Cool Water"
+requires_attunement: true
+grants:
+  spells:
+    casts:
+      - spell: shield
+        action_type: reaction
+        consumes:
+          pool: lone_gunslingers_poncho_shield
+          cost: 1
