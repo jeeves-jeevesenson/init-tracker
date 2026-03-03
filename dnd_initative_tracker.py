@@ -12561,9 +12561,12 @@ class InitiativeTracker(base.InitiativeTracker):
                         prop_id = str(prop.get("id") or prop.get("name") or "").strip().lower()
                     else:
                         prop_id = str(prop or "").strip().lower()
+                    prop_id = re.sub(r"[\s-]+", "_", prop_id)
                     if prop_id:
                         normalized_properties.append(prop_id)
                 weapon["properties"] = normalized_properties
+                selected_mode = str(weapon.get("selected_mode") or player_weapon_entry.get("selected_mode") or "").strip().lower()
+                weapon["selected_mode"] = "two" if selected_mode == "two" else "one"
                 weapon["mastery"] = str(weapon.get("mastery") or "").strip().lower()
                 weapon["one_handed"] = {
                     "damage_formula": str(one_handed.get("damage_formula") or "").strip(),
