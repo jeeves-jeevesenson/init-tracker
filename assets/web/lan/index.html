@@ -13409,8 +13409,8 @@ __DAMAGE_TYPE_OPTIONS__
       }
       const pct = Math.max(0, Math.min(100, (hp / maxHp) * 100));
       const tempPct = Math.max(0, Math.min(100, (tempHp / maxHp) * 100));
-      const shieldWidth = Math.min(tempPct, pct);
-      const shieldLeft = Math.max(0, pct - shieldWidth);
+      const shieldWidth = Math.min(tempPct, Math.max(0, 100 - pct));
+      const shieldLeft = pct;
       playerHpBarWrap.classList.add("show");
       playerHpBarFill.style.width = `${pct}%`;
       playerHpBarFill.classList.toggle("mid", pct <= 50 && pct > 20);
@@ -13479,7 +13479,7 @@ __DAMAGE_TYPE_OPTIONS__
         updatePlayerHpBar(me);
       } else {
         setMeLabel(claimed || null, false);
-        updatePlayerHpBar(null);
+        updatePlayerHpBar(claimed || null);
         moveEl.removeAttribute("title");
         actionEl.textContent = "Action: —";
         if (attackResourceEl){
