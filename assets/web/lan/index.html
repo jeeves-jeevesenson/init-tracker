@@ -5982,6 +5982,8 @@ __DAMAGE_TYPE_OPTIONS__
   function getWeaponSelectionCharacterKey(){
     const claimedName = getClaimedPlayerName();
     const stripped = stripCombatNameSuffix(claimedName || "");
+    const normalized = normalizeCharacterLookupKey(stripped || claimedName || "");
+    if (normalized) return normalized;
     const slug = characterSlugify(stripped || claimedName || "");
     return slug || "";
   }
