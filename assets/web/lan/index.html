@@ -5689,7 +5689,7 @@ __DAMAGE_TYPE_OPTIONS__
     Object.entries(inventorySlotMatchers).forEach(([slot, terms]) => {
       if (!Array.isArray(terms) || !terms.length) return;
       if (terms.some((term) => haystack.includes(term))){
-        matches.push(slot === "ring" ? "ring" : slot);
+        matches.push(slot);
       }
     });
     return Array.from(new Set(matches));
@@ -5711,7 +5711,7 @@ __DAMAGE_TYPE_OPTIONS__
     });
     const seen = new Set();
     return options.filter((entry) => {
-      const key = `${entry.value}|${entry.label}`;
+      const key = entry.value;
       if (seen.has(key)) return false;
       seen.add(key);
       return true;

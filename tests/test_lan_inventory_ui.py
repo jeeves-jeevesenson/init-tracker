@@ -3,8 +3,10 @@ import unittest
 
 
 class LanInventoryUiTests(unittest.TestCase):
+    SOURCE_PATH = pathlib.Path("assets/web/lan/index.html")
+
     def test_inventory_layout_includes_bg3_style_slots_and_backpack_list(self):
-        source = pathlib.Path("assets/web/lan/index.html").read_text(encoding="utf-8")
+        source = self.SOURCE_PATH.read_text(encoding="utf-8")
 
         self.assertIn('id="inventoryHeadSelect"', source)
         self.assertIn('id="inventoryCloakSelect"', source)
@@ -17,7 +19,7 @@ class LanInventoryUiTests(unittest.TestCase):
         self.assertIn('id="inventoryItemsList"', source)
 
     def test_inventory_button_opens_panel_without_toggle_hide(self):
-        source = pathlib.Path("assets/web/lan/index.html").read_text(encoding="utf-8")
+        source = self.SOURCE_PATH.read_text(encoding="utf-8")
 
         self.assertIn('inventoryBtn.addEventListener("click", () => {', source)
         self.assertIn("setInventoryPanelOpen(true);", source)
