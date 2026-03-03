@@ -5598,12 +5598,27 @@ __DAMAGE_TYPE_OPTIONS__
   const inventorySlotMatchers = {
     head: ["head", "helmet", "helm", "circlet", "hat", "hood"],
     cloak: ["cloak", "cape"],
-    armour: ["armour", "armor", "robe", "clothing", "padded"],
+    armour: ["armour", "armor", "robe", "clothing", "padded", "plate", "mail", "breastplate", "cuirass", "leather", "hide", "scale"],
     gloves: ["glove", "gauntlet", "bracer"],
     boots: ["boot", "shoe", "footwear", "greaves"],
     amulet: ["amulet", "necklace", "pendant"],
     ring: ["ring"],
   };
+
+  function normalizeInventorySlotTag(value){
+    const normalized = normalizeLowerValue(value).replace(/[\s-]+/g, "_");
+    if (!normalized) return "";
+    if (["head", "helmet", "helm", "circlet", "hat", "hood"].includes(normalized)) return "head";
+    if (["cloak", "cape"].includes(normalized)) return "cloak";
+    if (["armor", "armour", "chest", "body", "torso"].includes(normalized)) return "armour";
+    if (["gloves", "glove", "gauntlets", "gauntlet", "bracers", "bracer", "hands"].includes(normalized)) return "gloves";
+    if (["boots", "boot", "footwear", "feet", "shoes", "shoe", "greaves"].includes(normalized)) return "boots";
+    if (["amulet", "necklace", "pendant", "neck"].includes(normalized)) return "amulet";
+    if (normalized.startsWith("ring")) return "ring";
+    if (["main_hand", "mainhand", "primary_hand", "weapon_main"].includes(normalized)) return "main_hand";
+    if (["off_hand", "offhand", "secondary_hand", "weapon_off"].includes(normalized)) return "off_hand";
+    return "";
+  }
 
   function getPlayerProfile(name){
     if (!name) return null;
@@ -5677,6 +5692,16 @@ __DAMAGE_TYPE_OPTIONS__
   }
 
   function getInventoryItemMatchedSlots(item){
+    const explicitSlots = [
+      item?.slot,
+      item?.slot_id,
+      item?.equip_slot,
+      item?.equipped_slot,
+      item?.slotId,
+    ].map((entry) => normalizeInventorySlotTag(entry)).filter(Boolean);
+    if (explicitSlots.length){
+      return Array.from(new Set(explicitSlots));
+    }
     const haystack = [
       item?.slot,
       item?.category,

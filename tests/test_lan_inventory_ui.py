@@ -25,6 +25,16 @@ class LanInventoryUiTests(unittest.TestCase):
         self.assertIn("setInventoryPanelOpen(true);", source)
         self.assertNotIn("setInventoryPanelOpen(!inventoryPanelOpen)", source)
 
+    def test_inventory_slot_matching_supports_explicit_tags_and_common_armor_names(self):
+        source = self.SOURCE_PATH.read_text(encoding="utf-8")
+
+        self.assertIn("function normalizeInventorySlotTag(value)", source)
+        self.assertIn("item?.equip_slot", source)
+        self.assertIn('"plate"', source)
+        self.assertIn('"mail"', source)
+        self.assertIn('"breastplate"', source)
+        self.assertIn('"leather"', source)
+
 
 if __name__ == "__main__":
     unittest.main()
