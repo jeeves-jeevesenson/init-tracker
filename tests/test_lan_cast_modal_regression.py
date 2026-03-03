@@ -77,6 +77,9 @@ class LanCastModalRegressionTests(unittest.TestCase):
     def test_player_hp_bar_ui_and_threshold_classes_present(self):
         self.assertIn('id="playerHpBarWrap"', self.html)
         self.assertIn('id="playerHpBarFill"', self.html)
+        self.assertIn('const shieldWidth = Math.min(tempPct, Math.max(0, 100 - pct));', self.html)
+        self.assertIn("const shieldLeft = pct;", self.html)
+        self.assertIn("updatePlayerHpBar(claimed || null);", self.html)
         self.assertIn('playerHpBarFill.classList.toggle("mid", pct <= 50 && pct > 20);', self.html)
         self.assertIn('playerHpBarFill.classList.toggle("low", pct <= 20);', self.html)
 
