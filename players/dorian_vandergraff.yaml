@@ -55,10 +55,13 @@ defenses:
   ac:
     sources:
     - id: plate_armor
-      label: Platemail
+      label: Plate Armor
       when: always
-      base_formula: '20'
-    bonuses: []
+      base_formula: '18'
+    bonuses:
+    - label: 'Fighting Style: Defense'
+      when: always
+      value: 1
   resistances:
   - cold
   immunities: []
@@ -70,6 +73,7 @@ attacks:
   - id: inazuma
     name: Inazuma
     equipped: true
+    selected_mode: two
     proficient: true
     to_hit: 8
     magic_bonus: 0
@@ -127,6 +131,10 @@ features:
         name: Protected
         icon: 🛡️
         description_template: '{source_name}s oath protects you. Gain a +{save_bonus} and resistance to Necrotic, Psychic and Radiant damage'
+- id: fighting_style_defense
+  name: 'Fighting Style: Defense (+1 AC)'
+  passive: true
+  description: The Defense Fighting Style (now classified as a Fighting Style Feat) still provides a +1 bonus to your Armor Class while you are wearing Light, Medium, or Heavy armor.
 actions:
 - name: Attack
   description: Make a weapon or unarmed attack against a target within range.
@@ -250,6 +258,9 @@ inventory:
     quantity: 1
     description: Wondrous ring. While equipped, grants resistance to cold damage.
       Does not require attunement.
+  - name: Plate Armor
+    quantity: 1
+    description: AC 18. Strength 15 required (or -10 ft Speed). Stealth checks at disadvantage. Weight 65 lb. Cost 1,500 GP.
 magic_items:
   attunement_slots: 3
   equipped:

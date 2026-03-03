@@ -5947,7 +5947,7 @@ __DAMAGE_TYPE_OPTIONS__
 
   function getWeaponPropertySet(weapon){
     const properties = Array.isArray(weapon?.properties) ? weapon.properties : [];
-    return new Set(properties.map((entry) => normalizeLowerValue(entry)).filter(Boolean));
+    return new Set(properties.map((entry) => normalizeLowerValue(entry).replace(/[\s-]+/g, "_")).filter(Boolean));
   }
 
   function isWeaponVersatile(weapon){
@@ -6049,7 +6049,8 @@ __DAMAGE_TYPE_OPTIONS__
     const defaultWeapon = getDefaultAttackWeapon(weapons);
     const defaultId = String(defaultWeapon?.id || defaultWeapon?.name || "").trim();
     if (!defaultId) return "";
-    const preferred = `${defaultId}|one`;
+    const preferredMode = String(defaultWeapon?.selected_mode || "").trim().toLowerCase() === "two" ? "two" : "one";
+    const preferred = `${defaultId}|${preferredMode}`;
     if (mainhandOptions.some((entry) => entry.value === preferred)) return preferred;
     const fallback = mainhandOptions.find((entry) => entry.value.startsWith(`${defaultId}|`));
     return fallback ? fallback.value : (mainhandOptions[0]?.value || "");

@@ -224,6 +224,26 @@ class ItemsWeaponResolutionTests(unittest.TestCase):
         self.assertEqual(resolved["one_handed"].get("damage_formula", ""), "")
         self.assertEqual(resolved["two_handed"]["damage_formula"], "1d12 + 2 + str_mod")
 
+    def test_normalize_player_weapon_canonicalizes_properties_and_selected_mode(self):
+        player = {
+            "name": "Test",
+            "attacks": {
+                "weapons": [
+                    {
+                        "id": "greatsword",
+                        "properties": ["Two-Handed", "heavy weapon"],
+                        "selected_mode": "Two",
+                    }
+                ]
+            },
+        }
+        with mock.patch.object(tracker_mod.InitiativeTracker, "_items_registry_payload", return_value={"weapons": {}, "armors": {}}):
+            normalized = self.app._normalize_player_profile(player, "Test")
+
+        weapon = normalized["attacks"]["weapons"][0]
+        self.assertEqual(weapon["properties"], ["two_handed", "heavy_weapon"])
+        self.assertEqual(weapon["selected_mode"], "two")
+
 
 
 if __name__ == "__main__":
