@@ -10908,22 +10908,31 @@ class InitiativeTracker(base.InitiativeTracker):
                 chunks.append(f"{'+'.join(reasons)}: {original} {dtype}->{applied}")
             return f" ({'; '.join(chunks)})" if chunks else ""
 
-        def _damage_type_label(entries: List[Dict[str, Any]]) -> str:
-            labels: List[str] = []
-            seen: set[str] = set()
-            for entry in entries if isinstance(entries, list) else []:
+        def _damage_breakdown_label(entries: List[Dict[str, Any]]) -> str:
+            if not isinstance(entries, list):
+                return ""
+            merged: Dict[str, int] = {}
+            order: List[str] = []
+            for entry in entries:
                 if not isinstance(entry, dict):
+                    continue
+                try:
+                    amount = int(entry.get("amount") or 0)
+                except Exception:
+                    amount = 0
+                if amount <= 0:
                     continue
                 raw_type = str(entry.get("type") or "").strip().lower()
                 canonical = self._canonical_damage_type(raw_type)
-                dtype = canonical or raw_type
-                if not dtype or dtype in seen:
-                    continue
-                seen.add(dtype)
-                labels.append(dtype.title())
-            if not labels:
+                dtype = canonical or raw_type or "untyped"
+                if dtype not in merged:
+                    merged[dtype] = 0
+                    order.append(dtype)
+                merged[dtype] += int(amount)
+            if not order:
                 return ""
-            return f" {'+'.join(labels)}"
+            chunks = [f"{int(merged.get(dtype) or 0)} {dtype.title()}" for dtype in order if int(merged.get(dtype) or 0) > 0]
+            return f" ({', '.join(chunks)})" if chunks else ""
 
         removed: List[int] = []
         for target_cid in included:
@@ -11073,14 +11082,38 @@ class InitiativeTracker(base.InitiativeTracker):
             adjustment = self._adjust_damage_entries_for_target(target, damage_entries) if damage_entries else {"entries": [], "notes": []}
             adjusted_entries = list((adjustment or {}).get("entries") or [])
             adjustment_note = _adjustment_note(list((adjustment or {}).get("notes") or []))
-            damage_type_label = _damage_type_label(damage_entries)
-            if sculpt_auto_success and not damage_type_label:
+            before = int(getattr(target, "hp", 0) or 0)
+            remaining_hp = int(before)
+            effective_entries: List[Dict[str, Any]] = []
+            overflow_truncated = False
+            for entry in adjusted_entries:
+                if not isinstance(entry, dict):
+                    continue
+                if remaining_hp <= 0:
+                    overflow_truncated = True
+                    break
+                try:
+                    amount = max(0, int(entry.get("amount") or 0))
+                except Exception:
+                    amount = 0
+                if amount <= 0:
+                    continue
+                applied = min(int(amount), int(remaining_hp))
+                if applied <= 0:
+                    overflow_truncated = True
+                    continue
+                effective_entries.append({"amount": int(applied), "type": str(entry.get("type") or "").strip().lower()})
+                remaining_hp -= int(applied)
+                if applied < amount:
+                    overflow_truncated = True
+            total_damage = sum(int(entry.get("amount") or 0) for entry in effective_entries if isinstance(entry, dict))
+            damage_breakdown = _damage_breakdown_label(effective_entries)
+            if sculpt_auto_success and not damage_breakdown:
                 fallback_type = str(aoe.get("damage_type") or "").strip().lower()
                 canonical_fallback = self._canonical_damage_type(fallback_type)
-                if canonical_fallback:
-                    damage_type_label = f" {canonical_fallback.title()}"
-            total_damage = sum(int(entry.get("amount") or 0) for entry in adjusted_entries if isinstance(entry, dict))
-            before = int(getattr(target, "hp", 0) or 0)
+                if canonical_fallback and total_damage > 0:
+                    damage_breakdown = f" ({total_damage} {canonical_fallback.title()})"
+            overflow_note = " (overflow trimmed after target dropped to 0 HP)" if overflow_truncated else ""
             if total_damage > 0 and getattr(self, "_lan", None) is not None and hasattr(self._lan, "_broadcast_payload"):
                 try:
                     self._lan._broadcast_payload({
@@ -11092,7 +11125,7 @@ class InitiativeTracker(base.InitiativeTracker):
                         "spell_name": spell_name,
                         "spell_mode": "save" if requires_save else "effect",
                         "hit": True,
-                        "damage_entries": list(adjusted_entries),
+                        "damage_entries": list(effective_entries),
                         "damage_total": int(total_damage),
                     })
                 except Exception:
@@ -11143,17 +11176,17 @@ class InitiativeTracker(base.InitiativeTracker):
                         forced_move_notes.append(str(forced.get("mode") or "push"))
             if sculpt_auto_success:
                 self._log(
-                    f"{spell_name}: {target.name} SCULPT (auto) -> {total_damage}{damage_type_label} damage{adjustment_note}",
+                    f"{spell_name}: {target.name} SCULPT (auto) -> {total_damage} damage{damage_breakdown}{adjustment_note}{overflow_note}",
                     cid=int(target_cid),
                 )
             elif requires_save:
                 status = "PASS" if passed else "FAIL"
                 self._log(
-                    f"{spell_name}: {target.name} save {ability.upper()} {status} ({total} vs DC {dc}) -> {total_damage}{damage_type_label} damage{adjustment_note}"
+                    f"{spell_name}: {target.name} save {ability.upper()} {status} ({total} vs DC {dc}) -> {total_damage} damage{damage_breakdown}{adjustment_note}{overflow_note}"
                 )
             else:
                 self._log(
-                    f"{spell_name}: {target.name} auto -> {total_damage}{damage_type_label} damage{adjustment_note}"
+                    f"{spell_name}: {target.name} auto -> {total_damage} damage{damage_breakdown}{adjustment_note}{overflow_note}"
                 )
             if forced_move_notes:
                 self._log(
