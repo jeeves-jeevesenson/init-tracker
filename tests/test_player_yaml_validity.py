@@ -42,6 +42,12 @@ class PlayerYamlValidityTests(unittest.TestCase):
         self.assertIn("CHA", saves)
         self.assertNotIn("CHR", saves)
 
+    def test_malagrou_defaults_to_two_handed_axe_mode(self):
+        data = self._load("players/malagrou.yaml")
+        weapons = (((data.get("attacks") or {}).get("weapons")) or [])
+        axe = next((entry for entry in weapons if str((entry or {}).get("id") or "").strip() == "big_ass_axe_plus_1"), {})
+        self.assertEqual(str(axe.get("selected_mode") or "").strip().lower(), "two")
+
     def test_player_yaml_guardrails(self):
         valid_save_keys = {"STR", "DEX", "CON", "INT", "WIS", "CHA"}
         required_speed_keys = {"walk", "climb", "fly", "swim"}
