@@ -1,5 +1,6 @@
 import tempfile
 import unittest
+import re
 from pathlib import Path
 from unittest import mock
 
@@ -224,6 +225,38 @@ class ItemsWeaponResolutionTests(unittest.TestCase):
         self.assertEqual(resolved["one_handed"].get("damage_formula", ""), "")
         self.assertEqual(resolved["two_handed"]["damage_formula"], "1d12 + 2 + str_mod")
 
+    def test_resolve_weapon_from_items_infers_melee_reach_range_when_missing(self):
+        registry = {
+            "weapons": {
+                "glaive": {
+                    "id": "glaive",
+                    "name": "Glaive",
+                    "category": "martial_melee",
+                    "properties": ["reach", "heavy", "two_handed"],
+                    "damage": {"one_handed": {"formula": "1d10", "type": "slashing"}},
+                }
+            },
+            "armors": {},
+        }
+        resolved = self.app._resolve_weapon_from_items({"id": "glaive"}, registry["weapons"])
+        self.assertEqual(resolved["range"], "10")
+
+    def test_resolve_weapon_from_items_infers_default_melee_range_when_missing(self):
+        registry = {
+            "weapons": {
+                "battleaxe": {
+                    "id": "battleaxe",
+                    "name": "Battleaxe",
+                    "category": "martial_melee",
+                    "properties": ["versatile"],
+                    "damage": {"one_handed": {"formula": "1d8", "type": "slashing"}},
+                }
+            },
+            "armors": {},
+        }
+        resolved = self.app._resolve_weapon_from_items({"id": "battleaxe"}, registry["weapons"])
+        self.assertEqual(resolved["range"], "5")
+
     def test_normalize_player_weapon_canonicalizes_properties_and_selected_mode(self):
         player = {
             "name": "Test",
@@ -266,6 +299,28 @@ class ItemsWeaponResolutionTests(unittest.TestCase):
         self.assertTrue(weapon["main_hand"])
         self.assertFalse(weapon["off_hand"])
 
+    def test_repository_melee_items_resolve_with_range_for_attack_workflow(self):
+        registry = self.app._items_registry_payload()
+        weapons = registry.get("weapons") if isinstance(registry, dict) else {}
+        self.assertIsInstance(weapons, dict)
+        melee_items = []
+        for item_id, item_data in weapons.items():
+            if not isinstance(item_data, dict):
+                continue
+            category = str(item_data.get("category") or "").strip().lower()
+            if "melee" not in category:
+                continue
+            melee_items.append((item_id, item_data))
+        self.assertGreater(len(melee_items), 0)
+
+        for item_id, item_data in melee_items:
+            resolved = self.app._resolve_weapon_from_items({"id": item_id}, weapons)
+            range_text = str(resolved.get("range") or "").strip()
+            self.assertTrue(range_text, f"{item_id} did not resolve to a usable range")
+            match = re.search(r"(\d+(?:\.\d+)?)", range_text.split("/")[0])
+            self.assertIsNotNone(match, f"{item_id} resolved with non-numeric range '{range_text}'")
+            feet = float(match.group(1))
+            self.assertGreater(feet, 0.0, f"{item_id} resolved with non-positive range '{range_text}'")
 
 
 if __name__ == "__main__":

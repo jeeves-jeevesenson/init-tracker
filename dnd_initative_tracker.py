@@ -13059,6 +13059,26 @@ class InitiativeTracker(base.InitiativeTracker):
             return base
         return f"{base} + {self._weapon_ability_mod_expression(item_data)}"
 
+    def _weapon_range_from_item(self, item_data: Dict[str, Any]) -> str:
+        explicit_range = str(item_data.get("range") or "").strip()
+        if explicit_range:
+            return explicit_range
+        category = str(item_data.get("category") or "").strip().lower()
+        if "melee" not in category:
+            return ""
+        properties = item_data.get("properties")
+        normalized_props: set[str] = set()
+        if isinstance(properties, list):
+            for prop in properties:
+                if isinstance(prop, dict):
+                    prop_id = str(prop.get("id") or prop.get("name") or "").strip().lower()
+                else:
+                    prop_id = str(prop or "").strip().lower()
+                prop_id = re.sub(r"[\s-]+", "_", prop_id)
+                if prop_id:
+                    normalized_props.add(prop_id)
+        return "10" if "reach" in normalized_props else "5"
+
     def _resolve_weapon_from_items(
         self,
         weapon_entry: Dict[str, Any],
@@ -13076,7 +13096,9 @@ class InitiativeTracker(base.InitiativeTracker):
         if not str(weapon.get("name") or "").strip():
             weapon["name"] = str(item.get("name") or "").strip()
         if not str(weapon.get("range") or "").strip():
-            weapon["range"] = str(item.get("range") or "").strip()
+            inferred_range = self._weapon_range_from_item(item)
+            if inferred_range:
+                weapon["range"] = inferred_range
         if "properties" not in weapon and isinstance(item.get("properties"), list):
             weapon["properties"] = list(item.get("properties") or [])
         if "mastery" not in weapon and item.get("mastery") not in (None, ""):
