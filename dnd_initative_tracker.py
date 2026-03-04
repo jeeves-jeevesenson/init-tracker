@@ -8615,7 +8615,7 @@ class InitiativeTracker(base.InitiativeTracker):
                 dex=None,
                 ally=True,
                 is_pc=True,
-                is_spellcaster=bool(spellcasting),
+                is_spellcaster=self._is_spellcasting_enabled(spellcasting),
                 actions=actions,
                 bonus_actions=bonus_actions,
                 reactions=reactions,
@@ -12811,12 +12811,15 @@ class InitiativeTracker(base.InitiativeTracker):
             raw_spell_slots = spellcasting.get("spell_slots")
         elif "spell_slots" in data:
             raw_spell_slots = data.get("spell_slots")
-        spellcasting["spell_slots"] = self._normalize_spell_slots(raw_spell_slots)
-        slots_total = sum(int((entry or {}).get("max", 0) or 0) for entry in spellcasting["spell_slots"].values())
-        if slots_total <= 0 and bool(spellcasting):
-            level_value = self._coerce_level_value(leveling)
-            progression = self._spell_slot_progression_from_profile(leveling, spellcasting)
-            spellcasting["spell_slots"] = self._default_spell_slots_for_level(level_value, progression)
+        if self._is_spellcasting_enabled(spellcasting):
+            spellcasting["spell_slots"] = self._normalize_spell_slots(raw_spell_slots)
+            slots_total = sum(int((entry or {}).get("max", 0) or 0) for entry in spellcasting["spell_slots"].values())
+            if slots_total <= 0 and bool(spellcasting):
+                level_value = self._coerce_level_value(leveling)
+                progression = self._spell_slot_progression_from_profile(leveling, spellcasting)
+                spellcasting["spell_slots"] = self._default_spell_slots_for_level(level_value, progression)
+        else:
+            spellcasting["spell_slots"] = self._normalize_spell_slots(None)
 
         for key in ("known_cantrips", "known_spells", "known_spell_names"):
             if key not in spellcasting and key in data:
@@ -13061,6 +13064,21 @@ class InitiativeTracker(base.InitiativeTracker):
             "char": "cha",
         }
         return ability_map.get(raw)
+
+    @staticmethod
+    def _is_spellcasting_enabled(spellcasting: Any) -> bool:
+        if not isinstance(spellcasting, dict):
+            return False
+        if "enabled" not in spellcasting:
+            return bool(spellcasting)
+        enabled = spellcasting.get("enabled")
+        if isinstance(enabled, bool):
+            return enabled
+        if isinstance(enabled, (int, float)):
+            return bool(enabled)
+        if isinstance(enabled, str):
+            return enabled.strip().lower() in {"1", "true", "yes", "on"}
+        return bool(enabled)
 
     def _ability_score_modifier(self, abilities: Dict[str, Any], key: Optional[str]) -> int:
         if not key or not isinstance(abilities, dict):
@@ -15315,6 +15333,8 @@ class InitiativeTracker(base.InitiativeTracker):
         if not isinstance(recover_cfg, dict):
             return False, "No spell slot recovery config found.", []
         spellcasting = profile.get("spellcasting") if isinstance(profile.get("spellcasting"), dict) else {}
+        if not self._is_spellcasting_enabled(spellcasting):
+            return False, "Spellcasting is disabled for that caster, matey.", []
         slots = self._normalize_spell_slots(spellcasting.get("spell_slots"))
         variables = {
             "level": self._coerce_level_value(profile.get("leveling") if isinstance(profile.get("leveling"), dict) else {}),
@@ -16404,6 +16424,8 @@ class InitiativeTracker(base.InitiativeTracker):
         if not isinstance(profile, dict):
             profile = {}
         spellcasting = profile.get("spellcasting", {})
+        if not self._is_spellcasting_enabled(spellcasting):
+            raise ValueError("Spellcasting is disabled for that caster, matey.")
         slots = self._normalize_spell_slots(spellcasting.get("spell_slots") if isinstance(spellcasting, dict) else None)
         return player_name, slots
 

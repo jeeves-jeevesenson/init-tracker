@@ -7179,7 +7179,9 @@ __DAMAGE_TYPE_OPTIONS__
   }
 
   function getSpellSlotLevels(profile){
-    const slots = profile?.spellcasting?.spell_slots;
+    const spellcasting = profile?.spellcasting;
+    if (spellcasting && spellcasting.enabled === false) return [];
+    const slots = spellcasting?.spell_slots;
     if (!slots || typeof slots !== "object") return [];
     const levels = [];
     for (let level = 1; level <= 9; level += 1){
