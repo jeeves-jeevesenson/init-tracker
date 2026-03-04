@@ -301,6 +301,38 @@ class PlayerFeatureExecutionTests(unittest.TestCase):
         self.assertEqual((saved["slots"]["3"] or {}).get("current"), 2)
         self.assertEqual((saved["slots"]["2"] or {}).get("current"), 3)
 
+    def test_spellcasting_disabled_clears_spell_slots_in_normalized_profile(self):
+        app = self._new_app()
+        normalized = app._normalize_player_profile(
+            {
+                "name": "Malagrou",
+                "spellcasting": {
+                    "enabled": False,
+                    "spell_slots": {
+                        "1": {"max": 4, "current": 2},
+                        "2": {"max": 3, "current": 1},
+                    },
+                },
+            },
+            "malagrou",
+        )
+        spell_slots = ((normalized.get("spellcasting") or {}).get("spell_slots") or {})
+        self.assertEqual((spell_slots.get("1") or {}).get("max"), 0)
+        self.assertEqual((spell_slots.get("1") or {}).get("current"), 0)
+        self.assertEqual((spell_slots.get("2") or {}).get("max"), 0)
+        self.assertEqual((spell_slots.get("2") or {}).get("current"), 0)
+
+    def test_resolve_spell_slots_rejects_when_spellcasting_disabled(self):
+        app = self._new_app()
+        app._profile_for_player_name = lambda _name: {
+            "spellcasting": {
+                "enabled": False,
+                "spell_slots": {"1": {"max": 4, "current": 4}},
+            }
+        }
+        with self.assertRaisesRegex(ValueError, "Spellcasting is disabled"):
+            app._resolve_spell_slot_profile("Malagrou")
+
     def test_once_per_turn_limiter_blocks_second_use_same_turn(self):
         app = self._new_app()
         app.round_num = 2
