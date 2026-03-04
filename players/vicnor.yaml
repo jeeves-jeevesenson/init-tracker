@@ -396,6 +396,9 @@ spellcasting:
     prepared:
     - hex
     - armor-of-agathys
+    - absorb-elements
+    free:
+    - absorb-elements
   spell_slots:
     '1':
       max: 1
