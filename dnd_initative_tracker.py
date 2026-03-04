@@ -5072,6 +5072,7 @@ class InitiativeTracker(base.InitiativeTracker):
         self._pending_reaction_offers: Dict[str, Dict[str, Any]] = {}
         self._pending_shield_resolutions: Dict[str, Dict[str, Any]] = {}
         self._pending_hellish_rebuke_resolutions: Dict[str, Dict[str, Any]] = {}
+        self._pending_absorb_elements_resolutions: Dict[str, Dict[str, Any]] = {}
         self._session_has_saved = False
 
         # POC helpers: start the LAN server automatically.
@@ -5911,6 +5912,7 @@ class InitiativeTracker(base.InitiativeTracker):
         setattr(c, "_rage_attack_made_this_turn", False)
         setattr(c, "_rage_took_damage_this_turn", False)
         self._shield_effect_expire_if_turn_start(_normalize_cid_value(getattr(c, "cid", None), "shield.turn_start.cid"))
+        self._absorb_elements_turn_start(c)
         self._run_combatant_turn_hooks(c, "start_turn")
         try:
             if bool(getattr(c, "is_pc", False)):
@@ -6992,6 +6994,7 @@ class InitiativeTracker(base.InitiativeTracker):
                 "reaction_prefs_by_cid": self._json_safe(getattr(self, "_reaction_prefs_by_cid", {})),
                 "pending_reaction_offers": self._json_safe(getattr(self, "_pending_reaction_offers", {})),
                 "pending_shield_resolutions": self._json_safe(getattr(self, "_pending_shield_resolutions", {})),
+                "pending_absorb_elements_resolutions": self._json_safe(getattr(self, "_pending_absorb_elements_resolutions", {})),
                 "concentration_save_state": self._json_safe(getattr(self, "_concentration_save_state", {})),
             },
             "map": {
@@ -7167,6 +7170,11 @@ class InitiativeTracker(base.InitiativeTracker):
         self._reaction_prefs_by_cid = {int(k): dict(v) for k, v in (combat.get("reaction_prefs_by_cid") or {}).items() if isinstance(v, dict)} if isinstance(combat.get("reaction_prefs_by_cid"), dict) else {}
         self._pending_reaction_offers = dict(combat.get("pending_reaction_offers") if isinstance(combat.get("pending_reaction_offers"), dict) else {})
         self._pending_shield_resolutions = dict(combat.get("pending_shield_resolutions") if isinstance(combat.get("pending_shield_resolutions"), dict) else {})
+        self._pending_absorb_elements_resolutions = dict(
+            combat.get("pending_absorb_elements_resolutions")
+            if isinstance(combat.get("pending_absorb_elements_resolutions"), dict)
+            else {}
+        )
         self._concentration_save_state = dict(combat.get("concentration_save_state") if isinstance(combat.get("concentration_save_state"), dict) else {})
 
         grid = map_state.get("grid") if isinstance(map_state.get("grid"), dict) else {}
@@ -8173,6 +8181,7 @@ class InitiativeTracker(base.InitiativeTracker):
         self._reaction_prefs_by_cid = {}
         self._pending_reaction_offers = {}
         self._pending_shield_resolutions = {}
+        self._pending_absorb_elements_resolutions = {}
         self._concentration_save_state = {}
         self._session_has_saved = False
 
@@ -10301,6 +10310,11 @@ class InitiativeTracker(base.InitiativeTracker):
             dtype = self._canonical_damage_type(item)
             if dtype:
                 defenses["damage_resistances"].add(dtype)
+        absorb_state = self._absorb_elements_state(target_obj)
+        if bool(absorb_state.get("resistance_active")):
+            absorb_dtype = self._canonical_damage_type(absorb_state.get("damage_type"))
+            if absorb_dtype in {"acid", "cold", "fire", "lightning", "thunder"}:
+                defenses["damage_resistances"].add(absorb_dtype)
         return defenses
 
     def _adjust_damage_entries_for_target(self, target_obj: Any, damage_entries: List[Dict[str, Any]]) -> Dict[str, Any]:
@@ -17162,7 +17176,7 @@ class InitiativeTracker(base.InitiativeTracker):
         normalized: Dict[str, str] = {}
         for key, value in prefs.items():
             kind = str(key or "").strip().lower()
-            if kind not in ("opportunity_attack", "war_caster", "shield", "hellish_rebuke"):
+            if kind not in ("opportunity_attack", "war_caster", "shield", "hellish_rebuke", "absorb_elements"):
                 continue
             mode = str(value or "").strip().lower()
             if mode not in ("off", "ask", "auto"):
@@ -17292,6 +17306,8 @@ class InitiativeTracker(base.InitiativeTracker):
                 self._pending_shield_resolutions.pop(str(req_id), None)
             if isinstance(getattr(self, "_pending_hellish_rebuke_resolutions", None), dict):
                 self._pending_hellish_rebuke_resolutions.pop(str(req_id), None)
+            if isinstance(getattr(self, "_pending_absorb_elements_resolutions", None), dict):
+                self._pending_absorb_elements_resolutions.pop(str(req_id), None)
 
     def _build_oa_reaction_choices(self, reactor: Any, include_war_caster: bool = True) -> List[Dict[str, Any]]:
         if reactor is None:
@@ -17424,6 +17440,184 @@ class InitiativeTracker(base.InitiativeTracker):
         if has_prepared and has_slot:
             return True, "spell_slot"
         return False, "no_resource"
+
+    def _absorb_elements_state(self, target: Any) -> Dict[str, Any]:
+        state = getattr(target, "_absorb_elements_state", None)
+        return dict(state) if isinstance(state, dict) else {}
+
+    def _set_absorb_elements_state(self, target: Any, state: Optional[Dict[str, Any]]) -> None:
+        if target is None:
+            return
+        if not isinstance(state, dict):
+            setattr(target, "_absorb_elements_state", {})
+            return
+        setattr(target, "_absorb_elements_state", dict(state))
+
+    def _absorb_elements_trigger_types(self, damage_entries: Any) -> List[str]:
+        supported = {"acid", "cold", "fire", "lightning", "thunder"}
+        found: List[str] = []
+        seen: set[str] = set()
+        for entry in damage_entries if isinstance(damage_entries, list) else []:
+            if not isinstance(entry, dict):
+                continue
+            try:
+                amount = int(entry.get("amount") or 0)
+            except Exception:
+                amount = 0
+            if amount <= 0:
+                continue
+            dtype = self._canonical_damage_type(entry.get("type"))
+            if dtype in supported and dtype not in seen:
+                seen.add(dtype)
+                found.append(dtype)
+        return found
+
+    def _can_offer_absorb_elements_reaction(self, target: Any, trigger_types: List[str]) -> Tuple[bool, str]:
+        if target is None:
+            return False, "missing_target"
+        if not trigger_types:
+            return False, "invalid_damage_type"
+        if int(getattr(target, "reaction_remaining", 0) or 0) <= 0:
+            return False, "no_reaction"
+        player_name = self._pc_name_for(int(getattr(target, "cid", 0) or 0))
+        profile = self._profile_for_player_name(player_name)
+        normalized = self._normalize_player_spell_config(profile if isinstance(profile, dict) else {}, include_missing_prepared=False)
+        prepared = [str(x or "").strip().lower() for x in list(normalized.get("prepared_list") or [])]
+        if "absorb-elements" not in prepared:
+            return False, "not_prepared"
+        has_slot = False
+        try:
+            _pn, slots = self._resolve_spell_slot_profile(player_name)
+            for lvl in range(1, 10):
+                if int((slots.get(str(lvl), {}) or {}).get("current", 0) or 0) > 0:
+                    has_slot = True
+                    break
+        except Exception:
+            has_slot = False
+        if not has_slot:
+            return False, "no_resource"
+        return True, "spell_slot"
+
+    def _activate_absorb_elements(self, target: Any, damage_type: str, slot_level: int) -> None:
+        dtype = self._canonical_damage_type(damage_type)
+        if dtype not in {"acid", "cold", "fire", "lightning", "thunder"}:
+            return
+        state = {
+            "damage_type": dtype,
+            "resistance_active": True,
+            "bonus_armed": False,
+            "bonus_dice_count": max(1, int(slot_level)),
+            "bonus_turn_marker": None,
+        }
+        self._set_absorb_elements_state(target, state)
+
+    def _absorb_elements_turn_start(self, target: Any) -> None:
+        state = self._absorb_elements_state(target)
+        if not state:
+            return
+        marker = (
+            int(getattr(self, "round_num", 0) or 0),
+            int(getattr(self, "turn_num", 0) or 0),
+            int(getattr(target, "cid", 0) or 0),
+        )
+        if bool(state.get("resistance_active")):
+            state["resistance_active"] = False
+            state["bonus_armed"] = True
+            state["bonus_turn_marker"] = marker
+            self._set_absorb_elements_state(target, state)
+            return
+        bonus_marker = tuple(state.get("bonus_turn_marker") or ())
+        if bool(state.get("bonus_armed")) and bonus_marker and bonus_marker != marker:
+            self._set_absorb_elements_state(target, {})
+
+    def _consume_absorb_elements_melee_bonus(
+        self,
+        attacker: Any,
+        *,
+        hit: bool,
+        is_melee_attack: bool,
+        turn_marker: Tuple[int, int, int],
+    ) -> Optional[Dict[str, Any]]:
+        if attacker is None or not hit or not is_melee_attack:
+            return None
+        state = self._absorb_elements_state(attacker)
+        if not bool(state.get("bonus_armed")):
+            return None
+        bonus_marker = tuple(state.get("bonus_turn_marker") or ())
+        if not bonus_marker or bonus_marker != tuple(turn_marker):
+            return None
+        damage_type = self._canonical_damage_type(state.get("damage_type"))
+        dice_count = max(1, int(state.get("bonus_dice_count") or 1))
+        if damage_type not in {"acid", "cold", "fire", "lightning", "thunder"}:
+            self._set_absorb_elements_state(attacker, {})
+            return None
+        amount = sum(random.randint(1, 6) for _ in range(int(dice_count)))
+        self._set_absorb_elements_state(attacker, {})
+        if amount <= 0:
+            return None
+        return {"amount": int(amount), "type": damage_type}
+
+    def _maybe_offer_absorb_elements(
+        self,
+        victim_cid: int,
+        attacker_cid: Optional[int],
+        *,
+        pending_msg: Optional[Dict[str, Any]],
+        damage_entries: List[Dict[str, Any]],
+    ) -> Optional[str]:
+        attacker_cid = _normalize_cid_value(attacker_cid, "absorb_elements.attacker")
+        if attacker_cid is None:
+            return None
+        if int(attacker_cid) == int(victim_cid):
+            return None
+        victim = self.combatants.get(int(victim_cid))
+        attacker = self.combatants.get(int(attacker_cid))
+        if victim is None or attacker is None:
+            return None
+        trigger_types = self._absorb_elements_trigger_types(damage_entries)
+        if not trigger_types:
+            return None
+        mode = self._reaction_mode_for(int(victim_cid), "absorb_elements", default="ask")
+        if mode == "off":
+            return None
+        can_offer, _reason = self._can_offer_absorb_elements_reaction(victim, trigger_types)
+        if not can_offer:
+            return None
+        ws_targets = self._find_ws_for_cid(int(victim_cid))
+        choices = [
+            {
+                "kind": f"cast_absorb_elements_{dtype}",
+                "label": f"Absorb Elements ({dtype.title()})",
+                "mode": mode,
+            }
+            for dtype in trigger_types
+        ]
+        choices.extend(
+            [
+                {"kind": "absorb_elements_decline", "label": "No", "mode": "ask"},
+                {"kind": "absorb_elements_never", "label": "No (don't ask again)", "mode": "ask"},
+            ]
+        )
+        req_id = self._create_reaction_offer(
+            int(victim_cid),
+            "absorb_elements",
+            int(attacker_cid),
+            int(victim_cid),
+            choices,
+            ws_targets,
+            extra_payload={
+                "prompt": f"You took {', '.join(dtype.title() for dtype in trigger_types)} damage from {getattr(attacker, 'name', 'an attacker')}. Cast Absorb Elements?",
+            },
+        )
+        if req_id:
+            self._pending_absorb_elements_resolutions[str(req_id)] = {
+                "victim_cid": int(victim_cid),
+                "attacker_cid": int(attacker_cid),
+                "trigger_types": list(trigger_types),
+                "msg": dict(pending_msg) if isinstance(pending_msg, dict) else {},
+                "status": "offered",
+            }
+        return req_id
 
     def _maybe_offer_hellish_rebuke(self, victim_cid: int, attacker_cid: Optional[int], damage_total: int) -> Optional[str]:
         if int(damage_total or 0) <= 0:
@@ -21345,6 +21539,70 @@ class InitiativeTracker(base.InitiativeTracker):
                     except Exception:
                         pass
                 return
+            if str(offer.get("trigger") or "").strip().lower() == "absorb_elements":
+                pending = (getattr(self, "_pending_absorb_elements_resolutions", {}) or {}).pop(request_id, None)
+                self._pending_reaction_offers.pop(request_id, None)
+                if not isinstance(pending, dict):
+                    self._lan.toast(ws_id, "That Absorb Elements offer expired, matey.")
+                    return
+                reactor_cid = _normalize_cid_value(offer.get("reactor_cid"), "reaction_response.absorb_elements.reactor")
+                reactor = self.combatants.get(int(reactor_cid)) if reactor_cid is not None else None
+                if reactor is None:
+                    return
+                resume_msg = dict(pending.get("msg") or {})
+                if choice in ("absorb_elements_never", "never"):
+                    self._set_reaction_prefs(int(reactor_cid), {"absorb_elements": "off"})
+                if choice in ("absorb_elements_never", "never", "", "decline", "ignore", "absorb_elements_decline"):
+                    if isinstance(resume_msg, dict):
+                        resume_msg["_absorb_elements_resolution_done"] = True
+                        self._lan_apply_action(resume_msg)
+                    return
+                if not choice.startswith("cast_absorb_elements_"):
+                    if isinstance(resume_msg, dict):
+                        resume_msg["_absorb_elements_resolution_done"] = True
+                        self._lan_apply_action(resume_msg)
+                    return
+                chosen_type = self._canonical_damage_type(choice.replace("cast_absorb_elements_", "", 1))
+                allowed_types = {
+                    self._canonical_damage_type(item)
+                    for item in (pending.get("trigger_types") if isinstance(pending.get("trigger_types"), list) else [])
+                }
+                allowed_types = {item for item in allowed_types if item}
+                if chosen_type not in allowed_types:
+                    self._lan.toast(ws_id, "That damage type is invalid for Absorb Elements.")
+                    if isinstance(resume_msg, dict):
+                        resume_msg["_absorb_elements_resolution_done"] = True
+                        self._lan_apply_action(resume_msg)
+                    return
+                if not self._use_reaction(reactor):
+                    self._lan.toast(ws_id, "No reactions left for Absorb Elements, matey.")
+                    if isinstance(resume_msg, dict):
+                        resume_msg["_absorb_elements_resolution_done"] = True
+                        self._lan_apply_action(resume_msg)
+                    return
+                try:
+                    slot_level = int(msg.get("slot_level")) if msg.get("slot_level") is not None else 1
+                except Exception:
+                    slot_level = 1
+                slot_level = max(1, min(9, int(slot_level)))
+                player_name = self._pc_name_for(int(reactor.cid))
+                ok_slot, slot_err, spent_level = self._consume_spell_slot_for_cast(player_name, slot_level, 1)
+                if not ok_slot:
+                    self._lan.toast(ws_id, slot_err or "Could not cast Absorb Elements, matey.")
+                    if isinstance(resume_msg, dict):
+                        resume_msg["_absorb_elements_resolution_done"] = True
+                        self._lan_apply_action(resume_msg)
+                    return
+                spend_level = int(spent_level) if spent_level is not None else int(slot_level)
+                self._activate_absorb_elements(reactor, chosen_type, max(1, int(spend_level)))
+                self._log(
+                    f"{getattr(reactor, 'name', 'Target')} casts Absorb Elements ({chosen_type.title()}).",
+                    cid=int(getattr(reactor, "cid", 0) or 0),
+                )
+                if isinstance(resume_msg, dict):
+                    resume_msg["_absorb_elements_resolution_done"] = True
+                    self._lan_apply_action(resume_msg)
+                return
             if choice in ("", "decline", "ignore"):
                 self._pending_reaction_offers.pop(request_id, None)
                 return
@@ -22341,6 +22599,19 @@ class InitiativeTracker(base.InitiativeTracker):
                 dtype = str(effect.get("damage_type") or effect.get("type") or damage_type_hint or "damage").strip().lower() or "damage"
                 damage_entries.append({"amount": int(amount), "type": dtype})
 
+            if hit and not bool(msg.get("_absorb_elements_resolution_done")):
+                req_id = self._maybe_offer_absorb_elements(
+                    int(target_cid),
+                    int(cid),
+                    pending_msg=msg,
+                    damage_entries=damage_entries,
+                )
+                if req_id:
+                    attacker_ws_targets = self._find_ws_for_cid(int(cid))
+                    for attacker_ws in attacker_ws_targets:
+                        self._lan.toast(int(attacker_ws), "Waiting for Absorb Elements response…")
+                    return
+
             if is_magic_missile and self._shield_is_active(target):
                 damage_entries = []
                 self._log(f"Shield negates Magic Missile damage on {getattr(target, 'name', 'Target')}.", cid=int(target_cid))
@@ -22681,6 +22952,20 @@ class InitiativeTracker(base.InitiativeTracker):
                 pending_attacker = _normalize_cid_value(
                     pending_req.get("attacker_cid"),
                     "attack_request.pending_hellish_rebuke.attacker",
+                )
+                if pending_attacker is None or int(pending_attacker) != int(cid):
+                    continue
+                self._lan.toast(ws_id, "Hold fast — waiting on a reaction to resolve.")
+                return
+            for pending_req in list((self.__dict__.get("_pending_absorb_elements_resolutions", {}) or {}).values()):
+                if not isinstance(pending_req, dict):
+                    continue
+                pending_status = str(pending_req.get("status") or "").strip().lower()
+                if pending_status not in ("offered", "accepted"):
+                    continue
+                pending_attacker = _normalize_cid_value(
+                    pending_req.get("attacker_cid"),
+                    "attack_request.pending_absorb_elements.attacker",
                 )
                 if pending_attacker is None or int(pending_attacker) != int(cid):
                     continue
@@ -23424,6 +23709,19 @@ class InitiativeTracker(base.InitiativeTracker):
                             f"{smite_type} damage.",
                             cid=cid,
                         )
+            absorb_bonus_entry = self._consume_absorb_elements_melee_bonus(
+                c,
+                hit=bool(hit),
+                is_melee_attack=bool(is_melee_attack),
+                turn_marker=turn_marker,
+            )
+            if isinstance(absorb_bonus_entry, dict):
+                damage_entries.append(dict(absorb_bonus_entry))
+                self._log(
+                    f"{c.name}'s Absorb Elements adds {int(absorb_bonus_entry.get('amount') or 0)} "
+                    f"{str(absorb_bonus_entry.get('type') or 'damage')} damage.",
+                    cid=cid,
+                )
             if override_honored and isinstance(damage_entries, list):
                 for entry in damage_entries:
                     if not isinstance(entry, dict):
@@ -23455,6 +23753,19 @@ class InitiativeTracker(base.InitiativeTracker):
                     continue
                 dtype = str(effect.get("damage_type") or effect.get("type") or damage_type_hint or "damage").strip().lower() or "damage"
                 damage_entries.append({"amount": int(amount), "type": dtype})
+
+            if hit and not bool(msg.get("_absorb_elements_resolution_done")):
+                req_id = self._maybe_offer_absorb_elements(
+                    int(target_cid),
+                    int(cid),
+                    pending_msg=msg,
+                    damage_entries=damage_entries,
+                )
+                if req_id:
+                    attacker_ws_targets = self._find_ws_for_cid(int(cid))
+                    for attacker_ws in attacker_ws_targets:
+                        self._lan.toast(int(attacker_ws), "Waiting for Absorb Elements response…")
+                    return
 
             adjustment = self._adjust_damage_entries_for_target(target, damage_entries)
             damage_entries = list(adjustment.get("entries") or [])

@@ -1,0 +1,66 @@
+schema: dnd55.spell.v1
+id: absorb-elements
+name: Absorb Elements
+color: "#7DF9FF"
+edition: '2014'
+source:
+  book: Xanathar's Guide to Everything
+  page: null
+  srd: false
+level: 1
+school: abjuration
+tags:
+- utility
+- damage
+- reaction
+- automation_full
+casting_time: Reaction, which you take when you take acid, cold, fire, lightning, or thunder damage
+range: Self
+components: S
+duration: 1 round
+ritual: false
+concentration: false
+lists:
+  classes:
+  - druid
+  - ranger
+  - sorcerer
+  - wizard
+  subclasses: []
+import:
+  source: manual
+  aidedd_slug: absorb-elements
+  url: null
+  raw:
+    description: Reaction to incoming acid, cold, fire, lightning, or thunder damage.
+      Gain resistance to the triggering type until the start of your next turn, then
+      your first melee hit on that turn deals bonus damage of that type.
+    higher_level: Bonus melee damage increases by 1d6 per slot level above 1st.
+text:
+  summary: null
+  rules: null
+  higher_level: null
+mechanics:
+  automation: full
+  upcastable: true
+  targeting:
+    origin: self
+    range:
+      kind: self
+    target_selection:
+      mode: single
+  sequence:
+  - id: absorb_elements
+    name: Absorb Elements
+    outcomes:
+      hit: []
+  scaling:
+    kind: slot_level
+    base_slot: 1
+    add_per_slot_above: 1d6
+  ui:
+    template_preview: false
+  notes:
+  - LAN reaction automation offers one choice per triggering damage type.
+  - On accept, incoming triggering damage is resisted until start of caster's next turn.
+  - First melee hit on that next turn gains 1d6 per slot level (triggering damage type), then effect ends.

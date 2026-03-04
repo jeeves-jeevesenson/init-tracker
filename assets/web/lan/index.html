@@ -13698,6 +13698,7 @@ __DAMAGE_TYPE_OPTIONS__
     }
     if (key === "opportunity_attack") return "auto";
     if (key === "shield") return "ask";
+    if (key === "absorb_elements") return "ask";
     return "ask";
   }
 
@@ -13709,6 +13710,7 @@ __DAMAGE_TYPE_OPTIONS__
       opportunity_attack: String(prefs.opportunity_attack || "auto"),
       war_caster: String(prefs.war_caster || "ask"),
       shield: String(prefs.shield || "ask"),
+      absorb_elements: String(prefs.absorb_elements || "ask"),
     };
     send({type:"reaction_prefs_update", cid: claimedCid, prefs: payload});
   }
@@ -15150,6 +15152,8 @@ __DAMAGE_TYPE_OPTIONS__
             reactionOfferBody.textContent = `You are being targeted with ${attackName}. React with Shield?`;
           } else if (msg.trigger === "hellish_rebuke"){
             reactionOfferBody.textContent = String(msg.prompt || `You took damage from ${srcName}. React with Hellish Rebuke?`);
+          } else if (msg.trigger === "absorb_elements"){
+            reactionOfferBody.textContent = String(msg.prompt || `You took elemental damage from ${srcName}. React with Absorb Elements?`);
           } else if (msg.trigger === "leave_reach"){
             reactionOfferBody.textContent = `${srcName} is leaving your reach.`;
           } else if (msg.trigger === "sentinel_disengage"){
@@ -15197,7 +15201,14 @@ __DAMAGE_TYPE_OPTIONS__
               btn.type = "button";
               btn.textContent = String(choice.label || choice.kind || "Reaction");
               btn.addEventListener("click", ()=>{
-                send({type:"reaction_response", cid: claimedCid, request_id: pendingReactionRequestId, choice: String(choice.kind || "")});
+                const choiceKind = String(choice.kind || "");
+                const payload = {type:"reaction_response", cid: claimedCid, request_id: pendingReactionRequestId, choice: choiceKind};
+                if (msg.trigger === "absorb_elements" && choiceKind.startsWith("cast_absorb_elements_")){
+                  const slotInput = window.prompt("Absorb Elements slot level (1-9)", "1");
+                  const slotLevel = Number.isFinite(Number(slotInput)) ? Math.max(1, Math.min(9, Math.floor(Number(slotInput)))) : 1;
+                  payload.slot_level = slotLevel;
+                }
+                send(payload);
                 if (String(choice.kind||"") === "opportunity_attack"){
                   const target = getUnitByCid(msg.target_cid);
                   const weapon = getPrimaryMeleeAttackWeapon(getClaimedUnit());
@@ -15211,6 +15222,8 @@ __DAMAGE_TYPE_OPTIONS__
                   setWarCasterModalOpen(true);
                 } else if (String(choice.kind||"") === "never"){
                   setReactionPref(claimedCid, "hellish_rebuke", "off");
+                } else if (String(choice.kind||"") === "absorb_elements_never"){
+                  setReactionPref(claimedCid, "absorb_elements", "off");
                 }
                 if (reactionOfferModal){ reactionOfferModal.classList.remove("show"); reactionOfferModal.setAttribute("aria-hidden", "true"); }
               });
