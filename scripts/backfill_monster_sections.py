@@ -29,6 +29,18 @@ HEADING_ALIASES = {
         "actions légendaires",
     },
 }
+NON_COMBAT_HEADING_ALIASES = {
+    "habitat",
+    "treasure",
+    "environment",
+    "languages",
+    "senses",
+    "skills",
+    "challenge",
+    "proficiency bonus",
+    "resistances",
+    "immunities",
+}
 
 
 @dataclass(frozen=True)
@@ -75,6 +87,8 @@ class AideddSectionParser(HTMLParser):
             detected = _detect_section_from_heading(heading)
             if detected:
                 self._current_section = detected
+            elif _is_noncombat_heading(heading):
+                self._current_section = None
             self._current_heading_tag = None
             self._heading_chunks = []
 
@@ -120,7 +134,16 @@ def _normalize_heading_text(text: str) -> str:
     normalized = normalized.replace("’", "'")
     normalized = normalized.replace("é", "e")
     normalized = normalized.replace("è", "e")
-    return normalized
+    return normalized.strip(" :")
+
+
+def _is_noncombat_heading(heading: str) -> bool:
+    normalized = _normalize_heading_text(heading)
+    if not normalized:
+        return False
+    if normalized in NON_COMBAT_HEADING_ALIASES:
+        return True
+    return normalized.startswith(("habitat", "treasure"))
 
 
 def _detect_section_from_heading(heading: str) -> Optional[str]:

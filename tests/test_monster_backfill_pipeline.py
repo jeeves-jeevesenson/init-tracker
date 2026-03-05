@@ -50,6 +50,25 @@ class MonsterBackfillPipelineTests(unittest.TestCase):
             [{"name": "Move", "desc": "The wolf moves up to half its Speed."}],
         )
 
+
+    def test_extract_sections_from_aidedd_html_ignores_metadata_lists(self):
+        raw_html = """
+        <html><body>
+          <h3>Actions</h3>
+          <ul><li><strong>Bite.</strong> Melee Weapon Attack: +4 to hit. Hit: 7 (2d4 + 2) piercing damage.</li></ul>
+          <h3>Habitat</h3>
+          <ul><li>Swamp</li></ul>
+          <h3>Treasure</h3>
+          <ul><li>Standard</li></ul>
+        </body></html>
+        """
+
+        sections = backfill.extract_sections_from_aidedd_html(raw_html)
+
+        self.assertEqual(len(sections["actions"]), 1)
+        self.assertEqual(sections["actions"][0]["name"], "Bite")
+        self.assertEqual(sections["legendary_actions"], [])
+
     def test_extract_sections_from_5etools_monster(self):
         monster = {
             "trait": [{"name": "Pack Tactics", "entries": ["The wolf has Advantage when an ally is nearby."]}],

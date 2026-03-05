@@ -15686,8 +15686,13 @@ class InitiativeTracker(base.InitiativeTracker):
             if not isinstance(record, dict):
                 continue
             sections = record.get("sections")
-            if isinstance(sections, dict):
-                return sections
+            if not isinstance(sections, dict):
+                continue
+            valid, reason = self._validate_hydrated_monster_sections(sections)
+            if not valid:
+                self._monster_fallback_log("monster fallback cache entry rejected key=%s reason=%s", key, reason)
+                continue
+            return sections
         return {}
 
     def _load_local_5etools_monster_lookup(self) -> Dict[str, Dict[str, Any]]:
@@ -15759,8 +15764,61 @@ class InitiativeTracker(base.InitiativeTracker):
                 self._monster_fallback_log("monster fallback online fetch failed for key=%s: %s", key, exc)
                 continue
             if isinstance(sections, dict):
+                self._monster_fallback_log(
+                    "monster fallback online extract key=%s sections=%s action_names=%s",
+                    key,
+                    sorted([section_key for section_key, values in sections.items() if isinstance(values, list) and values]),
+                    [str(item.get("name") or "").strip() for item in sections.get("actions", []) if isinstance(item, dict)][:8],
+                )
                 return sections
         return {}
+
+    def _looks_like_combat_action_text(self, text: str) -> bool:
+        normalized = str(text or "").strip().lower()
+        if not normalized:
+            return False
+        patterns = (
+            "melee weapon attack",
+            "ranged weapon attack",
+            "melee attack roll",
+            "ranged attack roll",
+            "to hit",
+            "spell attack",
+            "spellcasting",
+            "multiattack",
+        )
+        return any(token in normalized for token in patterns)
+
+    def _validate_hydrated_monster_sections(self, sections: Any) -> Tuple[bool, str]:
+        if not isinstance(sections, dict):
+            return False, "sections-not-dict"
+        actions = sections.get("actions")
+        if not isinstance(actions, list) or not actions:
+            return False, "actions-empty"
+        blocked_names = {"habitat", "treasure", "environment", "skills", "languages", "senses"}
+        sanitized_actions: List[Dict[str, Any]] = []
+        for action in actions:
+            if not isinstance(action, dict):
+                continue
+            name = str(action.get("name") or "").strip()
+            if not name:
+                continue
+            if self._monster_attack_name_key(name) in blocked_names:
+                continue
+            sanitized_actions.append(action)
+        if not sanitized_actions:
+            return False, "actions-noncombat-names"
+        parsed_options, _ = self._parse_monster_attack_options(sanitized_actions)
+        if parsed_options:
+            return True, "ok"
+        if any(
+            self._looks_like_combat_action_text(
+                f"{str(item.get('name') or '').strip()} {str(item.get('description') or item.get('desc') or '').strip()}"
+            )
+            for item in sanitized_actions
+        ):
+            return True, "combat-keywords"
+        return False, "actions-not-parseable"
 
     def _apply_hydrated_monster_sections(self, raw_data: Dict[str, Any], sections: Dict[str, List[Dict[str, str]]]) -> bool:
         changed = False
@@ -15809,6 +15867,12 @@ class InitiativeTracker(base.InitiativeTracker):
         if not sections:
             self._monster_fallback_log("monster fallback hydration unavailable for %s; proceeding with manual UI", display_name or lookup_keys[0])
             return False
+        valid_sections, reason = self._validate_hydrated_monster_sections(sections)
+        if not valid_sections:
+            self._monster_fallback_log(
+                "monster fallback provider=%s rejected for %s reason=%s", provider, display_name or lookup_keys[0], reason
+            )
+            return False
         changed = self._apply_hydrated_monster_sections(raw_data, sections)
         self._monster_fallback_log("monster fallback provider=%s applied=%s for %s", provider, changed, display_name or lookup_keys[0])
         if not changed:
@@ -15818,9 +15882,14 @@ class InitiativeTracker(base.InitiativeTracker):
             value = raw_data.get(key)
             if isinstance(value, list) and value:
                 cached_sections[key] = copy.deepcopy(value)
-        if cached_sections:
+        cache_valid, cache_reason = self._validate_hydrated_monster_sections(cached_sections)
+        if cached_sections and cache_valid:
             self._store_monster_action_fallback_cache_entry(lookup_keys, display_name, cached_sections)
             self._monster_fallback_log("monster fallback cache write-through complete for keys=%s", lookup_keys)
+        elif cached_sections:
+            self._monster_fallback_log(
+                "monster fallback cache write-through skipped for %s reason=%s", display_name or lookup_keys[0], cache_reason
+            )
         parsed_options, _parsed_counts = self._parse_monster_attack_options(raw_data.get("actions"))
         self._monster_fallback_log("monster fallback parse outcome for %s: %d attack options", display_name or lookup_keys[0], len(parsed_options))
         return True
