@@ -237,6 +237,123 @@ class DmMapAttackAutomationTests(unittest.TestCase):
         sections = cached_payload.get("entries", {}).get("lizardfolk-sovereign", {}).get("sections", {})
         self.assertTrue(isinstance(sections.get("actions"), list) and sections.get("actions"))
 
+    def test_monster_attack_options_rejects_metadata_only_online_sections(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            with mock.patch.dict("os.environ", {"INITTRACKER_DATA_DIR": tmpdir}, clear=False):
+                attacker = type(
+                    "Combatant",
+                    (),
+                    {
+                        "monster_spec": type(
+                            "Spec",
+                            (),
+                            {
+                                "name": "Lizardfolk Sovereign",
+                                "filename": "lizardfolk-sovereign.yaml",
+                                "raw_data": {"name": "Lizardfolk Sovereign", "actions": []},
+                            },
+                        )()
+                    },
+                )()
+                with mock.patch(
+                    "dnd_initative_tracker._load_backfill_helpers_module",
+                    return_value=type(
+                        "Helpers",
+                        (),
+                        {
+                            "build_5etools_lookup": staticmethod(lambda _payload: {}),
+                            "extract_sections_from_5etools_monster": staticmethod(lambda _monster: {}),
+                            "_fetch_aidedd_html": staticmethod(lambda slug, timeout=15.0: f"html:{slug}:{timeout}"),
+                            "extract_sections_from_aidedd_html": staticmethod(
+                                lambda _html: {
+                                    "actions": [
+                                        {"name": "Habitat", "desc": "Swamp"},
+                                        {"name": "Treasure", "desc": "Standard"},
+                                    ]
+                                }
+                            ),
+                        },
+                    )(),
+                ):
+                    options, counts = self.app._monster_attack_options_for_map(attacker)
+
+                cache_path = f"{tmpdir}/logs/monster_action_fallback_cache.json"
+
+        self.assertEqual(options, [])
+        self.assertEqual(counts, {})
+        self.assertFalse(os.path.exists(cache_path))
+
+    def test_monster_attack_options_ignores_bad_cache_and_rehydrates(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            cache_dir = f"{tmpdir}/logs"
+            with mock.patch.dict("os.environ", {"INITTRACKER_DATA_DIR": tmpdir}, clear=False):
+                os.makedirs(cache_dir, exist_ok=True)
+                cache_path = f"{cache_dir}/monster_action_fallback_cache.json"
+                payload = {
+                    "version": 1,
+                    "entries": {
+                        "lizardfolk-sovereign": {
+                            "name": "Lizardfolk Sovereign",
+                            "sections": {
+                                "actions": [
+                                    {"name": "Habitat", "desc": "Swamp"},
+                                    {"name": "Treasure", "desc": "Standard"},
+                                ]
+                            },
+                            "updated_at": "2026-01-01T00:00:00Z",
+                        }
+                    },
+                }
+                with open(cache_path, "w", encoding="utf-8") as fh:
+                    json.dump(payload, fh)
+
+                attacker = type(
+                    "Combatant",
+                    (),
+                    {
+                        "monster_spec": type(
+                            "Spec",
+                            (),
+                            {
+                                "name": "Lizardfolk Sovereign",
+                                "filename": "lizardfolk-sovereign.yaml",
+                                "raw_data": {"name": "Lizardfolk Sovereign", "actions": []},
+                            },
+                        )()
+                    },
+                )()
+                with mock.patch(
+                    "dnd_initative_tracker._load_backfill_helpers_module",
+                    return_value=type(
+                        "Helpers",
+                        (),
+                        {
+                            "build_5etools_lookup": staticmethod(lambda _payload: {}),
+                            "extract_sections_from_5etools_monster": staticmethod(lambda _monster: {}),
+                            "_fetch_aidedd_html": staticmethod(lambda slug, timeout=15.0: f"html:{slug}:{timeout}"),
+                            "extract_sections_from_aidedd_html": staticmethod(
+                                lambda _html: {
+                                    "actions": [
+                                        {
+                                            "name": "Trident",
+                                            "desc": "Melee Attack Roll: +6, reach 5 ft. Hit: 8 (1d8 + 4) piercing damage.",
+                                        }
+                                    ]
+                                }
+                            ),
+                        },
+                    )(),
+                ):
+                    options, counts = self.app._monster_attack_options_for_map(attacker)
+
+                with open(cache_path, "r", encoding="utf-8") as fh:
+                    cached_payload = json.load(fh)
+
+        self.assertGreaterEqual(len(options), 1)
+        self.assertEqual(options[0]["to_hit"], 6)
+        sections = cached_payload.get("entries", {}).get("lizardfolk-sovereign", {}).get("sections", {})
+        self.assertEqual(sections.get("actions", [])[0].get("name"), "Trident")
+
     def test_monster_attack_options_online_failure_falls_back_cleanly(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             with mock.patch.dict("os.environ", {"INITTRACKER_DATA_DIR": tmpdir}, clear=False):
