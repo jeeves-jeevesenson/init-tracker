@@ -771,7 +771,7 @@ class LanSpellTargetRequestTests(unittest.TestCase):
             "concentration": True,
             "mechanics": {
                 "ui": {"spell_targeting": {"duration_turns": 10, "ac_bonus": 2}},
-                "sequence": [{"check": {"kind": "auto_hit"}, "outcomes": {"hit": [{"effect": "condition", "condition": "hasted", "duration_turns": 0, "ongoing": {"concentration_bound": True, "clear_group": "haste_{source_cid}_{target_cid}", "adapter": "haste"}}]}}],
+                "sequence": [{"check": {"kind": "auto_hit"}, "outcomes": {"hit": [{"effect": "condition", "condition": "hasted", "duration_turns": 0, "ongoing": {"concentration_bound": True, "clear_group": "haste_{source_cid}_{target_cid}", "adapter": "haste", "modifiers": {"ac_bonus": 2, "speed_multiplier": 2, "save_advantage_by_ability": ["dex"]}, "turn_state": {"extra_action_profile": "haste_limited"}}}]}}],
             },
         }
         msg = {
@@ -792,7 +792,8 @@ class LanSpellTargetRequestTests(unittest.TestCase):
         target = self.app.combatants[3]
         self.assertTrue(caster.concentrating)
         self.assertEqual(caster.concentration_spell, "haste")
-        self.assertEqual(target.ac, 18)
+        self.assertEqual(target.ac, 16)
+        self.assertEqual(self.app._combatant_ac_modifier(target), 2)
         self.assertEqual(getattr(target, "haste_remaining_turns", 0), 10)
         self.assertTrue(
             any(
@@ -805,6 +806,8 @@ class LanSpellTargetRequestTests(unittest.TestCase):
         self.assertFalse(skip)
         self.assertEqual(target.action_remaining, 2)
         self.assertEqual(target.move_total, 60)
+        self.assertEqual(self.app._combatant_extra_action_profile(target), "haste_limited")
+        self.assertEqual(self.app._combatant_action_restrictions(target), set())
         self.app._end_turn_cleanup(target.cid)
         self.assertEqual(getattr(target, "haste_remaining_turns", 0), 9)
 
@@ -817,7 +820,7 @@ class LanSpellTargetRequestTests(unittest.TestCase):
             "concentration": True,
             "mechanics": {
                 "ui": {"spell_targeting": {"duration_turns": 10, "ac_bonus": 2}},
-                "sequence": [{"check": {"kind": "auto_hit"}, "outcomes": {"hit": [{"effect": "condition", "condition": "hasted", "duration_turns": 0, "ongoing": {"concentration_bound": True, "clear_group": "haste_{source_cid}_{target_cid}", "adapter": "haste"}}]}}],
+                "sequence": [{"check": {"kind": "auto_hit"}, "outcomes": {"hit": [{"effect": "condition", "condition": "hasted", "duration_turns": 0, "ongoing": {"concentration_bound": True, "clear_group": "haste_{source_cid}_{target_cid}", "adapter": "haste", "modifiers": {"ac_bonus": 2, "speed_multiplier": 2, "save_advantage_by_ability": ["dex"]}, "turn_state": {"extra_action_profile": "haste_limited"}}}]}}],
             },
         }
         msg = {

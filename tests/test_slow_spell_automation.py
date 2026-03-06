@@ -60,7 +60,7 @@ class SlowAutomationTests(unittest.TestCase):
             "level": 3,
             "concentration": True,
             "mechanics": {
-                "sequence": [{"check": {"kind": "saving_throw", "ability": "wis", "dc": "spell_save_dc"}, "outcomes": {"fail": [{"effect": "condition", "condition": "slow_spell", "duration_turns": 0, "ongoing": {"concentration_bound": True, "clear_group": "slow_{source_cid}_{target_cid}", "condition_clear": ["slow_spell"], "repeat_save_end_turn": {"save_ability": "wis", "save_dc": "spell_save_dc", "condition": "slow_spell"}}}], "success": []}}]
+                "sequence": [{"check": {"kind": "saving_throw", "ability": "wis", "dc": "spell_save_dc"}, "outcomes": {"fail": [{"effect": "condition", "condition": "slow_spell", "duration_turns": 0, "ongoing": {"concentration_bound": True, "clear_group": "slow_{source_cid}_{target_cid}", "condition_clear": ["slow_spell"], "modifiers": {"speed_multiplier": 0.5, "ac_bonus": -2, "save_disadvantage_by_ability": ["dex"], "reactions_blocked": True}, "turn_state": {"action_restrictions": ["if_bonus_action_used"], "bonus_action_restrictions": ["if_action_used"], "attack_limit": 1}, "repeat_save_end_turn": {"save_ability": "wis", "save_dc": "spell_save_dc", "condition": "slow_spell"}}}], "success": []}}]
             },
         }
         self.app._infer_spell_targeting_mode = lambda preset: "save"
@@ -114,6 +114,15 @@ class SlowAutomationTests(unittest.TestCase):
                 if isinstance(entry, dict)
             )
         )
+        self.assertEqual(self.app._combatant_attack_limit(target), 1)
+        self.assertIn("if_bonus_action_used", self.app._combatant_action_restrictions(target))
+        self.assertIn("if_action_used", self.app._combatant_bonus_action_restrictions(target))
+        self.app._map_window = None
+        with mock.patch("dnd_initative_tracker.random.randint", return_value=12):
+            skip, _msg, _dec = self.app._process_start_of_turn(target)
+        self.assertFalse(skip)
+        self.assertEqual(target.move_total, 15)
+        self.assertEqual(target.reaction_remaining, 0)
 
 
     def test_slow_concentration_end_clears_registered_effects(self):
@@ -133,6 +142,8 @@ class SlowAutomationTests(unittest.TestCase):
             primitives={
                 "condition_apply": ["slow_spell"],
                 "condition_clear": ["slow_spell"],
+                "modifiers": {"speed_multiplier": 0.5, "ac_bonus": -2, "save_disadvantage_by_ability": ["dex"], "reactions_blocked": True},
+                "turn_state": {"action_restrictions": ["if_bonus_action_used"], "bonus_action_restrictions": ["if_action_used"], "attack_limit": 1},
                 "end_turn_save_riders": [
                     {
                         "clear_group": "slow_1_2",
@@ -153,7 +164,18 @@ class SlowAutomationTests(unittest.TestCase):
 
     def test_slow_helpers_apply_dex_disadvantage_and_ac_penalty(self):
         target = self.app.combatants[2]
-        target.condition_stacks = [tracker_mod.base.ConditionStack(sid=9, ctype="slow_spell", remaining_turns=None)]
+        self.app._register_target_spell_effect(
+            1,
+            2,
+            "slow",
+            spell_level=3,
+            concentration_bound=True,
+            clear_group="slow_1_2",
+            primitives={
+                "condition_apply": ["slow_spell"],
+                "modifiers": {"ac_bonus": -2, "save_disadvantage_by_ability": ["dex"]},
+            },
+        )
         self.assertTrue(self.app._slow_spell_save_disadvantage(target, "dex"))
         self.assertFalse(self.app._slow_spell_save_disadvantage(target, "wis"))
         self.assertEqual(self.app._slow_spell_ac_penalty(target), 2)

@@ -71,6 +71,18 @@ mechanics:
           clear_group: slow_{source_cid}_{target_cid}
           condition_clear:
           - slow_spell
+          modifiers:
+            speed_multiplier: 0.5
+            ac_bonus: -2
+            save_disadvantage_by_ability:
+            - dex
+            reactions_blocked: true
+          turn_state:
+            action_restrictions:
+            - if_bonus_action_used
+            bonus_action_restrictions:
+            - if_action_used
+            attack_limit: 1
           repeat_save_end_turn:
             save_ability: wis
             save_dc: spell_save_dc

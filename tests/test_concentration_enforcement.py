@@ -153,7 +153,20 @@ class ConcentrationEnforcementTests(unittest.TestCase):
         caster = self.app.combatants[1]
         target = self.app.combatants[2]
         self.app._start_concentration(caster, "haste", spell_level=3, targets=[target.cid])
-        self.app._apply_haste_effect(caster, target, duration_turns=1, ac_bonus=2)
+        self.app._register_target_spell_effect(
+            caster.cid,
+            target.cid,
+            "haste",
+            spell_level=3,
+            concentration_bound=True,
+            clear_group="haste_1_2",
+            primitives={
+                "modifiers": {"ac_bonus": 2, "speed_multiplier": 2, "save_advantage_by_ability": ["dex"]},
+                "turn_state": {"extra_action_profile": "haste_limited"},
+            },
+            adapter="haste",
+            adapter_payload={"duration_turns": 1},
+        )
 
         self.app._end_turn_cleanup(target.cid)
 
