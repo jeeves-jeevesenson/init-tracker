@@ -115,6 +115,12 @@ resources:
     max: 1
     max_formula: '1'
     reset: long_rest
+  - id: faithful_steed
+    label: Faithful Steed (Find Steed)
+    current: 1
+    max: 1
+    max_formula: '1'
+    reset: long_rest
 features:
 - id: channel_divinity
   name: Channel Divinity
@@ -159,6 +165,27 @@ features:
   name: 'Fighting Style: Defense (+1 AC)'
   passive: true
   description: The Defense Fighting Style (now classified as a Fighting Style Feat) still provides a +1 bonus to your Armor Class while you are wearing Light, Medium, or Heavy armor.
+- id: faithful_steed
+  name: Faithful Steed
+  category: Paladin Feature
+  source: PHB2024
+  level: 5
+  description: You always have Find Steed prepared. You can cast it once without expending a spell slot, regaining this free cast when you finish a Long Rest.
+  grants:
+    always_prepared_spells:
+    - find-steed
+    pools:
+    - id: faithful_steed
+      label: Faithful Steed (Find Steed)
+      max_formula: '1'
+      reset: long_rest
+    spells:
+      casts:
+      - spell: find-steed
+        action_type: action
+        consumes:
+          pool: faithful_steed
+          cost: 1
 actions:
 - name: Attack
   description: Make a weapon or unarmed attack against a target within range.
