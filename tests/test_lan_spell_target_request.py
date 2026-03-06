@@ -1203,6 +1203,28 @@ class LanSpellTargetRequestTests(unittest.TestCase):
         self.assertFalse(any(getattr(st, "ctype", "") == "paralyzed" for st in target.condition_stacks))
         self.assertEqual(list(getattr(target, "end_turn_save_riders", []) or []), [])
 
+    def test_hold_person_concentration_end_clears_paralyzed_and_rider(self):
+        caster = self.app.combatants[1]
+        target = self.app.combatants[2]
+        caster.concentrating = True
+        caster.concentration_spell = "hold-person"
+        caster.concentration_target = [2]
+        target.condition_stacks = [tracker_mod.base.ConditionStack(sid=1, ctype="paralyzed", remaining_turns=None)]
+        target.end_turn_save_riders = [
+            {
+                "clear_group": "hold_person_1_2",
+                "save_ability": "wis",
+                "save_dc": 15,
+                "condition": "paralyzed",
+                "source": "Hold Person",
+            }
+        ]
+
+        self.app._end_concentration(caster)
+
+        self.assertFalse(any(getattr(st, "ctype", "") == "paralyzed" for st in target.condition_stacks))
+        self.assertEqual(list(getattr(target, "end_turn_save_riders", []) or []), [])
+
     def test_healing_spell_requests_manual_healing_when_not_provided(self):
         self.app._find_spell_preset = lambda *_args, **_kwargs: {
             "slug": "healing-word",

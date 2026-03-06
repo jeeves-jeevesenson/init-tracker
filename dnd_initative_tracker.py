@@ -26387,6 +26387,18 @@ class InitiativeTracker(base.InitiativeTracker):
                 if target is None:
                     continue
                 self._clear_tashas_hideous_laughter_target_effect(c, target)
+        if spell_key == "hold-person":
+            for target_cid in targets:
+                target = self.combatants.get(int(target_cid))
+                if target is None:
+                    continue
+                clear_group = f"hold_person_{int(c.cid)}_{int(target_cid)}"
+                end_turn_save_riders = [
+                    rider for rider in list(getattr(target, "end_turn_save_riders", []) or [])
+                    if str((rider or {}).get("clear_group") or "").strip().lower() != clear_group
+                ]
+                setattr(target, "end_turn_save_riders", end_turn_save_riders)
+                self._remove_condition_type(target, "paralyzed")
         if not spell_key:
             return
         candidate_group_ids = {str(getattr(self.combatants.get(int(tid)), "summon_group_id", "") or "").strip() for tid in targets}
