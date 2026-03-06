@@ -2767,7 +2767,11 @@ class InitiativeTracker(tk.Tk):
         return True
 
     def _clear_haste_effect(self, target: Combatant, apply_lethargy: bool, reason: str) -> bool:
-        active = int(getattr(target, "haste_remaining_turns", 0) or 0) > 0 or int(getattr(target, "haste_ac_bonus", 0) or 0) > 0
+        active = (
+            int(getattr(target, "haste_remaining_turns", 0) or 0) > 0
+            or int(getattr(target, "haste_ac_bonus", 0) or 0) > 0
+            or int(getattr(target, "haste_source_cid", 0) or 0) > 0
+        )
         if not active:
             return False
         try:

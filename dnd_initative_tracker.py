@@ -6043,6 +6043,7 @@ class InitiativeTracker(base.InitiativeTracker):
 
     def _process_start_of_turn(self, c: Any) -> Tuple[bool, str, set[str]]:
         skip, msg, dec_skip = super()._process_start_of_turn(c)
+        self._apply_turn_state_modifiers_at_turn_start(c)
         setattr(c, "_rage_attack_made_this_turn", False)
         setattr(c, "_rage_took_damage_this_turn", False)
         self._shield_effect_expire_if_turn_start(_normalize_cid_value(getattr(c, "cid", None), "shield.turn_start.cid"))
@@ -6658,6 +6659,9 @@ class InitiativeTracker(base.InitiativeTracker):
         self._rebuild_table(scroll_to_current=True)
 
     def _end_turn_cleanup(self, cid: Optional[int], skip_decrement_types: Optional[set[str]] = None) -> None:
+        combatant = self.combatants.get(int(cid)) if cid is not None and int(cid) in self.combatants else None
+        if combatant is not None:
+            self._clear_turn_state_modifiers_at_turn_end(combatant)
         super()._end_turn_cleanup(cid, skip_decrement_types=skip_decrement_types)
         ending_cid = _normalize_cid_value(cid, "end_turn_cleanup.cid")
         if ending_cid is not None:
@@ -10958,15 +10962,147 @@ class InitiativeTracker(base.InitiativeTracker):
         return type_text == "construct"
 
     def _has_slow_spell_effect(self, target: Any) -> bool:
+        if target is None:
+            return False
+        for entry in list(getattr(target, "ongoing_spell_effects", []) or []):
+            if not isinstance(entry, dict):
+                continue
+            if str(entry.get("spell_key") or "").strip().lower() == "slow":
+                return True
         return bool(self._has_condition(target, "slow_spell"))
 
     def _slow_spell_save_disadvantage(self, target: Any, ability: Any) -> bool:
-        if str(ability or "").strip().lower() == "dex" and self._has_slow_spell_effect(target):
-            return True
         return self._combatant_save_roll_mode(target, ability) == "disadvantage"
 
     def _slow_spell_ac_penalty(self, target: Any) -> int:
+        mods = self._collect_combat_modifiers(target, source_filter="slow")
+        ac_bonus = int(mods.get("ac_bonus") or 0)
+        if ac_bonus < 0:
+            return abs(int(ac_bonus))
         return 2 if self._has_slow_spell_effect(target) else 0
+
+    @staticmethod
+    def _coerce_restriction_list(values: Any) -> set[str]:
+        if not isinstance(values, list):
+            return set()
+        out: set[str] = set()
+        for item in values:
+            key = str(item or "").strip().lower()
+            if key:
+                out.add(key)
+        return out
+
+    def _collect_turn_state_modifiers(self, combatant: Any) -> Dict[str, Any]:
+        summary: Dict[str, Any] = {
+            "extra_action_profile": "",
+            "action_restrictions": set(),
+            "bonus_action_restrictions": set(),
+            "attack_limit": None,
+        }
+        if combatant is None:
+            return summary
+        for entry in list(getattr(combatant, "ongoing_spell_effects", []) or []):
+            if not isinstance(entry, dict):
+                continue
+            primitives = entry.get("primitives") if isinstance(entry.get("primitives"), dict) else {}
+            turn_state = primitives.get("turn_state") if isinstance(primitives.get("turn_state"), dict) else {}
+            if not turn_state:
+                continue
+            profile = str(turn_state.get("extra_action_profile") or "").strip().lower()
+            if profile and not summary["extra_action_profile"]:
+                summary["extra_action_profile"] = profile
+            summary["action_restrictions"].update(self._coerce_restriction_list(turn_state.get("action_restrictions")))
+            summary["bonus_action_restrictions"].update(self._coerce_restriction_list(turn_state.get("bonus_action_restrictions")))
+            if turn_state.get("attack_limit") is not None:
+                try:
+                    attack_limit = max(0, int(turn_state.get("attack_limit") or 0))
+                except Exception:
+                    attack_limit = 0
+                existing_limit = summary.get("attack_limit")
+                if existing_limit is None:
+                    summary["attack_limit"] = attack_limit
+                else:
+                    summary["attack_limit"] = min(int(existing_limit), int(attack_limit))
+        return summary
+
+    def _combatant_extra_action_profile(self, combatant: Any) -> str:
+        return str(self._collect_turn_state_modifiers(combatant).get("extra_action_profile") or "")
+
+    def _combatant_action_restrictions(self, combatant: Any) -> set[str]:
+        return set(self._collect_turn_state_modifiers(combatant).get("action_restrictions") or set())
+
+    def _combatant_bonus_action_restrictions(self, combatant: Any) -> set[str]:
+        return set(self._collect_turn_state_modifiers(combatant).get("bonus_action_restrictions") or set())
+
+    def _combatant_attack_limit(self, combatant: Any) -> Optional[int]:
+        limit = self._collect_turn_state_modifiers(combatant).get("attack_limit")
+        if limit is None:
+            return None
+        try:
+            return max(0, int(limit))
+        except Exception:
+            return None
+
+    def _apply_turn_state_modifiers_at_turn_start(self, combatant: Any) -> None:
+        if combatant is None:
+            return
+        self._clear_turn_state_modifiers_at_turn_end(combatant)
+        turn_state = self._collect_turn_state_modifiers(combatant)
+        action_restrictions = set(turn_state.get("action_restrictions") or set())
+        bonus_restrictions = set(turn_state.get("bonus_action_restrictions") or set())
+        setattr(combatant, "_turn_action_restrictions", action_restrictions)
+        setattr(combatant, "_turn_bonus_action_restrictions", bonus_restrictions)
+        setattr(combatant, "_turn_attack_limit", turn_state.get("attack_limit"))
+        setattr(combatant, "_turn_attack_count", 0)
+        setattr(combatant, "_turn_action_used", False)
+        setattr(combatant, "_turn_bonus_action_used", False)
+        profile = str(turn_state.get("extra_action_profile") or "")
+        setattr(combatant, "_turn_extra_action_profile", profile)
+        if profile:
+            legacy_haste_extra_applied = bool(
+                profile == "haste_limited" and int(getattr(combatant, "haste_remaining_turns", 0) or 0) > 0
+            )
+            if not legacy_haste_extra_applied:
+                combatant.action_remaining = int(getattr(combatant, "action_remaining", 0) or 0) + 1
+        if bool(self._combatant_reactions_blocked(combatant)):
+            combatant.reaction_remaining = 0
+        combatant.action_total = int(getattr(combatant, "action_remaining", 0) or 0)
+
+    def _clear_turn_state_modifiers_at_turn_end(self, combatant: Any) -> None:
+        if combatant is None:
+            return
+        for field_name, default in (
+            ("_turn_action_restrictions", set()),
+            ("_turn_bonus_action_restrictions", set()),
+            ("_turn_attack_limit", None),
+            ("_turn_attack_count", 0),
+            ("_turn_action_used", False),
+            ("_turn_bonus_action_used", False),
+            ("_turn_extra_action_profile", ""),
+        ):
+            setattr(combatant, field_name, default)
+
+    def _use_action(self, c: Any, log_message: Optional[str] = None) -> bool:
+        restrictions = set(getattr(c, "_turn_action_restrictions", set()) or set())
+        if "none" in restrictions or "blocked" in restrictions:
+            return False
+        if "if_bonus_action_used" in restrictions and bool(getattr(c, "_turn_bonus_action_used", False)):
+            return False
+        used = super()._use_action(c, log_message=log_message)
+        if used:
+            setattr(c, "_turn_action_used", True)
+        return used
+
+    def _use_bonus_action(self, c: Any, log_message: Optional[str] = None) -> bool:
+        restrictions = set(getattr(c, "_turn_bonus_action_restrictions", set()) or set())
+        if "none" in restrictions or "blocked" in restrictions:
+            return False
+        if "if_action_used" in restrictions and bool(getattr(c, "_turn_action_used", False)):
+            return False
+        used = super()._use_bonus_action(c, log_message=log_message)
+        if used:
+            setattr(c, "_turn_bonus_action_used", True)
+        return used
 
     def _roll_save_with_mode(self, target: Any, ability: str, *, disadvantage: bool = False, advantage: bool = False) -> Tuple[int, int]:
         first = int(random.randint(1, 20))
@@ -24541,6 +24677,18 @@ class InitiativeTracker(base.InitiativeTracker):
                     return
             attack_resources = max(0, _parse_int(getattr(resource_c, "attack_resource_remaining", 0), 0) or 0)
             is_bonus_spend_attack = bool(attack_spend == "bonus" and not opportunity_attack and not is_cleave_followup)
+            attack_limit = self._combatant_attack_limit(resource_c)
+            if (
+                attack_limit is not None
+                and not opportunity_attack
+                and not is_bonus_spend_attack
+                and not is_cleave_followup
+                and not is_unleash_incarnation_attack
+            ):
+                turn_attack_count = int(getattr(resource_c, "_turn_attack_count", 0) or 0)
+                if turn_attack_count >= int(attack_limit):
+                    self._lan.toast(ws_id, "This effect limits ye to one attack this turn, matey.")
+                    return
             if is_bonus_spend_attack:
                 bonus_seq_id = str(msg.get("bonus_sequence_id") or "").strip().lower() or "bonus_attack"
                 try:
@@ -24591,6 +24739,8 @@ class InitiativeTracker(base.InitiativeTracker):
                             setattr(resource_c, "_nick_mastery_turn_marker", turn_marker)
                     attack_resources = max(0, int(attack_resources) - 1)
                     setattr(resource_c, "attack_resource_remaining", int(attack_resources))
+                    if attack_limit is not None:
+                        setattr(resource_c, "_turn_attack_count", int(getattr(resource_c, "_turn_attack_count", 0) or 0) + 1)
             to_hit = _parse_int(selected_weapon.get("to_hit"), _parse_int(attacks.get("weapon_to_hit"), 0) or 0) or 0
             magic_bonus = _parse_int(selected_weapon.get("magic_bonus"), _parse_int(selected_weapon.get("item_bonus"), 0) or 0) or 0
             to_hit += int(magic_bonus)
@@ -26784,6 +26934,24 @@ class InitiativeTracker(base.InitiativeTracker):
                 entry["advantage"] = True
             primitives.setdefault(primitive_key, []).append(entry)
 
+        ongoing_turn_state = ongoing.get("turn_state") if isinstance(ongoing.get("turn_state"), dict) else {}
+        if ongoing_turn_state:
+            turn_state: Dict[str, Any] = {}
+            extra_action_profile = str(ongoing_turn_state.get("extra_action_profile") or "").strip().lower()
+            if extra_action_profile:
+                turn_state["extra_action_profile"] = extra_action_profile
+            for list_key in ("action_restrictions", "bonus_action_restrictions"):
+                restrictions = self._coerce_restriction_list(ongoing_turn_state.get(list_key))
+                if restrictions:
+                    turn_state[list_key] = sorted(restrictions)
+            if ongoing_turn_state.get("attack_limit") is not None:
+                try:
+                    turn_state["attack_limit"] = max(0, int(ongoing_turn_state.get("attack_limit") or 0))
+                except Exception:
+                    pass
+            if turn_state:
+                primitives["turn_state"] = turn_state
+
         ongoing_modifiers = ongoing.get("modifiers") if isinstance(ongoing.get("modifiers"), dict) else {}
         if ongoing_modifiers:
             modifiers: Dict[str, Any] = {}
@@ -26829,8 +26997,7 @@ class InitiativeTracker(base.InitiativeTracker):
         if adapter == "haste":
             ui_cfg = ((preset.get("mechanics") or {}).get("ui") or {}).get("spell_targeting") if isinstance(((preset.get("mechanics") or {}).get("ui") or {}), dict) else {}
             duration_turns = int(adapter_payload.get("duration_turns") or (ui_cfg.get("duration_turns") if isinstance(ui_cfg, dict) else 0) or 10)
-            ac_bonus = int(adapter_payload.get("ac_bonus") or (ui_cfg.get("ac_bonus") if isinstance(ui_cfg, dict) else 0) or 2)
-            adapter_payload = {"duration_turns": max(1, duration_turns), "ac_bonus": max(0, ac_bonus)}
+            adapter_payload = {"duration_turns": max(1, duration_turns)}
 
         return {
             "spell_key": spell_key,
@@ -27176,14 +27343,11 @@ class InitiativeTracker(base.InitiativeTracker):
         if adapter == "haste":
             adapter_payload = effect_entry.get("adapter_payload") if isinstance(effect_entry.get("adapter_payload"), dict) else {}
             source_cid = int(effect_entry.get("source_cid") or 0)
-            caster = self.combatants.get(source_cid)
-            if caster is not None:
-                self._apply_haste_effect(
-                    caster,
-                    target,
-                    duration_turns=int(adapter_payload.get("duration_turns") or 10),
-                    ac_bonus=int(adapter_payload.get("ac_bonus") or 2),
-                )
+            self._clear_haste_effect(target, apply_lethargy=False, reason="")
+            target.haste_source_cid = int(source_cid) if source_cid > 0 else None
+            target.haste_remaining_turns = max(1, int(adapter_payload.get("duration_turns") or 10))
+            target.haste_speed_multiplier = 0
+            target.haste_ac_bonus = 0
 
     def _dematerialize_registered_spell_effect(self, target: Any, effect_entry: Dict[str, Any], *, reason: str = "") -> None:
         if target is None or not isinstance(effect_entry, dict):
