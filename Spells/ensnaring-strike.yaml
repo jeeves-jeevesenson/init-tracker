@@ -44,7 +44,7 @@ text:
   rules: null
   higher_level: null
 mechanics:
-  automation: partial
+  automation: full
   upcastable: true
   targeting:
     origin: self
@@ -70,8 +70,11 @@ mechanics:
           add_per_slot_above: 1d6
       - effect: condition
         condition: restrained
-        duration_turns: 0
+        duration_turns: 10
   scaling: *id001
   ui:
     template_preview: false
-  notes: []
+  notes:
+  - Targets make a Strength save on hit. Large or larger creatures have advantage on this save.
+  - While restrained by this spell, the target takes piercing damage at the start of each of its turns.
+  - Concentration save DC in this tracker is 10 + spell level; War Caster grants advantage on those saves.
