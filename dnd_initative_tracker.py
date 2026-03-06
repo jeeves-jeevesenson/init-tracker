@@ -23088,6 +23088,28 @@ class InitiativeTracker(base.InitiativeTracker):
             is_hold_person = preset_slug == "hold-person" or preset_id == "hold-person"
             is_heat_metal = preset_slug in ("heat-metal", "heat_metal") or preset_id in ("heat-metal", "heat_metal")
             is_slow_spell = preset_slug == "slow" or preset_id == "slow"
+            handled_generic_single_target = self._resolve_single_target_spell(
+                msg=msg,
+                caster=c,
+                target=target,
+                preset=preset,
+                spell_name=spell_name,
+                ws_id=ws_id,
+                attacker_cid=int(cid),
+                target_cid=int(target_cid),
+                skip_spells={
+                    "magic-missile",
+                    "polymorph",
+                    "haste",
+                    "slow",
+                    "hold-person",
+                    "heat-metal",
+                    "phantasmal-killer",
+                    "tasha-s-hideous-laughter",
+                },
+            )
+            if handled_generic_single_target:
+                return
             haste_duration_turns = 10
             haste_ac_bonus = 2
             if is_haste and isinstance(preset, dict):
@@ -26142,6 +26164,527 @@ class InitiativeTracker(base.InitiativeTracker):
                 self._lan.toast(ws_id, "Turn ended.")
             except Exception as exc:
                 self._oplog(f"LAN end turn failed: {exc}", level="warning")
+
+    def _parse_int_value(self, value: Any, fallback: Optional[int] = None) -> Optional[int]:
+        try:
+            return int(value)
+        except Exception:
+            return fallback
+
+    def _parse_non_negative_manual_amount(self, value: Any) -> Optional[int]:
+        if isinstance(value, bool):
+            return None
+        if isinstance(value, int):
+            return value if value >= 0 else None
+        if isinstance(value, float):
+            if not value.is_integer():
+                return None
+            return int(value) if value >= 0 else None
+        if isinstance(value, str):
+            text = value.strip()
+            if not text or not re.fullmatch(r"\+?\d+", text):
+                return None
+            try:
+                parsed = int(text)
+            except Exception:
+                return None
+            return parsed if parsed >= 0 else None
+        return None
+
+    def _parse_bool_value(self, value: Any, fallback: bool = False) -> bool:
+        if isinstance(value, bool):
+            return value
+        if isinstance(value, str):
+            lowered = value.strip().lower()
+            if lowered in ("1", "true", "yes", "y", "hit"):
+                return True
+            if lowered in ("0", "false", "no", "n", "miss"):
+                return False
+        return bool(fallback)
+
+    def _save_mod_for_spell_target(self, target_obj: Any, ability_key: str) -> int:
+        key = str(ability_key or "").strip().lower()
+        if not key:
+            return 0
+        aura_bonus = int((self._lan_aura_effects_for_target(target_obj) or {}).get("save_bonus") or 0)
+        saves = getattr(target_obj, "saving_throws", None)
+        if isinstance(saves, dict):
+            val = saves.get(key)
+            try:
+                return int(val) + aura_bonus
+            except Exception:
+                pass
+        mods = getattr(target_obj, "ability_mods", None)
+        if isinstance(mods, dict):
+            val = mods.get(key)
+            try:
+                return int(val) + aura_bonus
+            except Exception:
+                pass
+        return aura_bonus
+
+    def _roll_dice_expression(self, expr: Any, *, critical_max: bool = False) -> int:
+        text = str(expr or "").strip().lower().replace(" ", "")
+        if not text:
+            return 0
+        if text[0] not in "+-":
+            text = "+" + text
+        total = 0
+        for sign, token in re.findall(r"([+\-])([^+\-]+)", text):
+            factor = 1 if sign == "+" else -1
+            dice_match = re.fullmatch(r"(\d+)d(\d+)", token)
+            if dice_match:
+                count = max(0, int(dice_match.group(1)))
+                sides = max(0, int(dice_match.group(2)))
+                roll_total = 0
+                if count > 0 and sides > 0:
+                    if critical_max:
+                        roll_total = count * sides
+                    else:
+                        roll_total = sum(random.randint(1, sides) for _ in range(count))
+                total += factor * roll_total
+                continue
+            try:
+                total += factor * int(token)
+            except Exception:
+                continue
+        return int(total)
+
+    def _resolve_spell_scaling(self, dice_text: str, scaling: Any, slot_level: Optional[int], character_level: int) -> str:
+        scaled = str(dice_text or "").strip().lower()
+        if not scaled:
+            return ""
+        if isinstance(scaling, dict):
+            kind = str(scaling.get("kind") or "").strip().lower()
+            if kind == "slot_level" and slot_level is not None:
+                base_slot = self._parse_int_value(scaling.get("base_slot"), None)
+                add_expr = str(scaling.get("add_per_slot_above") or "").strip().lower()
+                if base_slot is not None and slot_level > int(base_slot) and add_expr:
+                    for _ in range(max(0, int(slot_level) - int(base_slot))):
+                        scaled = f"{scaled}+{add_expr}"
+            scaled = self._scale_damage_dice_for_character_level(scaled, scaling, character_level)
+        return scaled
+
+    def _bucket_for_spell_outcome(self, outcomes: Dict[str, Any], passed: bool, key_hint: str) -> List[Dict[str, Any]]:
+        keys = [key_hint] if key_hint else []
+        if passed:
+            keys.extend(["success", "pass", "saved", "save"])
+        else:
+            keys.extend(list(FAIL_OUTCOME_LABELS))
+        for key in keys:
+            bucket = outcomes.get(key)
+            if isinstance(bucket, list):
+                return [entry for entry in bucket if isinstance(entry, dict)]
+        return []
+
+    def _build_spell_resolution_context(
+        self,
+        *,
+        msg: Dict[str, Any],
+        caster: Any,
+        target: Any,
+        preset: Optional[Dict[str, Any]],
+        spell_name: str,
+        attacker_cid: int,
+        target_cid: int,
+    ) -> Dict[str, Any]:
+        mechanics = preset.get("mechanics") if isinstance(preset, dict) and isinstance(preset.get("mechanics"), dict) else {}
+        sequence = mechanics.get("sequence") if isinstance(mechanics.get("sequence"), list) else []
+        requested_mode = str(msg.get("spell_mode") or msg.get("mode") or "attack").strip().lower()
+        spell_mode = requested_mode if requested_mode in ("attack", "auto_hit", "save", "effect") else "attack"
+        inferred_mode = self._infer_spell_targeting_mode(preset)
+        if spell_mode == "attack" and inferred_mode in ("save", "auto_hit", "effect"):
+            spell_mode = inferred_mode
+        save_type = str(msg.get("save_type") or "").strip().lower()
+        if spell_mode == "save" and not save_type:
+            save_type = self._infer_spell_save_ability(preset)
+        save_dc = max(0, self._parse_int_value(msg.get("save_dc"), 0) or 0)
+        if spell_mode == "save" and save_dc <= 0:
+            try:
+                player_name = self._pc_name_for(int(attacker_cid))
+            except Exception:
+                player_name = ""
+            profile = self._profile_for_player_name(player_name)
+            if isinstance(profile, dict):
+                computed_dc = self._compute_spell_save_dc(profile)
+                if computed_dc is not None and int(computed_dc) > 0:
+                    save_dc = int(computed_dc)
+        else:
+            try:
+                player_name = self._pc_name_for(int(attacker_cid))
+            except Exception:
+                player_name = ""
+            profile = self._profile_for_player_name(player_name)
+        leveling = profile.get("leveling") if isinstance(profile, dict) and isinstance(profile.get("leveling"), dict) else {}
+        character_level = self._coerce_level_value(leveling)
+        slot_level = self._parse_int_value(msg.get("slot_level"), None)
+        if slot_level is None and isinstance(preset, dict):
+            slot_level = self._parse_int_value(preset.get("level"), None)
+        hit = self._parse_bool_value(msg.get("hit"), fallback=spell_mode == "auto_hit")
+        critical = self._parse_bool_value(msg.get("critical"), fallback=False)
+
+        damage_entries: List[Dict[str, Any]] = []
+        raw_damage_entries = msg.get("damage_entries")
+        if isinstance(raw_damage_entries, list):
+            for entry in raw_damage_entries:
+                if not isinstance(entry, dict):
+                    continue
+                amount = self._parse_non_negative_manual_amount(entry.get("amount"))
+                if amount is None or amount <= 0:
+                    continue
+                damage_entries.append({"amount": int(amount), "type": str(entry.get("type") or "").strip().lower()})
+
+        healing_entries: List[Dict[str, Any]] = []
+        raw_healing_entries = msg.get("healing_entries")
+        manual_healing_supplied = isinstance(raw_healing_entries, list) and any(isinstance(entry, dict) for entry in raw_healing_entries)
+        if isinstance(raw_healing_entries, list):
+            for entry in raw_healing_entries:
+                if not isinstance(entry, dict):
+                    continue
+                amount = self._parse_non_negative_manual_amount(entry.get("amount"))
+                if amount is None or amount <= 0:
+                    continue
+                healing_entries.append({"amount": int(amount), "type": "healing"})
+
+        damage_dice_text = str(msg.get("damage_dice") or "").strip().lower()
+        if not damage_dice_text and isinstance(preset, dict):
+            damage_dice_text = str(preset.get("dice") or "").strip().lower()
+        damage_scaling = preset.get("scaling") if isinstance(preset, dict) and isinstance(preset.get("scaling"), dict) else None
+        if damage_dice_text:
+            damage_dice_text = self._resolve_spell_scaling(damage_dice_text, damage_scaling, slot_level, character_level)
+
+        healing_dice_text = str(msg.get("healing_dice") or "").strip().lower()
+        if not healing_dice_text:
+            for step in sequence:
+                if not isinstance(step, dict):
+                    continue
+                outcomes = step.get("outcomes") if isinstance(step.get("outcomes"), dict) else {}
+                found = ""
+                for bucket in outcomes.values():
+                    if not isinstance(bucket, list):
+                        continue
+                    for effect in bucket:
+                        if not isinstance(effect, dict):
+                            continue
+                        if str(effect.get("effect") or "").strip().lower() != "healing":
+                            continue
+                        found = str(effect.get("dice") or "").strip().lower()
+                        if found:
+                            break
+                    if found:
+                        break
+                if found:
+                    healing_dice_text = found
+                    break
+        if healing_dice_text:
+            healing_dice_text = self._resolve_spell_scaling(healing_dice_text, damage_scaling, slot_level, character_level)
+
+        damage_type_hint = str(msg.get("damage_type") or "").strip().lower()
+        if not damage_type_hint and isinstance(preset, dict):
+            types = preset.get("damage_types") if isinstance(preset.get("damage_types"), list) else []
+            if types:
+                damage_type_hint = str(types[0] or "").strip().lower()
+
+        return {
+            "msg": msg,
+            "caster": caster,
+            "target": target,
+            "preset": preset,
+            "spell_name": spell_name,
+            "sequence": sequence,
+            "spell_mode": spell_mode,
+            "save_type": save_type,
+            "save_dc": int(save_dc),
+            "roll_save": self._parse_bool_value(msg.get("roll_save"), fallback=spell_mode == "save"),
+            "slot_level": slot_level,
+            "character_level": int(character_level),
+            "profile": profile,
+            "hit": bool(hit),
+            "critical": bool(critical),
+            "damage_entries": damage_entries,
+            "healing_entries": healing_entries,
+            "manual_healing_supplied": bool(manual_healing_supplied),
+            "damage_dice_text": damage_dice_text,
+            "healing_dice_text": healing_dice_text,
+            "damage_type_hint": damage_type_hint or "damage",
+            "attacker_cid": int(attacker_cid),
+            "target_cid": int(target_cid),
+        }
+
+    def _resolve_spell_check(self, ctx: Dict[str, Any]) -> Dict[str, Any]:
+        spell_mode = str(ctx.get("spell_mode") or "")
+        target = ctx.get("target")
+        hit = bool(ctx.get("hit"))
+        critical = bool(ctx.get("critical"))
+        save_result: Dict[str, Any] = {}
+        if spell_mode == "save":
+            save_type = str(ctx.get("save_type") or "").strip().lower()
+            save_dc = int(ctx.get("save_dc") or 0)
+            roll_save = bool(ctx.get("roll_save"))
+            passed = False
+            if roll_save and save_type and save_dc > 0 and target is not None:
+                roll = random.randint(1, 20)
+                save_mod = self._save_mod_for_spell_target(target, save_type)
+                total = int(roll) + int(save_mod)
+                passed = total >= int(save_dc)
+                save_result = {
+                    "ability": save_type,
+                    "dc": int(save_dc),
+                    "roll": int(roll),
+                    "modifier": int(save_mod),
+                    "total": int(total),
+                    "passed": bool(passed),
+                }
+            else:
+                passed = self._parse_bool_value(ctx.get("msg", {}).get("save_passed"), fallback=False)
+                save_result = {"ability": save_type, "dc": int(save_dc), "passed": bool(passed)}
+            hit = not bool(passed)
+            critical = False
+        elif spell_mode == "effect":
+            hit = True
+            critical = False
+        elif spell_mode == "auto_hit":
+            hit = True
+        return {"hit": bool(hit), "critical": bool(critical), "save_result": save_result}
+
+    def _roll_spell_effect_damage(self, effect: Dict[str, Any], ctx: Dict[str, Any]) -> int:
+        if not isinstance(effect, dict):
+            return 0
+        dice_text = str(effect.get("dice") or "").strip().lower()
+        if not dice_text:
+            return 0
+        scaling = effect.get("scaling") if isinstance(effect.get("scaling"), dict) else None
+        if not isinstance(scaling, dict):
+            preset = ctx.get("preset")
+            scaling = preset.get("scaling") if isinstance(preset, dict) and isinstance(preset.get("scaling"), dict) else None
+        scaled = self._resolve_spell_scaling(
+            dice_text,
+            scaling,
+            ctx.get("slot_level"),
+            int(ctx.get("character_level") or 0),
+        )
+        return max(0, int(self._roll_dice_expression(scaled)))
+
+    def _apply_spell_effect(self, effect: Dict[str, Any], ctx: Dict[str, Any], result_payload: Dict[str, Any]) -> None:
+        effect_kind = str(effect.get("effect") or "").strip().lower()
+        target = ctx.get("target")
+        if effect_kind == "damage":
+            amount = self._roll_spell_effect_damage(effect, ctx)
+            if amount <= 0:
+                return
+            dtype = str(effect.get("damage_type") or effect.get("type") or ctx.get("damage_type_hint") or "damage").strip().lower() or "damage"
+            ctx.setdefault("damage_entries", []).append({"amount": int(amount), "type": dtype})
+            return
+        if effect_kind == "healing":
+            if bool(ctx.get("manual_healing_supplied")):
+                return
+            dice = self._resolve_spell_scaling(
+                str(effect.get("dice") or "").strip().lower(),
+                effect.get("scaling") if isinstance(effect.get("scaling"), dict) else ctx.get("preset", {}).get("scaling"),
+                ctx.get("slot_level"),
+                int(ctx.get("character_level") or 0),
+            )
+            amount = max(0, int(self._roll_dice_expression(dice)))
+            if amount <= 0:
+                return
+            ctx.setdefault("healing_entries", []).append({"amount": int(amount), "type": "healing"})
+            return
+        if effect_kind == "condition" and target is not None:
+            condition_key = str(effect.get("condition") or "").strip().lower()
+            if not condition_key or self._condition_is_immune_for_target(target, condition_key):
+                return
+            stacks = list(getattr(target, "condition_stacks", []) or [])
+            if any(str(getattr(st, "ctype", "") or "").strip().lower() == condition_key for st in stacks):
+                return
+            next_sid = int(getattr(self, "_next_stack_id", 1) or 1)
+            setattr(self, "_next_stack_id", int(next_sid) + 1)
+            stacks.append(base.ConditionStack(sid=int(next_sid), ctype=condition_key, remaining_turns=None))
+            setattr(target, "condition_stacks", stacks)
+
+    def _resolve_spell_effects(self, ctx: Dict[str, Any], check_result: Dict[str, Any], result_payload: Dict[str, Any]) -> None:
+        sequence = ctx.get("sequence") if isinstance(ctx.get("sequence"), list) else []
+        if not sequence:
+            return
+        step = next((entry for entry in sequence if isinstance(entry, dict)), None)
+        if not isinstance(step, dict):
+            return
+        outcomes = step.get("outcomes") if isinstance(step.get("outcomes"), dict) else {}
+        spell_mode = str(ctx.get("spell_mode") or "")
+        hit = bool(check_result.get("hit"))
+        resolved_bucket: List[Dict[str, Any]] = []
+        if spell_mode == "save":
+            resolved_bucket = self._bucket_for_spell_outcome(outcomes, bool((check_result.get("save_result") or {}).get("passed")), "")
+        else:
+            resolved_bucket = self._bucket_for_spell_outcome(outcomes, False, "hit" if hit else "miss")
+        for effect in resolved_bucket:
+            if isinstance(effect, dict):
+                self._apply_spell_effect(effect, ctx, result_payload)
+
+    def _resolve_single_target_spell(
+        self,
+        *,
+        msg: Dict[str, Any],
+        caster: Any,
+        target: Any,
+        preset: Optional[Dict[str, Any]],
+        spell_name: str,
+        ws_id: Any,
+        attacker_cid: int,
+        target_cid: int,
+        skip_spells: Optional[set[str]] = None,
+    ) -> bool:
+        if not isinstance(preset, dict):
+            return False
+        if bool(msg.get("prompt_for_healing")):
+            return False
+        mechanics = preset.get("mechanics") if isinstance(preset.get("mechanics"), dict) else {}
+        sequence = mechanics.get("sequence") if isinstance(mechanics.get("sequence"), list) else []
+        if not sequence:
+            return False
+        allowed_effects = {"damage", "healing", "condition"}
+        allowed_checks = {"", "spell_attack", "saving_throw", "auto_hit", "effect"}
+        for step in sequence:
+            if not isinstance(step, dict):
+                continue
+            check = step.get("check") if isinstance(step.get("check"), dict) else {}
+            check_kind = str(check.get("kind") or "").strip().lower()
+            if check_kind not in allowed_checks:
+                return False
+            outcomes = step.get("outcomes") if isinstance(step.get("outcomes"), dict) else {}
+            for bucket in outcomes.values():
+                if not isinstance(bucket, list):
+                    continue
+                for effect in bucket:
+                    if not isinstance(effect, dict):
+                        continue
+                    if str(effect.get("effect") or "").strip().lower() not in allowed_effects:
+                        return False
+        spell_key = str(preset.get("slug") or preset.get("id") or "").strip().lower()
+        if skip_spells and spell_key in skip_spells:
+            return False
+
+        ctx = self._build_spell_resolution_context(
+            msg=msg,
+            caster=caster,
+            target=target,
+            preset=preset,
+            spell_name=spell_name,
+            attacker_cid=attacker_cid,
+            target_cid=target_cid,
+        )
+        check_result = self._resolve_spell_check(ctx)
+        hit = bool(check_result.get("hit"))
+        critical = bool(check_result.get("critical"))
+
+        if hit and not ctx.get("damage_entries") and ctx.get("damage_dice_text"):
+            amount = self._roll_dice_expression(
+                ctx.get("damage_dice_text"),
+                critical_max=bool(critical and str(ctx.get("spell_mode")) in ("attack", "auto_hit")),
+            )
+            if amount > 0:
+                ctx.setdefault("damage_entries", []).append({"amount": int(amount), "type": str(ctx.get("damage_type_hint") or "damage")})
+
+        if not ctx.get("healing_entries") and ctx.get("healing_dice_text") and not bool(msg.get("prompt_for_healing")):
+            amount = self._roll_dice_expression(ctx.get("healing_dice_text"))
+            if amount > 0:
+                ctx.setdefault("healing_entries", []).append({"amount": int(amount), "type": "healing"})
+
+        result_payload: Dict[str, Any] = {
+            "type": "spell_target_result",
+            "ok": True,
+            "attacker_cid": int(attacker_cid),
+            "target_cid": int(target_cid),
+            "target_name": str(getattr(target, "name", "Target") or "Target"),
+            "spell_name": str(spell_name or "Spell"),
+            "spell_mode": str(ctx.get("spell_mode") or "attack"),
+        }
+        if check_result.get("save_result"):
+            result_payload["save_result"] = dict(check_result.get("save_result") or {})
+
+        self._resolve_spell_effects(ctx, check_result, result_payload)
+        damage_entries = list(ctx.get("damage_entries") or [])
+        healing_entries = list(ctx.get("healing_entries") or [])
+
+        has_healing_effect = any(
+            isinstance(effect, dict) and str(effect.get("effect") or "").strip().lower() == "healing"
+            for step in list(ctx.get("sequence") or [])
+            if isinstance(step, dict)
+            for bucket in [(step.get("outcomes") if isinstance(step.get("outcomes"), dict) else {}).values()]
+            for effects in bucket
+            if isinstance(effects, list)
+            for effect in effects
+        )
+        if has_healing_effect and not healing_entries and bool(msg.get("prompt_for_healing")):
+            result_payload["needs_healing_prompt"] = True
+            msg["_spell_target_result"] = dict(result_payload)
+            self._lan.toast(ws_id, "Enter healing to resolve the spell.")
+            return True
+
+        if hit and damage_entries and not bool(msg.get("_absorb_elements_resolution_done")):
+            req_id = self._maybe_offer_absorb_elements(
+                int(target_cid),
+                int(attacker_cid),
+                pending_msg=msg,
+                damage_entries=damage_entries,
+            )
+            if req_id:
+                for attacker_ws in self._find_ws_for_cid(int(attacker_cid)):
+                    self._lan.toast(int(attacker_ws), "Waiting for Absorb Elements response…")
+                return True
+
+        adjustment = self._adjust_damage_entries_for_target(target, damage_entries)
+        damage_entries = list(adjustment.get("entries") or [])
+        total_damage = int(sum(int(entry.get("amount", 0) or 0) for entry in damage_entries))
+        total_healing = int(sum(int(entry.get("amount", 0) or 0) for entry in healing_entries))
+
+        if total_damage > 0 and hit:
+            before_hp = self._parse_int_value(getattr(target, "hp", None), 0) or 0
+            setattr(target, "hp", max(0, int(before_hp) - int(total_damage)))
+        healing_applied = 0
+        if total_healing > 0:
+            before_hp = self._parse_int_value(getattr(target, "hp", None), 0) or 0
+            max_hp = self._parse_int_value(getattr(target, "max_hp", None), before_hp) or before_hp
+            after_hp = max(0, min(int(max_hp), int(before_hp) + int(total_healing)))
+            healing_applied = max(0, int(after_hp) - int(before_hp))
+            setattr(target, "hp", int(after_hp))
+
+        result_payload["hit"] = bool(hit)
+        result_payload["critical"] = bool(critical and hit)
+        result_payload["damage_entries"] = list(damage_entries if hit else [])
+        result_payload["damage_total"] = int(total_damage if hit else 0)
+        if healing_entries:
+            result_payload["healing_entries"] = list(healing_entries)
+            result_payload["healing_total"] = int(total_healing)
+            result_payload["healing_applied"] = int(healing_applied)
+
+        if bool((preset or {}).get("concentration")) and hit and caster is not None:
+            current_targets = list(getattr(caster, "concentration_target", []) or [])
+            if int(target.cid) not in current_targets:
+                current_targets.append(int(target.cid))
+            self._start_concentration(
+                caster,
+                self._canonical_concentration_spell_key(preset, fallback=spell_name),
+                spell_level=int(ctx.get("slot_level") or (preset or {}).get("level") or 0) or None,
+                targets=current_targets,
+            )
+
+        msg["_spell_target_result"] = dict(result_payload)
+        self._log(
+            f"{getattr(caster, 'name', 'Caster')} resolves {spell_name} on {result_payload['target_name']}.",
+            cid=int(target_cid),
+        )
+        try:
+            self._rebuild_table(scroll_to_current=True)
+        except Exception:
+            pass
+        loop = getattr(self._lan, "_loop", None)
+        if ws_id is not None and loop:
+            try:
+                asyncio.run_coroutine_threadsafe(self._lan._send_async(ws_id, result_payload), loop)
+            except Exception:
+                pass
+        self._lan.toast(ws_id, "Spell resolved.")
+        return True
 
     def _infer_spell_targeting_mode(self, preset: Any) -> str:
         if not isinstance(preset, dict):

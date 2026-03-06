@@ -1395,6 +1395,131 @@ class LanSpellTargetRequestTests(unittest.TestCase):
         self.assertEqual(result.get("healing_applied"), 3)
         self.assertEqual(self.app.combatants[3].hp, 22)
 
+
+    def _load_spell_preset(self, slug: str):
+        with open(f"Spells/{slug}.yaml", "r", encoding="utf-8") as fh:
+            return tracker_mod.yaml.safe_load(fh)
+
+    def test_yaml_healing_word_resolves_through_generic_engine(self):
+        preset = self._load_spell_preset("healing-word")
+        self.app._find_spell_preset = lambda *_args, **_kwargs: preset
+        self.app.combatants[3].hp = 10
+        self.app.combatants[3].max_hp = 22
+        msg = {
+            "type": "spell_target_request",
+            "cid": 1,
+            "_claimed_cid": 1,
+            "_ws_id": 41,
+            "target_cid": 3,
+            "spell_name": "Healing Word",
+            "spell_slug": "healing-word",
+            "spell_mode": "effect",
+            "slot_level": 2,
+        }
+
+        with mock.patch("dnd_initative_tracker.random.randint", side_effect=[4, 3, 4, 3]):
+            self.app._lan_apply_action(msg)
+
+        result = msg.get("_spell_target_result")
+        self.assertIsInstance(result, dict)
+        self.assertEqual(result.get("healing_total"), 14)
+        self.assertEqual(self.app.combatants[3].hp, 22)
+
+    def test_yaml_shocking_grasp_cantrip_scaling_resolves_damage(self):
+        preset = self._load_spell_preset("shocking-grasp")
+        self.app._find_spell_preset = lambda *_args, **_kwargs: preset
+        self.app._profile_for_player_name = lambda _name: {"leveling": {"level": 11}}
+        msg = {
+            "type": "spell_target_request",
+            "cid": 1,
+            "_claimed_cid": 1,
+            "_ws_id": 42,
+            "target_cid": 2,
+            "spell_name": "Shocking Grasp",
+            "spell_slug": "shocking-grasp",
+            "spell_mode": "attack",
+            "hit": True,
+        }
+
+        with mock.patch("dnd_initative_tracker.random.randint", side_effect=[5, 4, 3]):
+            self.app._lan_apply_action(msg)
+
+        result = msg.get("_spell_target_result")
+        self.assertIsInstance(result, dict)
+        self.assertEqual(result.get("damage_total"), 12)
+        self.assertEqual(self.app.combatants[2].hp, 8)
+
+    def test_yaml_vicious_mockery_save_fail_deals_damage(self):
+        preset = self._load_spell_preset("vicious-mockery")
+        self.app._find_spell_preset = lambda *_args, **_kwargs: preset
+        msg = {
+            "type": "spell_target_request",
+            "cid": 1,
+            "_claimed_cid": 1,
+            "_ws_id": 43,
+            "target_cid": 2,
+            "spell_name": "Vicious Mockery",
+            "spell_slug": "vicious-mockery",
+            "spell_mode": "save",
+            "save_dc": 16,
+            "roll_save": True,
+        }
+
+        with mock.patch("dnd_initative_tracker.random.randint", side_effect=[2, 4]):
+            self.app._lan_apply_action(msg)
+
+        result = msg.get("_spell_target_result")
+        self.assertIsInstance(result, dict)
+        self.assertFalse(result.get("save_result", {}).get("passed"))
+        self.assertEqual(result.get("damage_total"), 4)
+
+    def test_yaml_charm_person_save_fail_applies_condition(self):
+        preset = self._load_spell_preset("charm-person")
+        self.app._find_spell_preset = lambda *_args, **_kwargs: preset
+        msg = {
+            "type": "spell_target_request",
+            "cid": 1,
+            "_claimed_cid": 1,
+            "_ws_id": 44,
+            "target_cid": 2,
+            "spell_name": "Charm Person",
+            "spell_slug": "charm-person",
+            "spell_mode": "save",
+            "save_dc": 16,
+            "roll_save": True,
+        }
+
+        with mock.patch("dnd_initative_tracker.random.randint", return_value=2):
+            self.app._lan_apply_action(msg)
+
+        stacks = list(getattr(self.app.combatants[2], "condition_stacks", []) or [])
+        self.assertTrue(any(str(getattr(st, "ctype", "")).lower() == "charmed" for st in stacks))
+
+    def test_yaml_save_condition_concentration_bookkeeping(self):
+        preset = self._load_spell_preset("charm-person")
+        preset["concentration"] = True
+        self.app._find_spell_preset = lambda *_args, **_kwargs: preset
+        msg = {
+            "type": "spell_target_request",
+            "cid": 1,
+            "_claimed_cid": 1,
+            "_ws_id": 45,
+            "target_cid": 2,
+            "spell_name": "Charm Person",
+            "spell_slug": "charm-person",
+            "spell_mode": "save",
+            "save_dc": 16,
+            "roll_save": True,
+            "slot_level": 1,
+        }
+
+        with mock.patch("dnd_initative_tracker.random.randint", return_value=2):
+            self.app._lan_apply_action(msg)
+
+        caster = self.app.combatants[1]
+        self.assertTrue(getattr(caster, "concentrating", False))
+        self.assertEqual(getattr(caster, "concentration_spell", ""), "charm-person")
+        self.assertIn(2, list(getattr(caster, "concentration_target", []) or []))
     def test_star_advantage_spell_attack_miss_spends_charge(self):
         self.app.combatants[1].pending_star_advantage_charge = {"name": "Star Advantage"}
         msg = {
