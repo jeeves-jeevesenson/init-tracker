@@ -10873,6 +10873,54 @@ class InitiativeTracker(base.InitiativeTracker):
             aoe["cy"] = float(current_pos[1])
             self._lan_handle_aoe_enter_triggers_for_aoe_move(int(aid), aoe, before)
 
+    def _combatant_has_monster_tag(self, target: base.Combatant, tag: str) -> bool:
+        normalized = str(tag or "").strip().lower()
+        if not normalized:
+            return False
+        spec = getattr(target, "monster_spec", None)
+        raw_data = getattr(spec, "raw_data", None) if spec is not None else None
+        raw_tags = raw_data.get("tags") if isinstance(raw_data, dict) else None
+        if isinstance(raw_tags, list):
+            for entry in raw_tags:
+                if str(entry).strip().lower() == normalized:
+                    return True
+        return False
+
+    def _is_shatter_spell(self, spell_slug: str, spell_id: str, preset: Optional[Dict[str, Any]]) -> bool:
+        spell_keys = {
+            str(spell_slug or "").strip().lower(),
+            str(spell_id or "").strip().lower(),
+        }
+        if isinstance(preset, dict):
+            spell_keys.update(
+                {
+                    str(preset.get("slug") or "").strip().lower(),
+                    str(preset.get("id") or "").strip().lower(),
+                    str(preset.get("name") or "").strip().lower(),
+                }
+            )
+        return "shatter" in spell_keys
+
+    def _target_has_shatter_save_disadvantage(
+        self,
+        target: base.Combatant,
+        *,
+        spell_slug: str,
+        spell_id: str,
+        preset: Optional[Dict[str, Any]],
+    ) -> bool:
+        if not self._is_shatter_spell(spell_slug, spell_id, preset):
+            return False
+        if self._combatant_has_monster_tag(target, "shatter_disadvantage"):
+            return True
+        spec = getattr(target, "monster_spec", None)
+        if spec is None:
+            return False
+        raw_data = getattr(spec, "raw_data", None)
+        raw_type = raw_data.get("type") if isinstance(raw_data, dict) else None
+        type_text = str(raw_type or getattr(spec, "mtype", "") or "").strip().lower()
+        return type_text == "construct"
+
     def _lan_auto_resolve_cast_aoe(
         self,
         aid: int,
@@ -11152,7 +11200,16 @@ class InitiativeTracker(base.InitiativeTracker):
                     total = int(dc or 0)
                     passed = True
                 else:
-                    roll = int(random.randint(1, 20))
+                    save_disadvantage = self._target_has_shatter_save_disadvantage(
+                        target,
+                        spell_slug=spell_slug,
+                        spell_id=spell_id,
+                        preset=preset,
+                    )
+                    if save_disadvantage:
+                        roll = min(int(random.randint(1, 20)), int(random.randint(1, 20)))
+                    else:
+                        roll = int(random.randint(1, 20))
                     total = int(roll + save_mod)
                     passed = bool(roll != 1 and total >= int(dc))
             else:
@@ -26626,13 +26683,13 @@ class InitiativeTracker(base.InitiativeTracker):
         index_data = _read_index_file(index_path)
         cache_version = int(index_data.get("version") or 0) if isinstance(index_data, dict) else 0
         cached_entries = index_data.get("entries") if isinstance(index_data.get("entries"), dict) else {}
-        if cache_version < 3:
+        if cache_version < 4:
             cached_entries = {}
         new_entries: Dict[str, Any] = {}
         yaml_missing_logged = False
 
         if not files:
-            _write_index_file(index_path, {"version": 3, "entries": {}})
+            _write_index_file(index_path, {"version": 4, "entries": {}})
             return
 
         for fp in files:
@@ -26714,6 +26771,7 @@ class InitiativeTracker(base.InitiativeTracker):
                     "traits", "actions", "attacks", "reactions", "legendary_actions", "description", "habitat", "treasure", "levels_allowed",
                     "variants", "damage_type_by_variant", "bonus_actions",
                     "skills", "senses",
+                    "tags",
                     "damage_vulnerabilities", "damage_resistances", "damage_immunities", "condition_immunities",
                     "vulnerabilities", "resistances", "immunities",
                 ):
@@ -26874,7 +26932,7 @@ class InitiativeTracker(base.InitiativeTracker):
             }
 
         self._monster_specs.sort(key=lambda spec: (spec.name.lower(), str(spec.filename).lower()))
-        _write_index_file(index_path, {"version": 3, "entries": new_entries})
+        _write_index_file(index_path, {"version": 4, "entries": new_entries})
 
 
     def _load_monster_details(self, name: str) -> Optional[MonsterSpec]:
@@ -26922,6 +26980,7 @@ class InitiativeTracker(base.InitiativeTracker):
             "bonus_actions",
             "skills",
             "senses",
+            "tags",
             "damage_vulnerabilities",
             "damage_resistances",
             "damage_immunities",
