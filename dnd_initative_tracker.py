@@ -17926,6 +17926,80 @@ class InitiativeTracker(base.InitiativeTracker):
                     choices.append({"kind": "war_caster", "label": "War Caster", "mode": mode})
         return choices
 
+    def _combatant_has_war_caster(self, c: Any) -> bool:
+        if c is None:
+            return False
+        pname = self._pc_name_for(int(getattr(c, "cid", 0) or 0))
+        profile = self._profile_for_player_name(pname)
+        features = profile.get("features") if isinstance(profile, dict) else []
+        if not isinstance(features, list):
+            return False
+        for feature in features:
+            if isinstance(feature, str) and feature.strip().lower() == "war caster":
+                return True
+            if isinstance(feature, dict):
+                nm = str(feature.get("name") or "").strip().lower()
+                fid = str(feature.get("id") or "").strip().lower()
+                if nm == "war caster" or fid == "war caster":
+                    return True
+        return False
+
+    def _queue_concentration_save(self, c: base.Combatant, source: str) -> None:
+        if not getattr(c, "concentrating", False):
+            return
+        if int(getattr(c, "hp", 0) or 0) <= 0:
+            self._end_concentration(c)
+            return
+        try:
+            level = int(getattr(c, "concentration_spell_level", 0) or 0)
+        except Exception:
+            level = 0
+        if level < 0:
+            level = 0
+        dc = 10 + int(level)
+        saves = getattr(c, "saving_throws", None)
+        mods = getattr(c, "ability_mods", None)
+        con_mod = 0
+        if isinstance(saves, dict):
+            try:
+                con_mod = int(saves.get("con") or 0)
+            except Exception:
+                con_mod = 0
+        if con_mod == 0 and isinstance(mods, dict):
+            try:
+                con_mod = int(mods.get("con") or 0)
+            except Exception:
+                con_mod = 0
+        has_war_caster = self._combatant_has_war_caster(c)
+        roll_a = random.randint(1, 20)
+        roll_b = random.randint(1, 20) if has_war_caster else None
+        roll_used = max(roll_a, int(roll_b)) if roll_b is not None else roll_a
+        total = int(roll_used) + int(con_mod)
+        spell_name = str(getattr(c, "concentration_spell", "") or "").replace("-", " ").strip().title() or "their spell"
+        if total >= int(dc):
+            if roll_b is None:
+                self._log(
+                    f"{c.name} maintains concentration on {spell_name}: CON save {int(roll_used)} + {int(con_mod)} = {int(total)} vs DC {int(dc)}.",
+                    cid=int(getattr(c, "cid", 0) or 0),
+                )
+            else:
+                self._log(
+                    f"{c.name} maintains concentration on {spell_name}: CON save with advantage ({int(roll_a)}/{int(roll_b)}) + {int(con_mod)} = {int(total)} vs DC {int(dc)}.",
+                    cid=int(getattr(c, "cid", 0) or 0),
+                )
+            return
+        if roll_b is None:
+            self._log(
+                f"{c.name} fails concentration on {spell_name}: CON save {int(roll_used)} + {int(con_mod)} = {int(total)} vs DC {int(dc)}.",
+                cid=int(getattr(c, "cid", 0) or 0),
+            )
+        else:
+            self._log(
+                f"{c.name} fails concentration on {spell_name}: CON save with advantage ({int(roll_a)}/{int(roll_b)}) + {int(con_mod)} = {int(total)} vs DC {int(dc)}.",
+                cid=int(getattr(c, "cid", 0) or 0),
+            )
+        self._end_concentration(c)
+
     def _find_ws_for_cid(self, cid: Optional[int]) -> List[int]:
         if cid is None:
             return []
@@ -20763,6 +20837,8 @@ class InitiativeTracker(base.InitiativeTracker):
                         continue
                     summon_positions.append({"col": col, "row": row})
             preset = self._find_spell_preset(spell_slug=spell_slug, spell_id=spell_id)
+            preset_slug = str((preset or {}).get("slug") or "").strip().lower()
+            preset_id = str((preset or {}).get("id") or "").strip().lower()
             if not isinstance(preset, dict):
                 self._lan.toast(ws_id, "That spell could not be found, matey.")
                 return
@@ -20990,6 +21066,18 @@ class InitiativeTracker(base.InitiativeTracker):
                             "slot_level": slot_level,
                         },
                     )
+            ensnaring_slug_keys = {"ensnaring-strike", "ensnaring_strike"}
+            if c is not None and (preset_slug in ensnaring_slug_keys or preset_id in ensnaring_slug_keys):
+                duration_turns = self._spell_duration_to_turns(preset)
+                if duration_turns is None or int(duration_turns) <= 0:
+                    duration_turns = 10
+                self._start_concentration(
+                    c,
+                    self._canonical_concentration_spell_key(preset, fallback=spell_slug or spell_id or "ensnaring-strike"),
+                    spell_level=slot_level if slot_level is not None else preset_level,
+                    targets=[int(c.cid)],
+                )
+                self._ensure_condition_stack(c, "ensnaring_strike", int(duration_turns))
             self._lan_force_state_broadcast()
             self._lan.toast(ws_id, f"Casted {preset.get('name') or 'spell'}.")
             return

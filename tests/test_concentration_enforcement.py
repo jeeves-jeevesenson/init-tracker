@@ -55,6 +55,7 @@ class ConcentrationEnforcementTests(unittest.TestCase):
         self.app._condition_is_immune_for_target = lambda target, condition: False
         self.app._adjust_damage_entries_for_target = lambda target, entries: {"entries": list(entries), "notes": []}
         self.app._evaluate_spell_formula = tracker_mod.InitiativeTracker._evaluate_spell_formula.__get__(self.app, tracker_mod.InitiativeTracker)
+        self.app._consume_spell_slot_for_cast = lambda **kwargs: (True, "", 1)
         self.app._find_spell_preset = lambda spell_slug="", spell_id="": {
             "slug": "moonbeam" if "moon" in (spell_slug or spell_id) else "sickening-radiance",
             "id": "moonbeam" if "moon" in (spell_slug or spell_id) else "sickening-radiance",
@@ -176,6 +177,58 @@ class ConcentrationEnforcementTests(unittest.TestCase):
         self.assertEqual(target.temp_hp, 0)
         self.assertFalse(caster.concentrating)
         self.assertEqual(caster.concentration_spell, "")
+
+
+    def test_cast_ensnaring_strike_auto_targets_self_and_sets_concentration(self):
+        caster = self.app.combatants[1]
+        caster.concentrating = True
+        caster.concentration_spell = "moonbeam"
+        caster.concentration_spell_level = 2
+        self.app._find_spell_preset = lambda spell_slug="", spell_id="": {
+            "slug": "ensnaring-strike",
+            "id": "ensnaring-strike",
+            "name": "Ensnaring Strike",
+            "concentration": True,
+            "level": 1,
+            "duration": "Concentration, up to 1 minute",
+        }
+
+        msg = {
+            "type": "cast_spell",
+            "cid": 1,
+            "_claimed_cid": 1,
+            "_ws_id": 7,
+            "spell_slug": "ensnaring-strike",
+            "spell_id": "ensnaring-strike",
+            "action_type": "bonus",
+            "payload": {"action_type": "bonus"},
+        }
+
+        self.app._lan_apply_action(msg)
+
+        self.assertTrue(caster.concentrating)
+        self.assertEqual(caster.concentration_spell, "ensnaring-strike")
+        self.assertEqual(caster.concentration_spell_level, 1)
+        self.assertEqual(caster.concentration_target, [1])
+        ensnaring_stacks = [st for st in list(getattr(caster, "condition_stacks", []) or []) if st.ctype == "ensnaring_strike"]
+        self.assertEqual(len(ensnaring_stacks), 1)
+        self.assertEqual(int(ensnaring_stacks[0].remaining_turns or 0), 10)
+
+    def test_concentration_save_uses_war_caster_advantage(self):
+        caster = self.app.combatants[1]
+        caster.saving_throws = {"con": 0}
+        self.app._profile_for_player_name = lambda _name: {"features": ["War Caster"]}
+        self.app._start_concentration(caster, "ensnaring-strike", spell_level=1, targets=[1])
+
+        seq = iter([3, 17])
+        orig_randint = tracker_mod.random.randint
+        tracker_mod.random.randint = lambda a, b: next(seq)
+        try:
+            self.app._queue_concentration_save(caster, "damage")
+        finally:
+            tracker_mod.random.randint = orig_randint
+
+        self.assertTrue(caster.concentrating)
 
 
 if __name__ == "__main__":
