@@ -257,18 +257,7 @@
       gap:2px;
     }
     .planning-chat-entry + .planning-chat-entry{
-      border-top:1px solid rgba(255,255,255,0.08);
-      margin-top:2px;
-      padding-top:6px;
-    }
-    .planning-chat-entry-meta{
-      display:flex;
-      align-items:center;
-      justify-content:flex-end;
-      gap:8px;
-      color:var(--muted);
-      font-size:10px;
-      line-height:1.15;
+      margin-top:4px;
     }
     .planning-chat-body{
       white-space:pre-wrap;
@@ -8938,14 +8927,6 @@ __DAMAGE_TYPE_OPTIONS__
       entryNode.className = "planning-chat-entry";
       entryNode.tabIndex = 0;
 
-      const entryMeta = document.createElement("div");
-      entryMeta.className = "planning-chat-entry-meta";
-
-      const time = document.createElement("span");
-      time.className = "planning-chat-time planning-chat-entry-time";
-      time.textContent = formatPlanningChatCompactTime(entry?.ts);
-      entryMeta.appendChild(time);
-
       const body = document.createElement("div");
       body.className = "planning-chat-body";
       body.textContent = String(entry?.text || "");
@@ -8955,16 +8936,10 @@ __DAMAGE_TYPE_OPTIONS__
       detail.textContent = detailText;
 
       entryNode.title = detailText;
-      entryNode.appendChild(entryMeta);
       entryNode.appendChild(body);
       entryNode.appendChild(detail);
       currentGroupBubble.appendChild(entryNode);
       currentGroupBubble.title = detailText;
-
-      const groupTime = currentGroupBubble.querySelector(".planning-chat-group-meta .planning-chat-time");
-      if (groupTime){
-        groupTime.textContent = formatPlanningChatCompactTime(entry?.ts);
-      }
 
       previousSenderKey = senderKey;
     });
