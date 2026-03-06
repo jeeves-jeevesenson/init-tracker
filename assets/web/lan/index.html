@@ -6675,6 +6675,49 @@ __DAMAGE_TYPE_OPTIONS__
       setResourcePoolDetailOverlayOpen(false);
       return;
     }
+    const summonSpell = isSummonPreset(entry.preset);
+    if (summonSpell){
+      const choices = getSummonChoices(entry.preset);
+      const summonChoice = normalizeTextValue(choices[0]?.monster_slug || choices[0]?.value || "");
+      if (!summonChoice){
+        localToast("Pick a summon creature first, matey.");
+        return;
+      }
+      if (!unit?.pos){
+        localToast("Could not find caster position, matey.");
+        return;
+      }
+      const payload = {
+        action_type: entry.actionType,
+        name: normalizeTextValue(entry.preset?.name) || entry.spellName || "Spell",
+        consumes_pool: {id: entry.consumesPool.id, cost: poolCost},
+        spell_slug: normalizeTextValue(getPresetSlug(entry.preset)) || null,
+        spell_id: normalizeTextValue(entry.preset?.id) || null,
+        summon_choice: summonChoice,
+        summon_quantity: 1,
+        variant: null,
+      };
+      pendingSummonPlacement = {
+        actionType: entry.actionType,
+        slotLevel: null,
+        spellSlug: normalizeTextValue(getPresetSlug(entry.preset)) || null,
+        spellId: normalizeTextValue(entry.preset?.id) || null,
+        summonChoice,
+        summonVariant: null,
+        summonQuantity: 1,
+        casterPos: {col: Number(unit.pos.col), row: Number(unit.pos.row)},
+        maxRangeFt: parseSpellRangeFeet(entry.preset?.range),
+        positions: [],
+        payload,
+        spellName: normalizeTextValue(entry.preset?.name) || entry.spellName || "Summon",
+      };
+      rebuildSummonValidCells();
+      updateSummonPlacementBanner();
+      draw();
+      localToast("Summon placement started. Choose valid highlighted squares.");
+      setResourcePoolDetailOverlayOpen(false);
+      return;
+    }
     const payload = {
       action_type: entry.actionType,
       name: normalizeTextValue(entry.preset?.name) || entry.spellName || "Spell",
