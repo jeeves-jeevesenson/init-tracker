@@ -22921,6 +22921,7 @@ class InitiativeTracker(base.InitiativeTracker):
             is_polymorph = preset_slug == "polymorph" or preset_id == "polymorph"
             is_phantasmal_killer = preset_slug == "phantasmal-killer" or preset_id == "phantasmal-killer"
             is_tashas_hideous_laughter = preset_slug == "tasha-s-hideous-laughter" or preset_id == "tasha-s-hideous-laughter"
+            is_hold_person = preset_slug == "hold-person" or preset_id == "hold-person"
             haste_duration_turns = 10
             haste_ac_bonus = 2
             if is_haste and isinstance(preset, dict):
@@ -23490,6 +23491,33 @@ class InitiativeTracker(base.InitiativeTracker):
                     }
                 )
                 setattr(target, "on_damage_save_riders", on_damage_save_riders)
+
+            if hit and is_hold_person and c is not None:
+                current_targets = list(getattr(c, "concentration_target", []) or [])
+                if int(target.cid) not in current_targets:
+                    current_targets.append(int(target.cid))
+                self._start_concentration(
+                    c,
+                    "hold-person",
+                    spell_level=int((preset or {}).get("level") or 0) or None,
+                    targets=current_targets,
+                )
+                clear_group = f"hold_person_{int(c.cid)}_{int(target.cid)}"
+                end_turn_save_riders = [
+                    rider
+                    for rider in list(getattr(target, "end_turn_save_riders", []) or [])
+                    if str((rider or {}).get("clear_group") or "").strip().lower() != clear_group
+                ]
+                end_turn_save_riders.append(
+                    {
+                        "clear_group": clear_group,
+                        "save_ability": "wis",
+                        "save_dc": int(save_dc),
+                        "condition": "paralyzed",
+                        "source": spell_name,
+                    }
+                )
+                setattr(target, "end_turn_save_riders", end_turn_save_riders)
 
             if hit and is_haste and c is not None:
                 current_targets = list(getattr(c, "concentration_target", []) or [])
