@@ -313,14 +313,13 @@ magic_items:
   - ring_of_desert_sands
   - tyrs_circlet
   attuned:
-  - inazuma
   - gauntlets_of_strength
   - boots_of_haste
   - tyrs_circlet
   items:
   - id: inazuma
     equipped: true
-    attuned: true
+    attuned: false
   - id: gauntlets_of_strength
     equipped: true
     attuned: true
