@@ -1440,6 +1440,8 @@ class LanController:
         "aoe_move",
         "aoe_remove",
         "dismiss_summons",
+        "dismiss_persistent_summon",
+        "reappear_persistent_summon",
         "reset_player_characters",
         "mount_request",
         "mount_response",
@@ -8883,6 +8885,23 @@ class InitiativeTracker(base.InitiativeTracker):
             self._lan_positions.pop(cid, None)
             self._turn_snapshots.pop(cid, None)
 
+        for group_id, members in list(getattr(self, "_summon_groups", {}).items()):
+            active_members = [int(member) for member in list(members or []) if int(member) not in removed]
+            self._summon_groups[group_id] = active_members
+            meta = self._summon_group_meta.get(group_id) if isinstance(getattr(self, "_summon_group_meta", None), dict) else None
+            lifecycle = meta.get("lifecycle") if isinstance(meta, dict) and isinstance(meta.get("lifecycle"), dict) else {}
+            if isinstance(meta, dict):
+                dismissed_units = meta.get("dismissed_units") if isinstance(meta.get("dismissed_units"), dict) else {}
+                meta["dismissed_units"] = dismissed_units
+                meta["dismissed"] = bool(dismissed_units)
+            if active_members:
+                continue
+            if isinstance(meta, dict) and bool(lifecycle.get("persist_until_dismissed")) and bool(meta.get("dismissed_units")):
+                continue
+            self._summon_groups.pop(group_id, None)
+            if isinstance(getattr(self, "_summon_group_meta", None), dict):
+                self._summon_group_meta.pop(group_id, None)
+
         aoe_ids = [aid for aid, aoe in (self._lan_aoes or {}).items() if aoe.get("owner_cid") in removed]
         if mw is not None and hasattr(mw, "_remove_aoe_by_id"):
             for aid in aoe_ids:
@@ -10034,6 +10053,9 @@ class InitiativeTracker(base.InitiativeTracker):
                     "vexed_by_cid": _normalize_cid_value(getattr(c, "_vexed_by_cid", None), "snapshot.vexed_by"),
                     "has_star_advantage": self._has_condition(c, "star_advantage"),
                     "summon_variant": str(getattr(c, "summon_variant", "") or "") or None,
+                    "summon_type_override": str(getattr(c, "summon_type_override", "") or "") or None,
+                    "summon_lifecycle": self._json_safe(getattr(c, "summon_lifecycle", None)),
+                    "summon_dismissed": bool(getattr(c, "summon_dismissed", False)),
                     "slot_level": getattr(c, "summon_slot_level", None),
                     "pos": {"col": int(pos[0]), "row": int(pos[1])},
                     "marks": marks,
@@ -18197,6 +18219,41 @@ class InitiativeTracker(base.InitiativeTracker):
         summon_variant: Optional[str],
         summon_quantity: Optional[int],
     ) -> Tuple[Optional[Dict[str, Any]], Optional[str]]:
+        def _match_choice_filters() -> List[str]:
+            filters = summon_cfg.get("choice_filters") if isinstance(summon_cfg.get("choice_filters"), list) else []
+            if not filters:
+                return []
+            if not self._monster_specs:
+                self._load_monsters_index()
+            matched_slugs: List[str] = []
+            seen: set[str] = set()
+            for entry in filters:
+                if not isinstance(entry, dict):
+                    continue
+                if str(entry.get("type") or "").strip().lower() != "monster_query":
+                    continue
+                criteria = entry.get("criteria") if isinstance(entry.get("criteria"), dict) else {}
+                wanted_type = str(criteria.get("type") or "").strip().lower()
+                wanted_cr = criteria.get("challenge_rating")
+                for spec in self._monster_specs:
+                    if not isinstance(spec, MonsterSpec):
+                        continue
+                    if wanted_type and str(getattr(spec, "mtype", "") or "").strip().lower() != wanted_type:
+                        continue
+                    if wanted_cr is not None:
+                        try:
+                            if float(getattr(spec, "cr", 0) or 0) != float(wanted_cr):
+                                continue
+                        except Exception:
+                            continue
+                    slug = self._monster_slug_from_spec(spec)
+                    if not slug or slug in seen:
+                        continue
+                    seen.add(slug)
+                    matched_slugs.append(slug)
+            matched_slugs.sort()
+            return matched_slugs
+
         normalized_choice = str(summon_choice or "").strip().lower()
         choices = [entry for entry in (summon_cfg.get("choices") if isinstance(summon_cfg.get("choices"), list) else []) if isinstance(entry, dict)]
         normalized_choices: List[Dict[str, Any]] = []
@@ -18218,8 +18275,6 @@ class InitiativeTracker(base.InitiativeTracker):
                     if any(str(v or "").strip().lower() == normalized_choice for v in keys):
                         selected_choice = entry
                         break
-                if selected_choice is None:
-                    return None, "That summon choice is not valid for this spell, matey."
             elif len(normalized_choices) == 1:
                 selected_choice = normalized_choices[0]
             else:
@@ -18230,6 +18285,8 @@ class InitiativeTracker(base.InitiativeTracker):
         option_pool = active_count_cfg.get("options") if isinstance(active_count_cfg.get("options"), list) else []
 
         allowed_monster_slugs = {str(entry.get("monster_slug") or "").strip().lower() for entry in normalized_choices if entry.get("monster_slug")}
+        for slug in _match_choice_filters():
+            allowed_monster_slugs.add(str(slug).strip().lower())
         if isinstance(option_pool, list) and option_pool:
             for opt in option_pool:
                 creature_options = opt.get("creature_options") if isinstance(opt.get("creature_options"), list) else []
@@ -18241,7 +18298,7 @@ class InitiativeTracker(base.InitiativeTracker):
         monster_slug = str(selected_choice.get("monster_slug") or "").strip().lower() if isinstance(selected_choice, dict) else ""
         if not monster_slug and normalized_choice and normalized_choice in allowed_monster_slugs:
             monster_slug = normalized_choice
-        if not monster_slug and len(allowed_monster_slugs) == 1:
+        if not monster_slug and not normalized_choice and len(allowed_monster_slugs) == 1:
             monster_slug = next(iter(allowed_monster_slugs))
         if not monster_slug:
             return None, "Pick a summon creature first, matey."
@@ -18276,13 +18333,21 @@ class InitiativeTracker(base.InitiativeTracker):
 
         variant_raw = str(summon_variant or "").strip()
         resolved_variant: Optional[str] = None
+        resolved_type_override: Optional[str] = None
         allowed_variant_names = [str(v).strip() for v in (selected_choice.get("variants") if isinstance(selected_choice, dict) and isinstance(selected_choice.get("variants"), list) else []) if str(v).strip()]
+        type_override_cfg = summon_cfg.get("type_override") if isinstance(summon_cfg.get("type_override"), dict) else {}
+        allowed_type_overrides = [str(v).strip() for v in (type_override_cfg.get("options") if isinstance(type_override_cfg.get("options"), list) else []) if str(v).strip()]
         if variant_raw:
             if allowed_variant_names:
                 normalized_variants = {name.lower(): name for name in allowed_variant_names}
                 if variant_raw.lower() not in normalized_variants:
                     return None, "That summon variant is not valid for this spell, matey."
                 resolved_variant = normalized_variants[variant_raw.lower()]
+            elif allowed_type_overrides:
+                normalized_overrides = {name.lower(): name for name in allowed_type_overrides}
+                if variant_raw.lower() not in normalized_overrides:
+                    return None, "That summon type is not valid for this spell, matey."
+                resolved_type_override = normalized_overrides[variant_raw.lower()]
             else:
                 resolved_variant = variant_raw
 
@@ -18300,7 +18365,134 @@ class InitiativeTracker(base.InitiativeTracker):
             "scaling_context": self._build_summon_scaling_context(caster, slot_level),
             "slot_level": int(slot_level) if isinstance(slot_level, int) else None,
             "source_spell": str(preset.get("slug") or preset.get("id") or "").strip(),
+            "type_override": resolved_type_override,
         }, None
+
+    def _resolve_summon_lifecycle(self, resolved: Dict[str, Any], summon_cfg: Dict[str, Any]) -> Dict[str, Any]:
+        lifecycle_cfg = resolved.get("lifecycle") if isinstance(resolved.get("lifecycle"), dict) else {}
+        concentration_bound = bool(resolved.get("concentration_bound"))
+        lifecycle = {
+            "concentration_bound": concentration_bound,
+            "persist_until_dismissed": bool(lifecycle_cfg.get("persist_until_dismissed")),
+            "replace_existing_same_spell": bool(lifecycle_cfg.get("replace_existing_same_spell")),
+            "dismissible": bool(lifecycle_cfg.get("dismissible")),
+            "ends_on_zero_hp": bool(lifecycle_cfg.get("ends_on_zero_hp")),
+            "reappear_within_range_ft": None,
+        }
+        try:
+            if lifecycle_cfg.get("reappear_within_range_ft") is not None:
+                lifecycle["reappear_within_range_ft"] = int(lifecycle_cfg.get("reappear_within_range_ft"))
+            elif lifecycle_cfg.get("reappear_distance_ft") is not None:
+                lifecycle["reappear_within_range_ft"] = int(lifecycle_cfg.get("reappear_distance_ft"))
+        except Exception:
+            lifecycle["reappear_within_range_ft"] = None
+        if not concentration_bound and lifecycle["dismissible"] and lifecycle["ends_on_zero_hp"]:
+            lifecycle["persist_until_dismissed"] = True
+        return lifecycle
+
+    def _dismiss_spell_summon_groups_for_caster(self, caster_cid: int, source_spell: str) -> int:
+        normalized_spell = str(source_spell or "").strip().lower()
+        if not normalized_spell:
+            return 0
+        removed = 0
+        for group_id, meta in list(self._summon_group_meta.items()):
+            if int(meta.get("caster_cid") or -1) != int(caster_cid):
+                continue
+            if str(meta.get("spell") or "").strip().lower() != normalized_spell:
+                continue
+            removed += self._dismiss_summon_group(group_id)
+        return removed
+
+    def _dismiss_persistent_summon_group(self, summon_group_id: str) -> int:
+        group_key = str(summon_group_id or "").strip()
+        meta = self._summon_group_meta.get(group_key) if isinstance(getattr(self, "_summon_group_meta", None), dict) else None
+        if not group_key or not isinstance(meta, dict):
+            return 0
+        lifecycle = meta.get("lifecycle") if isinstance(meta.get("lifecycle"), dict) else {}
+        if not bool(lifecycle.get("dismissible")):
+            return 0
+        cids = [int(cid) for cid in list(self._summon_groups.get(group_key) or []) if int(cid) in self.combatants]
+        if not cids:
+            return 0
+        dismissed = meta.get("dismissed_units") if isinstance(meta.get("dismissed_units"), dict) else {}
+        for cid in cids:
+            unit = self.combatants.get(int(cid))
+            if unit is None:
+                continue
+            dismissed[str(int(cid))] = {
+                "cid": int(cid),
+                "combatant": unit,
+            }
+            setattr(unit, "summon_dismissed", True)
+        meta["dismissed_units"] = dismissed
+        meta["dismissed"] = bool(dismissed)
+        self._remove_combatants_with_lan_cleanup(cids)
+        self._summon_groups[group_key] = []
+        self._rebuild_table(scroll_to_current=True)
+        self._lan_force_state_broadcast()
+        return len(cids)
+
+    def _reappear_persistent_summon_group(self, summon_group_id: str, caster_cid: int, col: int, row: int) -> int:
+        group_key = str(summon_group_id or "").strip()
+        meta = self._summon_group_meta.get(group_key) if isinstance(getattr(self, "_summon_group_meta", None), dict) else None
+        if not group_key or not isinstance(meta, dict):
+            return 0
+        if int(meta.get("caster_cid") or -1) != int(caster_cid):
+            return 0
+        lifecycle = meta.get("lifecycle") if isinstance(meta.get("lifecycle"), dict) else {}
+        dismissed_units = meta.get("dismissed_units") if isinstance(meta.get("dismissed_units"), dict) else {}
+        if not dismissed_units:
+            return 0
+        try:
+            max_range_ft = int(lifecycle.get("reappear_within_range_ft")) if lifecycle.get("reappear_within_range_ft") is not None else None
+        except Exception:
+            max_range_ft = None
+        caster_pos = self._lan_positions.get(int(caster_cid))
+        if max_range_ft is not None and caster_pos is not None:
+            feet_per_square = 5.0
+            try:
+                mw = getattr(self, "_map_window", None)
+                if mw is not None and mw.winfo_exists():
+                    feet_per_square = float(getattr(mw, "feet_per_square", feet_per_square) or feet_per_square)
+            except Exception:
+                pass
+            feet_per_square = max(1.0, feet_per_square)
+            dist_ft = math.hypot(int(col) - int(caster_pos[0]), int(row) - int(caster_pos[1])) * feet_per_square
+            if dist_ft - float(max_range_ft) > 1e-6:
+                return 0
+        restored: List[int] = []
+        for info in dismissed_units.values():
+            if not isinstance(info, dict):
+                continue
+            unit = info.get("combatant")
+            cid = _normalize_cid_value(info.get("cid"), "summon.reappear.cid")
+            if unit is None or cid is None:
+                continue
+            self.combatants[int(cid)] = unit
+            self._lan_positions[int(cid)] = (int(col), int(row))
+            setattr(unit, "summon_dismissed", False)
+            restored.append(int(cid))
+        if not restored:
+            return 0
+        self._summon_groups[group_key] = list(restored)
+        meta["dismissed_units"] = {}
+        meta["dismissed"] = False
+        self._rebuild_table(scroll_to_current=True)
+        self._lan_force_state_broadcast()
+        return len(restored)
+
+    def _find_persistent_spell_group_for_caster(self, caster_cid: int, source_spell: str) -> Optional[str]:
+        normalized_spell = str(source_spell or "").strip().lower()
+        for group_id, meta in list(self._summon_group_meta.items()):
+            if int(meta.get("caster_cid") or -1) != int(caster_cid):
+                continue
+            if str(meta.get("spell") or "").strip().lower() != normalized_spell:
+                continue
+            lifecycle = meta.get("lifecycle") if isinstance(meta.get("lifecycle"), dict) else {}
+            if not bool(lifecycle.get("persist_until_dismissed")):
+                continue
+            return str(group_id)
+        return None
 
     def _summon_can_be_controlled_by(self, claimed_cid: Optional[int], target_cid: Optional[int]) -> bool:
         if claimed_cid is None or target_cid is None:
@@ -19743,6 +19935,7 @@ class InitiativeTracker(base.InitiativeTracker):
             return []
         mod_spec = self._apply_monster_variant(spec, variant_name, slot_level, scaling_context=scaling_context)
         source_spell = str(resolved.get("source_spell") or preset.get("slug") or preset.get("id") or "").strip()
+        lifecycle = self._resolve_summon_lifecycle(resolved, summon_cfg)
         group_id = f"summon:{int(time.time() * 1000)}:{caster_cid}:{len(self._summon_groups) + 1}"
         side_raw = str(summon_cfg.get("side") or "caster").strip().lower()
         ally_flag = False if side_raw == "enemy" else True
@@ -19789,6 +19982,8 @@ class InitiativeTracker(base.InitiativeTracker):
         setattr(summoned, "summon_slot_level", slot_level)
         setattr(summoned, "summon_choice_slug", str(resolved.get("choice_slug") or chosen_slug))
         setattr(summoned, "summon_base_monster_slug", chosen_slug)
+        setattr(summoned, "summon_lifecycle", dict(lifecycle))
+        setattr(summoned, "summon_type_override", resolved.get("type_override") if isinstance(resolved.get("type_override"), str) else None)
         if color_override:
             setattr(summoned, "token_color", color_override)
         spawned = [cid]
@@ -19814,6 +20009,8 @@ class InitiativeTracker(base.InitiativeTracker):
                 "summon_variant": display_variant or None,
                 "summon_slot_level": slot_level,
                 "summon_source_spell": source_spell,
+                "lifecycle": dict(lifecycle),
+                "summon_type_override": resolved.get("type_override") if isinstance(resolved.get("type_override"), str) else None,
             }
         return spawned
 
@@ -19879,6 +20076,9 @@ class InitiativeTracker(base.InitiativeTracker):
         group_id = f"summon:{int(time.time() * 1000)}:{caster_cid}:{len(self._summon_groups) + 1}"
         controller_mode = str(resolved.get("control_mode") or self._normalize_summon_controller_mode(summon_cfg))
         source_spell = str(resolved.get("source_spell") or preset.get("slug") or preset.get("id") or spell_slug or spell_id or "").strip()
+        lifecycle = self._resolve_summon_lifecycle(resolved, summon_cfg)
+        if bool(lifecycle.get("replace_existing_same_spell")):
+            self._dismiss_spell_summon_groups_for_caster(int(caster_cid), source_spell)
         side_raw = str(summon_cfg.get("side") or "caster").strip().lower()
         ally_flag = False if side_raw == "enemy" else True
         color_override = self._normalize_token_color(summon_cfg.get("color") or summon_cfg.get("token_color"))
@@ -19923,6 +20123,8 @@ class InitiativeTracker(base.InitiativeTracker):
             setattr(summoned, "summon_slot_level", resolved.get("slot_level") if isinstance(resolved.get("slot_level"), int) else None)
             setattr(summoned, "summon_choice_slug", str(resolved.get("choice_slug") or chosen_slug))
             setattr(summoned, "summon_base_monster_slug", chosen_slug)
+            setattr(summoned, "summon_lifecycle", dict(lifecycle))
+            setattr(summoned, "summon_type_override", resolved.get("type_override") if isinstance(resolved.get("type_override"), str) else None)
             if color_override:
                 setattr(summoned, "token_color", color_override)
             spawned.append(cid)
@@ -19958,6 +20160,8 @@ class InitiativeTracker(base.InitiativeTracker):
                 "summon_variant": str(resolved.get("variant") or "").strip() or None,
                 "summon_slot_level": resolved.get("slot_level") if isinstance(resolved.get("slot_level"), int) else None,
                 "summon_source_spell": source_spell,
+                "lifecycle": dict(lifecycle),
+                "summon_type_override": resolved.get("type_override") if isinstance(resolved.get("type_override"), str) else None,
             }
         return spawned
 
@@ -22431,6 +22635,48 @@ class InitiativeTracker(base.InitiativeTracker):
                 return
             removed = self._dismiss_summons_for_caster(int(target_caster))
             self._lan.toast(ws_id, f"Dismissed {removed} summoned creature(s).")
+            return
+        elif typ == "dismiss_persistent_summon":
+            target_group = str(msg.get("summon_group_id") or "").strip()
+            if not target_group:
+                self._lan.toast(ws_id, "Pick a summon group first, matey.")
+                return
+            meta = self._summon_group_meta.get(target_group) if isinstance(getattr(self, "_summon_group_meta", None), dict) else None
+            if not isinstance(meta, dict):
+                self._lan.toast(ws_id, "That summon group be gone, matey.")
+                return
+            owner_cid = _normalize_cid_value(meta.get("caster_cid"), "dismiss_persistent.owner")
+            if not is_admin and (claimed is None or owner_cid is None or int(claimed) != int(owner_cid)):
+                self._lan.toast(ws_id, "Ye can only dismiss yer own persistent summon.")
+                return
+            removed = self._dismiss_persistent_summon_group(target_group)
+            self._lan.toast(ws_id, f"Dismissed {removed} summoned creature(s).")
+            return
+        elif typ == "reappear_persistent_summon":
+            target_group = str(msg.get("summon_group_id") or "").strip()
+            to = msg.get("to") if isinstance(msg.get("to"), dict) else {}
+            try:
+                col = int(to.get("col"))
+                row = int(to.get("row"))
+            except Exception:
+                self._lan.toast(ws_id, "Pick a valid reappearance location, matey.")
+                return
+            meta = self._summon_group_meta.get(target_group) if isinstance(getattr(self, "_summon_group_meta", None), dict) else None
+            if not isinstance(meta, dict):
+                self._lan.toast(ws_id, "That summon group be gone, matey.")
+                return
+            owner_cid = _normalize_cid_value(meta.get("caster_cid"), "reappear_persistent.owner")
+            if owner_cid is None:
+                self._lan.toast(ws_id, "That summon has no owner, matey.")
+                return
+            if not is_admin and (claimed is None or int(claimed) != int(owner_cid)):
+                self._lan.toast(ws_id, "Ye can only recall yer own persistent summon.")
+                return
+            restored = self._reappear_persistent_summon_group(target_group, int(owner_cid), int(col), int(row))
+            if restored <= 0:
+                self._lan.toast(ws_id, "Could not reappear that summon there, matey.")
+                return
+            self._lan.toast(ws_id, f"Reappeared {restored} summoned creature(s).")
             return
         elif typ == "assign_pre_summon":
             if not is_admin:
