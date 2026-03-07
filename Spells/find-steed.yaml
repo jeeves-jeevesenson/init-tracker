@@ -90,6 +90,7 @@ mechanics:
     duration:
       text: Until dispelled or reduced to 0 HP.
     lifecycle:
+      replace_existing_same_spell: true
       ends_on_zero_hp: true
       ends_on_spell_end: false
     control: summoner

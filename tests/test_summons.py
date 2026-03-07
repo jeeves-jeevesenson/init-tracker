@@ -15,6 +15,12 @@ class SummonHarness:
         self._next_cid = 1
         self._lan_positions = {}
         self._oplog = lambda *args, **kwargs: None
+        self._rebuild_table = lambda *args, **kwargs: None
+        self._lan_force_state_broadcast = lambda *args, **kwargs: None
+        self._monster_specs = []
+        self._load_monsters_index = lambda: None
+        self._turn_snapshots = {}
+        self._lan_aoes = {}
 
     def _unique_name(self, name):
         return str(name)
@@ -101,6 +107,14 @@ class SummonHarness:
     _normalize_startup_summon_entries = tracker_mod.InitiativeTracker._normalize_startup_summon_entries
     _monster_int_from_value = tracker_mod.InitiativeTracker._monster_int_from_value
     _sorted_combatants = tracker_mod.InitiativeTracker._sorted_combatants
+    _remove_combatants_with_lan_cleanup = tracker_mod.InitiativeTracker._remove_combatants_with_lan_cleanup
+    _monster_slug_from_spec = tracker_mod.InitiativeTracker._monster_slug_from_spec
+    _resolve_summon_lifecycle = tracker_mod.InitiativeTracker._resolve_summon_lifecycle
+    _dismiss_spell_summon_groups_for_caster = tracker_mod.InitiativeTracker._dismiss_spell_summon_groups_for_caster
+    _dismiss_summon_group = tracker_mod.InitiativeTracker._dismiss_summon_group
+    _dismiss_persistent_summon_group = tracker_mod.InitiativeTracker._dismiss_persistent_summon_group
+    _reappear_persistent_summon_group = tracker_mod.InitiativeTracker._reappear_persistent_summon_group
+    _find_persistent_spell_group_for_caster = tracker_mod.InitiativeTracker._find_persistent_spell_group_for_caster
 
 
 class SummonSpawnTests(unittest.TestCase):
@@ -605,6 +619,99 @@ class SummonSpawnTests(unittest.TestCase):
         cid = tracker_mod.InitiativeTracker._create_pc_from_profile(h, "Eldramar", {})
         self.assertIsNotNone(cid)
         h._spawn_startup_summons_for_pc.assert_called_once_with(cid, expected_entries)
+
+
+    def _find_familiar_preset(self):
+        return {
+            "slug": "find-familiar",
+            "id": "find-familiar",
+            "concentration": False,
+            "summon": {
+                "choices": [{"name": "Owl", "monster_slug": "owl"}],
+                "choice_filters": [{"type": "monster_query", "criteria": {"type": "beast", "challenge_rating": 0}}],
+                "type_override": {"options": ["Celestial", "Fey", "Fiend"]},
+                "count": {"kind": "fixed", "min": 1, "max": 1},
+                "lifecycle": {
+                    "persist_until_dismissed": True,
+                    "replace_existing_same_spell": True,
+                    "dismissible": True,
+                    "reappear_within_range_ft": 30,
+                    "ends_on_zero_hp": True,
+                },
+            },
+        }
+
+    def test_find_familiar_uses_spell_owned_choices_and_filters_only(self):
+        h = self._build_harness()
+        h._monster_specs = [
+            tracker_mod.MonsterSpec(filename="owl.yaml", name="Owl", mtype="beast", cr=0, hp=1, speed=5, swim_speed=0, fly_speed=60, burrow_speed=0, climb_speed=0, dex=13, init_mod=1, saving_throws={}, ability_mods={}, raw_data={}),
+            tracker_mod.MonsterSpec(filename="wolf.yaml", name="Wolf", mtype="beast", cr=0.25, hp=11, speed=40, swim_speed=0, fly_speed=0, burrow_speed=0, climb_speed=0, dex=15, init_mod=2, saving_throws={}, ability_mods={}, raw_data={}),
+        ]
+        h._load_monsters_index = lambda: None
+        resolved, err = h._resolve_spell_summon_request(
+            preset=self._find_familiar_preset(),
+            summon_cfg=self._find_familiar_preset()["summon"],
+            caster=h.combatants[100],
+            summon_choice="wolf",
+            slot_level=1,
+            summon_variant=None,
+            summon_quantity=None,
+        )
+        self.assertIsNone(resolved)
+        self.assertTrue(isinstance(err, str) and err)
+
+    def test_find_familiar_recast_replaces_existing_familiar(self):
+        h = self._build_harness()
+        preset = self._find_familiar_preset()
+        owl = tracker_mod.MonsterSpec(filename="owl.yaml", name="Owl", mtype="beast", cr=0, hp=1, speed=5, swim_speed=0, fly_speed=60, burrow_speed=0, climb_speed=0, dex=13, init_mod=1, saving_throws={}, ability_mods={}, raw_data={})
+        raven = tracker_mod.MonsterSpec(filename="raven.yaml", name="Raven", mtype="beast", cr=0, hp=1, speed=10, swim_speed=0, fly_speed=50, burrow_speed=0, climb_speed=0, dex=14, init_mod=2, saving_throws={}, ability_mods={}, raw_data={})
+        h._find_spell_preset = lambda spell_slug, spell_id: preset
+        h._find_monster_spec_by_slug = lambda slug: owl if slug == "owl" else raven if slug == "raven" else None
+        h._monster_specs = [owl, raven]
+
+        first = h._spawn_summons_from_cast(100, "find-familiar", "", 1, "owl", summon_variant="Fey")
+        self.assertEqual(len(first), 1)
+        second = h._spawn_summons_from_cast(100, "find-familiar", "", 1, "raven", summon_variant="Fiend")
+        self.assertEqual(len(second), 1)
+        self.assertNotIn(first[0], h.combatants)
+        self.assertIn(second[0], h.combatants)
+
+    def test_find_familiar_dismiss_and_reappear_preserve_identity(self):
+        h = self._build_harness()
+        preset = self._find_familiar_preset()
+        owl = tracker_mod.MonsterSpec(filename="owl.yaml", name="Owl", mtype="beast", cr=0, hp=1, speed=5, swim_speed=0, fly_speed=60, burrow_speed=0, climb_speed=0, dex=13, init_mod=1, saving_throws={}, ability_mods={}, raw_data={})
+        h._find_spell_preset = lambda spell_slug, spell_id: preset
+        h._find_monster_spec_by_slug = lambda slug: owl if slug == "owl" else None
+        h._lan_positions[100] = (10, 10)
+
+        spawned = h._spawn_summons_from_cast(100, "find-familiar", "", 1, "owl", summon_positions=[{"col": 11, "row": 10}])
+        familiar_cid = spawned[0]
+        group_id = getattr(h.combatants[familiar_cid], "summon_group_id")
+        removed = h._dismiss_persistent_summon_group(group_id)
+        self.assertEqual(removed, 1)
+        self.assertNotIn(familiar_cid, h.combatants)
+        restored = h._reappear_persistent_summon_group(group_id, 100, 12, 10)
+        self.assertEqual(restored, 1)
+        self.assertIn(familiar_cid, h.combatants)
+        self.assertEqual(getattr(h.combatants[familiar_cid], "summon_source_spell", None), "find-familiar")
+
+    def test_find_familiar_reappear_respects_range_and_type_override_preserved(self):
+        h = self._build_harness()
+        preset = self._find_familiar_preset()
+        owl = tracker_mod.MonsterSpec(filename="owl.yaml", name="Owl", mtype="beast", cr=0, hp=1, speed=5, swim_speed=0, fly_speed=60, burrow_speed=0, climb_speed=0, dex=13, init_mod=1, saving_throws={}, ability_mods={}, raw_data={})
+        h._find_spell_preset = lambda spell_slug, spell_id: preset
+        h._find_monster_spec_by_slug = lambda slug: owl if slug == "owl" else None
+        h._lan_positions[100] = (0, 0)
+
+        spawned = h._spawn_summons_from_cast(100, "find-familiar", "", 1, "owl", summon_variant="Fiend")
+        familiar = h.combatants[spawned[0]]
+        self.assertEqual(getattr(familiar, "summon_type_override", None), "Fiend")
+        group_id = getattr(familiar, "summon_group_id")
+        h._dismiss_persistent_summon_group(group_id)
+        too_far = h._reappear_persistent_summon_group(group_id, 100, 7, 0)
+        self.assertEqual(too_far, 0)
+        in_range = h._reappear_persistent_summon_group(group_id, 100, 6, 0)
+        self.assertEqual(in_range, 1)
 
     def test_conjure_animals_uses_pack_aoe_automation(self):
         spell = yaml.safe_load(Path("Spells/conjure-animals.yaml").read_text(encoding="utf-8"))

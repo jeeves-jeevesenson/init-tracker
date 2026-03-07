@@ -107,9 +107,11 @@ mechanics:
       duration_type: instantaneous
       notes: Familiar persists until dismissed or reduced to 0 Hit Points.
     lifecycle:
+      persist_until_dismissed: true
+      replace_existing_same_spell: true
       ends_on_zero_hp: true
       dismissible: true
-      reappear_distance_ft: 30
+      reappear_within_range_ft: 30
     control: summoner
     type_override:
       options:
