@@ -6678,6 +6678,10 @@ __DAMAGE_TYPE_OPTIONS__
     const summonSpell = isSummonPreset(entry.preset);
     if (summonSpell){
       const choices = getSummonChoices(entry.preset);
+      if (choices.length !== 1){
+        localToast("Open the spell cast panel and pick a summon creature first, matey.");
+        return;
+      }
       const summonChoice = normalizeTextValue(choices[0]?.monster_slug || choices[0]?.value || "");
       if (!summonChoice){
         localToast("Pick a summon creature first, matey.");
@@ -18876,8 +18880,8 @@ __DAMAGE_TYPE_OPTIONS__
     let reason = "";
     if (!selectedChoice){
       reason = "Pick a summon option first, matey.";
-    } else if (preset?.summon?.mount && !selectedVariant){
-      reason = "Pick a mount variant first, matey.";
+    } else if (Array.isArray((choices.find((choice) => normalizeTextValue(choice.monster_slug) === selectedChoice) || {}).variants) && (choices.find((choice) => normalizeTextValue(choice.monster_slug) === selectedChoice) || {}).variants.length > 0 && !selectedVariant){
+      reason = "Pick a summon variant first, matey.";
     } else if (!Number.isFinite(quantity) || quantity <= 0){
       reason = "Enter a valid summon quantity, matey.";
     } else if (quantityRule.fixed !== null && quantity !== quantityRule.fixed){
@@ -19015,11 +19019,12 @@ __DAMAGE_TYPE_OPTIONS__
       const currentVariant = normalizeTextValue(castSummonVariantInput.value || "");
       castSummonVariantInput.innerHTML = "";
       const mountMode = Boolean(preset?.summon?.mount);
+      const hasVariants = variants.length > 0;
       if (castSummonVariantLabel){
         castSummonVariantLabel.textContent = "Variant";
       }
-      castSummonVariantField?.classList.toggle("hidden", !mountMode);
-      if (mountMode){
+      castSummonVariantField?.classList.toggle("hidden", !hasVariants);
+      if (hasVariants){
         variants.forEach((variant) => {
           const opt = document.createElement("option");
           opt.value = variant;

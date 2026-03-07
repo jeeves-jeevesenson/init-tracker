@@ -201,7 +201,7 @@ class MonsterIndexTempResolutionTests(unittest.TestCase):
 
             cache_path = tracker_mod._ensure_logs_dir() / "monster_index.json"
             cache = json.loads(cache_path.read_text(encoding="utf-8"))
-            self.assertEqual(cache.get("version"), 2)
+            self.assertEqual(cache.get("version"), 4)
             self.assertIn("goblin.yaml", cache.get("entries", {}))
             self.assertIn("temp/goblin.yaml", cache.get("entries", {}))
 

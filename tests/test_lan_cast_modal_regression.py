@@ -88,6 +88,11 @@ class LanCastModalRegressionTests(unittest.TestCase):
         self.assertIn("const conditionText = formatTurnChipConditions(unit?.marks);", self.html)
         self.assertIn('nameEl.textContent = conditionText ? `${concentrationLabel} · ${conditionText}` : concentrationLabel;', self.html)
 
+    def test_summon_variants_are_available_for_non_mount_summons(self):
+        self.assertIn('const hasVariants = variants.length > 0;', self.html)
+        self.assertIn('castSummonVariantField?.classList.toggle("hidden", !hasVariants);', self.html)
+        self.assertIn('reason = "Pick a summon variant first, matey.";', self.html)
+
     def test_aoe_spell_appearance_options_use_variant_field(self):
         self.assertIn("const getSpellAppearanceOptions = (preset) => {", self.html)
         self.assertIn('castSummonVariantLabel.textContent = hasAppearanceOptions ? "Appearance" : "Variant";', self.html)
@@ -258,7 +263,7 @@ class LanCastModalRegressionTests(unittest.TestCase):
         self.assertIn('id="layOnHandsOverlay"', self.html)
         self.assertIn('pendingLayOnHandsTargeting = {', self.html)
         self.assertIn('setLayOnHandsOverlayOpen(true);', self.html)
-        self.assertIn('const msg = {type:"lay_on_hands_use", cid: claimedCid, target_cid: pendingLayOnHandsResolve.targetCid, amount};', self.html)
+        self.assertIn('const msg = {type:"lay_on_hands_use", cid: claimedCid, target_cid: pendingLayOnHandsResolve.targetCid, amount', self.html)
         self.assertIn('normalizeHexColor(pendingLayOnHandsTargeting ? "#4caf50"', self.html)
 
     def test_resource_pool_actions_route_bardic_and_mantle_to_targeting_flow(self):

@@ -18059,81 +18059,248 @@ class InitiativeTracker(base.InitiativeTracker):
     def _resolve_summon_choice(
         summon_cfg: Dict[str, Any], summon_choice: Any, slot_level: Optional[int]
     ) -> Tuple[Optional[Dict[str, Any]], Optional[int], Optional[str]]:
-        choices = summon_cfg.get("choices") if isinstance(summon_cfg.get("choices"), list) else []
+        choices = [entry for entry in (summon_cfg.get("choices") if isinstance(summon_cfg.get("choices"), list) else []) if isinstance(entry, dict)]
         normalized_choice = str(summon_choice or "").strip().lower()
         selected_choice: Optional[Dict[str, Any]] = None
-        if choices:
-            def entry_matches(entry: Dict[str, Any], key: str) -> bool:
-                if not key:
-                    return False
-                values = [entry.get("monster_slug"), entry.get("name"), entry.get("slug"), entry.get("id")]
-                return any(str(value or "").strip().lower() == key for value in values)
-
-            for entry in choices:
-                if isinstance(entry, dict) and entry_matches(entry, normalized_choice):
-                    selected_choice = entry
-                    break
-            if selected_choice is None and not normalized_choice:
-                for entry in choices:
-                    if isinstance(entry, dict) and entry.get("monster_slug"):
+        normalized_choices: List[Dict[str, Any]] = []
+        for entry in choices:
+            monster_slug = str(entry.get("monster_slug") or "").strip().lower()
+            if not monster_slug:
+                continue
+            normalized_choices.append({**entry, "monster_slug": monster_slug})
+        if normalized_choices:
+            if normalized_choice:
+                for entry in normalized_choices:
+                    values = [entry.get("monster_slug"), entry.get("name"), entry.get("slug"), entry.get("id")]
+                    if any(str(value or "").strip().lower() == normalized_choice for value in values):
                         selected_choice = entry
                         break
+            elif len(normalized_choices) == 1:
+                selected_choice = normalized_choices[0]
+            else:
+                return None, None, None
+            if selected_choice is None:
+                return None, None, None
 
         count_cfg = summon_cfg.get("count") if isinstance(summon_cfg.get("count"), dict) else {}
-        kind = str(count_cfg.get("kind") or "fixed").strip().lower()
-        if kind == "variable_by_slot":
-            effective_slot = int(slot_level or 0)
-            base_cfg = count_cfg.get("base") if isinstance(count_cfg.get("base"), dict) else {}
-            active_cfg: Dict[str, Any] = dict(base_cfg)
-            for override in count_cfg.get("slot_overrides") if isinstance(count_cfg.get("slot_overrides"), list) else []:
-                if not isinstance(override, dict):
-                    continue
-                try:
-                    override_level = int(override.get("slot_level"))
-                except Exception:
-                    continue
-                if override_level == effective_slot:
-                    active_cfg = dict(override)
+        active_count_cfg = InitiativeTracker._resolve_summon_count_config(count_cfg, slot_level)
+        option_pool = active_count_cfg.get("options") if isinstance(active_count_cfg.get("options"), list) else []
+
+        chosen_slug = str(selected_choice.get("monster_slug") or "").strip().lower() if isinstance(selected_choice, dict) else None
+        if option_pool:
+            matched = None
+            for opt in option_pool:
+                creature_options = [str(v or "").strip().lower() for v in (opt.get("creature_options") if isinstance(opt.get("creature_options"), list) else [])]
+                if not chosen_slug and len(creature_options) == 1:
+                    chosen_slug = creature_options[0]
+                    matched = opt
                     break
-
-            if isinstance(active_cfg.get("options"), list):
-                options = [opt for opt in active_cfg.get("options") if isinstance(opt, dict)]
-                picked = None
-                if normalized_choice:
-                    for opt in options:
-                        creature_options = [str(v).strip().lower() for v in opt.get("creature_options", [])]
-                        if normalized_choice in creature_options:
-                            picked = opt
-                            break
-                if picked is None and options:
-                    picked = options[0]
-                if isinstance(picked, dict):
-                    active_cfg = dict(picked)
-
-            chosen_slug = None
-            if selected_choice is not None:
-                chosen_slug = str(selected_choice.get("monster_slug") or "").strip().lower() or None
-            if chosen_slug is None:
-                creature_options = active_cfg.get("creature_options")
-                if isinstance(creature_options, list) and creature_options:
-                    chosen_slug = str(creature_options[0] or "").strip().lower() or None
-            try:
-                quantity = int(active_cfg.get("quantity"))
-            except Exception:
-                quantity = None
-            return selected_choice, quantity, chosen_slug
+                if chosen_slug and (not creature_options or chosen_slug in creature_options):
+                    matched = opt
+                    break
+            if matched is None:
+                return None, None, None
+            active_count_cfg = dict(matched)
 
         quantity = None
-        if isinstance(count_cfg.get("value"), (int, float)):
-            quantity = int(count_cfg.get("value"))
-        elif isinstance(count_cfg.get("min"), (int, float)):
-            quantity = int(count_cfg.get("min"))
-        elif isinstance(count_cfg.get("max"), (int, float)):
-            quantity = int(count_cfg.get("max"))
-        chosen_slug = None
-        if selected_choice is not None:
-            chosen_slug = str(selected_choice.get("monster_slug") or "").strip().lower() or None
+        for key in ("quantity", "value", "min", "max"):
+            if isinstance(active_count_cfg.get(key), (int, float)):
+                quantity = int(active_count_cfg.get(key))
+                break
         return selected_choice, quantity, chosen_slug
+
+    @staticmethod
+    def _resolve_summon_count_config(count_cfg: Dict[str, Any], slot_level: Optional[int]) -> Dict[str, Any]:
+        kind = str(count_cfg.get("kind") or "fixed").strip().lower()
+        if kind != "variable_by_slot":
+            return dict(count_cfg)
+        effective_slot = int(slot_level or 0)
+        base_cfg = count_cfg.get("base") if isinstance(count_cfg.get("base"), dict) else {}
+        active_cfg: Dict[str, Any] = dict(base_cfg)
+        for override in count_cfg.get("slot_overrides") if isinstance(count_cfg.get("slot_overrides"), list) else []:
+            if not isinstance(override, dict):
+                continue
+            try:
+                override_level = int(override.get("slot_level"))
+            except Exception:
+                continue
+            if override_level == effective_slot:
+                active_cfg = dict(override)
+                break
+        if isinstance(active_cfg.get("options"), list):
+            return {"kind": "option_pool", "options": [opt for opt in active_cfg.get("options") if isinstance(opt, dict)]}
+        return active_cfg
+
+    def _build_summon_scaling_context(self, caster: Any, slot_level: Optional[int]) -> Dict[str, int]:
+        out = {
+            "slot_level": int(slot_level or 0),
+            "caster_level": 0,
+            "pb": 0,
+            "spell_mod": 0,
+            "spell_attack_bonus": 0,
+            "spell_save_dc": 0,
+        }
+        caster_name = str(getattr(caster, "name", "") or "").strip()
+        profile: Dict[str, Any] = {}
+        if caster_name:
+            try:
+                maybe_profile = self._profile_for_player_name(caster_name)
+                if isinstance(maybe_profile, dict):
+                    profile = maybe_profile
+            except Exception:
+                profile = {}
+        leveling = profile.get("leveling") if isinstance(profile.get("leveling"), dict) else {}
+        try:
+            out["caster_level"] = max(0, int(leveling.get("level") or 0))
+        except Exception:
+            out["caster_level"] = 0
+        if out["caster_level"] <= 0 and isinstance(leveling.get("classes"), list):
+            total = 0
+            for entry in leveling.get("classes"):
+                if not isinstance(entry, dict):
+                    continue
+                try:
+                    total += int(entry.get("level") or 0)
+                except Exception:
+                    continue
+            out["caster_level"] = max(0, int(total))
+        proficiency = profile.get("proficiency") if isinstance(profile.get("proficiency"), dict) else {}
+        try:
+            out["pb"] = max(0, int(proficiency.get("bonus") or 0))
+        except Exception:
+            out["pb"] = 0
+        if out["pb"] <= 0 and out["caster_level"] > 0:
+            out["pb"] = int(self._proficiency_bonus_for_level(out["caster_level"]))
+        spellcasting = profile.get("spellcasting") if isinstance(profile.get("spellcasting"), dict) else {}
+        casting_ability = self._normalize_spellcasting_ability(spellcasting.get("casting_ability"))
+        ability_scores = profile.get("abilities") if isinstance(profile.get("abilities"), dict) else {}
+        ability_score = ability_scores.get(casting_ability) if casting_ability else None
+        try:
+            out["spell_mod"] = int(math.floor((int(ability_score) - 10) / 2))
+        except Exception:
+            out["spell_mod"] = 0
+        save_dc = self._compute_spell_save_dc(profile) if isinstance(profile, dict) else None
+        try:
+            out["spell_save_dc"] = max(0, int(save_dc or 0))
+        except Exception:
+            out["spell_save_dc"] = 0
+        out["spell_attack_bonus"] = max(0, out["spell_save_dc"] - 8)
+        return out
+
+    def _resolve_spell_summon_request(
+        self,
+        preset: Dict[str, Any],
+        summon_cfg: Dict[str, Any],
+        caster: Any,
+        summon_choice: Any,
+        slot_level: Optional[int],
+        summon_variant: Optional[str],
+        summon_quantity: Optional[int],
+    ) -> Tuple[Optional[Dict[str, Any]], Optional[str]]:
+        normalized_choice = str(summon_choice or "").strip().lower()
+        choices = [entry for entry in (summon_cfg.get("choices") if isinstance(summon_cfg.get("choices"), list) else []) if isinstance(entry, dict)]
+        normalized_choices: List[Dict[str, Any]] = []
+        for entry in choices:
+            monster_slug = self._normalize_monster_slug_value(entry.get("monster_slug"))
+            if not monster_slug:
+                continue
+            normalized_choices.append({
+                **entry,
+                "monster_slug": monster_slug,
+                "variants": [str(v).strip() for v in (entry.get("variants") if isinstance(entry.get("variants"), list) else []) if str(v).strip()],
+            })
+
+        selected_choice: Optional[Dict[str, Any]] = None
+        if normalized_choices:
+            if normalized_choice:
+                for entry in normalized_choices:
+                    keys = [entry.get("monster_slug"), entry.get("name"), entry.get("slug"), entry.get("id")]
+                    if any(str(v or "").strip().lower() == normalized_choice for v in keys):
+                        selected_choice = entry
+                        break
+                if selected_choice is None:
+                    return None, "That summon choice is not valid for this spell, matey."
+            elif len(normalized_choices) == 1:
+                selected_choice = normalized_choices[0]
+            else:
+                return None, "Pick a summon creature first, matey."
+
+        count_cfg = summon_cfg.get("count") if isinstance(summon_cfg.get("count"), dict) else {}
+        active_count_cfg = self._resolve_summon_count_config(count_cfg, slot_level)
+        option_pool = active_count_cfg.get("options") if isinstance(active_count_cfg.get("options"), list) else []
+
+        allowed_monster_slugs = {str(entry.get("monster_slug") or "").strip().lower() for entry in normalized_choices if entry.get("monster_slug")}
+        if isinstance(option_pool, list) and option_pool:
+            for opt in option_pool:
+                creature_options = opt.get("creature_options") if isinstance(opt.get("creature_options"), list) else []
+                for slug in creature_options:
+                    normalized_slug = self._normalize_monster_slug_value(slug)
+                    if normalized_slug:
+                        allowed_monster_slugs.add(normalized_slug)
+
+        monster_slug = str(selected_choice.get("monster_slug") or "").strip().lower() if isinstance(selected_choice, dict) else ""
+        if not monster_slug and normalized_choice and normalized_choice in allowed_monster_slugs:
+            monster_slug = normalized_choice
+        if not monster_slug and len(allowed_monster_slugs) == 1:
+            monster_slug = next(iter(allowed_monster_slugs))
+        if not monster_slug:
+            return None, "Pick a summon creature first, matey."
+        if allowed_monster_slugs and monster_slug not in allowed_monster_slugs:
+            return None, "That summon choice is not valid for this spell, matey."
+
+        selected_option_cfg: Dict[str, Any] = dict(active_count_cfg) if isinstance(active_count_cfg, dict) else {}
+        if option_pool:
+            matching_opts: List[Dict[str, Any]] = []
+            for opt in option_pool:
+                creature_options = [self._normalize_monster_slug_value(v) for v in (opt.get("creature_options") if isinstance(opt.get("creature_options"), list) else [])]
+                creature_options = [v for v in creature_options if v]
+                if not creature_options or monster_slug in creature_options:
+                    matching_opts.append(opt)
+            if not matching_opts:
+                return None, "That summon choice is not valid for this spell, matey."
+            selected_option_cfg = dict(matching_opts[0])
+
+        quantity: Optional[int] = None
+        if summon_quantity is not None:
+            try:
+                quantity = int(summon_quantity)
+            except Exception:
+                quantity = None
+        if quantity is None:
+            for key in ("quantity", "value", "min", "max"):
+                if isinstance(selected_option_cfg.get(key), (int, float)):
+                    quantity = int(selected_option_cfg.get(key))
+                    break
+        if quantity is None:
+            quantity = 1
+
+        variant_raw = str(summon_variant or "").strip()
+        resolved_variant: Optional[str] = None
+        allowed_variant_names = [str(v).strip() for v in (selected_choice.get("variants") if isinstance(selected_choice, dict) and isinstance(selected_choice.get("variants"), list) else []) if str(v).strip()]
+        if variant_raw:
+            if allowed_variant_names:
+                normalized_variants = {name.lower(): name for name in allowed_variant_names}
+                if variant_raw.lower() not in normalized_variants:
+                    return None, "That summon variant is not valid for this spell, matey."
+                resolved_variant = normalized_variants[variant_raw.lower()]
+            else:
+                resolved_variant = variant_raw
+
+        return {
+            "choice_slug": str(selected_choice.get("monster_slug") or monster_slug).strip().lower() if isinstance(selected_choice, dict) else monster_slug,
+            "choice_entry": selected_choice,
+            "monster_slug": monster_slug,
+            "variant": resolved_variant,
+            "quantity": max(0, int(quantity)),
+            "initiative_mode": str((summon_cfg.get("initiative") or {}).get("mode") or "shared").strip().lower(),
+            "control_mode": self._normalize_summon_controller_mode(summon_cfg),
+            "concentration_bound": bool(preset.get("concentration")),
+            "lifecycle": dict(summon_cfg.get("lifecycle") or {}) if isinstance(summon_cfg.get("lifecycle"), dict) else {},
+            "template_overrides": dict(selected_option_cfg),
+            "scaling_context": self._build_summon_scaling_context(caster, slot_level),
+            "slot_level": int(slot_level) if isinstance(slot_level, int) else None,
+            "source_spell": str(preset.get("slug") or preset.get("id") or "").strip(),
+        }, None
 
     def _summon_can_be_controlled_by(self, claimed_cid: Optional[int], target_cid: Optional[int]) -> bool:
         if claimed_cid is None or target_cid is None:
@@ -19089,11 +19256,19 @@ class InitiativeTracker(base.InitiativeTracker):
             return int(round(result_value))
         return result_value
 
-    def _apply_monster_variant(self, spec: MonsterSpec, variant_name: Optional[str], slot_level: Optional[int]) -> MonsterSpec:
+    def _apply_monster_variant(
+        self,
+        spec: MonsterSpec,
+        variant_name: Optional[str],
+        slot_level: Optional[int],
+        scaling_context: Optional[Dict[str, Any]] = None,
+    ) -> MonsterSpec:
         if not isinstance(getattr(spec, "raw_data", None), dict):
             return spec
         raw_data = copy.deepcopy(spec.raw_data)
-        variables = {"var": {"slot_level": int(slot_level or 0)}}
+        context = dict(scaling_context or {})
+        context.setdefault("slot_level", int(slot_level or 0))
+        variables = {"var": context}
         for key in ("ac", "hp"):
             if key in raw_data:
                 raw_data[key] = self._evaluate_dynamic_formula(raw_data.get(key), variables)
@@ -19556,16 +19731,18 @@ class InitiativeTracker(base.InitiativeTracker):
         caster_cid: int,
         preset: Dict[str, Any],
         summon_cfg: Dict[str, Any],
-        chosen_slug: str,
-        slot_level: Optional[int],
-        variant_name: Optional[str],
+        resolved: Dict[str, Any],
         summon_positions: Optional[List[Dict[str, Any]]] = None,
     ) -> List[int]:
+        chosen_slug = str(resolved.get("monster_slug") or "").strip().lower()
+        slot_level = resolved.get("slot_level") if isinstance(resolved.get("slot_level"), int) else None
+        variant_name = resolved.get("variant") if isinstance(resolved.get("variant"), str) else None
+        scaling_context = resolved.get("scaling_context") if isinstance(resolved.get("scaling_context"), dict) else {}
         spec = self._find_monster_spec_by_slug(chosen_slug)
         if spec is None:
             return []
-        mod_spec = self._apply_monster_variant(spec, variant_name, slot_level)
-        source_spell = str(preset.get("slug") or preset.get("id") or "").strip()
+        mod_spec = self._apply_monster_variant(spec, variant_name, slot_level, scaling_context=scaling_context)
+        source_spell = str(resolved.get("source_spell") or preset.get("slug") or preset.get("id") or "").strip()
         group_id = f"summon:{int(time.time() * 1000)}:{caster_cid}:{len(self._summon_groups) + 1}"
         side_raw = str(summon_cfg.get("side") or "caster").strip().lower()
         ally_flag = False if side_raw == "enemy" else True
@@ -19609,7 +19786,9 @@ class InitiativeTracker(base.InitiativeTracker):
         setattr(summoned, "mount_shared_turn", True)
         setattr(summoned, "mount_controller_mode", "summon_auto")
         setattr(summoned, "summon_variant", display_variant or None)
-        setattr(summoned, "summon_slot_level", int(slot_level) if isinstance(slot_level, int) else None)
+        setattr(summoned, "summon_slot_level", slot_level)
+        setattr(summoned, "summon_choice_slug", str(resolved.get("choice_slug") or chosen_slug))
+        setattr(summoned, "summon_base_monster_slug", chosen_slug)
         if color_override:
             setattr(summoned, "token_color", color_override)
         spawned = [cid]
@@ -19628,8 +19807,13 @@ class InitiativeTracker(base.InitiativeTracker):
                 "caster_cid": int(caster_cid),
                 "spell": source_spell,
                 "created_at": time.time(),
-                "concentration": bool(preset.get("concentration")),
+                "concentration": bool(resolved.get("concentration_bound")),
                 "mount": True,
+                "summon_choice_slug": str(resolved.get("choice_slug") or chosen_slug),
+                "summon_base_monster_slug": chosen_slug,
+                "summon_variant": display_variant or None,
+                "summon_slot_level": slot_level,
+                "summon_source_spell": source_spell,
             }
         return spawned
 
@@ -19651,24 +19835,26 @@ class InitiativeTracker(base.InitiativeTracker):
         if not summon_cfg:
             return []
 
-        selected_choice, quantity, chosen_slug = self._resolve_summon_choice(summon_cfg, summon_choice, slot_level)
-        if summon_quantity is not None:
-            try:
-                quantity = int(summon_quantity)
-            except Exception:
-                quantity = quantity
-        if quantity is None:
-            quantity = 1
-        quantity = max(0, int(quantity))
-        if quantity <= 0:
-            return []
-        if not chosen_slug and isinstance(selected_choice, dict):
-            chosen_slug = str(selected_choice.get("monster_slug") or "").strip().lower() or None
-        if not chosen_slug:
-            return []
-
         caster = self.combatants.get(int(caster_cid))
         if caster is None:
+            return []
+
+        resolved, _err = self._resolve_spell_summon_request(
+            preset=preset,
+            summon_cfg=summon_cfg,
+            caster=caster,
+            summon_choice=summon_choice,
+            slot_level=slot_level,
+            summon_variant=summon_variant,
+            summon_quantity=summon_quantity,
+        )
+        if not isinstance(resolved, dict):
+            return []
+        quantity = max(0, int(resolved.get("quantity") or 0))
+        if quantity <= 0:
+            return []
+        chosen_slug = str(resolved.get("monster_slug") or "").strip().lower()
+        if not chosen_slug:
             return []
 
         if bool(summon_cfg.get("mount")):
@@ -19676,20 +19862,23 @@ class InitiativeTracker(base.InitiativeTracker):
                 caster_cid=int(caster_cid),
                 preset=preset,
                 summon_cfg=summon_cfg,
-                chosen_slug=str(chosen_slug),
-                slot_level=slot_level,
-                variant_name=summon_variant,
+                resolved=resolved,
                 summon_positions=summon_positions,
             )
 
         spec = self._find_monster_spec_by_slug(chosen_slug)
         if spec is None:
             return []
-        spec = self._apply_monster_variant(spec, summon_variant, slot_level)
+        spec = self._apply_monster_variant(
+            spec,
+            resolved.get("variant") if isinstance(resolved.get("variant"), str) else None,
+            resolved.get("slot_level") if isinstance(resolved.get("slot_level"), int) else None,
+            scaling_context=resolved.get("scaling_context") if isinstance(resolved.get("scaling_context"), dict) else {},
+        )
 
         group_id = f"summon:{int(time.time() * 1000)}:{caster_cid}:{len(self._summon_groups) + 1}"
-        controller_mode = self._normalize_summon_controller_mode(summon_cfg)
-        source_spell = str(preset.get("slug") or preset.get("id") or spell_slug or spell_id or "").strip()
+        controller_mode = str(resolved.get("control_mode") or self._normalize_summon_controller_mode(summon_cfg))
+        source_spell = str(resolved.get("source_spell") or preset.get("slug") or preset.get("id") or spell_slug or spell_id or "").strip()
         side_raw = str(summon_cfg.get("side") or "caster").strip().lower()
         ally_flag = False if side_raw == "enemy" else True
         color_override = self._normalize_token_color(summon_cfg.get("color") or summon_cfg.get("token_color"))
@@ -19730,8 +19919,10 @@ class InitiativeTracker(base.InitiativeTracker):
             setattr(summoned, "summon_source_spell", source_spell)
             setattr(summoned, "summon_group_id", group_id)
             setattr(summoned, "summon_controller_mode", controller_mode)
-            setattr(summoned, "summon_variant", str(summon_variant or "").strip() or None)
-            setattr(summoned, "summon_slot_level", int(slot_level) if isinstance(slot_level, int) else None)
+            setattr(summoned, "summon_variant", str(resolved.get("variant") or "").strip() or None)
+            setattr(summoned, "summon_slot_level", resolved.get("slot_level") if isinstance(resolved.get("slot_level"), int) else None)
+            setattr(summoned, "summon_choice_slug", str(resolved.get("choice_slug") or chosen_slug))
+            setattr(summoned, "summon_base_monster_slug", chosen_slug)
             if color_override:
                 setattr(summoned, "token_color", color_override)
             spawned.append(cid)
@@ -19761,7 +19952,12 @@ class InitiativeTracker(base.InitiativeTracker):
                 "caster_cid": int(caster_cid),
                 "spell": source_spell,
                 "created_at": time.time(),
-                "concentration": bool(preset.get("concentration")),
+                "concentration": bool(resolved.get("concentration_bound")),
+                "summon_choice_slug": str(resolved.get("choice_slug") or chosen_slug),
+                "summon_base_monster_slug": chosen_slug,
+                "summon_variant": str(resolved.get("variant") or "").strip() or None,
+                "summon_slot_level": resolved.get("slot_level") if isinstance(resolved.get("slot_level"), int) else None,
+                "summon_source_spell": source_spell,
             }
         return spawned
 
@@ -21469,25 +21665,27 @@ class InitiativeTracker(base.InitiativeTracker):
                 return
 
             if summon_cfg:
-                selected_choice, quantity_from_cfg, chosen_slug = self._resolve_summon_choice(
-                    summon_cfg, summon_choice, slot_level
+                resolved_summon, summon_err = self._resolve_spell_summon_request(
+                    preset=preset,
+                    summon_cfg=summon_cfg,
+                    caster=c,
+                    summon_choice=summon_choice,
+                    slot_level=slot_level,
+                    summon_variant=summon_variant,
+                    summon_quantity=summon_quantity,
                 )
-                if summon_quantity is not None:
-                    try:
-                        quantity_from_cfg = int(summon_quantity)
-                    except Exception:
-                        quantity_from_cfg = quantity_from_cfg
-                if quantity_from_cfg is None:
-                    quantity_from_cfg = 1
-                quantity_from_cfg = max(0, int(quantity_from_cfg))
-                if not chosen_slug and isinstance(selected_choice, dict):
-                    chosen_slug = str(selected_choice.get("monster_slug") or "").strip().lower() or None
+                if not isinstance(resolved_summon, dict):
+                    self._lan.toast(ws_id, summon_err or "Summoning failed, matey.")
+                    return
+                quantity_from_cfg = max(0, int(resolved_summon.get("quantity") or 0))
+                chosen_slug = str(resolved_summon.get("monster_slug") or "").strip().lower() or None
                 if not chosen_slug:
                     self._lan.toast(ws_id, "Pick a summon creature first, matey.")
                     return
                 if self._find_monster_spec_by_slug(chosen_slug) is None:
                     self._lan.toast(ws_id, "That summon creature does not exist, matey.")
                     return
+                summon_variant = resolved_summon.get("variant") if isinstance(resolved_summon.get("variant"), str) else None
                 if summon_positions and len(summon_positions) < quantity_from_cfg:
                     self._lan.toast(ws_id, "Pick a valid square for each summon, matey.")
                     return
