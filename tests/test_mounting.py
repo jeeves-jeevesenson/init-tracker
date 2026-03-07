@@ -38,6 +38,8 @@ class MountHarness:
         self._log = lambda *args, **kwargs: None
         self._rebuild_table = lambda *args, **kwargs: None
         self._lan_force_state_broadcast = lambda: None
+        self._lan_sync_fixed_to_caster_aoes = lambda *_args, **_kwargs: None
+        self._lan_handle_aoe_enter_triggers_for_moved_unit = lambda *_args, **_kwargs: None
         self._mode_speed = lambda c: int(getattr(c, "speed", 0) or 0)
         self._lan_shortest_cost = lambda *args, **kwargs: 5
         self._find_ws_for_cid = lambda *_args, **_kwargs: []

@@ -71,9 +71,24 @@ class SummonHarness:
 
     def _normalize_token_color(self, color):
         return tracker_mod.InitiativeTracker._normalize_token_color(self, color)
+
+    def _profile_for_player_name(self, _name):
+        return {}
+
+    def _resolve_player_ac(self, _normalized, defenses):
+        return int((defenses or {}).get("ac") or 10)
+
     # Bind target methods from InitiativeTracker
     _resolve_summon_choice = staticmethod(tracker_mod.InitiativeTracker._resolve_summon_choice)
     _normalize_summon_controller_mode = staticmethod(tracker_mod.InitiativeTracker._normalize_summon_controller_mode)
+    _resolve_summon_count_config = staticmethod(tracker_mod.InitiativeTracker._resolve_summon_count_config)
+    _resolve_spell_summon_request = tracker_mod.InitiativeTracker._resolve_spell_summon_request
+    _build_summon_scaling_context = tracker_mod.InitiativeTracker._build_summon_scaling_context
+    _normalize_monster_slug_value = tracker_mod.InitiativeTracker._normalize_monster_slug_value
+    _normalize_spellcasting_ability = tracker_mod.InitiativeTracker._normalize_spellcasting_ability
+    _compute_spell_save_dc = tracker_mod.InitiativeTracker._compute_spell_save_dc
+    _proficiency_bonus_for_level = staticmethod(tracker_mod.InitiativeTracker._proficiency_bonus_for_level)
+    _is_spellcasting_enabled = staticmethod(tracker_mod.InitiativeTracker._is_spellcasting_enabled)
     _apply_summon_initiative = tracker_mod.InitiativeTracker._apply_summon_initiative
     _evaluate_dynamic_formula = tracker_mod.InitiativeTracker._evaluate_dynamic_formula
     _apply_monster_variant = tracker_mod.InitiativeTracker._apply_monster_variant
@@ -282,6 +297,10 @@ class SummonSpawnTests(unittest.TestCase):
         self.assertFalse(getattr(summoned, "ally", True))
         self.assertEqual(getattr(summoned, "token_color", None), "#3366ff")
         self.assertEqual(h._lan_positions.get(spawned[0]), (4, 5))
+        self.assertEqual(getattr(summoned, "summon_choice_slug", None), "construct-spirit")
+        self.assertEqual(getattr(summoned, "summon_base_monster_slug", None), "construct-spirit")
+        group_id = getattr(summoned, "summon_group_id", "")
+        self.assertEqual(h._summon_group_meta.get(group_id, {}).get("summon_choice_slug"), "construct-spirit")
 
     def test_resolve_choice_does_not_fallback_when_invalid_choice_provided(self):
         summon_cfg = {
@@ -295,7 +314,78 @@ class SummonSpawnTests(unittest.TestCase):
             summon_cfg, "not-a-real-slug", 6
         )
         self.assertIsNone(slug)
-        self.assertEqual(qty, 1)
+        self.assertIsNone(qty)
+
+    def test_summon_construct_defaults_to_construct_spirit_without_fallback(self):
+        h = self._build_harness()
+        preset = {
+            "slug": "summon-construct",
+            "id": "summon-construct",
+            "concentration": True,
+            "summon": {
+                "choices": [{"name": "Construct Spirit", "monster_slug": "construct-spirit"}],
+                "count": {"kind": "fixed", "min": 1, "max": 1},
+                "initiative": {"mode": "shared"},
+            },
+        }
+        recorded = []
+        spec = tracker_mod.MonsterSpec(
+            filename="construct-spirit.yaml",
+            name="Construct Spirit",
+            mtype="construct",
+            cr=1,
+            hp=40,
+            speed=30,
+            swim_speed=0,
+            fly_speed=0,
+            burrow_speed=0,
+            climb_speed=0,
+            dex=2,
+            init_mod=2,
+            saving_throws={},
+            ability_mods={},
+            raw_data={},
+        )
+
+        def _finder(slug):
+            recorded.append(slug)
+            return spec if slug == "construct-spirit" else None
+
+        h._find_spell_preset = lambda spell_slug, spell_id: preset
+        h._find_monster_spec_by_slug = _finder
+
+        spawned = h._spawn_summons_from_cast(
+            caster_cid=100,
+            spell_slug="summon-construct",
+            spell_id="",
+            slot_level=4,
+            summon_choice=None,
+        )
+        self.assertEqual(len(spawned), 1)
+        self.assertIn("construct-spirit", recorded)
+
+    def test_spell_summon_rejects_invalid_choice_without_fallback(self):
+        h = self._build_harness()
+        preset = {
+            "slug": "summon-construct",
+            "id": "summon-construct",
+            "concentration": True,
+            "summon": {
+                "choices": [{"name": "Construct Spirit", "monster_slug": "construct-spirit"}],
+                "count": {"kind": "fixed", "min": 1, "max": 1},
+            },
+        }
+        h._find_spell_preset = lambda spell_slug, spell_id: preset
+        h._find_monster_spec_by_slug = lambda slug: None
+
+        spawned = h._spawn_summons_from_cast(
+            caster_cid=100,
+            spell_slug="summon-construct",
+            spell_id="",
+            slot_level=4,
+            summon_choice="wolf",
+        )
+        self.assertEqual(spawned, [])
 
     def test_spawn_uses_monster_yaml_actions_and_attacks_for_controlled_summons(self):
         h = self._build_harness()
@@ -416,6 +506,8 @@ class SummonSpawnTests(unittest.TestCase):
         self.assertTrue(getattr(c, "is_mount", False))
         self.assertEqual(c.hp, 45)
         self.assertEqual(getattr(c, "summon_variant", None), "Fey")
+        self.assertEqual(getattr(c, "summon_choice_slug", None), "otherworldly-steed")
+        self.assertEqual(getattr(c, "summon_base_monster_slug", None), "otherworldly-steed")
         self.assertEqual(getattr(c, "token_color", None), "#6aa9ff")
 
     def test_startup_summon_normalization_supports_alias_and_overrides(self):
