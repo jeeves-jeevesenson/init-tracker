@@ -1972,7 +1972,7 @@ class LanController:
     def _rules_pdf_log_message(self, prefix: str, path: Optional[Path]) -> None:
         filename = _safe_rules_filename(path) or "unknown"
         found = bool(path)
-        self._append_lan_log(f"{prefix} filename={filename} found={found}")
+        self._append_lan_log(f"{prefix} filename={filename} found={found}", level="info")
 
     def start(self, quiet: bool = False) -> None:
         if self._server_thread and self._server_thread.is_alive():
