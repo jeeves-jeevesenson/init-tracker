@@ -10732,6 +10732,12 @@ class InitiativeTracker(base.InitiativeTracker):
             absorb_dtype = self._canonical_damage_type(absorb_state.get("damage_type"))
             if absorb_dtype in {"acid", "cold", "fire", "lightning", "thunder"}:
                 defenses["damage_resistances"].add(absorb_dtype)
+
+        env_mods = self._collect_environmental_modifiers_for_combatant(target_obj)
+        defenses["damage_immunities"].update(set(env_mods.get("damage_immunities") or set()))
+        defenses["damage_resistances"].update(set(env_mods.get("damage_resistances") or set()))
+        defenses["damage_vulnerabilities"].update(set(env_mods.get("damage_vulnerabilities") or set()))
+
         return defenses
 
     def _adjust_damage_entries_for_target(self, target_obj: Any, damage_entries: List[Dict[str, Any]]) -> Dict[str, Any]:
@@ -10970,7 +10976,144 @@ class InitiativeTracker(base.InitiativeTracker):
                 trigger["damage_type"] = damage_type
             if trigger:
                 env["move_damage_trigger"] = trigger
+        cast_rules: List[Dict[str, Any]] = []
+        for raw_rule in list(value.get("cast_rules") or []):
+            if not isinstance(raw_rule, dict):
+                continue
+            action = str(raw_rule.get("action") or "spellcast").strip().lower()
+            if action not in {"spellcast"}:
+                continue
+            requires = str(raw_rule.get("requires") or "any").strip().lower()
+            if requires not in {"any", "entirely_inside"}:
+                requires = "any"
+            rule: Dict[str, Any] = {"action": action, "requires": requires}
+            if "block_verbal" in raw_rule:
+                rule["block_verbal"] = bool(raw_rule.get("block_verbal"))
+            if bool(raw_rule.get("blocked")):
+                rule["blocked"] = True
+            if rule.get("blocked") or rule.get("block_verbal"):
+                cast_rules.append(rule)
+        if cast_rules:
+            env["cast_rules"] = cast_rules
+        damage_rules: List[Dict[str, Any]] = []
+        for raw_rule in list(value.get("damage_rules") or []):
+            if not isinstance(raw_rule, dict):
+                continue
+            damage_type = self._canonical_damage_type(raw_rule.get("damage_type"))
+            if not damage_type:
+                continue
+            mode = str(raw_rule.get("mode") or "").strip().lower()
+            if mode not in {"immunity", "resistance", "vulnerability"}:
+                continue
+            requires = str(raw_rule.get("requires") or "any").strip().lower()
+            if requires not in {"any", "entirely_inside"}:
+                requires = "any"
+            damage_rules.append({"damage_type": damage_type, "mode": mode, "requires": requires})
+        if damage_rules:
+            env["damage_rules"] = damage_rules
+        derived_conditions: List[Dict[str, Any]] = []
+        for raw_rule in list(value.get("derived_conditions") or []):
+            if isinstance(raw_rule, str):
+                raw_rule = {"condition": raw_rule}
+            if not isinstance(raw_rule, dict):
+                continue
+            condition_key = self._canonical_condition_key(raw_rule.get("condition"))
+            if not condition_key:
+                continue
+            requires = str(raw_rule.get("requires") or "any").strip().lower()
+            if requires not in {"any", "entirely_inside"}:
+                requires = "any"
+            derived_conditions.append({"condition": condition_key, "requires": requires})
+        if derived_conditions:
+            env["derived_conditions"] = derived_conditions
+        # Backward compatible shorthand: a silence field implies the canonical rules payload.
+        if bool(env.get("silence")):
+            env.setdefault("cast_rules", []).append({"action": "spellcast", "block_verbal": True, "requires": "entirely_inside"})
+            env.setdefault("derived_conditions", []).append({"condition": "deafened", "requires": "entirely_inside"})
+            env.setdefault("damage_rules", []).append({"damage_type": "thunder", "mode": "immunity", "requires": "entirely_inside"})
         return env
+
+    def _combatant_space_cells(self, combatant: Any, *, destination: Optional[Tuple[int, int]] = None) -> Optional[List[Tuple[int, int]]]:
+        cid = _normalize_cid_value(getattr(combatant, "cid", None), "environment.combatant.cid") if combatant is not None else None
+        if cid is None:
+            return None
+        anchor: Any = destination if isinstance(destination, tuple) and len(destination) == 2 else dict(getattr(self, "_lan_positions", {}) or {}).get(int(cid))
+        if not (isinstance(anchor, tuple) and len(anchor) == 2):
+            return None
+        col = int(anchor[0])
+        row = int(anchor[1])
+        size_name = str(getattr(combatant, "size", "") or "").strip().lower()
+        side_cells = 1
+        if size_name == "large":
+            side_cells = 2
+        elif size_name == "huge":
+            side_cells = 3
+        elif size_name == "gargantuan":
+            side_cells = 4
+        cells: List[Tuple[int, int]] = []
+        for dc in range(side_cells):
+            for dr in range(side_cells):
+                cells.append((int(col + dc), int(row + dr)))
+        return cells
+
+    def _collect_environmental_modifiers_for_combatant(
+        self,
+        combatant: Any,
+        *,
+        destination: Optional[Tuple[int, int]] = None,
+    ) -> Dict[str, Any]:
+        result: Dict[str, Any] = {
+            "cast_rules": [],
+            "damage_immunities": set(),
+            "damage_resistances": set(),
+            "damage_vulnerabilities": set(),
+            "derived_conditions": set(),
+            "ambiguous": False,
+        }
+        occupied_cells = self._combatant_space_cells(combatant, destination=destination)
+        if not occupied_cells:
+            result["ambiguous"] = True
+            return result
+        cell_set = {(int(c), int(r)) for c, r in occupied_cells}
+        for aid, aoe in list((self.__dict__.get("_lan_aoes", {}) or {}).items()):
+            if not isinstance(aoe, dict) or not bool(aoe.get("map_effect")):
+                continue
+            env = self._normalize_map_environment_metadata(aoe.get("environment"))
+            if not env:
+                continue
+            included = {cell for cell in cell_set if self._map_effect_contains_cell(aoe, int(cell[0]), int(cell[1]))}
+            if not included:
+                continue
+            any_inside = bool(included)
+            fully_inside = len(included) == len(cell_set)
+
+            def _rule_active(rule: Dict[str, Any]) -> bool:
+                requires = str(rule.get("requires") or "any").strip().lower()
+                return fully_inside if requires == "entirely_inside" else any_inside
+
+            for rule in list(env.get("cast_rules") or []):
+                if isinstance(rule, dict) and _rule_active(rule):
+                    result["cast_rules"].append({**rule, "aid": int(aid), "effect": aoe})
+            for rule in list(env.get("damage_rules") or []):
+                if not isinstance(rule, dict) or not _rule_active(rule):
+                    continue
+                dtype = self._canonical_damage_type(rule.get("damage_type"))
+                if not dtype:
+                    continue
+                mode = str(rule.get("mode") or "").strip().lower()
+                if mode == "immunity":
+                    result["damage_immunities"].add(dtype)
+                elif mode == "resistance":
+                    result["damage_resistances"].add(dtype)
+                elif mode == "vulnerability":
+                    result["damage_vulnerabilities"].add(dtype)
+            for rule in list(env.get("derived_conditions") or []):
+                if not isinstance(rule, dict) or not _rule_active(rule):
+                    continue
+                condition = self._canonical_condition_key(rule.get("condition"))
+                if condition:
+                    result["derived_conditions"].add(condition)
+        return result
 
     def _map_effect_contains_cell(self, effect: Dict[str, Any], col: int, row: int) -> bool:
         if not isinstance(effect, dict):
@@ -11055,8 +11198,16 @@ class InitiativeTracker(base.InitiativeTracker):
 
     def _cell_has_silence(self, col: int, row: int) -> bool:
         for entry in self._collect_environmental_effects_for_cell(int(col), int(row)):
-            if bool((entry.get("environment") or {}).get("silence")):
+            env = entry.get("environment") if isinstance(entry.get("environment"), dict) else {}
+            if bool(env.get("silence")):
                 return True
+            for rule in list(env.get("cast_rules") or []):
+                if not isinstance(rule, dict):
+                    continue
+                if str(rule.get("action") or "spellcast").strip().lower() != "spellcast":
+                    continue
+                if bool(rule.get("blocked")) or bool(rule.get("block_verbal")):
+                    return True
         return False
 
     def _cell_visibility_state(self, col: int, row: int) -> Dict[str, bool]:
@@ -11115,19 +11266,21 @@ class InitiativeTracker(base.InitiativeTracker):
         spell_preset: Any,
         destination: Optional[Tuple[int, int]] = None,
     ) -> Tuple[bool, str]:
-        if caster is None or not self._spell_has_verbal_component(spell_preset):
+        if caster is None:
             return (False, "")
-        caster_cid = _normalize_cid_value(getattr(caster, "cid", None), "spellcast.env.caster")
-        if caster_cid is None:
-            return (False, "")
-        positions = dict(getattr(self, "_lan_positions", {}) or {})
-        cell = positions.get(int(caster_cid))
-        if not (isinstance(cell, tuple) and len(cell) == 2) and isinstance(destination, tuple) and len(destination) == 2:
-            cell = destination
-        if not (isinstance(cell, tuple) and len(cell) == 2):
-            return (False, "")
-        if self._cell_has_silence(int(cell[0]), int(cell[1])):
-            return (True, "A silence zone blocks verbal spell components here, matey.")
+        has_verbal = self._spell_has_verbal_component(spell_preset)
+        modifiers = self._collect_environmental_modifiers_for_combatant(caster, destination=destination)
+        if bool(modifiers.get("ambiguous")):
+            return (True, "The environment is unclear here, so spellcasting is blocked for now, matey.")
+        for rule in list(modifiers.get("cast_rules") or []):
+            if not isinstance(rule, dict):
+                continue
+            if str(rule.get("action") or "spellcast").strip().lower() != "spellcast":
+                continue
+            if bool(rule.get("blocked")):
+                return (True, "The surrounding environment blocks that spell here, matey.")
+            if has_verbal and bool(rule.get("block_verbal")):
+                return (True, "A silence zone blocks verbal spell components here, matey.")
         return (False, "")
 
     def _clear_map_spell_effect(self, aid: int, *, end_concentration_if_bound: bool = False) -> None:

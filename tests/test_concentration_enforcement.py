@@ -350,6 +350,99 @@ class ConcentrationEnforcementTests(unittest.TestCase):
             self.app._apply_environmental_move_damage(mover, (4, 5), (5, 5), 10)
         self.assertLess(mover.hp, 30)
 
+    def test_environment_modifiers_include_silence_derived_condition_and_damage_immunity(self):
+        caster = self.app.combatants[1]
+        self.app._lan_positions[1] = (2, 2)
+        self.app._lan_aoes[90] = {
+            "map_effect": True,
+            "kind": "sphere",
+            "cx": 2.0,
+            "cy": 2.0,
+            "radius_sq": 3.0,
+            "environment": {
+                "silence": True,
+                "cast_rules": [{"action": "spellcast", "block_verbal": True, "requires": "entirely_inside"}],
+                "damage_rules": [{"damage_type": "thunder", "mode": "immunity", "requires": "entirely_inside"}],
+                "derived_conditions": [{"condition": "deafened", "requires": "entirely_inside"}],
+            },
+        }
+        mods = self.app._collect_environmental_modifiers_for_combatant(caster)
+        self.assertIn("deafened", mods.get("derived_conditions") or set())
+        self.assertIn("thunder", mods.get("damage_immunities") or set())
+        self.assertTrue(any(bool(rule.get("block_verbal")) for rule in list(mods.get("cast_rules") or [])))
+
+    def test_environment_modifiers_require_entirely_inside_for_large_creature(self):
+        caster = self.app.combatants[1]
+        caster.size = "Large"
+        self.app._lan_positions[1] = (0, 0)
+        self.app._lan_aoes[91] = {
+            "map_effect": True,
+            "kind": "cube",
+            "cx": 0.0,
+            "cy": 0.0,
+            "side_sq": 1.0,
+            "environment": {
+                "derived_conditions": [{"condition": "deafened", "requires": "entirely_inside"}],
+                "damage_rules": [{"damage_type": "thunder", "mode": "immunity", "requires": "entirely_inside"}],
+            },
+        }
+        partial = self.app._collect_environmental_modifiers_for_combatant(caster)
+        self.assertNotIn("deafened", partial.get("derived_conditions") or set())
+        self.assertNotIn("thunder", partial.get("damage_immunities") or set())
+
+        self.app._lan_aoes[92] = {
+            "map_effect": True,
+            "kind": "cube",
+            "cx": 0.5,
+            "cy": 0.5,
+            "side_sq": 2.0,
+            "environment": {
+                "derived_conditions": [{"condition": "deafened", "requires": "entirely_inside"}],
+                "damage_rules": [{"damage_type": "thunder", "mode": "immunity", "requires": "entirely_inside"}],
+            },
+        }
+        fully = self.app._collect_environmental_modifiers_for_combatant(caster)
+        self.assertIn("deafened", fully.get("derived_conditions") or set())
+        self.assertIn("thunder", fully.get("damage_immunities") or set())
+
+    def test_damage_adjustment_consumes_environment_damage_immunity(self):
+        self.app._adjust_damage_entries_for_target = tracker_mod.InitiativeTracker._adjust_damage_entries_for_target.__get__(self.app, tracker_mod.InitiativeTracker)
+        target = self.app.combatants[2]
+        self.app._lan_positions[2] = (6, 6)
+        self.app._lan_aoes[93] = {
+            "map_effect": True,
+            "kind": "sphere",
+            "cx": 6.0,
+            "cy": 6.0,
+            "radius_sq": 3.0,
+            "environment": {
+                "damage_rules": [{"damage_type": "thunder", "mode": "immunity", "requires": "entirely_inside"}],
+            },
+        }
+        adjusted = self.app._adjust_damage_entries_for_target(target, [{"amount": 10, "type": "thunder"}])
+        self.assertEqual(adjusted.get("entries"), [])
+
+    def test_derived_environment_conditions_do_not_persist_on_condition_stacks(self):
+        target = self.app.combatants[2]
+        self.app._lan_positions[2] = (8, 8)
+        self.app._lan_aoes[94] = {
+            "map_effect": True,
+            "kind": "sphere",
+            "cx": 8.0,
+            "cy": 8.0,
+            "radius_sq": 2.0,
+            "environment": {
+                "derived_conditions": [{"condition": "deafened", "requires": "entirely_inside"}],
+            },
+        }
+        mods_inside = self.app._collect_environmental_modifiers_for_combatant(target)
+        self.assertIn("deafened", mods_inside.get("derived_conditions") or set())
+        self.assertFalse(any(st.ctype == "deafened" for st in list(getattr(target, "condition_stacks", []) or [])))
+
+        self.app._lan_positions[2] = (20, 20)
+        mods_outside = self.app._collect_environmental_modifiers_for_combatant(target)
+        self.assertNotIn("deafened", mods_outside.get("derived_conditions") or set())
+
     def test_cast_aoe_persists_environment_metadata_from_spell_preset(self):
         self.app._find_spell_preset = lambda spell_slug="", spell_id="": {
             "slug": "fog-cloud",

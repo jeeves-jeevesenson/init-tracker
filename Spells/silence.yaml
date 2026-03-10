@@ -62,6 +62,17 @@ mechanics:
   sequence: []
   map_environment:
     silence: true
+    cast_rules:
+    - action: spellcast
+      block_verbal: true
+      requires: entirely_inside
+    damage_rules:
+    - damage_type: thunder
+      mode: immunity
+      requires: entirely_inside
+    derived_conditions:
+    - condition: deafened
+      requires: entirely_inside
   scaling: null
   ui:
     template_preview: true
