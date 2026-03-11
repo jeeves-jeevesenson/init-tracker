@@ -14300,6 +14300,7 @@ __DAMAGE_TYPE_OPTIONS__
       queueCommandResolution([Number(target.cid)], null);
       return;
     }
+    const shotMeta = getPendingSpellShotMeta();
     if (pendingSpellTargeting.isHealingSpell){
       const actionCid = spellActorCid;
       if (actionCid === null){
@@ -14331,6 +14332,8 @@ __DAMAGE_TYPE_OPTIONS__
           healing_entries: healingEntries,
           healing_dice: String(pendingSpellTargeting.damageDice || "").trim() || null,
           prompt_for_healing: true,
+          shot_index: shotMeta.shotIndex,
+          shot_total: shotMeta.shotTotal,
         });
       });
       return;
@@ -14366,6 +14369,8 @@ __DAMAGE_TYPE_OPTIONS__
         save_type: pendingSpellTargeting.saveType || null,
         save_dc: Number.isFinite(Number(pendingSpellTargeting.saveDc)) ? Number(pendingSpellTargeting.saveDc) : null,
         roll_save: true,
+        shot_index: shotMeta.shotIndex,
+        shot_total: shotMeta.shotTotal,
       });
       return;
     }
@@ -14378,6 +14383,8 @@ __DAMAGE_TYPE_OPTIONS__
         spell_slug: pendingSpellTargeting.spellSlug || null,
         spell_id: pendingSpellTargeting.spellId || null,
         spell_mode: "effect",
+        shot_index: shotMeta.shotIndex,
+        shot_total: shotMeta.shotTotal,
       });
       return;
     }
@@ -14404,6 +14411,8 @@ __DAMAGE_TYPE_OPTIONS__
         damage_entries: [],
         damage_dice: String(pendingSpellTargeting.damageDice || "").trim() || null,
         damage_type: String(pendingSpellTargeting.damageType || "").trim().toLowerCase() || null,
+        shot_index: shotMeta.shotIndex,
+        shot_total: shotMeta.shotTotal,
       });
       return;
     }
@@ -14422,6 +14431,8 @@ __DAMAGE_TYPE_OPTIONS__
       damageDice: pendingSpellTargeting.damageDice || "",
       damageType: pendingSpellTargeting.damageType || "",
       actorCid: spellActorCid,
+      shotIndex: shotMeta.shotIndex,
+      shotTotal: shotMeta.shotTotal,
     };
     if (attackResolveBody){
       const details = [
@@ -15811,13 +15822,24 @@ __DAMAGE_TYPE_OPTIONS__
               damageType: promptSpell.damageType || "",
               allowOutOfTurn: !!msg.aoe_manual_prompt,
               actorCid: normalizeCid(msg.attacker_cid, "spellTargetResult.attackerCid") ?? normalizeCid(pendingSpellTargeting?.actorCid, "spellTargetResult.pendingActorCid"),
+              shotIndex: Number.isFinite(Number(msg.shot_index)) ? Number(msg.shot_index) : null,
+              shotTotal: Number.isFinite(Number(msg.shot_total)) ? Number(msg.shot_total) : null,
             };
             if (attackResolveBody){
               const details = [
                 damageDice ? `Damage: ${damageDice}${promptSpell.damageType ? ` ${promptSpell.damageType}` : ""}.` : "",
                 promptSpell.description ? promptSpell.description : "",
               ].filter(Boolean).join(" ");
-              attackResolveBody.textContent = `Target save resolves automatically. Resolve ${promptSpell.spellName} on ${pendingAttackResolve.targetName}.`
+              const shotLabel = Number.isFinite(Number(msg.shot_index)) && Number.isFinite(Number(msg.shot_total)) && Number(msg.shot_total) > 1
+                ? `Beam ${Number(msg.shot_index)}/${Number(msg.shot_total)}: `
+                : "";
+              const saveAbility = String(msg.save_result?.ability || promptSpell.saveType || "save").toUpperCase();
+              const saveTotal = Number.isFinite(Number(msg.save_result?.total)) ? Number(msg.save_result.total) : null;
+              const saveDc = Number.isFinite(Number(msg.save_result?.dc || promptSpell.saveDc)) ? Number(msg.save_result?.dc || promptSpell.saveDc) : null;
+              const saveSummary = (saveTotal !== null && saveDc !== null)
+                ? `${pendingAttackResolve.targetName} failed ${saveAbility} save (${saveTotal} vs DC ${saveDc}).`
+                : `${pendingAttackResolve.targetName} failed the save.`;
+              attackResolveBody.textContent = `${shotLabel}${saveSummary} Enter damage for ${promptSpell.spellName}.`
                 + (details ? ` ${details}` : "");
             }
             if (attackDamageRows){
@@ -19623,6 +19645,19 @@ __DAMAGE_TYPE_OPTIONS__
       localToast(showToastMessage);
     }
   }
+  function getPendingSpellShotMeta(){
+    if (!pendingSpellTargeting){
+      return {shotIndex: null, shotTotal: null};
+    }
+    const shotTotal = Math.max(1, Number(pendingSpellTargeting.initialShots || pendingSpellTargeting.remainingShots || 1));
+    const remaining = Math.max(0, Number(pendingSpellTargeting.remainingShots || 0));
+    const shotIndex = Math.min(shotTotal, Math.max(1, shotTotal - remaining + 1));
+    if (shotTotal <= 1){
+      return {shotIndex: null, shotTotal: null};
+    }
+    return {shotIndex, shotTotal};
+  }
+
   function consumeSpellTargetingShot(){
     if (!pendingSpellTargeting){
       return;
@@ -19848,6 +19883,7 @@ __DAMAGE_TYPE_OPTIONS__
       damageDiceWhenWounded: String(config.damageDiceWhenWounded || "").trim(),
       description: String(config.description || "").trim(),
       remainingShots: Math.max(1, Number(config.projectileCount || 1)),
+      initialShots: Math.max(1, Number(config.projectileCount || 1)),
       targetSide: ["friendly", "enemy", "any"].includes(String(config.targetSide || "any").toLowerCase()) ? String(config.targetSide || "any").toLowerCase() : "any",
       overlayColor: normalizeHexColor(config.overlayColor || "") || null,
       skipResolveAttack: config.skipResolveAttack === true,
@@ -22738,6 +22774,8 @@ __DAMAGE_TYPE_OPTIONS__
           damage_dice: String(pendingAttackResolve.damageDice || "").trim() || null,
           damage_type: String(pendingAttackResolve.damageType || "").trim().toLowerCase() || null,
           prompt_attacker_cid: normalizeCid(pendingAttackResolve.actorCid, "attackResolve.promptAttackerCid"),
+          shot_index: Number.isFinite(Number(pendingAttackResolve.shotIndex)) ? Number(pendingAttackResolve.shotIndex) : null,
+          shot_total: Number.isFinite(Number(pendingAttackResolve.shotTotal)) ? Number(pendingAttackResolve.shotTotal) : null,
         });
       } else {
         const monkSeq = pendingMonkBonusAttackSequence && typeof pendingMonkBonusAttackSequence === "object"

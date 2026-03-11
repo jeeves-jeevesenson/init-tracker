@@ -25088,6 +25088,8 @@ class InitiativeTracker(base.InitiativeTracker):
                         amount = int(flat_mod)
                     if amount > 0:
                         damage_entries.append({"amount": int(amount), "type": damage_type_hint})
+            shot_index = self._parse_int_value(msg.get("shot_index"), None)
+            shot_total = self._parse_int_value(msg.get("shot_total"), None)
             result_payload: Dict[str, Any] = {
                 "type": "spell_target_result",
                 "ok": True,
@@ -25097,6 +25099,9 @@ class InitiativeTracker(base.InitiativeTracker):
                 "spell_name": spell_name,
                 "spell_mode": spell_mode,
             }
+            if shot_index is not None and shot_total is not None and shot_total > 1 and 1 <= shot_index <= shot_total:
+                result_payload["shot_index"] = int(shot_index)
+                result_payload["shot_total"] = int(shot_total)
 
             has_healing_effect = any(
                 isinstance(effect, dict)
@@ -25244,11 +25249,6 @@ class InitiativeTracker(base.InitiativeTracker):
                     "total": int(save_total),
                     "passed": bool(save_passed),
                 }
-                self._log(
-                    f"{target.name} {'succeeds' if save_passed else 'fails'} their save against {spell_name}"
-                    f"{' [DISADVANTAGE]' if self._slow_spell_save_disadvantage(target, save_type) else ''}.",
-                    cid=int(target_cid),
-                )
                 seq_step = next((step for step in sequence if isinstance(step, dict)), None)
                 if isinstance(seq_step, dict):
                     outcomes = seq_step.get("outcomes") if isinstance(seq_step.get("outcomes"), dict) else {}
@@ -25278,7 +25278,9 @@ class InitiativeTracker(base.InitiativeTracker):
                             asyncio.run_coroutine_threadsafe(self._lan._send_async(ws_id, result_payload), loop)
                         except Exception:
                             pass
-                    self._lan.toast(ws_id, "Target passed the save.")
+                    detail = self._format_single_target_spell_outcome(result_payload)
+                    self._log(str(detail.get("log") or f"{spell_name} resolves on {result_payload['target_name']}."), cid=int(target_cid))
+                    self._lan.toast(ws_id, str(detail.get("toast") or "Target passed the save."))
                     return
                 if is_polymorph:
                     selected_form_id = str(msg.get("polymorph_form_id") or "").strip().lower()
@@ -25357,7 +25359,11 @@ class InitiativeTracker(base.InitiativeTracker):
                             asyncio.run_coroutine_threadsafe(self._lan._send_async(ws_id, result_payload), loop)
                         except Exception:
                             pass
-                    self._lan.toast(ws_id, "Target failed the save.")
+                    save_result = result_payload.get("save_result") if isinstance(result_payload.get("save_result"), dict) else {}
+                    ability = str(save_result.get("ability") or "save").strip().upper() or "SAVE"
+                    total = int(save_result.get("total") or 0)
+                    dc = int(save_result.get("dc") or 0)
+                    self._lan.toast(ws_id, f"{self._spell_shot_label(result_payload)}{spell_name}: {result_payload['target_name']} failed {ability} save ({total} vs DC {dc}). Enter damage.")
                     return
                 if not damage_intent:
                     hit = True
@@ -25572,11 +25578,6 @@ class InitiativeTracker(base.InitiativeTracker):
                         else:
                             self._log(f"{c.name} expends Star Advantage and refreshes {target.name}.", cid=int(target_cid))
             elif hit:
-                self._log(
-                    f"{c.name} hits {result_payload['target_name']} with {spell_name}"
-                    f"{' (CRIT)' if result_payload.get('critical') else ''}.",
-                    cid=int(target_cid),
-                )
                 if star_advantage_attempted and int(target_cid) in self.combatants and int(getattr(target, "hp", 0) or 0) > 0:
                     if self._condition_is_immune_for_target(target, "star_advantage"):
                         self._log(f"{c.name}'s Star Advantage can't affect {target.name} (immune).", cid=int(target_cid))
@@ -25591,7 +25592,6 @@ class InitiativeTracker(base.InitiativeTracker):
                         else:
                             self._log(f"{c.name} expends Star Advantage and refreshes {target.name}.", cid=int(target_cid))
             else:
-                self._log(f"{c.name} misses {result_payload['target_name']} with {spell_name}.", cid=int(target_cid))
                 if star_advantage_attempted:
                     self._log(f"{c.name} expends Star Advantage on a miss.", cid=cid)
 
@@ -25641,12 +25641,9 @@ class InitiativeTracker(base.InitiativeTracker):
                     asyncio.run_coroutine_threadsafe(self._lan._send_async(ws_id, result_payload), loop)
                 except Exception:
                     pass
-            if not hit:
-                self._lan.toast(ws_id, "Spell misses.")
-            elif total_damage > 0:
-                self._lan.toast(ws_id, "Spell hits.")
-            else:
-                self._lan.toast(ws_id, "Spell resolved.")
+            detail = self._format_single_target_spell_outcome(result_payload)
+            self._log(str(detail.get("log") or f"{spell_name} resolves on {result_payload['target_name']}."), cid=int(target_cid))
+            self._lan.toast(ws_id, str(detail.get("toast") or "Spell resolved."))
         elif typ == "hellish_rebuke_resolve":
             request_id = str(msg.get("request_id") or "").strip()
             pending = (getattr(self, "_pending_hellish_rebuke_resolutions", {}) or {}).pop(request_id, None)
@@ -28543,6 +28540,9 @@ class InitiativeTracker(base.InitiativeTracker):
             if amount > 0:
                 ctx.setdefault("damage_entries", []).append({"amount": int(amount), "type": str(ctx.get("damage_type_hint") or "damage")})
 
+        shot_index = self._parse_int_value(msg.get("shot_index"), None)
+        shot_total = self._parse_int_value(msg.get("shot_total"), None)
+
         result_payload: Dict[str, Any] = {
             "type": "spell_target_result",
             "ok": True,
@@ -28552,6 +28552,9 @@ class InitiativeTracker(base.InitiativeTracker):
             "spell_name": str(spell_name or "Spell"),
             "spell_mode": str(ctx.get("spell_mode") or "attack"),
         }
+        if shot_index is not None and shot_total is not None and shot_total > 1 and 1 <= shot_index <= shot_total:
+            result_payload["shot_index"] = int(shot_index)
+            result_payload["shot_total"] = int(shot_total)
         if check_result.get("save_result"):
             result_payload["save_result"] = dict(check_result.get("save_result") or {})
 
@@ -28588,6 +28591,7 @@ class InitiativeTracker(base.InitiativeTracker):
 
         adjustment = self._adjust_damage_entries_for_target(target, damage_entries)
         damage_entries = list(adjustment.get("entries") or [])
+        adjustment_notes = list(adjustment.get("notes") or [])
         total_damage = int(sum(int(entry.get("amount", 0) or 0) for entry in damage_entries))
         total_healing = int(sum(int(entry.get("amount", 0) or 0) for entry in healing_entries))
 
@@ -28606,6 +28610,8 @@ class InitiativeTracker(base.InitiativeTracker):
         result_payload["critical"] = bool(critical and hit)
         result_payload["damage_entries"] = list(damage_entries if hit else [])
         result_payload["damage_total"] = int(total_damage if hit else 0)
+        if adjustment_notes:
+            result_payload["damage_adjustment_notes"] = adjustment_notes
         if healing_entries:
             result_payload["healing_entries"] = list(healing_entries)
             result_payload["healing_total"] = int(total_healing)
@@ -28657,10 +28663,8 @@ class InitiativeTracker(base.InitiativeTracker):
                 result_payload["haste_applied"] = True
 
         msg["_spell_target_result"] = dict(result_payload)
-        self._log(
-            f"{getattr(caster, 'name', 'Caster')} resolves {spell_name} on {result_payload['target_name']}.",
-            cid=int(target_cid),
-        )
+        detail = self._format_single_target_spell_outcome(result_payload)
+        self._log(str(detail.get("log") or f"{getattr(caster, 'name', 'Caster')} resolves {spell_name} on {result_payload['target_name']}."), cid=int(target_cid))
         try:
             self._rebuild_table(scroll_to_current=True)
         except Exception:
@@ -28671,8 +28675,119 @@ class InitiativeTracker(base.InitiativeTracker):
                 asyncio.run_coroutine_threadsafe(self._lan._send_async(ws_id, result_payload), loop)
             except Exception:
                 pass
-        self._lan.toast(ws_id, "Spell resolved.")
+        self._lan.toast(ws_id, str(detail.get("toast") or "Spell resolved."))
         return True
+
+    @staticmethod
+    def _format_spell_damage_entries(damage_entries: List[Dict[str, Any]]) -> str:
+        parts: List[str] = []
+        for entry in damage_entries if isinstance(damage_entries, list) else []:
+            if not isinstance(entry, dict):
+                continue
+            try:
+                amount = int(entry.get("amount") or 0)
+            except Exception:
+                amount = 0
+            if amount <= 0:
+                continue
+            dtype = str(entry.get("type") or "damage").strip().lower() or "damage"
+            parts.append(f"{int(amount)} {dtype}")
+        return ", ".join(parts)
+
+    @staticmethod
+    def _format_spell_adjustment_notes(notes: List[Dict[str, Any]]) -> str:
+        rendered: List[str] = []
+        for note in notes if isinstance(notes, list) else []:
+            if not isinstance(note, dict):
+                continue
+            dtype = str(note.get("type") or "damage").strip().lower() or "damage"
+            reasons = "/".join(str(reason or "").strip() for reason in list(note.get("reasons") or []) if str(reason or "").strip())
+            if not reasons:
+                continue
+            rendered.append(f"{dtype} {int(note.get('original') or 0)}→{int(note.get('applied') or 0)} ({reasons})")
+        return "; ".join(rendered)
+
+    @staticmethod
+    def _spell_shot_label(result_payload: Dict[str, Any]) -> str:
+        try:
+            shot_index = int(result_payload.get("shot_index") or 0)
+            shot_total = int(result_payload.get("shot_total") or 0)
+        except Exception:
+            return ""
+        if shot_total > 1 and 1 <= shot_index <= shot_total:
+            return f"Beam {shot_index}/{shot_total}: "
+        return ""
+
+    def _format_single_target_spell_outcome(self, result_payload: Dict[str, Any]) -> Dict[str, str]:
+        spell_name = str(result_payload.get("spell_name") or "Spell")
+        target_name = str(result_payload.get("target_name") or "target")
+        spell_mode = str(result_payload.get("spell_mode") or "attack").strip().lower()
+        hit = bool(result_payload.get("hit"))
+        crit = bool(result_payload.get("critical"))
+        shot_prefix = self._spell_shot_label(result_payload)
+        save = result_payload.get("save_result") if isinstance(result_payload.get("save_result"), dict) else {}
+        damage_entries = list(result_payload.get("damage_entries") or [])
+        healing_entries = list(result_payload.get("healing_entries") or [])
+        damage_total = int(result_payload.get("damage_total") or 0)
+        healing_total = int(result_payload.get("healing_total") or 0)
+        notes_text = self._format_spell_adjustment_notes(list(result_payload.get("damage_adjustment_notes") or []))
+
+        if spell_mode == "save" and save:
+            ability = str(save.get("ability") or "").strip().upper() or "SAVE"
+            dc = int(save.get("dc") or 0)
+            total = int(save.get("total") or 0)
+            passed = bool(save.get("passed"))
+            status = "succeeds" if passed else "fails"
+            status_toast = "passed" if passed else "failed"
+            if damage_total > 0:
+                damage_text = self._format_spell_damage_entries(damage_entries)
+                tail = f" takes {damage_total} damage"
+                if damage_text:
+                    tail += f" ({damage_text})"
+                if notes_text:
+                    tail += f" [{notes_text}]"
+                tail += "."
+            elif healing_total > 0:
+                heal_text = self._format_spell_damage_entries(healing_entries)
+                tail = f" is healed for {healing_total}"
+                if heal_text:
+                    tail += f" ({heal_text})"
+                tail += "."
+            else:
+                tail = " no damage applied."
+            return {
+                "log": f"{shot_prefix}{target_name} {status} their {ability} save against {spell_name} ({total} vs DC {dc});{tail}",
+                "toast": f"{shot_prefix}{spell_name}: {target_name} {status_toast} {ability} save ({total} vs DC {dc}).",
+            }
+
+        if damage_total > 0:
+            damage_text = self._format_spell_damage_entries(damage_entries)
+            crit_text = " (CRIT)" if crit else ""
+            log = f"{shot_prefix}{spell_name} {'hits' if hit else 'resolves'} {target_name}{crit_text} for {damage_total} damage"
+            toast = f"{shot_prefix}{spell_name} {'hits' if hit else 'resolves'}: {damage_total} damage"
+            if damage_text:
+                log += f" ({damage_text})"
+                toast += f" ({damage_text})"
+            if notes_text:
+                log += f" [{notes_text}]"
+            return {"log": log + ".", "toast": toast + "."}
+
+        if healing_total > 0:
+            heal_text = self._format_spell_damage_entries(healing_entries)
+            msg = f"{shot_prefix}{spell_name} heals {target_name} for {healing_total}"
+            if heal_text:
+                msg += f" ({heal_text})"
+            return {"log": msg + ".", "toast": msg + "."}
+
+        if spell_mode in {"attack", "auto_hit"}:
+            return {
+                "log": f"{shot_prefix}{spell_name} {'hits' if hit else 'misses'} {target_name}.",
+                "toast": f"{shot_prefix}{spell_name} {'hits' if hit else 'misses'}.",
+            }
+        return {
+            "log": f"{shot_prefix}{spell_name} resolves on {target_name} (effect only).",
+            "toast": f"{shot_prefix}{spell_name} resolved (effect only).",
+        }
 
     @staticmethod
     def _expand_ongoing_clear_group(template: Any, *, spell_key: str, source_cid: int, target_cid: int) -> str:

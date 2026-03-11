@@ -102,7 +102,7 @@ class LanSpellTargetRequestTests(unittest.TestCase):
         self.assertEqual(self.app.combatants[2].hp, 20)
 
 
-    def test_save_spell_log_uses_pass_fail_without_roll_details(self):
+    def test_save_spell_log_includes_ability_total_and_dc(self):
         msg = {
             "type": "spell_target_request",
             "cid": 1,
@@ -123,9 +123,9 @@ class LanSpellTargetRequestTests(unittest.TestCase):
 
         save_logs = [entry for _cid, entry in self.logs if "save against Toll the Dead" in entry]
         self.assertTrue(save_logs)
-        self.assertTrue(any("succeeds their save" in entry for entry in save_logs))
-        self.assertTrue(all("DC" not in entry for entry in save_logs))
-        self.assertTrue(all("+" not in entry for entry in save_logs))
+        self.assertTrue(any("succeeds" in entry for entry in save_logs))
+        self.assertTrue(any("WIS" in entry for entry in save_logs))
+        self.assertTrue(any("vs DC 13" in entry for entry in save_logs))
 
     def test_spell_target_request_save_fail_requests_damage_prompt(self):
         msg = {
@@ -172,8 +172,27 @@ class LanSpellTargetRequestTests(unittest.TestCase):
         self.assertTrue(result.get("hit"))
         self.assertEqual(result.get("damage_total"), 9)
         self.assertEqual(self.app.combatants[2].hp, 11)
-        self.assertIn((11, "Spell hits."), self.toasts)
+        self.assertIn((11, "Fire Bolt hits: 9 damage (9 fire)."), self.toasts)
 
+
+    def test_spell_target_request_toast_includes_beam_label_for_multi_projectile(self):
+        msg = {
+            "type": "spell_target_request",
+            "cid": 1,
+            "_claimed_cid": 1,
+            "_ws_id": 31,
+            "target_cid": 2,
+            "spell_name": "Eldritch Blast",
+            "spell_mode": "attack",
+            "hit": True,
+            "damage_entries": [{"amount": 7, "type": "force"}],
+            "shot_index": 2,
+            "shot_total": 3,
+        }
+
+        self.app._lan_apply_action(msg)
+
+        self.assertIn((31, "Beam 2/3: Eldritch Blast hits: 7 damage (7 force)."), self.toasts)
 
     def test_spell_target_request_records_manual_critical_hit(self):
         msg = {
@@ -784,7 +803,7 @@ class LanSpellTargetRequestTests(unittest.TestCase):
         self.assertEqual(result.get("save_result", {}).get("dc"), 15)
         self.assertFalse(result.get("save_result", {}).get("passed"))
         self.assertFalse(any("misses" in message.lower() for _, message in self.logs))
-        self.assertTrue(any("fails their save against Hold Person" in message for _, message in self.logs))
+        self.assertTrue(any("fails their WIS save against Hold Person" in message for _, message in self.logs))
 
     def test_polymorph_temp_hp_depletion_reverts_form_via_legacy_damage_helper(self):
         target = self.app.combatants[2]
