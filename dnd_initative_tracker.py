@@ -86,6 +86,24 @@ FALLBACK_5ETOOLS_PACKS: Tuple[Tuple[str, str], ...] = (
 FALLBACK_5ETOOLS_MIN_BYTES = 100 * 1024
 
 
+def _normalize_turn_schedule_config(raw_schedule: object) -> Tuple[Optional[str], Optional[int], Optional[str]]:
+    if not isinstance(raw_schedule, dict):
+        return None, None, None
+    mode = str(raw_schedule.get("mode") or "").strip().lower()
+    if mode != "cadence":
+        return None, None, None
+    try:
+        every_n = int(raw_schedule.get("every_n_turns"))
+    except Exception:
+        return None, None, None
+    if every_n < 1:
+        return None, None, None
+    counts = str(raw_schedule.get("counts") or "").strip().lower()
+    if counts != "normal_turns_only":
+        return None, None, None
+    return "cadence", every_n, "normal_turns_only"
+
+
 def _app_base_dir() -> Path:
     try:
         if getattr(sys, "frozen", False):
@@ -1365,6 +1383,9 @@ class MonsterSpec:
     saving_throws: Dict[str, int]
     ability_mods: Dict[str, int]
     raw_data: Dict[str, Any]
+    turn_schedule_mode: Optional[str] = None
+    turn_schedule_every_n: Optional[int] = None
+    turn_schedule_counts: Optional[str] = None
 
 
 @dataclass
@@ -3077,6 +3098,13 @@ class LanController:
             current_cid = int(cid)
         except Exception:
             return None
+        peek = getattr(self._tracker, "_peek_next_turn_cid", None)
+        if callable(peek):
+            try:
+                nxt = peek(current_cid)
+            except Exception:
+                nxt = None
+            return int(nxt) if nxt is not None else None
         ordered = self._tracker._display_order()
         ids = [int(c.cid) for c in ordered if getattr(c, "cid", None) is not None]
         if len(ids) <= 1 or current_cid not in ids:
@@ -6032,11 +6060,111 @@ class InitiativeTracker(base.InitiativeTracker):
         combatant = self.combatants.get(int(cid_norm))
         if combatant is None:
             return False
+        if str(getattr(combatant, "turn_schedule_mode", "") or "").strip().lower() == "cadence":
+            return True
         summon_owner = _normalize_cid_value(getattr(combatant, "summoned_by_cid", None), "turn.skip.summon.owner")
         if summon_owner is not None:
             return True
         mounted_by = _normalize_cid_value(getattr(combatant, "mounted_by_cid", None), "turn.skip.mounted_by")
         return mounted_by is not None and bool(getattr(combatant, "mount_shared_turn", False))
+
+
+    def _is_cadence_combatant(self, cid: Optional[int]) -> bool:
+        cid_norm = _normalize_cid_value(cid, "turn.cadence.cid")
+        if cid_norm is None:
+            return False
+        c = self.combatants.get(int(cid_norm))
+        if c is None:
+            return False
+        return str(getattr(c, "turn_schedule_mode", "") or "").strip().lower() == "cadence"
+
+    def _cadence_cids_in_order(self) -> List[int]:
+        ordered = self._display_order()
+        result: List[int] = []
+        for c in ordered:
+            cid = _normalize_cid_value(getattr(c, "cid", None), "turn.cadence.ordered")
+            if cid is None:
+                continue
+            if self._is_cadence_combatant(int(cid)):
+                result.append(int(cid))
+        return result
+
+    def _init_cadence_scheduler_state(self, reset_history: bool = True) -> None:
+        cadence_cids = self._cadence_cids_in_order()
+        counters = {int(cid): int((getattr(self, "_cadence_counters", {}) or {}).get(int(cid), 0) or 0) for cid in cadence_cids}
+        self._current_turn_kind = str(getattr(self, "_current_turn_kind", "normal") or "normal")
+        self._cadence_counters = counters
+        pending = []
+        existing_pending = list(getattr(self, "_cadence_pending_queue", []) or [])
+        for cid in existing_pending:
+            cid_norm = _normalize_cid_value(cid, "turn.cadence.pending")
+            if cid_norm is None or int(cid_norm) not in counters:
+                continue
+            pending.append(int(cid_norm))
+        self._cadence_pending_queue = pending
+        self._cadence_resume_normal_cid = _normalize_cid_value(getattr(self, "_cadence_resume_normal_cid", None), "turn.cadence.resume")
+        self._normal_turns_completed = int(getattr(self, "_normal_turns_completed", 0) or 0)
+        if reset_history:
+            self._turn_history = []
+
+    def _record_turn_history(self) -> None:
+        history = list(getattr(self, "_turn_history", []) or [])
+        history.append({
+            "current_cid": _normalize_cid_value(getattr(self, "current_cid", None), "turn.history.current"),
+            "round_num": int(getattr(self, "round_num", 1) or 1),
+            "turn_num": int(getattr(self, "turn_num", 0) or 0),
+            "turn_kind": str(getattr(self, "_current_turn_kind", "normal") or "normal"),
+            "cadence_counters": dict(getattr(self, "_cadence_counters", {}) or {}),
+            "cadence_pending_queue": list(getattr(self, "_cadence_pending_queue", []) or []),
+            "cadence_resume_normal_cid": _normalize_cid_value(getattr(self, "_cadence_resume_normal_cid", None), "turn.history.resume"),
+            "normal_turns_completed": int(getattr(self, "_normal_turns_completed", 0) or 0),
+        })
+        self._turn_history = history
+
+    def _next_normal_turn_candidate(self, from_cid: int) -> Tuple[Optional[int], bool]:
+        ordered = self._display_order()
+        ids = [int(c.cid) for c in ordered if getattr(c, "cid", None) is not None and not self._should_skip_turn(int(c.cid))]
+        if not ids:
+            return None, False
+        if from_cid not in ids:
+            return ids[0], False
+        idx = ids.index(from_cid)
+        nxt = (idx + 1) % len(ids)
+        return ids[nxt], nxt == 0
+
+    def _enqueue_ready_cadence_turns(self) -> None:
+        pending = list(getattr(self, "_cadence_pending_queue", []) or [])
+        pending_set = {int(cid) for cid in pending}
+        counters = dict(getattr(self, "_cadence_counters", {}) or {})
+        for cid in self._cadence_cids_in_order():
+            c = self.combatants.get(int(cid))
+            if c is None:
+                continue
+            every_n = int(getattr(c, "turn_schedule_every_n", 0) or 0)
+            if every_n <= 0:
+                continue
+            if int(counters.get(int(cid), 0) or 0) >= every_n and int(cid) not in pending_set:
+                pending.append(int(cid))
+                pending_set.add(int(cid))
+        self._cadence_pending_queue = pending
+
+    def _peek_next_turn_cid(self, current_cid: Optional[int]) -> Optional[int]:
+        cid_norm = _normalize_cid_value(current_cid, "turn.peek.current")
+        if cid_norm is None:
+            return self._first_non_skipped_turn_cid(self._display_order())
+        kind = str(getattr(self, "_current_turn_kind", "normal") or "normal")
+        pending = list(getattr(self, "_cadence_pending_queue", []) or [])
+        if kind == "normal":
+            if pending:
+                return _normalize_cid_value(pending[0], "turn.peek.pending")
+            nxt, _wrapped = self._next_normal_turn_candidate(int(cid_norm))
+            return nxt
+        if pending:
+            return _normalize_cid_value(pending[0], "turn.peek.pending.cadence")
+        resume = _normalize_cid_value(getattr(self, "_cadence_resume_normal_cid", None), "turn.peek.resume")
+        if resume is not None and resume in self.combatants:
+            return int(resume)
+        return self._first_non_skipped_turn_cid(self._display_order())
 
     def _first_non_skipped_turn_cid(self, ordered: List[Any]) -> Optional[int]:
         for entry in ordered:
@@ -6432,14 +6560,17 @@ class InitiativeTracker(base.InitiativeTracker):
         if not ordered:
             messagebox.showinfo("Turn Tracker", "No combatants in the list yet.")
             return
+        self._init_cadence_scheduler_state(reset_history=True)
         first_cid = self._first_non_skipped_turn_cid(ordered)
         if first_cid is None:
             first_cid = int(getattr(ordered[0], "cid", 0))
         self.current_cid = first_cid
+        self._current_turn_kind = "normal"
         self.round_num = 1
         self.turn_num = 1
         self._log("--- COMBAT STARTED ---")
         self._log("--- ROUND 1 ---")
+        self._record_turn_history()
         self._enter_turn_with_auto_skip(starting=True)
         self._rebuild_table(scroll_to_current=True)
 
@@ -6610,39 +6741,60 @@ class InitiativeTracker(base.InitiativeTracker):
         if not ids:
             return
 
+        self._init_cadence_scheduler_state(reset_history=False)
+
         if self.current_cid is None or self.current_cid not in ids:
             first_cid = self._first_non_skipped_turn_cid(ordered)
             self.current_cid = first_cid if first_cid is not None else ids[0]
+            self._current_turn_kind = "normal"
             self.round_num = max(1, self.round_num)
             self.turn_num = max(1, self.turn_num)
+            self._record_turn_history()
             self._enter_turn_with_auto_skip(starting=True)
             self._rebuild_table(scroll_to_current=True)
             return
 
-        ended_cid = self.current_cid
+        ended_cid = int(self.current_cid)
         claimed_cids = self._claimed_cids_snapshot()
+        ended_kind = str(getattr(self, "_current_turn_kind", "normal") or "normal")
         self._end_turn_cleanup(self.current_cid)
-        if ended_cid is not None:
-            self._log_turn_end(ended_cid)
+        self._log_turn_end(ended_cid)
 
-        idx = ids.index(self.current_cid)
-        steps = 0
         wrapped = False
-        next_cid = self.current_cid
-        while steps < len(ids):
-            nxt = (idx + 1 + steps) % len(ids)
-            if nxt == 0:
-                wrapped = True
-            cand = ids[nxt]
-            if not self._should_skip_turn(cand):
-                next_cid = cand
-                break
-            steps += 1
-        self.current_cid = next_cid
+        if ended_kind == "normal":
+            self._normal_turns_completed = int(getattr(self, "_normal_turns_completed", 0) or 0) + 1
+            for cadence_cid in list(getattr(self, "_cadence_counters", {}).keys()):
+                self._cadence_counters[int(cadence_cid)] = int(self._cadence_counters.get(int(cadence_cid), 0) or 0) + 1
+            self._enqueue_ready_cadence_turns()
+            next_normal_cid, wrapped = self._next_normal_turn_candidate(ended_cid)
+            self._cadence_resume_normal_cid = next_normal_cid
+            if getattr(self, "_cadence_pending_queue", []):
+                self.current_cid = int(self._cadence_pending_queue.pop(0))
+                self._current_turn_kind = "cadence"
+                cadence_every_n = int(getattr(self.combatants.get(int(self.current_cid)), "turn_schedule_every_n", 0) or 0)
+                if cadence_every_n > 0:
+                    self._cadence_counters[int(self.current_cid)] = max(0, int(self._cadence_counters.get(int(self.current_cid), 0) or 0) - cadence_every_n)
+            else:
+                self.current_cid = next_normal_cid if next_normal_cid is not None else ended_cid
+                self._current_turn_kind = "normal"
+        else:
+            if getattr(self, "_cadence_pending_queue", []):
+                self.current_cid = int(self._cadence_pending_queue.pop(0))
+                self._current_turn_kind = "cadence"
+                cadence_every_n = int(getattr(self.combatants.get(int(self.current_cid)), "turn_schedule_every_n", 0) or 0)
+                if cadence_every_n > 0:
+                    self._cadence_counters[int(self.current_cid)] = max(0, int(self._cadence_counters.get(int(self.current_cid), 0) or 0) - cadence_every_n)
+            else:
+                resume = _normalize_cid_value(getattr(self, "_cadence_resume_normal_cid", None), "turn.next.resume")
+                self.current_cid = int(resume) if resume is not None else (self._first_non_skipped_turn_cid(self._display_order()) or ended_cid)
+                self._current_turn_kind = "normal"
+
         self.turn_num += 1
         if wrapped:
             self.round_num += 1
             self._log(f"--- ROUND {self.round_num} ---")
+
+        self._record_turn_history()
 
         if self._should_show_dm_up_alert(ended_cid, self.current_cid, claimed_cids=claimed_cids):
             self._show_dm_up_alert_dialog()
@@ -6662,6 +6814,25 @@ class InitiativeTracker(base.InitiativeTracker):
                     continue
                 if move_limit > 0:
                     aoe["move_remaining_ft"] = float(move_limit)
+        self._rebuild_table(scroll_to_current=True)
+
+    def _prev_turn(self) -> None:
+        history = list(getattr(self, "_turn_history", []) or [])
+        if len(history) <= 1:
+            super()._prev_turn()
+            return
+        history.pop()
+        snap = history[-1]
+        self._turn_history = history
+        self.current_cid = _normalize_cid_value(snap.get("current_cid"), "turn.prev.current")
+        self.round_num = int(snap.get("round_num", 1) or 1)
+        self.turn_num = int(snap.get("turn_num", 0) or 0)
+        self._current_turn_kind = str(snap.get("turn_kind") or "normal")
+        self._cadence_counters = {int(k): int(v or 0) for k, v in dict(snap.get("cadence_counters") or {}).items()}
+        self._cadence_pending_queue = [int(x) for x in list(snap.get("cadence_pending_queue") or [])]
+        self._cadence_resume_normal_cid = _normalize_cid_value(snap.get("cadence_resume_normal_cid"), "turn.prev.resume")
+        self._normal_turns_completed = int(snap.get("normal_turns_completed", 0) or 0)
+        self.start_last_var.set("")
         self._rebuild_table(scroll_to_current=True)
 
     def _end_turn_cleanup(self, cid: Optional[int], skip_decrement_types: Optional[set[str]] = None) -> None:
@@ -7172,6 +7343,14 @@ class InitiativeTracker(base.InitiativeTracker):
                 "pending_shield_resolutions": self._json_safe(getattr(self, "_pending_shield_resolutions", {})),
                 "pending_absorb_elements_resolutions": self._json_safe(getattr(self, "_pending_absorb_elements_resolutions", {})),
                 "concentration_save_state": self._json_safe(getattr(self, "_concentration_save_state", {})),
+                "cadence_scheduler": self._json_safe({
+                    "current_turn_kind": str(getattr(self, "_current_turn_kind", "normal") or "normal"),
+                    "cadence_counters": dict(getattr(self, "_cadence_counters", {}) or {}),
+                    "cadence_pending_queue": list(getattr(self, "_cadence_pending_queue", []) or []),
+                    "cadence_resume_normal_cid": getattr(self, "_cadence_resume_normal_cid", None),
+                    "normal_turns_completed": int(getattr(self, "_normal_turns_completed", 0) or 0),
+                    "turn_history": list(getattr(self, "_turn_history", []) or []),
+                }),
             },
             "map": {
                 "grid": {"cols": cols, "rows": rows, "feet_per_square": feet_per_square},
@@ -7352,6 +7531,15 @@ class InitiativeTracker(base.InitiativeTracker):
             else {}
         )
         self._concentration_save_state = dict(combat.get("concentration_save_state") if isinstance(combat.get("concentration_save_state"), dict) else {})
+
+        cadence_scheduler = combat.get("cadence_scheduler") if isinstance(combat.get("cadence_scheduler"), dict) else {}
+        self._current_turn_kind = str(cadence_scheduler.get("current_turn_kind") or "normal")
+        self._cadence_counters = {int(k): int(v or 0) for k, v in dict(cadence_scheduler.get("cadence_counters") or {}).items()}
+        self._cadence_pending_queue = [int(x) for x in list(cadence_scheduler.get("cadence_pending_queue") or [])]
+        self._cadence_resume_normal_cid = _normalize_cid_value(cadence_scheduler.get("cadence_resume_normal_cid"), "session.cadence.resume")
+        self._normal_turns_completed = int(cadence_scheduler.get("normal_turns_completed", 0) or 0)
+        self._turn_history = list(cadence_scheduler.get("turn_history") or [])
+        self._init_cadence_scheduler_state(reset_history=False)
 
         grid = map_state.get("grid") if isinstance(map_state.get("grid"), dict) else {}
         self._lan_grid_cols = int(grid.get("cols", 20) or 20)
@@ -10283,6 +10471,8 @@ class InitiativeTracker(base.InitiativeTracker):
             "aoes": aoes,
             "units": units,
             "active_cid": active,
+            "active_turn_kind": str(getattr(self, "_current_turn_kind", "normal") or "normal"),
+            "up_next_cid": self._peek_next_turn_cid(active),
             "round_num": int(getattr(self, "round_num", 0) or 0),
             "turn_order": turn_order,
             "auras_enabled": bool(self.__dict__.get("_lan_auras_enabled", True)),
@@ -31005,6 +31195,9 @@ class InitiativeTracker(base.InitiativeTracker):
                             saving_throws=summary.get("saving_throws") if isinstance(summary.get("saving_throws"), dict) else {},
                             ability_mods=summary.get("ability_mods") if isinstance(summary.get("ability_mods"), dict) else {},
                             raw_data=summary.get("raw_data") if isinstance(summary.get("raw_data"), dict) else {},
+                            turn_schedule_mode=summary.get("turn_schedule_mode"),
+                            turn_schedule_every_n=summary.get("turn_schedule_every_n"),
+                            turn_schedule_counts=summary.get("turn_schedule_counts"),
                         )
                         if name not in self._monsters_by_name:
                             self._monsters_by_name[name] = spec
@@ -31174,6 +31367,8 @@ class InitiativeTracker(base.InitiativeTracker):
             except Exception:
                 ability_mods = {}
 
+            turn_schedule_mode, turn_schedule_every_n, turn_schedule_counts = _normalize_turn_schedule_config(raw_data.get("turn_schedule"))
+
             spec = MonsterSpec(
                 filename=rel_filename,
                 name=name,
@@ -31190,6 +31385,9 @@ class InitiativeTracker(base.InitiativeTracker):
                 saving_throws=saving_throws,
                 ability_mods=ability_mods,
                 raw_data=raw_data,
+                turn_schedule_mode=turn_schedule_mode,
+                turn_schedule_every_n=turn_schedule_every_n,
+                turn_schedule_counts=turn_schedule_counts,
             )
 
             if name not in self._monsters_by_name:
@@ -31215,6 +31413,9 @@ class InitiativeTracker(base.InitiativeTracker):
                     "saving_throws": saving_throws,
                     "ability_mods": ability_mods,
                     "raw_data": raw_data,
+                    "turn_schedule_mode": turn_schedule_mode,
+                    "turn_schedule_every_n": turn_schedule_every_n,
+                    "turn_schedule_counts": turn_schedule_counts,
                 },
             }
 
@@ -31275,6 +31476,7 @@ class InitiativeTracker(base.InitiativeTracker):
             "vulnerabilities",
             "resistances",
             "immunities",
+            "turn_schedule",
         ):
             if key in monster_data:
                 raw_data[key] = monster_data.get(key)
@@ -31283,6 +31485,10 @@ class InitiativeTracker(base.InitiativeTracker):
             raw_data["abilities"] = abilities
         if raw_data:
             spec.raw_data = raw_data
+            mode, every_n, counts = _normalize_turn_schedule_config(raw_data.get("turn_schedule"))
+            spec.turn_schedule_mode = mode
+            spec.turn_schedule_every_n = every_n
+            spec.turn_schedule_counts = counts
         return spec
 
     def _monster_names_sorted(self) -> List[str]:

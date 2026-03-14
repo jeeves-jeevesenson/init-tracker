@@ -376,6 +376,9 @@ class MonsterSpec:
     saving_throws: Dict[str, int]
     ability_mods: Dict[str, int]
     raw_data: Dict[str, Any]
+    turn_schedule_mode: Optional[str] = None
+    turn_schedule_every_n: Optional[int] = None
+    turn_schedule_counts: Optional[str] = None
 
 
 @dataclass(frozen=True)
@@ -429,6 +432,24 @@ def _normalize_speed_key(key: object) -> str:
     text = key.strip().lower().replace("_", " ").replace("-", " ")
     text = text.replace("ft", "").strip()
     return " ".join(text.split())
+
+
+def _normalize_turn_schedule_config(raw_schedule: object) -> Tuple[Optional[str], Optional[int], Optional[str]]:
+    if not isinstance(raw_schedule, dict):
+        return None, None, None
+    mode = str(raw_schedule.get("mode") or "").strip().lower()
+    if mode != "cadence":
+        return None, None, None
+    try:
+        every_n = int(raw_schedule.get("every_n_turns"))
+    except Exception:
+        return None, None, None
+    if every_n < 1:
+        return None, None, None
+    counts = str(raw_schedule.get("counts") or "").strip().lower()
+    if counts != "normal_turns_only":
+        return None, None, None
+    return "cadence", every_n, "normal_turns_only"
 
 
 def _parse_speed_string(text: str) -> Dict[str, int]:
@@ -2142,6 +2163,10 @@ class InitiativeTracker(tk.Tk):
             reactions=normalized_reactions,
             monster_spec=monster_spec,
         )
+        if monster_spec is not None:
+            setattr(c, "turn_schedule_mode", getattr(monster_spec, "turn_schedule_mode", None))
+            setattr(c, "turn_schedule_every_n", getattr(monster_spec, "turn_schedule_every_n", None))
+            setattr(c, "turn_schedule_counts", getattr(monster_spec, "turn_schedule_counts", None))
         self.combatants[cid] = c
         self._remember_role(c)
         return cid
@@ -2239,7 +2264,10 @@ class InitiativeTracker(tk.Tk):
             self.turn_move_var.set("—")
         else:
             c = self.combatants[self.current_cid]
-            self.turn_current_var.set(self._label_for(c))
+            label = self._label_for(c)
+            if str(getattr(c, "turn_schedule_mode", "") or "").strip().lower() == "cadence":
+                label = f"{label} (Cadence)"
+            self.turn_current_var.set(label)
             eff = self._effective_speed(c)
             if eff <= 0:
                 self.turn_move_var.set("0")
@@ -4065,6 +4093,9 @@ class InitiativeTracker(tk.Tk):
                             saving_throws=summary.get("saving_throws") if isinstance(summary.get("saving_throws"), dict) else {},
                             ability_mods=summary.get("ability_mods") if isinstance(summary.get("ability_mods"), dict) else {},
                             raw_data=summary.get("raw_data") if isinstance(summary.get("raw_data"), dict) else {},
+                            turn_schedule_mode=summary.get("turn_schedule_mode"),
+                            turn_schedule_every_n=summary.get("turn_schedule_every_n"),
+                            turn_schedule_counts=summary.get("turn_schedule_counts"),
                         )
                         if name not in self._monsters_by_name:
                             self._monsters_by_name[name] = spec
@@ -4320,6 +4351,9 @@ class InitiativeTracker(tk.Tk):
                     "saving_throws": saving_throws,
                     "ability_mods": ability_mods,
                     "raw_data": raw_data,
+                    "turn_schedule_mode": turn_schedule_mode,
+                    "turn_schedule_every_n": turn_schedule_every_n,
+                    "turn_schedule_counts": turn_schedule_counts,
                 },
             }
 
