@@ -6587,8 +6587,8 @@ class InitiativeTracker(base.InitiativeTracker):
         self.turn_num = 1
         self._log("--- COMBAT STARTED ---")
         self._log("--- ROUND 1 ---")
-        self._record_turn_history()
         self._enter_turn_with_auto_skip(starting=True)
+        self._record_turn_history()
         self._rebuild_table(scroll_to_current=True)
 
     def _claimed_cids_snapshot(self) -> set[int]:
@@ -6766,8 +6766,8 @@ class InitiativeTracker(base.InitiativeTracker):
             self._current_turn_kind = "normal"
             self.round_num = max(1, self.round_num)
             self.turn_num = max(1, self.turn_num)
-            self._record_turn_history()
             self._enter_turn_with_auto_skip(starting=True)
+            self._record_turn_history()
             self._rebuild_table(scroll_to_current=True)
             return
 
@@ -6783,12 +6783,13 @@ class InitiativeTracker(base.InitiativeTracker):
             self.round_num += 1
             self._log(f"--- ROUND {self.round_num} ---")
 
+        self._enter_turn_with_auto_skip(starting=False)
+
         self._record_turn_history()
 
         if self._should_show_dm_up_alert(ended_cid, self.current_cid, claimed_cids=claimed_cids):
             self._show_dm_up_alert_dialog()
 
-        self._enter_turn_with_auto_skip(starting=False)
         current_turn_cid = _normalize_cid_value(getattr(self, "current_cid", None), "next_turn.current_cid")
         if current_turn_cid is not None:
             for _aid, aoe in list((self.__dict__.get("_lan_aoes", {}) or {}).items()):

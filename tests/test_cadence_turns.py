@@ -364,6 +364,94 @@ turn_schedule:
         lan._tracker = app
         self.assertEqual(lan._next_turn_notification_target(1), 99)
 
+    def test_next_turn_history_records_final_target_after_auto_skip(self):
+        app = _bare_tracker()
+        _add_basic_combatant(app, 1, "A", 30)
+        _add_basic_combatant(app, 2, "B", 20)
+        _add_basic_combatant(app, 3, "C", 10)
+
+        app._enter_turn_with_auto_skip = helper_script.InitiativeTracker._enter_turn_with_auto_skip.__get__(app, tracker_mod.InitiativeTracker)
+        app._update_turn_ui = lambda: None
+        app._map_window = None
+        app._lan = None
+
+        app.current_cid = 1
+        app.round_num = 1
+        app.turn_num = 1
+        app._init_cadence_scheduler_state(reset_history=True)
+        app._current_turn_kind = "normal"
+        app._record_turn_history()
+
+        def _start_of_turn(c):
+            if c.cid == 2:
+                return True, "skip", set()
+            return False, "", set()
+
+        app._process_start_of_turn = _start_of_turn
+
+        app._next_turn()
+
+        self.assertEqual(app.current_cid, 3)
+        self.assertEqual(app._turn_history[-1]["current_cid"], 3)
+        app._prev_turn()
+        self.assertEqual(app.current_cid, 1)
+
+    def test_start_turns_history_records_final_target_after_auto_skip(self):
+        app = _bare_tracker()
+        _add_basic_combatant(app, 1, "A", 30)
+        _add_basic_combatant(app, 2, "B", 20)
+
+        app._start_turns = tracker_mod.InitiativeTracker._start_turns.__get__(app, tracker_mod.InitiativeTracker)
+        app._enter_turn_with_auto_skip = helper_script.InitiativeTracker._enter_turn_with_auto_skip.__get__(app, tracker_mod.InitiativeTracker)
+        app._update_turn_ui = lambda: None
+        app._map_window = None
+        app._lan = None
+
+        def _start_of_turn(c):
+            if c.cid == 1:
+                return True, "skip", set()
+            return False, "", set()
+
+        app._process_start_of_turn = _start_of_turn
+
+        app._start_turns()
+
+        self.assertEqual(app.current_cid, 2)
+        self.assertEqual(app._turn_history[-1]["current_cid"], 2)
+
+    def test_next_turn_history_records_final_cadence_target_after_auto_skip(self):
+        app = _bare_tracker()
+        _add_basic_combatant(app, 1, "A", 30)
+        _add_basic_combatant(app, 2, "B", 20)
+        _add_basic_combatant(app, 99, "Boss", 40, cadence_every=1)
+
+        app._enter_turn_with_auto_skip = helper_script.InitiativeTracker._enter_turn_with_auto_skip.__get__(app, tracker_mod.InitiativeTracker)
+        app._update_turn_ui = lambda: None
+        app._map_window = None
+        app._lan = None
+
+        app.current_cid = 1
+        app.round_num = 1
+        app.turn_num = 1
+        app._init_cadence_scheduler_state(reset_history=True)
+        app._current_turn_kind = "normal"
+        app._record_turn_history()
+
+        def _start_of_turn(c):
+            if c.cid == 2:
+                return True, "skip", set()
+            return False, "", set()
+
+        app._process_start_of_turn = _start_of_turn
+
+        app._next_turn()
+
+        self.assertEqual((app.current_cid, app._current_turn_kind), (99, "cadence"))
+        self.assertEqual(app._turn_history[-1]["current_cid"], 99)
+        self.assertEqual(app._turn_history[-1]["turn_kind"], "cadence")
+        app._prev_turn()
+        self.assertEqual((app.current_cid, app._current_turn_kind), (1, "normal"))
+
 
 if __name__ == "__main__":
     unittest.main()
