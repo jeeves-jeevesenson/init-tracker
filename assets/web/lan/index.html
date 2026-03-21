@@ -6975,8 +6975,7 @@ __DAMAGE_TYPE_OPTIONS__
         chip.style.cursor = "pointer";
         chip.title = "Monk Focus";
         chip.addEventListener("click", () => {
-          const cid = activeControlledUnitCid();
-          if (cid === null){
+          if (claimedCid === null || claimedCid === undefined){
             localToast("Claim a character first, matey.");
             return;
           }
@@ -6987,8 +6986,7 @@ __DAMAGE_TYPE_OPTIONS__
         chip.style.cursor = "pointer";
         chip.title = "Use Action Surge";
         chip.addEventListener("click", () => {
-          const cid = activeControlledUnitCid();
-          if (cid === null){
+          if (claimedCid === null || claimedCid === undefined){
             localToast("Claim a character first, matey.");
             return;
           }
@@ -7008,8 +7006,7 @@ __DAMAGE_TYPE_OPTIONS__
         chip.style.cursor = "pointer";
         chip.title = "Use Star Advantage";
         chip.addEventListener("click", () => {
-          const cid = activeControlledUnitCid();
-          if (cid === null){
+          if (claimedCid === null || claimedCid === undefined){
             localToast("Claim a character first, matey.");
             return;
           }
@@ -7054,8 +7051,7 @@ __DAMAGE_TYPE_OPTIONS__
         chip.style.cursor = "pointer";
         chip.title = "Use consumable";
         chip.addEventListener("click", () => {
-          const cid = activeControlledUnitCid();
-          if (cid === null){
+          if (claimedCid === null || claimedCid === undefined){
             localToast("Claim a character first, matey.");
             return;
           }
@@ -7067,7 +7063,7 @@ __DAMAGE_TYPE_OPTIONS__
           if (!window.confirm(`Use ${pool.label || consumableId}? (${pool.current}/${pool.max} remaining)`)){
             return;
           }
-          send({type: "use_consumable", cid, consumable_id: consumableId});
+          send({type: "use_consumable", cid: claimedCid, consumable_id: consumableId});
         });
       }
       if (pool.id === "unleash_incarnation"){
@@ -22631,8 +22627,7 @@ __DAMAGE_TYPE_OPTIONS__
   });
   if (inventoryConsumableAddBtn){
     inventoryConsumableAddBtn.addEventListener("click", () => {
-      const cid = activeControlledUnitCid();
-      if (cid === null){
+      if (claimedCid === null || claimedCid === undefined){
         localToast("Claim a character first, matey.");
         return;
       }
@@ -22641,7 +22636,7 @@ __DAMAGE_TYPE_OPTIONS__
         localToast("Pick a consumable first, matey.");
         return;
       }
-      send({type: "inventory_adjust_consumable", cid, consumable_id: consumableId, delta: 1});
+      send({type: "inventory_adjust_consumable", cid: claimedCid, consumable_id: consumableId, delta: 1});
     });
   }
   if (useActionBtn){

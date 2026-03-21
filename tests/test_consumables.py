@@ -101,6 +101,36 @@ class ConsumableTests(unittest.TestCase):
         items = self.app._player_yaml_cache_by_path[path]["inventory"]["items"]
         self.assertEqual(items, [])
 
+    def test_use_healing_potion_does_not_consume_when_bonus_action_blocked(self):
+        path = Path("players/test_consumable_bonus_blocked.yaml")
+        self.app._load_player_yaml_cache = lambda: None
+        self.app._normalize_character_lookup_key = lambda v: str(v).strip().lower()
+        self.app._player_yaml_name_map = {"cleric": path}
+        self.app._player_yaml_cache_by_path = {
+            path: {
+                "inventory": {
+                    "items": [
+                        {"id": "lesser_healing_potion", "name": "Lesser Healing Potion", "quantity": 1}
+                    ]
+                }
+            }
+        }
+        self.app._store_character_yaml = lambda target, raw: self.app._player_yaml_cache_by_path.__setitem__(target, raw)
+        self.app.in_combat = True
+        self.app._use_bonus_action = lambda _combatant: False
+
+        combatant = SimpleNamespace(hp=5, max_hp=20, bonus_action_remaining=1)
+        self.app._roll_healing_formula = lambda _formula: 7
+
+        ok, err, healed = self.app._use_inventory_consumable("cleric", "lesser_healing_potion", combatant)
+        self.assertFalse(ok)
+        self.assertIn("bonus action", err.lower())
+        self.assertEqual(healed, 0)
+        self.assertEqual(combatant.hp, 5)
+
+        items = self.app._player_yaml_cache_by_path[path]["inventory"]["items"]
+        self.assertEqual(items[0]["quantity"], 1)
+
     def test_use_healing_potion_fails_at_zero_quantity(self):
         path = Path("players/test_consumable_zero.yaml")
         self.app._load_player_yaml_cache = lambda: None

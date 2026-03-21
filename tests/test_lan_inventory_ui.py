@@ -48,6 +48,13 @@ class LanInventoryUiTests(unittest.TestCase):
         self.assertIn('"breastplate"', source)
         self.assertIn('"leather"', source)
 
+    def test_consumables_actions_use_claimed_cid_not_active_controlled_unit(self):
+        source = self.SOURCE_PATH.read_text(encoding="utf-8")
+        self.assertIn('send({type: "inventory_adjust_consumable", cid: claimedCid, consumable_id: consumableId, delta: 1});', source)
+        self.assertIn('send({type: "use_consumable", cid: claimedCid, consumable_id: consumableId});', source)
+        self.assertNotIn('send({type: "inventory_adjust_consumable", cid, consumable_id: consumableId, delta: 1});', source)
+        self.assertNotIn('send({type: "use_consumable", cid, consumable_id: consumableId});', source)
+
     def test_inventory_consumable_controls_send_narrow_messages(self):
         source = self.SOURCE_PATH.read_text(encoding="utf-8")
         self.assertIn('type: "inventory_adjust_consumable"', source)
