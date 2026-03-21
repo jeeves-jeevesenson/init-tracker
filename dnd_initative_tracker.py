@@ -16010,6 +16010,28 @@ class InitiativeTracker(base.InitiativeTracker):
             return False, "Could not update inventory, matey.", 0
         return True, "", int(next_quantity)
 
+    def _inventory_consumable_quantity(self, player_name: str, consumable_id: Any) -> int:
+        actor_name = str(player_name or "").strip()
+        item_id = str(consumable_id or "").strip().lower()
+        if not actor_name or not item_id:
+            return 0
+        self._load_player_yaml_cache()
+        player_key = self._normalize_character_lookup_key(actor_name)
+        player_path = self._player_yaml_name_map.get(player_key)
+        raw = self._player_yaml_cache_by_path.get(player_path) if player_path else None
+        inventory = raw.get("inventory") if isinstance(raw, dict) and isinstance(raw.get("inventory"), dict) else {}
+        items = inventory.get("items") if isinstance(inventory.get("items"), list) else []
+        for entry in items:
+            if not isinstance(entry, dict):
+                continue
+            if str(entry.get("id") or "").strip().lower() != item_id:
+                continue
+            try:
+                return max(0, int(entry.get("quantity") or 0))
+            except Exception:
+                return 0
+        return 0
+
     def _roll_healing_formula(self, formula: Any) -> Optional[int]:
         text = str(formula or "").strip().lower().replace(" ", "")
         match = re.fullmatch(r"(\d+)d(\d+)([+-]\d+)?", text)
@@ -16055,12 +16077,17 @@ class InitiativeTracker(base.InitiativeTracker):
         if heal_amount is None:
             return False, "That consumable formula be invalid, matey.", 0
 
+        if self._inventory_consumable_quantity(actor_name, item_id) <= 0:
+            return False, "No such consumable in inventory, matey.", 0
+
+        if bool(getattr(self, "in_combat", False)):
+            if not self._use_bonus_action(combatant):
+                return False, "Could not spend bonus action, matey.", 0
+
         ok_adjust, adjust_err, new_qty = self._adjust_inventory_consumable_quantity(actor_name, item_id, -1)
         if not ok_adjust:
             return False, adjust_err or "No such consumable in inventory, matey.", 0
 
-        if bool(getattr(self, "in_combat", False)):
-            self._use_bonus_action(combatant)
         old_hp = int(getattr(combatant, "hp", 0) or 0)
         max_hp = int(getattr(combatant, "max_hp", old_hp) or old_hp)
         new_hp = max(0, min(max_hp, old_hp + heal_amount))

@@ -73,7 +73,7 @@ class PlayerYamlValidityTests(unittest.TestCase):
         self.assertEqual((spellcasting.get("pact_magic_slots") or {}).get("count"), 1)
         self.assertEqual(((spellcasting.get("spell_slots") or {}).get("1") or {}).get("max"), 1)
         self.assertEqual(((spellcasting.get("cantrips") or {}).get("known") or []), ["eldritch-blast", "mage-hand"])
-        self.assertEqual(((spellcasting.get("prepared_spells") or {}).get("prepared") or []), ["hex", "armor-of-agathys"])
+        self.assertEqual(((spellcasting.get("prepared_spells") or {}).get("prepared") or []), ["hex", "armor-of-agathys", "absorb-elements"])
 
 
     def test_dorian_paladins_smite_feature_present(self):
