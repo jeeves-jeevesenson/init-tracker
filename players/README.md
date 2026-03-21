@@ -841,10 +841,12 @@ inventory:
     sp: 25                        # Silver pieces
     cp: 8                         # Copper pieces
   items:
-    - name: "Longsword"
+    - id: "longsword"
+      name: "Longsword"
       quantity: 1
       description: "A well-crafted longsword."
-    - name: "Healing Potion"
+    - id: "lesser_healing_potion"
+      name: "Lesser Healing Potion"
       quantity: 3
       description: "Restores 2d4+2 hit points."
     - name: "Rope, Hempen (50 feet)"
@@ -860,13 +862,15 @@ inventory:
   - **cp**: Copper pieces
   - Note: Can also track `pp` (platinum pieces), `ep` (electrum pieces) if desired
 - **items**: List of inventory items
+  - **id**: Stable item identifier (required for inventory-backed consumables)
   - **name**: Item name
   - **quantity**: Number of items
   - **description**: Item description or notes
 
 **Notes:**
-- The inventory system is primarily for record-keeping
-- The initiative tracker does not currently use inventory items in combat mechanics
+- Inventory-backed consumables (currently healing potions) are used in combat mechanics
+- Consumable pool displays in LAN are derived from `inventory.items[].quantity`
+- Consumable counts are **not** persisted as writable `resources.pools`; inventory is authoritative
 - Items with mechanical effects (magic items) should be defined as features
 
 ---

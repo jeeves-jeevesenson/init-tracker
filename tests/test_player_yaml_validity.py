@@ -118,6 +118,25 @@ class PlayerYamlValidityTests(unittest.TestCase):
         axe = next((entry for entry in weapons if str((entry or {}).get("id") or "").strip() == "big_ass_axe_plus_1"), {})
         self.assertEqual(str(axe.get("selected_mode") or "").strip().lower(), "two")
 
+    def test_consumables_library_healing_potions_schema(self):
+        expected = {
+            "lesser_healing_potion.yaml": "2d4 + 2",
+            "healing_potion.yaml": "4d4 + 4",
+            "greater_healing_potion.yaml": "6d4 + 6",
+            "supreme_healing_potion.yaml": "8d4 + 8",
+        }
+        for filename, formula in expected.items():
+            path = Path("Items/Consumables") / filename
+            data = self._load(str(path))
+            with self.subTest(consumable=filename):
+                self.assertEqual(str(data.get("kind") or "").strip(), "consumable")
+                self.assertTrue(bool(str(data.get("id") or "").strip()))
+                self.assertEqual(str(((data.get("activation") or {}).get("type") or "").strip()), "bonus_action")
+                self.assertEqual(
+                    str((((data.get("consumable") or {}).get("effect") or {}).get("formula") or "").strip()),
+                    formula,
+                )
+
     def test_player_yaml_guardrails(self):
         valid_save_keys = {"STR", "DEX", "CON", "INT", "WIS", "CHA"}
         required_speed_keys = {"walk", "climb", "fly", "swim"}

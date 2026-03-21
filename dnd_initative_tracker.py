@@ -1535,6 +1535,8 @@ class LanController:
         "bardic_inspiration_use",
         "mantle_of_inspiration",
         "lay_on_hands_use",
+        "inventory_adjust_consumable",
+        "use_consumable",
         "monk_patient_defense",
         "monk_step_of_wind",
         "monk_elemental_attunement",
@@ -4704,6 +4706,7 @@ class LanController:
             "player_spells": self._cached_snapshot.get("player_spells", {}),
             "player_profiles": self._cached_snapshot.get("player_profiles", {}),
             "resource_pools": self._cached_snapshot.get("resource_pools", {}),
+            "consumables_library": self._cached_snapshot.get("consumables_library", []),
             "monster_choices": monster_choices,
             "conditions": [
                 "blinded", "charmed", "deafened", "frightened", "grappled", "incapacitated",
@@ -5834,6 +5837,120 @@ class InitiativeTracker(base.InitiativeTracker):
         self._magic_items_registry_cache = payload
         self._magic_items_dir_signature = signature
         return payload
+
+    def _consumables_registry_payload(self) -> Dict[str, Dict[str, Any]]:
+        cached = self.__dict__.get("_consumables_registry_cache")
+        cached_signature = self.__dict__.get("_consumables_dir_signature")
+        items_dir = self._resolve_items_dir()
+        if items_dir is None:
+            self._consumables_registry_cache = {}
+            self._consumables_dir_signature = None
+            return {}
+
+        consumables_dir = items_dir / "Consumables"
+        files = (
+            sorted(list(consumables_dir.glob("*.yaml")) + list(consumables_dir.glob("*.yml")))
+            if consumables_dir.is_dir()
+            else []
+        )
+        signature = (
+            _directory_signature(consumables_dir, files) if consumables_dir.is_dir() else (0, 0, tuple()),
+            _files_signature(files),
+        )
+        if isinstance(cached, dict) and signature == cached_signature:
+            return cached
+
+        payload: Dict[str, Dict[str, Any]] = {}
+        for path in files:
+            try:
+                parsed = yaml.safe_load(path.read_text(encoding="utf-8")) if yaml is not None else None
+            except Exception as exc:
+                self._oplog(f"Consumable YAML parse failed for {path}: {exc}", level="warning")
+                continue
+            if not isinstance(parsed, dict):
+                continue
+            item_id = str(parsed.get("id") or "").strip().lower()
+            if not item_id:
+                continue
+            payload[item_id] = dict(parsed)
+
+        self._consumables_registry_cache = payload
+        self._consumables_dir_signature = signature
+        return payload
+
+    def _consumables_registry_list_payload(self) -> List[Dict[str, Any]]:
+        rows: List[Dict[str, Any]] = []
+        for item_id, entry in sorted(self._consumables_registry_payload().items(), key=lambda kv: kv[0]):
+            if not isinstance(entry, dict):
+                continue
+            rows.append(
+                {
+                    "id": str(item_id),
+                    "name": str(entry.get("name") or item_id).strip() or item_id,
+                    "kind": str(entry.get("kind") or "").strip(),
+                    "category": str(entry.get("category") or "").strip(),
+                    "stackable": bool(entry.get("stackable") is True),
+                    "activation": copy.deepcopy(entry.get("activation") if isinstance(entry.get("activation"), dict) else {}),
+                    "consumable": copy.deepcopy(entry.get("consumable") if isinstance(entry.get("consumable"), dict) else {}),
+                }
+            )
+        return rows
+
+    def _normalize_inventory_item_entries(self, profile: Dict[str, Any]) -> List[Dict[str, Any]]:
+        inventory = profile.get("inventory") if isinstance(profile.get("inventory"), dict) else {}
+        items = inventory.get("items") if isinstance(inventory.get("items"), list) else []
+        normalized: List[Dict[str, Any]] = []
+        for entry in items:
+            if not isinstance(entry, dict):
+                continue
+            item_id = str(entry.get("id") or "").strip().lower()
+            name = str(entry.get("name") or "").strip()
+            if not item_id and not name:
+                continue
+            try:
+                quantity = int(entry.get("quantity", entry.get("count", entry.get("qty", 1))))
+            except Exception:
+                quantity = 1
+            quantity = max(0, quantity)
+            normalized_entry = dict(entry)
+            if item_id:
+                normalized_entry["id"] = item_id
+            if not normalized_entry.get("name"):
+                normalized_entry["name"] = name or item_id
+            normalized_entry["quantity"] = int(quantity)
+            normalized.append(normalized_entry)
+        return normalized
+
+    def _derive_consumable_resource_pools_from_inventory(self, profile: Dict[str, Any]) -> List[Dict[str, Any]]:
+        registry = self._consumables_registry_payload()
+        if not registry:
+            return []
+        derived: List[Dict[str, Any]] = []
+        for item in self._normalize_inventory_item_entries(profile):
+            item_id = str(item.get("id") or "").strip().lower()
+            if not item_id:
+                continue
+            consumable = registry.get(item_id)
+            if not isinstance(consumable, dict):
+                continue
+            if str(consumable.get("kind") or "").strip().lower() != "consumable":
+                continue
+            qty = max(0, int(item.get("quantity", 0) or 0))
+            if qty <= 0:
+                continue
+            label = str(consumable.get("name") or item.get("name") or item_id).strip() or item_id
+            derived.append(
+                {
+                    "id": f"consumable:{item_id}",
+                    "label": label,
+                    "current": int(qty),
+                    "max": int(qty),
+                    "reset": "inventory",
+                    "derived_from_inventory": True,
+                    "consumable_id": item_id,
+                }
+            )
+        return derived
 
     def _active_magic_item_features(self, profile: Dict[str, Any]) -> List[Dict[str, Any]]:
         magic_items = profile.get("magic_items") if isinstance(profile.get("magic_items"), dict) else {}
@@ -10562,6 +10679,7 @@ class InitiativeTracker(base.InitiativeTracker):
             snap["player_spells"] = self._player_spell_config_payload()
             snap["player_profiles"] = self._player_profiles_payload()
             snap["resource_pools"] = self._player_resource_pools_payload()
+            snap["consumables_library"] = self._consumables_registry_list_payload()
             snap["beast_forms"] = self._load_beast_forms()
         else:
             cached_snapshot = getattr(getattr(self, "_lan", None), "_cached_snapshot", {})
@@ -10573,6 +10691,7 @@ class InitiativeTracker(base.InitiativeTracker):
                 "player_spells": {},
                 "player_profiles": {},
                 "resource_pools": {},
+                "consumables_library": [],
                 "beast_forms": [],
             }
             static_builders = {
@@ -10580,6 +10699,7 @@ class InitiativeTracker(base.InitiativeTracker):
                 "player_spells": self._player_spell_config_payload,
                 "player_profiles": self._player_profiles_payload,
                 "resource_pools": self._player_resource_pools_payload,
+                "consumables_library": self._consumables_registry_list_payload,
                 "beast_forms": self._load_beast_forms,
             }
             resource_refresh_interval_s = max(
@@ -15258,6 +15378,7 @@ class InitiativeTracker(base.InitiativeTracker):
                     "reset": "long_rest",
                 }
             )
+        normalized.extend(self._derive_consumable_resource_pools_from_inventory(data))
         return normalized
 
     def _compute_resource_pool_max(self, profile: Dict[str, Any], formula: Any, fallback: Any) -> int:
@@ -15811,6 +15932,140 @@ class InitiativeTracker(base.InitiativeTracker):
         except Exception:
             return False, "Could not update resource pools, matey."
         return True, ""
+
+    def _adjust_inventory_consumable_quantity(
+        self,
+        player_name: str,
+        consumable_id: Any,
+        delta: Any,
+    ) -> Tuple[bool, str, int]:
+        actor_name = str(player_name or "").strip()
+        item_id = str(consumable_id or "").strip().lower()
+        if not actor_name or not item_id:
+            return False, "That consumable be invalid, matey.", 0
+        try:
+            amount = int(delta)
+        except Exception:
+            amount = 0
+        if amount == 0:
+            return False, "Pick a non-zero amount, matey.", 0
+
+        registry = self._consumables_registry_payload()
+        item_def = registry.get(item_id)
+        if not isinstance(item_def, dict):
+            return False, "That consumable does not exist in the library, matey.", 0
+
+        self._load_player_yaml_cache()
+        player_key = self._normalize_character_lookup_key(actor_name)
+        player_path = self._player_yaml_name_map.get(player_key)
+        raw = self._player_yaml_cache_by_path.get(player_path) if player_path else None
+        if not isinstance(raw, dict):
+            return False, "No inventory set up for that player, matey.", 0
+
+        inventory = raw.get("inventory") if isinstance(raw.get("inventory"), dict) else {}
+        items = inventory.get("items") if isinstance(inventory.get("items"), list) else []
+        updated_items: List[Dict[str, Any]] = []
+        matched = False
+        next_quantity = 0
+        for entry in items:
+            if not isinstance(entry, dict):
+                continue
+            entry_id = str(entry.get("id") or "").strip().lower()
+            if entry_id != item_id:
+                updated_items.append(dict(entry))
+                continue
+            matched = True
+            try:
+                current = int(entry.get("quantity", entry.get("count", entry.get("qty", 0))))
+            except Exception:
+                current = 0
+            next_quantity = max(0, current + amount)
+            if next_quantity > 0:
+                updated = dict(entry)
+                updated["id"] = item_id
+                updated["name"] = str(updated.get("name") or item_def.get("name") or item_id).strip() or item_id
+                updated["quantity"] = int(next_quantity)
+                updated_items.append(updated)
+
+        if not matched and amount > 0:
+            next_quantity = int(amount)
+            updated_items.append(
+                {
+                    "id": item_id,
+                    "name": str(item_def.get("name") or item_id).strip() or item_id,
+                    "quantity": int(next_quantity),
+                    "description": str((item_def.get("consumable") or {}).get("effect", {}).get("formula") or "").strip(),
+                }
+            )
+        if not matched and amount < 0:
+            return False, "No such consumable in inventory, matey.", 0
+
+        inventory = dict(inventory)
+        inventory["items"] = updated_items
+        raw = dict(raw)
+        raw["inventory"] = inventory
+        try:
+            self._store_character_yaml(player_path, raw)
+        except Exception:
+            return False, "Could not update inventory, matey.", 0
+        return True, "", int(next_quantity)
+
+    def _roll_healing_formula(self, formula: Any) -> Optional[int]:
+        text = str(formula or "").strip().lower().replace(" ", "")
+        match = re.fullmatch(r"(\d+)d(\d+)([+-]\d+)?", text)
+        if not match:
+            return None
+        dice_count = max(1, int(match.group(1)))
+        dice_sides = max(1, int(match.group(2)))
+        bonus = int(match.group(3) or 0)
+        total = sum(random.randint(1, dice_sides) for _ in range(dice_count)) + bonus
+        return max(0, int(total))
+
+    def _use_inventory_consumable(
+        self,
+        player_name: str,
+        consumable_id: Any,
+        combatant: Any,
+    ) -> Tuple[bool, str, int]:
+        actor_name = str(player_name or "").strip()
+        item_id = str(consumable_id or "").strip().lower()
+        if not actor_name or not item_id:
+            return False, "That consumable be invalid, matey.", 0
+        if combatant is None:
+            return False, "Could not find that combatant, matey.", 0
+
+        registry = self._consumables_registry_payload()
+        item_def = registry.get(item_id)
+        if not isinstance(item_def, dict):
+            return False, "That consumable does not exist in the library, matey.", 0
+        activation = item_def.get("activation") if isinstance(item_def.get("activation"), dict) else {}
+        if str(activation.get("type") or "").strip().lower() != "bonus_action":
+            return False, "That consumable cannot be used right now, matey.", 0
+        if bool(getattr(self, "in_combat", False)) and int(getattr(combatant, "bonus_action_remaining", 0) or 0) <= 0:
+            return False, "No bonus actions left, matey.", 0
+
+        consumable_block = item_def.get("consumable") if isinstance(item_def.get("consumable"), dict) else {}
+        effect = consumable_block.get("effect") if isinstance(consumable_block.get("effect"), dict) else {}
+        targets = consumable_block.get("targets") if isinstance(consumable_block.get("targets"), dict) else {}
+        if str(targets.get("mode") or "").strip().lower() != "self":
+            return False, "Only self-target consumables be supported, matey.", 0
+        if str(effect.get("type") or "").strip().lower() != "heal":
+            return False, "Only healing consumables be supported, matey.", 0
+        heal_amount = self._roll_healing_formula(effect.get("formula"))
+        if heal_amount is None:
+            return False, "That consumable formula be invalid, matey.", 0
+
+        ok_adjust, adjust_err, new_qty = self._adjust_inventory_consumable_quantity(actor_name, item_id, -1)
+        if not ok_adjust:
+            return False, adjust_err or "No such consumable in inventory, matey.", 0
+
+        if bool(getattr(self, "in_combat", False)):
+            self._use_bonus_action(combatant)
+        old_hp = int(getattr(combatant, "hp", 0) or 0)
+        max_hp = int(getattr(combatant, "max_hp", old_hp) or old_hp)
+        new_hp = max(0, min(max_hp, old_hp + heal_amount))
+        setattr(combatant, "hp", int(new_hp))
+        return True, "", int(new_hp - old_hp)
 
     def _set_player_resource_pool_current(self, caster_name: str, pool_id: Any, new_current: Any) -> Tuple[bool, str]:
         player_name = str(caster_name or "").strip()
@@ -22089,6 +22344,9 @@ class InitiativeTracker(base.InitiativeTracker):
             if not isinstance(pool, dict):
                 self._lan.toast(ws_id, "That resource pool could not be found, matey.")
                 return
+            if bool(pool.get("derived_from_inventory")) or str(pool_id).strip().lower().startswith("consumable:"):
+                self._lan.toast(ws_id, "Consumable counts come from inventory. Adjust inventory instead, matey.")
+                return
             old_current = int(pool.get("current", 0) or 0)
             max_current = int(pool.get("max", 0) or 0)
             new_current = max(0, old_current + pool_delta)
@@ -28014,7 +28272,51 @@ class InitiativeTracker(base.InitiativeTracker):
                     f"for {actual_heal} HP ({heal_amount} points spent).",
                     cid=int(target.cid),
                 )
-                self._lan.toast(ws_id, f"Lay on Hands: healed {actual_heal} HP.")
+            self._lan.toast(ws_id, f"Lay on Hands: healed {actual_heal} HP.")
+            self._rebuild_table(scroll_to_current=True)
+        elif typ == "inventory_adjust_consumable":
+            c = self.combatants.get(cid)
+            if not c:
+                return
+            player_name = self._pc_name_for(int(cid))
+            consumable_id = str(msg.get("consumable_id") or msg.get("id") or "").strip().lower()
+            try:
+                delta = int(msg.get("delta"))
+            except Exception:
+                delta = 0
+            if not consumable_id or delta == 0:
+                self._lan.toast(ws_id, "Pick a consumable and amount, matey.")
+                return
+            ok_inv, inv_err, quantity = self._adjust_inventory_consumable_quantity(player_name, consumable_id, delta)
+            if not ok_inv:
+                self._lan.toast(ws_id, inv_err or "Could not update inventory, matey.")
+                return
+            registry_item = self._consumables_registry_payload().get(consumable_id, {})
+            item_name = str((registry_item or {}).get("name") or consumable_id).strip() or consumable_id
+            actor_name = getattr(c, "name", player_name or "Player")
+            self._log(
+                f"{actor_name} adjusted inventory: {item_name} ({delta:+d}), now {int(quantity)}.",
+                cid=cid,
+            )
+            self._lan.toast(ws_id, f"{item_name}: {int(quantity)} in inventory.")
+            self._rebuild_table(scroll_to_current=True)
+        elif typ == "use_consumable":
+            c = self.combatants.get(cid)
+            if not c:
+                return
+            player_name = self._pc_name_for(int(cid))
+            consumable_id = str(msg.get("consumable_id") or msg.get("id") or "").strip().lower()
+            if not consumable_id:
+                self._lan.toast(ws_id, "Pick a consumable first, matey.")
+                return
+            ok_use, use_err, actual_heal = self._use_inventory_consumable(player_name, consumable_id, c)
+            if not ok_use:
+                self._lan.toast(ws_id, use_err or "Could not use consumable, matey.")
+                return
+            registry_item = self._consumables_registry_payload().get(consumable_id, {})
+            item_name = str((registry_item or {}).get("name") or consumable_id).strip() or consumable_id
+            self._log(f"{getattr(c, 'name', 'Player')} uses {item_name} and heals {int(actual_heal)} HP.", cid=cid)
+            self._lan.toast(ws_id, f"{item_name}: healed {int(actual_heal)} HP.")
             self._rebuild_table(scroll_to_current=True)
         elif typ == "monk_patient_defense":
             c = self.combatants.get(cid)
