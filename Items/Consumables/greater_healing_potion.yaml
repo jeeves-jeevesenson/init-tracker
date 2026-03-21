@@ -1,0 +1,14 @@
+id: greater_healing_potion
+name: Greater Healing Potion
+kind: consumable
+category: potion
+stackable: true
+activation:
+  type: bonus_action
+  cost: 1
+consumable:
+  effect:
+    type: heal
+    formula: 6d4 + 6
+  targets:
+    mode: self

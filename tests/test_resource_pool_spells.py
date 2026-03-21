@@ -9,6 +9,7 @@ class ResourcePoolSpellTests(unittest.TestCase):
         self.app = object.__new__(tracker_mod.InitiativeTracker)
         self.warnings = []
         self.app._oplog = lambda msg, level="info": self.warnings.append((level, msg))
+        self.app._find_spell_preset = lambda **_kwargs: None
 
     def test_pool_granted_spells_collected_with_metadata(self):
         profile = {

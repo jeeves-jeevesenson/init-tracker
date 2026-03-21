@@ -3218,6 +3218,12 @@
                   <h4>Backpack</h4>
                   <div class="inventory-items-count" id="inventoryItemsCount">0 items</div>
                 </div>
+                <div class="row" style="gap:6px; margin-bottom:8px;">
+                  <select id="inventoryConsumableSelect" style="flex:1; min-width:160px;">
+                    <option value="">Add consumable…</option>
+                  </select>
+                  <button class="btn" id="inventoryConsumableAddBtn" type="button">+1</button>
+                </div>
                 <ul class="inventory-items-list" id="inventoryItemsList">
                   <li class="inventory-items-empty">No items in inventory.</li>
                 </ul>
@@ -4628,6 +4634,8 @@ __DAMAGE_TYPE_OPTIONS__
   const inventoryRingTwoSelectEl = document.getElementById("inventoryRingTwoSelect");
   const inventoryItemsCountEl = document.getElementById("inventoryItemsCount");
   const inventoryItemsListEl = document.getElementById("inventoryItemsList");
+  const inventoryConsumableSelectEl = document.getElementById("inventoryConsumableSelect");
+  const inventoryConsumableAddBtn = document.getElementById("inventoryConsumableAddBtn");
   const resetTurnBtn = document.getElementById("resetTurn");
   const standUpBtn = document.getElementById("standUp");
   const dismissSummonsBtn = document.getElementById("dismissSummons");
@@ -5895,6 +5903,18 @@ __DAMAGE_TYPE_OPTIONS__
     return inventory && typeof inventory === "object" ? inventory : null;
   }
 
+  function getConsumablesLibrary(){
+    const rows = state?.consumables_library;
+    if (!Array.isArray(rows)) return [];
+    return rows.filter((entry) => entry && typeof entry === "object" && String(entry.id || "").trim());
+  }
+
+  function findInventoryConsumableEntry(consumableId){
+    const key = normalizeLowerValue(consumableId);
+    if (!key) return null;
+    return getClaimedInventoryItems().find((entry) => normalizeLowerValue(entry?.id) === key) || null;
+  }
+
   function getInventoryItemValue(item){
     return String(item?.id || item?.name || "").trim();
   }
@@ -5907,6 +5927,33 @@ __DAMAGE_TYPE_OPTIONS__
 
   function getInventoryItemMeta(item){
     return String(item?.slot || item?.category || item?.type || item?.armor_type || "").trim();
+  }
+
+  function renderInventoryConsumableControls(){
+    if (!inventoryConsumableSelectEl || !inventoryConsumableAddBtn){
+      return;
+    }
+    const options = getConsumablesLibrary();
+    const previous = String(inventoryConsumableSelectEl.value || "").trim();
+    inventoryConsumableSelectEl.textContent = "";
+    const empty = document.createElement("option");
+    empty.value = "";
+    empty.textContent = "Add consumable…";
+    inventoryConsumableSelectEl.appendChild(empty);
+    options.forEach((entry) => {
+      const option = document.createElement("option");
+      option.value = String(entry.id || "").trim();
+      option.textContent = String(entry.name || entry.id || "Consumable").trim() || "Consumable";
+      inventoryConsumableSelectEl.appendChild(option);
+    });
+    const claimed = claimedCid !== null && claimedCid !== undefined;
+    inventoryConsumableSelectEl.disabled = !claimed || !options.length;
+    inventoryConsumableAddBtn.disabled = !claimed || !options.length;
+    if (options.some((entry) => String(entry.id || "").trim() === previous)){
+      inventoryConsumableSelectEl.value = previous;
+    } else {
+      inventoryConsumableSelectEl.value = "";
+    }
   }
 
   function getInventoryItemMatchedSlots(item){
@@ -6036,6 +6083,7 @@ __DAMAGE_TYPE_OPTIONS__
     const items = getClaimedInventoryItems();
     inventoryItemsCountEl.textContent = `${items.length} item${items.length === 1 ? "" : "s"}`;
     inventoryItemsListEl.textContent = "";
+    renderInventoryConsumableControls();
     if (!items.length){
       const empty = document.createElement("li");
       empty.className = "inventory-items-empty";
@@ -6052,6 +6100,30 @@ __DAMAGE_TYPE_OPTIONS__
       meta.className = "meta";
       meta.textContent = getInventoryItemMeta(item) || "gear";
       row.append(name, meta);
+      const itemId = String(item?.id || "").trim();
+      if (itemId && getConsumablesLibrary().some((entry) => normalizeLowerValue(entry.id) === normalizeLowerValue(itemId))){
+        const controls = document.createElement("span");
+        controls.style.display = "inline-flex";
+        controls.style.gap = "4px";
+        const minusBtn = document.createElement("button");
+        minusBtn.type = "button";
+        minusBtn.className = "btn";
+        minusBtn.textContent = "-1";
+        minusBtn.addEventListener("click", () => {
+          if (claimedCid === null || claimedCid === undefined) return;
+          send({type: "inventory_adjust_consumable", cid: claimedCid, consumable_id: itemId, delta: -1});
+        });
+        const plusBtn = document.createElement("button");
+        plusBtn.type = "button";
+        plusBtn.className = "btn";
+        plusBtn.textContent = "+1";
+        plusBtn.addEventListener("click", () => {
+          if (claimedCid === null || claimedCid === undefined) return;
+          send({type: "inventory_adjust_consumable", cid: claimedCid, consumable_id: itemId, delta: 1});
+        });
+        controls.append(minusBtn, plusBtn);
+        row.appendChild(controls);
+      }
       inventoryItemsListEl.appendChild(row);
     });
   }
@@ -6486,6 +6558,10 @@ __DAMAGE_TYPE_OPTIONS__
         label: String(entry.label || entry.id || "").trim(),
         current,
         max,
+        consumable_id: String(entry.consumable_id || "").trim(),
+        derived_from_inventory: entry.derived_from_inventory === true,
+        die_sides: Number(entry.die_sides || 0),
+        time_left_s: Number(entry.time_left_s || 0),
       };
     }).filter((entry) => entry.id);
   }
@@ -6974,6 +7050,26 @@ __DAMAGE_TYPE_OPTIONS__
           draw();
         });
       }
+      if (normalizeLowerValue(pool.id).startsWith("consumable:")){
+        chip.style.cursor = "pointer";
+        chip.title = "Use consumable";
+        chip.addEventListener("click", () => {
+          const cid = activeControlledUnitCid();
+          if (cid === null){
+            localToast("Claim a character first, matey.");
+            return;
+          }
+          const consumableId = String(pool?.consumable_id || "").trim();
+          if (!consumableId){
+            localToast("That consumable be invalid, matey.");
+            return;
+          }
+          if (!window.confirm(`Use ${pool.label || consumableId}? (${pool.current}/${pool.max} remaining)`)){
+            return;
+          }
+          send({type: "use_consumable", cid, consumable_id: consumableId});
+        });
+      }
       if (pool.id === "unleash_incarnation"){
         chip.style.cursor = "pointer";
         chip.title = "Unleash Incarnation";
@@ -7026,7 +7122,8 @@ __DAMAGE_TYPE_OPTIONS__
         chip.addEventListener("click", () => setBardicDiceConfirmModalOpen(true, pool));
       }
       const specializedPools = new Set(["wild_shape", "focus_points", "lay_on_hands", "second_wind", "action_surge", "unleash_incarnation", "star_advantage"]);
-      if (!specializedPools.has(pool.id)){
+      const isConsumablePool = normalizeLowerValue(pool.id).startsWith("consumable:");
+      if (!specializedPools.has(pool.id) && !isConsumablePool){
         chip.style.cursor = "pointer";
         chip.title = "Resource pool details";
         chip.addEventListener("click", () => {
@@ -22532,6 +22629,21 @@ __DAMAGE_TYPE_OPTIONS__
       draw();
     });
   });
+  if (inventoryConsumableAddBtn){
+    inventoryConsumableAddBtn.addEventListener("click", () => {
+      const cid = activeControlledUnitCid();
+      if (cid === null){
+        localToast("Claim a character first, matey.");
+        return;
+      }
+      const consumableId = String(inventoryConsumableSelectEl?.value || "").trim();
+      if (!consumableId){
+        localToast("Pick a consumable first, matey.");
+        return;
+      }
+      send({type: "inventory_adjust_consumable", cid, consumable_id: consumableId, delta: 1});
+    });
+  }
   if (useActionBtn){
     useActionBtn.addEventListener("click", () => {
       if (!isMapView && !claimedCid) return;

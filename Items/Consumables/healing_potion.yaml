@@ -1,0 +1,14 @@
+id: healing_potion
+name: Healing Potion
+kind: consumable
+category: potion
+stackable: true
+activation:
+  type: bonus_action
+  cost: 1
+consumable:
+  effect:
+    type: heal
+    formula: 4d4 + 4
+  targets:
+    mode: self

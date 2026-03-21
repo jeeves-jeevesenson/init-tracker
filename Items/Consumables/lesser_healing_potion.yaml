@@ -1,0 +1,14 @@
+id: lesser_healing_potion
+name: Lesser Healing Potion
+kind: consumable
+category: potion
+stackable: true
+activation:
+  type: bonus_action
+  cost: 1
+consumable:
+  effect:
+    type: heal
+    formula: 2d4 + 2
+  targets:
+    mode: self

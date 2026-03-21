@@ -1,0 +1,14 @@
+id: supreme_healing_potion
+name: Supreme Healing Potion
+kind: consumable
+category: potion
+stackable: true
+activation:
+  type: bonus_action
+  cost: 1
+consumable:
+  effect:
+    type: heal
+    formula: 8d4 + 8
+  targets:
+    mode: self

@@ -17,6 +17,8 @@ class LanInventoryUiTests(unittest.TestCase):
         self.assertIn('id="inventoryRingOneSelect"', source)
         self.assertIn('id="inventoryRingTwoSelect"', source)
         self.assertIn('id="inventoryItemsList"', source)
+        self.assertIn('id="inventoryConsumableSelect"', source)
+        self.assertIn('id="inventoryConsumableAddBtn"', source)
 
     def test_inventory_button_opens_panel_without_toggle_hide(self):
         source = self.SOURCE_PATH.read_text(encoding="utf-8")
@@ -45,6 +47,12 @@ class LanInventoryUiTests(unittest.TestCase):
         self.assertIn('"mail"', source)
         self.assertIn('"breastplate"', source)
         self.assertIn('"leather"', source)
+
+    def test_inventory_consumable_controls_send_narrow_messages(self):
+        source = self.SOURCE_PATH.read_text(encoding="utf-8")
+        self.assertIn('type: "inventory_adjust_consumable"', source)
+        self.assertIn('type: "use_consumable"', source)
+        self.assertIn("function getConsumablesLibrary()", source)
 
 
 if __name__ == "__main__":
