@@ -42,6 +42,8 @@ Player character YAML files provide a structured, human-readable format for stor
 - **Extensible**: Support for custom features, resources, spells, and actions
 - **Version Controlled**: Include a `format_version` field for future compatibility
 
+For the planned standalone web shop/inventory model freeze, see `docs/shop_inventory_design.md`.
+
 ### Key Benefits
 
 1. **Separation of Concerns**: Player data is separate from the application logic
