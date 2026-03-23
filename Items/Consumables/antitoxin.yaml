@@ -1,0 +1,11 @@
+format_version: 1
+id: antitoxin
+name: Antitoxin
+type: consumable
+kind: consumable
+category: adventuring_gear
+consumable_type: vial
+subtype: antitoxin
+description: A medicinal draught that helps resist poison.
+effect_hint: Gain advantage on saving throws against poison for 1 hour.
+stackable: true

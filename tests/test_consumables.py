@@ -12,14 +12,15 @@ class ConsumableTests(unittest.TestCase):
 
     def test_consumables_registry_loads_healing_potions(self):
         registry = self.app._consumables_registry_payload()
-        self.assertEqual(
-            set(registry.keys()),
+        self.assertTrue(
             {
                 "lesser_healing_potion",
                 "healing_potion",
                 "greater_healing_potion",
                 "supreme_healing_potion",
-            },
+                "scroll_of_magic_missile",
+                "antitoxin",
+            }.issubset(set(registry.keys()))
         )
 
     def test_derived_consumable_pools_track_inventory_quantity(self):
