@@ -1,0 +1,64 @@
+format_version: 1
+entries:
+  - item_id: longsword
+    item_bucket: weapon
+    shop_category: weapons
+    enabled: true
+    price:
+      gp: 15
+
+  - item_id: longbow
+    item_bucket: weapon
+    shop_category: weapons
+    enabled: true
+    price:
+      gp: 50
+
+  - item_id: chain_mail
+    item_bucket: armor
+    shop_category: armor
+    enabled: true
+    price:
+      gp: 75
+
+  - item_id: leather
+    item_bucket: armor
+    shop_category: armor
+    enabled: true
+    price:
+      gp: 10
+
+  - item_id: healing_potion
+    item_bucket: consumable
+    shop_category: consumables
+    enabled: true
+    price:
+      gp: 50
+
+  - item_id: lesser_healing_potion
+    item_bucket: consumable
+    shop_category: consumables
+    enabled: true
+    price:
+      gp: 25
+
+  - item_id: scroll_of_magic_missile
+    item_bucket: consumable
+    shop_category: scrolls
+    enabled: true
+    price:
+      gp: 50
+
+  - item_id: wand_of_sparking
+    item_bucket: magic_item
+    shop_category: magic_items
+    enabled: true
+    price:
+      gp: 250
+
+  - item_id: ring_of_desert_sands
+    item_bucket: magic_item
+    shop_category: magic_items
+    enabled: true
+    price:
+      gp: 300
