@@ -1,7 +1,13 @@
+format_version: 1
 id: greater_healing_potion
 name: Greater Healing Potion
+type: consumable
 kind: consumable
 category: potion
+consumable_type: potion
+subtype: healing
+description: A stronger restorative draught.
+effect_hint: Drink to regain 6d4 + 6 hit points.
 stackable: true
 activation:
   type: bonus_action

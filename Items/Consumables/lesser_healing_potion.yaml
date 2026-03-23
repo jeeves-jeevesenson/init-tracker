@@ -1,7 +1,13 @@
+format_version: 1
 id: lesser_healing_potion
 name: Lesser Healing Potion
+type: consumable
 kind: consumable
 category: potion
+consumable_type: potion
+subtype: healing
+description: A weak restorative draught.
+effect_hint: Drink to regain 2d4 + 2 hit points.
 stackable: true
 activation:
   type: bonus_action

@@ -129,6 +129,8 @@ class PlayerYamlValidityTests(unittest.TestCase):
             path = Path("Items/Consumables") / filename
             data = self._load(str(path))
             with self.subTest(consumable=filename):
+                self.assertEqual(int(data.get("format_version") or 0), 1)
+                self.assertEqual(str(data.get("type") or "").strip(), "consumable")
                 self.assertEqual(str(data.get("kind") or "").strip(), "consumable")
                 self.assertTrue(bool(str(data.get("id") or "").strip()))
                 self.assertEqual(str(((data.get("activation") or {}).get("type") or "").strip()), "bonus_action")
@@ -136,6 +138,22 @@ class PlayerYamlValidityTests(unittest.TestCase):
                     str((((data.get("consumable") or {}).get("effect") or {}).get("formula") or "").strip()),
                     formula,
                 )
+
+    def test_consumables_library_seed_non_potion_entries_schema(self):
+        expected = {
+            "scroll_of_magic_missile.yaml": "scroll_of_magic_missile",
+            "antitoxin.yaml": "antitoxin",
+        }
+        for filename, item_id in expected.items():
+            path = Path("Items/Consumables") / filename
+            data = self._load(str(path))
+            with self.subTest(consumable=filename):
+                self.assertEqual(int(data.get("format_version") or 0), 1)
+                self.assertEqual(str(data.get("id") or "").strip(), item_id)
+                self.assertEqual(str(data.get("type") or "").strip(), "consumable")
+                self.assertEqual(str(data.get("kind") or "").strip(), "consumable")
+                self.assertTrue(bool(str(data.get("description") or "").strip()))
+                self.assertTrue(bool(str(data.get("effect_hint") or "").strip()))
 
     def test_player_yaml_guardrails(self):
         valid_save_keys = {"STR", "DEX", "CON", "INT", "WIS", "CHA"}

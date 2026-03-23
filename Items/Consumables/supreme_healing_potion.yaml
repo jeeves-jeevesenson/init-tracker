@@ -1,7 +1,13 @@
+format_version: 1
 id: supreme_healing_potion
 name: Supreme Healing Potion
+type: consumable
 kind: consumable
 category: potion
+consumable_type: potion
+subtype: healing
+description: A potent restorative draught.
+effect_hint: Drink to regain 8d4 + 8 hit points.
 stackable: true
 activation:
   type: bonus_action

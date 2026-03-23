@@ -5,6 +5,7 @@ Item definitions are split by type to support structured automation:
 - `Items/Weapons/` — weapon YAML files
 - `Items/Armor/` — armor YAML files
 - `Items/Magic_Items/` — magic items (including magic weapons/armor)
+- `Items/Consumables/` — consumable item YAML files
 
 ## Preferred format (primary source of truth)
 
@@ -13,6 +14,7 @@ Use **one YAML file per item** where the filename is the item id (for example `l
 - Mundane weapon files live in `Items/Weapons/`
 - Armor files live in `Items/Armor/`
 - Magic weapon/armor files live in `Items/Magic_Items/` and are still resolved for weapon/armor presets at runtime
+- Consumable files live in `Items/Consumables/`
 - Each file should contain a single item object with an `id`
 
 This per-item layout is what runtime item loading now expects first.

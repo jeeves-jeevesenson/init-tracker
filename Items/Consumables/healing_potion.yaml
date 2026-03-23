@@ -1,7 +1,13 @@
+format_version: 1
 id: healing_potion
 name: Healing Potion
+type: consumable
 kind: consumable
 category: potion
+consumable_type: potion
+subtype: healing
+description: A red restorative draught.
+effect_hint: Drink to regain 4d4 + 4 hit points.
 stackable: true
 activation:
   type: bonus_action
