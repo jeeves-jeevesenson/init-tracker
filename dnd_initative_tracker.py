@@ -42,6 +42,7 @@ from typing import Any, Callable, Dict, Iterable, List, Optional, Tuple
 import copy
 from collections import deque
 import sys
+import tempfile
 
 import tkinter as tk
 from tkinter import filedialog, messagebox, scrolledtext, simpledialog, ttk
@@ -2447,6 +2448,46 @@ class LanController:
                 ),
             )
             return {"entries": stable_entries}
+
+        @self._fastapi_app.post("/api/shop/catalog/validate")
+        async def validate_shop_catalog(payload: Dict[str, Any] = Body(...)):
+            try:
+                validated = self.app._validate_shop_catalog_payload(payload)
+            except ValueError as exc:
+                raise HTTPException(status_code=400, detail=str(exc))
+            except Exception as exc:
+                raise HTTPException(status_code=500, detail=f"Failed to validate shop catalog: {exc}")
+            entries = validated.get("entries") if isinstance(validated, dict) else []
+            stable_entries = sorted(
+                entries if isinstance(entries, list) else [],
+                key=lambda row: (
+                    str(row.get("shop_category") or "").lower(),
+                    str(row.get("name") or "").lower(),
+                    str(row.get("item_bucket") or "").lower(),
+                    str(row.get("item_id") or "").lower(),
+                ),
+            )
+            return {"format_version": 1, "entries": stable_entries}
+
+        @self._fastapi_app.put("/api/shop/catalog")
+        async def save_shop_catalog(payload: Dict[str, Any] = Body(...)):
+            try:
+                saved = self.app._save_shop_catalog_payload(payload)
+            except ValueError as exc:
+                raise HTTPException(status_code=400, detail=str(exc))
+            except Exception as exc:
+                raise HTTPException(status_code=500, detail=f"Failed to save shop catalog: {exc}")
+            entries = saved.get("entries") if isinstance(saved, dict) else []
+            stable_entries = sorted(
+                entries if isinstance(entries, list) else [],
+                key=lambda row: (
+                    str(row.get("shop_category") or "").lower(),
+                    str(row.get("name") or "").lower(),
+                    str(row.get("item_bucket") or "").lower(),
+                    str(row.get("item_id") or "").lower(),
+                ),
+            )
+            return {"format_version": 1, "entries": stable_entries}
 
         @self._fastapi_app.post("/api/spells/{spell_id}/color")
         async def update_spell_color(spell_id: str, payload: Dict[str, Any] = Body(...)):
@@ -5981,29 +6022,33 @@ class InitiativeTracker(base.InitiativeTracker):
             raise ValueError(f"Catalog entry #{entry_index} in {catalog_path} must include at least one price denomination.")
         return normalized
 
-    def _load_shop_catalog_normalized(self) -> List[Dict[str, Any]]:
-        items_dir = self._resolve_items_dir()
-        if items_dir is None:
-            raise ValueError("Items directory is unavailable; cannot load shop catalog.")
+    @staticmethod
+    def _shop_catalog_storage_entry_from_normalized(entry: Dict[str, Any]) -> Dict[str, Any]:
+        price = entry.get("price") if isinstance(entry.get("price"), dict) else {}
+        ordered_price: Dict[str, int] = {}
+        for denom in ("gp", "sp", "cp"):
+            if denom in price:
+                ordered_price[denom] = int(price[denom])
+        return {
+            "item_id": str(entry.get("item_id") or "").strip().lower(),
+            "item_bucket": str(entry.get("item_bucket") or "").strip().lower(),
+            "shop_category": str(entry.get("shop_category") or "").strip(),
+            "enabled": bool(entry.get("enabled") is True),
+            "price": ordered_price,
+        }
 
-        definitions_by_bucket = self._load_shop_item_definitions(items_dir)
-        catalog_path = items_dir / "Shop" / "catalog.yaml"
-        if not catalog_path.exists():
-            raise ValueError(f"Shop catalog YAML not found at {catalog_path}.")
-        try:
-            parsed = yaml.safe_load(catalog_path.read_text(encoding="utf-8")) if yaml is not None else None
-        except Exception as exc:
-            raise ValueError(f"Failed to parse shop catalog YAML at {catalog_path}: {exc}") from exc
-        if not isinstance(parsed, dict):
-            raise ValueError(f"Shop catalog YAML at {catalog_path} must parse to a mapping.")
-
-        entries = parsed.get("entries")
-        if not isinstance(entries, list):
+    def _normalize_shop_catalog_entries(
+        self,
+        raw_entries: Any,
+        *,
+        catalog_path: Path,
+        definitions_by_bucket: Dict[str, Dict[str, Dict[str, Any]]],
+    ) -> List[Dict[str, Any]]:
+        if not isinstance(raw_entries, list):
             raise ValueError(f"Shop catalog YAML at {catalog_path} must contain an 'entries' list.")
-
         seen_keys: set[Tuple[str, str]] = set()
         normalized_entries: List[Dict[str, Any]] = []
-        for idx, raw_entry in enumerate(entries):
+        for idx, raw_entry in enumerate(raw_entries):
             entry_index = idx + 1
             if not isinstance(raw_entry, dict):
                 raise ValueError(f"Catalog entry #{entry_index} in {catalog_path} must be a mapping.")
@@ -6046,8 +6091,98 @@ class InitiativeTracker(base.InitiativeTracker):
                 if optional_key in definition:
                     normalized[optional_key] = copy.deepcopy(definition.get(optional_key))
             normalized_entries.append(normalized)
-
         return normalized_entries
+
+    def _validate_shop_catalog_payload(self, payload: Any) -> Dict[str, Any]:
+        if not isinstance(payload, dict):
+            raise ValueError("Shop catalog payload must be a mapping.")
+        items_dir = self._resolve_items_dir()
+        if items_dir is None:
+            raise ValueError("Items directory is unavailable; cannot validate shop catalog.")
+        catalog_path = items_dir / "Shop" / "catalog.yaml"
+        format_version = payload.get("format_version", 1)
+        if isinstance(format_version, bool):
+            raise ValueError("Shop catalog payload has invalid format_version.")
+        try:
+            format_version_int = int(format_version)
+        except Exception as exc:
+            raise ValueError("Shop catalog payload has non-integer format_version.") from exc
+        if format_version_int != 1:
+            raise ValueError(f"Unsupported shop catalog format_version '{format_version_int}'.")
+        definitions_by_bucket = self._load_shop_item_definitions(items_dir)
+        normalized_entries = self._normalize_shop_catalog_entries(
+            payload.get("entries"),
+            catalog_path=catalog_path,
+            definitions_by_bucket=definitions_by_bucket,
+        )
+        storage_payload = {
+            "format_version": 1,
+            "entries": [self._shop_catalog_storage_entry_from_normalized(entry) for entry in normalized_entries],
+        }
+        return {"format_version": 1, "entries": normalized_entries, "catalog_payload": storage_payload}
+
+    def _write_shop_catalog_yaml_atomic(self, path: Path, payload: Dict[str, Any]) -> None:
+        if yaml is None:
+            raise RuntimeError("PyYAML is required for shop catalog persistence.")
+        lock = getattr(self, "_shop_catalog_yaml_lock", None)
+        if lock is None or not hasattr(lock, "acquire"):
+            lock = threading.RLock()
+            self._shop_catalog_yaml_lock = lock
+        yaml_text = yaml.safe_dump(payload, sort_keys=False, allow_unicode=True)
+        tmp_path: Optional[Path] = None
+        with lock:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            try:
+                with tempfile.NamedTemporaryFile(
+                    mode="w",
+                    encoding="utf-8",
+                    dir=str(path.parent),
+                    prefix=f".{path.name}.",
+                    suffix=".tmp",
+                    delete=False,
+                ) as handle:
+                    handle.write(yaml_text)
+                    handle.flush()
+                    tmp_path = Path(handle.name)
+                tmp_path.replace(path)
+            except Exception:
+                if isinstance(tmp_path, Path):
+                    try:
+                        tmp_path.unlink(missing_ok=True)
+                    except Exception:
+                        pass
+                raise
+
+    def _save_shop_catalog_payload(self, payload: Any) -> Dict[str, Any]:
+        validated = self._validate_shop_catalog_payload(payload)
+        items_dir = self._resolve_items_dir()
+        if items_dir is None:
+            raise RuntimeError("Items directory is unavailable; cannot save shop catalog.")
+        catalog_path = items_dir / "Shop" / "catalog.yaml"
+        self._write_shop_catalog_yaml_atomic(catalog_path, validated["catalog_payload"])
+        return {"format_version": 1, "entries": copy.deepcopy(validated.get("entries") or [])}
+
+    def _load_shop_catalog_normalized(self) -> List[Dict[str, Any]]:
+        items_dir = self._resolve_items_dir()
+        if items_dir is None:
+            raise ValueError("Items directory is unavailable; cannot load shop catalog.")
+
+        definitions_by_bucket = self._load_shop_item_definitions(items_dir)
+        catalog_path = items_dir / "Shop" / "catalog.yaml"
+        if not catalog_path.exists():
+            raise ValueError(f"Shop catalog YAML not found at {catalog_path}.")
+        try:
+            parsed = yaml.safe_load(catalog_path.read_text(encoding="utf-8")) if yaml is not None else None
+        except Exception as exc:
+            raise ValueError(f"Failed to parse shop catalog YAML at {catalog_path}: {exc}") from exc
+        if not isinstance(parsed, dict):
+            raise ValueError(f"Shop catalog YAML at {catalog_path} must parse to a mapping.")
+
+        return self._normalize_shop_catalog_entries(
+            parsed.get("entries"),
+            catalog_path=catalog_path,
+            definitions_by_bucket=definitions_by_bucket,
+        )
 
     def _normalize_inventory_item_entries(self, profile: Dict[str, Any]) -> List[Dict[str, Any]]:
         inventory = profile.get("inventory") if isinstance(profile.get("inventory"), dict) else {}
