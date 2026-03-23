@@ -6,6 +6,7 @@ Item definitions are split by type to support structured automation:
 - `Items/Armor/` — armor YAML files
 - `Items/Magic_Items/` — magic items (including magic weapons/armor)
 - `Items/Consumables/` — consumable item YAML files
+- `Items/Shop/` — shop catalog overlay YAML files (sellability/category/price metadata)
 
 ## Preferred format (primary source of truth)
 
@@ -31,3 +32,7 @@ Some YAML files are metadata, not items. For example:
 - `properties_*.yaml` files that define shared weapon properties
 
 These files are intentionally ignored by the item registry unless they contain actual item records.
+
+## Overlay bucket
+
+`Items/Shop/` is an overlay layer for curated shop listings. Item behavior still belongs in the item-definition buckets (`Weapons`, `Armor`, `Magic_Items`, `Consumables`).
