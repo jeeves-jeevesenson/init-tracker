@@ -16,3 +16,12 @@ Shop files do **not** redefine item behavior. They only describe:
 - Shop catalog YAML in `Items/Shop/` is the source of truth for sellability/category/price metadata.
 
 Later loader/API code should join shop catalog entries to item definitions by `item_id` + `item_bucket`.
+
+## Admin API support (backend only)
+
+The backend now exposes unprotected admin-facing catalog write helpers for a future `/shop_admin` UI:
+
+- `POST /api/shop/catalog/validate` validates a proposed catalog payload **in memory** and returns normalized entries for preview.
+- `PUT /api/shop/catalog` validates via the same path, then atomically writes `Items/Shop/catalog.yaml` using a temp file + replace.
+
+Both endpoints enforce the same strict catalog rules used by the read path.
