@@ -32,10 +32,9 @@ class LanInventoryUiTests(unittest.TestCase):
     def test_inventory_defaults_prefer_equipped_items(self):
         source = self.SOURCE_PATH.read_text(encoding="utf-8")
 
-        self.assertIn("function isInventoryItemEquipped(item, equippedSet)", source)
-        self.assertIn("Array.isArray(inventory?.equipped)", source)
-        self.assertIn("const magicItems = profile?.magic_items;", source)
-        self.assertIn("Array.isArray(magicItems?.equipped)", source)
+        self.assertIn("function isInventoryItemEquipped(item)", source)
+        self.assertNotIn("inventory.equipped", source)
+        self.assertNotIn("profile?.magic_items", source)
         self.assertIn("const equippedDefaults = getEquippedInventoryDefaultsBySlot();", source)
 
     def test_inventory_slot_matching_supports_explicit_tags_and_common_armor_names(self):
