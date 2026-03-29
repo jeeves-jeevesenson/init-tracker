@@ -1722,6 +1722,39 @@
       text-transform:uppercase;
       letter-spacing:0.3px;
     }
+    .inventory-item-main{
+      display:flex;
+      align-items:center;
+      gap:8px;
+      min-width:0;
+      flex:1;
+    }
+    .inventory-item-main > span:first-child{
+      min-width:0;
+      overflow:hidden;
+      text-overflow:ellipsis;
+      white-space:nowrap;
+    }
+    .inventory-item-magic-status{
+      display:inline-flex;
+      align-items:center;
+      gap:4px;
+      flex-wrap:wrap;
+      font-size:10px;
+    }
+    .inventory-item-magic-status .chip{
+      padding:2px 6px;
+      font-size:10px;
+      background:rgba(245,227,178,0.16);
+      border-color:rgba(245,227,178,0.35);
+    }
+    .inventory-item-actions{
+      display:inline-flex;
+      align-items:center;
+      gap:4px;
+      flex-wrap:wrap;
+      justify-content:flex-end;
+    }
     .inventory-items-empty{
       color:var(--muted);
       font-size:12px;
@@ -5825,6 +5858,7 @@ __DAMAGE_TYPE_OPTIONS__
     amulet: ["amulet", "necklace", "pendant"],
     ring: ["ring"],
   };
+  const pendingMagicItemMutations = new Set();
 
   function normalizeInventorySlotTag(value){
     const normalized = normalizeLowerValue(value).replace(/[\s-]+/g, "_");
@@ -5985,7 +6019,7 @@ __DAMAGE_TYPE_OPTIONS__
     return Array.from(new Set(matches));
   }
 
-  function isInventoryItemEquipped(item, equippedSet){
+  function isInventoryItemEquipped(item){
     if (!item || typeof item !== "object") return false;
     const equipped = item.equipped;
     if (typeof equipped === "boolean") return equipped;
@@ -5996,14 +6030,84 @@ __DAMAGE_TYPE_OPTIONS__
         return true;
       }
     }
-    const id = normalizeCharacterLookupKey(item.id);
-    const name = normalizeCharacterLookupKey(item.name);
-    const idSlug = characterSlugify(item.id);
-    const nameSlug = characterSlugify(item.name);
-    return (id && equippedSet.has(id))
-      || (name && equippedSet.has(name))
-      || (idSlug && equippedSet.has(idSlug))
-      || (nameSlug && equippedSet.has(nameSlug));
+    return false;
+  }
+
+  function isInventoryItemAttuned(item){
+    if (!item || typeof item !== "object") return false;
+    const attuned = item.attuned;
+    if (typeof attuned === "boolean") return attuned;
+    if (typeof attuned === "number") return attuned !== 0;
+    if (typeof attuned === "string"){
+      const normalized = attuned.trim().toLowerCase();
+      return normalized === "1" || normalized === "true" || normalized === "yes" || normalized === "on";
+    }
+    return false;
+  }
+
+  function resolveOwnedInventoryMagicItem(item){
+    if (!item || typeof item !== "object") return null;
+    const explicit = item.magic_item;
+    if (explicit && typeof explicit === "object"){
+      return explicit;
+    }
+    const itemType = normalizeLowerValue(item.type || item.category);
+    if (item.is_magic_item === true || itemType.includes("magic")){
+      return item;
+    }
+    if ("requires_attunement" in item || "attuned" in item){
+      return item;
+    }
+    return null;
+  }
+
+  function ownedMagicItemRequiresAttunement(item){
+    const magicMeta = resolveOwnedInventoryMagicItem(item);
+    return Boolean(magicMeta && magicMeta.requires_attunement === true);
+  }
+
+  function getClaimedProfileLookupName(){
+    const claimedName = String(getClaimedPlayerName() || "").trim();
+    if (claimedName) return claimedName;
+    return "";
+  }
+
+  async function mutateInventoryMagicItem(instanceId, action){
+    const operation = String(action || "").trim().toLowerCase();
+    if (!["equip", "unequip", "attune", "unattune"].includes(operation)){
+      throw new Error(`Unsupported magic-item action: ${action}`);
+    }
+    const playerName = getClaimedProfileLookupName();
+    if (!playerName){
+      throw new Error("Claim a character first.");
+    }
+    const targetInstanceId = String(instanceId || "").trim();
+    if (!targetInstanceId){
+      throw new Error("Missing inventory item instance ID.");
+    }
+    const response = await fetch(`/api/characters/${encodeURIComponent(playerName)}/inventory/items/${encodeURIComponent(targetInstanceId)}/${operation}`, {
+      method: "POST",
+      headers: {"Accept": "application/json"},
+    });
+    const payload = await response.json().catch(() => ({}));
+    if (!response.ok){
+      const detail = payload?.detail;
+      const message = typeof detail === "string"
+        ? detail
+        : (detail && typeof detail === "object" ? String(detail.message || detail.error || "") : "");
+      throw new Error(message || `Magic-item ${operation} failed (${response.status}).`);
+    }
+    const updatedPlayer = payload?.player;
+    if (updatedPlayer && typeof updatedPlayer === "object"){
+      if (!state || typeof state !== "object"){
+        state = {};
+      }
+      if (!state.player_profiles || typeof state.player_profiles !== "object"){
+        state.player_profiles = {};
+      }
+      state.player_profiles[playerName] = updatedPlayer;
+    }
+    return payload;
   }
 
   function getEquippedInventoryDefaultsBySlot(){
@@ -6016,32 +6120,8 @@ __DAMAGE_TYPE_OPTIONS__
       amulet: [],
       ring: [],
     };
-    const profile = getPlayerProfile(getClaimedPlayerName());
-    const inventory = getClaimedInventory();
-    const equippedSet = new Set();
-    const addLookupVariants = (entry) => {
-      const normalized = normalizeCharacterLookupKey(entry);
-      const slug = characterSlugify(entry);
-      if (normalized) equippedSet.add(normalized);
-      if (slug) equippedSet.add(slug);
-    };
-    if (Array.isArray(inventory?.equipped)){
-      inventory.equipped.forEach((entry) => addLookupVariants(entry));
-    }
-    const magicItems = profile?.magic_items;
-    if (Array.isArray(magicItems?.equipped)){
-      magicItems.equipped.forEach((entry) => addLookupVariants(entry));
-    }
-    if (Array.isArray(magicItems?.items)){
-      magicItems.items.forEach((entry) => {
-        if (!entry || typeof entry !== "object") return;
-        if (!isInventoryItemEquipped(entry, equippedSet)) return;
-        addLookupVariants(entry.id);
-        addLookupVariants(entry.name);
-      });
-    }
     getClaimedInventoryItems().forEach((item) => {
-      if (!isInventoryItemEquipped(item, equippedSet)) return;
+      if (!isInventoryItemEquipped(item)) return;
       const value = getInventoryItemValue(item);
       if (!value) return;
       const matchedSlots = getInventoryItemMatchedSlots(item);
@@ -6094,12 +6174,90 @@ __DAMAGE_TYPE_OPTIONS__
     items.forEach((item) => {
       const row = document.createElement("li");
       row.className = "inventory-item-entry";
+      row.dataset.instanceId = String(item?.instance_id || "");
+      const main = document.createElement("span");
+      main.className = "inventory-item-main";
       const name = document.createElement("span");
       name.textContent = getInventoryItemLabel(item);
       const meta = document.createElement("span");
       meta.className = "meta";
       meta.textContent = getInventoryItemMeta(item) || "gear";
-      row.append(name, meta);
+      main.append(name, meta);
+      row.appendChild(main);
+
+      const magicMeta = resolveOwnedInventoryMagicItem(item);
+      const instanceId = String(item?.instance_id || "").trim();
+      if (magicMeta && instanceId){
+        const status = document.createElement("span");
+        status.className = "inventory-item-magic-status";
+        if (isInventoryItemEquipped(item)){
+          const equippedChip = document.createElement("span");
+          equippedChip.className = "chip";
+          equippedChip.textContent = "Equipped";
+          status.appendChild(equippedChip);
+        }
+        if (ownedMagicItemRequiresAttunement(item)){
+          const reqChip = document.createElement("span");
+          reqChip.className = "chip";
+          reqChip.textContent = "Requires attunement";
+          status.appendChild(reqChip);
+          if (isInventoryItemAttuned(item)){
+            const attunedChip = document.createElement("span");
+            attunedChip.className = "chip";
+            attunedChip.textContent = "Attuned";
+            status.appendChild(attunedChip);
+          }
+        }
+        if (status.childNodes.length){
+          main.appendChild(status);
+        }
+        const controls = document.createElement("span");
+        controls.className = "inventory-item-actions";
+        const pendingKey = `${instanceId}`;
+        const isPending = pendingMagicItemMutations.has(pendingKey);
+        const equipBtn = document.createElement("button");
+        equipBtn.type = "button";
+        equipBtn.className = "btn";
+        equipBtn.textContent = isInventoryItemEquipped(item) ? "Unequip" : "Equip";
+        equipBtn.disabled = isPending;
+        equipBtn.addEventListener("click", async () => {
+          pendingMagicItemMutations.add(pendingKey);
+          renderInventoryItemList();
+          try {
+            await mutateInventoryMagicItem(instanceId, isInventoryItemEquipped(item) ? "unequip" : "equip");
+            refreshWeaponSelectors();
+          } catch (err){
+            setHelpMessage(err?.message ? String(err.message) : "Failed to update magic item.");
+          } finally {
+            pendingMagicItemMutations.delete(pendingKey);
+            renderInventoryItemList();
+          }
+        });
+        controls.appendChild(equipBtn);
+
+        if (ownedMagicItemRequiresAttunement(item)){
+          const attuneBtn = document.createElement("button");
+          attuneBtn.type = "button";
+          attuneBtn.className = "btn";
+          attuneBtn.textContent = isInventoryItemAttuned(item) ? "Unattune" : "Attune";
+          attuneBtn.disabled = isPending;
+          attuneBtn.addEventListener("click", async () => {
+            pendingMagicItemMutations.add(pendingKey);
+            renderInventoryItemList();
+            try {
+              await mutateInventoryMagicItem(instanceId, isInventoryItemAttuned(item) ? "unattune" : "attune");
+              refreshWeaponSelectors();
+            } catch (err){
+              setHelpMessage(err?.message ? String(err.message) : "Failed to update magic item.");
+            } finally {
+              pendingMagicItemMutations.delete(pendingKey);
+              renderInventoryItemList();
+            }
+          });
+          controls.appendChild(attuneBtn);
+        }
+        row.appendChild(controls);
+      }
       const itemId = String(item?.id || "").trim();
       if (itemId && getConsumablesLibrary().some((entry) => normalizeLowerValue(entry.id) === normalizeLowerValue(itemId))){
         const controls = document.createElement("span");
