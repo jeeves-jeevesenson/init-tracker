@@ -2674,6 +2674,20 @@ class LanController:
             except CharacterApiError as exc:
                 raise HTTPException(status_code=exc.status_code, detail=exc.detail)
 
+        @self._fastapi_app.post("/api/characters/{name}/inventory/items/{instance_id}/equip_wearable")
+        async def equip_inventory_wearable_item(name: str, instance_id: str, payload: Optional[Dict[str, Any]] = Body(default=None)):
+            try:
+                return self.app._mutate_owned_inventory_wearable_slot(name, instance_id, "equip", payload=payload)
+            except CharacterApiError as exc:
+                raise HTTPException(status_code=exc.status_code, detail=exc.detail)
+
+        @self._fastapi_app.post("/api/characters/{name}/inventory/items/{instance_id}/unequip_wearable")
+        async def unequip_inventory_wearable_item(name: str, instance_id: str):
+            try:
+                return self.app._mutate_owned_inventory_wearable_slot(name, instance_id, "unequip")
+            except CharacterApiError as exc:
+                raise HTTPException(status_code=exc.status_code, detail=exc.detail)
+
         @self._fastapi_app.post("/api/characters/{name}/inventory/items/{instance_id}/equip_weapon_mainhand")
         async def equip_inventory_weapon_mainhand(name: str, instance_id: str, payload: Optional[Dict[str, Any]] = Body(default=None)):
             try:
@@ -14751,6 +14765,109 @@ class InitiativeTracker(base.InitiativeTracker):
             normalized.append(owned)
         return normalized
 
+    @staticmethod
+    def _normalize_wearable_slot_key(raw_slot: Any) -> str:
+        normalized = re.sub(r"[\s-]+", "_", str(raw_slot or "").strip().lower())
+        if not normalized:
+            return ""
+        if normalized in {"head", "helmet", "helm", "circlet", "hat", "hood", "crown"}:
+            return "head"
+        if normalized in {"cloak", "cape", "poncho"}:
+            return "cloak"
+        if normalized in {"gloves", "glove", "gauntlets", "gauntlet", "bracers", "bracer", "hands"}:
+            return "gloves"
+        if normalized in {"boots", "boot", "footwear", "feet", "shoes", "shoe", "greaves"}:
+            return "boots"
+        if normalized in {"amulet", "necklace", "pendant", "neck"}:
+            return "amulet"
+        if normalized in {"ring", "rings", "finger"}:
+            return "ring"
+        if normalized in {"ring_one", "ring_1"}:
+            return "ring_one"
+        if normalized in {"ring_two", "ring_2"}:
+            return "ring_two"
+        return ""
+
+    def _resolve_inventory_wearable_slots(self, entry: Dict[str, Any]) -> List[str]:
+        if not isinstance(entry, dict):
+            return []
+
+        equippable = self._resolve_inventory_equippable_definition(entry)
+        if isinstance(equippable, dict):
+            return []
+
+        magic_definition = self._resolve_inventory_magic_item_definition(entry)
+        if isinstance(magic_definition, dict):
+            magic_type = str(magic_definition.get("type") or "").strip().lower()
+            magic_category = str(magic_definition.get("category") or "").strip().lower()
+            if magic_type in {"weapon", "armor", "shield"} or magic_category == "shield" or "weapon" in magic_category:
+                return []
+
+        slot_candidates: List[str] = []
+        for key in ("slot", "slot_id", "equip_slot", "equipped_slot"):
+            value = str(entry.get(key) or "").strip()
+            if value:
+                slot_candidates.append(value)
+        for key in ("id", "name"):
+            value = str(entry.get(key) or "").strip()
+            if value:
+                slot_candidates.append(value)
+
+        if isinstance(magic_definition, dict):
+            for key in ("slot", "slot_id", "equip_slot", "equipped_slot", "type", "category", "id", "name"):
+                value = str(magic_definition.get(key) or "").strip()
+                if value:
+                    slot_candidates.append(value)
+
+        resolved_slots: List[str] = []
+        seen: set[str] = set()
+
+        def _append_slot(slot_key: str) -> None:
+            if slot_key and slot_key not in seen:
+                seen.add(slot_key)
+                resolved_slots.append(slot_key)
+
+        for candidate in slot_candidates:
+            normalized_candidate = re.sub(r"[\s-]+", "_", str(candidate or "").strip().lower())
+            if not normalized_candidate:
+                continue
+            mapped = self._normalize_wearable_slot_key(normalized_candidate)
+            if mapped == "ring":
+                _append_slot("ring_one")
+                _append_slot("ring_two")
+                continue
+            if mapped:
+                _append_slot(mapped)
+                continue
+            for token in re.split(r"[^a-z0-9_]+", normalized_candidate):
+                mapped_token = self._normalize_wearable_slot_key(token)
+                if mapped_token == "ring":
+                    _append_slot("ring_one")
+                    _append_slot("ring_two")
+                elif mapped_token:
+                    _append_slot(mapped_token)
+
+        return resolved_slots
+
+    def _normalize_owned_wearable_inventory_items(self, profile: Dict[str, Any]) -> List[Dict[str, Any]]:
+        normalized: List[Dict[str, Any]] = []
+        for entry in self._normalize_inventory_item_entries(profile):
+            if not isinstance(entry, dict):
+                continue
+            wearable_slots = self._resolve_inventory_wearable_slots(entry)
+            if not wearable_slots:
+                continue
+            owned = dict(entry)
+            owned["equipped"] = bool(owned.get("equipped") is True)
+            equipped_slot = self._normalize_wearable_slot_key(owned.get("equipped_slot"))
+            if equipped_slot in {"ring"}:
+                equipped_slot = ""
+            if equipped_slot in {"head", "cloak", "gloves", "boots", "amulet", "ring_one", "ring_two"}:
+                owned["equipped_slot"] = equipped_slot
+            owned["wearable_slots"] = wearable_slots
+            normalized.append(owned)
+        return normalized
+
     def _mutate_owned_inventory_item_equipped_state(self, name: str, instance_id: str, operation: str) -> Dict[str, Any]:
         player_name = str(name or "").strip()
         if not player_name:
@@ -15074,6 +15191,86 @@ class InitiativeTracker(base.InitiativeTracker):
             "equipped": bool(entry.get("equipped") is True),
             "equipped_slot": str(entry.get("equipped_slot") or "").strip() or None,
             "selected_mode": str(entry.get("selected_mode") or "").strip() or None,
+            "player": profile,
+        }
+
+    def _mutate_owned_inventory_wearable_slot(
+        self,
+        name: str,
+        instance_id: str,
+        operation: str,
+        payload: Optional[Dict[str, Any]] = None,
+    ) -> Dict[str, Any]:
+        player_name = str(name or "").strip()
+        if not player_name:
+            raise CharacterApiError(status_code=404, detail={"error": "not_found", "message": "Character not found."})
+        path = self._resolve_character_path(player_name)
+        if path is None:
+            raise CharacterApiError(status_code=404, detail={"error": "not_found", "message": "Character not found."})
+
+        target_instance_id = str(instance_id or "").strip()
+        if not target_instance_id:
+            raise CharacterApiError(
+                status_code=404,
+                detail={"error": "not_found", "message": "Owned inventory item not found for instance_id."},
+            )
+
+        normalized_operation = str(operation or "").strip().lower()
+        if normalized_operation not in {"equip", "unequip"}:
+            raise CharacterApiError(
+                status_code=400,
+                detail={"error": "invalid_operation", "message": f"Unsupported wearable mutation '{operation}'."},
+            )
+
+        raw = self._load_character_raw(path)
+        entry, items, index = self._find_owned_inventory_item_by_instance_id(raw, target_instance_id)
+        if not isinstance(entry, dict) or not isinstance(items, list) or index is None:
+            raise CharacterApiError(
+                status_code=404,
+                detail={"error": "not_found", "message": "Owned inventory item not found for instance_id."},
+            )
+
+        eligible_slots = self._resolve_inventory_wearable_slots(entry)
+        if not eligible_slots:
+            raise CharacterApiError(
+                status_code=400,
+                detail={"error": "invalid_operation", "message": "Target inventory entry is not a resolvable wearable item."},
+            )
+
+        if normalized_operation == "equip":
+            requested_slot = self._normalize_wearable_slot_key((payload or {}).get("slot") if isinstance(payload, dict) else "")
+            if requested_slot not in {"head", "cloak", "gloves", "boots", "amulet", "ring_one", "ring_two"}:
+                raise CharacterApiError(
+                    status_code=400,
+                    detail={"error": "invalid_operation", "message": "Wearable slot must be one of head/cloak/gloves/boots/amulet/ring_one/ring_two."},
+                )
+            if requested_slot not in set(eligible_slots):
+                raise CharacterApiError(
+                    status_code=400,
+                    detail={"error": "invalid_operation", "message": "Requested slot is not valid for this wearable item."},
+                )
+
+            for other_index, other_entry in enumerate(items):
+                if other_index == index or not isinstance(other_entry, dict):
+                    continue
+                other_slot = self._normalize_wearable_slot_key(other_entry.get("equipped_slot"))
+                if other_slot != requested_slot:
+                    continue
+                other_entry["equipped"] = False
+                other_entry.pop("equipped_slot", None)
+
+            entry["equipped"] = True
+            entry["equipped_slot"] = requested_slot
+        else:
+            entry["equipped"] = False
+            entry.pop("equipped_slot", None)
+
+        profile = self._store_character_yaml(path, raw)
+        return {
+            "ok": True,
+            "instance_id": target_instance_id,
+            "equipped": bool(entry.get("equipped") is True),
+            "equipped_slot": str(entry.get("equipped_slot") or "").strip() or None,
             "player": profile,
         }
 

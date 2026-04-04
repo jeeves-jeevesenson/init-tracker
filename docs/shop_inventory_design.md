@@ -64,6 +64,10 @@ Weapon hand-slot selection is also owned-instance state on `inventory.items[]`:
 - `equipped_slot: main_hand|off_hand`
 - `selected_mode: one|two` for versatile/two-handed usage
 
+General wearable slots are likewise owned-instance state on `inventory.items[]`:
+
+- `equipped_slot: head|cloak|gloves|boots|amulet|ring_one|ring_two`
+
 This replaces transient/local-only hand selectors as the source of truth.
 
 ## Attunement rules
