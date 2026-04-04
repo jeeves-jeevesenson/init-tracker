@@ -32,11 +32,11 @@ class LanInventoryUiTests(unittest.TestCase):
     def test_inventory_defaults_prefer_equipped_items(self):
         source = self.SOURCE_PATH.read_text(encoding="utf-8")
 
-        self.assertIn("function isInventoryItemEquipped(item)", source)
+        self.assertIn("const equippedSlot = normalizeInventorySlotTag(item?.equipped_slot);", source)
+        self.assertIn("if (equippedSlot === \"ring_one\" || equippedSlot === \"ring_two\")", source)
         self.assertNotIn("inventory.equipped", source)
         self.assertNotIn("profile?.magic_items", source)
         self.assertIn("const equippedDefaults = getEquippedInventoryDefaultsBySlot();", source)
-        self.assertIn("if (!isInventoryItemEquipped(item)) return;", source)
 
     def test_inventory_slot_matching_supports_explicit_tags_and_common_armor_names(self):
         source = self.SOURCE_PATH.read_text(encoding="utf-8")
@@ -67,6 +67,14 @@ class LanInventoryUiTests(unittest.TestCase):
         self.assertIn('const endpoint = operation === "equip" ? "equip_non_magic" : "unequip_non_magic";', source)
         self.assertIn("await mutateInventoryNonMagicItem(instanceId, isInventoryItemEquipped(item) ? \"unequip\" : \"equip\");", source)
         self.assertIn("refreshWeaponSelectors();", source)
+
+    def test_wearable_slot_selectors_use_instance_targeted_routes(self):
+        source = self.SOURCE_PATH.read_text(encoding="utf-8")
+        self.assertIn("function mutateInventoryWearable(instanceId, action, slot=\"\")", source)
+        self.assertIn('equip: "equip_wearable"', source)
+        self.assertIn('unequip: "unequip_wearable"', source)
+        self.assertIn("await mutateInventoryWearable(nextValue, \"equip\", slotKey);", source)
+        self.assertIn("await mutateInventoryWearable(previousInstanceId, \"unequip\");", source)
 
 
 if __name__ == "__main__":
