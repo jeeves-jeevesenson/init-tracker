@@ -22,13 +22,12 @@ class LanInventoryEquippablesUiTests(unittest.TestCase):
         self.assertIn("/inventory/items/${encodeURIComponent(targetInstanceId)}/${endpoint}", source)
         self.assertIn("await mutateInventoryNonMagicItem(instanceId, isInventoryItemEquipped(item) ? \"unequip\" : \"equip\");", source)
 
-    def test_weapon_equipment_sync_can_be_skipped_for_inventory_armor_shield_mutations(self):
+    def test_weapon_selector_refresh_no_longer_sends_equipment_update(self):
         source = self.SOURCE_PATH.read_text(encoding="utf-8")
 
-        self.assertIn("function refreshWeaponSelectors(syncEquipment=true)", source)
-        self.assertIn("if (syncEquipment){", source)
-        self.assertIn("sendEquipmentUpdate();", source)
-        self.assertIn("refreshWeaponSelectors(false);", source)
+        self.assertIn("function refreshWeaponSelectors()", source)
+        self.assertNotIn("if (syncEquipment){", source)
+        self.assertNotIn("refreshWeaponSelectors(false);", source)
 
 
 if __name__ == "__main__":
