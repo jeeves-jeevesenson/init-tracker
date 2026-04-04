@@ -2660,6 +2660,20 @@ class LanController:
             except CharacterApiError as exc:
                 raise HTTPException(status_code=exc.status_code, detail=exc.detail)
 
+        @self._fastapi_app.post("/api/characters/{name}/inventory/items/{instance_id}/equip_non_magic")
+        async def equip_inventory_non_magic_item(name: str, instance_id: str):
+            try:
+                return self.app._mutate_owned_inventory_item_equipped_state(name, instance_id, "equip")
+            except CharacterApiError as exc:
+                raise HTTPException(status_code=exc.status_code, detail=exc.detail)
+
+        @self._fastapi_app.post("/api/characters/{name}/inventory/items/{instance_id}/unequip_non_magic")
+        async def unequip_inventory_non_magic_item(name: str, instance_id: str):
+            try:
+                return self.app._mutate_owned_inventory_item_equipped_state(name, instance_id, "unequip")
+            except CharacterApiError as exc:
+                raise HTTPException(status_code=exc.status_code, detail=exc.detail)
+
         @self._fastapi_app.post("/api/characters/{name}/inventory/items/{instance_id}/attune")
         async def attune_inventory_magic_item(name: str, instance_id: str):
             try:
@@ -14588,6 +14602,103 @@ class InitiativeTracker(base.InitiativeTracker):
         if len(matches) == 1:
             return matches[0]
         return None
+
+    def _resolve_inventory_equippable_definition(self, entry: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+        item_registry = self._items_registry_payload()
+        if not isinstance(item_registry, dict) or not item_registry:
+            return None
+        item_id = str(entry.get("id") or "").strip().lower()
+        if not item_id:
+            return None
+
+        for kind in ("armors", "weapons"):
+            bucket = item_registry.get(kind) if isinstance(item_registry.get(kind), dict) else {}
+            definition = bucket.get(item_id)
+            if not isinstance(definition, dict):
+                continue
+            category = str(definition.get("category") or "").strip().lower()
+            classification = "weapon"
+            if kind == "armors":
+                classification = "shield" if category == "shield" else "armor"
+            return {
+                "id": item_id,
+                "kind": kind[:-1],
+                "classification": classification,
+                "category": category,
+                "definition": definition,
+            }
+        return None
+
+    def _mutate_owned_inventory_item_equipped_state(self, name: str, instance_id: str, operation: str) -> Dict[str, Any]:
+        player_name = str(name or "").strip()
+        if not player_name:
+            raise CharacterApiError(status_code=404, detail={"error": "not_found", "message": "Character not found."})
+        path = self._resolve_character_path(player_name)
+        if path is None:
+            raise CharacterApiError(status_code=404, detail={"error": "not_found", "message": "Character not found."})
+
+        target_instance_id = str(instance_id or "").strip()
+        if not target_instance_id:
+            raise CharacterApiError(
+                status_code=404,
+                detail={"error": "not_found", "message": "Owned inventory item not found for instance_id."},
+            )
+
+        normalized_operation = str(operation or "").strip().lower()
+        if normalized_operation not in {"equip", "unequip"}:
+            raise CharacterApiError(
+                status_code=400,
+                detail={"error": "invalid_operation", "message": f"Unsupported inventory item mutation '{operation}'."},
+            )
+
+        raw = self._load_character_raw(path)
+        entry, items, index = self._find_owned_inventory_item_by_instance_id(raw, target_instance_id)
+        if not isinstance(entry, dict) or not isinstance(items, list) or index is None:
+            raise CharacterApiError(
+                status_code=404,
+                detail={"error": "not_found", "message": "Owned inventory item not found for instance_id."},
+            )
+
+        if self._resolve_inventory_magic_item_definition(entry) is not None:
+            raise CharacterApiError(
+                status_code=400,
+                detail={
+                    "error": "invalid_operation",
+                    "message": "Target inventory entry is a magic item; use the magic-item mutation route.",
+                },
+            )
+
+        equippable = self._resolve_inventory_equippable_definition(entry)
+        if not isinstance(equippable, dict):
+            raise CharacterApiError(
+                status_code=400,
+                detail={"error": "invalid_operation", "message": "Target inventory entry is not a non-magic equippable item."},
+            )
+
+        equipped_value = normalized_operation == "equip"
+        items[index]["equipped"] = equipped_value
+        classification = str(equippable.get("classification") or "")
+        if equipped_value and classification in {"armor", "shield"}:
+            for other_index, other_entry in enumerate(items):
+                if other_index == index or not isinstance(other_entry, dict):
+                    continue
+                if other_entry.get("equipped") is not True:
+                    continue
+                if self._resolve_inventory_magic_item_definition(other_entry) is not None:
+                    continue
+                other_equippable = self._resolve_inventory_equippable_definition(other_entry)
+                if not isinstance(other_equippable, dict):
+                    continue
+                if str(other_equippable.get("classification") or "") == classification:
+                    other_entry["equipped"] = False
+
+        profile = self._store_character_yaml(path, raw)
+        return {
+            "ok": True,
+            "instance_id": target_instance_id,
+            "equipped": bool(items[index].get("equipped") is True),
+            "player": profile,
+        }
 
     def _mutate_owned_magic_item_state(self, name: str, instance_id: str, operation: str) -> Dict[str, Any]:
         player_name = str(name or "").strip()
