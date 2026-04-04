@@ -216,6 +216,24 @@ class ShopCatalogLoaderTests(unittest.TestCase):
             normalized = self.app._load_shop_catalog_normalized()
         self.assertTrue(normalized)
 
+    def test_write_shop_catalog_yaml_atomic_avoids_recursive_getattr_lookup(self):
+        class _TrackerWithRecursiveGetattr(tracker_mod.InitiativeTracker):
+            def __getattr__(self, _name):
+                raise RecursionError("recursive fallback")
+
+        app = object.__new__(_TrackerWithRecursiveGetattr)
+        app._oplog = lambda *args, **kwargs: None
+
+        with tempfile.TemporaryDirectory() as tmp:
+            catalog_path = Path(tmp) / "Items" / "Shop" / "catalog.yaml"
+            payload = {"format_version": 1, "entries": []}
+
+            app._write_shop_catalog_yaml_atomic(catalog_path, payload)
+
+            persisted = yaml.safe_load(catalog_path.read_text(encoding="utf-8"))
+            self.assertEqual(payload, persisted)
+            self.assertIn("_shop_catalog_yaml_lock", app.__dict__)
+
 
 if __name__ == "__main__":
     unittest.main()
