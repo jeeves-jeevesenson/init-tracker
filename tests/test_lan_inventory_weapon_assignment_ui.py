@@ -36,6 +36,7 @@ class LanInventoryWeaponAssignmentUiTests(unittest.TestCase):
     def test_weapon_selectors_do_not_persist_via_equipment_update(self):
         source = self.SOURCE_PATH.read_text(encoding="utf-8")
 
+        self.assertNotIn("equipment_update", source)
         self.assertNotIn("refreshWeaponSelectors(syncEquipment=true)", source)
         self.assertNotIn("sendEquipmentUpdate();", source)
         self.assertIn('mainhandWeaponSelectEl.addEventListener("change", async (event) => {', source)

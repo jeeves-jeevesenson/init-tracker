@@ -5172,7 +5172,6 @@ __DAMAGE_TYPE_OPTIONS__
   let selectedOffhandWeaponValue = "";
   let cachedOffhandWeaponValue = "";
   let weaponSelectionCharacterKey = "";
-  let equipmentSyncStateKey = "";
   let inventoryPanelOpen = false;
   let inventoryLoadoutSelections = {
     head: "",
@@ -6539,7 +6538,6 @@ __DAMAGE_TYPE_OPTIONS__
     const key = getWeaponSelectionCharacterKey();
     if (key === weaponSelectionCharacterKey) return;
     weaponSelectionCharacterKey = key;
-    equipmentSyncStateKey = "";
     inventoryLoadoutSelections = {
       head: "",
       cloak: "",
@@ -6664,27 +6662,6 @@ __DAMAGE_TYPE_OPTIONS__
       }
     });
     return defaults;
-  }
-
-  function sendEquipmentUpdate(){
-    if (claimedCid === null || claimedCid === undefined){
-      equipmentSyncStateKey = "";
-      return;
-    }
-    const selectedMainhand = getSelectedMainhandWeapon();
-    const selectedOffhand = getSelectedOffhandOption();
-    const payload = {
-      type: "equipment_update",
-      cid: claimedCid,
-      mainhand_weapon_id: String(selectedMainhand?.id || "").trim(),
-      offhand_item_id: String(selectedOffhand?.weapon?.id || selectedOffhand?.item?.id || "").trim(),
-      offhand_kind: String(selectedOffhand?.offhand_kind || "").trim(),
-      shield_equipped: selectedOffhand?.offhand_kind === "shield",
-    };
-    const nextKey = JSON.stringify([payload.mainhand_weapon_id, payload.offhand_item_id, payload.offhand_kind, payload.shield_equipped]);
-    if (nextKey === equipmentSyncStateKey) return;
-    equipmentSyncStateKey = nextKey;
-    send(payload);
   }
 
   function getDefaultMainhandValue(mainhandOptions){

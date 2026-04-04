@@ -24,17 +24,13 @@ class LanEquipmentUpdateTests(unittest.TestCase):
             },
         )()
 
-    def test_equipment_update_adds_shield_ac_once(self):
+    def test_equipment_update_no_longer_mutates_ac(self):
+        starting_ac = self.app.combatants[1].ac
         self.app._lan_apply_action({"type": "equipment_update", "cid": 1, "_claimed_cid": 1, "shield_equipped": True})
-        self.assertEqual(self.app.combatants[1].ac, 15)
-
-        self.app._lan_apply_action({"type": "equipment_update", "cid": 1, "_claimed_cid": 1, "shield_equipped": True})
-        self.assertEqual(self.app.combatants[1].ac, 15)
-
-    def test_equipment_update_removes_shield_ac(self):
         self.app._lan_apply_action({"type": "equipment_update", "cid": 1, "_claimed_cid": 1, "shield_equipped": True})
         self.app._lan_apply_action({"type": "equipment_update", "cid": 1, "_claimed_cid": 1, "shield_equipped": False})
-        self.assertEqual(self.app.combatants[1].ac, 13)
+        self.assertEqual(self.app.combatants[1].ac, starting_ac)
+        self.assertFalse(hasattr(self.app.combatants[1], "_offhand_shield_equipped"))
 
 
 if __name__ == "__main__":

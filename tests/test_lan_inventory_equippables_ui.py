@@ -26,6 +26,8 @@ class LanInventoryEquippablesUiTests(unittest.TestCase):
         source = self.SOURCE_PATH.read_text(encoding="utf-8")
 
         self.assertIn("function refreshWeaponSelectors()", source)
+        self.assertNotIn("function sendEquipmentUpdate()", source)
+        self.assertNotIn('type: "equipment_update"', source)
         self.assertNotIn("if (syncEquipment){", source)
         self.assertNotIn("refreshWeaponSelectors(false);", source)
 
