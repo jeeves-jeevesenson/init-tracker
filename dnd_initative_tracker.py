@@ -6205,10 +6205,10 @@ class InitiativeTracker(base.InitiativeTracker):
     def _write_shop_catalog_yaml_atomic(self, path: Path, payload: Dict[str, Any]) -> None:
         if yaml is None:
             raise RuntimeError("PyYAML is required for shop catalog persistence.")
-        lock = getattr(self, "_shop_catalog_yaml_lock", None)
+        lock = self.__dict__.get("_shop_catalog_yaml_lock")
         if lock is None or not hasattr(lock, "acquire"):
             lock = threading.RLock()
-            self._shop_catalog_yaml_lock = lock
+            self.__dict__["_shop_catalog_yaml_lock"] = lock
         yaml_text = yaml.safe_dump(payload, sort_keys=False, allow_unicode=True)
         tmp_path: Optional[Path] = None
         with lock:
