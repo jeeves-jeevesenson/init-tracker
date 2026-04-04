@@ -875,12 +875,15 @@ inventory:
   - **quantity**: Number of items
   - **description**: Item description or notes
   - **equipped**: Equipped flag stored on the owned item instance
+  - **equipped_slot**: Optional hand-slot assignment for owned weapons (`main_hand` or `off_hand`)
+  - **selected_mode**: Optional weapon usage mode (`one` or `two`) for versatile/two-handed behavior
 
 **Notes:**
 - Inventory-backed consumables (currently healing potions) are used in combat mechanics
 - Consumable pool displays in LAN are derived from `inventory.items[].quantity`
 - Consumable counts are **not** persisted as writable `resources.pools`; inventory is authoritative
 - Magic item ownership/state now lives on `inventory.items[]` entries (`id`, `instance_id`, `equipped`, `attuned`)
+- Weapon hand selection is now an inventory-owned per-instance state (`equipped_slot` + `selected_mode`), replacing transient UI-only hand selection over time
 - `id` identifies *what* the item is; `instance_id` identifies *which owned copy* it is
 - Registry-backed `id` values on owned equippables are the target shape for standardized equipment behavior
 - Non-stackable/equippable owned items should always define explicit `instance_id` in YAML
@@ -917,6 +920,8 @@ inventory:
 - **instance_id**: Unique owned instance key used by inventory mutations and shop purchase records
 - **equipped**: Whether the owned item is currently equipped
 - **attuned**: Whether the owned item is currently attuned
+- **equipped_slot**: Optional hand slot for weapon-shaped magic items (`main_hand` / `off_hand`)
+- **selected_mode**: Optional mode for weapon-shaped magic items (`one` / `two`)
 - **state.pools**: Persistent charge/resource state for this owned magic item instance
   - Item-granted pools/charges are stored here (not in top-level `resources.pools`)
   - Runtime only projects these pools while item is active (`equipped`, and `attuned` if required)

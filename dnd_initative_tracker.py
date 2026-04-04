@@ -2674,6 +2674,34 @@ class LanController:
             except CharacterApiError as exc:
                 raise HTTPException(status_code=exc.status_code, detail=exc.detail)
 
+        @self._fastapi_app.post("/api/characters/{name}/inventory/items/{instance_id}/equip_weapon_mainhand")
+        async def equip_inventory_weapon_mainhand(name: str, instance_id: str, payload: Optional[Dict[str, Any]] = Body(default=None)):
+            try:
+                return self.app._mutate_owned_inventory_weapon_assignment(name, instance_id, "equip_main_hand", payload=payload)
+            except CharacterApiError as exc:
+                raise HTTPException(status_code=exc.status_code, detail=exc.detail)
+
+        @self._fastapi_app.post("/api/characters/{name}/inventory/items/{instance_id}/equip_weapon_offhand")
+        async def equip_inventory_weapon_offhand(name: str, instance_id: str, payload: Optional[Dict[str, Any]] = Body(default=None)):
+            try:
+                return self.app._mutate_owned_inventory_weapon_assignment(name, instance_id, "equip_off_hand", payload=payload)
+            except CharacterApiError as exc:
+                raise HTTPException(status_code=exc.status_code, detail=exc.detail)
+
+        @self._fastapi_app.post("/api/characters/{name}/inventory/items/{instance_id}/unequip_weapon")
+        async def unequip_inventory_weapon(name: str, instance_id: str):
+            try:
+                return self.app._mutate_owned_inventory_weapon_assignment(name, instance_id, "unequip_weapon")
+            except CharacterApiError as exc:
+                raise HTTPException(status_code=exc.status_code, detail=exc.detail)
+
+        @self._fastapi_app.post("/api/characters/{name}/inventory/items/{instance_id}/set_weapon_mode")
+        async def set_inventory_weapon_mode(name: str, instance_id: str, payload: Optional[Dict[str, Any]] = Body(default=None)):
+            try:
+                return self.app._mutate_owned_inventory_weapon_assignment(name, instance_id, "set_weapon_mode", payload=payload)
+            except CharacterApiError as exc:
+                raise HTTPException(status_code=exc.status_code, detail=exc.detail)
+
         @self._fastapi_app.post("/api/characters/{name}/inventory/items/{instance_id}/attune")
         async def attune_inventory_magic_item(name: str, instance_id: str):
             try:
@@ -14629,6 +14657,100 @@ class InitiativeTracker(base.InitiativeTracker):
             }
         return None
 
+    @staticmethod
+    def _weapon_traits_from_definition(definition: Dict[str, Any]) -> Dict[str, bool]:
+        damage = definition.get("damage") if isinstance(definition.get("damage"), dict) else {}
+        two_handed = damage.get("two_handed") if isinstance(damage.get("two_handed"), dict) else {}
+        versatile = damage.get("versatile") if isinstance(damage.get("versatile"), dict) else {}
+        one_handed = damage.get("one_handed") if isinstance(damage.get("one_handed"), dict) else {}
+
+        properties_raw = definition.get("properties")
+        property_keys: set[str] = set()
+        if isinstance(properties_raw, list):
+            for prop in properties_raw:
+                if isinstance(prop, dict):
+                    prop_id = str(prop.get("id") or prop.get("name") or "").strip().lower()
+                else:
+                    prop_id = str(prop or "").strip().lower()
+                prop_id = re.sub(r"[\s-]+", "_", prop_id)
+                if prop_id:
+                    property_keys.add(prop_id)
+        elif isinstance(properties_raw, dict):
+            for key, value in properties_raw.items():
+                if value is not True:
+                    continue
+                normalized = re.sub(r"[\s-]+", "_", str(key or "").strip().lower())
+                if normalized:
+                    property_keys.add(normalized)
+
+        has_two_handed = bool("two_handed" in property_keys or two_handed)
+        has_versatile = bool("versatile" in property_keys or versatile)
+        has_one_handed = bool(one_handed)
+        supports_two_handed = bool(has_two_handed or has_versatile)
+        two_handed_only = bool(has_two_handed and not has_versatile and not has_one_handed)
+        return {
+            "supports_two_handed": supports_two_handed,
+            "two_handed_only": two_handed_only,
+        }
+
+    def _resolve_inventory_owned_weapon(self, entry: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+        equippable = self._resolve_inventory_equippable_definition(entry)
+        if isinstance(equippable, dict):
+            if str(equippable.get("classification") or "").strip().lower() != "weapon":
+                return None
+            definition = equippable.get("definition") if isinstance(equippable.get("definition"), dict) else {}
+            traits = self._weapon_traits_from_definition(definition)
+            return {
+                "source": "weapons",
+                "id": str(equippable.get("id") or "").strip().lower(),
+                "definition": definition,
+                **traits,
+            }
+
+        magic_definition = self._resolve_inventory_magic_item_definition(entry)
+        if not isinstance(magic_definition, dict):
+            return None
+        category = str(magic_definition.get("category") or "").strip().lower()
+        if not category:
+            return None
+        if "weapon" not in category and ("melee" not in category and "ranged" not in category):
+            return None
+        if category == "shield":
+            return None
+        traits = self._weapon_traits_from_definition(magic_definition)
+        return {
+            "source": "magic_items",
+            "id": str(magic_definition.get("id") or entry.get("id") or "").strip().lower(),
+            "definition": magic_definition,
+            **traits,
+        }
+
+    def _normalize_owned_weapon_inventory_items(self, profile: Dict[str, Any]) -> List[Dict[str, Any]]:
+        normalized: List[Dict[str, Any]] = []
+        for entry in self._normalize_inventory_item_entries(profile):
+            if not isinstance(entry, dict):
+                continue
+            resolved = self._resolve_inventory_owned_weapon(entry)
+            if not isinstance(resolved, dict):
+                continue
+            owned = dict(entry)
+            owned["equipped"] = bool(owned.get("equipped") is True)
+            selected_mode = str(owned.get("selected_mode") or "").strip().lower()
+            if selected_mode in {"one", "two"}:
+                owned["selected_mode"] = selected_mode
+            equipped_slot = str(owned.get("equipped_slot") or "").strip().lower()
+            if equipped_slot in {"main_hand", "off_hand"}:
+                owned["equipped_slot"] = equipped_slot
+            owned["weapon_assignment"] = {
+                "eligible_main_hand": True,
+                "eligible_off_hand": not bool(resolved.get("two_handed_only") is True),
+                "supports_two_handed": bool(resolved.get("supports_two_handed") is True),
+                "two_handed_only": bool(resolved.get("two_handed_only") is True),
+                "source": str(resolved.get("source") or "").strip(),
+            }
+            normalized.append(owned)
+        return normalized
+
     def _mutate_owned_inventory_item_equipped_state(self, name: str, instance_id: str, operation: str) -> Dict[str, Any]:
         player_name = str(name or "").strip()
         if not player_name:
@@ -14780,6 +14902,178 @@ class InitiativeTracker(base.InitiativeTracker):
             "instance_id": target_instance_id,
             "equipped": bool(entry.get("equipped") is True),
             "attuned": bool(entry.get("attuned") is True),
+            "player": profile,
+        }
+
+    def _mutate_owned_inventory_weapon_assignment(
+        self,
+        name: str,
+        instance_id: str,
+        operation: str,
+        payload: Optional[Dict[str, Any]] = None,
+    ) -> Dict[str, Any]:
+        player_name = str(name or "").strip()
+        if not player_name:
+            raise CharacterApiError(status_code=404, detail={"error": "not_found", "message": "Character not found."})
+        path = self._resolve_character_path(player_name)
+        if path is None:
+            raise CharacterApiError(status_code=404, detail={"error": "not_found", "message": "Character not found."})
+
+        target_instance_id = str(instance_id or "").strip()
+        if not target_instance_id:
+            raise CharacterApiError(
+                status_code=404,
+                detail={"error": "not_found", "message": "Owned inventory item not found for instance_id."},
+            )
+
+        normalized_operation = str(operation or "").strip().lower()
+        if normalized_operation not in {"equip_main_hand", "equip_off_hand", "unequip_weapon", "set_weapon_mode"}:
+            raise CharacterApiError(
+                status_code=400,
+                detail={"error": "invalid_operation", "message": f"Unsupported weapon assignment mutation '{operation}'."},
+            )
+
+        raw = self._load_character_raw(path)
+        entry, items, index = self._find_owned_inventory_item_by_instance_id(raw, target_instance_id)
+        if not isinstance(entry, dict) or not isinstance(items, list) or index is None:
+            raise CharacterApiError(
+                status_code=404,
+                detail={"error": "not_found", "message": "Owned inventory item not found for instance_id."},
+            )
+
+        target_equippable = self._resolve_inventory_equippable_definition(entry)
+        if isinstance(target_equippable, dict) and str(target_equippable.get("classification") or "").strip().lower() in {"armor", "shield"}:
+            raise CharacterApiError(
+                status_code=400,
+                detail={"error": "invalid_operation", "message": "Target inventory entry is armor/shield; use equip_non_magic route."},
+            )
+
+        resolved_weapon = self._resolve_inventory_owned_weapon(entry)
+        if not isinstance(resolved_weapon, dict):
+            raise CharacterApiError(
+                status_code=400,
+                detail={"error": "invalid_operation", "message": "Target inventory entry is not a resolvable weapon."},
+            )
+
+        requested_mode = str(((payload or {}).get("mode") if isinstance(payload, dict) else "") or "").strip().lower()
+        if requested_mode not in {"", "one", "two"}:
+            raise CharacterApiError(
+                status_code=400,
+                detail={"error": "invalid_operation", "message": "Weapon mode must be 'one' or 'two'."},
+            )
+
+        supports_two_handed = bool(resolved_weapon.get("supports_two_handed") is True)
+        two_handed_only = bool(resolved_weapon.get("two_handed_only") is True)
+
+        if normalized_operation == "equip_off_hand" and two_handed_only:
+            raise CharacterApiError(
+                status_code=400,
+                detail={"error": "invalid_operation", "message": "Two-handed-only weapons cannot be assigned to off hand."},
+            )
+
+        if requested_mode == "two" and not supports_two_handed:
+            raise CharacterApiError(
+                status_code=400,
+                detail={"error": "invalid_operation", "message": "Weapon does not support two-handed mode."},
+            )
+
+        if normalized_operation == "set_weapon_mode" and requested_mode == "":
+            raise CharacterApiError(
+                status_code=400,
+                detail={"error": "invalid_operation", "message": "set_weapon_mode requires payload.mode of 'one' or 'two'."},
+            )
+
+        if normalized_operation in {"equip_main_hand", "equip_off_hand"} and requested_mode == "" and two_handed_only:
+            requested_mode = "two" if normalized_operation == "equip_main_hand" else "one"
+
+        if normalized_operation == "equip_main_hand" and requested_mode == "":
+            requested_mode = "one"
+        if normalized_operation == "equip_off_hand":
+            requested_mode = "one"
+
+        if normalized_operation == "set_weapon_mode" and requested_mode == "two":
+            if str(entry.get("equipped_slot") or "").strip().lower() == "off_hand":
+                raise CharacterApiError(
+                    status_code=400,
+                    detail={"error": "invalid_operation", "message": "Off-hand weapons cannot be set to two-handed mode."},
+                )
+
+        if normalized_operation in {"equip_main_hand", "set_weapon_mode"} and requested_mode == "two":
+            has_equipped_shield = False
+            for idx, other in enumerate(items):
+                if idx == index or not isinstance(other, dict):
+                    continue
+                if other.get("equipped") is not True:
+                    continue
+                other_equippable = self._resolve_inventory_equippable_definition(other)
+                if not isinstance(other_equippable, dict):
+                    continue
+                if str(other_equippable.get("classification") or "").strip().lower() == "shield":
+                    has_equipped_shield = True
+                    break
+            if has_equipped_shield:
+                raise CharacterApiError(
+                    status_code=400,
+                    detail={"error": "invalid_operation", "message": "Cannot use a two-handed weapon while a shield is equipped."},
+                )
+
+        if normalized_operation == "equip_main_hand":
+            for idx, other in enumerate(items):
+                if idx == index or not isinstance(other, dict):
+                    continue
+                if str(other.get("equipped_slot") or "").strip().lower() == "main_hand":
+                    other.pop("equipped_slot", None)
+                    other.pop("selected_mode", None)
+            entry["equipped"] = True
+            entry["equipped_slot"] = "main_hand"
+            entry["selected_mode"] = "two" if requested_mode == "two" else "one"
+            if entry.get("selected_mode") == "two":
+                for idx, other in enumerate(items):
+                    if idx == index or not isinstance(other, dict):
+                        continue
+                    if str(other.get("equipped_slot") or "").strip().lower() == "off_hand":
+                        other.pop("equipped_slot", None)
+                        other.pop("selected_mode", None)
+        elif normalized_operation == "equip_off_hand":
+            for idx, other in enumerate(items):
+                if idx == index or not isinstance(other, dict):
+                    continue
+                if str(other.get("equipped_slot") or "").strip().lower() == "off_hand":
+                    other.pop("equipped_slot", None)
+                    other.pop("selected_mode", None)
+            entry["equipped"] = True
+            entry["equipped_slot"] = "off_hand"
+            entry["selected_mode"] = "one"
+        elif normalized_operation == "unequip_weapon":
+            entry["equipped"] = False
+            entry.pop("equipped_slot", None)
+            entry.pop("selected_mode", None)
+        elif normalized_operation == "set_weapon_mode":
+            if requested_mode == "two":
+                if not supports_two_handed:
+                    raise CharacterApiError(
+                        status_code=400,
+                        detail={"error": "invalid_operation", "message": "Weapon does not support two-handed mode."},
+                    )
+                entry["equipped"] = True
+                entry["equipped_slot"] = "main_hand"
+                entry["selected_mode"] = "two"
+                for idx, other in enumerate(items):
+                    if idx == index or not isinstance(other, dict):
+                        continue
+                    if str(other.get("equipped_slot") or "").strip().lower() == "off_hand":
+                        other.pop("equipped_slot", None)
+                        other.pop("selected_mode", None)
+            else:
+                entry["selected_mode"] = "one"
+
+        profile = self._store_character_yaml(path, raw)
+        return {
+            "ok": True,
+            "instance_id": target_instance_id,
+            "equipped": bool(entry.get("equipped") is True),
+            "equipped_slot": str(entry.get("equipped_slot") or "").strip() or None,
+            "selected_mode": str(entry.get("selected_mode") or "").strip() or None,
             "player": profile,
         }
 
