@@ -66,7 +66,7 @@ class LanInventoryUiTests(unittest.TestCase):
         self.assertIn("function mutateInventoryNonMagicItem(instanceId, action)", source)
         self.assertIn('const endpoint = operation === "equip" ? "equip_non_magic" : "unequip_non_magic";', source)
         self.assertIn("await mutateInventoryNonMagicItem(instanceId, isInventoryItemEquipped(item) ? \"unequip\" : \"equip\");", source)
-        self.assertIn("refreshWeaponSelectors(false);", source)
+        self.assertIn("refreshWeaponSelectors();", source)
 
 
 if __name__ == "__main__":

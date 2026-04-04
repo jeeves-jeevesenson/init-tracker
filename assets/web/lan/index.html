@@ -5860,6 +5860,7 @@ __DAMAGE_TYPE_OPTIONS__
   };
   const pendingMagicItemMutations = new Set();
   const pendingNonMagicItemMutations = new Set();
+  const pendingWeaponAssignmentMutations = new Set();
 
   function normalizeInventorySlotTag(value){
     const normalized = normalizeLowerValue(value).replace(/[\s-]+/g, "_");
@@ -6098,16 +6099,7 @@ __DAMAGE_TYPE_OPTIONS__
         : (detail && typeof detail === "object" ? String(detail.message || detail.error || "") : "");
       throw new Error(message || `Magic-item ${operation} failed (${response.status}).`);
     }
-    const updatedPlayer = payload?.player;
-    if (updatedPlayer && typeof updatedPlayer === "object"){
-      if (!state || typeof state !== "object"){
-        state = {};
-      }
-      if (!state.player_profiles || typeof state.player_profiles !== "object"){
-        state.player_profiles = {};
-      }
-      state.player_profiles[playerName] = updatedPlayer;
-    }
+    updateClaimedPlayerProfileFromMutation(payload, playerName);
     return payload;
   }
 
@@ -6150,17 +6142,58 @@ __DAMAGE_TYPE_OPTIONS__
         : (detail && typeof detail === "object" ? String(detail.message || detail.error || "") : "");
       throw new Error(message || `Non-magic ${operation} failed (${response.status}).`);
     }
-    const updatedPlayer = payload?.player;
-    if (updatedPlayer && typeof updatedPlayer === "object"){
-      if (!state || typeof state !== "object"){
-        state = {};
-      }
-      if (!state.player_profiles || typeof state.player_profiles !== "object"){
-        state.player_profiles = {};
-      }
-      state.player_profiles[playerName] = updatedPlayer;
-    }
+    updateClaimedPlayerProfileFromMutation(payload, playerName);
     return payload;
+  }
+
+  function updateClaimedPlayerProfileFromMutation(payload, playerName){
+    const updatedPlayer = payload?.player;
+    if (!updatedPlayer || typeof updatedPlayer !== "object") return;
+    if (!state || typeof state !== "object"){
+      state = {};
+    }
+    if (!state.player_profiles || typeof state.player_profiles !== "object"){
+      state.player_profiles = {};
+    }
+    state.player_profiles[playerName] = updatedPlayer;
+  }
+
+  function getClaimedAttackWeaponByIdMap(){
+    const byId = new Map();
+    getClaimedWeapons().forEach((weapon) => {
+      const key = normalizeLowerValue(weapon?.id || weapon?.name);
+      if (!key || byId.has(key)) return;
+      byId.set(key, weapon);
+    });
+    return byId;
+  }
+
+  function resolveOwnedInventoryWeaponForSelector(item, attackById){
+    if (!item || typeof item !== "object") return null;
+    const instanceId = String(item.instance_id || "").trim();
+    if (!instanceId) return null;
+    const explicitWeapon = item.weapon && typeof item.weapon === "object" ? item.weapon : null;
+    const magicMeta = resolveOwnedInventoryMagicItem(item);
+    const maybeMagicWeapon = magicMeta && typeof magicMeta === "object" ? magicMeta : null;
+    const attackWeapon = attackById.get(normalizeLowerValue(item.id || item.name));
+    const weapon = explicitWeapon || attackWeapon || maybeMagicWeapon;
+    if (!weapon || typeof weapon !== "object") return null;
+    const category = normalizeLowerValue(weapon.category || weapon.type || "");
+    const hasWeaponDamage = !!(weapon?.one_handed?.damage_formula || weapon?.two_handed?.damage_formula);
+    if (!hasWeaponDamage && !category.includes("weapon") && !category.includes("melee") && !category.includes("ranged")){
+      return null;
+    }
+    return {
+      instance_id: instanceId,
+      item,
+      weapon: {
+        ...weapon,
+        id: String(weapon.id || item.id || item.name || instanceId).trim(),
+        name: String(weapon.name || item.name || weapon.id || item.id || "Weapon").trim() || "Weapon",
+      },
+      equipped_slot: normalizeInventorySlotTag(item.equipped_slot),
+      selected_mode: normalizeLowerValue(item.selected_mode) === "two" ? "two" : "one",
+    };
   }
 
   function getEquippedInventoryDefaultsBySlot(){
@@ -6270,7 +6303,7 @@ __DAMAGE_TYPE_OPTIONS__
           renderInventoryItemList();
           try {
             await mutateInventoryNonMagicItem(instanceId, isInventoryItemEquipped(item) ? "unequip" : "equip");
-            refreshWeaponSelectors(false);
+            refreshWeaponSelectors();
           } catch (err){
             setHelpMessage(err?.message ? String(err.message) : "Failed to update item.");
           } finally {
@@ -6508,35 +6541,47 @@ __DAMAGE_TYPE_OPTIONS__
     return name.includes("shield");
   }
 
-  function buildMainhandOptions(weapons){
+  function getOwnedInventoryWeaponEntries(){
+    const attackById = getClaimedAttackWeaponByIdMap();
+    return getClaimedInventoryItems()
+      .map((item) => resolveOwnedInventoryWeaponForSelector(item, attackById))
+      .filter((entry) => !!entry);
+  }
+
+  function buildMainhandOptions(weaponEntries){
     const options = [];
-    (Array.isArray(weapons) ? weapons : []).forEach((weapon) => {
+    (Array.isArray(weaponEntries) ? weaponEntries : []).forEach((entry) => {
+      const instanceId = String(entry?.instance_id || "").trim();
+      const weapon = entry?.weapon;
       const id = String(weapon?.id || weapon?.name || "").trim();
       const name = String(weapon?.name || weapon?.id || "Weapon").trim() || "Weapon";
+      if (!instanceId || !id) return;
       if (!id) return;
       if (isWeaponVersatile(weapon)){
-        options.push({value: `${id}|one`, weapon, mode: "one", label: `${name} (One Handed)`});
-        options.push({value: `${id}|two`, weapon, mode: "two", label: `${name} (Two Handed)`});
+        options.push({value: `${instanceId}|one`, instance_id: instanceId, item: entry?.item, weapon, mode: "one", label: `${name} (One Handed)`});
+        options.push({value: `${instanceId}|two`, instance_id: instanceId, item: entry?.item, weapon, mode: "two", label: `${name} (Two Handed)`});
         return;
       }
       if (isWeaponTwoHandedOnly(weapon)){
-        options.push({value: `${id}|two`, weapon, mode: "two", label: `${name} (Two Handed)`});
+        options.push({value: `${instanceId}|two`, instance_id: instanceId, item: entry?.item, weapon, mode: "two", label: `${name} (Two Handed)`});
         return;
       }
-      options.push({value: `${id}|one`, weapon, mode: "one", label: `${name} (One Handed)`});
+      options.push({value: `${instanceId}|one`, instance_id: instanceId, item: entry?.item, weapon, mode: "one", label: `${name} (One Handed)`});
     });
     return options;
   }
 
-  function buildOffhandOptions(weapons){
+  function buildOffhandOptions(weaponEntries){
     const options = [];
-    (Array.isArray(weapons) ? weapons : []).forEach((weapon) => {
+    (Array.isArray(weaponEntries) ? weaponEntries : []).forEach((entry) => {
+      const instanceId = String(entry?.instance_id || "").trim();
+      const weapon = entry?.weapon;
       const id = String(weapon?.id || weapon?.name || "").trim();
       const name = String(weapon?.name || weapon?.id || "Weapon").trim() || "Weapon";
-      if (!id) return;
+      if (!instanceId || !id) return;
       if (isWeaponTwoHandedOnly(weapon)) return;
       if (isWeaponLight(weapon)){
-        options.push({value: `${id}|one`, weapon, mode: "one", label: `${name} (One Handed)`});
+        options.push({value: `${instanceId}|one`, instance_id: instanceId, item: entry?.item, weapon, mode: "one", label: `${name} (One Handed)`, offhand_kind: "weapon"});
       }
     });
     const inventoryItems = getClaimedInventoryItems();
@@ -6553,8 +6598,30 @@ __DAMAGE_TYPE_OPTIONS__
   function getSelectedOffhandOption(){
     const selectedValue = String(selectedOffhandWeaponValue || "").trim();
     if (!selectedValue) return null;
-    const offhandOptions = buildOffhandOptions(getClaimedWeapons());
+    const offhandOptions = buildOffhandOptions(getOwnedInventoryWeaponEntries());
     return offhandOptions.find((entry) => entry.value === selectedValue) || null;
+  }
+
+  function getEquippedWeaponSelectionsFromInventory(mainhandOptions, offhandOptions){
+    const defaults = {mainhand: "", offhand: ""};
+    getOwnedInventoryWeaponEntries().forEach((entry) => {
+      const instanceId = String(entry?.instance_id || "").trim();
+      if (!instanceId) return;
+      const selectedMode = entry?.selected_mode === "two" ? "two" : "one";
+      if (entry?.equipped_slot === "main_hand"){
+        const preferred = `${instanceId}|${selectedMode}`;
+        const fallback = `${instanceId}|one`;
+        defaults.mainhand = mainhandOptions.some((option) => option.value === preferred)
+          ? preferred
+          : (mainhandOptions.some((option) => option.value === fallback) ? fallback : defaults.mainhand);
+      } else if (entry?.equipped_slot === "off_hand"){
+        const offhandValue = `${instanceId}|one`;
+        if (offhandOptions.some((option) => option.value === offhandValue)){
+          defaults.offhand = offhandValue;
+        }
+      }
+    });
+    return defaults;
   }
 
   function sendEquipmentUpdate(){
@@ -6578,22 +6645,18 @@ __DAMAGE_TYPE_OPTIONS__
     send(payload);
   }
 
-  function getDefaultMainhandValue(weapons, mainhandOptions){
-    const defaultWeapon = getDefaultAttackWeapon(weapons);
-    const defaultId = String(defaultWeapon?.id || defaultWeapon?.name || "").trim();
-    if (!defaultId) return "";
-    const preferredMode = String(defaultWeapon?.selected_mode || "").trim().toLowerCase() === "two" ? "two" : "one";
-    const preferred = `${defaultId}|${preferredMode}`;
-    if (mainhandOptions.some((entry) => entry.value === preferred)) return preferred;
-    const fallback = mainhandOptions.find((entry) => entry.value.startsWith(`${defaultId}|`));
-    return fallback ? fallback.value : (mainhandOptions[0]?.value || "");
+  function getDefaultMainhandValue(mainhandOptions){
+    const equippedDefaults = getEquippedWeaponSelectionsFromInventory(mainhandOptions, []);
+    if (equippedDefaults.mainhand && mainhandOptions.some((entry) => entry.value === equippedDefaults.mainhand)){
+      return equippedDefaults.mainhand;
+    }
+    return mainhandOptions[0]?.value || "";
   }
 
   function getSelectedMainhandWeapon(){
-    const weapons = getClaimedWeapons();
-    const options = buildMainhandOptions(weapons);
+    const options = buildMainhandOptions(getOwnedInventoryWeaponEntries());
     const selectedValue = String(selectedMainhandWeaponValue || "").trim();
-    const selected = options.find((entry) => entry.value === selectedValue) || options.find((entry) => entry.value === getDefaultMainhandValue(weapons, options)) || options[0] || null;
+    const selected = options.find((entry) => entry.value === selectedValue) || options.find((entry) => entry.value === getDefaultMainhandValue(options)) || options[0] || null;
     if (!selected) return null;
     const mode = selected.mode === "two" ? "two" : "one";
     return {
@@ -6613,10 +6676,21 @@ __DAMAGE_TYPE_OPTIONS__
     return selectedValue.endsWith("|two");
   }
 
-  function refreshWeaponSelectors(syncEquipment=true){
-    const weapons = getClaimedWeapons();
-    const mainhandOptions = buildMainhandOptions(weapons);
-    const offhandOptions = buildOffhandOptions(weapons);
+  function parseWeaponSelectorValue(value){
+    const raw = String(value || "").trim();
+    if (!raw) return {instanceId: "", mode: "one"};
+    const [instanceId, mode] = raw.split("|");
+    return {
+      instanceId: String(instanceId || "").trim(),
+      mode: String(mode || "").trim().toLowerCase() === "two" ? "two" : "one",
+    };
+  }
+
+  function refreshWeaponSelectors(){
+    const weaponEntries = getOwnedInventoryWeaponEntries();
+    const mainhandOptions = buildMainhandOptions(weaponEntries);
+    const offhandOptions = buildOffhandOptions(weaponEntries);
+    const equippedDefaults = getEquippedWeaponSelectionsFromInventory(mainhandOptions, offhandOptions);
     if (mainhandWeaponSelectEl){
       mainhandWeaponSelectEl.textContent = "";
       mainhandOptions.forEach((entry) => {
@@ -6625,11 +6699,12 @@ __DAMAGE_TYPE_OPTIONS__
         option.textContent = entry.label;
         mainhandWeaponSelectEl.appendChild(option);
       });
-      const candidate = String(selectedMainhandWeaponValue || "").trim();
+      const candidate = String(equippedDefaults.mainhand || selectedMainhandWeaponValue || "").trim();
       if (candidate && mainhandOptions.some((entry) => entry.value === candidate)){
         mainhandWeaponSelectEl.value = candidate;
+        selectedMainhandWeaponValue = candidate;
       } else {
-        const fallback = getDefaultMainhandValue(weapons, mainhandOptions);
+        const fallback = getDefaultMainhandValue(mainhandOptions);
         selectedMainhandWeaponValue = fallback;
         mainhandWeaponSelectEl.value = fallback;
       }
@@ -6647,7 +6722,7 @@ __DAMAGE_TYPE_OPTIONS__
         option.textContent = entry.label;
         offhandWeaponSelectEl.appendChild(option);
       });
-      const savedCandidate = String(cachedOffhandWeaponValue || selectedOffhandWeaponValue || "").trim();
+      const savedCandidate = String(equippedDefaults.offhand || cachedOffhandWeaponValue || selectedOffhandWeaponValue || "").trim();
       const validSaved = savedCandidate && offhandOptions.some((entry) => entry.value === savedCandidate);
       if (!mainhandTwo && validSaved){
         selectedOffhandWeaponValue = savedCandidate;
@@ -6663,10 +6738,48 @@ __DAMAGE_TYPE_OPTIONS__
       selectedOffhandWeaponValue = "";
     }
     saveCurrentWeaponSelections();
-    if (syncEquipment){
-      sendEquipmentUpdate();
-    }
     refreshInventorySlotSelectors();
+  }
+
+  async function mutateInventoryWeaponAssignment(instanceId, action, extra=null){
+    const operation = String(action || "").trim().toLowerCase();
+    const endpointByAction = {
+      equip_main_hand: "equip_weapon_mainhand",
+      equip_off_hand: "equip_weapon_offhand",
+      unequip_weapon: "unequip_weapon",
+      set_weapon_mode: "set_weapon_mode",
+    };
+    const endpoint = endpointByAction[operation];
+    if (!endpoint){
+      throw new Error(`Unsupported weapon assignment action: ${action}`);
+    }
+    const playerName = getClaimedProfileLookupName();
+    if (!playerName){
+      throw new Error("Claim a character first.");
+    }
+    const targetInstanceId = String(instanceId || "").trim();
+    if (!targetInstanceId){
+      throw new Error("Missing inventory item instance ID.");
+    }
+    const requestOptions = {
+      method: "POST",
+      headers: {"Accept": "application/json"},
+    };
+    if (extra && typeof extra === "object"){
+      requestOptions.headers["Content-Type"] = "application/json";
+      requestOptions.body = JSON.stringify(extra);
+    }
+    const response = await fetch(`/api/characters/${encodeURIComponent(playerName)}/inventory/items/${encodeURIComponent(targetInstanceId)}/${endpoint}`, requestOptions);
+    const payload = await response.json().catch(() => ({}));
+    if (!response.ok){
+      const detail = payload?.detail;
+      const message = typeof detail === "string"
+        ? detail
+        : (detail && typeof detail === "object" ? String(detail.message || detail.error || "") : "");
+      throw new Error(message || `Weapon assignment ${operation} failed (${response.status}).`);
+    }
+    updateClaimedPlayerProfileFromMutation(payload, playerName);
+    return payload;
   }
 
   function setInventoryPanelOpen(open){
@@ -15043,12 +15156,10 @@ __DAMAGE_TYPE_OPTIONS__
         }
         const meleeWeaponId = String(meleeWeapon.id || "").trim();
         if (meleeWeaponId){
-          const preferredValue = `${meleeWeaponId}|one`;
-          const fallbackValue = `${meleeWeaponId}|two`;
-          const mainhandOptions = buildMainhandOptions(getClaimedWeapons());
-          selectedMainhandWeaponValue = mainhandOptions.some((entry) => entry.value === preferredValue)
-            ? preferredValue
-            : (mainhandOptions.some((entry) => entry.value === fallbackValue) ? fallbackValue : selectedMainhandWeaponValue);
+          const mainhandOptions = buildMainhandOptions(getOwnedInventoryWeaponEntries());
+          const preferred = mainhandOptions.find((entry) => String(entry?.weapon?.id || "").trim() === meleeWeaponId && entry.mode === "one");
+          const fallback = mainhandOptions.find((entry) => String(entry?.weapon?.id || "").trim() === meleeWeaponId);
+          selectedMainhandWeaponValue = String(preferred?.value || fallback?.value || selectedMainhandWeaponValue || "").trim();
           refreshWeaponSelectors();
         }
         pendingOpportunityAttack = true;
@@ -22860,18 +22971,91 @@ __DAMAGE_TYPE_OPTIONS__
     });
   }
   if (mainhandWeaponSelectEl){
-    mainhandWeaponSelectEl.addEventListener("change", (event) => {
-      selectedMainhandWeaponValue = String(event.target.value || "").trim();
-      refreshWeaponSelectors();
-      draw();
+    mainhandWeaponSelectEl.addEventListener("change", async (event) => {
+      const nextValue = String(event.target.value || "").trim();
+      const previousValue = String(selectedMainhandWeaponValue || "").trim();
+      if (!nextValue || nextValue === previousValue){
+        event.target.value = previousValue;
+        return;
+      }
+      const parsedNext = parseWeaponSelectorValue(nextValue);
+      if (!parsedNext.instanceId){
+        event.target.value = previousValue;
+        return;
+      }
+      const pendingKey = `mainhand:${parsedNext.instanceId}`;
+      if (pendingWeaponAssignmentMutations.has(pendingKey)){
+        event.target.value = previousValue;
+        return;
+      }
+      pendingWeaponAssignmentMutations.add(pendingKey);
+      mainhandWeaponSelectEl.disabled = true;
+      try {
+        const parsedPrevious = parseWeaponSelectorValue(previousValue);
+        if (parsedPrevious.instanceId && parsedPrevious.instanceId === parsedNext.instanceId){
+          await mutateInventoryWeaponAssignment(parsedNext.instanceId, "set_weapon_mode", {mode: parsedNext.mode});
+        } else {
+          await mutateInventoryWeaponAssignment(parsedNext.instanceId, "equip_main_hand", {mode: parsedNext.mode});
+        }
+        selectedMainhandWeaponValue = nextValue;
+        if (parsedNext.mode === "two"){
+          selectedOffhandWeaponValue = "";
+          cachedOffhandWeaponValue = "";
+        }
+        refreshWeaponSelectors();
+        saveCurrentWeaponSelections();
+      } catch (err){
+        localToast(err?.message || "Could not update main-hand weapon.");
+        selectedMainhandWeaponValue = previousValue;
+        refreshWeaponSelectors();
+      } finally {
+        pendingWeaponAssignmentMutations.delete(pendingKey);
+        if (mainhandWeaponSelectEl){
+          mainhandWeaponSelectEl.disabled = false;
+        }
+        draw();
+      }
     });
   }
   if (offhandWeaponSelectEl){
-    offhandWeaponSelectEl.addEventListener("change", (event) => {
-      selectedOffhandWeaponValue = String(event.target.value || "").trim();
-      cachedOffhandWeaponValue = selectedOffhandWeaponValue;
-      saveCurrentWeaponSelections();
-      draw();
+    offhandWeaponSelectEl.addEventListener("change", async (event) => {
+      const nextValue = String(event.target.value || "").trim();
+      const previousValue = String(selectedOffhandWeaponValue || "").trim();
+      const previousParsed = parseWeaponSelectorValue(previousValue);
+      const parsedNext = parseWeaponSelectorValue(nextValue);
+      const mutationToken = `offhand:${parsedNext.instanceId || previousParsed.instanceId || "none"}`;
+      if (pendingWeaponAssignmentMutations.has(mutationToken)){
+        event.target.value = previousValue;
+        return;
+      }
+      pendingWeaponAssignmentMutations.add(mutationToken);
+      offhandWeaponSelectEl.disabled = true;
+      try {
+        if (!parsedNext.instanceId){
+          if (previousParsed.instanceId){
+            await mutateInventoryWeaponAssignment(previousParsed.instanceId, "unequip_weapon");
+          }
+          selectedOffhandWeaponValue = "";
+          cachedOffhandWeaponValue = "";
+        } else {
+          await mutateInventoryWeaponAssignment(parsedNext.instanceId, "equip_off_hand");
+          selectedOffhandWeaponValue = nextValue;
+          cachedOffhandWeaponValue = nextValue;
+        }
+        refreshWeaponSelectors();
+        saveCurrentWeaponSelections();
+      } catch (err){
+        localToast(err?.message || "Could not update off-hand weapon.");
+        selectedOffhandWeaponValue = previousValue;
+        cachedOffhandWeaponValue = previousValue;
+        refreshWeaponSelectors();
+      } finally {
+        pendingWeaponAssignmentMutations.delete(mutationToken);
+        if (offhandWeaponSelectEl){
+          offhandWeaponSelectEl.disabled = isMainhandSelectionTwoHanded();
+        }
+        draw();
+      }
     });
   }
   Object.entries(inventorySlotSelectEls).forEach(([slotKey, selectEl]) => {
