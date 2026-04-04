@@ -5859,6 +5859,7 @@ __DAMAGE_TYPE_OPTIONS__
     ring: ["ring"],
   };
   const pendingMagicItemMutations = new Set();
+  const pendingNonMagicItemMutations = new Set();
 
   function normalizeInventorySlotTag(value){
     const normalized = normalizeLowerValue(value).replace(/[\s-]+/g, "_");
@@ -6110,6 +6111,58 @@ __DAMAGE_TYPE_OPTIONS__
     return payload;
   }
 
+  function resolveOwnedInventoryNonMagicEquippable(item){
+    if (!item || typeof item !== "object") return null;
+    if (resolveOwnedInventoryMagicItem(item)) return null;
+    const slots = getInventoryItemMatchedSlots(item);
+    if (isShieldItem(item)){
+      return {kind: "shield"};
+    }
+    if (slots.includes("armour")){
+      return {kind: "armor"};
+    }
+    return null;
+  }
+
+  async function mutateInventoryNonMagicItem(instanceId, action){
+    const operation = String(action || "").trim().toLowerCase();
+    if (!["equip", "unequip"].includes(operation)){
+      throw new Error(`Unsupported non-magic action: ${action}`);
+    }
+    const playerName = getClaimedProfileLookupName();
+    if (!playerName){
+      throw new Error("Claim a character first.");
+    }
+    const targetInstanceId = String(instanceId || "").trim();
+    if (!targetInstanceId){
+      throw new Error("Missing inventory item instance ID.");
+    }
+    const endpoint = operation === "equip" ? "equip_non_magic" : "unequip_non_magic";
+    const response = await fetch(`/api/characters/${encodeURIComponent(playerName)}/inventory/items/${encodeURIComponent(targetInstanceId)}/${endpoint}`, {
+      method: "POST",
+      headers: {"Accept": "application/json"},
+    });
+    const payload = await response.json().catch(() => ({}));
+    if (!response.ok){
+      const detail = payload?.detail;
+      const message = typeof detail === "string"
+        ? detail
+        : (detail && typeof detail === "object" ? String(detail.message || detail.error || "") : "");
+      throw new Error(message || `Non-magic ${operation} failed (${response.status}).`);
+    }
+    const updatedPlayer = payload?.player;
+    if (updatedPlayer && typeof updatedPlayer === "object"){
+      if (!state || typeof state !== "object"){
+        state = {};
+      }
+      if (!state.player_profiles || typeof state.player_profiles !== "object"){
+        state.player_profiles = {};
+      }
+      state.player_profiles[playerName] = updatedPlayer;
+    }
+    return payload;
+  }
+
   function getEquippedInventoryDefaultsBySlot(){
     const defaults = {
       head: [],
@@ -6185,8 +6238,51 @@ __DAMAGE_TYPE_OPTIONS__
       main.append(name, meta);
       row.appendChild(main);
 
-      const magicMeta = resolveOwnedInventoryMagicItem(item);
       const instanceId = String(item?.instance_id || "").trim();
+      const nonMagicEquippable = resolveOwnedInventoryNonMagicEquippable(item);
+      if (nonMagicEquippable && instanceId){
+        const status = document.createElement("span");
+        status.className = "inventory-item-magic-status";
+        if (isInventoryItemEquipped(item)){
+          const equippedChip = document.createElement("span");
+          equippedChip.className = "chip";
+          equippedChip.textContent = "Equipped";
+          status.appendChild(equippedChip);
+        }
+        const typeChip = document.createElement("span");
+        typeChip.className = "chip";
+        typeChip.textContent = nonMagicEquippable.kind === "shield" ? "Shield" : "Armor";
+        status.appendChild(typeChip);
+        if (status.childNodes.length){
+          main.appendChild(status);
+        }
+        const controls = document.createElement("span");
+        controls.className = "inventory-item-actions";
+        const pendingKey = `${instanceId}`;
+        const isPending = pendingNonMagicItemMutations.has(pendingKey);
+        const equipBtn = document.createElement("button");
+        equipBtn.type = "button";
+        equipBtn.className = "btn";
+        equipBtn.textContent = isInventoryItemEquipped(item) ? "Unequip" : "Equip";
+        equipBtn.disabled = isPending;
+        equipBtn.addEventListener("click", async () => {
+          pendingNonMagicItemMutations.add(pendingKey);
+          renderInventoryItemList();
+          try {
+            await mutateInventoryNonMagicItem(instanceId, isInventoryItemEquipped(item) ? "unequip" : "equip");
+            refreshWeaponSelectors(false);
+          } catch (err){
+            setHelpMessage(err?.message ? String(err.message) : "Failed to update item.");
+          } finally {
+            pendingNonMagicItemMutations.delete(pendingKey);
+            renderInventoryItemList();
+          }
+        });
+        controls.appendChild(equipBtn);
+        row.appendChild(controls);
+      }
+
+      const magicMeta = resolveOwnedInventoryMagicItem(item);
       if (magicMeta && instanceId){
         const status = document.createElement("span");
         status.className = "inventory-item-magic-status";
@@ -6517,7 +6613,7 @@ __DAMAGE_TYPE_OPTIONS__
     return selectedValue.endsWith("|two");
   }
 
-  function refreshWeaponSelectors(){
+  function refreshWeaponSelectors(syncEquipment=true){
     const weapons = getClaimedWeapons();
     const mainhandOptions = buildMainhandOptions(weapons);
     const offhandOptions = buildOffhandOptions(weapons);
@@ -6567,7 +6663,9 @@ __DAMAGE_TYPE_OPTIONS__
       selectedOffhandWeaponValue = "";
     }
     saveCurrentWeaponSelections();
-    sendEquipmentUpdate();
+    if (syncEquipment){
+      sendEquipmentUpdate();
+    }
     refreshInventorySlotSelectors();
   }
 

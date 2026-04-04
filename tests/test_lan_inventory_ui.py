@@ -36,6 +36,7 @@ class LanInventoryUiTests(unittest.TestCase):
         self.assertNotIn("inventory.equipped", source)
         self.assertNotIn("profile?.magic_items", source)
         self.assertIn("const equippedDefaults = getEquippedInventoryDefaultsBySlot();", source)
+        self.assertIn("if (!isInventoryItemEquipped(item)) return;", source)
 
     def test_inventory_slot_matching_supports_explicit_tags_and_common_armor_names(self):
         source = self.SOURCE_PATH.read_text(encoding="utf-8")
@@ -59,6 +60,13 @@ class LanInventoryUiTests(unittest.TestCase):
         self.assertIn('type: "inventory_adjust_consumable"', source)
         self.assertIn('type: "use_consumable"', source)
         self.assertIn("function getConsumablesLibrary()", source)
+
+    def test_inventory_non_magic_equippables_use_instance_targeted_routes(self):
+        source = self.SOURCE_PATH.read_text(encoding="utf-8")
+        self.assertIn("function mutateInventoryNonMagicItem(instanceId, action)", source)
+        self.assertIn('const endpoint = operation === "equip" ? "equip_non_magic" : "unequip_non_magic";', source)
+        self.assertIn("await mutateInventoryNonMagicItem(instanceId, isInventoryItemEquipped(item) ? \"unequip\" : \"equip\");", source)
+        self.assertIn("refreshWeaponSelectors(false);", source)
 
 
 if __name__ == "__main__":
