@@ -59,6 +59,12 @@ inventory:
 ## Equipment persistence
 
 Owned item equipment state must be persisted directly on each owned item (`equipped: true|false`) so players do not need to re-equip after restart.
+Weapon hand-slot selection is also owned-instance state on `inventory.items[]`:
+
+- `equipped_slot: main_hand|off_hand`
+- `selected_mode: one|two` for versatile/two-handed usage
+
+This replaces transient/local-only hand selectors as the source of truth.
 
 ## Attunement rules
 
