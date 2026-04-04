@@ -5861,6 +5861,8 @@ __DAMAGE_TYPE_OPTIONS__
   const pendingMagicItemMutations = new Set();
   const pendingNonMagicItemMutations = new Set();
   const pendingWeaponAssignmentMutations = new Set();
+  const pendingWearableSlotMutations = new Set();
+  const wearableSlotKeys = new Set(["head", "cloak", "gloves", "boots", "amulet", "ring_one", "ring_two"]);
 
   function normalizeInventorySlotTag(value){
     const normalized = normalizeLowerValue(value).replace(/[\s-]+/g, "_");
@@ -5952,7 +5954,7 @@ __DAMAGE_TYPE_OPTIONS__
   }
 
   function getInventoryItemValue(item){
-    return String(item?.id || item?.name || "").trim();
+    return String(item?.instance_id || "").trim();
   }
 
   function getInventoryItemLabel(item){
@@ -6198,25 +6200,26 @@ __DAMAGE_TYPE_OPTIONS__
 
   function getEquippedInventoryDefaultsBySlot(){
     const defaults = {
-      head: [],
-      cloak: [],
-      armour: [],
-      gloves: [],
-      boots: [],
-      amulet: [],
-      ring: [],
+      head: "",
+      cloak: "",
+      gloves: "",
+      boots: "",
+      amulet: "",
+      ring_one: "",
+      ring_two: "",
     };
     getClaimedInventoryItems().forEach((item) => {
-      if (!isInventoryItemEquipped(item)) return;
       const value = getInventoryItemValue(item);
       if (!value) return;
-      const matchedSlots = getInventoryItemMatchedSlots(item);
-      matchedSlots.forEach((slot) => {
-        if (!defaults[slot]) return;
-        if (!defaults[slot].includes(value)){
-          defaults[slot].push(value);
-        }
-      });
+      const equippedSlot = normalizeInventorySlotTag(item?.equipped_slot);
+      if (!equippedSlot) return;
+      if (equippedSlot === "ring_one" || equippedSlot === "ring_two"){
+        defaults[equippedSlot] = value;
+        return;
+      }
+      if (Object.prototype.hasOwnProperty.call(defaults, equippedSlot)){
+        defaults[equippedSlot] = value;
+      }
     });
     return defaults;
   }
@@ -6418,7 +6421,6 @@ __DAMAGE_TYPE_OPTIONS__
   function refreshInventorySlotSelectors(){
     const disabled = claimedCid === null || claimedCid === undefined;
     const equippedDefaults = getEquippedInventoryDefaultsBySlot();
-    const usedRingDefaults = new Set();
     Object.entries(inventorySlotSelectEls).forEach(([slotKey, selectEl]) => {
       if (!selectEl) return;
       const current = String(inventoryLoadoutSelections[slotKey] || selectEl.value || "").trim();
@@ -6434,18 +6436,58 @@ __DAMAGE_TYPE_OPTIONS__
         option.textContent = entry.label;
         selectEl.appendChild(option);
       });
-      const defaultPool = slotKey === "ring_one" || slotKey === "ring_two"
-        ? equippedDefaults.ring.filter((value) => !usedRingDefaults.has(value))
-        : (equippedDefaults[slotKey] || []);
-      const fallback = defaultPool.find((value) => options.some((entry) => entry.value === value)) || "";
+      const fallback = options.some((entry) => entry.value === equippedDefaults[slotKey])
+        ? equippedDefaults[slotKey]
+        : "";
       selectEl.value = options.some((entry) => entry.value === current) ? current : fallback;
-      if ((slotKey === "ring_one" || slotKey === "ring_two") && selectEl.value){
-        usedRingDefaults.add(selectEl.value);
-      }
-      selectEl.disabled = disabled;
+      const slotPending = pendingWearableSlotMutations.has(slotKey);
+      selectEl.disabled = disabled || (wearableSlotKeys.has(slotKey) && slotPending);
       inventoryLoadoutSelections[slotKey] = selectEl.value;
     });
     renderInventoryItemList();
+  }
+
+  async function mutateInventoryWearable(instanceId, action, slot=""){
+    const operation = String(action || "").trim().toLowerCase();
+    const endpointByAction = {
+      equip: "equip_wearable",
+      unequip: "unequip_wearable",
+    };
+    const endpoint = endpointByAction[operation];
+    if (!endpoint){
+      throw new Error(`Unsupported wearable action: ${action}`);
+    }
+    const playerName = getClaimedProfileLookupName();
+    if (!playerName){
+      throw new Error("Claim a character first.");
+    }
+    const targetInstanceId = String(instanceId || "").trim();
+    if (!targetInstanceId){
+      throw new Error("Missing inventory item instance ID.");
+    }
+    const requestOptions = {
+      method: "POST",
+      headers: {"Accept": "application/json"},
+    };
+    if (operation === "equip"){
+      const targetSlot = normalizeInventorySlotTag(slot);
+      if (!targetSlot){
+        throw new Error("Missing wearable slot.");
+      }
+      requestOptions.headers["Content-Type"] = "application/json";
+      requestOptions.body = JSON.stringify({slot: targetSlot});
+    }
+    const response = await fetch(`/api/characters/${encodeURIComponent(playerName)}/inventory/items/${encodeURIComponent(targetInstanceId)}/${endpoint}`, requestOptions);
+    const payload = await response.json().catch(() => ({}));
+    if (!response.ok){
+      const detail = payload?.detail;
+      const message = typeof detail === "string"
+        ? detail
+        : (detail && typeof detail === "object" ? String(detail.message || detail.error || "") : "");
+      throw new Error(message || `Wearable ${operation} failed (${response.status}).`);
+    }
+    updateClaimedPlayerProfileFromMutation(payload, playerName);
+    return payload;
   }
 
   function getWeaponSelectionCharacterKey(){
@@ -23060,9 +23102,40 @@ __DAMAGE_TYPE_OPTIONS__
   }
   Object.entries(inventorySlotSelectEls).forEach(([slotKey, selectEl]) => {
     if (!selectEl) return;
-    selectEl.addEventListener("change", (event) => {
-      inventoryLoadoutSelections[slotKey] = String(event.target.value || "").trim();
-      draw();
+    selectEl.addEventListener("change", async (event) => {
+      const nextValue = String(event.target.value || "").trim();
+      const previousValue = String(inventoryLoadoutSelections[slotKey] || "").trim();
+      if (!wearableSlotKeys.has(slotKey)){
+        inventoryLoadoutSelections[slotKey] = nextValue;
+        draw();
+        return;
+      }
+      if (pendingWearableSlotMutations.has(slotKey)){
+        event.target.value = previousValue;
+        return;
+      }
+      pendingWearableSlotMutations.add(slotKey);
+      selectEl.disabled = true;
+      try {
+        const equippedBySlot = getEquippedInventoryDefaultsBySlot();
+        const previousInstanceId = String(equippedBySlot[slotKey] || "").trim();
+        if (!nextValue){
+          if (previousInstanceId){
+            await mutateInventoryWearable(previousInstanceId, "unequip");
+          }
+        } else {
+          await mutateInventoryWearable(nextValue, "equip", slotKey);
+        }
+        refreshInventorySlotSelectors();
+      } catch (err){
+        localToast(err?.message || "Could not update wearable slot.");
+        inventoryLoadoutSelections[slotKey] = previousValue;
+        refreshInventorySlotSelectors();
+      } finally {
+        pendingWearableSlotMutations.delete(slotKey);
+        refreshInventorySlotSelectors();
+        draw();
+      }
     });
   });
   if (inventoryConsumableAddBtn){
