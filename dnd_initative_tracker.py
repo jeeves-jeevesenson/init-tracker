@@ -2073,6 +2073,7 @@ class LanController:
         self._fastapi_app.mount("/monsters/images", StaticFiles(directory=monster_images_dir), name="monster-images")
         web_entrypoint = assets_dir / "web" / "new_character" / "index.html"
         edit_entrypoint = assets_dir / "web" / "edit_character" / "index.html"
+        shop_admin_entrypoint = assets_dir / "web" / "shop_admin" / "index.html"
         required_config_ids = (
             "draft-status",
             "overwrite-button",
@@ -2095,10 +2096,14 @@ class LanController:
             response = await call_next(request)
             path = request.url.path
             # Never cache HTML shells; they decide which JS/CSS to load.
-            if path in ("/", "/planning", "/new_character", "/edit_character"):
+            if path in ("/", "/planning", "/new_character", "/edit_character", "/shop_admin"):
                 response.headers["Cache-Control"] = "no-store"
             # Force revalidation of the web editors so updates show up immediately.
-            elif path.startswith("/assets/web/new_character/") or path.startswith("/assets/web/edit_character/"):
+            elif (
+                path.startswith("/assets/web/new_character/")
+                or path.startswith("/assets/web/edit_character/")
+                or path.startswith("/assets/web/shop_admin/")
+            ):
                 response.headers["Cache-Control"] = "no-cache, must-revalidate"
             return response
 
@@ -2116,6 +2121,17 @@ class LanController:
                         "Edit character HTML shell is invalid. Missing required "
                         f"selectors/assets: {', '.join(missing)}"
                     ),
+                )
+            return html
+
+        def load_shop_admin_html() -> str:
+            if not shop_admin_entrypoint.exists():
+                raise HTTPException(status_code=404, detail="Shop admin page missing.")
+            html = _inject_asset_version(shop_admin_entrypoint.read_text(encoding="utf-8"))
+            if '/assets/web/shop_admin/app.js' not in html:
+                raise HTTPException(
+                    status_code=500,
+                    detail="Shop admin HTML shell is invalid. Missing required script asset.",
                 )
             return html
         for asset_name in ("alert.wav", "ko.wav"):
@@ -2153,6 +2169,10 @@ class LanController:
         @self._fastapi_app.get("/edit_character")
         async def edit_character():
             return HTMLResponse(load_edit_character_html())
+
+        @self._fastapi_app.get("/shop_admin")
+        async def shop_admin():
+            return HTMLResponse(load_shop_admin_html())
 
         @self._fastapi_app.get("/config")
         async def config_redirect():

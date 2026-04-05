@@ -1,0 +1,123 @@
+:root {
+  color-scheme: dark;
+  font-family: Inter, system-ui, -apple-system, Segoe UI, Roboto, sans-serif;
+  background: #0b1020;
+  color: #e5e7eb;
+}
+
+* { box-sizing: border-box; }
+
+body {
+  margin: 0;
+  background: radial-gradient(circle at top, #111827 0%, #0b1020 65%);
+}
+
+.page {
+  max-width: 1400px;
+  margin: 0 auto;
+  padding: 24px;
+}
+
+.eyebrow {
+  margin: 0;
+  color: #93c5fd;
+  font-size: 0.85rem;
+  text-transform: uppercase;
+}
+
+h1 { margin: 8px 0; }
+.subtitle { margin-top: 0; color: #cbd5e1; }
+
+.panel {
+  background: rgba(15, 23, 42, 0.9);
+  border: 1px solid #334155;
+  border-radius: 12px;
+  padding: 16px;
+  margin-bottom: 16px;
+}
+
+.actions {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+button {
+  border-radius: 8px;
+  border: 1px solid #475569;
+  color: #e5e7eb;
+  background: #1e293b;
+  padding: 8px 12px;
+  cursor: pointer;
+}
+
+button.primary {
+  background: #1d4ed8;
+  border-color: #1d4ed8;
+}
+
+button:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
+.status {
+  margin: 12px 0 6px;
+  padding: 10px 12px;
+  border-radius: 8px;
+  background: #0f172a;
+  border: 1px solid #334155;
+}
+
+.status.ok { border-color: #166534; color: #86efac; }
+.status.error { border-color: #991b1b; color: #fca5a5; }
+.status.info { border-color: #1d4ed8; color: #bfdbfe; }
+
+.hint {
+  margin: 0;
+  color: #94a3b8;
+  font-size: 0.9rem;
+}
+
+.table-wrap { overflow-x: auto; }
+
+table {
+  width: 100%;
+  border-collapse: collapse;
+  min-width: 1120px;
+}
+
+th, td {
+  border-bottom: 1px solid #334155;
+  text-align: left;
+  padding: 8px;
+  vertical-align: top;
+}
+
+th { color: #93c5fd; font-size: 0.9rem; }
+
+input[type="text"],
+input[type="number"] {
+  width: 100%;
+  border-radius: 6px;
+  border: 1px solid #475569;
+  background: #0f172a;
+  color: #e2e8f0;
+  padding: 6px 8px;
+}
+
+input[type="checkbox"] {
+  width: 18px;
+  height: 18px;
+}
+
+.read-only {
+  color: #94a3b8;
+  font-size: 0.9rem;
+  white-space: nowrap;
+}
+
+.row-delete {
+  background: #7f1d1d;
+  border-color: #991b1b;
+}

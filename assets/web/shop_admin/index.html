@@ -1,0 +1,54 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Shop Admin</title>
+  <link rel="stylesheet" href="/assets/web/shop_admin/styles.css?v=__APP_VERSION__" />
+</head>
+<body>
+  <main class="page">
+    <header>
+      <p class="eyebrow">InitTracker LAN • Shop Admin</p>
+      <h1>Shop Catalog Admin</h1>
+      <p class="subtitle">View, edit, validate, and save <code>Items/Shop/catalog.yaml</code> through the catalog APIs.</p>
+    </header>
+
+    <section class="panel controls" aria-label="Shop admin controls">
+      <div class="actions">
+        <button id="reload-button" class="ghost" type="button">Reload Catalog</button>
+        <button id="add-row-button" class="ghost" type="button">Add Entry</button>
+        <button id="validate-button" class="ghost" type="button">Validate</button>
+        <button id="save-button" class="primary" type="button">Save</button>
+      </div>
+      <p id="status-banner" class="status" role="status">Loading catalog…</p>
+      <p class="hint">API wiring: <code>/api/shop/catalog</code> • <code>/api/shop/catalog/validate</code> • <code>/api/shop/catalog</code> (PUT)</p>
+    </section>
+
+    <section class="panel" aria-label="Catalog editor">
+      <div class="table-wrap">
+        <table>
+          <thead>
+            <tr>
+              <th>item_id</th>
+              <th>item_bucket</th>
+              <th>shop_category</th>
+              <th>enabled</th>
+              <th>gp</th>
+              <th>sp</th>
+              <th>cp</th>
+              <th>name</th>
+              <th>type</th>
+              <th>definition_path</th>
+              <th>Actions</th>
+            </tr>
+          </thead>
+          <tbody id="catalog-rows"></tbody>
+        </table>
+      </div>
+    </section>
+  </main>
+
+  <script src="/assets/web/shop_admin/app.js?v=__APP_VERSION__"></script>
+</body>
+</html>
