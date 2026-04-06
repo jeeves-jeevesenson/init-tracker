@@ -891,6 +891,7 @@ inventory:
 - Registry-backed `id` values on owned equippables are the target shape for standardized equipment behavior
 - Non-stackable/equippable owned items should always define explicit `instance_id` in YAML
 - Stackable consumables may be represented as one stack entry with quantity; optional `instance_id` is allowed for stack-level state
+- Shop purchases deduct only from `inventory.currency` and add owned items only under `inventory.items[]` (no legacy top-level inventory/equipment buckets)
 
 ---
 
