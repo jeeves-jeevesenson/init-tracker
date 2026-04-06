@@ -2074,6 +2074,7 @@ class LanController:
         web_entrypoint = assets_dir / "web" / "new_character" / "index.html"
         edit_entrypoint = assets_dir / "web" / "edit_character" / "index.html"
         shop_admin_entrypoint = assets_dir / "web" / "shop_admin" / "index.html"
+        shop_entrypoint = assets_dir / "web" / "shop" / "index.html"
         required_config_ids = (
             "draft-status",
             "overwrite-button",
@@ -2096,13 +2097,14 @@ class LanController:
             response = await call_next(request)
             path = request.url.path
             # Never cache HTML shells; they decide which JS/CSS to load.
-            if path in ("/", "/planning", "/new_character", "/edit_character", "/shop_admin"):
+            if path in ("/", "/planning", "/new_character", "/edit_character", "/shop_admin", "/shop"):
                 response.headers["Cache-Control"] = "no-store"
             # Force revalidation of the web editors so updates show up immediately.
             elif (
                 path.startswith("/assets/web/new_character/")
                 or path.startswith("/assets/web/edit_character/")
                 or path.startswith("/assets/web/shop_admin/")
+                or path.startswith("/assets/web/shop/")
             ):
                 response.headers["Cache-Control"] = "no-cache, must-revalidate"
             return response
@@ -2132,6 +2134,24 @@ class LanController:
                 raise HTTPException(
                     status_code=500,
                     detail="Shop admin HTML shell is invalid. Missing required script asset.",
+                )
+            return html
+
+        def load_shop_html() -> str:
+            if not shop_entrypoint.exists():
+                raise HTTPException(status_code=404, detail="Shop page missing.")
+            html = _inject_asset_version(shop_entrypoint.read_text(encoding="utf-8"))
+            required_ids = ("shop-status", "player-name", "player-currency", "catalog-list")
+            missing = [element_id for element_id in required_ids if f'id="{element_id}"' not in html]
+            if '/assets/web/shop/app.js' not in html:
+                missing.append("script:/assets/web/shop/app.js")
+            if missing:
+                raise HTTPException(
+                    status_code=500,
+                    detail=(
+                        "Shop HTML shell is invalid. Missing required selectors/assets: "
+                        f"{', '.join(missing)}"
+                    ),
                 )
             return html
         for asset_name in ("alert.wav", "ko.wav"):
@@ -2173,6 +2193,10 @@ class LanController:
         @self._fastapi_app.get("/shop_admin")
         async def shop_admin():
             return HTMLResponse(load_shop_admin_html())
+
+        @self._fastapi_app.get("/shop")
+        async def shop():
+            return HTMLResponse(load_shop_html())
 
         @self._fastapi_app.get("/config")
         async def config_redirect():

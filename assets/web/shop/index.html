@@ -1,0 +1,34 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Shop</title>
+  <link rel="stylesheet" href="/assets/web/shop/styles.css?v=__APP_VERSION__" />
+</head>
+<body>
+  <main class="page">
+    <header>
+      <p class="eyebrow">InitTracker LAN • Player Shop</p>
+      <h1>Shop</h1>
+      <p class="subtitle">Buy enabled catalog items using your current inventory currency.</p>
+    </header>
+
+    <section class="panel" aria-label="Player shop status">
+      <p id="shop-status" class="status" role="status">Loading shop data…</p>
+      <div class="player-meta">
+        <p><strong>Player:</strong> <span id="player-name">—</span></p>
+        <p><strong>Currency:</strong> <span id="player-currency">—</span></p>
+      </div>
+      <button id="refresh-button" class="ghost" type="button">Refresh</button>
+      <p class="hint">API wiring: <code>/api/characters/by_ip</code> • <code>/api/shop/catalog</code> • <code>/api/shop/players/{name}/purchase</code></p>
+    </section>
+
+    <section class="panel" aria-label="Shop catalog">
+      <div id="catalog-list" class="catalog"></div>
+    </section>
+  </main>
+
+  <script src="/assets/web/shop/app.js?v=__APP_VERSION__"></script>
+</body>
+</html>
