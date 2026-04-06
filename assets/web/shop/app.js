@@ -9,7 +9,7 @@ const REQUIRED_IDS = ["shop-status", "player-name", "player-currency", "catalog-
 const state = {
   playerName: "",
   currency: { gp: 0, sp: 0, cp: 0 },
-  inventorySummary: { total_items: 0, unique_items: 0 },
+  inventorySummary: { item_count: 0, distinct_count: 0 },
   catalog: [],
   inFlightItemKey: "",
 };
@@ -33,19 +33,6 @@ const formatCurrency = (currency = {}) => {
   return `${gp} gp • ${sp} sp • ${cp} cp`;
 };
 
-const summarizeInventory = (items) => {
-  const list = Array.isArray(items) ? items : [];
-  const unique = new Set();
-  let total = 0;
-  list.forEach((entry) => {
-    const qty = Math.max(1, Number(entry?.quantity || 1));
-    total += qty;
-    const id = String(entry?.id || "").trim();
-    if (id) unique.add(id);
-  });
-  return { total_items: total, unique_items: unique.size };
-};
-
 const fetchJson = async (url, options = {}) => {
   const response = await fetch(url, {
     headers: { "Content-Type": "application/json", ...(options.headers || {}) },
@@ -65,21 +52,23 @@ const fetchJson = async (url, options = {}) => {
   return body || {};
 };
 
-const loadPlayerByIp = async () => {
-  const payload = await fetchJson("/api/characters/by_ip");
-  const character = payload?.character || {};
-  const name = String(character?.name || "").trim();
+const loadPlayerState = async () => {
+  const payload = await fetchJson("/api/shop/me");
+  const player = payload?.player || {};
+  const name = String(player?.name || "").trim();
   if (!name) {
     throw new Error("Assigned player is missing a name.");
   }
-  const inventory = character?.inventory || {};
   state.playerName = name;
   state.currency = {
-    gp: Number(inventory?.currency?.gp || 0),
-    sp: Number(inventory?.currency?.sp || 0),
-    cp: Number(inventory?.currency?.cp || 0),
+    gp: Number(player?.currency?.gp || 0),
+    sp: Number(player?.currency?.sp || 0),
+    cp: Number(player?.currency?.cp || 0),
   };
-  state.inventorySummary = summarizeInventory(inventory?.items);
+  state.inventorySummary = {
+    item_count: Number(player?.inventory_summary?.item_count || 0),
+    distinct_count: Number(player?.inventory_summary?.distinct_count || 0),
+  };
 };
 
 const loadCatalog = async () => {
@@ -90,7 +79,7 @@ const loadCatalog = async () => {
 const renderHeader = () => {
   playerNameEl.textContent = state.playerName || "—";
   const inv = state.inventorySummary;
-  playerCurrencyEl.textContent = `${formatCurrency(state.currency)} (items: ${inv.total_items}, unique: ${inv.unique_items})`;
+  playerCurrencyEl.textContent = `${formatCurrency(state.currency)} (items: ${inv.item_count}, unique: ${inv.distinct_count})`;
 };
 
 const itemKey = (entry) => `${entry?.item_bucket || ""}:${entry?.item_id || ""}`;
@@ -177,17 +166,7 @@ const buyItem = async (entry, quantityInputEl) => {
       method: "POST",
       body: JSON.stringify(payload),
     });
-    if (result?.player?.inventory?.currency) {
-      const inventory = result.player.inventory;
-      state.currency = {
-        gp: Number(inventory.currency?.gp || 0),
-        sp: Number(inventory.currency?.sp || 0),
-        cp: Number(inventory.currency?.cp || 0),
-      };
-      state.inventorySummary = summarizeInventory(inventory?.items);
-    } else {
-      await loadPlayerByIp();
-    }
+    await loadPlayerState();
     renderHeader();
     setStatus(`Purchase successful: ${quantity} × ${entry?.name || entry?.item_id}.`, "ok");
   } catch (error) {
@@ -201,7 +180,7 @@ const reload = async () => {
   refreshButton.disabled = true;
   setStatus("Loading player and catalog...", "info");
   try {
-    await Promise.all([loadPlayerByIp(), loadCatalog()]);
+    await Promise.all([loadPlayerState(), loadCatalog()]);
     renderHeader();
     renderCatalog();
     setStatus(`Loaded ${state.catalog.length} item${state.catalog.length === 1 ? "" : "s"} for ${state.playerName}.`, "ok");
