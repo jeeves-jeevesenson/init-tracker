@@ -88,9 +88,10 @@ class ShopRoutesTests(unittest.TestCase):
 
         self.assertEqual(js_response.status_code, 200)
         self.assertIn('/api/shop/catalog', js_response.text)
-        self.assertIn('/api/characters/by_ip', js_response.text)
+        self.assertIn('/api/shop/me', js_response.text)
         self.assertIn('/api/shop/players/', js_response.text)
         self.assertIn('/purchase', js_response.text)
+        self.assertNotIn('/api/characters/by_ip', js_response.text)
 
 
 if __name__ == "__main__":

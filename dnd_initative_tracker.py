@@ -2537,6 +2537,17 @@ class LanController:
             except CharacterApiError as exc:
                 raise HTTPException(status_code=exc.status_code, detail=exc.detail)
 
+        @self._fastapi_app.get("/api/shop/me")
+        async def shop_player_state(request: Request):
+            host = getattr(getattr(request, "client", None), "host", "")
+            name = self._assigned_character_name_for_host(host)
+            if not name:
+                raise HTTPException(status_code=404, detail="No assigned character.")
+            try:
+                return self.app._get_shop_player_state_payload(name)
+            except CharacterApiError as exc:
+                raise HTTPException(status_code=exc.status_code, detail=exc.detail)
+
         @self._fastapi_app.post("/api/spells/{spell_id}/color")
         async def update_spell_color(spell_id: str, payload: Dict[str, Any] = Body(...)):
             if not isinstance(payload, dict):
@@ -15557,6 +15568,43 @@ class InitiativeTracker(base.InitiativeTracker):
         raw = self._load_character_raw(path)
         merged = self._character_merge_defaults(raw)
         return {"filename": path.name, "character": merged}
+
+    def _get_shop_player_state_payload(self, name: str) -> Dict[str, Any]:
+        payload = self._get_character_payload(name)
+        character = payload.get("character") if isinstance(payload, dict) else {}
+        if not isinstance(character, dict):
+            character = {}
+        inventory = character.get("inventory") if isinstance(character.get("inventory"), dict) else {}
+        currency = inventory.get("currency") if isinstance(inventory.get("currency"), dict) else {}
+        normalized_currency = {
+            "gp": int(currency.get("gp", 0) or 0),
+            "sp": int(currency.get("sp", 0) or 0),
+            "cp": int(currency.get("cp", 0) or 0),
+        }
+        items = inventory.get("items") if isinstance(inventory.get("items"), list) else []
+        item_count = 0
+        distinct_ids: set[str] = set()
+        for entry in items:
+            if not isinstance(entry, dict):
+                continue
+            try:
+                quantity = int(entry.get("quantity", 1) or 1)
+            except Exception:
+                quantity = 1
+            item_count += max(1, quantity)
+            item_id = str(entry.get("id") or "").strip().lower()
+            if item_id:
+                distinct_ids.add(item_id)
+        return {
+            "player": {
+                "name": str(character.get("name") or name).strip() or str(name),
+                "currency": normalized_currency,
+                "inventory_summary": {
+                    "item_count": int(item_count),
+                    "distinct_count": int(len(distinct_ids)),
+                },
+            }
+        }
 
     def _create_character_payload(self, payload: Any) -> Dict[str, Any]:
         errors = self._validate_character_payload(payload)

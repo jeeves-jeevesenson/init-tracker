@@ -275,6 +275,20 @@ class ShopPurchaseApiTransactionTests(unittest.TestCase):
             self.assertEqual(404, ctx.exception.status_code)
             self.assertEqual("not_found", (ctx.exception.detail or {}).get("error"))
 
+    def test_missing_item_identifier_is_rejected(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            items_dir = self._seed_items(root)
+            player_path = self._seed_player(root)
+            self.app._resolve_items_dir = lambda: items_dir
+            self.app._resolve_character_path = lambda _name: player_path
+
+            with self.assertRaises(tracker_mod.CharacterApiError) as ctx:
+                self.app._purchase_shop_item_for_player("Alice", {"item_bucket": "weapon"})
+
+            self.assertEqual(400, ctx.exception.status_code)
+            self.assertEqual("invalid_purchase", (ctx.exception.detail or {}).get("error"))
+
 
 if __name__ == "__main__":
     unittest.main()
