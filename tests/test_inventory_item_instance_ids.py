@@ -51,6 +51,13 @@ class InventoryItemInstanceIdTests(unittest.TestCase):
         warning_messages = [message for level, message in self.log_events if level == "warning"]
         self.assertTrue(any("missing explicit instance_id" in message for message in warning_messages))
 
+    def test_normalization_warns_once_per_missing_instance_id(self):
+        profile = {"name": "Alice", "inventory": {"items": [{"id": "longsword", "equipped": True}]}}
+        self.app._normalize_inventory_item_entries(profile)
+        self.app._normalize_inventory_item_entries(profile)
+        warning_messages = [message for level, message in self.log_events if level == "warning" and "missing explicit instance_id" in message]
+        self.assertEqual(1, len(warning_messages))
+
 
 if __name__ == "__main__":
     unittest.main()
