@@ -2565,6 +2565,13 @@ class LanController:
             except CharacterApiError as exc:
                 raise HTTPException(status_code=exc.status_code, detail=exc.detail)
 
+        @self._fastapi_app.get("/api/shop/players/{name}")
+        async def shop_named_player_state(name: str):
+            try:
+                return self.app._get_shop_player_state_payload(name)
+            except CharacterApiError as exc:
+                raise HTTPException(status_code=exc.status_code, detail=exc.detail)
+
         @self._fastapi_app.post("/api/spells/{spell_id}/color")
         async def update_spell_color(spell_id: str, payload: Dict[str, Any] = Body(...)):
             if not isinstance(payload, dict):

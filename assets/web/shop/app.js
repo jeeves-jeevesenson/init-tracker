@@ -3,11 +3,25 @@ const playerNameEl = document.getElementById("player-name");
 const playerCurrencyEl = document.getElementById("player-currency");
 const catalogListEl = document.getElementById("catalog-list");
 const refreshButton = document.getElementById("refresh-button");
+const playerPickerShellEl = document.getElementById("player-picker-shell");
+const playerPickerSelectEl = document.getElementById("player-picker-select");
+const playerPickerLoadButtonEl = document.getElementById("player-picker-load-button");
 
-const REQUIRED_IDS = ["shop-status", "player-name", "player-currency", "catalog-list", "refresh-button"];
+const REQUIRED_IDS = [
+  "shop-status",
+  "player-name",
+  "player-currency",
+  "catalog-list",
+  "refresh-button",
+  "player-picker-shell",
+  "player-picker-select",
+  "player-picker-load-button",
+];
 
 const state = {
   playerName: "",
+  playerResolvedMode: "auto",
+  manualPlayerOptions: [],
   currency: { gp: 0, sp: 0, cp: 0 },
   inventorySummary: { item_count: 0, distinct_count: 0 },
   catalog: [],
@@ -56,12 +70,37 @@ const fetchJson = async (url, options = {}) => {
   return body || {};
 };
 
-const loadPlayerState = async () => {
-  const payload = await fetchJson("/api/shop/me");
+const setPlayerPickerVisible = (visible) => {
+  playerPickerShellEl.classList.toggle("hidden", !visible);
+};
+
+const renderPlayerPicker = () => {
+  const existing = new Set(Array.from(playerPickerSelectEl.options).map((option) => option.value));
+  state.manualPlayerOptions.forEach((name) => {
+    if (existing.has(name)) return;
+    const option = document.createElement("option");
+    option.value = name;
+    option.textContent = name;
+    playerPickerSelectEl.appendChild(option);
+  });
+  playerPickerSelectEl.value = state.playerName || "";
+  playerPickerLoadButtonEl.disabled = !playerPickerSelectEl.value;
+};
+
+const listCharacterNames = async () => {
+  const payload = await fetchJson("/api/characters");
+  const files = Array.isArray(payload?.files) ? payload.files : [];
+  const normalized = files
+    .map((file) => String(file || "").trim())
+    .filter((name) => name.length > 0);
+  return normalized.sort((left, right) => left.localeCompare(right));
+};
+
+const hydratePlayerState = (payload) => {
   const player = payload?.player || {};
   const name = String(player?.name || "").trim();
   if (!name) {
-    throw new Error("Assigned player is missing a name.");
+    throw new Error("Player payload is missing a name.");
   }
   state.playerName = name;
   state.currency = {
@@ -73,6 +112,16 @@ const loadPlayerState = async () => {
     item_count: Number(player?.inventory_summary?.item_count || 0),
     distinct_count: Number(player?.inventory_summary?.distinct_count || 0),
   };
+};
+
+const loadPlayerStateForMe = async () => {
+  const payload = await fetchJson("/api/shop/me");
+  hydratePlayerState(payload);
+};
+
+const loadPlayerStateForName = async (name) => {
+  const payload = await fetchJson(`/api/shop/players/${encodeURIComponent(name)}`);
+  hydratePlayerState(payload);
 };
 
 const loadCatalog = async () => {
@@ -171,7 +220,7 @@ const buyItem = async (entry, quantityInputEl) => {
       method: "POST",
       body: JSON.stringify(payload),
     });
-    await Promise.all([loadPlayerState(), loadCatalog()]);
+    await Promise.all([loadPlayerStateForName(state.playerName), loadCatalog()]);
     renderHeader();
     renderCatalog();
     setStatus(`Purchase successful: ${quantity} × ${entry?.name || entry?.item_id}.`, "ok");
@@ -187,38 +236,80 @@ const buyItem = async (entry, quantityInputEl) => {
 
 const reload = async () => {
   refreshButton.disabled = true;
-  setStatus("Loading player and catalog...", "info");
+  playerPickerLoadButtonEl.disabled = true;
+  setStatus("Loading player and catalog…", "info");
   try {
-    const [playerResult, catalogResult] = await Promise.allSettled([loadPlayerState(), loadCatalog()]);
+    state.playerResolvedMode = "auto";
+    const [playerResult, catalogResult] = await Promise.allSettled([loadPlayerStateForMe(), loadCatalog()]);
     if (playerResult.status === "rejected") {
-      throw playerResult.reason;
+      const playerError = playerResult.reason;
+      if (playerError.status === 404 && String(playerError.message || "").toLowerCase().includes("assigned character")) {
+        const names = await listCharacterNames();
+        state.manualPlayerOptions = names;
+        state.playerResolvedMode = "manual";
+        state.playerName = "";
+        setPlayerPickerVisible(true);
+        renderPlayerPicker();
+        if (catalogResult.status === "rejected") {
+          throw catalogResult.reason;
+        }
+        renderHeader();
+        renderCatalog();
+        state.lastLoadHadError = false;
+        setStatus("No assigned player was detected. Select who you are to continue.", "info");
+        return;
+      }
+      throw playerError;
     }
     if (catalogResult.status === "rejected") {
       throw catalogResult.reason;
     }
+    setPlayerPickerVisible(false);
     renderHeader();
     renderCatalog();
     state.lastLoadHadError = false;
     setStatus(`Loaded ${state.catalog.length} item${state.catalog.length === 1 ? "" : "s"} for ${state.playerName}.`, "ok");
   } catch (error) {
     state.lastLoadHadError = true;
-    if (error.status === 404 && String(error.message || "").toLowerCase().includes("assigned character")) {
-      setStatus("No player is assigned to this device/IP yet. Ask the DM to assign a character, then refresh.", "error");
-      state.playerName = "";
-      renderHeader();
-      renderCatalog();
-      return;
-    }
+    setPlayerPickerVisible(false);
     renderHeader();
     renderCatalog();
     setStatus(`Load failed: ${error.message}`, "error");
   } finally {
     refreshButton.disabled = false;
+    if (state.playerResolvedMode === "manual") {
+      playerPickerLoadButtonEl.disabled = !playerPickerSelectEl.value;
+    }
   }
 };
 
 const init = async () => {
   assertRequiredElements();
+  playerPickerSelectEl.addEventListener("change", () => {
+    playerPickerLoadButtonEl.disabled = !playerPickerSelectEl.value;
+  });
+  playerPickerLoadButtonEl.addEventListener("click", async () => {
+    const selected = String(playerPickerSelectEl.value || "").trim();
+    if (!selected) {
+      setStatus("Select a player before continuing.", "error");
+      return;
+    }
+    refreshButton.disabled = true;
+    playerPickerLoadButtonEl.disabled = true;
+    setStatus(`Loading shop data for ${selected}…`, "info");
+    try {
+      await Promise.all([loadPlayerStateForName(selected), loadCatalog()]);
+      renderPlayerPicker();
+      renderHeader();
+      renderCatalog();
+      setStatus(`Loaded ${state.catalog.length} item${state.catalog.length === 1 ? "" : "s"} for ${state.playerName}.`, "ok");
+    } catch (error) {
+      setStatus(`Load failed: ${error.message}`, "error");
+    } finally {
+      refreshButton.disabled = false;
+      playerPickerLoadButtonEl.disabled = !playerPickerSelectEl.value;
+    }
+  });
   refreshButton.addEventListener("click", reload);
   await reload();
 };

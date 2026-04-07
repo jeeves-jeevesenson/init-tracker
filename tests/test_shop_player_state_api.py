@@ -97,6 +97,34 @@ class ShopPlayerStateApiRouteTests(unittest.TestCase):
         self.assertEqual(response.status_code, 404)
         self.assertEqual("No assigned character.", response.json().get("detail"))
 
+    def test_shop_player_route_returns_payload_for_named_player(self):
+        client, lan = self._build_test_client()
+        expected = {
+            "player": {
+                "name": "Alice",
+                "currency": {"gp": 33, "sp": 4, "cp": 5},
+                "inventory_summary": {"item_count": 7, "distinct_count": 4},
+            }
+        }
+        with mock.patch.object(lan.app, "_get_shop_player_state_payload", return_value=expected) as payload_mock:
+            response = client.get("/api/shop/players/Alice")
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(expected, response.json())
+        payload_mock.assert_called_once_with("Alice")
+
+    def test_shop_player_route_returns_404_for_unknown_player(self):
+        client, lan = self._build_test_client()
+        with mock.patch.object(
+            lan.app,
+            "_get_shop_player_state_payload",
+            side_effect=tracker_mod.CharacterApiError(status_code=404, detail="Character not found."),
+        ):
+            response = client.get("/api/shop/players/Unknown")
+
+        self.assertEqual(response.status_code, 404)
+        self.assertEqual("Character not found.", response.json().get("detail"))
+
 
 class ShopPlayerStatePayloadTests(unittest.TestCase):
     def setUp(self):
