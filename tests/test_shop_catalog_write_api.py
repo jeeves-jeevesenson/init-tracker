@@ -80,6 +80,7 @@ class ShopCatalogWriteApiTests(unittest.TestCase):
                     "shop_category": "consumables",
                     "enabled": True,
                     "price": {"gp": 50},
+                    "stock": {"limit": 10, "sold": 2},
                 }
             ],
         }
@@ -94,6 +95,10 @@ class ShopCatalogWriteApiTests(unittest.TestCase):
                     "shop_category": "consumables",
                     "enabled": True,
                     "price": {"gp": 50},
+                    "stock_limit": 10,
+                    "stock_sold": 2,
+                    "stock_remaining": 8,
+                    "stock_unlimited": False,
                     "definition_path": "Items/Consumables/healing_potion.yaml",
                 }
             ],
@@ -212,6 +217,7 @@ class ShopCatalogWriteHelpersTests(unittest.TestCase):
                         "shop_category": "consumables",
                         "enabled": True,
                         "price": {"gp": 50},
+                        "stock": {"limit": 10, "sold": 2},
                     }
                 ],
             }
@@ -224,6 +230,7 @@ class ShopCatalogWriteHelpersTests(unittest.TestCase):
             self.assertEqual(1, persisted.get("format_version"))
             self.assertEqual("healing_potion", persisted["entries"][0]["item_id"])
             self.assertEqual({"gp": 50}, persisted["entries"][0]["price"])
+            self.assertEqual({"limit": 10, "sold": 2}, persisted["entries"][0]["stock"])
 
     def test_save_shop_catalog_payload_rejects_stale_expected_revision(self):
         with tempfile.TemporaryDirectory() as tmp:

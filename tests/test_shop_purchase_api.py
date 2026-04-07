@@ -134,6 +134,7 @@ class ShopPurchaseApiTransactionTests(unittest.TestCase):
                         "shop_category": "consumables",
                         "enabled": healing_enabled,
                         "price": {"gp": 5},
+                        "stock": {"limit": 3, "sold": 0},
                     },
                     {
                         "item_id": "longsword",
@@ -193,6 +194,8 @@ class ShopPurchaseApiTransactionTests(unittest.TestCase):
             persisted = yaml.safe_load(player_path.read_text(encoding="utf-8"))
             self.assertEqual({"gp": 90, "sp": 0, "cp": 0}, persisted["inventory"]["currency"])
             self.assertEqual(3, persisted["inventory"]["items"][0]["quantity"])
+            persisted_catalog = yaml.safe_load((items_dir / "Shop" / "catalog.yaml").read_text(encoding="utf-8"))
+            self.assertEqual(2, persisted_catalog["entries"][0]["stock"]["sold"])
 
     def test_successful_purchase_non_stackable_creates_instance_id_and_repeated_purchase_creates_separate_entries(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -288,6 +291,37 @@ class ShopPurchaseApiTransactionTests(unittest.TestCase):
 
             self.assertEqual(400, ctx.exception.status_code)
             self.assertEqual("invalid_purchase", (ctx.exception.detail or {}).get("error"))
+
+    def test_purchase_rejected_when_stock_exhausted_without_charging_currency(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            items_dir = self._seed_items(root)
+            player_path = self._seed_player(root)
+            self.app._resolve_items_dir = lambda: items_dir
+            self.app._resolve_character_path = lambda _name: player_path
+
+            catalog_path = items_dir / "Shop" / "catalog.yaml"
+            payload = yaml.safe_load(catalog_path.read_text(encoding="utf-8"))
+            payload["entries"][0]["stock"] = {"limit": 2, "sold": 2}
+            catalog_path.write_text(yaml.safe_dump(payload, sort_keys=False), encoding="utf-8")
+
+            with self.assertRaises(tracker_mod.CharacterApiError) as ctx:
+                self.app._purchase_shop_item_for_player("Alice", {"item_bucket": "consumable", "item_id": "healing_potion", "quantity": 1})
+            self.assertEqual("out_of_stock", (ctx.exception.detail or {}).get("error"))
+
+            persisted = yaml.safe_load(player_path.read_text(encoding="utf-8"))
+            self.assertEqual({"gp": 100, "sp": 0, "cp": 0}, persisted["inventory"]["currency"])
+
+    def test_purchase_rejected_when_quantity_exceeds_remaining_stock(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            items_dir = self._seed_items(root)
+            player_path = self._seed_player(root)
+            self.app._resolve_items_dir = lambda: items_dir
+            self.app._resolve_character_path = lambda _name: player_path
+            with self.assertRaises(tracker_mod.CharacterApiError) as ctx:
+                self.app._purchase_shop_item_for_player("Alice", {"item_bucket": "consumable", "item_id": "healing_potion", "quantity": 4})
+            self.assertEqual("insufficient_stock", (ctx.exception.detail or {}).get("error"))
 
 
 if __name__ == "__main__":

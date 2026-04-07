@@ -2547,6 +2547,15 @@ class LanController:
                 revision = saved.get("revision")
             return {"format_version": 1, "entries": stable_entries, "revision": revision}
 
+        @self._fastapi_app.get("/api/shop/admin/player-wealth")
+        async def shop_admin_player_wealth():
+            try:
+                return self.app._get_shop_admin_player_wealth_payload()
+            except CharacterApiError as exc:
+                raise HTTPException(status_code=exc.status_code, detail=exc.detail)
+            except Exception as exc:
+                raise HTTPException(status_code=500, detail=f"Failed to load player wealth: {exc}")
+
         @self._fastapi_app.post("/api/shop/players/{name}/purchase")
         async def purchase_shop_item(name: str, payload: Dict[str, Any] = Body(...)):
             try:
@@ -6190,6 +6199,35 @@ class InitiativeTracker(base.InitiativeTracker):
             raise ValueError(f"Catalog entry #{entry_index} in {catalog_path} must include at least one price denomination.")
         return normalized
 
+    def _normalize_shop_catalog_stock(self, raw_stock: Any, *, catalog_path: Path, entry_index: int) -> Dict[str, Any]:
+        if raw_stock is None:
+            return {"stock_limit": None, "stock_sold": 0, "stock_unlimited": True, "stock_remaining": None}
+        if not isinstance(raw_stock, dict):
+            raise ValueError(f"Catalog entry #{entry_index} in {catalog_path} has malformed stock data.")
+        limit_raw = raw_stock.get("limit")
+        sold_raw = raw_stock.get("sold", 0)
+        if isinstance(sold_raw, bool):
+            raise ValueError(f"Catalog entry #{entry_index} in {catalog_path} has invalid boolean stock.sold.")
+        try:
+            sold = int(sold_raw)
+        except Exception as exc:
+            raise ValueError(f"Catalog entry #{entry_index} in {catalog_path} has non-integer stock.sold.") from exc
+        if sold < 0:
+            raise ValueError(f"Catalog entry #{entry_index} in {catalog_path} has negative stock.sold.")
+        if limit_raw is None or str(limit_raw).strip() == "":
+            return {"stock_limit": None, "stock_sold": sold, "stock_unlimited": True, "stock_remaining": None}
+        if isinstance(limit_raw, bool):
+            raise ValueError(f"Catalog entry #{entry_index} in {catalog_path} has invalid boolean stock.limit.")
+        try:
+            limit = int(limit_raw)
+        except Exception as exc:
+            raise ValueError(f"Catalog entry #{entry_index} in {catalog_path} has non-integer stock.limit.") from exc
+        if limit < 0:
+            raise ValueError(f"Catalog entry #{entry_index} in {catalog_path} has negative stock.limit.")
+        if sold > limit:
+            raise ValueError(f"Catalog entry #{entry_index} in {catalog_path} has stock.sold greater than stock.limit.")
+        return {"stock_limit": limit, "stock_sold": sold, "stock_unlimited": False, "stock_remaining": limit - sold}
+
     @staticmethod
     def _shop_catalog_storage_entry_from_normalized(entry: Dict[str, Any]) -> Dict[str, Any]:
         price = entry.get("price") if isinstance(entry.get("price"), dict) else {}
@@ -6197,13 +6235,21 @@ class InitiativeTracker(base.InitiativeTracker):
         for denom in ("gp", "sp", "cp"):
             if denom in price:
                 ordered_price[denom] = int(price[denom])
-        return {
+        payload = {
             "item_id": str(entry.get("item_id") or "").strip().lower(),
             "item_bucket": str(entry.get("item_bucket") or "").strip().lower(),
             "shop_category": str(entry.get("shop_category") or "").strip(),
             "enabled": bool(entry.get("enabled") is True),
             "price": ordered_price,
         }
+        limit = entry.get("stock_limit")
+        sold = int(entry.get("stock_sold", 0) or 0)
+        if limit is not None or sold > 0:
+            stock: Dict[str, Any] = {"sold": sold}
+            if limit is not None:
+                stock["limit"] = int(limit)
+            payload["stock"] = stock
+        return payload
 
     def _normalize_shop_catalog_entries(
         self,
@@ -6255,6 +6301,7 @@ class InitiativeTracker(base.InitiativeTracker):
                 "price": self._normalize_shop_catalog_price(raw_entry.get("price"), catalog_path=catalog_path, entry_index=entry_index),
                 "definition_path": str(definition.get("_definition_path") or ""),
             }
+            normalized.update(self._normalize_shop_catalog_stock(raw_entry.get("stock"), catalog_path=catalog_path, entry_index=entry_index))
             for optional_key in ("description", "category", "consumable_type", "requires_attunement"):
                 if optional_key in definition:
                     normalized[optional_key] = copy.deepcopy(definition.get(optional_key))
@@ -6501,9 +6548,7 @@ class InitiativeTracker(base.InitiativeTracker):
         except ValueError as exc:
             raise CharacterApiError(status_code=400, detail={"error": "invalid_purchase", "message": str(exc)}) from exc
 
-        catalog_entry = self._resolve_shop_catalog_entry_for_purchase(item_bucket=item_bucket, item_id=item_id)
         definition = self._resolve_shop_item_definition_for_purchase(item_bucket=item_bucket, item_id=item_id)
-
         stackable = item_bucket == "consumable" and bool(definition.get("stackable") is True)
         if not stackable and quantity > 1 and item_bucket not in {"weapon", "armor", "magic_item"}:
             raise CharacterApiError(
@@ -6511,89 +6556,150 @@ class InitiativeTracker(base.InitiativeTracker):
                 detail={"error": "invalid_purchase", "message": "quantity > 1 is not supported for this item type."},
             )
 
-        unit_price = catalog_entry.get("price") if isinstance(catalog_entry.get("price"), dict) else {}
-        unit_price_cp = self._currency_to_cp(unit_price)
-        total_price_cp = unit_price_cp * quantity
+        lock = self.__dict__.get("_shop_purchase_lock")
+        if lock is None or not hasattr(lock, "acquire"):
+            lock = threading.RLock()
+            self.__dict__["_shop_purchase_lock"] = lock
 
-        raw = self._load_character_raw(path)
-        inventory = raw.get("inventory")
-        if not isinstance(inventory, dict):
-            inventory = {}
-            raw["inventory"] = inventory
-        currency = inventory.get("currency")
-        if not isinstance(currency, dict):
-            currency = {}
-            inventory["currency"] = currency
-        current_cp = self._currency_to_cp(currency)
-        if current_cp < total_price_cp:
-            raise CharacterApiError(
-                status_code=409,
-                detail={"error": "insufficient_funds", "message": "Insufficient funds for purchase."},
-            )
-        inventory["currency"] = self._cp_to_currency(current_cp - total_price_cp)
+        with lock:
+            catalog_entry = self._resolve_shop_catalog_entry_for_purchase(item_bucket=item_bucket, item_id=item_id)
+            unit_price = catalog_entry.get("price") if isinstance(catalog_entry.get("price"), dict) else {}
+            unit_price_cp = self._currency_to_cp(unit_price)
+            total_price_cp = unit_price_cp * quantity
+            display_name = str(definition.get("name") or catalog_entry.get("name") or item_id).strip() or item_id
 
-        items = inventory.get("items")
-        if not isinstance(items, list):
-            items = []
-            inventory["items"] = items
+            stock_unlimited = bool(catalog_entry.get("stock_unlimited") is True)
+            remaining = max(0, int(catalog_entry.get("stock_remaining") or 0)) if not stock_unlimited else -1
+            if not stock_unlimited and remaining <= 0:
+                raise CharacterApiError(
+                    status_code=409,
+                    detail={"error": "out_of_stock", "message": "Item is sold out.", "remaining_stock": 0},
+                )
+            if not stock_unlimited and quantity > remaining:
+                raise CharacterApiError(
+                    status_code=409,
+                    detail={"error": "insufficient_stock", "message": f"Only {remaining} in stock.", "remaining_stock": remaining},
+                )
 
-        purchase_changes: Dict[str, Any] = {
-            "stacked": False,
-            "quantity": int(quantity),
-            "created_instance_ids": [],
-            "updated_stack_instance_id": None,
-        }
-        display_name = str(definition.get("name") or catalog_entry.get("name") or item_id).strip() or item_id
-        if stackable:
-            target_index: Optional[int] = None
-            for idx, entry in enumerate(items):
-                if not isinstance(entry, dict):
-                    continue
-                if str(entry.get("id") or "").strip().lower() != item_id:
-                    continue
-                target_index = idx
-                break
-            if target_index is not None:
-                existing = items[target_index]
-                try:
-                    prior_qty = int(existing.get("quantity", 0) or 0)
-                except Exception:
-                    prior_qty = 0
-                existing["quantity"] = max(0, prior_qty) + quantity
-                if not str(existing.get("name") or "").strip():
-                    existing["name"] = display_name
-                purchase_changes["stacked"] = True
-                purchase_changes["updated_stack_instance_id"] = str(existing.get("instance_id") or "").strip() or None
+            raw = self._load_character_raw(path)
+            inventory = raw.get("inventory")
+            if not isinstance(inventory, dict):
+                inventory = {}
+                raw["inventory"] = inventory
+            currency = inventory.get("currency")
+            if not isinstance(currency, dict):
+                currency = {}
+                inventory["currency"] = currency
+            current_cp = self._currency_to_cp(currency)
+            if current_cp < total_price_cp:
+                raise CharacterApiError(
+                    status_code=409,
+                    detail={"error": "insufficient_funds", "message": "Insufficient funds for purchase."},
+                )
+            inventory["currency"] = self._cp_to_currency(current_cp - total_price_cp)
+
+            items = inventory.get("items")
+            if not isinstance(items, list):
+                items = []
+                inventory["items"] = items
+
+            purchase_changes: Dict[str, Any] = {
+                "stacked": False,
+                "quantity": int(quantity),
+                "created_instance_ids": [],
+                "updated_stack_instance_id": None,
+            }
+            if stackable:
+                target_index: Optional[int] = None
+                for idx, entry in enumerate(items):
+                    if not isinstance(entry, dict):
+                        continue
+                    if str(entry.get("id") or "").strip().lower() != item_id:
+                        continue
+                    target_index = idx
+                    break
+                if target_index is not None:
+                    existing = items[target_index]
+                    try:
+                        prior_qty = int(existing.get("quantity", 0) or 0)
+                    except Exception:
+                        prior_qty = 0
+                    existing["quantity"] = max(0, prior_qty) + quantity
+                    if not str(existing.get("name") or "").strip():
+                        existing["name"] = display_name
+                    purchase_changes["stacked"] = True
+                    purchase_changes["updated_stack_instance_id"] = str(existing.get("instance_id") or "").strip() or None
+                else:
+                    stack_instance_id = self._next_owned_item_instance_id(items, f"{item_id}_stack")
+                    items.append({"instance_id": stack_instance_id, "id": item_id, "name": display_name, "quantity": int(quantity), "equipped": False})
+                    purchase_changes["created_instance_ids"] = [stack_instance_id]
+                    purchase_changes["updated_stack_instance_id"] = stack_instance_id
             else:
-                stack_instance_id = self._next_owned_item_instance_id(items, f"{item_id}_stack")
-                new_stack = {
-                    "instance_id": stack_instance_id,
-                    "id": item_id,
-                    "name": display_name,
-                    "quantity": int(quantity),
-                    "equipped": False,
-                }
-                items.append(new_stack)
-                purchase_changes["created_instance_ids"] = [stack_instance_id]
-                purchase_changes["updated_stack_instance_id"] = stack_instance_id
-        else:
-            created_ids: List[str] = []
-            for _ in range(quantity):
-                instance_id = self._next_owned_item_instance_id(items, item_id)
-                owned_entry: Dict[str, Any] = {
-                    "instance_id": instance_id,
-                    "id": item_id,
-                    "name": display_name,
-                    "quantity": 1,
-                    "equipped": False,
-                }
-                if item_bucket == "magic_item" or bool(definition.get("requires_attunement") is True):
-                    owned_entry["attuned"] = False
-                items.append(owned_entry)
-                created_ids.append(instance_id)
-            purchase_changes["created_instance_ids"] = created_ids
+                created_ids: List[str] = []
+                for _ in range(quantity):
+                    instance_id = self._next_owned_item_instance_id(items, item_id)
+                    owned_entry: Dict[str, Any] = {"instance_id": instance_id, "id": item_id, "name": display_name, "quantity": 1, "equipped": False}
+                    if item_bucket == "magic_item" or bool(definition.get("requires_attunement") is True):
+                        owned_entry["attuned"] = False
+                    items.append(owned_entry)
+                    created_ids.append(instance_id)
+                purchase_changes["created_instance_ids"] = created_ids
 
-        profile = self._store_character_yaml(path, raw)
+            catalog_rollback_payload: Optional[Dict[str, Any]] = None
+            if not stock_unlimited:
+                items_dir = self._resolve_items_dir()
+                if items_dir is None:
+                    raise CharacterApiError(status_code=500, detail={"error": "catalog_save_failed", "message": "Items directory is unavailable."})
+                catalog_path = items_dir / "Shop" / "catalog.yaml"
+                catalog_revision_before = self._shop_catalog_revision_for_path(catalog_path)
+                parsed = yaml.safe_load(catalog_path.read_text(encoding="utf-8")) if yaml is not None else None
+                if not isinstance(parsed, dict):
+                    raise CharacterApiError(status_code=500, detail={"error": "catalog_save_failed", "message": "Failed to parse catalog before stock update."})
+                entries_payload = parsed.get("entries")
+                if not isinstance(entries_payload, list):
+                    raise CharacterApiError(status_code=500, detail={"error": "catalog_save_failed", "message": "Catalog entries payload is malformed."})
+                catalog_rollback_payload = copy.deepcopy(parsed)
+                target_entry: Optional[Dict[str, Any]] = None
+                for idx, row in enumerate(entries_payload):
+                    if not isinstance(row, dict):
+                        continue
+                    if str(row.get("item_bucket") or "").strip().lower() != item_bucket:
+                        continue
+                    if str(row.get("item_id") or "").strip().lower() != item_id:
+                        continue
+                    target_entry = row
+                    stock_meta = self._normalize_shop_catalog_stock(row.get("stock"), catalog_path=catalog_path, entry_index=idx + 1)
+                    current_sold = int(stock_meta.get("stock_sold") or 0)
+                    stock_limit = stock_meta.get("stock_limit")
+                    if stock_limit is None:
+                        raise CharacterApiError(status_code=500, detail={"error": "catalog_save_failed", "message": "Catalog stock changed while processing purchase."})
+                    if current_sold + quantity > int(stock_limit):
+                        stock_now_remaining = max(0, int(stock_limit) - current_sold)
+                        raise CharacterApiError(
+                            status_code=409,
+                            detail={"error": "insufficient_stock", "message": f"Only {stock_now_remaining} in stock.", "remaining_stock": stock_now_remaining},
+                        )
+                    target_entry["stock"] = {"limit": int(stock_limit), "sold": current_sold + quantity}
+                    break
+                if not isinstance(target_entry, dict):
+                    raise CharacterApiError(status_code=404, detail={"error": "not_found", "message": "Catalog entry not found."})
+                try:
+                    self._save_shop_catalog_payload(parsed, expected_revision=catalog_revision_before)
+                except ShopCatalogConflictError as exc:
+                    raise CharacterApiError(status_code=409, detail={"error": "catalog_changed", "message": str(exc)}) from exc
+                except Exception as exc:
+                    raise CharacterApiError(status_code=500, detail={"error": "catalog_save_failed", "message": str(exc)}) from exc
+
+            try:
+                profile = self._store_character_yaml(path, raw)
+            except Exception as exc:
+                if catalog_rollback_payload is not None:
+                    try:
+                        rollback_revision = self._shop_catalog_revision_token()
+                        self._save_shop_catalog_payload(catalog_rollback_payload, expected_revision=rollback_revision)
+                    except Exception:
+                        pass
+                raise CharacterApiError(status_code=500, detail={"error": "player_save_failed", "message": str(exc)}) from exc
         return {
             "ok": True,
             "purchase": {
@@ -6608,6 +6714,30 @@ class InitiativeTracker(base.InitiativeTracker):
             "inventory_change": purchase_changes,
             "player": profile,
         }
+
+    def _get_shop_admin_player_wealth_payload(self) -> Dict[str, Any]:
+        players: List[Dict[str, Any]] = []
+        total_cp = 0
+        for filename in self._list_character_filenames():
+            path = self._players_dir() / filename
+            if not path.exists():
+                continue
+            raw = self._load_character_raw(path)
+            name = str(raw.get("name") or path.stem).strip() or path.stem
+            inventory = raw.get("inventory") if isinstance(raw.get("inventory"), dict) else {}
+            currency = inventory.get("currency") if isinstance(inventory.get("currency"), dict) else {}
+            normalized_currency = self._cp_to_currency(self._currency_to_cp(currency))
+            player_total_cp = self._currency_to_cp(normalized_currency)
+            total_cp += player_total_cp
+            players.append(
+                {
+                    "name": name,
+                    "currency": normalized_currency,
+                    "total_cp": int(player_total_cp),
+                }
+            )
+        players.sort(key=lambda row: str(row.get("name") or "").lower())
+        return {"players": players, "party_total_cp": int(total_cp), "party_total_currency": self._cp_to_currency(total_cp)}
 
     def _normalize_inventory_item_entries(self, profile: Dict[str, Any]) -> List[Dict[str, Any]]:
         inventory = profile.get("inventory") if isinstance(profile.get("inventory"), dict) else {}
