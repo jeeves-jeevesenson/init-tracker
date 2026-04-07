@@ -45,7 +45,7 @@ That role belongs to `initiative-tracker-engineer.agent.md`.
 - Prefer repo evidence over theory.
 - Avoid inventing architecture that is not present in the checkout.
 - Start from likely entry points and trace the real execution flow.
-- Use standard Unix discovery patterns and prefer `rg` for recursive search.
+- Use standard Unix tools for discovery and prefer `grep -R` for recursive search.
 - Keep analysis concise and actionable.
 
 When evidence is incomplete, say exactly what is unknown and what should be inspected next.
