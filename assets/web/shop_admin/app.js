@@ -235,22 +235,28 @@ const renderRows = () => {
       rowInput({ value: entry.price?.sp ?? "", type: "number", min: 0, onChange: bindInput(index, "price", "sp"), invalid: invalidPrice, title: rowErrorText }),
       rowInput({ value: entry.price?.cp ?? "", type: "number", min: 0, onChange: bindInput(index, "price", "cp"), invalid: invalidPrice, title: rowErrorText }),
       (() => {
-        const span = document.createElement("span");
-        span.className = "read-only";
-        span.textContent = readOnly.name || "—";
-        return span;
-      })(),
-      (() => {
-        const span = document.createElement("span");
-        span.className = "read-only";
-        span.textContent = readOnly.type || "—";
-        return span;
-      })(),
-      (() => {
-        const span = document.createElement("span");
-        span.className = "read-only";
-        span.textContent = readOnly.definition_path || "—";
-        return span;
+        const wrapper = document.createElement("div");
+        wrapper.className = "read-only meta-block";
+
+        const name = document.createElement("p");
+        const nameLabel = document.createElement("strong");
+        nameLabel.textContent = "Name:";
+        name.append(nameLabel, ` ${readOnly.name || "—"}`);
+
+        const type = document.createElement("p");
+        const typeLabel = document.createElement("strong");
+        typeLabel.textContent = "Type:";
+        type.append(typeLabel, ` ${readOnly.type || "—"}`);
+
+        const source = document.createElement("p");
+        const sourceLabel = document.createElement("strong");
+        sourceLabel.textContent = "Source:";
+        source.append(sourceLabel, ` ${readOnly.definition_path || "—"}`);
+
+        wrapper.appendChild(name);
+        wrapper.appendChild(type);
+        wrapper.appendChild(source);
+        return wrapper;
       })(),
       (() => {
         const button = document.createElement("button");
@@ -272,7 +278,7 @@ const renderRows = () => {
       const errorRow = document.createElement("tr");
       errorRow.className = "row-error";
       const cell = document.createElement("td");
-      cell.colSpan = 11;
+      cell.colSpan = 9;
       cell.textContent = `Row ${index + 1}: ${rowErrorText}`;
       errorRow.appendChild(cell);
       rowsEl.appendChild(tr);

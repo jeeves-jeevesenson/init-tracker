@@ -69,7 +69,7 @@ class ShopAdminRoutesTests(unittest.TestCase):
         self.assertIn('id="save-button"', response.text)
         self.assertIn('id="dirty-state"', response.text)
         self.assertIn('/assets/web/shop_admin/app.js', response.text)
-        self.assertIn('/api/shop/catalog', response.text)
+        self.assertNotIn('API wiring:', response.text)
 
     def test_shop_admin_assets_are_served(self):
         client = self._build_test_client()

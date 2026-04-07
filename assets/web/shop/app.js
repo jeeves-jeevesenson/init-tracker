@@ -131,8 +131,7 @@ const loadCatalog = async () => {
 
 const renderHeader = () => {
   playerNameEl.textContent = state.playerName || "—";
-  const inv = state.inventorySummary;
-  playerCurrencyEl.textContent = `${formatCurrency(state.currency)} (items: ${inv.item_count}, unique: ${inv.distinct_count})`;
+  playerCurrencyEl.textContent = formatCurrency(state.currency);
 };
 
 const itemKey = (entry) => `${entry?.item_bucket || ""}:${entry?.item_id || ""}`;
@@ -155,13 +154,11 @@ const renderCatalog = () => {
     meta.className = "meta";
     const type = String(entry?.type || "—");
     const category = String(entry?.shop_category || "—");
-    const bucket = String(entry?.item_bucket || "—");
-    const path = String(entry?.definition_path || "—");
-    meta.textContent = `Category: ${category} • Bucket: ${bucket} • Type: ${type} • Source: ${path}`;
+    meta.textContent = `Category: ${category} • Type: ${type}`;
 
     const price = document.createElement("p");
     price.className = "price";
-    price.textContent = `Price: ${formatCurrency(entry?.price || {})}`;
+    price.textContent = formatCurrency(entry?.price || {});
 
     const actions = document.createElement("div");
     actions.className = "actions";

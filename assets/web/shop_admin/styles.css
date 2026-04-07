@@ -13,9 +13,9 @@ body {
 }
 
 .page {
-  max-width: 1400px;
+  width: min(1800px, 100%);
   margin: 0 auto;
-  padding: 24px;
+  padding: 24px clamp(12px, 2vw, 30px);
 }
 
 .eyebrow {
@@ -36,9 +36,11 @@ h1 { margin: 8px 0; }
   margin-bottom: 16px;
 }
 
+.controls { display: grid; gap: 12px; }
+
 .actions {
   display: flex;
-  gap: 8px;
+  gap: 10px;
   flex-wrap: wrap;
 }
 
@@ -47,7 +49,7 @@ button {
   border: 1px solid #475569;
   color: #e5e7eb;
   background: #1e293b;
-  padding: 8px 12px;
+  padding: 10px 14px;
   cursor: pointer;
 }
 
@@ -62,7 +64,7 @@ button:disabled {
 }
 
 .status {
-  margin: 12px 0 6px;
+  margin: 0;
   padding: 10px 12px;
   border-radius: 8px;
   background: #0f172a;
@@ -73,34 +75,26 @@ button:disabled {
 .status.error { border-color: #991b1b; color: #fca5a5; }
 .status.info { border-color: #1d4ed8; color: #bfdbfe; }
 
-.hint {
-  margin: 0;
-  color: #94a3b8;
-  font-size: 0.9rem;
-}
-
 .dirty-state {
-  margin: 10px 0 0;
+  margin: 0;
   color: #86efac;
-  font-size: 0.9rem;
+  font-size: 0.95rem;
 }
 
-.dirty-state.dirty {
-  color: #fbbf24;
-}
+.dirty-state.dirty { color: #fbbf24; }
 
 .table-wrap { overflow-x: auto; }
 
 table {
   width: 100%;
   border-collapse: collapse;
-  min-width: 1120px;
+  min-width: 1280px;
 }
 
 th, td {
   border-bottom: 1px solid #334155;
   text-align: left;
-  padding: 8px;
+  padding: 10px;
   vertical-align: top;
 }
 
@@ -109,16 +103,15 @@ th { color: #93c5fd; font-size: 0.9rem; }
 input[type="text"],
 input[type="number"] {
   width: 100%;
+  min-width: 120px;
   border-radius: 6px;
   border: 1px solid #475569;
   background: #0f172a;
   color: #e2e8f0;
-  padding: 6px 8px;
+  padding: 8px 10px;
 }
 
-input.invalid {
-  border-color: #dc2626;
-}
+input.invalid { border-color: #dc2626; }
 
 input[type="checkbox"] {
   width: 18px;
@@ -127,9 +120,16 @@ input[type="checkbox"] {
 
 .read-only {
   color: #94a3b8;
-  font-size: 0.9rem;
-  white-space: nowrap;
+  font-size: 0.88rem;
 }
+
+.meta-block {
+  display: grid;
+  gap: 4px;
+}
+
+.meta-block p { margin: 0; }
+.meta-block strong { color: #cbd5e1; font-weight: 600; }
 
 .row-delete {
   background: #7f1d1d;

@@ -8,13 +8,13 @@
 </head>
 <body>
   <main class="page">
-    <header>
+    <header class="hero">
       <p class="eyebrow">InitTracker LAN • Player Shop</p>
-      <h1>Shop</h1>
-      <p class="subtitle">Buy enabled catalog items using your current inventory currency.</p>
+      <h1>Adventurer's Shop</h1>
+      <p class="subtitle">Buy enabled catalog items with your current inventory currency.</p>
     </header>
 
-    <section class="panel" aria-label="Player shop status">
+    <section class="panel status-panel" aria-label="Player shop status">
       <p id="shop-status" class="status" role="status">Loading shop data…</p>
       <div id="player-picker-shell" class="player-picker hidden" aria-live="polite">
         <p class="picker-message">No assigned player was detected. Select who you are to continue.</p>
@@ -27,11 +27,12 @@
         </div>
       </div>
       <div class="player-meta">
-        <p><strong>Player:</strong> <span id="player-name">—</span></p>
-        <p><strong>Currency:</strong> <span id="player-currency">—</span></p>
+        <p><strong>Player</strong><span id="player-name">—</span></p>
+        <p><strong>Currency</strong><span id="player-currency">—</span></p>
       </div>
-      <button id="refresh-button" class="ghost" type="button">Refresh</button>
-      <p class="hint">API wiring: <code>/api/shop/me</code> • <code>/api/shop/players/{name}</code> • <code>/api/characters</code> • <code>/api/shop/catalog</code> • <code>/api/shop/players/{name}/purchase</code></p>
+      <div class="status-actions">
+        <button id="refresh-button" class="ghost" type="button">Refresh</button>
+      </div>
     </section>
 
     <section class="panel" aria-label="Shop catalog">
