@@ -5,6 +5,12 @@ const addRowButton = document.getElementById("add-row-button");
 const validateButton = document.getElementById("validate-button");
 const saveButton = document.getElementById("save-button");
 const dirtyStateEl = document.getElementById("dirty-state");
+const wealthRowsEl = document.getElementById("wealth-rows");
+const wealthSummaryStatusEl = document.getElementById("wealth-summary-status");
+const partyTotalGpEl = document.getElementById("party-total-gp");
+const partyTotalSpEl = document.getElementById("party-total-sp");
+const partyTotalCpEl = document.getElementById("party-total-cp");
+const partyTotalCpValueEl = document.getElementById("party-total-cp-value");
 
 const REQUIRED_IDS = [
   "catalog-rows",
@@ -14,13 +20,17 @@ const REQUIRED_IDS = [
   "validate-button",
   "save-button",
   "dirty-state",
+  "wealth-rows",
+  "wealth-summary-status",
+  "party-total-gp",
+  "party-total-sp",
+  "party-total-cp",
+  "party-total-cp-value",
 ];
 
 const assertRequiredElements = () => {
   const missing = REQUIRED_IDS.filter((id) => !document.getElementById(id));
-  if (!missing.length) {
-    return;
-  }
+  if (!missing.length) return;
   throw new Error(`Shop admin template missing required IDs: ${missing.join(", ")}`);
 };
 
@@ -31,6 +41,9 @@ const state = {
   dirty: false,
   revision: null,
   rowErrors: {},
+  wealthPlayers: [],
+  wealthPartyCurrency: { gp: 0, sp: 0, cp: 0 },
+  wealthPartyTotalCp: 0,
 };
 
 const setStatus = (message, tone = "info") => {
@@ -40,17 +53,12 @@ const setStatus = (message, tone = "info") => {
 };
 
 const updateDirtyState = () => {
-  if (!dirtyStateEl) {
-    return;
-  }
   dirtyStateEl.textContent = state.dirty ? "Unsaved changes" : "All changes saved";
   dirtyStateEl.classList.toggle("dirty", state.dirty);
 };
 
 const toNumberOrUndefined = (value) => {
-  if (value === "" || value === null || value === undefined) {
-    return undefined;
-  }
+  if (value === "" || value === null || value === undefined) return undefined;
   const numeric = Number(value);
   return Number.isFinite(numeric) ? numeric : undefined;
 };
@@ -63,6 +71,8 @@ const editableFromNormalized = (entry = {}) => ({
   price: {
     ...(entry.price && typeof entry.price === "object" ? entry.price : {}),
   },
+  stock_limit: entry.stock_unlimited ? "" : (entry.stock_limit ?? ""),
+  stock_sold: entry.stock_sold ?? 0,
   _readonly: {
     name: entry.name || "",
     type: entry.type || "",
@@ -95,9 +105,7 @@ const fetchJson = async (url, options = {}) => {
   } catch (_error) {
     body = null;
   }
-  if (!response.ok) {
-    throw parseErrorDetail(body, response);
-  }
+  if (!response.ok) throw parseErrorDetail(body, response);
   return body || {};
 };
 
@@ -118,18 +126,22 @@ const buildPayload = () => ({
     if (gp !== undefined) payloadEntry.price.gp = gp;
     if (sp !== undefined) payloadEntry.price.sp = sp;
     if (cp !== undefined) payloadEntry.price.cp = cp;
+
+    const stockLimit = toNumberOrUndefined(entry.stock_limit);
+    const stockSold = toNumberOrUndefined(entry.stock_sold);
+    if (stockLimit !== undefined || stockSold !== undefined) {
+      payloadEntry.stock = {};
+      if (stockLimit !== undefined) payloadEntry.stock.limit = stockLimit;
+      if (stockSold !== undefined) payloadEntry.stock.sold = stockSold;
+    }
     return payloadEntry;
   }),
 });
 
 const setBusy = (busy) => {
   state.busy = Boolean(busy);
-  [reloadButton, addRowButton, validateButton, saveButton].forEach((button) => {
-    button.disabled = state.busy;
-  });
-  rowsEl.querySelectorAll("input,button").forEach((el) => {
-    el.disabled = state.busy;
-  });
+  [reloadButton, addRowButton, validateButton, saveButton].forEach((button) => { button.disabled = state.busy; });
+  rowsEl.querySelectorAll("input,button").forEach((el) => { el.disabled = state.busy; });
 };
 
 const localValidationErrors = () => {
@@ -143,35 +155,52 @@ const localValidationErrors = () => {
     if (!itemId) rowErrors.push("item_id is required");
     if (!bucket) rowErrors.push("item_bucket is required");
     if (!category) rowErrors.push("shop_category is required");
+
     const key = `${bucket}:${itemId}`;
     if (itemId && bucket) {
       if (seen.has(key)) rowErrors.push("duplicate item_bucket + item_id");
       seen.add(key);
     }
+
     const price = entry.price && typeof entry.price === "object" ? entry.price : {};
     const denoms = ["gp", "sp", "cp"];
     const provided = denoms.filter((denom) => String(price[denom] ?? "").trim() !== "");
-    if (!provided.length) {
-      rowErrors.push("price requires at least one denomination");
-    }
+    if (!provided.length) rowErrors.push("price requires at least one denomination");
     provided.forEach((denom) => {
       const numeric = Number(price[denom]);
       if (!Number.isFinite(numeric) || numeric < 0 || !Number.isInteger(numeric)) {
         rowErrors.push(`price.${denom} must be a non-negative integer`);
       }
     });
-    if (rowErrors.length) {
-      errors[index] = rowErrors;
+
+    const stockLimitRaw = String(entry.stock_limit ?? "").trim();
+    const stockSoldRaw = String(entry.stock_sold ?? "").trim();
+    if (stockLimitRaw !== "") {
+      const stockLimit = Number(stockLimitRaw);
+      const stockSold = Number(stockSoldRaw === "" ? 0 : stockSoldRaw);
+      if (!Number.isFinite(stockLimit) || stockLimit < 0 || !Number.isInteger(stockLimit)) {
+        rowErrors.push("stock.limit must be a non-negative integer");
+      }
+      if (!Number.isFinite(stockSold) || stockSold < 0 || !Number.isInteger(stockSold)) {
+        rowErrors.push("stock.sold must be a non-negative integer");
+      } else if (Number.isFinite(stockLimit) && Number.isInteger(stockLimit) && stockSold > stockLimit) {
+        rowErrors.push("stock.sold cannot exceed stock.limit");
+      }
+    } else if (stockSoldRaw !== "") {
+      const stockSold = Number(stockSoldRaw);
+      if (!Number.isFinite(stockSold) || stockSold < 0 || !Number.isInteger(stockSold)) {
+        rowErrors.push("stock.sold must be a non-negative integer");
+      }
     }
+
+    if (rowErrors.length) errors[index] = rowErrors;
   });
   return errors;
 };
 
 const bindInput = (rowIndex, key, subkey = null) => (event) => {
   const row = state.entries[rowIndex];
-  if (!row) {
-    return;
-  }
+  if (!row) return;
   if (subkey) {
     row[key] = row[key] || {};
     row[key][subkey] = event.target.value;
@@ -196,9 +225,7 @@ const rowInput = ({ value = "", type = "text", onChange, min = null, invalid = f
   const input = document.createElement("input");
   input.type = type;
   input.value = value;
-  if (min !== null) {
-    input.min = String(min);
-  }
+  if (min !== null) input.min = String(min);
   if (invalid) {
     input.classList.add("invalid");
     if (title) input.title = title;
@@ -221,6 +248,13 @@ const renderRows = () => {
 
     const invalidRequired = rowErrors.some((message) => message.includes("required") || message.includes("duplicate"));
     const invalidPrice = rowErrors.some((message) => message.includes("price"));
+    const invalidStock = rowErrors.some((message) => message.includes("stock."));
+
+    const stockLimit = toNumberOrUndefined(entry.stock_limit);
+    const stockSold = Math.max(0, Number(toNumberOrUndefined(entry.stock_sold) ?? 0));
+    const stockRemainingText = stockLimit === undefined
+      ? "Unlimited"
+      : String(Math.max(0, stockLimit - stockSold));
 
     const fields = [
       rowInput({ value: entry.item_id || "", onChange: bindInput(index, "item_id"), invalid: invalidRequired, title: rowErrorText }),
@@ -234,25 +268,31 @@ const renderRows = () => {
       rowInput({ value: entry.price?.gp ?? "", type: "number", min: 0, onChange: bindInput(index, "price", "gp"), invalid: invalidPrice, title: rowErrorText }),
       rowInput({ value: entry.price?.sp ?? "", type: "number", min: 0, onChange: bindInput(index, "price", "sp"), invalid: invalidPrice, title: rowErrorText }),
       rowInput({ value: entry.price?.cp ?? "", type: "number", min: 0, onChange: bindInput(index, "price", "cp"), invalid: invalidPrice, title: rowErrorText }),
+      rowInput({ value: entry.stock_limit ?? "", type: "number", min: 0, onChange: bindInput(index, "stock_limit"), invalid: invalidStock, title: rowErrorText }),
+      rowInput({ value: entry.stock_sold ?? 0, type: "number", min: 0, onChange: bindInput(index, "stock_sold"), invalid: invalidStock, title: rowErrorText }),
+      (() => {
+        const badge = document.createElement("span");
+        badge.className = "stock-remaining";
+        if (stockRemainingText === "Unlimited") badge.classList.add("unlimited");
+        if (stockRemainingText === "0") badge.classList.add("sold-out");
+        badge.textContent = stockRemainingText;
+        return badge;
+      })(),
       (() => {
         const wrapper = document.createElement("div");
         wrapper.className = "read-only meta-block";
-
         const name = document.createElement("p");
         const nameLabel = document.createElement("strong");
         nameLabel.textContent = "Name:";
         name.append(nameLabel, ` ${readOnly.name || "—"}`);
-
         const type = document.createElement("p");
         const typeLabel = document.createElement("strong");
         typeLabel.textContent = "Type:";
         type.append(typeLabel, ` ${readOnly.type || "—"}`);
-
         const source = document.createElement("p");
         const sourceLabel = document.createElement("strong");
         sourceLabel.textContent = "Source:";
         source.append(sourceLabel, ` ${readOnly.definition_path || "—"}`);
-
         wrapper.appendChild(name);
         wrapper.appendChild(type);
         wrapper.appendChild(source);
@@ -278,7 +318,7 @@ const renderRows = () => {
       const errorRow = document.createElement("tr");
       errorRow.className = "row-error";
       const cell = document.createElement("td");
-      cell.colSpan = 9;
+      cell.colSpan = 12;
       cell.textContent = `Row ${index + 1}: ${rowErrorText}`;
       errorRow.appendChild(cell);
       rowsEl.appendChild(tr);
@@ -289,10 +329,45 @@ const renderRows = () => {
   });
 };
 
+const renderWealth = () => {
+  wealthRowsEl.innerHTML = "";
+  state.wealthPlayers.forEach((player) => {
+    const tr = document.createElement("tr");
+    const currency = player.currency || {};
+    [player.name || "—", Number(currency.gp || 0), Number(currency.sp || 0), Number(currency.cp || 0), Number(player.total_cp || 0)].forEach((value) => {
+      const td = document.createElement("td");
+      td.textContent = String(value);
+      tr.appendChild(td);
+    });
+    wealthRowsEl.appendChild(tr);
+  });
+  const party = state.wealthPartyCurrency || { gp: 0, sp: 0, cp: 0 };
+  partyTotalGpEl.textContent = String(Number(party.gp || 0));
+  partyTotalSpEl.textContent = String(Number(party.sp || 0));
+  partyTotalCpEl.textContent = String(Number(party.cp || 0));
+  partyTotalCpValueEl.textContent = String(Number(state.wealthPartyTotalCp || 0));
+};
+
+const loadWealth = async () => {
+  wealthSummaryStatusEl.textContent = "Loading player wealth…";
+  try {
+    const payload = await fetchJson("/api/shop/admin/player-wealth");
+    state.wealthPlayers = Array.isArray(payload.players) ? payload.players : [];
+    state.wealthPartyCurrency = payload.party_total_currency || { gp: 0, sp: 0, cp: 0 };
+    state.wealthPartyTotalCp = Number(payload.party_total_cp || 0);
+    wealthSummaryStatusEl.textContent = `Loaded ${state.wealthPlayers.length} players.`;
+  } catch (error) {
+    state.wealthPlayers = [];
+    state.wealthPartyCurrency = { gp: 0, sp: 0, cp: 0 };
+    state.wealthPartyTotalCp = 0;
+    wealthSummaryStatusEl.textContent = `Failed to load player wealth: ${error.message}`;
+  }
+  renderWealth();
+};
+
 const normalizeFromResponse = (payload, { markClean = false } = {}) => {
   state.formatVersion = Number(payload?.format_version || 1);
-  const entries = Array.isArray(payload?.entries) ? payload.entries : [];
-  state.entries = entries.map((entry) => editableFromNormalized(entry));
+  state.entries = (Array.isArray(payload?.entries) ? payload.entries : []).map((entry) => editableFromNormalized(entry));
   const revision = payload?.revision;
   state.revision = revision ? String(revision) : state.revision;
   state.rowErrors = localValidationErrors();
@@ -303,28 +378,21 @@ const normalizeFromResponse = (payload, { markClean = false } = {}) => {
   renderRows();
 };
 
-const summarizeRowErrors = (errors) => {
-  const rows = Object.keys(errors).length;
-  if (!rows) {
-    return "";
-  }
-  return Object.entries(errors)
-    .map(([index, issues]) => `Row ${Number(index) + 1}: ${(issues || []).join(", ")}`)
-    .join(" | ");
-};
+const summarizeRowErrors = (errors) => Object.entries(errors)
+  .map(([index, issues]) => `Row ${Number(index) + 1}: ${(issues || []).join(", ")}`)
+  .join(" | ");
 
 const loadCatalog = async () => {
   if (state.dirty) {
     const proceed = window.confirm("You have unsaved catalog edits. Reload and discard local changes?");
-    if (!proceed) {
-      return;
-    }
+    if (!proceed) return;
   }
   setBusy(true);
   setStatus("Loading catalog from /api/shop/catalog?include_disabled=true ...", "info");
   try {
     const payload = await fetchJson("/api/shop/catalog?include_disabled=true");
     normalizeFromResponse({ format_version: 1, entries: payload.entries || [], revision: payload.revision }, { markClean: true });
+    await loadWealth();
     setStatus(`Loaded ${state.entries.length} catalog entr${state.entries.length === 1 ? "y" : "ies"}.`, "ok");
   } catch (error) {
     setStatus(`Load failed: ${error.message}`, "error");
@@ -343,11 +411,7 @@ const validateCatalog = async () => {
   setBusy(true);
   setStatus("Validating catalog with backend validator...", "info");
   try {
-    const payload = buildPayload();
-    const validated = await fetchJson("/api/shop/catalog/validate", {
-      method: "POST",
-      body: JSON.stringify(payload),
-    });
+    const validated = await fetchJson("/api/shop/catalog/validate", { method: "POST", body: JSON.stringify(buildPayload()) });
     normalizeFromResponse(validated);
     setStatus(`Validation passed. ${state.entries.length} entries normalized.`, "ok");
   } catch (error) {
@@ -367,12 +431,9 @@ const saveCatalog = async () => {
   setBusy(true);
   setStatus("Saving catalog...", "info");
   try {
-    const payload = buildPayload();
-    const saved = await fetchJson("/api/shop/catalog", {
-      method: "PUT",
-      body: JSON.stringify(payload),
-    });
+    const saved = await fetchJson("/api/shop/catalog", { method: "PUT", body: JSON.stringify(buildPayload()) });
     normalizeFromResponse(saved, { markClean: true });
+    await loadWealth();
     setStatus(`Save successful. ${state.entries.length} entries saved.`, "ok");
   } catch (error) {
     if (error.status === 409) {
@@ -386,15 +447,7 @@ const saveCatalog = async () => {
 };
 
 const addEntry = () => {
-  state.entries.push(
-    editableFromNormalized({
-      item_id: "",
-      item_bucket: "",
-      shop_category: "",
-      enabled: true,
-      price: { gp: 0 },
-    }),
-  );
+  state.entries.push(editableFromNormalized({ item_id: "", item_bucket: "", shop_category: "", enabled: true, price: { gp: 0 }, stock_sold: 0 }));
   markDirty();
   state.rowErrors = localValidationErrors();
   renderRows();
@@ -402,9 +455,7 @@ const addEntry = () => {
 };
 
 const warnOnUnload = (event) => {
-  if (!state.dirty) {
-    return undefined;
-  }
+  if (!state.dirty) return undefined;
   event.preventDefault();
   event.returnValue = "You have unsaved shop catalog changes.";
   return event.returnValue;

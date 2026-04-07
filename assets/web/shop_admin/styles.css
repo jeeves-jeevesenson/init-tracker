@@ -88,7 +88,7 @@ button:disabled {
 table {
   width: 100%;
   border-collapse: collapse;
-  min-width: 1280px;
+  min-width: 1500px;
 }
 
 th, td {
@@ -144,4 +144,22 @@ tr.row-error td {
   color: #fca5a5;
   font-size: 0.85rem;
   border-bottom-color: #7f1d1d;
+}
+
+.wealth-summary-status {
+  margin: 0 0 10px 0;
+  color: #cbd5e1;
+}
+
+.stock-remaining {
+  font-weight: 600;
+  color: #bfdbfe;
+}
+
+.stock-remaining.unlimited {
+  color: #86efac;
+}
+
+.stock-remaining.sold-out {
+  color: #fca5a5;
 }

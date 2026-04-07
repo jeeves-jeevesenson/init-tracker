@@ -9,6 +9,7 @@ Shop files do **not** redefine item behavior. They only describe:
 - whether an item is sold (`enabled`)
 - how it is grouped in the shop UI (`shop_category`)
 - what it costs (`price`)
+- optional stock controls (`stock.limit`, `stock.sold`)
 
 ## Source of truth split
 
@@ -28,3 +29,17 @@ The backend exposes unprotected admin-facing catalog write helpers used by the c
   - If `expected_revision` does not match current catalog revision, save is rejected with HTTP `409` instead of overwriting newer host state.
 
 Both endpoints enforce the same strict catalog rules used by the read path.
+
+## Stock model
+
+Each catalog entry may include:
+
+```yaml
+stock:
+  limit: 10
+  sold: 3
+```
+
+- `limit`: max total purchasable quantity (omit/null for unlimited stock)
+- `sold`: count already purchased (defaults to `0`)
+- remaining stock is derived as `limit - sold`

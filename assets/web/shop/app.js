@@ -159,6 +159,11 @@ const renderCatalog = () => {
     const price = document.createElement("p");
     price.className = "price";
     price.textContent = formatCurrency(entry?.price || {});
+    const stock = document.createElement("p");
+    stock.className = "meta";
+    const stockUnlimited = Boolean(entry?.stock_unlimited === true);
+    const stockRemaining = Number(entry?.stock_remaining ?? 0);
+    stock.textContent = stockUnlimited ? "Stock: Unlimited" : `Stock: ${Math.max(0, stockRemaining)} remaining`;
 
     const actions = document.createElement("div");
     actions.className = "actions";
@@ -178,7 +183,8 @@ const renderCatalog = () => {
     const busyForRow = state.inFlightItemKey === key;
     const playerUnavailable = !state.playerName;
     quantityInput.disabled = busyForRow || playerUnavailable;
-    buyButton.disabled = busyForRow || playerUnavailable;
+    const soldOut = !stockUnlimited && stockRemaining <= 0;
+    buyButton.disabled = busyForRow || playerUnavailable || soldOut;
 
     buyButton.addEventListener("click", () => buyItem(entry, quantityInput));
 
@@ -188,6 +194,7 @@ const renderCatalog = () => {
     card.appendChild(title);
     card.appendChild(meta);
     card.appendChild(price);
+    card.appendChild(stock);
     card.appendChild(actions);
     catalogListEl.appendChild(card);
   });

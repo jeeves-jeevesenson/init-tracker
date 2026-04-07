@@ -94,6 +94,7 @@ class ShopCatalogLoaderTests(unittest.TestCase):
                             "shop_category": "consumables",
                             "enabled": False,
                             "price": {"sp": 30},
+                            "stock": {"limit": 5, "sold": 2},
                         },
                     ],
                 },
@@ -109,8 +110,35 @@ class ShopCatalogLoaderTests(unittest.TestCase):
             self.assertEqual("light", by_key[("armor", "leather")]["category"])
             self.assertTrue(by_key[("magic_item", "wand_of_sparking")]["requires_attunement"])
             self.assertEqual("potion", by_key[("consumable", "healing_potion")]["consumable_type"])
+            self.assertEqual(5, by_key[("consumable", "healing_potion")]["stock_limit"])
+            self.assertEqual(2, by_key[("consumable", "healing_potion")]["stock_sold"])
+            self.assertEqual(3, by_key[("consumable", "healing_potion")]["stock_remaining"])
             for row in normalized:
                 self.assertTrue(row["definition_path"].endswith(".yaml"))
+
+    def test_load_shop_catalog_normalized_fails_on_invalid_stock(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            items_dir = Path(tmp) / "Items"
+            self._seed_item_definitions(items_dir)
+            self._write_yaml(
+                items_dir / "Shop" / "catalog.yaml",
+                {
+                    "entries": [
+                        {
+                            "item_id": "longsword",
+                            "item_bucket": "weapon",
+                            "shop_category": "weapons",
+                            "enabled": True,
+                            "price": {"gp": 1},
+                            "stock": {"limit": 2, "sold": 3},
+                        }
+                    ]
+                },
+            )
+
+            with mock.patch.object(self.app, "_resolve_items_dir", return_value=items_dir):
+                with self.assertRaisesRegex(ValueError, "stock.sold greater than stock.limit"):
+                    self.app._load_shop_catalog_normalized()
 
     def test_load_shop_catalog_normalized_fails_when_item_definition_missing(self):
         with tempfile.TemporaryDirectory() as tmp:

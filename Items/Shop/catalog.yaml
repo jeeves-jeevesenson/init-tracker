@@ -34,6 +34,9 @@ entries:
     enabled: true
     price:
       gp: 50
+    stock:
+      limit: 10
+      sold: 0
 
   - item_id: lesser_healing_potion
     item_bucket: consumable
@@ -41,6 +44,9 @@ entries:
     enabled: true
     price:
       gp: 25
+    stock:
+      limit: 8
+      sold: 1
 
   - item_id: scroll_of_magic_missile
     item_bucket: consumable

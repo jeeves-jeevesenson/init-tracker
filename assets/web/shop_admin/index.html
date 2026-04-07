@@ -25,6 +25,34 @@
       <p id="status-banner" class="status" role="status">Loading catalog…</p>
     </section>
 
+    <section class="panel" aria-label="Player wealth summary">
+      <h2>Party Gold Summary</h2>
+      <p id="wealth-summary-status" class="wealth-summary-status">Loading player wealth…</p>
+      <div class="table-wrap">
+        <table>
+          <thead>
+            <tr>
+              <th>Player</th>
+              <th>gp</th>
+              <th>sp</th>
+              <th>cp</th>
+              <th>Total (cp)</th>
+            </tr>
+          </thead>
+          <tbody id="wealth-rows"></tbody>
+          <tfoot>
+            <tr>
+              <th>Party Total</th>
+              <th id="party-total-gp">0</th>
+              <th id="party-total-sp">0</th>
+              <th id="party-total-cp">0</th>
+              <th id="party-total-cp-value">0</th>
+            </tr>
+          </tfoot>
+        </table>
+      </div>
+    </section>
+
     <section class="panel" aria-label="Catalog editor">
       <div class="table-wrap">
         <table>
@@ -37,6 +65,9 @@
               <th>gp</th>
               <th>sp</th>
               <th>cp</th>
+              <th>stock limit</th>
+              <th>stock sold</th>
+              <th>stock remaining</th>
               <th>Metadata (readonly)</th>
               <th>Actions</th>
             </tr>
