@@ -101,8 +101,10 @@ class ShopRoutesTests(unittest.TestCase):
         js_response = client.get("/assets/web/shop/app.js")
 
         self.assertEqual(js_response.status_code, 200)
-        self.assertIn("error.status === 404", js_response.text)
-        self.assertIn("includes(\"assigned character\")", js_response.text)
+        self.assertIn(
+            "if (error.status === 404 && String(error.message || \"\").toLowerCase().includes(\"assigned character\"))",
+            js_response.text,
+        )
         self.assertIn("No player is assigned to this device/IP yet. Ask the DM to assign a character, then refresh.", js_response.text)
         self.assertIn("error.status === 409", js_response.text)
         self.assertIn("currency may be outdated; refresh and retry", js_response.text)
