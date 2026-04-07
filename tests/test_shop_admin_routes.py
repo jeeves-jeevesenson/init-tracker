@@ -80,6 +80,18 @@ class ShopAdminRoutesTests(unittest.TestCase):
         self.assertEqual(js_response.status_code, 200)
         self.assertEqual(css_response.status_code, 200)
 
+    def test_shop_admin_frontend_includes_dirty_state_conflict_and_revision_wiring(self):
+        client = self._build_test_client()
+
+        js_response = client.get("/assets/web/shop_admin/app.js")
+
+        self.assertEqual(js_response.status_code, 200)
+        self.assertIn("window.addEventListener(\"beforeunload\", warnOnUnload)", js_response.text)
+        self.assertIn("state.dirty ? \"Unsaved changes\" : \"All changes saved\"", js_response.text)
+        self.assertIn("expected_revision: state.revision || undefined", js_response.text)
+        self.assertIn("error.status === 409", js_response.text)
+        self.assertIn("Save blocked: catalog changed on host. Reload the latest catalog and retry.", js_response.text)
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -22,6 +22,9 @@ Later loader/API code should join shop catalog entries to item definitions by `i
 The backend exposes unprotected admin-facing catalog write helpers used by the current `/shop_admin` LAN UI:
 
 - `POST /api/shop/catalog/validate` validates a proposed catalog payload **in memory** and returns normalized entries for preview.
+- `GET /api/shop/catalog` returns normalized `entries` plus a `revision` token for optimistic concurrency on writes.
 - `PUT /api/shop/catalog` validates via the same path, then atomically writes `Items/Shop/catalog.yaml` using a temp file + replace.
+  - Clients may send optional `expected_revision`.
+  - If `expected_revision` does not match current catalog revision, save is rejected with HTTP `409` instead of overwriting newer host state.
 
 Both endpoints enforce the same strict catalog rules used by the read path.
