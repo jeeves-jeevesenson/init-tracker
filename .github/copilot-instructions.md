@@ -25,7 +25,7 @@ This repository is a Python desktop app (Tkinter) for the DM plus an optional LA
 - Avoid unrelated churn or opportunistic refactors.
 - If the request is planning/analysis only, do not force implementation.
 
-Use standard Unix tooling for discovery and prefer `rg` for recursive search patterns.
+Use standard Unix tools for discovery and prefer `grep -R` for recursive search.
 
 ---
 
