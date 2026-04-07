@@ -70,8 +70,13 @@ class ShopRoutesTests(unittest.TestCase):
         self.assertIn('id="player-name"', response.text)
         self.assertIn('id="player-currency"', response.text)
         self.assertIn('id="catalog-list"', response.text)
+        self.assertIn('id="player-picker-shell"', response.text)
+        self.assertIn('id="player-picker-select"', response.text)
+        self.assertIn('id="player-picker-load-button"', response.text)
         self.assertIn('/assets/web/shop/app.js', response.text)
         self.assertIn('/api/shop/me', response.text)
+        self.assertIn('/api/shop/players/{name}', response.text)
+        self.assertIn('/api/characters', response.text)
         self.assertNotIn('/api/characters/by_ip', response.text)
 
     def test_shop_assets_are_served(self):
@@ -92,10 +97,11 @@ class ShopRoutesTests(unittest.TestCase):
         self.assertIn('/api/shop/catalog', js_response.text)
         self.assertIn('/api/shop/me', js_response.text)
         self.assertIn('/api/shop/players/', js_response.text)
+        self.assertIn('/api/characters', js_response.text)
         self.assertIn('/purchase', js_response.text)
         self.assertNotIn('/api/characters/by_ip', js_response.text)
 
-    def test_shop_frontend_has_assignment_gap_and_purchase_conflict_messages(self):
+    def test_shop_frontend_has_fallback_picker_and_purchase_conflict_messages(self):
         client = self._build_test_client()
 
         js_response = client.get("/assets/web/shop/app.js")
@@ -105,7 +111,9 @@ class ShopRoutesTests(unittest.TestCase):
             "if (error.status === 404 && String(error.message || \"\").toLowerCase().includes(\"assigned character\"))",
             js_response.text,
         )
-        self.assertIn("No player is assigned to this device/IP yet. Ask the DM to assign a character, then refresh.", js_response.text)
+        self.assertIn("No assigned player was detected. Select who you are to continue.", js_response.text)
+        self.assertIn("/api/shop/players/${encodeURIComponent(name)}", js_response.text)
+        self.assertIn("const listCharacterNames = async () => {", js_response.text)
         self.assertIn("error.status === 409", js_response.text)
         self.assertIn("currency may be outdated; refresh and retry", js_response.text)
 
