@@ -36,7 +36,7 @@ class _ApiAppStub:
     def _validate_shop_catalog_payload(self, _payload):
         return {"format_version": 1, "entries": []}
 
-    def _save_shop_catalog_payload(self, _payload):
+    def _save_shop_catalog_payload(self, _payload, *, expected_revision=None):
         return {"format_version": 1, "entries": []}
 
 
@@ -133,6 +133,7 @@ class ShopCatalogWriteApiTests(unittest.TestCase):
         }
         saved = {
             "format_version": 1,
+            "revision": "2-200",
             "entries": [
                 {
                     "item_id": "longsword",
@@ -150,8 +151,34 @@ class ShopCatalogWriteApiTests(unittest.TestCase):
             response = client.put("/api/shop/catalog", json=payload)
 
         self.assertEqual(response.status_code, 200)
-        self.assertEqual(["longsword"], [row.get("item_id") for row in response.json().get("entries") or []])
-        save_mock.assert_called_once_with(payload)
+        response_payload = response.json()
+        self.assertEqual(["longsword"], [row.get("item_id") for row in response_payload.get("entries") or []])
+        self.assertEqual("2-200", response_payload.get("revision"))
+        save_mock.assert_called_once_with(payload, expected_revision=None)
+
+    def test_put_route_passes_expected_revision_to_save_helper(self):
+        client, lan = self._build_test_client()
+        payload = {
+            "format_version": 1,
+            "expected_revision": "1-100",
+            "entries": [],
+        }
+        save_response = {"format_version": 1, "entries": [], "revision": "2-100"}
+        with mock.patch.object(lan.app, "_save_shop_catalog_payload", return_value=save_response) as save_mock:
+            response = client.put("/api/shop/catalog", json=payload)
+        self.assertEqual(response.status_code, 200)
+        save_mock.assert_called_once_with(payload, expected_revision="1-100")
+
+    def test_put_route_returns_409_on_revision_conflict(self):
+        client, lan = self._build_test_client()
+        with mock.patch.object(
+            lan.app,
+            "_save_shop_catalog_payload",
+            side_effect=tracker_mod.ShopCatalogConflictError("Catalog has changed since load."),
+        ):
+            response = client.put("/api/shop/catalog", json={"format_version": 1, "expected_revision": "1-100", "entries": []})
+        self.assertEqual(response.status_code, 409)
+        self.assertIn("Catalog has changed since load", response.json().get("detail", ""))
 
 
 class ShopCatalogWriteHelpersTests(unittest.TestCase):
@@ -192,10 +219,33 @@ class ShopCatalogWriteHelpersTests(unittest.TestCase):
                 saved = self.app._save_shop_catalog_payload(payload)
 
             self.assertEqual(["healing_potion"], [row.get("item_id") for row in saved.get("entries") or []])
+            self.assertTrue(bool(str(saved.get("revision") or "").strip()))
             persisted = yaml.safe_load(catalog_path.read_text(encoding="utf-8"))
             self.assertEqual(1, persisted.get("format_version"))
             self.assertEqual("healing_potion", persisted["entries"][0]["item_id"])
             self.assertEqual({"gp": 50}, persisted["entries"][0]["price"])
+
+    def test_save_shop_catalog_payload_rejects_stale_expected_revision(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            items_dir = Path(tmp) / "Items"
+            self._seed_item_definitions(items_dir)
+            catalog_path = items_dir / "Shop" / "catalog.yaml"
+            self._write_yaml(catalog_path, {"format_version": 1, "entries": []})
+            payload = {
+                "format_version": 1,
+                "entries": [
+                    {
+                        "item_id": "longsword",
+                        "item_bucket": "weapon",
+                        "shop_category": "weapons",
+                        "enabled": True,
+                        "price": {"gp": 20},
+                    }
+                ],
+            }
+            with mock.patch.object(self.app, "_resolve_items_dir", return_value=items_dir):
+                with self.assertRaises(tracker_mod.ShopCatalogConflictError):
+                    self.app._save_shop_catalog_payload(payload, expected_revision="stale-revision")
 
     def test_save_shop_catalog_payload_failure_does_not_corrupt_existing_file(self):
         with tempfile.TemporaryDirectory() as tmp:

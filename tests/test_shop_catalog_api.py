@@ -30,6 +30,9 @@ class _AppStub:
     def _load_shop_catalog_normalized(self):
         return []
 
+    def _shop_catalog_revision_token(self):
+        return "1-100"
+
 
 class ShopCatalogApiTests(unittest.TestCase):
     def _build_lan_controller(self):
@@ -104,6 +107,7 @@ class ShopCatalogApiTests(unittest.TestCase):
         payload = response.json()
         entries = payload.get("entries")
         self.assertIsInstance(entries, list)
+        self.assertEqual("1-100", payload.get("revision"))
         self.assertEqual(2, len(entries))
         self.assertEqual(["apple", "dagger"], [row.get("item_id") for row in entries])
         for row in entries:
@@ -148,7 +152,9 @@ class ShopCatalogApiTests(unittest.TestCase):
             response = client.get("/api/shop/catalog?include_disabled=true")
 
         self.assertEqual(response.status_code, 200)
-        entries = response.json().get("entries") or []
+        response_payload = response.json()
+        self.assertEqual("1-100", response_payload.get("revision"))
+        entries = response_payload.get("entries") or []
         self.assertEqual(2, len(entries))
         self.assertEqual({"ring_mail", "healing_potion"}, {row.get("item_id") for row in entries})
 

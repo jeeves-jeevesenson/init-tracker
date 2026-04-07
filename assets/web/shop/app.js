@@ -12,6 +12,7 @@ const state = {
   inventorySummary: { item_count: 0, distinct_count: 0 },
   catalog: [],
   inFlightItemKey: "",
+  lastLoadHadError: false,
 };
 
 const assertRequiredElements = () => {
@@ -47,7 +48,10 @@ const fetchJson = async (url, options = {}) => {
   if (!response.ok) {
     const detail = body && body.detail ? body.detail : `${response.status} ${response.statusText}`;
     const message = typeof detail === "string" ? detail : (detail?.message || detail?.error || "Request failed");
-    throw new Error(message);
+    const error = new Error(message);
+    error.status = Number(response.status || 0);
+    error.detail = detail;
+    throw error;
   }
   return body || {};
 };
@@ -126,8 +130,9 @@ const renderCatalog = () => {
 
     const key = itemKey(entry);
     const busyForRow = state.inFlightItemKey === key;
-    quantityInput.disabled = busyForRow;
-    buyButton.disabled = busyForRow;
+    const playerUnavailable = !state.playerName;
+    quantityInput.disabled = busyForRow || playerUnavailable;
+    buyButton.disabled = busyForRow || playerUnavailable;
 
     buyButton.addEventListener("click", () => buyItem(entry, quantityInput));
 
@@ -162,15 +167,19 @@ const buyItem = async (entry, quantityInputEl) => {
   setInFlightRow(entry);
   setStatus(`Purchasing ${quantity} × ${entry?.name || entry?.item_id}...`, "info");
   try {
-    const result = await fetchJson(`/api/shop/players/${encodeURIComponent(state.playerName)}/purchase`, {
+    await fetchJson(`/api/shop/players/${encodeURIComponent(state.playerName)}/purchase`, {
       method: "POST",
       body: JSON.stringify(payload),
     });
-    await loadPlayerState();
+    await Promise.all([loadPlayerState(), loadCatalog()]);
     renderHeader();
+    renderCatalog();
     setStatus(`Purchase successful: ${quantity} × ${entry?.name || entry?.item_id}.`, "ok");
   } catch (error) {
-    setStatus(`Purchase failed: ${error.message}`, "error");
+    const message = error.status === 409
+      ? `Purchase failed: ${error.message} (currency may be outdated; refresh and retry).`
+      : `Purchase failed: ${error.message}`;
+    setStatus(message, "error");
   } finally {
     setInFlightRow(null);
   }
@@ -180,11 +189,26 @@ const reload = async () => {
   refreshButton.disabled = true;
   setStatus("Loading player and catalog...", "info");
   try {
-    await Promise.all([loadPlayerState(), loadCatalog()]);
+    const [playerResult, catalogResult] = await Promise.allSettled([loadPlayerState(), loadCatalog()]);
+    if (playerResult.status === "rejected") {
+      throw playerResult.reason;
+    }
+    if (catalogResult.status === "rejected") {
+      throw catalogResult.reason;
+    }
     renderHeader();
     renderCatalog();
+    state.lastLoadHadError = false;
     setStatus(`Loaded ${state.catalog.length} item${state.catalog.length === 1 ? "" : "s"} for ${state.playerName}.`, "ok");
   } catch (error) {
+    state.lastLoadHadError = true;
+    if (error.status === 404 && String(error.message || "").toLowerCase().includes("assigned character")) {
+      setStatus("No player is assigned to this device/IP yet. Ask the DM to assign a character, then refresh.", "error");
+      state.playerName = "";
+      renderHeader();
+      renderCatalog();
+      return;
+    }
     renderHeader();
     renderCatalog();
     setStatus(`Load failed: ${error.message}`, "error");

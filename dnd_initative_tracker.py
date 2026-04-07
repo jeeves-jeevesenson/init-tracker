@@ -861,6 +861,10 @@ class CharacterApiError(Exception):
     detail: Any
 
 
+class ShopCatalogConflictError(Exception):
+    pass
+
+
 def _ensure_logs_dir() -> Path:
     """Create logs/ in the app data directory (best effort)."""
     base_dir = _app_data_dir()
@@ -2476,6 +2480,7 @@ class LanController:
         async def get_shop_catalog(include_disabled: bool = False):
             try:
                 entries = self.app._load_shop_catalog_normalized()
+                revision = self.app._shop_catalog_revision_token()
             except Exception as exc:
                 raise HTTPException(status_code=500, detail=f"Failed to load shop catalog: {exc}")
             filtered = entries if include_disabled else [row for row in entries if row.get("enabled") is True]
@@ -2488,7 +2493,7 @@ class LanController:
                     str(row.get("item_id") or "").lower(),
                 ),
             )
-            return {"entries": stable_entries}
+            return {"entries": stable_entries, "revision": revision}
 
         @self._fastapi_app.post("/api/shop/catalog/validate")
         async def validate_shop_catalog(payload: Dict[str, Any] = Body(...)):
@@ -2512,8 +2517,17 @@ class LanController:
 
         @self._fastapi_app.put("/api/shop/catalog")
         async def save_shop_catalog(payload: Dict[str, Any] = Body(...)):
+            expected_revision = None
+            if isinstance(payload, dict):
+                raw_expected_revision = payload.get("expected_revision")
+                if raw_expected_revision is not None:
+                    expected_revision = str(raw_expected_revision).strip()
+                    if not expected_revision:
+                        expected_revision = None
             try:
-                saved = self.app._save_shop_catalog_payload(payload)
+                saved = self.app._save_shop_catalog_payload(payload, expected_revision=expected_revision)
+            except ShopCatalogConflictError as exc:
+                raise HTTPException(status_code=409, detail=str(exc))
             except ValueError as exc:
                 raise HTTPException(status_code=400, detail=str(exc))
             except Exception as exc:
@@ -2528,7 +2542,10 @@ class LanController:
                     str(row.get("item_id") or "").lower(),
                 ),
             )
-            return {"format_version": 1, "entries": stable_entries}
+            revision = None
+            if isinstance(saved, dict):
+                revision = saved.get("revision")
+            return {"format_version": 1, "entries": stable_entries, "revision": revision}
 
         @self._fastapi_app.post("/api/shop/players/{name}/purchase")
         async def purchase_shop_item(name: str, payload: Dict[str, Any] = Body(...)):
@@ -6264,7 +6281,28 @@ class InitiativeTracker(base.InitiativeTracker):
         }
         return {"format_version": 1, "entries": normalized_entries, "catalog_payload": storage_payload}
 
-    def _write_shop_catalog_yaml_atomic(self, path: Path, payload: Dict[str, Any]) -> None:
+    @staticmethod
+    def _shop_catalog_revision_for_path(path: Path) -> str:
+        try:
+            stat = path.stat()
+        except FileNotFoundError:
+            return "missing"
+        return f"{int(stat.st_mtime_ns)}-{int(stat.st_size)}"
+
+    def _shop_catalog_revision_token(self) -> str:
+        items_dir = self._resolve_items_dir()
+        if items_dir is None:
+            raise RuntimeError("Items directory is unavailable; cannot read shop catalog revision.")
+        catalog_path = items_dir / "Shop" / "catalog.yaml"
+        return self._shop_catalog_revision_for_path(catalog_path)
+
+    def _write_shop_catalog_yaml_atomic(
+        self,
+        path: Path,
+        payload: Dict[str, Any],
+        *,
+        expected_revision: Optional[str] = None,
+    ) -> str:
         if yaml is None:
             raise RuntimeError("PyYAML is required for shop catalog persistence.")
         lock = self.__dict__.get("_shop_catalog_yaml_lock")
@@ -6274,6 +6312,11 @@ class InitiativeTracker(base.InitiativeTracker):
         yaml_text = yaml.safe_dump(payload, sort_keys=False, allow_unicode=True)
         tmp_path: Optional[Path] = None
         with lock:
+            current_revision = self._shop_catalog_revision_for_path(path)
+            if expected_revision and current_revision != expected_revision:
+                raise ShopCatalogConflictError(
+                    "Catalog has changed since load. Reload to get latest revision before saving."
+                )
             path.parent.mkdir(parents=True, exist_ok=True)
             try:
                 with tempfile.NamedTemporaryFile(
@@ -6295,15 +6338,20 @@ class InitiativeTracker(base.InitiativeTracker):
                     except Exception:
                         pass
                 raise
+            return self._shop_catalog_revision_for_path(path)
 
-    def _save_shop_catalog_payload(self, payload: Any) -> Dict[str, Any]:
+    def _save_shop_catalog_payload(self, payload: Any, *, expected_revision: Optional[str] = None) -> Dict[str, Any]:
         validated = self._validate_shop_catalog_payload(payload)
         items_dir = self._resolve_items_dir()
         if items_dir is None:
             raise RuntimeError("Items directory is unavailable; cannot save shop catalog.")
         catalog_path = items_dir / "Shop" / "catalog.yaml"
-        self._write_shop_catalog_yaml_atomic(catalog_path, validated["catalog_payload"])
-        return {"format_version": 1, "entries": copy.deepcopy(validated.get("entries") or [])}
+        revision = self._write_shop_catalog_yaml_atomic(
+            catalog_path,
+            validated["catalog_payload"],
+            expected_revision=expected_revision,
+        )
+        return {"format_version": 1, "entries": copy.deepcopy(validated.get("entries") or []), "revision": revision}
 
     def _load_shop_catalog_normalized(self) -> List[Dict[str, Any]]:
         items_dir = self._resolve_items_dir()
@@ -6624,7 +6672,22 @@ class InitiativeTracker(base.InitiativeTracker):
             else:
                 base_key = normalized_item_id or item_id or re.sub(r"[^a-z0-9]+", "_", name.lower()).strip("_") or "item"
                 instance_id_counts[base_key] = instance_id_counts.get(base_key, 0) + 1
-                normalized_entry["instance_id"] = f"derived:{base_key}__{instance_id_counts[base_key]:03d}"
+                derived_instance_id = f"derived:{base_key}__{instance_id_counts[base_key]:03d}"
+                normalized_entry["instance_id"] = derived_instance_id
+                requires_canonical_instance_id = (
+                    bool(normalized_item_id)
+                    or bool(normalized_entry.get("equipped") is True)
+                    or bool(normalized_entry.get("attuned") is True)
+                    or isinstance(normalized_entry.get("state"), dict)
+                )
+                if requires_canonical_instance_id:
+                    self._oplog(
+                        (
+                            f"Player YAML {player_name}: inventory item '{normalized_item_id or name or base_key}' "
+                            f"is missing explicit instance_id; using fallback '{derived_instance_id}'."
+                        ),
+                        level="warning",
+                    )
             normalized_entry["quantity"] = int(quantity)
             normalized.append(normalized_entry)
         return normalized

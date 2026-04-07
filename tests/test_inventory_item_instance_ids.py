@@ -6,6 +6,8 @@ import dnd_initative_tracker as tracker_mod
 class InventoryItemInstanceIdTests(unittest.TestCase):
     def setUp(self):
         self.app = object.__new__(tracker_mod.InitiativeTracker)
+        self.log_events = []
+        self.app._oplog = lambda message, level="info": self.log_events.append((level, str(message)))
 
     def test_normalization_preserves_explicit_instance_id(self):
         profile = {
@@ -41,6 +43,13 @@ class InventoryItemInstanceIdTests(unittest.TestCase):
         normalized = self.app._normalize_owned_magic_inventory_items(profile)
         self.assertEqual(len(normalized), 1)
         self.assertEqual(normalized[0].get("instance_id"), "derived:wand_of_fireballs__001")
+
+    def test_normalization_logs_warning_when_canonical_item_missing_instance_id(self):
+        profile = {"name": "Alice", "inventory": {"items": [{"id": "longsword", "equipped": True}]}}
+        normalized = self.app._normalize_inventory_item_entries(profile)
+        self.assertEqual("derived:longsword__001", normalized[0].get("instance_id"))
+        warning_messages = [message for level, message in self.log_events if level == "warning"]
+        self.assertTrue(any("missing explicit instance_id" in message for message in warning_messages))
 
 
 if __name__ == "__main__":

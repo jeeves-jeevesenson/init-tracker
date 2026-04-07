@@ -71,6 +71,8 @@ class ShopRoutesTests(unittest.TestCase):
         self.assertIn('id="player-currency"', response.text)
         self.assertIn('id="catalog-list"', response.text)
         self.assertIn('/assets/web/shop/app.js', response.text)
+        self.assertIn('/api/shop/me', response.text)
+        self.assertNotIn('/api/characters/by_ip', response.text)
 
     def test_shop_assets_are_served(self):
         client = self._build_test_client()
@@ -92,6 +94,20 @@ class ShopRoutesTests(unittest.TestCase):
         self.assertIn('/api/shop/players/', js_response.text)
         self.assertIn('/purchase', js_response.text)
         self.assertNotIn('/api/characters/by_ip', js_response.text)
+
+    def test_shop_frontend_has_assignment_gap_and_purchase_conflict_messages(self):
+        client = self._build_test_client()
+
+        js_response = client.get("/assets/web/shop/app.js")
+
+        self.assertEqual(js_response.status_code, 200)
+        self.assertIn(
+            "if (error.status === 404 && String(error.message || \"\").toLowerCase().includes(\"assigned character\"))",
+            js_response.text,
+        )
+        self.assertIn("No player is assigned to this device/IP yet. Ask the DM to assign a character, then refresh.", js_response.text)
+        self.assertIn("error.status === 409", js_response.text)
+        self.assertIn("currency may be outdated; refresh and retry", js_response.text)
 
 
 if __name__ == "__main__":

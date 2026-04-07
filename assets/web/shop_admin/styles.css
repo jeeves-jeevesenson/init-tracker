@@ -79,6 +79,16 @@ button:disabled {
   font-size: 0.9rem;
 }
 
+.dirty-state {
+  margin: 10px 0 0;
+  color: #86efac;
+  font-size: 0.9rem;
+}
+
+.dirty-state.dirty {
+  color: #fbbf24;
+}
+
 .table-wrap { overflow-x: auto; }
 
 table {
@@ -106,6 +116,10 @@ input[type="number"] {
   padding: 6px 8px;
 }
 
+input.invalid {
+  border-color: #dc2626;
+}
+
 input[type="checkbox"] {
   width: 18px;
   height: 18px;
@@ -120,4 +134,14 @@ input[type="checkbox"] {
 .row-delete {
   background: #7f1d1d;
   border-color: #991b1b;
+}
+
+tr.row-invalid td {
+  background: rgba(127, 29, 29, 0.2);
+}
+
+tr.row-error td {
+  color: #fca5a5;
+  font-size: 0.85rem;
+  border-bottom-color: #7f1d1d;
 }
