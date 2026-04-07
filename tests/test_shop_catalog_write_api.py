@@ -163,7 +163,8 @@ class ShopCatalogWriteApiTests(unittest.TestCase):
             "expected_revision": "1-100",
             "entries": [],
         }
-        with mock.patch.object(lan.app, "_save_shop_catalog_payload", return_value={"format_version": 1, "entries": [], "revision": "2-100"}) as save_mock:
+        save_response = {"format_version": 1, "entries": [], "revision": "2-100"}
+        with mock.patch.object(lan.app, "_save_shop_catalog_payload", return_value=save_response) as save_mock:
             response = client.put("/api/shop/catalog", json=payload)
         self.assertEqual(response.status_code, 200)
         save_mock.assert_called_once_with(payload, expected_revision="1-100")

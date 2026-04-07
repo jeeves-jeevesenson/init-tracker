@@ -156,7 +156,7 @@ const localValidationErrors = () => {
     }
     provided.forEach((denom) => {
       const numeric = Number(price[denom]);
-      if (!Number.isFinite(numeric) || Number.isNaN(numeric) || numeric < 0 || !Number.isInteger(numeric)) {
+      if (!Number.isFinite(numeric) || numeric < 0 || !Number.isInteger(numeric)) {
         rowErrors.push(`price.${denom} must be a non-negative integer`);
       }
     });
