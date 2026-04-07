@@ -17,9 +17,9 @@ Shop files do **not** redefine item behavior. They only describe:
 
 Later loader/API code should join shop catalog entries to item definitions by `item_id` + `item_bucket`.
 
-## Admin API support (backend only)
+## Admin API support (`/shop_admin` + backend)
 
-The backend now exposes unprotected admin-facing catalog write helpers for a future `/shop_admin` UI:
+The backend exposes unprotected admin-facing catalog write helpers used by the current `/shop_admin` LAN UI:
 
 - `POST /api/shop/catalog/validate` validates a proposed catalog payload **in memory** and returns normalized entries for preview.
 - `PUT /api/shop/catalog` validates via the same path, then atomically writes `Items/Shop/catalog.yaml` using a temp file + replace.

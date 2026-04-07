@@ -67,6 +67,7 @@ class ShopAdminRoutesTests(unittest.TestCase):
         self.assertIn('id="catalog-rows"', response.text)
         self.assertIn('id="validate-button"', response.text)
         self.assertIn('id="save-button"', response.text)
+        self.assertIn('id="dirty-state"', response.text)
         self.assertIn('/assets/web/shop_admin/app.js', response.text)
         self.assertIn('/api/shop/catalog', response.text)
 

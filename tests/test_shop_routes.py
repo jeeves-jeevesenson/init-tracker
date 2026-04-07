@@ -71,6 +71,8 @@ class ShopRoutesTests(unittest.TestCase):
         self.assertIn('id="player-currency"', response.text)
         self.assertIn('id="catalog-list"', response.text)
         self.assertIn('/assets/web/shop/app.js', response.text)
+        self.assertIn('/api/shop/me', response.text)
+        self.assertNotIn('/api/characters/by_ip', response.text)
 
     def test_shop_assets_are_served(self):
         client = self._build_test_client()
