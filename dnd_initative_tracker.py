@@ -5836,6 +5836,7 @@ class InitiativeTracker(base.InitiativeTracker):
         self._player_yaml_meta_by_path = {}
         self._player_yaml_data_by_name = {}
         self._player_yaml_name_map = {}
+        self._inventory_missing_instance_id_warnings = set()
         self._player_yaml_dir_signature = None
         self._player_yaml_last_refresh = 0.0
         if rebuild:
@@ -6688,13 +6689,17 @@ class InitiativeTracker(base.InitiativeTracker):
                     or isinstance(normalized_entry.get("state"), dict)
                 )
                 if requires_canonical_instance_id:
-                    self._oplog(
-                        (
-                            f"Player YAML {player_name}: inventory item '{normalized_item_id or name or base_key}' "
-                            f"is missing explicit instance_id; using fallback '{derived_instance_id}'."
-                        ),
-                        level="warning",
-                    )
+                    warning_key = (player_name, normalized_item_id or name or base_key, derived_instance_id)
+                    warned_missing_instance_ids = self.__dict__.setdefault("_inventory_missing_instance_id_warnings", set())
+                    if warning_key not in warned_missing_instance_ids:
+                        warned_missing_instance_ids.add(warning_key)
+                        self._oplog(
+                            (
+                                f"Player YAML {player_name}: inventory item '{normalized_item_id or name or base_key}' "
+                                f"is missing explicit instance_id; using fallback '{derived_instance_id}'."
+                            ),
+                            level="warning",
+                        )
             normalized_entry["quantity"] = int(quantity)
             normalized.append(normalized_entry)
         return normalized
