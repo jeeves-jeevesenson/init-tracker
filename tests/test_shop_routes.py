@@ -115,6 +115,9 @@ class ShopRoutesTests(unittest.TestCase):
         self.assertIn("const listCharacterNames = async () => {", js_response.text)
         self.assertIn("error.status === 409", js_response.text)
         self.assertIn("currency may be outdated; refresh and retry", js_response.text)
+        self.assertIn("includes(\"insufficient funds\")", js_response.text)
+        self.assertIn("DAMN! Broke wizza alert. Wizza, how you gonna borrow a coin?", js_response.text)
+        self.assertIn('playShopAlertSound("alarm.wav")', js_response.text)
 
 
 if __name__ == "__main__":

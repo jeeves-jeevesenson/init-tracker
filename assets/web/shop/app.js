@@ -198,6 +198,18 @@ const setInFlightRow = (entryOrNull) => {
   renderCatalog();
 };
 
+const playShopAlertSound = (fileName) => {
+  try {
+    const audio = new Audio(`/assets/web/shop/${fileName}`);
+    const playback = audio.play();
+    if (playback && typeof playback.catch === "function") {
+      playback.catch(() => {});
+    }
+  } catch (_error) {
+    // Ignore audio playback errors so alerts still show.
+  }
+};
+
 const buyItem = async (entry, quantityInputEl) => {
   if (!state.playerName) {
     setStatus("No assigned player found for this device/IP.", "error");
@@ -222,10 +234,16 @@ const buyItem = async (entry, quantityInputEl) => {
     renderCatalog();
     setStatus(`Purchase successful: ${quantity} × ${entry?.name || entry?.item_id}.`, "ok");
   } catch (error) {
-    const message = error.status === 409
-      ? `Purchase failed: ${error.message} (currency may be outdated; refresh and retry).`
-      : `Purchase failed: ${error.message}`;
-    setStatus(message, "error");
+    const isInsufficientFunds = String(error.message || "").toLowerCase().includes("insufficient funds");
+    if (isInsufficientFunds) {
+      setStatus("DAMN! Broke wizza alert. Wizza, how you gonna borrow a coin?", "error");
+      playShopAlertSound("alarm.wav");
+    } else {
+      const message = error.status === 409
+        ? `Purchase failed: ${error.message} (currency may be outdated; refresh and retry).`
+        : `Purchase failed: ${error.message}`;
+      setStatus(message, "error");
+    }
   } finally {
     setInFlightRow(null);
   }
