@@ -155,6 +155,16 @@ button:disabled { opacity: 0.55; cursor: not-allowed; }
   background: rgba(15, 23, 42, 0.65);
 }
 
+.card.sold-out-card {
+  border-color: #7f1d1d;
+  background: rgba(127, 29, 29, 0.12);
+}
+
+.card.busy-card {
+  border-color: #1d4ed8;
+  box-shadow: 0 0 0 1px rgba(29, 78, 216, 0.3) inset;
+}
+
 .stock {
   margin: 0;
   font-size: 0.85rem;
@@ -170,6 +180,13 @@ button:disabled { opacity: 0.55; cursor: not-allowed; }
 .stock.sold-out {
   color: var(--error);
   border-color: #7f1d1d;
+  background: rgba(127, 29, 29, 0.14);
+}
+
+.stock.low-stock {
+  color: #fbbf24;
+  border-color: #a16207;
+  background: rgba(161, 98, 7, 0.18);
 }
 
 .item-name {

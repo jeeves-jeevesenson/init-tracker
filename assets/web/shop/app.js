@@ -29,6 +29,9 @@ const state = {
   lastLoadHadError: false,
 };
 
+const REFRESH_BUTTON_LABEL = "Refresh";
+const PICKER_LOAD_BUTTON_LABEL = "Use player";
+
 const assertRequiredElements = () => {
   const missing = REQUIRED_IDS.filter((id) => !document.getElementById(id));
   if (!missing.length) return;
@@ -85,6 +88,25 @@ const renderPlayerPicker = () => {
   });
   playerPickerSelectEl.value = state.playerName || "";
   playerPickerLoadButtonEl.disabled = !playerPickerSelectEl.value;
+};
+
+const setRefreshUi = ({ loading = false, message = "" } = {}) => {
+  refreshButton.disabled = loading;
+  refreshButton.textContent = loading ? "Refreshing…" : REFRESH_BUTTON_LABEL;
+  if (message) {
+    refreshButton.title = message;
+  } else {
+    refreshButton.removeAttribute("title");
+  }
+};
+
+const setPickerLoadUi = ({ loading = false, allowInteraction = false } = {}) => {
+  playerPickerLoadButtonEl.textContent = loading ? "Loading…" : PICKER_LOAD_BUTTON_LABEL;
+  if (loading) {
+    playerPickerLoadButtonEl.disabled = true;
+    return;
+  }
+  playerPickerLoadButtonEl.disabled = !allowInteraction || !playerPickerSelectEl.value;
 };
 
 const listCharacterNames = async () => {
@@ -152,8 +174,16 @@ const renderCatalog = () => {
     const stockUnlimited = Boolean(entry?.stock_unlimited === true);
     const stockRemaining = Number(entry?.stock_remaining ?? 0);
     const soldOut = !stockUnlimited && stockRemaining <= 0;
+    const lowStock = !stockUnlimited && stockRemaining > 0 && stockRemaining <= 3;
     stock.classList.toggle("sold-out", soldOut);
-    stock.textContent = stockUnlimited ? "Stock: Unlimited" : `Stock: ${Math.max(0, stockRemaining)}`;
+    stock.classList.toggle("low-stock", lowStock);
+    stock.textContent = stockUnlimited
+      ? "Stock: Unlimited"
+      : soldOut
+        ? "Sold out"
+        : lowStock
+          ? `Low stock: ${Math.max(0, stockRemaining)} left`
+          : `Stock: ${Math.max(0, stockRemaining)}`;
 
     const title = document.createElement("h3");
     title.className = "item-name";
@@ -180,8 +210,30 @@ const renderCatalog = () => {
     const key = itemKey(entry);
     const busyForRow = state.inFlightItemKey === key;
     const playerUnavailable = !state.playerName;
+    const purchaseBlocked = busyForRow || playerUnavailable || soldOut;
     quantityInput.disabled = busyForRow || playerUnavailable;
-    buyButton.disabled = busyForRow || playerUnavailable || soldOut;
+    buyButton.disabled = purchaseBlocked;
+    quantityInput.title = playerUnavailable
+      ? "Select a player before setting quantity."
+      : busyForRow
+        ? "Purchase in progress for this item."
+        : "";
+    buyButton.textContent = busyForRow
+      ? "Buying…"
+      : soldOut
+        ? "Sold out"
+        : playerUnavailable
+          ? "Pick player"
+          : "Buy";
+    buyButton.title = soldOut
+      ? "This item is out of stock."
+      : playerUnavailable
+        ? "Select your player to purchase items."
+        : busyForRow
+          ? "Purchase in progress."
+          : "";
+    card.classList.toggle("sold-out-card", soldOut);
+    card.classList.toggle("busy-card", busyForRow);
 
     buyButton.addEventListener("click", () => buyItem(entry, quantityInput));
 
@@ -226,35 +278,62 @@ const buyItem = async (entry, quantityInputEl) => {
   };
 
   setInFlightRow(entry);
+  setRefreshUi({ loading: true, message: "Purchase in progress." });
   setStatus(`Purchasing ${quantity} × ${entry?.name || entry?.item_id}...`, "info");
   try {
     await fetchJson(`/api/shop/players/${encodeURIComponent(state.playerName)}/purchase`, {
       method: "POST",
       body: JSON.stringify(payload),
     });
-    await Promise.all([loadPlayerStateForName(state.playerName), loadCatalog()]);
-    renderHeader();
-    renderCatalog();
-    setStatus(`Purchase successful: ${quantity} × ${entry?.name || entry?.item_id}.`, "ok");
+    const [playerReloadResult, catalogReloadResult] = await Promise.allSettled([
+      loadPlayerStateForName(state.playerName),
+      loadCatalog(),
+    ]);
+    if (playerReloadResult.status === "fulfilled") {
+      renderHeader();
+    }
+    if (catalogReloadResult.status === "fulfilled") {
+      renderCatalog();
+    }
+    if (playerReloadResult.status === "fulfilled" && catalogReloadResult.status === "fulfilled") {
+      state.lastLoadHadError = false;
+      setStatus(`Purchase successful: ${quantity} × ${entry?.name || entry?.item_id}.`, "ok");
+    } else {
+      state.lastLoadHadError = true;
+      const refreshIssues = [];
+      if (playerReloadResult.status === "rejected") refreshIssues.push("player currency");
+      if (catalogReloadResult.status === "rejected") refreshIssues.push("catalog stock");
+      setStatus(
+        `Purchase succeeded, but we could not fully refresh ${refreshIssues.join(" and ")}. Use Refresh before buying again.`,
+        "error",
+      );
+    }
   } catch (error) {
     const isInsufficientFunds = String(error.message || "").toLowerCase().includes("insufficient funds");
+    const lowerError = String(error.message || "").toLowerCase();
+    const isOutOfStock = lowerError.includes("out of stock")
+      || lowerError.includes("sold out")
+      || lowerError.includes("insufficient stock");
     if (isInsufficientFunds) {
-      setStatus("DAMN! Broke wizza alert. Wizza, how you gonna borrow a coin?", "error");
+      setStatus("Purchase failed: you cannot afford this item. Check your current currency and try a smaller quantity.", "error");
       playShopAlertSound("alarm.wav");
+    } else if (isOutOfStock) {
+      setStatus("Purchase failed: this item is out of stock or does not have enough remaining quantity.", "error");
     } else {
       const message = error.status === 409
-        ? `Purchase failed: ${error.message} (currency may be outdated; refresh and retry).`
+        ? `Purchase blocked: shop data changed. Refresh your currency/catalog, then retry this purchase. (${error.message})`
         : `Purchase failed: ${error.message}`;
       setStatus(message, "error");
     }
   } finally {
     setInFlightRow(null);
+    setRefreshUi({ loading: false, message: state.lastLoadHadError ? "Refresh recommended before next purchase." : "" });
   }
 };
 
 const reload = async () => {
-  refreshButton.disabled = true;
-  playerPickerLoadButtonEl.disabled = true;
+  setRefreshUi({ loading: true });
+  setPickerLoadUi({ loading: true });
   setStatus("Loading player and catalog…", "info");
   try {
     state.playerResolvedMode = "auto";
@@ -294,9 +373,11 @@ const reload = async () => {
     renderCatalog();
     setStatus(`Load failed: ${error.message}`, "error");
   } finally {
-    refreshButton.disabled = false;
+    setRefreshUi({ loading: false, message: state.lastLoadHadError ? "Last refresh failed. Retry before purchasing." : "" });
     if (state.playerResolvedMode === "manual") {
-      playerPickerLoadButtonEl.disabled = !playerPickerSelectEl.value;
+      setPickerLoadUi({ loading: false, allowInteraction: true });
+    } else {
+      setPickerLoadUi({ loading: false, allowInteraction: false });
     }
   }
 };
@@ -304,7 +385,9 @@ const reload = async () => {
 const init = async () => {
   assertRequiredElements();
   playerPickerSelectEl.addEventListener("change", () => {
-    playerPickerLoadButtonEl.disabled = !playerPickerSelectEl.value;
+    if (state.playerResolvedMode === "manual") {
+      setPickerLoadUi({ loading: false, allowInteraction: true });
+    }
   });
   playerPickerLoadButtonEl.addEventListener("click", async () => {
     const selected = String(playerPickerSelectEl.value || "").trim();
@@ -312,20 +395,22 @@ const init = async () => {
       setStatus("Select a player before continuing.", "error");
       return;
     }
-    refreshButton.disabled = true;
-    playerPickerLoadButtonEl.disabled = true;
+    setRefreshUi({ loading: true });
+    setPickerLoadUi({ loading: true });
     setStatus(`Loading shop data for ${selected}…`, "info");
     try {
       await Promise.all([loadPlayerStateForName(selected), loadCatalog()]);
       renderPlayerPicker();
       renderHeader();
       renderCatalog();
+      state.lastLoadHadError = false;
       setStatus(`Loaded ${state.catalog.length} item${state.catalog.length === 1 ? "" : "s"} for ${state.playerName}.`, "ok");
     } catch (error) {
+      state.lastLoadHadError = true;
       setStatus(`Load failed: ${error.message}`, "error");
     } finally {
-      refreshButton.disabled = false;
-      playerPickerLoadButtonEl.disabled = !playerPickerSelectEl.value;
+      setRefreshUi({ loading: false, message: state.lastLoadHadError ? "Last refresh failed. Retry before purchasing." : "" });
+      setPickerLoadUi({ loading: false, allowInteraction: true });
     }
   });
   refreshButton.addEventListener("click", reload);

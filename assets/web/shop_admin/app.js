@@ -50,6 +50,12 @@ const state = {
   wealthPartyTotalCp: 0,
 };
 
+const ACTION_LABELS = {
+  reload: "Reload Catalog",
+  validate: "Validate",
+  save: "Save",
+};
+
 const setStatus = (message, tone = "info") => {
   statusEl.textContent = message;
   statusEl.classList.remove("ok", "error", "info");
@@ -57,7 +63,7 @@ const setStatus = (message, tone = "info") => {
 };
 
 const updateDirtyState = () => {
-  dirtyStateEl.textContent = state.dirty ? "Unsaved changes" : "All changes saved";
+  dirtyStateEl.textContent = state.dirty ? "Unsaved changes — save to publish" : "All changes saved";
   dirtyStateEl.classList.toggle("dirty", state.dirty);
 };
 
@@ -142,10 +148,15 @@ const buildPayload = () => ({
   }),
 });
 
-const setBusy = (busy) => {
+const setBusy = (busy, mode = null) => {
   state.busy = Boolean(busy);
   [reloadButton, addRowButton, validateButton, saveButton].forEach((button) => { button.disabled = state.busy; });
   rowsEl.querySelectorAll("input,select,button").forEach((el) => { el.disabled = state.busy; });
+  statusEl.setAttribute("aria-busy", state.busy ? "true" : "false");
+
+  reloadButton.textContent = mode === "reload" ? "Reloading…" : ACTION_LABELS.reload;
+  validateButton.textContent = mode === "validate" ? "Validating…" : ACTION_LABELS.validate;
+  saveButton.textContent = mode === "save" ? "Saving…" : ACTION_LABELS.save;
 };
 
 const localValidationErrors = () => {
@@ -512,15 +523,15 @@ const loadCatalog = async () => {
     const proceed = window.confirm("You have unsaved catalog edits. Reload and discard local changes?");
     if (!proceed) return;
   }
-  setBusy(true);
-  setStatus("Loading catalog from /api/shop/catalog?include_disabled=true ...", "info");
+  setBusy(true, "reload");
+  setStatus("Reloading catalog and party wealth…", "info");
   try {
     const payload = await fetchJson("/api/shop/catalog?include_disabled=true");
     normalizeFromResponse({ format_version: 1, entries: payload.entries || [], revision: payload.revision }, { markClean: true });
     await loadWealth();
-    setStatus(`Loaded ${state.entries.length} catalog entr${state.entries.length === 1 ? "y" : "ies"}.`, "ok");
+    setStatus(`Reload complete: ${state.entries.length} catalog entr${state.entries.length === 1 ? "y" : "ies"} synced from host.`, "ok");
   } catch (error) {
-    setStatus(`Load failed: ${error.message}`, "error");
+    setStatus(`Reload failed: ${error.message}. Local edits were not changed.`, "error");
   } finally {
     setBusy(false);
   }
@@ -533,14 +544,14 @@ const validateCatalog = async () => {
     setStatus(`Fix local validation errors before backend validate: ${summarizeRowErrors(state.rowErrors)}`, "error");
     return;
   }
-  setBusy(true);
-  setStatus("Validating catalog with backend validator...", "info");
+  setBusy(true, "validate");
+  setStatus("Validating catalog with backend rules…", "info");
   try {
     const validated = await fetchJson("/api/shop/catalog/validate", { method: "POST", body: JSON.stringify(buildPayload()) });
     normalizeFromResponse(validated);
-    setStatus(`Validation passed. ${state.entries.length} entries normalized.`, "ok");
+    setStatus(`Validation passed. ${state.entries.length} entries normalized. No changes saved yet.`, "ok");
   } catch (error) {
-    setStatus(`Validation failed: ${error.message}`, "error");
+    setStatus(`Validation failed: ${error.message}. Fix issues and validate again.`, "error");
   } finally {
     setBusy(false);
   }
@@ -553,18 +564,18 @@ const saveCatalog = async () => {
     setStatus(`Fix local validation errors before save: ${summarizeRowErrors(state.rowErrors)}`, "error");
     return;
   }
-  setBusy(true);
-  setStatus("Saving catalog...", "info");
+  setBusy(true, "save");
+  setStatus("Saving catalog and refreshing party wealth…", "info");
   try {
     const saved = await fetchJson("/api/shop/catalog", { method: "PUT", body: JSON.stringify(buildPayload()) });
     normalizeFromResponse(saved, { markClean: true });
     await loadWealth();
-    setStatus(`Save successful. ${state.entries.length} entries saved.`, "ok");
+    setStatus(`Save successful. ${state.entries.length} entries saved and synced.`, "ok");
   } catch (error) {
     if (error.status === 409) {
       setStatus("Save blocked: catalog changed on host. Reload the latest catalog and retry.", "error");
     } else {
-      setStatus(`Save failed: ${error.message}`, "error");
+      setStatus(`Save failed: ${error.message}. Your local edits are still in this browser.`, "error");
     }
   } finally {
     setBusy(false);

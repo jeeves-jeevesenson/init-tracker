@@ -88,7 +88,7 @@ class ShopAdminRoutesTests(unittest.TestCase):
 
         self.assertEqual(js_response.status_code, 200)
         self.assertIn("window.addEventListener(\"beforeunload\", warnOnUnload)", js_response.text)
-        self.assertIn("state.dirty ? \"Unsaved changes\" : \"All changes saved\"", js_response.text)
+        self.assertIn("state.dirty ? \"Unsaved changes — save to publish\" : \"All changes saved\"", js_response.text)
         self.assertIn("expected_revision: state.revision || undefined", js_response.text)
         self.assertIn("error.status === 409", js_response.text)
         self.assertIn("Save blocked: catalog changed on host. Reload the latest catalog and retry.", js_response.text)

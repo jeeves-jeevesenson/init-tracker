@@ -114,9 +114,9 @@ class ShopRoutesTests(unittest.TestCase):
         self.assertIn("/api/shop/players/${encodeURIComponent(name)}", js_response.text)
         self.assertIn("const listCharacterNames = async () => {", js_response.text)
         self.assertIn("error.status === 409", js_response.text)
-        self.assertIn("currency may be outdated; refresh and retry", js_response.text)
+        self.assertIn("Purchase blocked: shop data changed. Refresh your currency/catalog, then retry this purchase.", js_response.text)
         self.assertIn("includes(\"insufficient funds\")", js_response.text)
-        self.assertIn("DAMN! Broke wizza alert. Wizza, how you gonna borrow a coin?", js_response.text)
+        self.assertIn("Purchase failed: you cannot afford this item. Check your current currency and try a smaller quantity.", js_response.text)
         self.assertIn('playShopAlertSound("alarm.wav")', js_response.text)
 
 
