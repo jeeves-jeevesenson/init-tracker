@@ -155,14 +155,14 @@ class ShopPurchaseApiTransactionTests(unittest.TestCase):
         )
         return items_dir
 
-    def _seed_player(self, root: Path):
+    def _seed_player(self, root: Path, *, gp: int = 100):
         player_path = root / "players" / "alice.yaml"
         self._write_yaml(
             player_path,
             {
                 "name": "Alice",
                 "inventory": {
-                    "currency": {"gp": 100, "sp": 0, "cp": 0},
+                    "currency": {"gp": gp, "sp": 0, "cp": 0},
                     "items": [
                         {
                             "instance_id": "healing_potion_stack",
@@ -223,7 +223,7 @@ class ShopPurchaseApiTransactionTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             items_dir = self._seed_items(root)
-            player_path = self._seed_player(root)
+            player_path = self._seed_player(root, gp=300)
             self.app._resolve_items_dir = lambda: items_dir
             self.app._resolve_character_path = lambda _name: player_path
 
@@ -278,6 +278,37 @@ class ShopPurchaseApiTransactionTests(unittest.TestCase):
             self.assertEqual(404, ctx.exception.status_code)
             self.assertEqual("not_found", (ctx.exception.detail or {}).get("error"))
 
+    def test_catalog_entry_with_missing_definition_is_rejected_without_mutation(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            items_dir = self._seed_items(root)
+            player_path = self._seed_player(root, gp=300)
+            self.app._resolve_items_dir = lambda: items_dir
+            self.app._resolve_character_path = lambda _name: player_path
+
+            catalog_path = items_dir / "Shop" / "catalog.yaml"
+            payload = yaml.safe_load(catalog_path.read_text(encoding="utf-8"))
+            payload["entries"].append(
+                {
+                    "item_id": "phantom_blade",
+                    "item_bucket": "weapon",
+                    "shop_category": "weapons",
+                    "enabled": True,
+                    "price": {"gp": 1},
+                }
+            )
+            catalog_path.write_text(yaml.safe_dump(payload, sort_keys=False), encoding="utf-8")
+            before_player = player_path.read_text(encoding="utf-8")
+            before_catalog = catalog_path.read_text(encoding="utf-8")
+
+            with self.assertRaises(tracker_mod.CharacterApiError) as ctx:
+                self.app._purchase_shop_item_for_player("Alice", {"item_bucket": "weapon", "item_id": "phantom_blade"})
+
+            self.assertEqual(500, ctx.exception.status_code)
+            self.assertEqual("catalog_load_failed", (ctx.exception.detail or {}).get("error"))
+            self.assertEqual(before_player, player_path.read_text(encoding="utf-8"))
+            self.assertEqual(before_catalog, catalog_path.read_text(encoding="utf-8"))
+
     def test_missing_item_identifier_is_rejected(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -322,6 +353,50 @@ class ShopPurchaseApiTransactionTests(unittest.TestCase):
             with self.assertRaises(tracker_mod.CharacterApiError) as ctx:
                 self.app._purchase_shop_item_for_player("Alice", {"item_bucket": "consumable", "item_id": "healing_potion", "quantity": 4})
             self.assertEqual("insufficient_stock", (ctx.exception.detail or {}).get("error"))
+
+    def test_catalog_save_failure_does_not_persist_player_mutation(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            items_dir = self._seed_items(root)
+            player_path = self._seed_player(root, gp=300)
+            self.app._resolve_items_dir = lambda: items_dir
+            self.app._resolve_character_path = lambda _name: player_path
+            self.app._save_shop_catalog_payload = mock.Mock(side_effect=RuntimeError("write failed"))
+            before_player = player_path.read_text(encoding="utf-8")
+
+            with self.assertRaises(tracker_mod.CharacterApiError) as ctx:
+                self.app._purchase_shop_item_for_player(
+                    "Alice", {"item_bucket": "consumable", "item_id": "healing_potion", "quantity": 1}
+                )
+
+            self.assertEqual(500, ctx.exception.status_code)
+            self.assertEqual("catalog_save_failed", (ctx.exception.detail or {}).get("error"))
+            self.assertEqual(before_player, player_path.read_text(encoding="utf-8"))
+
+    def test_player_save_failure_rolls_back_catalog_stock_best_effort(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            items_dir = self._seed_items(root)
+            player_path = self._seed_player(root, gp=300)
+            self.app._resolve_items_dir = lambda: items_dir
+            self.app._resolve_character_path = lambda _name: player_path
+            original_store = self.app._store_character_yaml
+            self.app._store_character_yaml = mock.Mock(side_effect=RuntimeError("player write failed"))
+            catalog_path = items_dir / "Shop" / "catalog.yaml"
+            before_catalog = yaml.safe_load(catalog_path.read_text(encoding="utf-8"))
+            before_player = player_path.read_text(encoding="utf-8")
+
+            with self.assertRaises(tracker_mod.CharacterApiError) as ctx:
+                self.app._purchase_shop_item_for_player(
+                    "Alice", {"item_bucket": "consumable", "item_id": "healing_potion", "quantity": 1}
+                )
+
+            self.assertEqual(500, ctx.exception.status_code)
+            self.assertEqual("player_save_failed", (ctx.exception.detail or {}).get("error"))
+            after_catalog = yaml.safe_load(catalog_path.read_text(encoding="utf-8"))
+            self.assertEqual(before_catalog, after_catalog)
+            self.assertEqual(before_player, player_path.read_text(encoding="utf-8"))
+            self.app._store_character_yaml = original_store
 
 
 if __name__ == "__main__":
