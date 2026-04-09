@@ -8,10 +8,10 @@
 </head>
 <body>
   <main class="page">
-    <header>
+    <header class="page-header">
       <p class="eyebrow">InitTracker LAN • Shop Admin</p>
       <h1>Shop Catalog Admin</h1>
-      <p class="subtitle">Edit, validate, and save <code>Items/Shop/catalog.yaml</code> with breathing room for real catalog data.</p>
+      <p class="subtitle">Control what the party can buy, how much it costs, and how much stock remains.</p>
     </header>
 
     <section class="panel controls" aria-label="Shop admin controls">
@@ -21,60 +21,51 @@
         <button id="validate-button" class="ghost" type="button">Validate</button>
         <button id="save-button" class="primary" type="button">Save</button>
       </div>
-      <p id="dirty-state" class="dirty-state">All changes saved</p>
-      <p id="status-banner" class="status" role="status">Loading catalog…</p>
-    </section>
-
-    <section class="panel" aria-label="Player wealth summary">
-      <h2>Party Gold Summary</h2>
-      <p id="wealth-summary-status" class="wealth-summary-status">Loading player wealth…</p>
-      <div class="table-wrap">
-        <table>
-          <thead>
-            <tr>
-              <th>Player</th>
-              <th>gp</th>
-              <th>sp</th>
-              <th>cp</th>
-              <th>Total (cp)</th>
-            </tr>
-          </thead>
-          <tbody id="wealth-rows"></tbody>
-          <tfoot>
-            <tr>
-              <th>Party Total</th>
-              <th id="party-total-gp">0</th>
-              <th id="party-total-sp">0</th>
-              <th id="party-total-cp">0</th>
-              <th id="party-total-cp-value">0</th>
-            </tr>
-          </tfoot>
-        </table>
+      <div class="status-row">
+        <p id="dirty-state" class="dirty-state">All changes saved</p>
+        <p id="status-banner" class="status" role="status">Loading catalog…</p>
       </div>
     </section>
 
-    <section class="panel" aria-label="Catalog editor">
-      <div class="table-wrap">
-        <table>
-          <thead>
-            <tr>
-              <th>item_id</th>
-              <th>item_bucket</th>
-              <th>shop_category</th>
-              <th>enabled</th>
-              <th>gp</th>
-              <th>sp</th>
-              <th>cp</th>
-              <th>stock limit</th>
-              <th>stock sold</th>
-              <th>stock remaining</th>
-              <th>Metadata (readonly)</th>
-              <th>Actions</th>
-            </tr>
-          </thead>
-          <tbody id="catalog-rows"></tbody>
-        </table>
-      </div>
+    <section class="workspace" aria-label="Shop admin workspace">
+      <section class="panel catalog-panel" aria-label="Catalog editor">
+        <div class="panel-heading">
+          <h2>Catalog Entries</h2>
+          <p>Each entry combines publishing state, pricing, stock controls, and source metadata.</p>
+        </div>
+        <datalist id="shop-category-suggestions"></datalist>
+        <div id="catalog-rows" class="catalog-rows"></div>
+      </section>
+
+      <aside class="panel wealth-panel" aria-label="Player wealth summary">
+        <div class="panel-heading compact">
+          <h2>Party Wealth</h2>
+          <p id="wealth-summary-status" class="wealth-summary-status">Loading player wealth…</p>
+        </div>
+        <div class="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th>Player</th>
+                <th>gp</th>
+                <th>sp</th>
+                <th>cp</th>
+                <th>Total (cp)</th>
+              </tr>
+            </thead>
+            <tbody id="wealth-rows"></tbody>
+            <tfoot>
+              <tr>
+                <th>Party Total</th>
+                <th id="party-total-gp">0</th>
+                <th id="party-total-sp">0</th>
+                <th id="party-total-cp">0</th>
+                <th id="party-total-cp-value">0</th>
+              </tr>
+            </tfoot>
+          </table>
+        </div>
+      </aside>
     </section>
   </main>
 
