@@ -11,6 +11,7 @@ const partyTotalGpEl = document.getElementById("party-total-gp");
 const partyTotalSpEl = document.getElementById("party-total-sp");
 const partyTotalCpEl = document.getElementById("party-total-cp");
 const partyTotalCpValueEl = document.getElementById("party-total-cp-value");
+const categorySuggestionsEl = document.getElementById("shop-category-suggestions");
 
 const REQUIRED_IDS = [
   "catalog-rows",
@@ -27,6 +28,9 @@ const REQUIRED_IDS = [
   "party-total-cp",
   "party-total-cp-value",
 ];
+
+const ITEM_BUCKET_OPTIONS = ["weapon", "armor", "magic_item", "consumable"];
+const DEFAULT_CATEGORY_SUGGESTIONS = ["weapons", "armor", "consumables", "scrolls", "magic_items"];
 
 const assertRequiredElements = () => {
   const missing = REQUIRED_IDS.filter((id) => !document.getElementById(id));
@@ -141,7 +145,7 @@ const buildPayload = () => ({
 const setBusy = (busy) => {
   state.busy = Boolean(busy);
   [reloadButton, addRowButton, validateButton, saveButton].forEach((button) => { button.disabled = state.busy; });
-  rowsEl.querySelectorAll("input,button").forEach((el) => { el.disabled = state.busy; });
+  rowsEl.querySelectorAll("input,select,button").forEach((el) => { el.disabled = state.busy; });
 };
 
 const localValidationErrors = () => {
@@ -211,6 +215,7 @@ const bindInput = (rowIndex, key, subkey = null) => (event) => {
   }
   markDirty();
   state.rowErrors = localValidationErrors();
+  updateCategorySuggestions();
   renderRows();
 };
 
@@ -218,14 +223,16 @@ const deleteRow = (rowIndex) => {
   state.entries.splice(rowIndex, 1);
   markDirty();
   state.rowErrors = localValidationErrors();
+  updateCategorySuggestions();
   renderRows();
 };
 
-const rowInput = ({ value = "", type = "text", onChange, min = null, invalid = false, title = "" }) => {
+const rowInput = ({ value = "", type = "text", onChange, min = null, invalid = false, title = "", list = "" }) => {
   const input = document.createElement("input");
   input.type = type;
   input.value = value;
   if (min !== null) input.min = String(min);
+  if (list) input.setAttribute("list", list);
   if (invalid) {
     input.classList.add("invalid");
     if (title) input.title = title;
@@ -234,17 +241,57 @@ const rowInput = ({ value = "", type = "text", onChange, min = null, invalid = f
   return input;
 };
 
+const rowSelect = ({ value = "", options = [], onChange, invalid = false, title = "" }) => {
+  const select = document.createElement("select");
+  const placeholder = document.createElement("option");
+  placeholder.value = "";
+  placeholder.textContent = "Select bucket";
+  select.appendChild(placeholder);
+  options.forEach((optionValue) => {
+    const option = document.createElement("option");
+    option.value = optionValue;
+    option.textContent = optionValue;
+    select.appendChild(option);
+  });
+  select.value = value || "";
+  if (invalid) {
+    select.classList.add("invalid");
+    if (title) select.title = title;
+  }
+  select.addEventListener("input", onChange);
+  return select;
+};
+
+const appendField = (container, { label, control, className = "" }) => {
+  const field = document.createElement("label");
+  field.className = `field ${className}`.trim();
+  const text = document.createElement("span");
+  text.className = "field-label";
+  text.textContent = label;
+  field.append(text, control);
+  container.appendChild(field);
+};
+
+const updateCategorySuggestions = () => {
+  if (!categorySuggestionsEl) return;
+  const values = new Set(DEFAULT_CATEGORY_SUGGESTIONS);
+  state.entries.forEach((entry) => {
+    const category = String(entry.shop_category || "").trim();
+    if (category) values.add(category);
+  });
+  categorySuggestionsEl.innerHTML = "";
+  [...values].sort((a, b) => a.localeCompare(b)).forEach((value) => {
+    const option = document.createElement("option");
+    option.value = value;
+    categorySuggestionsEl.appendChild(option);
+  });
+};
+
 const renderRows = () => {
   rowsEl.innerHTML = "";
   state.entries.forEach((entry, index) => {
-    const tr = document.createElement("tr");
-    const readOnly = entry._readonly || {};
     const rowErrors = state.rowErrors[index] || [];
     const rowErrorText = rowErrors.join("; ");
-    if (rowErrors.length) {
-      tr.classList.add("row-invalid");
-      tr.title = rowErrorText;
-    }
 
     const invalidRequired = rowErrors.some((message) => message.includes("required") || message.includes("duplicate"));
     const invalidPrice = rowErrors.some((message) => message.includes("price"));
@@ -256,76 +303,153 @@ const renderRows = () => {
       ? "Unlimited"
       : String(Math.max(0, stockLimit - stockSold));
 
-    const fields = [
-      rowInput({ value: entry.item_id || "", onChange: bindInput(index, "item_id"), invalid: invalidRequired, title: rowErrorText }),
-      rowInput({ value: entry.item_bucket || "", onChange: bindInput(index, "item_bucket"), invalid: invalidRequired, title: rowErrorText }),
-      rowInput({ value: entry.shop_category || "", onChange: bindInput(index, "shop_category"), invalid: invalidRequired, title: rowErrorText }),
-      (() => {
-        const checkbox = rowInput({ type: "checkbox", onChange: bindInput(index, "enabled") });
-        checkbox.checked = entry.enabled !== false;
-        return checkbox;
-      })(),
-      rowInput({ value: entry.price?.gp ?? "", type: "number", min: 0, onChange: bindInput(index, "price", "gp"), invalid: invalidPrice, title: rowErrorText }),
-      rowInput({ value: entry.price?.sp ?? "", type: "number", min: 0, onChange: bindInput(index, "price", "sp"), invalid: invalidPrice, title: rowErrorText }),
-      rowInput({ value: entry.price?.cp ?? "", type: "number", min: 0, onChange: bindInput(index, "price", "cp"), invalid: invalidPrice, title: rowErrorText }),
-      rowInput({ value: entry.stock_limit ?? "", type: "number", min: 0, onChange: bindInput(index, "stock_limit"), invalid: invalidStock, title: rowErrorText }),
-      rowInput({ value: entry.stock_sold ?? 0, type: "number", min: 0, onChange: bindInput(index, "stock_sold"), invalid: invalidStock, title: rowErrorText }),
-      (() => {
-        const badge = document.createElement("span");
-        badge.className = "stock-remaining";
-        if (stockRemainingText === "Unlimited") badge.classList.add("unlimited");
-        if (stockRemainingText === "0") badge.classList.add("sold-out");
-        badge.textContent = stockRemainingText;
-        return badge;
-      })(),
-      (() => {
-        const wrapper = document.createElement("div");
-        wrapper.className = "read-only meta-block";
-        const name = document.createElement("p");
-        const nameLabel = document.createElement("strong");
-        nameLabel.textContent = "Name:";
-        name.append(nameLabel, ` ${readOnly.name || "—"}`);
-        const type = document.createElement("p");
-        const typeLabel = document.createElement("strong");
-        typeLabel.textContent = "Type:";
-        type.append(typeLabel, ` ${readOnly.type || "—"}`);
-        const source = document.createElement("p");
-        const sourceLabel = document.createElement("strong");
-        sourceLabel.textContent = "Source:";
-        source.append(sourceLabel, ` ${readOnly.definition_path || "—"}`);
-        wrapper.appendChild(name);
-        wrapper.appendChild(type);
-        wrapper.appendChild(source);
-        return wrapper;
-      })(),
-      (() => {
-        const button = document.createElement("button");
-        button.type = "button";
-        button.className = "row-delete";
-        button.textContent = "Delete";
-        button.addEventListener("click", () => deleteRow(index));
-        return button;
-      })(),
-    ];
+    const card = document.createElement("article");
+    card.className = "catalog-card";
+    if (rowErrors.length) {
+      card.classList.add("row-invalid");
+      card.title = rowErrorText;
+    }
 
-    fields.forEach((fieldEl) => {
-      const td = document.createElement("td");
-      td.appendChild(fieldEl);
-      tr.appendChild(td);
+    const header = document.createElement("div");
+    header.className = "card-header";
+
+    const identity = document.createElement("div");
+    identity.className = "identity";
+    const readOnly = entry._readonly || {};
+    const nameEl = document.createElement("h3");
+    nameEl.textContent = readOnly.name || entry.item_id || "New catalog entry";
+    const identityMeta = document.createElement("p");
+    identityMeta.className = "identity-meta";
+    identityMeta.textContent = readOnly.type || "Item definition";
+    identity.append(nameEl, identityMeta);
+
+    const enabledLabel = document.createElement("label");
+    enabledLabel.className = "toggle";
+    const enabledInput = document.createElement("input");
+    enabledInput.type = "checkbox";
+    enabledInput.checked = entry.enabled !== false;
+    enabledInput.addEventListener("input", bindInput(index, "enabled"));
+    const toggleUi = document.createElement("span");
+    toggleUi.className = "toggle-ui";
+    const toggleText = document.createElement("span");
+    toggleText.className = "toggle-text";
+    toggleText.textContent = enabledInput.checked ? "Enabled" : "Disabled";
+    enabledInput.addEventListener("input", () => {
+      toggleText.textContent = enabledInput.checked ? "Enabled" : "Disabled";
+    });
+    enabledLabel.append(enabledInput, toggleUi, toggleText);
+
+    header.append(identity, enabledLabel);
+
+    const body = document.createElement("div");
+    body.className = "card-body";
+
+    const primaryGroup = document.createElement("section");
+    primaryGroup.className = "group group-primary";
+    const primaryTitle = document.createElement("h4");
+    primaryTitle.textContent = "Identity";
+    primaryGroup.appendChild(primaryTitle);
+
+    appendField(primaryGroup, {
+      label: "Item ID",
+      control: rowInput({ value: entry.item_id || "", onChange: bindInput(index, "item_id"), invalid: invalidRequired, title: rowErrorText }),
+    });
+    appendField(primaryGroup, {
+      label: "Bucket",
+      control: rowSelect({ value: entry.item_bucket || "", options: ITEM_BUCKET_OPTIONS, onChange: bindInput(index, "item_bucket"), invalid: invalidRequired, title: rowErrorText }),
+    });
+    appendField(primaryGroup, {
+      label: "Category",
+      control: rowInput({ value: entry.shop_category || "", onChange: bindInput(index, "shop_category"), invalid: invalidRequired, title: rowErrorText, list: "shop-category-suggestions" }),
     });
 
+    const priceGroup = document.createElement("section");
+    priceGroup.className = "group group-price";
+    const priceTitle = document.createElement("h4");
+    priceTitle.textContent = "Price";
+    priceGroup.appendChild(priceTitle);
+    const priceGrid = document.createElement("div");
+    priceGrid.className = "price-grid";
+    ["gp", "sp", "cp"].forEach((denom) => {
+      appendField(priceGrid, {
+        label: denom,
+        className: "compact",
+        control: rowInput({
+          value: entry.price?.[denom] ?? "",
+          type: "number",
+          min: 0,
+          onChange: bindInput(index, "price", denom),
+          invalid: invalidPrice,
+          title: rowErrorText,
+        }),
+      });
+    });
+    priceGroup.appendChild(priceGrid);
+
+    const stockGroup = document.createElement("section");
+    stockGroup.className = "group group-stock";
+    const stockTitle = document.createElement("h4");
+    stockTitle.textContent = "Stock";
+    stockGroup.appendChild(stockTitle);
+    const stockGrid = document.createElement("div");
+    stockGrid.className = "stock-grid";
+    appendField(stockGrid, {
+      label: "Limit",
+      className: "compact",
+      control: rowInput({ value: entry.stock_limit ?? "", type: "number", min: 0, onChange: bindInput(index, "stock_limit"), invalid: invalidStock, title: rowErrorText }),
+    });
+    appendField(stockGrid, {
+      label: "Sold",
+      className: "compact",
+      control: rowInput({ value: entry.stock_sold ?? 0, type: "number", min: 0, onChange: bindInput(index, "stock_sold"), invalid: invalidStock, title: rowErrorText }),
+    });
+    const stockRemaining = document.createElement("div");
+    stockRemaining.className = "stock-remaining-wrap";
+    const stockRemainingLabel = document.createElement("span");
+    stockRemainingLabel.className = "field-label";
+    stockRemainingLabel.textContent = "Remaining";
+    const stockBadge = document.createElement("span");
+    stockBadge.className = "stock-remaining";
+    if (stockRemainingText === "Unlimited") stockBadge.classList.add("unlimited");
+    if (stockRemainingText === "0") stockBadge.classList.add("sold-out");
+    stockBadge.textContent = stockRemainingText;
+    stockRemaining.append(stockRemainingLabel, stockBadge);
+    stockGrid.appendChild(stockRemaining);
+    stockGroup.appendChild(stockGrid);
+
+    const metadata = document.createElement("details");
+    metadata.className = "group metadata";
+    const summary = document.createElement("summary");
+    summary.textContent = "Definition metadata";
+    const definition = document.createElement("p");
+    definition.innerHTML = `<strong>Source:</strong> ${readOnly.definition_path || "—"}`;
+    const type = document.createElement("p");
+    type.innerHTML = `<strong>Type:</strong> ${readOnly.type || "—"}`;
+    metadata.append(summary, type, definition);
+
+    const footer = document.createElement("div");
+    footer.className = "card-footer";
+    const rowNumber = document.createElement("p");
+    rowNumber.className = "row-index";
+    rowNumber.textContent = `Entry #${index + 1}`;
+    const deleteButton = document.createElement("button");
+    deleteButton.type = "button";
+    deleteButton.className = "row-delete";
+    deleteButton.textContent = "Delete entry";
+    deleteButton.addEventListener("click", () => deleteRow(index));
+    footer.append(rowNumber, deleteButton);
+
+    body.append(primaryGroup, priceGroup, stockGroup, metadata);
+    card.append(header, body, footer);
+
     if (rowErrors.length) {
-      const errorRow = document.createElement("tr");
-      errorRow.className = "row-error";
-      const cell = document.createElement("td");
-      cell.colSpan = 12;
-      cell.textContent = `Row ${index + 1}: ${rowErrorText}`;
-      errorRow.appendChild(cell);
-      rowsEl.appendChild(tr);
-      rowsEl.appendChild(errorRow);
-      return;
+      const error = document.createElement("p");
+      error.className = "row-error";
+      error.textContent = `Row ${index + 1}: ${rowErrorText}`;
+      card.appendChild(error);
     }
-    rowsEl.appendChild(tr);
+
+    rowsEl.appendChild(card);
   });
 };
 
@@ -371,6 +495,7 @@ const normalizeFromResponse = (payload, { markClean = false } = {}) => {
   const revision = payload?.revision;
   state.revision = revision ? String(revision) : state.revision;
   state.rowErrors = localValidationErrors();
+  updateCategorySuggestions();
   if (markClean) {
     state.dirty = false;
     updateDirtyState();
@@ -450,6 +575,7 @@ const addEntry = () => {
   state.entries.push(editableFromNormalized({ item_id: "", item_bucket: "", shop_category: "", enabled: true, price: { gp: 0 }, stock_sold: 0 }));
   markDirty();
   state.rowErrors = localValidationErrors();
+  updateCategorySuggestions();
   renderRows();
   setStatus(`Added entry row. Total rows: ${state.entries.length}.`, "info");
 };
@@ -464,6 +590,7 @@ const warnOnUnload = (event) => {
 const init = async () => {
   assertRequiredElements();
   updateDirtyState();
+  updateCategorySuggestions();
   reloadButton.addEventListener("click", loadCatalog);
   addRowButton.addEventListener("click", addEntry);
   validateButton.addEventListener("click", validateCatalog);
