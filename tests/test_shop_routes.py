@@ -70,6 +70,7 @@ class ShopRoutesTests(unittest.TestCase):
         self.assertIn('id="player-name"', response.text)
         self.assertIn('id="player-currency"', response.text)
         self.assertIn('id="catalog-list"', response.text)
+        self.assertIn('id="refresh-button"', response.text)
         self.assertIn('id="player-picker-shell"', response.text)
         self.assertIn('id="player-picker-select"', response.text)
         self.assertIn('id="player-picker-load-button"', response.text)
