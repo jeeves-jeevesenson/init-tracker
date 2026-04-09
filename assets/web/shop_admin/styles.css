@@ -118,6 +118,10 @@ select:disabled {
   color: #bfdbfe;
 }
 
+.status[aria-busy="true"] {
+  border-style: dashed;
+}
+
 .dirty-state {
   margin: 0;
   color: #86efac;
