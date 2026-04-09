@@ -138,7 +138,7 @@ const itemKey = (entry) => `${entry?.item_bucket || ""}:${entry?.item_id || ""}`
 
 const renderCatalog = () => {
   if (!state.catalog.length) {
-    catalogListEl.innerHTML = "<p>No enabled catalog entries found.</p>";
+    catalogListEl.innerHTML = "<p class=\"empty-catalog\">No enabled catalog entries found.</p>";
     return;
   }
 
@@ -147,23 +147,21 @@ const renderCatalog = () => {
     const card = document.createElement("article");
     card.className = "card";
 
-    const title = document.createElement("h3");
-    title.textContent = String(entry?.name || entry?.item_id || "Unknown item");
+    const stock = document.createElement("p");
+    stock.className = "stock";
+    const stockUnlimited = Boolean(entry?.stock_unlimited === true);
+    const stockRemaining = Number(entry?.stock_remaining ?? 0);
+    const soldOut = !stockUnlimited && stockRemaining <= 0;
+    stock.classList.toggle("sold-out", soldOut);
+    stock.textContent = stockUnlimited ? "Stock: Unlimited" : `Stock: ${Math.max(0, stockRemaining)}`;
 
-    const meta = document.createElement("p");
-    meta.className = "meta";
-    const type = String(entry?.type || "—");
-    const category = String(entry?.shop_category || "—");
-    meta.textContent = `Category: ${category} • Type: ${type}`;
+    const title = document.createElement("h3");
+    title.className = "item-name";
+    title.textContent = String(entry?.name || entry?.item_id || "Unknown item");
 
     const price = document.createElement("p");
     price.className = "price";
     price.textContent = formatCurrency(entry?.price || {});
-    const stock = document.createElement("p");
-    stock.className = "meta";
-    const stockUnlimited = Boolean(entry?.stock_unlimited === true);
-    const stockRemaining = Number(entry?.stock_remaining ?? 0);
-    stock.textContent = stockUnlimited ? "Stock: Unlimited" : `Stock: ${Math.max(0, stockRemaining)} remaining`;
 
     const actions = document.createElement("div");
     actions.className = "actions";
@@ -183,7 +181,6 @@ const renderCatalog = () => {
     const busyForRow = state.inFlightItemKey === key;
     const playerUnavailable = !state.playerName;
     quantityInput.disabled = busyForRow || playerUnavailable;
-    const soldOut = !stockUnlimited && stockRemaining <= 0;
     buyButton.disabled = busyForRow || playerUnavailable || soldOut;
 
     buyButton.addEventListener("click", () => buyItem(entry, quantityInput));
@@ -191,10 +188,9 @@ const renderCatalog = () => {
     actions.appendChild(quantityInput);
     actions.appendChild(buyButton);
 
-    card.appendChild(title);
-    card.appendChild(meta);
-    card.appendChild(price);
     card.appendChild(stock);
+    card.appendChild(title);
+    card.appendChild(price);
     card.appendChild(actions);
     catalogListEl.appendChild(card);
   });

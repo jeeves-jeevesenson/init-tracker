@@ -14,8 +14,19 @@
       <p class="subtitle">Buy enabled catalog items with your current inventory currency.</p>
     </header>
 
-    <section class="panel status-panel" aria-label="Player shop status">
+    <section class="panel storefront-shell" aria-label="Player shop status and catalog">
+      <div class="shop-summary">
+        <div class="player-meta">
+          <p><strong>Player</strong><span id="player-name">—</span></p>
+          <p><strong>Currency</strong><span id="player-currency">—</span></p>
+        </div>
+        <div class="status-actions">
+          <button id="refresh-button" class="ghost" type="button">Refresh</button>
+        </div>
+      </div>
+
       <p id="shop-status" class="status" role="status">Loading shop data…</p>
+
       <div id="player-picker-shell" class="player-picker hidden" aria-live="polite">
         <p class="picker-message">No assigned player was detected. Select who you are to continue.</p>
         <label for="player-picker-select">Player</label>
@@ -26,16 +37,7 @@
           <button id="player-picker-load-button" type="button">Use player</button>
         </div>
       </div>
-      <div class="player-meta">
-        <p><strong>Player</strong><span id="player-name">—</span></p>
-        <p><strong>Currency</strong><span id="player-currency">—</span></p>
-      </div>
-      <div class="status-actions">
-        <button id="refresh-button" class="ghost" type="button">Refresh</button>
-      </div>
-    </section>
 
-    <section class="panel" aria-label="Shop catalog">
       <div id="catalog-list" class="catalog"></div>
     </section>
   </main>
