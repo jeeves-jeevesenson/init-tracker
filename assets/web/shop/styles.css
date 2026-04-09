@@ -3,6 +3,7 @@
   --bg: #0f172a;
   --panel: #111827;
   --border: #334155;
+  --border-soft: #243246;
   --text: #e2e8f0;
   --muted: #94a3b8;
   --ok: #22c55e;
@@ -19,26 +20,27 @@ body {
 }
 
 .page {
-  width: min(1680px, 100%);
+  width: min(1700px, 100%);
   margin: 0 auto;
-  padding: 24px clamp(12px, 2vw, 28px) 28px;
+  padding: 24px clamp(12px, 2.3vw, 38px) 28px;
   display: grid;
-  gap: 16px;
+  gap: 14px;
 }
 
 .hero {
   display: grid;
   gap: 6px;
+  max-width: 92ch;
 }
 
 .panel {
   border: 1px solid var(--border);
-  border-radius: 12px;
+  border-radius: 16px;
   background: var(--panel);
-  padding: 16px;
+  padding: 18px;
 }
 
-.status-panel {
+.storefront-shell {
   display: grid;
   gap: 12px;
 }
@@ -46,41 +48,67 @@ body {
 .eyebrow { color: var(--muted); margin: 0; }
 h1 { margin: 0; }
 .subtitle { margin: 0; color: var(--muted); }
-.status { margin: 0; }
+.status {
+  margin: 0;
+  border: 1px solid var(--border-soft);
+  border-radius: 10px;
+  background: #0d1525;
+  padding: 10px 12px;
+}
 .status.ok { color: var(--ok); }
 .status.error { color: var(--error); }
 
-.player-meta {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(210px, 1fr));
-  gap: 10px;
+.shop-summary {
+  display: flex;
+  gap: 12px;
+  align-items: stretch;
 }
 
-.player-meta p {
+.player-meta {
+  flex: 1;
+  display: flex;
+  gap: 10px;
+  flex-wrap: wrap;
+  min-width: 0;
+}
+
+.player-meta > p {
+  flex: 1 1 250px;
+  min-width: 180px;
+  max-width: 100%;
   margin: 0;
-  border: 1px solid var(--border);
-  border-radius: 10px;
+  border: 1px solid var(--border-soft);
+  border-radius: 12px;
   padding: 10px 12px;
   background: #0b1220;
   display: grid;
-  gap: 4px;
+  gap: 10px;
 }
 
 .player-meta strong {
   color: var(--muted);
-  font-size: 0.9rem;
+  font-size: 0.82rem;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
   font-weight: 600;
+}
+
+.player-meta span {
+  font-size: 1.08rem;
+  font-weight: 700;
+  overflow-wrap: anywhere;
 }
 
 .status-actions {
   display: flex;
-  justify-content: flex-end;
+  justify-content: flex-start;
+  align-items: stretch;
 }
 
 .hidden { display: none; }
 
 .player-picker {
-  border: 1px dashed var(--border);
+  border: 1px dashed var(--border-soft);
   border-radius: 10px;
   padding: 12px;
   display: grid;
@@ -112,26 +140,59 @@ button:disabled { opacity: 0.55; cursor: not-allowed; }
 
 .catalog {
   display: grid;
-  gap: 12px;
-  grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
+  gap: 8px;
+  align-items: stretch;
 }
 
 .card {
-  border: 1px solid var(--border);
+  border: 1px solid var(--border-soft);
   border-radius: 10px;
-  padding: 14px;
+  padding: 12px;
   display: grid;
-  gap: 10px;
+  grid-template-columns: minmax(110px, 0.8fr) minmax(180px, 2fr) minmax(150px, 1fr) minmax(180px, 1.3fr);
+  gap: 12px;
+  align-items: center;
   background: rgba(15, 23, 42, 0.65);
 }
 
-.card h3 { margin: 0; font-size: 1.05rem; }
-.meta { color: var(--muted); font-size: 0.95rem; margin: 0; }
-.price { font-weight: 700; margin: 0; font-size: 1rem; }
-.actions { display: flex; gap: 8px; align-items: center; }
+.stock {
+  margin: 0;
+  font-size: 0.85rem;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--muted);
+  border: 1px solid var(--border-soft);
+  border-radius: 999px;
+  width: fit-content;
+  padding: 5px 9px;
+}
+
+.stock.sold-out {
+  color: var(--error);
+  border-color: #7f1d1d;
+}
+
+.item-name {
+  margin: 0;
+  font-size: 1.03rem;
+  line-height: 1.25;
+}
+
+.price {
+  margin: 0;
+  font-weight: 700;
+  color: #dbeafe;
+}
+
+.actions {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  justify-self: end;
+}
 
 .quantity-input {
-  width: 88px;
+  width: 84px;
   border: 1px solid var(--border);
   border-radius: 8px;
   background: #0b1220;
@@ -139,7 +200,36 @@ button:disabled { opacity: 0.55; cursor: not-allowed; }
   padding: 8px;
 }
 
-@media (max-width: 640px) {
-  .status-actions { justify-content: stretch; }
-  .status-actions button { width: 100%; }
+.empty-catalog {
+  margin: 0;
+  color: var(--muted);
+  border: 1px dashed var(--border-soft);
+  border-radius: 10px;
+  padding: 14px;
+}
+
+@media (max-width: 1080px) {
+  .card {
+    grid-template-columns: minmax(100px, 0.9fr) minmax(180px, 2fr) minmax(140px, 1fr) minmax(180px, 1fr);
+  }
+}
+
+@media (max-width: 880px) {
+  .shop-summary {
+    flex-direction: column;
+  }
+
+  .status-actions button {
+    width: 100%;
+  }
+
+  .card {
+    grid-template-columns: 1fr;
+    gap: 10px;
+    align-items: start;
+  }
+
+  .actions {
+    justify-self: start;
+  }
 }
