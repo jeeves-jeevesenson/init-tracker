@@ -2134,10 +2134,31 @@ class LanController:
             if not shop_admin_entrypoint.exists():
                 raise HTTPException(status_code=404, detail="Shop admin page missing.")
             html = _inject_asset_version(shop_admin_entrypoint.read_text(encoding="utf-8"))
+            required_ids = (
+                "catalog-rows",
+                "status-banner",
+                "reload-button",
+                "add-row-button",
+                "validate-button",
+                "save-button",
+                "dirty-state",
+                "wealth-rows",
+                "wealth-summary-status",
+                "party-total-gp",
+                "party-total-sp",
+                "party-total-cp",
+                "party-total-cp-value",
+            )
+            missing = [element_id for element_id in required_ids if f'id="{element_id}"' not in html]
             if '/assets/web/shop_admin/app.js' not in html:
+                missing.append("script:/assets/web/shop_admin/app.js")
+            if missing:
                 raise HTTPException(
                     status_code=500,
-                    detail="Shop admin HTML shell is invalid. Missing required script asset.",
+                    detail=(
+                        "Shop admin HTML shell is invalid. Missing required selectors/assets: "
+                        f"{', '.join(missing)}"
+                    ),
                 )
             return html
 
@@ -2145,7 +2166,16 @@ class LanController:
             if not shop_entrypoint.exists():
                 raise HTTPException(status_code=404, detail="Shop page missing.")
             html = _inject_asset_version(shop_entrypoint.read_text(encoding="utf-8"))
-            required_ids = ("shop-status", "player-name", "player-currency", "catalog-list")
+            required_ids = (
+                "shop-status",
+                "player-name",
+                "player-currency",
+                "catalog-list",
+                "refresh-button",
+                "player-picker-shell",
+                "player-picker-select",
+                "player-picker-load-button",
+            )
             missing = [element_id for element_id in required_ids if f'id="{element_id}"' not in html]
             if '/assets/web/shop/app.js' not in html:
                 missing.append("script:/assets/web/shop/app.js")
