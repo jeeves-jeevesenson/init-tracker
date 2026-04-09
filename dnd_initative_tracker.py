@@ -6510,8 +6510,8 @@ class InitiativeTracker(base.InitiativeTracker):
         definition = bucket.get(str(item_id or "").strip().lower()) if isinstance(bucket, dict) else None
         if not isinstance(definition, dict):
             raise CharacterApiError(
-                status_code=400,
-                detail={"error": "invalid_purchase", "message": "Unable to resolve item definition for purchase."},
+                status_code=500,
+                detail={"error": "item_definition_unavailable", "message": "Catalog item definition is unavailable."},
             )
         return definition
 
@@ -6543,18 +6543,15 @@ class InitiativeTracker(base.InitiativeTracker):
 
         item_bucket = str(payload.get("item_bucket") or "").strip().lower()
         item_id = str(payload.get("item_id") or "").strip().lower()
+        if not item_bucket or not item_id:
+            raise CharacterApiError(
+                status_code=400,
+                detail={"error": "invalid_purchase", "message": "item_bucket and item_id are required."},
+            )
         try:
             quantity = self._normalize_purchase_quantity(payload.get("quantity"))
         except ValueError as exc:
             raise CharacterApiError(status_code=400, detail={"error": "invalid_purchase", "message": str(exc)}) from exc
-
-        definition = self._resolve_shop_item_definition_for_purchase(item_bucket=item_bucket, item_id=item_id)
-        stackable = item_bucket == "consumable" and bool(definition.get("stackable") is True)
-        if not stackable and quantity > 1 and item_bucket not in {"weapon", "armor", "magic_item"}:
-            raise CharacterApiError(
-                status_code=400,
-                detail={"error": "invalid_purchase", "message": "quantity > 1 is not supported for this item type."},
-            )
 
         lock = self.__dict__.get("_shop_purchase_lock")
         if lock is None or not hasattr(lock, "acquire"):
@@ -6563,6 +6560,13 @@ class InitiativeTracker(base.InitiativeTracker):
 
         with lock:
             catalog_entry = self._resolve_shop_catalog_entry_for_purchase(item_bucket=item_bucket, item_id=item_id)
+            definition = self._resolve_shop_item_definition_for_purchase(item_bucket=item_bucket, item_id=item_id)
+            stackable = item_bucket == "consumable" and bool(definition.get("stackable") is True)
+            if not stackable and quantity > 1 and item_bucket not in {"weapon", "armor", "magic_item"}:
+                raise CharacterApiError(
+                    status_code=400,
+                    detail={"error": "invalid_purchase", "message": "quantity > 1 is not supported for this item type."},
+                )
             unit_price = catalog_entry.get("price") if isinstance(catalog_entry.get("price"), dict) else {}
             unit_price_cp = self._currency_to_cp(unit_price)
             total_price_cp = unit_price_cp * quantity

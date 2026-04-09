@@ -107,7 +107,7 @@ class ShopRoutesTests(unittest.TestCase):
 
         self.assertEqual(js_response.status_code, 200)
         self.assertIn(
-            "if (error.status === 404 && String(error.message || \"\").toLowerCase().includes(\"assigned character\"))",
+            "if (playerError.status === 404 && String(playerError.message || \"\").toLowerCase().includes(\"assigned character\"))",
             js_response.text,
         )
         self.assertIn("No assigned player was detected. Select who you are to continue.", js_response.text)
