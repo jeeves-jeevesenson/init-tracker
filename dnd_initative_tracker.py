@@ -75,11 +75,19 @@ except Exception as e:  # pragma: no cover
         "Make sure helper_script and dnd_initative_tracker be in the same directory.\n\n"
         f"Import error: {e}"
     )
+from map_state import (
+    MAP_STATE_SCHEMA_VERSION,
+    MapQueryAPI,
+    MapState,
+    apply_map_delta,
+    build_map_delta,
+    map_delta_has_changes,
+)
 
 
 FAIL_OUTCOME_LABELS = {"fail", "failed", "failure", "failed_save", "fail_save"}
 USER_YAML_DIRNAME = "Dnd-Init-Yamls"
-SESSION_SNAPSHOT_SCHEMA_VERSION = 1
+SESSION_SNAPSHOT_SCHEMA_VERSION = 2
 FALLBACK_5ETOOLS_PACKS: Tuple[Tuple[str, str], ...] = (
     ("bestiary-xmm.json", "https://5e.tools/data/bestiary/bestiary-xmm.json"),
     ("bestiary-mm.json", "https://5e.tools/data/bestiary/bestiary-mm.json"),
@@ -3736,6 +3744,11 @@ class LanController:
                     self._broadcast_payload({"type": "terrain_patch", **terrain_patch})
                     self._apply_terrain_patch_to_map(terrain_patch)
 
+                map_delta_envelope = self._build_map_delta_envelope(prev_snap, snap)
+                if map_delta_envelope:
+                    self._broadcast_payload(map_delta_envelope)
+                    self._apply_map_delta_to_map(map_delta_envelope)
+
                 aoe_patch = self._build_aoe_patch(prev_snap, snap)
                 if aoe_patch:
                     self._broadcast_payload({"type": "aoe_patch", **aoe_patch})
@@ -4047,6 +4060,63 @@ class LanController:
             patch["obstacle_removals"] = obstacle_removals
         return patch
 
+    def _snapshot_to_map_state(self, snap: Dict[str, Any]) -> MapState:
+        if isinstance(snap.get("map_state"), dict):
+            return MapState.from_dict(snap.get("map_state"))
+        grid = snap.get("grid") if isinstance(snap.get("grid"), dict) else {}
+        positions: Dict[int, Tuple[int, int]] = {}
+        for unit in snap.get("units") if isinstance(snap.get("units"), list) else []:
+            if not isinstance(unit, dict):
+                continue
+            pos = unit.get("pos") if isinstance(unit.get("pos"), dict) else {}
+            try:
+                cid = int(unit.get("cid"))
+                positions[cid] = (int(pos.get("col")), int(pos.get("row")))
+            except Exception:
+                continue
+        aoes: Dict[int, Dict[str, Any]] = {}
+        for aoe in snap.get("aoes") if isinstance(snap.get("aoes"), list) else []:
+            if not isinstance(aoe, dict):
+                continue
+            try:
+                aid = int(aoe.get("aid"))
+            except Exception:
+                continue
+            payload = dict(aoe)
+            payload.pop("aid", None)
+            aoes[aid] = payload
+        return MapState.from_legacy(
+            cols=int(grid.get("cols", 20) or 20),
+            rows=int(grid.get("rows", 20) or 20),
+            feet_per_square=float(grid.get("feet_per_square", 5.0) or 5.0),
+            positions=positions,
+            obstacles={(int(item.get("col")), int(item.get("row"))) for item in (snap.get("obstacles") or []) if isinstance(item, dict)},
+            rough_terrain={(int(item.get("col")), int(item.get("row"))): dict(item) for item in (snap.get("rough_terrain") or []) if isinstance(item, dict)},
+            aoes=aoes,
+            presentation={
+                "auras_enabled": bool(snap.get("auras_enabled", True)),
+            },
+        )
+
+    def _build_map_delta_envelope(self, prev: Dict[str, Any], curr: Dict[str, Any]) -> Dict[str, Any]:
+        delta = build_map_delta(self._snapshot_to_map_state(prev), self._snapshot_to_map_state(curr))
+        if not map_delta_has_changes(delta):
+            return {}
+        return {"type": "map_delta", "delta": delta}
+
+    def _apply_map_delta_to_map(self, envelope: Dict[str, Any]) -> None:
+        if not isinstance(envelope, dict):
+            return
+        delta = envelope.get("delta") if isinstance(envelope.get("delta"), dict) else {}
+        if not map_delta_has_changes(delta):
+            return
+        app_state = getattr(self.app, "_map_state", None)
+        if isinstance(app_state, MapState):
+            next_state = apply_map_delta(app_state, delta)
+        else:
+            next_state = apply_map_delta(self.app._capture_canonical_map_state(prefer_window=False), delta)
+        self.app._apply_canonical_map_state(next_state, hydrate_window=True)
+
     def _normalize_rough_cell(self, cell: object, mw: Optional[object] = None) -> Dict[str, object]:
         if mw is not None and hasattr(mw, "_rough_cell_data"):
             try:
@@ -4160,6 +4230,10 @@ class LanController:
                 mw_removals.append(key)
 
         self.app._lan_rough_terrain = rough_state
+        try:
+            self.app._apply_canonical_map_state(self.app._capture_canonical_map_state(prefer_window=False), hydrate_window=False)
+        except Exception:
+            pass
         if mw_ready:
             updates = list(mw_updates)
             removals = list(mw_removals)
@@ -4903,12 +4977,22 @@ class LanController:
 
     def _terrain_payload(self, snap: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
         src = snap if isinstance(snap, dict) else self._cached_snapshot
-        rough = src.get("rough_terrain")
-        if not isinstance(rough, list):
-            rough = []
-        obstacles = src.get("obstacles")
-        if not isinstance(obstacles, list):
-            obstacles = []
+        map_state_payload = src.get("map_state") if isinstance(src.get("map_state"), dict) else None
+        if isinstance(map_state_payload, dict):
+            state = MapState.from_dict(map_state_payload)
+            legacy = state.to_legacy()
+            rough = [
+                {"col": int(col), "row": int(row), **dict(cell)}
+                for (col, row), cell in sorted((legacy.get("rough_terrain") if isinstance(legacy.get("rough_terrain"), dict) else {}).items())
+            ]
+            obstacles = [{"col": int(col), "row": int(row)} for (col, row) in sorted(legacy.get("obstacles") if isinstance(legacy.get("obstacles"), set) else set())]
+        else:
+            rough = src.get("rough_terrain")
+            if not isinstance(rough, list):
+                rough = []
+            obstacles = src.get("obstacles")
+            if not isinstance(obstacles, list):
+                obstacles = []
         return {"rough_terrain": rough, "obstacles": obstacles}
 
     def _monster_choices_payload(self) -> List[Dict[str, Any]]:
@@ -5191,6 +5275,8 @@ class LanController:
             state["rough_terrain"] = snap.get("rough_terrain", [])
         if "obstacles" not in state:
             state["obstacles"] = snap.get("obstacles", [])
+        if "map_state" not in state:
+            state["map_state"] = snap.get("map_state", {})
         return state
 
     def _pc_name_for(self, cid: int) -> str:
@@ -5564,6 +5650,20 @@ class InitiativeTracker(base.InitiativeTracker):
         self._lan_auras_enabled = True
         self._session_bg_images: List[Dict[str, Any]] = []
         self._session_next_bg_id = 1
+        self._map_state: MapState = MapState.from_legacy(
+            cols=self._lan_grid_cols,
+            rows=self._lan_grid_rows,
+            feet_per_square=5.0,
+            positions=self._lan_positions,
+            obstacles=self._lan_obstacles,
+            rough_terrain=self._lan_rough_terrain,
+            aoes=self._lan_aoes,
+            presentation={
+                "auras_enabled": bool(self._lan_auras_enabled),
+                "bg_images": list(self._session_bg_images),
+                "next_bg_id": int(self._session_next_bg_id),
+            },
+        )
         self._turn_snapshots: Dict[int, Dict[str, Any]] = {}
         self._summon_groups: Dict[str, List[int]] = {}
         self._summon_group_meta: Dict[str, Dict[str, Any]] = {}
@@ -7427,7 +7527,7 @@ class InitiativeTracker(base.InitiativeTracker):
     def _init_cadence_scheduler_state(self, reset_history: bool = True) -> None:
         cadence_cids = self._cadence_cids_in_order()
         counters = {int(cid): int((getattr(self, "_cadence_counters", {}) or {}).get(int(cid), 0) or 0) for cid in cadence_cids}
-        self._current_turn_kind = str(getattr(self, "_current_turn_kind", "normal") or "normal")
+        self._current_turn_kind = str(self.__dict__.get("_current_turn_kind", "normal") or "normal")
         self._cadence_counters = counters
         pending = []
         existing_pending = list(getattr(self, "_cadence_pending_queue", []) or [])
@@ -7448,7 +7548,7 @@ class InitiativeTracker(base.InitiativeTracker):
             "current_cid": _normalize_cid_value(getattr(self, "current_cid", None), "turn.history.current"),
             "round_num": int(getattr(self, "round_num", 1) or 1),
             "turn_num": int(getattr(self, "turn_num", 0) or 0),
-            "turn_kind": str(getattr(self, "_current_turn_kind", "normal") or "normal"),
+            "turn_kind": str(self.__dict__.get("_current_turn_kind", "normal") or "normal"),
             "cadence_counters": dict(getattr(self, "_cadence_counters", {}) or {}),
             "cadence_pending_queue": list(getattr(self, "_cadence_pending_queue", []) or []),
             "cadence_resume_normal_cid": _normalize_cid_value(getattr(self, "_cadence_resume_normal_cid", None), "turn.history.resume"),
@@ -7487,12 +7587,12 @@ class InitiativeTracker(base.InitiativeTracker):
         cid_norm = _normalize_cid_value(current_cid, "turn.peek.current")
         if cid_norm is None:
             return self._first_non_skipped_turn_cid(self._display_order())
-        kind = str(getattr(self, "_current_turn_kind", "normal") or "normal")
-        pending = list(getattr(self, "_cadence_pending_queue", []) or [])
+        kind = str(self.__dict__.get("_current_turn_kind", "normal") or "normal")
+        pending = list(self.__dict__.get("_cadence_pending_queue", []) or [])
         if kind == "normal":
             if pending:
                 return _normalize_cid_value(pending[0], "turn.peek.pending")
-            simulated_counters = {int(k): int(v or 0) for k, v in dict(getattr(self, "_cadence_counters", {}) or {}).items()}
+            simulated_counters = {int(k): int(v or 0) for k, v in dict(self.__dict__.get("_cadence_counters", {}) or {}).items()}
             for cadence_cid in list(simulated_counters.keys()):
                 simulated_counters[int(cadence_cid)] = int(simulated_counters.get(int(cadence_cid), 0) or 0) + 1
             simulated_pending = list(pending)
@@ -7513,7 +7613,7 @@ class InitiativeTracker(base.InitiativeTracker):
             return nxt
         if pending:
             return _normalize_cid_value(pending[0], "turn.peek.pending.cadence")
-        resume = _normalize_cid_value(getattr(self, "_cadence_resume_normal_cid", None), "turn.peek.resume")
+        resume = _normalize_cid_value(self.__dict__.get("_cadence_resume_normal_cid", None), "turn.peek.resume")
         if resume is not None and resume in self.combatants:
             return int(resume)
         return self._first_non_skipped_turn_cid(self._display_order())
@@ -8143,7 +8243,7 @@ class InitiativeTracker(base.InitiativeTracker):
 
     def _advance_to_next_turn_candidate(self, ended_cid: int) -> Tuple[bool, bool]:
         wrapped = False
-        ended_kind = str(getattr(self, "_current_turn_kind", "normal") or "normal")
+        ended_kind = str(self.__dict__.get("_current_turn_kind", "normal") or "normal")
         if ended_kind == "normal":
             self._normal_turns_completed = int(getattr(self, "_normal_turns_completed", 0) or 0) + 1
             for cadence_cid in list(getattr(self, "_cadence_counters", {}).keys()):
@@ -8563,6 +8663,183 @@ class InitiativeTracker(base.InitiativeTracker):
     def _session_quicksave_path(self) -> Path:
         return self._session_saves_dir() / "quick_save.json"
 
+    def _capture_canonical_map_state(self, prefer_window: bool = True) -> MapState:
+        mw = getattr(self, "_map_window", None) if prefer_window else None
+        map_open = False
+        try:
+            map_open = bool(mw is not None and mw.winfo_exists())
+        except Exception:
+            map_open = False
+            mw = None
+
+        cols = int(getattr(self, "_lan_grid_cols", 20) or 20)
+        rows = int(getattr(self, "_lan_grid_rows", 20) or 20)
+        feet_per_square = 5.0
+        positions = dict(getattr(self, "_lan_positions", {}) or {})
+        obstacles = set(getattr(self, "_lan_obstacles", set()) or set())
+        rough_terrain = dict(getattr(self, "_lan_rough_terrain", {}) or {})
+        aoes = dict(getattr(self, "_lan_aoes", {}) or {})
+        presentation = {
+            "auras_enabled": bool(self.__dict__.get("_lan_auras_enabled", True)),
+            "bg_images": list(self.__dict__.get("_session_bg_images", []) or []),
+            "next_bg_id": int(self.__dict__.get("_session_next_bg_id", 1) or 1),
+        }
+
+        if map_open and mw is not None:
+            try:
+                cols = int(getattr(mw, "cols", cols) or cols)
+                rows = int(getattr(mw, "rows", rows) or rows)
+                feet_per_square = float(getattr(mw, "feet_per_square", feet_per_square) or feet_per_square)
+                positions = {
+                    int(cid): (int(tok.get("col")), int(tok.get("row")))
+                    for cid, tok in (getattr(mw, "unit_tokens", {}) or {}).items()
+                }
+                obstacles = set(getattr(mw, "obstacles", obstacles) or set())
+                rough_terrain = dict(getattr(mw, "rough_terrain", rough_terrain) or {})
+                aoes = {int(aid): dict(data) for aid, data in (getattr(mw, "aoes", aoes) or {}).items()}
+                bg_images: List[Dict[str, Any]] = []
+                for bid, data in sorted((getattr(mw, "bg_images", {}) or {}).items()):
+                    bg_images.append(
+                        {
+                            "bid": int(bid),
+                            "path": str(data.get("path") or ""),
+                            "x": float(data.get("x", 0.0) or 0.0),
+                            "y": float(data.get("y", 0.0) or 0.0),
+                            "scale_pct": float(data.get("scale_pct", 100.0) or 100.0),
+                            "trans_pct": float(data.get("trans_pct", 0.0) or 0.0),
+                            "locked": bool(data.get("locked", False)),
+                        }
+                    )
+                presentation["bg_images"] = bg_images
+                presentation["next_bg_id"] = int(getattr(mw, "_next_bg_id", presentation["next_bg_id"]) or presentation["next_bg_id"])
+            except Exception:
+                pass
+
+        state = MapState.from_legacy(
+            cols=cols,
+            rows=rows,
+            feet_per_square=feet_per_square,
+            positions=positions,
+            obstacles=obstacles,
+            rough_terrain=rough_terrain,
+            aoes=aoes,
+            presentation=presentation,
+        )
+        self._map_state = state
+        return state
+
+    def _apply_canonical_map_state(self, state: MapState, hydrate_window: bool = False) -> None:
+        normalized = state.normalized()
+        self._map_state = normalized
+        legacy = normalized.to_legacy()
+        self._lan_grid_cols = int(legacy.get("cols", 20) or 20)
+        self._lan_grid_rows = int(legacy.get("rows", 20) or 20)
+        self._lan_positions = dict(legacy.get("positions") if isinstance(legacy.get("positions"), dict) else {})
+        self._lan_obstacles = set(legacy.get("obstacles") if isinstance(legacy.get("obstacles"), set) else set())
+        self._lan_rough_terrain = dict(legacy.get("rough_terrain") if isinstance(legacy.get("rough_terrain"), dict) else {})
+        self._lan_aoes = dict(legacy.get("aoes") if isinstance(legacy.get("aoes"), dict) else {})
+        self._lan_next_aoe_id = max(1, int(self.__dict__.get("_lan_next_aoe_id", 1) or 1), max(self._lan_aoes.keys(), default=0) + 1)
+        presentation = normalized.presentation if isinstance(normalized.presentation, dict) else {}
+        self._lan_auras_enabled = bool(presentation.get("auras_enabled", self.__dict__.get("_lan_auras_enabled", True)))
+        self._session_bg_images = list(presentation.get("bg_images") if isinstance(presentation.get("bg_images"), list) else [])
+        self._session_next_bg_id = int(presentation.get("next_bg_id", self.__dict__.get("_session_next_bg_id", 1)) or 1)
+        if not hydrate_window:
+            return
+        mw = getattr(self, "_map_window", None)
+        try:
+            if mw is None or not mw.winfo_exists():
+                return
+            mw.cols = int(self._lan_grid_cols)
+            mw.rows = int(self._lan_grid_rows)
+            mw.feet_per_square = float(normalized.grid.feet_per_square)
+            mw.obstacles = set(self._lan_obstacles)
+            mw.rough_terrain = dict(self._lan_rough_terrain)
+            mw.aoes = {int(aid): dict(data) for aid, data in self._lan_aoes.items()}
+            mw._next_aoe_id = int(self._lan_next_aoe_id)
+            mw._redraw_all()
+            mw.refresh_units()
+            self._apply_saved_positions_to_map_window(mw)
+            try:
+                mw._refresh_aoe_list()
+            except Exception:
+                pass
+        except Exception:
+            return
+
+    def _map_query_api(self) -> MapQueryAPI:
+        return MapQueryAPI(self._capture_canonical_map_state(prefer_window=True))
+
+    def _migrate_session_snapshot_payload(self, payload: Dict[str, Any]) -> Dict[str, Any]:
+        source = dict(payload) if isinstance(payload, dict) else {}
+        source_version = int(source.get("schema_version", 0) or 0)
+        if source_version == SESSION_SNAPSHOT_SCHEMA_VERSION:
+            if not isinstance(source.get("map"), dict):
+                source["map"] = {}
+            map_state = source["map"]
+            if "canonical" not in map_state or not isinstance(map_state.get("canonical"), dict):
+                grid = map_state.get("grid") if isinstance(map_state.get("grid"), dict) else {}
+                legacy = MapState.from_dict(
+                    {
+                        "schema_version": MAP_STATE_SCHEMA_VERSION,
+                        "grid": {
+                            "cols": int(grid.get("cols", 20) or 20),
+                            "rows": int(grid.get("rows", 20) or 20),
+                            "feet_per_square": float(grid.get("feet_per_square", 5.0) or 5.0),
+                        },
+                        "terrain_cells": list(map_state.get("rough_terrain") if isinstance(map_state.get("rough_terrain"), list) else []),
+                        "obstacles": list(map_state.get("obstacles") if isinstance(map_state.get("obstacles"), list) else []),
+                        "token_positions": list(map_state.get("positions") if isinstance(map_state.get("positions"), list) else []),
+                        "aoes": {str(k): dict(v) for k, v in (map_state.get("aoes") or {}).items() if isinstance(v, dict)},
+                        "features": list(map_state.get("features") if isinstance(map_state.get("features"), list) else []),
+                        "hazards": list(map_state.get("hazards") if isinstance(map_state.get("hazards"), list) else []),
+                        "structures": list(map_state.get("structures") if isinstance(map_state.get("structures"), list) else []),
+                        "elevation_cells": list(map_state.get("elevation_cells") if isinstance(map_state.get("elevation_cells"), list) else []),
+                        "presentation": {
+                            "auras_enabled": bool(map_state.get("auras_enabled", True)),
+                            "bg_images": list(map_state.get("bg_images") if isinstance(map_state.get("bg_images"), list) else []),
+                            "next_bg_id": int(map_state.get("next_bg_id", 1) or 1),
+                        },
+                    }
+                )
+                map_state["canonical"] = legacy.to_dict()
+            source["schema_version"] = SESSION_SNAPSHOT_SCHEMA_VERSION
+            return source
+
+        if source_version == 1:
+            migrated = dict(source)
+            map_state = migrated.get("map") if isinstance(migrated.get("map"), dict) else {}
+            grid = map_state.get("grid") if isinstance(map_state.get("grid"), dict) else {}
+            legacy = MapState.from_dict(
+                {
+                    "schema_version": MAP_STATE_SCHEMA_VERSION,
+                    "grid": {
+                        "cols": int(grid.get("cols", 20) or 20),
+                        "rows": int(grid.get("rows", 20) or 20),
+                        "feet_per_square": float(grid.get("feet_per_square", 5.0) or 5.0),
+                    },
+                    "terrain_cells": list(map_state.get("rough_terrain") if isinstance(map_state.get("rough_terrain"), list) else []),
+                    "obstacles": list(map_state.get("obstacles") if isinstance(map_state.get("obstacles"), list) else []),
+                    "token_positions": list(map_state.get("positions") if isinstance(map_state.get("positions"), list) else []),
+                    "aoes": {str(k): dict(v) for k, v in (map_state.get("aoes") or {}).items() if isinstance(v, dict)},
+                    "features": list(map_state.get("features") if isinstance(map_state.get("features"), list) else []),
+                    "hazards": list(map_state.get("hazards") if isinstance(map_state.get("hazards"), list) else []),
+                    "structures": list(map_state.get("structures") if isinstance(map_state.get("structures"), list) else []),
+                    "elevation_cells": list(map_state.get("elevation_cells") if isinstance(map_state.get("elevation_cells"), list) else []),
+                    "presentation": {
+                        "auras_enabled": bool(map_state.get("auras_enabled", True)),
+                        "bg_images": list(map_state.get("bg_images") if isinstance(map_state.get("bg_images"), list) else []),
+                        "next_bg_id": int(map_state.get("next_bg_id", 1) or 1),
+                    },
+                }
+            )
+            if not isinstance(migrated.get("map"), dict):
+                migrated["map"] = {}
+            migrated["map"]["canonical"] = legacy.to_dict()
+            migrated["schema_version"] = SESSION_SNAPSHOT_SCHEMA_VERSION
+            return migrated
+
+        raise ValueError(f"Unsupported snapshot schema_version: {source.get('schema_version')}")
+
     def _json_safe(self, value: Any) -> Any:
         if value is None or isinstance(value, (bool, int, float, str)):
             return value
@@ -8628,58 +8905,12 @@ class InitiativeTracker(base.InitiativeTracker):
         }
 
     def _session_snapshot_payload(self, label: Optional[str] = None) -> Dict[str, Any]:
-        mw = self.__dict__.get("_map_window")
-        map_open = False
-        try:
-            map_open = bool(mw is not None and mw.winfo_exists())
-        except Exception:
-            map_open = False
-            mw = None
-
-        cols = int(getattr(self, "_lan_grid_cols", 20) or 20)
-        rows = int(getattr(self, "_lan_grid_rows", 20) or 20)
-        feet_per_square = 5.0
-        positions = dict(self.__dict__.get("_lan_positions", {}) or {})
-        obstacles = set(getattr(self, "_lan_obstacles", set()) or set())
-        rough_terrain = dict(getattr(self, "_lan_rough_terrain", {}) or {})
-        aoes = dict(self.__dict__.get("_lan_aoes", {}) or {})
-        next_aoe_id = int(getattr(self, "_lan_next_aoe_id", 1) or 1)
-        bg_images = list(getattr(self, "_session_bg_images", []) or [])
-        next_bg_id = int(getattr(self, "_session_next_bg_id", 1) or 1)
-
-        if map_open and mw is not None:
-            try:
-                cols = int(getattr(mw, "cols", cols) or cols)
-                rows = int(getattr(mw, "rows", rows) or rows)
-                feet_per_square = float(getattr(mw, "feet_per_square", feet_per_square) or feet_per_square)
-                positions = {int(cid): (int(tok.get("col")), int(tok.get("row"))) for cid, tok in (getattr(mw, "unit_tokens", {}) or {}).items()}
-                obstacles = set(getattr(mw, "obstacles", obstacles) or set())
-                rough_terrain = dict(getattr(mw, "rough_terrain", rough_terrain) or {})
-                aoes = dict(getattr(mw, "aoes", aoes) or {})
-                next_aoe_id = int(getattr(mw, "_next_aoe_id", next_aoe_id) or next_aoe_id)
-                bg_images = []
-                for bid, data in sorted((getattr(mw, "bg_images", {}) or {}).items()):
-                    bg_images.append({
-                        "bid": int(bid),
-                        "path": str(data.get("path") or ""),
-                        "x": float(data.get("x", 0.0) or 0.0),
-                        "y": float(data.get("y", 0.0) or 0.0),
-                        "scale_pct": float(data.get("scale_pct", 100.0) or 100.0),
-                        "trans_pct": float(data.get("trans_pct", 0.0) or 0.0),
-                        "locked": bool(data.get("locked", False)),
-                    })
-                next_bg_id = int(getattr(mw, "_next_bg_id", next_bg_id) or next_bg_id)
-            except Exception:
-                pass
-
-        self._lan_grid_cols, self._lan_grid_rows = cols, rows
-        self._lan_positions = {int(cid): (int(pos[0]), int(pos[1])) for cid, pos in positions.items()}
-        self._lan_obstacles = {(int(c), int(r)) for c, r in obstacles}
-        self._lan_rough_terrain = dict(rough_terrain)
-        self._lan_aoes = dict(aoes)
-        self._lan_next_aoe_id = max(1, int(next_aoe_id))
-        self._session_bg_images = list(bg_images)
-        self._session_next_bg_id = max(1, int(next_bg_id))
+        canonical_map_state = self._capture_canonical_map_state(prefer_window=True)
+        self._apply_canonical_map_state(canonical_map_state, hydrate_window=False)
+        map_legacy = canonical_map_state.to_legacy()
+        canonical_payload = canonical_map_state.to_dict()
+        next_aoe_id = max(1, int(self.__dict__.get("_lan_next_aoe_id", 1) or 1), max(self._lan_aoes.keys(), default=0) + 1)
+        self._lan_next_aoe_id = next_aoe_id
 
         return {
             "schema_version": SESSION_SNAPSHOT_SCHEMA_VERSION,
@@ -8697,36 +8928,45 @@ class InitiativeTracker(base.InitiativeTracker):
                 "round_num": int(getattr(self, "round_num", 1) or 1),
                 "turn_num": int(getattr(self, "turn_num", 0) or 0),
                 "in_combat": bool(getattr(self, "in_combat", False)),
-                "turn_snapshots": self._json_safe(getattr(self, "_turn_snapshots", {})),
-                "name_role_memory": self._json_safe(getattr(self, "_name_role_memory", {})),
-                "summon_groups": self._json_safe(getattr(self, "_summon_groups", {})),
-                "summon_group_meta": self._json_safe(getattr(self, "_summon_group_meta", {})),
-                "pending_pre_summons": self._json_safe(getattr(self, "_pending_pre_summons", {})),
-                "pending_mount_requests": self._json_safe(getattr(self, "_pending_mount_requests", {})),
-                "reaction_prefs_by_cid": self._json_safe(getattr(self, "_reaction_prefs_by_cid", {})),
-                "pending_reaction_offers": self._json_safe(getattr(self, "_pending_reaction_offers", {})),
-                "pending_shield_resolutions": self._json_safe(getattr(self, "_pending_shield_resolutions", {})),
-                "pending_absorb_elements_resolutions": self._json_safe(getattr(self, "_pending_absorb_elements_resolutions", {})),
-                "concentration_save_state": self._json_safe(getattr(self, "_concentration_save_state", {})),
+                "turn_snapshots": self._json_safe(self.__dict__.get("_turn_snapshots", {})),
+                "name_role_memory": self._json_safe(self.__dict__.get("_name_role_memory", {})),
+                "summon_groups": self._json_safe(self.__dict__.get("_summon_groups", {})),
+                "summon_group_meta": self._json_safe(self.__dict__.get("_summon_group_meta", {})),
+                "pending_pre_summons": self._json_safe(self.__dict__.get("_pending_pre_summons", {})),
+                "pending_mount_requests": self._json_safe(self.__dict__.get("_pending_mount_requests", {})),
+                "reaction_prefs_by_cid": self._json_safe(self.__dict__.get("_reaction_prefs_by_cid", {})),
+                "pending_reaction_offers": self._json_safe(self.__dict__.get("_pending_reaction_offers", {})),
+                "pending_shield_resolutions": self._json_safe(self.__dict__.get("_pending_shield_resolutions", {})),
+                "pending_absorb_elements_resolutions": self._json_safe(self.__dict__.get("_pending_absorb_elements_resolutions", {})),
+                "concentration_save_state": self._json_safe(self.__dict__.get("_concentration_save_state", {})),
                 "cadence_scheduler": self._json_safe({
-                    "current_turn_kind": str(getattr(self, "_current_turn_kind", "normal") or "normal"),
-                    "cadence_counters": dict(getattr(self, "_cadence_counters", {}) or {}),
-                    "cadence_pending_queue": list(getattr(self, "_cadence_pending_queue", []) or []),
-                    "cadence_resume_normal_cid": getattr(self, "_cadence_resume_normal_cid", None),
-                    "normal_turns_completed": int(getattr(self, "_normal_turns_completed", 0) or 0),
-                    "turn_history": list(getattr(self, "_turn_history", []) or []),
+                    "current_turn_kind": str(self.__dict__.get("_current_turn_kind", "normal") or "normal"),
+                    "cadence_counters": dict(self.__dict__.get("_cadence_counters", {}) or {}),
+                    "cadence_pending_queue": list(self.__dict__.get("_cadence_pending_queue", []) or []),
+                    "cadence_resume_normal_cid": self.__dict__.get("_cadence_resume_normal_cid", None),
+                    "normal_turns_completed": int(self.__dict__.get("_normal_turns_completed", 0) or 0),
+                    "turn_history": list(self.__dict__.get("_turn_history", []) or []),
                 }),
             },
             "map": {
-                "grid": {"cols": cols, "rows": rows, "feet_per_square": feet_per_square},
+                "grid": {
+                    "cols": int(map_legacy.get("cols", self._lan_grid_cols) or self._lan_grid_cols),
+                    "rows": int(map_legacy.get("rows", self._lan_grid_rows) or self._lan_grid_rows),
+                    "feet_per_square": float(map_legacy.get("feet_per_square", canonical_map_state.grid.feet_per_square) or canonical_map_state.grid.feet_per_square),
+                },
                 "positions": [{"cid": int(cid), "col": int(pos[0]), "row": int(pos[1])} for cid, pos in sorted(self._lan_positions.items())],
                 "obstacles": [{"col": int(c), "row": int(r)} for c, r in sorted(self._lan_obstacles)],
                 "rough_terrain": [{"col": int(c), "row": int(r), **(dict(cell) if isinstance(cell, dict) else {"color": str(cell), "movement_type": "ground", "is_swim": False, "is_rough": True})} for (c, r), cell in sorted(self._lan_rough_terrain.items())],
                 "aoes": self._json_safe(self._lan_aoes),
+                "features": self._json_safe(canonical_payload.get("features", [])),
+                "hazards": self._json_safe(canonical_payload.get("hazards", [])),
+                "structures": self._json_safe(canonical_payload.get("structures", [])),
+                "elevation_cells": self._json_safe(canonical_payload.get("elevation_cells", [])),
                 "next_aoe_id": int(self._lan_next_aoe_id),
-                "auras_enabled": bool(getattr(self, "_lan_auras_enabled", True)),
+                "auras_enabled": bool(self.__dict__.get("_lan_auras_enabled", True)),
                 "bg_images": self._json_safe(self._session_bg_images),
                 "next_bg_id": int(self._session_next_bg_id),
+                "canonical": canonical_payload,
             },
             "log": {"lines": self._json_safe(self._lan_battle_log_lines(limit=0))},
         }
@@ -8739,9 +8979,8 @@ class InitiativeTracker(base.InitiativeTracker):
 
     def _load_session_from_path(self, path: Path) -> None:
         payload = json.loads(path.read_text(encoding="utf-8"))
-        if int(payload.get("schema_version", 0) or 0) != SESSION_SNAPSHOT_SCHEMA_VERSION:
-            raise ValueError(f"Unsupported snapshot schema_version: {payload.get('schema_version')}")
-        self._apply_session_snapshot(payload, source_path=path)
+        migrated = self._migrate_session_snapshot_payload(payload)
+        self._apply_session_snapshot(migrated, source_path=path)
 
     def _restore_map_backgrounds(self, bg_entries: List[Dict[str, Any]]) -> None:
         mw = getattr(self, "_map_window", None)
@@ -8907,49 +9146,36 @@ class InitiativeTracker(base.InitiativeTracker):
         self._turn_history = list(cadence_scheduler.get("turn_history") or [])
         self._init_cadence_scheduler_state(reset_history=False)
 
-        grid = map_state.get("grid") if isinstance(map_state.get("grid"), dict) else {}
-        self._lan_grid_cols = int(grid.get("cols", 20) or 20)
-        self._lan_grid_rows = int(grid.get("rows", 20) or 20)
-        self._lan_positions = {}
-        for item in map_state.get("positions") if isinstance(map_state.get("positions"), list) else []:
-            if isinstance(item, dict):
-                try:
-                    self._lan_positions[int(item.get("cid"))] = (int(item.get("col")), int(item.get("row")))
-                except Exception:
-                    pass
-        self._lan_obstacles = set()
-        for item in map_state.get("obstacles") if isinstance(map_state.get("obstacles"), list) else []:
-            if isinstance(item, dict):
-                try:
-                    self._lan_obstacles.add((int(item.get("col")), int(item.get("row"))))
-                except Exception:
-                    pass
-        rough: Dict[Tuple[int, int], Dict[str, object]] = {}
-        for item in map_state.get("rough_terrain") if isinstance(map_state.get("rough_terrain"), list) else []:
-            if not isinstance(item, dict):
-                continue
-            try:
-                key = (int(item.get("col")), int(item.get("row")))
-            except Exception:
-                continue
-            rough[key] = {
-                "color": str(item.get("color") or ""),
-                "movement_type": str(item.get("movement_type") or "ground"),
-                "is_swim": bool(item.get("is_swim", False)),
-                "is_rough": bool(item.get("is_rough", True)),
-            }
-        self._lan_rough_terrain = rough
-        raw_aoes = map_state.get("aoes") if isinstance(map_state.get("aoes"), dict) else {}
-        self._lan_aoes = {}
-        for raw_key, raw_value in raw_aoes.items():
-            try:
-                self._lan_aoes[int(raw_key)] = dict(raw_value) if isinstance(raw_value, dict) else {}
-            except Exception:
-                continue
-        self._lan_next_aoe_id = int(map_state.get("next_aoe_id", 1) or 1)
-        self._lan_auras_enabled = bool(map_state.get("auras_enabled", True))
-        self._session_bg_images = list(map_state.get("bg_images") if isinstance(map_state.get("bg_images"), list) else [])
-        self._session_next_bg_id = int(map_state.get("next_bg_id", 1) or 1)
+        canonical_payload = map_state.get("canonical") if isinstance(map_state.get("canonical"), dict) else None
+        if isinstance(canonical_payload, dict):
+            canonical = MapState.from_dict(canonical_payload)
+        else:
+            grid = map_state.get("grid") if isinstance(map_state.get("grid"), dict) else {}
+            canonical = MapState.from_dict(
+                {
+                    "schema_version": MAP_STATE_SCHEMA_VERSION,
+                    "grid": {
+                        "cols": int(grid.get("cols", 20) or 20),
+                        "rows": int(grid.get("rows", 20) or 20),
+                        "feet_per_square": float(grid.get("feet_per_square", 5.0) or 5.0),
+                    },
+                    "terrain_cells": list(map_state.get("rough_terrain") if isinstance(map_state.get("rough_terrain"), list) else []),
+                    "obstacles": list(map_state.get("obstacles") if isinstance(map_state.get("obstacles"), list) else []),
+                    "token_positions": list(map_state.get("positions") if isinstance(map_state.get("positions"), list) else []),
+                    "aoes": {str(k): dict(v) for k, v in (map_state.get("aoes") or {}).items() if isinstance(v, dict)},
+                    "features": list(map_state.get("features") if isinstance(map_state.get("features"), list) else []),
+                    "hazards": list(map_state.get("hazards") if isinstance(map_state.get("hazards"), list) else []),
+                    "structures": list(map_state.get("structures") if isinstance(map_state.get("structures"), list) else []),
+                    "elevation_cells": list(map_state.get("elevation_cells") if isinstance(map_state.get("elevation_cells"), list) else []),
+                    "presentation": {
+                        "auras_enabled": bool(map_state.get("auras_enabled", True)),
+                        "bg_images": list(map_state.get("bg_images") if isinstance(map_state.get("bg_images"), list) else []),
+                        "next_bg_id": int(map_state.get("next_bg_id", 1) or 1),
+                    },
+                }
+            )
+        self._apply_canonical_map_state(canonical, hydrate_window=False)
+        grid = canonical.grid.to_dict()
 
         # Let map mode open with the saved grid size without re-prompting.
         self._map_open_without_prompt_size = (int(self._lan_grid_cols), int(self._lan_grid_rows))
@@ -9064,6 +9290,16 @@ class InitiativeTracker(base.InitiativeTracker):
         self._lan_next_aoe_id = 1
         self._session_bg_images = []
         self._session_next_bg_id = 1
+        self._map_state = MapState.from_legacy(
+            cols=self._lan_grid_cols,
+            rows=self._lan_grid_rows,
+            feet_per_square=5.0,
+            positions=self._lan_positions,
+            obstacles=self._lan_obstacles,
+            rough_terrain=self._lan_rough_terrain,
+            aoes=self._lan_aoes,
+            presentation={"auras_enabled": bool(self.__dict__.get("_lan_auras_enabled", True)), "bg_images": [], "next_bg_id": 1},
+        )
 
         mw = getattr(self, "_map_window", None)
         try:
@@ -9107,23 +9343,8 @@ class InitiativeTracker(base.InitiativeTracker):
         except Exception:
             return
         try:
-            mw.cols = int(getattr(mw, "cols", getattr(self, "_lan_grid_cols", 20)) or 20)
-            mw.rows = int(getattr(mw, "rows", getattr(self, "_lan_grid_rows", 20)) or 20)
-            self._lan_grid_cols = int(mw.cols)
-            self._lan_grid_rows = int(mw.rows)
-            mw.obstacles = set(getattr(self, "_lan_obstacles", set()) or set())
-            mw.rough_terrain = dict(getattr(self, "_lan_rough_terrain", {}) or {})
-            mw.aoes = {int(k): dict(v) for k, v in dict(self.__dict__.get("_lan_aoes", {}) or {}).items()}
-            mw._next_aoe_id = int(getattr(self, "_lan_next_aoe_id", 1) or 1)
-            mw._next_bg_id = int(getattr(self, "_session_next_bg_id", 1) or 1)
-            mw._redraw_all()
-            mw.refresh_units()
-            self._apply_saved_positions_to_map_window(mw)
-            try:
-                mw._refresh_aoe_list()
-            except Exception:
-                pass
-            self._restore_map_backgrounds(list(getattr(self, "_session_bg_images", []) or []))
+            self._apply_canonical_map_state(self._capture_canonical_map_state(prefer_window=True), hydrate_window=True)
+            self._restore_map_backgrounds(list(self.__dict__.get("_session_bg_images", []) or []))
         except Exception:
             pass
 
@@ -9155,35 +9376,7 @@ class InitiativeTracker(base.InitiativeTracker):
                 return
         except Exception:
             return
-
-        try:
-            self._lan_grid_cols = int(getattr(mw, "cols", self._lan_grid_cols) or self._lan_grid_cols)
-            self._lan_grid_rows = int(getattr(mw, "rows", self._lan_grid_rows) or self._lan_grid_rows)
-            self._lan_positions = {
-                int(cid): (int(tok.get("col")), int(tok.get("row")))
-                for cid, tok in (getattr(mw, "unit_tokens", {}) or {}).items()
-            }
-            self._lan_obstacles = set(getattr(mw, "obstacles", set()) or set())
-            self._lan_rough_terrain = dict(getattr(mw, "rough_terrain", {}) or {})
-            self._lan_aoes = {int(k): dict(v) for k, v in (getattr(mw, "aoes", {}) or {}).items()}
-            self._lan_next_aoe_id = int(getattr(mw, "_next_aoe_id", self._lan_next_aoe_id) or self._lan_next_aoe_id)
-            bg_images: List[Dict[str, Any]] = []
-            for bid, data in sorted((getattr(mw, "bg_images", {}) or {}).items()):
-                bg_images.append(
-                    {
-                        "bid": int(bid),
-                        "path": str(data.get("path") or ""),
-                        "x": float(data.get("x", 0.0) or 0.0),
-                        "y": float(data.get("y", 0.0) or 0.0),
-                        "scale_pct": float(data.get("scale_pct", 100.0) or 100.0),
-                        "trans_pct": float(data.get("trans_pct", 0.0) or 0.0),
-                        "locked": bool(data.get("locked", False)),
-                    }
-                )
-            self._session_bg_images = bg_images
-            self._session_next_bg_id = int(getattr(mw, "_next_bg_id", self._session_next_bg_id) or self._session_next_bg_id)
-        except Exception:
-            return
+        self._apply_canonical_map_state(self._capture_canonical_map_state(prefer_window=True), hydrate_window=False)
 
     def _apply_saved_positions_to_map_window(self, mw: Any) -> None:
         """Ensure map window tokens match persisted LAN positions."""
@@ -11472,6 +11665,23 @@ class InitiativeTracker(base.InitiativeTracker):
                 except Exception:
                     pass
 
+        canonical_map_state = MapState.from_legacy(
+            cols=int(cols),
+            rows=int(rows),
+            feet_per_square=5.0,
+            positions=positions,
+            obstacles=obstacles,
+            rough_terrain=rough_terrain,
+            aoes=aoe_source,
+            presentation={
+                "auras_enabled": bool(self.__dict__.get("_lan_auras_enabled", True)),
+                "bg_images": list(self.__dict__.get("_session_bg_images", []) or []),
+                "next_bg_id": int(self.__dict__.get("_session_next_bg_id", 1) or 1),
+            },
+        )
+        self._apply_canonical_map_state(canonical_map_state, hydrate_window=False)
+        canonical_payload = canonical_map_state.to_dict()
+
         def _log_invalid_aoe_value(aid_value: int, name_value: str, kind_value: str, key: str, raw_value: Any) -> None:
             self._oplog(
                 f"LAN AoE invalid value aid={aid_value} name={name_value} kind={kind_value} key={key} value={raw_value!r}",
@@ -11835,9 +12045,14 @@ class InitiativeTracker(base.InitiativeTracker):
             "obstacles": [{"col": int(c), "row": int(r)} for (c, r) in sorted(obstacles)],
             "rough_terrain": rough_payload,
             "aoes": aoes,
+            "map_state": canonical_payload,
+            "features": canonical_payload.get("features", []),
+            "hazards": canonical_payload.get("hazards", []),
+            "structures": canonical_payload.get("structures", []),
+            "elevation_cells": canonical_payload.get("elevation_cells", []),
             "units": units,
             "active_cid": active,
-            "active_turn_kind": str(getattr(self, "_current_turn_kind", "normal") or "normal"),
+            "active_turn_kind": str(self.__dict__.get("_current_turn_kind", "normal") or "normal"),
             "up_next_cid": self._peek_next_turn_cid(active),
             "round_num": int(getattr(self, "round_num", 0) or 0),
             "turn_order": turn_order,
@@ -33387,26 +33602,14 @@ class InitiativeTracker(base.InitiativeTracker):
     def _lan_live_map_data(
         self,
     ) -> Tuple[int, int, set[Tuple[int, int]], Dict[Tuple[int, int], Dict[str, object]], Dict[int, Tuple[int, int]]]:
-        cols = int(self._lan_grid_cols)
-        rows = int(self._lan_grid_rows)
-        obstacles = set(self._lan_obstacles)
-        rough_terrain: Dict[Tuple[int, int], Dict[str, object]] = dict(getattr(self, "_lan_rough_terrain", {}) or {})
-        positions = dict(self._lan_positions)
-
-        mw = getattr(self, "_map_window", None)
-        try:
-            if mw is not None and mw.winfo_exists():
-                cols = int(getattr(mw, "cols", cols))
-                rows = int(getattr(mw, "rows", rows))
-                obstacles = set(getattr(mw, "obstacles", obstacles) or set())
-                rough_terrain = dict(getattr(mw, "rough_terrain", rough_terrain) or {})
-                for cid, tok in (getattr(mw, "unit_tokens", {}) or {}).items():
-                    try:
-                        positions[int(cid)] = (int(tok.get("col")), int(tok.get("row")))
-                    except Exception:
-                        pass
-        except Exception:
-            pass
+        state = self._capture_canonical_map_state(prefer_window=True)
+        self._apply_canonical_map_state(state, hydrate_window=False)
+        legacy = state.to_legacy()
+        cols = int(legacy.get("cols", self._lan_grid_cols) or self._lan_grid_cols)
+        rows = int(legacy.get("rows", self._lan_grid_rows) or self._lan_grid_rows)
+        obstacles = set(legacy.get("obstacles") if isinstance(legacy.get("obstacles"), set) else set())
+        rough_terrain = dict(legacy.get("rough_terrain") if isinstance(legacy.get("rough_terrain"), dict) else {})
+        positions = dict(legacy.get("positions") if isinstance(legacy.get("positions"), dict) else {})
         return cols, rows, obstacles, rough_terrain, positions
 
     def _water_movement_multiplier(self, c: Optional[base.Combatant], mode: str) -> float:
@@ -33447,6 +33650,15 @@ class InitiativeTracker(base.InitiativeTracker):
 
         mode = self._normalize_movement_mode(getattr(creature, "movement_mode", "normal"))
         water_multiplier = self._water_movement_multiplier(creature, mode)
+        map_query = MapQueryAPI(
+            MapState.from_legacy(
+                cols=cols,
+                rows=rows,
+                positions={},
+                obstacles=obstacles,
+                rough_terrain=rough_terrain,
+            )
+        )
 
         def in_bounds(c: int, r: int) -> bool:
             return 0 <= c < cols and 0 <= r < rows
@@ -33483,9 +33695,9 @@ class InitiativeTracker(base.InitiativeTracker):
                         step = 5
                         npar = parity
 
-                    target_cell = rough_terrain.get((nc, nr))
-                    current_cell = rough_terrain.get((c, r))
-                    target_is_rough = bool(target_cell.get("is_rough", False)) if isinstance(target_cell, dict) else False
+                    target_cell = map_query.terrain_at(nc, nr).to_dict()
+                    current_cell = map_query.terrain_at(c, r).to_dict()
+                    target_is_rough = bool(target_cell.get("is_rough", False))
                     current_type = self._normalize_movement_type(
                         current_cell.get("movement_type") if isinstance(current_cell, dict) else None,
                         is_swim=bool(current_cell.get("is_swim", False))

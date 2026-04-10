@@ -192,8 +192,13 @@ class SessionSaveLoadTests(unittest.TestCase):
             app._save_session_to_path(snap_path, label="roundtrip")
 
             payload = json.loads(snap_path.read_text(encoding="utf-8"))
-            self.assertEqual(payload["schema_version"], 1)
+            self.assertEqual(payload["schema_version"], 2)
             self.assertEqual(payload["metadata"]["label"], "roundtrip")
+            self.assertIn("canonical", payload["map"])
+            canonical = payload["map"]["canonical"]
+            self.assertEqual(canonical["grid"]["cols"], 40)
+            self.assertEqual(canonical["token_positions"][0]["cid"], 1)
+            self.assertEqual(canonical["terrain_cells"][0]["col"], 3)
 
             app.combatants = {}
             app.current_cid = None
@@ -451,6 +456,33 @@ class SessionSaveLoadTests(unittest.TestCase):
             self.assertEqual(map_window.rows, 100)
             self.assertEqual(app._lan_grid_cols, 100)
             self.assertEqual(app._lan_grid_rows, 100)
+
+    def test_migrate_v1_snapshot_adds_canonical_map_state(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            app = self._make_app(Path(tmpdir) / "battle.log")
+            payload_v1 = {
+                "schema_version": 1,
+                "combat": {},
+                "map": {
+                    "grid": {"cols": 9, "rows": 7, "feet_per_square": 5},
+                    "positions": [{"cid": 1, "col": 2, "row": 3}],
+                    "obstacles": [{"col": 4, "row": 5}],
+                    "rough_terrain": [{"col": 1, "row": 1, "color": "#fff", "movement_type": "ground", "is_swim": False, "is_rough": True}],
+                    "aoes": {"10": {"kind": "circle", "cx": 1.0, "cy": 1.0}},
+                    "next_aoe_id": 11,
+                },
+                "log": {"lines": []},
+            }
+            migrated = app._migrate_session_snapshot_payload(payload_v1)
+            self.assertEqual(migrated["schema_version"], 2)
+            self.assertIn("canonical", migrated["map"])
+            canonical = migrated["map"]["canonical"]
+            self.assertEqual(canonical["grid"]["cols"], 9)
+            self.assertEqual(canonical["grid"]["rows"], 7)
+            self.assertEqual(canonical["token_positions"][0]["cid"], 1)
+            self.assertEqual(canonical["terrain_cells"][0]["col"], 1)
+            self.assertEqual(canonical["obstacles"][0]["col"], 4)
+            self.assertIn("10", canonical["aoes"])
 
 
 if __name__ == "__main__":

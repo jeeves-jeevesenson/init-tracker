@@ -460,6 +460,30 @@ class LanSnapshotStaticTests(unittest.TestCase):
         lan._tick()
         self.assertEqual(static_call_count["count"], 2)
 
+    def test_build_map_delta_envelope_includes_terrain_and_token_updates(self):
+        lan = object.__new__(tracker_mod.LanController)
+        prev = {
+            "grid": {"cols": 8, "rows": 8, "feet_per_square": 5},
+            "rough_terrain": [],
+            "obstacles": [],
+            "units": [{"cid": 1, "pos": {"col": 1, "row": 1}}],
+            "aoes": [],
+        }
+        curr = {
+            "grid": {"cols": 8, "rows": 8, "feet_per_square": 5},
+            "rough_terrain": [{"col": 2, "row": 3, "color": "#fff", "movement_type": "ground", "is_swim": False, "is_rough": True}],
+            "obstacles": [{"col": 4, "row": 4}],
+            "units": [{"cid": 1, "pos": {"col": 5, "row": 5}}],
+            "aoes": [{"aid": 10, "kind": "circle"}],
+        }
+
+        envelope = lan._build_map_delta_envelope(prev, curr)
+        self.assertEqual(envelope["type"], "map_delta")
+        delta = envelope["delta"]
+        self.assertEqual(delta["terrain_cells"]["upserts"][0]["col"], 2)
+        self.assertEqual(delta["obstacles"]["upserts"][0]["col"], 4)
+        self.assertEqual(delta["tokens"]["upserts"][0]["cid"], 1)
+
 
 if __name__ == "__main__":
     unittest.main()

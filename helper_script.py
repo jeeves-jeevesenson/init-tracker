@@ -46,6 +46,7 @@ import tkinter.font as tkfont
 from dataclasses import dataclass, field
 from typing import Any, Callable, Dict, List, Optional, Tuple, Set, Union
 from tkinter import messagebox, ttk, simpledialog, filedialog
+from map_state import MapQueryAPI, MapState
 
 PIL_IMAGE_IMPORT_ERROR: Optional[str] = None
 PIL_IMAGETK_IMPORT_ERROR: Optional[str] = None
@@ -8588,6 +8589,15 @@ class BattleMapWindow(tk.Toplevel):
 
         obstacles = getattr(self, "obstacles", set()) or set()
         rough_terrain = getattr(self, "rough_terrain", {}) or {}
+        map_query = MapQueryAPI(
+            MapState.from_legacy(
+                cols=int(self.cols),
+                rows=int(self.rows),
+                obstacles=obstacles,
+                rough_terrain=rough_terrain,
+                positions={},
+            )
+        )
         mode = self.app._normalize_movement_mode(getattr(creature, "movement_mode", "normal"))
         water_multiplier = self.app._water_movement_multiplier(creature, mode)
 
@@ -8609,12 +8619,12 @@ class BattleMapWindow(tk.Toplevel):
                 nc, nr = col + dc, row + dr
                 if nc < 0 or nr < 0 or nc >= self.cols or nr >= self.rows:
                     continue
-                if (nc, nr) in obstacles:
+                if map_query.blocks_movement(nc, nr):
                     continue
 
                 # no corner-cutting
                 if is_diag:
-                    if (col + dc, row) in obstacles or (col, row + dr) in obstacles:
+                    if map_query.blocks_movement(col + dc, row) or map_query.blocks_movement(col, row + dr):
                         continue
                     step_cost = diag5 if parity == 0 else diag10
                     npar = 1 - parity
@@ -8622,10 +8632,10 @@ class BattleMapWindow(tk.Toplevel):
                     step_cost = step
                     npar = parity
 
-                current_cell = self._rough_cell_data(rough_terrain.get((col, row)))
-                target_cell = self._rough_cell_data(rough_terrain.get((nc, nr)))
-                current_type = current_cell.get("movement_type")
-                target_type = target_cell.get("movement_type")
+                current_cell = map_query.terrain_at(col, row)
+                target_cell = map_query.terrain_at(nc, nr)
+                current_type = current_cell.movement_type
+                target_type = target_cell.movement_type
                 if mode == "swim" and target_type != "water":
                     continue
                 if mode == "burrow" and target_type == "water":
@@ -8633,7 +8643,7 @@ class BattleMapWindow(tk.Toplevel):
                 if mode != "fly":
                     if current_type == "water" or target_type == "water":
                         step_cost = int(math.ceil(step_cost * water_multiplier))
-                    if bool(target_cell.get("is_rough")):
+                    if bool(target_cell.is_rough):
                         step_cost *= 2
                 try:
                     step_cost = int(

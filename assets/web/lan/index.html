@@ -10265,6 +10265,70 @@ __DAMAGE_TYPE_OPTIONS__
     state.aoes = Array.from(aoeMap.values()).sort((a, b) => Number(a.aid) - Number(b.aid));
   }
 
+  function applyMapDeltaEnvelope(envelope){
+    if (!envelope || typeof envelope !== "object") return;
+    const delta = envelope.delta && typeof envelope.delta === "object" ? envelope.delta : null;
+    if (!delta) return;
+    if (!state){ state = {}; }
+    if (delta.grid && typeof delta.grid === "object"){
+      state.grid = delta.grid;
+      invalidateMovementRangeCache();
+    }
+    const terrain = delta.terrain_cells && typeof delta.terrain_cells === "object" ? delta.terrain_cells : {};
+    const obstacles = delta.obstacles && typeof delta.obstacles === "object" ? delta.obstacles : {};
+    applyTerrainPatch({
+      rough_updates: Array.isArray(terrain.upserts) ? terrain.upserts : [],
+      rough_removals: Array.isArray(terrain.removals) ? terrain.removals : [],
+      obstacle_updates: Array.isArray(obstacles.upserts) ? obstacles.upserts : [],
+      obstacle_removals: Array.isArray(obstacles.removals) ? obstacles.removals : [],
+    });
+    const aoes = delta.aoes && typeof delta.aoes === "object" ? delta.aoes : {};
+    applyAoePatch({
+      updates: Array.isArray(aoes.upserts) ? aoes.upserts : [],
+      removals: Array.isArray(aoes.removals) ? aoes.removals : [],
+    });
+    if (Array.isArray(state.units)){
+      const tokenPart = delta.tokens && typeof delta.tokens === "object" ? delta.tokens : {};
+      const updates = Array.isArray(tokenPart.upserts) ? tokenPart.upserts : [];
+      if (updates.length){
+        const updatePayloads = [];
+        updates.forEach((entry) => {
+          if (!entry || typeof entry !== "object") return;
+          const cid = Number(entry.cid);
+          const col = Number(entry.col);
+          const row = Number(entry.row);
+          if (!Number.isFinite(cid) || !Number.isFinite(col) || !Number.isFinite(row)) return;
+          updatePayloads.push({cid, pos: {col, row}});
+        });
+        applyUnitUpdates(updatePayloads);
+      }
+    }
+    if (delta.features && typeof delta.features === "object"){
+      state.map_features = {
+        upserts: Array.isArray(delta.features.upserts) ? delta.features.upserts : [],
+        removals: Array.isArray(delta.features.removals) ? delta.features.removals : [],
+      };
+    }
+    if (delta.hazards && typeof delta.hazards === "object"){
+      state.map_hazards = {
+        upserts: Array.isArray(delta.hazards.upserts) ? delta.hazards.upserts : [],
+        removals: Array.isArray(delta.hazards.removals) ? delta.hazards.removals : [],
+      };
+    }
+    if (delta.structures && typeof delta.structures === "object"){
+      state.map_structures = {
+        upserts: Array.isArray(delta.structures.upserts) ? delta.structures.upserts : [],
+        removals: Array.isArray(delta.structures.removals) ? delta.structures.removals : [],
+      };
+    }
+    if (delta.elevation_cells && typeof delta.elevation_cells === "object"){
+      state.map_elevation = {
+        upserts: Array.isArray(delta.elevation_cells.upserts) ? delta.elevation_cells.upserts : [],
+        removals: Array.isArray(delta.elevation_cells.removals) ? delta.elevation_cells.removals : [],
+      };
+    }
+  }
+
   function planningModeSpeed(unit){
     if (!unit) return 30;
     const mode = normalizeMovementMode(unit?.movement_mode);
@@ -15687,6 +15751,7 @@ __DAMAGE_TYPE_OPTIONS__
     "units_snapshot",
     "terrain_update",
     "terrain_patch",
+    "map_delta",
     "grid_update",
     "aoe_patch",
   ]);
@@ -15852,6 +15917,7 @@ __DAMAGE_TYPE_OPTIONS__
         const oldMonsterChoices = state?.monster_choices;
         const oldResourcePools = state?.resource_pools;
         const oldGrid = state?.grid;
+        const oldMapState = state?.map_state;
         const oldTerrain = state?.rough_terrain;
         const oldObstacles = state?.obstacles;
         state = (msg.state && typeof msg.state === "object") ? msg.state : {};
@@ -15874,6 +15940,9 @@ __DAMAGE_TYPE_OPTIONS__
         }
         if (!state.grid && oldGrid){
           state.grid = oldGrid;
+        }
+        if (!state.map_state && oldMapState && typeof oldMapState === "object"){
+          state.map_state = oldMapState;
         }
         if (!state.rough_terrain && Array.isArray(oldTerrain)){
           state.rough_terrain = oldTerrain;
@@ -16421,6 +16490,10 @@ __DAMAGE_TYPE_OPTIONS__
         scheduleUiFlush({draw:true});
       } else if (msg.type === "terrain_patch"){
         applyTerrainPatch(msg);
+        updateWaitingOverlay();
+        scheduleUiFlush({draw:true});
+      } else if (msg.type === "map_delta"){
+        applyMapDeltaEnvelope(msg);
         updateWaitingOverlay();
         scheduleUiFlush({draw:true});
       } else if (msg.type === "aoe_patch"){
