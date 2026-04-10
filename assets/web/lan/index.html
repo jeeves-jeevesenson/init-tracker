@@ -10302,6 +10302,26 @@ __DAMAGE_TYPE_OPTIONS__
         });
         applyUnitUpdates(updatePayloads);
       }
+      const removals = Array.isArray(tokenPart.removals) ? tokenPart.removals : [];
+      if (removals.length){
+        const removalCids = new Set();
+        removals.forEach((entry) => {
+          if (!entry || typeof entry !== "object") return;
+          const cid = Number(entry.cid);
+          if (!Number.isFinite(cid)) return;
+          removalCids.add(cid);
+        });
+        if (removalCids.size){
+          state.units = state.units.map((unit) => {
+            if (!unit) return unit;
+            const cid = Number(unit.cid);
+            if (!Number.isFinite(cid) || !removalCids.has(cid)) return unit;
+            const next = {...unit};
+            delete next.pos;
+            return next;
+          });
+        }
+      }
     }
     if (delta.features && typeof delta.features === "object"){
       state.map_features = {

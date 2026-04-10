@@ -484,6 +484,65 @@ class SessionSaveLoadTests(unittest.TestCase):
             self.assertEqual(canonical["obstacles"][0]["col"], 4)
             self.assertIn("10", canonical["aoes"])
 
+    def test_capture_canonical_map_state_preserves_canonical_only_layers(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            app = self._make_app(Path(tmpdir) / "battle.log")
+            app._lan_grid_cols = 12
+            app._lan_grid_rows = 10
+            app._lan_positions = {1: (2, 3)}
+            app._lan_obstacles = {(4, 4)}
+            app._lan_rough_terrain = {(1, 1): {"color": "#aaa", "movement_type": "ground", "is_swim": False, "is_rough": True}}
+            app._lan_aoes = {9: {"kind": "circle", "cx": 1.0, "cy": 1.0}}
+            app._map_state = tracker_mod.MapState.from_dict(
+                {
+                    "grid": {"cols": 12, "rows": 10, "feet_per_square": 5},
+                    "features": [{"id": "f1", "col": 5, "row": 5, "kind": "feature", "payload": {"name": "crate"}}],
+                    "hazards": [{"id": "h1", "col": 6, "row": 6, "kind": "hazard", "payload": {"name": "fire"}}],
+                    "structures": [
+                        {
+                            "id": "s1",
+                            "kind": "structure",
+                            "anchor_col": 7,
+                            "anchor_row": 7,
+                            "occupied_cells": [{"col": 7, "row": 7}],
+                            "payload": {"name": "wall"},
+                        }
+                    ],
+                    "elevation_cells": [{"col": 8, "row": 8, "elevation": 10}],
+                }
+            )
+
+            captured = app._capture_canonical_map_state(prefer_window=False).to_dict()
+            self.assertEqual(captured["token_positions"][0]["cid"], 1)
+            self.assertEqual(captured["features"][0]["id"], "f1")
+            self.assertEqual(captured["hazards"][0]["id"], "h1")
+            self.assertEqual(captured["structures"][0]["id"], "s1")
+            self.assertEqual(captured["elevation_cells"][0]["col"], 8)
+
+    def test_migrate_schema_v2_sparse_legacy_map_payload_is_hardened(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            app = self._make_app(Path(tmpdir) / "battle.log")
+            payload = {
+                "schema_version": 2,
+                "combat": {},
+                "map": {
+                    "grid": {"cols": 9, "rows": 7, "feet_per_square": 5},
+                    "positions": {"1": [2, 3]},
+                    "obstacles": [[4, 5], {"col": 1, "row": 1}],
+                    "rough_terrain": {"3,4": {"color": "#fff", "movement_type": "ground", "is_swim": False, "is_rough": True}},
+                    "aoes": [{"aid": 10, "kind": "circle", "cx": 1.0, "cy": 1.0}, {"aid": "bad"}],
+                },
+                "log": {"lines": []},
+            }
+
+            migrated = app._migrate_session_snapshot_payload(payload)
+            canonical = migrated["map"]["canonical"]
+            self.assertEqual(canonical["grid"]["cols"], 9)
+            self.assertEqual(canonical["token_positions"][0]["cid"], 1)
+            self.assertIn({"col": 4, "row": 5}, canonical["obstacles"])
+            self.assertEqual(canonical["terrain_cells"][0]["col"], 3)
+            self.assertIn("10", canonical["aoes"])
+
 
 if __name__ == "__main__":
     unittest.main()
