@@ -10128,6 +10128,7 @@ __DAMAGE_TYPE_OPTIONS__
       Math.max(0, Number(unit.swim_speed || 0)),
       roughTerrainVersion,
       obstacleVersion,
+      stateUpdateCounter,
     ].join("|");
     if (key === movementRangeCacheKey && movementRangeCostMap){
       if (movementRangePerfDebug){
@@ -10145,6 +10146,10 @@ __DAMAGE_TYPE_OPTIONS__
       unit,
       getCachedRoughTerrainMap(),
       getCachedObstacleSet(),
+      Array.isArray(state?.features) ? state.features : [],
+      Array.isArray(state?.hazards) ? state.hazards : [],
+      Array.isArray(state?.structures) ? state.structures : [],
+      Array.isArray(state?.elevation_cells) ? state.elevation_cells : [],
       Number(cols),
       Number(rows),
       Math.max(1, Number(feetPerSquare || 5)),
@@ -10323,29 +10328,51 @@ __DAMAGE_TYPE_OPTIONS__
         }
       }
     }
-    if (delta.features && typeof delta.features === "object"){
-      state.map_features = {
-        upserts: Array.isArray(delta.features.upserts) ? delta.features.upserts : [],
-        removals: Array.isArray(delta.features.removals) ? delta.features.removals : [],
-      };
-    }
-    if (delta.hazards && typeof delta.hazards === "object"){
-      state.map_hazards = {
-        upserts: Array.isArray(delta.hazards.upserts) ? delta.hazards.upserts : [],
-        removals: Array.isArray(delta.hazards.removals) ? delta.hazards.removals : [],
-      };
-    }
-    if (delta.structures && typeof delta.structures === "object"){
-      state.map_structures = {
-        upserts: Array.isArray(delta.structures.upserts) ? delta.structures.upserts : [],
-        removals: Array.isArray(delta.structures.removals) ? delta.structures.removals : [],
-      };
-    }
-    if (delta.elevation_cells && typeof delta.elevation_cells === "object"){
-      state.map_elevation = {
-        upserts: Array.isArray(delta.elevation_cells.upserts) ? delta.elevation_cells.upserts : [],
-        removals: Array.isArray(delta.elevation_cells.removals) ? delta.elevation_cells.removals : [],
-      };
+    let tacticalEntityChanged = false;
+    const applyEntityDelta = (sectionName, idKey, removalsAreCells = false) => {
+      const section = delta[sectionName] && typeof delta[sectionName] === "object" ? delta[sectionName] : {};
+      const upserts = Array.isArray(section.upserts) ? section.upserts : [];
+      const removals = Array.isArray(section.removals) ? section.removals : [];
+      if (!upserts.length && !removals.length) return;
+      const current = Array.isArray(state[sectionName]) ? state[sectionName] : [];
+      const map = new Map();
+      current.forEach((entry) => {
+        if (!entry || typeof entry !== "object") return;
+        if (removalsAreCells){
+          map.set(`${Number(entry.col)},${Number(entry.row)}`, entry);
+          return;
+        }
+        const id = String(entry[idKey] ?? "");
+        if (!id) return;
+        map.set(id, entry);
+      });
+      upserts.forEach((entry) => {
+        if (!entry || typeof entry !== "object") return;
+        if (removalsAreCells){
+          map.set(`${Number(entry.col)},${Number(entry.row)}`, entry);
+          return;
+        }
+        const id = String(entry[idKey] ?? "");
+        if (!id) return;
+        map.set(id, entry);
+      });
+      removals.forEach((entry) => {
+        if (removalsAreCells){
+          if (!entry || typeof entry !== "object") return;
+          map.delete(`${Number(entry.col)},${Number(entry.row)}`);
+          return;
+        }
+        map.delete(String(entry ?? ""));
+      });
+      state[sectionName] = Array.from(map.values());
+      tacticalEntityChanged = true;
+    };
+    applyEntityDelta("features", "id");
+    applyEntityDelta("hazards", "id");
+    applyEntityDelta("structures", "id");
+    applyEntityDelta("elevation_cells", "col,row", true);
+    if (tacticalEntityChanged){
+      invalidateMovementRangeCache();
     }
   }
 
@@ -10634,6 +10661,10 @@ __DAMAGE_TYPE_OPTIONS__
             unit,
             roughMap,
             obstacleSet,
+            Array.isArray(state?.features) ? state.features : [],
+            Array.isArray(state?.hazards) ? state.hazards : [],
+            Array.isArray(state?.structures) ? state.structures : [],
+            Array.isArray(state?.elevation_cells) ? state.elevation_cells : [],
             state.grid.cols,
             state.grid.rows,
             feetPerSquare,
@@ -12847,7 +12878,7 @@ __DAMAGE_TYPE_OPTIONS__
     return set;
   }
 
-  function movementCostMap(startCol, startRow, maxFt, unit, roughMap, obstacles, cols, rows, feetPerSquare){
+  function movementCostMap(startCol, startRow, maxFt, unit, roughMap, obstacles, features, hazards, structures, elevationCells, cols, rows, feetPerSquare){
     const step = Number(feetPerSquare) || 5;
     const diag5 = step;
     const diag10 = step * 2;
@@ -12861,6 +12892,56 @@ __DAMAGE_TYPE_OPTIONS__
     if (mode === "normal" && landSpeed > 0 && swimSpeed > 0){
       waterMultiplier = landSpeed / swimSpeed;
     }
+
+    const blockedCells = new Set();
+    const hazardMultiplierByCell = new Map();
+    const elevationByCell = new Map();
+    const addEntityCells = (entry, callback) => {
+      if (!entry || typeof entry !== "object") return;
+      const payload = (entry.payload && typeof entry.payload === "object") ? entry.payload : {};
+      const occupied = Array.isArray(payload.occupied_cells) ? payload.occupied_cells : [];
+      if (occupied.length){
+        occupied.forEach((cell) => {
+          const col = Number(cell?.col);
+          const row = Number(cell?.row);
+          if (!Number.isFinite(col) || !Number.isFinite(row)) return;
+          callback(Math.trunc(col), Math.trunc(row), payload);
+        });
+        return;
+      }
+      const col = Number(entry.col);
+      const row = Number(entry.row);
+      if (!Number.isFinite(col) || !Number.isFinite(row)) return;
+      callback(Math.trunc(col), Math.trunc(row), payload);
+    };
+    (Array.isArray(features) ? features : []).forEach((feature) => {
+      addEntityCells(feature, (col, row, payload) => {
+        if (payload.blocks_movement) blockedCells.add(cellKey(col, row));
+      });
+    });
+    (Array.isArray(structures) ? structures : []).forEach((structure) => {
+      addEntityCells(structure, (col, row, payload) => {
+        if (payload.blocks_movement !== false) blockedCells.add(cellKey(col, row));
+      });
+    });
+    (Array.isArray(hazards) ? hazards : []).forEach((hazard) => {
+      addEntityCells(hazard, (col, row, payload) => {
+        if (payload.blocks_movement) blockedCells.add(cellKey(col, row));
+        const multiplier = Number(payload.movement_multiplier ?? 1);
+        if (Number.isFinite(multiplier) && multiplier > 0 && multiplier !== 1){
+          const key = cellKey(col, row);
+          const current = Number(hazardMultiplierByCell.get(key) || 1);
+          hazardMultiplierByCell.set(key, current * multiplier);
+        }
+      });
+    });
+    (Array.isArray(elevationCells) ? elevationCells : []).forEach((cell) => {
+      const col = Number(cell?.col);
+      const row = Number(cell?.row);
+      const elevation = Number(cell?.elevation ?? 0);
+      if (!Number.isFinite(col) || !Number.isFinite(row) || !Number.isFinite(elevation)) return;
+      elevationByCell.set(cellKey(Math.trunc(col), Math.trunc(row)), elevation);
+    });
 
     function inBounds(col, row){
       return col >= 0 && row >= 0 && col < cols && row < rows;
@@ -12927,9 +13008,14 @@ __DAMAGE_TYPE_OPTIONS__
         const nc = col + dc;
         const nr = row + dr;
         if (!inBounds(nc, nr)) continue;
-        if (obstacles.has(cellKey(nc, nr))) continue;
+        if (obstacles.has(cellKey(nc, nr)) || blockedCells.has(cellKey(nc, nr))) continue;
         if (isDiag){
-          if (obstacles.has(cellKey(col + dc, row)) || obstacles.has(cellKey(col, row + dr))){
+          if (
+            obstacles.has(cellKey(col + dc, row))
+            || obstacles.has(cellKey(col, row + dr))
+            || blockedCells.has(cellKey(col + dc, row))
+            || blockedCells.has(cellKey(col, row + dr))
+          ){
             continue;
           }
         }
@@ -12955,6 +13041,18 @@ __DAMAGE_TYPE_OPTIONS__
           }
           if (targetCell.is_rough){
             stepCost *= 2;
+          }
+        }
+        const hazardMultiplier = Number(hazardMultiplierByCell.get(cellKey(nc, nr)) || 1);
+        if (Number.isFinite(hazardMultiplier) && hazardMultiplier > 0){
+          stepCost = Math.ceil(stepCost * hazardMultiplier);
+        }
+        const fromElevation = Number(elevationByCell.get(cellKey(col, row)) || 0);
+        const toElevation = Number(elevationByCell.get(cellKey(nc, nr)) || 0);
+        if (Number.isFinite(fromElevation) && Number.isFinite(toElevation)){
+          const elevationDelta = Math.abs(toElevation - fromElevation);
+          if (elevationDelta > 0){
+            stepCost += Math.ceil((elevationDelta / Math.max(1, Number(feetPerSquare || 5))) * step);
           }
         }
 
@@ -13357,6 +13455,88 @@ __DAMAGE_TYPE_OPTIONS__
         const y = panY + o.row*zoom;
         ctx.fillRect(x+1,y+1,zoom-2,zoom-2);
       });
+    }
+
+    const entityCells = (entry) => {
+      const payload = (entry && typeof entry.payload === "object" && entry.payload) ? entry.payload : {};
+      const occupied = Array.isArray(payload.occupied_cells) ? payload.occupied_cells : [];
+      if (occupied.length){
+        return occupied
+          .map((cell) => ({col:Number(cell?.col), row:Number(cell?.row)}))
+          .filter((cell) => Number.isFinite(cell.col) && Number.isFinite(cell.row));
+      }
+      const col = Number(entry?.col);
+      const row = Number(entry?.row);
+      if (!Number.isFinite(col) || !Number.isFinite(row)) return [];
+      return [{col, row}];
+    };
+
+    if (Array.isArray(state.structures)){
+      ctx.save();
+      ctx.strokeStyle = "rgba(225,188,124,0.9)";
+      ctx.lineWidth = Math.max(1, zoom * 0.08);
+      ctx.setLineDash([4,3]);
+      state.structures.forEach((structure) => {
+        entityCells(structure).forEach((cell) => {
+          const x = panX + cell.col * zoom;
+          const y = panY + cell.row * zoom;
+          ctx.strokeRect(x + 1, y + 1, zoom - 2, zoom - 2);
+        });
+      });
+      ctx.restore();
+    }
+
+    if (Array.isArray(state.features)){
+      ctx.save();
+      state.features.forEach((feature) => {
+        entityCells(feature).forEach((cell) => {
+          const x = panX + (cell.col + 0.5) * zoom;
+          const y = panY + (cell.row + 0.5) * zoom;
+          const radius = Math.max(3, zoom * 0.18);
+          ctx.beginPath();
+          ctx.fillStyle = "rgba(233,145,55,0.95)";
+          ctx.strokeStyle = "rgba(99,54,12,0.95)";
+          ctx.lineWidth = 1;
+          ctx.arc(x, y, radius, 0, Math.PI * 2);
+          ctx.fill();
+          ctx.stroke();
+        });
+      });
+      ctx.restore();
+    }
+
+    if (Array.isArray(state.hazards)){
+      ctx.save();
+      state.hazards.forEach((hazard) => {
+        entityCells(hazard).forEach((cell) => {
+          const x = panX + cell.col * zoom;
+          const y = panY + cell.row * zoom;
+          ctx.fillStyle = "rgba(255,96,96,0.28)";
+          ctx.strokeStyle = "rgba(186,34,34,0.75)";
+          ctx.lineWidth = 1;
+          ctx.fillRect(x + 1, y + 1, zoom - 2, zoom - 2);
+          ctx.strokeRect(x + 1, y + 1, zoom - 2, zoom - 2);
+        });
+      });
+      ctx.restore();
+    }
+
+    if (Array.isArray(state.elevation_cells)){
+      ctx.save();
+      ctx.fillStyle = "rgba(128,172,255,0.9)";
+      ctx.font = `${Math.max(9, Math.floor(zoom * 0.28))}px system-ui`;
+      state.elevation_cells.forEach((cell) => {
+        const col = Number(cell?.col);
+        const row = Number(cell?.row);
+        const elevation = Number(cell?.elevation ?? 0);
+        if (!Number.isFinite(col) || !Number.isFinite(row) || !Number.isFinite(elevation) || Math.abs(elevation) < 0.001){
+          return;
+        }
+        const x = panX + col * zoom + 3;
+        const y = panY + row * zoom + Math.max(10, zoom * 0.32);
+        ctx.fillText(String(Math.round(elevation)), x, y);
+      });
+      ctx.restore();
     }
 
     // AoE overlays
@@ -15940,6 +16120,10 @@ __DAMAGE_TYPE_OPTIONS__
         const oldMapState = state?.map_state;
         const oldTerrain = state?.rough_terrain;
         const oldObstacles = state?.obstacles;
+        const oldFeatures = state?.features;
+        const oldHazards = state?.hazards;
+        const oldStructures = state?.structures;
+        const oldElevation = state?.elevation_cells;
         state = (msg.state && typeof msg.state === "object") ? msg.state : {};
         // Preserve static data from previous state if not in new message
         // Only preserve if old values exist and new values are undefined (not just missing)
@@ -15969,6 +16153,18 @@ __DAMAGE_TYPE_OPTIONS__
         }
         if (!state.obstacles && Array.isArray(oldObstacles)){
           state.obstacles = oldObstacles;
+        }
+        if (!state.features && Array.isArray(oldFeatures)){
+          state.features = oldFeatures;
+        }
+        if (!state.hazards && Array.isArray(oldHazards)){
+          state.hazards = oldHazards;
+        }
+        if (!state.structures && Array.isArray(oldStructures)){
+          state.structures = oldStructures;
+        }
+        if (!state.elevation_cells && Array.isArray(oldElevation)){
+          state.elevation_cells = oldElevation;
         }
         let movementTerrainChanged = false;
         if (state.rough_terrain !== oldTerrain){

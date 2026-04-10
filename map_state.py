@@ -44,6 +44,33 @@ def _string_to_cell_key(raw: Any) -> Optional[CellKey]:
     return None
 
 
+def _normalize_cell_list(raw_cells: Any) -> List[CellKey]:
+    cells: List[CellKey] = []
+    for raw in raw_cells if isinstance(raw_cells, list) else []:
+        key = None
+        if isinstance(raw, dict):
+            key = (_normalize_int(raw.get("col")), _normalize_int(raw.get("row")))
+        else:
+            key = _string_to_cell_key(raw)
+        if key is None:
+            continue
+        cells.append((int(key[0]), int(key[1])))
+    return cells
+
+
+def _entity_cells(col: int, row: int, payload: Any) -> List[CellKey]:
+    base = (int(col), int(row))
+    if not isinstance(payload, dict):
+        return [base]
+    cells = _normalize_cell_list(payload.get("occupied_cells"))
+    if cells:
+        return cells
+    footprint = _normalize_cell_list(payload.get("footprint"))
+    if footprint:
+        return footprint
+    return [base]
+
+
 @dataclass
 class GridSpec:
     cols: int = 20
@@ -547,11 +574,19 @@ class MapQueryAPI:
 
     def features_at(self, col: int, row: int) -> List[MapFeature]:
         key = (int(col), int(row))
-        return [item for item in self.state.features.values() if (item.col, item.row) == key]
+        found: List[MapFeature] = []
+        for item in self.state.features.values():
+            if key in _entity_cells(item.col, item.row, item.payload):
+                found.append(item)
+        return found
 
     def hazards_at(self, col: int, row: int) -> List[MapHazard]:
         key = (int(col), int(row))
-        return [item for item in self.state.hazards.values() if (item.col, item.row) == key]
+        found: List[MapHazard] = []
+        for item in self.state.hazards.values():
+            if key in _entity_cells(item.col, item.row, item.payload):
+                found.append(item)
+        return found
 
     def structures_at(self, col: int, row: int) -> List[MapStructure]:
         key = (int(col), int(row))
@@ -566,7 +601,22 @@ class MapQueryAPI:
         return float(cell.elevation) if cell is not None else 0.0
 
     def blocks_movement(self, col: int, row: int) -> bool:
-        return (int(col), int(row)) in self.state.obstacles
+        key = (int(col), int(row))
+        if key in self.state.obstacles:
+            return True
+        for feature in self.features_at(col, row):
+            payload = feature.payload if isinstance(feature.payload, dict) else {}
+            if bool(payload.get("blocks_movement")):
+                return True
+        for structure in self.structures_at(col, row):
+            payload = structure.payload if isinstance(structure.payload, dict) else {}
+            if bool(payload.get("blocks_movement")):
+                return True
+        for hazard in self.hazards_at(col, row):
+            payload = hazard.payload if isinstance(hazard.payload, dict) else {}
+            if bool(payload.get("blocks_movement")):
+                return True
+        return False
 
     def movement_cost_for_step(self, from_col: int, from_row: int, to_col: int, to_row: int, base_cost: int) -> int:
         if self.blocks_movement(to_col, to_row):
@@ -575,7 +625,31 @@ class MapQueryAPI:
         cost = int(base_cost)
         if bool(target.is_rough):
             cost *= 2
+        for hazard in self.hazards_at(to_col, to_row):
+            payload = hazard.payload if isinstance(hazard.payload, dict) else {}
+            try:
+                multiplier = float(payload.get("movement_multiplier", 1.0) or 1.0)
+            except Exception:
+                multiplier = 1.0
+            if multiplier > 0:
+                cost = int(max(1, round(float(cost) * multiplier)))
+        try:
+            from_elev = float(self.elevation_at(from_col, from_row))
+            to_elev = float(self.elevation_at(to_col, to_row))
+            delta = abs(to_elev - from_elev)
+            if delta > 0.0:
+                step_unit = float(self.state.grid.feet_per_square or 5.0)
+                climb_penalty = int(round((delta / max(1.0, step_unit)) * max(1, int(base_cost))))
+                cost += max(0, climb_penalty)
+        except Exception:
+            pass
         return max(1, int(cost))
+
+    def vertical_distance(self, from_col: int, from_row: int, to_col: int, to_row: int) -> float:
+        dx = float(to_col) - float(from_col)
+        dy = float(to_row) - float(from_row)
+        dz = float(self.elevation_at(to_col, to_row)) - float(self.elevation_at(from_col, from_row))
+        return (dx * dx + dy * dy + dz * dz) ** 0.5
 
     def traversal_state_for_unit(self, col: int, row: int) -> Dict[str, Any]:
         key = (int(col), int(row))
