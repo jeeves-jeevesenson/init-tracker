@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass, field
 from typing import Any, Dict, Iterable, List, Optional, Tuple
 
@@ -592,9 +593,31 @@ class MapQueryAPI:
         key = (int(col), int(row))
         found: List[MapStructure] = []
         for item in self.state.structures.values():
-            if key == (item.anchor_col, item.anchor_row) or key in set(item.occupied_cells):
+            if key in self.structure_cells(item):
                 found.append(item)
         return found
+
+    def structure_cells(self, structure: Any) -> set[CellKey]:
+        if isinstance(structure, MapStructure):
+            item = structure
+        elif isinstance(structure, str):
+            item = (self.state.structures or {}).get(str(structure))
+        else:
+            item = None
+        if not isinstance(item, MapStructure):
+            return set()
+        cells = {(int(item.anchor_col), int(item.anchor_row))}
+        for col, row in list(item.occupied_cells or []):
+            cells.add((int(col), int(row)))
+        return cells
+
+    def structure_world_cells_for_anchor(self, structure_id: Any, anchor_col: int, anchor_row: int) -> set[CellKey]:
+        item = (self.state.structures or {}).get(str(structure_id or ""))
+        if not isinstance(item, MapStructure):
+            return set()
+        dc = int(anchor_col) - int(item.anchor_col)
+        dr = int(anchor_row) - int(item.anchor_row)
+        return {(col + dc, row + dr) for col, row in self.structure_cells(item)}
 
     def elevation_at(self, col: int, row: int) -> float:
         cell = self.state.elevation_cells.get((int(col), int(row)))
@@ -618,8 +641,99 @@ class MapQueryAPI:
                 return True
         return False
 
+    def _cell_tags(self, col: int, row: int) -> set[str]:
+        tags: set[str] = set()
+        for item in self.features_at(col, row):
+            payload = item.payload if isinstance(item.payload, dict) else {}
+            for raw in payload.get("tags") if isinstance(payload.get("tags"), list) else []:
+                text = str(raw or "").strip().lower()
+                if text:
+                    tags.add(text)
+            kind = str(item.kind or "").strip().lower()
+            if kind:
+                tags.add(kind)
+        for item in self.structures_at(col, row):
+            payload = item.payload if isinstance(item.payload, dict) else {}
+            for raw in payload.get("tags") if isinstance(payload.get("tags"), list) else []:
+                text = str(raw or "").strip().lower()
+                if text:
+                    tags.add(text)
+            kind = str(item.kind or "").strip().lower()
+            if kind:
+                tags.add(kind)
+        return tags
+
+    def _cell_climb_cap(self, col: int, row: int) -> Optional[float]:
+        candidates: List[float] = []
+        for item in self.features_at(col, row):
+            payload = item.payload if isinstance(item.payload, dict) else {}
+            for key in ("max_climb_delta", "max_step_height", "climb_delta_ft"):
+                if payload.get(key) is None:
+                    continue
+                try:
+                    candidates.append(float(payload.get(key)))
+                except Exception:
+                    continue
+        for item in self.structures_at(col, row):
+            payload = item.payload if isinstance(item.payload, dict) else {}
+            for key in ("max_climb_delta", "max_step_height", "climb_delta_ft"):
+                if payload.get(key) is None:
+                    continue
+                try:
+                    candidates.append(float(payload.get(key)))
+                except Exception:
+                    continue
+        if not candidates:
+            return None
+        return max(0.0, max(candidates))
+
+    def climbable_transition(self, from_col: int, from_row: int, to_col: int, to_row: int) -> Dict[str, Any]:
+        from_elevation = float(self.elevation_at(from_col, from_row))
+        to_elevation = float(self.elevation_at(to_col, to_row))
+        delta = abs(to_elevation - from_elevation)
+        feet_per_square = max(1.0, float(self.state.grid.feet_per_square or 5.0))
+        from_tags = self._cell_tags(from_col, from_row)
+        to_tags = self._cell_tags(to_col, to_row)
+        tags = from_tags | to_tags
+        climbable = bool(
+            tags.intersection(
+                {
+                    "climbable",
+                    "ladder",
+                    "stairs",
+                    "stair",
+                    "ramp",
+                    "gangplank",
+                    "bridge",
+                    "boarding_bridge",
+                }
+            )
+        )
+        strict_transition = bool("requires_climb_transition" in tags or "cliff" in tags or "mast" in tags)
+        cap_candidates = [feet_per_square]
+        local_cap = self._cell_climb_cap(from_col, from_row)
+        if local_cap is not None:
+            cap_candidates.append(local_cap)
+        local_cap = self._cell_climb_cap(to_col, to_row)
+        if local_cap is not None:
+            cap_candidates.append(local_cap)
+        max_step_without_climb = max(0.0, max(cap_candidates))
+        blocked = bool(strict_transition and delta > max_step_without_climb and not climbable)
+        return {
+            "from": {"col": int(from_col), "row": int(from_row), "elevation": from_elevation},
+            "to": {"col": int(to_col), "row": int(to_row), "elevation": to_elevation},
+            "delta": delta,
+            "climbable": climbable,
+            "strict_transition": strict_transition,
+            "max_step_without_climb": max_step_without_climb,
+            "blocked": blocked,
+        }
+
     def movement_cost_for_step(self, from_col: int, from_row: int, to_col: int, to_row: int, base_cost: int) -> int:
         if self.blocks_movement(to_col, to_row):
+            return INFINITE_MOVEMENT_COST
+        transition = self.climbable_transition(from_col, from_row, to_col, to_row)
+        if bool(transition.get("blocked")):
             return INFINITE_MOVEMENT_COST
         target = self.terrain_at(to_col, to_row)
         cost = int(base_cost)
@@ -640,6 +754,8 @@ class MapQueryAPI:
             if delta > 0.0:
                 step_unit = float(self.state.grid.feet_per_square or 5.0)
                 climb_penalty = int(round((delta / max(1.0, step_unit)) * max(1, int(base_cost))))
+                if bool(transition.get("climbable")) and climb_penalty > 0:
+                    climb_penalty = int(math.ceil(climb_penalty * 0.5))
                 cost += max(0, climb_penalty)
         except Exception:
             pass
@@ -664,6 +780,139 @@ class MapQueryAPI:
             "elevation": self.elevation_at(col, row),
             "occupied_by": [int(cid) for cid, pos in self.state.token_positions.items() if tuple(pos) == key],
         }
+
+    def structure_move_blockers(self, structure_id: Any, delta_col: int, delta_row: int) -> Dict[str, Any]:
+        sid = str(structure_id or "").strip()
+        if not sid:
+            return {"ok": False, "reason": "missing_structure_id", "target_cells": []}
+        structure = (self.state.structures or {}).get(sid)
+        if not isinstance(structure, MapStructure):
+            return {"ok": False, "reason": "structure_not_found", "target_cells": []}
+        current_cells = self.structure_cells(structure)
+        target_cells = {(int(col) + int(delta_col), int(row) + int(delta_row)) for col, row in current_cells}
+        cols = int(self.state.grid.cols)
+        rows = int(self.state.grid.rows)
+        out_of_bounds = sorted((col, row) for col, row in target_cells if col < 0 or row < 0 or col >= cols or row >= rows)
+        obstacle_hits = sorted((col, row) for col, row in target_cells if (col, row) in self.state.obstacles)
+        blocking_features: List[Dict[str, Any]] = []
+        blocking_structures: List[Dict[str, Any]] = []
+        blocking_hazards: List[Dict[str, Any]] = []
+        for col, row in sorted(target_cells):
+            for feature in self.features_at(col, row):
+                if str(feature.feature_id) == sid:
+                    continue
+                payload = feature.payload if isinstance(feature.payload, dict) else {}
+                attached_sid = str(payload.get("attached_structure_id") or "").strip()
+                if attached_sid == sid:
+                    continue
+                if bool(payload.get("blocks_structure_movement")) or bool(payload.get("blocks_movement")):
+                    blocking_features.append({"id": str(feature.feature_id), "cell": {"col": int(col), "row": int(row)}})
+            for hazard in self.hazards_at(col, row):
+                payload = hazard.payload if isinstance(hazard.payload, dict) else {}
+                if bool(payload.get("blocks_structure_movement")):
+                    blocking_hazards.append({"id": str(hazard.hazard_id), "cell": {"col": int(col), "row": int(row)}})
+            for other in self.structures_at(col, row):
+                if str(other.structure_id) == sid:
+                    continue
+                blocking_structures.append({"id": str(other.structure_id), "cell": {"col": int(col), "row": int(row)}})
+        blockers = {
+            "out_of_bounds": [{"col": int(col), "row": int(row)} for col, row in out_of_bounds],
+            "obstacles": [{"col": int(col), "row": int(row)} for col, row in obstacle_hits],
+            "features": blocking_features,
+            "structures": blocking_structures,
+            "hazards": blocking_hazards,
+        }
+        has_blockers = any(bool(value) for value in blockers.values())
+        return {
+            "ok": not has_blockers,
+            "structure_id": sid,
+            "delta": {"col": int(delta_col), "row": int(delta_row)},
+            "target_cells": [{"col": int(col), "row": int(row)} for col, row in sorted(target_cells)],
+            "blockers": blockers,
+        }
+
+    def adjacent_structures(self, structure_id: Any, *, include_diagonal: bool = True) -> List[MapStructure]:
+        sid = str(structure_id or "").strip()
+        source = (self.state.structures or {}).get(sid)
+        if not isinstance(source, MapStructure):
+            return []
+        source_cells = self.structure_cells(source)
+        found: Dict[str, MapStructure] = {}
+        for other in self.state.structures.values():
+            if str(other.structure_id) == sid:
+                continue
+            other_cells = self.structure_cells(other)
+            adjacent = False
+            for col, row in source_cells:
+                for ocol, orow in other_cells:
+                    dc = abs(int(col) - int(ocol))
+                    dr = abs(int(row) - int(orow))
+                    if include_diagonal:
+                        if max(dc, dr) == 1:
+                            adjacent = True
+                            break
+                    elif dc + dr == 1:
+                        adjacent = True
+                        break
+                if adjacent:
+                    break
+            if adjacent:
+                found[str(other.structure_id)] = other
+        return list(found.values())
+
+    def structure_contacts(self, structure_id: Any) -> List[Dict[str, Any]]:
+        sid = str(structure_id or "").strip()
+        source = (self.state.structures or {}).get(sid)
+        if not isinstance(source, MapStructure):
+            return []
+        source_cells = self.structure_cells(source)
+        relations: List[Dict[str, Any]] = []
+        for other in self.state.structures.values():
+            oid = str(other.structure_id)
+            if oid == sid:
+                continue
+            other_cells = self.structure_cells(other)
+            shared = sorted(source_cells & other_cells)
+            edge_touch: set[CellKey] = set()
+            corner_touch: set[CellKey] = set()
+            for col, row in source_cells:
+                for ocol, orow in other_cells:
+                    dc = abs(int(col) - int(ocol))
+                    dr = abs(int(row) - int(orow))
+                    if dc + dr == 1:
+                        edge_touch.add((int(col), int(row)))
+                    elif max(dc, dr) == 1:
+                        corner_touch.add((int(col), int(row)))
+            if not shared and not edge_touch and not corner_touch:
+                continue
+            source_payload = source.payload if isinstance(source.payload, dict) else {}
+            other_payload = other.payload if isinstance(other.payload, dict) else {}
+            boardable = bool(
+                shared
+                or source_payload.get("boardable")
+                or other_payload.get("boardable")
+                or source_payload.get("allow_boarding")
+                or other_payload.get("allow_boarding")
+                or source_payload.get("has_gangplank")
+                or other_payload.get("has_gangplank")
+            )
+            relations.append(
+                {
+                    "source_id": sid,
+                    "target_id": oid,
+                    "shared_cells": [{"col": int(col), "row": int(row)} for col, row in shared],
+                    "touching_edges": [{"col": int(col), "row": int(row)} for col, row in sorted(edge_touch)],
+                    "touching_corners": [{"col": int(col), "row": int(row)} for col, row in sorted(corner_touch - edge_touch)],
+                    "adjacent": bool(edge_touch or corner_touch),
+                    "contact": bool(shared or edge_touch),
+                    "boardable": boardable,
+                }
+            )
+        relations.sort(key=lambda item: str(item.get("target_id") or ""))
+        return relations
+
+    def boardable_structure_ids(self, structure_id: Any) -> List[str]:
+        return [str(item.get("target_id") or "") for item in self.structure_contacts(structure_id) if bool(item.get("boardable"))]
 
 
 def build_map_delta(prev: MapState, curr: MapState) -> Dict[str, Any]:

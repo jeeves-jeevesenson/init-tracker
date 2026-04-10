@@ -7970,6 +7970,7 @@ class BattleMapWindow(tk.Toplevel):
     def _apply_tactical_author_to_selected_cell(self) -> None:
         cell = self._map_author_selected_cell
         if cell is None:
+            messagebox.showinfo("Tactical Entities", "Select a map cell first.", parent=self)
             return
         col, row = int(cell[0]), int(cell[1])
         mode = str(self.map_author_mode_var.get() or "off").strip().lower()
@@ -7988,7 +7989,8 @@ class BattleMapWindow(tk.Toplevel):
             try:
                 duration = int(duration_raw)
             except Exception:
-                duration = 0
+                messagebox.showerror("Tactical Entities", "Duration must be an integer.", parent=self)
+                return
             if duration > 0:
                 payload["duration_turns"] = duration
                 payload["remaining_turns"] = duration
@@ -8016,7 +8018,8 @@ class BattleMapWindow(tk.Toplevel):
             try:
                 elevation = float(duration_raw)
             except Exception:
-                elevation = 0.0
+                messagebox.showerror("Tactical Entities", "Elevation must be numeric.", parent=self)
+                return
             self.app._set_map_elevation(col, row, elevation)
             if abs(elevation) < 1e-9:
                 self.map_elevation_cells.pop((col, row), None)
@@ -8070,9 +8073,11 @@ class BattleMapWindow(tk.Toplevel):
         self._redraw_all()
 
     def _resolve_environment_turn(self) -> None:
+        result = {}
         try:
-            self.app._resolve_map_environment_event({"type": "tick_hazards"})
+            result = self.app._resolve_map_environment_event({"type": "tick_hazards"})
         except Exception:
+            messagebox.showerror("Environment", "Failed to resolve environment tick.", parent=self)
             return
         try:
             state = self.app._capture_canonical_map_state(prefer_window=False)
@@ -8080,10 +8085,19 @@ class BattleMapWindow(tk.Toplevel):
         except Exception:
             pass
         self._redraw_all()
+        ignited = list(result.get("ignited_feature_ids") if isinstance(result, dict) else []) if isinstance(result, dict) else []
+        expired = list(result.get("expired_hazard_ids") if isinstance(result, dict) else []) if isinstance(result, dict) else []
+        if ignited or expired:
+            messagebox.showinfo(
+                "Environment",
+                f"Resolved hazards.\nIgnited features: {len(ignited)}\nExpired hazards: {len(expired)}",
+                parent=self,
+            )
 
     def _move_structure_from_selected_cell(self) -> None:
         cell = self._map_author_selected_cell
         if cell is None:
+            messagebox.showinfo("Move Structure", "Select a structure cell first.", parent=self)
             return
         col, row = int(cell[0]), int(cell[1])
         target_structure_id = None
@@ -8103,6 +8117,7 @@ class BattleMapWindow(tk.Toplevel):
                 target_structure_id = str(sid)
                 break
         if not target_structure_id:
+            messagebox.showinfo("Move Structure", "No structure at selected cell.", parent=self)
             return
         raw = simpledialog.askstring(
             "Move Structure",
@@ -8114,11 +8129,13 @@ class BattleMapWindow(tk.Toplevel):
             return
         parts = [part.strip() for part in str(raw).split(",")]
         if len(parts) != 2:
+            messagebox.showerror("Move Structure", "Enter movement as dc,dr (example: 1,0).", parent=self)
             return
         try:
             dc = int(parts[0])
             dr = int(parts[1])
         except Exception:
+            messagebox.showerror("Move Structure", "Movement delta must be integers.", parent=self)
             return
         moved = False
         try:
@@ -8126,6 +8143,17 @@ class BattleMapWindow(tk.Toplevel):
         except Exception:
             moved = False
         if not moved:
+            reason = str(getattr(self.app, "_last_map_structure_move_error", "") or "blocked")
+            blockers = getattr(self.app, "_last_map_structure_move_blockers", {}) or {}
+            blocker_lines = []
+            if isinstance(blockers, dict):
+                payload = blockers.get("blockers") if isinstance(blockers.get("blockers"), dict) else {}
+                for key in ("out_of_bounds", "obstacles", "features", "structures", "hazards"):
+                    entries = payload.get(key) if isinstance(payload, dict) else []
+                    if entries:
+                        blocker_lines.append(f"{key}: {len(entries)}")
+            detail = f"\nBlockers: {', '.join(blocker_lines)}" if blocker_lines else ""
+            messagebox.showerror("Move Structure", f"Move rejected ({reason}).{detail}", parent=self)
             return
         try:
             self._apply_canonical_map_layers_from_state(self.app._capture_canonical_map_state(prefer_window=False))
@@ -8154,9 +8182,11 @@ class BattleMapWindow(tk.Toplevel):
     def _save_template_from_selected_structure(self) -> None:
         cell = self._map_author_selected_cell
         if cell is None:
+            messagebox.showinfo("Structure Template", "Select a structure cell first.", parent=self)
             return
         sid = self._selected_structure_id_at_cell(int(cell[0]), int(cell[1]))
         if not sid:
+            messagebox.showinfo("Structure Template", "No structure at selected cell.", parent=self)
             return
         structure = self.map_structures.get(sid) if isinstance(self.map_structures.get(sid), dict) else {}
         template_id = simpledialog.askstring("Save Structure Template", "Template id:", parent=self)
@@ -8208,11 +8238,17 @@ class BattleMapWindow(tk.Toplevel):
         try:
             self.app._save_structure_template(str(template_id).strip(), template_payload)
         except Exception:
+            messagebox.showerror(
+                "Structure Template",
+                str(getattr(self.app, "_last_map_template_error", "") or "Failed to save template."),
+                parent=self,
+            )
             return
 
     def _place_template_at_selected_cell(self) -> None:
         cell = self._map_author_selected_cell
         if cell is None:
+            messagebox.showinfo("Structure Template", "Select a placement cell first.", parent=self)
             return
         templates = {}
         try:
@@ -8220,6 +8256,7 @@ class BattleMapWindow(tk.Toplevel):
         except Exception:
             templates = {}
         if not isinstance(templates, dict) or not templates:
+            messagebox.showinfo("Structure Template", "No templates available.", parent=self)
             return
         ids = sorted(str(key) for key in templates.keys())
         choice = simpledialog.askstring(
@@ -8239,6 +8276,11 @@ class BattleMapWindow(tk.Toplevel):
         except Exception:
             created = None
         if not created:
+            messagebox.showerror(
+                "Structure Template",
+                str(getattr(self.app, "_last_map_template_error", "") or "Template placement failed."),
+                parent=self,
+            )
             return
         try:
             self._apply_canonical_map_layers_from_state(self.app._capture_canonical_map_state(prefer_window=False))
