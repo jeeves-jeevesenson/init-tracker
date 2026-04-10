@@ -21,11 +21,27 @@ This repository is a Python desktop app (Tkinter) for the DM plus an optional LA
 
 - Stay scoped to the user request.
 - Prefer local repo evidence over generic theory.
-- Keep changes small, targeted, and easy to review.
-- Avoid unrelated churn or opportunistic refactors.
-- If the request is planning/analysis only, do not force implementation.
+- Preserve repo conventions and existing architecture unless change is required by scope.
+- Use standard Unix tools for discovery and prefer `rg` for recursive search.
 
-Use standard Unix tools for discovery and prefer `grep -R` for recursive search.
+### Implementation-mode default (important)
+
+For implementation-ready prompts, the default flow is:
+**inspect relevant files → implement scoped changes → run focused validation → report results**.
+
+Do this in one coherent pass unless the user explicitly asks for staged approvals.
+
+---
+
+## Anti-waste and anti-loop rules
+
+- Do **not** ask the user to restate requirements already present in-thread.
+- Do **not** spend turns paraphrasing prompt text unless there is true ambiguity.
+- Do **not** default to planning-only output when implementation was requested and tools are available.
+- Do **not** speculate about missing tools; first verify capability from environment or attempt the required operation.
+- Do **not** fragment scoped implementation into repeated confirmation loops unless blocked by real ambiguity/risk.
+
+Large multi-file diffs are acceptable when they are the correct scoped solution and grounded in repo evidence.
 
 ---
 
@@ -38,6 +54,8 @@ Use standard Unix tools for discovery and prefer `grep -R` for recursive search.
 - Preserve compatibility for saved state/config and YAML schemas unless explicitly requested.
 - Preserve LAN trust boundaries; do not broaden internet exposure unless explicitly requested.
 - Never expose secrets, tokens, credentials, or `.env` values.
+
+These are engineering guardrails. They should shape implementation, not cause avoidable execution stalls.
 
 ---
 
@@ -67,7 +85,7 @@ Minimum check after code edits:
 
 ---
 
-## Anti-waste guidance
+## Efficiency guidance
 
 Unless the task requires it, avoid:
 - broad repository tours when relevant files are already identified
@@ -75,4 +93,4 @@ Unless the task requires it, avoid:
 - full-repo lint/build/test loops before localizing the issue
 - speculative rewrites not tied to user-requested outcomes
 
-If investigation scope is uncertain, identify the minimum next file/path to inspect and continue incrementally.
+If investigation scope is uncertain, identify the minimum next file/path to inspect and continue.
