@@ -167,6 +167,126 @@ class ShopCatalogApiTests(unittest.TestCase):
         self.assertIn("Failed to load shop catalog", response.json().get("detail", ""))
         self.assertIn("catalog broken", response.json().get("detail", ""))
 
+    def _catalog_sample(self):
+        return [
+            {
+                "item_id": "longsword",
+                "item_bucket": "weapon",
+                "name": "Longsword",
+                "type": "weapon",
+                "shop_category": "weapons",
+                "enabled": True,
+                "price": {"gp": 15},
+                "item_tier": "C",
+                "definition_path": "Items/Weapons/longsword.yaml",
+            },
+            {
+                "item_id": "healing_potion",
+                "item_bucket": "consumable",
+                "name": "Healing Potion",
+                "type": "consumable",
+                "shop_category": "consumables",
+                "enabled": True,
+                "price": {"gp": 5},
+                "item_tier": "B",
+                "description": "Restores 2d4+2 HP.",
+                "definition_path": "Items/Consumables/healing_potion.yaml",
+            },
+            {
+                "item_id": "wand_of_sparking",
+                "item_bucket": "magic_item",
+                "name": "Wand of Sparking",
+                "type": "wand",
+                "shop_category": "magic_items",
+                "enabled": True,
+                "price": {"gp": 250},
+                "item_tier": "A",
+                "rarity": "common",
+                "definition_path": "Items/Magic_Items/wand_of_sparking.yaml",
+            },
+            {
+                "item_id": "arrow",
+                "item_bucket": "gear",
+                "name": "Arrow",
+                "type": "gear",
+                "shop_category": "gear",
+                "enabled": True,
+                "price": {"cp": 5},
+                "item_tier": "C",
+                "definition_path": "Items/Gear/arrow.yaml",
+            },
+        ]
+
+    def test_shop_catalog_filter_by_bucket_returns_only_matching_bucket(self):
+        client, lan = self._build_test_client()
+        with mock.patch.object(lan.app, "_load_shop_catalog_normalized", return_value=self._catalog_sample()):
+            response = client.get("/api/shop/catalog?bucket=weapon")
+
+        self.assertEqual(200, response.status_code)
+        entries = response.json().get("entries") or []
+        self.assertEqual(1, len(entries))
+        self.assertEqual("longsword", entries[0]["item_id"])
+
+    def test_shop_catalog_filter_by_category_returns_only_matching_category(self):
+        client, lan = self._build_test_client()
+        with mock.patch.object(lan.app, "_load_shop_catalog_normalized", return_value=self._catalog_sample()):
+            response = client.get("/api/shop/catalog?category=gear")
+
+        self.assertEqual(200, response.status_code)
+        entries = response.json().get("entries") or []
+        self.assertEqual(1, len(entries))
+        self.assertEqual("arrow", entries[0]["item_id"])
+
+    def test_shop_catalog_search_q_filters_by_name(self):
+        client, lan = self._build_test_client()
+        with mock.patch.object(lan.app, "_load_shop_catalog_normalized", return_value=self._catalog_sample()):
+            response = client.get("/api/shop/catalog?q=healing")
+
+        self.assertEqual(200, response.status_code)
+        entries = response.json().get("entries") or []
+        self.assertEqual(1, len(entries))
+        self.assertEqual("healing_potion", entries[0]["item_id"])
+
+    def test_shop_catalog_search_q_filters_by_description(self):
+        client, lan = self._build_test_client()
+        with mock.patch.object(lan.app, "_load_shop_catalog_normalized", return_value=self._catalog_sample()):
+            response = client.get("/api/shop/catalog?q=2d4")
+
+        self.assertEqual(200, response.status_code)
+        entries = response.json().get("entries") or []
+        self.assertEqual(1, len(entries))
+        self.assertEqual("healing_potion", entries[0]["item_id"])
+
+    def test_shop_catalog_filter_by_tier_returns_only_tier_a(self):
+        client, lan = self._build_test_client()
+        with mock.patch.object(lan.app, "_load_shop_catalog_normalized", return_value=self._catalog_sample()):
+            response = client.get("/api/shop/catalog?tier=A")
+
+        self.assertEqual(200, response.status_code)
+        entries = response.json().get("entries") or []
+        self.assertEqual(1, len(entries))
+        self.assertEqual("wand_of_sparking", entries[0]["item_id"])
+
+    def test_shop_catalog_response_includes_total_count(self):
+        client, lan = self._build_test_client()
+        with mock.patch.object(lan.app, "_load_shop_catalog_normalized", return_value=self._catalog_sample()):
+            response = client.get("/api/shop/catalog")
+
+        self.assertEqual(200, response.status_code)
+        payload = response.json()
+        self.assertIn("total", payload)
+        self.assertEqual(4, payload["total"])
+
+    def test_shop_catalog_gear_bucket_entries_are_returned(self):
+        client, lan = self._build_test_client()
+        with mock.patch.object(lan.app, "_load_shop_catalog_normalized", return_value=self._catalog_sample()):
+            response = client.get("/api/shop/catalog?bucket=gear")
+
+        self.assertEqual(200, response.status_code)
+        entries = response.json().get("entries") or []
+        self.assertEqual(1, len(entries))
+        self.assertEqual("gear", entries[0]["item_bucket"])
+
 
 if __name__ == "__main__":
     unittest.main()

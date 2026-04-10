@@ -123,6 +123,20 @@ class ShopPurchaseApiTransactionTests(unittest.TestCase):
             "type": "wondrous",
             "requires_attunement": True,
         })
+        self._write_yaml(items_dir / "Gear" / "arrow.yaml", {
+            "id": "arrow",
+            "name": "Arrow",
+            "type": "gear",
+            "kind": "gear",
+            "stackable": True,
+        })
+        self._write_yaml(items_dir / "Gear" / "rope.yaml", {
+            "id": "rope",
+            "name": "Rope, Hempen (50 feet)",
+            "type": "gear",
+            "kind": "gear",
+            "stackable": False,
+        })
         self._write_yaml(
             items_dir / "Shop" / "catalog.yaml",
             {
@@ -149,6 +163,20 @@ class ShopPurchaseApiTransactionTests(unittest.TestCase):
                         "shop_category": "magic_items",
                         "enabled": True,
                         "price": {"gp": 250},
+                    },
+                    {
+                        "item_id": "arrow",
+                        "item_bucket": "gear",
+                        "shop_category": "gear",
+                        "enabled": True,
+                        "price": {"cp": 5},
+                    },
+                    {
+                        "item_id": "rope",
+                        "item_bucket": "gear",
+                        "shop_category": "gear",
+                        "enabled": True,
+                        "price": {"gp": 1},
                     },
                 ],
             },
@@ -397,6 +425,62 @@ class ShopPurchaseApiTransactionTests(unittest.TestCase):
             self.assertEqual(before_catalog, after_catalog)
             self.assertEqual(before_player, player_path.read_text(encoding="utf-8"))
             self.app._store_character_yaml = original_store
+
+    def test_gear_stackable_purchase_increments_quantity(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            items_dir = self._seed_items(root)
+            player_path = self._seed_player(root, gp=50)
+            self.app._resolve_items_dir = lambda: items_dir
+            self.app._resolve_character_path = lambda _name: player_path
+
+            # First purchase creates a new stack
+            first = self.app._purchase_shop_item_for_player("Alice", {"item_bucket": "gear", "item_id": "arrow", "quantity": 10})
+            self.assertTrue(first.get("ok"))
+            self.assertFalse(first.get("inventory_change", {}).get("stacked"))
+            self.assertEqual(1, len(first.get("inventory_change", {}).get("created_instance_ids") or []))
+
+            # Second purchase stacks onto existing
+            second = self.app._purchase_shop_item_for_player("Alice", {"item_bucket": "gear", "item_id": "arrow", "quantity": 10})
+            self.assertTrue(second.get("ok"))
+            self.assertTrue(second.get("inventory_change", {}).get("stacked"))
+
+            persisted = yaml.safe_load(player_path.read_text(encoding="utf-8"))
+            arrows = [e for e in persisted["inventory"]["items"] if e.get("id") == "arrow"]
+            self.assertEqual(1, len(arrows))
+            self.assertEqual(20, arrows[0]["quantity"])
+
+    def test_gear_non_stackable_purchase_creates_separate_instance(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            items_dir = self._seed_items(root)
+            player_path = self._seed_player(root, gp=50)
+            self.app._resolve_items_dir = lambda: items_dir
+            self.app._resolve_character_path = lambda _name: player_path
+
+            result = self.app._purchase_shop_item_for_player("Alice", {"item_bucket": "gear", "item_id": "rope"})
+
+            self.assertTrue(result.get("ok"))
+            self.assertFalse(result.get("inventory_change", {}).get("stacked"))
+            ids = result.get("inventory_change", {}).get("created_instance_ids") or []
+            self.assertEqual(1, len(ids))
+            persisted = yaml.safe_load(player_path.read_text(encoding="utf-8"))
+            ropes = [e for e in persisted["inventory"]["items"] if e.get("id") == "rope"]
+            self.assertEqual(1, len(ropes))
+
+    def test_gear_non_stackable_quantity_gt_1_is_rejected(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            items_dir = self._seed_items(root)
+            player_path = self._seed_player(root, gp=50)
+            self.app._resolve_items_dir = lambda: items_dir
+            self.app._resolve_character_path = lambda _name: player_path
+
+            with self.assertRaises(tracker_mod.CharacterApiError) as ctx:
+                self.app._purchase_shop_item_for_player("Alice", {"item_bucket": "gear", "item_id": "rope", "quantity": 3})
+
+            self.assertEqual(400, ctx.exception.status_code)
+            self.assertEqual("invalid_purchase", (ctx.exception.detail or {}).get("error"))
 
 
 if __name__ == "__main__":

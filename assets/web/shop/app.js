@@ -6,6 +6,10 @@ const refreshButton = document.getElementById("refresh-button");
 const playerPickerShellEl = document.getElementById("player-picker-shell");
 const playerPickerSelectEl = document.getElementById("player-picker-select");
 const playerPickerLoadButtonEl = document.getElementById("player-picker-load-button");
+const filterSearchEl = document.getElementById("filter-search");
+const filterBucketEl = document.getElementById("filter-bucket");
+const filterTierEl = document.getElementById("filter-tier");
+const filterCountEl = document.getElementById("filter-count");
 
 const REQUIRED_IDS = [
   "shop-status",
@@ -18,6 +22,16 @@ const REQUIRED_IDS = [
   "player-picker-load-button",
 ];
 
+const RARITY_ORDER = ["common", "uncommon", "rare", "very rare", "legendary", "artifact"];
+const RARITY_COLORS = {
+  common: "#94a3b8",
+  uncommon: "#4ade80",
+  rare: "#60a5fa",
+  "very rare": "#c084fc",
+  legendary: "#fb923c",
+  artifact: "#fbbf24",
+};
+
 const state = {
   playerName: "",
   playerResolvedMode: "auto",
@@ -27,6 +41,9 @@ const state = {
   catalog: [],
   inFlightItemKey: "",
   lastLoadHadError: false,
+  filterText: "",
+  filterBucket: "",
+  filterTier: "",
 };
 
 const REFRESH_BUTTON_LABEL = "Refresh";
@@ -158,14 +175,65 @@ const renderHeader = () => {
 
 const itemKey = (entry) => `${entry?.item_bucket || ""}:${entry?.item_id || ""}`;
 
+const filteredCatalog = () => {
+  const text = state.filterText.trim().toLowerCase();
+  const bucket = state.filterBucket;
+  const tier = state.filterTier.toUpperCase();
+  return state.catalog.filter((entry) => {
+    if (bucket && (entry?.item_bucket || "") !== bucket) return false;
+    if (tier && String(entry?.item_tier || "").toUpperCase() !== tier) return false;
+    if (text) {
+      const haystack = [
+        entry?.name || "",
+        entry?.item_id || "",
+        entry?.description || "",
+        entry?.rarity || "",
+        entry?.shop_category || "",
+      ].join(" ").toLowerCase();
+      if (!haystack.includes(text)) return false;
+    }
+    return true;
+  });
+};
+
+const rarityBadge = (rarity) => {
+  if (!rarity) return null;
+  const badge = document.createElement("span");
+  badge.className = "badge badge-rarity";
+  badge.textContent = rarity;
+  const color = RARITY_COLORS[rarity.toLowerCase()] || "#94a3b8";
+  badge.style.setProperty("--badge-color", color);
+  return badge;
+};
+
+const tierBadge = (tier) => {
+  if (!tier) return null;
+  const badge = document.createElement("span");
+  badge.className = `badge badge-tier badge-tier-${tier.toLowerCase()}`;
+  badge.textContent = `Tier ${tier}`;
+  return badge;
+};
+
 const renderCatalog = () => {
+  const visible = filteredCatalog();
+  if (filterCountEl) {
+    filterCountEl.textContent = state.catalog.length
+      ? `${visible.length} / ${state.catalog.length} items`
+      : "";
+  }
+
   if (!state.catalog.length) {
     catalogListEl.innerHTML = "<p class=\"empty-catalog\">No enabled catalog entries found.</p>";
     return;
   }
 
+  if (!visible.length) {
+    catalogListEl.innerHTML = "<p class=\"empty-catalog\">No items match the current filter. Try clearing your search.</p>";
+    return;
+  }
+
   catalogListEl.innerHTML = "";
-  state.catalog.forEach((entry) => {
+  visible.forEach((entry) => {
     const card = document.createElement("article");
     card.className = "card";
 
@@ -185,9 +253,26 @@ const renderCatalog = () => {
           ? `Low stock: ${Math.max(0, stockRemaining)} left`
           : `Stock: ${Math.max(0, stockRemaining)}`;
 
+    const titleRow = document.createElement("div");
+    titleRow.className = "item-title-row";
+
     const title = document.createElement("h3");
     title.className = "item-name";
     title.textContent = String(entry?.name || entry?.item_id || "Unknown item");
+
+    const badgesEl = document.createElement("div");
+    badgesEl.className = "item-badges";
+    const rBadge = rarityBadge(entry?.rarity);
+    if (rBadge) badgesEl.appendChild(rBadge);
+    const tBadge = tierBadge(entry?.item_tier);
+    if (tBadge) badgesEl.appendChild(tBadge);
+    if (entry?.requires_attunement) {
+      const ab = document.createElement("span");
+      ab.className = "badge badge-attunement";
+      ab.textContent = "Attunement";
+      badgesEl.appendChild(ab);
+    }
+    titleRow.append(title, badgesEl);
 
     const price = document.createElement("p");
     price.className = "price";
@@ -241,9 +326,22 @@ const renderCatalog = () => {
     actions.appendChild(buyButton);
 
     card.appendChild(stock);
-    card.appendChild(title);
+    card.appendChild(titleRow);
     card.appendChild(price);
     card.appendChild(actions);
+
+    if (entry?.description) {
+      const descToggle = document.createElement("details");
+      descToggle.className = "item-desc-toggle";
+      const sum = document.createElement("summary");
+      sum.textContent = "Description";
+      const desc = document.createElement("p");
+      desc.className = "item-desc";
+      desc.textContent = String(entry.description);
+      descToggle.append(sum, desc);
+      card.appendChild(descToggle);
+    }
+
     catalogListEl.appendChild(card);
   });
 };
@@ -384,6 +482,24 @@ const reload = async () => {
 
 const init = async () => {
   assertRequiredElements();
+  if (filterSearchEl) {
+    filterSearchEl.addEventListener("input", (e) => {
+      state.filterText = e.target.value;
+      renderCatalog();
+    });
+  }
+  if (filterBucketEl) {
+    filterBucketEl.addEventListener("change", (e) => {
+      state.filterBucket = e.target.value;
+      renderCatalog();
+    });
+  }
+  if (filterTierEl) {
+    filterTierEl.addEventListener("change", (e) => {
+      state.filterTier = e.target.value;
+      renderCatalog();
+    });
+  }
   playerPickerSelectEl.addEventListener("change", () => {
     if (state.playerResolvedMode === "manual") {
       setPickerLoadUi({ loading: false, allowInteraction: true });

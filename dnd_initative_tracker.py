@@ -441,6 +441,7 @@ def _seed_user_items_dir() -> Path:
     try:
         (user_dir / "Weapons").mkdir(parents=True, exist_ok=True)
         (user_dir / "Armor").mkdir(parents=True, exist_ok=True)
+        (user_dir / "Gear").mkdir(parents=True, exist_ok=True)
     except Exception:
         return base_dir
     if not base_dir.exists():
@@ -2507,13 +2508,36 @@ class LanController:
             return payload
 
         @self._fastapi_app.get("/api/shop/catalog")
-        async def get_shop_catalog(include_disabled: bool = False):
+        async def get_shop_catalog(
+            include_disabled: bool = False,
+            q: str = "",
+            bucket: str = "",
+            category: str = "",
+            tier: str = "",
+        ):
             try:
                 entries = self.app._load_shop_catalog_normalized()
                 revision = self.app._shop_catalog_revision_token()
             except Exception as exc:
                 raise HTTPException(status_code=500, detail=f"Failed to load shop catalog: {exc}")
             filtered = entries if include_disabled else [row for row in entries if row.get("enabled") is True]
+            if q.strip():
+                q_lower = q.strip().lower()
+                filtered = [
+                    row for row in filtered
+                    if q_lower in str(row.get("name") or "").lower()
+                    or q_lower in str(row.get("item_id") or "").lower()
+                    or q_lower in str(row.get("description") or "").lower()
+                ]
+            if bucket.strip():
+                bucket_lower = bucket.strip().lower()
+                filtered = [row for row in filtered if str(row.get("item_bucket") or "").lower() == bucket_lower]
+            if category.strip():
+                category_lower = category.strip().lower()
+                filtered = [row for row in filtered if str(row.get("shop_category") or "").lower() == category_lower]
+            if tier.strip():
+                tier_upper = tier.strip().upper()
+                filtered = [row for row in filtered if str(row.get("item_tier") or "").upper() == tier_upper]
             stable_entries = sorted(
                 filtered,
                 key=lambda row: (
@@ -2523,7 +2547,7 @@ class LanController:
                     str(row.get("item_id") or "").lower(),
                 ),
             )
-            return {"entries": stable_entries, "revision": revision}
+            return {"entries": stable_entries, "revision": revision, "total": len(stable_entries)}
 
         @self._fastapi_app.post("/api/shop/catalog/validate")
         async def validate_shop_catalog(payload: Dict[str, Any] = Body(...)):
@@ -6195,6 +6219,7 @@ class InitiativeTracker(base.InitiativeTracker):
             "armor": "Armor",
             "magic_item": "Magic_Items",
             "consumable": "Consumables",
+            "gear": "Gear",
         }
         loaded: Dict[str, Dict[str, Dict[str, Any]]] = {}
         for item_bucket, relative_dir in bucket_dirs.items():
@@ -6332,11 +6357,32 @@ class InitiativeTracker(base.InitiativeTracker):
                 "definition_path": str(definition.get("_definition_path") or ""),
             }
             normalized.update(self._normalize_shop_catalog_stock(raw_entry.get("stock"), catalog_path=catalog_path, entry_index=entry_index))
-            for optional_key in ("description", "category", "consumable_type", "requires_attunement"):
+            for optional_key in ("description", "category", "consumable_type", "requires_attunement", "rarity", "subtype"):
                 if optional_key in definition:
                     normalized[optional_key] = copy.deepcopy(definition.get(optional_key))
+            normalized["item_tier"] = self._compute_item_tier(definition)
             normalized_entries.append(normalized)
         return normalized_entries
+
+    @staticmethod
+    def _compute_item_tier(definition: Dict[str, Any]) -> str:
+        """Compute an item behavior tier from its definition.
+
+        Tier A — mechanically modeled: has a `grants` dict with at least one
+                  of spells/actions/pools/modifiers/aura.
+        Tier B — partially described: has a `description` string or `rarity`
+                  field or `requires_attunement`.
+        Tier C — basic stub: just id/name, not yet mechanized.
+        """
+        if isinstance(definition.get("grants"), dict) and any(
+            k in definition["grants"] for k in ("spells", "actions", "pools", "modifiers", "aura")
+        ):
+            return "A"
+        if (
+            isinstance(definition.get("description"), str) and definition["description"].strip()
+        ) or definition.get("rarity") or definition.get("requires_attunement"):
+            return "B"
+        return "C"
 
     def _validate_shop_catalog_payload(self, payload: Any) -> Dict[str, Any]:
         if not isinstance(payload, dict):
@@ -6591,7 +6637,7 @@ class InitiativeTracker(base.InitiativeTracker):
         with lock:
             catalog_entry = self._resolve_shop_catalog_entry_for_purchase(item_bucket=item_bucket, item_id=item_id)
             definition = self._resolve_shop_item_definition_for_purchase(item_bucket=item_bucket, item_id=item_id)
-            stackable = item_bucket == "consumable" and bool(definition.get("stackable") is True)
+            stackable = bool(definition.get("stackable") is True)
             if not stackable and quantity > 1 and item_bucket not in {"weapon", "armor", "magic_item"}:
                 raise CharacterApiError(
                     status_code=400,

@@ -150,8 +150,9 @@ button:disabled { opacity: 0.55; cursor: not-allowed; }
   padding: 12px;
   display: grid;
   grid-template-columns: minmax(110px, 0.8fr) minmax(180px, 2fr) minmax(150px, 1fr) minmax(180px, 1.3fr);
+  grid-template-rows: auto;
   gap: 12px;
-  align-items: center;
+  align-items: start;
   background: rgba(15, 23, 42, 0.65);
 }
 
@@ -223,6 +224,107 @@ button:disabled { opacity: 0.55; cursor: not-allowed; }
   border: 1px dashed var(--border-soft);
   border-radius: 10px;
   padding: 14px;
+}
+
+/* ── Filter bar ── */
+.shop-filters {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  align-items: center;
+}
+
+.filter-search {
+  flex: 1 1 200px;
+  min-width: 0;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: #0b1220;
+  color: var(--text);
+  padding: 8px 10px;
+}
+
+.filter-select {
+  flex: 0 0 auto;
+  min-width: 130px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: #0b1220;
+  color: var(--text);
+  padding: 8px;
+}
+
+.filter-count {
+  color: var(--muted);
+  font-size: 0.85rem;
+  white-space: nowrap;
+  margin-left: auto;
+}
+
+/* ── Item title row / badges ── */
+.item-title-row {
+  display: flex;
+  gap: 8px;
+  align-items: flex-start;
+  flex-wrap: wrap;
+  min-width: 0;
+}
+
+.item-badges {
+  display: flex;
+  gap: 4px;
+  flex-wrap: wrap;
+  align-items: center;
+}
+
+.badge {
+  display: inline-block;
+  padding: 2px 7px;
+  border-radius: 999px;
+  font-size: 0.73rem;
+  font-weight: 600;
+  letter-spacing: 0.03em;
+  text-transform: capitalize;
+  white-space: nowrap;
+  border: 1px solid currentColor;
+}
+
+.badge-rarity {
+  color: var(--badge-color, #94a3b8);
+  border-color: var(--badge-color, #94a3b8);
+  background: color-mix(in srgb, var(--badge-color, #94a3b8) 12%, transparent);
+}
+
+.badge-tier-a { color: #22c55e; border-color: #166534; background: rgba(22,101,52,0.18); }
+.badge-tier-b { color: #60a5fa; border-color: #1d4ed8; background: rgba(29,78,216,0.18); }
+.badge-tier-c { color: #94a3b8; border-color: #334155; background: rgba(51,65,85,0.25); }
+
+.badge-attunement {
+  color: #e879f9;
+  border-color: #a21caf;
+  background: rgba(162,28,175,0.18);
+}
+
+/* ── Description expand ── */
+.item-desc-toggle {
+  grid-column: 1 / -1;
+  font-size: 0.88rem;
+  color: var(--muted);
+}
+
+.item-desc-toggle summary {
+  cursor: pointer;
+  color: #93c5fd;
+  font-weight: 600;
+  font-size: 0.82rem;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+}
+
+.item-desc {
+  margin: 6px 0 0;
+  line-height: 1.5;
+  white-space: pre-line;
 }
 
 @media (max-width: 1080px) {
