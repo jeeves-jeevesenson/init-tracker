@@ -519,6 +519,66 @@ class SessionSaveLoadTests(unittest.TestCase):
             self.assertEqual(captured["structures"][0]["id"], "s1")
             self.assertEqual(captured["elevation_cells"][0]["col"], 8)
 
+    def test_environment_event_destroy_feature_spawns_fire_hazard(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            app = self._make_app(Path(tmpdir) / "battle.log")
+            app._map_state = tracker_mod.MapState.from_dict(
+                {
+                    "grid": {"cols": 12, "rows": 12, "feet_per_square": 5},
+                    "features": [
+                        {
+                            "id": "f_powder",
+                            "col": 3,
+                            "row": 4,
+                            "kind": "powder_barrel",
+                            "payload": {"flammable": True},
+                        }
+                    ],
+                    "hazards": [],
+                }
+            )
+            result = app._resolve_map_environment_event({"type": "destroy_feature", "feature_id": "f_powder"})
+            self.assertTrue(result.get("ok"))
+            state = app._capture_canonical_map_state(prefer_window=False).to_dict()
+            self.assertEqual(state["features"], [])
+            self.assertEqual(state["hazards"][0]["kind"], "fire")
+
+    def test_move_structure_moves_attached_feature_and_token(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            app = self._make_app(Path(tmpdir) / "battle.log")
+            app._map_state = tracker_mod.MapState.from_dict(
+                {
+                    "grid": {"cols": 20, "rows": 20, "feet_per_square": 5},
+                    "token_positions": [{"cid": 1, "col": 5, "row": 5}],
+                    "structures": [
+                        {
+                            "id": "ship_1",
+                            "kind": "ship_hull",
+                            "anchor_col": 5,
+                            "anchor_row": 5,
+                            "occupied_cells": [{"col": 5, "row": 5}, {"col": 6, "row": 5}],
+                            "payload": {},
+                        }
+                    ],
+                    "features": [
+                        {
+                            "id": "f_mast",
+                            "col": 6,
+                            "row": 5,
+                            "kind": "mast",
+                            "payload": {"attached_structure_id": "ship_1"},
+                        }
+                    ],
+                }
+            )
+            app._lan_positions = {1: (5, 5)}
+            moved = app._move_map_structure("ship_1", 2, 0)
+            self.assertTrue(moved)
+            state = app._capture_canonical_map_state(prefer_window=False).to_dict()
+            self.assertEqual(state["structures"][0]["anchor_col"], 7)
+            self.assertEqual(state["features"][0]["col"], 8)
+            self.assertEqual(state["token_positions"][0]["col"], 7)
+
     def test_migrate_schema_v2_sparse_legacy_map_payload_is_hardened(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             app = self._make_app(Path(tmpdir) / "battle.log")

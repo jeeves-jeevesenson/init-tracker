@@ -76,9 +76,13 @@ except Exception as e:  # pragma: no cover
         f"Import error: {e}"
     )
 from map_state import (
+    ElevationCell,
     MAP_STATE_SCHEMA_VERSION,
+    MapFeature,
+    MapHazard,
     MapQueryAPI,
     MapState,
+    MapStructure,
     apply_map_delta,
     build_map_delta,
     map_delta_has_changes,
@@ -4085,17 +4089,31 @@ class LanController:
             payload = dict(aoe)
             payload.pop("aid", None)
             aoes[aid] = payload
-        return MapState.from_legacy(
-            cols=int(grid.get("cols", 20) or 20),
-            rows=int(grid.get("rows", 20) or 20),
-            feet_per_square=float(grid.get("feet_per_square", 5.0) or 5.0),
-            positions=positions,
-            obstacles={(int(item.get("col")), int(item.get("row"))) for item in (snap.get("obstacles") or []) if isinstance(item, dict)},
-            rough_terrain={(int(item.get("col")), int(item.get("row"))): dict(item) for item in (snap.get("rough_terrain") or []) if isinstance(item, dict)},
-            aoes=aoes,
-            presentation={
-                "auras_enabled": bool(snap.get("auras_enabled", True)),
-            },
+        terrain_cells = [dict(item) for item in (snap.get("rough_terrain") or []) if isinstance(item, dict)]
+        obstacles = [dict(item) for item in (snap.get("obstacles") or []) if isinstance(item, dict)]
+        token_positions = [
+            {"cid": int(cid), "col": int(pos[0]), "row": int(pos[1])}
+            for cid, pos in sorted(positions.items())
+            if isinstance(pos, tuple) and len(pos) == 2
+        ]
+        return MapState.from_dict(
+            {
+                "schema_version": MAP_STATE_SCHEMA_VERSION,
+                "grid": {
+                    "cols": int(grid.get("cols", 20) or 20),
+                    "rows": int(grid.get("rows", 20) or 20),
+                    "feet_per_square": float(grid.get("feet_per_square", 5.0) or 5.0),
+                },
+                "terrain_cells": terrain_cells,
+                "obstacles": obstacles,
+                "token_positions": token_positions,
+                "aoes": {str(int(aid)): dict(payload) for aid, payload in aoes.items()},
+                "features": list(snap.get("features") if isinstance(snap.get("features"), list) else []),
+                "hazards": list(snap.get("hazards") if isinstance(snap.get("hazards"), list) else []),
+                "structures": list(snap.get("structures") if isinstance(snap.get("structures"), list) else []),
+                "elevation_cells": list(snap.get("elevation_cells") if isinstance(snap.get("elevation_cells"), list) else []),
+                "presentation": {"auras_enabled": bool(snap.get("auras_enabled", True))},
+            }
         )
 
     def _build_map_delta_envelope(self, prev: Dict[str, Any], curr: Dict[str, Any]) -> Dict[str, Any]:
@@ -8670,7 +8688,7 @@ class InitiativeTracker(base.InitiativeTracker):
         Legacy LAN fields and map-window runtime fields are treated as compatibility projections and
         replace only legacy-representable layers.
         """
-        mw = getattr(self, "_map_window", None) if prefer_window else None
+        mw = self.__dict__.get("_map_window") if prefer_window else None
         map_open = False
         try:
             map_open = bool(mw is not None and mw.winfo_exists())
@@ -8690,6 +8708,7 @@ class InitiativeTracker(base.InitiativeTracker):
             "bg_images": list(self.__dict__.get("_session_bg_images", []) or []),
             "next_bg_id": int(self.__dict__.get("_session_next_bg_id", 1) or 1),
         }
+        window_canonical_payload: Dict[str, Any] = {}
 
         if map_open and mw is not None:
             try:
@@ -8718,6 +8737,11 @@ class InitiativeTracker(base.InitiativeTracker):
                     )
                 presentation["bg_images"] = bg_images
                 presentation["next_bg_id"] = int(getattr(mw, "_next_bg_id", presentation["next_bg_id"]) or presentation["next_bg_id"])
+                canonical_export = getattr(mw, "_canonical_map_layers_payload", None)
+                if callable(canonical_export):
+                    payload = canonical_export()
+                    if isinstance(payload, dict):
+                        window_canonical_payload = payload
             except Exception:
                 pass
 
@@ -8734,6 +8758,22 @@ class InitiativeTracker(base.InitiativeTracker):
         base_state = self.__dict__.get("_map_state")
         if isinstance(base_state, MapState):
             canonical_only = base_state.normalized()
+            if isinstance(window_canonical_payload, dict) and window_canonical_payload:
+                canonical_only = MapState.from_dict(
+                    {
+                        "schema_version": MAP_STATE_SCHEMA_VERSION,
+                        "grid": canonical_only.grid.to_dict(),
+                        "terrain_cells": [cell.to_dict() for cell in canonical_only.terrain_cells.values()],
+                        "obstacles": [{"col": int(col), "row": int(row)} for col, row in canonical_only.obstacles.keys()],
+                        "token_positions": [{"cid": int(cid), "col": int(pos[0]), "row": int(pos[1])} for cid, pos in canonical_only.token_positions.items()],
+                        "aoes": {str(int(aid)): dict(aoe) for aid, aoe in canonical_only.aoes.items()},
+                        "presentation": dict(canonical_only.presentation or {}),
+                        "features": list(window_canonical_payload.get("features") if isinstance(window_canonical_payload.get("features"), list) else []),
+                        "hazards": list(window_canonical_payload.get("hazards") if isinstance(window_canonical_payload.get("hazards"), list) else []),
+                        "structures": list(window_canonical_payload.get("structures") if isinstance(window_canonical_payload.get("structures"), list) else []),
+                        "elevation_cells": list(window_canonical_payload.get("elevation_cells") if isinstance(window_canonical_payload.get("elevation_cells"), list) else []),
+                    }
+                )
             state = MapState(
                 schema_version=MAP_STATE_SCHEMA_VERSION,
                 grid=legacy_state.grid,
@@ -8781,6 +8821,9 @@ class InitiativeTracker(base.InitiativeTracker):
             mw.rough_terrain = dict(self._lan_rough_terrain)
             mw.aoes = {int(aid): dict(data) for aid, data in self._lan_aoes.items()}
             mw._next_aoe_id = int(self._lan_next_aoe_id)
+            canonical_hydrator = getattr(mw, "_apply_canonical_map_layers_from_state", None)
+            if callable(canonical_hydrator):
+                canonical_hydrator(normalized)
             mw._redraw_all()
             mw.refresh_units()
             self._apply_saved_positions_to_map_window(mw)
@@ -8793,6 +8836,452 @@ class InitiativeTracker(base.InitiativeTracker):
 
     def _map_query_api(self) -> MapQueryAPI:
         return MapQueryAPI(self._capture_canonical_map_state(prefer_window=True))
+
+    def _next_map_entity_id(self, prefix: str, existing: Iterable[str]) -> str:
+        used = {str(item) for item in existing}
+        index = 1
+        base = str(prefix or "entity").strip().lower() or "entity"
+        while True:
+            candidate = f"{base}_{index}"
+            if candidate not in used:
+                return candidate
+            index += 1
+
+    def _mutate_canonical_map_state(
+        self,
+        mutator: Callable[[MapState], None],
+        *,
+        hydrate_window: bool = True,
+        broadcast: bool = True,
+    ) -> MapState:
+        state = self._capture_canonical_map_state(prefer_window=True).normalized()
+        mutator(state)
+        normalized = state.normalized()
+        self._apply_canonical_map_state(normalized, hydrate_window=hydrate_window)
+        if broadcast:
+            try:
+                self._lan_force_state_broadcast()
+            except Exception:
+                pass
+        return normalized
+
+    def _upsert_map_feature(
+        self,
+        *,
+        feature_id: Optional[str] = None,
+        col: int = 0,
+        row: int = 0,
+        kind: str = "feature",
+        payload: Optional[Dict[str, Any]] = None,
+    ) -> str:
+        payload_dict = dict(payload or {})
+
+        def _mutate(state: MapState) -> None:
+            nonlocal feature_id
+            feature_map = dict(state.features or {})
+            if not feature_id:
+                feature_id = self._next_map_entity_id("feature", feature_map.keys())
+            item = MapFeature(
+                feature_id=str(feature_id),
+                col=int(col),
+                row=int(row),
+                kind=str(kind or "feature"),
+                payload=payload_dict,
+            ).normalized()
+            feature_map[item.feature_id] = item
+            state.features = feature_map
+
+        self._mutate_canonical_map_state(_mutate)
+        return str(feature_id)
+
+    def _remove_map_feature(self, feature_id: Any) -> None:
+        key = str(feature_id or "").strip()
+        if not key:
+            return
+
+        def _mutate(state: MapState) -> None:
+            feature_map = dict(state.features or {})
+            feature_map.pop(key, None)
+            state.features = feature_map
+
+        self._mutate_canonical_map_state(_mutate)
+
+    def _upsert_map_hazard(
+        self,
+        *,
+        hazard_id: Optional[str] = None,
+        col: int = 0,
+        row: int = 0,
+        kind: str = "hazard",
+        payload: Optional[Dict[str, Any]] = None,
+    ) -> str:
+        payload_dict = dict(payload or {})
+
+        def _mutate(state: MapState) -> None:
+            nonlocal hazard_id
+            hazard_map = dict(state.hazards or {})
+            if not hazard_id:
+                hazard_id = self._next_map_entity_id("hazard", hazard_map.keys())
+            item = MapHazard(
+                hazard_id=str(hazard_id),
+                col=int(col),
+                row=int(row),
+                kind=str(kind or "hazard"),
+                payload=payload_dict,
+            ).normalized()
+            hazard_map[item.hazard_id] = item
+            state.hazards = hazard_map
+
+        self._mutate_canonical_map_state(_mutate)
+        return str(hazard_id)
+
+    def _remove_map_hazard(self, hazard_id: Any) -> None:
+        key = str(hazard_id or "").strip()
+        if not key:
+            return
+
+        def _mutate(state: MapState) -> None:
+            hazard_map = dict(state.hazards or {})
+            hazard_map.pop(key, None)
+            state.hazards = hazard_map
+
+        self._mutate_canonical_map_state(_mutate)
+
+    def _upsert_map_structure(
+        self,
+        *,
+        structure_id: Optional[str] = None,
+        kind: str = "structure",
+        anchor_col: int = 0,
+        anchor_row: int = 0,
+        occupied_cells: Optional[List[Tuple[int, int]]] = None,
+        payload: Optional[Dict[str, Any]] = None,
+    ) -> str:
+        payload_dict = dict(payload or {})
+        occupied = list(occupied_cells or [])
+
+        def _mutate(state: MapState) -> None:
+            nonlocal structure_id
+            structure_map = dict(state.structures or {})
+            if not structure_id:
+                structure_id = self._next_map_entity_id("structure", structure_map.keys())
+            item = MapStructure(
+                structure_id=str(structure_id),
+                kind=str(kind or "structure"),
+                anchor_col=int(anchor_col),
+                anchor_row=int(anchor_row),
+                occupied_cells=[(int(c), int(r)) for c, r in occupied],
+                payload=payload_dict,
+            ).normalized()
+            structure_map[item.structure_id] = item
+            state.structures = structure_map
+
+        self._mutate_canonical_map_state(_mutate)
+        return str(structure_id)
+
+    def _remove_map_structure(self, structure_id: Any) -> None:
+        key = str(structure_id or "").strip()
+        if not key:
+            return
+
+        def _mutate(state: MapState) -> None:
+            structure_map = dict(state.structures or {})
+            structure_map.pop(key, None)
+            state.structures = structure_map
+
+        self._mutate_canonical_map_state(_mutate)
+
+    def _set_map_elevation(self, col: int, row: int, elevation: float) -> None:
+        key = (int(col), int(row))
+        value = float(elevation)
+
+        def _mutate(state: MapState) -> None:
+            elevation_map = dict(state.elevation_cells or {})
+            if abs(value) < 1e-9:
+                elevation_map.pop(key, None)
+            else:
+                elevation_map[key] = ElevationCell(col=int(key[0]), row=int(key[1]), elevation=value).normalized()
+            state.elevation_cells = elevation_map
+
+        self._mutate_canonical_map_state(_mutate)
+
+    def _move_map_structure(self, structure_id: Any, delta_col: int, delta_row: int) -> bool:
+        sid = str(structure_id or "").strip()
+        if not sid:
+            return False
+        moved = False
+
+        def _mutate(state: MapState) -> None:
+            nonlocal moved
+            item = (state.structures or {}).get(sid)
+            if item is None:
+                return
+            old_structure_cells = set(item.occupied_cells or [])
+            old_structure_cells.add((int(item.anchor_col), int(item.anchor_row)))
+            occupied = [(int(c) + int(delta_col), int(r) + int(delta_row)) for c, r in list(item.occupied_cells or [])]
+            next_anchor = (int(item.anchor_col) + int(delta_col), int(item.anchor_row) + int(delta_row))
+            cols = int(state.grid.cols)
+            rows = int(state.grid.rows)
+            for col, row in [next_anchor] + occupied:
+                if col < 0 or row < 0 or col >= cols or row >= rows:
+                    return
+            updated = MapStructure(
+                structure_id=str(item.structure_id),
+                kind=str(item.kind),
+                anchor_col=next_anchor[0],
+                anchor_row=next_anchor[1],
+                occupied_cells=occupied,
+                payload=dict(item.payload or {}),
+            ).normalized()
+            structures = dict(state.structures or {})
+            structures[sid] = updated
+            state.structures = structures
+            for feature in list((state.features or {}).values()):
+                feature_payload = feature.payload if isinstance(feature.payload, dict) else {}
+                if str(feature_payload.get("attached_structure_id") or "") != sid:
+                    continue
+                feature_cells = feature_payload.get("occupied_cells")
+                shifted_cells: List[Dict[str, int]] = []
+                if isinstance(feature_cells, list):
+                    for raw in feature_cells:
+                        if isinstance(raw, dict):
+                            shifted_cells.append(
+                                {
+                                    "col": int(raw.get("col", 0)) + int(delta_col),
+                                    "row": int(raw.get("row", 0)) + int(delta_row),
+                                }
+                            )
+                next_payload = dict(feature_payload)
+                if shifted_cells:
+                    next_payload["occupied_cells"] = shifted_cells
+                features = dict(state.features or {})
+                features[str(feature.feature_id)] = MapFeature(
+                    feature_id=str(feature.feature_id),
+                    col=int(feature.col) + int(delta_col),
+                    row=int(feature.row) + int(delta_row),
+                    kind=str(feature.kind),
+                    payload=next_payload,
+                ).normalized()
+                state.features = features
+            token_positions = dict(state.token_positions or {})
+            for cid, pos in list(token_positions.items()):
+                if tuple(pos) not in old_structure_cells:
+                    continue
+                token_positions[int(cid)] = (int(pos[0]) + int(delta_col), int(pos[1]) + int(delta_row))
+            state.token_positions = token_positions
+            moved = True
+
+        self._mutate_canonical_map_state(_mutate)
+        return bool(moved)
+
+    def _save_structure_template(self, template_id: str, template_payload: Dict[str, Any]) -> None:
+        tid = str(template_id or "").strip()
+        if not tid:
+            return
+
+        def _mutate(state: MapState) -> None:
+            presentation = dict(state.presentation or {})
+            templates = dict(presentation.get("structure_templates") if isinstance(presentation.get("structure_templates"), dict) else {})
+            templates[tid] = dict(template_payload or {})
+            presentation["structure_templates"] = templates
+            state.presentation = presentation
+
+        self._mutate_canonical_map_state(_mutate)
+
+    def _structure_templates(self) -> Dict[str, Dict[str, Any]]:
+        state = self._capture_canonical_map_state(prefer_window=True)
+        presentation = state.presentation if isinstance(state.presentation, dict) else {}
+        templates = presentation.get("structure_templates")
+        if not isinstance(templates, dict):
+            return {}
+        out: Dict[str, Dict[str, Any]] = {}
+        for key, value in templates.items():
+            if isinstance(value, dict):
+                out[str(key)] = dict(value)
+        return out
+
+    def _instantiate_structure_template(
+        self,
+        template_id: str,
+        *,
+        anchor_col: int,
+        anchor_row: int,
+        facing_deg: float = 0.0,
+    ) -> Optional[str]:
+        templates = self._structure_templates()
+        template = templates.get(str(template_id or "").strip())
+        if not isinstance(template, dict):
+            return None
+        local_cells_raw = template.get("footprint") if isinstance(template.get("footprint"), list) else []
+        occupied_cells: List[Tuple[int, int]] = []
+        for entry in local_cells_raw:
+            if not isinstance(entry, dict):
+                continue
+            try:
+                local_col = int(entry.get("col", 0))
+                local_row = int(entry.get("row", 0))
+            except Exception:
+                continue
+            occupied_cells.append((int(anchor_col) + local_col, int(anchor_row) + local_row))
+        if not occupied_cells:
+            occupied_cells = [(int(anchor_col), int(anchor_row))]
+        payload = {
+            "template_id": str(template_id),
+            "name": str(template.get("name") or template_id),
+            "facing_deg": float(facing_deg),
+            "local_decks": list(template.get("decks") if isinstance(template.get("decks"), list) else []),
+            "anchor_points": list(template.get("anchor_points") if isinstance(template.get("anchor_points"), list) else []),
+        }
+        structure_id = self._upsert_map_structure(
+            kind=str(template.get("kind") or "structure"),
+            anchor_col=int(anchor_col),
+            anchor_row=int(anchor_row),
+            occupied_cells=occupied_cells,
+            payload=payload,
+        )
+        default_features = template.get("features") if isinstance(template.get("features"), list) else []
+        for feature in default_features:
+            if not isinstance(feature, dict):
+                continue
+            try:
+                local_col = int(feature.get("col", 0))
+                local_row = int(feature.get("row", 0))
+            except Exception:
+                local_col = 0
+                local_row = 0
+            self._upsert_map_feature(
+                col=int(anchor_col) + local_col,
+                row=int(anchor_row) + local_row,
+                kind=str(feature.get("kind") or "feature"),
+                payload={
+                    "name": str(feature.get("name") or feature.get("kind") or "feature"),
+                    "tags": list(feature.get("tags") if isinstance(feature.get("tags"), list) else []),
+                    "attached_structure_id": str(structure_id),
+                },
+            )
+        return structure_id
+
+    def _resolve_map_environment_event(self, event: Dict[str, Any]) -> Dict[str, Any]:
+        if not isinstance(event, dict):
+            return {"ok": False, "reason": "invalid_event"}
+        event_type = str(event.get("type") or "").strip().lower()
+        if not event_type:
+            return {"ok": False, "reason": "missing_type"}
+
+        result: Dict[str, Any] = {"ok": True, "type": event_type}
+
+        def _mutate(state: MapState) -> None:
+            if event_type == "destroy_feature":
+                feature_id = str(event.get("feature_id") or "").strip()
+                feature = (state.features or {}).get(feature_id)
+                if feature is None:
+                    result["ok"] = False
+                    result["reason"] = "feature_not_found"
+                    return
+                features = dict(state.features or {})
+                features.pop(feature_id, None)
+                state.features = features
+                payload = feature.payload if isinstance(feature.payload, dict) else {}
+                feature_kind = str(feature.kind or "").lower()
+                flammable = bool(payload.get("flammable")) or feature_kind in {"barrel", "powder_barrel"}
+                if flammable:
+                    hazard_payload = {
+                        "tags": ["fire", "environment"],
+                        "duration_turns": 3,
+                        "remaining_turns": 3,
+                        "movement_multiplier": 2.0,
+                        "source_feature_id": feature_id,
+                    }
+                    hazard_id = self._next_map_entity_id("hazard", (state.hazards or {}).keys())
+                    hazards = dict(state.hazards or {})
+                    hazards[hazard_id] = MapHazard(
+                        hazard_id=hazard_id,
+                        col=int(feature.col),
+                        row=int(feature.row),
+                        kind="fire",
+                        payload=hazard_payload,
+                    ).normalized()
+                    state.hazards = hazards
+                    result["spawned_hazard_id"] = hazard_id
+            elif event_type == "ignite_feature":
+                feature_id = str(event.get("feature_id") or "").strip()
+                feature = (state.features or {}).get(feature_id)
+                if feature is None:
+                    result["ok"] = False
+                    result["reason"] = "feature_not_found"
+                    return
+                payload = dict(feature.payload or {})
+                payload["ignited"] = True
+                features = dict(state.features or {})
+                features[feature_id] = MapFeature(
+                    feature_id=str(feature.feature_id),
+                    col=int(feature.col),
+                    row=int(feature.row),
+                    kind=str(feature.kind),
+                    payload=payload,
+                ).normalized()
+                state.features = features
+            elif event_type == "tick_hazards":
+                hazards: Dict[str, MapHazard] = {}
+                ignited_features: List[str] = []
+                for hid, hazard in (state.hazards or {}).items():
+                    payload = dict(hazard.payload or {})
+                    if bool(payload.get("persistent")):
+                        hazards[str(hid)] = hazard
+                    else:
+                        remaining = payload.get("remaining_turns")
+                        if remaining is None:
+                            duration = payload.get("duration_turns")
+                            if duration is None:
+                                hazards[str(hid)] = hazard
+                                remaining = None
+                            else:
+                                remaining = int(duration)
+                        if remaining is not None:
+                            try:
+                                remaining_int = int(remaining) - 1
+                            except Exception:
+                                remaining_int = 0
+                            if remaining_int > 0:
+                                payload["remaining_turns"] = remaining_int
+                                hazards[str(hid)] = MapHazard(
+                                    hazard_id=str(hazard.hazard_id),
+                                    col=int(hazard.col),
+                                    row=int(hazard.row),
+                                    kind=str(hazard.kind),
+                                    payload=payload,
+                                ).normalized()
+                    if str(hazard.kind or "").strip().lower() == "fire":
+                        hx, hy = int(hazard.col), int(hazard.row)
+                        for feature in (state.features or {}).values():
+                            feature_payload = feature.payload if isinstance(feature.payload, dict) else {}
+                            feature_kind = str(feature.kind or "").strip().lower()
+                            flammable = bool(feature_payload.get("flammable")) or feature_kind in {"barrel", "powder_barrel", "mast", "crate"}
+                            if not flammable:
+                                continue
+                            fx, fy = int(feature.col), int(feature.row)
+                            if max(abs(fx - hx), abs(fy - hy)) <= 1:
+                                ignited_features.append(str(feature.feature_id))
+                if ignited_features:
+                    next_features = dict(state.features or {})
+                    for fid in ignited_features:
+                        feature = next_features.get(fid)
+                        if feature is None:
+                            continue
+                        payload = dict(feature.payload or {})
+                        payload["ignited"] = True
+                        next_features[fid] = MapFeature(
+                            feature_id=str(feature.feature_id),
+                            col=int(feature.col),
+                            row=int(feature.row),
+                            kind=str(feature.kind),
+                            payload=payload,
+                        ).normalized()
+                    state.features = next_features
+                state.hazards = hazards
+
+        self._mutate_canonical_map_state(_mutate)
+        return result
 
     def _canonical_map_state_from_snapshot_map_payload(self, map_state: Any) -> MapState:
         source = map_state if isinstance(map_state, dict) else {}
@@ -11741,21 +12230,16 @@ class InitiativeTracker(base.InitiativeTracker):
                 except Exception:
                     pass
 
-        canonical_map_state = MapState.from_legacy(
-            cols=int(cols),
-            rows=int(rows),
-            feet_per_square=5.0,
-            positions=positions,
-            obstacles=obstacles,
-            rough_terrain=rough_terrain,
-            aoes=aoe_source,
-            presentation={
-                "auras_enabled": bool(self.__dict__.get("_lan_auras_enabled", True)),
-                "bg_images": list(self.__dict__.get("_session_bg_images", []) or []),
-                "next_bg_id": int(self.__dict__.get("_session_next_bg_id", 1) or 1),
-            },
-        )
+        canonical_map_state = self._capture_canonical_map_state(prefer_window=True).normalized()
         self._apply_canonical_map_state(canonical_map_state, hydrate_window=False)
+        legacy_map_state = canonical_map_state.to_legacy()
+        cols = int(legacy_map_state.get("cols", cols) or cols)
+        rows = int(legacy_map_state.get("rows", rows) or rows)
+        obstacles = set(legacy_map_state.get("obstacles") if isinstance(legacy_map_state.get("obstacles"), set) else obstacles)
+        rough_terrain = dict(
+            legacy_map_state.get("rough_terrain") if isinstance(legacy_map_state.get("rough_terrain"), dict) else rough_terrain
+        )
+        positions = dict(legacy_map_state.get("positions") if isinstance(legacy_map_state.get("positions"), dict) else positions)
         canonical_payload = canonical_map_state.to_dict()
 
         def _log_invalid_aoe_value(aid_value: int, name_value: str, kind_value: str, key: str, raw_value: Any) -> None:
@@ -33726,15 +34210,14 @@ class InitiativeTracker(base.InitiativeTracker):
 
         mode = self._normalize_movement_mode(getattr(creature, "movement_mode", "normal"))
         water_multiplier = self._water_movement_multiplier(creature, mode)
-        map_query = MapQueryAPI(
-            MapState.from_legacy(
-                cols=cols,
-                rows=rows,
-                positions={},
-                obstacles=obstacles,
-                rough_terrain=rough_terrain,
-            )
-        )
+        canonical_state = self._capture_canonical_map_state(prefer_window=True)
+        map_query = MapQueryAPI(canonical_state if isinstance(canonical_state, MapState) else MapState.from_legacy(
+            cols=cols,
+            rows=rows,
+            positions={},
+            obstacles=obstacles,
+            rough_terrain=rough_terrain,
+        ))
 
         def in_bounds(c: int, r: int) -> bool:
             return 0 <= c < cols and 0 <= r < rows
@@ -33791,8 +34274,11 @@ class InitiativeTracker(base.InitiativeTracker):
                     if mode != "fly":
                         if current_type == "water" or target_type == "water":
                             step = int(math.ceil(step * water_multiplier))
-                        if target_is_rough:
-                            step *= 2
+                        try:
+                            step = map_query.movement_cost_for_step(c, r, nc, nr, step)
+                        except Exception:
+                            if target_is_rough:
+                                step *= 2
                     step = int(math.ceil(step * self._movement_cost_multiplier_for_step(c, r, nc, nr, combatant=creature)))
 
                     ncost = cost + step

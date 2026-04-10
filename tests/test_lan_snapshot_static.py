@@ -484,6 +484,37 @@ class LanSnapshotStaticTests(unittest.TestCase):
         self.assertEqual(delta["obstacles"]["upserts"][0]["col"], 4)
         self.assertEqual(delta["tokens"]["upserts"][0]["cid"], 1)
 
+    def test_build_map_delta_envelope_includes_canonical_layers(self):
+        lan = object.__new__(tracker_mod.LanController)
+        prev = {
+            "grid": {"cols": 8, "rows": 8, "feet_per_square": 5},
+            "rough_terrain": [],
+            "obstacles": [],
+            "units": [{"cid": 1, "pos": {"col": 1, "row": 1}}],
+            "aoes": [],
+            "features": [{"id": "f1", "col": 1, "row": 1, "kind": "crate", "payload": {}}],
+            "hazards": [{"id": "h1", "col": 2, "row": 2, "kind": "fire", "payload": {}}],
+            "structures": [{"id": "s1", "kind": "ship_hull", "anchor_col": 0, "anchor_row": 0, "occupied_cells": [], "payload": {}}],
+            "elevation_cells": [{"col": 1, "row": 1, "elevation": 0}],
+        }
+        curr = {
+            "grid": {"cols": 8, "rows": 8, "feet_per_square": 5},
+            "rough_terrain": [],
+            "obstacles": [],
+            "units": [{"cid": 1, "pos": {"col": 2, "row": 2}}],
+            "aoes": [],
+            "features": [{"id": "f2", "col": 4, "row": 4, "kind": "barrel", "payload": {}}],
+            "hazards": [{"id": "h2", "col": 5, "row": 5, "kind": "smoke", "payload": {}}],
+            "structures": [{"id": "s2", "kind": "rowboat", "anchor_col": 3, "anchor_row": 3, "occupied_cells": [], "payload": {}}],
+            "elevation_cells": [{"col": 7, "row": 7, "elevation": 10}],
+        }
+        envelope = lan._build_map_delta_envelope(prev, curr)
+        delta = envelope["delta"]
+        self.assertEqual(delta["features"]["upserts"][0]["id"], "f2")
+        self.assertEqual(delta["hazards"]["upserts"][0]["id"], "h2")
+        self.assertEqual(delta["structures"]["upserts"][0]["id"], "s2")
+        self.assertEqual(delta["elevation_cells"]["upserts"][0]["col"], 7)
+
 
 if __name__ == "__main__":
     unittest.main()

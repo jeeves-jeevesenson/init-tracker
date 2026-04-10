@@ -46,7 +46,7 @@ import tkinter.font as tkfont
 from dataclasses import dataclass, field
 from typing import Any, Callable, Dict, List, Optional, Tuple, Set, Union
 from tkinter import messagebox, ttk, simpledialog, filedialog
-from map_state import MapQueryAPI, MapState
+from map_state import ElevationCell, MapFeature, MapHazard, MapQueryAPI, MapState, MapStructure
 
 PIL_IMAGE_IMPORT_ERROR: Optional[str] = None
 PIL_IMAGETK_IMPORT_ERROR: Optional[str] = None
@@ -6204,6 +6204,18 @@ class BattleMapWindow(tk.Toplevel):
         self._drawing_obstacles: bool = False
         self.rough_terrain: Dict[Tuple[int, int], Dict[str, object]] = {}
         self._drawing_rough: bool = False
+        self.map_features: Dict[str, Dict[str, Any]] = {}
+        self.map_hazards: Dict[str, Dict[str, Any]] = {}
+        self.map_structures: Dict[str, Dict[str, Any]] = {}
+        self.map_elevation_cells: Dict[Tuple[int, int], float] = {}
+        self.map_structure_templates: Dict[str, Dict[str, Any]] = {}
+        self.map_author_mode_var = tk.StringVar(value="off")
+        self.map_author_kind_var = tk.StringVar(value="barrel")
+        self.map_author_label_var = tk.StringVar(value="")
+        self.map_author_duration_var = tk.StringVar(value="3")
+        self.map_author_blocking_var = tk.BooleanVar(value=False)
+        self.map_author_elevation_var = tk.StringVar(value="5")
+        self._map_author_selected_cell: Optional[Tuple[int, int]] = None
         self._suspend_lan_sync: bool = False
         self._map_dirty: bool = False
         self._pan_key_to_dir: Dict[str, Tuple[int, int]] = {
@@ -6411,9 +6423,19 @@ class BattleMapWindow(tk.Toplevel):
 
         if redraw_move_highlight:
             self._update_move_highlight()
+        try:
+            capture_fn = getattr(self.app, "_capture_canonical_map_state", None)
+            if callable(capture_fn):
+                self._apply_canonical_map_layers_from_state(capture_fn(prefer_window=False))
+        except Exception:
+            pass
 
     def _on_close(self) -> None:
         self._stop_keyboard_panning(reset_velocity=True)
+        try:
+            self._sync_tactical_layers_to_app()
+        except Exception:
+            pass
         try:
             self._stop_polling()
         except Exception:
@@ -6788,6 +6810,67 @@ class BattleMapWindow(tk.Toplevel):
         ttk.Button(preset_btns, text="Save Preset", command=self._save_obstacle_preset).pack(side=tk.LEFT)
         ttk.Button(preset_btns, text="Load Preset", command=self._load_obstacle_preset).pack(side=tk.LEFT, padx=(8, 0))
         view.columnconfigure(1, weight=1)
+
+        # --- Tactical entities ---
+        tactical = ttk.LabelFrame(left, text="Tactical Entities", padding=6)
+        tactical.pack(fill=tk.X, pady=(0, 10))
+        ttk.Label(tactical, text="Author Mode:").grid(row=0, column=0, sticky="w")
+        mode_combo = ttk.Combobox(
+            tactical,
+            textvariable=self.map_author_mode_var,
+            values=["off", "feature", "hazard", "structure", "elevation"],
+            state="readonly",
+            width=11,
+        )
+        mode_combo.grid(row=0, column=1, sticky="w", padx=(6, 0))
+        ttk.Label(tactical, text="Kind:").grid(row=0, column=2, sticky="w", padx=(8, 0))
+        kind_combo = ttk.Combobox(
+            tactical,
+            textvariable=self.map_author_kind_var,
+            values=[
+                "barrel",
+                "powder_barrel",
+                "cannon",
+                "crate",
+                "ladder",
+                "hatch",
+                "railing",
+                "mast",
+                "door",
+                "blocking_prop",
+                "cover_prop",
+                "fire",
+                "smoke",
+                "grease",
+                "difficult_terrain",
+                "magical_zone",
+                "blocked_zone",
+                "ship_hull",
+                "rowboat",
+                "dock",
+                "moving_platform",
+                "wagon",
+            ],
+            width=16,
+        )
+        kind_combo.grid(row=0, column=3, sticky="ew", padx=(6, 0))
+        ttk.Label(tactical, text="Label:").grid(row=1, column=0, sticky="w", pady=(6, 0))
+        ttk.Entry(tactical, textvariable=self.map_author_label_var, width=14).grid(row=1, column=1, sticky="ew", padx=(6, 0), pady=(6, 0))
+        ttk.Label(tactical, text="Duration/Elev:").grid(row=1, column=2, sticky="w", padx=(8, 0), pady=(6, 0))
+        author_value = ttk.Entry(tactical, textvariable=self.map_author_duration_var, width=8)
+        author_value.grid(row=1, column=3, sticky="w", padx=(6, 0), pady=(6, 0))
+        ttk.Checkbutton(tactical, text="Blocking", variable=self.map_author_blocking_var).grid(
+            row=2, column=0, columnspan=2, sticky="w", pady=(6, 0)
+        )
+        btn_row = ttk.Frame(tactical)
+        btn_row.grid(row=2, column=2, columnspan=2, sticky="e", pady=(6, 0))
+        ttk.Button(btn_row, text="Apply @ Cell", command=self._apply_tactical_author_to_selected_cell).pack(side=tk.LEFT)
+        ttk.Button(btn_row, text="Remove @ Cell", command=self._remove_tactical_entities_at_selected_cell).pack(side=tk.LEFT, padx=(6, 0))
+        ttk.Button(btn_row, text="Move Struct…", command=self._move_structure_from_selected_cell).pack(side=tk.LEFT, padx=(6, 0))
+        ttk.Button(btn_row, text="Save Template…", command=self._save_template_from_selected_structure).pack(side=tk.LEFT, padx=(6, 0))
+        ttk.Button(btn_row, text="Place Template…", command=self._place_template_at_selected_cell).pack(side=tk.LEFT, padx=(6, 0))
+        ttk.Button(btn_row, text="Resolve Env", command=self._resolve_environment_turn).pack(side=tk.LEFT, padx=(6, 0))
+        tactical.columnconfigure(3, weight=1)
 
         # --- Units panel ---
         ttk.Label(left, text="Units (drag onto map)").pack(anchor="w")
@@ -7183,6 +7266,10 @@ class BattleMapWindow(tk.Toplevel):
         self._redraw_all()
         self._draw_rough_terrain()
         self._draw_obstacles()
+        self._draw_map_structures()
+        self._draw_map_features()
+        self._draw_map_hazards()
+        self._draw_map_elevation()
 
     def _fit_to_window(self) -> None:
         try:
@@ -7670,6 +7757,494 @@ class BattleMapWindow(tk.Toplevel):
             self.canvas.delete("rough")
         except Exception:
             pass
+
+    def _canonical_map_layers_payload(self) -> Dict[str, Any]:
+        features = [dict(entry) for entry in self.map_features.values() if isinstance(entry, dict)]
+        hazards = [dict(entry) for entry in self.map_hazards.values() if isinstance(entry, dict)]
+        structures = [dict(entry) for entry in self.map_structures.values() if isinstance(entry, dict)]
+        elevation_cells = [
+            {"col": int(col), "row": int(row), "elevation": float(elevation)}
+            for (col, row), elevation in sorted(self.map_elevation_cells.items())
+        ]
+        return {
+            "features": features,
+            "hazards": hazards,
+            "structures": structures,
+            "elevation_cells": elevation_cells,
+        }
+
+    def _apply_canonical_map_layers_from_state(self, state: MapState) -> None:
+        normalized = state.normalized() if isinstance(state, MapState) else MapState().normalized()
+        self.map_features = {str(item.feature_id): item.to_dict() for item in normalized.features.values()}
+        self.map_hazards = {str(item.hazard_id): item.to_dict() for item in normalized.hazards.values()}
+        self.map_structures = {str(item.structure_id): item.to_dict() for item in normalized.structures.values()}
+        self.map_elevation_cells = {(int(item.col), int(item.row)): float(item.elevation) for item in normalized.elevation_cells.values()}
+
+    def _entity_cells(self, col: int, row: int, payload: Any) -> List[Tuple[int, int]]:
+        if isinstance(payload, dict):
+            raw_cells = payload.get("occupied_cells")
+            if isinstance(raw_cells, list) and raw_cells:
+                out: List[Tuple[int, int]] = []
+                for raw in raw_cells:
+                    if not isinstance(raw, dict):
+                        continue
+                    try:
+                        out.append((int(raw.get("col")), int(raw.get("row"))))
+                    except Exception:
+                        continue
+                if out:
+                    return out
+        return [(int(col), int(row))]
+
+    def _draw_map_elevation(self) -> None:
+        try:
+            self.canvas.delete("elevation")
+        except Exception:
+            pass
+        if not self.map_elevation_cells:
+            return
+        for (col, row), elevation in sorted(self.map_elevation_cells.items()):
+            x1 = self.x0 + col * self.cell
+            y1 = self.y0 + row * self.cell
+            try:
+                self.canvas.create_text(
+                    x1 + self.cell * 0.15,
+                    y1 + self.cell * 0.2,
+                    text=f"{int(round(float(elevation)))}",
+                    anchor="nw",
+                    fill="#3b2f9f",
+                    font=("TkDefaultFont", max(7, int(self.cell * 0.22)), "bold"),
+                    tags=("elevation",),
+                )
+            except Exception:
+                pass
+
+    def _draw_map_structures(self) -> None:
+        try:
+            self.canvas.delete("structure")
+        except Exception:
+            pass
+        for structure in self.map_structures.values():
+            if not isinstance(structure, dict):
+                continue
+            sid = str(structure.get("id") or "")
+            kind = str(structure.get("kind") or "structure")
+            payload = structure.get("payload") if isinstance(structure.get("payload"), dict) else {}
+            occupied = self._entity_cells(
+                int(structure.get("anchor_col", 0) or 0),
+                int(structure.get("anchor_row", 0) or 0),
+                payload,
+            )
+            for col, row in occupied:
+                x1 = self.x0 + col * self.cell
+                y1 = self.y0 + row * self.cell
+                x2 = x1 + self.cell
+                y2 = y1 + self.cell
+                try:
+                    self.canvas.create_rectangle(
+                        x1,
+                        y1,
+                        x2,
+                        y2,
+                        fill="",
+                        outline="#5a3f1b",
+                        width=max(1, int(self.cell * 0.06)),
+                        dash=(4, 3),
+                        tags=("structure", f"structure:{sid}"),
+                    )
+                except Exception:
+                    pass
+            if occupied:
+                cx = sum(col for col, _ in occupied) / float(len(occupied))
+                cy = sum(row for _, row in occupied) / float(len(occupied))
+                px, py = self._grid_to_pixel(int(round(cx)), int(round(cy)))
+                try:
+                    self.canvas.create_text(
+                        px,
+                        py,
+                        text=kind[:3].upper(),
+                        fill="#5a3f1b",
+                        font=("TkDefaultFont", max(7, int(self.cell * 0.24)), "bold"),
+                        tags=("structure", f"structure:{sid}"),
+                    )
+                except Exception:
+                    pass
+
+    def _draw_map_features(self) -> None:
+        try:
+            self.canvas.delete("feature")
+        except Exception:
+            pass
+        for feature in self.map_features.values():
+            if not isinstance(feature, dict):
+                continue
+            fid = str(feature.get("id") or "")
+            kind = str(feature.get("kind") or "feature")
+            payload = feature.get("payload") if isinstance(feature.get("payload"), dict) else {}
+            for col, row in self._entity_cells(int(feature.get("col", 0) or 0), int(feature.get("row", 0) or 0), payload):
+                px, py = self._grid_to_pixel(col, row)
+                r = max(4.0, self.cell * 0.15)
+                try:
+                    self.canvas.create_oval(
+                        px - r,
+                        py - r,
+                        px + r,
+                        py + r,
+                        fill="#c46b1a",
+                        outline="#703800",
+                        width=1,
+                        tags=("feature", f"feature:{fid}"),
+                    )
+                    self.canvas.create_text(
+                        px,
+                        py - r - 2,
+                        text=(str(payload.get("name") or kind)[:10]),
+                        fill="#6a3a10",
+                        font=("TkDefaultFont", max(6, int(self.cell * 0.2)), "bold"),
+                        tags=("feature", f"feature:{fid}"),
+                    )
+                except Exception:
+                    pass
+
+    def _draw_map_hazards(self) -> None:
+        try:
+            self.canvas.delete("hazard")
+        except Exception:
+            pass
+        for hazard in self.map_hazards.values():
+            if not isinstance(hazard, dict):
+                continue
+            hid = str(hazard.get("id") or "")
+            kind = str(hazard.get("kind") or "hazard")
+            payload = hazard.get("payload") if isinstance(hazard.get("payload"), dict) else {}
+            for col, row in self._entity_cells(int(hazard.get("col", 0) or 0), int(hazard.get("row", 0) or 0), payload):
+                x1 = self.x0 + col * self.cell
+                y1 = self.y0 + row * self.cell
+                x2 = x1 + self.cell
+                y2 = y1 + self.cell
+                try:
+                    self.canvas.create_rectangle(
+                        x1,
+                        y1,
+                        x2,
+                        y2,
+                        fill="#ff6b6b",
+                        stipple="gray50",
+                        outline="#aa1f1f",
+                        width=1,
+                        tags=("hazard", f"hazard:{hid}"),
+                    )
+                    rem = payload.get("remaining_turns", payload.get("duration_turns", ""))
+                    label = f"{kind[:4]}:{rem}" if rem not in (None, "") else kind[:4]
+                    self.canvas.create_text(
+                        x1 + self.cell * 0.5,
+                        y1 + self.cell * 0.5,
+                        text=label,
+                        fill="#5f0f0f",
+                        font=("TkDefaultFont", max(6, int(self.cell * 0.2)), "bold"),
+                        tags=("hazard", f"hazard:{hid}"),
+                    )
+                except Exception:
+                    pass
+
+    def _sync_tactical_layers_to_app(self) -> None:
+        payload = self._canonical_map_layers_payload()
+        app_state = getattr(self.app, "_map_state", None)
+        if not isinstance(app_state, MapState):
+            app_state = self.app._capture_canonical_map_state(prefer_window=False)
+        merged = MapState.from_dict(
+            {
+                **app_state.to_dict(),
+                "features": payload.get("features", []),
+                "hazards": payload.get("hazards", []),
+                "structures": payload.get("structures", []),
+                "elevation_cells": payload.get("elevation_cells", []),
+            }
+        )
+        try:
+            self.app._apply_canonical_map_state(merged, hydrate_window=False)
+            self.app._lan_force_state_broadcast()
+        except Exception:
+            pass
+
+    def _apply_tactical_author_to_selected_cell(self) -> None:
+        cell = self._map_author_selected_cell
+        if cell is None:
+            return
+        col, row = int(cell[0]), int(cell[1])
+        mode = str(self.map_author_mode_var.get() or "off").strip().lower()
+        kind = str(self.map_author_kind_var.get() or "").strip().lower() or mode
+        label = str(self.map_author_label_var.get() or "").strip()
+        blocking = bool(self.map_author_blocking_var.get())
+        duration_raw = str(self.map_author_duration_var.get() or "").strip()
+        if mode == "off":
+            return
+        if mode == "feature":
+            payload = {"name": label or kind, "tags": [kind], "blocks_movement": blocking}
+            feature_id = self.app._upsert_map_feature(col=col, row=row, kind=kind, payload=payload)
+            self.map_features[str(feature_id)] = {"id": feature_id, "col": col, "row": row, "kind": kind, "payload": payload}
+        elif mode == "hazard":
+            payload = {"name": label or kind, "tags": [kind], "blocks_movement": blocking}
+            try:
+                duration = int(duration_raw)
+            except Exception:
+                duration = 0
+            if duration > 0:
+                payload["duration_turns"] = duration
+                payload["remaining_turns"] = duration
+            hazard_id = self.app._upsert_map_hazard(col=col, row=row, kind=kind, payload=payload)
+            self.map_hazards[str(hazard_id)] = {"id": hazard_id, "col": col, "row": row, "kind": kind, "payload": payload}
+        elif mode == "structure":
+            occupied = [(col, row), (min(self.cols - 1, col + 1), row), (col, min(self.rows - 1, row + 1))]
+            payload = {"name": label or kind, "blocks_movement": blocking}
+            structure_id = self.app._upsert_map_structure(
+                kind=kind,
+                anchor_col=col,
+                anchor_row=row,
+                occupied_cells=occupied,
+                payload=payload,
+            )
+            self.map_structures[str(structure_id)] = {
+                "id": structure_id,
+                "kind": kind,
+                "anchor_col": col,
+                "anchor_row": row,
+                "occupied_cells": [{"col": c, "row": r} for c, r in occupied],
+                "payload": payload,
+            }
+        elif mode == "elevation":
+            try:
+                elevation = float(duration_raw)
+            except Exception:
+                elevation = 0.0
+            self.app._set_map_elevation(col, row, elevation)
+            if abs(elevation) < 1e-9:
+                self.map_elevation_cells.pop((col, row), None)
+            else:
+                self.map_elevation_cells[(col, row)] = elevation
+        self._sync_tactical_layers_to_app()
+        self._redraw_all()
+
+    def _remove_tactical_entities_at_selected_cell(self) -> None:
+        cell = self._map_author_selected_cell
+        if cell is None:
+            return
+        col, row = int(cell[0]), int(cell[1])
+        removed_feature_ids: List[str] = []
+        removed_hazard_ids: List[str] = []
+        removed_structure_ids: List[str] = []
+        for fid, feature in list(self.map_features.items()):
+            payload = feature.get("payload") if isinstance(feature.get("payload"), dict) else {}
+            cells = self._entity_cells(int(feature.get("col", 0) or 0), int(feature.get("row", 0) or 0), payload)
+            if (col, row) in cells:
+                removed_feature_ids.append(str(fid))
+        for hid, hazard in list(self.map_hazards.items()):
+            payload = hazard.get("payload") if isinstance(hazard.get("payload"), dict) else {}
+            cells = self._entity_cells(int(hazard.get("col", 0) or 0), int(hazard.get("row", 0) or 0), payload)
+            if (col, row) in cells:
+                removed_hazard_ids.append(str(hid))
+        for sid, structure in list(self.map_structures.items()):
+            occupied = structure.get("occupied_cells") if isinstance(structure.get("occupied_cells"), list) else []
+            cells = []
+            for entry in occupied:
+                if isinstance(entry, dict):
+                    try:
+                        cells.append((int(entry.get("col")), int(entry.get("row"))))
+                    except Exception:
+                        continue
+            anchor = (int(structure.get("anchor_col", 0) or 0), int(structure.get("anchor_row", 0) or 0))
+            if (col, row) == anchor or (col, row) in cells:
+                removed_structure_ids.append(str(sid))
+        for fid in removed_feature_ids:
+            self.map_features.pop(fid, None)
+            self.app._remove_map_feature(fid)
+        for hid in removed_hazard_ids:
+            self.map_hazards.pop(hid, None)
+            self.app._remove_map_hazard(hid)
+        for sid in removed_structure_ids:
+            self.map_structures.pop(sid, None)
+            self.app._remove_map_structure(sid)
+        self.map_elevation_cells.pop((col, row), None)
+        self.app._set_map_elevation(col, row, 0.0)
+        self._sync_tactical_layers_to_app()
+        self._redraw_all()
+
+    def _resolve_environment_turn(self) -> None:
+        try:
+            self.app._resolve_map_environment_event({"type": "tick_hazards"})
+        except Exception:
+            return
+        try:
+            state = self.app._capture_canonical_map_state(prefer_window=False)
+            self._apply_canonical_map_layers_from_state(state)
+        except Exception:
+            pass
+        self._redraw_all()
+
+    def _move_structure_from_selected_cell(self) -> None:
+        cell = self._map_author_selected_cell
+        if cell is None:
+            return
+        col, row = int(cell[0]), int(cell[1])
+        target_structure_id = None
+        for sid, structure in self.map_structures.items():
+            if not isinstance(structure, dict):
+                continue
+            anchor = (int(structure.get("anchor_col", 0) or 0), int(structure.get("anchor_row", 0) or 0))
+            occupied = structure.get("occupied_cells") if isinstance(structure.get("occupied_cells"), list) else []
+            cells = {anchor}
+            for entry in occupied:
+                if isinstance(entry, dict):
+                    try:
+                        cells.add((int(entry.get("col")), int(entry.get("row"))))
+                    except Exception:
+                        continue
+            if (col, row) in cells:
+                target_structure_id = str(sid)
+                break
+        if not target_structure_id:
+            return
+        raw = simpledialog.askstring(
+            "Move Structure",
+            "Enter delta as 'dc,dr' (example: 1,0):",
+            initialvalue="1,0",
+            parent=self,
+        )
+        if raw is None:
+            return
+        parts = [part.strip() for part in str(raw).split(",")]
+        if len(parts) != 2:
+            return
+        try:
+            dc = int(parts[0])
+            dr = int(parts[1])
+        except Exception:
+            return
+        moved = False
+        try:
+            moved = bool(self.app._move_map_structure(target_structure_id, dc, dr))
+        except Exception:
+            moved = False
+        if not moved:
+            return
+        try:
+            self._apply_canonical_map_layers_from_state(self.app._capture_canonical_map_state(prefer_window=False))
+        except Exception:
+            pass
+        self._redraw_all()
+
+    def _selected_structure_id_at_cell(self, col: int, row: int) -> Optional[str]:
+        for sid, structure in self.map_structures.items():
+            if not isinstance(structure, dict):
+                continue
+            anchor = (int(structure.get("anchor_col", 0) or 0), int(structure.get("anchor_row", 0) or 0))
+            occupied = structure.get("occupied_cells") if isinstance(structure.get("occupied_cells"), list) else []
+            cells = {anchor}
+            for entry in occupied:
+                if not isinstance(entry, dict):
+                    continue
+                try:
+                    cells.add((int(entry.get("col")), int(entry.get("row"))))
+                except Exception:
+                    continue
+            if (col, row) in cells:
+                return str(sid)
+        return None
+
+    def _save_template_from_selected_structure(self) -> None:
+        cell = self._map_author_selected_cell
+        if cell is None:
+            return
+        sid = self._selected_structure_id_at_cell(int(cell[0]), int(cell[1]))
+        if not sid:
+            return
+        structure = self.map_structures.get(sid) if isinstance(self.map_structures.get(sid), dict) else {}
+        template_id = simpledialog.askstring("Save Structure Template", "Template id:", parent=self)
+        if not template_id:
+            return
+        anchor_col = int(structure.get("anchor_col", 0) or 0)
+        anchor_row = int(structure.get("anchor_row", 0) or 0)
+        occupied = structure.get("occupied_cells") if isinstance(structure.get("occupied_cells"), list) else []
+        footprint: List[Dict[str, int]] = []
+        for entry in occupied:
+            if not isinstance(entry, dict):
+                continue
+            try:
+                col = int(entry.get("col")) - anchor_col
+                row = int(entry.get("row")) - anchor_row
+            except Exception:
+                continue
+            footprint.append({"col": col, "row": row})
+        if not footprint:
+            footprint = [{"col": 0, "row": 0}]
+        template_payload = {
+            "name": str(structure.get("payload", {}).get("name") if isinstance(structure.get("payload"), dict) else structure.get("kind") or template_id),
+            "kind": str(structure.get("kind") or "structure"),
+            "footprint": footprint,
+            "features": [],
+            "decks": [],
+            "anchor_points": [],
+        }
+        for feature in self.map_features.values():
+            if not isinstance(feature, dict):
+                continue
+            payload = feature.get("payload") if isinstance(feature.get("payload"), dict) else {}
+            if str(payload.get("attached_structure_id") or "") != sid:
+                continue
+            try:
+                feature_col = int(feature.get("col", 0) or 0)
+                feature_row = int(feature.get("row", 0) or 0)
+            except Exception:
+                continue
+            template_payload["features"].append(
+                {
+                    "col": feature_col - anchor_col,
+                    "row": feature_row - anchor_row,
+                    "kind": str(feature.get("kind") or "feature"),
+                    "name": str(payload.get("name") or feature.get("kind") or "feature"),
+                    "tags": list(payload.get("tags") if isinstance(payload.get("tags"), list) else []),
+                }
+            )
+        try:
+            self.app._save_structure_template(str(template_id).strip(), template_payload)
+        except Exception:
+            return
+
+    def _place_template_at_selected_cell(self) -> None:
+        cell = self._map_author_selected_cell
+        if cell is None:
+            return
+        templates = {}
+        try:
+            templates = self.app._structure_templates()
+        except Exception:
+            templates = {}
+        if not isinstance(templates, dict) or not templates:
+            return
+        ids = sorted(str(key) for key in templates.keys())
+        choice = simpledialog.askstring(
+            "Place Structure Template",
+            f"Template id ({', '.join(ids[:12])}{'…' if len(ids) > 12 else ''}):",
+            initialvalue=ids[0] if ids else "",
+            parent=self,
+        )
+        if not choice:
+            return
+        try:
+            created = self.app._instantiate_structure_template(
+                str(choice).strip(),
+                anchor_col=int(cell[0]),
+                anchor_row=int(cell[1]),
+            )
+        except Exception:
+            created = None
+        if not created:
+            return
+        try:
+            self._apply_canonical_map_layers_from_state(self.app._capture_canonical_map_state(prefer_window=False))
+        except Exception:
+            pass
+        self._redraw_all()
         if not self.rough_terrain:
             return
         for (col, row), cell in sorted(self.rough_terrain.items()):
@@ -8235,6 +8810,10 @@ class BattleMapWindow(tk.Toplevel):
         self.canvas.delete("group")
         self.canvas.delete("rough")
         self.canvas.delete("obstacle")
+        self.canvas.delete("structure")
+        self.canvas.delete("feature")
+        self.canvas.delete("hazard")
+        self.canvas.delete("elevation")
         # Recreate measure items later if needed
         self._measure_items = []
         self._measure_start = None
@@ -8266,6 +8845,12 @@ class BattleMapWindow(tk.Toplevel):
 
         # Obstacles (block movement)
         self._draw_obstacles()
+
+        # Tactical layers
+        self._draw_map_structures()
+        self._draw_map_features()
+        self._draw_map_hazards()
+        self._draw_map_elevation()
 
         # Move-range overlay goes above the grid but below tokens
         self._update_move_highlight()
@@ -8589,15 +9174,23 @@ class BattleMapWindow(tk.Toplevel):
 
         obstacles = getattr(self, "obstacles", set()) or set()
         rough_terrain = getattr(self, "rough_terrain", {}) or {}
-        map_query = MapQueryAPI(
-            MapState.from_legacy(
+        capture_fn = getattr(self.app, "_capture_canonical_map_state", None)
+        if callable(capture_fn):
+            try:
+                canonical_state = capture_fn(prefer_window=True)
+            except Exception:
+                canonical_state = None
+        else:
+            canonical_state = None
+        if not isinstance(canonical_state, MapState):
+            canonical_state = MapState.from_legacy(
                 cols=int(self.cols),
                 rows=int(self.rows),
                 obstacles=obstacles,
                 rough_terrain=rough_terrain,
                 positions={},
             )
-        )
+        map_query = MapQueryAPI(canonical_state)
         mode = self.app._normalize_movement_mode(getattr(creature, "movement_mode", "normal"))
         water_multiplier = self.app._water_movement_multiplier(creature, mode)
 
@@ -8643,8 +9236,11 @@ class BattleMapWindow(tk.Toplevel):
                 if mode != "fly":
                     if current_type == "water" or target_type == "water":
                         step_cost = int(math.ceil(step_cost * water_multiplier))
-                    if bool(target_cell.is_rough):
-                        step_cost *= 2
+                    try:
+                        step_cost = map_query.movement_cost_for_step(col, row, nc, nr, step_cost)
+                    except Exception:
+                        if bool(target_cell.is_rough):
+                            step_cost *= 2
                 try:
                     step_cost = int(
                         math.ceil(
@@ -10230,6 +10826,16 @@ class BattleMapWindow(tk.Toplevel):
                 self._drawing_obstacles = True
                 self._paint_obstacle_from_event(event)
                 return
+        except Exception:
+            pass
+
+        try:
+            col, row = self._pixel_to_grid(mx, my)
+            if col is not None and row is not None:
+                self._map_author_selected_cell = (int(col), int(row))
+                if str(self.map_author_mode_var.get() or "off").strip().lower() != "off":
+                    self._apply_tactical_author_to_selected_cell()
+                    return
         except Exception:
             pass
 

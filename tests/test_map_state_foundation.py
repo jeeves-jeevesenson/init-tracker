@@ -58,6 +58,67 @@ class MapStateFoundationTests(unittest.TestCase):
         self.assertIn((2, 1), legacy["rough_terrain"])
         self.assertIn(11, legacy["aoes"])
 
+    def test_query_uses_feature_footprint_and_hazard_cost(self):
+        state = MapState.from_dict(
+            {
+                "grid": {"cols": 10, "rows": 10, "feet_per_square": 5},
+                "terrain_cells": [],
+                "obstacles": [],
+                "features": [
+                    {
+                        "id": "f1",
+                        "col": 2,
+                        "row": 2,
+                        "kind": "feature",
+                        "payload": {
+                            "blocks_movement": True,
+                            "occupied_cells": [{"col": 2, "row": 2}, {"col": 3, "row": 2}],
+                        },
+                    }
+                ],
+                "hazards": [
+                    {
+                        "id": "h1",
+                        "col": 4,
+                        "row": 4,
+                        "kind": "fire",
+                        "payload": {"movement_multiplier": 2},
+                    }
+                ],
+                "elevation_cells": [{"col": 4, "row": 4, "elevation": 10}],
+            }
+        )
+        query = MapQueryAPI(state)
+        self.assertTrue(query.blocks_movement(3, 2))
+        self.assertEqual(query.movement_cost_for_step(4, 3, 4, 4, 5), 20)
+
+    def test_map_delta_carries_canonical_layers(self):
+        prev = MapState.from_dict(
+            {
+                "grid": {"cols": 8, "rows": 8, "feet_per_square": 5},
+                "features": [{"id": "f1", "col": 1, "row": 1, "kind": "crate", "payload": {}}],
+                "hazards": [{"id": "h1", "col": 2, "row": 2, "kind": "fire", "payload": {}}],
+                "structures": [{"id": "s1", "kind": "ship_hull", "anchor_col": 0, "anchor_row": 0, "occupied_cells": [], "payload": {}}],
+                "elevation_cells": [{"col": 3, "row": 3, "elevation": 5}],
+            }
+        )
+        curr = MapState.from_dict(
+            {
+                "grid": {"cols": 8, "rows": 8, "feet_per_square": 5},
+                "features": [{"id": "f2", "col": 4, "row": 4, "kind": "barrel", "payload": {}}],
+                "hazards": [{"id": "h2", "col": 5, "row": 5, "kind": "smoke", "payload": {}}],
+                "structures": [{"id": "s2", "kind": "rowboat", "anchor_col": 1, "anchor_row": 1, "occupied_cells": [], "payload": {}}],
+                "elevation_cells": [{"col": 6, "row": 6, "elevation": 10}],
+            }
+        )
+        delta = build_map_delta(prev, curr)
+        merged = apply_map_delta(prev, delta)
+        payload = merged.to_dict()
+        self.assertEqual(payload["features"][0]["id"], "f2")
+        self.assertEqual(payload["hazards"][0]["id"], "h2")
+        self.assertEqual(payload["structures"][0]["id"], "s2")
+        self.assertEqual(payload["elevation_cells"][0]["col"], 6)
+
 
 if __name__ == "__main__":
     unittest.main()
