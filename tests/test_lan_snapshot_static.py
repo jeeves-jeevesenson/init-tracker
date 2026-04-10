@@ -515,6 +515,21 @@ class LanSnapshotStaticTests(unittest.TestCase):
         self.assertEqual(delta["structures"]["upserts"][0]["id"], "s2")
         self.assertEqual(delta["elevation_cells"]["upserts"][0]["col"], 7)
 
+    def test_snapshot_to_map_state_prefers_map_state_payload_with_templates(self):
+        lan = object.__new__(tracker_mod.LanController)
+        snap = {
+            "map_state": {
+                "grid": {"cols": 9, "rows": 9, "feet_per_square": 5},
+                "features": [{"id": "f1", "col": 1, "row": 1, "kind": "crate", "payload": {}}],
+                "presentation": {"structure_templates": {"ship_a": {"name": "Ship A", "kind": "ship_hull", "footprint": [{"col": 0, "row": 0}]}}},
+            },
+            "features": [{"id": "f2", "col": 2, "row": 2, "kind": "barrel", "payload": {}}],
+        }
+        state = lan._snapshot_to_map_state(snap).to_dict()
+        self.assertEqual(state["features"][0]["id"], "f1")
+        self.assertIn("structure_templates", state["presentation"])
+        self.assertIn("ship_a", state["presentation"]["structure_templates"])
+
 
 if __name__ == "__main__":
     unittest.main()

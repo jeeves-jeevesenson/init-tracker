@@ -8781,7 +8781,10 @@ class InitiativeTracker(base.InitiativeTracker):
                 obstacles=dict(legacy_state.obstacles),
                 token_positions=dict(legacy_state.token_positions),
                 aoes=dict(legacy_state.aoes),
-                presentation=dict(legacy_state.presentation),
+                presentation={
+                    **dict(canonical_only.presentation if isinstance(canonical_only.presentation, dict) else {}),
+                    **dict(legacy_state.presentation),
+                },
                 features=dict(canonical_only.features),
                 hazards=dict(canonical_only.hazards),
                 structures=dict(canonical_only.structures),
@@ -8836,6 +8839,134 @@ class InitiativeTracker(base.InitiativeTracker):
 
     def _map_query_api(self) -> MapQueryAPI:
         return MapQueryAPI(self._capture_canonical_map_state(prefer_window=True))
+
+    def _structure_move_blockers(
+        self,
+        state: MapState,
+        structure_id: Any,
+        delta_col: int,
+        delta_row: int,
+    ) -> Dict[str, Any]:
+        query = MapQueryAPI(state if isinstance(state, MapState) else MapState())
+        return query.structure_move_blockers(structure_id, int(delta_col), int(delta_row))
+
+    def _structure_contact_semantics(self, structure_id: Any) -> Dict[str, Any]:
+        sid = str(structure_id or "").strip()
+        if not sid:
+            return {"ok": False, "reason": "missing_structure_id"}
+        query = self._map_query_api()
+        relations = query.structure_contacts(sid)
+        return {
+            "ok": True,
+            "structure_id": sid,
+            "relations": relations,
+            "adjacent_structure_ids": [str(item.get("target_id") or "") for item in relations if bool(item.get("adjacent"))],
+            "boardable_structure_ids": [str(item.get("target_id") or "") for item in relations if bool(item.get("boardable"))],
+        }
+
+    def _normalize_structure_template_payload(
+        self,
+        template_id: Any,
+        template_payload: Any,
+    ) -> Tuple[Dict[str, Any], List[str]]:
+        tid = str(template_id or "").strip()
+        payload = dict(template_payload) if isinstance(template_payload, dict) else {}
+        errors: List[str] = []
+        if not tid:
+            errors.append("missing_template_id")
+        name = str(payload.get("name") or tid or "template").strip() or "template"
+        kind = str(payload.get("kind") or "structure").strip() or "structure"
+        footprint_raw = payload.get("footprint") if isinstance(payload.get("footprint"), list) else []
+        footprint: List[Dict[str, int]] = []
+        seen_cells: set[Tuple[int, int]] = set()
+        for entry in footprint_raw:
+            if not isinstance(entry, dict):
+                continue
+            try:
+                col = int(entry.get("col", 0))
+                row = int(entry.get("row", 0))
+            except Exception:
+                continue
+            key = (col, row)
+            if key in seen_cells:
+                continue
+            seen_cells.add(key)
+            footprint.append({"col": col, "row": row})
+        if not footprint:
+            footprint = [{"col": 0, "row": 0}]
+        if (0, 0) not in {(int(item["col"]), int(item["row"])) for item in footprint}:
+            footprint.insert(0, {"col": 0, "row": 0})
+        features: List[Dict[str, Any]] = []
+        for raw in payload.get("features") if isinstance(payload.get("features"), list) else []:
+            if not isinstance(raw, dict):
+                continue
+            try:
+                col = int(raw.get("col", 0))
+                row = int(raw.get("row", 0))
+            except Exception:
+                col = 0
+                row = 0
+            tags = [str(tag).strip().lower() for tag in (raw.get("tags") if isinstance(raw.get("tags"), list) else []) if str(tag).strip()]
+            feature_payload = dict(raw.get("payload") if isinstance(raw.get("payload"), dict) else {})
+            features.append(
+                {
+                    "col": col,
+                    "row": row,
+                    "kind": str(raw.get("kind") or "feature").strip() or "feature",
+                    "name": str(raw.get("name") or raw.get("kind") or "feature").strip() or "feature",
+                    "tags": tags,
+                    "payload": feature_payload,
+                }
+            )
+        decks: List[Dict[str, Any]] = []
+        for raw in payload.get("decks") if isinstance(payload.get("decks"), list) else []:
+            if not isinstance(raw, dict):
+                continue
+            deck = dict(raw)
+            if deck.get("name") in (None, ""):
+                deck["name"] = f"Deck {len(decks) + 1}"
+            if deck.get("elevation_offset") is not None:
+                try:
+                    deck["elevation_offset"] = float(deck.get("elevation_offset"))
+                except Exception:
+                    deck["elevation_offset"] = 0.0
+            decks.append(deck)
+        anchor_points: List[Dict[str, Any]] = []
+        for raw in payload.get("anchor_points") if isinstance(payload.get("anchor_points"), list) else []:
+            if not isinstance(raw, dict):
+                continue
+            try:
+                ap_col = int(raw.get("col", 0))
+                ap_row = int(raw.get("row", 0))
+            except Exception:
+                continue
+            anchor_points.append(
+                {
+                    "col": ap_col,
+                    "row": ap_row,
+                    "name": str(raw.get("name") or "").strip(),
+                    "tags": [str(tag).strip().lower() for tag in (raw.get("tags") if isinstance(raw.get("tags"), list) else []) if str(tag).strip()],
+                }
+            )
+        facing_default = payload.get("facing_deg", payload.get("default_facing_deg", 0.0))
+        try:
+            facing_default = float(facing_default or 0.0)
+        except Exception:
+            facing_default = 0.0
+        anchor_mode = str(payload.get("anchor_mode") or "origin").strip().lower() or "origin"
+        if anchor_mode not in {"origin", "center"}:
+            anchor_mode = "origin"
+        normalized = {
+            "name": name,
+            "kind": kind,
+            "footprint": footprint,
+            "features": features,
+            "decks": decks,
+            "anchor_points": anchor_points,
+            "default_facing_deg": facing_default,
+            "anchor_mode": anchor_mode,
+        }
+        return normalized, errors
 
     def _next_map_entity_id(self, prefix: str, existing: Iterable[str]) -> str:
         used = {str(item) for item in existing}
@@ -9008,6 +9139,16 @@ class InitiativeTracker(base.InitiativeTracker):
     def _move_map_structure(self, structure_id: Any, delta_col: int, delta_row: int) -> bool:
         sid = str(structure_id or "").strip()
         if not sid:
+            self._last_map_structure_move_error = "missing_structure_id"
+            return False
+        try:
+            dc = int(delta_col)
+            dr = int(delta_row)
+        except Exception:
+            self._last_map_structure_move_error = "invalid_delta"
+            return False
+        if dc == 0 and dr == 0:
+            self._last_map_structure_move_error = "zero_delta"
             return False
         moved = False
 
@@ -9015,16 +9156,17 @@ class InitiativeTracker(base.InitiativeTracker):
             nonlocal moved
             item = (state.structures or {}).get(sid)
             if item is None:
+                self._last_map_structure_move_error = "structure_not_found"
+                return
+            blockers = self._structure_move_blockers(state, sid, dc, dr)
+            if not bool(blockers.get("ok")):
+                self._last_map_structure_move_error = "blocked"
+                self._last_map_structure_move_blockers = blockers
                 return
             old_structure_cells = set(item.occupied_cells or [])
             old_structure_cells.add((int(item.anchor_col), int(item.anchor_row)))
-            occupied = [(int(c) + int(delta_col), int(r) + int(delta_row)) for c, r in list(item.occupied_cells or [])]
-            next_anchor = (int(item.anchor_col) + int(delta_col), int(item.anchor_row) + int(delta_row))
-            cols = int(state.grid.cols)
-            rows = int(state.grid.rows)
-            for col, row in [next_anchor] + occupied:
-                if col < 0 or row < 0 or col >= cols or row >= rows:
-                    return
+            occupied = [(int(c) + dc, int(r) + dr) for c, r in list(item.occupied_cells or [])]
+            next_anchor = (int(item.anchor_col) + dc, int(item.anchor_row) + dr)
             updated = MapStructure(
                 structure_id=str(item.structure_id),
                 kind=str(item.kind),
@@ -9047,18 +9189,32 @@ class InitiativeTracker(base.InitiativeTracker):
                         if isinstance(raw, dict):
                             shifted_cells.append(
                                 {
-                                    "col": int(raw.get("col", 0)) + int(delta_col),
-                                    "row": int(raw.get("row", 0)) + int(delta_row),
+                                    "col": int(raw.get("col", 0)) + dc,
+                                    "row": int(raw.get("row", 0)) + dr,
                                 }
                             )
+                feature_footprint = feature_payload.get("footprint")
+                shifted_footprint: List[Dict[str, int]] = []
+                if isinstance(feature_footprint, list):
+                    for raw in feature_footprint:
+                        if not isinstance(raw, dict):
+                            continue
+                        shifted_footprint.append(
+                            {
+                                "col": int(raw.get("col", 0)) + dc,
+                                "row": int(raw.get("row", 0)) + dr,
+                            }
+                        )
                 next_payload = dict(feature_payload)
                 if shifted_cells:
                     next_payload["occupied_cells"] = shifted_cells
+                if shifted_footprint:
+                    next_payload["footprint"] = shifted_footprint
                 features = dict(state.features or {})
                 features[str(feature.feature_id)] = MapFeature(
                     feature_id=str(feature.feature_id),
-                    col=int(feature.col) + int(delta_col),
-                    row=int(feature.row) + int(delta_row),
+                    col=int(feature.col) + dc,
+                    row=int(feature.row) + dr,
                     kind=str(feature.kind),
                     payload=next_payload,
                 ).normalized()
@@ -9067,9 +9223,11 @@ class InitiativeTracker(base.InitiativeTracker):
             for cid, pos in list(token_positions.items()):
                 if tuple(pos) not in old_structure_cells:
                     continue
-                token_positions[int(cid)] = (int(pos[0]) + int(delta_col), int(pos[1]) + int(delta_row))
+                token_positions[int(cid)] = (int(pos[0]) + dc, int(pos[1]) + dr)
             state.token_positions = token_positions
             moved = True
+            self._last_map_structure_move_error = ""
+            self._last_map_structure_move_blockers = {}
 
         self._mutate_canonical_map_state(_mutate)
         return bool(moved)
@@ -9077,16 +9235,22 @@ class InitiativeTracker(base.InitiativeTracker):
     def _save_structure_template(self, template_id: str, template_payload: Dict[str, Any]) -> None:
         tid = str(template_id or "").strip()
         if not tid:
+            self._last_map_template_error = "missing_template_id"
             return
+        normalized_payload, errors = self._normalize_structure_template_payload(tid, template_payload)
+        if errors:
+            self._last_map_template_error = ",".join(errors)
+            raise ValueError(self._last_map_template_error)
 
         def _mutate(state: MapState) -> None:
             presentation = dict(state.presentation or {})
             templates = dict(presentation.get("structure_templates") if isinstance(presentation.get("structure_templates"), dict) else {})
-            templates[tid] = dict(template_payload or {})
+            templates[tid] = dict(normalized_payload or {})
             presentation["structure_templates"] = templates
             state.presentation = presentation
 
         self._mutate_canonical_map_state(_mutate)
+        self._last_map_template_error = ""
 
     def _structure_templates(self) -> Dict[str, Dict[str, Any]]:
         state = self._capture_canonical_map_state(prefer_window=True)
@@ -9097,7 +9261,10 @@ class InitiativeTracker(base.InitiativeTracker):
         out: Dict[str, Dict[str, Any]] = {}
         for key, value in templates.items():
             if isinstance(value, dict):
-                out[str(key)] = dict(value)
+                normalized, errors = self._normalize_structure_template_payload(str(key), value)
+                if errors:
+                    continue
+                out[str(key)] = dict(normalized)
         return out
 
     def _instantiate_structure_template(
@@ -9111,7 +9278,26 @@ class InitiativeTracker(base.InitiativeTracker):
         templates = self._structure_templates()
         template = templates.get(str(template_id or "").strip())
         if not isinstance(template, dict):
+            self._last_map_template_error = "template_not_found"
             return None
+        self._last_map_template_error = ""
+        try:
+            facing = float(facing_deg)
+        except Exception:
+            facing = 0.0
+        rotation_steps = int(round(facing / 90.0)) % 4
+        canonical_anchor_col = int(anchor_col)
+        canonical_anchor_row = int(anchor_row)
+
+        def _rotate(local_col: int, local_row: int) -> Tuple[int, int]:
+            if rotation_steps == 1:
+                return -int(local_row), int(local_col)
+            if rotation_steps == 2:
+                return -int(local_col), -int(local_row)
+            if rotation_steps == 3:
+                return int(local_row), -int(local_col)
+            return int(local_col), int(local_row)
+
         local_cells_raw = template.get("footprint") if isinstance(template.get("footprint"), list) else []
         occupied_cells: List[Tuple[int, int]] = []
         for entry in local_cells_raw:
@@ -9122,43 +9308,114 @@ class InitiativeTracker(base.InitiativeTracker):
                 local_row = int(entry.get("row", 0))
             except Exception:
                 continue
-            occupied_cells.append((int(anchor_col) + local_col, int(anchor_row) + local_row))
+            rc, rr = _rotate(local_col, local_row)
+            occupied_cells.append((canonical_anchor_col + rc, canonical_anchor_row + rr))
         if not occupied_cells:
-            occupied_cells = [(int(anchor_col), int(anchor_row))]
+            occupied_cells = [(canonical_anchor_col, canonical_anchor_row)]
         payload = {
             "template_id": str(template_id),
             "name": str(template.get("name") or template_id),
-            "facing_deg": float(facing_deg),
+            "facing_deg": float(facing),
             "local_decks": list(template.get("decks") if isinstance(template.get("decks"), list) else []),
             "anchor_points": list(template.get("anchor_points") if isinstance(template.get("anchor_points"), list) else []),
         }
-        structure_id = self._upsert_map_structure(
-            kind=str(template.get("kind") or "structure"),
-            anchor_col=int(anchor_col),
-            anchor_row=int(anchor_row),
-            occupied_cells=occupied_cells,
-            payload=payload,
-        )
-        default_features = template.get("features") if isinstance(template.get("features"), list) else []
-        for feature in default_features:
-            if not isinstance(feature, dict):
-                continue
+        structure_id: Optional[str] = None
+
+        def _mutate(state: MapState) -> None:
+            nonlocal structure_id
+            sid = self._next_map_entity_id("structure", (state.structures or {}).keys())
+            cols = int(state.grid.cols)
+            rows = int(state.grid.rows)
+            for col, row in occupied_cells:
+                if int(col) < 0 or int(row) < 0 or int(col) >= cols or int(row) >= rows:
+                    self._last_map_template_error = "template_out_of_bounds"
+                    return
+            test_structures = dict(state.structures or {})
+            test_structures[sid] = MapStructure(
+                structure_id=sid,
+                kind=str(template.get("kind") or "structure"),
+                anchor_col=canonical_anchor_col,
+                anchor_row=canonical_anchor_row,
+                occupied_cells=list(occupied_cells),
+                payload=dict(payload),
+            ).normalized()
+            test_state = MapState(
+                schema_version=state.schema_version,
+                grid=state.grid,
+                terrain_cells=dict(state.terrain_cells),
+                obstacles=dict(state.obstacles),
+                features=dict(state.features),
+                hazards=dict(state.hazards),
+                structures=test_structures,
+                elevation_cells=dict(state.elevation_cells),
+                token_positions=dict(state.token_positions),
+                aoes=dict(state.aoes),
+                presentation=dict(state.presentation),
+            ).normalized()
+            blockers = self._structure_move_blockers(test_state, sid, 0, 0)
+            blocked_entities = dict(blockers.get("blockers") if isinstance(blockers.get("blockers"), dict) else {})
+            blocked_entities["structures"] = [
+                item for item in blocked_entities.get("structures", []) if str(item.get("id") or "") != sid
+            ]
+            has_block = any(bool(blocked_entities.get(key)) for key in ("out_of_bounds", "obstacles", "features", "structures", "hazards"))
+            if has_block:
+                self._last_map_template_error = "template_conflict"
+                return
+            test_state.structures = test_structures
+            structure_id = sid
+            default_features = template.get("features") if isinstance(template.get("features"), list) else []
+            feature_map = dict(state.features or {})
+            for feature in default_features:
+                if not isinstance(feature, dict):
+                    continue
+                try:
+                    local_col = int(feature.get("col", 0))
+                    local_row = int(feature.get("row", 0))
+                except Exception:
+                    local_col = 0
+                    local_row = 0
+                rc, rr = _rotate(local_col, local_row)
+                world_col = canonical_anchor_col + rc
+                world_row = canonical_anchor_row + rr
+                if world_col < 0 or world_row < 0 or world_col >= cols or world_row >= rows:
+                    continue
+                feature_id = self._next_map_entity_id("feature", feature_map.keys())
+                feature_payload = dict(feature.get("payload") if isinstance(feature.get("payload"), dict) else {})
+                feature_payload["name"] = str(feature.get("name") or feature.get("kind") or "feature")
+                feature_payload["tags"] = list(feature.get("tags") if isinstance(feature.get("tags"), list) else [])
+                feature_payload["attached_structure_id"] = str(sid)
+                feature_map[feature_id] = MapFeature(
+                    feature_id=feature_id,
+                    col=world_col,
+                    row=world_row,
+                    kind=str(feature.get("kind") or "feature"),
+                    payload=feature_payload,
+                ).normalized()
+            state.structures = test_structures
+            state.features = feature_map
+
+        self._mutate_canonical_map_state(_mutate)
+        if not structure_id:
+            return None
+        try:
+            template_decks = template.get("decks") if isinstance(template.get("decks"), list) else []
+            for entry in template_decks:
+                if not isinstance(entry, dict):
+                    continue
+                if entry.get("elevation_offset") is None:
+                    continue
+                anchor_offset = float(entry.get("elevation_offset") or 0.0)
+                if abs(anchor_offset) < 1e-9:
+                    continue
+                self._set_map_elevation(canonical_anchor_col, canonical_anchor_row, anchor_offset)
+                break
+        except Exception:
+            pass
+        if structure_id:
             try:
-                local_col = int(feature.get("col", 0))
-                local_row = int(feature.get("row", 0))
+                self._last_structure_contact_semantics = self._structure_contact_semantics(structure_id)
             except Exception:
-                local_col = 0
-                local_row = 0
-            self._upsert_map_feature(
-                col=int(anchor_col) + local_col,
-                row=int(anchor_row) + local_row,
-                kind=str(feature.get("kind") or "feature"),
-                payload={
-                    "name": str(feature.get("name") or feature.get("kind") or "feature"),
-                    "tags": list(feature.get("tags") if isinstance(feature.get("tags"), list) else []),
-                    "attached_structure_id": str(structure_id),
-                },
-            )
+                pass
         return structure_id
 
     def _resolve_map_environment_event(self, event: Dict[str, Any]) -> Dict[str, Any]:
@@ -9171,6 +9428,37 @@ class InitiativeTracker(base.InitiativeTracker):
         result: Dict[str, Any] = {"ok": True, "type": event_type}
 
         def _mutate(state: MapState) -> None:
+            def _next_hazard_id() -> str:
+                return self._next_map_entity_id("hazard", (state.hazards or {}).keys())
+
+            def _in_bounds(col: int, row: int) -> bool:
+                return 0 <= int(col) < int(state.grid.cols) and 0 <= int(row) < int(state.grid.rows)
+
+            def _spawn_hazard(col: int, row: int, kind: str, payload: Optional[Dict[str, Any]] = None) -> Optional[str]:
+                if not _in_bounds(col, row):
+                    return None
+                data = dict(payload or {})
+                duration = data.get("duration_turns")
+                if duration is not None and data.get("remaining_turns") is None:
+                    try:
+                        data["remaining_turns"] = int(duration)
+                    except Exception:
+                        pass
+                hazards = dict(state.hazards or {})
+                for hid, existing in hazards.items():
+                    if int(existing.col) == int(col) and int(existing.row) == int(row) and str(existing.kind or "").lower() == str(kind or "").lower():
+                        return str(hid)
+                hid = _next_hazard_id()
+                hazards[hid] = MapHazard(
+                    hazard_id=hid,
+                    col=int(col),
+                    row=int(row),
+                    kind=str(kind or "hazard"),
+                    payload=data,
+                ).normalized()
+                state.hazards = hazards
+                return hid
+
             if event_type == "destroy_feature":
                 feature_id = str(event.get("feature_id") or "").strip()
                 feature = (state.features or {}).get(feature_id)
@@ -9184,25 +9472,29 @@ class InitiativeTracker(base.InitiativeTracker):
                 payload = feature.payload if isinstance(feature.payload, dict) else {}
                 feature_kind = str(feature.kind or "").lower()
                 flammable = bool(payload.get("flammable")) or feature_kind in {"barrel", "powder_barrel"}
-                if flammable:
-                    hazard_payload = {
-                        "tags": ["fire", "environment"],
-                        "duration_turns": 3,
-                        "remaining_turns": 3,
-                        "movement_multiplier": 2.0,
-                        "source_feature_id": feature_id,
+                spawn_config = payload.get("on_destroy_spawn_hazard") if isinstance(payload.get("on_destroy_spawn_hazard"), dict) else None
+                if spawn_config is None and flammable:
+                    spawn_config = {
+                        "kind": "fire",
+                        "payload": {
+                            "tags": ["fire", "environment"],
+                            "duration_turns": 3,
+                            "remaining_turns": 3,
+                            "movement_multiplier": 2.0,
+                            "source_feature_id": feature_id,
+                        },
                     }
-                    hazard_id = self._next_map_entity_id("hazard", (state.hazards or {}).keys())
-                    hazards = dict(state.hazards or {})
-                    hazards[hazard_id] = MapHazard(
-                        hazard_id=hazard_id,
-                        col=int(feature.col),
-                        row=int(feature.row),
-                        kind="fire",
-                        payload=hazard_payload,
-                    ).normalized()
-                    state.hazards = hazards
+                hazard_id = None
+                if isinstance(spawn_config, dict):
+                    hazard_id = _spawn_hazard(
+                        int(feature.col),
+                        int(feature.row),
+                        str(spawn_config.get("kind") or "hazard"),
+                        dict(spawn_config.get("payload") if isinstance(spawn_config.get("payload"), dict) else {}),
+                    )
+                if hazard_id:
                     result["spawned_hazard_id"] = hazard_id
+                    result["spawned_hazard_kind"] = str(spawn_config.get("kind") or "hazard") if isinstance(spawn_config, dict) else "hazard"
             elif event_type == "ignite_feature":
                 feature_id = str(event.get("feature_id") or "").strip()
                 feature = (state.features or {}).get(feature_id)
@@ -9221,13 +9513,85 @@ class InitiativeTracker(base.InitiativeTracker):
                     payload=payload,
                 ).normalized()
                 state.features = features
+                spawn_config = payload.get("on_ignite_spawn_hazard")
+                if isinstance(spawn_config, dict):
+                    spawned = _spawn_hazard(
+                        int(feature.col),
+                        int(feature.row),
+                        str(spawn_config.get("kind") or "fire"),
+                        dict(spawn_config.get("payload") if isinstance(spawn_config.get("payload"), dict) else {}),
+                    )
+                    if spawned:
+                        result["spawned_hazard_id"] = spawned
+            elif event_type == "extinguish_feature":
+                feature_id = str(event.get("feature_id") or "").strip()
+                feature = (state.features or {}).get(feature_id)
+                if feature is None:
+                    result["ok"] = False
+                    result["reason"] = "feature_not_found"
+                    return
+                payload = dict(feature.payload or {})
+                payload["ignited"] = False
+                features = dict(state.features or {})
+                features[feature_id] = MapFeature(
+                    feature_id=str(feature.feature_id),
+                    col=int(feature.col),
+                    row=int(feature.row),
+                    kind=str(feature.kind),
+                    payload=payload,
+                ).normalized()
+                state.features = features
+            elif event_type == "extinguish_hazard":
+                hazard_id = str(event.get("hazard_id") or "").strip()
+                hazards = dict(state.hazards or {})
+                if hazard_id:
+                    if hazard_id in hazards:
+                        hazards.pop(hazard_id, None)
+                        state.hazards = hazards
+                    else:
+                        result["ok"] = False
+                        result["reason"] = "hazard_not_found"
+                else:
+                    try:
+                        col = int(event.get("col"))
+                        row = int(event.get("row"))
+                    except Exception:
+                        result["ok"] = False
+                        result["reason"] = "missing_hazard_target"
+                        return
+                    tags = {str(tag).strip().lower() for tag in (event.get("tags") if isinstance(event.get("tags"), list) else []) if str(tag).strip()}
+                    removed = 0
+                    for hid, hazard in list(hazards.items()):
+                        if int(hazard.col) != col or int(hazard.row) != row:
+                            continue
+                        payload = hazard.payload if isinstance(hazard.payload, dict) else {}
+                        hazard_tags = {str(tag).strip().lower() for tag in (payload.get("tags") if isinstance(payload.get("tags"), list) else []) if str(tag).strip()}
+                        if tags and not (hazard_tags & tags):
+                            continue
+                        hazards.pop(hid, None)
+                        removed += 1
+                    state.hazards = hazards
+                    result["removed_hazard_count"] = removed
             elif event_type == "tick_hazards":
                 hazards: Dict[str, MapHazard] = {}
                 ignited_features: List[str] = []
-                for hid, hazard in (state.hazards or {}).items():
+                pending_spawns: List[Tuple[int, int, str, Dict[str, Any]]] = []
+                spawned_hazards: List[str] = []
+                expired_hazards: List[str] = []
+                max_ignite_events = max(1, int(event.get("max_ignite_events", 12) or 12))
+                for hid in sorted((state.hazards or {}).keys()):
+                    hazard = (state.hazards or {}).get(hid)
+                    if hazard is None:
+                        continue
                     payload = dict(hazard.payload or {})
                     if bool(payload.get("persistent")):
-                        hazards[str(hid)] = hazard
+                        hazards[str(hid)] = MapHazard(
+                            hazard_id=str(hazard.hazard_id),
+                            col=int(hazard.col),
+                            row=int(hazard.row),
+                            kind=str(hazard.kind),
+                            payload=payload,
+                        ).normalized()
                     else:
                         remaining = payload.get("remaining_turns")
                         if remaining is None:
@@ -9251,9 +9615,13 @@ class InitiativeTracker(base.InitiativeTracker):
                                     kind=str(hazard.kind),
                                     payload=payload,
                                 ).normalized()
+                            else:
+                                expired_hazards.append(str(hid))
                     if str(hazard.kind or "").strip().lower() == "fire":
                         hx, hy = int(hazard.col), int(hazard.row)
                         for feature in (state.features or {}).values():
+                            if len(ignited_features) >= max_ignite_events:
+                                break
                             feature_payload = feature.payload if isinstance(feature.payload, dict) else {}
                             feature_kind = str(feature.kind or "").strip().lower()
                             flammable = bool(feature_payload.get("flammable")) or feature_kind in {"barrel", "powder_barrel", "mast", "crate"}
@@ -9262,6 +9630,19 @@ class InitiativeTracker(base.InitiativeTracker):
                             fx, fy = int(feature.col), int(feature.row)
                             if max(abs(fx - hx), abs(fy - hy)) <= 1:
                                 ignited_features.append(str(feature.feature_id))
+                                if bool(feature_payload.get("on_ignite_spawn_hazard")):
+                                    pending_spawns.append(
+                                        (
+                                            int(fx),
+                                            int(fy),
+                                            str((feature_payload.get("on_ignite_spawn_hazard") or {}).get("kind") or "fire"),
+                                            dict(
+                                                (feature_payload.get("on_ignite_spawn_hazard") or {}).get("payload")
+                                                if isinstance((feature_payload.get("on_ignite_spawn_hazard") or {}).get("payload"), dict)
+                                                else {}
+                                            ),
+                                        )
+                                    )
                 if ignited_features:
                     next_features = dict(state.features or {})
                     for fid in ignited_features:
@@ -9279,6 +9660,16 @@ class InitiativeTracker(base.InitiativeTracker):
                         ).normalized()
                     state.features = next_features
                 state.hazards = hazards
+                for spawn_col, spawn_row, spawn_kind, spawn_payload in pending_spawns:
+                    spawned = _spawn_hazard(spawn_col, spawn_row, spawn_kind, spawn_payload)
+                    if spawned:
+                        spawned_hazards.append(spawned)
+                if expired_hazards:
+                    result["expired_hazard_ids"] = sorted(set(expired_hazards))
+                if spawned_hazards:
+                    result["spawned_hazard_ids"] = sorted(set(spawned_hazards))
+                if ignited_features:
+                    result["ignited_feature_ids"] = sorted(set(ignited_features))
 
         self._mutate_canonical_map_state(_mutate)
         return result

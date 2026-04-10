@@ -579,6 +579,149 @@ class SessionSaveLoadTests(unittest.TestCase):
             self.assertEqual(state["features"][0]["col"], 8)
             self.assertEqual(state["token_positions"][0]["col"], 7)
 
+    def test_move_structure_rejects_conflicting_cells(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            app = self._make_app(Path(tmpdir) / "battle.log")
+            app._map_state = tracker_mod.MapState.from_dict(
+                {
+                    "grid": {"cols": 20, "rows": 20, "feet_per_square": 5},
+                    "structures": [
+                        {
+                            "id": "ship_1",
+                            "kind": "ship_hull",
+                            "anchor_col": 5,
+                            "anchor_row": 5,
+                            "occupied_cells": [{"col": 5, "row": 5}, {"col": 6, "row": 5}],
+                            "payload": {},
+                        },
+                        {
+                            "id": "ship_2",
+                            "kind": "ship_hull",
+                            "anchor_col": 8,
+                            "anchor_row": 5,
+                            "occupied_cells": [{"col": 8, "row": 5}],
+                            "payload": {},
+                        },
+                    ],
+                    "features": [
+                        {
+                            "id": "f_wall",
+                            "col": 7,
+                            "row": 5,
+                            "kind": "wall",
+                            "payload": {"blocks_structure_movement": True},
+                        }
+                    ],
+                }
+            )
+            moved = app._move_map_structure("ship_1", 2, 0)
+            self.assertFalse(moved)
+            self.assertEqual(getattr(app, "_last_map_structure_move_error", ""), "blocked")
+            blockers = getattr(app, "_last_map_structure_move_blockers", {})
+            self.assertTrue((blockers.get("blockers") or {}).get("features"))
+
+    def test_environment_tick_reports_ignitions_and_expiry(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            app = self._make_app(Path(tmpdir) / "battle.log")
+            app._map_state = tracker_mod.MapState.from_dict(
+                {
+                    "grid": {"cols": 12, "rows": 12, "feet_per_square": 5},
+                    "features": [
+                        {
+                            "id": "f_mast",
+                            "col": 5,
+                            "row": 5,
+                            "kind": "mast",
+                            "payload": {"flammable": True, "on_ignite_spawn_hazard": {"kind": "fire", "payload": {"duration_turns": 2}}},
+                        }
+                    ],
+                    "hazards": [
+                        {
+                            "id": "h_fire",
+                            "col": 5,
+                            "row": 4,
+                            "kind": "fire",
+                            "payload": {"duration_turns": 1, "remaining_turns": 1},
+                        }
+                    ],
+                }
+            )
+            result = app._resolve_map_environment_event({"type": "tick_hazards"})
+            self.assertTrue(result.get("ok"))
+            self.assertTrue(result.get("expired_hazard_ids"))
+            self.assertTrue(result.get("ignited_feature_ids"))
+            state = app._capture_canonical_map_state(prefer_window=False).to_dict()
+            self.assertTrue(any((item.get("payload") or {}).get("ignited") for item in state["features"]))
+
+    def test_extinguish_hazard_by_cell(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            app = self._make_app(Path(tmpdir) / "battle.log")
+            app._map_state = tracker_mod.MapState.from_dict(
+                {
+                    "grid": {"cols": 8, "rows": 8, "feet_per_square": 5},
+                    "hazards": [
+                        {"id": "h1", "col": 3, "row": 3, "kind": "fire", "payload": {"tags": ["fire"]}},
+                        {"id": "h2", "col": 3, "row": 3, "kind": "smoke", "payload": {"tags": ["smoke"]}},
+                    ],
+                }
+            )
+            result = app._resolve_map_environment_event({"type": "extinguish_hazard", "col": 3, "row": 3, "tags": ["fire"]})
+            self.assertTrue(result.get("ok"))
+            self.assertEqual(result.get("removed_hazard_count"), 1)
+            state = app._capture_canonical_map_state(prefer_window=False).to_dict()
+            self.assertEqual(len(state["hazards"]), 1)
+
+    def test_structure_template_validation_and_rotation(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            app = self._make_app(Path(tmpdir) / "battle.log")
+            app._map_state = tracker_mod.MapState.from_dict({"grid": {"cols": 20, "rows": 20, "feet_per_square": 5}})
+            app._save_structure_template(
+                "ship_alpha",
+                {
+                    "name": "Ship Alpha",
+                    "kind": "ship_hull",
+                    "footprint": [{"col": 0, "row": 0}, {"col": 1, "row": 0}],
+                    "features": [{"col": 1, "row": 0, "kind": "mast", "name": "Mast", "tags": ["climbable"]}],
+                },
+            )
+            created = app._instantiate_structure_template("ship_alpha", anchor_col=10, anchor_row=10, facing_deg=90)
+            self.assertTrue(created)
+            state = app._capture_canonical_map_state(prefer_window=False).to_dict()
+            structure = next(item for item in state["structures"] if item["id"] == created)
+            occupied = {(entry["col"], entry["row"]) for entry in structure["occupied_cells"]}
+            self.assertIn((10, 10), occupied)
+            self.assertIn((10, 11), occupied)
+
+    def test_structure_contact_semantics_reports_boardable_adjacency(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            app = self._make_app(Path(tmpdir) / "battle.log")
+            app._map_state = tracker_mod.MapState.from_dict(
+                {
+                    "grid": {"cols": 20, "rows": 20, "feet_per_square": 5},
+                    "structures": [
+                        {
+                            "id": "a",
+                            "kind": "ship_hull",
+                            "anchor_col": 5,
+                            "anchor_row": 5,
+                            "occupied_cells": [{"col": 5, "row": 5}, {"col": 6, "row": 5}],
+                            "payload": {"boardable": True},
+                        },
+                        {
+                            "id": "b",
+                            "kind": "ship_hull",
+                            "anchor_col": 7,
+                            "anchor_row": 5,
+                            "occupied_cells": [{"col": 7, "row": 5}],
+                            "payload": {"allow_boarding": True},
+                        },
+                    ],
+                }
+            )
+            semantics = app._structure_contact_semantics("a")
+            self.assertTrue(semantics.get("ok"))
+            self.assertEqual(semantics.get("boardable_structure_ids"), ["b"])
+
     def test_migrate_schema_v2_sparse_legacy_map_payload_is_hardened(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             app = self._make_app(Path(tmpdir) / "battle.log")
