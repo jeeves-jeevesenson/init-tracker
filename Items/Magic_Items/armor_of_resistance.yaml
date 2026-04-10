@@ -1,0 +1,53 @@
+id: armor_of_resistance
+name: Armor of Resistance
+category: armor
+description: 'Armor (light, medium, or heavy), rare (requires attunement)
+
+
+  You have resistance to one type of damage while you wear this armor. The GM chooses
+  the type or determines it randomly from the options below.
+
+
+  | d10 | Damage Type |
+
+
+  |---|---|
+
+
+  | 1 | Acid |
+
+
+  | 2 | Cold |
+
+
+  | 3 | Fire |
+
+
+  | 4 | Force |
+
+
+  | 5 | Lightning |
+
+
+  | 6 | Necrotic |
+
+
+  | 7 | Poison |
+
+
+  | 8 | Psychic |
+
+
+  | 9 | Radiant |
+
+
+  | 10 | Thunder |'
+source:
+  provider: dnd5eapi
+  edition: '2014'
+  url: https://www.dnd5eapi.co/api/2014/magic-items/armor-of-resistance
+import_notes:
+- Imported from 2014 SRD magic item data.
+- This is a descriptive stub; add grants/modifiers manually if desired.
+rarity: rare
+requires_attunement: true

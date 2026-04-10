@@ -1,0 +1,24 @@
+format_version: 1
+id: potion_of_gaseous_form
+name: Potion of Gaseous Form
+type: consumable
+kind: consumable
+category: potion
+consumable_type: potion
+subtype: rare
+description: 'Potion, rare
+
+
+  When you drink this potion, you gain the effect of the gaseous form spell for 1
+  hour (no concentration required) or until you end the effect as a bonus action.
+  This potion''s container seems to hold fog that moves and pours like water.'
+effect_hint: Imported from external SRD data. Review description for exact behavior.
+stackable: true
+source:
+  provider: dnd5eapi
+  edition: '2014'
+  url: https://www.dnd5eapi.co/api/2014/magic-items/potion-of-gaseous-form
+import_notes:
+- Imported from 2014 SRD magic item data.
+- This is a descriptive stub; add automation manually if desired.
+rarity: rare

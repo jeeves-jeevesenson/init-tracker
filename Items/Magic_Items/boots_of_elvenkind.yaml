@@ -1,0 +1,17 @@
+id: boots_of_elvenkind
+name: Boots of Elvenkind
+category: wondrous_items
+description: 'Wondrous item, uncommon
+
+
+  While you wear these boots, your steps make no sound, regardless of the surface
+  you are moving across. You also have advantage on Dexterity (Stealth) checks that
+  rely on moving silently.'
+source:
+  provider: dnd5eapi
+  edition: '2014'
+  url: https://www.dnd5eapi.co/api/2014/magic-items/boots-of-elvenkind
+import_notes:
+- Imported from 2014 SRD magic item data.
+- This is a descriptive stub; add grants/modifiers manually if desired.
+rarity: uncommon

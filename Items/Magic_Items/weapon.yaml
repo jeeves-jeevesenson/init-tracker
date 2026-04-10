@@ -1,0 +1,16 @@
+id: weapon
+name: Weapon, +1, +2, or +3
+category: weapon
+description: 'Weapon (any), uncommon (+1), rare (+2), or very rare (+3)
+
+
+  You have a bonus to attack and damage rolls made with this magic weapon. The bonus
+  is determined by the weapon''s rarity.'
+source:
+  provider: dnd5eapi
+  edition: '2014'
+  url: https://www.dnd5eapi.co/api/2014/magic-items/weapon
+import_notes:
+- Imported from 2014 SRD magic item data.
+- This is a descriptive stub; add grants/modifiers manually if desired.
+rarity: varies

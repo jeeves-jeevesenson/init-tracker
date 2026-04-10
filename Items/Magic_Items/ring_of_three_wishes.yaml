@@ -1,0 +1,16 @@
+id: ring_of_three_wishes
+name: Ring of Three Wishes
+category: ring
+description: 'Ring, legendary
+
+
+  While wearing this ring, you can use an action to expend 1 of its 3 charges to cast
+  the wish spell from it. The ring becomes nonmagical when you use the last charge.'
+source:
+  provider: dnd5eapi
+  edition: '2014'
+  url: https://www.dnd5eapi.co/api/2014/magic-items/ring-of-three-wishes
+import_notes:
+- Imported from 2014 SRD magic item data.
+- This is a descriptive stub; add grants/modifiers manually if desired.
+rarity: legendary

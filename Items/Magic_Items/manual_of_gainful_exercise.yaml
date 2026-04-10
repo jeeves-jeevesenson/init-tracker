@@ -1,0 +1,18 @@
+id: manual_of_gainful_exercise
+name: Manual of Gainful Exercise
+category: wondrous_items
+description: 'Wondrous item, very rare
+
+
+  This book describes fitness exercises, and its words are charged with magic. If
+  you spend 48 hours over a period of 6 days or fewer studying the book''s contents
+  and practicing its guidelines, your Strength score increases by 2, as does your
+  maximum for that score. The manual then loses its magic, but regains it in a century.'
+source:
+  provider: dnd5eapi
+  edition: '2014'
+  url: https://www.dnd5eapi.co/api/2014/magic-items/manual-of-gainful-exercise
+import_notes:
+- Imported from 2014 SRD magic item data.
+- This is a descriptive stub; add grants/modifiers manually if desired.
+rarity: very rare

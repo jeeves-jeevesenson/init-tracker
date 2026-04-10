@@ -1,0 +1,18 @@
+format_version: 1
+id: case_map_or_scroll
+name: Case, map or scroll
+type: gear
+kind: gear
+category: adventuring_gear
+source:
+  provider: dnd5eapi
+  edition: '2014'
+  url: https://www.dnd5eapi.co/api/2014/equipment/case-map-or-scroll
+subtype: standard_gear
+description: This cylindrical leather case can hold up to ten rolled-up sheets of
+  paper or five rolled-up sheets of parchment.
+cost:
+  gp: 1
+weight_lb: 1
+import_notes:
+- Imported from 2014 SRD equipment data.

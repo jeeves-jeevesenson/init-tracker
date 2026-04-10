@@ -1,0 +1,16 @@
+id: ring_of_water_walking
+name: Ring of Water Walking
+category: ring
+description: 'Ring, uncommon
+
+
+  While wearing this ring, you can stand on and move across any liquid surface as
+  if it were solid ground.'
+source:
+  provider: dnd5eapi
+  edition: '2014'
+  url: https://www.dnd5eapi.co/api/2014/magic-items/ring-of-water-walking
+import_notes:
+- Imported from 2014 SRD magic item data.
+- This is a descriptive stub; add grants/modifiers manually if desired.
+rarity: uncommon

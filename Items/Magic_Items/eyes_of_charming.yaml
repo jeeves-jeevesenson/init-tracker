@@ -1,0 +1,19 @@
+id: eyes_of_charming
+name: Eyes of Charming
+category: wondrous_items
+description: 'Wondrous item, uncommon (requires attunement)
+
+
+  These crystal lenses fit over the eyes. They have 3 charges. While wearing them,
+  you can expend 1 charge as an action to cast the charm person spell (save DC 13)
+  on a humanoid within 30 feet of you, provided that you and the target can see each
+  other. The lenses regain all expended charges daily at dawn.'
+source:
+  provider: dnd5eapi
+  edition: '2014'
+  url: https://www.dnd5eapi.co/api/2014/magic-items/eyes-of-charming
+import_notes:
+- Imported from 2014 SRD magic item data.
+- This is a descriptive stub; add grants/modifiers manually if desired.
+rarity: uncommon
+requires_attunement: true

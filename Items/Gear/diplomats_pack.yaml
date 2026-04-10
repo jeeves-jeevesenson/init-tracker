@@ -1,0 +1,38 @@
+format_version: 1
+id: diplomats_pack
+name: Diplomat's Pack
+type: gear
+kind: gear
+category: adventuring_gear
+source:
+  provider: dnd5eapi
+  edition: '2014'
+  url: https://www.dnd5eapi.co/api/2014/equipment/diplomats-pack
+subtype: equipment_packs
+description: 'Contains:
+
+  - 1 × Chest
+
+  - 2 × Case, map or scroll
+
+  - 1 × Clothes, fine
+
+  - 1 × Ink (1 ounce bottle)
+
+  - 1 × Ink pen
+
+  - 1 × Lamp
+
+  - 2 × Oil (flask)
+
+  - 5 × Paper (one sheet)
+
+  - 1 × Perfume (vial)
+
+  - 1 × Sealing wax
+
+  - 1 × Soap'
+cost:
+  gp: 39
+import_notes:
+- Imported from 2014 SRD equipment data.

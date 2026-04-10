@@ -1,0 +1,20 @@
+format_version: 1
+id: component_pouch
+name: Component pouch
+type: gear
+kind: gear
+category: adventuring_gear
+source:
+  provider: dnd5eapi
+  edition: '2014'
+  url: https://www.dnd5eapi.co/api/2014/equipment/component-pouch
+subtype: standard_gear
+description: A component pouch is a small, watertight leather belt pouch that has
+  compartments to hold all the material components and other special items you need
+  to cast your spells, except for those components that have a specific cost (as indicated
+  in a spell's description).
+cost:
+  gp: 25
+weight_lb: 2
+import_notes:
+- Imported from 2014 SRD equipment data.

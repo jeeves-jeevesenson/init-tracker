@@ -1,0 +1,20 @@
+id: cloak_of_displacement
+name: Cloak of Displacement
+category: wondrous_items
+description: 'Wondrous item, rare (requires attunement)
+
+
+  While you wear this cloak, it projects an illusion that makes you appear to be standing
+  in a place near your actual location, causing any creature to have disadvantage
+  on attack rolls against you. If you take damage, the property ceases to function
+  until the start of your next turn. This property is suppressed while you are incapacitated,
+  restrained, or otherwise unable to move.'
+source:
+  provider: dnd5eapi
+  edition: '2014'
+  url: https://www.dnd5eapi.co/api/2014/magic-items/cloak-of-displacement
+import_notes:
+- Imported from 2014 SRD magic item data.
+- This is a descriptive stub; add grants/modifiers manually if desired.
+rarity: rare
+requires_attunement: true

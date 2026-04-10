@@ -1,0 +1,20 @@
+id: flame_tongue
+name: Flame Tongue
+category: weapon
+description: 'Weapon (any sword), rare (requires attunement)
+
+
+  You can use a bonus action to speak this magic sword''s command word, causing flames
+  to erupt from the blade. These flames shed bright light in a 40-foot radius and
+  dim light for an additional 40 feet. While the sword is ablaze, it deals an extra
+  2d6 fire damage to any target it hits. The flames last until you use a bonus action
+  to speak the command word again or until you drop or sheathe the sword.'
+source:
+  provider: dnd5eapi
+  edition: '2014'
+  url: https://www.dnd5eapi.co/api/2014/magic-items/flame-tongue
+import_notes:
+- Imported from 2014 SRD magic item data.
+- This is a descriptive stub; add grants/modifiers manually if desired.
+rarity: rare
+requires_attunement: true

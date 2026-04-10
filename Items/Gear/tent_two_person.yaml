@@ -1,0 +1,17 @@
+format_version: 1
+id: tent_two_person
+name: Tent, two-person
+type: gear
+kind: gear
+category: adventuring_gear
+source:
+  provider: dnd5eapi
+  edition: '2014'
+  url: https://www.dnd5eapi.co/api/2014/equipment/tent-two-person
+subtype: standard_gear
+description: A simple and portable canvas shelter, a tent sleeps two.
+cost:
+  gp: 2
+weight_lb: 20
+import_notes:
+- Imported from 2014 SRD equipment data.

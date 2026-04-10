@@ -1,0 +1,17 @@
+id: elemental_gem_air
+name: Air Elemental Gem
+category: wondrous_items
+description: 'Wondrous item, uncommon
+
+
+  This blue sapphire contains a mote of elemental energy. When you use an action to
+  break the gem, an air elemental is summoned as if you had cast the conjure elemental
+  spell, and the gem''s magic is lost.'
+source:
+  provider: dnd5eapi
+  edition: '2014'
+  url: https://www.dnd5eapi.co/api/2014/magic-items/elemental-gem-air
+import_notes:
+- Imported from 2014 SRD magic item data.
+- This is a descriptive stub; add grants/modifiers manually if desired.
+rarity: uncommon

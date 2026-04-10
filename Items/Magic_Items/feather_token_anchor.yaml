@@ -1,0 +1,20 @@
+id: feather_token_anchor
+name: Anchor Feather Token
+category: wondrous_items
+description: 'Wondrous item, rare
+
+
+  This tiny object looks like a feather.
+
+
+  You can use an action to touch the token to a boat or ship. For the next 24 hours,
+  the vessel can''t be moved by any means. Touching the token to the vessel again
+  ends the effect. When the effect ends, the token disappears.'
+source:
+  provider: dnd5eapi
+  edition: '2014'
+  url: https://www.dnd5eapi.co/api/2014/magic-items/feather-token-anchor
+import_notes:
+- Imported from 2014 SRD magic item data.
+- This is a descriptive stub; add grants/modifiers manually if desired.
+rarity: rare

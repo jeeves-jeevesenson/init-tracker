@@ -1,0 +1,30 @@
+format_version: 1
+id: entertainers_pack
+name: Entertainer's Pack
+type: gear
+kind: gear
+category: adventuring_gear
+source:
+  provider: dnd5eapi
+  edition: '2014'
+  url: https://www.dnd5eapi.co/api/2014/equipment/entertainers-pack
+subtype: equipment_packs
+description: 'Contains:
+
+  - 1 × Backpack
+
+  - 1 × Bedroll
+
+  - 2 × Clothes, costume
+
+  - 5 × Candle
+
+  - 5 × Rations (1 day)
+
+  - 1 × Waterskin
+
+  - 1 × Disguise Kit'
+cost:
+  gp: 40
+import_notes:
+- Imported from 2014 SRD equipment data.

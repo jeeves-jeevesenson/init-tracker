@@ -1,0 +1,16 @@
+format_version: 1
+id: clothes_common
+name: Clothes, common
+type: gear
+kind: gear
+category: adventuring_gear
+source:
+  provider: dnd5eapi
+  edition: '2014'
+  url: https://www.dnd5eapi.co/api/2014/equipment/clothes-common
+subtype: standard_gear
+cost:
+  sp: 5
+weight_lb: 3
+import_notes:
+- Imported from 2014 SRD equipment data.

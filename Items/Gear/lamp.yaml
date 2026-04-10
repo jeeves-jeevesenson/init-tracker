@@ -1,0 +1,18 @@
+format_version: 1
+id: lamp
+name: Lamp
+type: gear
+kind: gear
+category: adventuring_gear
+source:
+  provider: dnd5eapi
+  edition: '2014'
+  url: https://www.dnd5eapi.co/api/2014/equipment/lamp
+subtype: standard_gear
+description: A lamp casts bright light in a 15-foot radius and dim light for an additional
+  30 feet. Once lit, it burns for 6 hours on a flask (1 pint) of oil.
+cost:
+  sp: 5
+weight_lb: 1
+import_notes:
+- Imported from 2014 SRD equipment data.

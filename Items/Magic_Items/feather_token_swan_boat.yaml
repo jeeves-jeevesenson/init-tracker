@@ -1,0 +1,25 @@
+id: feather_token_swan_boat
+name: Swan Boat Feather Token
+category: wondrous_items
+description: 'Wondrous item, rare
+
+
+  This tiny object looks like a feather.
+
+
+  You can use an action to touch the token to a body of water at least 60 feet in
+  diameter. The token disappears, and a 50-foot-long, 20-foot wide boat shaped like
+  a swan takes its place. The boat is self-propelled and moves across water at a speed
+  of 6 miles per hour. You can use an action while on the boat to command it to move
+  or to turn up to 90 degrees. The boat can carry up to thirty-two Medium or smaller
+  creatures. A Large creature counts as four Medium creatures, while a Huge creature
+  counts as nine. The boat remains for 24 hours and then disappears. You can dismiss
+  the boat as an action.'
+source:
+  provider: dnd5eapi
+  edition: '2014'
+  url: https://www.dnd5eapi.co/api/2014/magic-items/feather-token-swan-boat
+import_notes:
+- Imported from 2014 SRD magic item data.
+- This is a descriptive stub; add grants/modifiers manually if desired.
+rarity: rare

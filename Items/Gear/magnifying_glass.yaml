@@ -1,0 +1,24 @@
+format_version: 1
+id: magnifying_glass
+name: Magnifying glass
+type: gear
+kind: gear
+category: adventuring_gear
+source:
+  provider: dnd5eapi
+  edition: '2014'
+  url: https://www.dnd5eapi.co/api/2014/equipment/magnifying-glass
+subtype: standard_gear
+description: 'This lens allows a closer look at small objects. It is also useful as
+  a substitute for flint and steel when starting fires. Lighting a fire with a magnifying
+  glass requires light as bright as sunlight to focus, tinder to ignite, and about
+  5 minutes for the fire to ignite.
+
+
+  A magnifying glass grants advantage on any ability check made to appraise or inspect
+  an item that is small or highly detailed.'
+cost:
+  gp: 100
+weight_lb: 0
+import_notes:
+- Imported from 2014 SRD equipment data.

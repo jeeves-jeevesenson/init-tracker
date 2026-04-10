@@ -1,0 +1,17 @@
+id: wand_of_the_war_mage_2
+name: Wand of the War Mage, +2
+category: wand
+description: 'Wand, rare (requires attunement by a spellcaster)
+
+
+  While holding this wand, you gain a +2 bonus to spell attack rolls. In addition,
+  you ignore half cover when making a spell attack.'
+source:
+  provider: dnd5eapi
+  edition: '2014'
+  url: https://www.dnd5eapi.co/api/2014/magic-items/wand-of-the-war-mage-2
+import_notes:
+- Imported from 2014 SRD magic item data.
+- This is a descriptive stub; add grants/modifiers manually if desired.
+rarity: rare
+requires_attunement: true

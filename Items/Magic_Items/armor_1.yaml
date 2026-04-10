@@ -1,0 +1,15 @@
+id: armor_1
+name: Armor, +1
+category: armor
+description: 'Armor (light, medium, or heavy), rare
+
+
+  You have a +1 bonus to AC while wearing this armor.'
+source:
+  provider: dnd5eapi
+  edition: '2014'
+  url: https://www.dnd5eapi.co/api/2014/magic-items/armor-1
+import_notes:
+- Imported from 2014 SRD magic item data.
+- This is a descriptive stub; add grants/modifiers manually if desired.
+rarity: rare

@@ -1,0 +1,16 @@
+format_version: 1
+id: spike_iron
+name: Spike, iron
+type: gear
+kind: gear
+category: adventuring_gear
+source:
+  provider: dnd5eapi
+  edition: '2014'
+  url: https://www.dnd5eapi.co/api/2014/equipment/spike-iron
+subtype: standard_gear
+cost:
+  sp: 1
+weight_lb: 5
+import_notes:
+- Imported from 2014 SRD equipment data.

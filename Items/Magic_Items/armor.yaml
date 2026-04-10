@@ -1,0 +1,17 @@
+id: armor
+name: Armor, +1, +2, or +3
+category: armor
+description: 'Armor (light, medium, or heavy), rare (+1), very rare (+2), or legendary
+  (+3)
+
+
+  You have a bonus to AC while wearing this armor. The bonus is determined by its
+  rarity.'
+source:
+  provider: dnd5eapi
+  edition: '2014'
+  url: https://www.dnd5eapi.co/api/2014/magic-items/armor
+import_notes:
+- Imported from 2014 SRD magic item data.
+- This is a descriptive stub; add grants/modifiers manually if desired.
+rarity: varies

@@ -1,0 +1,25 @@
+format_version: 1
+id: oil_of_sharpness
+name: Oil of Sharpness
+type: consumable
+kind: consumable
+category: potion
+consumable_type: potion
+subtype: very rare
+description: 'Potion, very rare
+
+
+  This clear, gelatinous oil sparkles with tiny, ultrathin silver shards. The oil
+  can coat one slashing or piercing weapon or up to 5 pieces of slashing or piercing
+  ammunition. Applying the oil takes 1 minute. For 1 hour, the coated item is magical
+  and has a +3 bonus to attack and damage rolls.'
+effect_hint: Imported from external SRD data. Review description for exact behavior.
+stackable: true
+source:
+  provider: dnd5eapi
+  edition: '2014'
+  url: https://www.dnd5eapi.co/api/2014/magic-items/oil-of-sharpness
+import_notes:
+- Imported from 2014 SRD magic item data.
+- This is a descriptive stub; add automation manually if desired.
+rarity: very rare

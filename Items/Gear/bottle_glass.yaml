@@ -1,0 +1,16 @@
+format_version: 1
+id: bottle_glass
+name: Bottle, glass
+type: gear
+kind: gear
+category: adventuring_gear
+source:
+  provider: dnd5eapi
+  edition: '2014'
+  url: https://www.dnd5eapi.co/api/2014/equipment/bottle-glass
+subtype: standard_gear
+cost:
+  gp: 2
+weight_lb: 2
+import_notes:
+- Imported from 2014 SRD equipment data.

@@ -1,0 +1,24 @@
+format_version: 1
+id: manacles
+name: Manacles
+type: gear
+kind: gear
+category: adventuring_gear
+source:
+  provider: dnd5eapi
+  edition: '2014'
+  url: https://www.dnd5eapi.co/api/2014/equipment/manacles
+subtype: standard_gear
+description: 'These metal restraints can bind a Small or Medium creature. Escaping
+  the manacles requires a successful DC 20 Dexterity check. Breaking them requires
+  a successful DC 20 Strength check.
+
+
+  Each set of manacles comes with one key. Without the key, a creature proficient
+  with thieves'' tools can pick the manacles'' lock with a successful DC 15 Dexterity
+  check. Manacles have 15 hit points.'
+cost:
+  gp: 2
+weight_lb: 6
+import_notes:
+- Imported from 2014 SRD equipment data.

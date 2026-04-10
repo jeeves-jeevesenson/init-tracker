@@ -1,0 +1,19 @@
+id: tome_of_leadership_and_influence
+name: Tome of Leadership and Influence
+category: wondrous_items
+description: 'Wondrous item, very rare
+
+
+  This book contains guidelines for influencing and charming others, and its words
+  are charged with magic. If you spend 48 hours over a period of 6 days or fewer studying
+  the book''s contents and practicing its guidelines, your Charisma score increases
+  by 2, as does your maximum for that score. The manual then loses its magic, but
+  regains it in a century.'
+source:
+  provider: dnd5eapi
+  edition: '2014'
+  url: https://www.dnd5eapi.co/api/2014/magic-items/tome-of-leadership-and-influence
+import_notes:
+- Imported from 2014 SRD magic item data.
+- This is a descriptive stub; add grants/modifiers manually if desired.
+rarity: very rare

@@ -1,0 +1,15 @@
+id: weapon_1
+name: Weapon, +1
+category: weapon
+description: 'Weapon (any), uncommon
+
+
+  You have a +1 bonus to attack and damage rolls made with this magic weapon.'
+source:
+  provider: dnd5eapi
+  edition: '2014'
+  url: https://www.dnd5eapi.co/api/2014/magic-items/weapon-1
+import_notes:
+- Imported from 2014 SRD magic item data.
+- This is a descriptive stub; add grants/modifiers manually if desired.
+rarity: uncommon

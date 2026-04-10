@@ -1,0 +1,16 @@
+format_version: 1
+id: basket
+name: Basket
+type: gear
+kind: gear
+category: adventuring_gear
+source:
+  provider: dnd5eapi
+  edition: '2014'
+  url: https://www.dnd5eapi.co/api/2014/equipment/basket
+subtype: standard_gear
+cost:
+  sp: 4
+weight_lb: 2
+import_notes:
+- Imported from 2014 SRD equipment data.

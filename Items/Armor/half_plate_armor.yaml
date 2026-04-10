@@ -1,0 +1,20 @@
+format_version: 1
+id: half_plate_armor
+name: Half Plate Armor
+type: armor
+category: medium
+ac:
+  base_formula: '15'
+  dex_cap: 2
+source:
+  provider: dnd5eapi
+  edition: '2014'
+  url: https://www.dnd5eapi.co/api/2014/equipment/half-plate-armor
+requirements:
+  strength: 0
+properties:
+  stealth_disadvantage: true
+cost_gp: 750
+weight_lb: 40
+import_notes:
+- Imported from 2014 SRD equipment data.

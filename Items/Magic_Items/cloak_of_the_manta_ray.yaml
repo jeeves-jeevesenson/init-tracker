@@ -1,0 +1,16 @@
+id: cloak_of_the_manta_ray
+name: Cloak of the Manta Ray
+category: wondrous_items
+description: 'Wondrous item, uncommon
+
+
+  While wearing this cloak with its hood up, you can breathe underwater, and you have
+  a swimming speed of 60 feet. Pulling the hood up or down requires an action.'
+source:
+  provider: dnd5eapi
+  edition: '2014'
+  url: https://www.dnd5eapi.co/api/2014/magic-items/cloak-of-the-manta-ray
+import_notes:
+- Imported from 2014 SRD magic item data.
+- This is a descriptive stub; add grants/modifiers manually if desired.
+rarity: uncommon

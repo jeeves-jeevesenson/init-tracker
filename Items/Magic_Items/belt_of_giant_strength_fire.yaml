@@ -1,0 +1,17 @@
+id: belt_of_giant_strength_fire
+name: Belt of Fire Giant Strength
+category: wondrous_items
+description: 'Wondrous item, very rare (requires attunement)
+
+
+  While wearing this belt, your Strength score changes to 25. If your Strength is
+  already equal to or greater than the belt''s score, the item has no Effect on you.'
+source:
+  provider: dnd5eapi
+  edition: '2014'
+  url: https://www.dnd5eapi.co/api/2014/magic-items/belt-of-giant-strength-fire
+import_notes:
+- Imported from 2014 SRD magic item data.
+- This is a descriptive stub; add grants/modifiers manually if desired.
+rarity: very rare
+requires_attunement: true

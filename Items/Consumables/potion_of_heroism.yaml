@@ -1,0 +1,24 @@
+format_version: 1
+id: potion_of_heroism
+name: Potion of Heroism
+type: consumable
+kind: consumable
+category: potion
+consumable_type: potion
+subtype: rare
+description: 'Potion, rare
+
+
+  For 1 hour after drinking it, you gain 10 temporary hit points that last for 1 hour.
+  For the same duration, you are under the effect of the bless spell (no concentration
+  required). This blue potion bubbles and steams as if boiling.'
+effect_hint: Imported from external SRD data. Review description for exact behavior.
+stackable: true
+source:
+  provider: dnd5eapi
+  edition: '2014'
+  url: https://www.dnd5eapi.co/api/2014/magic-items/potion-of-heroism
+import_notes:
+- Imported from 2014 SRD magic item data.
+- This is a descriptive stub; add automation manually if desired.
+rarity: rare

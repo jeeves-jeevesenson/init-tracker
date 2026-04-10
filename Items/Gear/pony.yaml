@@ -1,0 +1,15 @@
+format_version: 1
+id: pony
+name: Pony
+type: gear
+kind: gear
+category: vehicle
+source:
+  provider: dnd5eapi
+  edition: '2014'
+  url: https://www.dnd5eapi.co/api/2014/equipment/pony
+subtype: mounts_and_other_animals
+cost:
+  gp: 30
+import_notes:
+- Imported from 2014 SRD equipment data.

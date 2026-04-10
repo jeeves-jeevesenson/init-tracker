@@ -1,0 +1,18 @@
+id: eyes_of_minute_seeing
+name: Eyes of Minute Seeing
+category: wondrous_items
+description: 'Wondrous item, uncommon
+
+
+  These crystal lenses fit over the eyes. While wearing them, you can see much better
+  than normal out to a range of 1 foot. You have advantage on Intelligence (Investigation)
+  checks that rely on sight while searching an area or studying an object within that
+  range.'
+source:
+  provider: dnd5eapi
+  edition: '2014'
+  url: https://www.dnd5eapi.co/api/2014/magic-items/eyes-of-minute-seeing
+import_notes:
+- Imported from 2014 SRD magic item data.
+- This is a descriptive stub; add grants/modifiers manually if desired.
+rarity: uncommon

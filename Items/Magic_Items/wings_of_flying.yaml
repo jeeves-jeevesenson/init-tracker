@@ -1,0 +1,19 @@
+id: wings_of_flying
+name: Wings of Flying
+category: wondrous_items
+description: 'Wondrous item, rare (requires attunement)
+
+
+  While wearing this cloak, you can use an action to speak its command word. This
+  turns the cloak into a pair of bat wings or bird wings on your back for 1 hour or
+  until you repeat the command word as an action. The wings give you a flying speed
+  of 60 feet. When they disappear, you can''t use them again for 1d12 hours.'
+source:
+  provider: dnd5eapi
+  edition: '2014'
+  url: https://www.dnd5eapi.co/api/2014/magic-items/wings-of-flying
+import_notes:
+- Imported from 2014 SRD magic item data.
+- This is a descriptive stub; add grants/modifiers manually if desired.
+rarity: rare
+requires_attunement: true

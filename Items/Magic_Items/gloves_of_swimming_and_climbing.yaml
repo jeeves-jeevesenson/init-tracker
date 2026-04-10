@@ -1,0 +1,17 @@
+id: gloves_of_swimming_and_climbing
+name: Gloves of Swimming and Climbing
+category: wondrous_items
+description: 'Wondrous item, uncommon (requires attunement)
+
+
+  While wearing these gloves, climbing and swimming don''t cost you extra movement,
+  and you gain a +5 bonus to Strength (Athletics) checks made to climb or swim.'
+source:
+  provider: dnd5eapi
+  edition: '2014'
+  url: https://www.dnd5eapi.co/api/2014/magic-items/gloves-of-swimming-and-climbing
+import_notes:
+- Imported from 2014 SRD magic item data.
+- This is a descriptive stub; add grants/modifiers manually if desired.
+rarity: uncommon
+requires_attunement: true

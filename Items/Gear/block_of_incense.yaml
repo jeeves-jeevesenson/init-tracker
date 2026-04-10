@@ -1,0 +1,17 @@
+format_version: 1
+id: block_of_incense
+name: Block of incense
+type: gear
+kind: gear
+category: adventuring_gear
+source:
+  provider: dnd5eapi
+  edition: '2014'
+  url: https://www.dnd5eapi.co/api/2014/equipment/block-of-incense
+subtype: standard_gear
+description: A block of incense, typically found in a priest's pack.
+cost:
+  cp: 0
+weight_lb: 0
+import_notes:
+- Imported from 2014 SRD equipment data.

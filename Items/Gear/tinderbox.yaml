@@ -1,0 +1,22 @@
+format_version: 1
+id: tinderbox
+name: Tinderbox
+type: gear
+kind: gear
+category: adventuring_gear
+source:
+  provider: dnd5eapi
+  edition: '2014'
+  url: https://www.dnd5eapi.co/api/2014/equipment/tinderbox
+subtype: standard_gear
+description: 'This small container holds flint, fire steel, and tinder (usually dry
+  cloth soaked in light oil) used to kindle a fire. Using it to light a torch--or
+  anything else with abundant, exposed fuel--takes an action.
+
+
+  Lighting any other fire takes 1 minute.'
+cost:
+  sp: 5
+weight_lb: 1
+import_notes:
+- Imported from 2014 SRD equipment data.

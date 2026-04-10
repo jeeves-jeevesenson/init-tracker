@@ -1,0 +1,32 @@
+format_version: 1
+id: explorers_pack
+name: Explorer's Pack
+type: gear
+kind: gear
+category: adventuring_gear
+source:
+  provider: dnd5eapi
+  edition: '2014'
+  url: https://www.dnd5eapi.co/api/2014/equipment/explorers-pack
+subtype: equipment_packs
+description: 'Contains:
+
+  - 1 × Backpack
+
+  - 1 × Bedroll
+
+  - 1 × Mess Kit
+
+  - 1 × Tinderbox
+
+  - 10 × Torch
+
+  - 10 × Rations (1 day)
+
+  - 1 × Waterskin
+
+  - 1 × Rope, hempen (50 feet)'
+cost:
+  gp: 10
+import_notes:
+- Imported from 2014 SRD equipment data.

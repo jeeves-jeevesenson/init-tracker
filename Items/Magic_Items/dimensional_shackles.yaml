@@ -1,0 +1,25 @@
+id: dimensional_shackles
+name: Dimensional Shackles
+category: wondrous_items
+description: 'Wondrous item, rare
+
+
+  You can use an action to place these shackles on an incapacitated creature. The
+  shackles adjust to fit a creature of Small to Large size. In addition to serving
+  as mundane manacles, the shackles prevent a creature bound by them from using any
+  method of extradimensional movement, including teleportation or travel to a different
+  plane of existence. They don''t prevent the creature from passing through an interdimensional
+  portal.
+
+
+  You and any creature you designate when you use the shackles can use an action to
+  remove them. Once every 30 days, the bound creature can make a DC 30 Strength (Athletics)
+  check. On a success, the creature breaks free and destroys the shackles.'
+source:
+  provider: dnd5eapi
+  edition: '2014'
+  url: https://www.dnd5eapi.co/api/2014/magic-items/dimensional-shackles
+import_notes:
+- Imported from 2014 SRD magic item data.
+- This is a descriptive stub; add grants/modifiers manually if desired.
+rarity: rare

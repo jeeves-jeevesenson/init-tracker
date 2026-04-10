@@ -1,0 +1,17 @@
+format_version: 1
+id: spyglass
+name: Spyglass
+type: gear
+kind: gear
+category: adventuring_gear
+source:
+  provider: dnd5eapi
+  edition: '2014'
+  url: https://www.dnd5eapi.co/api/2014/equipment/spyglass
+subtype: standard_gear
+description: Objects viewed through a spyglass are magnified to twice their size.
+cost:
+  gp: 1000
+weight_lb: 1
+import_notes:
+- Imported from 2014 SRD equipment data.

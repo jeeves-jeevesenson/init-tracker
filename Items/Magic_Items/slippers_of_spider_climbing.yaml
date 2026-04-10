@@ -1,0 +1,19 @@
+id: slippers_of_spider_climbing
+name: Slippers of Spider Climbing
+category: wondrous_items
+description: 'Wondrous item, uncommon (requires attunement)
+
+
+  While you wear these light shoes, you can move up, down, and across vertical surfaces
+  and upside down along ceilings, while leaving your hands free. You have a climbing
+  speed equal to your walking speed. However, the slippers don''t allow you to move
+  this way on a slippery surface, such as one covered by ice or oil.'
+source:
+  provider: dnd5eapi
+  edition: '2014'
+  url: https://www.dnd5eapi.co/api/2014/magic-items/slippers-of-spider-climbing
+import_notes:
+- Imported from 2014 SRD magic item data.
+- This is a descriptive stub; add grants/modifiers manually if desired.
+rarity: uncommon
+requires_attunement: true

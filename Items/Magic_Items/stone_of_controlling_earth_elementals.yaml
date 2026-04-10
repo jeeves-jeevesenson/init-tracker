@@ -1,0 +1,18 @@
+id: stone_of_controlling_earth_elementals
+name: Stone of Controlling Earth Elementals
+category: wondrous_items
+description: 'Wondrous item, rare
+
+
+  If the stone is touching the ground, you can use an action to speak its command
+  word and summon an earth elemental, as if you had cast the conjure elemental spell.
+  The stone can''t be used this way again until the next dawn. The stone weighs 5
+  pounds.'
+source:
+  provider: dnd5eapi
+  edition: '2014'
+  url: https://www.dnd5eapi.co/api/2014/magic-items/stone-of-controlling-earth-elementals
+import_notes:
+- Imported from 2014 SRD magic item data.
+- This is a descriptive stub; add grants/modifiers manually if desired.
+rarity: rare

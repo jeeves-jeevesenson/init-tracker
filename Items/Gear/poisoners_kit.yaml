@@ -1,0 +1,19 @@
+format_version: 1
+id: poisoners_kit
+name: Poisoner's Kit
+type: gear
+kind: gear
+category: adventuring_gear
+source:
+  provider: dnd5eapi
+  edition: '2014'
+  url: https://www.dnd5eapi.co/api/2014/equipment/poisoners-kit
+subtype: kits
+description: A poisoner's kit includes the vials, chemicals, and other equipment necessary
+  for the creation of poisons. Proficiency with this kit lets you add your proficiency
+  bonus to any ability checks you make to craft or use poisons.
+cost:
+  gp: 50
+weight_lb: 2
+import_notes:
+- Imported from 2014 SRD equipment data.

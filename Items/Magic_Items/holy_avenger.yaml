@@ -1,0 +1,24 @@
+id: holy_avenger
+name: Holy Avenger
+category: weapon
+description: 'Weapon (any sword), legendary (requires attunement by a paladin)
+
+
+  You gain a +3 bonus to attack and damage rolls made with this magic weapon. When
+  you hit a fiend or an undead with it, that creature takes an extra 2d10 radiant
+  damage.
+
+
+  While you hold the drawn sword, it creates an aura in a 10-foot radius around you.
+  You and all creatures friendly to you in the aura have advantage on saving throws
+  against spells and other magical effects. If you have 17 or more levels in the paladin
+  class, the radius of the aura increases to 30 feet.'
+source:
+  provider: dnd5eapi
+  edition: '2014'
+  url: https://www.dnd5eapi.co/api/2014/magic-items/holy-avenger
+import_notes:
+- Imported from 2014 SRD magic item data.
+- This is a descriptive stub; add grants/modifiers manually if desired.
+rarity: legendary
+requires_attunement: true

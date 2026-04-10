@@ -1,0 +1,19 @@
+format_version: 1
+id: lock
+name: Lock
+type: gear
+kind: gear
+category: adventuring_gear
+source:
+  provider: dnd5eapi
+  edition: '2014'
+  url: https://www.dnd5eapi.co/api/2014/equipment/lock
+subtype: standard_gear
+description: A key is provided with the lock. Without the key, a creature proficient
+  with thieves' tools can pick this lock with a successful DC 15 Dexterity check.
+  Your GM may decide that better locks are available for higher prices.
+cost:
+  gp: 10
+weight_lb: 1
+import_notes:
+- Imported from 2014 SRD equipment data.

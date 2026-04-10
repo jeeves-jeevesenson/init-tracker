@@ -1,0 +1,17 @@
+format_version: 1
+id: vestments
+name: Vestments
+type: gear
+kind: gear
+category: adventuring_gear
+source:
+  provider: dnd5eapi
+  edition: '2014'
+  url: https://www.dnd5eapi.co/api/2014/equipment/vestments
+subtype: standard_gear
+description: Religious clothing, typically found in a priest's pack.
+cost:
+  cp: 0
+weight_lb: 0
+import_notes:
+- Imported from 2014 SRD equipment data.

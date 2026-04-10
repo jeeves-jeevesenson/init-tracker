@@ -1,0 +1,16 @@
+format_version: 1
+id: sled
+name: Sled
+type: gear
+kind: gear
+category: vehicle
+source:
+  provider: dnd5eapi
+  edition: '2014'
+  url: https://www.dnd5eapi.co/api/2014/equipment/sled
+subtype: tack_harness_and_drawn_vehicles
+cost:
+  gp: 20
+weight_lb: 300
+import_notes:
+- Imported from 2014 SRD equipment data.

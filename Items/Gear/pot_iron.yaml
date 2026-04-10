@@ -1,0 +1,16 @@
+format_version: 1
+id: pot_iron
+name: Pot, iron
+type: gear
+kind: gear
+category: adventuring_gear
+source:
+  provider: dnd5eapi
+  edition: '2014'
+  url: https://www.dnd5eapi.co/api/2014/equipment/pot-iron
+subtype: standard_gear
+cost:
+  gp: 2
+weight_lb: 10
+import_notes:
+- Imported from 2014 SRD equipment data.

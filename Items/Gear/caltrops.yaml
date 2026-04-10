@@ -1,0 +1,29 @@
+format_version: 1
+id: caltrops
+name: Caltrops
+type: gear
+kind: gear
+category: adventuring_gear
+source:
+  provider: dnd5eapi
+  edition: '2014'
+  url: https://www.dnd5eapi.co/api/2014/equipment/caltrops
+subtype: standard_gear
+description: 'As an action, you can spread a bag of caltrops to cover a square area
+  that is 5 feet on a side.
+
+
+  Any creature that enters the area must succeed on a DC 15 Dexterity saving throw
+  or stop moving this turn and take 1 piercing damage.
+
+
+  Taking this damage reduces the creature''s walking speed by 10 feet until the creature
+  regains at least 1 hit point.
+
+
+  A creature moving through the area at half speed doesn''t need to make the save.'
+cost:
+  cp: 5
+weight_lb: 2
+import_notes:
+- Imported from 2014 SRD equipment data.

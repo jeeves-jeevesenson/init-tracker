@@ -1,0 +1,30 @@
+format_version: 1
+id: scholars_pack
+name: Scholar's Pack
+type: gear
+kind: gear
+category: adventuring_gear
+source:
+  provider: dnd5eapi
+  edition: '2014'
+  url: https://www.dnd5eapi.co/api/2014/equipment/scholars-pack
+subtype: equipment_packs
+description: 'Contains:
+
+  - 1 × Backpack
+
+  - 1 × Book
+
+  - 1 × Ink (1 ounce bottle)
+
+  - 1 × Ink pen
+
+  - 10 × Parchment (one sheet)
+
+  - 1 × Little bag of sand
+
+  - 1 × Small knife'
+cost:
+  gp: 40
+import_notes:
+- Imported from 2014 SRD equipment data.

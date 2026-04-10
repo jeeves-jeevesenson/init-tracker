@@ -1,0 +1,21 @@
+id: bowl_of_commanding_water_elementals
+name: Bowl of Commanding Water Elementals
+category: wondrous_items
+description: 'Wondrous item, rare
+
+
+  While this bowl is filled with water, you can use an action to speak the bowl''s
+  command word and summon a water elemental, as if you had cast the conjure elemental
+  spell. The bowl can''t be used this way again until the next dawn.
+
+
+  The bowl is about 1 foot in diameter and half as deep. It weighs 3 pounds and holds
+  about 3 gallons.'
+source:
+  provider: dnd5eapi
+  edition: '2014'
+  url: https://www.dnd5eapi.co/api/2014/magic-items/bowl-of-commanding-water-elementals
+import_notes:
+- Imported from 2014 SRD magic item data.
+- This is a descriptive stub; add grants/modifiers manually if desired.
+rarity: rare

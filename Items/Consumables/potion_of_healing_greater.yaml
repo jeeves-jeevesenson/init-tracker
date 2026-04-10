@@ -1,0 +1,23 @@
+format_version: 1
+id: potion_of_healing_greater
+name: Potion of Greater Healing
+type: consumable
+kind: consumable
+category: potion
+consumable_type: potion
+subtype: uncommon
+description: 'Potion, uncommon
+
+
+  You regain 4d4 + 4 hit points when you drink this potion. The potion''s red liquid
+  glimmers when agitated.'
+effect_hint: Imported from external SRD data. Review description for exact behavior.
+stackable: true
+source:
+  provider: dnd5eapi
+  edition: '2014'
+  url: https://www.dnd5eapi.co/api/2014/magic-items/potion-of-healing-greater
+import_notes:
+- Imported from 2014 SRD magic item data.
+- This is a descriptive stub; add automation manually if desired.
+rarity: uncommon

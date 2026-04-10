@@ -1,0 +1,19 @@
+id: pearl_of_power
+name: Pearl of Power
+category: wondrous_items
+description: 'Wondrous item, uncommon (requires attunement by a spellcaster)
+
+
+  While this pearl is on your person, you can use an action to speak its command word
+  and regain one expended spell slot. If the expended slot was of 4th level or higher,
+  the new slot is 3rd level. Once you use the pearl, it can''t be used again until
+  the next dawn.'
+source:
+  provider: dnd5eapi
+  edition: '2014'
+  url: https://www.dnd5eapi.co/api/2014/magic-items/pearl-of-power
+import_notes:
+- Imported from 2014 SRD magic item data.
+- This is a descriptive stub; add grants/modifiers manually if desired.
+rarity: uncommon
+requires_attunement: true

@@ -1,0 +1,17 @@
+id: scimitar_of_speed
+name: Scimitar of Speed
+category: weapon
+description: 'Weapon (scimitar), very rare (requires attunement)
+
+
+  You gain a +2 bonus to attack and damage rolls made with this magic weapon. In addition,
+  you can make one attack with it as a bonus action on each of your turns.'
+source:
+  provider: dnd5eapi
+  edition: '2014'
+  url: https://www.dnd5eapi.co/api/2014/magic-items/scimitar-of-speed
+import_notes:
+- Imported from 2014 SRD magic item data.
+- This is a descriptive stub; add grants/modifiers manually if desired.
+rarity: very rare
+requires_attunement: true

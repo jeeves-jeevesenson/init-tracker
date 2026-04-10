@@ -1,0 +1,19 @@
+format_version: 1
+id: ram_portable
+name: Ram, portable
+type: gear
+kind: gear
+category: adventuring_gear
+source:
+  provider: dnd5eapi
+  edition: '2014'
+  url: https://www.dnd5eapi.co/api/2014/equipment/ram-portable
+subtype: standard_gear
+description: You can use a portable ram to break down doors. When doing so, you gain
+  a +4 bonus on the Strength check. One other character can help you use the ram,
+  giving you advantage on this check.
+cost:
+  gp: 4
+weight_lb: 35
+import_notes:
+- Imported from 2014 SRD equipment data.

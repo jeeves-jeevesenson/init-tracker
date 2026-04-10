@@ -1,0 +1,20 @@
+id: helm_of_teleportation
+name: Helm of Teleportation
+category: wondrous_items
+description: 'Wondrous item, rare (requires attunement)
+
+
+  This helm has 3 charges. While wearing it, you can use an action and expend 1 charge
+  to cast the teleport spell from it. The helm regains 1d3
+
+
+  expended charges daily at dawn.'
+source:
+  provider: dnd5eapi
+  edition: '2014'
+  url: https://www.dnd5eapi.co/api/2014/magic-items/helm-of-teleportation
+import_notes:
+- Imported from 2014 SRD magic item data.
+- This is a descriptive stub; add grants/modifiers manually if desired.
+rarity: rare
+requires_attunement: true

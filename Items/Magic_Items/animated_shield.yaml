@@ -1,0 +1,21 @@
+id: animated_shield
+name: Animated Shield
+category: armor
+description: 'Armor (shield), very rare (requires attunement)
+
+
+  While holding this shield, you can speak its command word as a bonus action to cause
+  it to animate. The shield leaps into the air and hovers in your space to protect
+  you as if you were wielding it, leaving your hands free. The shield remains animated
+  for 1 minute, until you use a bonus action to end this effect, or until you are
+  incapacitated or die, at which point the shield falls to the ground or into your
+  hand if you have one free.'
+source:
+  provider: dnd5eapi
+  edition: '2014'
+  url: https://www.dnd5eapi.co/api/2014/magic-items/animated-shield
+import_notes:
+- Imported from 2014 SRD magic item data.
+- This is a descriptive stub; add grants/modifiers manually if desired.
+rarity: very rare
+requires_attunement: true

@@ -1,0 +1,18 @@
+format_version: 1
+id: hide_armor
+name: Hide Armor
+type: armor
+category: medium
+ac:
+  base_formula: '12'
+  dex_cap: 2
+source:
+  provider: dnd5eapi
+  edition: '2014'
+  url: https://www.dnd5eapi.co/api/2014/equipment/hide-armor
+requirements:
+  strength: 0
+cost_gp: 10
+weight_lb: 12
+import_notes:
+- Imported from 2014 SRD equipment data.

@@ -1,0 +1,16 @@
+id: cloak_of_protection
+name: Cloak of Protection
+category: wondrous_items
+description: 'Wondrous item, uncommon (requires attunement)
+
+
+  You gain a +1 bonus to AC and saving throws while you wear this cloak.'
+source:
+  provider: dnd5eapi
+  edition: '2014'
+  url: https://www.dnd5eapi.co/api/2014/magic-items/cloak-of-protection
+import_notes:
+- Imported from 2014 SRD magic item data.
+- This is a descriptive stub; add grants/modifiers manually if desired.
+rarity: uncommon
+requires_attunement: true

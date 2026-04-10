@@ -1,0 +1,17 @@
+format_version: 1
+id: quiver
+name: Quiver
+type: gear
+kind: gear
+category: adventuring_gear
+source:
+  provider: dnd5eapi
+  edition: '2014'
+  url: https://www.dnd5eapi.co/api/2014/equipment/quiver
+subtype: standard_gear
+description: A quiver can hold up to 20 arrows.
+cost:
+  gp: 1
+weight_lb: 1
+import_notes:
+- Imported from 2014 SRD equipment data.

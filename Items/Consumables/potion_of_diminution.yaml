@@ -1,0 +1,25 @@
+format_version: 1
+id: potion_of_diminution
+name: Potion of Diminution
+type: consumable
+kind: consumable
+category: potion
+consumable_type: potion
+subtype: rare
+description: 'Potion, rare
+
+
+  When you drink this potion, you gain the "reduce" effect of the enlarge/reduce spell
+  for 1d4 hours (no concentration required). The red in the potion''s liquid continuously
+  contracts to a tiny bead and then expands to color the clear liquid around it. Shaking
+  the bottle fails to interrupt this process.'
+effect_hint: Imported from external SRD data. Review description for exact behavior.
+stackable: true
+source:
+  provider: dnd5eapi
+  edition: '2014'
+  url: https://www.dnd5eapi.co/api/2014/magic-items/potion-of-diminution
+import_notes:
+- Imported from 2014 SRD magic item data.
+- This is a descriptive stub; add automation manually if desired.
+rarity: rare

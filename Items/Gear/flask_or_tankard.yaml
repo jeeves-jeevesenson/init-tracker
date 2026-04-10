@@ -1,0 +1,16 @@
+format_version: 1
+id: flask_or_tankard
+name: Flask or tankard
+type: gear
+kind: gear
+category: adventuring_gear
+source:
+  provider: dnd5eapi
+  edition: '2014'
+  url: https://www.dnd5eapi.co/api/2014/equipment/flask-or-tankard
+subtype: standard_gear
+cost:
+  cp: 2
+weight_lb: 1
+import_notes:
+- Imported from 2014 SRD equipment data.

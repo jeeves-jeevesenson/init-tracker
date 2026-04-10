@@ -1,0 +1,20 @@
+format_version: 1
+id: lantern_hooded
+name: Lantern, hooded
+type: gear
+kind: gear
+category: adventuring_gear
+source:
+  provider: dnd5eapi
+  edition: '2014'
+  url: https://www.dnd5eapi.co/api/2014/equipment/lantern-hooded
+subtype: standard_gear
+description: A hooded lantern casts bright light in a 30-foot radius and dim light
+  for an additional 30 feet. Once lit, it burns for 6 hours on a flask (1 pint) of
+  oil. As an action, you can lower the hood, reducing the light to dim light in a
+  5-foot radius.
+cost:
+  gp: 5
+weight_lb: 2
+import_notes:
+- Imported from 2014 SRD equipment data.

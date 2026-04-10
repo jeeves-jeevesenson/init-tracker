@@ -1,0 +1,17 @@
+id: horseshoes_of_speed
+name: Horseshoes of Speed
+category: wondrous_items
+description: 'Wondrous item, rare
+
+
+  These iron horseshoes come in a set of four. While all four shoes are affixed to
+  the hooves of a horse or similar creature, they increase the creature''s walking
+  speed by 30 feet.'
+source:
+  provider: dnd5eapi
+  edition: '2014'
+  url: https://www.dnd5eapi.co/api/2014/magic-items/horseshoes-of-speed
+import_notes:
+- Imported from 2014 SRD magic item data.
+- This is a descriptive stub; add grants/modifiers manually if desired.
+rarity: rare

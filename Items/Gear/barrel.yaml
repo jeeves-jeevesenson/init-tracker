@@ -1,0 +1,16 @@
+format_version: 1
+id: barrel
+name: Barrel
+type: gear
+kind: gear
+category: adventuring_gear
+source:
+  provider: dnd5eapi
+  edition: '2014'
+  url: https://www.dnd5eapi.co/api/2014/equipment/barrel
+subtype: standard_gear
+cost:
+  gp: 2
+weight_lb: 70
+import_notes:
+- Imported from 2014 SRD equipment data.

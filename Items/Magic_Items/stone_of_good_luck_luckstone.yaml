@@ -1,0 +1,17 @@
+id: stone_of_good_luck_luckstone
+name: Stone of Good Luck (Luckstone)
+category: wondrous_items
+description: 'Wondrous item, uncommon (requires attunement)
+
+
+  While this polished agate is on your person, you gain a +1 bonus to ability checks
+  and saving throws.'
+source:
+  provider: dnd5eapi
+  edition: '2014'
+  url: https://www.dnd5eapi.co/api/2014/magic-items/stone-of-good-luck-luckstone
+import_notes:
+- Imported from 2014 SRD magic item data.
+- This is a descriptive stub; add grants/modifiers manually if desired.
+rarity: uncommon
+requires_attunement: true

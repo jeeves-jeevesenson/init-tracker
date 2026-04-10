@@ -1,0 +1,18 @@
+format_version: 1
+id: rope_silk_50_feet
+name: Rope, silk (50 feet)
+type: gear
+kind: gear
+category: adventuring_gear
+source:
+  provider: dnd5eapi
+  edition: '2014'
+  url: https://www.dnd5eapi.co/api/2014/equipment/rope-silk-50-feet
+subtype: standard_gear
+description: Rope, whether made of hemp or silk, has 2 hit points and can be burst
+  with a DC 17 Strength check.
+cost:
+  gp: 10
+weight_lb: 5
+import_notes:
+- Imported from 2014 SRD equipment data.

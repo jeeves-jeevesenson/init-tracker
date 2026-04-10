@@ -1,0 +1,24 @@
+format_version: 1
+id: potion_of_invisibility
+name: Potion of Invisibility
+type: consumable
+kind: consumable
+category: potion
+consumable_type: potion
+subtype: very rare
+description: 'Potion, very rare
+
+
+  This potion''s container looks empty but feels as though it holds liquid. When you
+  drink it, you become invisible for 1 hour. Anything you wear or carry is invisible
+  with you. The effect ends early if you attack or cast a spell.'
+effect_hint: Imported from external SRD data. Review description for exact behavior.
+stackable: true
+source:
+  provider: dnd5eapi
+  edition: '2014'
+  url: https://www.dnd5eapi.co/api/2014/magic-items/potion-of-invisibility
+import_notes:
+- Imported from 2014 SRD magic item data.
+- This is a descriptive stub; add automation manually if desired.
+rarity: very rare

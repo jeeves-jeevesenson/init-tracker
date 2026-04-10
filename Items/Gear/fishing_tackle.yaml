@@ -1,0 +1,18 @@
+format_version: 1
+id: fishing_tackle
+name: Fishing tackle
+type: gear
+kind: gear
+category: adventuring_gear
+source:
+  provider: dnd5eapi
+  edition: '2014'
+  url: https://www.dnd5eapi.co/api/2014/equipment/fishing-tackle
+subtype: standard_gear
+description: This kit includes a wooden rod, silken line, corkwood bobbers, steel
+  hooks, lead sinkers, velvet lures, and narrow netting.
+cost:
+  gp: 1
+weight_lb: 4
+import_notes:
+- Imported from 2014 SRD equipment data.

@@ -1,0 +1,36 @@
+id: elemental_gem
+name: Elemental Gem
+category: wondrous_items
+description: 'Wondrous item, uncommon
+
+
+  This gem contains a mote of elemental energy. When you use an action to break the
+  gem, an elemental is summoned as if you had cast the conjure elemental spell, and
+  the gem''s magic is lost. The type of gem determines the elemental summoned by the
+  spell.
+
+
+  | Gem | Summoned Elemental |
+
+
+  |---|---|
+
+
+  | Blue sapphire | Air elemental |
+
+
+  | Yellow diamond | Earth elemental |
+
+
+  | Red corundum | Fire elemental |
+
+
+  | Emerald | Water elemental |'
+source:
+  provider: dnd5eapi
+  edition: '2014'
+  url: https://www.dnd5eapi.co/api/2014/magic-items/elemental-gem
+import_notes:
+- Imported from 2014 SRD magic item data.
+- This is a descriptive stub; add grants/modifiers manually if desired.
+rarity: uncommon

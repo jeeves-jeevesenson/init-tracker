@@ -1,0 +1,44 @@
+format_version: 1
+id: burglars_pack
+name: Burglar's Pack
+type: gear
+kind: gear
+category: adventuring_gear
+source:
+  provider: dnd5eapi
+  edition: '2014'
+  url: https://www.dnd5eapi.co/api/2014/equipment/burglars-pack
+subtype: equipment_packs
+description: 'Contains:
+
+  - 1 × Backpack
+
+  - 1 × Ball bearings (bag of 1,000)
+
+  - 1 × String (10 feet)
+
+  - 1 × Bell
+
+  - 5 × Candle
+
+  - 1 × Crowbar
+
+  - 1 × Hammer
+
+  - 10 × Piton
+
+  - 1 × Lantern, hooded
+
+  - 2 × Oil (flask)
+
+  - 5 × Rations (1 day)
+
+  - 1 × Tinderbox
+
+  - 1 × Waterskin
+
+  - 1 × Rope, hempen (50 feet)'
+cost:
+  gp: 16
+import_notes:
+- Imported from 2014 SRD equipment data.

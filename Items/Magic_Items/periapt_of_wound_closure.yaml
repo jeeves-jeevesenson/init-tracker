@@ -1,0 +1,18 @@
+id: periapt_of_wound_closure
+name: Periapt of Wound Closure
+category: wondrous_items
+description: 'Wondrous item, uncommon (requires attunement)
+
+
+  While you wear this pendant, you stabilize whenever you are dying at the start of
+  your turn. In addition, whenever you roll a Hit Die to regain hit points, double
+  the number of hit points it restores.'
+source:
+  provider: dnd5eapi
+  edition: '2014'
+  url: https://www.dnd5eapi.co/api/2014/magic-items/periapt-of-wound-closure
+import_notes:
+- Imported from 2014 SRD magic item data.
+- This is a descriptive stub; add grants/modifiers manually if desired.
+rarity: uncommon
+requires_attunement: true

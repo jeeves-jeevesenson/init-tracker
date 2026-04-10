@@ -1,0 +1,18 @@
+format_version: 1
+id: chain_10_feet
+name: Chain (10 feet)
+type: gear
+kind: gear
+category: adventuring_gear
+source:
+  provider: dnd5eapi
+  edition: '2014'
+  url: https://www.dnd5eapi.co/api/2014/equipment/chain-10-feet
+subtype: standard_gear
+description: A chain has 10 hit points. It can be burst with a successful DC 20 Strength
+  check.
+cost:
+  gp: 5
+weight_lb: 10
+import_notes:
+- Imported from 2014 SRD equipment data.

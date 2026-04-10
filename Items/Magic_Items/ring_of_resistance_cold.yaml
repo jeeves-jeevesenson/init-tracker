@@ -1,0 +1,16 @@
+id: ring_of_resistance_cold
+name: Ring of Cold Resistance
+category: ring
+description: 'Ring, rare (requires attunement)
+
+
+  You have resistance to cold damage while wearing this tourmaline ring.'
+source:
+  provider: dnd5eapi
+  edition: '2014'
+  url: https://www.dnd5eapi.co/api/2014/magic-items/ring-of-resistance-cold
+import_notes:
+- Imported from 2014 SRD magic item data.
+- This is a descriptive stub; add grants/modifiers manually if desired.
+rarity: rare
+requires_attunement: true

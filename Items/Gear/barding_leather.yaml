@@ -1,0 +1,20 @@
+format_version: 1
+id: barding_leather
+name: 'Barding: Leather'
+type: gear
+kind: gear
+category: vehicle
+source:
+  provider: dnd5eapi
+  edition: '2014'
+  url: https://www.dnd5eapi.co/api/2014/equipment/barding-leather
+subtype: tack_harness_and_drawn_vehicles
+description: Barding is armor designed to protect an animal's head, neck, chest, and
+  body. Any type of armor shown on the Armor table can be purchased as barding. The
+  cost is four times the equivalent armor made for humanoids, and it weighs twice
+  as much.
+cost:
+  gp: 40
+weight_lb: 20
+import_notes:
+- Imported from 2014 SRD equipment data.

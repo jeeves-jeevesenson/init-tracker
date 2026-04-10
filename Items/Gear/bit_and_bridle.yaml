@@ -1,0 +1,16 @@
+format_version: 1
+id: bit_and_bridle
+name: Bit and bridle
+type: gear
+kind: gear
+category: vehicle
+source:
+  provider: dnd5eapi
+  edition: '2014'
+  url: https://www.dnd5eapi.co/api/2014/equipment/bit-and-bridle
+subtype: tack_harness_and_drawn_vehicles
+cost:
+  gp: 2
+weight_lb: 1
+import_notes:
+- Imported from 2014 SRD equipment data.

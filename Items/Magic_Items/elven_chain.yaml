@@ -1,0 +1,16 @@
+id: elven_chain
+name: Elven Chain
+category: armor
+description: 'Armor (chain shirt), rare
+
+
+  You gain a +1 bonus to AC while you wear this armor. You are considered proficient
+  with this armor even if you lack proficiency with medium armor.'
+source:
+  provider: dnd5eapi
+  edition: '2014'
+  url: https://www.dnd5eapi.co/api/2014/magic-items/elven-chain
+import_notes:
+- Imported from 2014 SRD magic item data.
+- This is a descriptive stub; add grants/modifiers manually if desired.
+rarity: rare

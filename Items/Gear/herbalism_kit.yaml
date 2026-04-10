@@ -1,0 +1,21 @@
+format_version: 1
+id: herbalism_kit
+name: Herbalism Kit
+type: gear
+kind: gear
+category: adventuring_gear
+source:
+  provider: dnd5eapi
+  edition: '2014'
+  url: https://www.dnd5eapi.co/api/2014/equipment/herbalism-kit
+subtype: kits
+description: This kit contains a variety of instruments such as clippers, mortar and
+  pestle, and pouches and vials used by herbalists to create remedies and potions.
+  Proficiency with this kit lets you add your proficiency bonus to any ability checks
+  you make to identify or apply herbs. Also, proficiency with this kit is required
+  to create antitoxin and potions of healing.
+cost:
+  gp: 5
+weight_lb: 3
+import_notes:
+- Imported from 2014 SRD equipment data.

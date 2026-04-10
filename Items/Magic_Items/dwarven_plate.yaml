@@ -1,0 +1,17 @@
+id: dwarven_plate
+name: Dwarven Plate
+category: armor
+description: 'Armor (plate), very rare
+
+
+  While wearing this armor, you gain a +2 bonus to AC. In addition, if an effect moves
+  you against your will along the ground, you can use your reaction to reduce the
+  distance you are moved by up to 10 feet.'
+source:
+  provider: dnd5eapi
+  edition: '2014'
+  url: https://www.dnd5eapi.co/api/2014/magic-items/dwarven-plate
+import_notes:
+- Imported from 2014 SRD magic item data.
+- This is a descriptive stub; add grants/modifiers manually if desired.
+rarity: very rare

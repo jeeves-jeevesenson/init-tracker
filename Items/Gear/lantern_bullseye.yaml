@@ -1,0 +1,19 @@
+format_version: 1
+id: lantern_bullseye
+name: Lantern, bullseye
+type: gear
+kind: gear
+category: adventuring_gear
+source:
+  provider: dnd5eapi
+  edition: '2014'
+  url: https://www.dnd5eapi.co/api/2014/equipment/lantern-bullseye
+subtype: standard_gear
+description: A bullseye lantern casts bright light in a 60-foot cone and dim light
+  for an additional 60 feet. Once lit, it burns for 6 hours on a flask (1 pint) of
+  oil.
+cost:
+  gp: 10
+weight_lb: 2
+import_notes:
+- Imported from 2014 SRD equipment data.

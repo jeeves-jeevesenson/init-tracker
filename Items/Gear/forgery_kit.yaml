@@ -1,0 +1,21 @@
+format_version: 1
+id: forgery_kit
+name: Forgery Kit
+type: gear
+kind: gear
+category: adventuring_gear
+source:
+  provider: dnd5eapi
+  edition: '2014'
+  url: https://www.dnd5eapi.co/api/2014/equipment/forgery-kit
+subtype: kits
+description: This small box contains a variety of papers and parchments, pens and
+  inks, seals and sealing wax, gold and silver leaf, and other supplies necessary
+  to create convincing forgeries of physical documents. Proficiency with this kit
+  lets you add your proficiency bonus to any ability checks you make to create a physical
+  forgery of a document.
+cost:
+  gp: 15
+weight_lb: 5
+import_notes:
+- Imported from 2014 SRD equipment data.

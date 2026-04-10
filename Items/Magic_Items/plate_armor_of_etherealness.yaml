@@ -1,0 +1,19 @@
+id: plate_armor_of_etherealness
+name: Plate Armor of Etherealness
+category: armor
+description: 'Armor (plate), legendary (requires attunement)
+
+
+  While you''re wearing this armor, you can speak its command word as an action to
+  gain the effect of the etherealness spell, which last for 10 minutes or until you
+  remove the armor or use an action to speak the command word again. This property
+  of the armor can''t be used again until the next dawn.'
+source:
+  provider: dnd5eapi
+  edition: '2014'
+  url: https://www.dnd5eapi.co/api/2014/magic-items/plate-armor-of-etherealness
+import_notes:
+- Imported from 2014 SRD magic item data.
+- This is a descriptive stub; add grants/modifiers manually if desired.
+rarity: legendary
+requires_attunement: true

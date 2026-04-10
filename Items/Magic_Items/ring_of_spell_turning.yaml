@@ -1,0 +1,20 @@
+id: ring_of_spell_turning
+name: Ring of Spell Turning
+category: ring
+description: 'Ring, legendary (requires attunement)
+
+
+  While wearing this ring, you have advantage on saving throws against any spell that
+  targets only you (not in an area of effect). In addition, if you roll a 20 for the
+  save and the spell is 7th level or lower, the spell has no effect on you and instead
+  targets the caster, using the slot level, spell save DC, attack bonus, and spellcasting
+  ability of the caster.'
+source:
+  provider: dnd5eapi
+  edition: '2014'
+  url: https://www.dnd5eapi.co/api/2014/magic-items/ring-of-spell-turning
+import_notes:
+- Imported from 2014 SRD magic item data.
+- This is a descriptive stub; add grants/modifiers manually if desired.
+rarity: legendary
+requires_attunement: true

@@ -1,0 +1,21 @@
+id: feather_token_fan
+name: Fan Feather Token
+category: wondrous_items
+description: 'Wondrous item, rare
+
+
+  This tiny object looks like a feather.
+
+
+  If you are on a boat or ship, you can use an action to toss the token up to 10 feet
+  in the air. The token disappears, and a giant flapping fan takes its place. The
+  fan floats and creates a wind strong enough to fill the sails of one ship, increasing
+  its speed by 5 miles per hour for 8 hours. You can dismiss the fan as an action.'
+source:
+  provider: dnd5eapi
+  edition: '2014'
+  url: https://www.dnd5eapi.co/api/2014/magic-items/feather-token-fan
+import_notes:
+- Imported from 2014 SRD magic item data.
+- This is a descriptive stub; add grants/modifiers manually if desired.
+rarity: rare

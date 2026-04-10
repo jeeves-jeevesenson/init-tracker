@@ -1,0 +1,18 @@
+id: ring_of_evasion
+name: Ring of Evasion
+category: ring
+description: 'Ring, rare (requires attunement)
+
+
+  This ring has 3 charges, and it regains 1d3 expended charges daily at dawn. When
+  you fail a Dexterity saving throw while wearing it, you can use your reaction to
+  expend 1 of its charges to succeed on that saving throw instead.'
+source:
+  provider: dnd5eapi
+  edition: '2014'
+  url: https://www.dnd5eapi.co/api/2014/magic-items/ring-of-evasion
+import_notes:
+- Imported from 2014 SRD magic item data.
+- This is a descriptive stub; add grants/modifiers manually if desired.
+rarity: rare
+requires_attunement: true

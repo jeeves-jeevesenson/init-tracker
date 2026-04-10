@@ -1,0 +1,16 @@
+id: goggles_of_night
+name: Goggles of Night
+category: wondrous_items
+description: 'Wondrous item, uncommon
+
+
+  While wearing these dark lenses, you have darkvision out to a range of 60 feet.
+  If you already have darkvision, wearing the goggles increases its range by 60 feet.'
+source:
+  provider: dnd5eapi
+  edition: '2014'
+  url: https://www.dnd5eapi.co/api/2014/magic-items/goggles-of-night
+import_notes:
+- Imported from 2014 SRD magic item data.
+- This is a descriptive stub; add grants/modifiers manually if desired.
+rarity: uncommon

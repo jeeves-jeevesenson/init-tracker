@@ -1,0 +1,26 @@
+format_version: 1
+id: ball_bearings_bag_of_1000
+name: Ball bearings (bag of 1,000)
+type: gear
+kind: gear
+category: adventuring_gear
+source:
+  provider: dnd5eapi
+  edition: '2014'
+  url: https://www.dnd5eapi.co/api/2014/equipment/ball-bearings-bag-of-1000
+subtype: standard_gear
+description: 'As an action, you can spill these tiny metal balls from their pouch
+  to cover a level, square area that is 10 feet on a side.
+
+
+  A creature moving across the covered area must succeed on a DC 10 Dexterity saving
+  throw or fall prone.
+
+
+  A creature moving through the area at half speed doesn''t need to make the save.'
+cost:
+  gp: 1
+weight_lb: 2
+stackable: true
+import_notes:
+- Imported from 2014 SRD equipment data.

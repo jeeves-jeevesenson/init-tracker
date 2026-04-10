@@ -1,0 +1,17 @@
+id: gauntlets_of_ogre_power
+name: Gauntlets of Ogre Power
+category: wondrous_items
+description: 'Wondrous item, uncommon (requires attunement)
+
+
+  Your Strength score is 19 while you wear these gauntlets. They have no effect on
+  you if your Strength is already 19 or higher.'
+source:
+  provider: dnd5eapi
+  edition: '2014'
+  url: https://www.dnd5eapi.co/api/2014/magic-items/gauntlets-of-ogre-power
+import_notes:
+- Imported from 2014 SRD magic item data.
+- This is a descriptive stub; add grants/modifiers manually if desired.
+rarity: uncommon
+requires_attunement: true

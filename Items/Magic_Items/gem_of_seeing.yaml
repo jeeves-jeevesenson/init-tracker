@@ -1,0 +1,21 @@
+id: gem_of_seeing
+name: Gem of Seeing
+category: wondrous_items
+description: 'Wondrous item, rare (requires attunement)
+
+
+  This gem has 3 charges. As an action, you can speak the gem''s command word and
+  expend 1 charge. For the next 10 minutes, you have truesight out to 120 feet when
+  you peer through the gem.
+
+
+  The gem regains 1d3 expended charges daily at dawn.'
+source:
+  provider: dnd5eapi
+  edition: '2014'
+  url: https://www.dnd5eapi.co/api/2014/magic-items/gem-of-seeing
+import_notes:
+- Imported from 2014 SRD magic item data.
+- This is a descriptive stub; add grants/modifiers manually if desired.
+rarity: rare
+requires_attunement: true

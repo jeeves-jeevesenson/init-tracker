@@ -1,0 +1,24 @@
+format_version: 1
+id: potion_of_speed
+name: Potion of Speed
+type: consumable
+kind: consumable
+category: potion
+consumable_type: potion
+subtype: very rare
+description: 'Potion, very rare
+
+
+  When you drink this potion, you gain the effect of the haste spell for 1 minute
+  (no concentration required). The potion''s yellow fluid is streaked with black and
+  swirls on its own.'
+effect_hint: Imported from external SRD data. Review description for exact behavior.
+stackable: true
+source:
+  provider: dnd5eapi
+  edition: '2014'
+  url: https://www.dnd5eapi.co/api/2014/magic-items/potion-of-speed
+import_notes:
+- Imported from 2014 SRD magic item data.
+- This is a descriptive stub; add automation manually if desired.
+rarity: very rare

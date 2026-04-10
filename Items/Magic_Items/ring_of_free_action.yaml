@@ -1,0 +1,17 @@
+id: ring_of_free_action
+name: Ring of Free Action
+category: ring
+description: 'Ring, rare (requires attunement)
+
+
+  While you wear this ring, difficult terrain doesn''t cost you extra movement. In
+  addition, magic can neither reduce your speed nor cause you to be paralyzed or restrained.'
+source:
+  provider: dnd5eapi
+  edition: '2014'
+  url: https://www.dnd5eapi.co/api/2014/magic-items/ring-of-free-action
+import_notes:
+- Imported from 2014 SRD magic item data.
+- This is a descriptive stub; add grants/modifiers manually if desired.
+rarity: rare
+requires_attunement: true

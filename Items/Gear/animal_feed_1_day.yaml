@@ -1,0 +1,16 @@
+format_version: 1
+id: animal_feed_1_day
+name: Animal Feed (1 day)
+type: gear
+kind: gear
+category: vehicle
+source:
+  provider: dnd5eapi
+  edition: '2014'
+  url: https://www.dnd5eapi.co/api/2014/equipment/animal-feed-1-day
+subtype: tack_harness_and_drawn_vehicles
+cost:
+  cp: 5
+weight_lb: 10
+import_notes:
+- Imported from 2014 SRD equipment data.

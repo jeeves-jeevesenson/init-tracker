@@ -1,0 +1,18 @@
+format_version: 1
+id: candle
+name: Candle
+type: gear
+kind: gear
+category: adventuring_gear
+source:
+  provider: dnd5eapi
+  edition: '2014'
+  url: https://www.dnd5eapi.co/api/2014/equipment/candle
+subtype: standard_gear
+description: For 1 hour, a candle sheds bright light in a 5-foot radius and dim light
+  for an additional 5 feet.
+cost:
+  cp: 1
+weight_lb: 0
+import_notes:
+- Imported from 2014 SRD equipment data.

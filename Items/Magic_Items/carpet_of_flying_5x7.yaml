@@ -1,0 +1,22 @@
+id: carpet_of_flying_5x7
+name: Carpet of Flying (5 ft. × 7 ft.)
+category: wondrous_items
+description: 'Wondrous item, very rare
+
+
+  You can speak the carpet''s command word as an  action to make the carpet hover
+  and fly. It moves according to your spoken directions, provided that you are within
+  30 feet of it.
+
+
+  This carpet is 5 feet by 7 feet and has a flying speed of 40 feet. It can carry
+  up to 1200 pounds, but its flying speed becomes 20 feet while carrying over 600
+  pounds.'
+source:
+  provider: dnd5eapi
+  edition: '2014'
+  url: https://www.dnd5eapi.co/api/2014/magic-items/carpet-of-flying-5x7
+import_notes:
+- Imported from 2014 SRD magic item data.
+- This is a descriptive stub; add grants/modifiers manually if desired.
+rarity: very rare

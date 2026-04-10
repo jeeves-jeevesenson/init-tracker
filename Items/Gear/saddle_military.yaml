@@ -1,0 +1,18 @@
+format_version: 1
+id: saddle_military
+name: Saddle, Military
+type: gear
+kind: gear
+category: vehicle
+source:
+  provider: dnd5eapi
+  edition: '2014'
+  url: https://www.dnd5eapi.co/api/2014/equipment/saddle-military
+subtype: tack_harness_and_drawn_vehicles
+description: A military saddle braces the rider, helping you keep your seat on an
+  active mount in battle. It gives you advantage on any check you make to remain mounted.
+cost:
+  gp: 20
+weight_lb: 30
+import_notes:
+- Imported from 2014 SRD equipment data.

@@ -1,0 +1,26 @@
+format_version: 1
+id: oil_of_etherealness
+name: Oil of Etherealness
+type: consumable
+kind: consumable
+category: potion
+consumable_type: potion
+subtype: rare
+description: 'Potion, rare
+
+
+  Beads of this cloudy gray oil form on the outside of its container and quickly evaporate.
+  The oil can cover a Medium or smaller creature, along with the equipment it''s wearing
+  and carrying (one additional vial is required for each size category above Medium).
+  Applying the oil takes 10 minutes. The affected creature then gains the effect of
+  the etherealness spell for 1 hour.'
+effect_hint: Imported from external SRD data. Review description for exact behavior.
+stackable: true
+source:
+  provider: dnd5eapi
+  edition: '2014'
+  url: https://www.dnd5eapi.co/api/2014/magic-items/oil-of-etherealness
+import_notes:
+- Imported from 2014 SRD magic item data.
+- This is a descriptive stub; add automation manually if desired.
+rarity: rare

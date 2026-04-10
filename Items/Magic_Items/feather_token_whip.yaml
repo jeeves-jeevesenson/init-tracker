@@ -1,0 +1,26 @@
+id: feather_token_whip
+name: Whip Feather Token
+category: wondrous_items
+description: 'Wondrous item, rare
+
+
+  This tiny object looks like a feather.
+
+
+  You can use an action to throw the token to a point within 10 feet of you. The token
+  disappears, and a floating whip takes its place. You can then use a bonus action
+  to make a melee spell attack against a creature within 10 feet of the whip, with
+  an attack bonus of +9. On a hit, the target takes 1d6 + 5 force damage.
+
+
+  As a bonus action on your turn, you can direct the whip to fly up to 20 feet and
+  repeat the attack against a creature within 10 feet of it. The whip disappears after
+  1 hour, when you use an action to dismiss it, or when you are incapacitated or die.'
+source:
+  provider: dnd5eapi
+  edition: '2014'
+  url: https://www.dnd5eapi.co/api/2014/magic-items/feather-token-whip
+import_notes:
+- Imported from 2014 SRD magic item data.
+- This is a descriptive stub; add grants/modifiers manually if desired.
+rarity: rare

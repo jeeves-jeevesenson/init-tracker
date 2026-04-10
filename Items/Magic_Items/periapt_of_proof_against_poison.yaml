@@ -1,0 +1,17 @@
+id: periapt_of_proof_against_poison
+name: Periapt of Proof against Poison
+category: wondrous_items
+description: 'Wondrous item, rare
+
+
+  This delicate silver chain has a brilliant-cut black gem pendant. While you wear
+  it, poisons have no effect on you. You are immune to the poisoned condition and
+  have immunity to poison damage.'
+source:
+  provider: dnd5eapi
+  edition: '2014'
+  url: https://www.dnd5eapi.co/api/2014/magic-items/periapt-of-proof-against-poison
+import_notes:
+- Imported from 2014 SRD magic item data.
+- This is a descriptive stub; add grants/modifiers manually if desired.
+rarity: rare

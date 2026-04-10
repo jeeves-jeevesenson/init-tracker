@@ -1,0 +1,21 @@
+id: crystal_ball_of_true_seeing
+name: Crystal Ball of True Seeing
+category: wondrous_items
+description: 'Wondrous item, legendary (requires attunement)
+
+
+  The crystal ball is about 6 inches in diameter. While touching it, you can cast
+  the scrying spell (save DC 17) with it.
+
+
+  ***Crystal Ball of True Seeing.*** While scrying with the crystal ball, you have
+  truesight with a radius of 120 feet centered on the spell''s sensor.'
+source:
+  provider: dnd5eapi
+  edition: '2014'
+  url: https://www.dnd5eapi.co/api/2014/magic-items/crystal-ball-of-true-seeing
+import_notes:
+- Imported from 2014 SRD magic item data.
+- This is a descriptive stub; add grants/modifiers manually if desired.
+rarity: legendary
+requires_attunement: true

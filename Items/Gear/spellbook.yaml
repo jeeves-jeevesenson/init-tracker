@@ -1,0 +1,18 @@
+format_version: 1
+id: spellbook
+name: Spellbook
+type: gear
+kind: gear
+category: adventuring_gear
+source:
+  provider: dnd5eapi
+  edition: '2014'
+  url: https://www.dnd5eapi.co/api/2014/equipment/spellbook
+subtype: standard_gear
+description: Essential for wizards, a spellbook is a leather-bound tome with 100 blank
+  vellum pages suitable for recording spells.
+cost:
+  gp: 50
+weight_lb: 3
+import_notes:
+- Imported from 2014 SRD equipment data.

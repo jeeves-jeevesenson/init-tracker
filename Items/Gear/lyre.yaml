@@ -1,0 +1,21 @@
+format_version: 1
+id: lyre
+name: Lyre
+type: gear
+kind: gear
+category: tool
+source:
+  provider: dnd5eapi
+  edition: '2014'
+  url: https://www.dnd5eapi.co/api/2014/equipment/lyre
+subtype: musical_instrument
+description: Several of the most common types of musical instruments are shown on
+  the table as examples. If you have proficiency with a given musical instrument,
+  you can add your proficiency bonus to any ability checks you make to play music
+  with the instrument. A bard can use a musical instrument as a spellcasting focus.
+  Each type of musical instrument requires a separate proficiency.
+cost:
+  gp: 30
+weight_lb: 2
+import_notes:
+- Imported from 2014 SRD equipment data.

@@ -1,0 +1,19 @@
+format_version: 1
+id: disguise_kit
+name: Disguise Kit
+type: gear
+kind: gear
+category: adventuring_gear
+source:
+  provider: dnd5eapi
+  edition: '2014'
+  url: https://www.dnd5eapi.co/api/2014/equipment/disguise-kit
+subtype: kits
+description: This pouch of cosmetics, hair dye, and small props lets you create disguises
+  that change your physical appearance. Proficiency with this kit lets you add your
+  proficiency bonus to any ability checks you make to create a visual disguise.
+cost:
+  gp: 25
+weight_lb: 3
+import_notes:
+- Imported from 2014 SRD equipment data.

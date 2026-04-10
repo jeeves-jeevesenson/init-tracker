@@ -1,0 +1,15 @@
+format_version: 1
+id: warship
+name: Warship
+type: gear
+kind: gear
+category: vehicle
+source:
+  provider: dnd5eapi
+  edition: '2014'
+  url: https://www.dnd5eapi.co/api/2014/equipment/warship
+subtype: waterborne_vehicles
+cost:
+  gp: 25000
+import_notes:
+- Imported from 2014 SRD equipment data.

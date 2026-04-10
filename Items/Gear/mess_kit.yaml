@@ -1,0 +1,18 @@
+format_version: 1
+id: mess_kit
+name: Mess Kit
+type: gear
+kind: gear
+category: adventuring_gear
+source:
+  provider: dnd5eapi
+  edition: '2014'
+  url: https://www.dnd5eapi.co/api/2014/equipment/mess-kit
+subtype: kits
+description: This tin box contains a cup and simple cutlery. The box clamps together,
+  and one side can be used as a cooking pan and the other as a plate or shallow bowl.
+cost:
+  sp: 2
+weight_lb: 1
+import_notes:
+- Imported from 2014 SRD equipment data.

@@ -1,0 +1,18 @@
+format_version: 1
+id: rope_hempen_50_feet
+name: Rope, hempen (50 feet)
+type: gear
+kind: gear
+category: adventuring_gear
+source:
+  provider: dnd5eapi
+  edition: '2014'
+  url: https://www.dnd5eapi.co/api/2014/equipment/rope-hempen-50-feet
+subtype: standard_gear
+description: Rope, whether made of hemp or silk, has 2 hit points and can be burst
+  with a DC 17 Strength check.
+cost:
+  gp: 1
+weight_lb: 10
+import_notes:
+- Imported from 2014 SRD equipment data.

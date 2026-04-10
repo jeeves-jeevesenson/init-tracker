@@ -1,0 +1,19 @@
+format_version: 1
+id: block_and_tackle
+name: Block and tackle
+type: gear
+kind: gear
+category: adventuring_gear
+source:
+  provider: dnd5eapi
+  edition: '2014'
+  url: https://www.dnd5eapi.co/api/2014/equipment/block-and-tackle
+subtype: standard_gear
+description: A set of pulleys with a cable threaded through them and a hook to attach
+  to objects, a block and tackle allows you to hoist up to four times the weight you
+  can normally lift.
+cost:
+  gp: 1
+weight_lb: 5
+import_notes:
+- Imported from 2014 SRD equipment data.

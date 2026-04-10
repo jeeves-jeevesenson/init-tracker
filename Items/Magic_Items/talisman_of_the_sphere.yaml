@@ -1,0 +1,20 @@
+id: talisman_of_the_sphere
+name: Talisman of the Sphere
+category: wondrous_items
+description: 'Wondrous item, legendary (requires attunement)
+
+
+  When you make an Intelligence (Arcana) check to control a sphere of annihilation
+  while you are holding this talisman, you double your proficiency bonus on the check.
+  In addition, when you start your turn with control over a sphere of annihilation,
+  you can use an action to levitate it 10 feet plus a number of additional feet equal
+  to 10 × your Intelligence modifier.'
+source:
+  provider: dnd5eapi
+  edition: '2014'
+  url: https://www.dnd5eapi.co/api/2014/magic-items/talisman-of-the-sphere
+import_notes:
+- Imported from 2014 SRD magic item data.
+- This is a descriptive stub; add grants/modifiers manually if desired.
+rarity: legendary
+requires_attunement: true

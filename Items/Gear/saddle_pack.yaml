@@ -1,0 +1,16 @@
+format_version: 1
+id: saddle_pack
+name: Saddle, Pack
+type: gear
+kind: gear
+category: vehicle
+source:
+  provider: dnd5eapi
+  edition: '2014'
+  url: https://www.dnd5eapi.co/api/2014/equipment/saddle-pack
+subtype: tack_harness_and_drawn_vehicles
+cost:
+  gp: 5
+weight_lb: 15
+import_notes:
+- Imported from 2014 SRD equipment data.

@@ -1,0 +1,17 @@
+format_version: 1
+id: saddle_exotic
+name: Saddle, Exotic
+type: gear
+kind: gear
+category: vehicle
+source:
+  provider: dnd5eapi
+  edition: '2014'
+  url: https://www.dnd5eapi.co/api/2014/equipment/saddle-exotic
+subtype: tack_harness_and_drawn_vehicles
+description: An exotic saddle is required for riding any aquatic or flying mount.
+cost:
+  gp: 60
+weight_lb: 50
+import_notes:
+- Imported from 2014 SRD equipment data.

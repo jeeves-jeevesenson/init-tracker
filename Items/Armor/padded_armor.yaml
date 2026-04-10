@@ -1,0 +1,19 @@
+format_version: 1
+id: padded_armor
+name: Padded Armor
+type: armor
+category: light
+ac:
+  base_formula: '11'
+source:
+  provider: dnd5eapi
+  edition: '2014'
+  url: https://www.dnd5eapi.co/api/2014/equipment/padded-armor
+requirements:
+  strength: 0
+properties:
+  stealth_disadvantage: true
+cost_gp: 5
+weight_lb: 8
+import_notes:
+- Imported from 2014 SRD equipment data.

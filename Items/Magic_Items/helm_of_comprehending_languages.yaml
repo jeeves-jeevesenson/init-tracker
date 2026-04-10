@@ -1,0 +1,16 @@
+id: helm_of_comprehending_languages
+name: Helm of Comprehending Languages
+category: wondrous_items
+description: 'Wondrous item, uncommon
+
+
+  While wearing this helm, you can use an action to cast the comprehend languages
+  spell from it at will.'
+source:
+  provider: dnd5eapi
+  edition: '2014'
+  url: https://www.dnd5eapi.co/api/2014/magic-items/helm-of-comprehending-languages
+import_notes:
+- Imported from 2014 SRD magic item data.
+- This is a descriptive stub; add grants/modifiers manually if desired.
+rarity: uncommon

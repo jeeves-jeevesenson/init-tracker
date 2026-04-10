@@ -1,0 +1,16 @@
+format_version: 1
+id: clothes_fine
+name: Clothes, fine
+type: gear
+kind: gear
+category: adventuring_gear
+source:
+  provider: dnd5eapi
+  edition: '2014'
+  url: https://www.dnd5eapi.co/api/2014/equipment/clothes-fine
+subtype: standard_gear
+cost:
+  gp: 15
+weight_lb: 6
+import_notes:
+- Imported from 2014 SRD equipment data.
