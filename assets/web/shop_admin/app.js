@@ -29,8 +29,8 @@ const REQUIRED_IDS = [
   "party-total-cp-value",
 ];
 
-const ITEM_BUCKET_OPTIONS = ["weapon", "armor", "magic_item", "consumable"];
-const DEFAULT_CATEGORY_SUGGESTIONS = ["weapons", "armor", "consumables", "scrolls", "magic_items"];
+const ITEM_BUCKET_OPTIONS = ["weapon", "armor", "magic_item", "consumable", "gear"];
+const DEFAULT_CATEGORY_SUGGESTIONS = ["weapons", "armor", "consumables", "scrolls", "magic_items", "gear"];
 
 const assertRequiredElements = () => {
   const missing = REQUIRED_IDS.filter((id) => !document.getElementById(id));
@@ -48,6 +48,10 @@ const state = {
   wealthPlayers: [],
   wealthPartyCurrency: { gp: 0, sp: 0, cp: 0 },
   wealthPartyTotalCp: 0,
+  selectedRows: new Set(),
+  filterText: "",
+  filterBucket: "",
+  filterEnabled: "",
 };
 
 const ACTION_LABELS = {
@@ -232,10 +236,51 @@ const bindInput = (rowIndex, key, subkey = null) => (event) => {
 
 const deleteRow = (rowIndex) => {
   state.entries.splice(rowIndex, 1);
+  state.selectedRows.delete(rowIndex);
+  // Re-key selected rows after splice
+  const newSelected = new Set();
+  state.selectedRows.forEach((idx) => { if (idx < rowIndex) newSelected.add(idx); else if (idx > rowIndex) newSelected.add(idx - 1); });
+  state.selectedRows = newSelected;
   markDirty();
   state.rowErrors = localValidationErrors();
   updateCategorySuggestions();
   renderRows();
+};
+
+const visibleIndices = () => {
+  const text = state.filterText.trim().toLowerCase();
+  const bucket = state.filterBucket;
+  const enabled = state.filterEnabled;
+  return state.entries.map((entry, index) => ({ entry, index })).filter(({ entry }) => {
+    if (bucket && String(entry.item_bucket || "") !== bucket) return false;
+    if (enabled === "true" && !entry.enabled) return false;
+    if (enabled === "false" && entry.enabled !== false) return false;
+    if (text) {
+      const haystack = [entry.item_id, entry.item_bucket, entry.shop_category, entry._readonly?.name || ""].join(" ").toLowerCase();
+      if (!haystack.includes(text)) return false;
+    }
+    return true;
+  }).map(({ index }) => index);
+};
+
+const bulkSetEnabled = (value) => {
+  const indices = visibleIndices();
+  indices.forEach((index) => { state.entries[index].enabled = value; });
+  markDirty();
+  state.rowErrors = localValidationErrors();
+  renderRows();
+  setStatus(`${value ? "Enabled" : "Disabled"} ${indices.length} matching entries.`, "ok");
+};
+
+const bulkDelete = () => {
+  const indices = visibleIndices().sort((a, b) => b - a);
+  indices.forEach((index) => { state.entries.splice(index, 1); });
+  state.selectedRows = new Set();
+  markDirty();
+  state.rowErrors = localValidationErrors();
+  updateCategorySuggestions();
+  renderRows();
+  setStatus(`Deleted ${indices.length} matching entries.`, "info");
 };
 
 const rowInput = ({ value = "", type = "text", onChange, min = null, invalid = false, title = "", list = "" }) => {
@@ -300,7 +345,87 @@ const updateCategorySuggestions = () => {
 
 const renderRows = () => {
   rowsEl.innerHTML = "";
-  state.entries.forEach((entry, index) => {
+
+  // Render filter toolbar
+  const toolbar = document.createElement("div");
+  toolbar.className = "admin-filter-toolbar";
+
+  const searchInput = document.createElement("input");
+  searchInput.type = "search";
+  searchInput.placeholder = "Search item ID, name, or category…";
+  searchInput.value = state.filterText;
+  searchInput.className = "admin-filter-search";
+  searchInput.addEventListener("input", (e) => {
+    state.filterText = e.target.value;
+    renderRows();
+  });
+
+  const bucketSelect = document.createElement("select");
+  bucketSelect.className = "admin-filter-select";
+  const allBucketOpt = document.createElement("option");
+  allBucketOpt.value = "";
+  allBucketOpt.textContent = "All buckets";
+  bucketSelect.appendChild(allBucketOpt);
+  ITEM_BUCKET_OPTIONS.forEach((b) => {
+    const opt = document.createElement("option");
+    opt.value = b;
+    opt.textContent = b;
+    bucketSelect.appendChild(opt);
+  });
+  bucketSelect.value = state.filterBucket;
+  bucketSelect.addEventListener("change", (e) => {
+    state.filterBucket = e.target.value;
+    renderRows();
+  });
+
+  const enabledSelect = document.createElement("select");
+  enabledSelect.className = "admin-filter-select";
+  [["", "All entries"], ["true", "Enabled only"], ["false", "Disabled only"]].forEach(([val, label]) => {
+    const opt = document.createElement("option");
+    opt.value = val;
+    opt.textContent = label;
+    enabledSelect.appendChild(opt);
+  });
+  enabledSelect.value = state.filterEnabled;
+  enabledSelect.addEventListener("change", (e) => {
+    state.filterEnabled = e.target.value;
+    renderRows();
+  });
+
+  const bulkEnableBtn = document.createElement("button");
+  bulkEnableBtn.type = "button";
+  bulkEnableBtn.textContent = "Enable visible";
+  bulkEnableBtn.className = "bulk-btn";
+  bulkEnableBtn.disabled = state.busy;
+  bulkEnableBtn.addEventListener("click", () => bulkSetEnabled(true));
+
+  const bulkDisableBtn = document.createElement("button");
+  bulkDisableBtn.type = "button";
+  bulkDisableBtn.textContent = "Disable visible";
+  bulkDisableBtn.className = "bulk-btn";
+  bulkDisableBtn.disabled = state.busy;
+  bulkDisableBtn.addEventListener("click", () => bulkSetEnabled(false));
+
+  const visible = visibleIndices();
+  const countBadge = document.createElement("span");
+  countBadge.className = "admin-count-badge";
+  countBadge.textContent = `${visible.length} / ${state.entries.length} entries`;
+
+  toolbar.append(searchInput, bucketSelect, enabledSelect, bulkEnableBtn, bulkDisableBtn, countBadge);
+  rowsEl.appendChild(toolbar);
+
+  if (!visible.length) {
+    const empty = document.createElement("p");
+    empty.className = "admin-empty";
+    empty.textContent = state.entries.length
+      ? "No entries match the current filter."
+      : "No catalog entries. Use Add Entry to create one.";
+    rowsEl.appendChild(empty);
+    return;
+  }
+
+  visible.forEach((index) => {
+    const entry = state.entries[index];
     const rowErrors = state.rowErrors[index] || [];
     const rowErrorText = rowErrors.join("; ");
 

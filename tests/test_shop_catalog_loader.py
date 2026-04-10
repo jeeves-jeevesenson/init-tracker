@@ -244,6 +244,146 @@ class ShopCatalogLoaderTests(unittest.TestCase):
             normalized = self.app._load_shop_catalog_normalized()
         self.assertTrue(normalized)
 
+    def test_load_shop_catalog_normalized_gear_bucket_loads_and_passes_through(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            items_dir = Path(tmp) / "Items"
+            self._seed_item_definitions(items_dir)
+            self._write_yaml(
+                items_dir / "Gear" / "arrow.yaml",
+                {
+                    "id": "arrow",
+                    "name": "Arrow",
+                    "type": "gear",
+                    "kind": "gear",
+                    "category": "adventuring_gear",
+                    "subtype": "ammunition",
+                    "stackable": True,
+                },
+            )
+            self._write_yaml(
+                items_dir / "Shop" / "catalog.yaml",
+                {
+                    "format_version": 1,
+                    "entries": [
+                        {
+                            "item_id": "arrow",
+                            "item_bucket": "gear",
+                            "shop_category": "gear",
+                            "enabled": True,
+                            "price": {"cp": 5},
+                        },
+                    ],
+                },
+            )
+
+            with mock.patch.object(self.app, "_resolve_items_dir", return_value=items_dir):
+                normalized = self.app._load_shop_catalog_normalized()
+
+        self.assertEqual(1, len(normalized))
+        entry = normalized[0]
+        self.assertEqual("arrow", entry["item_id"])
+        self.assertEqual("gear", entry["item_bucket"])
+        self.assertEqual("adventuring_gear", entry.get("category"))
+        self.assertEqual("ammunition", entry.get("subtype"))
+        self.assertTrue(entry["definition_path"].endswith(".yaml"))
+
+    def test_normalized_entry_includes_item_tier_field(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            items_dir = Path(tmp) / "Items"
+            self._seed_item_definitions(items_dir)
+            # Seed a bare-stub weapon with no description/rarity/grants
+            self._write_yaml(
+                items_dir / "Weapons" / "crude_club.yaml",
+                {"id": "crude_club", "name": "Crude Club", "type": "weapon"},
+            )
+            # Seed a magic item with grants → Tier A
+            self._write_yaml(
+                items_dir / "Magic_Items" / "ring_of_fire.yaml",
+                {
+                    "id": "ring_of_fire",
+                    "name": "Ring of Fire",
+                    "type": "ring",
+                    "requires_attunement": True,
+                    "grants": {"modifiers": [{"id": "fire_resist", "target": "resistance", "mode": "fire"}]},
+                },
+            )
+            self._write_yaml(
+                items_dir / "Shop" / "catalog.yaml",
+                {
+                    "format_version": 1,
+                    "entries": [
+                        {
+                            "item_id": "crude_club",
+                            "item_bucket": "weapon",
+                            "shop_category": "weapons",
+                            "enabled": True,
+                            "price": {"gp": 1},
+                        },
+                        {
+                            "item_id": "wand_of_sparking",
+                            "item_bucket": "magic_item",
+                            "shop_category": "magic_items",
+                            "enabled": True,
+                            "price": {"gp": 250},
+                        },
+                        {
+                            "item_id": "ring_of_fire",
+                            "item_bucket": "magic_item",
+                            "shop_category": "magic_items",
+                            "enabled": True,
+                            "price": {"gp": 500},
+                        },
+                    ],
+                },
+            )
+
+            with mock.patch.object(self.app, "_resolve_items_dir", return_value=items_dir):
+                normalized = self.app._load_shop_catalog_normalized()
+
+        by_key = {(r["item_bucket"], r["item_id"]): r for r in normalized}
+        # crude_club has no description/rarity/grants → Tier C
+        self.assertEqual("C", by_key[("weapon", "crude_club")]["item_tier"])
+        # wand_of_sparking has requires_attunement + description → Tier B
+        self.assertEqual("B", by_key[("magic_item", "wand_of_sparking")]["item_tier"])
+        # ring_of_fire has grants.modifiers → Tier A
+        self.assertEqual("A", by_key[("magic_item", "ring_of_fire")]["item_tier"])
+
+    def test_normalized_entry_includes_rarity_when_present_in_definition(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            items_dir = Path(tmp) / "Items"
+            self._seed_item_definitions(items_dir)
+            self._write_yaml(
+                items_dir / "Magic_Items" / "rare_ring.yaml",
+                {
+                    "id": "rare_ring",
+                    "name": "Rare Ring",
+                    "type": "ring",
+                    "rarity": "rare",
+                    "description": "A rare magical ring.",
+                },
+            )
+            self._write_yaml(
+                items_dir / "Shop" / "catalog.yaml",
+                {
+                    "format_version": 1,
+                    "entries": [
+                        {
+                            "item_id": "rare_ring",
+                            "item_bucket": "magic_item",
+                            "shop_category": "magic_items",
+                            "enabled": True,
+                            "price": {"gp": 1000},
+                        },
+                    ],
+                },
+            )
+
+            with mock.patch.object(self.app, "_resolve_items_dir", return_value=items_dir):
+                normalized = self.app._load_shop_catalog_normalized()
+
+        self.assertEqual("rare", normalized[0].get("rarity"))
+        self.assertEqual("B", normalized[0].get("item_tier"))
+
     def test_write_shop_catalog_yaml_atomic_avoids_recursive_getattr_lookup(self):
         class _TrackerWithRecursiveGetattr(tracker_mod.InitiativeTracker):
             def __getattr__(self, _name):

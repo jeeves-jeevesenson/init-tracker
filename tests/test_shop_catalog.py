@@ -10,6 +10,7 @@ class ShopCatalogTests(unittest.TestCase):
         "armor": Path("Items/Armor"),
         "magic_item": Path("Items/Magic_Items"),
         "consumable": Path("Items/Consumables"),
+        "gear": Path("Items/Gear"),
     }
 
     @staticmethod

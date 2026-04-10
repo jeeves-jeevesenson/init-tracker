@@ -38,6 +38,25 @@
         </div>
       </div>
 
+      <div class="shop-filters" role="search" aria-label="Filter catalog">
+        <input id="filter-search" type="search" class="filter-search" placeholder="Search items…" autocomplete="off" />
+        <select id="filter-bucket" class="filter-select" aria-label="Filter by type">
+          <option value="">All types</option>
+          <option value="weapon">Weapons</option>
+          <option value="armor">Armor</option>
+          <option value="magic_item">Magic Items</option>
+          <option value="consumable">Consumables</option>
+          <option value="gear">Gear</option>
+        </select>
+        <select id="filter-tier" class="filter-select" aria-label="Filter by tier">
+          <option value="">All tiers</option>
+          <option value="A">Tier A (Mechanized)</option>
+          <option value="B">Tier B (Described)</option>
+          <option value="C">Tier C (Stub)</option>
+        </select>
+        <span id="filter-count" class="filter-count"></span>
+      </div>
+
       <div id="catalog-list" class="catalog"></div>
     </section>
   </main>
