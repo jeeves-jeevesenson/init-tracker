@@ -178,10 +178,10 @@ const itemKey = (entry) => `${entry?.item_bucket || ""}:${entry?.item_id || ""}`
 const filteredCatalog = () => {
   const text = state.filterText.trim().toLowerCase();
   const bucket = state.filterBucket;
-  const tier = state.filterTier;
+  const tier = state.filterTier.toUpperCase();
   return state.catalog.filter((entry) => {
     if (bucket && (entry?.item_bucket || "") !== bucket) return false;
-    if (tier && String(entry?.item_tier || "").toUpperCase() !== tier.toUpperCase()) return false;
+    if (tier && String(entry?.item_tier || "").toUpperCase() !== tier) return false;
     if (text) {
       const haystack = [
         entry?.name || "",

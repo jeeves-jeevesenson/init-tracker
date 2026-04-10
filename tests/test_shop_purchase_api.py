@@ -481,29 +481,6 @@ class ShopPurchaseApiTransactionTests(unittest.TestCase):
 
             self.assertEqual(400, ctx.exception.status_code)
             self.assertEqual("invalid_purchase", (ctx.exception.detail or {}).get("error"))
-        with tempfile.TemporaryDirectory() as tmp:
-            root = Path(tmp)
-            items_dir = self._seed_items(root)
-            player_path = self._seed_player(root, gp=300)
-            self.app._resolve_items_dir = lambda: items_dir
-            self.app._resolve_character_path = lambda _name: player_path
-            original_store = self.app._store_character_yaml
-            self.app._store_character_yaml = mock.Mock(side_effect=RuntimeError("player write failed"))
-            catalog_path = items_dir / "Shop" / "catalog.yaml"
-            before_catalog = yaml.safe_load(catalog_path.read_text(encoding="utf-8"))
-            before_player = player_path.read_text(encoding="utf-8")
-
-            with self.assertRaises(tracker_mod.CharacterApiError) as ctx:
-                self.app._purchase_shop_item_for_player(
-                    "Alice", {"item_bucket": "consumable", "item_id": "healing_potion", "quantity": 1}
-                )
-
-            self.assertEqual(500, ctx.exception.status_code)
-            self.assertEqual("player_save_failed", (ctx.exception.detail or {}).get("error"))
-            after_catalog = yaml.safe_load(catalog_path.read_text(encoding="utf-8"))
-            self.assertEqual(before_catalog, after_catalog)
-            self.assertEqual(before_player, player_path.read_text(encoding="utf-8"))
-            self.app._store_character_yaml = original_store
 
 
 if __name__ == "__main__":

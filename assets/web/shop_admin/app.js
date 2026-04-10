@@ -237,9 +237,17 @@ const bindInput = (rowIndex, key, subkey = null) => (event) => {
 const deleteRow = (rowIndex) => {
   state.entries.splice(rowIndex, 1);
   state.selectedRows.delete(rowIndex);
-  // Re-key selected rows after splice
+  // Re-key selected rows after splice: indices before rowIndex stay the same,
+  // the deleted index is dropped, indices after rowIndex decrement by one.
   const newSelected = new Set();
-  state.selectedRows.forEach((idx) => { if (idx < rowIndex) newSelected.add(idx); else if (idx > rowIndex) newSelected.add(idx - 1); });
+  state.selectedRows.forEach((idx) => {
+    if (idx < rowIndex) {
+      newSelected.add(idx);
+    } else if (idx > rowIndex) {
+      newSelected.add(idx - 1);
+    }
+    // idx === rowIndex: deleted row, drop from selection
+  });
   state.selectedRows = newSelected;
   markDirty();
   state.rowErrors = localValidationErrors();

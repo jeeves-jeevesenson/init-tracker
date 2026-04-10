@@ -24,7 +24,7 @@ import argparse
 import re
 import sys
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Set
+from typing import Any, Dict, List, Optional, Set, Tuple
 
 import yaml
 
@@ -94,6 +94,8 @@ def load_definitions(items_dir: Path, bucket: str) -> Dict[str, Dict[str, Any]]:
             continue
         if not isinstance(data, dict):
             continue
+        # Item IDs are normalized to lowercase to match the backend loader convention
+        # (see _load_item_definition_bucket_for_shop which also lower-cases them).
         item_id = str(data.get("id") or "").strip().lower()
         if not item_id:
             continue
@@ -143,7 +145,7 @@ def build_catalog(
     *,
     enable_buckets: Set[str],
     enable_tiers: Set[str],
-) -> Dict[str, Any]:
+) -> Tuple[Dict[str, Any], Dict[str, int]]:
     # Index existing entries for preservation
     existing_by_key: Dict[str, Dict[str, Any]] = {}
     for entry in existing_catalog.get("entries") or []:
