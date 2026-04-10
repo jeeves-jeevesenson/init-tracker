@@ -8664,6 +8664,12 @@ class InitiativeTracker(base.InitiativeTracker):
         return self._session_saves_dir() / "quick_save.json"
 
     def _capture_canonical_map_state(self, prefer_window: bool = True) -> MapState:
+        """Capture current legacy/map-window layers into the canonical map state.
+
+        `_map_state` is authoritative for canonical-only layers (features/hazards/structures/elevation).
+        Legacy LAN fields and map-window runtime fields are treated as compatibility projections and
+        replace only legacy-representable layers.
+        """
         mw = getattr(self, "_map_window", None) if prefer_window else None
         map_open = False
         try:
@@ -8715,7 +8721,7 @@ class InitiativeTracker(base.InitiativeTracker):
             except Exception:
                 pass
 
-        state = MapState.from_legacy(
+        legacy_state = MapState.from_legacy(
             cols=cols,
             rows=rows,
             feet_per_square=feet_per_square,
@@ -8725,10 +8731,29 @@ class InitiativeTracker(base.InitiativeTracker):
             aoes=aoes,
             presentation=presentation,
         )
+        base_state = self.__dict__.get("_map_state")
+        if isinstance(base_state, MapState):
+            canonical_only = base_state.normalized()
+            state = MapState(
+                schema_version=MAP_STATE_SCHEMA_VERSION,
+                grid=legacy_state.grid,
+                terrain_cells=dict(legacy_state.terrain_cells),
+                obstacles=dict(legacy_state.obstacles),
+                token_positions=dict(legacy_state.token_positions),
+                aoes=dict(legacy_state.aoes),
+                presentation=dict(legacy_state.presentation),
+                features=dict(canonical_only.features),
+                hazards=dict(canonical_only.hazards),
+                structures=dict(canonical_only.structures),
+                elevation_cells=dict(canonical_only.elevation_cells),
+            ).normalized()
+        else:
+            state = legacy_state
         self._map_state = state
         return state
 
     def _apply_canonical_map_state(self, state: MapState, hydrate_window: bool = False) -> None:
+        """Apply canonical map state and project compatibility fields for legacy/LAN consumers."""
         normalized = state.normalized()
         self._map_state = normalized
         legacy = normalized.to_legacy()
@@ -8769,6 +8794,133 @@ class InitiativeTracker(base.InitiativeTracker):
     def _map_query_api(self) -> MapQueryAPI:
         return MapQueryAPI(self._capture_canonical_map_state(prefer_window=True))
 
+    def _canonical_map_state_from_snapshot_map_payload(self, map_state: Any) -> MapState:
+        source = map_state if isinstance(map_state, dict) else {}
+        canonical_payload = source.get("canonical")
+        if isinstance(canonical_payload, dict):
+            return MapState.from_dict(canonical_payload)
+
+        def _normalize_cell_key(raw_key: Any) -> Optional[Tuple[int, int]]:
+            if isinstance(raw_key, str):
+                parts = [part.strip() for part in raw_key.split(",")]
+                if len(parts) == 2:
+                    try:
+                        return (int(parts[0]), int(parts[1]))
+                    except Exception:
+                        return None
+            if isinstance(raw_key, (list, tuple)) and len(raw_key) == 2:
+                try:
+                    return (int(raw_key[0]), int(raw_key[1]))
+                except Exception:
+                    return None
+            return None
+
+        grid = source.get("grid") if isinstance(source.get("grid"), dict) else {}
+
+        terrain_cells: List[Dict[str, Any]] = []
+        raw_rough = source.get("rough_terrain")
+        if isinstance(raw_rough, list):
+            terrain_cells = [dict(item) for item in raw_rough if isinstance(item, dict)]
+        elif isinstance(raw_rough, dict):
+            for raw_key, raw_value in raw_rough.items():
+                key = _normalize_cell_key(raw_key)
+                if key is None:
+                    continue
+                if isinstance(raw_value, dict):
+                    cell_payload = dict(raw_value)
+                    cell_payload["col"] = int(key[0])
+                    cell_payload["row"] = int(key[1])
+                else:
+                    cell_payload = {
+                        "col": int(key[0]),
+                        "row": int(key[1]),
+                        "color": str(raw_value or "#8d6e63"),
+                        "movement_type": "ground",
+                        "is_swim": False,
+                        "is_rough": True,
+                    }
+                terrain_cells.append(cell_payload)
+
+        obstacles: List[Dict[str, int]] = []
+        raw_obstacles = source.get("obstacles")
+        if isinstance(raw_obstacles, list):
+            for raw_item in raw_obstacles:
+                if isinstance(raw_item, dict):
+                    obstacles.append(dict(raw_item))
+                    continue
+                key = _normalize_cell_key(raw_item)
+                if key is None:
+                    continue
+                obstacles.append({"col": int(key[0]), "row": int(key[1])})
+        elif isinstance(raw_obstacles, (set, tuple)):
+            for raw_item in raw_obstacles:
+                key = _normalize_cell_key(raw_item)
+                if key is None:
+                    continue
+                obstacles.append({"col": int(key[0]), "row": int(key[1])})
+
+        token_positions: List[Dict[str, int]] = []
+        raw_positions = source.get("positions")
+        if isinstance(raw_positions, list):
+            token_positions = [dict(item) for item in raw_positions if isinstance(item, dict)]
+        elif isinstance(raw_positions, dict):
+            for raw_cid, raw_pos in raw_positions.items():
+                key = _normalize_cell_key(raw_pos)
+                if key is None:
+                    continue
+                try:
+                    cid = int(raw_cid)
+                except Exception:
+                    continue
+                token_positions.append({"cid": cid, "col": int(key[0]), "row": int(key[1])})
+
+        aoes: Dict[str, Dict[str, Any]] = {}
+        raw_aoes = source.get("aoes")
+        if isinstance(raw_aoes, dict):
+            for raw_id, raw_aoe in raw_aoes.items():
+                if not isinstance(raw_aoe, dict):
+                    continue
+                try:
+                    aid = int(raw_id)
+                except Exception:
+                    continue
+                aoes[str(aid)] = dict(raw_aoe)
+        elif isinstance(raw_aoes, list):
+            for raw_aoe in raw_aoes:
+                if not isinstance(raw_aoe, dict):
+                    continue
+                try:
+                    aid = int(raw_aoe.get("aid"))
+                except Exception:
+                    continue
+                payload = dict(raw_aoe)
+                payload.pop("aid", None)
+                aoes[str(aid)] = payload
+
+        return MapState.from_dict(
+            {
+                "schema_version": MAP_STATE_SCHEMA_VERSION,
+                "grid": {
+                    "cols": int(grid.get("cols", 20) or 20),
+                    "rows": int(grid.get("rows", 20) or 20),
+                    "feet_per_square": float(grid.get("feet_per_square", 5.0) or 5.0),
+                },
+                "terrain_cells": terrain_cells,
+                "obstacles": obstacles,
+                "token_positions": token_positions,
+                "aoes": aoes,
+                "features": list(source.get("features") if isinstance(source.get("features"), list) else []),
+                "hazards": list(source.get("hazards") if isinstance(source.get("hazards"), list) else []),
+                "structures": list(source.get("structures") if isinstance(source.get("structures"), list) else []),
+                "elevation_cells": list(source.get("elevation_cells") if isinstance(source.get("elevation_cells"), list) else []),
+                "presentation": {
+                    "auras_enabled": bool(source.get("auras_enabled", True)),
+                    "bg_images": list(source.get("bg_images") if isinstance(source.get("bg_images"), list) else []),
+                    "next_bg_id": int(source.get("next_bg_id", 1) or 1),
+                },
+            }
+        )
+
     def _migrate_session_snapshot_payload(self, payload: Dict[str, Any]) -> Dict[str, Any]:
         source = dict(payload) if isinstance(payload, dict) else {}
         source_version = int(source.get("schema_version", 0) or 0)
@@ -8776,65 +8928,16 @@ class InitiativeTracker(base.InitiativeTracker):
             if not isinstance(source.get("map"), dict):
                 source["map"] = {}
             map_state = source["map"]
-            if "canonical" not in map_state or not isinstance(map_state.get("canonical"), dict):
-                grid = map_state.get("grid") if isinstance(map_state.get("grid"), dict) else {}
-                legacy = MapState.from_dict(
-                    {
-                        "schema_version": MAP_STATE_SCHEMA_VERSION,
-                        "grid": {
-                            "cols": int(grid.get("cols", 20) or 20),
-                            "rows": int(grid.get("rows", 20) or 20),
-                            "feet_per_square": float(grid.get("feet_per_square", 5.0) or 5.0),
-                        },
-                        "terrain_cells": list(map_state.get("rough_terrain") if isinstance(map_state.get("rough_terrain"), list) else []),
-                        "obstacles": list(map_state.get("obstacles") if isinstance(map_state.get("obstacles"), list) else []),
-                        "token_positions": list(map_state.get("positions") if isinstance(map_state.get("positions"), list) else []),
-                        "aoes": {str(k): dict(v) for k, v in (map_state.get("aoes") or {}).items() if isinstance(v, dict)},
-                        "features": list(map_state.get("features") if isinstance(map_state.get("features"), list) else []),
-                        "hazards": list(map_state.get("hazards") if isinstance(map_state.get("hazards"), list) else []),
-                        "structures": list(map_state.get("structures") if isinstance(map_state.get("structures"), list) else []),
-                        "elevation_cells": list(map_state.get("elevation_cells") if isinstance(map_state.get("elevation_cells"), list) else []),
-                        "presentation": {
-                            "auras_enabled": bool(map_state.get("auras_enabled", True)),
-                            "bg_images": list(map_state.get("bg_images") if isinstance(map_state.get("bg_images"), list) else []),
-                            "next_bg_id": int(map_state.get("next_bg_id", 1) or 1),
-                        },
-                    }
-                )
-                map_state["canonical"] = legacy.to_dict()
+            map_state["canonical"] = self._canonical_map_state_from_snapshot_map_payload(map_state).to_dict()
             source["schema_version"] = SESSION_SNAPSHOT_SCHEMA_VERSION
             return source
 
         if source_version == 1:
             migrated = dict(source)
             map_state = migrated.get("map") if isinstance(migrated.get("map"), dict) else {}
-            grid = map_state.get("grid") if isinstance(map_state.get("grid"), dict) else {}
-            legacy = MapState.from_dict(
-                {
-                    "schema_version": MAP_STATE_SCHEMA_VERSION,
-                    "grid": {
-                        "cols": int(grid.get("cols", 20) or 20),
-                        "rows": int(grid.get("rows", 20) or 20),
-                        "feet_per_square": float(grid.get("feet_per_square", 5.0) or 5.0),
-                    },
-                    "terrain_cells": list(map_state.get("rough_terrain") if isinstance(map_state.get("rough_terrain"), list) else []),
-                    "obstacles": list(map_state.get("obstacles") if isinstance(map_state.get("obstacles"), list) else []),
-                    "token_positions": list(map_state.get("positions") if isinstance(map_state.get("positions"), list) else []),
-                    "aoes": {str(k): dict(v) for k, v in (map_state.get("aoes") or {}).items() if isinstance(v, dict)},
-                    "features": list(map_state.get("features") if isinstance(map_state.get("features"), list) else []),
-                    "hazards": list(map_state.get("hazards") if isinstance(map_state.get("hazards"), list) else []),
-                    "structures": list(map_state.get("structures") if isinstance(map_state.get("structures"), list) else []),
-                    "elevation_cells": list(map_state.get("elevation_cells") if isinstance(map_state.get("elevation_cells"), list) else []),
-                    "presentation": {
-                        "auras_enabled": bool(map_state.get("auras_enabled", True)),
-                        "bg_images": list(map_state.get("bg_images") if isinstance(map_state.get("bg_images"), list) else []),
-                        "next_bg_id": int(map_state.get("next_bg_id", 1) or 1),
-                    },
-                }
-            )
             if not isinstance(migrated.get("map"), dict):
                 migrated["map"] = {}
-            migrated["map"]["canonical"] = legacy.to_dict()
+            migrated["map"]["canonical"] = self._canonical_map_state_from_snapshot_map_payload(map_state).to_dict()
             migrated["schema_version"] = SESSION_SNAPSHOT_SCHEMA_VERSION
             return migrated
 
@@ -9146,34 +9249,7 @@ class InitiativeTracker(base.InitiativeTracker):
         self._turn_history = list(cadence_scheduler.get("turn_history") or [])
         self._init_cadence_scheduler_state(reset_history=False)
 
-        canonical_payload = map_state.get("canonical") if isinstance(map_state.get("canonical"), dict) else None
-        if isinstance(canonical_payload, dict):
-            canonical = MapState.from_dict(canonical_payload)
-        else:
-            grid = map_state.get("grid") if isinstance(map_state.get("grid"), dict) else {}
-            canonical = MapState.from_dict(
-                {
-                    "schema_version": MAP_STATE_SCHEMA_VERSION,
-                    "grid": {
-                        "cols": int(grid.get("cols", 20) or 20),
-                        "rows": int(grid.get("rows", 20) or 20),
-                        "feet_per_square": float(grid.get("feet_per_square", 5.0) or 5.0),
-                    },
-                    "terrain_cells": list(map_state.get("rough_terrain") if isinstance(map_state.get("rough_terrain"), list) else []),
-                    "obstacles": list(map_state.get("obstacles") if isinstance(map_state.get("obstacles"), list) else []),
-                    "token_positions": list(map_state.get("positions") if isinstance(map_state.get("positions"), list) else []),
-                    "aoes": {str(k): dict(v) for k, v in (map_state.get("aoes") or {}).items() if isinstance(v, dict)},
-                    "features": list(map_state.get("features") if isinstance(map_state.get("features"), list) else []),
-                    "hazards": list(map_state.get("hazards") if isinstance(map_state.get("hazards"), list) else []),
-                    "structures": list(map_state.get("structures") if isinstance(map_state.get("structures"), list) else []),
-                    "elevation_cells": list(map_state.get("elevation_cells") if isinstance(map_state.get("elevation_cells"), list) else []),
-                    "presentation": {
-                        "auras_enabled": bool(map_state.get("auras_enabled", True)),
-                        "bg_images": list(map_state.get("bg_images") if isinstance(map_state.get("bg_images"), list) else []),
-                        "next_bg_id": int(map_state.get("next_bg_id", 1) or 1),
-                    },
-                }
-            )
+        canonical = self._canonical_map_state_from_snapshot_map_payload(map_state)
         self._apply_canonical_map_state(canonical, hydrate_window=False)
         grid = canonical.grid.to_dict()
 
