@@ -15,3 +15,8 @@ applyTo: "assets/web/**"
 ## Debuggability
 - If adding UI state, expose a simple debug view/log hook rather than silent failures.
 - Avoid console spam; log only meaningful state transitions or errors.
+
+## Execution behavior for implementation tasks
+- Do not ask users to repeat already-provided scope.
+- For implementation-ready requests, inspect targeted files and execute changes directly.
+- Use focused validation/reporting; avoid approval-loop churn unless blocked by real ambiguity.
