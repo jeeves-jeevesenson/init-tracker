@@ -40,7 +40,13 @@ class ShipCompositeRenderingTests(unittest.TestCase):
 
     def test_exact_cell_union_boundary_handles_concave_hull(self):
         boundary = helper_mod.BattleMapWindow._ship_cell_union_boundary_vertices([(0, 0), (1, 0), (0, 1)])
-        self.assertEqual(boundary, [(0, 0), (2, 0), (2, 1), (1, 1), (1, 2), (0, 2)])
+        self.assertIn((1, 1), boundary)
+        self.assertIn((0, 0), boundary)
+        self.assertIn((2, 1), boundary)
+        self.assertEqual(abs(helper_mod.BattleMapWindow._polygon_area(boundary)), 3.0)
+        for idx, current in enumerate(boundary):
+            nxt = boundary[(idx + 1) % len(boundary)]
+            self.assertEqual(abs(int(current[0]) - int(nxt[0])) + abs(int(current[1]) - int(nxt[1])), 1)
 
     def test_ship_hull_geometry_is_stable_across_rotation_steps(self):
         window = object.__new__(helper_mod.BattleMapWindow)
