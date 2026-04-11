@@ -318,6 +318,95 @@ class LanSnapshotStaticTests(unittest.TestCase):
         self.assertEqual(feature.get("preset_id"), "barrel")
         self.assertEqual(feature.get("display_name"), "Deck Barrel")
 
+    def test_lan_snapshot_units_include_boarding_context(self):
+        app = object.__new__(tracker_mod.InitiativeTracker)
+        app._lan_grid_cols = 20
+        app._lan_grid_rows = 20
+        app._lan_obstacles = set()
+        app._lan_positions = {101: (5, 5)}
+        app._lan_aoes = {}
+        app._lan_rough_terrain = {}
+        app._lan_next_aoe_id = 1
+        app.current_cid = 101
+        app.round_num = 1
+        app._display_order = lambda: [type("OrderC", (), {"cid": 101})()]
+        app._peek_next_turn_cid = lambda _cid: None
+        app._oplog = lambda *args, **kwargs: None
+        app._name_role_memory = {"Boarder": "pc"}
+        app._lan_marks_for = lambda _c: []
+        app._normalize_action_entries = lambda _entries, _kind: []
+        app._token_color_payload = lambda _c: None
+        app._token_border_color_payload = lambda _c: None
+        app._has_condition = lambda _c, _name: False
+        app._collect_combat_modifiers = lambda _c: {}
+        app._lan_seed_missing_positions = lambda positions, *_args: positions
+        app._build_you_payload = lambda _ws_id=None: {"claimed_cid": None, "claimed_name": None}
+        app._spell_presets_payload = lambda: []
+        app._player_spell_config_payload = lambda: {}
+        app._player_profiles_payload = lambda: {}
+        app._player_resource_pools_payload = lambda: {}
+        app._consumables_registry_list_payload = lambda: []
+        app._load_beast_forms = lambda: []
+        app._elemental_attunement_active = lambda _c: False
+        app._json_safe = lambda value: value
+        app._concentration_total_rounds_for_combatant = lambda _c: 0
+        app._active_produce_flame_state = lambda _c: None
+        app._beguiling_magic_window_remaining = lambda _c: 0.0
+        app._lan_active_aura_contexts = lambda **_kwargs: []
+        app._lan_reaction_debug_enabled = lambda: False
+        app._lan = type("LanStub", (), {"_cached_snapshot": {}})()
+        app.combatants = {
+            101: type("C", (), {"cid": 101, "name": "Boarder", "hp": 9, "max_hp": 9, "speed": 30, "move_remaining": 30, "move_total": 30})(),
+        }
+        app._map_state = tracker_mod.MapState.from_dict(
+            {
+                "grid": {"cols": 20, "rows": 20, "feet_per_square": 5},
+                "token_positions": [{"cid": 101, "col": 5, "row": 5}],
+                "structures": [
+                    {
+                        "id": "a",
+                        "kind": "ship_hull",
+                        "anchor_col": 5,
+                        "anchor_row": 5,
+                        "occupied_cells": [{"col": 5, "row": 5}, {"col": 6, "row": 5}],
+                        "payload": {
+                            "name": "Ship A",
+                            "ship_instance_id": "ship_1",
+                            "boardable": True,
+                            "boarding_points": [{"id": "p", "col": 6, "row": 5}],
+                        },
+                    },
+                    {
+                        "id": "b",
+                        "kind": "ship_hull",
+                        "anchor_col": 7,
+                        "anchor_row": 5,
+                        "occupied_cells": [{"col": 7, "row": 5}],
+                        "payload": {
+                            "name": "Ship B",
+                            "ship_instance_id": "ship_2",
+                            "allow_boarding": True,
+                            "boarding_points": [{"id": "p", "col": 7, "row": 5}],
+                        },
+                    },
+                ],
+                "presentation": {
+                    "boarding_links": [{"id": "boarding_link_1", "source_id": "a", "target_id": "b", "status": "active"}],
+                },
+            }
+        )
+        app._capture_canonical_map_state = lambda prefer_window=True: app._map_state.normalized()
+        app._apply_canonical_map_state = lambda state, hydrate_window=False: setattr(app, "_map_state", state.normalized())
+
+        snap = app._lan_snapshot(include_static=False, hydrate_static=False)
+        unit = (snap.get("units") or [])[0]
+        self.assertTrue(unit.get("on_ship"))
+        self.assertEqual(unit.get("ship_structure_id"), "a")
+        self.assertIn("b", unit.get("traversable_boarding_target_ids") or [])
+        active_boarding = snap.get("active_creature_boarding") or {}
+        self.assertTrue(active_boarding.get("on_ship"))
+        self.assertEqual(active_boarding.get("source_structure_id"), "a")
+
     def test_units_include_max_hp_field(self):
         app = object.__new__(tracker_mod.InitiativeTracker)
         app._lan_grid_cols = 10

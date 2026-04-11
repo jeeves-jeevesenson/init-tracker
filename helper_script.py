@@ -6238,6 +6238,7 @@ class BattleMapWindow(tk.Toplevel):
         self.map_ship_summary_var = tk.StringVar(value="Ships: select a structure cell or place a ship blueprint.")
         self.map_boarding_target_var = tk.StringVar(value="")
         self.map_boarding_status_var = tk.StringVar(value="Boarding: select a ship to inspect/create/break boarding links.")
+        self.map_boarding_traversal_status_var = tk.StringVar(value="Boarding traversal: select a creature on a boarded ship.")
         self._ship_blueprint_lookup: Dict[str, str] = {}
         self._boarding_target_lookup: Dict[str, str] = {}
         self._map_author_selected_cell: Optional[Tuple[int, int]] = None
@@ -6945,14 +6946,18 @@ class BattleMapWindow(tk.Toplevel):
         self._boarding_target_combo.pack(side=tk.LEFT, padx=(6, 0))
         ttk.Button(boarding_row, text="Create Link", command=self._create_boarding_link_from_selected_ship).pack(side=tk.LEFT, padx=(8, 0))
         ttk.Button(boarding_row, text="Break Link", command=self._break_boarding_link_from_selected_ship).pack(side=tk.LEFT, padx=(6, 0))
+        ttk.Button(boarding_row, text="Traverse Selected Unit", command=self._traverse_selected_creature_boarding).pack(side=tk.LEFT, padx=(6, 0))
         ttk.Label(tactical, textvariable=self.map_ship_summary_var, justify="left", wraplength=440).grid(
             row=11, column=0, columnspan=4, sticky="w", pady=(4, 0)
         )
         ttk.Label(tactical, textvariable=self.map_boarding_status_var, justify="left", wraplength=440).grid(
             row=12, column=0, columnspan=4, sticky="w", pady=(4, 0)
         )
+        ttk.Label(tactical, textvariable=self.map_boarding_traversal_status_var, justify="left", wraplength=440).grid(
+            row=13, column=0, columnspan=4, sticky="w", pady=(4, 0)
+        )
         ttk.Label(tactical, textvariable=self.map_structure_contact_status_var, justify="left", wraplength=440).grid(
-            row=13, column=0, columnspan=4, sticky="w", pady=(6, 0)
+            row=14, column=0, columnspan=4, sticky="w", pady=(6, 0)
         )
         tactical.columnconfigure(3, weight=1)
         tool_combo.bind("<<ComboboxSelected>>", lambda _e: self._refresh_tactical_preset_selection(sync_mode=True))
@@ -6962,6 +6967,7 @@ class BattleMapWindow(tk.Toplevel):
         self._refresh_tactical_preset_selection(sync_mode=True)
         self._refresh_ship_blueprint_selection()
         self._update_selected_tactical_cell_status()
+        self._update_selected_creature_boarding_status()
 
         # --- Units panel ---
         ttk.Label(left, text="Units (drag onto map)").pack(anchor="w")
@@ -6979,7 +6985,10 @@ class BattleMapWindow(tk.Toplevel):
         self.units_list.bind("<ButtonRelease-1>", self._on_units_release)
         self.units_list.bind("<Double-Button-1>", self._on_units_double_click)
         self.units_list.bind("<Return>", lambda e: self._place_selected_units_near_center())
-        self.units_list.bind("<<ListboxSelect>>", lambda _e: self._sync_units_movement_mode())
+        self.units_list.bind(
+            "<<ListboxSelect>>",
+            lambda _e: (self._sync_units_movement_mode(), self._update_selected_creature_boarding_status()),
+        )
 
         mode_row = ttk.Frame(left)
         mode_row.pack(fill=tk.X, pady=(4, 8))
@@ -8541,6 +8550,7 @@ class BattleMapWindow(tk.Toplevel):
             self.map_ship_summary_var.set("Ships: select a structure cell or place a ship blueprint.")
             self.map_boarding_status_var.set("Boarding: select a ship to inspect/create/break boarding links.")
             self._refresh_selected_ship_boarding_options(None, None)
+            self._update_selected_creature_boarding_status()
             return
         sid = self._selected_structure_id_at_cell(int(cell[0]), int(cell[1]))
         if not sid:
@@ -8548,6 +8558,7 @@ class BattleMapWindow(tk.Toplevel):
             self.map_ship_summary_var.set("Ships: no ship selected.")
             self.map_boarding_status_var.set("Boarding: no ship selected.")
             self._refresh_selected_ship_boarding_options(None, None)
+            self._update_selected_creature_boarding_status()
             return
         semantics = {}
         try:
@@ -8557,6 +8568,7 @@ class BattleMapWindow(tk.Toplevel):
         if not isinstance(semantics, dict) or not bool(semantics.get("ok")):
             self.map_structure_contact_status_var.set(f"Structure {sid}: contact data unavailable")
             self._refresh_selected_ship_boarding_options(None, semantics if isinstance(semantics, dict) else None)
+            self._update_selected_creature_boarding_status()
             return
         adjacent = semantics.get("adjacent_structures") if isinstance(semantics.get("adjacent_structures"), list) else []
         boardable = semantics.get("boardable_structures") if isinstance(semantics.get("boardable_structures"), list) else []
@@ -8586,6 +8598,7 @@ class BattleMapWindow(tk.Toplevel):
             self.map_ship_summary_var.set("Ships: selected structure is not a ship instance.")
             self.map_boarding_status_var.set("Boarding: selected structure is not a ship instance.")
             self._refresh_selected_ship_boarding_options(None, semantics)
+            self._update_selected_creature_boarding_status()
             return
         active_boarding_count = int(ship_summary.get("active_boarding_count", 0) or 0)
         traversable_boarding_count = int(ship_summary.get("traversable_boarding_count", 0) or 0)
@@ -8601,6 +8614,7 @@ class BattleMapWindow(tk.Toplevel):
             f"· Traversable links: {traversable_boarding_count}"
         )
         self._refresh_selected_ship_boarding_options(sid, semantics)
+        self._update_selected_creature_boarding_status()
 
     def _refresh_selected_ship_boarding_options(self, structure_id: Optional[str], semantics: Optional[Dict[str, Any]]) -> None:
         sid = str(structure_id or "").strip()
@@ -8699,6 +8713,83 @@ class BattleMapWindow(tk.Toplevel):
             return
         self._post_tactical_map_mutation(redraw_all=True, schedule_broadcast=True)
         self._update_selected_structure_contact_status()
+
+    def _update_selected_creature_boarding_status(self) -> None:
+        cid = self._dm_action_target_cid()
+        if cid is None:
+            self.map_boarding_traversal_status_var.set("Boarding traversal: select a creature (units list or active turn).")
+            return
+        context = self.app._creature_boarding_context(int(cid))
+        creature = self.app.combatants.get(int(cid))
+        name = str(getattr(creature, "name", f"#{cid}"))
+        if not isinstance(context, dict) or not bool(context.get("ok")):
+            self.map_boarding_traversal_status_var.set(f"Boarding traversal: {name} has no map position.")
+            return
+        if not bool(context.get("on_ship")):
+            self.map_boarding_traversal_status_var.set(f"Boarding traversal: {name} is not currently on a ship.")
+            return
+        reachable = context.get("reachable_target_structures") if isinstance(context.get("reachable_target_structures"), list) else []
+        labels: List[str] = []
+        for item in reachable[:4]:
+            if not isinstance(item, dict):
+                continue
+            rid = str(item.get("id") or "").strip()
+            rname = str(item.get("name") or rid).strip() or rid
+            if rname:
+                labels.append(rname if rname == rid else f"{rname} ({rid})")
+        last = context.get("last_crossing") if isinstance(context.get("last_crossing"), dict) else {}
+        last_target = str(last.get("target_structure_name") or last.get("target_structure_id") or "").strip()
+        last_suffix = f" · Last crossing: {last_target}" if last_target else ""
+        self.map_boarding_traversal_status_var.set(
+            f"Boarding traversal: {name} on {context.get('source_structure_name') or context.get('source_structure_id')} "
+            f"· Reachable: {', '.join(labels) if labels else 'none'}{last_suffix}"
+        )
+
+    def _traverse_selected_creature_boarding(self) -> None:
+        cid = self._dm_action_target_cid()
+        if cid is None:
+            messagebox.showinfo("Boarding Traversal", "Select a creature first.", parent=self)
+            return
+        context = self.app._creature_boarding_context(int(cid))
+        if not isinstance(context, dict) or not bool(context.get("ok")):
+            messagebox.showerror("Boarding Traversal", "Selected creature is not on the tactical map.", parent=self)
+            return
+        if not bool(context.get("on_ship")):
+            messagebox.showerror("Boarding Traversal", "Selected creature is not on a ship.", parent=self)
+            return
+        reachable_ids = [
+            str(item)
+            for item in (context.get("reachable_target_structure_ids") if isinstance(context.get("reachable_target_structure_ids"), list) else [])
+            if str(item).strip()
+        ]
+        selected = str(self.map_boarding_target_var.get() or "").strip()
+        lookup = self._boarding_target_lookup if isinstance(getattr(self, "_boarding_target_lookup", {}), dict) else {}
+        target_id = str(lookup.get(selected) or "").strip()
+        if not target_id and len(reachable_ids) == 1:
+            target_id = str(reachable_ids[0])
+        if not target_id:
+            messagebox.showinfo("Boarding Traversal", "Select a boarding target relation first.", parent=self)
+            return
+        if target_id not in set(reachable_ids):
+            messagebox.showerror("Boarding Traversal", "That destination is not currently traversable for this creature.", parent=self)
+            return
+        enforce_movement = not bool(self._dm_move_active())
+        result = self.app._execute_boarding_traversal(
+            int(cid),
+            target_id,
+            enforce_movement=enforce_movement,
+            actor="dm",
+        )
+        if not bool(result.get("ok")):
+            messagebox.showerror(
+                "Boarding Traversal",
+                str(result.get("message") or result.get("reason") or "Boarding traversal failed."),
+                parent=self,
+            )
+            self._update_selected_creature_boarding_status()
+            return
+        self._post_tactical_map_mutation(redraw_all=True, schedule_broadcast=True)
+        self._update_selected_creature_boarding_status()
 
     def _refresh_ship_blueprint_selection(self) -> None:
         blueprints = {}
@@ -13129,6 +13220,7 @@ class BattleMapWindow(tk.Toplevel):
         self._update_move_highlight()
         # Conditions / markers often change on turn transitions; refresh token markers + group labels.
         self._update_groups()
+        self._update_selected_creature_boarding_status()
         self._draw_rotation_affordance()
         if auto_center and cid is not None:
             self._center_on_cid(cid)
