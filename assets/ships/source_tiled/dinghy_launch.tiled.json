@@ -1,0 +1,369 @@
+{
+  "id": "dinghy_launch",
+  "width": 5,
+  "height": 8,
+  "ship": {
+    "id": "dinghy_launch",
+    "display_name": "Dinghy / Launch",
+    "subtitle": "Small boarding boat",
+    "kind": "ship_hull",
+    "category": "utility_craft",
+    "size": "small",
+    "render_anchor": {
+      "col": 2,
+      "row": 4
+    },
+    "facing_mode": "rotate_90",
+    "boarding_edges": [
+      "port",
+      "starboard",
+      "fore",
+      "aft"
+    ],
+    "contact_tags": [
+      "ship",
+      "boarding_ready",
+      "boat"
+    ],
+    "crew": {
+      "min_crew": 1,
+      "recommended_crew": 4
+    },
+    "render": {
+      "style": "polygon",
+      "base_image_key": "dinghy_launch_hull",
+      "overlay_hints": [
+        "boarding_points",
+        "weapon_hardpoints"
+      ],
+      "preview": {
+        "emoji": "\u26f5"
+      }
+    }
+  },
+  "layers": [
+    {
+      "name": "hull",
+      "cells": [
+        {
+          "col": 2,
+          "row": 0
+        },
+        {
+          "col": 1,
+          "row": 1
+        },
+        {
+          "col": 2,
+          "row": 1
+        },
+        {
+          "col": 3,
+          "row": 1
+        },
+        {
+          "col": 1,
+          "row": 2
+        },
+        {
+          "col": 2,
+          "row": 2
+        },
+        {
+          "col": 3,
+          "row": 2
+        },
+        {
+          "col": 0,
+          "row": 3
+        },
+        {
+          "col": 1,
+          "row": 3
+        },
+        {
+          "col": 2,
+          "row": 3
+        },
+        {
+          "col": 3,
+          "row": 3
+        },
+        {
+          "col": 4,
+          "row": 3
+        },
+        {
+          "col": 0,
+          "row": 4
+        },
+        {
+          "col": 1,
+          "row": 4
+        },
+        {
+          "col": 2,
+          "row": 4
+        },
+        {
+          "col": 3,
+          "row": 4
+        },
+        {
+          "col": 4,
+          "row": 4
+        },
+        {
+          "col": 1,
+          "row": 5
+        },
+        {
+          "col": 2,
+          "row": 5
+        },
+        {
+          "col": 3,
+          "row": 5
+        },
+        {
+          "col": 1,
+          "row": 6
+        },
+        {
+          "col": 2,
+          "row": 6
+        },
+        {
+          "col": 3,
+          "row": 6
+        },
+        {
+          "col": 2,
+          "row": 7
+        }
+      ]
+    },
+    {
+      "name": "fixtures",
+      "objects": [
+        {
+          "id": "mast_main",
+          "name": "Main Mast",
+          "kind": "mast",
+          "col": 2,
+          "row": 3,
+          "tags": [
+            "ship_fixture",
+            "mast",
+            "climbable"
+          ]
+        },
+        {
+          "id": "bench_mid",
+          "name": "Mid Bench",
+          "kind": "bench",
+          "col": 2,
+          "row": 4,
+          "tags": [
+            "ship_fixture",
+            "cover"
+          ]
+        }
+      ]
+    },
+    {
+      "name": "components",
+      "objects": [
+        {
+          "id": "hull",
+          "name": "Hull",
+          "kind": "hull",
+          "col": 2,
+          "row": 4,
+          "max_hp": 120,
+          "ac": 13,
+          "damage_threshold": 0
+        },
+        {
+          "id": "helm",
+          "name": "Stern Tiller",
+          "kind": "control",
+          "col": 2,
+          "row": 7,
+          "max_hp": 20,
+          "ac": 12
+        },
+        {
+          "id": "rigging",
+          "name": "Rigging",
+          "kind": "rigging",
+          "col": 2,
+          "row": 3,
+          "max_hp": 20,
+          "ac": 10
+        }
+      ]
+    },
+    {
+      "name": "weapon_hardpoints",
+      "objects": []
+    },
+    {
+      "name": "boarding_points",
+      "objects": [
+        {
+          "id": "port_mid",
+          "name": "Port Rail",
+          "col": 0,
+          "row": 4
+        },
+        {
+          "id": "starboard_mid",
+          "name": "Starboard Rail",
+          "col": 4,
+          "row": 4
+        },
+        {
+          "id": "fore",
+          "name": "Bow Rail",
+          "col": 2,
+          "row": 0
+        },
+        {
+          "id": "aft",
+          "name": "Stern Rail",
+          "col": 2,
+          "row": 7
+        }
+      ]
+    },
+    {
+      "name": "deck_regions",
+      "objects": [
+        {
+          "id": "bow",
+          "label": "Bow",
+          "category": "forecastle",
+          "cells": [
+            {
+              "col": 2,
+              "row": 0
+            },
+            {
+              "col": 1,
+              "row": 1
+            },
+            {
+              "col": 2,
+              "row": 1
+            },
+            {
+              "col": 3,
+              "row": 1
+            }
+          ]
+        },
+        {
+          "id": "open_deck",
+          "label": "Open Deck",
+          "category": "main_deck",
+          "cells": [
+            {
+              "col": 1,
+              "row": 2
+            },
+            {
+              "col": 2,
+              "row": 2
+            },
+            {
+              "col": 3,
+              "row": 2
+            },
+            {
+              "col": 0,
+              "row": 3
+            },
+            {
+              "col": 1,
+              "row": 3
+            },
+            {
+              "col": 2,
+              "row": 3
+            },
+            {
+              "col": 3,
+              "row": 3
+            },
+            {
+              "col": 4,
+              "row": 3
+            },
+            {
+              "col": 0,
+              "row": 4
+            },
+            {
+              "col": 1,
+              "row": 4
+            },
+            {
+              "col": 2,
+              "row": 4
+            },
+            {
+              "col": 3,
+              "row": 4
+            },
+            {
+              "col": 4,
+              "row": 4
+            }
+          ],
+          "render_hint": {
+            "label_priority": 10
+          }
+        },
+        {
+          "id": "stern",
+          "label": "Stern",
+          "category": "helm",
+          "cells": [
+            {
+              "col": 1,
+              "row": 5
+            },
+            {
+              "col": 2,
+              "row": 5
+            },
+            {
+              "col": 3,
+              "row": 5
+            },
+            {
+              "col": 1,
+              "row": 6
+            },
+            {
+              "col": 2,
+              "row": 6
+            },
+            {
+              "col": 3,
+              "row": 6
+            },
+            {
+              "col": 2,
+              "row": 7
+            }
+          ],
+          "render_hint": {
+            "label_priority": 20
+          }
+        }
+      ]
+    }
+  ]
+}

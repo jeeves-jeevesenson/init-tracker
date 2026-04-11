@@ -862,7 +862,7 @@ class SessionSaveLoadTests(unittest.TestCase):
             app._map_state = tracker_mod.MapState.from_dict({"grid": {"cols": 80, "rows": 80, "feet_per_square": 5}})
             app._lan_grid_cols = 80
             app._lan_grid_rows = 80
-            starters = ("rowboat_launch", "sloop", "brig", "galleon_heavy")
+            starters = ("dinghy_launch", "sloop", "brig", "frigate_heavy")
             for index, blueprint_id in enumerate(starters):
                 created = app._instantiate_ship_blueprint(
                     blueprint_id,
@@ -875,13 +875,16 @@ class SessionSaveLoadTests(unittest.TestCase):
     def test_ship_turn_rotates_starter_footprints_with_no_drift(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             app = self._make_app(Path(tmpdir) / "battle.log")
-            app._map_state = tracker_mod.MapState.from_dict({"grid": {"cols": 90, "rows": 90, "feet_per_square": 5}})
-            app._lan_grid_cols = 90
-            app._lan_grid_rows = 90
-            starters = ("rowboat_launch", "sloop", "brig", "galleon_heavy")
-            for index, blueprint_id in enumerate(starters):
-                anchor_col = 8 + index * 20
-                anchor_row = 10
+            app._map_state = tracker_mod.MapState.from_dict({"grid": {"cols": 160, "rows": 160, "feet_per_square": 5}})
+            app._lan_grid_cols = 160
+            app._lan_grid_rows = 160
+            starter_placements = {
+                "dinghy_launch": (12, 12),
+                "sloop": (42, 24),
+                "brig": (78, 52),
+                "frigate_heavy": (118, 92),
+            }
+            for blueprint_id, (anchor_col, anchor_row) in starter_placements.items():
                 structure_id = app._instantiate_ship_blueprint(blueprint_id, anchor_col=anchor_col, anchor_row=anchor_row, facing_deg=0)
                 self.assertIsNotNone(structure_id)
                 structure = app._ship_structure_for_id(structure_id)

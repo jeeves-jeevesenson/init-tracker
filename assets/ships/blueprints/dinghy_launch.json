@@ -1,0 +1,364 @@
+{
+  "boarding": {
+    "boardable": true,
+    "bridges": [],
+    "contact_tags": [
+      "boarding_ready",
+      "boat",
+      "ship"
+    ],
+    "edges": [
+      "aft",
+      "fore",
+      "port",
+      "starboard"
+    ],
+    "points": [
+      {
+        "col": 0,
+        "id": "port_mid",
+        "kind": "boarding_point",
+        "name": "Port Rail",
+        "row": 4
+      },
+      {
+        "col": 2,
+        "id": "fore",
+        "kind": "boarding_point",
+        "name": "Bow Rail",
+        "row": 0
+      },
+      {
+        "col": 2,
+        "id": "aft",
+        "kind": "boarding_point",
+        "name": "Stern Rail",
+        "row": 7
+      },
+      {
+        "col": 4,
+        "id": "starboard_mid",
+        "kind": "boarding_point",
+        "name": "Starboard Rail",
+        "row": 4
+      }
+    ]
+  },
+  "category": "utility_craft",
+  "components": [
+    {
+      "ac": 10,
+      "col": 2,
+      "id": "rigging",
+      "kind": "rigging",
+      "max_hp": 20,
+      "name": "Rigging",
+      "row": 3
+    },
+    {
+      "ac": 13,
+      "col": 2,
+      "damage_threshold": 0,
+      "id": "hull",
+      "kind": "hull",
+      "max_hp": 120,
+      "name": "Hull",
+      "row": 4
+    },
+    {
+      "ac": 12,
+      "col": 2,
+      "id": "helm",
+      "kind": "control",
+      "max_hp": 20,
+      "name": "Stern Tiller",
+      "row": 7
+    }
+  ],
+  "deck_regions": [
+    {
+      "category": "forecastle",
+      "cells": [
+        {
+          "col": 1,
+          "row": 1
+        },
+        {
+          "col": 2,
+          "row": 0
+        },
+        {
+          "col": 2,
+          "row": 1
+        },
+        {
+          "col": 3,
+          "row": 1
+        }
+      ],
+      "id": "bow",
+      "label": "Bow"
+    },
+    {
+      "category": "main_deck",
+      "cells": [
+        {
+          "col": 0,
+          "row": 3
+        },
+        {
+          "col": 0,
+          "row": 4
+        },
+        {
+          "col": 1,
+          "row": 2
+        },
+        {
+          "col": 1,
+          "row": 3
+        },
+        {
+          "col": 1,
+          "row": 4
+        },
+        {
+          "col": 2,
+          "row": 2
+        },
+        {
+          "col": 2,
+          "row": 3
+        },
+        {
+          "col": 2,
+          "row": 4
+        },
+        {
+          "col": 3,
+          "row": 2
+        },
+        {
+          "col": 3,
+          "row": 3
+        },
+        {
+          "col": 3,
+          "row": 4
+        },
+        {
+          "col": 4,
+          "row": 3
+        },
+        {
+          "col": 4,
+          "row": 4
+        }
+      ],
+      "id": "open_deck",
+      "label": "Open Deck",
+      "render_hint": {
+        "label_priority": 10
+      }
+    },
+    {
+      "category": "helm",
+      "cells": [
+        {
+          "col": 1,
+          "row": 5
+        },
+        {
+          "col": 1,
+          "row": 6
+        },
+        {
+          "col": 2,
+          "row": 5
+        },
+        {
+          "col": 2,
+          "row": 6
+        },
+        {
+          "col": 2,
+          "row": 7
+        },
+        {
+          "col": 3,
+          "row": 5
+        },
+        {
+          "col": 3,
+          "row": 6
+        }
+      ],
+      "id": "stern",
+      "label": "Stern",
+      "render_hint": {
+        "label_priority": 20
+      }
+    }
+  ],
+  "display_name": "Dinghy / Launch",
+  "engagement_defaults": {
+    "crew": {
+      "min_crew": 1,
+      "recommended_crew": 4
+    }
+  },
+  "fixtures": [
+    {
+      "col": 2,
+      "id": "mast_main",
+      "kind": "mast",
+      "name": "Main Mast",
+      "row": 3,
+      "tags": [
+        "climbable",
+        "mast",
+        "ship_fixture"
+      ]
+    },
+    {
+      "col": 2,
+      "id": "bench_mid",
+      "kind": "bench",
+      "name": "Mid Bench",
+      "row": 4,
+      "tags": [
+        "cover",
+        "ship_fixture"
+      ]
+    }
+  ],
+  "id": "dinghy_launch",
+  "kind": "ship_hull",
+  "local_space": {
+    "facing_mode": "rotate_90",
+    "hull_cells": [
+      {
+        "col": 0,
+        "row": 3
+      },
+      {
+        "col": 0,
+        "row": 4
+      },
+      {
+        "col": 1,
+        "row": 1
+      },
+      {
+        "col": 1,
+        "row": 2
+      },
+      {
+        "col": 1,
+        "row": 3
+      },
+      {
+        "col": 1,
+        "row": 4
+      },
+      {
+        "col": 1,
+        "row": 5
+      },
+      {
+        "col": 1,
+        "row": 6
+      },
+      {
+        "col": 2,
+        "row": 0
+      },
+      {
+        "col": 2,
+        "row": 1
+      },
+      {
+        "col": 2,
+        "row": 2
+      },
+      {
+        "col": 2,
+        "row": 3
+      },
+      {
+        "col": 2,
+        "row": 4
+      },
+      {
+        "col": 2,
+        "row": 5
+      },
+      {
+        "col": 2,
+        "row": 6
+      },
+      {
+        "col": 2,
+        "row": 7
+      },
+      {
+        "col": 3,
+        "row": 1
+      },
+      {
+        "col": 3,
+        "row": 2
+      },
+      {
+        "col": 3,
+        "row": 3
+      },
+      {
+        "col": 3,
+        "row": 4
+      },
+      {
+        "col": 3,
+        "row": 5
+      },
+      {
+        "col": 3,
+        "row": 6
+      },
+      {
+        "col": 4,
+        "row": 3
+      },
+      {
+        "col": 4,
+        "row": 4
+      }
+    ],
+    "render_anchor": {
+      "col": 2,
+      "row": 4
+    }
+  },
+  "render": {
+    "base_image_key": "dinghy_launch_hull",
+    "base_image_path": "",
+    "deck_texture_key": "ship_deck_wood",
+    "deck_texture_path": "",
+    "facing_assets": {},
+    "fallback_style": "polygon",
+    "image_anchor": "center",
+    "image_offset_col": 0,
+    "image_offset_row": 0,
+    "overlay_hints": [
+      "boarding_points",
+      "weapon_hardpoints"
+    ],
+    "preview": {
+      "emoji": "\u26f5"
+    },
+    "style": "polygon"
+  },
+  "schema": "composite_ship_blueprint_v1",
+  "size": "small",
+  "weapon_hardpoints": []
+}

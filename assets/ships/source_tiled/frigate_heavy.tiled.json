@@ -1,17 +1,17 @@
 {
-  "id": "brig",
-  "width": 9,
-  "height": 18,
+  "id": "frigate_heavy",
+  "width": 11,
+  "height": 22,
   "ship": {
-    "id": "brig",
-    "display_name": "Brig",
-    "subtitle": "Broadside-capable medium ship",
+    "id": "frigate_heavy",
+    "display_name": "Frigate / Heavy Ship",
+    "subtitle": "Large engagement-focused vessel",
     "kind": "ship_hull",
     "category": "sailing_ship",
-    "size": "large",
+    "size": "huge",
     "render_anchor": {
-      "col": 4,
-      "row": 9
+      "col": 5,
+      "row": 11
     },
     "facing_mode": "rotate_90",
     "boarding_edges": [
@@ -23,15 +23,16 @@
     "contact_tags": [
       "ship",
       "boarding_ready",
-      "warship"
+      "warship",
+      "heavy"
     ],
     "crew": {
-      "min_crew": 8,
-      "recommended_crew": 20
+      "min_crew": 15,
+      "recommended_crew": 35
     },
     "render": {
       "style": "polygon",
-      "base_image_key": "brig_hull",
+      "base_image_key": "frigate_heavy_hull",
       "overlay_hints": [
         "boarding_points",
         "weapon_hardpoints"
@@ -46,14 +47,10 @@
       "name": "hull",
       "cells": [
         {
-          "col": 4,
+          "col": 5,
           "row": 0
         },
         {
-          "col": 3,
-          "row": 1
-        },
-        {
           "col": 4,
           "row": 1
         },
@@ -62,8 +59,8 @@
           "row": 1
         },
         {
-          "col": 3,
-          "row": 2
+          "col": 6,
+          "row": 1
         },
         {
           "col": 4,
@@ -74,8 +71,8 @@
           "row": 2
         },
         {
-          "col": 2,
-          "row": 3
+          "col": 6,
+          "row": 2
         },
         {
           "col": 3,
@@ -94,8 +91,8 @@
           "row": 3
         },
         {
-          "col": 2,
-          "row": 4
+          "col": 7,
+          "row": 3
         },
         {
           "col": 3,
@@ -114,8 +111,8 @@
           "row": 4
         },
         {
-          "col": 1,
-          "row": 5
+          "col": 7,
+          "row": 4
         },
         {
           "col": 2,
@@ -142,8 +139,8 @@
           "row": 5
         },
         {
-          "col": 1,
-          "row": 6
+          "col": 8,
+          "row": 5
         },
         {
           "col": 2,
@@ -170,8 +167,8 @@
           "row": 6
         },
         {
-          "col": 0,
-          "row": 7
+          "col": 8,
+          "row": 6
         },
         {
           "col": 1,
@@ -206,8 +203,8 @@
           "row": 7
         },
         {
-          "col": 0,
-          "row": 8
+          "col": 9,
+          "row": 7
         },
         {
           "col": 1,
@@ -242,6 +239,10 @@
           "row": 8
         },
         {
+          "col": 9,
+          "row": 8
+        },
+        {
           "col": 0,
           "row": 9
         },
@@ -278,6 +279,14 @@
           "row": 9
         },
         {
+          "col": 9,
+          "row": 9
+        },
+        {
+          "col": 10,
+          "row": 9
+        },
+        {
           "col": 0,
           "row": 10
         },
@@ -314,6 +323,18 @@
           "row": 10
         },
         {
+          "col": 9,
+          "row": 10
+        },
+        {
+          "col": 10,
+          "row": 10
+        },
+        {
+          "col": 0,
+          "row": 11
+        },
+        {
           "col": 1,
           "row": 11
         },
@@ -342,6 +363,22 @@
           "row": 11
         },
         {
+          "col": 8,
+          "row": 11
+        },
+        {
+          "col": 9,
+          "row": 11
+        },
+        {
+          "col": 10,
+          "row": 11
+        },
+        {
+          "col": 0,
+          "row": 12
+        },
+        {
           "col": 1,
           "row": 12
         },
@@ -370,6 +407,22 @@
           "row": 12
         },
         {
+          "col": 8,
+          "row": 12
+        },
+        {
+          "col": 9,
+          "row": 12
+        },
+        {
+          "col": 10,
+          "row": 12
+        },
+        {
+          "col": 1,
+          "row": 13
+        },
+        {
           "col": 2,
           "row": 13
         },
@@ -390,6 +443,22 @@
           "row": 13
         },
         {
+          "col": 7,
+          "row": 13
+        },
+        {
+          "col": 8,
+          "row": 13
+        },
+        {
+          "col": 9,
+          "row": 13
+        },
+        {
+          "col": 1,
+          "row": 14
+        },
+        {
           "col": 2,
           "row": 14
         },
@@ -408,6 +477,22 @@
         {
           "col": 6,
           "row": 14
+        },
+        {
+          "col": 7,
+          "row": 14
+        },
+        {
+          "col": 8,
+          "row": 14
+        },
+        {
+          "col": 9,
+          "row": 14
+        },
+        {
+          "col": 2,
+          "row": 15
         },
         {
           "col": 3,
@@ -422,6 +507,22 @@
           "row": 15
         },
         {
+          "col": 6,
+          "row": 15
+        },
+        {
+          "col": 7,
+          "row": 15
+        },
+        {
+          "col": 8,
+          "row": 15
+        },
+        {
+          "col": 2,
+          "row": 16
+        },
+        {
           "col": 3,
           "row": 16
         },
@@ -432,10 +533,86 @@
         {
           "col": 5,
           "row": 16
+        },
+        {
+          "col": 6,
+          "row": 16
+        },
+        {
+          "col": 7,
+          "row": 16
+        },
+        {
+          "col": 8,
+          "row": 16
+        },
+        {
+          "col": 3,
+          "row": 17
         },
         {
           "col": 4,
           "row": 17
+        },
+        {
+          "col": 5,
+          "row": 17
+        },
+        {
+          "col": 6,
+          "row": 17
+        },
+        {
+          "col": 7,
+          "row": 17
+        },
+        {
+          "col": 3,
+          "row": 18
+        },
+        {
+          "col": 4,
+          "row": 18
+        },
+        {
+          "col": 5,
+          "row": 18
+        },
+        {
+          "col": 6,
+          "row": 18
+        },
+        {
+          "col": 7,
+          "row": 18
+        },
+        {
+          "col": 4,
+          "row": 19
+        },
+        {
+          "col": 5,
+          "row": 19
+        },
+        {
+          "col": 6,
+          "row": 19
+        },
+        {
+          "col": 4,
+          "row": 20
+        },
+        {
+          "col": 5,
+          "row": 20
+        },
+        {
+          "col": 6,
+          "row": 20
+        },
+        {
+          "col": 5,
+          "row": 21
         }
       ]
     },
@@ -446,8 +623,8 @@
           "id": "mast_fore",
           "name": "Fore Mast",
           "kind": "mast",
-          "col": 4,
-          "row": 6,
+          "col": 5,
+          "row": 8,
           "tags": [
             "ship_fixture",
             "mast",
@@ -458,8 +635,8 @@
           "id": "mast_main",
           "name": "Main Mast",
           "kind": "mast",
-          "col": 4,
-          "row": 10,
+          "col": 5,
+          "row": 12,
           "tags": [
             "ship_fixture",
             "mast",
@@ -467,11 +644,23 @@
           ]
         },
         {
-          "id": "stairs_quarterdeck",
+          "id": "mast_mizzen",
+          "name": "Mizzen Mast",
+          "kind": "mast",
+          "col": 5,
+          "row": 16,
+          "tags": [
+            "ship_fixture",
+            "mast",
+            "climbable"
+          ]
+        },
+        {
+          "id": "quarter_stairs",
           "name": "Quarterdeck Stairs",
           "kind": "stairs",
-          "col": 4,
-          "row": 12,
+          "col": 5,
+          "row": 15,
           "tags": [
             "ship_fixture",
             "stairs",
@@ -487,28 +676,28 @@
           "id": "hull",
           "name": "Hull",
           "kind": "hull",
-          "col": 4,
-          "row": 9,
-          "max_hp": 400,
+          "col": 5,
+          "row": 11,
+          "max_hp": 500,
           "ac": 15,
-          "damage_threshold": 10
+          "damage_threshold": 15
         },
         {
           "id": "helm",
           "name": "Helm",
           "kind": "control",
-          "col": 4,
-          "row": 17,
-          "max_hp": 50,
+          "col": 5,
+          "row": 21,
+          "max_hp": 60,
           "ac": 15
         },
         {
           "id": "rigging",
           "name": "Rigging",
           "kind": "rigging",
-          "col": 4,
-          "row": 10,
-          "max_hp": 80,
+          "col": 5,
+          "row": 12,
+          "max_hp": 100,
           "ac": 12
         }
       ]
@@ -517,40 +706,40 @@
       "name": "weapon_hardpoints",
       "objects": [
         {
-          "id": "port_battery_a",
-          "name": "Port Battery A",
+          "id": "port_heavy_battery",
+          "name": "Port Heavy Battery",
           "kind": "cannon",
           "weapon_type": "cannon",
           "arc": "port",
           "col": 0,
-          "row": 8
+          "row": 11
         },
         {
-          "id": "port_battery_b",
-          "name": "Port Battery B",
+          "id": "port_heavy_battery_aft",
+          "name": "Port Heavy Battery Aft",
           "kind": "cannon",
           "weapon_type": "cannon",
           "arc": "port",
           "col": 0,
-          "row": 9
+          "row": 12
         },
         {
-          "id": "starboard_battery_a",
-          "name": "Starboard Battery A",
+          "id": "starboard_heavy_battery",
+          "name": "Starboard Heavy Battery",
           "kind": "cannon",
           "weapon_type": "cannon",
           "arc": "starboard",
-          "col": 8,
-          "row": 8
+          "col": 10,
+          "row": 11
         },
         {
-          "id": "starboard_battery_b",
-          "name": "Starboard Battery B",
+          "id": "starboard_heavy_battery_aft",
+          "name": "Starboard Heavy Battery Aft",
           "kind": "cannon",
           "weapon_type": "cannon",
           "arc": "starboard",
-          "col": 8,
-          "row": 9
+          "col": 10,
+          "row": 12
         }
       ]
     },
@@ -561,25 +750,25 @@
           "id": "port_mid",
           "name": "Port Rail",
           "col": 0,
-          "row": 9
+          "row": 11
         },
         {
           "id": "starboard_mid",
           "name": "Starboard Rail",
-          "col": 8,
-          "row": 9
+          "col": 10,
+          "row": 11
         },
         {
           "id": "fore",
           "name": "Bow Rail",
-          "col": 4,
+          "col": 5,
           "row": 0
         },
         {
           "id": "aft",
           "name": "Stern Rail",
-          "col": 4,
-          "row": 17
+          "col": 5,
+          "row": 21
         }
       ]
     },
@@ -592,14 +781,10 @@
           "category": "forecastle",
           "cells": [
             {
-              "col": 4,
+              "col": 5,
               "row": 0
             },
             {
-              "col": 3,
-              "row": 1
-            },
-            {
               "col": 4,
               "row": 1
             },
@@ -608,8 +793,8 @@
               "row": 1
             },
             {
-              "col": 3,
-              "row": 2
+              "col": 6,
+              "row": 1
             },
             {
               "col": 4,
@@ -620,8 +805,8 @@
               "row": 2
             },
             {
-              "col": 2,
-              "row": 3
+              "col": 6,
+              "row": 2
             },
             {
               "col": 3,
@@ -638,6 +823,30 @@
             {
               "col": 6,
               "row": 3
+            },
+            {
+              "col": 7,
+              "row": 3
+            },
+            {
+              "col": 3,
+              "row": 4
+            },
+            {
+              "col": 4,
+              "row": 4
+            },
+            {
+              "col": 5,
+              "row": 4
+            },
+            {
+              "col": 6,
+              "row": 4
+            },
+            {
+              "col": 7,
+              "row": 4
             }
           ]
         },
@@ -648,30 +857,6 @@
           "cells": [
             {
               "col": 2,
-              "row": 4
-            },
-            {
-              "col": 3,
-              "row": 4
-            },
-            {
-              "col": 4,
-              "row": 4
-            },
-            {
-              "col": 5,
-              "row": 4
-            },
-            {
-              "col": 6,
-              "row": 4
-            },
-            {
-              "col": 1,
-              "row": 5
-            },
-            {
-              "col": 2,
               "row": 5
             },
             {
@@ -695,8 +880,8 @@
               "row": 5
             },
             {
-              "col": 1,
-              "row": 6
+              "col": 8,
+              "row": 5
             },
             {
               "col": 2,
@@ -721,6 +906,46 @@
             {
               "col": 7,
               "row": 6
+            },
+            {
+              "col": 8,
+              "row": 6
+            },
+            {
+              "col": 1,
+              "row": 7
+            },
+            {
+              "col": 2,
+              "row": 7
+            },
+            {
+              "col": 3,
+              "row": 7
+            },
+            {
+              "col": 4,
+              "row": 7
+            },
+            {
+              "col": 5,
+              "row": 7
+            },
+            {
+              "col": 6,
+              "row": 7
+            },
+            {
+              "col": 7,
+              "row": 7
+            },
+            {
+              "col": 8,
+              "row": 7
+            },
+            {
+              "col": 9,
+              "row": 7
             }
           ]
         },
@@ -730,46 +955,6 @@
           "category": "main_deck",
           "cells": [
             {
-              "col": 0,
-              "row": 7
-            },
-            {
-              "col": 1,
-              "row": 7
-            },
-            {
-              "col": 2,
-              "row": 7
-            },
-            {
-              "col": 3,
-              "row": 7
-            },
-            {
-              "col": 4,
-              "row": 7
-            },
-            {
-              "col": 5,
-              "row": 7
-            },
-            {
-              "col": 6,
-              "row": 7
-            },
-            {
-              "col": 7,
-              "row": 7
-            },
-            {
-              "col": 8,
-              "row": 7
-            },
-            {
-              "col": 0,
-              "row": 8
-            },
-            {
               "col": 1,
               "row": 8
             },
@@ -799,6 +984,10 @@
             },
             {
               "col": 8,
+              "row": 8
+            },
+            {
+              "col": 9,
               "row": 8
             },
             {
@@ -836,6 +1025,58 @@
             {
               "col": 8,
               "row": 9
+            },
+            {
+              "col": 9,
+              "row": 9
+            },
+            {
+              "col": 10,
+              "row": 9
+            },
+            {
+              "col": 0,
+              "row": 10
+            },
+            {
+              "col": 1,
+              "row": 10
+            },
+            {
+              "col": 2,
+              "row": 10
+            },
+            {
+              "col": 3,
+              "row": 10
+            },
+            {
+              "col": 4,
+              "row": 10
+            },
+            {
+              "col": 5,
+              "row": 10
+            },
+            {
+              "col": 6,
+              "row": 10
+            },
+            {
+              "col": 7,
+              "row": 10
+            },
+            {
+              "col": 8,
+              "row": 10
+            },
+            {
+              "col": 9,
+              "row": 10
+            },
+            {
+              "col": 10,
+              "row": 10
             }
           ],
           "render_hint": {
@@ -843,73 +1084,133 @@
           }
         },
         {
-          "id": "main_mast_zone",
-          "label": "Main Mast Zone",
-          "category": "mast_zone",
+          "id": "main_battery",
+          "label": "Main Battery",
+          "category": "main_battery",
           "cells": [
             {
               "col": 0,
-              "row": 10
+              "row": 11
             },
             {
               "col": 1,
-              "row": 10
+              "row": 11
             },
             {
               "col": 2,
-              "row": 10
+              "row": 11
             },
             {
               "col": 3,
-              "row": 10
+              "row": 11
             },
             {
               "col": 4,
-              "row": 10
+              "row": 11
             },
             {
               "col": 5,
-              "row": 10
+              "row": 11
             },
             {
               "col": 6,
-              "row": 10
+              "row": 11
             },
             {
               "col": 7,
-              "row": 10
+              "row": 11
             },
             {
               "col": 8,
-              "row": 10
+              "row": 11
+            },
+            {
+              "col": 9,
+              "row": 11
+            },
+            {
+              "col": 10,
+              "row": 11
+            },
+            {
+              "col": 0,
+              "row": 12
             },
             {
               "col": 1,
-              "row": 11
+              "row": 12
             },
             {
               "col": 2,
-              "row": 11
+              "row": 12
             },
             {
               "col": 3,
-              "row": 11
+              "row": 12
             },
             {
               "col": 4,
-              "row": 11
+              "row": 12
             },
             {
               "col": 5,
-              "row": 11
+              "row": 12
             },
             {
               "col": 6,
-              "row": 11
+              "row": 12
             },
             {
               "col": 7,
-              "row": 11
+              "row": 12
+            },
+            {
+              "col": 8,
+              "row": 12
+            },
+            {
+              "col": 9,
+              "row": 12
+            },
+            {
+              "col": 10,
+              "row": 12
+            },
+            {
+              "col": 1,
+              "row": 13
+            },
+            {
+              "col": 2,
+              "row": 13
+            },
+            {
+              "col": 3,
+              "row": 13
+            },
+            {
+              "col": 4,
+              "row": 13
+            },
+            {
+              "col": 5,
+              "row": 13
+            },
+            {
+              "col": 6,
+              "row": 13
+            },
+            {
+              "col": 7,
+              "row": 13
+            },
+            {
+              "col": 8,
+              "row": 13
+            },
+            {
+              "col": 9,
+              "row": 13
             }
           ]
         },
@@ -920,71 +1221,67 @@
           "cells": [
             {
               "col": 1,
-              "row": 12
+              "row": 14
             },
             {
               "col": 2,
-              "row": 12
+              "row": 14
             },
             {
               "col": 3,
-              "row": 12
+              "row": 14
             },
             {
               "col": 4,
-              "row": 12
+              "row": 14
             },
             {
               "col": 5,
-              "row": 12
+              "row": 14
             },
             {
               "col": 6,
-              "row": 12
+              "row": 14
             },
             {
               "col": 7,
-              "row": 12
+              "row": 14
+            },
+            {
+              "col": 8,
+              "row": 14
+            },
+            {
+              "col": 9,
+              "row": 14
             },
             {
               "col": 2,
-              "row": 13
+              "row": 15
             },
             {
               "col": 3,
-              "row": 13
+              "row": 15
             },
             {
               "col": 4,
-              "row": 13
+              "row": 15
             },
             {
               "col": 5,
-              "row": 13
+              "row": 15
             },
             {
               "col": 6,
-              "row": 13
+              "row": 15
             },
             {
-              "col": 2,
-              "row": 14
+              "col": 7,
+              "row": 15
             },
             {
-              "col": 3,
-              "row": 14
-            },
-            {
-              "col": 4,
-              "row": 14
-            },
-            {
-              "col": 5,
-              "row": 14
-            },
-            {
-              "col": 6,
-              "row": 14
+              "col": 8,
+              "row": 15
             }
           ],
           "render_hint": {
@@ -992,21 +1289,13 @@
           }
         },
         {
-          "id": "helm_stern",
-          "label": "Helm / Stern",
+          "id": "helm_captains_stern",
+          "label": "Helm / Captain's Stern",
           "category": "helm",
           "cells": [
             {
-              "col": 3,
-              "row": 15
-            },
-            {
-              "col": 4,
-              "row": 15
-            },
-            {
-              "col": 5,
-              "row": 15
+              "col": 2,
+              "row": 16
             },
             {
               "col": 3,
@@ -1019,10 +1308,86 @@
             {
               "col": 5,
               "row": 16
+            },
+            {
+              "col": 6,
+              "row": 16
+            },
+            {
+              "col": 7,
+              "row": 16
+            },
+            {
+              "col": 8,
+              "row": 16
+            },
+            {
+              "col": 3,
+              "row": 17
             },
             {
               "col": 4,
               "row": 17
+            },
+            {
+              "col": 5,
+              "row": 17
+            },
+            {
+              "col": 6,
+              "row": 17
+            },
+            {
+              "col": 7,
+              "row": 17
+            },
+            {
+              "col": 3,
+              "row": 18
+            },
+            {
+              "col": 4,
+              "row": 18
+            },
+            {
+              "col": 5,
+              "row": 18
+            },
+            {
+              "col": 6,
+              "row": 18
+            },
+            {
+              "col": 7,
+              "row": 18
+            },
+            {
+              "col": 4,
+              "row": 19
+            },
+            {
+              "col": 5,
+              "row": 19
+            },
+            {
+              "col": 6,
+              "row": 19
+            },
+            {
+              "col": 4,
+              "row": 20
+            },
+            {
+              "col": 5,
+              "row": 20
+            },
+            {
+              "col": 6,
+              "row": 20
+            },
+            {
+              "col": 5,
+              "row": 21
             }
           ],
           "render_hint": {
