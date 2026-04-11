@@ -10130,6 +10130,42 @@ class InitiativeTracker(base.InitiativeTracker):
                 return {"ok": False, "reason": "turn_spent", "message": "No turns remain for this round."}
             delta = -90.0 if action == "turn_port" else 90.0
             next_facing = (float(ship.get("facing_deg", 0.0) or 0.0) + delta) % 360.0
+            current_state = self._capture_canonical_map_state(prefer_window=True).normalized()
+            projected = self._project_ship_turn_geometry(
+                state=current_state,
+                structure_id=sid,
+                ship=ship,
+                next_facing=next_facing,
+            )
+            if not bool(projected.get("ok")):
+                self._last_ship_engagement_error = {
+                    "reason": "turn_blocked",
+                    "maneuver": action,
+                    "projection": projected,
+                }
+                return {
+                    "ok": False,
+                    "reason": "turn_blocked",
+                    "message": "Ship turn is blocked.",
+                    "blockers": dict(projected.get("blockers") if isinstance(projected.get("blockers"), dict) else {}),
+                    "target_cells": list(projected.get("target_cells") if isinstance(projected.get("target_cells"), list) else []),
+                }
+            runtime_boarding = dict(ship.get("boarding") if isinstance(ship.get("boarding"), dict) else {})
+            local_points = list(runtime_boarding.get("points_local") if isinstance(runtime_boarding.get("points_local"), list) else [])
+            local_bridges = list(runtime_boarding.get("bridges_local") if isinstance(runtime_boarding.get("bridges_local"), list) else [])
+            local_edges = list(runtime_boarding.get("edges_local") if isinstance(runtime_boarding.get("edges_local"), list) else [])
+            if local_points:
+                runtime_boarding["points"] = local_points
+            if local_bridges:
+                runtime_boarding["bridges"] = local_bridges
+            if local_edges:
+                runtime_boarding["edges"] = local_edges
+            transformed_boarding = self._transform_ship_boarding_runtime_metadata(
+                boarding=runtime_boarding,
+                anchor_col=int(projected.get("anchor_col", 0) or 0),
+                anchor_row=int(projected.get("anchor_row", 0) or 0),
+                facing_deg=float(next_facing),
+            )
 
             def _apply_turn(current: Dict[str, Any]) -> Dict[str, Any]:
                 updated = self._normalize_ship_engagement_state(current, current_round=int(getattr(self, "round_num", 0) or 0))
@@ -10137,30 +10173,10 @@ class InitiativeTracker(base.InitiativeTracker):
                 updated_engagement = dict(updated.get("engagement_state") if isinstance(updated.get("engagement_state"), dict) else {})
                 updated_engagement["turns_remaining"] = max(0, int(updated_engagement.get("turns_remaining", 0) or 0) - 1)
                 updated["engagement_state"] = updated_engagement
-                structure_item = self._ship_structure_for_id(sid)
-                if structure_item is not None:
-                    payload = dict(structure_item.payload if isinstance(structure_item.payload, dict) else {})
-                    payload["facing_deg"] = float(next_facing)
-                    runtime_boarding = dict(updated.get("boarding") if isinstance(updated.get("boarding"), dict) else {})
-                    local_points = list(runtime_boarding.get("points_local") if isinstance(runtime_boarding.get("points_local"), list) else [])
-                    local_bridges = list(runtime_boarding.get("bridges_local") if isinstance(runtime_boarding.get("bridges_local"), list) else [])
-                    local_edges = list(runtime_boarding.get("edges_local") if isinstance(runtime_boarding.get("edges_local"), list) else [])
-                    if local_points:
-                        runtime_boarding["points"] = local_points
-                    if local_bridges:
-                        runtime_boarding["bridges"] = local_bridges
-                    if local_edges:
-                        runtime_boarding["edges"] = local_edges
-                    updated["boarding"] = self._transform_ship_boarding_runtime_metadata(
-                        boarding=runtime_boarding,
-                        anchor_col=int(structure_item.anchor_col),
-                        anchor_row=int(structure_item.anchor_row),
-                        facing_deg=float(next_facing),
-                    )
+                updated["boarding"] = dict(transformed_boarding)
                 return updated
 
             next_ship = self._update_ship_instance(str(ship.get("id") or ""), _apply_turn) or ship
-            transformed_boarding = dict(next_ship.get("boarding") if isinstance(next_ship.get("boarding"), dict) else {})
 
             def _mutate_structure(state: MapState) -> None:
                 structure_map = dict(state.structures or {})
@@ -10180,10 +10196,27 @@ class InitiativeTracker(base.InitiativeTracker):
                     kind=str(current_structure.kind),
                     anchor_col=int(current_structure.anchor_col),
                     anchor_row=int(current_structure.anchor_row),
-                    occupied_cells=list(current_structure.occupied_cells or []),
+                    occupied_cells=[(int(c), int(r)) for c, r in list(projected.get("occupied_cells") if isinstance(projected.get("occupied_cells"), list) else [])],
                     payload=payload,
                 ).normalized()
                 state.structures = structure_map
+                if isinstance(state.features, dict):
+                    feature_map = dict(state.features or {})
+                    for update in list(projected.get("feature_updates") if isinstance(projected.get("feature_updates"), list) else []):
+                        fid = str(update.get("feature_id") or "").strip()
+                        if not fid:
+                            continue
+                        current_feature = feature_map.get(fid)
+                        if not isinstance(current_feature, MapFeature):
+                            continue
+                        feature_map[fid] = MapFeature(
+                            feature_id=fid,
+                            col=int(update.get("col", current_feature.col) or 0),
+                            row=int(update.get("row", current_feature.row) or 0),
+                            kind=str(update.get("kind") or current_feature.kind or "feature"),
+                            payload=dict(update.get("payload") if isinstance(update.get("payload"), dict) else current_feature.payload or {}),
+                        ).normalized()
+                    state.features = feature_map
                 self._reconcile_boarding_links_for_state(state)
 
             self._mutate_canonical_map_state(_mutate_structure)
@@ -11183,6 +11216,9 @@ class InitiativeTracker(base.InitiativeTracker):
                         "name": str(feature.get("name") or feature.get("kind") or "feature"),
                         "tags": list(feature.get("tags") if isinstance(feature.get("tags"), list) else []),
                         "payload": feature_payload,
+                        "local_col": int(local_col),
+                        "local_row": int(local_row),
+                        "local_cells": sorted((int(c), int(r)) for c, r in local_cells),
                         "world_col": int(world_col),
                         "world_row": int(world_row),
                         "world_cells": sorted((int(c), int(r)) for c, r in world_cells),
@@ -11266,6 +11302,13 @@ class InitiativeTracker(base.InitiativeTracker):
                 feature_payload["name"] = str(projected.get("name") or projected.get("kind") or "feature")
                 feature_payload["tags"] = list(projected.get("tags") if isinstance(projected.get("tags"), list) else [])
                 feature_payload["attached_structure_id"] = str(sid)
+                feature_payload["attached_rotation_mode"] = str(feature_payload.get("attached_rotation_mode") or "rotate_with_structure").strip().lower() or "rotate_with_structure"
+                feature_payload["attached_local_col"] = int(projected.get("local_col", 0) or 0)
+                feature_payload["attached_local_row"] = int(projected.get("local_row", 0) or 0)
+                feature_payload["attached_local_cells"] = [
+                    {"col": int(c), "row": int(r)}
+                    for c, r in list(projected.get("local_cells") if isinstance(projected.get("local_cells"), list) else [])
+                ]
                 world_cells = list(projected.get("world_cells") if isinstance(projected.get("world_cells"), list) else [])
                 if world_cells:
                     feature_payload["occupied_cells"] = [{"col": int(c), "row": int(r)} for c, r in world_cells]
@@ -11316,6 +11359,11 @@ class InitiativeTracker(base.InitiativeTracker):
     @classmethod
     def _rotate_ship_local_cell(cls, local_col: int, local_row: int, facing_deg: Any) -> Tuple[int, int]:
         steps = cls._ship_rotation_steps_for_facing(facing_deg)
+        return cls._rotate_ship_local_cell_by_steps(local_col, local_row, steps)
+
+    @staticmethod
+    def _rotate_ship_local_cell_by_steps(local_col: int, local_row: int, rotation_steps: int) -> Tuple[int, int]:
+        steps = int(rotation_steps) % 4
         if steps == 1:
             return -int(local_row), int(local_col)
         if steps == 2:
@@ -11323,6 +11371,64 @@ class InitiativeTracker(base.InitiativeTracker):
         if steps == 3:
             return int(local_row), -int(local_col)
         return int(local_col), int(local_row)
+
+    @classmethod
+    def _unrotate_ship_world_offset(cls, delta_col: int, delta_row: int, facing_deg: Any) -> Tuple[int, int]:
+        steps = cls._ship_rotation_steps_for_facing(facing_deg)
+        return cls._rotate_ship_local_cell_by_steps(int(delta_col), int(delta_row), (-steps) % 4)
+
+    @classmethod
+    def _ship_world_cells_from_local(
+        cls,
+        *,
+        anchor_col: int,
+        anchor_row: int,
+        local_cells: Iterable[Tuple[int, int]],
+        facing_deg: Any,
+    ) -> List[Tuple[int, int]]:
+        world_cells: set[Tuple[int, int]] = set()
+        for local_col, local_row in list(local_cells):
+            dc, dr = cls._rotate_ship_local_cell(int(local_col), int(local_row), facing_deg)
+            world_cells.add((int(anchor_col) + int(dc), int(anchor_row) + int(dr)))
+        if not world_cells:
+            world_cells.add((int(anchor_col), int(anchor_row)))
+        return sorted(world_cells)
+
+    def _ship_local_footprint_cells(
+        self,
+        *,
+        structure: MapStructure,
+        ship: Dict[str, Any],
+        state: Optional[MapState] = None,
+    ) -> List[Tuple[int, int]]:
+        payload = structure.payload if isinstance(structure.payload, dict) else {}
+        blueprint_id = str(ship.get("blueprint_id") or payload.get("ship_blueprint_id") or "").strip().lower()
+        blueprints = self._ship_blueprints()
+        blueprint = blueprints.get(blueprint_id) if blueprint_id else {}
+        template = blueprint.get("template") if isinstance(blueprint, dict) and isinstance(blueprint.get("template"), dict) else {}
+        local_cells: List[Tuple[int, int]] = []
+        for raw in template.get("footprint") if isinstance(template.get("footprint"), list) else []:
+            if not isinstance(raw, dict):
+                continue
+            try:
+                local_cells.append((int(raw.get("col", 0)), int(raw.get("row", 0))))
+            except Exception:
+                continue
+        if not local_cells:
+            facing = ship.get("facing_deg", payload.get("facing_deg", 0.0))
+            world_cells = {(int(structure.anchor_col), int(structure.anchor_row))}
+            world_cells.update((int(col), int(row)) for col, row in list(structure.occupied_cells or []))
+            for col, row in sorted(world_cells):
+                local_col, local_row = self._unrotate_ship_world_offset(
+                    int(col) - int(structure.anchor_col),
+                    int(row) - int(structure.anchor_row),
+                    facing,
+                )
+                local_cells.append((int(local_col), int(local_row)))
+        deduped = sorted({(int(col), int(row)) for col, row in local_cells})
+        if (0, 0) not in set(deduped):
+            deduped.insert(0, (0, 0))
+        return deduped
 
     @staticmethod
     def _ship_relative_edge_vector(edge: str) -> Optional[Tuple[int, int]]:
@@ -11342,6 +11448,190 @@ class InitiativeTracker(base.InitiativeTracker):
         if abs(int(delta_col)) >= abs(int(delta_row)):
             return "east" if int(delta_col) >= 0 else "west"
         return "south" if int(delta_row) >= 0 else "north"
+
+    def _project_ship_turn_geometry(
+        self,
+        *,
+        state: MapState,
+        structure_id: str,
+        ship: Dict[str, Any],
+        next_facing: float,
+    ) -> Dict[str, Any]:
+        sid = str(structure_id or "").strip()
+        structure = (state.structures or {}).get(sid)
+        if not isinstance(structure, MapStructure):
+            return {"ok": False, "reason": "structure_not_found"}
+        payload = structure.payload if isinstance(structure.payload, dict) else {}
+        local_footprint = self._ship_local_footprint_cells(structure=structure, ship=ship, state=state)
+        target_cells = self._ship_world_cells_from_local(
+            anchor_col=int(structure.anchor_col),
+            anchor_row=int(structure.anchor_row),
+            local_cells=local_footprint,
+            facing_deg=next_facing,
+        )
+        target_cell_set = {(int(col), int(row)) for col, row in target_cells}
+        query = MapQueryAPI(state)
+        cols = int(state.grid.cols)
+        rows = int(state.grid.rows)
+        blockers: Dict[str, List[Dict[str, Any]]] = {
+            "out_of_bounds": [],
+            "obstacles": [],
+            "features": [],
+            "structures": [],
+            "hazards": [],
+            "template_conflicts": [],
+        }
+        attached_features = [
+            feature
+            for feature in list((state.features or {}).values())
+            if isinstance(feature, MapFeature)
+            and str((feature.payload if isinstance(feature.payload, dict) else {}).get("attached_structure_id") or "").strip() == sid
+        ]
+        attached_feature_ids = {str(feature.feature_id) for feature in attached_features}
+        for col, row in sorted(target_cell_set):
+            cell = {"col": int(col), "row": int(row)}
+            if int(col) < 0 or int(row) < 0 or int(col) >= cols or int(row) >= rows:
+                blockers["out_of_bounds"].append(cell)
+                continue
+            if (int(col), int(row)) in state.obstacles:
+                blockers["obstacles"].append(cell)
+            for feature in query.features_at(int(col), int(row)):
+                fid = str(feature.feature_id)
+                if fid in attached_feature_ids:
+                    continue
+                feature_payload = feature.payload if isinstance(feature.payload, dict) else {}
+                if bool(feature_payload.get("blocks_structure_movement")) or bool(feature_payload.get("blocks_movement")):
+                    blockers["features"].append({"id": fid, "cell": cell})
+            for other_structure in query.structures_at(int(col), int(row)):
+                if str(other_structure.structure_id) == sid:
+                    continue
+                blockers["structures"].append({"id": str(other_structure.structure_id), "cell": cell})
+            for hazard in query.hazards_at(int(col), int(row)):
+                hazard_payload = hazard.payload if isinstance(hazard.payload, dict) else {}
+                if MapQueryAPI.hazard_blocks_structure_movement(hazard_payload):
+                    blockers["hazards"].append({"id": str(hazard.hazard_id), "cell": cell})
+
+        current_facing = float(ship.get("facing_deg", payload.get("facing_deg", 0.0)) or 0.0)
+        feature_updates: List[Dict[str, Any]] = []
+        occupied_tracker: set[Tuple[int, int]] = set()
+        for feature in attached_features:
+            feature_payload = dict(feature.payload if isinstance(feature.payload, dict) else {})
+            rotation_mode = str(feature_payload.get("attached_rotation_mode") or "rotate_with_structure").strip().lower()
+            if rotation_mode not in {"rotate_with_structure", "translate_only", "fixed_world"}:
+                rotation_mode = "rotate_with_structure"
+            if rotation_mode == "fixed_world":
+                continue
+            local_col: int
+            local_row: int
+            try:
+                local_col = int(feature_payload.get("attached_local_col"))
+                local_row = int(feature_payload.get("attached_local_row"))
+            except Exception:
+                local_col, local_row = self._unrotate_ship_world_offset(
+                    int(feature.col) - int(structure.anchor_col),
+                    int(feature.row) - int(structure.anchor_row),
+                    current_facing,
+                )
+            local_cells: List[Tuple[int, int]] = []
+            raw_local_cells = feature_payload.get("attached_local_cells")
+            if isinstance(raw_local_cells, list):
+                for raw in raw_local_cells:
+                    if not isinstance(raw, dict):
+                        continue
+                    try:
+                        local_cells.append((int(raw.get("col", 0)), int(raw.get("row", 0))))
+                    except Exception:
+                        continue
+            if not local_cells:
+                raw_world_cells = feature_payload.get("occupied_cells") if isinstance(feature_payload.get("occupied_cells"), list) else []
+                for raw in raw_world_cells:
+                    if not isinstance(raw, dict):
+                        continue
+                    try:
+                        raw_col = int(raw.get("col", 0))
+                        raw_row = int(raw.get("row", 0))
+                    except Exception:
+                        continue
+                    lcol, lrow = self._unrotate_ship_world_offset(
+                        raw_col - int(structure.anchor_col),
+                        raw_row - int(structure.anchor_row),
+                        current_facing,
+                    )
+                    local_cells.append((int(lcol), int(lrow)))
+            if not local_cells:
+                local_cells = [(int(local_col), int(local_row))]
+            feature_facing = next_facing if rotation_mode == "rotate_with_structure" else current_facing
+            world_col, world_row = self._ship_world_cells_from_local(
+                anchor_col=int(structure.anchor_col),
+                anchor_row=int(structure.anchor_row),
+                local_cells=[(int(local_col), int(local_row))],
+                facing_deg=feature_facing,
+            )[0]
+            world_cells = self._ship_world_cells_from_local(
+                anchor_col=int(structure.anchor_col),
+                anchor_row=int(structure.anchor_row),
+                local_cells=local_cells,
+                facing_deg=feature_facing,
+            )
+            for col, row in world_cells:
+                cell = {"col": int(col), "row": int(row)}
+                if (int(col), int(row)) in occupied_tracker:
+                    blockers["template_conflicts"].append(
+                        {"id": str(feature.feature_id), "cell": cell, "reason": "duplicate_feature_occupancy"}
+                    )
+                else:
+                    occupied_tracker.add((int(col), int(row)))
+                if int(col) < 0 or int(row) < 0 or int(col) >= cols or int(row) >= rows:
+                    blockers["out_of_bounds"].append(cell)
+                    continue
+                if (int(col), int(row)) in state.obstacles:
+                    blockers["obstacles"].append(cell)
+                for hazard in query.hazards_at(int(col), int(row)):
+                    hazard_payload = hazard.payload if isinstance(hazard.payload, dict) else {}
+                    if MapQueryAPI.hazard_blocks_structure_movement(hazard_payload):
+                        blockers["hazards"].append({"id": str(hazard.hazard_id), "cell": cell})
+                for other_structure in query.structures_at(int(col), int(row)):
+                    if str(other_structure.structure_id) == sid:
+                        continue
+                    blockers["structures"].append({"id": str(other_structure.structure_id), "cell": cell})
+                for other_feature in query.features_at(int(col), int(row)):
+                    oid = str(other_feature.feature_id)
+                    if oid in attached_feature_ids:
+                        continue
+                    other_payload = other_feature.payload if isinstance(other_feature.payload, dict) else {}
+                    if bool(other_payload.get("blocks_structure_movement")) or bool(other_payload.get("blocks_movement")):
+                        blockers["features"].append({"id": oid, "cell": cell})
+            next_payload = dict(feature_payload)
+            next_payload["attached_rotation_mode"] = rotation_mode
+            next_payload["attached_local_col"] = int(local_col)
+            next_payload["attached_local_row"] = int(local_row)
+            next_payload["attached_local_cells"] = [{"col": int(col), "row": int(row)} for col, row in sorted(set(local_cells))]
+            next_payload["occupied_cells"] = [{"col": int(col), "row": int(row)} for col, row in sorted(set(world_cells))]
+            if isinstance(feature_payload.get("footprint"), list):
+                next_payload["footprint"] = [{"col": int(col), "row": int(row)} for col, row in sorted(set(world_cells))]
+            feature_updates.append(
+                {
+                    "feature_id": str(feature.feature_id),
+                    "col": int(world_col),
+                    "row": int(world_row),
+                    "kind": str(feature.kind),
+                    "payload": next_payload,
+                }
+            )
+
+        has_blockers = any(bool(blockers.get(key)) for key in blockers.keys())
+        return {
+            "ok": not has_blockers,
+            "reason": "turn_blocked" if has_blockers else "",
+            "structure_id": sid,
+            "anchor_col": int(structure.anchor_col),
+            "anchor_row": int(structure.anchor_row),
+            "facing_deg": float(next_facing),
+            "target_cells": [{"col": int(col), "row": int(row)} for col, row in sorted(target_cell_set)],
+            "occupied_cells": [(int(col), int(row)) for col, row in sorted(target_cell_set - {(int(structure.anchor_col), int(structure.anchor_row))})],
+            "feature_updates": feature_updates,
+            "blockers": blockers,
+        }
 
     @classmethod
     def _transform_ship_boarding_runtime_metadata(
