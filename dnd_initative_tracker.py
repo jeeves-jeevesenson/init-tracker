@@ -11028,6 +11028,102 @@ class InitiativeTracker(base.InitiativeTracker):
                 pass
         return item
 
+    @staticmethod
+    def _lan_asset_url_for_path(path_value: Any) -> Optional[str]:
+        raw = str(path_value or "").strip()
+        if not raw:
+            return None
+        if raw.startswith(("http://", "https://")):
+            return raw
+        if raw.startswith("/assets/"):
+            return raw
+        if raw.startswith("assets/"):
+            return f"/{raw}"
+        candidate = Path(raw).expanduser()
+        try:
+            if candidate.is_absolute():
+                assets_root = (Path(__file__).resolve().parent / "assets").resolve()
+                try:
+                    rel = candidate.resolve().relative_to(assets_root)
+                except Exception:
+                    return None
+                return f"/assets/{rel.as_posix()}"
+        except Exception:
+            return None
+        return None
+
+    @staticmethod
+    def _lan_asset_url_variants(url: Optional[str]) -> List[str]:
+        base = str(url or "").strip()
+        if not base:
+            return []
+        if "?" in base:
+            stem, query = base.split("?", 1)
+            query_suffix = f"?{query}"
+        else:
+            stem, query_suffix = base, ""
+        root, ext = os.path.splitext(stem)
+        variants: List[str] = []
+        if ext.lower() in {".avif", ".webp", ".png", ".jpg", ".jpeg"}:
+            for candidate_ext in (ext.lower(), ".webp", ".png", ".jpg", ".jpeg", ".avif"):
+                candidate = f"{root}{candidate_ext}{query_suffix}"
+                if candidate not in variants:
+                    variants.append(candidate)
+            return variants
+        return [base]
+
+    def _lan_ship_deck_texture_urls(self, render_payload: Dict[str, Any]) -> List[str]:
+        render = dict(render_payload if isinstance(render_payload, dict) else {})
+        candidates: List[str] = []
+        direct_path = str(render.get("deck_texture_path") or "").strip()
+        if direct_path:
+            candidates.append(direct_path)
+        key = str(render.get("deck_texture_key") or "ship_deck_wood").strip() or "ship_deck_wood"
+        resolved = self._ship_render_asset_path_for_key(key)
+        if resolved:
+            candidates.append(str(resolved))
+        default_path = str(DEFAULT_SHIP_RENDER_ASSET_KEYS.get(key) or "").strip()
+        if default_path:
+            candidates.append(default_path)
+        urls: List[str] = []
+        for raw in candidates:
+            url = self._lan_asset_url_for_path(raw)
+            if not url:
+                continue
+            for variant in self._lan_asset_url_variants(url):
+                if variant not in urls:
+                    urls.append(variant)
+        return urls
+
+    def _lan_ship_render_metadata(self, structure_entry: Dict[str, Any]) -> Dict[str, Any]:
+        entry = dict(structure_entry if isinstance(structure_entry, dict) else {})
+        payload = dict(entry.get("payload") if isinstance(entry.get("payload"), dict) else {})
+        kind = str(entry.get("kind") or "").strip().lower()
+        is_ship = kind == "ship_hull" or bool(payload.get("ship_instance_id"))
+        if not is_ship:
+            return {}
+        occupied_cells: List[Dict[str, int]] = []
+        raw_occupied = entry.get("occupied_cells") if isinstance(entry.get("occupied_cells"), list) else []
+        if not raw_occupied:
+            raw_occupied = payload.get("occupied_cells") if isinstance(payload.get("occupied_cells"), list) else []
+        for item in raw_occupied:
+            if not isinstance(item, dict):
+                continue
+            try:
+                occupied_cells.append({"col": int(item.get("col", 0)), "row": int(item.get("row", 0))})
+            except Exception:
+                continue
+        render = dict(payload.get("ship_render") if isinstance(payload.get("ship_render"), dict) else {})
+        deck_texture_urls = self._lan_ship_deck_texture_urls(render)
+        if deck_texture_urls:
+            render["deck_texture_url_candidates"] = list(deck_texture_urls)
+        return {
+            "ship_render": render,
+            "ship_local_space": dict(payload.get("ship_local_space") if isinstance(payload.get("ship_local_space"), dict) else {}),
+            "ship_deck_regions": list(payload.get("ship_deck_regions") if isinstance(payload.get("ship_deck_regions"), list) else []),
+            "occupied_cells": occupied_cells,
+        }
+
     def _upsert_map_feature(
         self,
         *,
@@ -16046,6 +16142,9 @@ class InitiativeTracker(base.InitiativeTracker):
             if not sid:
                 continue
             structure_entry = self._lan_tactical_entity_view(structure_entry, category="structure")
+            ship_render_payload = self._lan_ship_render_metadata(structure_entry)
+            if ship_render_payload:
+                structure_entry.update(ship_render_payload)
             semantics = self._structure_contact_semantics(sid)
             if bool(semantics.get("ok")):
                 structure_entry["contact_semantics"] = {
