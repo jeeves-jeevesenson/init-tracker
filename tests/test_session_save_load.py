@@ -872,6 +872,154 @@ class SessionSaveLoadTests(unittest.TestCase):
                 )
                 self.assertIsNotNone(created, msg=f"{blueprint_id} failed with {getattr(app, '_last_map_template_error', '')}")
 
+    def test_ship_turn_rotates_starter_footprints_with_no_drift(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            app = self._make_app(Path(tmpdir) / "battle.log")
+            app._map_state = tracker_mod.MapState.from_dict({"grid": {"cols": 90, "rows": 90, "feet_per_square": 5}})
+            app._lan_grid_cols = 90
+            app._lan_grid_rows = 90
+            starters = ("rowboat_launch", "sloop", "brig", "galleon_heavy")
+            for index, blueprint_id in enumerate(starters):
+                anchor_col = 8 + index * 20
+                anchor_row = 10
+                structure_id = app._instantiate_ship_blueprint(blueprint_id, anchor_col=anchor_col, anchor_row=anchor_row, facing_deg=0)
+                self.assertIsNotNone(structure_id)
+                structure = app._ship_structure_for_id(structure_id)
+                ship = app._ship_instance_for_structure(structure_id)
+                self.assertIsNotNone(structure)
+                self.assertIsInstance(ship, dict)
+                blueprint = app._ship_blueprints().get(blueprint_id) or {}
+                template = blueprint.get("template") if isinstance(blueprint.get("template"), dict) else {}
+                local_cells = {
+                    (int(raw.get("col", 0)), int(raw.get("row", 0)))
+                    for raw in (template.get("footprint") if isinstance(template.get("footprint"), list) else [])
+                    if isinstance(raw, dict)
+                }
+                if not local_cells:
+                    local_cells = {(0, 0)}
+                for turn_index, expected_facing in enumerate((90.0, 180.0, 270.0, 0.0), start=1):
+                    app.round_num = turn_index
+                    result = app._ship_engagement_maneuver(structure_id, "turn_starboard")
+                    self.assertTrue(result.get("ok"), msg=result)
+                    structure = app._ship_structure_for_id(structure_id)
+                    self.assertIsNotNone(structure)
+                    actual_cells = {(int(structure.anchor_col), int(structure.anchor_row))}
+                    actual_cells.update((int(col), int(row)) for col, row in list(structure.occupied_cells or []))
+                    expected_cells = {
+                        (
+                            int(anchor_col) + tracker_mod.InitiativeTracker._rotate_ship_local_cell(int(col), int(row), expected_facing)[0],
+                            int(anchor_row) + tracker_mod.InitiativeTracker._rotate_ship_local_cell(int(col), int(row), expected_facing)[1],
+                        )
+                        for col, row in local_cells
+                    }
+                    self.assertEqual(actual_cells, expected_cells)
+                if blueprint_id == "brig":
+                    self.assertIn((anchor_col + 3, anchor_row + 2), local_cells)
+
+    def test_ship_turn_rotates_attached_fixtures(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            app = self._make_app(Path(tmpdir) / "battle.log")
+            app._map_state = tracker_mod.MapState.from_dict({"grid": {"cols": 50, "rows": 50, "feet_per_square": 5}})
+            app._lan_grid_cols = 50
+            app._lan_grid_rows = 50
+            structure_id = app._instantiate_ship_blueprint("sloop", anchor_col=15, anchor_row=15, facing_deg=0)
+            self.assertIsNotNone(structure_id)
+            state_before = app._capture_canonical_map_state(prefer_window=False).normalized()
+            attached_before = {
+                str(feature.feature_id): (int(feature.col), int(feature.row))
+                for feature in list((state_before.features or {}).values())
+                if isinstance(feature, tracker_mod.MapFeature)
+                and str((feature.payload if isinstance(feature.payload, dict) else {}).get("attached_structure_id") or "") == str(structure_id)
+            }
+            self.assertTrue(attached_before)
+            app.round_num = 2
+            result = app._ship_engagement_maneuver(structure_id, "turn_starboard")
+            self.assertTrue(result.get("ok"), msg=result)
+            state_after = app._capture_canonical_map_state(prefer_window=False).normalized()
+            attached_after = {
+                str(feature.feature_id): feature
+                for feature in list((state_after.features or {}).values())
+                if isinstance(feature, tracker_mod.MapFeature)
+                and str((feature.payload if isinstance(feature.payload, dict) else {}).get("attached_structure_id") or "") == str(structure_id)
+            }
+            self.assertEqual(set(attached_before.keys()), set(attached_after.keys()))
+            for fid, (old_col, old_row) in attached_before.items():
+                expected_local = (old_col - 15, old_row - 15)
+                dc, dr = tracker_mod.InitiativeTracker._rotate_ship_local_cell(expected_local[0], expected_local[1], 90.0)
+                expected_world = (15 + dc, 15 + dr)
+                feature = attached_after[fid]
+                self.assertEqual((int(feature.col), int(feature.row)), expected_world)
+                payload = feature.payload if isinstance(feature.payload, dict) else {}
+                self.assertEqual(int(payload.get("attached_local_col", 0)), expected_local[0])
+                self.assertEqual(int(payload.get("attached_local_row", 0)), expected_local[1])
+
+    def test_ship_turn_refreshes_boarding_metadata_and_contacts(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            app = self._make_app(Path(tmpdir) / "battle.log")
+            app._map_state = tracker_mod.MapState.from_dict({"grid": {"cols": 40, "rows": 40, "feet_per_square": 5}})
+            app._lan_grid_cols = 40
+            app._lan_grid_rows = 40
+            src = app._instantiate_ship_blueprint("rowboat_launch", anchor_col=10, anchor_row=10, facing_deg=0)
+            dst = app._instantiate_ship_blueprint("rowboat_launch", anchor_col=10, anchor_row=11, facing_deg=180)
+            self.assertIsNotNone(src)
+            self.assertIsNotNone(dst)
+            app.round_num = 2
+            turn = app._ship_engagement_maneuver(src, "turn_starboard")
+            self.assertTrue(turn.get("ok"), msg=turn)
+            structure = app._ship_structure_for_id(src)
+            self.assertIsNotNone(structure)
+            payload = structure.payload if isinstance(structure.payload, dict) else {}
+            points_local = payload.get("boarding_points_local") if isinstance(payload.get("boarding_points_local"), list) else []
+            points_world = payload.get("boarding_points") if isinstance(payload.get("boarding_points"), list) else []
+            expected_points = {
+                (
+                    10 + tracker_mod.InitiativeTracker._rotate_ship_local_cell(int(point.get("col", 0)), int(point.get("row", 0)), 90.0)[0],
+                    10 + tracker_mod.InitiativeTracker._rotate_ship_local_cell(int(point.get("col", 0)), int(point.get("row", 0)), 90.0)[1],
+                )
+                for point in points_local
+                if isinstance(point, dict)
+            }
+            actual_points = {(int(point.get("col", 0)), int(point.get("row", 0))) for point in points_world if isinstance(point, dict)}
+            self.assertEqual(actual_points, expected_points)
+            self.assertIn("south", payload.get("boardable_edges") or [])
+            semantics = app._structure_contact_semantics(src)
+            relation = next(
+                (item for item in (semantics.get("ship_relations") or []) if str(item.get("target_id") or "") == str(dst)),
+                {},
+            )
+            self.assertTrue(relation.get("boarding_capable"))
+            self.assertIn({"col": 10, "row": 11}, relation.get("boarding_points") or [])
+
+    def test_ship_turn_rejects_blocked_rotated_geometry(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            app = self._make_app(Path(tmpdir) / "battle.log")
+            app._map_state = tracker_mod.MapState.from_dict(
+                {
+                    "grid": {"cols": 30, "rows": 30, "feet_per_square": 5},
+                    "obstacles": [{"col": 5, "row": 6}],
+                }
+            )
+            app._lan_grid_cols = 30
+            app._lan_grid_rows = 30
+            structure_id = app._instantiate_ship_blueprint("rowboat_launch", anchor_col=5, anchor_row=5, facing_deg=0)
+            self.assertIsNotNone(structure_id)
+            ship_before = app._ship_instance_for_structure(structure_id)
+            structure_before = app._ship_structure_for_id(structure_id)
+            self.assertIsInstance(ship_before, dict)
+            self.assertIsNotNone(structure_before)
+            result = app._ship_engagement_maneuver(structure_id, "turn_starboard")
+            self.assertFalse(result.get("ok"))
+            self.assertEqual(result.get("reason"), "turn_blocked")
+            blockers = result.get("blockers") if isinstance(result.get("blockers"), dict) else {}
+            self.assertIn({"col": 5, "row": 6}, blockers.get("obstacles") or [])
+            ship_after = app._ship_instance_for_structure(structure_id)
+            structure_after = app._ship_structure_for_id(structure_id)
+            self.assertEqual(float((ship_after or {}).get("facing_deg", 0.0) or 0.0), float((ship_before or {}).get("facing_deg", 0.0) or 0.0))
+            self.assertEqual(
+                {(int(structure_before.anchor_col), int(structure_before.anchor_row))} | set(structure_before.occupied_cells or []),
+                {(int(structure_after.anchor_col), int(structure_after.anchor_row))} | set(structure_after.occupied_cells or []),
+            )
+
     def test_ship_boarding_metadata_transforms_for_multiple_facings(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             app = self._make_app(Path(tmpdir) / "battle.log")
