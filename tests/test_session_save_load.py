@@ -692,6 +692,92 @@ class SessionSaveLoadTests(unittest.TestCase):
             self.assertIn((10, 10), occupied)
             self.assertIn((10, 11), occupied)
 
+    def test_structure_template_rejects_attached_feature_blocking_feature_and_is_atomic(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            app = self._make_app(Path(tmpdir) / "battle.log")
+            app._map_state = tracker_mod.MapState.from_dict(
+                {
+                    "grid": {"cols": 20, "rows": 20, "feet_per_square": 5},
+                    "features": [
+                        {"id": "f_wall", "col": 11, "row": 10, "kind": "wall", "payload": {"blocks_movement": True}},
+                    ],
+                }
+            )
+            app._save_structure_template(
+                "ship_alpha",
+                {
+                    "name": "Ship Alpha",
+                    "kind": "ship_hull",
+                    "footprint": [{"col": 0, "row": 0}],
+                    "features": [{"col": 1, "row": 0, "kind": "mast", "name": "Mast"}],
+                },
+            )
+            created = app._instantiate_structure_template("ship_alpha", anchor_col=10, anchor_row=10)
+            self.assertIsNone(created)
+            self.assertEqual(getattr(app, "_last_map_template_error", ""), "template_conflict")
+            blockers = getattr(app, "_last_map_template_blockers", {})
+            self.assertTrue((blockers.get("blockers") or {}).get("features"))
+            state = app._capture_canonical_map_state(prefer_window=False).to_dict()
+            self.assertEqual(len(state["structures"]), 0)
+            self.assertEqual(len([entry for entry in state["features"] if (entry.get("payload") or {}).get("attached_structure_id")]), 0)
+
+    def test_structure_template_rejects_attached_feature_on_existing_structure_cell(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            app = self._make_app(Path(tmpdir) / "battle.log")
+            app._map_state = tracker_mod.MapState.from_dict(
+                {
+                    "grid": {"cols": 20, "rows": 20, "feet_per_square": 5},
+                    "structures": [
+                        {
+                            "id": "dock",
+                            "kind": "dock",
+                            "anchor_col": 11,
+                            "anchor_row": 10,
+                            "occupied_cells": [{"col": 11, "row": 10}],
+                            "payload": {"blocks_movement": True},
+                        }
+                    ],
+                }
+            )
+            app._save_structure_template(
+                "ship_alpha",
+                {
+                    "name": "Ship Alpha",
+                    "kind": "ship_hull",
+                    "footprint": [{"col": 0, "row": 0}],
+                    "features": [{"col": 1, "row": 0, "kind": "mast", "name": "Mast"}],
+                },
+            )
+            created = app._instantiate_structure_template("ship_alpha", anchor_col=10, anchor_row=10)
+            self.assertIsNone(created)
+            blockers = getattr(app, "_last_map_template_blockers", {})
+            self.assertTrue((blockers.get("blockers") or {}).get("structures"))
+
+    def test_structure_template_rejects_attached_feature_on_generic_blocking_hazard(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            app = self._make_app(Path(tmpdir) / "battle.log")
+            app._map_state = tracker_mod.MapState.from_dict(
+                {
+                    "grid": {"cols": 20, "rows": 20, "feet_per_square": 5},
+                    "hazards": [
+                        {"id": "h_fire", "col": 11, "row": 10, "kind": "fire", "payload": {"blocks_movement": True}},
+                    ],
+                }
+            )
+            app._save_structure_template(
+                "ship_alpha",
+                {
+                    "name": "Ship Alpha",
+                    "kind": "ship_hull",
+                    "footprint": [{"col": 0, "row": 0}],
+                    "features": [{"col": 1, "row": 0, "kind": "mast", "name": "Mast"}],
+                },
+            )
+            created = app._instantiate_structure_template("ship_alpha", anchor_col=10, anchor_row=10)
+            self.assertIsNone(created)
+            blockers = getattr(app, "_last_map_template_blockers", {})
+            self.assertTrue((blockers.get("blockers") or {}).get("hazards"))
+
     def test_structure_contact_semantics_reports_boardable_adjacency(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             app = self._make_app(Path(tmpdir) / "battle.log")

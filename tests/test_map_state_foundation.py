@@ -193,6 +193,75 @@ class MapStateFoundationTests(unittest.TestCase):
         self.assertTrue(contacts[0]["boardable"])
         self.assertEqual(query.boardable_structure_ids("ship_a"), ["ship_b"])
 
+    def test_structure_move_blockers_treat_generic_hazard_blocking_as_structure_blocking(self):
+        state = MapState.from_dict(
+            {
+                "grid": {"cols": 10, "rows": 10, "feet_per_square": 5},
+                "structures": [
+                    {
+                        "id": "s1",
+                        "kind": "ship",
+                        "anchor_col": 2,
+                        "anchor_row": 3,
+                        "occupied_cells": [{"col": 2, "row": 3}],
+                        "payload": {"blocks_movement": True},
+                    }
+                ],
+                "hazards": [
+                    {
+                        "id": "h1",
+                        "col": 3,
+                        "row": 3,
+                        "kind": "fire",
+                        "payload": {"blocks_movement": True},
+                    }
+                ],
+            }
+        )
+        query = MapQueryAPI(state)
+        blocked = query.structure_move_blockers("s1", 1, 0)
+        self.assertFalse(blocked["ok"])
+        self.assertTrue(blocked["blockers"]["hazards"])
+
+    def test_structure_move_blockers_hazard_override_false_wins_over_generic_blocking(self):
+        state = MapState.from_dict(
+            {
+                "grid": {"cols": 10, "rows": 10, "feet_per_square": 5},
+                "structures": [
+                    {
+                        "id": "s1",
+                        "kind": "ship",
+                        "anchor_col": 2,
+                        "anchor_row": 3,
+                        "occupied_cells": [{"col": 2, "row": 3}],
+                        "payload": {"blocks_movement": True},
+                    }
+                ],
+                "hazards": [
+                    {
+                        "id": "h1",
+                        "col": 3,
+                        "row": 3,
+                        "kind": "fog",
+                        "payload": {"blocks_movement": True, "blocks_structure_movement": False},
+                    },
+                    {
+                        "id": "h2",
+                        "col": 4,
+                        "row": 3,
+                        "kind": "reef",
+                        "payload": {"blocks_structure_movement": True},
+                    },
+                ],
+            }
+        )
+        query = MapQueryAPI(state)
+        clear = query.structure_move_blockers("s1", 1, 0)
+        self.assertTrue(clear["ok"])
+        blocked = query.structure_move_blockers("s1", 2, 0)
+        self.assertFalse(blocked["ok"])
+        self.assertTrue(blocked["blockers"]["hazards"])
+
     def test_climb_transition_blocks_strict_unclimbable_vertical_steps(self):
         state = MapState.from_dict(
             {

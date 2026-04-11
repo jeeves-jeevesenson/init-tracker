@@ -570,6 +570,15 @@ class MapQueryAPI:
     def __init__(self, state: MapState) -> None:
         self.state = state.normalized()
 
+    @staticmethod
+    def hazard_blocks_structure_movement(payload: Any) -> bool:
+        data = payload if isinstance(payload, dict) else {}
+        if data.get("blocks_structure_movement") is False:
+            return False
+        if bool(data.get("blocks_structure_movement")):
+            return True
+        return bool(data.get("blocks_movement"))
+
     def terrain_at(self, col: int, row: int) -> TerrainCell:
         return self.state.terrain_cells.get((int(col), int(row)), TerrainCell(col=int(col), row=int(row), is_rough=False))
 
@@ -809,7 +818,7 @@ class MapQueryAPI:
                     blocking_features.append({"id": str(feature.feature_id), "cell": {"col": int(col), "row": int(row)}})
             for hazard in self.hazards_at(col, row):
                 payload = hazard.payload if isinstance(hazard.payload, dict) else {}
-                if bool(payload.get("blocks_structure_movement")):
+                if self.hazard_blocks_structure_movement(payload):
                     blocking_hazards.append({"id": str(hazard.hazard_id), "cell": {"col": int(col), "row": int(row)}})
             for other in self.structures_at(col, row):
                 if str(other.structure_id) == sid:
