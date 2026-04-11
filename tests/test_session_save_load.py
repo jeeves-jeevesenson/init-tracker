@@ -914,7 +914,7 @@ class SessionSaveLoadTests(unittest.TestCase):
                     }
                     self.assertEqual(actual_cells, expected_cells)
                 if blueprint_id == "brig":
-                    self.assertIn((anchor_col + 3, anchor_row + 2), local_cells)
+                    self.assertIn((3, 2), local_cells)
 
     def test_ship_turn_rotates_attached_fixtures(self):
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -960,7 +960,7 @@ class SessionSaveLoadTests(unittest.TestCase):
             app._lan_grid_cols = 40
             app._lan_grid_rows = 40
             src = app._instantiate_ship_blueprint("rowboat_launch", anchor_col=10, anchor_row=10, facing_deg=0)
-            dst = app._instantiate_ship_blueprint("rowboat_launch", anchor_col=10, anchor_row=11, facing_deg=180)
+            dst = app._instantiate_ship_blueprint("rowboat_launch", anchor_col=11, anchor_row=11, facing_deg=0)
             self.assertIsNotNone(src)
             self.assertIsNotNone(dst)
             app.round_num = 2
@@ -988,7 +988,8 @@ class SessionSaveLoadTests(unittest.TestCase):
                 {},
             )
             self.assertTrue(relation.get("boarding_capable"))
-            self.assertIn({"col": 10, "row": 11}, relation.get("boarding_points") or [])
+            source_points = relation.get("source_boarding_points") if isinstance(relation.get("source_boarding_points"), list) else []
+            self.assertIn({"id": "starboard_mid", "name": "Starboard Rail", "col": 10, "row": 11, "tags": []}, source_points)
 
     def test_ship_turn_rejects_blocked_rotated_geometry(self):
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -996,13 +997,21 @@ class SessionSaveLoadTests(unittest.TestCase):
             app._map_state = tracker_mod.MapState.from_dict(
                 {
                     "grid": {"cols": 30, "rows": 30, "feet_per_square": 5},
-                    "obstacles": [{"col": 5, "row": 6}],
                 }
             )
             app._lan_grid_cols = 30
             app._lan_grid_rows = 30
             structure_id = app._instantiate_ship_blueprint("rowboat_launch", anchor_col=5, anchor_row=5, facing_deg=0)
             self.assertIsNotNone(structure_id)
+            app._mutate_canonical_map_state(
+                lambda state: setattr(
+                    state,
+                    "obstacles",
+                    {**dict(state.obstacles or {}), (5, 6): True},
+                ),
+                hydrate_window=False,
+                broadcast=False,
+            )
             ship_before = app._ship_instance_for_structure(structure_id)
             structure_before = app._ship_structure_for_id(structure_id)
             self.assertIsInstance(ship_before, dict)
