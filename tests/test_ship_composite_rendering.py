@@ -1,12 +1,34 @@
 import unittest
 import tempfile
+import types
 from pathlib import Path
 
 import dnd_initative_tracker as tracker_mod
 import helper_script as helper_mod
+from ship_blueprints import load_repo_runtime_ship_blueprints
 
 
 class ShipCompositeRenderingTests(unittest.TestCase):
+    class _CanvasSpy:
+        def __init__(self):
+            self.polygons = []
+
+        def delete(self, *_args, **_kwargs):
+            return None
+
+        def create_image(self, *_args, **_kwargs):
+            return None
+
+        def create_polygon(self, points, **kwargs):
+            self.polygons.append((list(points), dict(kwargs)))
+            return len(self.polygons)
+
+        def create_rectangle(self, *_args, **_kwargs):
+            return None
+
+        def create_text(self, *_args, **_kwargs):
+            return None
+
     def test_selection_prefers_ship_hull_when_cells_overlap(self):
         window = object.__new__(helper_mod.BattleMapWindow)
         window._structure_id_by_cell = {(5, 5): "dock_a"}
@@ -143,6 +165,85 @@ class ShipCompositeRenderingTests(unittest.TestCase):
             helper_mod.ImageTk = image_tk_original
         self.assertIsNotNone(first)
         self.assertIs(first, second)
+
+    def test_entity_cells_supports_payload_occupied_cells(self):
+        window = object.__new__(helper_mod.BattleMapWindow)
+        cells = window._entity_cells(
+            2,
+            3,
+            {"occupied_cells": [{"col": 2, "row": 3}, {"col": 3, "row": 3}]},
+        )
+        self.assertEqual(cells, [(2, 3), (3, 3)])
+
+    def test_draw_map_structures_uses_structure_root_occupied_cells_for_ships(self):
+        window = object.__new__(helper_mod.BattleMapWindow)
+        window.canvas = self._CanvasSpy()
+        window.x0 = 0.0
+        window.y0 = 0.0
+        window.cell = 10.0
+        window._map_author_selected_cell = None
+        window.map_ship_debug_render_var = types.SimpleNamespace(get=lambda: False)
+        window.app = types.SimpleNamespace(
+            _ship_instance_for_structure=lambda _sid: {},
+            _ship_blueprints=lambda: {},
+        )
+        window.map_structures = {
+            "ship_a": {
+                "id": "ship_a",
+                "kind": "ship_hull",
+                "anchor_col": 5,
+                "anchor_row": 5,
+                "occupied_cells": [{"col": 5, "row": 5}, {"col": 6, "row": 5}],
+                "payload": {"name": "Red Wake", "ship_instance_id": "ship_1", "occupied_cells": [{"col": 5, "row": 5}]},
+            }
+        }
+        captured = {}
+
+        def _capture_draw(*, sid, occupied, render, facing_deg):
+            captured["sid"] = sid
+            captured["occupied"] = list(occupied)
+            return False
+
+        window._draw_ship_deck_surface = _capture_draw
+        window._draw_ship_selected_overlays = lambda *args, **kwargs: None
+        window._draw_map_structures()
+        self.assertEqual(captured.get("sid"), "ship_a")
+        self.assertEqual(captured.get("occupied"), [(5, 5), (6, 5)])
+
+    def test_rotated_starter_deck_regions_stay_within_rotated_hull_footprint(self):
+        runtime, errors = load_repo_runtime_ship_blueprints()
+        self.assertFalse(errors, msg=errors)
+        blueprint = runtime["sloop"]
+        local_hull = [
+            (int(cell.get("col", 0) or 0), int(cell.get("row", 0) or 0))
+            for cell in (blueprint.get("footprint") if isinstance(blueprint.get("footprint"), list) else [])
+            if isinstance(cell, dict)
+        ]
+        self.assertGreater(len(local_hull), 1)
+        for facing in (0.0, 90.0, 180.0, 270.0):
+            occupied = set(
+                tracker_mod.InitiativeTracker._ship_world_cells_from_local(
+                    anchor_col=20,
+                    anchor_row=12,
+                    local_cells=local_hull,
+                    facing_deg=facing,
+                )
+            )
+            regions = tracker_mod.InitiativeTracker._transform_ship_deck_regions_runtime_metadata(
+                deck_regions=list(blueprint.get("deck_regions") if isinstance(blueprint.get("deck_regions"), list) else []),
+                anchor_col=20,
+                anchor_row=12,
+                facing_deg=facing,
+            )
+            self.assertTrue(regions)
+            for region in regions:
+                cells = {
+                    (int(cell.get("col", 0) or 0), int(cell.get("row", 0) or 0))
+                    for cell in (region.get("cells") if isinstance(region.get("cells"), list) else [])
+                    if isinstance(cell, dict)
+                }
+                self.assertTrue(cells)
+                self.assertTrue(cells.issubset(occupied))
 
     def test_deck_region_alignment_stays_consistent_across_facings(self):
         region = {"id": "mast_zone", "label": "Mast Zone", "cells": [{"col": 1, "row": 0}, {"col": 1, "row": 1}]}

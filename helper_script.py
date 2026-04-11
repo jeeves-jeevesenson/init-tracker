@@ -7936,6 +7936,9 @@ class BattleMapWindow(tk.Toplevel):
             if not isinstance(structure, dict):
                 continue
             payload = structure.get("payload") if isinstance(structure.get("payload"), dict) else {}
+            root_cells = structure.get("occupied_cells")
+            if isinstance(root_cells, list) and root_cells:
+                payload = {**payload, "occupied_cells": list(root_cells)}
             cells = self._entity_cells(
                 int(structure.get("anchor_col", 0) or 0),
                 int(structure.get("anchor_row", 0) or 0),
@@ -7945,20 +7948,39 @@ class BattleMapWindow(tk.Toplevel):
                 structure_cells[(int(col), int(row))] = str(sid)
         self._structure_id_by_cell = structure_cells
 
+    @staticmethod
+    def _normalize_entity_cells(raw_cells: Any) -> List[Tuple[int, int]]:
+        out: List[Tuple[int, int]] = []
+        seen: set[Tuple[int, int]] = set()
+        for raw in raw_cells if isinstance(raw_cells, list) else []:
+            col: Optional[int] = None
+            row: Optional[int] = None
+            if isinstance(raw, dict):
+                try:
+                    col = int(raw.get("col"))
+                    row = int(raw.get("row"))
+                except Exception:
+                    continue
+            elif isinstance(raw, (list, tuple)) and len(raw) >= 2:
+                try:
+                    col = int(raw[0])
+                    row = int(raw[1])
+                except Exception:
+                    continue
+            if col is None or row is None:
+                continue
+            cell = (int(col), int(row))
+            if cell in seen:
+                continue
+            seen.add(cell)
+            out.append(cell)
+        return out
+
     def _entity_cells(self, col: int, row: int, payload: Any) -> List[Tuple[int, int]]:
         if isinstance(payload, dict):
-            raw_cells = payload.get("occupied_cells")
-            if isinstance(raw_cells, list) and raw_cells:
-                out: List[Tuple[int, int]] = []
-                for raw in raw_cells:
-                    if not isinstance(raw, dict):
-                        continue
-                    try:
-                        out.append((int(raw.get("col")), int(raw.get("row"))))
-                    except Exception:
-                        continue
-                if out:
-                    return out
+            payload_cells = self._normalize_entity_cells(payload.get("occupied_cells"))
+            if payload_cells:
+                return payload_cells
         return [(int(col), int(row))]
 
     @staticmethod
@@ -8553,6 +8575,9 @@ class BattleMapWindow(tk.Toplevel):
             sid = str(structure.get("id") or "")
             kind = str(structure.get("kind") or "structure")
             payload = structure.get("payload") if isinstance(structure.get("payload"), dict) else {}
+            root_cells = structure.get("occupied_cells")
+            if isinstance(root_cells, list) and root_cells:
+                payload = {**payload, "occupied_cells": list(root_cells)}
             occupied = self._entity_cells(
                 int(structure.get("anchor_col", 0) or 0),
                 int(structure.get("anchor_row", 0) or 0),
@@ -8895,6 +8920,9 @@ class BattleMapWindow(tk.Toplevel):
             if not isinstance(structure, dict):
                 continue
             payload = structure.get("payload") if isinstance(structure.get("payload"), dict) else {}
+            root_cells = structure.get("occupied_cells")
+            if isinstance(root_cells, list) and root_cells:
+                payload = {**payload, "occupied_cells": list(root_cells)}
             cells = self._entity_cells(
                 int(structure.get("anchor_col", 0) or 0),
                 int(structure.get("anchor_row", 0) or 0),
@@ -9102,16 +9130,16 @@ class BattleMapWindow(tk.Toplevel):
             if (col, row) in cells:
                 removed_hazard_ids.append(str(hid))
         for sid, structure in list(self.map_structures.items()):
-            occupied = structure.get("occupied_cells") if isinstance(structure.get("occupied_cells"), list) else []
-            cells = []
-            for entry in occupied:
-                if isinstance(entry, dict):
-                    try:
-                        cells.append((int(entry.get("col")), int(entry.get("row"))))
-                    except Exception:
-                        continue
-            anchor = (int(structure.get("anchor_col", 0) or 0), int(structure.get("anchor_row", 0) or 0))
-            if (col, row) == anchor or (col, row) in cells:
+            payload = structure.get("payload") if isinstance(structure.get("payload"), dict) else {}
+            root_cells = structure.get("occupied_cells")
+            if isinstance(root_cells, list) and root_cells:
+                payload = {**payload, "occupied_cells": list(root_cells)}
+            cells = self._entity_cells(
+                int(structure.get("anchor_col", 0) or 0),
+                int(structure.get("anchor_row", 0) or 0),
+                payload,
+            )
+            if (col, row) in cells:
                 removed_structure_ids.append(str(sid))
         for fid in removed_feature_ids:
             self.app._remove_map_feature(fid, hydrate_window=False, broadcast=False)
@@ -9160,15 +9188,17 @@ class BattleMapWindow(tk.Toplevel):
         for sid, structure in self.map_structures.items():
             if not isinstance(structure, dict):
                 continue
-            anchor = (int(structure.get("anchor_col", 0) or 0), int(structure.get("anchor_row", 0) or 0))
-            occupied = structure.get("occupied_cells") if isinstance(structure.get("occupied_cells"), list) else []
-            cells = {anchor}
-            for entry in occupied:
-                if isinstance(entry, dict):
-                    try:
-                        cells.add((int(entry.get("col")), int(entry.get("row"))))
-                    except Exception:
-                        continue
+            payload = structure.get("payload") if isinstance(structure.get("payload"), dict) else {}
+            root_cells = structure.get("occupied_cells")
+            if isinstance(root_cells, list) and root_cells:
+                payload = {**payload, "occupied_cells": list(root_cells)}
+            cells = set(
+                self._entity_cells(
+                    int(structure.get("anchor_col", 0) or 0),
+                    int(structure.get("anchor_row", 0) or 0),
+                    payload,
+                )
+            )
             if (col, row) in cells:
                 target_structure_id = str(sid)
                 break
@@ -9225,23 +9255,31 @@ class BattleMapWindow(tk.Toplevel):
                     if not isinstance(item, dict) or not self._is_ship_structure_payload(item):
                         continue
                     payload = item.get("payload") if isinstance(item.get("payload"), dict) else {}
-                    occupied = self._entity_cells(int(item.get("anchor_col", 0) or 0), int(item.get("anchor_row", 0) or 0), payload)
+                    root_cells = item.get("occupied_cells")
+                    if isinstance(root_cells, list) and root_cells:
+                        payload = {**payload, "occupied_cells": list(root_cells)}
+                    occupied = self._entity_cells(
+                        int(item.get("anchor_col", 0) or 0),
+                        int(item.get("anchor_row", 0) or 0),
+                        payload,
+                    )
                     if (int(col), int(row)) in occupied:
                         return str(sid)
                 return hit
         for sid, structure in self.map_structures.items():
             if not isinstance(structure, dict):
                 continue
-            anchor = (int(structure.get("anchor_col", 0) or 0), int(structure.get("anchor_row", 0) or 0))
-            occupied = structure.get("occupied_cells") if isinstance(structure.get("occupied_cells"), list) else []
-            cells = {anchor}
-            for entry in occupied:
-                if not isinstance(entry, dict):
-                    continue
-                try:
-                    cells.add((int(entry.get("col")), int(entry.get("row"))))
-                except Exception:
-                    continue
+            payload = structure.get("payload") if isinstance(structure.get("payload"), dict) else {}
+            root_cells = structure.get("occupied_cells")
+            if isinstance(root_cells, list) and root_cells:
+                payload = {**payload, "occupied_cells": list(root_cells)}
+            cells = set(
+                self._entity_cells(
+                    int(structure.get("anchor_col", 0) or 0),
+                    int(structure.get("anchor_row", 0) or 0),
+                    payload,
+                )
+            )
             if (col, row) in cells:
                 return str(sid)
         return None
