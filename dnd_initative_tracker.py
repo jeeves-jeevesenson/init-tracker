@@ -9047,17 +9047,26 @@ class InitiativeTracker(base.InitiativeTracker):
         normalized_payload = dict(normalized.get("payload") if isinstance(normalized.get("payload"), dict) else (payload or {}))
         return normalized_kind, normalized_payload
 
-    def _lan_tactical_entity_view(self, entry: Dict[str, Any]) -> Dict[str, Any]:
+    def _lan_tactical_entity_view(self, entry: Dict[str, Any], *, category: str) -> Dict[str, Any]:
         item = dict(entry if isinstance(entry, dict) else {})
         payload = dict(item.get("payload") if isinstance(item.get("payload"), dict) else {})
-        item["payload"] = payload
-        item["preset_id"] = str(payload.get("tactical_preset_id") or "")
-        item["display_name"] = str(payload.get("display_name") or payload.get("name") or item.get("kind") or "")
-        if payload.get("stack_state") is not None:
-            item["stack_state"] = str(payload.get("stack_state"))
-        if payload.get("count") is not None:
+        normalized = normalize_tactical_payload(
+            category=category,
+            kind=item.get("kind"),
+            payload=payload,
+            preset_id=payload.get("tactical_preset_id"),
+            count=payload.get("count"),
+        )
+        normalized_payload = dict(normalized.get("payload") if isinstance(normalized.get("payload"), dict) else payload)
+        item["kind"] = str(normalized.get("kind") or item.get("kind") or category)
+        item["payload"] = normalized_payload
+        item["preset_id"] = str(normalized_payload.get("tactical_preset_id") or "")
+        item["display_name"] = str(normalized_payload.get("display_name") or normalized_payload.get("name") or item.get("kind") or "")
+        if normalized_payload.get("stack_state") is not None:
+            item["stack_state"] = str(normalized_payload.get("stack_state"))
+        if normalized_payload.get("count") is not None:
             try:
-                item["count"] = int(payload.get("count"))
+                item["count"] = int(normalized_payload.get("count"))
             except Exception:
                 pass
         return item
@@ -13239,12 +13248,12 @@ class InitiativeTracker(base.InitiativeTracker):
             "aoes": aoes,
             "map_state": canonical_payload,
             "features": [
-                self._lan_tactical_entity_view(item)
+                self._lan_tactical_entity_view(item, category="feature")
                 for item in (canonical_payload.get("features") if isinstance(canonical_payload.get("features"), list) else [])
                 if isinstance(item, dict)
             ],
             "hazards": [
-                self._lan_tactical_entity_view(item)
+                self._lan_tactical_entity_view(item, category="hazard")
                 for item in (canonical_payload.get("hazards") if isinstance(canonical_payload.get("hazards"), list) else [])
                 if isinstance(item, dict)
             ],
@@ -13263,7 +13272,7 @@ class InitiativeTracker(base.InitiativeTracker):
             sid = str(structure_entry.get("id") or "").strip()
             if not sid:
                 continue
-            structure_entry = self._lan_tactical_entity_view(structure_entry)
+            structure_entry = self._lan_tactical_entity_view(structure_entry, category="structure")
             semantics = self._structure_contact_semantics(sid)
             if bool(semantics.get("ok")):
                 structure_entry["contact_semantics"] = {
