@@ -132,6 +132,32 @@ def _active_rotation_target(active_cid: Optional[int], drag_cid: Optional[int]) 
     return drag if drag == active else None
 
 
+MAP_INTERACTION_MODE_SELECT = "select"
+MAP_INTERACTION_MODE_PLACE = "place"
+MAP_INTERACTION_MODE_ERASE = "erase"
+MAP_INTERACTION_MODE_MEASURE = "measure"
+MAP_INTERACTION_MODE_SHIP = "ship"
+MAP_INTERACTION_MODES: Tuple[str, ...] = (
+    MAP_INTERACTION_MODE_SELECT,
+    MAP_INTERACTION_MODE_PLACE,
+    MAP_INTERACTION_MODE_ERASE,
+    MAP_INTERACTION_MODE_MEASURE,
+    MAP_INTERACTION_MODE_SHIP,
+)
+MAP_MODE_TO_AUTHOR_TOOL: Dict[str, str] = {
+    MAP_INTERACTION_MODE_SELECT: "select",
+    MAP_INTERACTION_MODE_PLACE: "stamp",
+    MAP_INTERACTION_MODE_ERASE: "erase",
+    MAP_INTERACTION_MODE_MEASURE: "select",
+    MAP_INTERACTION_MODE_SHIP: "select",
+}
+
+
+def _normalize_map_interaction_mode(value: Any) -> str:
+    mode = str(value or "").strip().lower()
+    return mode if mode in MAP_INTERACTION_MODES else MAP_INTERACTION_MODE_SELECT
+
+
 def _seed_user_players_dir() -> None:
     _seed_user_items_dir()
     user_dir = _app_data_dir() / "players"
