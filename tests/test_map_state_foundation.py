@@ -393,6 +393,101 @@ class MapStateFoundationTests(unittest.TestCase):
         cost = query.movement_cost_for_step(2, 2, 2, 3, 5)
         self.assertLess(cost, 15)
 
+    def test_boarding_traversal_helpers_resolve_token_ship_relation_and_landing_candidates(self):
+        state = MapState.from_dict(
+            {
+                "grid": {"cols": 20, "rows": 20, "feet_per_square": 5},
+                "token_positions": [{"cid": 101, "col": 3, "row": 2}],
+                "structures": [
+                    {
+                        "id": "ship_a",
+                        "kind": "ship_hull",
+                        "anchor_col": 2,
+                        "anchor_row": 2,
+                        "occupied_cells": [{"col": 2, "row": 2}, {"col": 3, "row": 2}],
+                        "payload": {
+                            "ship_instance_id": "ship_1",
+                            "boardable": True,
+                            "boarding_points": [{"id": "p_link", "col": 3, "row": 2}],
+                        },
+                    },
+                    {
+                        "id": "ship_b",
+                        "kind": "ship_hull",
+                        "anchor_col": 4,
+                        "anchor_row": 2,
+                        "occupied_cells": [{"col": 4, "row": 2}, {"col": 4, "row": 3}],
+                        "payload": {
+                            "ship_instance_id": "ship_2",
+                            "allow_boarding": True,
+                            "boarding_points": [{"id": "p_link", "col": 4, "row": 2}],
+                        },
+                    },
+                ],
+                "presentation": {
+                    "boarding_links": [
+                        {
+                            "id": "boarding_link_1",
+                            "source_id": "ship_a",
+                            "target_id": "ship_b",
+                            "status": "active",
+                            "source_point": {"id": "p_link", "col": 3, "row": 2},
+                            "target_point": {"id": "p_link", "col": 4, "row": 2},
+                        }
+                    ]
+                },
+            }
+        )
+        query = MapQueryAPI(state)
+        self.assertEqual(query.ship_structure_id_for_token(101), "ship_a")
+        self.assertEqual(query.traversable_boarding_targets_for_structure("ship_a"), ["ship_b"])
+        pairs = query.boarding_point_pairs_for_relation("ship_a", "ship_b")
+        self.assertTrue(pairs)
+        self.assertEqual(pairs[0]["source_cell"], {"col": 3, "row": 2})
+        self.assertEqual(pairs[0]["target_cell"], {"col": 4, "row": 2})
+        landings = query.candidate_boarding_landing_cells("ship_a", "ship_b")
+        self.assertTrue(landings)
+        self.assertEqual((landings[0]["col"], landings[0]["row"]), (4, 2))
+
+    def test_boarding_traversal_helpers_require_traversable_relation(self):
+        state = MapState.from_dict(
+            {
+                "grid": {"cols": 12, "rows": 12, "feet_per_square": 5},
+                "structures": [
+                    {
+                        "id": "ship_a",
+                        "kind": "ship_hull",
+                        "anchor_col": 2,
+                        "anchor_row": 2,
+                        "occupied_cells": [{"col": 2, "row": 2}, {"col": 3, "row": 2}],
+                        "payload": {"ship_instance_id": "ship_1", "boardable": True},
+                    },
+                    {
+                        "id": "ship_b",
+                        "kind": "ship_hull",
+                        "anchor_col": 4,
+                        "anchor_row": 2,
+                        "occupied_cells": [{"col": 4, "row": 2}],
+                        "payload": {"ship_instance_id": "ship_2", "allow_boarding": True},
+                    },
+                ],
+                "presentation": {
+                    "boarding_links": [
+                        {
+                            "id": "boarding_link_1",
+                            "source_id": "ship_a",
+                            "target_id": "ship_b",
+                            "status": "withdrawn",
+                        }
+                    ]
+                },
+            }
+        )
+        query = MapQueryAPI(state)
+        self.assertEqual(query.traversable_boarding_targets_for_structure("ship_a"), [])
+        self.assertEqual(query.boarding_point_pairs_for_relation("ship_a", "ship_b"), [])
+        self.assertEqual(query.candidate_boarding_landing_cells("ship_a", "ship_b"), [])
+
 
 if __name__ == "__main__":
     unittest.main()

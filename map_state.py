@@ -1867,6 +1867,275 @@ class MapQueryAPI:
                 pending.append(next_id)
         return sorted(item for item in visited if item != sid)
 
+    def structure_id_for_cell(self, col: int, row: int, *, ship_only: bool = False) -> Optional[str]:
+        matches = self.structures_at(int(col), int(row))
+        if not matches:
+            return None
+        if ship_only:
+            ship_matches = [item for item in matches if self._is_ship_structure(item)]
+            if not ship_matches:
+                return None
+            matches = ship_matches
+        ordered = sorted(matches, key=lambda item: str(item.structure_id))
+        return str(ordered[0].structure_id) if ordered else None
+
+    def ship_structure_id_for_cell(self, col: int, row: int) -> Optional[str]:
+        return self.structure_id_for_cell(int(col), int(row), ship_only=True)
+
+    def ship_structure_id_for_token(self, cid: int) -> Optional[str]:
+        pos = self.state.token_positions.get(int(cid))
+        if not (isinstance(pos, tuple) and len(pos) == 2):
+            return None
+        return self.ship_structure_id_for_cell(int(pos[0]), int(pos[1]))
+
+    def traversable_boarding_relations_for_structure(self, structure_id: Any) -> List[Dict[str, Any]]:
+        sid = str(structure_id or "").strip()
+        if not sid:
+            return []
+        relations: Dict[str, Dict[str, Any]] = {}
+        for link in self.traversable_boarding_links_for_structure(sid):
+            source_id = str(link.get("source_id") or "").strip()
+            target_id = str(link.get("target_id") or "").strip()
+            other_id = target_id if source_id == sid else source_id
+            if not other_id:
+                continue
+            relation = self.ship_contact_relation(sid, other_id)
+            item = relations.setdefault(
+                other_id,
+                {
+                    "source_id": sid,
+                    "target_id": other_id,
+                    "target_name": other_id,
+                    "contact": bool((relation or {}).get("contact")),
+                    "boarding_capable": bool((relation or {}).get("boarding_capable")),
+                    "boarding_points": list(
+                        relation.get("boarding_points")
+                        if isinstance(relation, dict) and isinstance(relation.get("boarding_points"), list)
+                        else []
+                    ),
+                    "source_boarding_points": list(
+                        relation.get("source_boarding_points")
+                        if isinstance(relation, dict) and isinstance(relation.get("source_boarding_points"), list)
+                        else []
+                    ),
+                    "target_boarding_points": list(
+                        relation.get("target_boarding_points")
+                        if isinstance(relation, dict) and isinstance(relation.get("target_boarding_points"), list)
+                        else []
+                    ),
+                    "traversable": True,
+                    "boarding_links": [],
+                    "boarding_link_ids": [],
+                },
+            )
+            item["boarding_links"].append(dict(link))
+            lid = str(link.get("id") or "").strip()
+            if lid:
+                item["boarding_link_ids"].append(lid)
+        return [relations[key] for key in sorted(relations.keys())]
+
+    def traversable_boarding_relation(self, source_id: Any, target_id: Any) -> Optional[Dict[str, Any]]:
+        sid = str(source_id or "").strip()
+        tid = str(target_id or "").strip()
+        if not sid or not tid:
+            return None
+        for relation in self.traversable_boarding_relations_for_structure(sid):
+            if str(relation.get("target_id") or "").strip() == tid:
+                return dict(relation)
+        return None
+
+    def traversable_boarding_targets_for_structure(self, structure_id: Any) -> List[str]:
+        return [
+            str(item.get("target_id") or "")
+            for item in self.traversable_boarding_relations_for_structure(structure_id)
+            if str(item.get("target_id") or "").strip()
+        ]
+
+    def boarding_point_pairs_for_relation(
+        self,
+        source_id: Any,
+        target_id: Any,
+        *,
+        link_id: Optional[str] = None,
+        traversable_only: bool = True,
+    ) -> List[Dict[str, Any]]:
+        sid = str(source_id or "").strip()
+        tid = str(target_id or "").strip()
+        if not sid or not tid:
+            return []
+        relation = self.ship_contact_relation(sid, tid)
+        if not isinstance(relation, dict):
+            return []
+        source_points = list(relation.get("source_boarding_points") if isinstance(relation.get("source_boarding_points"), list) else [])
+        target_points = list(relation.get("target_boarding_points") if isinstance(relation.get("target_boarding_points"), list) else [])
+        shared_points = list(relation.get("boarding_points") if isinstance(relation.get("boarding_points"), list) else [])
+        relation_links = self.boarding_links_for_structure(sid)
+        oriented_links: List[Dict[str, Any]] = []
+        for link in relation_links:
+            if traversable_only and not bool(link.get("traversable")):
+                continue
+            ls = str(link.get("source_id") or "").strip()
+            lt = str(link.get("target_id") or "").strip()
+            if {ls, lt} != {sid, tid}:
+                continue
+            if link_id is not None and str(link.get("id") or "").strip() != str(link_id).strip():
+                continue
+            oriented_links.append(dict(link))
+        pairs: List[Dict[str, Any]] = []
+        seen: set[Tuple[int, int, int, int]] = set()
+
+        def _point_cell(point: Any) -> Optional[Tuple[int, int]]:
+            if not isinstance(point, dict):
+                return None
+            try:
+                return (int(point.get("col", 0)), int(point.get("row", 0)))
+            except Exception:
+                return None
+
+        def _append_pair(source_point: Any, target_point: Any, kind: str, link: Optional[Dict[str, Any]] = None) -> None:
+            sc = _point_cell(source_point)
+            tc = _point_cell(target_point)
+            if sc is None or tc is None:
+                return
+            key = (int(sc[0]), int(sc[1]), int(tc[0]), int(tc[1]))
+            if key in seen:
+                return
+            seen.add(key)
+            pairs.append(
+                {
+                    "kind": str(kind),
+                    "source_point": dict(source_point if isinstance(source_point, dict) else {}),
+                    "target_point": dict(target_point if isinstance(target_point, dict) else {}),
+                    "source_cell": {"col": int(sc[0]), "row": int(sc[1])},
+                    "target_cell": {"col": int(tc[0]), "row": int(tc[1])},
+                    "link_id": str((link or {}).get("id") or "").strip() or None,
+                }
+            )
+
+        for link in oriented_links:
+            ls = str(link.get("source_id") or "").strip()
+            if ls == sid:
+                source_point = link.get("source_point")
+                target_point = link.get("target_point")
+            else:
+                source_point = link.get("target_point")
+                target_point = link.get("source_point")
+            if isinstance(source_point, dict) and isinstance(target_point, dict):
+                _append_pair(source_point, target_point, "link_points", link=link)
+            for shared in (link.get("shared_points") if isinstance(link.get("shared_points"), list) else []):
+                if isinstance(shared, dict):
+                    _append_pair(shared, shared, "link_shared_point", link=link)
+
+        target_by_id = {
+            str(point.get("id") or "").strip(): point
+            for point in target_points
+            if isinstance(point, dict) and str(point.get("id") or "").strip()
+        }
+        for source_point in source_points:
+            if not isinstance(source_point, dict):
+                continue
+            pid = str(source_point.get("id") or "").strip()
+            if pid and pid in target_by_id:
+                _append_pair(source_point, target_by_id[pid], "matching_point_id")
+
+        for shared in shared_points:
+            if isinstance(shared, dict):
+                _append_pair(shared, shared, "shared_relation_point")
+
+        if not pairs:
+            for source_point in source_points:
+                if not isinstance(source_point, dict):
+                    continue
+                for target_point in target_points:
+                    if not isinstance(target_point, dict):
+                        continue
+                    _append_pair(source_point, target_point, "source_to_target_fallback")
+                    if len(pairs) >= 64:
+                        break
+                if len(pairs) >= 64:
+                    break
+        return pairs
+
+    def candidate_boarding_landing_cells(
+        self,
+        source_id: Any,
+        target_id: Any,
+        *,
+        link_id: Optional[str] = None,
+        traversable_only: bool = True,
+    ) -> List[Dict[str, Any]]:
+        sid = str(source_id or "").strip()
+        tid = str(target_id or "").strip()
+        if not sid or not tid:
+            return []
+        relation = self.ship_contact_relation(sid, tid)
+        if not isinstance(relation, dict):
+            return []
+        target_cells = self.structure_cells(tid)
+        if not target_cells:
+            return []
+        pairs = self.boarding_point_pairs_for_relation(
+            sid,
+            tid,
+            link_id=link_id,
+            traversable_only=traversable_only,
+        )
+        base_points: List[Dict[str, Any]] = []
+        for pair in pairs:
+            point = pair.get("target_point")
+            if isinstance(point, dict):
+                base_points.append(dict(point))
+        if not base_points:
+            for point in (relation.get("target_boarding_points") if isinstance(relation.get("target_boarding_points"), list) else []):
+                if isinstance(point, dict):
+                    base_points.append(dict(point))
+        if not base_points:
+            for point in (relation.get("boarding_points") if isinstance(relation.get("boarding_points"), list) else []):
+                if isinstance(point, dict):
+                    base_points.append(dict(point))
+        offsets = [
+            (0, 0),
+            (1, 0),
+            (-1, 0),
+            (0, 1),
+            (0, -1),
+            (1, 1),
+            (1, -1),
+            (-1, 1),
+            (-1, -1),
+        ]
+        cols = int(self.state.grid.cols)
+        rows = int(self.state.grid.rows)
+        landing_cells: List[Dict[str, Any]] = []
+        seen: set[Tuple[int, int]] = set()
+        for priority, point in enumerate(base_points):
+            try:
+                base_col = int(point.get("col", 0))
+                base_row = int(point.get("row", 0))
+            except Exception:
+                continue
+            for offset_rank, (dc, dr) in enumerate(offsets):
+                col = int(base_col + dc)
+                row = int(base_row + dr)
+                key = (col, row)
+                if key in seen:
+                    continue
+                if col < 0 or row < 0 or col >= cols or row >= rows:
+                    continue
+                if key not in target_cells:
+                    continue
+                seen.add(key)
+                landing_cells.append(
+                    {
+                        "col": int(col),
+                        "row": int(row),
+                        "priority": int(priority),
+                        "offset_rank": int(offset_rank),
+                        "base_point": dict(point),
+                    }
+                )
+        return landing_cells
+
 
 def build_map_delta(prev: MapState, curr: MapState) -> Dict[str, Any]:
     p = prev.normalized()

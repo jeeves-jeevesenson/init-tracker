@@ -936,6 +936,87 @@ class SessionSaveLoadTests(unittest.TestCase):
             post_semantics = restored._structure_contact_semantics(src)
             self.assertEqual(post_semantics.get("active_boarding_structure_ids"), [])
 
+    def test_boarding_traversal_transaction_moves_token_and_persists_history(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            app = self._make_app(Path(tmpdir) / "battle.log")
+            app._map_state = tracker_mod.MapState.from_dict({"grid": {"cols": 30, "rows": 30, "feet_per_square": 5}})
+            app._lan_grid_cols = 30
+            app._lan_grid_rows = 30
+            src = app._instantiate_ship_blueprint("rowboat_launch", anchor_col=10, anchor_row=10, facing_deg=90)
+            dst = app._instantiate_ship_blueprint("rowboat_launch", anchor_col=11, anchor_row=10, facing_deg=0)
+            self.assertIsNotNone(src)
+            self.assertIsNotNone(dst)
+            created = app._create_boarding_link(src, dst, initiator="dm")
+            self.assertTrue(created.get("ok"))
+            app.combatants = {
+                101: type(
+                    "C",
+                    (),
+                    {
+                        "cid": 101,
+                        "name": "Boarder",
+                        "hp": 12,
+                        "move_total": 30,
+                        "move_remaining": 30,
+                    },
+                )()
+            }
+            state = app._capture_canonical_map_state(prefer_window=False).normalized()
+            query = tracker_mod.MapQueryAPI(state)
+            src_ship = query.ship_structure_id_for_cell(10, 10)
+            self.assertEqual(str(src_ship), str(src))
+            app._mutate_canonical_map_state(
+                lambda s: setattr(s, "token_positions", {**dict(s.token_positions or {}), 101: (10, 10)}),
+                hydrate_window=False,
+                broadcast=False,
+            )
+            result = app._execute_boarding_traversal(101, dst, enforce_movement=True)
+            self.assertTrue(result.get("ok"), msg=result)
+            post = app._capture_canonical_map_state(prefer_window=False).normalized()
+            self.assertEqual(post.token_positions.get(101), (11, 10))
+            history = (post.presentation or {}).get("boarding_traversal_history") or {}
+            self.assertIn("101", history)
+            snap_path = Path(tmpdir) / "boarding_traversal_session.json"
+            app._save_session_to_path(snap_path, label="boarding-traversal")
+            restored = self._make_app(Path(tmpdir) / "battle_restored.log")
+            restored._load_session_from_path(snap_path)
+            restored_state = restored._capture_canonical_map_state(prefer_window=False).normalized()
+            self.assertEqual(restored_state.token_positions.get(101), (11, 10))
+            restored_history = (restored_state.presentation or {}).get("boarding_traversal_history") or {}
+            self.assertIn("101", restored_history)
+
+    def test_boarding_traversal_fails_without_traversable_relation(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            app = self._make_app(Path(tmpdir) / "battle.log")
+            app._map_state = tracker_mod.MapState.from_dict({"grid": {"cols": 20, "rows": 20, "feet_per_square": 5}})
+            app._lan_grid_cols = 20
+            app._lan_grid_rows = 20
+            src = app._instantiate_ship_blueprint("rowboat_launch", anchor_col=8, anchor_row=8, facing_deg=90)
+            dst = app._instantiate_ship_blueprint("rowboat_launch", anchor_col=9, anchor_row=8, facing_deg=0)
+            self.assertIsNotNone(src)
+            self.assertIsNotNone(dst)
+            app.combatants = {
+                202: type(
+                    "C",
+                    (),
+                    {
+                        "cid": 202,
+                        "name": "Deckhand",
+                        "hp": 10,
+                        "move_total": 30,
+                        "move_remaining": 30,
+                    },
+                )()
+            }
+            app._mutate_canonical_map_state(
+                lambda s: setattr(s, "token_positions", {**dict(s.token_positions or {}), 202: (8, 8)}),
+                hydrate_window=False,
+                broadcast=False,
+            )
+            result = app._execute_boarding_traversal(202, dst, enforce_movement=True)
+            self.assertFalse(result.get("ok"))
+            self.assertEqual(result.get("reason"), "no_traversable_boarding_relation")
+
     def test_ship_blueprints_coexist_with_structure_templates(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             app = self._make_app(Path(tmpdir) / "battle.log")

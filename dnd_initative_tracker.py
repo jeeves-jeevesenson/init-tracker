@@ -9062,6 +9062,13 @@ class InitiativeTracker(base.InitiativeTracker):
         ]
         traversable_boarding_ids = [str(item.get("target_id") or "") for item in ship_relations if bool(item.get("boarding_traversable"))]
         boarding_links = query.boarding_links_for_structure(sid)
+        traversable_relations = query.traversable_boarding_relations_for_structure(sid)
+        for item in traversable_relations:
+            target_id = str(item.get("target_id") or "").strip()
+            if not target_id:
+                continue
+            item["target_name"] = _structure_display_name(target_id)
+            item["landing_candidates"] = query.candidate_boarding_landing_cells(sid, target_id, traversable_only=True)
         return {
             "ok": True,
             "structure_id": sid,
@@ -9080,7 +9087,298 @@ class InitiativeTracker(base.InitiativeTracker):
             "traversable_boarding_structure_ids": traversable_boarding_ids,
             "active_boarding_structures": [{"id": target_id, "name": _structure_display_name(target_id)} for target_id in active_boarding_ids],
             "traversable_boarding_structures": [{"id": target_id, "name": _structure_display_name(target_id)} for target_id in traversable_boarding_ids],
+            "traversable_boarding_relations": traversable_relations,
             "boarding_links": boarding_links,
+        }
+
+    def _structure_display_name(self, structure_id: Any, *, state: Optional[MapState] = None) -> str:
+        sid = str(structure_id or "").strip()
+        if not sid:
+            return ""
+        source_state = state if isinstance(state, MapState) else self._capture_canonical_map_state(prefer_window=False)
+        structure = (source_state.structures or {}).get(sid)
+        if isinstance(structure, MapStructure):
+            payload = structure.payload if isinstance(structure.payload, dict) else {}
+            return str(payload.get("name") or structure.kind or sid)
+        return sid
+
+    def _creature_boarding_context(
+        self,
+        cid: Any,
+        *,
+        state: Optional[MapState] = None,
+        query: Optional[MapQueryAPI] = None,
+    ) -> Dict[str, Any]:
+        try:
+            target_cid = int(cid)
+        except Exception:
+            return {"ok": False, "reason": "invalid_cid"}
+        source_state = state if isinstance(state, MapState) else self._capture_canonical_map_state(prefer_window=True)
+        map_query = query if isinstance(query, MapQueryAPI) else MapQueryAPI(source_state)
+        pos = map_query.state.token_positions.get(target_cid)
+        if not (isinstance(pos, tuple) and len(pos) == 2):
+            return {"ok": False, "cid": int(target_cid), "reason": "missing_token_position"}
+        source_structure_id = map_query.ship_structure_id_for_token(int(target_cid))
+        presentation = map_query.state.presentation if isinstance(map_query.state.presentation, dict) else {}
+        traversal_history = (
+            presentation.get("boarding_traversal_history")
+            if isinstance(presentation.get("boarding_traversal_history"), dict)
+            else {}
+        )
+        last_crossing = (
+            dict(traversal_history.get(str(target_cid)))
+            if isinstance(traversal_history, dict) and isinstance(traversal_history.get(str(target_cid)), dict)
+            else None
+        )
+        if not source_structure_id:
+            return {
+                "ok": True,
+                "cid": int(target_cid),
+                "on_ship": False,
+                "source_structure_id": None,
+                "source_structure_name": None,
+                "reachable_target_structure_ids": [],
+                "reachable_target_structures": [],
+                "traversable_link_count": 0,
+                "traversable_links": [],
+                "relations": [],
+                "last_crossing": last_crossing,
+            }
+        relations = map_query.traversable_boarding_relations_for_structure(source_structure_id)
+        links = map_query.traversable_boarding_links_for_structure(source_structure_id)
+        reachable_ids: List[str] = []
+        reachable_structures: List[Dict[str, str]] = []
+        relation_payloads: List[Dict[str, Any]] = []
+        for relation in relations:
+            target_id = str(relation.get("target_id") or "").strip()
+            if not target_id:
+                continue
+            reachable_ids.append(target_id)
+            reachable_structures.append({"id": target_id, "name": self._structure_display_name(target_id, state=map_query.state)})
+            relation_payloads.append(
+                {
+                    **dict(relation),
+                    "target_name": self._structure_display_name(target_id, state=map_query.state),
+                    "landing_candidates": map_query.candidate_boarding_landing_cells(
+                        source_structure_id,
+                        target_id,
+                        traversable_only=True,
+                    ),
+                }
+            )
+        return {
+            "ok": True,
+            "cid": int(target_cid),
+            "on_ship": True,
+            "source_structure_id": str(source_structure_id),
+            "source_structure_name": self._structure_display_name(source_structure_id, state=map_query.state),
+            "reachable_target_structure_ids": sorted(set(reachable_ids)),
+            "reachable_target_structures": sorted(reachable_structures, key=lambda item: str(item.get("id") or "")),
+            "traversable_link_count": len(links),
+            "traversable_links": [dict(item) for item in links],
+            "relations": relation_payloads,
+            "last_crossing": last_crossing,
+        }
+
+    def _execute_boarding_traversal(
+        self,
+        cid: Any,
+        target_structure_id: Any,
+        *,
+        link_id: Optional[str] = None,
+        enforce_movement: bool = True,
+        actor: str = "dm",
+    ) -> Dict[str, Any]:
+        try:
+            target_cid = int(cid)
+        except Exception:
+            return {"ok": False, "reason": "invalid_cid", "message": "Select a valid creature first."}
+        target_id = str(target_structure_id or "").strip()
+        if not target_id:
+            return {"ok": False, "reason": "missing_target_structure", "message": "Select a boarding destination ship."}
+        source_state = self._capture_canonical_map_state(prefer_window=True).normalized()
+        query = MapQueryAPI(source_state)
+        origin = source_state.token_positions.get(int(target_cid))
+        if not (isinstance(origin, tuple) and len(origin) == 2):
+            return {"ok": False, "reason": "missing_token_position", "message": "That creature is not currently on the tactical map."}
+        source_structure_id = query.ship_structure_id_for_token(int(target_cid))
+        if not source_structure_id:
+            return {"ok": False, "reason": "creature_not_on_ship", "message": "Selected creature is not standing on a ship structure."}
+        relation = query.traversable_boarding_relation(source_structure_id, target_id)
+        if not isinstance(relation, dict):
+            context = self._creature_boarding_context(int(target_cid), state=source_state, query=query)
+            reachable = context.get("reachable_target_structures") if isinstance(context.get("reachable_target_structures"), list) else []
+            reachable_names = ", ".join(str(item.get("name") or item.get("id") or "") for item in reachable[:4] if isinstance(item, dict))
+            suffix = f" Reachable: {reachable_names}." if reachable_names else ""
+            return {
+                "ok": False,
+                "reason": "no_traversable_boarding_relation",
+                "message": f"No active traversable boarding link from {self._structure_display_name(source_structure_id, state=source_state)} to {self._structure_display_name(target_id, state=source_state)}.{suffix}",
+                "source_structure_id": str(source_structure_id),
+                "target_structure_id": str(target_id),
+            }
+        relation_links = relation.get("boarding_links") if isinstance(relation.get("boarding_links"), list) else []
+        selected_link: Optional[Dict[str, Any]] = None
+        normalized_link_id = str(link_id or "").strip()
+        if normalized_link_id:
+            for item in relation_links:
+                if str(item.get("id") or "").strip() == normalized_link_id:
+                    selected_link = dict(item)
+                    break
+            if not isinstance(selected_link, dict):
+                return {
+                    "ok": False,
+                    "reason": "link_not_found_for_relation",
+                    "message": "Selected boarding link is not available for that ship relation.",
+                }
+        else:
+            ordered = sorted(
+                (dict(item) for item in relation_links if isinstance(item, dict)),
+                key=lambda item: str(item.get("id") or ""),
+            )
+            if ordered:
+                selected_link = ordered[0]
+        selected_link_id = str((selected_link or {}).get("id") or "").strip() or None
+        candidate_cells = query.candidate_boarding_landing_cells(
+            source_structure_id,
+            target_id,
+            link_id=selected_link_id,
+            traversable_only=True,
+        )
+        if not candidate_cells:
+            return {
+                "ok": False,
+                "reason": "no_landing_candidates",
+                "message": "No valid target-side boarding points are currently available for this traversal.",
+                "source_structure_id": str(source_structure_id),
+                "target_structure_id": str(target_id),
+            }
+        occupied = {
+            (int(pos[0]), int(pos[1])): int(other_cid)
+            for other_cid, pos in source_state.token_positions.items()
+            if int(other_cid) != int(target_cid) and isinstance(pos, tuple) and len(pos) == 2
+        }
+        blocked_count = 0
+        occupied_count = 0
+        destination: Optional[Tuple[int, int]] = None
+        for entry in candidate_cells:
+            try:
+                col = int(entry.get("col", 0))
+                row = int(entry.get("row", 0))
+            except Exception:
+                continue
+            if query.blocks_movement(col, row):
+                blocked_count += 1
+                continue
+            if (col, row) in occupied:
+                occupied_count += 1
+                continue
+            destination = (int(col), int(row))
+            break
+        if destination is None:
+            return {
+                "ok": False,
+                "reason": "landing_cells_blocked_or_occupied",
+                "message": f"Traversal blocked: {blocked_count} blocked and {occupied_count} occupied boarding destination cells.",
+                "source_structure_id": str(source_structure_id),
+                "target_structure_id": str(target_id),
+                "candidate_count": len(candidate_cells),
+                "blocked_count": int(blocked_count),
+                "occupied_count": int(occupied_count),
+            }
+        movement_cost = max(1, int(round(float(source_state.grid.feet_per_square or 5.0))))
+        combatant = self.combatants.get(int(target_cid))
+        if enforce_movement and combatant is not None:
+            remaining = int(getattr(combatant, "move_remaining", 0) or 0)
+            if remaining < movement_cost:
+                return {
+                    "ok": False,
+                    "reason": "insufficient_movement",
+                    "message": f"{combatant.name} needs {movement_cost} ft to board but only has {remaining} ft remaining.",
+                    "required_movement_ft": int(movement_cost),
+                    "remaining_movement_ft": int(remaining),
+                }
+
+        def _mutate(state: MapState) -> None:
+            token_positions = dict(state.token_positions or {})
+            token_positions[int(target_cid)] = (int(destination[0]), int(destination[1]))
+            state.token_positions = token_positions
+            presentation = dict(state.presentation or {})
+            history = dict(
+                presentation.get("boarding_traversal_history")
+                if isinstance(presentation.get("boarding_traversal_history"), dict)
+                else {}
+            )
+            history[str(int(target_cid))] = {
+                "source_structure_id": str(source_structure_id),
+                "source_structure_name": self._structure_display_name(source_structure_id, state=state),
+                "target_structure_id": str(target_id),
+                "target_structure_name": self._structure_display_name(target_id, state=state),
+                "link_id": selected_link_id,
+                "origin": {"col": int(origin[0]), "row": int(origin[1])},
+                "destination": {"col": int(destination[0]), "row": int(destination[1])},
+                "round_num": int(getattr(self, "round_num", 0) or 0),
+                "turn_cid": int(getattr(self, "current_cid", 0) or 0) if getattr(self, "current_cid", None) is not None else None,
+                "actor": str(actor or "dm"),
+            }
+            presentation["boarding_traversal_history"] = history
+            state.presentation = presentation
+
+        self._mutate_canonical_map_state(_mutate, hydrate_window=True, broadcast=True)
+        if enforce_movement and combatant is not None:
+            try:
+                combatant.move_remaining = max(0, int(getattr(combatant, "move_remaining", 0) or 0) - int(movement_cost))
+            except Exception:
+                pass
+        try:
+            self._apply_environmental_move_damage(
+                combatant,
+                (int(origin[0]), int(origin[1])),
+                (int(destination[0]), int(destination[1])),
+                int(movement_cost),
+            )
+        except Exception:
+            pass
+        try:
+            self._lan_sync_fixed_to_caster_aoes(int(target_cid))
+            self._lan_handle_aoe_enter_triggers_for_moved_unit(
+                int(target_cid),
+                (int(origin[0]), int(origin[1])),
+                (int(destination[0]), int(destination[1])),
+            )
+            self._enforce_johns_echo_tether(int(target_cid))
+        except Exception:
+            pass
+        try:
+            self._sneak_handle_hidden_movement(
+                int(target_cid),
+                (int(origin[0]), int(origin[1])),
+                (int(destination[0]), int(destination[1])),
+            )
+        except Exception:
+            pass
+        if combatant is not None:
+            try:
+                self._log(
+                    f"{combatant.name} boards {self._structure_display_name(target_id)} via {selected_link_id or 'boarding link'} "
+                    f"({movement_cost} ft).",
+                    cid=int(target_cid),
+                )
+            except Exception:
+                pass
+        try:
+            self._rebuild_table(scroll_to_current=True)
+        except Exception:
+            pass
+        return {
+            "ok": True,
+            "cid": int(target_cid),
+            "source_structure_id": str(source_structure_id),
+            "target_structure_id": str(target_id),
+            "link_id": selected_link_id,
+            "origin": {"col": int(origin[0]), "row": int(origin[1])},
+            "destination": {"col": int(destination[0]), "row": int(destination[1])},
+            "movement_cost_ft": int(movement_cost),
         }
 
     def _normalize_ship_blueprint_payload(
@@ -13907,6 +14205,7 @@ class InitiativeTracker(base.InitiativeTracker):
         )
         positions = dict(legacy_map_state.get("positions") if isinstance(legacy_map_state.get("positions"), dict) else positions)
         canonical_payload = canonical_map_state.to_dict()
+        map_query = MapQueryAPI(canonical_map_state)
 
         def _log_invalid_aoe_value(aid_value: int, name_value: str, kind_value: str, key: str, raw_value: Any) -> None:
             self._oplog(
@@ -14135,6 +14434,7 @@ class InitiativeTracker(base.InitiativeTracker):
         for c in sorted(self.combatants.values(), key=lambda x: int(x.cid)):
             role = self._name_role_memory.get(str(c.name), "enemy")
             pos = positions.get(c.cid, (max(0, cols // 2), max(0, rows // 2)))
+            boarding_context = self._creature_boarding_context(int(c.cid), state=canonical_map_state, query=map_query)
             is_invisible = self._has_condition(c, "invisible")
             is_hidden = bool(getattr(c, "is_hidden", False))
             marks = self._lan_marks_for(c)
@@ -14211,6 +14511,24 @@ class InitiativeTracker(base.InitiativeTracker):
                     "mount_controller_mode": str(getattr(c, "mount_controller_mode", "") or "") or None,
                     "has_mounted_this_turn": bool(getattr(c, "has_mounted_this_turn", False)),
                     "can_be_mounted": bool(getattr(c, "can_be_mounted", False)),
+                    "on_ship": bool(boarding_context.get("on_ship", False)),
+                    "ship_structure_id": str(boarding_context.get("source_structure_id") or "") or None,
+                    "ship_structure_name": str(boarding_context.get("source_structure_name") or "") or None,
+                    "traversable_boarding_targets": list(
+                        boarding_context.get("reachable_target_structures")
+                        if isinstance(boarding_context.get("reachable_target_structures"), list)
+                        else []
+                    ),
+                    "traversable_boarding_target_ids": list(
+                        boarding_context.get("reachable_target_structure_ids")
+                        if isinstance(boarding_context.get("reachable_target_structure_ids"), list)
+                        else []
+                    ),
+                    "boarding_last_crossing": (
+                        dict(boarding_context.get("last_crossing"))
+                        if isinstance(boarding_context.get("last_crossing"), dict)
+                        else None
+                    ),
                     "facing_deg": int(self._normalize_facing_degrees(getattr(c, "facing_deg", 0))),
                     "vexed_by_cid": _normalize_cid_value(getattr(c, "_vexed_by_cid", None), "snapshot.vexed_by"),
                     "has_star_advantage": self._has_condition(c, "star_advantage"),
@@ -14292,7 +14610,8 @@ class InitiativeTracker(base.InitiativeTracker):
             "turn_order": turn_order,
             "auras_enabled": bool(self.__dict__.get("_lan_auras_enabled", True)),
         }
-        map_query = MapQueryAPI(self._capture_canonical_map_state(prefer_window=False))
+        if active is not None:
+            snap["active_creature_boarding"] = self._creature_boarding_context(int(active), state=canonical_map_state, query=map_query)
         snap["boarding_links"] = map_query.boarding_links()
         snap["active_boarding_links"] = [dict(item) for item in snap["boarding_links"] if bool(item.get("traversable"))]
         structure_entries = [dict(item) for item in (canonical_payload.get("structures") if isinstance(canonical_payload.get("structures"), list) else []) if isinstance(item, dict)]
@@ -14332,6 +14651,7 @@ class InitiativeTracker(base.InitiativeTracker):
                     "active_boarding_structures": list(semantics.get("active_boarding_structures") if isinstance(semantics.get("active_boarding_structures"), list) else []),
                     "traversable_boarding_structure_ids": list(semantics.get("traversable_boarding_structure_ids") if isinstance(semantics.get("traversable_boarding_structure_ids"), list) else []),
                     "traversable_boarding_structures": list(semantics.get("traversable_boarding_structures") if isinstance(semantics.get("traversable_boarding_structures"), list) else []),
+                    "traversable_boarding_relations": list(semantics.get("traversable_boarding_relations") if isinstance(semantics.get("traversable_boarding_relations"), list) else []),
                     "boarding_links": list(semantics.get("boarding_links") if isinstance(semantics.get("boarding_links"), list) else []),
                 }
             ship_summary = self._selected_ship_summary(sid)
