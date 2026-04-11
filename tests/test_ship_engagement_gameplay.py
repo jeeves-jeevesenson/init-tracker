@@ -22,6 +22,9 @@ class ShipEngagementGameplayTests(unittest.TestCase):
         app._oplog = lambda *args, **kwargs: None
         app._lan_reaction_debug_enabled = lambda: False
         app._lan = type("LanStub", (), {"_cached_snapshot": {}})()
+        app._map_state_version = 0
+        app._structure_contact_semantics_cache = {}
+        app._selected_ship_summary_cache = {}
         target_col = 7 if contact_target else int(target_anchor_col)
         app._map_state = tracker_mod.MapState.from_dict(
             {
@@ -79,7 +82,14 @@ class ShipEngagementGameplayTests(unittest.TestCase):
             }
         )
         app._capture_canonical_map_state = lambda prefer_window=True: app._map_state.normalized()
-        app._apply_canonical_map_state = lambda state, hydrate_window=False: setattr(app, "_map_state", state.normalized())
+
+        def _apply(state, hydrate_window=False):
+            app._map_state = state.normalized()
+            app._map_state_version = int(getattr(app, "_map_state_version", 0) or 0) + 1
+            app._structure_contact_semantics_cache = {}
+            app._selected_ship_summary_cache = {}
+
+        app._apply_canonical_map_state = _apply
         return app
 
     def test_ship_engagement_state_normalization(self):
@@ -151,6 +161,42 @@ class ShipEngagementGameplayTests(unittest.TestCase):
         ship_1 = ship_instances.get("ship_1") or {}
         self.assertIn("engagement_state", ship_1)
         self.assertIn("movement_profile", ship_1)
+
+    def test_ship_maneuver_multi_step_applies_canonical_state_once(self):
+        app = self._build_app(target_anchor_col=20)
+        calls = {"apply": 0}
+        original_apply = app._apply_canonical_map_state
+
+        def _counted_apply(state, hydrate_window=False):
+            calls["apply"] += 1
+            original_apply(state, hydrate_window=hydrate_window)
+
+        app._apply_canonical_map_state = _counted_apply
+        moved = app._ship_engagement_maneuver("ship_a", "move_forward", steps=3)
+        self.assertTrue(moved.get("ok"))
+        self.assertEqual(int(moved.get("moved_squares", 0) or 0), 3)
+        self.assertEqual(calls["apply"], 1)
+
+    def test_selected_ship_summary_cache_invalidates_after_map_mutation(self):
+        app = self._build_app(target_anchor_col=15)
+        calls = {"semantics": 0}
+        original_semantics = app._structure_contact_semantics
+
+        def _counted_semantics(*args, **kwargs):
+            calls["semantics"] += 1
+            return original_semantics(*args, **kwargs)
+
+        app._structure_contact_semantics = _counted_semantics
+        first = app._selected_ship_summary("ship_a")
+        second = app._selected_ship_summary("ship_a")
+        self.assertTrue(first.get("ok"))
+        self.assertTrue(second.get("ok"))
+        self.assertEqual(calls["semantics"], 1)
+        moved = app._ship_engagement_maneuver("ship_a", "move_forward", steps=1)
+        self.assertTrue(moved.get("ok"))
+        refreshed = app._selected_ship_summary("ship_a")
+        self.assertTrue(refreshed.get("ok"))
+        self.assertEqual(calls["semantics"], 2)
 
 
 if __name__ == "__main__":

@@ -7923,6 +7923,19 @@ class BattleMapWindow(tk.Toplevel):
         self.map_hazards = {str(item.hazard_id): item.to_dict() for item in normalized.hazards.values()}
         self.map_structures = {str(item.structure_id): item.to_dict() for item in normalized.structures.values()}
         self.map_elevation_cells = {(int(item.col), int(item.row)): float(item.elevation) for item in normalized.elevation_cells.values()}
+        structure_cells: Dict[Tuple[int, int], str] = {}
+        for sid, structure in self.map_structures.items():
+            if not isinstance(structure, dict):
+                continue
+            payload = structure.get("payload") if isinstance(structure.get("payload"), dict) else {}
+            cells = self._entity_cells(
+                int(structure.get("anchor_col", 0) or 0),
+                int(structure.get("anchor_row", 0) or 0),
+                payload,
+            )
+            for col, row in cells:
+                structure_cells[(int(col), int(row))] = str(sid)
+        self._structure_id_by_cell = structure_cells
 
     def _entity_cells(self, col: int, row: int, payload: Any) -> List[Tuple[int, int]]:
         if isinstance(payload, dict):
@@ -8283,7 +8296,17 @@ class BattleMapWindow(tk.Toplevel):
             status_parts.append("empty")
         self.map_author_cell_status_var.set(" · ".join(status_parts))
 
-    def _post_tactical_map_mutation(self, *, redraw_all: bool = False, schedule_broadcast: bool = True) -> None:
+    def _post_tactical_map_mutation(
+        self,
+        *,
+        redraw_all: bool = False,
+        schedule_broadcast: bool = True,
+        redraw: bool = True,
+        redraw_units: bool = False,
+        refresh_structure_status: bool = True,
+        refresh_tactical_status: bool = True,
+        refresh_ship_blueprints: bool = False,
+    ) -> None:
         try:
             state = getattr(self.app, "_map_state", None)
             if not isinstance(state, MapState):
@@ -8301,16 +8324,22 @@ class BattleMapWindow(tk.Toplevel):
             except Exception:
                 pass
         updater = getattr(self, "_update_selected_structure_contact_status", None)
-        if callable(updater):
+        if refresh_structure_status and callable(updater):
             updater()
         refresh_ships = getattr(self, "_refresh_ship_blueprint_selection", None)
-        if callable(refresh_ships):
+        if refresh_ship_blueprints and callable(refresh_ships):
             refresh_ships()
-        self._update_selected_tactical_cell_status()
-        if redraw_all:
-            self._redraw_all()
-        else:
-            self._redraw_tactical_layers()
+        if refresh_tactical_status:
+            self._update_selected_tactical_cell_status()
+        if redraw:
+            if redraw_all:
+                self._redraw_all()
+            else:
+                self._redraw_tactical_layers()
+                if redraw_units:
+                    self._update_groups()
+                    self._apply_active_highlight()
+                    self._update_included_for_selected()
 
     def _apply_tactical_author_to_selected_cell(
         self,
@@ -8562,14 +8591,14 @@ class BattleMapWindow(tk.Toplevel):
             detail = f"\nBlockers: {', '.join(blocker_lines)}" if blocker_lines else ""
             messagebox.showerror("Move Structure", f"Move rejected ({reason}).{detail}", parent=self)
             return
-        try:
-            self._apply_canonical_map_layers_from_state(self.app._capture_canonical_map_state(prefer_window=False))
-        except Exception:
-            pass
-        self._update_selected_structure_contact_status()
-        self._redraw_all()
+        self._post_tactical_map_mutation(redraw_all=False, schedule_broadcast=True, redraw=True, redraw_units=True)
 
     def _selected_structure_id_at_cell(self, col: int, row: int) -> Optional[str]:
+        cached_lookup = getattr(self, "_structure_id_by_cell", None)
+        if isinstance(cached_lookup, dict):
+            hit = cached_lookup.get((int(col), int(row)))
+            if isinstance(hit, str) and hit:
+                return hit
         for sid, structure in self.map_structures.items():
             if not isinstance(structure, dict):
                 continue
@@ -8640,7 +8669,7 @@ class BattleMapWindow(tk.Toplevel):
         )
         ship_summary: Dict[str, Any] = {}
         try:
-            ship_summary = self.app._selected_ship_summary(sid)
+            ship_summary = self.app._selected_ship_summary(sid, semantics=semantics)
         except Exception:
             ship_summary = {}
         if not isinstance(ship_summary, dict) or not bool(ship_summary.get("ok")):
@@ -8811,8 +8840,7 @@ class BattleMapWindow(tk.Toplevel):
                 detail = f"\nBlockers: {', '.join(blocker_lines)}"
             messagebox.showerror("Ship Engagement", f"{result.get('message') or result.get('reason')}{detail}", parent=self)
             return
-        self._post_tactical_map_mutation(redraw_all=True, schedule_broadcast=True)
-        self._update_selected_structure_contact_status()
+        self._post_tactical_map_mutation(redraw_all=False, schedule_broadcast=True, redraw=True, redraw_units=True)
 
     def _ship_fire_weapon_action(self) -> None:
         source_id = self._selected_ship_for_boarding_action()
@@ -8845,8 +8873,7 @@ class BattleMapWindow(tk.Toplevel):
             f"Engagement: {weapon_id} {hit_text} ({result.get('attack_total')} vs AC {result.get('target_ac')}) "
             f"for {int(result.get('damage', 0) or 0)} damage."
         )
-        self._post_tactical_map_mutation(redraw_all=True, schedule_broadcast=True)
-        self._update_selected_structure_contact_status()
+        self._post_tactical_map_mutation(redraw=False, schedule_broadcast=True)
 
     def _ship_ram_action(self) -> None:
         source_id = self._selected_ship_for_boarding_action()
@@ -8866,8 +8893,7 @@ class BattleMapWindow(tk.Toplevel):
             f"Engagement: Ram resolved. Target took {int(result.get('target_damage', 0) or 0)} "
             f"and source took {int(result.get('source_damage', 0) or 0)}."
         )
-        self._post_tactical_map_mutation(redraw_all=True, schedule_broadcast=True)
-        self._update_selected_structure_contact_status()
+        self._post_tactical_map_mutation(redraw=False, schedule_broadcast=True)
 
     def _create_boarding_link_from_selected_ship(self) -> None:
         source_id = self._selected_ship_for_boarding_action()
@@ -8884,8 +8910,7 @@ class BattleMapWindow(tk.Toplevel):
         if not bool(result.get("ok")):
             messagebox.showerror("Boarding", str(result.get("message") or result.get("reason") or "Boarding link failed."), parent=self)
             return
-        self._post_tactical_map_mutation(redraw_all=True, schedule_broadcast=True)
-        self._update_selected_structure_contact_status()
+        self._post_tactical_map_mutation(redraw=False, schedule_broadcast=True)
 
     def _break_boarding_link_from_selected_ship(self) -> None:
         source_id = self._selected_ship_for_boarding_action()
@@ -8908,8 +8933,7 @@ class BattleMapWindow(tk.Toplevel):
         if not bool(result.get("ok")):
             messagebox.showerror("Boarding", str(result.get("message") or result.get("reason") or "Boarding link update failed."), parent=self)
             return
-        self._post_tactical_map_mutation(redraw_all=True, schedule_broadcast=True)
-        self._update_selected_structure_contact_status()
+        self._post_tactical_map_mutation(redraw=False, schedule_broadcast=True)
 
     def _update_selected_creature_boarding_status(self) -> None:
         traversal_status_var = getattr(self, "map_boarding_traversal_status_var", None)
@@ -8994,7 +9018,7 @@ class BattleMapWindow(tk.Toplevel):
             )
             self._update_selected_creature_boarding_status()
             return
-        self._post_tactical_map_mutation(redraw_all=True, schedule_broadcast=True)
+        self._post_tactical_map_mutation(redraw_all=False, schedule_broadcast=True, redraw=True, redraw_units=True)
         self._update_selected_creature_boarding_status()
 
     def _refresh_ship_blueprint_selection(self) -> None:
@@ -9070,12 +9094,15 @@ class BattleMapWindow(tk.Toplevel):
                 parent=self,
             )
             return
-        try:
-            self._apply_canonical_map_layers_from_state(self.app._capture_canonical_map_state(prefer_window=False))
-        except Exception:
-            pass
-        self._update_selected_structure_contact_status()
-        self._redraw_all()
+        self._post_tactical_map_mutation(
+            redraw_all=False,
+            schedule_broadcast=True,
+            redraw=True,
+            redraw_units=False,
+            refresh_structure_status=True,
+            refresh_tactical_status=True,
+            refresh_ship_blueprints=False,
+        )
 
     def _save_template_from_selected_structure(self) -> None:
         cell = self._map_author_selected_cell
@@ -9188,12 +9215,7 @@ class BattleMapWindow(tk.Toplevel):
                 parent=self,
             )
             return
-        try:
-            self._apply_canonical_map_layers_from_state(self.app._capture_canonical_map_state(prefer_window=False))
-        except Exception:
-            pass
-        self._update_selected_structure_contact_status()
-        self._redraw_all()
+        self._post_tactical_map_mutation(redraw_all=False, schedule_broadcast=True, redraw=True, redraw_units=False)
         if not self.rough_terrain:
             return
         for (col, row), cell in sorted(self.rough_terrain.items()):
