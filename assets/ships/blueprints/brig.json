@@ -68,6 +68,171 @@
       "row": 1
     }
   ],
+  "deck_regions": [
+    {
+      "category": "forecastle",
+      "cells": [
+        {
+          "col": 0,
+          "row": 0
+        },
+        {
+          "col": 0,
+          "row": 1
+        },
+        {
+          "col": 1,
+          "row": 0
+        }
+      ],
+      "id": "forecastle",
+      "label": "Forecastle"
+    },
+    {
+      "category": "hold",
+      "cells": [
+        {
+          "col": 2,
+          "row": 1
+        },
+        {
+          "col": 2,
+          "row": 2
+        }
+      ],
+      "id": "hold_hatch",
+      "label": "Hold / Hatch"
+    },
+    {
+      "category": "main_deck",
+      "cells": [
+        {
+          "col": 0,
+          "row": 0
+        },
+        {
+          "col": 0,
+          "row": 1
+        },
+        {
+          "col": 1,
+          "row": 0
+        },
+        {
+          "col": 1,
+          "row": 1
+        },
+        {
+          "col": 1,
+          "row": 2
+        },
+        {
+          "col": 2,
+          "row": 0
+        },
+        {
+          "col": 2,
+          "row": 1
+        },
+        {
+          "col": 2,
+          "row": 2
+        },
+        {
+          "col": 3,
+          "row": 0
+        },
+        {
+          "col": 3,
+          "row": 1
+        },
+        {
+          "col": 3,
+          "row": 2
+        },
+        {
+          "col": 4,
+          "row": 0
+        },
+        {
+          "col": 4,
+          "row": 1
+        }
+      ],
+      "id": "main_deck",
+      "label": "Main Deck",
+      "render_hint": {
+        "label_priority": 10
+      }
+    },
+    {
+      "category": "mast_zone",
+      "cells": [
+        {
+          "col": 1,
+          "row": 0
+        },
+        {
+          "col": 2,
+          "row": 1
+        },
+        {
+          "col": 3,
+          "row": 1
+        }
+      ],
+      "id": "mast_zone",
+      "label": "Mast Zone"
+    },
+    {
+      "category": "port_battery",
+      "cells": [
+        {
+          "col": 0,
+          "row": 0
+        },
+        {
+          "col": 0,
+          "row": 1
+        }
+      ],
+      "id": "port_battery",
+      "label": "Port Battery"
+    },
+    {
+      "category": "helm",
+      "cells": [
+        {
+          "col": 3,
+          "row": 2
+        },
+        {
+          "col": 4,
+          "row": 1
+        }
+      ],
+      "id": "quarterdeck",
+      "label": "Quarterdeck / Helm",
+      "render_hint": {
+        "label_priority": 20
+      }
+    },
+    {
+      "category": "starboard_battery",
+      "cells": [
+        {
+          "col": 4,
+          "row": 0
+        },
+        {
+          "col": 4,
+          "row": 1
+        }
+      ],
+      "id": "starboard_battery",
+      "label": "Starboard Battery"
+    }
+  ],
   "display_name": "Brig",
   "engagement_defaults": {
     "crew": {
@@ -178,6 +343,14 @@
   },
   "render": {
     "base_image_key": "brig_hull",
+    "base_image_path": "",
+    "deck_texture_key": "ship_deck_wood",
+    "deck_texture_path": "",
+    "facing_assets": {},
+    "fallback_style": "polygon",
+    "image_anchor": "center",
+    "image_offset_col": 0,
+    "image_offset_row": 0,
     "overlay_hints": [
       "boarding_points",
       "weapon_hardpoints"

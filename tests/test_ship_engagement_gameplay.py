@@ -198,6 +198,14 @@ class ShipEngagementGameplayTests(unittest.TestCase):
         self.assertTrue(refreshed.get("ok"))
         self.assertEqual(calls["semantics"], 3)
 
+    def test_selected_ship_summary_exposes_deck_regions(self):
+        app = self._build_app(target_anchor_col=15)
+        summary = app._selected_ship_summary("ship_a")
+        self.assertTrue(summary.get("ok"))
+        region_ids = summary.get("deck_region_ids") if isinstance(summary.get("deck_region_ids"), list) else []
+        self.assertIn("main_deck", region_ids)
+        self.assertTrue(summary.get("deck_regions"))
+
 
 if __name__ == "__main__":
     unittest.main()
