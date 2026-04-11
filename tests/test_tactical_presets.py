@@ -3,10 +3,13 @@ import unittest
 from pathlib import Path
 
 import dnd_initative_tracker as tracker_mod
-from map_state import normalize_tactical_payload, tactical_preset_catalog
+from map_state import normalize_tactical_payload, set_tactical_preset_loader, tactical_preset_catalog
 
 
 class TacticalPresetCatalogTests(unittest.TestCase):
+    def tearDown(self):
+        set_tactical_preset_loader(None)
+
     def test_barrel_defaults_normalize_to_feature_semantics(self):
         normalized = normalize_tactical_payload(category="feature", kind="barrel", payload={})
         self.assertEqual(normalized["category"], "feature")
@@ -69,6 +72,25 @@ class TacticalPresetCatalogTests(unittest.TestCase):
             "difficult_patch",
         ):
             self.assertIn(preset_id, catalog)
+
+    def test_external_loader_can_add_presets_without_breaking_builtins(self):
+        set_tactical_preset_loader(
+            lambda: {
+                "test_seam_feature": {
+                    "display_name": "Test Seam Feature",
+                    "family": "Support / World",
+                    "category": "feature",
+                    "kind": "test_seam_feature",
+                    "payload": {"name": "Seam Feature", "tags": ["test"]},
+                }
+            }
+        )
+        catalog = tactical_preset_catalog()
+        self.assertIn("barrel", catalog)
+        self.assertIn("test_seam_feature", catalog)
+        normalized = normalize_tactical_payload(category="feature", kind="test_seam_feature", payload={})
+        self.assertEqual(normalized["kind"], "test_seam_feature")
+        self.assertEqual(normalized["payload"]["tactical_preset_id"], "test_seam_feature")
 
 
 class TacticalPresetPersistenceTests(unittest.TestCase):

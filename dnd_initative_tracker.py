@@ -9113,7 +9113,14 @@ class InitiativeTracker(base.InitiativeTracker):
         )
         return str(feature_id)
 
-    def _remove_map_feature(self, feature_id: Any) -> None:
+    def _remove_map_feature(
+        self,
+        feature_id: Any,
+        *,
+        hydrate_window: bool = True,
+        broadcast: bool = True,
+        defer_broadcast: bool = False,
+    ) -> None:
         key = str(feature_id or "").strip()
         if not key:
             return
@@ -9123,7 +9130,12 @@ class InitiativeTracker(base.InitiativeTracker):
             feature_map.pop(key, None)
             state.features = feature_map
 
-        self._mutate_canonical_map_state(_mutate)
+        self._mutate_canonical_map_state(
+            _mutate,
+            hydrate_window=hydrate_window,
+            broadcast=broadcast,
+            defer_broadcast=defer_broadcast,
+        )
 
     def _upsert_map_hazard(
         self,
@@ -9167,7 +9179,14 @@ class InitiativeTracker(base.InitiativeTracker):
         )
         return str(hazard_id)
 
-    def _remove_map_hazard(self, hazard_id: Any) -> None:
+    def _remove_map_hazard(
+        self,
+        hazard_id: Any,
+        *,
+        hydrate_window: bool = True,
+        broadcast: bool = True,
+        defer_broadcast: bool = False,
+    ) -> None:
         key = str(hazard_id or "").strip()
         if not key:
             return
@@ -9177,7 +9196,12 @@ class InitiativeTracker(base.InitiativeTracker):
             hazard_map.pop(key, None)
             state.hazards = hazard_map
 
-        self._mutate_canonical_map_state(_mutate)
+        self._mutate_canonical_map_state(
+            _mutate,
+            hydrate_window=hydrate_window,
+            broadcast=broadcast,
+            defer_broadcast=defer_broadcast,
+        )
 
     def _upsert_map_structure(
         self,
@@ -9224,7 +9248,14 @@ class InitiativeTracker(base.InitiativeTracker):
         )
         return str(structure_id)
 
-    def _remove_map_structure(self, structure_id: Any) -> None:
+    def _remove_map_structure(
+        self,
+        structure_id: Any,
+        *,
+        hydrate_window: bool = True,
+        broadcast: bool = True,
+        defer_broadcast: bool = False,
+    ) -> None:
         key = str(structure_id or "").strip()
         if not key:
             return
@@ -9234,7 +9265,12 @@ class InitiativeTracker(base.InitiativeTracker):
             structure_map.pop(key, None)
             state.structures = structure_map
 
-        self._mutate_canonical_map_state(_mutate)
+        self._mutate_canonical_map_state(
+            _mutate,
+            hydrate_window=hydrate_window,
+            broadcast=broadcast,
+            defer_broadcast=defer_broadcast,
+        )
 
     def _set_map_elevation(
         self,

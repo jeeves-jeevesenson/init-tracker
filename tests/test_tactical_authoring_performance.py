@@ -12,6 +12,9 @@ class _Var:
     def get(self):
         return self._value
 
+    def set(self, value):
+        self._value = value
+
 
 class TacticalAuthoringPerformanceTests(unittest.TestCase):
     def _make_minimal_app(self):
@@ -50,17 +53,30 @@ class TacticalAuthoringPerformanceTests(unittest.TestCase):
         redraw_calls = {"count": 0}
         helper = types.SimpleNamespace(
             _map_author_selected_cell=(2, 3),
+            map_author_tool_var=_Var("stamp"),
             map_author_mode_var=_Var("feature"),
             map_author_kind_var=_Var("crate"),
+            map_author_preset_var=_Var("crate_stack"),
             map_author_label_var=_Var("Crate"),
             map_author_blocking_var=_Var(True),
             map_author_duration_var=_Var(""),
+            map_author_count_var=_Var("1"),
             app=app,
             cols=20,
             rows=20,
             _apply_canonical_map_layers_from_state=lambda state: self.assertIs(state, state_obj),
             _redraw_tactical_layers=lambda: redraw_calls.__setitem__("count", redraw_calls["count"] + 1),
             _sync_tactical_layers_to_app=lambda: self.fail("legacy tactical sync-back should not run during placement"),
+            _refresh_tactical_palette_state=lambda normalized=None: None,
+            _selected_tactical_preset_id=lambda: "crate_stack",
+            _selected_tactical_preset=lambda: {"stackable": True},
+            map_author_elevation_var=_Var("5"),
+            _post_tactical_map_mutation=lambda redraw_all=False: (
+                self.assertFalse(redraw_all),
+                helper._apply_canonical_map_layers_from_state(state_obj),
+                app._schedule_lan_state_broadcast(),
+                helper._redraw_tactical_layers(),
+            ),
         )
 
         helper_script.BattleMapWindow._apply_tactical_author_to_selected_cell(helper)
@@ -89,6 +105,7 @@ class TacticalAuthoringPerformanceTests(unittest.TestCase):
         redraw_calls = {"count": 0}
         helper = types.SimpleNamespace(
             _map_author_selected_cell=(2, 3),
+            map_author_tool_var=_Var("stamp"),
             map_author_mode_var=_Var("preset"),
             map_author_kind_var=_Var("fire"),
             map_author_preset_var=_Var("fire"),
@@ -97,11 +114,21 @@ class TacticalAuthoringPerformanceTests(unittest.TestCase):
             map_author_blocking_var=_Var(False),
             map_author_advanced_var=_Var(False),
             map_author_duration_var=_Var(""),
+            map_author_elevation_var=_Var("5"),
             app=app,
             cols=20,
             rows=20,
             _apply_canonical_map_layers_from_state=lambda state: self.assertIs(state, state_obj),
             _redraw_tactical_layers=lambda: redraw_calls.__setitem__("count", redraw_calls["count"] + 1),
+            _refresh_tactical_palette_state=lambda normalized=None: None,
+            _selected_tactical_preset_id=lambda: "fire",
+            _selected_tactical_preset=lambda: {},
+            _post_tactical_map_mutation=lambda redraw_all=False: (
+                self.assertFalse(redraw_all),
+                helper._apply_canonical_map_layers_from_state(state_obj),
+                app._schedule_lan_state_broadcast(),
+                helper._redraw_tactical_layers(),
+            ),
         )
 
         helper_script.BattleMapWindow._apply_tactical_author_to_selected_cell(helper)
@@ -186,6 +213,45 @@ class TacticalAuthoringPerformanceTests(unittest.TestCase):
         only_timer["callback"]()
         self.assertEqual(broadcasts, [False])
         self.assertIsNone(app._lan_state_broadcast_after_id)
+
+    def test_remove_tactical_entities_batches_canonical_removals_without_sync_back(self):
+        calls = {"remove_feature": 0, "remove_hazard": 0, "remove_structure": 0, "set_elevation": 0, "scheduled_flush": 0}
+        state_obj = object()
+
+        app = types.SimpleNamespace(
+            _remove_map_feature=lambda _id, **kwargs: (calls.__setitem__("remove_feature", calls["remove_feature"] + 1), self.assertFalse(kwargs.get("hydrate_window", True)), self.assertFalse(kwargs.get("broadcast", True))),
+            _remove_map_hazard=lambda _id, **kwargs: (calls.__setitem__("remove_hazard", calls["remove_hazard"] + 1), self.assertFalse(kwargs.get("hydrate_window", True)), self.assertFalse(kwargs.get("broadcast", True))),
+            _remove_map_structure=lambda _id, **kwargs: (calls.__setitem__("remove_structure", calls["remove_structure"] + 1), self.assertFalse(kwargs.get("hydrate_window", True)), self.assertFalse(kwargs.get("broadcast", True))),
+            _set_map_elevation=lambda _col, _row, _value, **kwargs: (calls.__setitem__("set_elevation", calls["set_elevation"] + 1), self.assertFalse(kwargs.get("hydrate_window", True)), self.assertFalse(kwargs.get("broadcast", True))),
+            _capture_canonical_map_state=lambda prefer_window=False: state_obj,
+            _schedule_lan_state_broadcast=lambda: calls.__setitem__("scheduled_flush", calls["scheduled_flush"] + 1),
+        )
+
+        helper = types.SimpleNamespace(
+            _map_author_selected_cell=(2, 3),
+            map_features={"f1": {"id": "f1", "col": 2, "row": 3, "payload": {}}},
+            map_hazards={"h1": {"id": "h1", "col": 2, "row": 3, "payload": {}}},
+            map_structures={"s1": {"id": "s1", "anchor_col": 2, "anchor_row": 3, "occupied_cells": []}},
+            map_elevation_cells={(2, 3): 5.0},
+            _entity_cells=lambda col, row, payload: [(int(col), int(row))],
+            app=app,
+            _apply_canonical_map_layers_from_state=lambda state: self.assertIs(state, state_obj),
+            _redraw_tactical_layers=lambda: None,
+            _update_selected_structure_contact_status=lambda: None,
+            _post_tactical_map_mutation=lambda redraw_all=False: (
+                self.assertFalse(redraw_all),
+                helper._apply_canonical_map_layers_from_state(state_obj),
+                app._schedule_lan_state_broadcast(),
+            ),
+        )
+
+        changed = helper_script.BattleMapWindow._remove_tactical_entities_at_selected_cell(helper)
+        self.assertTrue(changed)
+        self.assertEqual(calls["remove_feature"], 1)
+        self.assertEqual(calls["remove_hazard"], 1)
+        self.assertEqual(calls["remove_structure"], 1)
+        self.assertEqual(calls["set_elevation"], 1)
+        self.assertEqual(calls["scheduled_flush"], 1)
 
 
 if __name__ == "__main__":
