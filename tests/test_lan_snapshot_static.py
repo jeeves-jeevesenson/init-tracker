@@ -276,7 +276,15 @@ class LanSnapshotStaticTests(unittest.TestCase):
                             "components": [{"id": "hull"}],
                             "mounted_weapons": [{"id": "cannon_a"}],
                         }
-                    }
+                    },
+                    "boarding_links": [
+                        {
+                            "id": "boarding_link_1",
+                            "source_id": "a",
+                            "target_id": "b",
+                            "status": "active",
+                        }
+                    ],
                 },
                 "features": [
                     {
@@ -297,10 +305,15 @@ class LanSnapshotStaticTests(unittest.TestCase):
         semantics = structure_a.get("contact_semantics") or {}
         self.assertEqual(semantics.get("boardable_structure_ids"), ["b"])
         self.assertEqual((semantics.get("boardable_structures") or [])[0]["name"], "Interceptor")
+        self.assertEqual(semantics.get("active_boarding_structure_ids"), ["b"])
+        self.assertEqual((semantics.get("boarding_links") or [])[0]["id"], "boarding_link_1")
         ship_state = structure_a.get("ship_state") or {}
         self.assertEqual(ship_state.get("blueprint_id"), "sloop")
         self.assertEqual(ship_state.get("weapon_count"), 1)
+        self.assertEqual(ship_state.get("active_boarding_count"), 1)
         self.assertEqual((snap.get("ships") or [])[0]["id"], "ship_1")
+        self.assertEqual((snap.get("boarding_links") or [])[0]["id"], "boarding_link_1")
+        self.assertEqual((snap.get("active_boarding_links") or [])[0]["id"], "boarding_link_1")
         feature = next(item for item in snap["features"] if item["id"] == "f1")
         self.assertEqual(feature.get("preset_id"), "barrel")
         self.assertEqual(feature.get("display_name"), "Deck Barrel")

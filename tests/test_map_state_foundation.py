@@ -234,6 +234,61 @@ class MapStateFoundationTests(unittest.TestCase):
         self.assertIn(contacts[0]["contact_type"], {"touching_edge", "bridged", "overlap", "overlap_bridged"})
         self.assertEqual(query.ship_boardable_structure_ids("ship_a"), ["ship_b"])
 
+    def test_boarding_links_are_normalized_and_exposed_by_ship_relations(self):
+        state = MapState.from_dict(
+            {
+                "grid": {"cols": 12, "rows": 12, "feet_per_square": 5},
+                "structures": [
+                    {
+                        "id": "ship_a",
+                        "kind": "ship_hull",
+                        "anchor_col": 2,
+                        "anchor_row": 2,
+                        "occupied_cells": [{"col": 2, "row": 2}, {"col": 3, "row": 2}],
+                        "payload": {
+                            "ship_instance_id": "ship_1",
+                            "boardable": True,
+                            "boardable_edges": ["starboard"],
+                            "boarding_points": [{"id": "p1", "col": 3, "row": 2}],
+                        },
+                    },
+                    {
+                        "id": "ship_b",
+                        "kind": "ship_hull",
+                        "anchor_col": 4,
+                        "anchor_row": 2,
+                        "occupied_cells": [{"col": 4, "row": 2}],
+                        "payload": {
+                            "ship_instance_id": "ship_2",
+                            "allow_boarding": True,
+                            "boardable_edges": ["port"],
+                            "boarding_points": [{"id": "p2", "col": 4, "row": 2}],
+                        },
+                    },
+                ],
+                "presentation": {
+                    "boarding_links": [
+                        {
+                            "id": "boarding_link_1",
+                            "source_id": "ship_a",
+                            "target_id": "ship_b",
+                            "status": "active",
+                        }
+                    ]
+                },
+            }
+        )
+        query = MapQueryAPI(state)
+        links = query.boarding_links()
+        self.assertEqual(len(links), 1)
+        self.assertEqual(links[0]["status"], "active")
+        self.assertTrue(links[0]["traversable"])
+        relations = query.ship_boarding_relations("ship_a")
+        self.assertEqual(len(relations), 1)
+        self.assertEqual(relations[0]["boarding_status"], "active")
+        self.assertTrue(relations[0]["boarding_traversable"])
+        self.assertEqual(query.connected_boarding_structure_ids("ship_a"), ["ship_b"])
+
     def test_structure_move_blockers_treat_generic_hazard_blocking_as_structure_blocking(self):
         state = MapState.from_dict(
             {

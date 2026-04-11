@@ -6236,7 +6236,10 @@ class BattleMapWindow(tk.Toplevel):
         self.map_ship_facing_var = tk.StringVar(value="0")
         self.map_ship_name_var = tk.StringVar(value="")
         self.map_ship_summary_var = tk.StringVar(value="Ships: select a structure cell or place a ship blueprint.")
+        self.map_boarding_target_var = tk.StringVar(value="")
+        self.map_boarding_status_var = tk.StringVar(value="Boarding: select a ship to inspect/create/break boarding links.")
         self._ship_blueprint_lookup: Dict[str, str] = {}
+        self._boarding_target_lookup: Dict[str, str] = {}
         self._map_author_selected_cell: Optional[Tuple[int, int]] = None
         self._map_author_preset_lookup: Dict[str, str] = {}
         self._map_author_painting: bool = False
@@ -6929,11 +6932,27 @@ class BattleMapWindow(tk.Toplevel):
         self._ship_name_entry = ttk.Entry(ship_row, textvariable=self.map_ship_name_var, width=14)
         self._ship_name_entry.pack(side=tk.LEFT, padx=(6, 0))
         ttk.Button(ship_row, text="Place Ship @ Cell", command=self._place_ship_blueprint_at_selected_cell).pack(side=tk.LEFT, padx=(8, 0))
+        boarding_row = ttk.Frame(tactical)
+        boarding_row.grid(row=10, column=0, columnspan=4, sticky="ew", pady=(6, 0))
+        ttk.Label(boarding_row, text="Boarding Target:").pack(side=tk.LEFT)
+        self._boarding_target_combo = ttk.Combobox(
+            boarding_row,
+            textvariable=self.map_boarding_target_var,
+            values=[],
+            width=24,
+            state="readonly",
+        )
+        self._boarding_target_combo.pack(side=tk.LEFT, padx=(6, 0))
+        ttk.Button(boarding_row, text="Create Link", command=self._create_boarding_link_from_selected_ship).pack(side=tk.LEFT, padx=(8, 0))
+        ttk.Button(boarding_row, text="Break Link", command=self._break_boarding_link_from_selected_ship).pack(side=tk.LEFT, padx=(6, 0))
         ttk.Label(tactical, textvariable=self.map_ship_summary_var, justify="left", wraplength=440).grid(
-            row=10, column=0, columnspan=4, sticky="w", pady=(4, 0)
+            row=11, column=0, columnspan=4, sticky="w", pady=(4, 0)
+        )
+        ttk.Label(tactical, textvariable=self.map_boarding_status_var, justify="left", wraplength=440).grid(
+            row=12, column=0, columnspan=4, sticky="w", pady=(4, 0)
         )
         ttk.Label(tactical, textvariable=self.map_structure_contact_status_var, justify="left", wraplength=440).grid(
-            row=11, column=0, columnspan=4, sticky="w", pady=(6, 0)
+            row=13, column=0, columnspan=4, sticky="w", pady=(6, 0)
         )
         tactical.columnconfigure(3, weight=1)
         tool_combo.bind("<<ComboboxSelected>>", lambda _e: self._refresh_tactical_preset_selection(sync_mode=True))
@@ -8520,11 +8539,15 @@ class BattleMapWindow(tk.Toplevel):
         if cell is None:
             self.map_structure_contact_status_var.set("Structure contacts: select a structure cell.")
             self.map_ship_summary_var.set("Ships: select a structure cell or place a ship blueprint.")
+            self.map_boarding_status_var.set("Boarding: select a ship to inspect/create/break boarding links.")
+            self._refresh_selected_ship_boarding_options(None, None)
             return
         sid = self._selected_structure_id_at_cell(int(cell[0]), int(cell[1]))
         if not sid:
             self.map_structure_contact_status_var.set(f"Structure contacts @ ({int(cell[0])},{int(cell[1])}): none")
             self.map_ship_summary_var.set("Ships: no ship selected.")
+            self.map_boarding_status_var.set("Boarding: no ship selected.")
+            self._refresh_selected_ship_boarding_options(None, None)
             return
         semantics = {}
         try:
@@ -8533,6 +8556,7 @@ class BattleMapWindow(tk.Toplevel):
             semantics = {}
         if not isinstance(semantics, dict) or not bool(semantics.get("ok")):
             self.map_structure_contact_status_var.set(f"Structure {sid}: contact data unavailable")
+            self._refresh_selected_ship_boarding_options(None, semantics if isinstance(semantics, dict) else None)
             return
         adjacent = semantics.get("adjacent_structures") if isinstance(semantics.get("adjacent_structures"), list) else []
         boardable = semantics.get("boardable_structures") if isinstance(semantics.get("boardable_structures"), list) else []
@@ -8560,7 +8584,11 @@ class BattleMapWindow(tk.Toplevel):
             ship_summary = {}
         if not isinstance(ship_summary, dict) or not bool(ship_summary.get("ok")):
             self.map_ship_summary_var.set("Ships: selected structure is not a ship instance.")
+            self.map_boarding_status_var.set("Boarding: selected structure is not a ship instance.")
+            self._refresh_selected_ship_boarding_options(None, semantics)
             return
+        active_boarding_count = int(ship_summary.get("active_boarding_count", 0) or 0)
+        traversable_boarding_count = int(ship_summary.get("traversable_boarding_count", 0) or 0)
         self.map_ship_summary_var.set(
             "Ship "
             f"{str(ship_summary.get('name') or sid)} "
@@ -8568,8 +8596,109 @@ class BattleMapWindow(tk.Toplevel):
             f"· Facing: {int(round(float(ship_summary.get('facing_deg', 0.0) or 0.0))) % 360}° "
             f"· Components: {int(ship_summary.get('component_count', 0) or 0)} "
             f"· Weapons: {int(ship_summary.get('weapon_count', 0) or 0)} "
-            f"· Boarding contacts: {int(ship_summary.get('boardable_contact_count', 0) or 0)}"
+            f"· Boarding contacts: {int(ship_summary.get('boardable_contact_count', 0) or 0)} "
+            f"· Active links: {active_boarding_count} "
+            f"· Traversable links: {traversable_boarding_count}"
         )
+        self._refresh_selected_ship_boarding_options(sid, semantics)
+
+    def _refresh_selected_ship_boarding_options(self, structure_id: Optional[str], semantics: Optional[Dict[str, Any]]) -> None:
+        sid = str(structure_id or "").strip()
+        data = semantics if isinstance(semantics, dict) else {}
+        relations = data.get("ship_relations") if isinstance(data.get("ship_relations"), list) else []
+        labels: List[str] = []
+        lookup: Dict[str, str] = {}
+        active_count = 0
+        traversable_count = 0
+        for relation in relations:
+            if not isinstance(relation, dict):
+                continue
+            target_id = str(relation.get("target_id") or "").strip()
+            if not target_id:
+                continue
+            target_name = str(relation.get("target_name") or relation.get("target_id") or "").strip() or target_id
+            status = str(relation.get("boarding_status") or ("available" if relation.get("boarding_capable") else "blocked")).strip().lower()
+            if status in {"active", "prepared"}:
+                active_count += 1
+            if bool(relation.get("boarding_traversable")):
+                traversable_count += 1
+            suffix = ""
+            if status in {"active", "prepared"}:
+                suffix = "active"
+            elif bool(relation.get("boarding_capable")):
+                suffix = "available"
+            else:
+                suffix = "blocked"
+            label = f"{target_name} ({target_id}) · {suffix}"
+            labels.append(label)
+            lookup[label] = target_id
+        combo = getattr(self, "_boarding_target_combo", None)
+        self._boarding_target_lookup = lookup
+        if combo is not None:
+            try:
+                combo.configure(values=labels)
+            except Exception:
+                pass
+        selected = str(self.map_boarding_target_var.get() or "").strip()
+        if selected not in lookup:
+            self.map_boarding_target_var.set(labels[0] if labels else "")
+        if not sid:
+            self.map_boarding_status_var.set("Boarding: no ship selected.")
+            return
+        if not relations:
+            self.map_boarding_status_var.set("Boarding: no nearby ship relations.")
+            return
+        self.map_boarding_status_var.set(
+            f"Boarding from {sid}: {len(relations)} relations · Active: {active_count} · Traversable: {traversable_count}"
+        )
+
+    def _selected_ship_for_boarding_action(self) -> Optional[str]:
+        cell = self._map_author_selected_cell
+        if cell is None:
+            return None
+        return self._selected_structure_id_at_cell(int(cell[0]), int(cell[1]))
+
+    def _create_boarding_link_from_selected_ship(self) -> None:
+        source_id = self._selected_ship_for_boarding_action()
+        if not source_id:
+            messagebox.showinfo("Boarding", "Select a ship cell first.", parent=self)
+            return
+        selected = str(self.map_boarding_target_var.get() or "").strip()
+        lookup = self._boarding_target_lookup if isinstance(getattr(self, "_boarding_target_lookup", {}), dict) else {}
+        target_id = str(lookup.get(selected) or "").strip()
+        if not target_id:
+            messagebox.showinfo("Boarding", "Select a boarding target relation first.", parent=self)
+            return
+        result = self.app._create_boarding_link(source_id, target_id, initiator="dm")
+        if not bool(result.get("ok")):
+            messagebox.showerror("Boarding", str(result.get("message") or result.get("reason") or "Boarding link failed."), parent=self)
+            return
+        self._post_tactical_map_mutation(redraw_all=True, schedule_broadcast=True)
+        self._update_selected_structure_contact_status()
+
+    def _break_boarding_link_from_selected_ship(self) -> None:
+        source_id = self._selected_ship_for_boarding_action()
+        if not source_id:
+            messagebox.showinfo("Boarding", "Select a ship cell first.", parent=self)
+            return
+        selected = str(self.map_boarding_target_var.get() or "").strip()
+        lookup = self._boarding_target_lookup if isinstance(getattr(self, "_boarding_target_lookup", {}), dict) else {}
+        target_id = str(lookup.get(selected) or "").strip()
+        if not target_id:
+            messagebox.showinfo("Boarding", "Select a boarding target relation first.", parent=self)
+            return
+        result = self.app._set_boarding_link_status(
+            source_structure_id=source_id,
+            target_structure_id=target_id,
+            status="withdrawn",
+            notes="DM withdrew boarding link",
+            remove=False,
+        )
+        if not bool(result.get("ok")):
+            messagebox.showerror("Boarding", str(result.get("message") or result.get("reason") or "Boarding link update failed."), parent=self)
+            return
+        self._post_tactical_map_mutation(redraw_all=True, schedule_broadcast=True)
+        self._update_selected_structure_contact_status()
 
     def _refresh_ship_blueprint_selection(self) -> None:
         blueprints = {}

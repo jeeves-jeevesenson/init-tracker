@@ -76,6 +76,7 @@ except Exception as e:  # pragma: no cover
         f"Import error: {e}"
     )
 from map_state import (
+    BOARDING_LINK_STATUSES,
     ElevationCell,
     MAP_STATE_SCHEMA_VERSION,
     MapFeature,
@@ -9043,7 +9044,7 @@ class InitiativeTracker(base.InitiativeTracker):
         adjacent_ids = [str(item.get("target_id") or "") for item in enriched_relations if bool(item.get("adjacent"))]
         boardable_ids = [str(item.get("target_id") or "") for item in enriched_relations if bool(item.get("boardable"))]
         ship_relations: List[Dict[str, Any]] = []
-        for relation in query.ship_contacts(sid):
+        for relation in query.ship_boarding_relations(sid):
             if not isinstance(relation, dict):
                 continue
             item = dict(relation)
@@ -9053,6 +9054,14 @@ class InitiativeTracker(base.InitiativeTracker):
             ship_relations.append(item)
         ship_contact_ids = [str(item.get("target_id") or "") for item in ship_relations if bool(item.get("contact"))]
         boarding_capable_ids = [str(item.get("target_id") or "") for item in ship_relations if bool(item.get("boarding_capable"))]
+        active_boarding_ids = [
+            str(item.get("target_id") or "")
+            for item in ship_relations
+            if bool(item.get("boarding_active"))
+            and str(item.get("boarding_status") or "").strip().lower() in {"prepared", "active"}
+        ]
+        traversable_boarding_ids = [str(item.get("target_id") or "") for item in ship_relations if bool(item.get("boarding_traversable"))]
+        boarding_links = query.boarding_links_for_structure(sid)
         return {
             "ok": True,
             "structure_id": sid,
@@ -9067,6 +9076,11 @@ class InitiativeTracker(base.InitiativeTracker):
             "boarding_capable_structure_ids": boarding_capable_ids,
             "ship_contact_structures": [{"id": target_id, "name": _structure_display_name(target_id)} for target_id in ship_contact_ids],
             "boarding_capable_structures": [{"id": target_id, "name": _structure_display_name(target_id)} for target_id in boarding_capable_ids],
+            "active_boarding_structure_ids": active_boarding_ids,
+            "traversable_boarding_structure_ids": traversable_boarding_ids,
+            "active_boarding_structures": [{"id": target_id, "name": _structure_display_name(target_id)} for target_id in active_boarding_ids],
+            "traversable_boarding_structures": [{"id": target_id, "name": _structure_display_name(target_id)} for target_id in traversable_boarding_ids],
+            "boarding_links": boarding_links,
         }
 
     def _normalize_ship_blueprint_payload(
@@ -9322,6 +9336,211 @@ class InitiativeTracker(base.InitiativeTracker):
             return dict(instances.get(ship_id) or {})
         return None
 
+    def _boarding_links(self) -> List[Dict[str, Any]]:
+        state = self._capture_canonical_map_state(prefer_window=False)
+        query = MapQueryAPI(state)
+        return query.boarding_links()
+
+    def _create_boarding_link(
+        self,
+        source_structure_id: Any,
+        target_structure_id: Any,
+        *,
+        initiator: Optional[str] = None,
+        status: str = "active",
+        notes: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        source_id = str(source_structure_id or "").strip()
+        target_id = str(target_structure_id or "").strip()
+        if not source_id or not target_id:
+            return {"ok": False, "reason": "missing_structure_id", "message": "Select both a source ship and target ship."}
+        if source_id == target_id:
+            return {"ok": False, "reason": "same_structure", "message": "Source and target ships must be different."}
+        query = self._map_query_api()
+        relation = query.ship_contact_relation(source_id, target_id)
+        if not isinstance(relation, dict):
+            return {
+                "ok": False,
+                "reason": "ship_relation_not_found",
+                "message": "Ships are not in contact and cannot establish boarding.",
+            }
+        if not bool(relation.get("boarding_capable")):
+            return {
+                "ok": False,
+                "reason": "relation_not_boarding_capable",
+                "message": "Ships are in contact but this relation is not boarding-capable.",
+            }
+        desired_status = str(status or "active").strip().lower() or "active"
+        if desired_status not in BOARDING_LINK_STATUSES:
+            desired_status = "active"
+        created_id: Optional[str] = None
+
+        def _mutate(state: MapState) -> None:
+            nonlocal created_id
+            presentation = dict(state.presentation or {})
+            existing_links = presentation.get("boarding_links")
+            links = [dict(item) for item in existing_links if isinstance(item, dict)] if isinstance(existing_links, list) else []
+            now_iso = datetime.now().isoformat(timespec="seconds")
+            current_round = int(getattr(self, "round_num", 0) or 0)
+            current_turn_cid = int(getattr(self, "current_cid", 0) or 0) or None
+            source_ship = self._ship_instance_for_structure(source_id) or {}
+            target_ship = self._ship_instance_for_structure(target_id) or {}
+            normalized_source_points = (
+                relation.get("source_boarding_points")
+                if isinstance(relation.get("source_boarding_points"), list)
+                else []
+            )
+            normalized_target_points = (
+                relation.get("target_boarding_points")
+                if isinstance(relation.get("target_boarding_points"), list)
+                else []
+            )
+            source_point = dict(normalized_source_points[0]) if normalized_source_points else None
+            target_point = dict(normalized_target_points[0]) if normalized_target_points else None
+            source_edges = relation.get("source_boardable_edges") if isinstance(relation.get("source_boardable_edges"), list) else []
+            target_edges = relation.get("target_boardable_edges") if isinstance(relation.get("target_boardable_edges"), list) else []
+            bridge_links = relation.get("bridge_links") if isinstance(relation.get("bridge_links"), list) else []
+            bridge_kind = ""
+            if bridge_links and isinstance(bridge_links[0], dict):
+                bridge_kind = str((bridge_links[0] or {}).get("kind") or "").strip().lower()
+            existing_index: Optional[int] = None
+            for index, item in enumerate(links):
+                item_source = str(item.get("source_id") or "").strip()
+                item_target = str(item.get("target_id") or "").strip()
+                if {item_source, item_target} == {source_id, target_id}:
+                    existing_index = index
+                    break
+            if existing_index is not None:
+                current = dict(links[existing_index])
+                current["source_id"] = source_id
+                current["target_id"] = target_id
+                current["source_ship_id"] = str(source_ship.get("id") or current.get("source_ship_id") or "").strip()
+                current["target_ship_id"] = str(target_ship.get("id") or current.get("target_ship_id") or "").strip()
+                current["status"] = desired_status
+                current["opened_round"] = current_round
+                current["opened_turn_cid"] = current_turn_cid
+                current["initiator"] = str(initiator or current.get("initiator") or "dm").strip() or "dm"
+                current["reason"] = "manual_create_or_update"
+                current["notes"] = str(notes or current.get("notes") or "").strip() or None
+                current["updated_at"] = now_iso
+                current["source_edge"] = str(source_edges[0]).strip().lower() if source_edges else current.get("source_edge")
+                current["target_edge"] = str(target_edges[0]).strip().lower() if target_edges else current.get("target_edge")
+                if source_point is not None:
+                    current["source_point"] = source_point
+                if target_point is not None:
+                    current["target_point"] = target_point
+                current["shared_points"] = list(relation.get("boarding_points") if isinstance(relation.get("boarding_points"), list) else [])
+                if bridge_kind:
+                    current["bridge_kind"] = bridge_kind
+                links[existing_index] = current
+                created_id = str(current.get("id") or "")
+            else:
+                link_id = self._next_map_entity_id("boarding_link", [str(item.get("id") or "") for item in links])
+                created_id = link_id
+                link_payload: Dict[str, Any] = {
+                    "id": link_id,
+                    "source_id": source_id,
+                    "target_id": target_id,
+                    "source_ship_id": str(source_ship.get("id") or "").strip(),
+                    "target_ship_id": str(target_ship.get("id") or "").strip(),
+                    "status": desired_status,
+                    "initiator": str(initiator or "dm").strip() or "dm",
+                    "opened_round": current_round,
+                    "opened_turn_cid": current_turn_cid,
+                    "reason": "manual_create",
+                    "notes": str(notes or "").strip() or None,
+                    "created_at": now_iso,
+                    "updated_at": now_iso,
+                    "source_edge": str(source_edges[0]).strip().lower() if source_edges else None,
+                    "target_edge": str(target_edges[0]).strip().lower() if target_edges else None,
+                    "source_point": source_point,
+                    "target_point": target_point,
+                    "shared_points": list(relation.get("boarding_points") if isinstance(relation.get("boarding_points"), list) else []),
+                    "bridge_kind": bridge_kind or None,
+                }
+                links.append(link_payload)
+            presentation["boarding_links"] = links
+            state.presentation = presentation
+
+        self._mutate_canonical_map_state(_mutate)
+        refreshed = self._map_query_api().boarding_links()
+        link = next((item for item in refreshed if str(item.get("id") or "") == str(created_id or "")), None)
+        if not isinstance(link, dict):
+            return {"ok": False, "reason": "link_not_found_after_create", "message": "Boarding link could not be confirmed after update."}
+        status_label = str(link.get("status") or "active")
+        return {
+            "ok": True,
+            "boarding_link": link,
+            "message": f"Boarding link {str(link.get('id') or '')} is now {status_label}.",
+        }
+
+    def _set_boarding_link_status(
+        self,
+        *,
+        link_id: Any = None,
+        source_structure_id: Any = None,
+        target_structure_id: Any = None,
+        status: str = "withdrawn",
+        notes: Optional[str] = None,
+        remove: bool = False,
+    ) -> Dict[str, Any]:
+        desired_status = str(status or "withdrawn").strip().lower() or "withdrawn"
+        if desired_status not in BOARDING_LINK_STATUSES:
+            desired_status = "withdrawn"
+        link_key = str(link_id or "").strip()
+        source_id = str(source_structure_id or "").strip()
+        target_id = str(target_structure_id or "").strip()
+        query = self._map_query_api()
+        links = query.boarding_links()
+        selected_link: Optional[Dict[str, Any]] = None
+        if link_key:
+            selected_link = next((item for item in links if str(item.get("id") or "").strip() == link_key), None)
+        elif source_id and target_id:
+            selected_link = next(
+                (
+                    item
+                    for item in links
+                    if {str(item.get("source_id") or "").strip(), str(item.get("target_id") or "").strip()}
+                    == {source_id, target_id}
+                ),
+                None,
+            )
+        if not isinstance(selected_link, dict):
+            return {"ok": False, "reason": "boarding_link_not_found", "message": "No boarding link was found for this relation."}
+        target_link_id = str(selected_link.get("id") or "").strip()
+        if not target_link_id:
+            return {"ok": False, "reason": "missing_boarding_link_id", "message": "Boarding link ID is missing."}
+
+        def _mutate(state: MapState) -> None:
+            presentation = dict(state.presentation or {})
+            existing_links = presentation.get("boarding_links")
+            links_raw = [dict(item) for item in existing_links if isinstance(item, dict)] if isinstance(existing_links, list) else []
+            updated_links: List[Dict[str, Any]] = []
+            now_iso = datetime.now().isoformat(timespec="seconds")
+            for item in links_raw:
+                item_id = str(item.get("id") or "").strip()
+                if item_id != target_link_id:
+                    updated_links.append(item)
+                    continue
+                if remove:
+                    continue
+                next_item = dict(item)
+                next_item["status"] = desired_status
+                next_item["reason"] = f"manual_{desired_status}"
+                next_item["updated_at"] = now_iso
+                next_item["notes"] = str(notes or item.get("notes") or "").strip() or None
+                updated_links.append(next_item)
+            presentation["boarding_links"] = updated_links
+            state.presentation = presentation
+
+        self._mutate_canonical_map_state(_mutate)
+        return {
+            "ok": True,
+            "boarding_link_id": target_link_id,
+            "status": None if remove else desired_status,
+            "message": f"Boarding link {target_link_id} {'removed' if remove else f'set to {desired_status}'}.",
+        }
+
     def _selected_ship_summary(self, structure_id: Any) -> Dict[str, Any]:
         sid = str(structure_id or "").strip()
         if not sid:
@@ -9336,6 +9555,12 @@ class InitiativeTracker(base.InitiativeTracker):
         components = list(ship.get("components") if isinstance(ship.get("components"), list) else [])
         weapons = list(ship.get("mounted_weapons") if isinstance(ship.get("mounted_weapons"), list) else [])
         boardable = semantics.get("boarding_capable_structures") if isinstance(semantics.get("boarding_capable_structures"), list) else []
+        active_boarding = semantics.get("active_boarding_structures") if isinstance(semantics.get("active_boarding_structures"), list) else []
+        traversable_boarding = (
+            semantics.get("traversable_boarding_structures")
+            if isinstance(semantics.get("traversable_boarding_structures"), list)
+            else []
+        )
         return {
             "ok": True,
             "ship_id": str(ship.get("id") or ""),
@@ -9346,9 +9571,13 @@ class InitiativeTracker(base.InitiativeTracker):
             "component_count": len(components),
             "weapon_count": len(weapons),
             "boardable_contact_count": len(boardable),
+            "active_boarding_count": len(active_boarding),
+            "traversable_boarding_count": len(traversable_boarding),
             "components": components,
             "mounted_weapons": weapons,
             "boardable_contacts": boardable,
+            "active_boarding_contacts": active_boarding,
+            "traversable_boarding_contacts": traversable_boarding,
             "contact_summary": semantics,
         }
 
@@ -9764,6 +9993,43 @@ class InitiativeTracker(base.InitiativeTracker):
             defer_broadcast=defer_broadcast,
         )
 
+    def _reconcile_boarding_links_for_state(self, state: MapState) -> None:
+        presentation = dict(state.presentation if isinstance(state.presentation, dict) else {})
+        links_raw = presentation.get("boarding_links")
+        if not isinstance(links_raw, list) or not links_raw:
+            return
+        query = MapQueryAPI(state)
+        normalized_links = query.boarding_links()
+        if not normalized_links:
+            presentation["boarding_links"] = []
+            state.presentation = presentation
+            return
+        updated_links: List[Dict[str, Any]] = []
+        now_iso = datetime.now().isoformat(timespec="seconds")
+        for link in normalized_links:
+            item = dict(link)
+            if item.get("relation_found") is False and str(item.get("status") or "").strip().lower() in {"prepared", "active"}:
+                item["status"] = "broken"
+                item["reason"] = "relation_not_found"
+                item["updated_at"] = now_iso
+            elif str(item.get("status") or "").strip().lower() == "blocked" and not item.get("reason"):
+                item["reason"] = str(item.get("blocking_reason") or "blocked").strip() or "blocked"
+                item["updated_at"] = now_iso
+            for transient_key in (
+                "relation_found",
+                "contact",
+                "boarding_capable",
+                "contact_type",
+                "boarding_points",
+                "bridge_links",
+                "blocking_reason",
+                "traversable",
+            ):
+                item.pop(transient_key, None)
+            updated_links.append(item)
+        presentation["boarding_links"] = updated_links
+        state.presentation = presentation
+
     def _move_map_structure(self, structure_id: Any, delta_col: int, delta_row: int) -> bool:
         sid = str(structure_id or "").strip()
         if not sid:
@@ -9853,6 +10119,7 @@ class InitiativeTracker(base.InitiativeTracker):
                     continue
                 token_positions[int(cid)] = (int(pos[0]) + dc, int(pos[1]) + dr)
             state.token_positions = token_positions
+            self._reconcile_boarding_links_for_state(state)
             moved = True
             self._last_map_structure_move_error = ""
             self._last_map_structure_move_blockers = {}
@@ -10804,6 +11071,7 @@ class InitiativeTracker(base.InitiativeTracker):
                     "structure_templates": dict(source.get("structure_templates") if isinstance(source.get("structure_templates"), dict) else {}),
                     "ship_blueprints": dict(source.get("ship_blueprints") if isinstance(source.get("ship_blueprints"), dict) else {}),
                     "ship_instances": dict(source.get("ship_instances") if isinstance(source.get("ship_instances"), dict) else {}),
+                    "boarding_links": list(source.get("boarding_links") if isinstance(source.get("boarding_links"), list) else []),
                 },
             }
         )
@@ -14024,6 +14292,9 @@ class InitiativeTracker(base.InitiativeTracker):
             "turn_order": turn_order,
             "auras_enabled": bool(self.__dict__.get("_lan_auras_enabled", True)),
         }
+        map_query = MapQueryAPI(self._capture_canonical_map_state(prefer_window=False))
+        snap["boarding_links"] = map_query.boarding_links()
+        snap["active_boarding_links"] = [dict(item) for item in snap["boarding_links"] if bool(item.get("traversable"))]
         structure_entries = [dict(item) for item in (canonical_payload.get("structures") if isinstance(canonical_payload.get("structures"), list) else []) if isinstance(item, dict)]
         ship_instances = self._ship_instances()
         ships_payload: List[Dict[str, Any]] = []
@@ -14057,6 +14328,11 @@ class InitiativeTracker(base.InitiativeTracker):
                     "ship_relations": list(semantics.get("ship_relations") if isinstance(semantics.get("ship_relations"), list) else []),
                     "ship_contact_structures": list(semantics.get("ship_contact_structures") if isinstance(semantics.get("ship_contact_structures"), list) else []),
                     "boarding_capable_structures": list(semantics.get("boarding_capable_structures") if isinstance(semantics.get("boarding_capable_structures"), list) else []),
+                    "active_boarding_structure_ids": list(semantics.get("active_boarding_structure_ids") if isinstance(semantics.get("active_boarding_structure_ids"), list) else []),
+                    "active_boarding_structures": list(semantics.get("active_boarding_structures") if isinstance(semantics.get("active_boarding_structures"), list) else []),
+                    "traversable_boarding_structure_ids": list(semantics.get("traversable_boarding_structure_ids") if isinstance(semantics.get("traversable_boarding_structure_ids"), list) else []),
+                    "traversable_boarding_structures": list(semantics.get("traversable_boarding_structures") if isinstance(semantics.get("traversable_boarding_structures"), list) else []),
+                    "boarding_links": list(semantics.get("boarding_links") if isinstance(semantics.get("boarding_links"), list) else []),
                 }
             ship_summary = self._selected_ship_summary(sid)
             if bool(ship_summary.get("ok")):
@@ -14069,6 +14345,8 @@ class InitiativeTracker(base.InitiativeTracker):
                     "component_count": int(ship_summary.get("component_count", 0) or 0),
                     "weapon_count": int(ship_summary.get("weapon_count", 0) or 0),
                     "boardable_contact_count": int(ship_summary.get("boardable_contact_count", 0) or 0),
+                    "active_boarding_count": int(ship_summary.get("active_boarding_count", 0) or 0),
+                    "traversable_boarding_count": int(ship_summary.get("traversable_boarding_count", 0) or 0),
                 }
             structure_entries[index] = structure_entry
         snap["structures"] = structure_entries
