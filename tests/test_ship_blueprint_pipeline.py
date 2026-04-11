@@ -16,13 +16,17 @@ class ShipBlueprintPipelineTests(unittest.TestCase):
     def test_repo_blueprint_load_includes_imported_starters(self):
         runtime, errors = load_repo_runtime_ship_blueprints()
         self.assertFalse(errors, msg=errors)
+        self.assertIn("dinghy_launch", runtime)
         self.assertIn("sloop", runtime)
         self.assertIn("brig", runtime)
+        self.assertIn("frigate_heavy", runtime)
         self.assertEqual(((runtime["sloop"].get("render") or {}).get("style")), "polygon")
         self.assertEqual(((runtime["sloop"].get("render") or {}).get("base_image_key")), "sloop_hull")
         self.assertEqual(((runtime["sloop"].get("render") or {}).get("fallback_style")), "polygon")
         self.assertEqual(((runtime["sloop"].get("render") or {}).get("deck_texture_key")), "ship_deck_wood")
+        self.assertEqual(((runtime["dinghy_launch"].get("render") or {}).get("style")), "polygon")
         self.assertTrue(isinstance(runtime["sloop"].get("deck_regions"), list) and runtime["sloop"].get("deck_regions"))
+        self.assertTrue(isinstance(runtime["frigate_heavy"].get("deck_regions"), list) and runtime["frigate_heavy"].get("deck_regions"))
         self.assertTrue(((runtime["brig"].get("local_space") or {}).get("hull_cells")))
 
     def test_composite_schema_validation_rejects_invalid_anchor(self):
@@ -66,10 +70,13 @@ class ShipBlueprintPipelineTests(unittest.TestCase):
         app._map_state = tracker_mod.MapState.from_dict({"grid": {"cols": 30, "rows": 30, "feet_per_square": 5}})
         app._capture_canonical_map_state = lambda prefer_window=False: app._map_state.normalized()
         blueprints = app._ship_blueprints()
+        self.assertIn("dinghy_launch", blueprints)
         self.assertIn("sloop", blueprints)
         self.assertIn("brig", blueprints)
+        self.assertIn("frigate_heavy", blueprints)
         self.assertTrue(blueprints["sloop"].get("deck_regions"))
         self.assertTrue(blueprints["brig"].get("deck_regions"))
+        self.assertTrue(blueprints["frigate_heavy"].get("deck_regions"))
         self.assertEqual(((blueprints["sloop"].get("render") or {}).get("style")), "polygon")
         self.assertTrue(((blueprints["brig"].get("local_space") or {}).get("hull_cells")))
         path = app._ship_render_asset_path_for_key("sloop_hull")
@@ -81,8 +88,20 @@ class ShipBlueprintPipelineTests(unittest.TestCase):
         normalized_dir = repo_root / "assets" / "ships" / "blueprints"
         blueprints, errors = load_composite_ship_blueprints_from_dir(normalized_dir)
         self.assertFalse(errors, msg=errors)
+        self.assertIn("dinghy_launch", blueprints)
         self.assertIn("sloop", blueprints)
         self.assertIn("brig", blueprints)
+        self.assertIn("frigate_heavy", blueprints)
+
+    def test_imported_starter_region_labels_are_present(self):
+        runtime, errors = load_repo_runtime_ship_blueprints()
+        self.assertFalse(errors, msg=errors)
+        dinghy_labels = {str(region.get("label") or "") for region in (runtime["dinghy_launch"].get("deck_regions") or []) if isinstance(region, dict)}
+        frigate_labels = {str(region.get("label") or "") for region in (runtime["frigate_heavy"].get("deck_regions") or []) if isinstance(region, dict)}
+        self.assertIn("Open Deck", dinghy_labels)
+        self.assertIn("Stern", dinghy_labels)
+        self.assertIn("Main Battery", frigate_labels)
+        self.assertIn("Helm / Captain's Stern", frigate_labels)
 
     def test_render_metadata_supports_asset_fields_and_facing_overrides(self):
         normalized, errors = normalize_composite_ship_blueprint(

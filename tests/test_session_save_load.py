@@ -862,7 +862,7 @@ class SessionSaveLoadTests(unittest.TestCase):
             app._map_state = tracker_mod.MapState.from_dict({"grid": {"cols": 80, "rows": 80, "feet_per_square": 5}})
             app._lan_grid_cols = 80
             app._lan_grid_rows = 80
-            starters = ("rowboat_launch", "sloop", "brig", "galleon_heavy")
+            starters = ("dinghy_launch", "sloop", "brig", "frigate_heavy")
             for index, blueprint_id in enumerate(starters):
                 created = app._instantiate_ship_blueprint(
                     blueprint_id,
@@ -878,7 +878,7 @@ class SessionSaveLoadTests(unittest.TestCase):
             app._map_state = tracker_mod.MapState.from_dict({"grid": {"cols": 90, "rows": 90, "feet_per_square": 5}})
             app._lan_grid_cols = 90
             app._lan_grid_rows = 90
-            starters = ("rowboat_launch", "sloop", "brig", "galleon_heavy")
+            starters = ("dinghy_launch", "sloop", "brig", "frigate_heavy")
             for index, blueprint_id in enumerate(starters):
                 anchor_col = 8 + index * 20
                 anchor_row = 10

@@ -1,16 +1,17 @@
 {
   "id": "sloop",
-  "width": 4,
-  "height": 3,
+  "width": 7,
+  "height": 14,
   "ship": {
     "id": "sloop",
     "display_name": "Sloop",
+    "subtitle": "Fast small combat vessel",
     "kind": "ship_hull",
     "category": "sailing_ship",
     "size": "medium",
     "render_anchor": {
-      "col": 1,
-      "row": 1
+      "col": 3,
+      "row": 7
     },
     "facing_mode": "rotate_90",
     "boarding_edges": [
@@ -35,7 +36,7 @@
         "weapon_hardpoints"
       ],
       "preview": {
-        "emoji": "⛵"
+        "emoji": "\u26f5"
       }
     }
   },
@@ -44,28 +45,8 @@
       "name": "hull",
       "cells": [
         {
-          "col": 0,
-          "row": 0
-        },
-        {
-          "col": 1,
-          "row": 0
-        },
-        {
-          "col": 2,
-          "row": 0
-        },
-        {
           "col": 3,
           "row": 0
-        },
-        {
-          "col": 0,
-          "row": 1
-        },
-        {
-          "col": 1,
-          "row": 1
         },
         {
           "col": 2,
@@ -74,6 +55,226 @@
         {
           "col": 3,
           "row": 1
+        },
+        {
+          "col": 4,
+          "row": 1
+        },
+        {
+          "col": 2,
+          "row": 2
+        },
+        {
+          "col": 3,
+          "row": 2
+        },
+        {
+          "col": 4,
+          "row": 2
+        },
+        {
+          "col": 1,
+          "row": 3
+        },
+        {
+          "col": 2,
+          "row": 3
+        },
+        {
+          "col": 3,
+          "row": 3
+        },
+        {
+          "col": 4,
+          "row": 3
+        },
+        {
+          "col": 5,
+          "row": 3
+        },
+        {
+          "col": 1,
+          "row": 4
+        },
+        {
+          "col": 2,
+          "row": 4
+        },
+        {
+          "col": 3,
+          "row": 4
+        },
+        {
+          "col": 4,
+          "row": 4
+        },
+        {
+          "col": 5,
+          "row": 4
+        },
+        {
+          "col": 1,
+          "row": 5
+        },
+        {
+          "col": 2,
+          "row": 5
+        },
+        {
+          "col": 3,
+          "row": 5
+        },
+        {
+          "col": 4,
+          "row": 5
+        },
+        {
+          "col": 5,
+          "row": 5
+        },
+        {
+          "col": 0,
+          "row": 6
+        },
+        {
+          "col": 1,
+          "row": 6
+        },
+        {
+          "col": 2,
+          "row": 6
+        },
+        {
+          "col": 3,
+          "row": 6
+        },
+        {
+          "col": 4,
+          "row": 6
+        },
+        {
+          "col": 5,
+          "row": 6
+        },
+        {
+          "col": 6,
+          "row": 6
+        },
+        {
+          "col": 0,
+          "row": 7
+        },
+        {
+          "col": 1,
+          "row": 7
+        },
+        {
+          "col": 2,
+          "row": 7
+        },
+        {
+          "col": 3,
+          "row": 7
+        },
+        {
+          "col": 4,
+          "row": 7
+        },
+        {
+          "col": 5,
+          "row": 7
+        },
+        {
+          "col": 6,
+          "row": 7
+        },
+        {
+          "col": 1,
+          "row": 8
+        },
+        {
+          "col": 2,
+          "row": 8
+        },
+        {
+          "col": 3,
+          "row": 8
+        },
+        {
+          "col": 4,
+          "row": 8
+        },
+        {
+          "col": 5,
+          "row": 8
+        },
+        {
+          "col": 1,
+          "row": 9
+        },
+        {
+          "col": 2,
+          "row": 9
+        },
+        {
+          "col": 3,
+          "row": 9
+        },
+        {
+          "col": 4,
+          "row": 9
+        },
+        {
+          "col": 5,
+          "row": 9
+        },
+        {
+          "col": 1,
+          "row": 10
+        },
+        {
+          "col": 2,
+          "row": 10
+        },
+        {
+          "col": 3,
+          "row": 10
+        },
+        {
+          "col": 4,
+          "row": 10
+        },
+        {
+          "col": 5,
+          "row": 10
+        },
+        {
+          "col": 2,
+          "row": 11
+        },
+        {
+          "col": 3,
+          "row": 11
+        },
+        {
+          "col": 4,
+          "row": 11
+        },
+        {
+          "col": 2,
+          "row": 12
+        },
+        {
+          "col": 3,
+          "row": 12
+        },
+        {
+          "col": 4,
+          "row": 12
+        },
+        {
+          "col": 3,
+          "row": 13
         }
       ]
     },
@@ -84,8 +285,8 @@
           "id": "mast_main",
           "name": "Main Mast",
           "kind": "mast",
-          "col": 1,
-          "row": 0,
+          "col": 3,
+          "row": 8,
           "tags": [
             "ship_fixture",
             "mast",
@@ -96,8 +297,8 @@
           "id": "hatch_main",
           "name": "Hatch",
           "kind": "hatch",
-          "col": 2,
-          "row": 1,
+          "col": 3,
+          "row": 7,
           "tags": [
             "ship_fixture",
             "hatch",
@@ -113,8 +314,8 @@
           "id": "hull",
           "name": "Hull",
           "kind": "hull",
-          "col": 1,
-          "row": 1,
+          "col": 3,
+          "row": 7,
           "max_hp": 300,
           "ac": 15,
           "damage_threshold": 8
@@ -124,7 +325,7 @@
           "name": "Helm",
           "kind": "control",
           "col": 3,
-          "row": 0,
+          "row": 13,
           "max_hp": 40,
           "ac": 14
         },
@@ -132,8 +333,8 @@
           "id": "rigging",
           "name": "Rigging",
           "kind": "rigging",
-          "col": 1,
-          "row": 0,
+          "col": 3,
+          "row": 8,
           "max_hp": 50,
           "ac": 12
         }
@@ -149,7 +350,7 @@
           "weapon_type": "cannon",
           "arc": "port",
           "col": 0,
-          "row": 0
+          "row": 6
         },
         {
           "id": "starboard_cannon",
@@ -157,8 +358,8 @@
           "kind": "cannon",
           "weapon_type": "cannon",
           "arc": "starboard",
-          "col": 3,
-          "row": 1
+          "col": 6,
+          "row": 6
         }
       ]
     },
@@ -169,19 +370,25 @@
           "id": "port_mid",
           "name": "Port Rail",
           "col": 0,
-          "row": 1
+          "row": 7
         },
         {
           "id": "starboard_mid",
           "name": "Starboard Rail",
-          "col": 3,
-          "row": 0
+          "col": 6,
+          "row": 7
         },
         {
           "id": "fore",
           "name": "Bow Rail",
-          "col": 1,
+          "col": 3,
           "row": 0
+        },
+        {
+          "id": "aft",
+          "name": "Stern Rail",
+          "col": 3,
+          "row": 13
         }
       ]
     },
@@ -189,72 +396,256 @@
       "name": "deck_regions",
       "objects": [
         {
-          "id": "main_deck",
-          "label": "Main Deck",
-          "category": "main_deck",
-          "render_hint": {"label_priority": 10},
-          "cells": [
-            {"col": 0, "row": 0},
-            {"col": 0, "row": 1},
-            {"col": 1, "row": 0},
-            {"col": 1, "row": 1},
-            {"col": 2, "row": 0},
-            {"col": 2, "row": 1},
-            {"col": 3, "row": 0},
-            {"col": 3, "row": 1}
-          ]
-        },
-        {
-          "id": "quarterdeck",
-          "label": "Quarterdeck / Helm",
-          "category": "helm",
-          "render_hint": {"label_priority": 20},
-          "cells": [
-            {"col": 2, "row": 0},
-            {"col": 3, "row": 0}
-          ]
-        },
-        {
           "id": "forecastle",
           "label": "Forecastle",
           "category": "forecastle",
           "cells": [
-            {"col": 0, "row": 0},
-            {"col": 0, "row": 1}
+            {
+              "col": 3,
+              "row": 0
+            },
+            {
+              "col": 2,
+              "row": 1
+            },
+            {
+              "col": 3,
+              "row": 1
+            },
+            {
+              "col": 4,
+              "row": 1
+            },
+            {
+              "col": 2,
+              "row": 2
+            },
+            {
+              "col": 3,
+              "row": 2
+            },
+            {
+              "col": 4,
+              "row": 2
+            }
           ]
         },
         {
-          "id": "hold_hatch",
-          "label": "Hold Hatch",
-          "category": "hold",
+          "id": "main_deck",
+          "label": "Main Deck",
+          "category": "main_deck",
           "cells": [
-            {"col": 2, "row": 1}
-          ]
-        },
-        {
-          "id": "port_battery",
-          "label": "Port Battery",
-          "category": "port_battery",
-          "cells": [
-            {"col": 0, "row": 0}
-          ]
-        },
-        {
-          "id": "starboard_battery",
-          "label": "Starboard Battery",
-          "category": "starboard_battery",
-          "cells": [
-            {"col": 3, "row": 1}
-          ]
+            {
+              "col": 1,
+              "row": 3
+            },
+            {
+              "col": 2,
+              "row": 3
+            },
+            {
+              "col": 3,
+              "row": 3
+            },
+            {
+              "col": 4,
+              "row": 3
+            },
+            {
+              "col": 5,
+              "row": 3
+            },
+            {
+              "col": 1,
+              "row": 4
+            },
+            {
+              "col": 2,
+              "row": 4
+            },
+            {
+              "col": 3,
+              "row": 4
+            },
+            {
+              "col": 4,
+              "row": 4
+            },
+            {
+              "col": 5,
+              "row": 4
+            },
+            {
+              "col": 1,
+              "row": 5
+            },
+            {
+              "col": 2,
+              "row": 5
+            },
+            {
+              "col": 3,
+              "row": 5
+            },
+            {
+              "col": 4,
+              "row": 5
+            },
+            {
+              "col": 5,
+              "row": 5
+            },
+            {
+              "col": 0,
+              "row": 6
+            },
+            {
+              "col": 1,
+              "row": 6
+            },
+            {
+              "col": 2,
+              "row": 6
+            },
+            {
+              "col": 3,
+              "row": 6
+            },
+            {
+              "col": 4,
+              "row": 6
+            },
+            {
+              "col": 5,
+              "row": 6
+            },
+            {
+              "col": 6,
+              "row": 6
+            },
+            {
+              "col": 0,
+              "row": 7
+            },
+            {
+              "col": 1,
+              "row": 7
+            },
+            {
+              "col": 2,
+              "row": 7
+            },
+            {
+              "col": 3,
+              "row": 7
+            },
+            {
+              "col": 4,
+              "row": 7
+            },
+            {
+              "col": 5,
+              "row": 7
+            },
+            {
+              "col": 6,
+              "row": 7
+            }
+          ],
+          "render_hint": {
+            "label_priority": 10
+          }
         },
         {
           "id": "mast_zone",
           "label": "Mast Zone",
           "category": "mast_zone",
           "cells": [
-            {"col": 1, "row": 0},
-            {"col": 1, "row": 1}
+            {
+              "col": 2,
+              "row": 8
+            },
+            {
+              "col": 3,
+              "row": 8
+            },
+            {
+              "col": 4,
+              "row": 8
+            },
+            {
+              "col": 2,
+              "row": 9
+            },
+            {
+              "col": 3,
+              "row": 9
+            },
+            {
+              "col": 4,
+              "row": 9
+            }
           ]
+        },
+        {
+          "id": "quarterdeck",
+          "label": "Quarterdeck",
+          "category": "quarterdeck",
+          "cells": [
+            {
+              "col": 2,
+              "row": 10
+            },
+            {
+              "col": 3,
+              "row": 10
+            },
+            {
+              "col": 4,
+              "row": 10
+            },
+            {
+              "col": 2,
+              "row": 11
+            },
+            {
+              "col": 3,
+              "row": 11
+            },
+            {
+              "col": 4,
+              "row": 11
+            }
+          ],
+          "render_hint": {
+            "label_priority": 20
+          }
+        },
+        {
+          "id": "helm",
+          "label": "Helm",
+          "category": "helm",
+          "cells": [
+            {
+              "col": 2,
+              "row": 12
+            },
+            {
+              "col": 3,
+              "row": 12
+            },
+            {
+              "col": 4,
+              "row": 12
+            },
+            {
+              "col": 3,
+              "row": 13
+            }
+          ],
+          "render_hint": {
+            "label_priority": 30
+          }
         }
       ]
     }
