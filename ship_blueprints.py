@@ -87,6 +87,46 @@ def _normalize_render_facing_assets(raw: Any) -> Dict[str, Dict[str, Any]]:
     return normalized
 
 
+def _normalize_deck_regions(raw: Any) -> List[Dict[str, Any]]:
+    out: List[Dict[str, Any]] = []
+    for index, item in enumerate(raw if isinstance(raw, list) else []):
+        if not isinstance(item, dict):
+            continue
+        region_id = str(item.get("id") or f"region_{index + 1}").strip().lower() or f"region_{index + 1}"
+        label = str(item.get("label") or item.get("display_name") or item.get("name") or region_id.replace("_", " ").title()).strip() or region_id
+        category = str(item.get("category") or item.get("kind") or "").strip().lower()
+        tags = _normalize_tags(item.get("tags"))
+        render_hint_raw = item.get("render_hint") if isinstance(item.get("render_hint"), dict) else {}
+        render_hint: Dict[str, Any] = {}
+        if render_hint_raw.get("overlay_style") is not None:
+            render_hint["overlay_style"] = str(render_hint_raw.get("overlay_style")).strip().lower()
+        if render_hint_raw.get("label_priority") is not None:
+            render_hint["label_priority"] = _as_int(render_hint_raw.get("label_priority"))
+        if item.get("overlay_style") is not None and "overlay_style" not in render_hint:
+            render_hint["overlay_style"] = str(item.get("overlay_style")).strip().lower()
+        if item.get("label_priority") is not None and "label_priority" not in render_hint:
+            render_hint["label_priority"] = _as_int(item.get("label_priority"))
+        cells = _normalize_cells(item.get("cells"))
+        area = item.get("area") if isinstance(item.get("area"), dict) else {}
+        if not cells and area:
+            start_col = _as_int(area.get("col"), 0)
+            start_row = _as_int(area.get("row"), 0)
+            width = max(1, _as_int(area.get("width"), 1))
+            height = max(1, _as_int(area.get("height"), 1))
+            generated = [{"col": int(start_col + dc), "row": int(start_row + dr)} for dr in range(height) for dc in range(width)]
+            cells = _normalize_cells(generated)
+        entry: Dict[str, Any] = {"id": region_id, "label": label, "cells": cells}
+        if category:
+            entry["category"] = category
+        if tags:
+            entry["tags"] = tags
+        if render_hint:
+            entry["render_hint"] = render_hint
+        out.append(entry)
+    out.sort(key=lambda entry: str(entry.get("id") or ""))
+    return out
+
+
 def normalize_composite_ship_blueprint(payload: Any, *, source: str = "") -> Tuple[Dict[str, Any], List[str]]:
     data = dict(payload) if isinstance(payload, dict) else {}
     errors: List[str] = []
@@ -123,8 +163,11 @@ def normalize_composite_ship_blueprint(payload: Any, *, source: str = "") -> Tup
     image_offset_col = _as_int(render.get("image_offset_col"), 0)
     image_offset_row = _as_int(render.get("image_offset_row"), 0)
     fallback_style = str(render.get("fallback_style") or "polygon").strip().lower() or "polygon"
+    deck_texture_key = str(render.get("deck_texture_key") or "ship_deck_wood").strip() or "ship_deck_wood"
+    deck_texture_path = str(render.get("deck_texture_path") or "").strip()
     engagement_defaults = dict(data.get("engagement_defaults") if isinstance(data.get("engagement_defaults"), dict) else {})
     crew = dict(engagement_defaults.get("crew") if isinstance(engagement_defaults.get("crew"), dict) else {})
+    deck_regions = _normalize_deck_regions(data.get("deck_regions"))
     normalized = {
         "schema": COMPOSITE_SHIP_SCHEMA,
         "id": blueprint_id,
@@ -152,6 +195,8 @@ def normalize_composite_ship_blueprint(payload: Any, *, source: str = "") -> Tup
             "fallback_style": fallback_style,
             "base_image_key": base_image_key,
             "base_image_path": base_image_path,
+            "deck_texture_key": deck_texture_key,
+            "deck_texture_path": deck_texture_path,
             "image_anchor": image_anchor,
             "image_offset_col": image_offset_col,
             "image_offset_row": image_offset_row,
@@ -159,6 +204,7 @@ def normalize_composite_ship_blueprint(payload: Any, *, source: str = "") -> Tup
             "overlay_hints": _normalize_tags(render.get("overlay_hints")),
             "preview": dict(render.get("preview") if isinstance(render.get("preview"), dict) else {}),
         },
+        "deck_regions": deck_regions,
         "engagement_defaults": {
             "crew": {
                 "min_crew": max(0, _as_int(crew.get("min_crew"), _as_int(data.get("crew_min"), 0))),
@@ -176,6 +222,25 @@ def normalize_composite_ship_blueprint(payload: Any, *, source: str = "") -> Tup
     for point in normalized["boarding"]["points"]:
         if (int(point.get("col", 0)), int(point.get("row", 0))) not in hull_set:
             errors.append(f"boarding_point_outside_hull:{point.get('id')}")
+    seen_regions: set[str] = set()
+    for region in normalized.get("deck_regions", []):
+        rid = str(region.get("id") or "").strip().lower()
+        if not rid:
+            errors.append("deck_region_missing_id")
+            continue
+        if rid in seen_regions:
+            errors.append(f"duplicate_deck_region_id:{rid}")
+        seen_regions.add(rid)
+        cells = list(region.get("cells") if isinstance(region.get("cells"), list) else [])
+        if not cells:
+            errors.append(f"deck_region_empty:{rid}")
+            continue
+        for cell in cells:
+            if not isinstance(cell, dict):
+                continue
+            if (int(cell.get("col", 0)), int(cell.get("row", 0))) not in hull_set:
+                errors.append(f"deck_region_outside_hull:{rid}")
+                break
     if source:
         normalized["source"] = source
     return normalized, sorted(set(errors))
@@ -213,6 +278,7 @@ def runtime_blueprint_from_composite(normalized: Dict[str, Any]) -> Dict[str, An
             "facing_mode": str(local_space.get("facing_mode") or "rotate_90"),
             "hull_cells": [dict(item) for item in (local_space.get("hull_cells") if isinstance(local_space.get("hull_cells"), list) else []) if isinstance(item, dict)],
         },
+        "deck_regions": [dict(item) for item in (normalized.get("deck_regions") if isinstance(normalized.get("deck_regions"), list) else []) if isinstance(item, dict)],
     }
 
 
@@ -276,6 +342,51 @@ def import_tiled_ship_blueprint(tiled_payload: Any, *, blueprint_id: Optional[st
             return []
         return _normalize_local_entities(layer.get("objects"), prefix=layer_name.rstrip("s"))
 
+    def _deck_regions() -> List[Dict[str, Any]]:
+        layer = layers.get("deck_regions")
+        if not isinstance(layer, dict):
+            return []
+        out: List[Dict[str, Any]] = []
+        for index, raw in enumerate(layer.get("objects") if isinstance(layer.get("objects"), list) else []):
+            if not isinstance(raw, dict):
+                continue
+            properties = raw.get("properties") if isinstance(raw.get("properties"), dict) else {}
+            rid = str(raw.get("id") or properties.get("id") or f"region_{index + 1}").strip().lower() or f"region_{index + 1}"
+            category = str(raw.get("category") or raw.get("kind") or raw.get("type") or properties.get("category") or "").strip().lower()
+            label = str(raw.get("label") or raw.get("name") or properties.get("label") or rid.replace("_", " ").title()).strip() or rid
+            tags = _normalize_tags(raw.get("tags") if raw.get("tags") is not None else properties.get("tags"))
+            render_hint_raw = raw.get("render_hint") if isinstance(raw.get("render_hint"), dict) else {}
+            if not render_hint_raw and isinstance(properties.get("render_hint"), dict):
+                render_hint_raw = dict(properties.get("render_hint"))
+            render_hint: Dict[str, Any] = {}
+            overlay_style = render_hint_raw.get("overlay_style", raw.get("overlay_style", properties.get("overlay_style")))
+            if overlay_style is not None:
+                render_hint["overlay_style"] = str(overlay_style).strip().lower()
+            label_priority = render_hint_raw.get("label_priority", raw.get("label_priority", properties.get("label_priority")))
+            if label_priority is not None:
+                render_hint["label_priority"] = _as_int(label_priority)
+            cells = _normalize_cells(raw.get("cells") if raw.get("cells") is not None else properties.get("cells"))
+            area = raw.get("area") if isinstance(raw.get("area"), dict) else (properties.get("area") if isinstance(properties.get("area"), dict) else {})
+            if not cells:
+                base_col = _as_int(raw.get("col", properties.get("col", 0)), 0)
+                base_row = _as_int(raw.get("row", properties.get("row", 0)), 0)
+                width = max(1, _as_int(raw.get("width", properties.get("width", 1)), 1))
+                height = max(1, _as_int(raw.get("height", properties.get("height", 1)), 1))
+                area = {"col": int(base_col), "row": int(base_row), "width": int(width), "height": int(height)}
+            entry: Dict[str, Any] = {"id": rid, "label": label}
+            if category:
+                entry["category"] = category
+            if tags:
+                entry["tags"] = tags
+            if render_hint:
+                entry["render_hint"] = render_hint
+            if cells:
+                entry["cells"] = cells
+            else:
+                entry["area"] = dict(area)
+            out.append(entry)
+        return out
+
     payload = {
         "schema": COMPOSITE_SHIP_SCHEMA,
         "id": bid,
@@ -299,6 +410,7 @@ def import_tiled_ship_blueprint(tiled_payload: Any, *, blueprint_id: Optional[st
             "bridges": [dict(item) for item in (ship.get("bridges") if isinstance(ship.get("bridges"), list) else []) if isinstance(item, dict)],
         },
         "render": dict(ship.get("render") if isinstance(ship.get("render"), dict) else {"style": "polygon"}),
+        "deck_regions": _deck_regions(),
         "engagement_defaults": {"crew": dict(ship.get("crew") if isinstance(ship.get("crew"), dict) else {})},
     }
     normalized, errors = normalize_composite_ship_blueprint(payload)

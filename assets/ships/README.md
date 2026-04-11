@@ -21,6 +21,8 @@ Supported normalized `render` fields:
 - `fallback_style` (defaults to `polygon`)
 - `base_image_key` (runtime asset lookup key)
 - `base_image_path` (optional direct asset path)
+- `deck_texture_key` (runtime lookup key for hull-clipped deck texture; defaults to `ship_deck_wood`)
+- `deck_texture_path` (optional direct texture path override)
 - `image_anchor` (`center`, `n`, `s`, `e`, `w`, `ne`, `nw`, `se`, `sw`)
 - `image_offset_col` / `image_offset_row`
 - `facing_assets` object keyed by facing (`0`, `90`, `180`, `270`) for per-facing overrides
@@ -59,5 +61,20 @@ Optional object layers:
 - `components`
 - `weapon_hardpoints`
 - `boarding_points`
+- `deck_regions`
 
 Objects should include `id`, `name`, `kind` (or `type`) and `col`/`row`.
+
+### `deck_regions` object convention
+
+Each object normalizes to one canonical runtime deck region:
+
+- `id` (required, unique per ship)
+- `label` or `name` (display text)
+- `category` (optional semantic tag such as `helm`, `main_deck`, `forecastle`, `hold`, etc.)
+- region shape via either:
+  - `cells: [{col,row}, ...]`, or
+  - rectangle-style `col`, `row`, `width`, `height` (runtime expands to cells)
+- optional `render_hint` object:
+  - `label_priority` (integer)
+  - `overlay_style` (string)

@@ -63,9 +63,10 @@ PIL_IMAGETK_IMPORT_ERROR: Optional[str] = None
 USER_YAML_DIRNAME = "Dnd-Init-Yamls"
 
 try:
-    from PIL import Image  # type: ignore
+    from PIL import Image, ImageDraw  # type: ignore
 except Exception as e:  # pragma: no cover
     Image = None
+    ImageDraw = None
     PIL_IMAGE_IMPORT_ERROR = str(e)
 
 try:
@@ -8168,6 +8169,207 @@ class BattleMapWindow(tk.Toplevel):
             return False
         return True
 
+    @staticmethod
+    def _ship_deck_texture_variant_paths(path: str) -> List[str]:
+        raw = str(path or "").strip()
+        if not raw:
+            return []
+        src = Path(raw)
+        suffix = src.suffix.lower()
+        if suffix != ".avif":
+            return [str(src)]
+        variants = [src]
+        for ext in (".png", ".webp", ".jpg", ".jpeg"):
+            variants.append(src.with_suffix(ext))
+        deduped: List[str] = []
+        seen: set[str] = set()
+        for candidate in variants:
+            key = str(candidate)
+            if key in seen:
+                continue
+            seen.add(key)
+            deduped.append(key)
+        return deduped
+
+    def _resolve_ship_deck_texture(self, render: Dict[str, Any]) -> Tuple[Optional[str], str]:
+        render_data = dict(render if isinstance(render, dict) else {})
+        direct_path = str(render_data.get("deck_texture_path") or "").strip()
+        key = str(render_data.get("deck_texture_key") or "ship_deck_wood").strip() or "ship_deck_wood"
+        resolved = self._resolve_ship_asset_path(image_path=direct_path, image_key=key)
+        if not resolved:
+            return None, f"{key}:missing"
+        path = Path(resolved)
+        if path.suffix.lower() != ".avif":
+            return str(path), str(path)
+        for candidate in self._ship_deck_texture_variant_paths(str(path)):
+            cp = Path(candidate)
+            if cp.exists() and cp.is_file():
+                return str(cp), str(cp)
+        return None, f"{key}:missing"
+
+    def _ship_deck_pattern_image(self, *, width: int, height: int) -> Any:
+        if Image is None or ImageDraw is None:
+            return None
+        image = Image.new("RGBA", (max(1, int(width)), max(1, int(height))), (134, 95, 57, 255))
+        draw = ImageDraw.Draw(image)
+        plank_h = max(4, int(round(self.cell * 0.22)))
+        seam_w = max(1, int(round(self.cell * 0.04)))
+        y = 0
+        row_index = 0
+        while y < int(height):
+            band = (146, 105, 64, 255) if row_index % 2 == 0 else (126, 88, 52, 255)
+            draw.rectangle([0, y, int(width), min(int(height), y + plank_h)], fill=band)
+            row_index += 1
+            y += plank_h
+        board_len = max(14, int(round(self.cell * 1.2)))
+        y = 0
+        offset = 0
+        while y < int(height):
+            x = int(offset % board_len)
+            while x < int(width):
+                draw.rectangle([x, y, min(int(width), x + seam_w), min(int(height), y + plank_h)], fill=(95, 66, 41, 110))
+                x += board_len
+            offset += int(round(board_len * 0.5))
+            y += plank_h
+        return image
+
+    def _ship_deck_composite_tk_image(
+        self,
+        *,
+        sid: str,
+        occupied: List[Tuple[int, int]],
+        render: Dict[str, Any],
+        facing_deg: Any,
+    ) -> Any:
+        if Image is None or ImageTk is None or ImageDraw is None:
+            return None
+        if not occupied:
+            return None
+        min_col = min(int(col) for col, _ in occupied)
+        max_col = max(int(col) for col, _ in occupied)
+        min_row = min(int(row) for _, row in occupied)
+        max_row = max(int(row) for _, row in occupied)
+        width = max(1, int(round((max_col - min_col + 1) * self.cell)))
+        height = max(1, int(round((max_row - min_row + 1) * self.cell)))
+        hull_vertices = self._ship_cell_union_boundary_vertices(occupied)
+        if len(hull_vertices) < 3:
+            return None
+        blueprint_id = ""
+        try:
+            structure = self.map_structures.get(str(sid)) if isinstance(getattr(self, "map_structures", None), dict) else {}
+            payload = structure.get("payload") if isinstance(structure, dict) and isinstance(structure.get("payload"), dict) else {}
+            blueprint_id = str(payload.get("ship_blueprint_id") or "").strip().lower()
+        except Exception:
+            blueprint_id = ""
+        steps = self._ship_render_rotation_steps(facing_deg)
+        relative_shape = tuple(sorted((int(col) - int(min_col), int(row) - int(min_row)) for col, row in occupied))
+        texture_path, texture_identity = self._resolve_ship_deck_texture(render)
+        texture_candidates = self._ship_deck_texture_variant_paths(texture_path) if texture_path else []
+        if not texture_candidates and texture_path:
+            texture_candidates = [str(texture_path)]
+        cache_key = (
+            blueprint_id,
+            steps,
+            int(round(self.cell)),
+            relative_shape,
+            texture_identity,
+            str((render or {}).get("style") or ""),
+            str((render or {}).get("fallback_style") or ""),
+        )
+        cache = getattr(self, "_ship_deck_render_cache", None)
+        if not isinstance(cache, dict):
+            cache = {}
+            self._ship_deck_render_cache = cache
+        cached = cache.get(cache_key)
+        if cached is not None:
+            return cached
+        mask = Image.new("L", (int(width), int(height)), 0)
+        draw_mask = ImageDraw.Draw(mask)
+        polygon = [
+            (
+                float((int(col) - int(min_col)) * self.cell),
+                float((int(row) - int(min_row)) * self.cell),
+            )
+            for col, row in hull_vertices
+        ]
+        try:
+            draw_mask.polygon(polygon, fill=255)
+        except Exception:
+            return None
+        base = None
+        if texture_candidates:
+            for candidate in texture_candidates:
+                try:
+                    texture = Image.open(candidate).convert("RGBA")
+                    tw, th = texture.size
+                    if tw <= 0 or th <= 0:
+                        continue
+                    tiled = Image.new("RGBA", (int(width), int(height)))
+                    for x in range(0, int(width), int(tw)):
+                        for y in range(0, int(height), int(th)):
+                            tiled.paste(texture, (int(x), int(y)))
+                    base = tiled
+                    texture_identity = str(candidate)
+                    break
+                except Exception:
+                    continue
+        if base is None:
+            base = self._ship_deck_pattern_image(width=int(width), height=int(height))
+        if base is None:
+            return None
+        try:
+            base.putalpha(mask)
+            tk_image = ImageTk.PhotoImage(base)
+        except Exception:
+            return None
+        cache[cache_key] = tk_image
+        if len(cache) > 128:
+            try:
+                oldest_key = next(iter(cache.keys()))
+                if oldest_key != cache_key:
+                    cache.pop(oldest_key, None)
+            except Exception:
+                pass
+        return tk_image
+
+    def _draw_ship_deck_surface(
+        self,
+        *,
+        sid: str,
+        occupied: List[Tuple[int, int]],
+        render: Dict[str, Any],
+        facing_deg: Any,
+    ) -> bool:
+        if not occupied:
+            return False
+        min_col = min(int(col) for col, _ in occupied)
+        max_col = max(int(col) for col, _ in occupied)
+        min_row = min(int(row) for _, row in occupied)
+        max_row = max(int(row) for _, row in occupied)
+        x1 = self.x0 + float(min_col) * self.cell
+        y1 = self.y0 + float(min_row) * self.cell
+        x2 = self.x0 + float(max_col + 1) * self.cell
+        y2 = self.y0 + float(max_row + 1) * self.cell
+        tk_image = self._ship_deck_composite_tk_image(
+            sid=sid,
+            occupied=occupied,
+            render=render,
+            facing_deg=facing_deg,
+        )
+        if tk_image is None:
+            return False
+        try:
+            self.canvas.create_image(
+                (x1 + x2) / 2.0,
+                (y1 + y2) / 2.0,
+                image=tk_image,
+                anchor="center",
+                tags=("structure", f"structure:{sid}", "ship_hull", "ship_deck"),
+            )
+        except Exception:
+            return False
+        return True
+
     def _ship_render_metadata_for_structure(self, sid: str, structure: Dict[str, Any]) -> Dict[str, Any]:
         payload = structure.get("payload") if isinstance(structure.get("payload"), dict) else {}
         render = payload.get("ship_render") if isinstance(payload.get("ship_render"), dict) else {}
@@ -8248,7 +8450,12 @@ class BattleMapWindow(tk.Toplevel):
                 )
             except Exception:
                 pass
-        boarding_points = payload.get("boarding_points") if isinstance(payload.get("boarding_points"), list) else []
+        runtime_boarding = ship_state.get("boarding") if isinstance(ship_state.get("boarding"), dict) else {}
+        boarding_points = (
+            runtime_boarding.get("points")
+            if isinstance(runtime_boarding.get("points"), list)
+            else (payload.get("boarding_points") if isinstance(payload.get("boarding_points"), list) else [])
+        )
         for point in boarding_points:
             if not isinstance(point, dict):
                 continue
@@ -8268,6 +8475,41 @@ class BattleMapWindow(tk.Toplevel):
                 )
             except Exception:
                 pass
+        deck_regions = (
+            ship_state.get("deck_regions")
+            if isinstance(ship_state.get("deck_regions"), list)
+            else (payload.get("ship_deck_regions") if isinstance(payload.get("ship_deck_regions"), list) else [])
+        )
+        if selected:
+            for region in deck_regions:
+                if not isinstance(region, dict):
+                    continue
+                label = str(region.get("label") or region.get("name") or region.get("id") or "").strip()
+                if not label:
+                    continue
+                centroid = region.get("world_centroid") if isinstance(region.get("world_centroid"), dict) else {}
+                if centroid:
+                    col = float(centroid.get("col", 0.0) or 0.0)
+                    row = float(centroid.get("row", 0.0) or 0.0)
+                else:
+                    cells = [cell for cell in (region.get("cells") if isinstance(region.get("cells"), list) else []) if isinstance(cell, dict)]
+                    if not cells:
+                        continue
+                    col = sum(float(cell.get("col", 0.0) or 0.0) for cell in cells) / float(len(cells))
+                    row = sum(float(cell.get("row", 0.0) or 0.0) for cell in cells) / float(len(cells))
+                px = self.x0 + (float(col) + 0.5) * self.cell
+                py = self.y0 + (float(row) + 0.5) * self.cell
+                try:
+                    self.canvas.create_text(
+                        px,
+                        py,
+                        text=label,
+                        fill="#e8dfc8",
+                        font=("TkDefaultFont", max(7, int(self.cell * 0.18)), "bold"),
+                        tags=("structure", f"structure:{sid}", "ship_overlay", "ship_region_label"),
+                    )
+                except Exception:
+                    pass
 
     def _draw_map_elevation(self) -> None:
         try:
@@ -8327,7 +8569,7 @@ class BattleMapWindow(tk.Toplevel):
                 facing_deg = float(ship_state.get("facing_deg", payload.get("facing_deg", 0.0)) or 0.0)
                 render_metadata = self._ship_render_metadata_for_structure(sid, structure)
                 polygon_points = self._ship_hull_polygon_points(occupied)
-                asset_drawn = self._draw_ship_asset(
+                deck_drawn = self._draw_ship_deck_surface(
                     sid=sid,
                     occupied=occupied,
                     render=render_metadata,
@@ -8337,9 +8579,9 @@ class BattleMapWindow(tk.Toplevel):
                     try:
                         self.canvas.create_polygon(
                             polygon_points,
-                            fill="" if asset_drawn else "#6f8ca4" if not selected else "#89a9c6",
+                            fill="" if deck_drawn else ("#8f6a46" if not selected else "#a67a52"),
                             outline="#2f3f4f" if not selected else "#203040",
-                            width=max(1, int(self.cell * (0.045 if (asset_drawn and not selected) else 0.06 if not selected else 0.1))),
+                            width=max(1, int(self.cell * (0.05 if not selected else 0.09))),
                             smooth=False,
                             tags=("structure", f"structure:{sid}", "ship_hull"),
                         )

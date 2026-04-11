@@ -102,6 +102,7 @@ FALLBACK_5ETOOLS_PACKS: Tuple[Tuple[str, str], ...] = (
 FALLBACK_5ETOOLS_MIN_BYTES = 100 * 1024
 DEFAULT_SHIP_RENDER_ASSET_KEYS: Dict[str, str] = {
     "sloop_hull": "assets/ships/art/sloop_hull_v1.png",
+    "ship_deck_wood": "assets/ships/art/wood.avif",
 }
 DEFAULT_SHIP_BLUEPRINTS_V1: Dict[str, Dict[str, Any]] = {
     "rowboat_launch": {
@@ -9461,6 +9462,11 @@ class InitiativeTracker(base.InitiativeTracker):
         }
         template, template_errors = self._normalize_structure_template_payload(f"ship_blueprint:{bid}", base_template_payload)
         errors.extend(template_errors)
+        hull_local_set = {
+            (int(cell.get("col", 0)), int(cell.get("row", 0)))
+            for cell in (template.get("footprint") if isinstance(template.get("footprint"), list) else [])
+            if isinstance(cell, dict)
+        }
         components: List[Dict[str, Any]] = []
         for index, raw in enumerate(payload.get("components") if isinstance(payload.get("components"), list) else []):
             if not isinstance(raw, dict):
@@ -9523,6 +9529,57 @@ class InitiativeTracker(base.InitiativeTracker):
                 if cells:
                     surface["cells"] = cells
             surfaces.append(surface)
+        deck_regions: List[Dict[str, Any]] = []
+        seen_region_ids: set[str] = set()
+        for index, raw in enumerate(payload.get("deck_regions") if isinstance(payload.get("deck_regions"), list) else []):
+            if not isinstance(raw, dict):
+                continue
+            region_id = str(raw.get("id") or f"region_{index + 1}").strip().lower() or f"region_{index + 1}"
+            if region_id in seen_region_ids:
+                errors.append(f"duplicate_deck_region_id:{region_id}")
+                continue
+            seen_region_ids.add(region_id)
+            cells: List[Dict[str, int]] = []
+            for cell in raw.get("cells") if isinstance(raw.get("cells"), list) else []:
+                if not isinstance(cell, dict):
+                    continue
+                try:
+                    col = int(cell.get("col", 0))
+                    row = int(cell.get("row", 0))
+                except Exception:
+                    continue
+                if hull_local_set and (col, row) not in hull_local_set:
+                    errors.append(f"deck_region_outside_hull:{region_id}")
+                    continue
+                cells.append({"col": int(col), "row": int(row)})
+            cells = [{"col": int(col), "row": int(row)} for col, row in sorted({(int(c.get('col', 0)), int(c.get('row', 0))) for c in cells if isinstance(c, dict)})]
+            if not cells:
+                errors.append(f"deck_region_empty:{region_id}")
+                continue
+            region: Dict[str, Any] = {
+                "id": region_id,
+                "label": str(raw.get("label") or raw.get("display_name") or raw.get("name") or region_id.replace("_", " ").title()).strip() or region_id,
+                "cells": cells,
+            }
+            category = str(raw.get("category") or "").strip().lower()
+            if category:
+                region["category"] = category
+            tags = [str(tag).strip().lower() for tag in (raw.get("tags") if isinstance(raw.get("tags"), list) else []) if str(tag).strip()]
+            if tags:
+                region["tags"] = sorted(set(tags))
+            render_hint = raw.get("render_hint") if isinstance(raw.get("render_hint"), dict) else {}
+            region_hint: Dict[str, Any] = {}
+            if render_hint.get("label_priority") is not None:
+                try:
+                    region_hint["label_priority"] = int(render_hint.get("label_priority"))
+                except Exception:
+                    pass
+            if render_hint.get("overlay_style") is not None:
+                region_hint["overlay_style"] = str(render_hint.get("overlay_style")).strip().lower()
+            if region_hint:
+                region["render_hint"] = region_hint
+            deck_regions.append(region)
+        deck_regions.sort(key=lambda entry: str(entry.get("id") or ""))
         boarding_raw = payload.get("boarding") if isinstance(payload.get("boarding"), dict) else {}
         boarding_points: List[Dict[str, Any]] = []
         for index, raw in enumerate(boarding_raw.get("points") if isinstance(boarding_raw.get("points"), list) else []):
@@ -9577,6 +9634,7 @@ class InitiativeTracker(base.InitiativeTracker):
             "template": template,
             "decks": list(template.get("decks") if isinstance(template.get("decks"), list) else []),
             "surfaces": surfaces,
+            "deck_regions": deck_regions,
             "components": components,
             "mounted_weapons": weapons,
             "boarding": {
@@ -9632,6 +9690,7 @@ class InitiativeTracker(base.InitiativeTracker):
                 "boarding": {"boardable": True, "edges": ["port", "starboard"], "points": [], "bridges": []},
                 "components": [],
                 "mounted_weapons": [],
+                "deck_regions": [],
             }
         normalized: Dict[str, Dict[str, Any]] = {}
         for key, value in candidate_blueprints.items():
@@ -9776,6 +9835,19 @@ class InitiativeTracker(base.InitiativeTracker):
             weapons = [dict(entry) for entry in (blueprint.get("mounted_weapons") if isinstance(blueprint.get("mounted_weapons"), list) else []) if isinstance(entry, dict)]
         item["components"] = components
         item["mounted_weapons"] = weapons
+        deck_regions = [dict(entry) for entry in (item.get("deck_regions") if isinstance(item.get("deck_regions"), list) else []) if isinstance(entry, dict)]
+        if not deck_regions and isinstance(blueprint, dict):
+            parent_structure_id = str(item.get("parent_structure_id") or "").strip()
+            structure = (self._capture_canonical_map_state(prefer_window=False).structures or {}).get(parent_structure_id) if parent_structure_id else None
+            anchor_col = int(structure.anchor_col) if isinstance(structure, MapStructure) else 0
+            anchor_row = int(structure.anchor_row) if isinstance(structure, MapStructure) else 0
+            deck_regions = self._transform_ship_deck_regions_runtime_metadata(
+                deck_regions=list(blueprint.get("deck_regions") if isinstance(blueprint.get("deck_regions"), list) else []),
+                anchor_col=anchor_col,
+                anchor_row=anchor_row,
+                facing_deg=float(item.get("facing_deg", 0.0) or 0.0),
+            )
+        item["deck_regions"] = deck_regions
         crew = dict(item.get("crew") if isinstance(item.get("crew"), dict) else {})
         if not crew and isinstance(blueprint, dict):
             crew = dict(blueprint.get("crew") if isinstance(blueprint.get("crew"), dict) else {})
@@ -10239,8 +10311,15 @@ class InitiativeTracker(base.InitiativeTracker):
                 runtime_boarding["bridges"] = local_bridges
             if local_edges:
                 runtime_boarding["edges"] = local_edges
+            runtime_deck_regions = list(ship.get("deck_regions") if isinstance(ship.get("deck_regions"), list) else [])
             transformed_boarding = self._transform_ship_boarding_runtime_metadata(
                 boarding=runtime_boarding,
+                anchor_col=int(projected.get("anchor_col", 0) or 0),
+                anchor_row=int(projected.get("anchor_row", 0) or 0),
+                facing_deg=float(next_facing),
+            )
+            transformed_deck_regions = self._transform_ship_deck_regions_runtime_metadata(
+                deck_regions=runtime_deck_regions,
                 anchor_col=int(projected.get("anchor_col", 0) or 0),
                 anchor_row=int(projected.get("anchor_row", 0) or 0),
                 facing_deg=float(next_facing),
@@ -10253,6 +10332,7 @@ class InitiativeTracker(base.InitiativeTracker):
                 updated_engagement["turns_remaining"] = max(0, int(updated_engagement.get("turns_remaining", 0) or 0) - 1)
                 updated["engagement_state"] = updated_engagement
                 updated["boarding"] = dict(transformed_boarding)
+                updated["deck_regions"] = list(transformed_deck_regions)
                 return updated
 
             next_ship: Dict[str, Any] = dict(ship)
@@ -10272,6 +10352,7 @@ class InitiativeTracker(base.InitiativeTracker):
                 payload["boarding_points_local"] = list(transformed_boarding.get("points_local") if isinstance(transformed_boarding.get("points_local"), list) else [])
                 payload["boarding_bridges"] = list(transformed_boarding.get("bridges") if isinstance(transformed_boarding.get("bridges"), list) else [])
                 payload["boarding_bridges_local"] = list(transformed_boarding.get("bridges_local") if isinstance(transformed_boarding.get("bridges_local"), list) else [])
+                payload["ship_deck_regions"] = list(transformed_deck_regions)
                 structure_map[sid] = MapStructure(
                     structure_id=str(current_structure.structure_id),
                     kind=str(current_structure.kind),
@@ -10339,12 +10420,58 @@ class InitiativeTracker(base.InitiativeTracker):
                 return {"ok": False, "reason": "move_failed", "message": "Unable to move ship."}
             total_moved += 1
         ship_id = str(ship.get("id") or "").strip()
+        final_structure = (working_state.structures or {}).get(sid)
+        final_anchor_col = int((final_structure.anchor_col if isinstance(final_structure, MapStructure) else structure.anchor_col) or 0)
+        final_anchor_row = int((final_structure.anchor_row if isinstance(final_structure, MapStructure) else structure.anchor_row) or 0)
+        runtime_boarding = dict(ship.get("boarding") if isinstance(ship.get("boarding"), dict) else {})
+        local_points = list(runtime_boarding.get("points_local") if isinstance(runtime_boarding.get("points_local"), list) else [])
+        local_bridges = list(runtime_boarding.get("bridges_local") if isinstance(runtime_boarding.get("bridges_local"), list) else [])
+        local_edges = list(runtime_boarding.get("edges_local") if isinstance(runtime_boarding.get("edges_local"), list) else [])
+        if local_points:
+            runtime_boarding["points"] = local_points
+        if local_bridges:
+            runtime_boarding["bridges"] = local_bridges
+        if local_edges:
+            runtime_boarding["edges"] = local_edges
+        transformed_boarding = self._transform_ship_boarding_runtime_metadata(
+            boarding=runtime_boarding,
+            anchor_col=int(final_anchor_col),
+            anchor_row=int(final_anchor_row),
+            facing_deg=float(ship.get("facing_deg", 0.0) or 0.0),
+        )
+        transformed_deck_regions = self._transform_ship_deck_regions_runtime_metadata(
+            deck_regions=list(ship.get("deck_regions") if isinstance(ship.get("deck_regions"), list) else []),
+            anchor_col=int(final_anchor_col),
+            anchor_row=int(final_anchor_row),
+            facing_deg=float(ship.get("facing_deg", 0.0) or 0.0),
+        )
+        if isinstance(final_structure, MapStructure):
+            structures = dict(working_state.structures or {})
+            payload = dict(final_structure.payload if isinstance(final_structure.payload, dict) else {})
+            payload["boardable_edges"] = list(transformed_boarding.get("edges") if isinstance(transformed_boarding.get("edges"), list) else [])
+            payload["boardable_edges_local"] = list(transformed_boarding.get("edges_local") if isinstance(transformed_boarding.get("edges_local"), list) else [])
+            payload["boarding_points"] = list(transformed_boarding.get("points") if isinstance(transformed_boarding.get("points"), list) else [])
+            payload["boarding_points_local"] = list(transformed_boarding.get("points_local") if isinstance(transformed_boarding.get("points_local"), list) else [])
+            payload["boarding_bridges"] = list(transformed_boarding.get("bridges") if isinstance(transformed_boarding.get("bridges"), list) else [])
+            payload["boarding_bridges_local"] = list(transformed_boarding.get("bridges_local") if isinstance(transformed_boarding.get("bridges_local"), list) else [])
+            payload["ship_deck_regions"] = list(transformed_deck_regions)
+            structures[sid] = MapStructure(
+                structure_id=str(final_structure.structure_id),
+                kind=str(final_structure.kind),
+                anchor_col=int(final_structure.anchor_col),
+                anchor_row=int(final_structure.anchor_row),
+                occupied_cells=list(final_structure.occupied_cells or []),
+                payload=payload,
+            ).normalized()
+            working_state.structures = structures
 
         def _apply_move(current: Dict[str, Any]) -> Dict[str, Any]:
             updated = self._normalize_ship_engagement_state(current, current_round=int(getattr(self, "round_num", 0) or 0))
             updated_engagement = dict(updated.get("engagement_state") if isinstance(updated.get("engagement_state"), dict) else {})
             updated_engagement["movement_remaining"] = max(0, int(updated_engagement.get("movement_remaining", 0) or 0) - int(total_moved))
             updated["engagement_state"] = updated_engagement
+            updated["boarding"] = dict(transformed_boarding)
+            updated["deck_regions"] = list(transformed_deck_regions)
             return updated
 
         if ship_id:
@@ -10561,6 +10688,7 @@ class InitiativeTracker(base.InitiativeTracker):
         crew_state = dict(ship.get("crew_state") if isinstance(ship.get("crew_state"), dict) else {})
         hull_state = dict(ship.get("hull_state") if isinstance(ship.get("hull_state"), dict) else {})
         engagement_state = dict(ship.get("engagement_state") if isinstance(ship.get("engagement_state"), dict) else {})
+        deck_regions = list(ship.get("deck_regions") if isinstance(ship.get("deck_regions"), list) else (blueprint.get("deck_regions") if isinstance(blueprint.get("deck_regions"), list) else []))
         damaged_components = sum(
             1
             for entry in component_state.values()
@@ -10621,6 +10749,9 @@ class InitiativeTracker(base.InitiativeTracker):
             "active_boarding_contacts": active_boarding,
             "traversable_boarding_contacts": traversable_boarding,
             "contact_summary": semantics,
+            "deck_regions": deck_regions,
+            "deck_region_ids": [str(region.get("id") or "").strip().lower() for region in deck_regions if isinstance(region, dict)],
+            "deck_region_labels": [str(region.get("label") or region.get("name") or "").strip() for region in deck_regions if isinstance(region, dict)],
         }
         if use_cache:
             if not isinstance(cache, dict):
@@ -11871,6 +12002,67 @@ class InitiativeTracker(base.InitiativeTracker):
         }
         return transformed
 
+    @classmethod
+    def _transform_ship_deck_regions_runtime_metadata(
+        cls,
+        *,
+        deck_regions: Any,
+        anchor_col: int,
+        anchor_row: int,
+        facing_deg: Any,
+    ) -> List[Dict[str, Any]]:
+        out: List[Dict[str, Any]] = []
+        for index, raw in enumerate(deck_regions if isinstance(deck_regions, list) else []):
+            if not isinstance(raw, dict):
+                continue
+            rid = str(raw.get("id") or f"region_{index + 1}").strip().lower() or f"region_{index + 1}"
+            local_cells: List[Tuple[int, int]] = []
+            for cell in raw.get("cells_local") if isinstance(raw.get("cells_local"), list) else (raw.get("cells") if isinstance(raw.get("cells"), list) else []):
+                if not isinstance(cell, dict):
+                    continue
+                try:
+                    local_cells.append((int(cell.get("col", 0)), int(cell.get("row", 0))))
+                except Exception:
+                    continue
+            local_cells = sorted(set((int(col), int(row)) for col, row in local_cells))
+            if not local_cells:
+                continue
+            world_cells = cls._ship_world_cells_from_local(
+                anchor_col=int(anchor_col),
+                anchor_row=int(anchor_row),
+                local_cells=local_cells,
+                facing_deg=facing_deg,
+            )
+            if not world_cells:
+                continue
+            world_col_avg = round(sum(int(col) for col, _ in world_cells) / float(len(world_cells)), 2)
+            world_row_avg = round(sum(int(row) for _, row in world_cells) / float(len(world_cells)), 2)
+            local_col_avg = round(sum(int(col) for col, _ in local_cells) / float(len(local_cells)), 2)
+            local_row_avg = round(sum(int(row) for _, row in local_cells) / float(len(local_cells)), 2)
+            region: Dict[str, Any] = {
+                "id": rid,
+                "label": str(raw.get("label") or raw.get("name") or rid.replace("_", " ").title()).strip() or rid,
+                "cells_local": [{"col": int(col), "row": int(row)} for col, row in local_cells],
+                "cells": [{"col": int(col), "row": int(row)} for col, row in world_cells],
+                "local_centroid": {"col": float(local_col_avg), "row": float(local_row_avg)},
+                "world_centroid": {"col": float(world_col_avg), "row": float(world_row_avg)},
+                "anchor_col": int(anchor_col),
+                "anchor_row": int(anchor_row),
+                "facing_deg": float(facing_deg or 0.0),
+                "rotation_steps": cls._ship_rotation_steps_for_facing(facing_deg),
+            }
+            category = str(raw.get("category") or "").strip().lower()
+            if category:
+                region["category"] = category
+            tags = [str(tag).strip().lower() for tag in (raw.get("tags") if isinstance(raw.get("tags"), list) else []) if str(tag).strip()]
+            if tags:
+                region["tags"] = sorted(set(tags))
+            render_hint = raw.get("render_hint") if isinstance(raw.get("render_hint"), dict) else {}
+            if render_hint:
+                region["render_hint"] = dict(render_hint)
+            out.append(region)
+        return out
+
     def _instantiate_ship_blueprint(
         self,
         blueprint_id: Any,
@@ -11909,6 +12101,12 @@ class InitiativeTracker(base.InitiativeTracker):
             anchor_row=int(anchor_row),
             facing_deg=float(final_facing),
         )
+        transformed_deck_regions = self._transform_ship_deck_regions_runtime_metadata(
+            deck_regions=list(blueprint.get("deck_regions") if isinstance(blueprint.get("deck_regions"), list) else []),
+            anchor_col=int(anchor_col),
+            anchor_row=int(anchor_row),
+            facing_deg=float(final_facing),
+        )
 
         def _mutate(state: MapState) -> None:
             sid = str(structure_id)
@@ -11941,6 +12139,7 @@ class InitiativeTracker(base.InitiativeTracker):
                 "components": components,
                 "mounted_weapons": weapons,
                 "boarding": dict(transformed_boarding),
+                "deck_regions": list(transformed_deck_regions),
                 "crew": {"min_crew": int(min_crew), "recommended_crew": int(recommended_crew)},
                 "decks": list(blueprint.get("decks") if isinstance(blueprint.get("decks"), list) else []),
                 "surfaces": list(blueprint.get("surfaces") if isinstance(blueprint.get("surfaces"), list) else []),
@@ -11984,6 +12183,7 @@ class InitiativeTracker(base.InitiativeTracker):
                     ),
                     "ship_render": dict(blueprint.get("render") if isinstance(blueprint.get("render"), dict) else {}),
                     "ship_local_space": dict(blueprint.get("local_space") if isinstance(blueprint.get("local_space"), dict) else {}),
+                    "ship_deck_regions": list(transformed_deck_regions),
                 }
             )
             structures = dict(state.structures or {})

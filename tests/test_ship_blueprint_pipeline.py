@@ -21,6 +21,8 @@ class ShipBlueprintPipelineTests(unittest.TestCase):
         self.assertEqual(((runtime["sloop"].get("render") or {}).get("style")), "polygon")
         self.assertEqual(((runtime["sloop"].get("render") or {}).get("base_image_key")), "sloop_hull")
         self.assertEqual(((runtime["sloop"].get("render") or {}).get("fallback_style")), "polygon")
+        self.assertEqual(((runtime["sloop"].get("render") or {}).get("deck_texture_key")), "ship_deck_wood")
+        self.assertTrue(isinstance(runtime["sloop"].get("deck_regions"), list) and runtime["sloop"].get("deck_regions"))
         self.assertTrue(((runtime["brig"].get("local_space") or {}).get("hull_cells")))
 
     def test_composite_schema_validation_rejects_invalid_anchor(self):
@@ -57,6 +59,7 @@ class ShipBlueprintPipelineTests(unittest.TestCase):
             normalized = import_tiled_ship_blueprint(payload, blueprint_id=source_path.stem.replace(".tiled", ""))
             self.assertEqual(normalized.get("schema"), COMPOSITE_SHIP_SCHEMA)
             self.assertTrue(((normalized.get("local_space") or {}).get("hull_cells")))
+            self.assertTrue(((normalized.get("deck_regions") if isinstance(normalized.get("deck_regions"), list) else [])))
 
     def test_runtime_app_uses_loaded_composite_blueprints(self):
         app = object.__new__(tracker_mod.InitiativeTracker)
@@ -65,6 +68,8 @@ class ShipBlueprintPipelineTests(unittest.TestCase):
         blueprints = app._ship_blueprints()
         self.assertIn("sloop", blueprints)
         self.assertIn("brig", blueprints)
+        self.assertTrue(blueprints["sloop"].get("deck_regions"))
+        self.assertTrue(blueprints["brig"].get("deck_regions"))
         self.assertEqual(((blueprints["sloop"].get("render") or {}).get("style")), "polygon")
         self.assertTrue(((blueprints["brig"].get("local_space") or {}).get("hull_cells")))
         path = app._ship_render_asset_path_for_key("sloop_hull")
@@ -108,6 +113,25 @@ class ShipBlueprintPipelineTests(unittest.TestCase):
         self.assertEqual(render.get("image_offset_col"), 1)
         self.assertEqual(render.get("image_offset_row"), -1)
         self.assertIn("90", render.get("facing_assets") or {})
+
+    def test_composite_schema_validates_deck_regions_within_hull(self):
+        normalized, errors = normalize_composite_ship_blueprint(
+            {
+                "schema": COMPOSITE_SHIP_SCHEMA,
+                "id": "deck_ship",
+                "display_name": "Deck Ship",
+                "local_space": {
+                    "render_anchor": {"col": 0, "row": 0},
+                    "hull_cells": [{"col": 0, "row": 0}, {"col": 1, "row": 0}],
+                },
+                "deck_regions": [
+                    {"id": "main", "label": "Main Deck", "cells": [{"col": 0, "row": 0}]},
+                    {"id": "bad", "label": "Bad", "cells": [{"col": 3, "row": 3}]},
+                ],
+            }
+        )
+        self.assertEqual(normalized.get("id"), "deck_ship")
+        self.assertIn("deck_region_outside_hull:bad", errors)
 
 
 if __name__ == "__main__":

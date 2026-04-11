@@ -235,6 +235,89 @@
           "row": 2
         }
       ]
+    },
+    {
+      "name": "deck_regions",
+      "objects": [
+        {
+          "id": "main_deck",
+          "label": "Main Deck",
+          "category": "main_deck",
+          "render_hint": {"label_priority": 10},
+          "cells": [
+            {"col": 0, "row": 0},
+            {"col": 1, "row": 0},
+            {"col": 2, "row": 0},
+            {"col": 3, "row": 0},
+            {"col": 4, "row": 0},
+            {"col": 0, "row": 1},
+            {"col": 1, "row": 1},
+            {"col": 2, "row": 1},
+            {"col": 3, "row": 1},
+            {"col": 4, "row": 1},
+            {"col": 1, "row": 2},
+            {"col": 2, "row": 2},
+            {"col": 3, "row": 2}
+          ]
+        },
+        {
+          "id": "quarterdeck",
+          "label": "Quarterdeck / Helm",
+          "category": "helm",
+          "render_hint": {"label_priority": 20},
+          "cells": [
+            {"col": 3, "row": 2},
+            {"col": 4, "row": 1}
+          ]
+        },
+        {
+          "id": "forecastle",
+          "label": "Forecastle",
+          "category": "forecastle",
+          "cells": [
+            {"col": 0, "row": 0},
+            {"col": 0, "row": 1},
+            {"col": 1, "row": 0}
+          ]
+        },
+        {
+          "id": "hold_hatch",
+          "label": "Hold / Hatch",
+          "category": "hold",
+          "cells": [
+            {"col": 2, "row": 1},
+            {"col": 2, "row": 2}
+          ]
+        },
+        {
+          "id": "port_battery",
+          "label": "Port Battery",
+          "category": "port_battery",
+          "cells": [
+            {"col": 0, "row": 0},
+            {"col": 0, "row": 1}
+          ]
+        },
+        {
+          "id": "starboard_battery",
+          "label": "Starboard Battery",
+          "category": "starboard_battery",
+          "cells": [
+            {"col": 4, "row": 0},
+            {"col": 4, "row": 1}
+          ]
+        },
+        {
+          "id": "mast_zone",
+          "label": "Mast Zone",
+          "category": "mast_zone",
+          "cells": [
+            {"col": 1, "row": 0},
+            {"col": 2, "row": 1},
+            {"col": 3, "row": 1}
+          ]
+        }
+      ]
     }
   ]
 }

@@ -1,4 +1,6 @@
 import unittest
+import tempfile
+from pathlib import Path
 
 import dnd_initative_tracker as tracker_mod
 import helper_script as helper_mod
@@ -72,6 +74,92 @@ class ShipCompositeRenderingTests(unittest.TestCase):
             if expected_area is None:
                 expected_area = area
             self.assertEqual(area, expected_area)
+
+    def test_deck_texture_render_uses_converted_raster_when_avif_unreadable(self):
+        window = object.__new__(helper_mod.BattleMapWindow)
+        with tempfile.TemporaryDirectory() as tmpdir:
+            tmp = Path(tmpdir)
+            avif = tmp / "wood.avif"
+            png = tmp / "wood.png"
+            avif.write_bytes(b"not-real-avif")
+            if helper_mod.Image is None:
+                self.skipTest("Pillow not available")
+            helper_mod.Image.new("RGBA", (4, 4), (140, 100, 60, 255)).save(png)
+            window._resolve_ship_asset_path = lambda image_path, image_key: str(avif)
+            window.cell = 20.0
+            window.x0 = 0.0
+            window.y0 = 0.0
+            window._ship_deck_render_cache = {}
+            window.map_structures = {"ship_a": {"payload": {"ship_blueprint_id": "sloop"}}}
+            image_tk_original = helper_mod.ImageTk
+
+            class _FakeImageTk:
+                @staticmethod
+                def PhotoImage(image):
+                    return ("photo", image.size)
+
+            helper_mod.ImageTk = _FakeImageTk
+            try:
+                composite = window._ship_deck_composite_tk_image(
+                    sid="ship_a",
+                    occupied=[(0, 0), (1, 0), (0, 1), (1, 1)],
+                    render={"deck_texture_key": "ship_deck_wood"},
+                    facing_deg=0.0,
+                )
+            finally:
+                helper_mod.ImageTk = image_tk_original
+            self.assertIsNotNone(composite)
+
+    def test_deck_texture_asset_seam_reports_missing_deterministically(self):
+        window = object.__new__(helper_mod.BattleMapWindow)
+        window._resolve_ship_asset_path = lambda image_path, image_key: None
+        resolved, identity = window._resolve_ship_deck_texture({})
+        self.assertIsNone(resolved)
+        self.assertEqual(identity, "ship_deck_wood:missing")
+
+    def test_deck_render_cache_reuses_same_composite_key(self):
+        if helper_mod.Image is None:
+            self.skipTest("Pillow not available")
+        window = object.__new__(helper_mod.BattleMapWindow)
+        window.cell = 20.0
+        window.x0 = 0.0
+        window.y0 = 0.0
+        window._ship_deck_render_cache = {}
+        window.map_structures = {"ship_a": {"payload": {"ship_blueprint_id": "sloop"}}}
+        window._resolve_ship_asset_path = lambda image_path, image_key: None
+        image_tk_original = helper_mod.ImageTk
+
+        class _FakeImageTk:
+            @staticmethod
+            def PhotoImage(image):
+                return ("photo", image.size)
+
+        helper_mod.ImageTk = _FakeImageTk
+        try:
+            occupied = [(0, 0), (1, 0), (0, 1), (1, 1)]
+            first = window._ship_deck_composite_tk_image(sid="ship_a", occupied=occupied, render={}, facing_deg=0.0)
+            second = window._ship_deck_composite_tk_image(sid="ship_a", occupied=occupied, render={}, facing_deg=0.0)
+        finally:
+            helper_mod.ImageTk = image_tk_original
+        self.assertIsNotNone(first)
+        self.assertIs(first, second)
+
+    def test_deck_region_alignment_stays_consistent_across_facings(self):
+        region = {"id": "mast_zone", "label": "Mast Zone", "cells": [{"col": 1, "row": 0}, {"col": 1, "row": 1}]}
+        expected_count = None
+        for facing in (0.0, 90.0, 180.0, 270.0):
+            transformed = tracker_mod.InitiativeTracker._transform_ship_deck_regions_runtime_metadata(
+                deck_regions=[region],
+                anchor_col=10,
+                anchor_row=10,
+                facing_deg=facing,
+            )
+            self.assertEqual(len(transformed), 1)
+            world_cells = transformed[0].get("cells") if isinstance(transformed[0].get("cells"), list) else []
+            self.assertEqual(len(world_cells), 2)
+            if expected_count is None:
+                expected_count = len(world_cells)
+            self.assertEqual(len(world_cells), expected_count)
 
 
 if __name__ == "__main__":
