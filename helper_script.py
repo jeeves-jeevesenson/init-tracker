@@ -7004,7 +7004,6 @@ class BattleMapWindow(tk.Toplevel):
         self._refresh_tactical_preset_selection(sync_mode=True)
         self._refresh_ship_blueprint_selection()
         self._update_selected_tactical_cell_status()
-        self._update_selected_creature_boarding_status()
 
         # --- Units panel ---
         ttk.Label(left, text="Units (drag onto map)").pack(anchor="w")
@@ -7249,6 +7248,7 @@ class BattleMapWindow(tk.Toplevel):
         self.canvas.bind("<KeyRelease-Shift_L>", self._on_shift_release)
         self.canvas.bind("<KeyRelease-Shift_R>", self._on_shift_release)
         self.canvas.bind("<Enter>", lambda _e: self.canvas.focus_set())
+        self._update_selected_creature_boarding_status()
 
     # ---------------- Units list / drag placement ----------------
     def refresh_units(self) -> None:
@@ -7293,8 +7293,15 @@ class BattleMapWindow(tk.Toplevel):
             self.unit_mode_combo.config(state=(tk.NORMAL if enabled else tk.DISABLED))
 
     def _selected_unit_cids(self) -> List[int]:
+        units_list = getattr(self, "units_list", None)
+        if units_list is None:
+            return []
+        try:
+            selected_indices = list(units_list.curselection())
+        except Exception:
+            return []
         cids: List[int] = []
-        for idx in list(self.units_list.curselection()):
+        for idx in selected_indices:
             if 0 <= idx < len(getattr(self, "_units_index_to_cid", [])):
                 cids.append(self._units_index_to_cid[idx])
         return cids
@@ -8905,18 +8912,27 @@ class BattleMapWindow(tk.Toplevel):
         self._update_selected_structure_contact_status()
 
     def _update_selected_creature_boarding_status(self) -> None:
+        traversal_status_var = getattr(self, "map_boarding_traversal_status_var", None)
+        if traversal_status_var is None or not hasattr(traversal_status_var, "set"):
+            return
         cid = self._dm_action_target_cid()
         if cid is None:
-            self.map_boarding_traversal_status_var.set("Boarding traversal: select a creature (units list or active turn).")
+            traversal_status_var.set("Boarding traversal: select a creature (units list or active turn).")
             return
-        context = self.app._creature_boarding_context(int(cid))
-        creature = self.app.combatants.get(int(cid))
+        app = getattr(self, "app", None)
+        context_fn = getattr(app, "_creature_boarding_context", None)
+        if not callable(context_fn):
+            traversal_status_var.set("Boarding traversal: status unavailable.")
+            return
+        context = context_fn(int(cid))
+        combatants = getattr(app, "combatants", {})
+        creature = combatants.get(int(cid)) if isinstance(combatants, dict) else None
         name = str(getattr(creature, "name", f"#{cid}"))
         if not isinstance(context, dict) or not bool(context.get("ok")):
-            self.map_boarding_traversal_status_var.set(f"Boarding traversal: {name} has no map position.")
+            traversal_status_var.set(f"Boarding traversal: {name} has no map position.")
             return
         if not bool(context.get("on_ship")):
-            self.map_boarding_traversal_status_var.set(f"Boarding traversal: {name} is not currently on a ship.")
+            traversal_status_var.set(f"Boarding traversal: {name} is not currently on a ship.")
             return
         reachable = context.get("reachable_target_structures") if isinstance(context.get("reachable_target_structures"), list) else []
         labels: List[str] = []
@@ -8930,7 +8946,7 @@ class BattleMapWindow(tk.Toplevel):
         last = context.get("last_crossing") if isinstance(context.get("last_crossing"), dict) else {}
         last_target = str(last.get("target_structure_name") or last.get("target_structure_id") or "").strip()
         last_suffix = f" · Last crossing: {last_target}" if last_target else ""
-        self.map_boarding_traversal_status_var.set(
+        traversal_status_var.set(
             f"Boarding traversal: {name} on {context.get('source_structure_name') or context.get('source_structure_id')} "
             f"· Reachable: {', '.join(labels) if labels else 'none'}{last_suffix}"
         )
