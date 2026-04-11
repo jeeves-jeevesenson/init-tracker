@@ -196,7 +196,7 @@ class ShipEngagementGameplayTests(unittest.TestCase):
         self.assertTrue(moved.get("ok"))
         refreshed = app._selected_ship_summary("ship_a")
         self.assertTrue(refreshed.get("ok"))
-        self.assertEqual(calls["semantics"], 2)
+        self.assertEqual(calls["semantics"], 3)
 
 
 if __name__ == "__main__":

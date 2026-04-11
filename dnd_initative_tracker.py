@@ -8982,7 +8982,7 @@ class InitiativeTracker(base.InitiativeTracker):
         normalized = state.normalized()
         self._map_state = normalized
         try:
-            self._map_state_version = int(getattr(self, "_map_state_version", 0) or 0) + 1
+            self._map_state_version = int(self.__dict__.get("_map_state_version", 0) or 0) + 1
         except Exception:
             self._map_state_version = 1
         self._structure_contact_semantics_cache = {}
@@ -9030,7 +9030,7 @@ class InitiativeTracker(base.InitiativeTracker):
 
     def _map_state_cache_key(self) -> int:
         try:
-            return int(getattr(self, "_map_state_version", 0) or 0)
+            return int(self.__dict__.get("_map_state_version", 0) or 0)
         except Exception:
             return 0
 
@@ -9056,7 +9056,7 @@ class InitiativeTracker(base.InitiativeTracker):
             return {"ok": False, "reason": "missing_structure_id"}
         use_cache = state is None and query is None
         cache_key = (self._map_state_cache_key(), sid)
-        cache = getattr(self, "_structure_contact_semantics_cache", {})
+        cache = self.__dict__.get("_structure_contact_semantics_cache", {})
         if use_cache and isinstance(cache, dict):
             cached = cache.get(cache_key)
             if isinstance(cached, dict):
@@ -10506,7 +10506,7 @@ class InitiativeTracker(base.InitiativeTracker):
         current_round = int(getattr(self, "round_num", 0) or 0)
         use_cache = semantics is None
         cache_key = (self._map_state_cache_key(), current_round, sid)
-        cache = getattr(self, "_selected_ship_summary_cache", {})
+        cache = self.__dict__.get("_selected_ship_summary_cache", {})
         if use_cache and isinstance(cache, dict):
             cached = cache.get(cache_key)
             if isinstance(cached, dict):
