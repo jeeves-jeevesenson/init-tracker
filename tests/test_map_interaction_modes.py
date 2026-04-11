@@ -39,11 +39,20 @@ class MapInteractionModeTests(unittest.TestCase):
         helper = types.SimpleNamespace(
             _map_author_selected_cell=(2, 3),
             _selected_structure_id_at_cell=lambda _col, _row: "ship_a",
+            map_structures={"ship_a": {"id": "ship_a", "kind": "ship_hull", "payload": {"ship_instance_id": "ship_1"}}},
+            _is_ship_structure_payload=lambda structure: helper_mod.BattleMapWindow._is_ship_structure_payload(structure),
+            _active_map_interaction_mode=lambda: "ship",
         )
         helper._selected_ship_for_boarding_action = lambda: helper_mod.BattleMapWindow._selected_ship_for_boarding_action(helper)
+        helper._selected_ship_command_available = lambda: helper_mod.BattleMapWindow._selected_ship_command_available(helper)
         sid = helper_mod.BattleMapWindow._selected_ship_for_boarding_action(helper)
         self.assertEqual(sid, "ship_a")
         self.assertTrue(helper_mod.BattleMapWindow._selected_ship_command_available(helper))
+        helper._active_map_interaction_mode = lambda: "select"
+        self.assertFalse(helper_mod.BattleMapWindow._selected_ship_command_available(helper))
+        helper._active_map_interaction_mode = lambda: "ship"
+        helper.map_structures["ship_a"] = {"id": "ship_a", "kind": "dock", "payload": {}}
+        self.assertFalse(helper_mod.BattleMapWindow._selected_ship_command_available(helper))
         helper._map_author_selected_cell = None
         self.assertFalse(helper_mod.BattleMapWindow._selected_ship_command_available(helper))
 

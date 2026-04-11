@@ -5120,6 +5120,10 @@ __DAMAGE_TYPE_OPTIONS__
   let endTurnReadyVisualActive = false;
   let selectedTurnCid = null;
   let selectedStructureId = "";
+  const shipDeckTextureKeyFallbacks = {
+    ship_deck_wood: "/assets/ships/art/wood.avif",
+  };
+  const shipDeckTextureCache = new Map();
   let pendingMountRequestId = null;
   let pendingEchoTetherRequestId = null;
   let pendingInitiativeCid = null;
@@ -12859,13 +12863,168 @@ __DAMAGE_TYPE_OPTIONS__
     return `${col},${row}`;
   }
 
+  function isShipStructureEntry(entry){
+    if (!entry || typeof entry !== "object") return false;
+    const payload = (entry.payload && typeof entry.payload === "object") ? entry.payload : {};
+    const kind = String(entry.kind || "").trim().toLowerCase();
+    return kind === "ship_hull" || !!payload.ship_instance_id || !!entry.ship_state;
+  }
+
+  function normalizeCellList(rawCells){
+    const out = [];
+    if (!Array.isArray(rawCells)) return out;
+    rawCells.forEach((cell) => {
+      const col = Number(cell?.col);
+      const row = Number(cell?.row);
+      if (!Number.isFinite(col) || !Number.isFinite(row)) return;
+      out.push({col: Math.trunc(col), row: Math.trunc(row)});
+    });
+    return out;
+  }
+
+  function structureShipRenderMetadata(structure){
+    const payload = (structure?.payload && typeof structure.payload === "object") ? structure.payload : {};
+    const render = (structure?.ship_render && typeof structure.ship_render === "object")
+      ? structure.ship_render
+      : ((payload.ship_render && typeof payload.ship_render === "object") ? payload.ship_render : {});
+    const localSpace = (structure?.ship_local_space && typeof structure.ship_local_space === "object")
+      ? structure.ship_local_space
+      : ((payload.ship_local_space && typeof payload.ship_local_space === "object") ? payload.ship_local_space : {});
+    const deckRegions = Array.isArray(structure?.ship_deck_regions)
+      ? structure.ship_deck_regions
+      : (Array.isArray(payload.ship_deck_regions) ? payload.ship_deck_regions : []);
+    return {render, localSpace, deckRegions};
+  }
+
+  function deckTextureUrlCandidatesFromRender(render){
+    const renderData = (render && typeof render === "object") ? render : {};
+    const seen = new Set();
+    const candidates = [];
+    const pushCandidate = (raw) => {
+      const text = String(raw || "").trim();
+      if (!text || seen.has(text)) return;
+      seen.add(text);
+      candidates.push(text);
+    };
+    const rawUrls = Array.isArray(renderData.deck_texture_url_candidates) ? renderData.deck_texture_url_candidates : [];
+    rawUrls.forEach((raw) => pushCandidate(raw));
+    const directPath = String(renderData.deck_texture_path || "").trim();
+    if (directPath){
+      pushCandidate(directPath.startsWith("/assets/") ? directPath : (directPath.startsWith("assets/") ? `/${directPath}` : directPath));
+    }
+    const textureKey = String(renderData.deck_texture_key || "ship_deck_wood").trim() || "ship_deck_wood";
+    if (!candidates.length && shipDeckTextureKeyFallbacks[textureKey]){
+      pushCandidate(shipDeckTextureKeyFallbacks[textureKey]);
+    }
+    const expanded = [];
+    candidates.forEach((url) => {
+      const [stem, query = ""] = String(url).split("?");
+      const querySuffix = query ? `?${query}` : "";
+      const extMatch = stem.match(/\.(avif|webp|png|jpe?g)$/i);
+      if (extMatch){
+        const root = stem.slice(0, -extMatch[0].length);
+        [extMatch[0].toLowerCase(), ".webp", ".png", ".jpg", ".jpeg", ".avif"].forEach((ext) => {
+          const candidate = `${root}${ext}${querySuffix}`;
+          if (!seen.has(candidate)){
+            seen.add(candidate);
+            expanded.push(candidate);
+          }
+        });
+      } else {
+        if (!seen.has(url)){
+          seen.add(url);
+          expanded.push(url);
+        }
+      }
+    });
+    return expanded.length ? expanded : candidates;
+  }
+
+  function ensureShipDeckTexture(url){
+    const key = String(url || "").trim();
+    if (!key) return null;
+    const cached = shipDeckTextureCache.get(key);
+    if (cached){
+      return cached;
+    }
+    const image = new Image();
+    const entry = {status: "loading", image, pattern: null};
+    shipDeckTextureCache.set(key, entry);
+    image.onload = () => {
+      entry.status = "ready";
+      entry.pattern = null;
+      scheduleUiFlush({draw:true});
+    };
+    image.onerror = () => {
+      entry.status = "error";
+      entry.pattern = null;
+      scheduleUiFlush({draw:true});
+    };
+    image.src = key;
+    return entry;
+  }
+
+  function resolveShipDeckPattern(structure){
+    const metadata = structureShipRenderMetadata(structure);
+    const textureCandidates = deckTextureUrlCandidatesFromRender(metadata.render);
+    for (const url of textureCandidates){
+      const entry = ensureShipDeckTexture(url);
+      if (!entry || entry.status !== "ready" || !entry.image) continue;
+      if (!entry.pattern){
+        try {
+          entry.pattern = ctx.createPattern(entry.image, "repeat");
+        } catch (_err){
+          entry.pattern = null;
+        }
+      }
+      if (entry.pattern){
+        return entry.pattern;
+      }
+    }
+    return null;
+  }
+
+  function drawStructureCellOuterEdges(cells, strokeStyle, lineWidth){
+    if (!Array.isArray(cells) || !cells.length) return;
+    const cellSet = new Set(cells.map((cell) => cellKey(cell.col, cell.row)));
+    ctx.save();
+    ctx.strokeStyle = strokeStyle;
+    ctx.lineWidth = lineWidth;
+    ctx.beginPath();
+    cells.forEach((cell) => {
+      const col = Number(cell.col);
+      const row = Number(cell.row);
+      if (!Number.isFinite(col) || !Number.isFinite(row)) return;
+      const x = panX + col * zoom;
+      const y = panY + row * zoom;
+      if (!cellSet.has(cellKey(col, row - 1))){
+        ctx.moveTo(x, y);
+        ctx.lineTo(x + zoom, y);
+      }
+      if (!cellSet.has(cellKey(col + 1, row))){
+        ctx.moveTo(x + zoom, y);
+        ctx.lineTo(x + zoom, y + zoom);
+      }
+      if (!cellSet.has(cellKey(col, row + 1))){
+        ctx.moveTo(x + zoom, y + zoom);
+        ctx.lineTo(x, y + zoom);
+      }
+      if (!cellSet.has(cellKey(col - 1, row))){
+        ctx.moveTo(x, y + zoom);
+        ctx.lineTo(x, y);
+      }
+    });
+    ctx.stroke();
+    ctx.restore();
+  }
+
   function entityCellsForEntry(entry){
     const payload = (entry && typeof entry.payload === "object" && entry.payload) ? entry.payload : {};
-    const occupied = Array.isArray(payload.occupied_cells) ? payload.occupied_cells : [];
+    const occupied = Array.isArray(entry?.occupied_cells)
+      ? entry.occupied_cells
+      : (Array.isArray(payload.occupied_cells) ? payload.occupied_cells : []);
     if (occupied.length){
-      return occupied
-        .map((cell) => ({col:Number(cell?.col), row:Number(cell?.row)}))
-        .filter((cell) => Number.isFinite(cell.col) && Number.isFinite(cell.row));
+      return normalizeCellList(occupied);
     }
     const col = Number(entry?.col);
     const row = Number(entry?.row);
@@ -12914,20 +13073,11 @@ __DAMAGE_TYPE_OPTIONS__
     const addEntityCells = (entry, callback) => {
       if (!entry || typeof entry !== "object") return;
       const payload = (entry.payload && typeof entry.payload === "object") ? entry.payload : {};
-      const occupied = Array.isArray(payload.occupied_cells) ? payload.occupied_cells : [];
-      if (occupied.length){
-        occupied.forEach((cell) => {
-          const col = Number(cell?.col);
-          const row = Number(cell?.row);
-          if (!Number.isFinite(col) || !Number.isFinite(row)) return;
-          callback(Math.trunc(col), Math.trunc(row), payload);
-        });
-        return;
-      }
-      const col = Number(entry.col);
-      const row = Number(entry.row);
-      if (!Number.isFinite(col) || !Number.isFinite(row)) return;
-      callback(Math.trunc(col), Math.trunc(row), payload);
+      const cells = entityCellsForEntry(entry);
+      if (!cells.length) return;
+      cells.forEach((cell) => {
+        callback(Math.trunc(cell.col), Math.trunc(cell.row), payload);
+      });
     };
     (Array.isArray(features) ? features : []).forEach((feature) => {
       addEntityCells(feature, (col, row, payload) => {
@@ -13473,18 +13623,77 @@ __DAMAGE_TYPE_OPTIONS__
     }
 
     if (Array.isArray(state.structures)){
-      ctx.save();
-      ctx.strokeStyle = "rgba(225,188,124,0.9)";
-      ctx.lineWidth = Math.max(1, zoom * 0.08);
-      ctx.setLineDash([4,3]);
+      const shipStructures = [];
+      const nonShipStructures = [];
       state.structures.forEach((structure) => {
-        entityCellsForEntry(structure).forEach((cell) => {
+        if (isShipStructureEntry(structure)){
+          shipStructures.push(structure);
+        } else {
+          nonShipStructures.push(structure);
+        }
+      });
+      shipStructures.forEach((structure) => {
+        const cells = entityCellsForEntry(structure);
+        if (!cells.length) return;
+        const selected = String(structure?.id || "") === String(selectedStructureId || "");
+        const deckPattern = resolveShipDeckPattern(structure);
+        ctx.save();
+        if (deckPattern){
+          ctx.fillStyle = deckPattern;
+          ctx.globalAlpha = selected ? 0.92 : 0.84;
+        } else {
+          ctx.fillStyle = selected ? "rgba(168,122,79,0.92)" : "rgba(143,106,70,0.86)";
+        }
+        cells.forEach((cell) => {
           const x = panX + cell.col * zoom;
           const y = panY + cell.row * zoom;
-          ctx.strokeRect(x + 1, y + 1, zoom - 2, zoom - 2);
+          ctx.fillRect(x + 1, y + 1, zoom - 2, zoom - 2);
         });
+        ctx.restore();
+        drawStructureCellOuterEdges(
+          cells,
+          selected ? "rgba(31,56,85,0.98)" : "rgba(49,63,79,0.96)",
+          Math.max(1, zoom * (selected ? 0.11 : 0.08)),
+        );
+        const metadata = structureShipRenderMetadata(structure);
+        const deckRegions = Array.isArray(metadata.deckRegions) ? metadata.deckRegions : [];
+        if (deckRegions.length){
+          ctx.save();
+          ctx.strokeStyle = "rgba(62,112,166,0.5)";
+          ctx.lineWidth = Math.max(1, zoom * 0.04);
+          deckRegions.forEach((region) => {
+            const regionCells = normalizeCellList(region?.cells);
+            if (!regionCells.length) return;
+            drawStructureCellOuterEdges(regionCells, "rgba(62,112,166,0.5)", Math.max(1, zoom * 0.04));
+            const centroid = (region?.world_centroid && typeof region.world_centroid === "object")
+              ? region.world_centroid
+              : null;
+            const col = Number(centroid?.col);
+            const row = Number(centroid?.row);
+            if (!Number.isFinite(col) || !Number.isFinite(row)) return;
+            const label = String(region?.label || region?.id || "").trim();
+            if (!label) return;
+            ctx.fillStyle = "rgba(19,33,48,0.9)";
+            ctx.font = `${Math.max(8, Math.floor(zoom * 0.24))}px system-ui`;
+            ctx.fillText(label, panX + (col + 0.15) * zoom, panY + (row + 0.62) * zoom);
+          });
+          ctx.restore();
+        }
       });
-      ctx.restore();
+      if (nonShipStructures.length){
+        ctx.save();
+        ctx.strokeStyle = "rgba(225,188,124,0.9)";
+        ctx.lineWidth = Math.max(1, zoom * 0.08);
+        ctx.setLineDash([4,3]);
+        nonShipStructures.forEach((structure) => {
+          entityCellsForEntry(structure).forEach((cell) => {
+            const x = panX + cell.col * zoom;
+            const y = panY + cell.row * zoom;
+            ctx.strokeRect(x + 1, y + 1, zoom - 2, zoom - 2);
+          });
+        });
+        ctx.restore();
+      }
     }
 
     if (Array.isArray(state.features)){

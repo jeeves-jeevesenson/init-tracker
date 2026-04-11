@@ -407,6 +407,70 @@ class LanSnapshotStaticTests(unittest.TestCase):
         self.assertTrue(active_boarding.get("on_ship"))
         self.assertEqual(active_boarding.get("source_structure_id"), "a")
 
+    def test_lan_snapshot_exposes_ship_render_metadata_and_texture_candidates(self):
+        app = object.__new__(tracker_mod.InitiativeTracker)
+        app._lan_grid_cols = 20
+        app._lan_grid_rows = 20
+        app._lan_obstacles = set()
+        app._lan_positions = {}
+        app._lan_aoes = {}
+        app._lan_rough_terrain = {}
+        app._lan_next_aoe_id = 1
+        app.combatants = {}
+        app.current_cid = None
+        app.round_num = 1
+        app._display_order = lambda: []
+        app._peek_next_turn_cid = lambda _cid: None
+        app._oplog = lambda *args, **kwargs: None
+        app._lan_reaction_debug_enabled = lambda: False
+        app._lan = type("LanStub", (), {"_cached_snapshot": {}})()
+        app._ship_render_asset_path_for_key = lambda _key: None
+        app._map_state = tracker_mod.MapState.from_dict(
+            {
+                "grid": {"cols": 20, "rows": 20, "feet_per_square": 5},
+                "structures": [
+                    {
+                        "id": "ship_a",
+                        "kind": "ship_hull",
+                        "anchor_col": 5,
+                        "anchor_row": 5,
+                        "occupied_cells": [{"col": 5, "row": 5}, {"col": 6, "row": 5}],
+                        "payload": {
+                            "name": "Deckship",
+                            "ship_instance_id": "ship_1",
+                            "ship_render": {"deck_texture_key": "ship_deck_wood"},
+                            "ship_local_space": {"facing_mode": "rotate_90"},
+                            "ship_deck_regions": [{"id": "main", "label": "Main Deck", "cells": [{"col": 5, "row": 5}]}],
+                        },
+                    }
+                ],
+                "presentation": {
+                    "ship_instances": {
+                        "ship_1": {
+                            "id": "ship_1",
+                            "name": "Deckship",
+                            "blueprint_id": "sloop",
+                            "parent_structure_id": "ship_a",
+                            "facing_deg": 0,
+                            "components": [{"id": "hull"}],
+                            "mounted_weapons": [],
+                        }
+                    }
+                },
+            }
+        )
+        app._capture_canonical_map_state = lambda prefer_window=True: app._map_state.normalized()
+        app._apply_canonical_map_state = lambda state, hydrate_window=False: setattr(app, "_map_state", state.normalized())
+
+        snap = app._lan_snapshot(include_static=False, hydrate_static=False)
+        ship_entry = next(item for item in (snap.get("structures") or []) if item.get("id") == "ship_a")
+        self.assertEqual(ship_entry.get("occupied_cells"), [{"col": 5, "row": 5}, {"col": 6, "row": 5}])
+        self.assertEqual((ship_entry.get("ship_local_space") or {}).get("facing_mode"), "rotate_90")
+        self.assertEqual((ship_entry.get("ship_deck_regions") or [])[0]["id"], "main")
+        ship_render = ship_entry.get("ship_render") or {}
+        self.assertEqual(ship_render.get("deck_texture_key"), "ship_deck_wood")
+        self.assertTrue(any(str(url).endswith(".png") for url in (ship_render.get("deck_texture_url_candidates") or [])))
+
     def test_units_include_max_hp_field(self):
         app = object.__new__(tracker_mod.InitiativeTracker)
         app._lan_grid_cols = 10

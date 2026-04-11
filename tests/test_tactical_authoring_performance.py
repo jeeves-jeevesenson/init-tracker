@@ -287,6 +287,43 @@ class TacticalAuthoringPerformanceTests(unittest.TestCase):
         self.assertEqual(calls["scheduled_flush"], 1)
         self.assertFalse(helper._map_author_painting)
 
+    def test_rough_paint_toggle_does_not_override_select_mode(self):
+        calls = {"rough_paint": 0}
+        helper = types.SimpleNamespace(
+            canvas=types.SimpleNamespace(
+                canvasx=lambda x: x,
+                canvasy=lambda y: y,
+                find_overlapping=lambda *_args: [],
+            ),
+            _rotation_handle_hit_cid=lambda _mx, _my: None,
+            _active_map_interaction_mode=lambda: "select",
+            rough_mode_var=_Var(True),
+            obstacle_mode_var=_Var(False),
+            map_place_source_var=_Var("tactical"),
+            _paint_rough_terrain_from_event=lambda _event: calls.__setitem__("rough_paint", calls["rough_paint"] + 1),
+            _pixel_to_grid=lambda _mx, _my: (2, 3),
+            _update_selected_structure_contact_status=lambda: None,
+            _update_selected_tactical_cell_status=lambda: None,
+            _refresh_tactical_palette_state=lambda: None,
+            _map_author_selected_cell=None,
+            _drag_kind=None,
+            _drag_id=None,
+            _drag_origin_cell=None,
+            _rotating_token_cid=None,
+            _group_preferred_cid=None,
+            _cell_to_cids={},
+            _shift_held=False,
+            _clear_rotation_affordance=lambda: None,
+            _drawing_obstacles=False,
+            _drawing_rough=False,
+        )
+        event = types.SimpleNamespace(x=4, y=6, state=0)
+
+        helper_script.BattleMapWindow._on_canvas_press(helper, event)
+
+        self.assertEqual(calls["rough_paint"], 0)
+        self.assertEqual(helper._map_author_selected_cell, (2, 3))
+
 
 if __name__ == "__main__":
     unittest.main()
