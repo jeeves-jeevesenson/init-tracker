@@ -259,6 +259,11 @@ features:
     - shatter
     - call-lightning
     - sleet-storm
+    - control-water
+    - ice-storm
+    - destructive-wave
+    - insect-plague
+    - lightning-bolt
 - id: wrath_of_the_storm
   name: Wrath of the Storm
   category: Cleric Subclass Feature
@@ -402,32 +407,24 @@ spellcasting:
     max: 0
     known: []
   prepared_spells:
-    max_formula: '25'
+    max_formula: '16'
     prepared:
-    - thunderwave
     - healing-word
     - create-or-destroy-water
     - guiding-bolt
-    - fog-cloud
     - cure-wounds
     - inflict-wounds
-    - gust-of-wind
-    - shatter
-    - prayer-of-healing
+    - mass-cure-wounds
     - lesser-restoration
-    - find-traps
-    - call-lightning
-    - sleet-storm
+    - dawn
     - revivify
     - dispel-magic
     - bestow-curse
-    - control-water
-    - ice-storm
-    - destructive-wave
-    - insect-plague
     - flame-strike
     - dispel-evil-and-good
-    - lightning-bolt
+    - harm
+    - heal
+    - blade-barrier
   spell_slots:
     '1':
       max: 4
