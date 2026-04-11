@@ -1505,6 +1505,115 @@ class MapQueryAPI:
     def boardable_structure_ids(self, structure_id: Any) -> List[str]:
         return [str(item.get("target_id") or "") for item in self.structure_contacts(structure_id) if bool(item.get("boardable"))]
 
+    @staticmethod
+    def _is_ship_structure(item: Any) -> bool:
+        if not isinstance(item, MapStructure):
+            return False
+        kind = str(item.kind or "").strip().lower()
+        payload = item.payload if isinstance(item.payload, dict) else {}
+        return bool("ship" in kind or payload.get("ship_instance_id") or payload.get("ship_blueprint_id"))
+
+    @staticmethod
+    def _boarding_points(payload: Any) -> List[Dict[str, Any]]:
+        if not isinstance(payload, dict):
+            return []
+        points_raw = payload.get("boarding_points")
+        points: List[Dict[str, Any]] = []
+        for raw in points_raw if isinstance(points_raw, list) else []:
+            if not isinstance(raw, dict):
+                continue
+            try:
+                col = int(raw.get("col", 0))
+                row = int(raw.get("row", 0))
+            except Exception:
+                continue
+            points.append(
+                {
+                    "id": str(raw.get("id") or "").strip(),
+                    "name": str(raw.get("name") or "").strip(),
+                    "col": col,
+                    "row": row,
+                    "tags": [str(tag).strip().lower() for tag in (raw.get("tags") if isinstance(raw.get("tags"), list) else []) if str(tag).strip()],
+                }
+            )
+        return points
+
+    def ship_contacts(self, structure_id: Any) -> List[Dict[str, Any]]:
+        sid = str(structure_id or "").strip()
+        source = (self.state.structures or {}).get(sid)
+        if not isinstance(source, MapStructure):
+            return []
+        source_payload = source.payload if isinstance(source.payload, dict) else {}
+        source_points = self._boarding_points(source_payload)
+        source_point_cells = {(int(point.get("col", 0)), int(point.get("row", 0))) for point in source_points}
+        contacts: List[Dict[str, Any]] = []
+        for relation in self.structure_contacts(sid):
+            if not isinstance(relation, dict):
+                continue
+            target_id = str(relation.get("target_id") or "").strip()
+            target = (self.state.structures or {}).get(target_id)
+            if not isinstance(target, MapStructure):
+                continue
+            target_payload = target.payload if isinstance(target.payload, dict) else {}
+            if not (self._is_ship_structure(source) or self._is_ship_structure(target)):
+                continue
+            target_points = self._boarding_points(target_payload)
+            target_point_cells = {(int(point.get("col", 0)), int(point.get("row", 0))) for point in target_points}
+            shared_cells = {(int(entry.get("col", 0)), int(entry.get("row", 0))) for entry in (relation.get("shared_cells") if isinstance(relation.get("shared_cells"), list) else []) if isinstance(entry, dict)}
+            edge_cells = {(int(entry.get("col", 0)), int(entry.get("row", 0))) for entry in (relation.get("touching_edges") if isinstance(relation.get("touching_edges"), list) else []) if isinstance(entry, dict)}
+            shared_boarding_set = (
+                source_point_cells & target_point_cells
+                | (source_point_cells & edge_cells)
+                | (target_point_cells & edge_cells)
+                | (source_point_cells & shared_cells)
+                | (target_point_cells & shared_cells)
+            )
+            shared_boarding_cells = [{"col": int(col), "row": int(row)} for col, row in sorted(shared_boarding_set)]
+            has_bridge = bool(source_payload.get("has_gangplank") or target_payload.get("has_gangplank"))
+            bridge_links: List[Dict[str, Any]] = []
+            if has_bridge:
+                bridge_links.append(
+                    {
+                        "kind": "gangplank",
+                        "source_id": sid,
+                        "target_id": target_id,
+                        "active": bool(relation.get("contact") or relation.get("adjacent")),
+                    }
+                )
+            contact_type = "none"
+            if shared_cells:
+                contact_type = "overlap"
+            elif edge_cells:
+                contact_type = "touching_edge"
+            elif bool(relation.get("adjacent")):
+                contact_type = "touching_corner"
+            if has_bridge and bool(relation.get("adjacent") or relation.get("contact")):
+                contact_type = "bridged" if contact_type != "overlap" else "overlap_bridged"
+            boarding_capable = bool(
+                relation.get("boardable")
+                or shared_boarding_cells
+                or has_bridge
+                or source_payload.get("allow_boarding")
+                or target_payload.get("allow_boarding")
+            )
+            contacts.append(
+                {
+                    **relation,
+                    "ship_contact": True,
+                    "collision_adjacent": bool(relation.get("adjacent")),
+                    "contact_type": contact_type,
+                    "source_ship": self._is_ship_structure(source),
+                    "target_ship": self._is_ship_structure(target),
+                    "boarding_points": shared_boarding_cells,
+                    "bridge_links": bridge_links,
+                    "boarding_capable": boarding_capable,
+                }
+            )
+        return contacts
+
+    def ship_boardable_structure_ids(self, structure_id: Any) -> List[str]:
+        return [str(item.get("target_id") or "") for item in self.ship_contacts(structure_id) if bool(item.get("boarding_capable"))]
+
 
 def build_map_delta(prev: MapState, curr: MapState) -> Dict[str, Any]:
     p = prev.normalized()

@@ -265,6 +265,19 @@ class LanSnapshotStaticTests(unittest.TestCase):
                         "payload": {"name": "Interceptor", "allow_boarding": True},
                     },
                 ],
+                "presentation": {
+                    "ship_instances": {
+                        "ship_1": {
+                            "id": "ship_1",
+                            "name": "Black Pearl",
+                            "blueprint_id": "sloop",
+                            "parent_structure_id": "a",
+                            "facing_deg": 90,
+                            "components": [{"id": "hull"}],
+                            "mounted_weapons": [{"id": "cannon_a"}],
+                        }
+                    }
+                },
                 "features": [
                     {
                         "id": "f1",
@@ -284,6 +297,10 @@ class LanSnapshotStaticTests(unittest.TestCase):
         semantics = structure_a.get("contact_semantics") or {}
         self.assertEqual(semantics.get("boardable_structure_ids"), ["b"])
         self.assertEqual((semantics.get("boardable_structures") or [])[0]["name"], "Interceptor")
+        ship_state = structure_a.get("ship_state") or {}
+        self.assertEqual(ship_state.get("blueprint_id"), "sloop")
+        self.assertEqual(ship_state.get("weapon_count"), 1)
+        self.assertEqual((snap.get("ships") or [])[0]["id"], "ship_1")
         feature = next(item for item in snap["features"] if item["id"] == "f1")
         self.assertEqual(feature.get("preset_id"), "barrel")
         self.assertEqual(feature.get("display_name"), "Deck Barrel")
@@ -582,7 +599,11 @@ class LanSnapshotStaticTests(unittest.TestCase):
             "map_state": {
                 "grid": {"cols": 9, "rows": 9, "feet_per_square": 5},
                 "features": [{"id": "f1", "col": 1, "row": 1, "kind": "crate", "payload": {}}],
-                "presentation": {"structure_templates": {"ship_a": {"name": "Ship A", "kind": "ship_hull", "footprint": [{"col": 0, "row": 0}]}}},
+                "presentation": {
+                    "structure_templates": {"ship_a": {"name": "Ship A", "kind": "ship_hull", "footprint": [{"col": 0, "row": 0}]}},
+                    "ship_blueprints": {"sloop": {"id": "sloop", "name": "Sloop", "template": {"name": "Sloop", "kind": "ship_hull", "footprint": [{"col": 0, "row": 0}]}}},
+                    "ship_instances": {"ship_1": {"id": "ship_1", "blueprint_id": "sloop", "parent_structure_id": "ship_a"}},
+                },
             },
             "features": [{"id": "f2", "col": 2, "row": 2, "kind": "barrel", "payload": {}}],
         }
@@ -590,6 +611,8 @@ class LanSnapshotStaticTests(unittest.TestCase):
         self.assertEqual(state["features"][0]["id"], "f1")
         self.assertIn("structure_templates", state["presentation"])
         self.assertIn("ship_a", state["presentation"]["structure_templates"])
+        self.assertIn("ship_blueprints", state["presentation"])
+        self.assertIn("sloop", state["presentation"]["ship_blueprints"])
 
 
 if __name__ == "__main__":

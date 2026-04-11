@@ -98,6 +98,171 @@ FALLBACK_5ETOOLS_PACKS: Tuple[Tuple[str, str], ...] = (
     ("bestiary-mm.json", "https://5e.tools/data/bestiary/bestiary-mm.json"),
 )
 FALLBACK_5ETOOLS_MIN_BYTES = 100 * 1024
+DEFAULT_SHIP_BLUEPRINTS_V1: Dict[str, Dict[str, Any]] = {
+    "rowboat_launch": {
+        "name": "Rowboat / Launch",
+        "category": "utility_craft",
+        "size": "small",
+        "kind": "ship_hull",
+        "default_facing_deg": 0.0,
+        "footprint": [{"col": 0, "row": 0}, {"col": 1, "row": 0}],
+        "fixtures": [
+            {"id": "bench_a", "name": "Bench", "kind": "crate", "col": 0, "row": 0, "tags": ["ship_fixture", "cover"]},
+            {"id": "bench_b", "name": "Bench", "kind": "crate", "col": 1, "row": 0, "tags": ["ship_fixture", "cover"]},
+        ],
+        "decks": [{"id": "deck_main", "name": "Main Deck", "elevation_offset": 0.0}],
+        "surfaces": [{"id": "deck_surface", "name": "Deck Surface", "elevation": 0.0, "cells": [{"col": 0, "row": 0}, {"col": 1, "row": 0}]}],
+        "components": [{"id": "hull", "name": "Hull", "type": "hull", "max_hp": 50, "ac": 13, "damage_threshold": 0}],
+        "mounted_weapons": [],
+        "boarding": {
+            "boardable": True,
+            "edges": ["port", "starboard", "fore", "aft"],
+            "points": [{"id": "port_mid", "name": "Port Rail", "col": 0, "row": 0}, {"id": "starboard_mid", "name": "Starboard Rail", "col": 1, "row": 0}],
+            "contact_tags": ["boat", "boarding_ready"],
+        },
+        "crew": {"min_crew": 1, "recommended_crew": 2},
+    },
+    "sloop": {
+        "name": "Sloop",
+        "category": "sailing_ship",
+        "size": "medium",
+        "kind": "ship_hull",
+        "default_facing_deg": 0.0,
+        "footprint": [
+            {"col": 0, "row": 0},
+            {"col": 1, "row": 0},
+            {"col": 2, "row": 0},
+            {"col": 3, "row": 0},
+            {"col": 0, "row": 1},
+            {"col": 1, "row": 1},
+            {"col": 2, "row": 1},
+            {"col": 3, "row": 1},
+        ],
+        "fixtures": [
+            {"id": "mast_main", "name": "Main Mast", "kind": "mast", "col": 1, "row": 0, "tags": ["ship_fixture", "mast", "climbable"]},
+            {"id": "hatch_main", "name": "Hatch", "kind": "hatch", "col": 2, "row": 1, "tags": ["ship_fixture", "hatch", "traversal"]},
+            {"id": "ladder_hold", "name": "Ladder", "kind": "ladder", "col": 2, "row": 1, "tags": ["ship_fixture", "ladder", "climbable"]},
+            {"id": "cannon_port", "name": "Port Cannon", "kind": "cannon", "col": 0, "row": 0, "tags": ["ship_fixture", "weapon", "port"]},
+            {"id": "cannon_starboard", "name": "Starboard Cannon", "kind": "cannon", "col": 3, "row": 1, "tags": ["ship_fixture", "weapon", "starboard"]},
+        ],
+        "decks": [
+            {"id": "deck_main", "name": "Main Deck", "elevation_offset": 0.0},
+            {"id": "deck_hold", "name": "Lower Hold", "elevation_offset": -5.0},
+        ],
+        "surfaces": [{"id": "deck_surface", "name": "Deck Surface", "elevation": 0.0}],
+        "components": [
+            {"id": "hull", "name": "Hull", "type": "hull", "max_hp": 300, "ac": 15, "damage_threshold": 8},
+            {"id": "helm", "name": "Helm", "type": "control", "col": 3, "row": 0, "max_hp": 40, "ac": 14},
+            {"id": "rigging", "name": "Rigging", "type": "rigging", "col": 1, "row": 0, "max_hp": 50, "ac": 12},
+        ],
+        "mounted_weapons": [
+            {"id": "port_cannon", "name": "Port Cannon", "weapon_type": "cannon", "arc": "port", "col": 0, "row": 0},
+            {"id": "starboard_cannon", "name": "Starboard Cannon", "weapon_type": "cannon", "arc": "starboard", "col": 3, "row": 1},
+        ],
+        "boarding": {
+            "boardable": True,
+            "edges": ["port", "starboard", "fore", "aft"],
+            "points": [
+                {"id": "port_mid", "name": "Port Rail", "col": 0, "row": 1},
+                {"id": "starboard_mid", "name": "Starboard Rail", "col": 3, "row": 0},
+                {"id": "fore", "name": "Bow Rail", "col": 1, "row": 0},
+            ],
+            "contact_tags": ["ship", "boarding_ready"],
+        },
+        "crew": {"min_crew": 4, "recommended_crew": 10},
+    },
+    "brig": {
+        "name": "Brig",
+        "category": "sailing_ship",
+        "size": "large",
+        "kind": "ship_hull",
+        "default_facing_deg": 0.0,
+        "footprint": [
+            {"col": 0, "row": 0},
+            {"col": 1, "row": 0},
+            {"col": 2, "row": 0},
+            {"col": 3, "row": 0},
+            {"col": 4, "row": 0},
+            {"col": 0, "row": 1},
+            {"col": 1, "row": 1},
+            {"col": 2, "row": 1},
+            {"col": 3, "row": 1},
+            {"col": 4, "row": 1},
+            {"col": 1, "row": 2},
+            {"col": 2, "row": 2},
+            {"col": 3, "row": 2},
+        ],
+        "fixtures": [
+            {"id": "mast_fore", "name": "Fore Mast", "kind": "mast", "col": 1, "row": 0, "tags": ["ship_fixture", "mast", "climbable"]},
+            {"id": "mast_main", "name": "Main Mast", "kind": "mast", "col": 3, "row": 1, "tags": ["ship_fixture", "mast", "climbable"]},
+            {"id": "stairs_quarterdeck", "name": "Quarterdeck Stairs", "kind": "stairs", "col": 4, "row": 1, "tags": ["ship_fixture", "stairs", "traversal"]},
+            {"id": "hatch_hold", "name": "Hold Hatch", "kind": "hatch", "col": 2, "row": 1, "tags": ["ship_fixture", "hatch"]},
+            {"id": "cannon_port_a", "name": "Port Cannon A", "kind": "cannon", "col": 0, "row": 0, "tags": ["ship_fixture", "weapon", "port"]},
+            {"id": "cannon_port_b", "name": "Port Cannon B", "kind": "cannon", "col": 0, "row": 1, "tags": ["ship_fixture", "weapon", "port"]},
+            {"id": "cannon_starboard_a", "name": "Starboard Cannon A", "kind": "cannon", "col": 4, "row": 0, "tags": ["ship_fixture", "weapon", "starboard"]},
+            {"id": "cannon_starboard_b", "name": "Starboard Cannon B", "kind": "cannon", "col": 4, "row": 1, "tags": ["ship_fixture", "weapon", "starboard"]},
+        ],
+        "decks": [
+            {"id": "deck_main", "name": "Main Deck", "elevation_offset": 0.0},
+            {"id": "deck_quarter", "name": "Quarterdeck", "elevation_offset": 5.0},
+            {"id": "deck_hold", "name": "Lower Hold", "elevation_offset": -5.0},
+        ],
+        "surfaces": [{"id": "deck_surface", "name": "Deck Surface", "elevation": 0.0}],
+        "components": [
+            {"id": "hull", "name": "Hull", "type": "hull", "max_hp": 400, "ac": 15, "damage_threshold": 10},
+            {"id": "helm", "name": "Helm", "type": "control", "col": 4, "row": 1, "max_hp": 50, "ac": 15},
+            {"id": "rigging", "name": "Rigging", "type": "rigging", "col": 3, "row": 1, "max_hp": 80, "ac": 12},
+        ],
+        "mounted_weapons": [
+            {"id": "port_battery_a", "name": "Port Battery A", "weapon_type": "cannon", "arc": "port", "col": 0, "row": 0},
+            {"id": "port_battery_b", "name": "Port Battery B", "weapon_type": "cannon", "arc": "port", "col": 0, "row": 1},
+            {"id": "starboard_battery_a", "name": "Starboard Battery A", "weapon_type": "cannon", "arc": "starboard", "col": 4, "row": 0},
+            {"id": "starboard_battery_b", "name": "Starboard Battery B", "weapon_type": "cannon", "arc": "starboard", "col": 4, "row": 1},
+        ],
+        "boarding": {
+            "boardable": True,
+            "edges": ["port", "starboard", "fore", "aft"],
+            "points": [
+                {"id": "port_mid", "name": "Port Rail", "col": 0, "row": 1},
+                {"id": "starboard_mid", "name": "Starboard Rail", "col": 4, "row": 1},
+                {"id": "aft_quarterdeck", "name": "Quarterdeck Rail", "col": 3, "row": 2},
+            ],
+            "contact_tags": ["ship", "boarding_ready", "warship"],
+        },
+        "crew": {"min_crew": 8, "recommended_crew": 20},
+    },
+    "galleon_heavy": {
+        "name": "Heavy Galleon",
+        "category": "heavy_ship",
+        "size": "huge",
+        "kind": "ship_hull",
+        "default_facing_deg": 0.0,
+        "footprint": [
+            {"col": 0, "row": 0}, {"col": 1, "row": 0}, {"col": 2, "row": 0}, {"col": 3, "row": 0}, {"col": 4, "row": 0}, {"col": 5, "row": 0},
+            {"col": 0, "row": 1}, {"col": 1, "row": 1}, {"col": 2, "row": 1}, {"col": 3, "row": 1}, {"col": 4, "row": 1}, {"col": 5, "row": 1},
+            {"col": 1, "row": 2}, {"col": 2, "row": 2}, {"col": 3, "row": 2}, {"col": 4, "row": 2},
+        ],
+        "fixtures": [
+            {"id": "mast_fore", "name": "Fore Mast", "kind": "mast", "col": 1, "row": 0, "tags": ["ship_fixture", "mast", "climbable"]},
+            {"id": "mast_main", "name": "Main Mast", "kind": "mast", "col": 3, "row": 1, "tags": ["ship_fixture", "mast", "climbable"]},
+            {"id": "mast_mizzen", "name": "Mizzen Mast", "kind": "mast", "col": 5, "row": 1, "tags": ["ship_fixture", "mast", "climbable"]},
+            {"id": "quarter_stairs", "name": "Quarterdeck Stairs", "kind": "stairs", "col": 5, "row": 2, "tags": ["ship_fixture", "stairs", "traversal"]},
+        ],
+        "decks": [{"id": "deck_main", "name": "Main Deck", "elevation_offset": 0.0}, {"id": "deck_quarter", "name": "Quarterdeck", "elevation_offset": 5.0}],
+        "components": [{"id": "hull", "name": "Hull", "type": "hull", "max_hp": 500, "ac": 15, "damage_threshold": 15}],
+        "mounted_weapons": [
+            {"id": "port_heavy_battery", "name": "Port Heavy Battery", "weapon_type": "cannon", "arc": "port", "col": 0, "row": 1},
+            {"id": "starboard_heavy_battery", "name": "Starboard Heavy Battery", "weapon_type": "cannon", "arc": "starboard", "col": 5, "row": 1},
+        ],
+        "boarding": {
+            "boardable": True,
+            "edges": ["port", "starboard", "fore", "aft"],
+            "points": [{"id": "port_mid", "name": "Port Rail", "col": 0, "row": 1}, {"id": "starboard_mid", "name": "Starboard Rail", "col": 5, "row": 1}],
+            "contact_tags": ["ship", "boarding_ready", "heavy"],
+        },
+        "crew": {"min_crew": 15, "recommended_crew": 35},
+    },
+}
 
 
 def _normalize_turn_schedule_config(raw_schedule: object) -> Tuple[Optional[str], Optional[int], Optional[str]]:
@@ -8877,6 +9042,17 @@ class InitiativeTracker(base.InitiativeTracker):
             enriched_relations.append(item)
         adjacent_ids = [str(item.get("target_id") or "") for item in enriched_relations if bool(item.get("adjacent"))]
         boardable_ids = [str(item.get("target_id") or "") for item in enriched_relations if bool(item.get("boardable"))]
+        ship_relations: List[Dict[str, Any]] = []
+        for relation in query.ship_contacts(sid):
+            if not isinstance(relation, dict):
+                continue
+            item = dict(relation)
+            target_id = str(item.get("target_id") or "").strip()
+            if target_id:
+                item["target_name"] = _structure_display_name(target_id)
+            ship_relations.append(item)
+        ship_contact_ids = [str(item.get("target_id") or "") for item in ship_relations if bool(item.get("contact"))]
+        boarding_capable_ids = [str(item.get("target_id") or "") for item in ship_relations if bool(item.get("boarding_capable"))]
         return {
             "ok": True,
             "structure_id": sid,
@@ -8886,6 +9062,294 @@ class InitiativeTracker(base.InitiativeTracker):
             "boardable_structure_ids": boardable_ids,
             "adjacent_structures": [{"id": target_id, "name": _structure_display_name(target_id)} for target_id in adjacent_ids],
             "boardable_structures": [{"id": target_id, "name": _structure_display_name(target_id)} for target_id in boardable_ids],
+            "ship_relations": ship_relations,
+            "ship_contact_structure_ids": ship_contact_ids,
+            "boarding_capable_structure_ids": boarding_capable_ids,
+            "ship_contact_structures": [{"id": target_id, "name": _structure_display_name(target_id)} for target_id in ship_contact_ids],
+            "boarding_capable_structures": [{"id": target_id, "name": _structure_display_name(target_id)} for target_id in boarding_capable_ids],
+        }
+
+    def _normalize_ship_blueprint_payload(
+        self,
+        blueprint_id: Any,
+        blueprint_payload: Any,
+    ) -> Tuple[Dict[str, Any], List[str]]:
+        bid = str(blueprint_id or "").strip().lower()
+        payload = dict(blueprint_payload) if isinstance(blueprint_payload, dict) else {}
+        errors: List[str] = []
+        if not bid:
+            errors.append("missing_blueprint_id")
+        name = str(payload.get("name") or bid or "ship").strip() or "ship"
+        category = str(payload.get("category") or payload.get("ship_category") or "ship").strip().lower() or "ship"
+        size = str(payload.get("size") or payload.get("ship_size") or "medium").strip().lower() or "medium"
+        kind = str(payload.get("kind") or "ship_hull").strip() or "ship_hull"
+        base_template_payload = {
+            "name": name,
+            "kind": kind,
+            "footprint": list(payload.get("footprint") if isinstance(payload.get("footprint"), list) else []),
+            "features": list(
+                payload.get("fixtures")
+                if isinstance(payload.get("fixtures"), list)
+                else payload.get("features")
+                if isinstance(payload.get("features"), list)
+                else []
+            ),
+            "decks": list(payload.get("decks") if isinstance(payload.get("decks"), list) else []),
+            "anchor_points": list(payload.get("anchor_points") if isinstance(payload.get("anchor_points"), list) else []),
+            "default_facing_deg": payload.get("default_facing_deg", payload.get("facing_deg", 0.0)),
+        }
+        template, template_errors = self._normalize_structure_template_payload(f"ship_blueprint:{bid}", base_template_payload)
+        errors.extend(template_errors)
+        components: List[Dict[str, Any]] = []
+        for index, raw in enumerate(payload.get("components") if isinstance(payload.get("components"), list) else []):
+            if not isinstance(raw, dict):
+                continue
+            component_id = str(raw.get("id") or f"component_{index + 1}").strip().lower() or f"component_{index + 1}"
+            component: Dict[str, Any] = {
+                "id": component_id,
+                "name": str(raw.get("name") or component_id.replace("_", " ").title()).strip() or component_id,
+                "type": str(raw.get("type") or "component").strip().lower() or "component",
+            }
+            for numeric_key in ("col", "row", "max_hp", "ac", "damage_threshold"):
+                if raw.get(numeric_key) is None:
+                    continue
+                try:
+                    component[numeric_key] = int(raw.get(numeric_key))
+                except Exception:
+                    continue
+            components.append(component)
+        weapons: List[Dict[str, Any]] = []
+        for index, raw in enumerate(payload.get("mounted_weapons") if isinstance(payload.get("mounted_weapons"), list) else []):
+            if not isinstance(raw, dict):
+                continue
+            weapon_id = str(raw.get("id") or f"weapon_{index + 1}").strip().lower() or f"weapon_{index + 1}"
+            weapon: Dict[str, Any] = {
+                "id": weapon_id,
+                "name": str(raw.get("name") or weapon_id.replace("_", " ").title()).strip() or weapon_id,
+                "weapon_type": str(raw.get("weapon_type") or raw.get("type") or "weapon").strip().lower() or "weapon",
+                "arc": str(raw.get("arc") or "broadside").strip().lower() or "broadside",
+            }
+            for numeric_key in ("col", "row", "max_hp", "ac", "damage_threshold", "ammo", "range"):
+                if raw.get(numeric_key) is None:
+                    continue
+                try:
+                    weapon[numeric_key] = int(raw.get(numeric_key))
+                except Exception:
+                    continue
+            weapons.append(weapon)
+        surfaces: List[Dict[str, Any]] = []
+        for index, raw in enumerate(payload.get("surfaces") if isinstance(payload.get("surfaces"), list) else []):
+            if not isinstance(raw, dict):
+                continue
+            surface: Dict[str, Any] = {
+                "id": str(raw.get("id") or f"surface_{index + 1}").strip().lower() or f"surface_{index + 1}",
+                "name": str(raw.get("name") or f"Surface {index + 1}").strip() or f"Surface {index + 1}",
+            }
+            if raw.get("elevation") is not None:
+                try:
+                    surface["elevation"] = float(raw.get("elevation"))
+                except Exception:
+                    surface["elevation"] = 0.0
+            if isinstance(raw.get("cells"), list):
+                cells = []
+                for cell in raw.get("cells"):
+                    if not isinstance(cell, dict):
+                        continue
+                    try:
+                        cells.append({"col": int(cell.get("col", 0)), "row": int(cell.get("row", 0))})
+                    except Exception:
+                        continue
+                if cells:
+                    surface["cells"] = cells
+            surfaces.append(surface)
+        boarding_raw = payload.get("boarding") if isinstance(payload.get("boarding"), dict) else {}
+        boarding_points: List[Dict[str, Any]] = []
+        for index, raw in enumerate(boarding_raw.get("points") if isinstance(boarding_raw.get("points"), list) else []):
+            if not isinstance(raw, dict):
+                continue
+            try:
+                point_col = int(raw.get("col", 0))
+                point_row = int(raw.get("row", 0))
+            except Exception:
+                continue
+            boarding_points.append(
+                {
+                    "id": str(raw.get("id") or f"point_{index + 1}").strip().lower() or f"point_{index + 1}",
+                    "name": str(raw.get("name") or f"Point {index + 1}").strip() or f"Point {index + 1}",
+                    "col": point_col,
+                    "row": point_row,
+                    "tags": [str(tag).strip().lower() for tag in (raw.get("tags") if isinstance(raw.get("tags"), list) else []) if str(tag).strip()],
+                }
+            )
+        boarding_edges = [
+            str(edge).strip().lower()
+            for edge in (boarding_raw.get("edges") if isinstance(boarding_raw.get("edges"), list) else payload.get("boardable_edges") if isinstance(payload.get("boardable_edges"), list) else [])
+            if str(edge).strip()
+        ]
+        bridges: List[Dict[str, Any]] = []
+        for index, raw in enumerate(boarding_raw.get("bridges") if isinstance(boarding_raw.get("bridges"), list) else []):
+            if not isinstance(raw, dict):
+                continue
+            bridge: Dict[str, Any] = {"id": str(raw.get("id") or f"bridge_{index + 1}").strip().lower() or f"bridge_{index + 1}"}
+            for key in ("name", "kind", "target_blueprint_id"):
+                if raw.get(key):
+                    bridge[key] = str(raw.get(key)).strip()
+            if raw.get("col") is not None and raw.get("row") is not None:
+                try:
+                    bridge["col"] = int(raw.get("col"))
+                    bridge["row"] = int(raw.get("row"))
+                except Exception:
+                    pass
+            bridges.append(bridge)
+        crew_raw = payload.get("crew") if isinstance(payload.get("crew"), dict) else {}
+        crew = {
+            "min_crew": int(crew_raw.get("min_crew", payload.get("crew_min", 0)) or 0),
+            "recommended_crew": int(crew_raw.get("recommended_crew", payload.get("crew_recommended", 0)) or 0),
+        }
+        normalized = {
+            "id": bid,
+            "name": name,
+            "kind": kind,
+            "category": category,
+            "size": size,
+            "default_facing_deg": float(template.get("default_facing_deg", 0.0) or 0.0),
+            "template": template,
+            "decks": list(template.get("decks") if isinstance(template.get("decks"), list) else []),
+            "surfaces": surfaces,
+            "components": components,
+            "mounted_weapons": weapons,
+            "boarding": {
+                "boardable": bool(boarding_raw.get("boardable", True)),
+                "edges": sorted(set(boarding_edges or ["port", "starboard"])),
+                "points": boarding_points,
+                "bridges": bridges,
+                "contact_tags": [
+                    str(tag).strip().lower()
+                    for tag in (boarding_raw.get("contact_tags") if isinstance(boarding_raw.get("contact_tags"), list) else [])
+                    if str(tag).strip()
+                ],
+            },
+            "crew": crew,
+        }
+        return normalized, errors
+
+    def _ship_blueprints(self) -> Dict[str, Dict[str, Any]]:
+        state = self._capture_canonical_map_state(prefer_window=False)
+        presentation = state.presentation if isinstance(state.presentation, dict) else {}
+        loaded = presentation.get("ship_blueprints")
+        candidate_blueprints: Dict[str, Any] = {}
+        if isinstance(loaded, dict):
+            candidate_blueprints.update({str(key): value for key, value in loaded.items()})
+        if not candidate_blueprints:
+            candidate_blueprints.update({str(key): value for key, value in DEFAULT_SHIP_BLUEPRINTS_V1.items()})
+        templates = presentation.get("structure_templates") if isinstance(presentation.get("structure_templates"), dict) else {}
+        for key, template in templates.items():
+            if not isinstance(template, dict):
+                continue
+            kind = str(template.get("kind") or "").strip().lower()
+            if "ship" not in kind:
+                continue
+            bp_id = str(key).strip().lower()
+            if bp_id in candidate_blueprints:
+                continue
+            candidate_blueprints[bp_id] = {
+                "name": str(template.get("name") or bp_id.replace("_", " ").title()),
+                "kind": kind or "ship_hull",
+                "footprint": list(template.get("footprint") if isinstance(template.get("footprint"), list) else []),
+                "features": list(template.get("features") if isinstance(template.get("features"), list) else []),
+                "decks": list(template.get("decks") if isinstance(template.get("decks"), list) else []),
+                "default_facing_deg": float(template.get("default_facing_deg", 0.0) or 0.0),
+                "category": "legacy_template_ship",
+                "size": "medium",
+                "boarding": {"boardable": True, "edges": ["port", "starboard"], "points": [], "bridges": []},
+                "components": [],
+                "mounted_weapons": [],
+            }
+        normalized: Dict[str, Dict[str, Any]] = {}
+        for key, value in candidate_blueprints.items():
+            item, errors = self._normalize_ship_blueprint_payload(key, value)
+            if errors:
+                continue
+            normalized[str(item.get("id") or key)] = item
+        return normalized
+
+    def _save_ship_blueprint(self, blueprint_id: Any, blueprint_payload: Any) -> None:
+        bid = str(blueprint_id or "").strip().lower()
+        normalized, errors = self._normalize_ship_blueprint_payload(bid, blueprint_payload)
+        if errors:
+            raise ValueError(",".join(errors))
+
+        def _mutate(state: MapState) -> None:
+            presentation = dict(state.presentation or {})
+            blueprints = dict(presentation.get("ship_blueprints") if isinstance(presentation.get("ship_blueprints"), dict) else {})
+            blueprints[bid] = dict(normalized)
+            presentation["ship_blueprints"] = blueprints
+            state.presentation = presentation
+
+        self._mutate_canonical_map_state(_mutate)
+
+    def _ship_instances(self) -> Dict[str, Dict[str, Any]]:
+        state = self._capture_canonical_map_state(prefer_window=False)
+        presentation = state.presentation if isinstance(state.presentation, dict) else {}
+        raw = presentation.get("ship_instances")
+        if not isinstance(raw, dict):
+            return {}
+        out: Dict[str, Dict[str, Any]] = {}
+        for key, value in raw.items():
+            if not isinstance(value, dict):
+                continue
+            ship_id = str(value.get("id") or key).strip()
+            if not ship_id:
+                continue
+            out[ship_id] = dict(value)
+        return out
+
+    def _ship_instance_for_structure(self, structure_id: Any) -> Optional[Dict[str, Any]]:
+        sid = str(structure_id or "").strip()
+        if not sid:
+            return None
+        instances = self._ship_instances()
+        for ship in instances.values():
+            if str(ship.get("parent_structure_id") or "").strip() == sid:
+                return dict(ship)
+        state = self._capture_canonical_map_state(prefer_window=False)
+        structure = (state.structures or {}).get(sid)
+        if not isinstance(structure, MapStructure):
+            return None
+        payload = structure.payload if isinstance(structure.payload, dict) else {}
+        ship_id = str(payload.get("ship_instance_id") or "").strip()
+        if ship_id and ship_id in instances:
+            return dict(instances.get(ship_id) or {})
+        return None
+
+    def _selected_ship_summary(self, structure_id: Any) -> Dict[str, Any]:
+        sid = str(structure_id or "").strip()
+        if not sid:
+            return {"ok": False, "reason": "missing_structure_id"}
+        ship = self._ship_instance_for_structure(sid)
+        if not isinstance(ship, dict):
+            return {"ok": False, "reason": "ship_not_found"}
+        semantics = self._structure_contact_semantics(sid)
+        blueprint_id = str(ship.get("blueprint_id") or "").strip()
+        blueprints = self._ship_blueprints()
+        blueprint = blueprints.get(blueprint_id) if blueprint_id in blueprints else {}
+        components = list(ship.get("components") if isinstance(ship.get("components"), list) else [])
+        weapons = list(ship.get("mounted_weapons") if isinstance(ship.get("mounted_weapons"), list) else [])
+        boardable = semantics.get("boarding_capable_structures") if isinstance(semantics.get("boarding_capable_structures"), list) else []
+        return {
+            "ok": True,
+            "ship_id": str(ship.get("id") or ""),
+            "name": str(ship.get("name") or ""),
+            "blueprint_id": blueprint_id,
+            "blueprint_name": str((blueprint or {}).get("name") or blueprint_id or ""),
+            "facing_deg": float(ship.get("facing_deg", 0.0) or 0.0),
+            "component_count": len(components),
+            "weapon_count": len(weapons),
+            "boardable_contact_count": len(boardable),
+            "components": components,
+            "mounted_weapons": weapons,
+            "boardable_contacts": boardable,
+            "contact_summary": semantics,
         }
 
     def _normalize_structure_template_payload(
@@ -9445,6 +9909,23 @@ class InitiativeTracker(base.InitiativeTracker):
             self._last_map_template_error = "template_not_found"
             self._last_map_template_blockers = {}
             return None
+        return self._instantiate_normalized_structure_template(
+            template_id=str(template_id),
+            template=template,
+            anchor_col=anchor_col,
+            anchor_row=anchor_row,
+            facing_deg=facing_deg,
+        )
+
+    def _instantiate_normalized_structure_template(
+        self,
+        *,
+        template_id: str,
+        template: Dict[str, Any],
+        anchor_col: int,
+        anchor_row: int,
+        facing_deg: float = 0.0,
+    ) -> Optional[str]:
         self._last_map_template_error = ""
         self._last_map_template_blockers = {}
         try:
@@ -9678,6 +10159,105 @@ class InitiativeTracker(base.InitiativeTracker):
                 self._last_structure_contact_semantics = self._structure_contact_semantics(structure_id)
             except Exception:
                 pass
+        return structure_id
+
+    def _instantiate_ship_blueprint(
+        self,
+        blueprint_id: Any,
+        *,
+        anchor_col: int,
+        anchor_row: int,
+        facing_deg: Optional[float] = None,
+        name: Optional[str] = None,
+    ) -> Optional[str]:
+        bid = str(blueprint_id or "").strip().lower()
+        blueprints = self._ship_blueprints()
+        blueprint = blueprints.get(bid)
+        if not isinstance(blueprint, dict):
+            self._last_map_template_error = "ship_blueprint_not_found"
+            self._last_map_template_blockers = {}
+            return None
+        template = blueprint.get("template") if isinstance(blueprint.get("template"), dict) else {}
+        if not isinstance(template, dict) or not template:
+            self._last_map_template_error = "ship_blueprint_template_missing"
+            self._last_map_template_blockers = {}
+            return None
+        final_facing = float(blueprint.get("default_facing_deg", 0.0) if facing_deg is None else facing_deg)
+        structure_id = self._instantiate_normalized_structure_template(
+            template_id=f"ship_blueprint:{bid}",
+            template=template,
+            anchor_col=int(anchor_col),
+            anchor_row=int(anchor_row),
+            facing_deg=final_facing,
+        )
+        if not structure_id:
+            return None
+
+        def _mutate(state: MapState) -> None:
+            sid = str(structure_id)
+            structure = (state.structures or {}).get(sid)
+            if not isinstance(structure, MapStructure):
+                return
+            presentation = dict(state.presentation or {})
+            ship_instances = dict(presentation.get("ship_instances") if isinstance(presentation.get("ship_instances"), dict) else {})
+            ship_instance_id = self._next_map_entity_id("ship", ship_instances.keys())
+            display_name = str(name or "").strip() or str(blueprint.get("name") or bid.replace("_", " ").title())
+            boarding = dict(blueprint.get("boarding") if isinstance(blueprint.get("boarding"), dict) else {})
+            boarding_points = list(boarding.get("points") if isinstance(boarding.get("points"), list) else [])
+            boardable_edges = list(boarding.get("edges") if isinstance(boarding.get("edges"), list) else [])
+            components = [dict(item) for item in (blueprint.get("components") if isinstance(blueprint.get("components"), list) else []) if isinstance(item, dict)]
+            weapons = [dict(item) for item in (blueprint.get("mounted_weapons") if isinstance(blueprint.get("mounted_weapons"), list) else []) if isinstance(item, dict)]
+            ship_instances[ship_instance_id] = {
+                "id": ship_instance_id,
+                "name": display_name,
+                "blueprint_id": bid,
+                "parent_structure_id": sid,
+                "facing_deg": float(final_facing),
+                "category": str(blueprint.get("category") or "ship"),
+                "size": str(blueprint.get("size") or "medium"),
+                "components": components,
+                "mounted_weapons": weapons,
+                "boarding": boarding,
+                "crew": dict(blueprint.get("crew") if isinstance(blueprint.get("crew"), dict) else {}),
+                "decks": list(blueprint.get("decks") if isinstance(blueprint.get("decks"), list) else []),
+                "surfaces": list(blueprint.get("surfaces") if isinstance(blueprint.get("surfaces"), list) else []),
+                "crew_state": {"active_crew": 0, "crew_ready": True},
+                "hull_state": {"status": "intact", "hp": None},
+                "component_state": {},
+                "weapon_state": {},
+            }
+            payload = dict(structure.payload if isinstance(structure.payload, dict) else {})
+            payload.update(
+                {
+                    "name": display_name,
+                    "ship_instance_id": ship_instance_id,
+                    "ship_blueprint_id": bid,
+                    "facing_deg": float(final_facing),
+                    "boardable": bool(boarding.get("boardable", True)),
+                    "allow_boarding": bool(boarding.get("boardable", True)),
+                    "boardable_edges": list(boardable_edges),
+                    "boarding_points": list(boarding_points),
+                    "has_gangplank": bool(any("bridge" in str(tag).lower() for point in boarding_points for tag in (point.get("tags") if isinstance(point, dict) and isinstance(point.get("tags"), list) else []))),
+                }
+            )
+            structures = dict(state.structures or {})
+            structures[sid] = MapStructure(
+                structure_id=str(structure.structure_id),
+                kind=str(structure.kind or "ship_hull"),
+                anchor_col=int(structure.anchor_col),
+                anchor_row=int(structure.anchor_row),
+                occupied_cells=list(structure.occupied_cells or []),
+                payload=payload,
+            ).normalized()
+            presentation["ship_instances"] = ship_instances
+            state.presentation = presentation
+            state.structures = structures
+
+        self._mutate_canonical_map_state(_mutate)
+        try:
+            self._last_structure_contact_semantics = self._structure_contact_semantics(structure_id)
+        except Exception:
+            pass
         return structure_id
 
     def _resolve_map_environment_event(self, event: Dict[str, Any]) -> Dict[str, Any]:
@@ -10083,6 +10663,9 @@ class InitiativeTracker(base.InitiativeTracker):
                     "auras_enabled": bool(source.get("auras_enabled", True)),
                     "bg_images": list(source.get("bg_images") if isinstance(source.get("bg_images"), list) else []),
                     "next_bg_id": int(source.get("next_bg_id", 1) or 1),
+                    "structure_templates": dict(source.get("structure_templates") if isinstance(source.get("structure_templates"), dict) else {}),
+                    "ship_blueprints": dict(source.get("ship_blueprints") if isinstance(source.get("ship_blueprints"), dict) else {}),
+                    "ship_instances": dict(source.get("ship_instances") if isinstance(source.get("ship_instances"), dict) else {}),
                 },
             }
         )
@@ -13304,6 +13887,22 @@ class InitiativeTracker(base.InitiativeTracker):
             "auras_enabled": bool(self.__dict__.get("_lan_auras_enabled", True)),
         }
         structure_entries = [dict(item) for item in (canonical_payload.get("structures") if isinstance(canonical_payload.get("structures"), list) else []) if isinstance(item, dict)]
+        ship_instances = self._ship_instances()
+        ships_payload: List[Dict[str, Any]] = []
+        for ship in ship_instances.values():
+            if not isinstance(ship, dict):
+                continue
+            ships_payload.append(
+                {
+                    "id": str(ship.get("id") or ""),
+                    "name": str(ship.get("name") or ""),
+                    "blueprint_id": str(ship.get("blueprint_id") or ""),
+                    "parent_structure_id": str(ship.get("parent_structure_id") or ""),
+                    "facing_deg": float(ship.get("facing_deg", 0.0) or 0.0),
+                    "component_count": len(ship.get("components") if isinstance(ship.get("components"), list) else []),
+                    "weapon_count": len(ship.get("mounted_weapons") if isinstance(ship.get("mounted_weapons"), list) else []),
+                }
+            )
         for index, structure_entry in enumerate(structure_entries):
             sid = str(structure_entry.get("id") or "").strip()
             if not sid:
@@ -13317,9 +13916,25 @@ class InitiativeTracker(base.InitiativeTracker):
                     "adjacent_structures": list(semantics.get("adjacent_structures") if isinstance(semantics.get("adjacent_structures"), list) else []),
                     "boardable_structures": list(semantics.get("boardable_structures") if isinstance(semantics.get("boardable_structures"), list) else []),
                     "relations": list(semantics.get("relations") if isinstance(semantics.get("relations"), list) else []),
+                    "ship_relations": list(semantics.get("ship_relations") if isinstance(semantics.get("ship_relations"), list) else []),
+                    "ship_contact_structures": list(semantics.get("ship_contact_structures") if isinstance(semantics.get("ship_contact_structures"), list) else []),
+                    "boarding_capable_structures": list(semantics.get("boarding_capable_structures") if isinstance(semantics.get("boarding_capable_structures"), list) else []),
+                }
+            ship_summary = self._selected_ship_summary(sid)
+            if bool(ship_summary.get("ok")):
+                structure_entry["ship_state"] = {
+                    "ship_id": str(ship_summary.get("ship_id") or ""),
+                    "name": str(ship_summary.get("name") or ""),
+                    "blueprint_id": str(ship_summary.get("blueprint_id") or ""),
+                    "blueprint_name": str(ship_summary.get("blueprint_name") or ""),
+                    "facing_deg": float(ship_summary.get("facing_deg", 0.0) or 0.0),
+                    "component_count": int(ship_summary.get("component_count", 0) or 0),
+                    "weapon_count": int(ship_summary.get("weapon_count", 0) or 0),
+                    "boardable_contact_count": int(ship_summary.get("boardable_contact_count", 0) or 0),
                 }
             structure_entries[index] = structure_entry
         snap["structures"] = structure_entries
+        snap["ships"] = ships_payload
         if self._lan_reaction_debug_enabled():
             snap["reaction_debug"] = self._lan_reaction_debug_payload(
                 positions=positions,
