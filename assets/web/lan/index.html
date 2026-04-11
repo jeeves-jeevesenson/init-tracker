@@ -5119,6 +5119,7 @@ __DAMAGE_TYPE_OPTIONS__
   const turnNotificationAutoCloseMs = 5000;
   let endTurnReadyVisualActive = false;
   let selectedTurnCid = null;
+  let selectedStructureId = "";
   let pendingMountRequestId = null;
   let pendingEchoTetherRequestId = null;
   let pendingInitiativeCid = null;
@@ -12858,6 +12859,20 @@ __DAMAGE_TYPE_OPTIONS__
     return `${col},${row}`;
   }
 
+  function entityCellsForEntry(entry){
+    const payload = (entry && typeof entry.payload === "object" && entry.payload) ? entry.payload : {};
+    const occupied = Array.isArray(payload.occupied_cells) ? payload.occupied_cells : [];
+    if (occupied.length){
+      return occupied
+        .map((cell) => ({col:Number(cell?.col), row:Number(cell?.row)}))
+        .filter((cell) => Number.isFinite(cell.col) && Number.isFinite(cell.row));
+    }
+    const col = Number(entry?.col);
+    const row = Number(entry?.row);
+    if (!Number.isFinite(col) || !Number.isFinite(row)) return [];
+    return [{col, row}];
+  }
+
   function buildRoughTerrainMap(list){
     const map = new Map();
     if (Array.isArray(list)){
@@ -13457,27 +13472,13 @@ __DAMAGE_TYPE_OPTIONS__
       });
     }
 
-    const entityCells = (entry) => {
-      const payload = (entry && typeof entry.payload === "object" && entry.payload) ? entry.payload : {};
-      const occupied = Array.isArray(payload.occupied_cells) ? payload.occupied_cells : [];
-      if (occupied.length){
-        return occupied
-          .map((cell) => ({col:Number(cell?.col), row:Number(cell?.row)}))
-          .filter((cell) => Number.isFinite(cell.col) && Number.isFinite(cell.row));
-      }
-      const col = Number(entry?.col);
-      const row = Number(entry?.row);
-      if (!Number.isFinite(col) || !Number.isFinite(row)) return [];
-      return [{col, row}];
-    };
-
     if (Array.isArray(state.structures)){
       ctx.save();
       ctx.strokeStyle = "rgba(225,188,124,0.9)";
       ctx.lineWidth = Math.max(1, zoom * 0.08);
       ctx.setLineDash([4,3]);
       state.structures.forEach((structure) => {
-        entityCells(structure).forEach((cell) => {
+        entityCellsForEntry(structure).forEach((cell) => {
           const x = panX + cell.col * zoom;
           const y = panY + cell.row * zoom;
           ctx.strokeRect(x + 1, y + 1, zoom - 2, zoom - 2);
@@ -13489,7 +13490,7 @@ __DAMAGE_TYPE_OPTIONS__
     if (Array.isArray(state.features)){
       ctx.save();
       state.features.forEach((feature) => {
-        entityCells(feature).forEach((cell) => {
+        entityCellsForEntry(feature).forEach((cell) => {
           const x = panX + (cell.col + 0.5) * zoom;
           const y = panY + (cell.row + 0.5) * zoom;
           const radius = Math.max(3, zoom * 0.18);
@@ -13508,7 +13509,7 @@ __DAMAGE_TYPE_OPTIONS__
     if (Array.isArray(state.hazards)){
       ctx.save();
       state.hazards.forEach((hazard) => {
-        entityCells(hazard).forEach((cell) => {
+        entityCellsForEntry(hazard).forEach((cell) => {
           const x = panX + cell.col * zoom;
           const y = panY + cell.row * zoom;
           ctx.fillStyle = "rgba(255,96,96,0.28)";
@@ -14113,6 +14114,53 @@ __DAMAGE_TYPE_OPTIONS__
     activeTurnOrderBubbleEl.style.top = `${top}px`;
   }
 
+  function structureDisplayName(structure){
+    if (!structure || typeof structure !== "object") return "";
+    const payload = (structure.payload && typeof structure.payload === "object") ? structure.payload : {};
+    const structureId = String(structure.id || "").trim();
+    return String(payload.name || structure.kind || structureId || "").trim();
+  }
+
+  function getStructureById(structureId){
+    const sid = String(structureId || "").trim();
+    if (!sid || !Array.isArray(state?.structures)) return null;
+    return state.structures.find((entry) => String(entry?.id || "").trim() === sid) || null;
+  }
+
+  function setSelectedStructureFromCell(col, row){
+    const targetCol = Number(col);
+    const targetRow = Number(row);
+    if (!Number.isFinite(targetCol) || !Number.isFinite(targetRow) || !Array.isArray(state?.structures)){
+      selectedStructureId = "";
+      return;
+    }
+    const hit = state.structures.find((entry) => (
+      entityCellsForEntry(entry).some((cell) => Number(cell.col) === targetCol && Number(cell.row) === targetRow)
+    ));
+    selectedStructureId = hit ? String(hit.id || "") : "";
+  }
+
+  function selectedStructureStatusText(){
+    const structure = getStructureById(selectedStructureId);
+    if (!structure){
+      selectedStructureId = "";
+      return "";
+    }
+    const displayName = structureDisplayName(structure) || String(structure.id || "structure");
+    const semantics = (structure.contact_semantics && typeof structure.contact_semantics === "object")
+      ? structure.contact_semantics
+      : {};
+    const adjacent = Array.isArray(semantics.adjacent_structures)
+      ? semantics.adjacent_structures.map((entry) => String(entry?.name || entry?.id || "").trim()).filter(Boolean)
+      : [];
+    const boardable = Array.isArray(semantics.boardable_structures)
+      ? semantics.boardable_structures.map((entry) => String(entry?.name || entry?.id || "").trim()).filter(Boolean)
+      : [];
+    const adjacentText = adjacent.length ? adjacent.slice(0, 3).join(", ") : "none";
+    const boardableText = boardable.length ? boardable.slice(0, 3).join(", ") : "none";
+    return `Selected structure: ${displayName} · Adjacent: ${adjacentText} · Boardable: ${boardableText}`;
+  }
+
   function updateTurnOrder(){
     if (!activeTurnOrderEl){
       return;
@@ -14265,6 +14313,10 @@ __DAMAGE_TYPE_OPTIONS__
       let statusText = roundLabel ? `${activeLabel} · ${roundLabel}` : activeLabel;
       if (claimedIndex >= 0 && claimedUnit && !isMapView && !isControlledTurn){
         statusText = `${statusText} · You are #${claimedIndex + 1}: ${claimedUnit.name}`;
+      }
+      const structureStatus = selectedStructureStatusText();
+      if (structureStatus){
+        statusText = `${statusText} · ${structureStatus}`;
       }
       activeTurnOrderStatusEl.textContent = statusText;
     }
@@ -17420,6 +17472,8 @@ __DAMAGE_TYPE_OPTIONS__
       ? Math.hypot(p.x - Number(dragging.startX), p.y - Number(dragging.startY))
       : 0;
     const hasTokenDragMove = tokenDragDistance >= TOKEN_DRAG_MOVE_THRESHOLD;
+    const panDistance = panning ? Math.hypot(p.x - Number(panning.x), p.y - Number(panning.y)) : 0;
+    const hasPanMove = panDistance >= 4;
     setTokenTooltip(null);
     if (pendingRelocationPlacement && !isMapView && !hasTokenDragMove && !panning && !aoeDragging){
       const g = screenToGrid(p.x, p.y);
@@ -17720,6 +17774,11 @@ __DAMAGE_TYPE_OPTIONS__
     })();
     if (dragging && dragging.pointerId === ev.pointerId){
       dragging = null;
+    }
+    if (!hasTokenDragMove && !hasPanMove && !aoeDragging && !measurementMode){
+      const g = screenToGrid(p.x, p.y);
+      setSelectedStructureFromCell(g.col, g.row);
+      updateHud();
     }
     panning = null;
   });

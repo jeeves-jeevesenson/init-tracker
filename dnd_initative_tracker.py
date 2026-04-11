@@ -8856,12 +8856,33 @@ class InitiativeTracker(base.InitiativeTracker):
             return {"ok": False, "reason": "missing_structure_id"}
         query = self._map_query_api()
         relations = query.structure_contacts(sid)
+        state = query.state if isinstance(getattr(query, "state", None), MapState) else MapState()
+        structure_map = state.structures if isinstance(state.structures, dict) else {}
+
+        def _structure_display_name(raw_id: Any) -> str:
+            key = str(raw_id or "").strip()
+            item = structure_map.get(key)
+            if not isinstance(item, MapStructure):
+                return key
+            payload = item.payload if isinstance(item.payload, dict) else {}
+            return str(payload.get("name") or item.kind or key)
+
+        enriched_relations: List[Dict[str, Any]] = []
+        for relation in relations:
+            item = dict(relation if isinstance(relation, dict) else {})
+            item["target_name"] = _structure_display_name(item.get("target_id"))
+            enriched_relations.append(item)
+        adjacent_ids = [str(item.get("target_id") or "") for item in enriched_relations if bool(item.get("adjacent"))]
+        boardable_ids = [str(item.get("target_id") or "") for item in enriched_relations if bool(item.get("boardable"))]
         return {
             "ok": True,
             "structure_id": sid,
-            "relations": relations,
-            "adjacent_structure_ids": [str(item.get("target_id") or "") for item in relations if bool(item.get("adjacent"))],
-            "boardable_structure_ids": [str(item.get("target_id") or "") for item in relations if bool(item.get("boardable"))],
+            "structure_name": _structure_display_name(sid),
+            "relations": enriched_relations,
+            "adjacent_structure_ids": adjacent_ids,
+            "boardable_structure_ids": boardable_ids,
+            "adjacent_structures": [{"id": target_id, "name": _structure_display_name(target_id)} for target_id in adjacent_ids],
+            "boardable_structures": [{"id": target_id, "name": _structure_display_name(target_id)} for target_id in boardable_ids],
         }
 
     def _normalize_structure_template_payload(
@@ -9279,8 +9300,10 @@ class InitiativeTracker(base.InitiativeTracker):
         template = templates.get(str(template_id or "").strip())
         if not isinstance(template, dict):
             self._last_map_template_error = "template_not_found"
+            self._last_map_template_blockers = {}
             return None
         self._last_map_template_error = ""
+        self._last_map_template_blockers = {}
         try:
             facing = float(facing_deg)
         except Exception:
@@ -9326,12 +9349,7 @@ class InitiativeTracker(base.InitiativeTracker):
             sid = self._next_map_entity_id("structure", (state.structures or {}).keys())
             cols = int(state.grid.cols)
             rows = int(state.grid.rows)
-            for col, row in occupied_cells:
-                if int(col) < 0 or int(row) < 0 or int(col) >= cols or int(row) >= rows:
-                    self._last_map_template_error = "template_out_of_bounds"
-                    return
-            test_structures = dict(state.structures or {})
-            test_structures[sid] = MapStructure(
+            candidate_structure = MapStructure(
                 structure_id=sid,
                 kind=str(template.get("kind") or "structure"),
                 anchor_col=canonical_anchor_col,
@@ -9339,6 +9357,8 @@ class InitiativeTracker(base.InitiativeTracker):
                 occupied_cells=list(occupied_cells),
                 payload=dict(payload),
             ).normalized()
+            test_structures = dict(state.structures or {})
+            test_structures[sid] = candidate_structure
             test_state = MapState(
                 schema_version=state.schema_version,
                 grid=state.grid,
@@ -9352,19 +9372,9 @@ class InitiativeTracker(base.InitiativeTracker):
                 aoes=dict(state.aoes),
                 presentation=dict(state.presentation),
             ).normalized()
-            blockers = self._structure_move_blockers(test_state, sid, 0, 0)
-            blocked_entities = dict(blockers.get("blockers") if isinstance(blockers.get("blockers"), dict) else {})
-            blocked_entities["structures"] = [
-                item for item in blocked_entities.get("structures", []) if str(item.get("id") or "") != sid
-            ]
-            has_block = any(bool(blocked_entities.get(key)) for key in ("out_of_bounds", "obstacles", "features", "structures", "hazards"))
-            if has_block:
-                self._last_map_template_error = "template_conflict"
-                return
-            test_state.structures = test_structures
-            structure_id = sid
             default_features = template.get("features") if isinstance(template.get("features"), list) else []
-            feature_map = dict(state.features or {})
+            projected_features: List[Dict[str, Any]] = []
+            projected_feature_ids = set(state.features.keys() if isinstance(state.features, dict) else ())
             for feature in default_features:
                 if not isinstance(feature, dict):
                     continue
@@ -9377,18 +9387,126 @@ class InitiativeTracker(base.InitiativeTracker):
                 rc, rr = _rotate(local_col, local_row)
                 world_col = canonical_anchor_col + rc
                 world_row = canonical_anchor_row + rr
-                if world_col < 0 or world_row < 0 or world_col >= cols or world_row >= rows:
-                    continue
-                feature_id = self._next_map_entity_id("feature", feature_map.keys())
                 feature_payload = dict(feature.get("payload") if isinstance(feature.get("payload"), dict) else {})
-                feature_payload["name"] = str(feature.get("name") or feature.get("kind") or "feature")
-                feature_payload["tags"] = list(feature.get("tags") if isinstance(feature.get("tags"), list) else [])
+                local_cells_raw = (
+                    feature_payload.get("occupied_cells")
+                    if isinstance(feature_payload.get("occupied_cells"), list)
+                    else feature_payload.get("footprint")
+                    if isinstance(feature_payload.get("footprint"), list)
+                    else []
+                )
+                local_cells: List[Tuple[int, int]] = []
+                for raw in local_cells_raw:
+                    if not isinstance(raw, dict):
+                        continue
+                    try:
+                        local_cells.append((int(raw.get("col", 0)), int(raw.get("row", 0))))
+                    except Exception:
+                        continue
+                if not local_cells:
+                    local_cells = [(local_col, local_row)]
+                world_cells = {(canonical_anchor_col + _rotate(c, r)[0], canonical_anchor_row + _rotate(c, r)[1]) for c, r in local_cells}
+                feature_id = self._next_map_entity_id("feature", projected_feature_ids)
+                projected_feature_ids.add(feature_id)
+                projected_features.append(
+                    {
+                        "feature_id": feature_id,
+                        "kind": str(feature.get("kind") or "feature"),
+                        "name": str(feature.get("name") or feature.get("kind") or "feature"),
+                        "tags": list(feature.get("tags") if isinstance(feature.get("tags"), list) else []),
+                        "payload": feature_payload,
+                        "world_col": int(world_col),
+                        "world_row": int(world_row),
+                        "world_cells": sorted((int(c), int(r)) for c, r in world_cells),
+                    }
+                )
+            blockers = self._structure_move_blockers(test_state, sid, 0, 0)
+            structure_blockers = dict(blockers.get("blockers") if isinstance(blockers.get("blockers"), dict) else {})
+            structure_blockers["structures"] = [
+                item for item in structure_blockers.get("structures", []) if str(item.get("id") or "") != sid
+            ]
+            feature_blockers: Dict[str, List[Dict[str, Any]]] = {
+                "out_of_bounds": [],
+                "obstacles": [],
+                "features": [],
+                "structures": [],
+                "hazards": [],
+                "template_conflicts": [],
+            }
+            seen_projected_feature_cells: set[Tuple[int, int]] = set()
+            query = MapQueryAPI(state)
+            for projected in projected_features:
+                fid = str(projected.get("feature_id") or "")
+                for col, row in list(projected.get("world_cells") if isinstance(projected.get("world_cells"), list) else []):
+                    cell = {"col": int(col), "row": int(row)}
+                    if (int(col), int(row)) in seen_projected_feature_cells:
+                        feature_blockers["template_conflicts"].append(
+                            {"id": fid, "cell": cell, "reason": "duplicate_feature_occupancy"}
+                        )
+                    else:
+                        seen_projected_feature_cells.add((int(col), int(row)))
+                    if int(col) < 0 or int(row) < 0 or int(col) >= cols or int(row) >= rows:
+                        feature_blockers["out_of_bounds"].append(cell)
+                        continue
+                    if (int(col), int(row)) in state.obstacles:
+                        feature_blockers["obstacles"].append(cell)
+                    for other_feature in query.features_at(int(col), int(row)):
+                        existing_payload = other_feature.payload if isinstance(other_feature.payload, dict) else {}
+                        if bool(existing_payload.get("blocks_structure_movement")) or bool(existing_payload.get("blocks_movement")):
+                            feature_blockers["features"].append(
+                                {"id": str(other_feature.feature_id), "cell": {"col": int(col), "row": int(row)}}
+                            )
+                    for other_structure in query.structures_at(int(col), int(row)):
+                        feature_blockers["structures"].append(
+                            {"id": str(other_structure.structure_id), "cell": {"col": int(col), "row": int(row)}}
+                        )
+                    for hazard in query.hazards_at(int(col), int(row)):
+                        hazard_payload = hazard.payload if isinstance(hazard.payload, dict) else {}
+                        if MapQueryAPI.hazard_blocks_structure_movement(hazard_payload):
+                            feature_blockers["hazards"].append(
+                                {"id": str(hazard.hazard_id), "cell": {"col": int(col), "row": int(row)}}
+                            )
+            merged_blockers = {
+                "out_of_bounds": list(structure_blockers.get("out_of_bounds", [])) + list(feature_blockers["out_of_bounds"]),
+                "obstacles": list(structure_blockers.get("obstacles", [])) + list(feature_blockers["obstacles"]),
+                "features": list(structure_blockers.get("features", [])) + list(feature_blockers["features"]),
+                "structures": list(structure_blockers.get("structures", [])) + list(feature_blockers["structures"]),
+                "hazards": list(structure_blockers.get("hazards", [])) + list(feature_blockers["hazards"]),
+                "template_conflicts": list(feature_blockers["template_conflicts"]),
+            }
+            has_block = any(bool(merged_blockers.get(key)) for key in merged_blockers.keys())
+            if has_block:
+                self._last_map_template_error = (
+                    "template_out_of_bounds"
+                    if bool(merged_blockers.get("out_of_bounds"))
+                    and not any(bool(merged_blockers.get(key)) for key in ("obstacles", "features", "structures", "hazards", "template_conflicts"))
+                    else "template_conflict"
+                )
+                self._last_map_template_blockers = {
+                    "ok": False,
+                    "template_id": str(template_id),
+                    "structure_id": sid,
+                    "blockers": merged_blockers,
+                    "structure_blockers": structure_blockers,
+                    "feature_blockers": feature_blockers,
+                }
+                return
+            structure_id = sid
+            feature_map = dict(state.features or {})
+            for projected in projected_features:
+                feature_payload = dict(projected.get("payload") if isinstance(projected.get("payload"), dict) else {})
+                feature_payload["name"] = str(projected.get("name") or projected.get("kind") or "feature")
+                feature_payload["tags"] = list(projected.get("tags") if isinstance(projected.get("tags"), list) else [])
                 feature_payload["attached_structure_id"] = str(sid)
-                feature_map[feature_id] = MapFeature(
-                    feature_id=feature_id,
-                    col=world_col,
-                    row=world_row,
-                    kind=str(feature.get("kind") or "feature"),
+                world_cells = list(projected.get("world_cells") if isinstance(projected.get("world_cells"), list) else [])
+                if world_cells:
+                    feature_payload["occupied_cells"] = [{"col": int(c), "row": int(r)} for c, r in world_cells]
+                    feature_payload.pop("footprint", None)
+                feature_map[str(projected.get("feature_id") or "")] = MapFeature(
+                    feature_id=str(projected.get("feature_id") or ""),
+                    col=int(projected.get("world_col", 0) or 0),
+                    row=int(projected.get("world_row", 0) or 0),
+                    kind=str(projected.get("kind") or "feature"),
                     payload=feature_payload,
                 ).normalized()
             state.structures = test_structures
@@ -9397,6 +9515,7 @@ class InitiativeTracker(base.InitiativeTracker):
         self._mutate_canonical_map_state(_mutate)
         if not structure_id:
             return None
+        self._last_map_template_blockers = {}
         try:
             template_decks = template.get("decks") if isinstance(template.get("decks"), list) else []
             for entry in template_decks:
@@ -12999,7 +13118,7 @@ class InitiativeTracker(base.InitiativeTracker):
             "map_state": canonical_payload,
             "features": canonical_payload.get("features", []),
             "hazards": canonical_payload.get("hazards", []),
-            "structures": canonical_payload.get("structures", []),
+            "structures": [],
             "elevation_cells": canonical_payload.get("elevation_cells", []),
             "units": units,
             "active_cid": active,
@@ -13009,6 +13128,21 @@ class InitiativeTracker(base.InitiativeTracker):
             "turn_order": turn_order,
             "auras_enabled": bool(self.__dict__.get("_lan_auras_enabled", True)),
         }
+        structure_entries = [dict(item) for item in (canonical_payload.get("structures") if isinstance(canonical_payload.get("structures"), list) else []) if isinstance(item, dict)]
+        for structure_entry in structure_entries:
+            sid = str(structure_entry.get("id") or "").strip()
+            if not sid:
+                continue
+            semantics = self._structure_contact_semantics(sid)
+            if bool(semantics.get("ok")):
+                structure_entry["contact_semantics"] = {
+                    "adjacent_structure_ids": list(semantics.get("adjacent_structure_ids") if isinstance(semantics.get("adjacent_structure_ids"), list) else []),
+                    "boardable_structure_ids": list(semantics.get("boardable_structure_ids") if isinstance(semantics.get("boardable_structure_ids"), list) else []),
+                    "adjacent_structures": list(semantics.get("adjacent_structures") if isinstance(semantics.get("adjacent_structures"), list) else []),
+                    "boardable_structures": list(semantics.get("boardable_structures") if isinstance(semantics.get("boardable_structures"), list) else []),
+                    "relations": list(semantics.get("relations") if isinstance(semantics.get("relations"), list) else []),
+                }
+        snap["structures"] = structure_entries
         if self._lan_reaction_debug_enabled():
             snap["reaction_debug"] = self._lan_reaction_debug_payload(
                 positions=positions,

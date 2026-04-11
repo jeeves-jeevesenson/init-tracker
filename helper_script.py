@@ -6215,6 +6215,7 @@ class BattleMapWindow(tk.Toplevel):
         self.map_author_duration_var = tk.StringVar(value="3")
         self.map_author_blocking_var = tk.BooleanVar(value=False)
         self.map_author_elevation_var = tk.StringVar(value="5")
+        self.map_structure_contact_status_var = tk.StringVar(value="Structure contacts: select a structure cell.")
         self._map_author_selected_cell: Optional[Tuple[int, int]] = None
         self._suspend_lan_sync: bool = False
         self._map_dirty: bool = False
@@ -6870,6 +6871,9 @@ class BattleMapWindow(tk.Toplevel):
         ttk.Button(btn_row, text="Save Template…", command=self._save_template_from_selected_structure).pack(side=tk.LEFT, padx=(6, 0))
         ttk.Button(btn_row, text="Place Template…", command=self._place_template_at_selected_cell).pack(side=tk.LEFT, padx=(6, 0))
         ttk.Button(btn_row, text="Resolve Env", command=self._resolve_environment_turn).pack(side=tk.LEFT, padx=(6, 0))
+        ttk.Label(tactical, textvariable=self.map_structure_contact_status_var, justify="left", wraplength=440).grid(
+            row=3, column=0, columnspan=4, sticky="w", pady=(6, 0)
+        )
         tactical.columnconfigure(3, weight=1)
 
         # --- Units panel ---
@@ -8159,6 +8163,7 @@ class BattleMapWindow(tk.Toplevel):
             self._apply_canonical_map_layers_from_state(self.app._capture_canonical_map_state(prefer_window=False))
         except Exception:
             pass
+        self._update_selected_structure_contact_status()
         self._redraw_all()
 
     def _selected_structure_id_at_cell(self, col: int, row: int) -> Optional[str]:
@@ -8178,6 +8183,43 @@ class BattleMapWindow(tk.Toplevel):
             if (col, row) in cells:
                 return str(sid)
         return None
+
+    def _update_selected_structure_contact_status(self) -> None:
+        cell = self._map_author_selected_cell
+        if cell is None:
+            self.map_structure_contact_status_var.set("Structure contacts: select a structure cell.")
+            return
+        sid = self._selected_structure_id_at_cell(int(cell[0]), int(cell[1]))
+        if not sid:
+            self.map_structure_contact_status_var.set(f"Structure contacts @ ({int(cell[0])},{int(cell[1])}): none")
+            return
+        semantics = {}
+        try:
+            semantics = self.app._structure_contact_semantics(sid)
+        except Exception:
+            semantics = {}
+        if not isinstance(semantics, dict) or not bool(semantics.get("ok")):
+            self.map_structure_contact_status_var.set(f"Structure {sid}: contact data unavailable")
+            return
+        adjacent = semantics.get("adjacent_structures") if isinstance(semantics.get("adjacent_structures"), list) else []
+        boardable = semantics.get("boardable_structures") if isinstance(semantics.get("boardable_structures"), list) else []
+
+        def _label(items: List[Dict[str, Any]]) -> str:
+            labels = []
+            for item in items:
+                if not isinstance(item, dict):
+                    continue
+                item_id = str(item.get("id") or "").strip()
+                item_name = str(item.get("name") or item_id or "").strip()
+                if item_name:
+                    labels.append(item_name if item_name == item_id else f"{item_name} ({item_id})")
+            return ", ".join(labels[:4]) + (" …" if len(labels) > 4 else "")
+
+        adjacent_text = _label(adjacent) or "none"
+        boardable_text = _label(boardable) or "none"
+        self.map_structure_contact_status_var.set(
+            f"Structure {sid} — Adjacent: {adjacent_text} | Boardable: {boardable_text}"
+        )
 
     def _save_template_from_selected_structure(self) -> None:
         cell = self._map_author_selected_cell
@@ -8276,9 +8318,17 @@ class BattleMapWindow(tk.Toplevel):
         except Exception:
             created = None
         if not created:
+            blocker_lines = []
+            blockers = getattr(self.app, "_last_map_template_blockers", {}) or {}
+            payload = blockers.get("blockers") if isinstance(blockers, dict) and isinstance(blockers.get("blockers"), dict) else {}
+            for key in ("out_of_bounds", "obstacles", "features", "structures", "hazards", "template_conflicts"):
+                entries = payload.get(key) if isinstance(payload, dict) else []
+                if entries:
+                    blocker_lines.append(f"{key}: {len(entries)}")
+            detail = f"\nBlockers: {', '.join(blocker_lines)}" if blocker_lines else ""
             messagebox.showerror(
                 "Structure Template",
-                str(getattr(self.app, "_last_map_template_error", "") or "Template placement failed."),
+                f"{str(getattr(self.app, '_last_map_template_error', '') or 'Template placement failed.')}{detail}",
                 parent=self,
             )
             return
@@ -8286,6 +8336,7 @@ class BattleMapWindow(tk.Toplevel):
             self._apply_canonical_map_layers_from_state(self.app._capture_canonical_map_state(prefer_window=False))
         except Exception:
             pass
+        self._update_selected_structure_contact_status()
         self._redraw_all()
         if not self.rough_terrain:
             return
@@ -10875,6 +10926,7 @@ class BattleMapWindow(tk.Toplevel):
             col, row = self._pixel_to_grid(mx, my)
             if col is not None and row is not None:
                 self._map_author_selected_cell = (int(col), int(row))
+                self._update_selected_structure_contact_status()
                 if str(self.map_author_mode_var.get() or "off").strip().lower() != "off":
                     self._apply_tactical_author_to_selected_cell()
                     return

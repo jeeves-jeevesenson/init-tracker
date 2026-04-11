@@ -227,6 +227,55 @@ class LanSnapshotStaticTests(unittest.TestCase):
         self.assertEqual(payload["rough_terrain"], [{"col": 0, "row": 1}])
         self.assertEqual(payload["obstacles"], [{"col": 2, "row": 3}])
 
+    def test_lan_snapshot_structures_include_contact_semantics(self):
+        app = object.__new__(tracker_mod.InitiativeTracker)
+        app._lan_grid_cols = 20
+        app._lan_grid_rows = 20
+        app._lan_obstacles = set()
+        app._lan_positions = {}
+        app._lan_aoes = {}
+        app._lan_rough_terrain = {}
+        app._lan_next_aoe_id = 1
+        app.combatants = {}
+        app.current_cid = None
+        app.round_num = 1
+        app._display_order = lambda: []
+        app._peek_next_turn_cid = lambda _cid: None
+        app._oplog = lambda *args, **kwargs: None
+        app._lan_reaction_debug_enabled = lambda: False
+        app._lan = type("LanStub", (), {"_cached_snapshot": {}})()
+        app._map_state = tracker_mod.MapState.from_dict(
+            {
+                "grid": {"cols": 20, "rows": 20, "feet_per_square": 5},
+                "structures": [
+                    {
+                        "id": "a",
+                        "kind": "ship_hull",
+                        "anchor_col": 5,
+                        "anchor_row": 5,
+                        "occupied_cells": [{"col": 5, "row": 5}, {"col": 6, "row": 5}],
+                        "payload": {"name": "Black Pearl", "boardable": True},
+                    },
+                    {
+                        "id": "b",
+                        "kind": "ship_hull",
+                        "anchor_col": 7,
+                        "anchor_row": 5,
+                        "occupied_cells": [{"col": 7, "row": 5}],
+                        "payload": {"name": "Interceptor", "allow_boarding": True},
+                    },
+                ],
+            }
+        )
+        app._capture_canonical_map_state = lambda prefer_window=True: app._map_state.normalized()
+        app._apply_canonical_map_state = lambda state, hydrate_window=False: setattr(app, "_map_state", state.normalized())
+
+        snap = app._lan_snapshot(include_static=False, hydrate_static=False)
+        structure_a = next(item for item in snap["structures"] if item["id"] == "a")
+        semantics = structure_a.get("contact_semantics") or {}
+        self.assertEqual(semantics.get("boardable_structure_ids"), ["b"])
+        self.assertEqual((semantics.get("boardable_structures") or [])[0]["name"], "Interceptor")
+
     def test_units_include_max_hp_field(self):
         app = object.__new__(tracker_mod.InitiativeTracker)
         app._lan_grid_cols = 10
