@@ -100,6 +100,9 @@ FALLBACK_5ETOOLS_PACKS: Tuple[Tuple[str, str], ...] = (
     ("bestiary-mm.json", "https://5e.tools/data/bestiary/bestiary-mm.json"),
 )
 FALLBACK_5ETOOLS_MIN_BYTES = 100 * 1024
+DEFAULT_SHIP_RENDER_ASSET_KEYS: Dict[str, str] = {
+    "sloop_hull": "assets/ships/art/sloop_hull_v1.png",
+}
 DEFAULT_SHIP_BLUEPRINTS_V1: Dict[str, Dict[str, Any]] = {
     "rowboat_launch": {
         "name": "Rowboat / Launch",
@@ -9653,6 +9656,29 @@ class InitiativeTracker(base.InitiativeTracker):
 
         self._mutate_canonical_map_state(_mutate)
 
+    def _ship_render_asset_path_for_key(self, image_key: Any) -> Optional[str]:
+        key = str(image_key or "").strip()
+        if not key:
+            return None
+        state = self._capture_canonical_map_state(prefer_window=False)
+        presentation = state.presentation if isinstance(state.presentation, dict) else {}
+        asset_map = dict(DEFAULT_SHIP_RENDER_ASSET_KEYS)
+        custom_assets = presentation.get("ship_render_assets") if isinstance(presentation.get("ship_render_assets"), dict) else {}
+        for raw_key, raw_path in custom_assets.items():
+            key_name = str(raw_key or "").strip()
+            path_value = str(raw_path or "").strip()
+            if key_name and path_value:
+                asset_map[key_name] = path_value
+        candidate = str(asset_map.get(key) or "").strip()
+        if not candidate:
+            return None
+        path = Path(candidate).expanduser()
+        if not path.is_absolute():
+            path = (Path(__file__).resolve().parent / path).resolve()
+        if path.exists() and path.is_file():
+            return str(path)
+        return None
+
     def _ship_instances(self) -> Dict[str, Dict[str, Any]]:
         state = self._capture_canonical_map_state(prefer_window=False)
         presentation = state.presentation if isinstance(state.presentation, dict) else {}
@@ -11956,6 +11982,8 @@ class InitiativeTracker(base.InitiativeTracker):
                             )
                         )
                     ),
+                    "ship_render": dict(blueprint.get("render") if isinstance(blueprint.get("render"), dict) else {}),
+                    "ship_local_space": dict(blueprint.get("local_space") if isinstance(blueprint.get("local_space"), dict) else {}),
                 }
             )
             structures = dict(state.structures or {})
