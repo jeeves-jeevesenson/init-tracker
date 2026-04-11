@@ -71,6 +71,12 @@ class TacticalAuthoringPerformanceTests(unittest.TestCase):
             _selected_tactical_preset_id=lambda: "crate_stack",
             _selected_tactical_preset=lambda: {"stackable": True},
             map_author_elevation_var=_Var("5"),
+            _post_tactical_map_mutation=lambda redraw_all=False: (
+                self.assertFalse(redraw_all),
+                helper._apply_canonical_map_layers_from_state(state_obj),
+                app._schedule_lan_state_broadcast(),
+                helper._redraw_tactical_layers(),
+            ),
         )
 
         helper_script.BattleMapWindow._apply_tactical_author_to_selected_cell(helper)
@@ -117,6 +123,12 @@ class TacticalAuthoringPerformanceTests(unittest.TestCase):
             _refresh_tactical_palette_state=lambda normalized=None: None,
             _selected_tactical_preset_id=lambda: "fire",
             _selected_tactical_preset=lambda: {},
+            _post_tactical_map_mutation=lambda redraw_all=False: (
+                self.assertFalse(redraw_all),
+                helper._apply_canonical_map_layers_from_state(state_obj),
+                app._schedule_lan_state_broadcast(),
+                helper._redraw_tactical_layers(),
+            ),
         )
 
         helper_script.BattleMapWindow._apply_tactical_author_to_selected_cell(helper)
@@ -226,6 +238,11 @@ class TacticalAuthoringPerformanceTests(unittest.TestCase):
             _apply_canonical_map_layers_from_state=lambda state: self.assertIs(state, state_obj),
             _redraw_tactical_layers=lambda: None,
             _update_selected_structure_contact_status=lambda: None,
+            _post_tactical_map_mutation=lambda redraw_all=False: (
+                self.assertFalse(redraw_all),
+                helper._apply_canonical_map_layers_from_state(state_obj),
+                app._schedule_lan_state_broadcast(),
+            ),
         )
 
         changed = helper_script.BattleMapWindow._remove_tactical_entities_at_selected_cell(helper)
