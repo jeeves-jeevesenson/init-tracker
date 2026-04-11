@@ -89,6 +89,7 @@ from map_state import (
     normalize_tactical_payload,
     map_delta_has_changes,
 )
+from ship_blueprints import load_repo_runtime_ship_blueprints
 
 
 FAIL_OUTCOME_LABELS = {"fail", "failed", "failure", "failed_save", "fail_save"}
@@ -9465,7 +9466,7 @@ class InitiativeTracker(base.InitiativeTracker):
             component: Dict[str, Any] = {
                 "id": component_id,
                 "name": str(raw.get("name") or component_id.replace("_", " ").title()).strip() or component_id,
-                "type": str(raw.get("type") or "component").strip().lower() or "component",
+                "type": str(raw.get("type") or raw.get("kind") or "component").strip().lower() or "component",
             }
             for numeric_key in ("col", "row", "max_hp", "ac", "damage_threshold"):
                 if raw.get(numeric_key) is None:
@@ -9587,6 +9588,8 @@ class InitiativeTracker(base.InitiativeTracker):
                 ],
             },
             "crew": crew,
+            "render": dict(payload.get("render") if isinstance(payload.get("render"), dict) else {}),
+            "local_space": dict(payload.get("local_space") if isinstance(payload.get("local_space"), dict) else {}),
         }
         return normalized, errors
 
@@ -9599,6 +9602,11 @@ class InitiativeTracker(base.InitiativeTracker):
             candidate_blueprints.update({str(key): value for key, value in loaded.items()})
         if not candidate_blueprints:
             candidate_blueprints.update({str(key): value for key, value in DEFAULT_SHIP_BLUEPRINTS_V1.items()})
+            repo_runtime_blueprints, repo_errors = load_repo_runtime_ship_blueprints()
+            if isinstance(repo_runtime_blueprints, dict):
+                candidate_blueprints.update({str(key): value for key, value in repo_runtime_blueprints.items()})
+            if repo_errors:
+                self._last_ship_blueprint_loader_errors = list(repo_errors)
         templates = presentation.get("structure_templates") if isinstance(presentation.get("structure_templates"), dict) else {}
         for key, template in templates.items():
             if not isinstance(template, dict):
@@ -10555,6 +10563,8 @@ class InitiativeTracker(base.InitiativeTracker):
             "name": str(ship.get("name") or ""),
             "blueprint_id": blueprint_id,
             "blueprint_name": str((blueprint or {}).get("name") or blueprint_id or ""),
+            "blueprint_render": dict((blueprint or {}).get("render") if isinstance((blueprint or {}).get("render"), dict) else {}),
+            "blueprint_local_space": dict((blueprint or {}).get("local_space") if isinstance((blueprint or {}).get("local_space"), dict) else {}),
             "facing_deg": float(ship.get("facing_deg", 0.0) or 0.0),
             "component_count": len(components),
             "weapon_count": len(weapons),

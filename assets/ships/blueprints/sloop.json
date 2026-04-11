@@ -1,0 +1,179 @@
+{
+  "boarding": {
+    "boardable": true,
+    "bridges": [],
+    "contact_tags": [
+      "boarding_ready",
+      "ship"
+    ],
+    "edges": [
+      "aft",
+      "fore",
+      "port",
+      "starboard"
+    ],
+    "points": [
+      {
+        "col": 0,
+        "id": "port_mid",
+        "kind": "boarding_point",
+        "name": "Port Rail",
+        "row": 1
+      },
+      {
+        "col": 1,
+        "id": "fore",
+        "kind": "boarding_point",
+        "name": "Bow Rail",
+        "row": 0
+      },
+      {
+        "col": 3,
+        "id": "starboard_mid",
+        "kind": "boarding_point",
+        "name": "Starboard Rail",
+        "row": 0
+      }
+    ]
+  },
+  "category": "sailing_ship",
+  "components": [
+    {
+      "ac": 12,
+      "col": 1,
+      "id": "rigging",
+      "kind": "rigging",
+      "max_hp": 50,
+      "name": "Rigging",
+      "row": 0
+    },
+    {
+      "ac": 15,
+      "col": 1,
+      "damage_threshold": 8,
+      "id": "hull",
+      "kind": "hull",
+      "max_hp": 300,
+      "name": "Hull",
+      "row": 1
+    },
+    {
+      "ac": 14,
+      "col": 3,
+      "id": "helm",
+      "kind": "control",
+      "max_hp": 40,
+      "name": "Helm",
+      "row": 0
+    }
+  ],
+  "display_name": "Sloop",
+  "engagement_defaults": {
+    "crew": {
+      "min_crew": 4,
+      "recommended_crew": 10
+    }
+  },
+  "fixtures": [
+    {
+      "col": 1,
+      "id": "mast_main",
+      "kind": "mast",
+      "name": "Main Mast",
+      "row": 0,
+      "tags": [
+        "climbable",
+        "mast",
+        "ship_fixture"
+      ]
+    },
+    {
+      "col": 2,
+      "id": "hatch_main",
+      "kind": "hatch",
+      "name": "Hatch",
+      "row": 1,
+      "tags": [
+        "hatch",
+        "ship_fixture",
+        "traversal"
+      ]
+    }
+  ],
+  "id": "sloop",
+  "kind": "ship_hull",
+  "local_space": {
+    "facing_mode": "rotate_90",
+    "hull_cells": [
+      {
+        "col": 0,
+        "row": 0
+      },
+      {
+        "col": 0,
+        "row": 1
+      },
+      {
+        "col": 1,
+        "row": 0
+      },
+      {
+        "col": 1,
+        "row": 1
+      },
+      {
+        "col": 2,
+        "row": 0
+      },
+      {
+        "col": 2,
+        "row": 1
+      },
+      {
+        "col": 3,
+        "row": 0
+      },
+      {
+        "col": 3,
+        "row": 1
+      }
+    ],
+    "render_anchor": {
+      "col": 1,
+      "row": 1
+    }
+  },
+  "render": {
+    "base_image_key": "sloop_hull",
+    "overlay_hints": [
+      "boarding_points",
+      "weapon_hardpoints"
+    ],
+    "preview": {
+      "emoji": "\u26f5"
+    },
+    "style": "polygon"
+  },
+  "schema": "composite_ship_blueprint_v1",
+  "size": "medium",
+  "weapon_hardpoints": [
+    {
+      "arc": "port",
+      "col": 0,
+      "id": "port_cannon",
+      "kind": "cannon",
+      "name": "Port Cannon",
+      "row": 0,
+      "weapon_type": "cannon"
+    },
+    {
+      "arc": "starboard",
+      "col": 3,
+      "id": "starboard_cannon",
+      "kind": "cannon",
+      "name": "Starboard Cannon",
+      "row": 1,
+      "weapon_type": "cannon"
+    }
+  ]
+}
