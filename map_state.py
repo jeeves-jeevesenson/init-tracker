@@ -3,7 +3,7 @@ from __future__ import annotations
 import copy
 import math
 from dataclasses import dataclass, field
-from typing import Any, Dict, Iterable, List, Optional, Tuple
+from typing import Any, Callable, Dict, Iterable, List, Optional, Tuple
 
 
 MAP_STATE_SCHEMA_VERSION = 1
@@ -473,12 +473,46 @@ TACTICAL_PRESET_ALIASES: Dict[str, str] = {
 }
 
 
+_TACTICAL_PRESET_LOADER: Optional[Callable[[], Dict[str, Dict[str, Any]]]] = None
+
+
+def set_tactical_preset_loader(loader: Optional[Callable[[], Dict[str, Dict[str, Any]]]]) -> None:
+    """Register an optional tactical preset loader for additive external definitions."""
+    global _TACTICAL_PRESET_LOADER
+    _TACTICAL_PRESET_LOADER = loader if callable(loader) else None
+
+
+def _active_tactical_preset_catalog() -> Dict[str, Dict[str, Any]]:
+    catalog: Dict[str, Dict[str, Any]] = copy.deepcopy(TACTICAL_PRESET_CATALOG)
+    loader = _TACTICAL_PRESET_LOADER
+    if not callable(loader):
+        return catalog
+    try:
+        loaded = loader()
+    except Exception:
+        loaded = {}
+    if not isinstance(loaded, dict):
+        return catalog
+    for raw_key, raw_value in loaded.items():
+        preset = dict(raw_value) if isinstance(raw_value, dict) else {}
+        preset_id = str(preset.get("id") or raw_key or "").strip().lower()
+        if not preset_id:
+            continue
+        preset["id"] = preset_id
+        if "display_name" not in preset:
+            preset["display_name"] = preset_id.replace("_", " ").title()
+        if "payload" in preset and not isinstance(preset.get("payload"), dict):
+            preset["payload"] = {}
+        catalog[preset_id] = preset
+    return catalog
+
+
 def tactical_preset_catalog() -> Dict[str, Dict[str, Any]]:
-    return copy.deepcopy(TACTICAL_PRESET_CATALOG)
+    return copy.deepcopy(_active_tactical_preset_catalog())
 
 
 def tactical_preset_families() -> List[str]:
-    families = {str(preset.get("family") or "Other") for preset in TACTICAL_PRESET_CATALOG.values()}
+    families = {str(preset.get("family") or "Other") for preset in _active_tactical_preset_catalog().values()}
     return sorted(families)
 
 
@@ -497,15 +531,16 @@ def _stack_state_for_count(preset_id: str, count: int) -> Optional[str]:
 
 
 def _resolve_preset_id(preset_id: Any = None, kind: Any = None) -> str:
+    catalog = _active_tactical_preset_catalog()
     direct = str(preset_id or "").strip().lower()
-    if direct in TACTICAL_PRESET_CATALOG:
+    if direct in catalog:
         return direct
     kind_key = str(kind or "").strip().lower()
-    if kind_key in TACTICAL_PRESET_CATALOG:
+    if kind_key in catalog:
         return kind_key
     if kind_key in TACTICAL_PRESET_ALIASES:
         mapped = str(TACTICAL_PRESET_ALIASES.get(kind_key) or "").strip().lower()
-        if mapped in TACTICAL_PRESET_CATALOG:
+        if mapped in catalog:
             return mapped
     return ""
 
@@ -518,6 +553,7 @@ def normalize_tactical_payload(
     preset_id: Any = None,
     count: Any = None,
 ) -> Dict[str, Any]:
+    catalog = _active_tactical_preset_catalog()
     category_key = str(category or "").strip().lower() or "feature"
     kind_key = str(kind or "").strip().lower() or category_key
     payload_dict = dict(payload if isinstance(payload, dict) else {})
@@ -533,7 +569,7 @@ def normalize_tactical_payload(
             "payload": payload_dict,
             "occupied_offsets": [],
         }
-    preset = TACTICAL_PRESET_CATALOG.get(resolved_preset_id, {})
+    preset = catalog.get(resolved_preset_id, {})
     preset_payload = dict(preset.get("payload") if isinstance(preset.get("payload"), dict) else {})
     merged = {**preset_payload, **payload_dict}
     merged["tags"] = _merge_tags(preset_payload.get("tags"), payload_dict.get("tags"))
@@ -585,10 +621,11 @@ def normalize_tactical_payload(
 
 
 def tactical_preset_author_summary(preset_id: Any, count: Any = None) -> str:
+    catalog = _active_tactical_preset_catalog()
     resolved = _resolve_preset_id(preset_id=preset_id, kind="")
     if not resolved:
         return "Custom tactical object"
-    preset = TACTICAL_PRESET_CATALOG.get(resolved, {})
+    preset = catalog.get(resolved, {})
     normalized = normalize_tactical_payload(
         category=preset.get("category"),
         kind=preset.get("kind"),
