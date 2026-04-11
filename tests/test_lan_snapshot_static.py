@@ -471,6 +471,38 @@ class LanSnapshotStaticTests(unittest.TestCase):
         self.assertEqual(ship_render.get("deck_texture_key"), "ship_deck_wood")
         self.assertTrue(any(str(url).endswith(".png") for url in (ship_render.get("deck_texture_url_candidates") or [])))
 
+    def test_lan_asset_url_variants_keep_original_and_deterministic_extension_order(self):
+        variants = tracker_mod.InitiativeTracker._lan_asset_url_variants("/assets/ships/art/WOOD.PNG?v=1")
+        self.assertEqual(
+            variants,
+            [
+                "/assets/ships/art/WOOD.PNG?v=1",
+                "/assets/ships/art/WOOD.avif?v=1",
+                "/assets/ships/art/WOOD.webp?v=1",
+                "/assets/ships/art/WOOD.png?v=1",
+                "/assets/ships/art/WOOD.jpg?v=1",
+                "/assets/ships/art/WOOD.jpeg?v=1",
+            ],
+        )
+
+    def test_lan_ship_deck_texture_urls_preserve_supplied_candidates(self):
+        app = object.__new__(tracker_mod.InitiativeTracker)
+        app._ship_render_asset_path_for_key = lambda _key: "assets/ships/art/wood.avif"
+        urls = app._lan_ship_deck_texture_urls(
+            {
+                "deck_texture_key": "ship_deck_wood",
+                "deck_texture_url_candidates": [
+                    "/assets/custom/deck.PNG?rev=1",
+                    "/assets/custom/deck.PNG?rev=1",
+                ],
+            }
+        )
+        self.assertGreaterEqual(len(urls), 6)
+        self.assertEqual(urls[0], "/assets/custom/deck.PNG?rev=1")
+        self.assertEqual(urls.count("/assets/custom/deck.PNG?rev=1"), 1)
+        self.assertIn("/assets/custom/deck.avif?rev=1", urls)
+        self.assertIn("/assets/ships/art/wood.avif", urls)
+
     def test_units_include_max_hp_field(self):
         app = object.__new__(tracker_mod.InitiativeTracker)
         app._lan_grid_cols = 10

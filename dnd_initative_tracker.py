@@ -11065,8 +11065,14 @@ class InitiativeTracker(base.InitiativeTracker):
         root, ext = os.path.splitext(stem)
         variants: List[str] = []
         if ext.lower() in {".avif", ".webp", ".png", ".jpg", ".jpeg"}:
-            for candidate_ext in (ext.lower(), ".webp", ".png", ".jpg", ".jpeg", ".avif"):
-                candidate = f"{root}{candidate_ext}{query_suffix}"
+            for candidate in (
+                base,
+                f"{root}.avif{query_suffix}",
+                f"{root}.webp{query_suffix}",
+                f"{root}.png{query_suffix}",
+                f"{root}.jpg{query_suffix}",
+                f"{root}.jpeg{query_suffix}",
+            ):
                 if candidate not in variants:
                     variants.append(candidate)
             return variants
@@ -11075,6 +11081,8 @@ class InitiativeTracker(base.InitiativeTracker):
     def _lan_ship_deck_texture_urls(self, render_payload: Dict[str, Any]) -> List[str]:
         render = dict(render_payload if isinstance(render_payload, dict) else {})
         candidates: List[str] = []
+        for raw in list(render.get("deck_texture_url_candidates") if isinstance(render.get("deck_texture_url_candidates"), list) else []):
+            candidates.append(str(raw or "").strip())
         direct_path = str(render.get("deck_texture_path") or "").strip()
         if direct_path:
             candidates.append(direct_path)

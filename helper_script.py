@@ -7241,7 +7241,12 @@ class BattleMapWindow(tk.Toplevel):
         except Exception:
             pass
 
-        ttk.Label(left, text="Tip: Right-click two points to measure distance (crow flies).").pack(anchor="w", pady=(10, 0))
+        ttk.Label(
+            left,
+            text="Tip: Right-click is mode-aware — Place exits to Select, Ship Cmd cancels preview, Measure sets points.",
+            justify="left",
+            wraplength=440,
+        ).pack(anchor="w", pady=(10, 0))
 
         # --- Background images panel ---
         ttk.Separator(left).pack(fill=tk.X, pady=(10, 10))
@@ -9225,9 +9230,9 @@ class BattleMapWindow(tk.Toplevel):
         if hasattr(self, "_map_author_duration_label"):
             self._map_author_duration_label.configure(text=("Duration:" if category == "hazard" else "Duration (haz):"))
         if mode == MAP_INTERACTION_MODE_MEASURE:
-            self.map_author_active_status_var.set("Tool: Measure · Left-click two points (or right-click) to measure.")
+            self.map_author_active_status_var.set("Tool: Measure · Click two points to measure (crow flies).")
         elif mode == MAP_INTERACTION_MODE_SHIP:
-            self.map_author_active_status_var.set("Tool: Ship Command · Select a ship cell to preview/commit maneuvers and run boarding actions.")
+            self.map_author_active_status_var.set("Tool: Ship Command · Select a ship cell for commands; right-click cancels maneuver preview.")
         elif can_erase:
             if rough_paint_armed or obstacle_paint_armed:
                 paint_mode = "rough terrain" if rough_paint_armed else "obstacles"
@@ -9239,12 +9244,12 @@ class BattleMapWindow(tk.Toplevel):
         elif can_stamp:
             source = str(self.map_place_source_var.get() or "tactical").strip().lower()
             if source == "ship" and not (rough_paint_armed or obstacle_paint_armed):
-                self.map_author_active_status_var.set("Tool: Place Ship · Hover for footprint preview, click to place ship blueprint.")
+                self.map_author_active_status_var.set("Tool: Place Ship · Hover for footprint preview, click to place ship blueprint, right-click/Esc to Select.")
             elif rough_paint_armed or obstacle_paint_armed:
                 paint_mode = "rough terrain" if rough_paint_armed else "obstacles"
                 self.map_author_active_status_var.set(f"Tool: Place · {paint_mode.title()} paint is armed and applies on drag in this mode.")
             else:
-                self.map_author_active_status_var.set(f"Tool: Place · {display_name} ({category}) · Hover and click to place.")
+                self.map_author_active_status_var.set(f"Tool: Place · {display_name} ({category}) · Hover/click to place, right-click/Esc to Select.")
         else:
             if rough_paint_armed or obstacle_paint_armed:
                 self.map_author_active_status_var.set("Tool: Select · Paint toggles are armed but only apply in Place/Erase mode.")

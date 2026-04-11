@@ -12898,12 +12898,12 @@ __DAMAGE_TYPE_OPTIONS__
 
   function deckTextureUrlCandidatesFromRender(render){
     const renderData = (render && typeof render === "object") ? render : {};
-    const seen = new Set();
     const candidates = [];
+    const seenCandidates = new Set();
     const pushCandidate = (raw) => {
       const text = String(raw || "").trim();
-      if (!text || seen.has(text)) return;
-      seen.add(text);
+      if (!text || seenCandidates.has(text)) return;
+      seenCandidates.add(text);
       candidates.push(text);
     };
     const rawUrls = Array.isArray(renderData.deck_texture_url_candidates) ? renderData.deck_texture_url_candidates : [];
@@ -12917,25 +12917,30 @@ __DAMAGE_TYPE_OPTIONS__
       pushCandidate(shipDeckTextureKeyFallbacks[textureKey]);
     }
     const expanded = [];
+    const seenExpanded = new Set();
+    const pushExpanded = (raw) => {
+      const text = String(raw || "").trim();
+      if (!text || seenExpanded.has(text)) return;
+      seenExpanded.add(text);
+      expanded.push(text);
+    };
     candidates.forEach((url) => {
       const [stem, query = ""] = String(url).split("?");
       const querySuffix = query ? `?${query}` : "";
       const extMatch = stem.match(/\.(avif|webp|png|jpe?g)$/i);
-      if (extMatch){
-        const root = stem.slice(0, -extMatch[0].length);
-        [extMatch[0].toLowerCase(), ".webp", ".png", ".jpg", ".jpeg", ".avif"].forEach((ext) => {
-          const candidate = `${root}${ext}${querySuffix}`;
-          if (!seen.has(candidate)){
-            seen.add(candidate);
-            expanded.push(candidate);
-          }
-        });
-      } else {
-        if (!seen.has(url)){
-          seen.add(url);
-          expanded.push(url);
-        }
+      if (!extMatch){
+        pushExpanded(url);
+        return;
       }
+      const root = stem.slice(0, -extMatch[0].length);
+      [
+        url,
+        `${root}.avif${querySuffix}`,
+        `${root}.webp${querySuffix}`,
+        `${root}.png${querySuffix}`,
+        `${root}.jpg${querySuffix}`,
+        `${root}.jpeg${querySuffix}`,
+      ].forEach((candidate) => pushExpanded(candidate));
     });
     return expanded.length ? expanded : candidates;
   }
