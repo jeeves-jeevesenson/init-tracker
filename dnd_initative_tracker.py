@@ -5668,6 +5668,8 @@ class InitiativeTracker(base.InitiativeTracker):
         self._lan_auras_enabled = True
         self._session_bg_images: List[Dict[str, Any]] = []
         self._session_next_bg_id = 1
+        self._lan_state_broadcast_after_id = None
+        self._lan_state_broadcast_delay_ms = 75
         self._map_state: MapState = MapState.from_legacy(
             cols=self._lan_grid_cols,
             rows=self._lan_grid_rows,
@@ -9005,6 +9007,7 @@ class InitiativeTracker(base.InitiativeTracker):
         *,
         hydrate_window: bool = True,
         broadcast: bool = True,
+        defer_broadcast: bool = False,
     ) -> MapState:
         state = self._capture_canonical_map_state(prefer_window=True).normalized()
         mutator(state)
@@ -9012,7 +9015,14 @@ class InitiativeTracker(base.InitiativeTracker):
         self._apply_canonical_map_state(normalized, hydrate_window=hydrate_window)
         if broadcast:
             try:
-                self._lan_force_state_broadcast()
+                if defer_broadcast:
+                    scheduler = getattr(self, "_schedule_lan_state_broadcast", None)
+                    if callable(scheduler):
+                        scheduler()
+                    else:
+                        self._lan_force_state_broadcast()
+                else:
+                    self._lan_force_state_broadcast()
             except Exception:
                 pass
         return normalized
@@ -9025,6 +9035,9 @@ class InitiativeTracker(base.InitiativeTracker):
         row: int = 0,
         kind: str = "feature",
         payload: Optional[Dict[str, Any]] = None,
+        hydrate_window: bool = True,
+        broadcast: bool = True,
+        defer_broadcast: bool = False,
     ) -> str:
         payload_dict = dict(payload or {})
 
@@ -9043,7 +9056,12 @@ class InitiativeTracker(base.InitiativeTracker):
             feature_map[item.feature_id] = item
             state.features = feature_map
 
-        self._mutate_canonical_map_state(_mutate)
+        self._mutate_canonical_map_state(
+            _mutate,
+            hydrate_window=hydrate_window,
+            broadcast=broadcast,
+            defer_broadcast=defer_broadcast,
+        )
         return str(feature_id)
 
     def _remove_map_feature(self, feature_id: Any) -> None:
@@ -9066,6 +9084,9 @@ class InitiativeTracker(base.InitiativeTracker):
         row: int = 0,
         kind: str = "hazard",
         payload: Optional[Dict[str, Any]] = None,
+        hydrate_window: bool = True,
+        broadcast: bool = True,
+        defer_broadcast: bool = False,
     ) -> str:
         payload_dict = dict(payload or {})
 
@@ -9084,7 +9105,12 @@ class InitiativeTracker(base.InitiativeTracker):
             hazard_map[item.hazard_id] = item
             state.hazards = hazard_map
 
-        self._mutate_canonical_map_state(_mutate)
+        self._mutate_canonical_map_state(
+            _mutate,
+            hydrate_window=hydrate_window,
+            broadcast=broadcast,
+            defer_broadcast=defer_broadcast,
+        )
         return str(hazard_id)
 
     def _remove_map_hazard(self, hazard_id: Any) -> None:
@@ -9108,6 +9134,9 @@ class InitiativeTracker(base.InitiativeTracker):
         anchor_row: int = 0,
         occupied_cells: Optional[List[Tuple[int, int]]] = None,
         payload: Optional[Dict[str, Any]] = None,
+        hydrate_window: bool = True,
+        broadcast: bool = True,
+        defer_broadcast: bool = False,
     ) -> str:
         payload_dict = dict(payload or {})
         occupied = list(occupied_cells or [])
@@ -9128,7 +9157,12 @@ class InitiativeTracker(base.InitiativeTracker):
             structure_map[item.structure_id] = item
             state.structures = structure_map
 
-        self._mutate_canonical_map_state(_mutate)
+        self._mutate_canonical_map_state(
+            _mutate,
+            hydrate_window=hydrate_window,
+            broadcast=broadcast,
+            defer_broadcast=defer_broadcast,
+        )
         return str(structure_id)
 
     def _remove_map_structure(self, structure_id: Any) -> None:
@@ -9143,7 +9177,16 @@ class InitiativeTracker(base.InitiativeTracker):
 
         self._mutate_canonical_map_state(_mutate)
 
-    def _set_map_elevation(self, col: int, row: int, elevation: float) -> None:
+    def _set_map_elevation(
+        self,
+        col: int,
+        row: int,
+        elevation: float,
+        *,
+        hydrate_window: bool = True,
+        broadcast: bool = True,
+        defer_broadcast: bool = False,
+    ) -> None:
         key = (int(col), int(row))
         value = float(elevation)
 
@@ -9155,7 +9198,12 @@ class InitiativeTracker(base.InitiativeTracker):
                 elevation_map[key] = ElevationCell(col=int(key[0]), row=int(key[1]), elevation=value).normalized()
             state.elevation_cells = elevation_map
 
-        self._mutate_canonical_map_state(_mutate)
+        self._mutate_canonical_map_state(
+            _mutate,
+            hydrate_window=hydrate_window,
+            broadcast=broadcast,
+            defer_broadcast=defer_broadcast,
+        )
 
     def _move_map_structure(self, structure_id: Any, delta_col: int, delta_row: int) -> bool:
         sid = str(structure_id or "").strip()
@@ -13199,7 +13247,41 @@ class InitiativeTracker(base.InitiativeTracker):
                     snap[key] = default
         return snap
 
-    def _lan_force_state_broadcast(self) -> None:
+    def _schedule_lan_state_broadcast(self, delay_ms: Optional[int] = None) -> None:
+        try:
+            existing = getattr(self, "_lan_state_broadcast_after_id", None)
+            if existing is not None:
+                try:
+                    self.after_cancel(existing)
+                except Exception:
+                    pass
+                self._lan_state_broadcast_after_id = None
+
+            broadcast_delay = int(
+                delay_ms
+                if delay_ms is not None
+                else int(getattr(self, "_lan_state_broadcast_delay_ms", 75) or 75)
+            )
+            broadcast_delay = max(0, broadcast_delay)
+
+            def _flush() -> None:
+                self._lan_state_broadcast_after_id = None
+                broadcaster = getattr(self, "_lan_force_state_broadcast", None)
+                if not callable(broadcaster):
+                    return
+                try:
+                    broadcaster(include_static=False)
+                except TypeError:
+                    broadcaster()
+
+            self._lan_state_broadcast_after_id = self.after(broadcast_delay, _flush)
+        except Exception:
+            try:
+                self._lan_force_state_broadcast()
+            except Exception:
+                pass
+
+    def _lan_force_state_broadcast(self, include_static: bool = True) -> None:
         try:
             snap = self._lan_snapshot()
             self._lan._cached_snapshot = snap
@@ -13213,13 +13295,14 @@ class InitiativeTracker(base.InitiativeTracker):
                 self._lan._last_snapshot = copy.deepcopy(snap)
             except Exception:
                 pass
-            try:
-                static_payload = self._lan._static_data_payload()
-                static_json = json.dumps(static_payload, sort_keys=True, separators=(",", ":"))
-                self._lan._last_static_json = static_json
-                self._lan._broadcast_payload({"type": "static_data", "data": static_payload})
-            except Exception:
-                pass
+            if include_static:
+                try:
+                    static_payload = self._lan._static_data_payload()
+                    static_json = json.dumps(static_payload, sort_keys=True, separators=(",", ":"))
+                    self._lan._last_static_json = static_json
+                    self._lan._broadcast_payload({"type": "static_data", "data": static_payload})
+                except Exception:
+                    pass
             self._lan._broadcast_state(snap)
         except Exception:
             pass
