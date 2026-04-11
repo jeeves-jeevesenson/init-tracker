@@ -1,0 +1,494 @@
+format_version: 2
+name: стихия
+player: стихия
+summon_on_start:
+- monster: raven.yaml
+  overrides:
+    token_color: '#050b20'
+    token_border_color: '#09172f'
+identity:
+  pronouns: bird/birb
+  ancestry: Kenku
+  background: Acolyte
+  alignment: Chaotic Neutral
+  description: Bird :V
+leveling:
+  level: 10
+  classes:
+  - name: Cleric
+    subclass: Tempest
+    level: 10
+abilities:
+  str: 17
+  dex: 10
+  con: 16
+  int: 8
+  wis: 20
+  cha: 12
+proficiency:
+  bonus: 4
+  saves:
+  - WIS
+  - CHA
+  skills:
+    proficient:
+    - History
+    - Religion
+    - Insight
+    - Medicine
+    - Survival
+    - Performance
+    expertise: []
+  tools:
+  - Light Armor
+  - Medium Armor
+  - Heavy Armor
+  - Shields
+  - Simple Weapons
+  - Martial Weapons
+  - Calligrapher's Supplies
+  languages:
+  - Common
+  - Giant
+  - Goblin
+  - Auran
+vitals:
+  max_hp: 87
+  current_hp: 87
+  temp_hp: 0
+  hit_dice:
+    die: d8
+    total: 10
+    spent: 0
+  speed:
+    walk: 35
+    climb: 0
+    fly: 0
+    swim: 35
+  initiative:
+    formula: dex_mod
+  passive_perception:
+    formula: 10 + wis_mod + prof
+defenses:
+  ac:
+    sources:
+    - id: plate_armor
+      label: +1 Heavy Armor
+      when: always
+      base_formula: '18'
+      magic_bonus: 1
+    bonuses: []
+  resistances:
+  - lightning
+  immunities: []
+  vulnerabilities: []
+attacks:
+  weapon_to_hit: 7
+  weapons:
+  - id: bardiche_plus_2
+    name: Bardiche (+2)
+    proficient: true
+    equipped: true
+    main_hand: true
+    to_hit: 7
+    magic_bonus: 2
+    range: '10'
+    one_handed:
+      damage_formula: ''
+      damage_type: ''
+    two_handed:
+      damage_formula: 1d12 + str_mod + 2
+      damage_type: force
+    effect:
+      on_hit: 'Heavy, Reach, Two-Handed (halberd profile). Cleave mastery. On hit, target makes a STR save (DC 18, attacker spell save DC) or is pushed 5 ft.'
+      save_ability: str
+      save_dc: 18
+resources:
+  pools:
+  - id: channel_divinity
+    label: Channel Divinity
+    current: 3
+    max_formula: '2 + (1 if cleric_level >= 6 else 0) + (1 if cleric_level >= 18 else 0)'
+    reset: short_rest
+  - id: wrath_of_the_storm
+    label: Wrath of the Storm
+    current: 5
+    max_formula: 'max(1, wis_mod)'
+    reset: long_rest
+  - id: divine_intervention
+    label: Divine Intervention
+    current: 1
+    max_formula: '1'
+    reset: long_rest
+features:
+- id: war_caster
+  name: War Caster
+  category: Feat
+  source: PHB2024
+  description: Somatic components while hands are occupied; Advantage on Constitution saving throws to maintain concentration; when a hostile creature leaves your reach, you can use your Reaction to cast an eligible single-target spell with a casting time of 1 action.
+- id: divine_order_protector
+  name: Divine Order - Protector
+  category: Cleric Feature
+  source: PHB2024
+  level: 1
+  description: Martial weapons and heavy armor training.
+- id: channel_divinity
+  name: Channel Divinity
+  category: Cleric Feature
+  source: PHB2024
+  level: 2
+  grants:
+    pools:
+    - id: channel_divinity
+      label: Channel Divinity
+      max_formula: '2 + (1 if cleric_level >= 6 else 0) + (1 if cleric_level >= 18 else 0)'
+      reset: short_rest
+    actions:
+    - id: divine_spark
+      name: Divine Spark
+      activation: action
+      range_ft: 30
+      heal_formula: '(1 + (1 if cleric_level >= 7 else 0) + (1 if cleric_level >= 13 else 0) + (1 if cleric_level >= 18 else 0))d8 + wis_mod'
+      damage_formula: '(1 + (1 if cleric_level >= 7 else 0) + (1 if cleric_level >= 13 else 0) + (1 if cleric_level >= 18 else 0))d8 + wis_mod'
+      damage_types:
+      - radiant
+      - necrotic
+      save:
+        ability: con
+        dc_formula: spell_save_dc
+        on_success: half
+      consumes:
+        pool: channel_divinity
+        cost: 1
+    - id: turn_undead
+      name: Turn Undead
+      activation: action
+      range_ft: 30
+      target_type: undead
+      save:
+        ability: wis
+        dc_formula: spell_save_dc
+      duration: 1_minute
+      conditions_on_fail:
+      - frightened
+      - incapacitated
+      breaks_on:
+      - target_takes_damage
+      - source_incapacitated
+      - source_dead
+      consumes:
+        pool: channel_divinity
+        cost: 1
+    modifiers: []
+    damage_riders: []
+- id: sear_undead
+  name: Sear Undead
+  category: Cleric Feature
+  source: PHB2024
+  level: 5
+  description: Turn Undead deals extra radiant damage on failed save.
+  grants:
+    actions: []
+    modifiers:
+    - id: sear_undead_damage
+      applies_to: turn_undead
+      damage_formula: 'max(1, wis_mod)d8'
+      damage_type: radiant
+      trigger: on_failed_save
+      does_not_break_turn: true
+    damage_riders: []
+- id: blessed_strikes
+  name: Blessed Strikes
+  category: Cleric Feature
+  source: PHB2024
+  level: 7
+  selection: divine_strike
+  grants:
+    damage_riders:
+    - id: blessed_strikes_divine_strike
+      once_per_turn: true
+      trigger: weapon_attack_hit
+      damage_formula: 1d8
+      damage_type_options:
+      - radiant
+      - necrotic
+    modifiers: []
+    actions: []
+- id: divine_intervention
+  name: Divine Intervention
+  category: Cleric Feature
+  source: PHB2024
+  level: 10
+  grants:
+    pools:
+    - id: divine_intervention
+      label: Divine Intervention
+      max_formula: '1'
+      reset: long_rest
+    actions:
+    - id: divine_intervention_cast
+      name: Divine Intervention
+      activation: action
+      spell_choice:
+        class: cleric
+        max_level: 5
+        disallow_reaction_cast: true
+      no_spell_slot: true
+      ignore_material_components: true
+      consumes:
+        pool: divine_intervention
+        cost: 1
+    modifiers: []
+    damage_riders: []
+- id: tempest_bonus_proficiencies
+  name: Tempest Domain - Bonus Proficiencies
+  category: Cleric Subclass Feature
+  source: PHB2014
+  level: 1
+  description: Martial weapons and heavy armor training.
+- id: tempest_domain_spells
+  name: Tempest Domain Spells
+  category: Cleric Subclass Feature
+  source: PHB2014
+  level: 1
+  grants:
+    always_prepared_spells:
+    - fog-cloud
+    - thunderwave
+    - gust-of-wind
+    - shatter
+    - call-lightning
+    - sleet-storm
+- id: wrath_of_the_storm
+  name: Wrath of the Storm
+  category: Cleric Subclass Feature
+  source: PHB2014
+  level: 1
+  grants:
+    pools:
+    - id: wrath_of_the_storm
+      label: Wrath of the Storm
+      max_formula: 'max(1, wis_mod)'
+      reset: long_rest
+    reactions:
+    - id: wrath_of_the_storm_reaction
+      name: Wrath of the Storm
+      trigger: creature_within_5ft_hits_you
+      save:
+        ability: dex
+        dc_formula: spell_save_dc
+        on_success: half
+      damage_formula: 2d8
+      damage_type_options:
+      - lightning
+      - thunder
+      consumes:
+        pool: wrath_of_the_storm
+        cost: 1
+    actions: []
+    modifiers: []
+    damage_riders: []
+- id: destructive_wrath
+  name: Channel Divinity - Destructive Wrath
+  category: Cleric Subclass Feature
+  source: PHB2014
+  level: 2
+  grants:
+    modifiers:
+    - id: destructive_wrath_maximize
+      trigger: lightning_or_thunder_damage_roll
+      effect: maximize_damage_dice
+      consumes:
+        pool: channel_divinity
+        cost: 1
+    actions: []
+    damage_riders: []
+- id: thunderous_strike
+  name: Thunderous Strike
+  category: Cleric Subclass Feature
+  source: PHB2014
+  level: 6
+  grants:
+    modifiers:
+    - id: thunderous_strike_push
+      trigger: deal_lightning_damage
+      target_size_max: large
+      push_distance_ft: 10
+    actions: []
+    damage_riders: []
+- id: tempest_divine_strike
+  name: Tempest Domain - Divine Strike
+  category: Cleric Subclass Feature
+  source: PHB2014
+  level: 8
+  grants:
+    damage_riders:
+    - id: tempest_divine_strike_damage
+      once_per_turn: true
+      trigger: weapon_attack_hit
+      damage_formula: '1d8 + (1d8 if cleric_level >= 14 else 0)'
+      damage_type: thunder
+    modifiers: []
+    actions: []
+actions:
+- name: Attack
+  description: Make a weapon or unarmed attack against a target within range.
+  type: action
+- name: Bardiche (+2)
+  description: 'Make a melee attack with a +2 magical bardiche (halberd profile: Heavy, Reach, Two-Handed, Cleave). On hit, deal 1d12 + STR mod + 2 force damage. Target makes a STR save (DC 18, attacker spell save DC) or is pushed 5 ft. While equipped as spellcasting focus, this weapon grants +1 to spell save DC.'
+  type: action
+- name: Dash
+  description: Gain extra movement for the current turn equal to your speed.
+  type: action
+- name: Disengage
+  description: Your movement does not provoke opportunity attacks for the rest of
+    the turn.
+  type: action
+- name: Dodge
+  description: Until the start of your next turn, attack rolls against you have disadvantage
+    if you can see the attacker, and you make Dexterity saves with advantage.
+  type: action
+- name: Help
+  description: Aid a creature in the next ability check or attack roll against a target
+    within 5 feet of you.
+  type: action
+- name: Hide
+  description: Attempt to hide by making a Dexterity (Stealth) check.
+  type: action
+- name: Influence
+  description: Attempt to influence a creature through conversation, bargaining, or
+    intimidation.
+  type: action
+- name: Magic
+  description: Cast a spell or use a magical feature that takes an action.
+  type: action
+- name: Ready
+  description: Prepare an action and a trigger; use your reaction to perform it when
+    the trigger occurs.
+  type: action
+- name: Search
+  description: Devote attention to finding something by making a Wisdom (Perception)
+    or Intelligence (Investigation) check.
+  type: action
+- name: Study
+  description: Focus on detailed observation or research to gain information about
+    a creature, object, or situation.
+  type: action
+- name: Utilize
+  description: Use an object or interact with the environment in a significant way.
+  type: action
+reactions:
+- name: Opportunity Attack
+  description: When a hostile creature you can see moves out of your reach, you can
+    use your reaction to make one melee attack against it.
+  type: reaction
+bonus_actions: []
+spellcasting:
+  enabled: true
+  spell_yaml_paths:
+  - ./Spells
+  casting_ability: wis
+  save_dc_formula: 8 + prof + casting_mod
+  spell_attack_formula: prof + casting_mod + 1
+  cantrips:
+    max: 5
+    known:
+    - toll-the-dead
+    - sacred-flame
+    - spare-the-dying
+    - guidance
+    - mending
+  known_spells:
+    max: 0
+    known: []
+  prepared_spells:
+    max_formula: '25'
+    prepared:
+    - thunderwave
+    - healing-word
+    - create-or-destroy-water
+    - guiding-bolt
+    - fog-cloud
+    - cure-wounds
+    - inflict-wounds
+    - gust-of-wind
+    - shatter
+    - prayer-of-healing
+    - lesser-restoration
+    - find-traps
+    - call-lightning
+    - sleet-storm
+    - revivify
+    - dispel-magic
+    - bestow-curse
+    - control-water
+    - ice-storm
+    - destructive-wave
+    - insect-plague
+    - flame-strike
+    - dispel-evil-and-good
+    - lightning-bolt
+  spell_slots:
+    '1':
+      max: 4
+      current: 4
+    '2':
+      max: 3
+      current: 3
+    '3':
+      max: 3
+      current: 3
+    '4':
+      max: 3
+      current: 3
+    '5':
+      max: 2
+      current: 2
+    '6':
+      max: 0
+      current: 0
+    '7':
+      max: 0
+      current: 0
+    '8':
+      max: 0
+      current: 0
+    '9':
+      max: 0
+      current: 0
+inventory:
+  currency:
+    gp: 9652
+    sp: 0
+    cp: 0
+  items:
+  - id: bardiche_plus_2
+    instance_id: bardiche_plus_2__001
+    name: Bardiche (+2)
+    quantity: 1
+    description: ''
+    equipped: true
+    attuned: true
+  - id: grom
+    instance_id: grom__001
+    name: гром
+    quantity: 1
+    description: Grants lightning resistance while worn and attuned.
+    slot: head
+    equipped: true
+    attuned: true
+  - name: Bane Platemail +1
+    instance_id: bane_platemail_plus_1__001
+    quantity: 1
+    description: AC 19 while worn (plate armor +1). Strength 15 required (or -10 ft Speed). Stealth checks at disadvantage.
+    slot: armour
+    equipped: true
+  - id: gauntlets_of_lesser_hill_giant_strength
+    instance_id: gauntlets_of_lesser_hill_giant_strength__001
+    name: Gauntlets of Lesser Hill Giant Strength
+    quantity: 1
+    description: Sets Strength to 17 while worn and attuned.
+    slot: gloves
+    equipped: true
+    attuned: true
+notes: {}
