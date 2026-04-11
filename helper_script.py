@@ -7936,11 +7936,13 @@ class BattleMapWindow(tk.Toplevel):
             if not isinstance(structure, dict):
                 continue
             payload = structure.get("payload") if isinstance(structure.get("payload"), dict) else {}
+            root_cells = structure.get("occupied_cells")
+            if isinstance(root_cells, list) and root_cells:
+                payload = {**payload, "occupied_cells": list(root_cells)}
             cells = self._entity_cells(
                 int(structure.get("anchor_col", 0) or 0),
                 int(structure.get("anchor_row", 0) or 0),
                 payload,
-                structure=structure,
             )
             for col, row in cells:
                 structure_cells[(int(col), int(row))] = str(sid)
@@ -7974,11 +7976,7 @@ class BattleMapWindow(tk.Toplevel):
             out.append(cell)
         return out
 
-    def _entity_cells(self, col: int, row: int, payload: Any, *, structure: Optional[Dict[str, Any]] = None) -> List[Tuple[int, int]]:
-        if isinstance(structure, dict):
-            root_cells = self._normalize_entity_cells(structure.get("occupied_cells"))
-            if root_cells:
-                return root_cells
+    def _entity_cells(self, col: int, row: int, payload: Any) -> List[Tuple[int, int]]:
         if isinstance(payload, dict):
             payload_cells = self._normalize_entity_cells(payload.get("occupied_cells"))
             if payload_cells:
@@ -8577,11 +8575,13 @@ class BattleMapWindow(tk.Toplevel):
             sid = str(structure.get("id") or "")
             kind = str(structure.get("kind") or "structure")
             payload = structure.get("payload") if isinstance(structure.get("payload"), dict) else {}
+            root_cells = structure.get("occupied_cells")
+            if isinstance(root_cells, list) and root_cells:
+                payload = {**payload, "occupied_cells": list(root_cells)}
             occupied = self._entity_cells(
                 int(structure.get("anchor_col", 0) or 0),
                 int(structure.get("anchor_row", 0) or 0),
                 payload,
-                structure=structure,
             )
             is_ship = self._is_ship_structure_payload(structure)
             selected = bool(selected_sid and sid == selected_sid)
@@ -8920,11 +8920,13 @@ class BattleMapWindow(tk.Toplevel):
             if not isinstance(structure, dict):
                 continue
             payload = structure.get("payload") if isinstance(structure.get("payload"), dict) else {}
+            root_cells = structure.get("occupied_cells")
+            if isinstance(root_cells, list) and root_cells:
+                payload = {**payload, "occupied_cells": list(root_cells)}
             cells = self._entity_cells(
                 int(structure.get("anchor_col", 0) or 0),
                 int(structure.get("anchor_row", 0) or 0),
                 payload,
-                structure=structure,
             )
             if (col, row) in cells:
                 structure_labels.append(str(payload.get("name") or structure.get("kind") or "structure"))
@@ -9129,11 +9131,13 @@ class BattleMapWindow(tk.Toplevel):
                 removed_hazard_ids.append(str(hid))
         for sid, structure in list(self.map_structures.items()):
             payload = structure.get("payload") if isinstance(structure.get("payload"), dict) else {}
+            root_cells = structure.get("occupied_cells")
+            if isinstance(root_cells, list) and root_cells:
+                payload = {**payload, "occupied_cells": list(root_cells)}
             cells = self._entity_cells(
                 int(structure.get("anchor_col", 0) or 0),
                 int(structure.get("anchor_row", 0) or 0),
                 payload,
-                structure=structure,
             )
             if (col, row) in cells:
                 removed_structure_ids.append(str(sid))
@@ -9185,12 +9189,14 @@ class BattleMapWindow(tk.Toplevel):
             if not isinstance(structure, dict):
                 continue
             payload = structure.get("payload") if isinstance(structure.get("payload"), dict) else {}
+            root_cells = structure.get("occupied_cells")
+            if isinstance(root_cells, list) and root_cells:
+                payload = {**payload, "occupied_cells": list(root_cells)}
             cells = set(
                 self._entity_cells(
                     int(structure.get("anchor_col", 0) or 0),
                     int(structure.get("anchor_row", 0) or 0),
                     payload,
-                    structure=structure,
                 )
             )
             if (col, row) in cells:
@@ -9249,11 +9255,13 @@ class BattleMapWindow(tk.Toplevel):
                     if not isinstance(item, dict) or not self._is_ship_structure_payload(item):
                         continue
                     payload = item.get("payload") if isinstance(item.get("payload"), dict) else {}
+                    root_cells = item.get("occupied_cells")
+                    if isinstance(root_cells, list) and root_cells:
+                        payload = {**payload, "occupied_cells": list(root_cells)}
                     occupied = self._entity_cells(
                         int(item.get("anchor_col", 0) or 0),
                         int(item.get("anchor_row", 0) or 0),
                         payload,
-                        structure=item,
                     )
                     if (int(col), int(row)) in occupied:
                         return str(sid)
@@ -9262,12 +9270,14 @@ class BattleMapWindow(tk.Toplevel):
             if not isinstance(structure, dict):
                 continue
             payload = structure.get("payload") if isinstance(structure.get("payload"), dict) else {}
+            root_cells = structure.get("occupied_cells")
+            if isinstance(root_cells, list) and root_cells:
+                payload = {**payload, "occupied_cells": list(root_cells)}
             cells = set(
                 self._entity_cells(
                     int(structure.get("anchor_col", 0) or 0),
                     int(structure.get("anchor_row", 0) or 0),
                     payload,
-                    structure=structure,
                 )
             )
             if (col, row) in cells:

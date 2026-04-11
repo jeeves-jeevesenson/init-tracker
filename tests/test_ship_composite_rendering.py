@@ -166,22 +166,14 @@ class ShipCompositeRenderingTests(unittest.TestCase):
         self.assertIsNotNone(first)
         self.assertIs(first, second)
 
-    def test_entity_cells_prefers_structure_root_cells_then_payload_fallback(self):
+    def test_entity_cells_supports_payload_occupied_cells(self):
         window = object.__new__(helper_mod.BattleMapWindow)
-        preferred = window._entity_cells(
-            5,
-            5,
-            {"occupied_cells": [{"col": 99, "row": 99}]},
-            structure={"occupied_cells": [{"col": 5, "row": 5}, {"col": 6, "row": 5}]},
-        )
-        self.assertEqual(preferred, [(5, 5), (6, 5)])
-        fallback = window._entity_cells(
+        cells = window._entity_cells(
             2,
             3,
             {"occupied_cells": [{"col": 2, "row": 3}, {"col": 3, "row": 3}]},
-            structure={},
         )
-        self.assertEqual(fallback, [(2, 3), (3, 3)])
+        self.assertEqual(cells, [(2, 3), (3, 3)])
 
     def test_draw_map_structures_uses_structure_root_occupied_cells_for_ships(self):
         window = object.__new__(helper_mod.BattleMapWindow)
