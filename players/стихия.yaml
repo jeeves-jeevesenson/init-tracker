@@ -13,11 +13,11 @@ identity:
   alignment: Chaotic Neutral
   description: Bird :V
 leveling:
-  level: 10
+  level: 11
   classes:
   - name: Cleric
     subclass: Tempest
-    level: 10
+    level: 11
 abilities:
   str: 17
   dex: 10
@@ -53,8 +53,8 @@ proficiency:
   - Goblin
   - Auran
 vitals:
-  max_hp: 87
-  current_hp: 87
+  max_hp: 95
+  current_hp: 95
   temp_hp: 0
   hit_dice:
     die: d8
