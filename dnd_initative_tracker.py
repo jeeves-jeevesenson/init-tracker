@@ -9774,10 +9774,66 @@ class InitiativeTracker(base.InitiativeTracker):
         return None
 
     @staticmethod
-    def _ship_forward_vector(facing_deg: Any) -> Tuple[int, int]:
-        steps = InitiativeTracker._ship_rotation_steps_for_facing(facing_deg)
-        vectors = [(1, 0), (0, 1), (-1, 0), (0, -1)]
-        return vectors[steps % 4]
+    def _ship_local_forward_vector(ship: Optional[Dict[str, Any]] = None) -> Tuple[int, int]:
+        payload = dict(ship if isinstance(ship, dict) else {})
+        boarding = payload.get("boarding") if isinstance(payload.get("boarding"), dict) else {}
+        points = list(boarding.get("points_local") if isinstance(boarding, dict) and isinstance(boarding.get("points_local"), list) else [])
+        if not points and isinstance(boarding, dict) and isinstance(boarding.get("points"), list):
+            points = list(boarding.get("points"))
+        fore_points: List[Tuple[int, int]] = []
+        aft_points: List[Tuple[int, int]] = []
+        for raw in points:
+            if not isinstance(raw, dict):
+                continue
+            pid = str(raw.get("id") or "").strip().lower()
+            if pid not in {"fore", "bow", "aft", "stern"}:
+                continue
+            try:
+                col = int(raw.get("local_col", raw.get("col", 0)))
+                row = int(raw.get("local_row", raw.get("row", 0)))
+            except Exception:
+                continue
+            if pid in {"fore", "bow"}:
+                fore_points.append((int(col), int(row)))
+            else:
+                aft_points.append((int(col), int(row)))
+        if fore_points and aft_points:
+            fore_col = sum(col for col, _ in fore_points) / float(len(fore_points))
+            fore_row = sum(row for _, row in fore_points) / float(len(fore_points))
+            aft_col = sum(col for col, _ in aft_points) / float(len(aft_points))
+            aft_row = sum(row for _, row in aft_points) / float(len(aft_points))
+            dc = fore_col - aft_col
+            dr = fore_row - aft_row
+            if abs(dc) >= abs(dr) and abs(dc) > 1e-6:
+                return (1 if dc > 0 else -1, 0)
+            if abs(dr) > 1e-6:
+                return (0, 1 if dr > 0 else -1)
+        return (0, -1)
+
+    @classmethod
+    def _ship_forward_vector(cls, facing_deg: Any, ship: Optional[Dict[str, Any]] = None) -> Tuple[int, int]:
+        local_forward = cls._ship_local_forward_vector(ship)
+        return cls._rotate_ship_local_cell(int(local_forward[0]), int(local_forward[1]), facing_deg)
+
+    @staticmethod
+    def _ship_port_starboard_vectors(forward_dc: int, forward_dr: int) -> Tuple[Tuple[int, int], Tuple[int, int]]:
+        port = (int(forward_dr), -int(forward_dc))
+        starboard = (-int(forward_dr), int(forward_dc))
+        return port, starboard
+
+    @classmethod
+    def _ship_relative_step_vector(cls, maneuver: str, facing_deg: Any, ship: Optional[Dict[str, Any]] = None) -> Tuple[int, int]:
+        action = str(maneuver or "").strip().lower()
+        forward_dc, forward_dr = cls._ship_forward_vector(facing_deg, ship)
+        if action == "move_reverse":
+            return -int(forward_dc), -int(forward_dr)
+        if action in {"move_port", "port"}:
+            port, _ = cls._ship_port_starboard_vectors(int(forward_dc), int(forward_dr))
+            return port
+        if action in {"move_starboard", "starboard"}:
+            _, starboard = cls._ship_port_starboard_vectors(int(forward_dc), int(forward_dr))
+            return starboard
+        return int(forward_dc), int(forward_dr)
 
     @staticmethod
     def _ship_weapon_profile(weapon: Dict[str, Any]) -> Dict[str, Any]:
@@ -10257,7 +10313,14 @@ class InitiativeTracker(base.InitiativeTracker):
             updated["hull_state"] = hull_state
         return {"ship": updated, "applied_damage": int(amount), "target_component_id": target_id}
 
-    def _ship_engagement_maneuver(self, structure_id: Any, maneuver: Any, *, steps: int = 1) -> Dict[str, Any]:
+    def _ship_engagement_maneuver(
+        self,
+        structure_id: Any,
+        maneuver: Any,
+        *,
+        steps: int = 1,
+        preview_only: bool = False,
+    ) -> Dict[str, Any]:
         sid = str(structure_id or "").strip()
         action = str(maneuver or "").strip().lower()
         if not sid:
@@ -10300,6 +10363,15 @@ class InitiativeTracker(base.InitiativeTracker):
                     "message": "Ship turn is blocked.",
                     "blockers": dict(projected.get("blockers") if isinstance(projected.get("blockers"), dict) else {}),
                     "target_cells": list(projected.get("target_cells") if isinstance(projected.get("target_cells"), list) else []),
+                }
+            if preview_only:
+                return {
+                    "ok": True,
+                    "structure_id": sid,
+                    "maneuver": action,
+                    "facing_deg": float(next_facing),
+                    "target_cells": list(projected.get("target_cells") if isinstance(projected.get("target_cells"), list) else []),
+                    "blockers": dict(projected.get("blockers") if isinstance(projected.get("blockers"), dict) else {}),
                 }
             runtime_boarding = dict(ship.get("boarding") if isinstance(ship.get("boarding"), dict) else {})
             local_points = list(runtime_boarding.get("points_local") if isinstance(runtime_boarding.get("points_local"), list) else [])
@@ -10391,7 +10463,7 @@ class InitiativeTracker(base.InitiativeTracker):
 
             self._mutate_canonical_map_state(_mutate_structure, hydrate_window=False, broadcast=False)
             return {"ok": True, "structure_id": sid, "maneuver": action, "facing_deg": float(next_ship.get("facing_deg", next_facing) or next_facing)}
-        if action not in {"move_forward", "move_reverse"}:
+        if action not in {"move_forward", "move_reverse", "move_port", "move_starboard"}:
             return {"ok": False, "reason": "unsupported_maneuver", "message": "Unsupported maneuver."}
         if helm_disabled:
             return {"ok": False, "reason": "helm_disabled", "message": "The helm is disabled and the ship cannot move."}
@@ -10401,9 +10473,7 @@ class InitiativeTracker(base.InitiativeTracker):
         move_steps = max(1, int(steps or 1))
         if move_steps > move_budget:
             return {"ok": False, "reason": "movement_spent", "message": "Not enough ship movement remaining this round."}
-        fwd_dc, fwd_dr = self._ship_forward_vector(ship.get("facing_deg", 0.0))
-        if action == "move_reverse":
-            fwd_dc, fwd_dr = -fwd_dc, -fwd_dr
+        fwd_dc, fwd_dr = self._ship_relative_step_vector(action, ship.get("facing_deg", 0.0), ship)
         working_state = self._capture_canonical_map_state(prefer_window=True).normalized()
         total_moved = 0
         for _ in range(move_steps):
@@ -10482,6 +10552,20 @@ class InitiativeTracker(base.InitiativeTracker):
             presentation["ship_instances"] = ship_instances
             working_state.presentation = presentation
         self._reconcile_boarding_links_for_state(working_state)
+        target_cells = []
+        if isinstance(final_structure, MapStructure):
+            raw_cells = {(int(final_structure.anchor_col), int(final_structure.anchor_row))}
+            raw_cells.update((int(col), int(row)) for col, row in list(final_structure.occupied_cells or []))
+            target_cells = [{"col": int(col), "row": int(row)} for col, row in sorted(raw_cells)]
+        if preview_only:
+            return {
+                "ok": True,
+                "structure_id": sid,
+                "maneuver": action,
+                "moved_squares": int(total_moved),
+                "target_cells": target_cells,
+                "facing_deg": float(ship.get("facing_deg", 0.0) or 0.0),
+            }
         self._apply_canonical_map_state(working_state.normalized(), hydrate_window=False)
         semantics = self._structure_contact_semantics(sid, state=working_state)
         return {
@@ -10489,6 +10573,7 @@ class InitiativeTracker(base.InitiativeTracker):
             "structure_id": sid,
             "maneuver": action,
             "moved_squares": int(total_moved),
+            "target_cells": target_cells,
             "contact_count": len(semantics.get("ship_contact_structure_ids") if isinstance(semantics.get("ship_contact_structure_ids"), list) else []),
         }
 
@@ -12062,6 +12147,76 @@ class InitiativeTracker(base.InitiativeTracker):
                 region["render_hint"] = dict(render_hint)
             out.append(region)
         return out
+
+    def _ship_blueprint_placement_preview(
+        self,
+        blueprint_id: Any,
+        *,
+        anchor_col: int,
+        anchor_row: int,
+        facing_deg: Any = 0.0,
+    ) -> Dict[str, Any]:
+        bid = str(blueprint_id or "").strip().lower()
+        blueprints = self._ship_blueprints()
+        blueprint = blueprints.get(bid)
+        if not isinstance(blueprint, dict):
+            return {"ok": False, "reason": "ship_blueprint_not_found", "target_cells": [], "blockers": {"ok": False, "blockers": {}}}
+        template = blueprint.get("template") if isinstance(blueprint.get("template"), dict) else {}
+        local_cells: List[Tuple[int, int]] = []
+        for raw in template.get("footprint") if isinstance(template.get("footprint"), list) else []:
+            if not isinstance(raw, dict):
+                continue
+            try:
+                local_cells.append((int(raw.get("col", 0)), int(raw.get("row", 0))))
+            except Exception:
+                continue
+        if not local_cells:
+            local_cells = [(0, 0)]
+        target_cells = self._ship_world_cells_from_local(
+            anchor_col=int(anchor_col),
+            anchor_row=int(anchor_row),
+            local_cells=local_cells,
+            facing_deg=facing_deg,
+        )
+        state = self._capture_canonical_map_state(prefer_window=True).normalized()
+        query = MapQueryAPI(state)
+        cols = int(state.grid.cols)
+        rows = int(state.grid.rows)
+        blockers: Dict[str, List[Dict[str, Any]]] = {
+            "out_of_bounds": [],
+            "obstacles": [],
+            "features": [],
+            "structures": [],
+            "hazards": [],
+            "template_conflicts": [],
+        }
+        for col, row in target_cells:
+            cell = {"col": int(col), "row": int(row)}
+            if int(col) < 0 or int(row) < 0 or int(col) >= cols or int(row) >= rows:
+                blockers["out_of_bounds"].append(cell)
+                continue
+            if (int(col), int(row)) in state.obstacles:
+                blockers["obstacles"].append(cell)
+            for feature in query.features_at(int(col), int(row)):
+                payload = feature.payload if isinstance(feature.payload, dict) else {}
+                if bool(payload.get("blocks_structure_movement")) or bool(payload.get("blocks_movement")):
+                    blockers["features"].append({"id": str(feature.feature_id), "cell": cell})
+            for structure in query.structures_at(int(col), int(row)):
+                blockers["structures"].append({"id": str(structure.structure_id), "cell": cell})
+            for hazard in query.hazards_at(int(col), int(row)):
+                payload = hazard.payload if isinstance(hazard.payload, dict) else {}
+                if MapQueryAPI.hazard_blocks_structure_movement(payload):
+                    blockers["hazards"].append({"id": str(hazard.hazard_id), "cell": cell})
+        has_blockers = any(bool(blockers.get(key)) for key in blockers.keys())
+        return {
+            "ok": not has_blockers,
+            "blueprint_id": bid,
+            "anchor_col": int(anchor_col),
+            "anchor_row": int(anchor_row),
+            "facing_deg": float(facing_deg or 0.0),
+            "target_cells": [{"col": int(col), "row": int(row)} for col, row in target_cells],
+            "blockers": {"ok": not has_blockers, "blockers": blockers},
+        }
 
     def _instantiate_ship_blueprint(
         self,

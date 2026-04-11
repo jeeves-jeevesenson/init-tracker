@@ -101,22 +101,58 @@ class ShipEngagementGameplayTests(unittest.TestCase):
         self.assertGreaterEqual(int((ship.get("crew_state") or {}).get("active_crew", 0) or 0), 1)
         self.assertIn("gun_a", ship.get("weapon_state") or {})
 
+    def test_ship_local_forward_vector_prefers_fore_and_aft_points(self):
+        vector = tracker_mod.InitiativeTracker._ship_local_forward_vector(
+            {
+                "boarding": {
+                    "points_local": [
+                        {"id": "fore", "col": 2, "row": 0},
+                        {"id": "aft", "col": 2, "row": 8},
+                    ]
+                }
+            }
+        )
+        self.assertEqual(vector, (0, -1))
+
     def test_ship_maneuver_success_and_blocked_reason(self):
         app = self._build_app(target_anchor_col=15)
         moved = app._ship_engagement_maneuver("ship_a", "move_forward", steps=1)
         self.assertTrue(moved.get("ok"))
         structure = app._ship_structure_for_id("ship_a")
         self.assertIsNotNone(structure)
-        self.assertEqual(int(structure.anchor_col), 6)
+        self.assertEqual(int(structure.anchor_col), 5)
+        self.assertEqual(int(structure.anchor_row), 4)
         app._map_state = tracker_mod.MapState.from_dict(
             {
                 **app._map_state.to_dict(),
-                "obstacles": [{"col": 7, "row": 5}],
+                "obstacles": [{"col": 5, "row": 3}],
             }
         )
         blocked = app._ship_engagement_maneuver("ship_a", "move_forward", steps=1)
         self.assertFalse(blocked.get("ok"))
         self.assertEqual(blocked.get("reason"), "movement_blocked")
+
+    def test_ship_maneuver_port_and_starboard_are_relative_to_facing(self):
+        app = self._build_app(target_anchor_col=20)
+        moved_port = app._ship_engagement_maneuver("ship_a", "move_port", steps=1)
+        self.assertTrue(moved_port.get("ok"))
+        structure = app._ship_structure_for_id("ship_a")
+        self.assertIsNotNone(structure)
+        self.assertEqual((int(structure.anchor_col), int(structure.anchor_row)), (4, 5))
+        moved_starboard = app._ship_engagement_maneuver("ship_a", "move_starboard", steps=1)
+        self.assertTrue(moved_starboard.get("ok"))
+        structure = app._ship_structure_for_id("ship_a")
+        self.assertIsNotNone(structure)
+        self.assertEqual((int(structure.anchor_col), int(structure.anchor_row)), (5, 5))
+
+    def test_ship_maneuver_preview_does_not_mutate_state(self):
+        app = self._build_app(target_anchor_col=20)
+        preview = app._ship_engagement_maneuver("ship_a", "move_forward", steps=1, preview_only=True)
+        self.assertTrue(preview.get("ok"))
+        self.assertTrue(preview.get("target_cells"))
+        structure = app._ship_structure_for_id("ship_a")
+        self.assertIsNotNone(structure)
+        self.assertEqual((int(structure.anchor_col), int(structure.anchor_row)), (5, 5))
 
     def test_ship_weapon_action_applies_damage(self):
         app = self._build_app(target_anchor_col=10)

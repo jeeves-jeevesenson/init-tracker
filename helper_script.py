@@ -132,6 +132,32 @@ def _active_rotation_target(active_cid: Optional[int], drag_cid: Optional[int]) 
     return drag if drag == active else None
 
 
+MAP_INTERACTION_MODE_SELECT = "select"
+MAP_INTERACTION_MODE_PLACE = "place"
+MAP_INTERACTION_MODE_ERASE = "erase"
+MAP_INTERACTION_MODE_MEASURE = "measure"
+MAP_INTERACTION_MODE_SHIP = "ship"
+MAP_INTERACTION_MODES: Tuple[str, ...] = (
+    MAP_INTERACTION_MODE_SELECT,
+    MAP_INTERACTION_MODE_PLACE,
+    MAP_INTERACTION_MODE_ERASE,
+    MAP_INTERACTION_MODE_MEASURE,
+    MAP_INTERACTION_MODE_SHIP,
+)
+MAP_MODE_TO_AUTHOR_TOOL: Dict[str, str] = {
+    MAP_INTERACTION_MODE_SELECT: "select",
+    MAP_INTERACTION_MODE_PLACE: "stamp",
+    MAP_INTERACTION_MODE_ERASE: "erase",
+    MAP_INTERACTION_MODE_MEASURE: "select",
+    MAP_INTERACTION_MODE_SHIP: "select",
+}
+
+
+def _normalize_map_interaction_mode(value: Any) -> str:
+    mode = str(value or "").strip().lower()
+    return mode if mode in MAP_INTERACTION_MODES else MAP_INTERACTION_MODE_SELECT
+
+
 def _seed_user_players_dir() -> None:
     _seed_user_items_dir()
     user_dir = _app_data_dir() / "players"
@@ -6221,7 +6247,9 @@ class BattleMapWindow(tk.Toplevel):
         self.map_elevation_cells: Dict[Tuple[int, int], float] = {}
         self.map_structure_templates: Dict[str, Dict[str, Any]] = {}
         self._tactical_presets = tactical_preset_catalog()
+        self.map_interaction_mode_var = tk.StringVar(value=MAP_INTERACTION_MODE_SELECT)
         self.map_author_tool_var = tk.StringVar(value="select")
+        self.map_place_source_var = tk.StringVar(value="tactical")
         self.map_author_family_var = tk.StringVar(value="All")
         self.map_author_preset_search_var = tk.StringVar(value="")
         self.map_author_preset_var = tk.StringVar(value="barrel")
@@ -6254,6 +6282,9 @@ class BattleMapWindow(tk.Toplevel):
         self._map_author_painting: bool = False
         self._map_author_last_painted_cell: Optional[Tuple[int, int]] = None
         self._map_author_drag_dirty: bool = False
+        self._map_hover_cell: Optional[Tuple[int, int]] = None
+        self._map_place_preview_active: bool = False
+        self._ship_maneuver_preview: Optional[Dict[str, Any]] = None
         self._suspend_lan_sync: bool = False
         self._map_dirty: bool = False
         self._pan_key_to_dir: Dict[str, Tuple[int, int]] = {
@@ -6380,7 +6411,7 @@ class BattleMapWindow(tk.Toplevel):
         self.refresh_units()
 
         # Keybindings
-        self.bind("<Escape>", lambda e: self._clear_measure())
+        self.bind("<Escape>", self._on_map_escape)
         self.bind("<KeyPress-r>", lambda e: self.refresh_units())
         self.bind("<Control-z>", lambda e: self._undo_obstacle())
         self.bind("<KeyPress-Shift_L>", self._on_shift_press)
@@ -6849,19 +6880,36 @@ class BattleMapWindow(tk.Toplevel):
         ttk.Button(preset_btns, text="Load Preset", command=self._load_obstacle_preset).pack(side=tk.LEFT, padx=(8, 0))
         view.columnconfigure(1, weight=1)
 
-        # --- Tactical palette ---
-        tactical = ttk.LabelFrame(left, text="Tactical Palette", padding=6)
+        # --- Map interaction modes ---
+        mode_frame = ttk.LabelFrame(left, text="Map Mode", padding=6)
+        mode_frame.pack(fill=tk.X, pady=(0, 10))
+        for index, (mode_id, label) in enumerate(
+            [
+                (MAP_INTERACTION_MODE_SELECT, "Select"),
+                (MAP_INTERACTION_MODE_PLACE, "Place"),
+                (MAP_INTERACTION_MODE_ERASE, "Erase"),
+                (MAP_INTERACTION_MODE_MEASURE, "Measure"),
+                (MAP_INTERACTION_MODE_SHIP, "Ship Cmd"),
+            ]
+        ):
+            ttk.Radiobutton(
+                mode_frame,
+                text=label,
+                variable=self.map_interaction_mode_var,
+                value=mode_id,
+                command=lambda value=mode_id: self._set_map_interaction_mode(value),
+            ).grid(row=0, column=index, sticky="w", padx=(0 if index == 0 else 6, 0))
+        mode_frame.columnconfigure(5, weight=1)
+
+        # --- Placement palette ---
+        tactical = ttk.LabelFrame(left, text="Placement", padding=6)
         tactical.pack(fill=tk.X, pady=(0, 10))
-        ttk.Label(tactical, text="Tool:").grid(row=0, column=0, sticky="w")
-        tool_combo = ttk.Combobox(
-            tactical,
-            textvariable=self.map_author_tool_var,
-            values=["select", "stamp", "erase", "elevation"],
-            state="readonly",
-            width=11,
-        )
-        tool_combo.grid(row=0, column=1, sticky="w", padx=(6, 0))
-        ttk.Label(tactical, text="Group:").grid(row=0, column=2, sticky="w", padx=(8, 0))
+        source_row = ttk.Frame(tactical)
+        source_row.grid(row=0, column=0, columnspan=4, sticky="w")
+        ttk.Label(source_row, text="Source:").pack(side=tk.LEFT)
+        ttk.Radiobutton(source_row, text="Tactical", variable=self.map_place_source_var, value="tactical").pack(side=tk.LEFT, padx=(6, 0))
+        ttk.Radiobutton(source_row, text="Ship", variable=self.map_place_source_var, value="ship").pack(side=tk.LEFT, padx=(6, 0))
+        ttk.Label(tactical, text="Group:").grid(row=1, column=0, sticky="w", pady=(6, 0))
         family_values = ["All"] + sorted(
             {str(item.get("family") or "Other") for item in self._tactical_presets.values() if isinstance(item, dict)}
         )
@@ -6873,10 +6921,10 @@ class BattleMapWindow(tk.Toplevel):
             state="readonly",
             width=18,
         )
-        family_combo.grid(row=0, column=3, sticky="ew", padx=(6, 0))
-        ttk.Label(tactical, text="Search:").grid(row=1, column=0, sticky="w", pady=(6, 0))
+        family_combo.grid(row=1, column=1, sticky="w", padx=(6, 0), pady=(6, 0))
+        ttk.Label(tactical, text="Search:").grid(row=1, column=2, sticky="w", padx=(8, 0), pady=(6, 0))
         preset_search_entry = ttk.Entry(tactical, textvariable=self.map_author_preset_search_var, width=20)
-        preset_search_entry.grid(row=1, column=1, columnspan=3, sticky="ew", padx=(6, 0), pady=(6, 0))
+        preset_search_entry.grid(row=1, column=3, sticky="ew", padx=(6, 0), pady=(6, 0))
         ttk.Label(tactical, text="Preset:").grid(row=2, column=0, sticky="w", pady=(6, 0))
         self._map_author_preset_combo = ttk.Combobox(
             tactical,
@@ -6902,8 +6950,8 @@ class BattleMapWindow(tk.Toplevel):
         self._map_author_elevation_entry.grid(row=4, column=3, sticky="w", padx=(6, 0), pady=(6, 0))
         btn_row = ttk.Frame(tactical)
         btn_row.grid(row=5, column=0, columnspan=4, sticky="ew", pady=(6, 0))
-        ttk.Button(btn_row, text="Stamp @ Cell", command=self._apply_tactical_author_to_selected_cell).pack(side=tk.LEFT)
-        ttk.Button(btn_row, text="Erase @ Cell", command=self._remove_tactical_entities_at_selected_cell).pack(side=tk.LEFT, padx=(6, 0))
+        ttk.Button(btn_row, text="Place @ Selected Cell", command=self._apply_tactical_author_to_selected_cell).pack(side=tk.LEFT)
+        ttk.Button(btn_row, text="Erase @ Selected Cell", command=self._remove_tactical_entities_at_selected_cell).pack(side=tk.LEFT, padx=(6, 0))
         ttk.Button(btn_row, text="Move Struct…", command=self._move_structure_from_selected_cell).pack(side=tk.LEFT, padx=(6, 0))
         ttk.Button(btn_row, text="Save Template…", command=self._save_template_from_selected_structure).pack(side=tk.LEFT, padx=(6, 0))
         ttk.Button(btn_row, text="Place Template…", command=self._place_template_at_selected_cell).pack(side=tk.LEFT, padx=(6, 0))
@@ -6914,11 +6962,8 @@ class BattleMapWindow(tk.Toplevel):
         ttk.Label(tactical, textvariable=self.map_author_summary_var, justify="left", wraplength=440).grid(
             row=7, column=0, columnspan=4, sticky="w", pady=(4, 0)
         )
-        ttk.Label(tactical, textvariable=self.map_author_cell_status_var, justify="left", wraplength=440).grid(
-            row=8, column=0, columnspan=4, sticky="w", pady=(4, 0)
-        )
         ship_row = ttk.Frame(tactical)
-        ship_row.grid(row=9, column=0, columnspan=4, sticky="ew", pady=(6, 0))
+        ship_row.grid(row=8, column=0, columnspan=4, sticky="ew", pady=(6, 0))
         ttk.Label(ship_row, text="Ship Blueprint:").pack(side=tk.LEFT)
         self._ship_blueprint_combo = ttk.Combobox(
             ship_row,
@@ -6947,17 +6992,29 @@ class BattleMapWindow(tk.Toplevel):
             variable=self.map_ship_debug_render_var,
             command=self._redraw_tactical_layers,
         ).pack(side=tk.LEFT, padx=(8, 0))
-        engagement_row = ttk.Frame(tactical)
-        engagement_row.grid(row=10, column=0, columnspan=4, sticky="ew", pady=(6, 0))
+
+        selection = ttk.LabelFrame(left, text="Selection", padding=6)
+        selection.pack(fill=tk.X, pady=(0, 10))
+        ttk.Label(selection, textvariable=self.map_author_cell_status_var, justify="left", wraplength=440).pack(anchor="w")
+        ttk.Label(selection, textvariable=self.map_structure_contact_status_var, justify="left", wraplength=440).pack(anchor="w", pady=(4, 0))
+
+        self._selected_ship_command_frame = ttk.LabelFrame(left, text="Selected Ship Commands", padding=6)
+        self._selected_ship_command_frame_visible = False
+        engagement_row = ttk.Frame(self._selected_ship_command_frame)
+        engagement_row.pack(fill=tk.X, pady=(0, 4))
         ttk.Label(engagement_row, text="Move:").pack(side=tk.LEFT)
         ttk.Entry(engagement_row, textvariable=self.map_ship_move_steps_var, width=4).pack(side=tk.LEFT, padx=(4, 0))
         ttk.Button(engagement_row, text="Forward", command=lambda: self._ship_maneuver_action("move_forward")).pack(side=tk.LEFT, padx=(6, 0))
         ttk.Button(engagement_row, text="Reverse", command=lambda: self._ship_maneuver_action("move_reverse")).pack(side=tk.LEFT, padx=(4, 0))
+        ttk.Button(engagement_row, text="Port", command=lambda: self._ship_maneuver_action("move_port")).pack(side=tk.LEFT, padx=(4, 0))
+        ttk.Button(engagement_row, text="Starboard", command=lambda: self._ship_maneuver_action("move_starboard")).pack(side=tk.LEFT, padx=(4, 0))
         ttk.Button(engagement_row, text="Turn Port", command=lambda: self._ship_maneuver_action("turn_port")).pack(side=tk.LEFT, padx=(8, 0))
         ttk.Button(engagement_row, text="Turn Starboard", command=lambda: self._ship_maneuver_action("turn_starboard")).pack(side=tk.LEFT, padx=(4, 0))
+        ttk.Button(engagement_row, text="Commit", command=self._commit_ship_maneuver_preview).pack(side=tk.LEFT, padx=(8, 0))
+        ttk.Button(engagement_row, text="Cancel", command=self._cancel_ship_maneuver_preview).pack(side=tk.LEFT, padx=(4, 0))
         ttk.Button(engagement_row, text="Ram", command=self._ship_ram_action).pack(side=tk.LEFT, padx=(8, 0))
-        boarding_row = ttk.Frame(tactical)
-        boarding_row.grid(row=11, column=0, columnspan=4, sticky="ew", pady=(6, 0))
+        boarding_row = ttk.Frame(self._selected_ship_command_frame)
+        boarding_row.pack(fill=tk.X, pady=(0, 4))
         ttk.Label(boarding_row, text="Weapon:").pack(side=tk.LEFT)
         self._ship_weapon_combo = ttk.Combobox(
             boarding_row,
@@ -6989,29 +7046,19 @@ class BattleMapWindow(tk.Toplevel):
         ttk.Button(boarding_row, text="Create Link", command=self._create_boarding_link_from_selected_ship).pack(side=tk.LEFT, padx=(8, 0))
         ttk.Button(boarding_row, text="Break Link", command=self._break_boarding_link_from_selected_ship).pack(side=tk.LEFT, padx=(6, 0))
         ttk.Button(boarding_row, text="Traverse Selected Unit", command=self._traverse_selected_creature_boarding).pack(side=tk.LEFT, padx=(6, 0))
-        ttk.Label(tactical, textvariable=self.map_ship_summary_var, justify="left", wraplength=440).grid(
-            row=12, column=0, columnspan=4, sticky="w", pady=(4, 0)
-        )
-        ttk.Label(tactical, textvariable=self.map_ship_engagement_status_var, justify="left", wraplength=440).grid(
-            row=13, column=0, columnspan=4, sticky="w", pady=(4, 0)
-        )
-        ttk.Label(tactical, textvariable=self.map_boarding_status_var, justify="left", wraplength=440).grid(
-            row=14, column=0, columnspan=4, sticky="w", pady=(4, 0)
-        )
-        ttk.Label(tactical, textvariable=self.map_boarding_traversal_status_var, justify="left", wraplength=440).grid(
-            row=15, column=0, columnspan=4, sticky="w", pady=(4, 0)
-        )
-        ttk.Label(tactical, textvariable=self.map_structure_contact_status_var, justify="left", wraplength=440).grid(
-            row=16, column=0, columnspan=4, sticky="w", pady=(6, 0)
-        )
+        ttk.Label(self._selected_ship_command_frame, textvariable=self.map_ship_summary_var, justify="left", wraplength=440).pack(anchor="w", pady=(4, 0))
+        ttk.Label(self._selected_ship_command_frame, textvariable=self.map_ship_engagement_status_var, justify="left", wraplength=440).pack(anchor="w", pady=(4, 0))
+        ttk.Label(self._selected_ship_command_frame, textvariable=self.map_boarding_status_var, justify="left", wraplength=440).pack(anchor="w", pady=(4, 0))
+        ttk.Label(self._selected_ship_command_frame, textvariable=self.map_boarding_traversal_status_var, justify="left", wraplength=440).pack(anchor="w", pady=(4, 0))
         tactical.columnconfigure(3, weight=1)
-        tool_combo.bind("<<ComboboxSelected>>", lambda _e: self._refresh_tactical_preset_selection(sync_mode=True))
         family_combo.bind("<<ComboboxSelected>>", lambda _e: self._refresh_tactical_preset_selection())
         preset_search_entry.bind("<KeyRelease>", lambda _e: self._refresh_tactical_preset_selection(sync_mode=False))
         self._map_author_preset_combo.bind("<<ComboboxSelected>>", lambda _e: self._refresh_tactical_preset_selection(sync_mode=True))
         self._refresh_tactical_preset_selection(sync_mode=True)
         self._refresh_ship_blueprint_selection()
         self._update_selected_tactical_cell_status()
+        self._update_selected_structure_contact_status()
+        self._sync_map_author_tool_from_mode()
 
         # --- Units panel ---
         ttk.Label(left, text="Units (drag onto map)").pack(anchor="w")
@@ -7250,7 +7297,7 @@ class BattleMapWindow(tk.Toplevel):
         self.canvas.bind("<Double-Button-1>", self._on_canvas_double_click)
         self.canvas.bind("<Button-3>", self._on_canvas_right_click)
         self.canvas.bind("<Motion>", self._on_canvas_hover)
-        self.canvas.bind("<Leave>", lambda _e: self._hide_hover_tooltip())
+        self.canvas.bind("<Leave>", self._on_canvas_leave)
         self.canvas.bind("<KeyPress-Shift_L>", self._on_shift_press)
         self.canvas.bind("<KeyPress-Shift_R>", self._on_shift_press)
         self.canvas.bind("<KeyRelease-Shift_L>", self._on_shift_release)
@@ -7422,6 +7469,7 @@ class BattleMapWindow(tk.Toplevel):
         self._draw_map_features()
         self._draw_map_hazards()
         self._draw_map_elevation()
+        self._draw_map_mode_preview_overlays()
 
     def _fit_to_window(self) -> None:
         try:
@@ -8672,6 +8720,162 @@ class BattleMapWindow(tk.Toplevel):
                 except Exception:
                     pass
 
+    def _selected_ship_blueprint_id(self) -> str:
+        self._refresh_ship_blueprint_selection()
+        selected = str(self.map_ship_blueprint_var.get() or "").strip()
+        lookup = self._ship_blueprint_lookup if isinstance(getattr(self, "_ship_blueprint_lookup", {}), dict) else {}
+        return str(lookup.get(selected) or selected).strip().lower()
+
+    def _draw_map_mode_preview_overlays(self) -> None:
+        try:
+            self.canvas.delete("map_mode_overlay")
+        except Exception:
+            pass
+        selected_cell = self._map_author_selected_cell
+        if selected_cell is not None:
+            sc, sr = int(selected_cell[0]), int(selected_cell[1])
+            x1 = self.x0 + sc * self.cell
+            y1 = self.y0 + sr * self.cell
+            x2 = x1 + self.cell
+            y2 = y1 + self.cell
+            try:
+                self.canvas.create_rectangle(
+                    x1,
+                    y1,
+                    x2,
+                    y2,
+                    outline="#ffe08a",
+                    width=max(1, int(self.cell * 0.09)),
+                    tags=("map_mode_overlay",),
+                )
+            except Exception:
+                pass
+        preview = self._ship_maneuver_preview if isinstance(self._ship_maneuver_preview, dict) else {}
+        result = preview.get("result") if isinstance(preview.get("result"), dict) else {}
+        for raw in list(result.get("target_cells") if isinstance(result.get("target_cells"), list) else []):
+            if not isinstance(raw, dict):
+                continue
+            try:
+                col = int(raw.get("col"))
+                row = int(raw.get("row"))
+            except Exception:
+                continue
+            x1 = self.x0 + col * self.cell
+            y1 = self.y0 + row * self.cell
+            x2 = x1 + self.cell
+            y2 = y1 + self.cell
+            try:
+                self.canvas.create_rectangle(
+                    x1,
+                    y1,
+                    x2,
+                    y2,
+                    fill="#7fbfff",
+                    stipple="gray25",
+                    outline="#3d77a8",
+                    width=1,
+                    tags=("map_mode_overlay",),
+                )
+            except Exception:
+                pass
+        mode = self._active_map_interaction_mode()
+        if mode != MAP_INTERACTION_MODE_PLACE:
+            return
+        hover = self._map_hover_cell
+        if hover is None:
+            return
+        col, row = int(hover[0]), int(hover[1])
+        x1 = self.x0 + col * self.cell
+        y1 = self.y0 + row * self.cell
+        x2 = x1 + self.cell
+        y2 = y1 + self.cell
+        source = str(self.map_place_source_var.get() or "tactical").strip().lower()
+        if source == "ship":
+            blueprint_id = self._selected_ship_blueprint_id()
+            if not blueprint_id:
+                return
+            try:
+                facing = float(str(self.map_ship_facing_var.get() or "0").strip() or 0.0)
+            except Exception:
+                facing = 0.0
+            preview_payload = self.app._ship_blueprint_placement_preview(
+                blueprint_id,
+                anchor_col=col,
+                anchor_row=row,
+                facing_deg=facing,
+            )
+            for cell in list(preview_payload.get("target_cells") if isinstance(preview_payload, dict) else []):
+                if not isinstance(cell, dict):
+                    continue
+                try:
+                    pc = int(cell.get("col"))
+                    pr = int(cell.get("row"))
+                except Exception:
+                    continue
+                px1 = self.x0 + pc * self.cell
+                py1 = self.y0 + pr * self.cell
+                px2 = px1 + self.cell
+                py2 = py1 + self.cell
+                try:
+                    self.canvas.create_rectangle(
+                        px1,
+                        py1,
+                        px2,
+                        py2,
+                        fill="#73b36b",
+                        stipple="gray25",
+                        outline="#2a6e33",
+                        width=1,
+                        tags=("map_mode_overlay",),
+                    )
+                except Exception:
+                    pass
+            blockers = preview_payload.get("blockers") if isinstance(preview_payload, dict) else {}
+            blocker_map = blockers.get("blockers") if isinstance(blockers, dict) and isinstance(blockers.get("blockers"), dict) else {}
+            for key in ("out_of_bounds", "obstacles", "features", "structures", "hazards", "template_conflicts"):
+                for entry in list(blocker_map.get(key) if isinstance(blocker_map, dict) else []):
+                    cell = entry.get("cell") if isinstance(entry, dict) and isinstance(entry.get("cell"), dict) else entry
+                    if not isinstance(cell, dict):
+                        continue
+                    try:
+                        bc = int(cell.get("col"))
+                        br = int(cell.get("row"))
+                    except Exception:
+                        continue
+                    bx1 = self.x0 + bc * self.cell
+                    by1 = self.y0 + br * self.cell
+                    bx2 = bx1 + self.cell
+                    by2 = by1 + self.cell
+                    try:
+                        self.canvas.create_rectangle(
+                            bx1,
+                            by1,
+                            bx2,
+                            by2,
+                            fill="#d65b5b",
+                            stipple="gray25",
+                            outline="#7b1f1f",
+                            width=1,
+                            tags=("map_mode_overlay",),
+                        )
+                    except Exception:
+                        pass
+            return
+        try:
+            self.canvas.create_rectangle(
+                x1,
+                y1,
+                x2,
+                y2,
+                fill="#89c47c",
+                stipple="gray25",
+                outline="#2f6b2d",
+                width=1,
+                tags=("map_mode_overlay",),
+            )
+        except Exception:
+            pass
+
     def _draw_map_features(self) -> None:
         try:
             self.canvas.delete("feature")
@@ -8769,6 +8973,73 @@ class BattleMapWindow(tk.Toplevel):
         except Exception:
             pass
 
+    def _active_map_interaction_mode(self) -> str:
+        var = getattr(self, "map_interaction_mode_var", None)
+        if var is None or not hasattr(var, "get"):
+            return MAP_INTERACTION_MODE_SELECT
+        return _normalize_map_interaction_mode(var.get())
+
+    def _sync_map_author_tool_from_mode(self) -> None:
+        mode = self._active_map_interaction_mode()
+        target_tool = MAP_MODE_TO_AUTHOR_TOOL.get(mode, "select")
+        try:
+            self.map_author_tool_var.set(target_tool)
+        except Exception:
+            pass
+        self._refresh_tactical_palette_state()
+        self._refresh_selected_ship_command_surface()
+
+    def _set_map_interaction_mode(self, mode: Any) -> None:
+        normalized_mode = _normalize_map_interaction_mode(mode)
+        try:
+            self.map_interaction_mode_var.set(normalized_mode)
+        except Exception:
+            pass
+        if normalized_mode != MAP_INTERACTION_MODE_PLACE:
+            self._map_hover_cell = None
+        if normalized_mode != MAP_INTERACTION_MODE_SHIP:
+            self._cancel_ship_maneuver_preview(redraw=False)
+        self._sync_map_author_tool_from_mode()
+        self._redraw_tactical_layers()
+
+    def _selected_ship_for_boarding_action(self) -> Optional[str]:
+        cell = self._map_author_selected_cell
+        if cell is None:
+            return None
+        return self._selected_structure_id_at_cell(int(cell[0]), int(cell[1]))
+
+    def _selected_ship_command_available(self) -> bool:
+        return bool(self._selected_ship_for_boarding_action())
+
+    def _refresh_selected_ship_command_surface(self) -> None:
+        frame = getattr(self, "_selected_ship_command_frame", None)
+        if frame is None:
+            return
+        should_show = self._selected_ship_command_available()
+        if should_show and not bool(getattr(self, "_selected_ship_command_frame_visible", False)):
+            frame.pack(fill=tk.X, pady=(0, 10))
+            self._selected_ship_command_frame_visible = True
+        elif not should_show and bool(getattr(self, "_selected_ship_command_frame_visible", False)):
+            frame.pack_forget()
+            self._selected_ship_command_frame_visible = False
+
+    def _cancel_ship_maneuver_preview(self, *, redraw: bool = True) -> None:
+        self._ship_maneuver_preview = None
+        if redraw:
+            self._redraw_tactical_layers()
+
+    def _on_map_escape(self, _event: Optional[tk.Event] = None) -> None:
+        self._clear_measure()
+        self._map_author_painting = False
+        self._map_author_last_painted_cell = None
+        self._map_place_preview_active = False
+        if self._ship_maneuver_preview:
+            self._cancel_ship_maneuver_preview(redraw=False)
+        if self._active_map_interaction_mode() != MAP_INTERACTION_MODE_SELECT:
+            self._set_map_interaction_mode(MAP_INTERACTION_MODE_SELECT)
+            return
+        self._redraw_tactical_layers()
+
     def _refresh_tactical_preset_selection(self, *, sync_mode: bool = False) -> None:
         presets = self._tactical_presets if isinstance(self._tactical_presets, dict) else {}
         family = str(self.map_author_family_var.get() or "").strip()
@@ -8849,6 +9120,7 @@ class BattleMapWindow(tk.Toplevel):
         return ""
 
     def _refresh_tactical_palette_state(self, *, normalized: Optional[Dict[str, Any]] = None) -> None:
+        mode = self._active_map_interaction_mode()
         tool = str(self.map_author_tool_var.get() or "select").strip().lower()
         preset_id = self._selected_tactical_preset_id()
         preset = self._selected_tactical_preset()
@@ -8862,8 +9134,8 @@ class BattleMapWindow(tk.Toplevel):
             )
         category = str(normalized.get("category") or "feature").strip().lower()
         display_name = str(normalized.get("display_name") or preset_id.replace("_", " ").title() or "None").strip()
-        can_stamp = tool == "stamp"
-        can_erase = tool == "erase"
+        can_stamp = mode == MAP_INTERACTION_MODE_PLACE and tool == "stamp"
+        can_erase = mode == MAP_INTERACTION_MODE_ERASE and tool == "erase"
         can_elevation = tool == "elevation"
         if hasattr(self, "_map_author_label_entry"):
             self._map_author_label_entry.configure(state=("normal" if can_stamp else "disabled"))
@@ -8876,12 +9148,20 @@ class BattleMapWindow(tk.Toplevel):
             self._map_author_elevation_entry.configure(state=("normal" if can_elevation else "disabled"))
         if hasattr(self, "_map_author_duration_label"):
             self._map_author_duration_label.configure(text=("Duration:" if category == "hazard" else "Duration (haz):"))
-        if can_erase:
+        if mode == MAP_INTERACTION_MODE_MEASURE:
+            self.map_author_active_status_var.set("Tool: Measure · Left-click two points (or right-click) to measure.")
+        elif mode == MAP_INTERACTION_MODE_SHIP:
+            self.map_author_active_status_var.set("Tool: Ship Command · Select a ship cell to preview and commit maneuvers.")
+        elif can_erase:
             self.map_author_active_status_var.set("Tool: Erase · Click/drag to remove tactical entities and elevation.")
         elif can_elevation:
             self.map_author_active_status_var.set(f"Tool: Elevation · Click/drag to set elevation to {self.map_author_elevation_var.get()}.")
         elif can_stamp:
-            self.map_author_active_status_var.set(f"Tool: Stamp · {display_name} ({category}) · Click/drag to place.")
+            source = str(self.map_place_source_var.get() or "tactical").strip().lower()
+            if source == "ship":
+                self.map_author_active_status_var.set("Tool: Place Ship · Hover for footprint preview, click to place ship blueprint.")
+            else:
+                self.map_author_active_status_var.set(f"Tool: Place · {display_name} ({category}) · Hover and click to place.")
         else:
             self.map_author_active_status_var.set("Tool: Select · Click to inspect/select structures.")
 
@@ -9294,8 +9574,13 @@ class BattleMapWindow(tk.Toplevel):
             self._refresh_selected_ship_boarding_options(None, None)
             self._refresh_selected_ship_engagement_options({})
             self._update_selected_creature_boarding_status()
+            self._refresh_selected_ship_command_surface()
             return
         sid = self._selected_structure_id_at_cell(int(cell[0]), int(cell[1]))
+        preview = self._ship_maneuver_preview if isinstance(self._ship_maneuver_preview, dict) else {}
+        preview_sid = str(preview.get("structure_id") or "").strip()
+        if preview_sid and preview_sid != str(sid or "").strip():
+            self._cancel_ship_maneuver_preview(redraw=False)
         if not sid:
             self.map_structure_contact_status_var.set(f"Structure contacts @ ({int(cell[0])},{int(cell[1])}): none")
             self.map_ship_summary_var.set("Ships: no ship selected.")
@@ -9304,6 +9589,7 @@ class BattleMapWindow(tk.Toplevel):
             self._refresh_selected_ship_boarding_options(None, None)
             self._refresh_selected_ship_engagement_options({})
             self._update_selected_creature_boarding_status()
+            self._refresh_selected_ship_command_surface()
             return
         semantics = {}
         try:
@@ -9315,6 +9601,7 @@ class BattleMapWindow(tk.Toplevel):
             self._refresh_selected_ship_boarding_options(None, semantics if isinstance(semantics, dict) else None)
             self._refresh_selected_ship_engagement_options({})
             self._update_selected_creature_boarding_status()
+            self._refresh_selected_ship_command_surface()
             return
         adjacent = semantics.get("adjacent_structures") if isinstance(semantics.get("adjacent_structures"), list) else []
         boardable = semantics.get("boardable_structures") if isinstance(semantics.get("boardable_structures"), list) else []
@@ -9347,6 +9634,7 @@ class BattleMapWindow(tk.Toplevel):
             self._refresh_selected_ship_boarding_options(None, semantics)
             self._refresh_selected_ship_engagement_options({})
             self._update_selected_creature_boarding_status()
+            self._refresh_selected_ship_command_surface()
             return
         active_boarding_count = int(ship_summary.get("active_boarding_count", 0) or 0)
         traversable_boarding_count = int(ship_summary.get("traversable_boarding_count", 0) or 0)
@@ -9373,6 +9661,7 @@ class BattleMapWindow(tk.Toplevel):
         self._refresh_selected_ship_boarding_options(sid, semantics)
         self._refresh_selected_ship_engagement_options(ship_summary)
         self._update_selected_creature_boarding_status()
+        self._refresh_selected_ship_command_surface()
 
     def _refresh_selected_ship_engagement_options(self, ship_summary: Dict[str, Any]) -> None:
         summary = ship_summary if isinstance(ship_summary, dict) else {}
@@ -9476,12 +9765,6 @@ class BattleMapWindow(tk.Toplevel):
             f"Boarding from {sid}: {len(relations)} relations · Active: {active_count} · Traversable: {traversable_count}"
         )
 
-    def _selected_ship_for_boarding_action(self) -> Optional[str]:
-        cell = self._map_author_selected_cell
-        if cell is None:
-            return None
-        return self._selected_structure_id_at_cell(int(cell[0]), int(cell[1]))
-
     def _ship_maneuver_action(self, maneuver: str) -> None:
         source_id = self._selected_ship_for_boarding_action()
         if not source_id:
@@ -9494,6 +9777,40 @@ class BattleMapWindow(tk.Toplevel):
             except Exception:
                 messagebox.showerror("Ship Engagement", "Move steps must be a positive integer.", parent=self)
                 return
+        result = self.app._ship_engagement_maneuver(source_id, maneuver, steps=steps, preview_only=True)
+        if not bool(result.get("ok")):
+            detail = ""
+            blockers = result.get("blockers") if isinstance(result.get("blockers"), dict) else {}
+            payload = blockers.get("blockers") if isinstance(blockers.get("blockers"), dict) else {}
+            blocker_lines = []
+            for key in ("out_of_bounds", "obstacles", "features", "structures", "hazards"):
+                entries = payload.get(key) if isinstance(payload, dict) else []
+                if entries:
+                    blocker_lines.append(f"{key}: {len(entries)}")
+            if blocker_lines:
+                detail = f"\nBlockers: {', '.join(blocker_lines)}"
+            messagebox.showerror("Ship Engagement", f"{result.get('message') or result.get('reason')}{detail}", parent=self)
+            return
+        self._ship_maneuver_preview = {
+            "structure_id": str(source_id),
+            "maneuver": str(maneuver),
+            "steps": int(steps),
+            "result": dict(result),
+        }
+        projected_cells = list(result.get("target_cells") if isinstance(result.get("target_cells"), list) else [])
+        self.map_ship_engagement_status_var.set(
+            f"Engagement preview: {maneuver} ({steps}) targets {len(projected_cells)} cells. Commit or cancel."
+        )
+        self._redraw_tactical_layers()
+
+    def _commit_ship_maneuver_preview(self) -> None:
+        preview = self._ship_maneuver_preview if isinstance(self._ship_maneuver_preview, dict) else {}
+        source_id = str(preview.get("structure_id") or "").strip()
+        maneuver = str(preview.get("maneuver") or "").strip().lower()
+        if not source_id or not maneuver:
+            messagebox.showinfo("Ship Engagement", "No maneuver preview is active.", parent=self)
+            return
+        steps = max(1, int(preview.get("steps", 1) or 1))
         result = self.app._ship_engagement_maneuver(source_id, maneuver, steps=steps)
         if not bool(result.get("ok")):
             detail = ""
@@ -9508,6 +9825,7 @@ class BattleMapWindow(tk.Toplevel):
                 detail = f"\nBlockers: {', '.join(blocker_lines)}"
             messagebox.showerror("Ship Engagement", f"{result.get('message') or result.get('reason')}{detail}", parent=self)
             return
+        self._cancel_ship_maneuver_preview(redraw=False)
         self._post_tactical_map_mutation(redraw_all=False, schedule_broadcast=True, redraw=True, redraw_units=True)
 
     def _ship_fire_weapon_action(self) -> None:
@@ -9719,23 +10037,23 @@ class BattleMapWindow(tk.Toplevel):
         else:
             self.map_ship_blueprint_var.set("")
 
-    def _place_ship_blueprint_at_selected_cell(self) -> None:
+    def _place_ship_blueprint_at_selected_cell(self, *, schedule_broadcast: bool = True) -> bool:
         cell = self._map_author_selected_cell
         if cell is None:
             messagebox.showinfo("Ship Blueprints", "Select a placement cell first.", parent=self)
-            return
+            return False
         self._refresh_ship_blueprint_selection()
         selected = str(self.map_ship_blueprint_var.get() or "").strip()
         lookup = self._ship_blueprint_lookup if isinstance(getattr(self, "_ship_blueprint_lookup", {}), dict) else {}
         blueprint_id = str(lookup.get(selected) or selected).strip().lower()
         if not blueprint_id:
             messagebox.showinfo("Ship Blueprints", "No ship blueprints available.", parent=self)
-            return
+            return False
         try:
             facing = float(str(self.map_ship_facing_var.get() or "0").strip() or 0.0)
         except Exception:
             messagebox.showerror("Ship Blueprints", "Facing must be numeric.", parent=self)
-            return
+            return False
         ship_name = str(self.map_ship_name_var.get() or "").strip()
         try:
             created = self.app._instantiate_ship_blueprint(
@@ -9761,16 +10079,17 @@ class BattleMapWindow(tk.Toplevel):
                 f"{str(getattr(self.app, '_last_map_template_error', '') or 'Ship placement failed.')}{detail}",
                 parent=self,
             )
-            return
+            return False
         self._post_tactical_map_mutation(
             redraw_all=False,
-            schedule_broadcast=True,
+            schedule_broadcast=schedule_broadcast,
             redraw=True,
             redraw_units=False,
             refresh_structure_status=True,
             refresh_tactical_status=True,
             refresh_ship_blueprints=False,
         )
+        return True
 
     def _save_template_from_selected_structure(self) -> None:
         cell = self._map_author_selected_cell
@@ -10515,6 +10834,7 @@ class BattleMapWindow(tk.Toplevel):
         self._draw_map_features()
         self._draw_map_hazards()
         self._draw_map_elevation()
+        self._draw_map_mode_preview_overlays()
         self._draw_rotation_affordance()
 
 
@@ -12487,21 +12807,30 @@ class BattleMapWindow(tk.Toplevel):
                 self._update_selected_structure_contact_status()
                 self._update_selected_tactical_cell_status()
                 self._refresh_tactical_palette_state()
-                tool = str(self.map_author_tool_var.get() or "select").strip().lower()
-                if tool in {"stamp", "erase", "elevation"}:
+                mode_fn = getattr(self, "_active_map_interaction_mode", None)
+                mode = mode_fn() if callable(mode_fn) else MAP_INTERACTION_MODE_SELECT
+                if mode == MAP_INTERACTION_MODE_MEASURE:
+                    self._on_canvas_right_click(event)
+                    return
+                if mode in {MAP_INTERACTION_MODE_PLACE, MAP_INTERACTION_MODE_ERASE}:
+                    tool = str(self.map_author_tool_var.get() or "select").strip().lower()
                     self._map_author_painting = True
                     self._map_author_drag_dirty = False
                     self._map_author_last_painted_cell = None
-                    if tool == "erase":
+                    if mode == MAP_INTERACTION_MODE_ERASE or tool == "erase":
                         changed = self._remove_tactical_entities_at_selected_cell(
                             cell=(int(col), int(row)),
                             schedule_broadcast=False,
                         )
                     else:
-                        changed = self._apply_tactical_author_to_selected_cell(
-                            cell=(int(col), int(row)),
-                            schedule_broadcast=False,
-                        )
+                        source = str(self.map_place_source_var.get() or "tactical").strip().lower()
+                        if source == "ship":
+                            changed = bool(self._place_ship_blueprint_at_selected_cell(schedule_broadcast=False))
+                        else:
+                            changed = self._apply_tactical_author_to_selected_cell(
+                                cell=(int(col), int(row)),
+                                schedule_broadcast=False,
+                            )
                     self._map_author_drag_dirty = bool(changed)
                     self._map_author_last_painted_cell = (int(col), int(row))
                     return
@@ -12768,7 +13097,25 @@ class BattleMapWindow(tk.Toplevel):
             pass
         self._hover_tooltip_text = None
 
+    def _on_canvas_leave(self, _event: tk.Event) -> None:
+        self._map_hover_cell = None
+        self._hide_hover_tooltip()
+        mode_fn = getattr(self, "_active_map_interaction_mode", None)
+        mode = mode_fn() if callable(mode_fn) else MAP_INTERACTION_MODE_SELECT
+        if mode == MAP_INTERACTION_MODE_PLACE:
+            self._redraw_tactical_layers()
+
     def _on_canvas_hover(self, event: tk.Event) -> None:
+        mode_fn = getattr(self, "_active_map_interaction_mode", None)
+        mode = mode_fn() if callable(mode_fn) else MAP_INTERACTION_MODE_SELECT
+        mx = float(self.canvas.canvasx(event.x))
+        my = float(self.canvas.canvasy(event.y))
+        col, row = self._pixel_to_grid(mx, my)
+        next_hover = (int(col), int(row)) if col is not None and row is not None else None
+        if next_hover != self._map_hover_cell:
+            self._map_hover_cell = next_hover
+            if mode == MAP_INTERACTION_MODE_PLACE:
+                self._redraw_tactical_layers()
         if getattr(self, "_drawing_obstacles", False) or getattr(self, "_drawing_rough", False):
             self._hide_hover_tooltip()
             return
@@ -12838,17 +13185,33 @@ class BattleMapWindow(tk.Toplevel):
             if cell == self._map_author_last_painted_cell:
                 return
             self._map_author_selected_cell = cell
+            mode_fn = getattr(self, "_active_map_interaction_mode", None)
+            mode = mode_fn() if callable(mode_fn) else MAP_INTERACTION_MODE_SELECT
             tool = str(self.map_author_tool_var.get() or "select").strip().lower()
-            if tool == "erase":
+            if mode == MAP_INTERACTION_MODE_ERASE or tool == "erase":
                 changed = self._remove_tactical_entities_at_selected_cell(cell=cell, schedule_broadcast=False)
-            elif tool in {"stamp", "elevation"}:
-                changed = self._apply_tactical_author_to_selected_cell(cell=cell, schedule_broadcast=False)
+            elif mode == MAP_INTERACTION_MODE_PLACE and tool in {"stamp", "elevation"}:
+                source = str(self.map_place_source_var.get() or "tactical").strip().lower()
+                if source == "ship":
+                    changed = self._place_ship_blueprint_at_selected_cell(schedule_broadcast=False)
+                else:
+                    changed = self._apply_tactical_author_to_selected_cell(cell=cell, schedule_broadcast=False)
             else:
                 changed = False
             if changed:
                 self._map_author_drag_dirty = True
             self._map_author_last_painted_cell = cell
             return
+        mode_fn = getattr(self, "_active_map_interaction_mode", None)
+        mode = mode_fn() if callable(mode_fn) else MAP_INTERACTION_MODE_SELECT
+        if mode == MAP_INTERACTION_MODE_PLACE:
+            mx = float(self.canvas.canvasx(event.x))
+            my = float(self.canvas.canvasy(event.y))
+            col, row = self._pixel_to_grid(mx, my)
+            next_hover = (int(col), int(row)) if col is not None and row is not None else None
+            if next_hover != self._map_hover_cell:
+                self._map_hover_cell = next_hover
+                self._redraw_tactical_layers()
         self._hide_hover_tooltip()
 
         if self._drag_kind is None or self._drag_id is None:
@@ -13115,6 +13478,13 @@ class BattleMapWindow(tk.Toplevel):
 
     # ---------------- Measurement ----------------
     def _on_canvas_right_click(self, event: tk.Event) -> None:
+        mode_fn = getattr(self, "_active_map_interaction_mode", None)
+        mode = mode_fn() if callable(mode_fn) else MAP_INTERACTION_MODE_SELECT
+        if mode == MAP_INTERACTION_MODE_PLACE:
+            self._map_place_preview_active = False
+            self._map_hover_cell = None
+            self._set_map_interaction_mode(MAP_INTERACTION_MODE_SELECT)
+            return
         # Two-click measurement in feet (crow flies)
         mx = float(self.canvas.canvasx(event.x))
         my = float(self.canvas.canvasy(event.y))

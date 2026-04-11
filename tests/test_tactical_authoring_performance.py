@@ -254,11 +254,13 @@ class TacticalAuthoringPerformanceTests(unittest.TestCase):
             _rotation_handle_hit_cid=lambda _mx, _my: None,
             rough_mode_var=_Var(False),
             obstacle_mode_var=_Var(False),
+            map_place_source_var=_Var("tactical"),
             _pixel_to_grid=lambda mx, my: (int(mx), int(my)),
             _update_selected_structure_contact_status=lambda: None,
             _update_selected_tactical_cell_status=lambda: None,
             _refresh_tactical_palette_state=lambda: None,
             map_author_tool_var=_Var("stamp"),
+            _active_map_interaction_mode=lambda: "place",
             _apply_tactical_author_to_selected_cell=lambda **kwargs: (
                 calls.__setitem__("apply", calls["apply"] + 1),
                 self.assertFalse(kwargs.get("schedule_broadcast", True)),
