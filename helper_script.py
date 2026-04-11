@@ -7986,8 +7986,14 @@ class BattleMapWindow(tk.Toplevel):
             return
         if mode == "feature":
             payload = {"name": label or kind, "tags": [kind], "blocks_movement": blocking}
-            feature_id = self.app._upsert_map_feature(col=col, row=row, kind=kind, payload=payload)
-            self.map_features[str(feature_id)] = {"id": feature_id, "col": col, "row": row, "kind": kind, "payload": payload}
+            self.app._upsert_map_feature(
+                col=col,
+                row=row,
+                kind=kind,
+                payload=payload,
+                hydrate_window=False,
+                broadcast=False,
+            )
         elif mode == "hazard":
             payload = {"name": label or kind, "tags": [kind], "blocks_movement": blocking}
             try:
@@ -7998,39 +8004,53 @@ class BattleMapWindow(tk.Toplevel):
             if duration > 0:
                 payload["duration_turns"] = duration
                 payload["remaining_turns"] = duration
-            hazard_id = self.app._upsert_map_hazard(col=col, row=row, kind=kind, payload=payload)
-            self.map_hazards[str(hazard_id)] = {"id": hazard_id, "col": col, "row": row, "kind": kind, "payload": payload}
+            self.app._upsert_map_hazard(
+                col=col,
+                row=row,
+                kind=kind,
+                payload=payload,
+                hydrate_window=False,
+                broadcast=False,
+            )
         elif mode == "structure":
             occupied = [(col, row), (min(self.cols - 1, col + 1), row), (col, min(self.rows - 1, row + 1))]
             payload = {"name": label or kind, "blocks_movement": blocking}
-            structure_id = self.app._upsert_map_structure(
+            self.app._upsert_map_structure(
                 kind=kind,
                 anchor_col=col,
                 anchor_row=row,
                 occupied_cells=occupied,
                 payload=payload,
+                hydrate_window=False,
+                broadcast=False,
             )
-            self.map_structures[str(structure_id)] = {
-                "id": structure_id,
-                "kind": kind,
-                "anchor_col": col,
-                "anchor_row": row,
-                "occupied_cells": [{"col": c, "row": r} for c, r in occupied],
-                "payload": payload,
-            }
         elif mode == "elevation":
             try:
                 elevation = float(duration_raw)
             except Exception:
                 messagebox.showerror("Tactical Entities", "Elevation must be numeric.", parent=self)
                 return
-            self.app._set_map_elevation(col, row, elevation)
-            if abs(elevation) < 1e-9:
-                self.map_elevation_cells.pop((col, row), None)
+            self.app._set_map_elevation(
+                col,
+                row,
+                elevation,
+                hydrate_window=False,
+                broadcast=False,
+            )
+        try:
+            state = self.app._capture_canonical_map_state(prefer_window=False)
+            self._apply_canonical_map_layers_from_state(state)
+        except Exception:
+            pass
+        try:
+            schedule_broadcast = getattr(self.app, "_schedule_lan_state_broadcast", None)
+            if callable(schedule_broadcast):
+                schedule_broadcast()
             else:
-                self.map_elevation_cells[(col, row)] = elevation
-        self._sync_tactical_layers_to_app()
-        self._redraw_all()
+                self.app._lan_force_state_broadcast()
+        except Exception:
+            pass
+        self._redraw_tactical_layers()
 
     def _remove_tactical_entities_at_selected_cell(self) -> None:
         cell = self._map_author_selected_cell
@@ -8958,6 +8978,18 @@ class BattleMapWindow(tk.Toplevel):
         self._apply_active_highlight()
         self._draw_rotation_affordance()
         self._update_included_for_selected()
+
+    def _redraw_tactical_layers(self) -> None:
+        self._compute_metrics()
+        self.canvas.delete("structure")
+        self.canvas.delete("feature")
+        self.canvas.delete("hazard")
+        self.canvas.delete("elevation")
+        self._draw_map_structures()
+        self._draw_map_features()
+        self._draw_map_hazards()
+        self._draw_map_elevation()
+        self._draw_rotation_affordance()
 
 
     def _layout_unit(self, cid: int) -> None:
