@@ -1,0 +1,79 @@
+import json
+from pathlib import Path
+import unittest
+
+import dnd_initative_tracker as tracker_mod
+from ship_blueprints import (
+    COMPOSITE_SHIP_SCHEMA,
+    import_tiled_ship_blueprint,
+    load_composite_ship_blueprints_from_dir,
+    load_repo_runtime_ship_blueprints,
+    normalize_composite_ship_blueprint,
+)
+
+
+class ShipBlueprintPipelineTests(unittest.TestCase):
+    def test_repo_blueprint_load_includes_imported_starters(self):
+        runtime, errors = load_repo_runtime_ship_blueprints()
+        self.assertFalse(errors, msg=errors)
+        self.assertIn("sloop", runtime)
+        self.assertIn("brig", runtime)
+        self.assertEqual(((runtime["sloop"].get("render") or {}).get("style")), "polygon")
+        self.assertTrue(((runtime["brig"].get("local_space") or {}).get("hull_cells")))
+
+    def test_composite_schema_validation_rejects_invalid_anchor(self):
+        normalized, errors = normalize_composite_ship_blueprint(
+            {
+                "schema": COMPOSITE_SHIP_SCHEMA,
+                "id": "bad_ship",
+                "display_name": "Bad Ship",
+                "local_space": {
+                    "render_anchor": {"col": 9, "row": 9},
+                    "hull_cells": [{"col": 0, "row": 0}],
+                },
+            }
+        )
+        self.assertEqual(normalized.get("id"), "bad_ship")
+        self.assertIn("render_anchor_not_in_hull", errors)
+
+    def test_tiled_import_requires_hull(self):
+        with self.assertRaises(Exception):
+            import_tiled_ship_blueprint(
+                {
+                    "id": "broken",
+                    "width": 2,
+                    "height": 2,
+                    "layers": [],
+                }
+            )
+
+    def test_tiled_source_files_round_trip_to_composite_schema(self):
+        repo_root = Path(__file__).resolve().parents[1]
+        source_dir = repo_root / "assets" / "ships" / "source_tiled"
+        for source_path in sorted(source_dir.glob("*.tiled.json")):
+            payload = json.loads(source_path.read_text(encoding="utf-8"))
+            normalized = import_tiled_ship_blueprint(payload, blueprint_id=source_path.stem.replace(".tiled", ""))
+            self.assertEqual(normalized.get("schema"), COMPOSITE_SHIP_SCHEMA)
+            self.assertTrue(((normalized.get("local_space") or {}).get("hull_cells")))
+
+    def test_runtime_app_uses_loaded_composite_blueprints(self):
+        app = object.__new__(tracker_mod.InitiativeTracker)
+        app._map_state = tracker_mod.MapState.from_dict({"grid": {"cols": 30, "rows": 30, "feet_per_square": 5}})
+        app._capture_canonical_map_state = lambda prefer_window=False: app._map_state.normalized()
+        blueprints = app._ship_blueprints()
+        self.assertIn("sloop", blueprints)
+        self.assertIn("brig", blueprints)
+        self.assertEqual(((blueprints["sloop"].get("render") or {}).get("style")), "polygon")
+        self.assertTrue(((blueprints["brig"].get("local_space") or {}).get("hull_cells")))
+
+    def test_normalized_blueprint_files_validate(self):
+        repo_root = Path(__file__).resolve().parents[1]
+        normalized_dir = repo_root / "assets" / "ships" / "blueprints"
+        blueprints, errors = load_composite_ship_blueprints_from_dir(normalized_dir)
+        self.assertFalse(errors, msg=errors)
+        self.assertIn("sloop", blueprints)
+        self.assertIn("brig", blueprints)
+
+
+if __name__ == "__main__":
+    unittest.main()

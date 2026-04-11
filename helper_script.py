@@ -6240,6 +6240,7 @@ class BattleMapWindow(tk.Toplevel):
         self.map_ship_move_steps_var = tk.StringVar(value="1")
         self.map_ship_weapon_var = tk.StringVar(value="")
         self.map_ship_target_component_var = tk.StringVar(value="")
+        self.map_ship_debug_render_var = tk.BooleanVar(value=False)
         self.map_boarding_target_var = tk.StringVar(value="")
         self.map_boarding_status_var = tk.StringVar(value="Boarding: select a ship to inspect/create/break boarding links.")
         self.map_boarding_traversal_status_var = tk.StringVar(value="Boarding traversal: select a creature on a boarded ship.")
@@ -6939,6 +6940,12 @@ class BattleMapWindow(tk.Toplevel):
         self._ship_name_entry = ttk.Entry(ship_row, textvariable=self.map_ship_name_var, width=14)
         self._ship_name_entry.pack(side=tk.LEFT, padx=(6, 0))
         ttk.Button(ship_row, text="Place Ship @ Cell", command=self._place_ship_blueprint_at_selected_cell).pack(side=tk.LEFT, padx=(8, 0))
+        ttk.Checkbutton(
+            ship_row,
+            text="Ship Debug Overlay",
+            variable=self.map_ship_debug_render_var,
+            command=self._redraw_tactical_layers,
+        ).pack(side=tk.LEFT, padx=(8, 0))
         engagement_row = ttk.Frame(tactical)
         engagement_row.grid(row=10, column=0, columnspan=4, sticky="ew", pady=(6, 0))
         ttk.Label(engagement_row, text="Move:").pack(side=tk.LEFT)
@@ -7953,6 +7960,123 @@ class BattleMapWindow(tk.Toplevel):
                     return out
         return [(int(col), int(row))]
 
+    @staticmethod
+    def _is_ship_structure_payload(structure: Dict[str, Any]) -> bool:
+        kind = str(structure.get("kind") or "").strip().lower()
+        payload = structure.get("payload") if isinstance(structure.get("payload"), dict) else {}
+        return bool("ship" in kind or payload.get("ship_instance_id") or payload.get("ship_blueprint_id"))
+
+    @staticmethod
+    def _convex_hull(points: List[Tuple[float, float]]) -> List[Tuple[float, float]]:
+        pts = sorted(set(points))
+        if len(pts) <= 2:
+            return pts
+
+        def cross(o: Tuple[float, float], a: Tuple[float, float], b: Tuple[float, float]) -> float:
+            return (a[0] - o[0]) * (b[1] - o[1]) - (a[1] - o[1]) * (b[0] - o[0])
+
+        lower: List[Tuple[float, float]] = []
+        for p in pts:
+            while len(lower) >= 2 and cross(lower[-2], lower[-1], p) <= 0:
+                lower.pop()
+            lower.append(p)
+        upper: List[Tuple[float, float]] = []
+        for p in reversed(pts):
+            while len(upper) >= 2 and cross(upper[-2], upper[-1], p) <= 0:
+                upper.pop()
+            upper.append(p)
+        return lower[:-1] + upper[:-1]
+
+    def _ship_hull_polygon_points(self, occupied: List[Tuple[int, int]]) -> List[float]:
+        corners: List[Tuple[float, float]] = []
+        for col, row in occupied:
+            x1 = self.x0 + float(col) * self.cell
+            y1 = self.y0 + float(row) * self.cell
+            x2 = x1 + self.cell
+            y2 = y1 + self.cell
+            corners.extend([(x1, y1), (x2, y1), (x2, y2), (x1, y2)])
+        hull = self._convex_hull(corners)
+        flat: List[float] = []
+        for x, y in hull:
+            flat.extend([float(x), float(y)])
+        return flat
+
+    def _ship_overlay_world_from_local(
+        self,
+        *,
+        anchor_col: int,
+        anchor_row: int,
+        local_col: int,
+        local_row: int,
+        facing_deg: float,
+    ) -> Tuple[int, int]:
+        rotate_fn = getattr(self.app, "_rotate_ship_local_cell", None)
+        if callable(rotate_fn):
+            try:
+                dc, dr = rotate_fn(int(local_col), int(local_row), float(facing_deg))
+                return int(anchor_col) + int(dc), int(anchor_row) + int(dr)
+            except Exception:
+                pass
+        return int(anchor_col) + int(local_col), int(anchor_row) + int(local_row)
+
+    def _draw_ship_selected_overlays(self, sid: str, structure: Dict[str, Any], selected: bool, debug_mode: bool) -> None:
+        if not (selected or debug_mode):
+            return
+        payload = structure.get("payload") if isinstance(structure.get("payload"), dict) else {}
+        anchor_col = int(structure.get("anchor_col", 0) or 0)
+        anchor_row = int(structure.get("anchor_row", 0) or 0)
+        ship_state = {}
+        try:
+            ship_state = self.app._ship_instance_for_structure(sid) or {}
+        except Exception:
+            ship_state = {}
+        facing_deg = float(ship_state.get("facing_deg", payload.get("facing_deg", 0.0)) or 0.0)
+        components = ship_state.get("components") if isinstance(ship_state.get("components"), list) else []
+        for component in components:
+            if not isinstance(component, dict):
+                continue
+            world_col, world_row = self._ship_overlay_world_from_local(
+                anchor_col=anchor_col,
+                anchor_row=anchor_row,
+                local_col=int(component.get("col", 0) or 0),
+                local_row=int(component.get("row", 0) or 0),
+                facing_deg=facing_deg,
+            )
+            px, py = self._grid_to_pixel(world_col, world_row)
+            try:
+                self.canvas.create_oval(
+                    px - max(3.0, self.cell * 0.11),
+                    py - max(3.0, self.cell * 0.11),
+                    px + max(3.0, self.cell * 0.11),
+                    py + max(3.0, self.cell * 0.11),
+                    fill="#f7f1d2",
+                    outline="#8a5a00",
+                    width=1,
+                    tags=("structure", f"structure:{sid}", "ship_overlay"),
+                )
+            except Exception:
+                pass
+        boarding_points = payload.get("boarding_points") if isinstance(payload.get("boarding_points"), list) else []
+        for point in boarding_points:
+            if not isinstance(point, dict):
+                continue
+            px, py = self._grid_to_pixel(int(point.get("col", 0) or 0), int(point.get("row", 0) or 0)
+            )
+            size = max(2.0, self.cell * 0.08)
+            try:
+                self.canvas.create_rectangle(
+                    px - size,
+                    py - size,
+                    px + size,
+                    py + size,
+                    fill="#3f7fbf",
+                    outline="#163a66",
+                    width=1,
+                    tags=("structure", f"structure:{sid}", "ship_overlay"),
+                )
+            except Exception:
+                pass
+
     def _draw_map_elevation(self) -> None:
         try:
             self.canvas.delete("elevation")
@@ -7981,6 +8105,14 @@ class BattleMapWindow(tk.Toplevel):
             self.canvas.delete("structure")
         except Exception:
             pass
+        selected_sid: Optional[str] = None
+        selected_cell = self._map_author_selected_cell
+        if selected_cell is not None:
+            try:
+                selected_sid = self._selected_structure_id_at_cell(int(selected_cell[0]), int(selected_cell[1]))
+            except Exception:
+                selected_sid = None
+        debug_mode = bool(self.map_ship_debug_render_var.get()) if hasattr(self, "map_ship_debug_render_var") else False
         for structure in self.map_structures.values():
             if not isinstance(structure, dict):
                 continue
@@ -7992,35 +8124,76 @@ class BattleMapWindow(tk.Toplevel):
                 int(structure.get("anchor_row", 0) or 0),
                 payload,
             )
-            for col, row in occupied:
-                x1 = self.x0 + col * self.cell
-                y1 = self.y0 + row * self.cell
-                x2 = x1 + self.cell
-                y2 = y1 + self.cell
-                try:
-                    self.canvas.create_rectangle(
-                        x1,
-                        y1,
-                        x2,
-                        y2,
-                        fill="",
-                        outline="#5a3f1b",
-                        width=max(1, int(self.cell * 0.06)),
-                        dash=(4, 3),
-                        tags=("structure", f"structure:{sid}"),
-                    )
-                except Exception:
-                    pass
+            is_ship = self._is_ship_structure_payload(structure)
+            selected = bool(selected_sid and sid == selected_sid)
+            if is_ship and occupied:
+                polygon_points = self._ship_hull_polygon_points(occupied)
+                if len(polygon_points) >= 6:
+                    try:
+                        self.canvas.create_polygon(
+                            polygon_points,
+                            fill="#6f8ca4" if not selected else "#89a9c6",
+                            outline="#2f3f4f" if not selected else "#203040",
+                            width=max(1, int(self.cell * (0.06 if not selected else 0.1))),
+                            smooth=False,
+                            tags=("structure", f"structure:{sid}", "ship_hull"),
+                        )
+                    except Exception:
+                        pass
+                if debug_mode:
+                    for col, row in occupied:
+                        x1 = self.x0 + col * self.cell
+                        y1 = self.y0 + row * self.cell
+                        x2 = x1 + self.cell
+                        y2 = y1 + self.cell
+                        try:
+                            self.canvas.create_rectangle(
+                                x1,
+                                y1,
+                                x2,
+                                y2,
+                                fill="",
+                                outline="#38526d",
+                                width=1,
+                                dash=(3, 2),
+                                tags=("structure", f"structure:{sid}", "ship_debug"),
+                            )
+                        except Exception:
+                            pass
+                self._draw_ship_selected_overlays(sid, structure, selected=selected, debug_mode=debug_mode)
+            else:
+                for col, row in occupied:
+                    x1 = self.x0 + col * self.cell
+                    y1 = self.y0 + row * self.cell
+                    x2 = x1 + self.cell
+                    y2 = y1 + self.cell
+                    try:
+                        self.canvas.create_rectangle(
+                            x1,
+                            y1,
+                            x2,
+                            y2,
+                            fill="",
+                            outline="#5a3f1b",
+                            width=max(1, int(self.cell * 0.06)),
+                            dash=(4, 3),
+                            tags=("structure", f"structure:{sid}"),
+                        )
+                    except Exception:
+                        pass
             if occupied:
                 cx = sum(col for col, _ in occupied) / float(len(occupied))
                 cy = sum(row for _, row in occupied) / float(len(occupied))
                 px, py = self._grid_to_pixel(int(round(cx)), int(round(cy)))
+                label_text = kind[:3].upper()
+                if is_ship:
+                    label_text = str(payload.get("name") or "SHIP")[:8]
                 try:
                     self.canvas.create_text(
                         px,
                         py,
-                        text=kind[:3].upper(),
-                        fill="#5a3f1b",
+                        text=label_text,
+                        fill="#1d2b39" if is_ship else "#5a3f1b",
                         font=("TkDefaultFont", max(7, int(self.cell * 0.24)), "bold"),
                         tags=("structure", f"structure:{sid}"),
                     )
@@ -8598,6 +8771,16 @@ class BattleMapWindow(tk.Toplevel):
         if isinstance(cached_lookup, dict):
             hit = cached_lookup.get((int(col), int(row)))
             if isinstance(hit, str) and hit:
+                structure = self.map_structures.get(hit) if isinstance(self.map_structures, dict) else None
+                if isinstance(structure, dict) and self._is_ship_structure_payload(structure):
+                    return hit
+                for sid, item in self.map_structures.items():
+                    if not isinstance(item, dict) or not self._is_ship_structure_payload(item):
+                        continue
+                    payload = item.get("payload") if isinstance(item.get("payload"), dict) else {}
+                    occupied = self._entity_cells(int(item.get("anchor_col", 0) or 0), int(item.get("anchor_row", 0) or 0), payload)
+                    if (int(col), int(row)) in occupied:
+                        return str(sid)
                 return hit
         for sid, structure in self.map_structures.items():
             if not isinstance(structure, dict):

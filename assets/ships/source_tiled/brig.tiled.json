@@ -1,0 +1,240 @@
+{
+  "id": "brig",
+  "width": 5,
+  "height": 3,
+  "ship": {
+    "id": "brig",
+    "display_name": "Brig",
+    "kind": "ship_hull",
+    "category": "sailing_ship",
+    "size": "large",
+    "render_anchor": {
+      "col": 2,
+      "row": 1
+    },
+    "facing_mode": "rotate_90",
+    "boarding_edges": [
+      "port",
+      "starboard",
+      "fore",
+      "aft"
+    ],
+    "contact_tags": [
+      "ship",
+      "boarding_ready",
+      "warship"
+    ],
+    "crew": {
+      "min_crew": 8,
+      "recommended_crew": 20
+    },
+    "render": {
+      "style": "polygon",
+      "base_image_key": "brig_hull",
+      "overlay_hints": [
+        "boarding_points",
+        "weapon_hardpoints"
+      ],
+      "preview": {
+        "emoji": "🚢"
+      }
+    }
+  },
+  "layers": [
+    {
+      "name": "hull",
+      "cells": [
+        {
+          "col": 0,
+          "row": 0
+        },
+        {
+          "col": 1,
+          "row": 0
+        },
+        {
+          "col": 2,
+          "row": 0
+        },
+        {
+          "col": 3,
+          "row": 0
+        },
+        {
+          "col": 4,
+          "row": 0
+        },
+        {
+          "col": 0,
+          "row": 1
+        },
+        {
+          "col": 1,
+          "row": 1
+        },
+        {
+          "col": 2,
+          "row": 1
+        },
+        {
+          "col": 3,
+          "row": 1
+        },
+        {
+          "col": 4,
+          "row": 1
+        },
+        {
+          "col": 1,
+          "row": 2
+        },
+        {
+          "col": 2,
+          "row": 2
+        },
+        {
+          "col": 3,
+          "row": 2
+        }
+      ]
+    },
+    {
+      "name": "fixtures",
+      "objects": [
+        {
+          "id": "mast_fore",
+          "name": "Fore Mast",
+          "kind": "mast",
+          "col": 1,
+          "row": 0,
+          "tags": [
+            "ship_fixture",
+            "mast",
+            "climbable"
+          ]
+        },
+        {
+          "id": "mast_main",
+          "name": "Main Mast",
+          "kind": "mast",
+          "col": 3,
+          "row": 1,
+          "tags": [
+            "ship_fixture",
+            "mast",
+            "climbable"
+          ]
+        },
+        {
+          "id": "stairs_quarterdeck",
+          "name": "Quarterdeck Stairs",
+          "kind": "stairs",
+          "col": 3,
+          "row": 2,
+          "tags": [
+            "ship_fixture",
+            "stairs",
+            "traversal"
+          ]
+        }
+      ]
+    },
+    {
+      "name": "components",
+      "objects": [
+        {
+          "id": "hull",
+          "name": "Hull",
+          "kind": "hull",
+          "col": 2,
+          "row": 1,
+          "max_hp": 400,
+          "ac": 15,
+          "damage_threshold": 10
+        },
+        {
+          "id": "helm",
+          "name": "Helm",
+          "kind": "control",
+          "col": 4,
+          "row": 1,
+          "max_hp": 50,
+          "ac": 15
+        },
+        {
+          "id": "rigging",
+          "name": "Rigging",
+          "kind": "rigging",
+          "col": 3,
+          "row": 1,
+          "max_hp": 80,
+          "ac": 12
+        }
+      ]
+    },
+    {
+      "name": "weapon_hardpoints",
+      "objects": [
+        {
+          "id": "port_battery_a",
+          "name": "Port Battery A",
+          "kind": "cannon",
+          "weapon_type": "cannon",
+          "arc": "port",
+          "col": 0,
+          "row": 0
+        },
+        {
+          "id": "port_battery_b",
+          "name": "Port Battery B",
+          "kind": "cannon",
+          "weapon_type": "cannon",
+          "arc": "port",
+          "col": 0,
+          "row": 1
+        },
+        {
+          "id": "starboard_battery_a",
+          "name": "Starboard Battery A",
+          "kind": "cannon",
+          "weapon_type": "cannon",
+          "arc": "starboard",
+          "col": 4,
+          "row": 0
+        },
+        {
+          "id": "starboard_battery_b",
+          "name": "Starboard Battery B",
+          "kind": "cannon",
+          "weapon_type": "cannon",
+          "arc": "starboard",
+          "col": 4,
+          "row": 1
+        }
+      ]
+    },
+    {
+      "name": "boarding_points",
+      "objects": [
+        {
+          "id": "port_mid",
+          "name": "Port Rail",
+          "col": 0,
+          "row": 1
+        },
+        {
+          "id": "starboard_mid",
+          "name": "Starboard Rail",
+          "col": 4,
+          "row": 1
+        },
+        {
+          "id": "aft_quarterdeck",
+          "name": "Quarterdeck Rail",
+          "col": 3,
+          "row": 2
+        }
+      ]
+    }
+  ]
+}

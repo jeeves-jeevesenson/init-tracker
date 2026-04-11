@@ -1,0 +1,230 @@
+{
+  "boarding": {
+    "boardable": true,
+    "bridges": [],
+    "contact_tags": [
+      "boarding_ready",
+      "ship",
+      "warship"
+    ],
+    "edges": [
+      "aft",
+      "fore",
+      "port",
+      "starboard"
+    ],
+    "points": [
+      {
+        "col": 0,
+        "id": "port_mid",
+        "kind": "boarding_point",
+        "name": "Port Rail",
+        "row": 1
+      },
+      {
+        "col": 3,
+        "id": "aft_quarterdeck",
+        "kind": "boarding_point",
+        "name": "Quarterdeck Rail",
+        "row": 2
+      },
+      {
+        "col": 4,
+        "id": "starboard_mid",
+        "kind": "boarding_point",
+        "name": "Starboard Rail",
+        "row": 1
+      }
+    ]
+  },
+  "category": "sailing_ship",
+  "components": [
+    {
+      "ac": 15,
+      "col": 2,
+      "damage_threshold": 10,
+      "id": "hull",
+      "kind": "hull",
+      "max_hp": 400,
+      "name": "Hull",
+      "row": 1
+    },
+    {
+      "ac": 12,
+      "col": 3,
+      "id": "rigging",
+      "kind": "rigging",
+      "max_hp": 80,
+      "name": "Rigging",
+      "row": 1
+    },
+    {
+      "ac": 15,
+      "col": 4,
+      "id": "helm",
+      "kind": "control",
+      "max_hp": 50,
+      "name": "Helm",
+      "row": 1
+    }
+  ],
+  "display_name": "Brig",
+  "engagement_defaults": {
+    "crew": {
+      "min_crew": 8,
+      "recommended_crew": 20
+    }
+  },
+  "fixtures": [
+    {
+      "col": 1,
+      "id": "mast_fore",
+      "kind": "mast",
+      "name": "Fore Mast",
+      "row": 0,
+      "tags": [
+        "climbable",
+        "mast",
+        "ship_fixture"
+      ]
+    },
+    {
+      "col": 3,
+      "id": "mast_main",
+      "kind": "mast",
+      "name": "Main Mast",
+      "row": 1,
+      "tags": [
+        "climbable",
+        "mast",
+        "ship_fixture"
+      ]
+    },
+    {
+      "col": 3,
+      "id": "stairs_quarterdeck",
+      "kind": "stairs",
+      "name": "Quarterdeck Stairs",
+      "row": 2,
+      "tags": [
+        "ship_fixture",
+        "stairs",
+        "traversal"
+      ]
+    }
+  ],
+  "id": "brig",
+  "kind": "ship_hull",
+  "local_space": {
+    "facing_mode": "rotate_90",
+    "hull_cells": [
+      {
+        "col": 0,
+        "row": 0
+      },
+      {
+        "col": 0,
+        "row": 1
+      },
+      {
+        "col": 1,
+        "row": 0
+      },
+      {
+        "col": 1,
+        "row": 1
+      },
+      {
+        "col": 1,
+        "row": 2
+      },
+      {
+        "col": 2,
+        "row": 0
+      },
+      {
+        "col": 2,
+        "row": 1
+      },
+      {
+        "col": 2,
+        "row": 2
+      },
+      {
+        "col": 3,
+        "row": 0
+      },
+      {
+        "col": 3,
+        "row": 1
+      },
+      {
+        "col": 3,
+        "row": 2
+      },
+      {
+        "col": 4,
+        "row": 0
+      },
+      {
+        "col": 4,
+        "row": 1
+      }
+    ],
+    "render_anchor": {
+      "col": 2,
+      "row": 1
+    }
+  },
+  "render": {
+    "base_image_key": "brig_hull",
+    "overlay_hints": [
+      "boarding_points",
+      "weapon_hardpoints"
+    ],
+    "preview": {
+      "emoji": "\ud83d\udea2"
+    },
+    "style": "polygon"
+  },
+  "schema": "composite_ship_blueprint_v1",
+  "size": "large",
+  "weapon_hardpoints": [
+    {
+      "arc": "port",
+      "col": 0,
+      "id": "port_battery_a",
+      "kind": "cannon",
+      "name": "Port Battery A",
+      "row": 0,
+      "weapon_type": "cannon"
+    },
+    {
+      "arc": "port",
+      "col": 0,
+      "id": "port_battery_b",
+      "kind": "cannon",
+      "name": "Port Battery B",
+      "row": 1,
+      "weapon_type": "cannon"
+    },
+    {
+      "arc": "starboard",
+      "col": 4,
+      "id": "starboard_battery_a",
+      "kind": "cannon",
+      "name": "Starboard Battery A",
+      "row": 0,
+      "weapon_type": "cannon"
+    },
+    {
+      "arc": "starboard",
+      "col": 4,
+      "id": "starboard_battery_b",
+      "kind": "cannon",
+      "name": "Starboard Battery B",
+      "row": 1,
+      "weapon_type": "cannon"
+    }
+  ]
+}
