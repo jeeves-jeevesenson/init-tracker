@@ -6232,6 +6232,11 @@ class BattleMapWindow(tk.Toplevel):
         self.map_author_active_status_var = tk.StringVar(value="Tool: Select")
         self.map_author_cell_status_var = tk.StringVar(value="Cell: none selected.")
         self.map_structure_contact_status_var = tk.StringVar(value="Structure contacts: select a structure cell.")
+        self.map_ship_blueprint_var = tk.StringVar(value="")
+        self.map_ship_facing_var = tk.StringVar(value="0")
+        self.map_ship_name_var = tk.StringVar(value="")
+        self.map_ship_summary_var = tk.StringVar(value="Ships: select a structure cell or place a ship blueprint.")
+        self._ship_blueprint_lookup: Dict[str, str] = {}
         self._map_author_selected_cell: Optional[Tuple[int, int]] = None
         self._map_author_preset_lookup: Dict[str, str] = {}
         self._map_author_painting: bool = False
@@ -6900,8 +6905,35 @@ class BattleMapWindow(tk.Toplevel):
         ttk.Label(tactical, textvariable=self.map_author_cell_status_var, justify="left", wraplength=440).grid(
             row=8, column=0, columnspan=4, sticky="w", pady=(4, 0)
         )
+        ship_row = ttk.Frame(tactical)
+        ship_row.grid(row=9, column=0, columnspan=4, sticky="ew", pady=(6, 0))
+        ttk.Label(ship_row, text="Ship Blueprint:").pack(side=tk.LEFT)
+        self._ship_blueprint_combo = ttk.Combobox(
+            ship_row,
+            textvariable=self.map_ship_blueprint_var,
+            values=[],
+            width=22,
+            state="readonly",
+        )
+        self._ship_blueprint_combo.pack(side=tk.LEFT, padx=(6, 0))
+        ttk.Label(ship_row, text="Facing:").pack(side=tk.LEFT, padx=(8, 0))
+        self._ship_facing_combo = ttk.Combobox(
+            ship_row,
+            textvariable=self.map_ship_facing_var,
+            values=["0", "90", "180", "270"],
+            width=6,
+            state="readonly",
+        )
+        self._ship_facing_combo.pack(side=tk.LEFT, padx=(6, 0))
+        ttk.Label(ship_row, text="Name:").pack(side=tk.LEFT, padx=(8, 0))
+        self._ship_name_entry = ttk.Entry(ship_row, textvariable=self.map_ship_name_var, width=14)
+        self._ship_name_entry.pack(side=tk.LEFT, padx=(6, 0))
+        ttk.Button(ship_row, text="Place Ship @ Cell", command=self._place_ship_blueprint_at_selected_cell).pack(side=tk.LEFT, padx=(8, 0))
+        ttk.Label(tactical, textvariable=self.map_ship_summary_var, justify="left", wraplength=440).grid(
+            row=10, column=0, columnspan=4, sticky="w", pady=(4, 0)
+        )
         ttk.Label(tactical, textvariable=self.map_structure_contact_status_var, justify="left", wraplength=440).grid(
-            row=9, column=0, columnspan=4, sticky="w", pady=(6, 0)
+            row=11, column=0, columnspan=4, sticky="w", pady=(6, 0)
         )
         tactical.columnconfigure(3, weight=1)
         tool_combo.bind("<<ComboboxSelected>>", lambda _e: self._refresh_tactical_preset_selection(sync_mode=True))
@@ -6909,6 +6941,7 @@ class BattleMapWindow(tk.Toplevel):
         preset_search_entry.bind("<KeyRelease>", lambda _e: self._refresh_tactical_preset_selection(sync_mode=False))
         self._map_author_preset_combo.bind("<<ComboboxSelected>>", lambda _e: self._refresh_tactical_preset_selection(sync_mode=True))
         self._refresh_tactical_preset_selection(sync_mode=True)
+        self._refresh_ship_blueprint_selection()
         self._update_selected_tactical_cell_status()
 
         # --- Units panel ---
@@ -8198,6 +8231,9 @@ class BattleMapWindow(tk.Toplevel):
         updater = getattr(self, "_update_selected_structure_contact_status", None)
         if callable(updater):
             updater()
+        refresh_ships = getattr(self, "_refresh_ship_blueprint_selection", None)
+        if callable(refresh_ships):
+            refresh_ships()
         self._update_selected_tactical_cell_status()
         if redraw_all:
             self._redraw_all()
@@ -8483,10 +8519,12 @@ class BattleMapWindow(tk.Toplevel):
         cell = self._map_author_selected_cell
         if cell is None:
             self.map_structure_contact_status_var.set("Structure contacts: select a structure cell.")
+            self.map_ship_summary_var.set("Ships: select a structure cell or place a ship blueprint.")
             return
         sid = self._selected_structure_id_at_cell(int(cell[0]), int(cell[1]))
         if not sid:
             self.map_structure_contact_status_var.set(f"Structure contacts @ ({int(cell[0])},{int(cell[1])}): none")
+            self.map_ship_summary_var.set("Ships: no ship selected.")
             return
         semantics = {}
         try:
@@ -8515,6 +8553,103 @@ class BattleMapWindow(tk.Toplevel):
         self.map_structure_contact_status_var.set(
             f"Structure {sid} — Adjacent: {adjacent_text} | Boardable: {boardable_text}"
         )
+        ship_summary: Dict[str, Any] = {}
+        try:
+            ship_summary = self.app._selected_ship_summary(sid)
+        except Exception:
+            ship_summary = {}
+        if not isinstance(ship_summary, dict) or not bool(ship_summary.get("ok")):
+            self.map_ship_summary_var.set("Ships: selected structure is not a ship instance.")
+            return
+        self.map_ship_summary_var.set(
+            "Ship "
+            f"{str(ship_summary.get('name') or sid)} "
+            f"· Blueprint: {str(ship_summary.get('blueprint_name') or ship_summary.get('blueprint_id') or 'n/a')} "
+            f"· Facing: {int(round(float(ship_summary.get('facing_deg', 0.0) or 0.0))) % 360}° "
+            f"· Components: {int(ship_summary.get('component_count', 0) or 0)} "
+            f"· Weapons: {int(ship_summary.get('weapon_count', 0) or 0)} "
+            f"· Boarding contacts: {int(ship_summary.get('boardable_contact_count', 0) or 0)}"
+        )
+
+    def _refresh_ship_blueprint_selection(self) -> None:
+        blueprints = {}
+        try:
+            blueprints = self.app._ship_blueprints()
+        except Exception:
+            blueprints = {}
+        ids = sorted(str(key) for key in blueprints.keys())
+        labels: List[str] = []
+        lookup: Dict[str, str] = {}
+        for blueprint_id in ids:
+            payload = blueprints.get(blueprint_id) if isinstance(blueprints.get(blueprint_id), dict) else {}
+            label = str(payload.get("name") or blueprint_id.replace("_", " ").title()).strip() or blueprint_id
+            display = f"{label} ({blueprint_id})"
+            labels.append(display)
+            lookup[display] = blueprint_id
+        self._ship_blueprint_lookup = lookup
+        combo = getattr(self, "_ship_blueprint_combo", None)
+        if combo is not None:
+            try:
+                combo.configure(values=labels)
+            except Exception:
+                pass
+        current = str(self.map_ship_blueprint_var.get() or "").strip()
+        if current in lookup:
+            return
+        if labels:
+            self.map_ship_blueprint_var.set(labels[0])
+        else:
+            self.map_ship_blueprint_var.set("")
+
+    def _place_ship_blueprint_at_selected_cell(self) -> None:
+        cell = self._map_author_selected_cell
+        if cell is None:
+            messagebox.showinfo("Ship Blueprints", "Select a placement cell first.", parent=self)
+            return
+        self._refresh_ship_blueprint_selection()
+        selected = str(self.map_ship_blueprint_var.get() or "").strip()
+        lookup = self._ship_blueprint_lookup if isinstance(getattr(self, "_ship_blueprint_lookup", {}), dict) else {}
+        blueprint_id = str(lookup.get(selected) or selected).strip().lower()
+        if not blueprint_id:
+            messagebox.showinfo("Ship Blueprints", "No ship blueprints available.", parent=self)
+            return
+        try:
+            facing = float(str(self.map_ship_facing_var.get() or "0").strip() or 0.0)
+        except Exception:
+            messagebox.showerror("Ship Blueprints", "Facing must be numeric.", parent=self)
+            return
+        ship_name = str(self.map_ship_name_var.get() or "").strip()
+        try:
+            created = self.app._instantiate_ship_blueprint(
+                blueprint_id,
+                anchor_col=int(cell[0]),
+                anchor_row=int(cell[1]),
+                facing_deg=facing,
+                name=ship_name or None,
+            )
+        except Exception:
+            created = None
+        if not created:
+            blocker_lines = []
+            blockers = getattr(self.app, "_last_map_template_blockers", {}) or {}
+            payload = blockers.get("blockers") if isinstance(blockers, dict) and isinstance(blockers.get("blockers"), dict) else {}
+            for key in ("out_of_bounds", "obstacles", "features", "structures", "hazards", "template_conflicts"):
+                entries = payload.get(key) if isinstance(payload, dict) else []
+                if entries:
+                    blocker_lines.append(f"{key}: {len(entries)}")
+            detail = f"\nBlockers: {', '.join(blocker_lines)}" if blocker_lines else ""
+            messagebox.showerror(
+                "Ship Blueprints",
+                f"{str(getattr(self.app, '_last_map_template_error', '') or 'Ship placement failed.')}{detail}",
+                parent=self,
+            )
+            return
+        try:
+            self._apply_canonical_map_layers_from_state(self.app._capture_canonical_map_state(prefer_window=False))
+        except Exception:
+            pass
+        self._update_selected_structure_contact_status()
+        self._redraw_all()
 
     def _save_template_from_selected_structure(self) -> None:
         cell = self._map_author_selected_cell

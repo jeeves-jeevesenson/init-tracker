@@ -193,6 +193,47 @@ class MapStateFoundationTests(unittest.TestCase):
         self.assertTrue(contacts[0]["boardable"])
         self.assertEqual(query.boardable_structure_ids("ship_a"), ["ship_b"])
 
+    def test_ship_contact_query_reports_contact_type_and_boarding_links(self):
+        state = MapState.from_dict(
+            {
+                "grid": {"cols": 12, "rows": 12, "feet_per_square": 5},
+                "structures": [
+                    {
+                        "id": "ship_a",
+                        "kind": "ship_hull",
+                        "anchor_col": 2,
+                        "anchor_row": 2,
+                        "occupied_cells": [{"col": 2, "row": 2}, {"col": 3, "row": 2}],
+                        "payload": {
+                            "ship_instance_id": "ship_1",
+                            "boardable": True,
+                            "boarding_points": [{"id": "p1", "col": 3, "row": 2}],
+                        },
+                    },
+                    {
+                        "id": "ship_b",
+                        "kind": "ship_hull",
+                        "anchor_col": 4,
+                        "anchor_row": 2,
+                        "occupied_cells": [{"col": 4, "row": 2}],
+                        "payload": {
+                            "ship_instance_id": "ship_2",
+                            "allow_boarding": True,
+                            "has_gangplank": True,
+                            "boarding_points": [{"id": "p2", "col": 4, "row": 2}],
+                        },
+                    },
+                ],
+            }
+        )
+        query = MapQueryAPI(state)
+        contacts = query.ship_contacts("ship_a")
+        self.assertEqual(len(contacts), 1)
+        self.assertTrue(contacts[0]["ship_contact"])
+        self.assertTrue(contacts[0]["boarding_capable"])
+        self.assertIn(contacts[0]["contact_type"], {"touching_edge", "bridged", "overlap", "overlap_bridged"})
+        self.assertEqual(query.ship_boardable_structure_ids("ship_a"), ["ship_b"])
+
     def test_structure_move_blockers_treat_generic_hazard_blocking_as_structure_blocking(self):
         state = MapState.from_dict(
             {

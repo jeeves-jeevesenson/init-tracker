@@ -14147,6 +14147,9 @@ __DAMAGE_TYPE_OPTIONS__
       return "";
     }
     const displayName = structureDisplayName(structure) || String(structure.id || "structure");
+    const shipState = (structure.ship_state && typeof structure.ship_state === "object")
+      ? structure.ship_state
+      : null;
     const semantics = (structure.contact_semantics && typeof structure.contact_semantics === "object")
       ? structure.contact_semantics
       : {};
@@ -14158,7 +14161,14 @@ __DAMAGE_TYPE_OPTIONS__
       : [];
     const adjacentText = adjacent.length ? adjacent.slice(0, 3).join(", ") : "none";
     const boardableText = boardable.length ? boardable.slice(0, 3).join(", ") : "none";
-    return `Selected structure: ${displayName} · Adjacent: ${adjacentText} · Boardable: ${boardableText}`;
+    if (!shipState){
+      return `Selected structure: ${displayName} · Adjacent: ${adjacentText} · Boardable: ${boardableText}`;
+    }
+    const blueprintName = String(shipState.blueprint_name || shipState.blueprint_id || "").trim() || "Unknown Blueprint";
+    const facingDeg = Number(shipState.facing_deg || 0);
+    const componentCount = Number(shipState.component_count || 0);
+    const weaponCount = Number(shipState.weapon_count || 0);
+    return `Selected ship: ${String(shipState.name || displayName)} · Blueprint: ${blueprintName} · Facing: ${Math.round(facingDeg)}° · Components: ${componentCount} · Weapons: ${weaponCount} · Adjacent: ${adjacentText} · Boardable: ${boardableText}`;
   }
 
   function updateTurnOrder(){
