@@ -54,11 +54,8 @@ class TacticalAuthoringPerformanceTests(unittest.TestCase):
         helper = types.SimpleNamespace(
             _map_author_selected_cell=(2, 3),
             map_author_tool_var=_Var("stamp"),
-            map_author_mode_var=_Var("feature"),
-            map_author_kind_var=_Var("crate"),
             map_author_preset_var=_Var("crate_stack"),
             map_author_label_var=_Var("Crate"),
-            map_author_blocking_var=_Var(True),
             map_author_duration_var=_Var(""),
             map_author_count_var=_Var("1"),
             app=app,
@@ -69,12 +66,12 @@ class TacticalAuthoringPerformanceTests(unittest.TestCase):
             _sync_tactical_layers_to_app=lambda: self.fail("legacy tactical sync-back should not run during placement"),
             _refresh_tactical_palette_state=lambda normalized=None: None,
             _selected_tactical_preset_id=lambda: "crate_stack",
-            _selected_tactical_preset=lambda: {"stackable": True},
+            _selected_tactical_preset=lambda: {"stackable": True, "kind": "crate"},
             map_author_elevation_var=_Var("5"),
-            _post_tactical_map_mutation=lambda redraw_all=False: (
+            _post_tactical_map_mutation=lambda redraw_all=False, schedule_broadcast=True: (
                 self.assertFalse(redraw_all),
                 helper._apply_canonical_map_layers_from_state(state_obj),
-                app._schedule_lan_state_broadcast(),
+                app._schedule_lan_state_broadcast() if schedule_broadcast else None,
                 helper._redraw_tactical_layers(),
             ),
         )
@@ -106,13 +103,9 @@ class TacticalAuthoringPerformanceTests(unittest.TestCase):
         helper = types.SimpleNamespace(
             _map_author_selected_cell=(2, 3),
             map_author_tool_var=_Var("stamp"),
-            map_author_mode_var=_Var("preset"),
-            map_author_kind_var=_Var("fire"),
             map_author_preset_var=_Var("fire"),
             map_author_count_var=_Var("1"),
             map_author_label_var=_Var(""),
-            map_author_blocking_var=_Var(False),
-            map_author_advanced_var=_Var(False),
             map_author_duration_var=_Var(""),
             map_author_elevation_var=_Var("5"),
             app=app,
@@ -122,11 +115,11 @@ class TacticalAuthoringPerformanceTests(unittest.TestCase):
             _redraw_tactical_layers=lambda: redraw_calls.__setitem__("count", redraw_calls["count"] + 1),
             _refresh_tactical_palette_state=lambda normalized=None: None,
             _selected_tactical_preset_id=lambda: "fire",
-            _selected_tactical_preset=lambda: {},
-            _post_tactical_map_mutation=lambda redraw_all=False: (
+            _selected_tactical_preset=lambda: {"kind": "fire"},
+            _post_tactical_map_mutation=lambda redraw_all=False, schedule_broadcast=True: (
                 self.assertFalse(redraw_all),
                 helper._apply_canonical_map_layers_from_state(state_obj),
-                app._schedule_lan_state_broadcast(),
+                app._schedule_lan_state_broadcast() if schedule_broadcast else None,
                 helper._redraw_tactical_layers(),
             ),
         )
@@ -238,10 +231,10 @@ class TacticalAuthoringPerformanceTests(unittest.TestCase):
             _apply_canonical_map_layers_from_state=lambda state: self.assertIs(state, state_obj),
             _redraw_tactical_layers=lambda: None,
             _update_selected_structure_contact_status=lambda: None,
-            _post_tactical_map_mutation=lambda redraw_all=False: (
+            _post_tactical_map_mutation=lambda redraw_all=False, schedule_broadcast=True: (
                 self.assertFalse(redraw_all),
                 helper._apply_canonical_map_layers_from_state(state_obj),
-                app._schedule_lan_state_broadcast(),
+                app._schedule_lan_state_broadcast() if schedule_broadcast else None,
             ),
         )
 
@@ -252,6 +245,45 @@ class TacticalAuthoringPerformanceTests(unittest.TestCase):
         self.assertEqual(calls["remove_structure"], 1)
         self.assertEqual(calls["set_elevation"], 1)
         self.assertEqual(calls["scheduled_flush"], 1)
+
+    def test_canvas_tactical_drag_defers_broadcast_until_release(self):
+        calls = {"apply": 0, "scheduled_flush": 0}
+
+        helper = types.SimpleNamespace(
+            canvas=types.SimpleNamespace(canvasx=lambda x: x, canvasy=lambda y: y),
+            _rotation_handle_hit_cid=lambda _mx, _my: None,
+            rough_mode_var=_Var(False),
+            obstacle_mode_var=_Var(False),
+            _pixel_to_grid=lambda mx, my: (int(mx), int(my)),
+            _update_selected_structure_contact_status=lambda: None,
+            _update_selected_tactical_cell_status=lambda: None,
+            _refresh_tactical_palette_state=lambda: None,
+            map_author_tool_var=_Var("stamp"),
+            _apply_tactical_author_to_selected_cell=lambda **kwargs: (
+                calls.__setitem__("apply", calls["apply"] + 1),
+                self.assertFalse(kwargs.get("schedule_broadcast", True)),
+                True,
+            )[-1],
+            _remove_tactical_entities_at_selected_cell=lambda **kwargs: False,
+            _map_author_selected_cell=None,
+            _map_author_painting=False,
+            _map_author_drag_dirty=False,
+            _map_author_last_painted_cell=None,
+            _drawing_obstacles=False,
+            _drawing_rough=False,
+            app=types.SimpleNamespace(
+                _schedule_lan_state_broadcast=lambda: calls.__setitem__("scheduled_flush", calls["scheduled_flush"] + 1),
+                _lan_force_state_broadcast=lambda: calls.__setitem__("scheduled_flush", calls["scheduled_flush"] + 1),
+            ),
+        )
+        event = types.SimpleNamespace(x=4, y=6, state=0)
+
+        helper_script.BattleMapWindow._on_canvas_press(helper, event)
+        helper_script.BattleMapWindow._on_canvas_release(helper, event)
+
+        self.assertEqual(calls["apply"], 1)
+        self.assertEqual(calls["scheduled_flush"], 1)
+        self.assertFalse(helper._map_author_painting)
 
 
 if __name__ == "__main__":

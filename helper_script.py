@@ -6220,24 +6220,23 @@ class BattleMapWindow(tk.Toplevel):
         self.map_elevation_cells: Dict[Tuple[int, int], float] = {}
         self.map_structure_templates: Dict[str, Dict[str, Any]] = {}
         self._tactical_presets = tactical_preset_catalog()
-        self.map_author_mode_var = tk.StringVar(value="feature")
-        self.map_author_kind_var = tk.StringVar(value="barrel")
         self.map_author_tool_var = tk.StringVar(value="select")
-        self.map_author_family_var = tk.StringVar(value="")
+        self.map_author_family_var = tk.StringVar(value="All")
+        self.map_author_preset_search_var = tk.StringVar(value="")
         self.map_author_preset_var = tk.StringVar(value="barrel")
         self.map_author_count_var = tk.StringVar(value="1")
         self.map_author_label_var = tk.StringVar(value="")
         self.map_author_duration_var = tk.StringVar(value="3")
-        self.map_author_blocking_var = tk.BooleanVar(value=False)
-        self.map_author_advanced_var = tk.BooleanVar(value=False)
         self.map_author_summary_var = tk.StringVar(value="")
         self.map_author_elevation_var = tk.StringVar(value="5")
         self.map_author_active_status_var = tk.StringVar(value="Tool: Select")
+        self.map_author_cell_status_var = tk.StringVar(value="Cell: none selected.")
         self.map_structure_contact_status_var = tk.StringVar(value="Structure contacts: select a structure cell.")
         self._map_author_selected_cell: Optional[Tuple[int, int]] = None
         self._map_author_preset_lookup: Dict[str, str] = {}
         self._map_author_painting: bool = False
         self._map_author_last_painted_cell: Optional[Tuple[int, int]] = None
+        self._map_author_drag_dirty: bool = False
         self._suspend_lan_sync: bool = False
         self._map_dirty: bool = False
         self._pan_key_to_dir: Dict[str, Tuple[int, int]] = {
@@ -6846,11 +6845,10 @@ class BattleMapWindow(tk.Toplevel):
         )
         tool_combo.grid(row=0, column=1, sticky="w", padx=(6, 0))
         ttk.Label(tactical, text="Group:").grid(row=0, column=2, sticky="w", padx=(8, 0))
-        family_values = sorted(
+        family_values = ["All"] + sorted(
             {str(item.get("family") or "Other") for item in self._tactical_presets.values() if isinstance(item, dict)}
         )
-        if family_values:
-            self.map_author_family_var.set(family_values[0])
+        self.map_author_family_var.set("All")
         family_combo = ttk.Combobox(
             tactical,
             textvariable=self.map_author_family_var,
@@ -6859,7 +6857,10 @@ class BattleMapWindow(tk.Toplevel):
             width=18,
         )
         family_combo.grid(row=0, column=3, sticky="ew", padx=(6, 0))
-        ttk.Label(tactical, text="Preset:").grid(row=1, column=0, sticky="w", pady=(6, 0))
+        ttk.Label(tactical, text="Search:").grid(row=1, column=0, sticky="w", pady=(6, 0))
+        preset_search_entry = ttk.Entry(tactical, textvariable=self.map_author_preset_search_var, width=20)
+        preset_search_entry.grid(row=1, column=1, columnspan=3, sticky="ew", padx=(6, 0), pady=(6, 0))
+        ttk.Label(tactical, text="Preset:").grid(row=2, column=0, sticky="w", pady=(6, 0))
         self._map_author_preset_combo = ttk.Combobox(
             tactical,
             textvariable=self.map_author_preset_var,
@@ -6867,23 +6868,23 @@ class BattleMapWindow(tk.Toplevel):
             width=20,
             state="readonly",
         )
-        self._map_author_preset_combo.grid(row=1, column=1, columnspan=3, sticky="ew", padx=(6, 0), pady=(6, 0))
-        ttk.Label(tactical, text="Label:").grid(row=2, column=0, sticky="w", pady=(6, 0))
+        self._map_author_preset_combo.grid(row=2, column=1, columnspan=3, sticky="ew", padx=(6, 0), pady=(6, 0))
+        ttk.Label(tactical, text="Label:").grid(row=3, column=0, sticky="w", pady=(6, 0))
         self._map_author_label_entry = ttk.Entry(tactical, textvariable=self.map_author_label_var, width=14)
-        self._map_author_label_entry.grid(row=2, column=1, sticky="ew", padx=(6, 0), pady=(6, 0))
-        ttk.Label(tactical, text="Count:").grid(row=2, column=2, sticky="w", padx=(8, 0), pady=(6, 0))
+        self._map_author_label_entry.grid(row=3, column=1, sticky="ew", padx=(6, 0), pady=(6, 0))
+        ttk.Label(tactical, text="Count:").grid(row=3, column=2, sticky="w", padx=(8, 0), pady=(6, 0))
         self._map_author_count_entry = ttk.Entry(tactical, textvariable=self.map_author_count_var, width=8)
-        self._map_author_count_entry.grid(row=2, column=3, sticky="w", padx=(6, 0), pady=(6, 0))
+        self._map_author_count_entry.grid(row=3, column=3, sticky="w", padx=(6, 0), pady=(6, 0))
         self._map_author_count_entry.bind("<FocusOut>", lambda _e: self._refresh_tactical_preset_selection(sync_mode=False))
         self._map_author_duration_label = ttk.Label(tactical, text="Duration:")
-        self._map_author_duration_label.grid(row=3, column=0, sticky="w", pady=(6, 0))
+        self._map_author_duration_label.grid(row=4, column=0, sticky="w", pady=(6, 0))
         self._map_author_duration_entry = ttk.Entry(tactical, textvariable=self.map_author_duration_var, width=8)
-        self._map_author_duration_entry.grid(row=3, column=1, sticky="w", padx=(6, 0), pady=(6, 0))
-        ttk.Label(tactical, text="Elevation:").grid(row=3, column=2, sticky="w", padx=(8, 0), pady=(6, 0))
+        self._map_author_duration_entry.grid(row=4, column=1, sticky="w", padx=(6, 0), pady=(6, 0))
+        ttk.Label(tactical, text="Elevation:").grid(row=4, column=2, sticky="w", padx=(8, 0), pady=(6, 0))
         self._map_author_elevation_entry = ttk.Entry(tactical, textvariable=self.map_author_elevation_var, width=8)
-        self._map_author_elevation_entry.grid(row=3, column=3, sticky="w", padx=(6, 0), pady=(6, 0))
+        self._map_author_elevation_entry.grid(row=4, column=3, sticky="w", padx=(6, 0), pady=(6, 0))
         btn_row = ttk.Frame(tactical)
-        btn_row.grid(row=4, column=0, columnspan=4, sticky="ew", pady=(6, 0))
+        btn_row.grid(row=5, column=0, columnspan=4, sticky="ew", pady=(6, 0))
         ttk.Button(btn_row, text="Stamp @ Cell", command=self._apply_tactical_author_to_selected_cell).pack(side=tk.LEFT)
         ttk.Button(btn_row, text="Erase @ Cell", command=self._remove_tactical_entities_at_selected_cell).pack(side=tk.LEFT, padx=(6, 0))
         ttk.Button(btn_row, text="Move Struct…", command=self._move_structure_from_selected_cell).pack(side=tk.LEFT, padx=(6, 0))
@@ -6891,19 +6892,24 @@ class BattleMapWindow(tk.Toplevel):
         ttk.Button(btn_row, text="Place Template…", command=self._place_template_at_selected_cell).pack(side=tk.LEFT, padx=(6, 0))
         ttk.Button(btn_row, text="Resolve Env", command=self._resolve_environment_turn).pack(side=tk.LEFT, padx=(6, 0))
         ttk.Label(tactical, textvariable=self.map_author_active_status_var, justify="left", wraplength=440).grid(
-            row=5, column=0, columnspan=4, sticky="w", pady=(4, 0)
-        )
-        ttk.Label(tactical, textvariable=self.map_author_summary_var, justify="left", wraplength=440).grid(
             row=6, column=0, columnspan=4, sticky="w", pady=(4, 0)
         )
+        ttk.Label(tactical, textvariable=self.map_author_summary_var, justify="left", wraplength=440).grid(
+            row=7, column=0, columnspan=4, sticky="w", pady=(4, 0)
+        )
+        ttk.Label(tactical, textvariable=self.map_author_cell_status_var, justify="left", wraplength=440).grid(
+            row=8, column=0, columnspan=4, sticky="w", pady=(4, 0)
+        )
         ttk.Label(tactical, textvariable=self.map_structure_contact_status_var, justify="left", wraplength=440).grid(
-            row=7, column=0, columnspan=4, sticky="w", pady=(6, 0)
+            row=9, column=0, columnspan=4, sticky="w", pady=(6, 0)
         )
         tactical.columnconfigure(3, weight=1)
         tool_combo.bind("<<ComboboxSelected>>", lambda _e: self._refresh_tactical_preset_selection(sync_mode=True))
         family_combo.bind("<<ComboboxSelected>>", lambda _e: self._refresh_tactical_preset_selection())
+        preset_search_entry.bind("<KeyRelease>", lambda _e: self._refresh_tactical_preset_selection(sync_mode=False))
         self._map_author_preset_combo.bind("<<ComboboxSelected>>", lambda _e: self._refresh_tactical_preset_selection(sync_mode=True))
         self._refresh_tactical_preset_selection(sync_mode=True)
+        self._update_selected_tactical_cell_status()
 
         # --- Units panel ---
         ttk.Label(left, text="Units (drag onto map)").pack(anchor="w")
@@ -8003,13 +8009,27 @@ class BattleMapWindow(tk.Toplevel):
     def _refresh_tactical_preset_selection(self, *, sync_mode: bool = False) -> None:
         presets = self._tactical_presets if isinstance(self._tactical_presets, dict) else {}
         family = str(self.map_author_family_var.get() or "").strip()
+        query = str(self.map_author_preset_search_var.get() or "").strip().lower()
+        use_all_families = not family or family.lower() == "all"
         ids = [
             str(pid).strip().lower()
             for pid, preset in presets.items()
-            if isinstance(preset, dict) and str(preset.get("family") or "Other") == family
+            if isinstance(preset, dict) and (use_all_families or str(preset.get("family") or "Other") == family)
         ]
         if not ids:
             ids = [str(pid).strip().lower() for pid in presets.keys()]
+        if query:
+            filtered_ids: List[str] = []
+            for preset_id in ids:
+                preset = presets.get(preset_id) if isinstance(presets.get(preset_id), dict) else {}
+                display_name = str(preset.get("display_name") or preset_id.replace("_", " ").title()).strip()
+                family_value = str(preset.get("family") or "Other").strip()
+                category = str(preset.get("category") or "").strip().lower()
+                searchable = f"{preset_id} {display_name} {family_value} {category}".lower()
+                if query in searchable:
+                    filtered_ids.append(preset_id)
+            if filtered_ids:
+                ids = filtered_ids
         ids = sorted({pid for pid in ids if pid})
         current = self._selected_tactical_preset_id()
         if current not in ids and ids:
@@ -8020,7 +8040,8 @@ class BattleMapWindow(tk.Toplevel):
             preset = presets.get(preset_id) if isinstance(presets.get(preset_id), dict) else {}
             display_name = str(preset.get("display_name") or preset_id.replace("_", " ").title()).strip()
             category = str(preset.get("category") or "").strip().lower()
-            label = f"{display_name} · {category}" if category else display_name
+            category_label = category.replace("_", " ").title() if category else ""
+            label = f"{display_name} · {category_label}" if category_label else display_name
             values.append(label)
             self._map_author_preset_lookup[label] = preset_id
         selected_label = next((label for label, preset_id in self._map_author_preset_lookup.items() if preset_id == current), "")
@@ -8037,17 +8058,13 @@ class BattleMapWindow(tk.Toplevel):
                 pass
         normalized = normalize_tactical_payload(
             category="feature",
-            kind=current or self.map_author_kind_var.get(),
+            kind=current or "feature",
             preset_id=current,
             payload={},
             count=self.map_author_count_var.get(),
         )
         if sync_mode:
-            preset_category = str(normalized.get("category") or "feature")
-            self.map_author_mode_var.set(preset_category)
-            self.map_author_kind_var.set(str(normalized.get("kind") or current or "feature"))
             payload = normalized.get("payload") if isinstance(normalized.get("payload"), dict) else {}
-            self.map_author_blocking_var.set(bool(payload.get("blocks_movement")))
             if payload.get("count") is not None:
                 self.map_author_count_var.set(str(payload.get("count")))
             duration_value = payload.get("duration_turns")
@@ -8075,7 +8092,7 @@ class BattleMapWindow(tk.Toplevel):
         if not isinstance(normalized, dict):
             normalized = normalize_tactical_payload(
                 category="feature",
-                kind=preset_id or self.map_author_kind_var.get(),
+                kind=preset_id or "feature",
                 preset_id=preset_id,
                 payload={},
                 count=self.map_author_count_var.get(),
@@ -8113,7 +8130,55 @@ class BattleMapWindow(tk.Toplevel):
             else {}
         )
 
-    def _post_tactical_map_mutation(self, *, redraw_all: bool = False) -> None:
+    def _update_selected_tactical_cell_status(self) -> None:
+        cell = self._map_author_selected_cell
+        if cell is None:
+            self.map_author_cell_status_var.set("Cell: none selected.")
+            return
+        col, row = int(cell[0]), int(cell[1])
+        feature_labels: List[str] = []
+        hazard_labels: List[str] = []
+        structure_labels: List[str] = []
+        for feature in self.map_features.values():
+            if not isinstance(feature, dict):
+                continue
+            payload = feature.get("payload") if isinstance(feature.get("payload"), dict) else {}
+            cells = self._entity_cells(int(feature.get("col", 0) or 0), int(feature.get("row", 0) or 0), payload)
+            if (col, row) in cells:
+                feature_labels.append(str(payload.get("name") or feature.get("kind") or "feature"))
+        for hazard in self.map_hazards.values():
+            if not isinstance(hazard, dict):
+                continue
+            payload = hazard.get("payload") if isinstance(hazard.get("payload"), dict) else {}
+            cells = self._entity_cells(int(hazard.get("col", 0) or 0), int(hazard.get("row", 0) or 0), payload)
+            if (col, row) in cells:
+                hazard_labels.append(str(payload.get("name") or hazard.get("kind") or "hazard"))
+        for structure in self.map_structures.values():
+            if not isinstance(structure, dict):
+                continue
+            payload = structure.get("payload") if isinstance(structure.get("payload"), dict) else {}
+            cells = self._entity_cells(
+                int(structure.get("anchor_col", 0) or 0),
+                int(structure.get("anchor_row", 0) or 0),
+                payload,
+            )
+            if (col, row) in cells:
+                structure_labels.append(str(payload.get("name") or structure.get("kind") or "structure"))
+        elevation = self.map_elevation_cells.get((col, row))
+        status_parts: List[str] = [f"Cell ({col},{row})"]
+        if feature_labels:
+            status_parts.append(f"Features: {', '.join(feature_labels[:2])}{' …' if len(feature_labels) > 2 else ''}")
+        if hazard_labels:
+            status_parts.append(f"Hazards: {', '.join(hazard_labels[:2])}{' …' if len(hazard_labels) > 2 else ''}")
+        if structure_labels:
+            status_parts.append(f"Structures: {', '.join(structure_labels[:2])}{' …' if len(structure_labels) > 2 else ''}")
+        if elevation is not None:
+            status_parts.append(f"Elevation: {int(round(float(elevation)))}")
+        if len(status_parts) == 1:
+            status_parts.append("empty")
+        self.map_author_cell_status_var.set(" · ".join(status_parts))
+
+    def _post_tactical_map_mutation(self, *, redraw_all: bool = False, schedule_broadcast: bool = True) -> None:
         try:
             state = getattr(self.app, "_map_state", None)
             if not isinstance(state, MapState):
@@ -8121,23 +8186,30 @@ class BattleMapWindow(tk.Toplevel):
             self._apply_canonical_map_layers_from_state(state)
         except Exception:
             pass
-        try:
-            schedule_broadcast = getattr(self.app, "_schedule_lan_state_broadcast", None)
-            if callable(schedule_broadcast):
-                schedule_broadcast()
-            else:
-                self.app._lan_force_state_broadcast()
-        except Exception:
-            pass
+        if schedule_broadcast:
+            try:
+                schedule_broadcast_fn = getattr(self.app, "_schedule_lan_state_broadcast", None)
+                if callable(schedule_broadcast_fn):
+                    schedule_broadcast_fn()
+                else:
+                    self.app._lan_force_state_broadcast()
+            except Exception:
+                pass
         updater = getattr(self, "_update_selected_structure_contact_status", None)
         if callable(updater):
             updater()
+        self._update_selected_tactical_cell_status()
         if redraw_all:
             self._redraw_all()
         else:
             self._redraw_tactical_layers()
 
-    def _apply_tactical_author_to_selected_cell(self, *, cell: Optional[Tuple[int, int]] = None) -> bool:
+    def _apply_tactical_author_to_selected_cell(
+        self,
+        *,
+        cell: Optional[Tuple[int, int]] = None,
+        schedule_broadcast: bool = True,
+    ) -> bool:
         selected_cell = cell if cell is not None else self._map_author_selected_cell
         tool = str(self.map_author_tool_var.get() or "select").strip().lower()
         if tool not in {"stamp", "elevation"}:
@@ -8152,18 +8224,23 @@ class BattleMapWindow(tk.Toplevel):
             except Exception:
                 messagebox.showerror("Tactical Palette", "Elevation must be numeric.", parent=self)
                 return False
+            current_elevation = self.map_elevation_cells.get((col, row))
+            if current_elevation is not None and abs(float(current_elevation) - elevation) < 1e-9:
+                return False
             self.app._set_map_elevation(col, row, elevation, hydrate_window=False, broadcast=False)
-            self._post_tactical_map_mutation()
+            self._post_tactical_map_mutation(schedule_broadcast=schedule_broadcast)
             return True
         cell = selected_cell
         if cell is None:
             messagebox.showinfo("Tactical Palette", "Select a map cell first.", parent=self)
             return False
         col, row = int(cell[0]), int(cell[1])
-        kind = str(self.map_author_kind_var.get() or "").strip().lower() or "feature"
+        preset_id = self._selected_tactical_preset_id()
+        preset = self._selected_tactical_preset()
+        fallback_kind = str(preset.get("kind") or preset_id or "feature").strip().lower() or "feature"
+        kind = fallback_kind
         label = str(self.map_author_label_var.get() or "").strip()
         duration_raw = str(self.map_author_duration_var.get() or "").strip()
-        preset_id = self._selected_tactical_preset_id()
         count_raw = str(getattr(self, "map_author_count_var", None).get() if hasattr(self, "map_author_count_var") else "").strip()
         count_value: Optional[int] = None
         if count_raw:
@@ -8180,9 +8257,7 @@ class BattleMapWindow(tk.Toplevel):
             count=count_value,
         )
         mode = str(normalized.get("category") or "feature").strip().lower()
-        self.map_author_mode_var.set(mode)
         kind = str(normalized.get("kind") or kind).strip().lower()
-        self.map_author_kind_var.set(kind)
         payload = dict(normalized.get("payload") if isinstance(normalized.get("payload"), dict) else {})
         if label:
             payload["name"] = label
@@ -8242,10 +8317,15 @@ class BattleMapWindow(tk.Toplevel):
             )
         else:
             return False
-        self._post_tactical_map_mutation()
+        self._post_tactical_map_mutation(schedule_broadcast=schedule_broadcast)
         return True
 
-    def _remove_tactical_entities_at_selected_cell(self, *, cell: Optional[Tuple[int, int]] = None) -> bool:
+    def _remove_tactical_entities_at_selected_cell(
+        self,
+        *,
+        cell: Optional[Tuple[int, int]] = None,
+        schedule_broadcast: bool = True,
+    ) -> bool:
         selected_cell = cell if cell is not None else self._map_author_selected_cell
         cell = selected_cell
         if cell is None:
@@ -8288,7 +8368,7 @@ class BattleMapWindow(tk.Toplevel):
         changed = bool(removed_feature_ids or removed_hazard_ids or removed_structure_ids or had_elevation)
         if not changed:
             return False
-        self._post_tactical_map_mutation()
+        self._post_tactical_map_mutation(schedule_broadcast=schedule_broadcast)
         return True
 
     def _resolve_environment_turn(self) -> None:
@@ -11154,15 +11234,24 @@ class BattleMapWindow(tk.Toplevel):
             if col is not None and row is not None:
                 self._map_author_selected_cell = (int(col), int(row))
                 self._update_selected_structure_contact_status()
-                self._refresh_tactical_preset_selection(sync_mode=False)
+                self._update_selected_tactical_cell_status()
+                self._refresh_tactical_palette_state()
                 tool = str(self.map_author_tool_var.get() or "select").strip().lower()
                 if tool in {"stamp", "erase", "elevation"}:
                     self._map_author_painting = True
+                    self._map_author_drag_dirty = False
                     self._map_author_last_painted_cell = None
                     if tool == "erase":
-                        self._remove_tactical_entities_at_selected_cell(cell=(int(col), int(row)))
+                        changed = self._remove_tactical_entities_at_selected_cell(
+                            cell=(int(col), int(row)),
+                            schedule_broadcast=False,
+                        )
                     else:
-                        self._apply_tactical_author_to_selected_cell(cell=(int(col), int(row)))
+                        changed = self._apply_tactical_author_to_selected_cell(
+                            cell=(int(col), int(row)),
+                            schedule_broadcast=False,
+                        )
+                    self._map_author_drag_dirty = bool(changed)
                     self._map_author_last_painted_cell = (int(col), int(row))
                     return
         except Exception:
@@ -11500,9 +11589,13 @@ class BattleMapWindow(tk.Toplevel):
             self._map_author_selected_cell = cell
             tool = str(self.map_author_tool_var.get() or "select").strip().lower()
             if tool == "erase":
-                self._remove_tactical_entities_at_selected_cell(cell=cell)
+                changed = self._remove_tactical_entities_at_selected_cell(cell=cell, schedule_broadcast=False)
             elif tool in {"stamp", "elevation"}:
-                self._apply_tactical_author_to_selected_cell(cell=cell)
+                changed = self._apply_tactical_author_to_selected_cell(cell=cell, schedule_broadcast=False)
+            else:
+                changed = False
+            if changed:
+                self._map_author_drag_dirty = True
             self._map_author_last_painted_cell = cell
             return
         self._hide_hover_tooltip()
@@ -11628,6 +11721,16 @@ class BattleMapWindow(tk.Toplevel):
         if getattr(self, "_map_author_painting", False):
             self._map_author_painting = False
             self._map_author_last_painted_cell = None
+            if getattr(self, "_map_author_drag_dirty", False):
+                try:
+                    schedule_broadcast_fn = getattr(self.app, "_schedule_lan_state_broadcast", None)
+                    if callable(schedule_broadcast_fn):
+                        schedule_broadcast_fn()
+                    else:
+                        self.app._lan_force_state_broadcast()
+                except Exception:
+                    pass
+            self._map_author_drag_dirty = False
             return
 
         # Finalize drags, enforce movement for the active creature, then refresh grouping/highlights.
