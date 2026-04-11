@@ -821,7 +821,12 @@ class SessionSaveLoadTests(unittest.TestCase):
                     "fixtures": [{"id": "mast_main", "name": "Mast", "kind": "mast", "col": 1, "row": 0, "tags": ["ship_fixture"]}],
                     "components": [{"id": "hull", "name": "Hull", "type": "hull", "max_hp": 200, "ac": 15}],
                     "mounted_weapons": [{"id": "port_cannon", "name": "Port Cannon", "weapon_type": "cannon", "arc": "port", "col": 0, "row": 0}],
-                    "boarding": {"boardable": True, "edges": ["port", "starboard"], "points": [{"id": "rail", "col": 2, "row": 0}]},
+                    "boarding": {
+                        "boardable": True,
+                        "edges": ["port", "starboard", "fore", "aft"],
+                        "points": [{"id": "rail", "col": 2, "row": 0}],
+                        "bridges": [{"id": "bridge_a", "col": 1, "row": 0, "kind": "gangplank"}],
+                    },
                     "decks": [{"id": "main", "name": "Main Deck", "elevation_offset": 0}],
                 },
             )
@@ -841,6 +846,66 @@ class SessionSaveLoadTests(unittest.TestCase):
             self.assertEqual(ship.get("parent_structure_id"), created)
             self.assertEqual(ship.get("blueprint_id"), "test_sloop")
             self.assertEqual(ship.get("name"), "Sea Ghost")
+            self.assertEqual((payload.get("boarding_points") or [])[0]["col"], 10)
+            self.assertEqual((payload.get("boarding_points") or [])[0]["row"], 12)
+            self.assertIn("east", payload.get("boardable_edges") or [])
+            self.assertIn("south", payload.get("boardable_edges") or [])
+            self.assertEqual((payload.get("boarding_bridges") or [])[0]["col"], 10)
+            self.assertEqual((payload.get("boarding_bridges") or [])[0]["row"], 11)
+            self.assertEqual((ship.get("boarding") or {}).get("rotation_steps"), 1)
+            self.assertEqual(((ship.get("boarding") or {}).get("points") or [])[0]["col"], 10)
+            self.assertEqual(((ship.get("boarding") or {}).get("points") or [])[0]["row"], 12)
+
+    def test_default_starter_ship_blueprints_instantiate_on_empty_map(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            app = self._make_app(Path(tmpdir) / "battle.log")
+            app._map_state = tracker_mod.MapState.from_dict({"grid": {"cols": 80, "rows": 80, "feet_per_square": 5}})
+            app._lan_grid_cols = 80
+            app._lan_grid_rows = 80
+            starters = ("rowboat_launch", "sloop", "brig", "galleon_heavy")
+            for index, blueprint_id in enumerate(starters):
+                created = app._instantiate_ship_blueprint(
+                    blueprint_id,
+                    anchor_col=5 + index * 12,
+                    anchor_row=10,
+                    facing_deg=0,
+                )
+                self.assertIsNotNone(created, msg=f"{blueprint_id} failed with {getattr(app, '_last_map_template_error', '')}")
+
+    def test_ship_boarding_metadata_transforms_for_multiple_facings(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            app = self._make_app(Path(tmpdir) / "battle.log")
+            app._map_state = tracker_mod.MapState.from_dict({"grid": {"cols": 40, "rows": 40, "feet_per_square": 5}})
+            app._lan_grid_cols = 40
+            app._lan_grid_rows = 40
+            created_180 = app._instantiate_ship_blueprint("rowboat_launch", anchor_col=15, anchor_row=15, facing_deg=180)
+            created_270 = app._instantiate_ship_blueprint("rowboat_launch", anchor_col=20, anchor_row=20, facing_deg=270)
+            self.assertIsNotNone(created_180)
+            self.assertIsNotNone(created_270)
+            state = app._capture_canonical_map_state(prefer_window=False).to_dict()
+            structure_180 = next(item for item in state["structures"] if item["id"] == created_180)
+            structure_270 = next(item for item in state["structures"] if item["id"] == created_270)
+            points_180 = (structure_180.get("payload") or {}).get("boarding_points") or []
+            points_270 = (structure_270.get("payload") or {}).get("boarding_points") or []
+            self.assertIn({"id": "starboard_mid", "name": "Starboard Rail", "col": 14, "row": 15, "tags": [], "local_col": 1, "local_row": 0}, points_180)
+            self.assertIn({"id": "starboard_mid", "name": "Starboard Rail", "col": 20, "row": 19, "tags": [], "local_col": 1, "local_row": 0}, points_270)
+
+    def test_ship_contacts_use_world_transformed_boarding_points(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            app = self._make_app(Path(tmpdir) / "battle.log")
+            app._map_state = tracker_mod.MapState.from_dict({"grid": {"cols": 30, "rows": 30, "feet_per_square": 5}})
+            app._lan_grid_cols = 30
+            app._lan_grid_rows = 30
+            src = app._instantiate_ship_blueprint("rowboat_launch", anchor_col=10, anchor_row=10, facing_deg=90)
+            dst = app._instantiate_ship_blueprint("rowboat_launch", anchor_col=11, anchor_row=10, facing_deg=0)
+            self.assertIsNotNone(src)
+            self.assertIsNotNone(dst)
+            semantics = app._structure_contact_semantics(src)
+            self.assertTrue(semantics.get("ok"))
+            ship_relations = semantics.get("ship_relations") if isinstance(semantics.get("ship_relations"), list) else []
+            relation = next((item for item in ship_relations if str(item.get("target_id") or "") == str(dst)), {})
+            self.assertTrue(relation.get("boarding_capable"))
+            self.assertIn({"col": 10, "row": 10}, relation.get("boarding_points") or [])
 
     def test_ship_blueprints_coexist_with_structure_templates(self):
         with tempfile.TemporaryDirectory() as tmpdir:

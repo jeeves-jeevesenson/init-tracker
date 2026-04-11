@@ -141,7 +141,7 @@ DEFAULT_SHIP_BLUEPRINTS_V1: Dict[str, Dict[str, Any]] = {
         "fixtures": [
             {"id": "mast_main", "name": "Main Mast", "kind": "mast", "col": 1, "row": 0, "tags": ["ship_fixture", "mast", "climbable"]},
             {"id": "hatch_main", "name": "Hatch", "kind": "hatch", "col": 2, "row": 1, "tags": ["ship_fixture", "hatch", "traversal"]},
-            {"id": "ladder_hold", "name": "Ladder", "kind": "ladder", "col": 2, "row": 1, "tags": ["ship_fixture", "ladder", "climbable"]},
+            {"id": "ladder_hold", "name": "Ladder", "kind": "ladder", "col": 1, "row": 1, "tags": ["ship_fixture", "ladder", "climbable"]},
             {"id": "cannon_port", "name": "Port Cannon", "kind": "cannon", "col": 0, "row": 0, "tags": ["ship_fixture", "weapon", "port"]},
             {"id": "cannon_starboard", "name": "Starboard Cannon", "kind": "cannon", "col": 3, "row": 1, "tags": ["ship_fixture", "weapon", "starboard"]},
         ],
@@ -195,7 +195,7 @@ DEFAULT_SHIP_BLUEPRINTS_V1: Dict[str, Dict[str, Any]] = {
         "fixtures": [
             {"id": "mast_fore", "name": "Fore Mast", "kind": "mast", "col": 1, "row": 0, "tags": ["ship_fixture", "mast", "climbable"]},
             {"id": "mast_main", "name": "Main Mast", "kind": "mast", "col": 3, "row": 1, "tags": ["ship_fixture", "mast", "climbable"]},
-            {"id": "stairs_quarterdeck", "name": "Quarterdeck Stairs", "kind": "stairs", "col": 4, "row": 1, "tags": ["ship_fixture", "stairs", "traversal"]},
+            {"id": "stairs_quarterdeck", "name": "Quarterdeck Stairs", "kind": "stairs", "col": 3, "row": 2, "tags": ["ship_fixture", "stairs", "traversal"]},
             {"id": "hatch_hold", "name": "Hold Hatch", "kind": "hatch", "col": 2, "row": 1, "tags": ["ship_fixture", "hatch"]},
             {"id": "cannon_port_a", "name": "Port Cannon A", "kind": "cannon", "col": 0, "row": 0, "tags": ["ship_fixture", "weapon", "port"]},
             {"id": "cannon_port_b", "name": "Port Cannon B", "kind": "cannon", "col": 0, "row": 1, "tags": ["ship_fixture", "weapon", "port"]},
@@ -10161,6 +10161,125 @@ class InitiativeTracker(base.InitiativeTracker):
                 pass
         return structure_id
 
+    @staticmethod
+    def _ship_rotation_steps_for_facing(facing_deg: Any) -> int:
+        try:
+            facing = float(facing_deg)
+        except Exception:
+            facing = 0.0
+        return int(round(facing / 90.0)) % 4
+
+    @classmethod
+    def _rotate_ship_local_cell(cls, local_col: int, local_row: int, facing_deg: Any) -> Tuple[int, int]:
+        steps = cls._ship_rotation_steps_for_facing(facing_deg)
+        if steps == 1:
+            return -int(local_row), int(local_col)
+        if steps == 2:
+            return -int(local_col), -int(local_row)
+        if steps == 3:
+            return int(local_row), -int(local_col)
+        return int(local_col), int(local_row)
+
+    @staticmethod
+    def _ship_relative_edge_vector(edge: str) -> Optional[Tuple[int, int]]:
+        normalized = str(edge or "").strip().lower()
+        vectors = {
+            "fore": (1, 0),
+            "bow": (1, 0),
+            "aft": (-1, 0),
+            "stern": (-1, 0),
+            "port": (0, 1),
+            "starboard": (0, -1),
+        }
+        return vectors.get(normalized)
+
+    @staticmethod
+    def _ship_world_edge_label(delta_col: int, delta_row: int) -> str:
+        if abs(int(delta_col)) >= abs(int(delta_row)):
+            return "east" if int(delta_col) >= 0 else "west"
+        return "south" if int(delta_row) >= 0 else "north"
+
+    @classmethod
+    def _transform_ship_boarding_runtime_metadata(
+        cls,
+        *,
+        boarding: Dict[str, Any],
+        anchor_col: int,
+        anchor_row: int,
+        facing_deg: Any,
+    ) -> Dict[str, Any]:
+        local_boarding = dict(boarding if isinstance(boarding, dict) else {})
+        points_local = list(local_boarding.get("points") if isinstance(local_boarding.get("points"), list) else [])
+        points_world: List[Dict[str, Any]] = []
+        for index, raw in enumerate(points_local):
+            if not isinstance(raw, dict):
+                continue
+            try:
+                local_col = int(raw.get("col", 0))
+                local_row = int(raw.get("row", 0))
+            except Exception:
+                continue
+            dc, dr = cls._rotate_ship_local_cell(local_col, local_row, facing_deg)
+            points_world.append(
+                {
+                    **dict(raw),
+                    "id": str(raw.get("id") or f"point_{index + 1}").strip().lower() or f"point_{index + 1}",
+                    "local_col": int(local_col),
+                    "local_row": int(local_row),
+                    "col": int(anchor_col) + int(dc),
+                    "row": int(anchor_row) + int(dr),
+                }
+            )
+
+        bridges_local = list(local_boarding.get("bridges") if isinstance(local_boarding.get("bridges"), list) else [])
+        bridges_world: List[Dict[str, Any]] = []
+        for index, raw in enumerate(bridges_local):
+            if not isinstance(raw, dict):
+                continue
+            bridge = dict(raw)
+            bridge["id"] = str(raw.get("id") or f"bridge_{index + 1}").strip().lower() or f"bridge_{index + 1}"
+            if raw.get("col") is not None and raw.get("row") is not None:
+                try:
+                    local_col = int(raw.get("col", 0))
+                    local_row = int(raw.get("row", 0))
+                    dc, dr = cls._rotate_ship_local_cell(local_col, local_row, facing_deg)
+                    bridge["local_col"] = int(local_col)
+                    bridge["local_row"] = int(local_row)
+                    bridge["col"] = int(anchor_col) + int(dc)
+                    bridge["row"] = int(anchor_row) + int(dr)
+                except Exception:
+                    pass
+            bridges_world.append(bridge)
+
+        edges_local = [
+            str(edge).strip().lower()
+            for edge in (local_boarding.get("edges") if isinstance(local_boarding.get("edges"), list) else [])
+            if str(edge).strip()
+        ]
+        edges_world: List[str] = []
+        for edge in edges_local:
+            vector = cls._ship_relative_edge_vector(edge)
+            if vector is None:
+                edges_world.append(edge)
+                continue
+            dc, dr = cls._rotate_ship_local_cell(int(vector[0]), int(vector[1]), facing_deg)
+            edges_world.append(cls._ship_world_edge_label(dc, dr))
+        transformed = {
+            **local_boarding,
+            "boardable": bool(local_boarding.get("boardable", True)),
+            "points_local": points_local,
+            "points": points_world,
+            "bridges_local": bridges_local,
+            "bridges": bridges_world,
+            "edges_local": edges_local,
+            "edges": sorted(set(edges_world)),
+            "anchor_col": int(anchor_col),
+            "anchor_row": int(anchor_row),
+            "facing_deg": float(facing_deg or 0.0),
+            "rotation_steps": cls._ship_rotation_steps_for_facing(facing_deg),
+        }
+        return transformed
+
     def _instantiate_ship_blueprint(
         self,
         blueprint_id: Any,
@@ -10193,6 +10312,13 @@ class InitiativeTracker(base.InitiativeTracker):
         if not structure_id:
             return None
 
+        transformed_boarding = self._transform_ship_boarding_runtime_metadata(
+            boarding=dict(blueprint.get("boarding") if isinstance(blueprint.get("boarding"), dict) else {}),
+            anchor_col=int(anchor_col),
+            anchor_row=int(anchor_row),
+            facing_deg=float(final_facing),
+        )
+
         def _mutate(state: MapState) -> None:
             sid = str(structure_id)
             structure = (state.structures or {}).get(sid)
@@ -10202,9 +10328,6 @@ class InitiativeTracker(base.InitiativeTracker):
             ship_instances = dict(presentation.get("ship_instances") if isinstance(presentation.get("ship_instances"), dict) else {})
             ship_instance_id = self._next_map_entity_id("ship", ship_instances.keys())
             display_name = str(name or "").strip() or str(blueprint.get("name") or bid.replace("_", " ").title())
-            boarding = dict(blueprint.get("boarding") if isinstance(blueprint.get("boarding"), dict) else {})
-            boarding_points = list(boarding.get("points") if isinstance(boarding.get("points"), list) else [])
-            boardable_edges = list(boarding.get("edges") if isinstance(boarding.get("edges"), list) else [])
             components = [dict(item) for item in (blueprint.get("components") if isinstance(blueprint.get("components"), list) else []) if isinstance(item, dict)]
             weapons = [dict(item) for item in (blueprint.get("mounted_weapons") if isinstance(blueprint.get("mounted_weapons"), list) else []) if isinstance(item, dict)]
             ship_instances[ship_instance_id] = {
@@ -10217,7 +10340,7 @@ class InitiativeTracker(base.InitiativeTracker):
                 "size": str(blueprint.get("size") or "medium"),
                 "components": components,
                 "mounted_weapons": weapons,
-                "boarding": boarding,
+                "boarding": dict(transformed_boarding),
                 "crew": dict(blueprint.get("crew") if isinstance(blueprint.get("crew"), dict) else {}),
                 "decks": list(blueprint.get("decks") if isinstance(blueprint.get("decks"), list) else []),
                 "surfaces": list(blueprint.get("surfaces") if isinstance(blueprint.get("surfaces"), list) else []),
@@ -10233,11 +10356,26 @@ class InitiativeTracker(base.InitiativeTracker):
                     "ship_instance_id": ship_instance_id,
                     "ship_blueprint_id": bid,
                     "facing_deg": float(final_facing),
-                    "boardable": bool(boarding.get("boardable", True)),
-                    "allow_boarding": bool(boarding.get("boardable", True)),
-                    "boardable_edges": list(boardable_edges),
-                    "boarding_points": list(boarding_points),
-                    "has_gangplank": bool(any("bridge" in str(tag).lower() for point in boarding_points for tag in (point.get("tags") if isinstance(point, dict) and isinstance(point.get("tags"), list) else []))),
+                    "boardable": bool(transformed_boarding.get("boardable", True)),
+                    "allow_boarding": bool(transformed_boarding.get("boardable", True)),
+                    "boardable_edges": list(transformed_boarding.get("edges") if isinstance(transformed_boarding.get("edges"), list) else []),
+                    "boardable_edges_local": list(transformed_boarding.get("edges_local") if isinstance(transformed_boarding.get("edges_local"), list) else []),
+                    "boarding_points": list(transformed_boarding.get("points") if isinstance(transformed_boarding.get("points"), list) else []),
+                    "boarding_points_local": list(transformed_boarding.get("points_local") if isinstance(transformed_boarding.get("points_local"), list) else []),
+                    "boarding_bridges": list(transformed_boarding.get("bridges") if isinstance(transformed_boarding.get("bridges"), list) else []),
+                    "boarding_bridges_local": list(transformed_boarding.get("bridges_local") if isinstance(transformed_boarding.get("bridges_local"), list) else []),
+                    "has_gangplank": bool(
+                        list(transformed_boarding.get("bridges") if isinstance(transformed_boarding.get("bridges"), list) else [])
+                        or any(
+                            "bridge" in str(tag).lower()
+                            for point in (transformed_boarding.get("points") if isinstance(transformed_boarding.get("points"), list) else [])
+                            for tag in (
+                                point.get("tags")
+                                if isinstance(point, dict) and isinstance(point.get("tags"), list)
+                                else []
+                            )
+                        )
+                    ),
                 }
             )
             structures = dict(state.structures or {})
