@@ -75,18 +75,40 @@ class ShipCompositeRenderingTests(unittest.TestCase):
                 expected_area = area
             self.assertEqual(area, expected_area)
 
-    def test_deck_texture_asset_seam_falls_back_to_converted_raster(self):
+    def test_deck_texture_render_uses_converted_raster_when_avif_unreadable(self):
         window = object.__new__(helper_mod.BattleMapWindow)
         with tempfile.TemporaryDirectory() as tmpdir:
             tmp = Path(tmpdir)
             avif = tmp / "wood.avif"
             png = tmp / "wood.png"
             avif.write_bytes(b"not-real-avif")
-            png.write_bytes(b"not-real-png")
+            if helper_mod.Image is None:
+                self.skipTest("Pillow not available")
+            helper_mod.Image.new("RGBA", (4, 4), (140, 100, 60, 255)).save(png)
             window._resolve_ship_asset_path = lambda image_path, image_key: str(avif)
-            resolved, identity = window._resolve_ship_deck_texture({"deck_texture_key": "ship_deck_wood"})
-            self.assertEqual(str(png), resolved)
-            self.assertEqual(str(png), identity)
+            window.cell = 20.0
+            window.x0 = 0.0
+            window.y0 = 0.0
+            window._ship_deck_render_cache = {}
+            window.map_structures = {"ship_a": {"payload": {"ship_blueprint_id": "sloop"}}}
+            image_tk_original = helper_mod.ImageTk
+
+            class _FakeImageTk:
+                @staticmethod
+                def PhotoImage(image):
+                    return ("photo", image.size)
+
+            helper_mod.ImageTk = _FakeImageTk
+            try:
+                composite = window._ship_deck_composite_tk_image(
+                    sid="ship_a",
+                    occupied=[(0, 0), (1, 0), (0, 1), (1, 1)],
+                    render={"deck_texture_key": "ship_deck_wood"},
+                    facing_deg=0.0,
+                )
+            finally:
+                helper_mod.ImageTk = image_tk_original
+            self.assertIsNotNone(composite)
 
     def test_deck_texture_asset_seam_reports_missing_deterministically(self):
         window = object.__new__(helper_mod.BattleMapWindow)

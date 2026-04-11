@@ -8264,6 +8264,9 @@ class BattleMapWindow(tk.Toplevel):
         steps = self._ship_render_rotation_steps(facing_deg)
         relative_shape = tuple(sorted((int(col) - int(min_col), int(row) - int(min_row)) for col, row in occupied))
         texture_path, texture_identity = self._resolve_ship_deck_texture(render)
+        texture_candidates = self._ship_deck_texture_variant_paths(texture_path) if texture_path else []
+        if not texture_candidates and texture_path:
+            texture_candidates = [str(texture_path)]
         cache_key = (
             blueprint_id,
             steps,
@@ -8294,18 +8297,22 @@ class BattleMapWindow(tk.Toplevel):
         except Exception:
             return None
         base = None
-        if texture_path:
-            try:
-                texture = Image.open(texture_path).convert("RGBA")
-                tw, th = texture.size
-                if tw > 0 and th > 0:
+        if texture_candidates:
+            for candidate in texture_candidates:
+                try:
+                    texture = Image.open(candidate).convert("RGBA")
+                    tw, th = texture.size
+                    if tw <= 0 or th <= 0:
+                        continue
                     tiled = Image.new("RGBA", (int(width), int(height)))
                     for x in range(0, int(width), int(tw)):
                         for y in range(0, int(height), int(th)):
                             tiled.paste(texture, (int(x), int(y)))
                     base = tiled
-            except Exception:
-                base = None
+                    texture_identity = str(candidate)
+                    break
+                except Exception:
+                    continue
         if base is None:
             base = self._ship_deck_pattern_image(width=int(width), height=int(height))
         if base is None:
