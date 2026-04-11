@@ -265,6 +265,19 @@ DEFAULT_SHIP_BLUEPRINTS_V1: Dict[str, Dict[str, Any]] = {
     },
 }
 
+SHIP_ENGAGEMENT_WEAPON_PROFILES: Dict[str, Dict[str, Any]] = {
+    "cannon": {"range": 12, "damage": 22, "to_hit": 6, "reload_rounds": 1},
+    "ballista": {"range": 14, "damage": 16, "to_hit": 5, "reload_rounds": 0},
+    "weapon": {"range": 8, "damage": 12, "to_hit": 4, "reload_rounds": 0},
+}
+
+SHIP_ENGAGEMENT_MOVEMENT_BY_SIZE: Dict[str, Dict[str, int]] = {
+    "small": {"speed": 4, "turns": 2, "actions": 2},
+    "medium": {"speed": 3, "turns": 1, "actions": 2},
+    "large": {"speed": 2, "turns": 1, "actions": 2},
+    "huge": {"speed": 1, "turns": 1, "actions": 1},
+}
+
 
 def _normalize_turn_schedule_config(raw_schedule: object) -> Tuple[Optional[str], Optional[int], Optional[str]]:
     if not isinstance(raw_schedule, dict):
@@ -9607,13 +9620,14 @@ class InitiativeTracker(base.InitiativeTracker):
         if not isinstance(raw, dict):
             return {}
         out: Dict[str, Dict[str, Any]] = {}
+        current_round = int(getattr(self, "round_num", 0) or 0)
         for key, value in raw.items():
             if not isinstance(value, dict):
                 continue
             ship_id = str(value.get("id") or key).strip()
             if not ship_id:
                 continue
-            out[ship_id] = dict(value)
+            out[ship_id] = self._normalize_ship_engagement_state(dict(value), current_round=current_round)
         return out
 
     def _ship_instance_for_structure(self, structure_id: Any) -> Optional[Dict[str, Any]]:
@@ -9633,6 +9647,191 @@ class InitiativeTracker(base.InitiativeTracker):
         if ship_id and ship_id in instances:
             return dict(instances.get(ship_id) or {})
         return None
+
+    @staticmethod
+    def _ship_forward_vector(facing_deg: Any) -> Tuple[int, int]:
+        steps = InitiativeTracker._ship_rotation_steps_for_facing(facing_deg)
+        vectors = [(1, 0), (0, 1), (-1, 0), (0, -1)]
+        return vectors[steps % 4]
+
+    @staticmethod
+    def _ship_weapon_profile(weapon: Dict[str, Any]) -> Dict[str, Any]:
+        data = dict(weapon if isinstance(weapon, dict) else {})
+        wtype = str(data.get("weapon_type") or data.get("type") or "weapon").strip().lower() or "weapon"
+        base = dict(SHIP_ENGAGEMENT_WEAPON_PROFILES.get(wtype) or SHIP_ENGAGEMENT_WEAPON_PROFILES["weapon"])
+        if data.get("range") is not None:
+            try:
+                base["range"] = max(1, int(data.get("range")))
+            except Exception:
+                pass
+        if data.get("damage") is not None:
+            try:
+                base["damage"] = max(1, int(data.get("damage")))
+            except Exception:
+                pass
+        if data.get("to_hit") is not None:
+            try:
+                base["to_hit"] = int(data.get("to_hit"))
+            except Exception:
+                pass
+        if data.get("reload_rounds") is not None:
+            try:
+                base["reload_rounds"] = max(0, int(data.get("reload_rounds")))
+            except Exception:
+                pass
+        return base
+
+    @staticmethod
+    def _ship_component_default_state(component: Dict[str, Any]) -> Dict[str, Any]:
+        data = dict(component if isinstance(component, dict) else {})
+        max_hp = max(0, int(data.get("max_hp", 0) or 0))
+        hp = max_hp
+        ac = max(0, int(data.get("ac", 0) or 0))
+        threshold = max(0, int(data.get("damage_threshold", 0) or 0))
+        status = "destroyed" if max_hp > 0 and hp <= 0 else "operational"
+        return {
+            "max_hp": max_hp,
+            "hp": hp,
+            "ac": ac,
+            "damage_threshold": threshold,
+            "disabled": status == "destroyed",
+            "status": status,
+        }
+
+    def _normalize_ship_engagement_state(self, ship: Dict[str, Any], *, current_round: Optional[int] = None) -> Dict[str, Any]:
+        item = dict(ship if isinstance(ship, dict) else {})
+        blueprint_id = str(item.get("blueprint_id") or "").strip()
+        blueprint = self._ship_blueprints().get(blueprint_id) if blueprint_id else {}
+        components = [dict(entry) for entry in (item.get("components") if isinstance(item.get("components"), list) else []) if isinstance(entry, dict)]
+        if not components and isinstance(blueprint, dict):
+            components = [dict(entry) for entry in (blueprint.get("components") if isinstance(blueprint.get("components"), list) else []) if isinstance(entry, dict)]
+        weapons = [dict(entry) for entry in (item.get("mounted_weapons") if isinstance(item.get("mounted_weapons"), list) else []) if isinstance(entry, dict)]
+        if not weapons and isinstance(blueprint, dict):
+            weapons = [dict(entry) for entry in (blueprint.get("mounted_weapons") if isinstance(blueprint.get("mounted_weapons"), list) else []) if isinstance(entry, dict)]
+        item["components"] = components
+        item["mounted_weapons"] = weapons
+        crew = dict(item.get("crew") if isinstance(item.get("crew"), dict) else {})
+        if not crew and isinstance(blueprint, dict):
+            crew = dict(blueprint.get("crew") if isinstance(blueprint.get("crew"), dict) else {})
+        min_crew = max(0, int(crew.get("min_crew", 0) or 0))
+        recommended_crew = max(min_crew, int(crew.get("recommended_crew", min_crew) or min_crew))
+        crew["min_crew"] = min_crew
+        crew["recommended_crew"] = recommended_crew
+        item["crew"] = crew
+        crew_state = dict(item.get("crew_state") if isinstance(item.get("crew_state"), dict) else {})
+        if crew_state.get("active_crew") is None:
+            crew_state["active_crew"] = recommended_crew or min_crew
+        try:
+            crew_state["active_crew"] = max(0, int(crew_state.get("active_crew", 0) or 0))
+        except Exception:
+            crew_state["active_crew"] = 0
+        crew_state["crew_ready"] = bool(crew_state.get("active_crew", 0) > 0)
+        crew_state["undercrewed"] = bool(min_crew > 0 and int(crew_state.get("active_crew", 0)) < min_crew)
+        item["crew_state"] = crew_state
+        component_state = dict(item.get("component_state") if isinstance(item.get("component_state"), dict) else {})
+        for component in components:
+            cid = str(component.get("id") or "").strip().lower()
+            if not cid:
+                continue
+            current = dict(component_state.get(cid) if isinstance(component_state.get(cid), dict) else {})
+            default = self._ship_component_default_state(component)
+            merged = {**default, **current}
+            try:
+                merged["max_hp"] = max(0, int(merged.get("max_hp", default["max_hp"]) or default["max_hp"]))
+                merged["hp"] = max(0, min(int(merged.get("hp", default["hp"]) or 0), int(merged["max_hp"])))
+                merged["ac"] = max(0, int(merged.get("ac", default["ac"]) or 0))
+                merged["damage_threshold"] = max(0, int(merged.get("damage_threshold", default["damage_threshold"]) or 0))
+            except Exception:
+                merged = dict(default)
+            merged["disabled"] = bool(merged.get("disabled")) or (merged.get("max_hp", 0) > 0 and merged.get("hp", 0) <= 0)
+            merged["status"] = "destroyed" if merged["disabled"] else "operational"
+            component_state[cid] = merged
+        item["component_state"] = component_state
+        hull_component = next((entry for entry in components if str(entry.get("type") or "").strip().lower() == "hull"), components[0] if components else {})
+        hull_component_id = str((hull_component or {}).get("id") or "hull").strip().lower() or "hull"
+        hull_component_state = dict(component_state.get(hull_component_id) if isinstance(component_state.get(hull_component_id), dict) else {})
+        hull_max = max(0, int(hull_component_state.get("max_hp", 0) or 0))
+        hull_hp = max(0, min(int(hull_component_state.get("hp", hull_max) or 0), hull_max if hull_max > 0 else int(hull_component_state.get("hp", 0) or 0)))
+        hull_state = dict(item.get("hull_state") if isinstance(item.get("hull_state"), dict) else {})
+        hull_state["component_id"] = hull_component_id
+        hull_state["max_hp"] = hull_max
+        hull_state["hp"] = hull_hp
+        hull_state["ac"] = max(0, int(hull_component_state.get("ac", 0) or 0))
+        hull_state["status"] = "sunk" if hull_max > 0 and hull_hp <= 0 else "intact"
+        item["hull_state"] = hull_state
+        size = str(item.get("size") or (blueprint or {}).get("size") or "medium").strip().lower() or "medium"
+        default_profile = dict(SHIP_ENGAGEMENT_MOVEMENT_BY_SIZE.get(size) or SHIP_ENGAGEMENT_MOVEMENT_BY_SIZE["medium"])
+        movement_profile = dict(item.get("movement_profile") if isinstance(item.get("movement_profile"), dict) else {})
+        movement_profile["base_speed"] = max(1, int(movement_profile.get("base_speed", default_profile["speed"]) or default_profile["speed"]))
+        movement_profile["turn_allowance"] = max(0, int(movement_profile.get("turn_allowance", default_profile["turns"]) or default_profile["turns"]))
+        movement_profile["actions_per_round"] = max(1, int(movement_profile.get("actions_per_round", default_profile["actions"]) or default_profile["actions"]))
+        item["movement_profile"] = movement_profile
+        weapon_state = dict(item.get("weapon_state") if isinstance(item.get("weapon_state"), dict) else {})
+        for weapon in weapons:
+            wid = str(weapon.get("id") or "").strip().lower()
+            if not wid:
+                continue
+            profile = self._ship_weapon_profile(weapon)
+            current = dict(weapon_state.get(wid) if isinstance(weapon_state.get(wid), dict) else {})
+            current["disabled"] = bool(current.get("disabled"))
+            current["spent"] = bool(current.get("spent"))
+            current["reload_rounds"] = max(0, int(current.get("reload_rounds", profile["reload_rounds"]) or profile["reload_rounds"]))
+            try:
+                current["last_fired_round"] = int(current.get("last_fired_round")) if current.get("last_fired_round") is not None else None
+            except Exception:
+                current["last_fired_round"] = None
+            if current_round is not None and current["spent"] and current["last_fired_round"] is not None:
+                rounds_elapsed = int(current_round) - int(current["last_fired_round"])
+                if rounds_elapsed > int(current["reload_rounds"]):
+                    current["spent"] = False
+            weapon_state[wid] = current
+        item["weapon_state"] = weapon_state
+        engagement_state = dict(item.get("engagement_state") if isinstance(item.get("engagement_state"), dict) else {})
+        round_num = int(current_round if current_round is not None else int(getattr(self, "round_num", 0) or 0))
+        last_round = int(engagement_state.get("round", -1) or -1)
+        max_actions = int(movement_profile.get("actions_per_round", 1) or 1)
+        if min_crew > 0 and int(crew_state.get("active_crew", 0)) < min_crew:
+            max_actions = max(1, max_actions - 1)
+        if round_num != last_round:
+            engagement_state.update(
+                {
+                    "round": round_num,
+                    "movement_remaining": int(movement_profile.get("base_speed", 1) or 1),
+                    "turns_remaining": int(movement_profile.get("turn_allowance", 0) or 0),
+                    "actions_remaining": int(max_actions),
+                    "ram_used": False,
+                }
+            )
+        else:
+            engagement_state["movement_remaining"] = max(0, int(engagement_state.get("movement_remaining", movement_profile.get("base_speed", 1)) or 0))
+            engagement_state["turns_remaining"] = max(0, int(engagement_state.get("turns_remaining", movement_profile.get("turn_allowance", 0)) or 0))
+            engagement_state["actions_remaining"] = max(0, int(engagement_state.get("actions_remaining", max_actions) or 0))
+            engagement_state["ram_used"] = bool(engagement_state.get("ram_used"))
+        engagement_state["max_actions"] = int(max_actions)
+        item["engagement_state"] = engagement_state
+        return item
+
+    def _update_ship_instance(self, ship_id: Any, update_fn: Callable[[Dict[str, Any]], Dict[str, Any]]) -> Optional[Dict[str, Any]]:
+        target_id = str(ship_id or "").strip()
+        if not target_id:
+            return None
+        updated_item: Optional[Dict[str, Any]] = None
+
+        def _mutate(state: MapState) -> None:
+            nonlocal updated_item
+            presentation = dict(state.presentation or {})
+            ship_instances = dict(presentation.get("ship_instances") if isinstance(presentation.get("ship_instances"), dict) else {})
+            current = dict(ship_instances.get(target_id) if isinstance(ship_instances.get(target_id), dict) else {})
+            if not current:
+                return
+            normalized = self._normalize_ship_engagement_state(current, current_round=int(getattr(self, "round_num", 0) or 0))
+            updated_item = dict(update_fn(dict(normalized)) or normalized)
+            ship_instances[target_id] = dict(updated_item)
+            presentation["ship_instances"] = ship_instances
+            state.presentation = presentation
+
+        self._mutate_canonical_map_state(_mutate)
+        return dict(updated_item) if isinstance(updated_item, dict) else None
 
     def _boarding_links(self) -> List[Dict[str, Any]]:
         state = self._capture_canonical_map_state(prefer_window=False)
@@ -9839,6 +10038,347 @@ class InitiativeTracker(base.InitiativeTracker):
             "message": f"Boarding link {target_link_id} {'removed' if remove else f'set to {desired_status}'}.",
         }
 
+    def _ship_arc_world_edges(self, arc: Any, facing_deg: Any) -> set[str]:
+        label = str(arc or "").strip().lower() or "broadside"
+        if label in {"all", "omni", "turret"}:
+            return {"north", "south", "east", "west"}
+        local_labels = [label]
+        if label == "broadside":
+            local_labels = ["port", "starboard"]
+        edges: set[str] = set()
+        for local in local_labels:
+            vector = self._ship_relative_edge_vector(local)
+            if vector is None:
+                continue
+            dc, dr = self._rotate_ship_local_cell(int(vector[0]), int(vector[1]), facing_deg)
+            edges.add(self._ship_world_edge_label(dc, dr))
+        return edges
+
+    def _ship_relative_world_edge(self, source_col: int, source_row: int, target_col: int, target_row: int) -> str:
+        delta_col = int(target_col) - int(source_col)
+        delta_row = int(target_row) - int(source_row)
+        return self._ship_world_edge_label(delta_col, delta_row)
+
+    def _ship_structure_for_id(self, structure_id: Any) -> Optional[MapStructure]:
+        sid = str(structure_id or "").strip()
+        if not sid:
+            return None
+        state = self._capture_canonical_map_state(prefer_window=False)
+        item = (state.structures or {}).get(sid)
+        return item if isinstance(item, MapStructure) else None
+
+    def _ship_apply_damage(
+        self,
+        ship: Dict[str, Any],
+        *,
+        damage: int,
+        target_component_id: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        updated = self._normalize_ship_engagement_state(dict(ship), current_round=int(getattr(self, "round_num", 0) or 0))
+        amount = max(0, int(damage))
+        cid = str(target_component_id or "").strip().lower()
+        component_state = dict(updated.get("component_state") if isinstance(updated.get("component_state"), dict) else {})
+        hull_state = dict(updated.get("hull_state") if isinstance(updated.get("hull_state"), dict) else {})
+        default_target = str(hull_state.get("component_id") or "hull").strip().lower() or "hull"
+        target_id = cid or default_target
+        state_entry = dict(component_state.get(target_id) if isinstance(component_state.get(target_id), dict) else {})
+        if not state_entry:
+            target_id = default_target
+            state_entry = dict(component_state.get(target_id) if isinstance(component_state.get(target_id), dict) else {})
+        if not state_entry:
+            return {"ship": updated, "applied_damage": 0, "target_component_id": target_id}
+        threshold = max(0, int(state_entry.get("damage_threshold", 0) or 0))
+        if amount <= threshold:
+            return {"ship": updated, "applied_damage": 0, "target_component_id": target_id}
+        hp = max(0, int(state_entry.get("hp", 0) or 0))
+        max_hp = max(0, int(state_entry.get("max_hp", hp) or hp))
+        next_hp = max(0, hp - amount)
+        state_entry["hp"] = next_hp
+        state_entry["max_hp"] = max_hp
+        state_entry["disabled"] = bool(max_hp > 0 and next_hp <= 0)
+        state_entry["status"] = "destroyed" if state_entry["disabled"] else ("damaged" if next_hp < max_hp else "operational")
+        component_state[target_id] = state_entry
+        updated["component_state"] = component_state
+        if target_id == default_target:
+            hull_state["hp"] = next_hp
+            hull_state["max_hp"] = max_hp
+            hull_state["status"] = "sunk" if max_hp > 0 and next_hp <= 0 else ("damaged" if next_hp < max_hp else "intact")
+            updated["hull_state"] = hull_state
+        return {"ship": updated, "applied_damage": int(amount), "target_component_id": target_id}
+
+    def _ship_engagement_maneuver(self, structure_id: Any, maneuver: Any, *, steps: int = 1) -> Dict[str, Any]:
+        sid = str(structure_id or "").strip()
+        action = str(maneuver or "").strip().lower()
+        if not sid:
+            return {"ok": False, "reason": "missing_structure_id", "message": "Select a ship first."}
+        ship = self._ship_instance_for_structure(sid)
+        structure = self._ship_structure_for_id(sid)
+        if not isinstance(ship, dict) or structure is None:
+            return {"ok": False, "reason": "ship_not_found", "message": "Selected structure is not a ship."}
+        ship = self._normalize_ship_engagement_state(ship, current_round=int(getattr(self, "round_num", 0) or 0))
+        crew_state = dict(ship.get("crew_state") if isinstance(ship.get("crew_state"), dict) else {})
+        if not bool(crew_state.get("crew_ready", True)):
+            return {"ok": False, "reason": "crew_unavailable", "message": "No active crew are available to maneuver."}
+        engagement = dict(ship.get("engagement_state") if isinstance(ship.get("engagement_state"), dict) else {})
+        component_state = dict(ship.get("component_state") if isinstance(ship.get("component_state"), dict) else {})
+        helm_disabled = bool((component_state.get("helm") or {}).get("disabled"))
+        rigging_disabled = bool((component_state.get("rigging") or {}).get("disabled"))
+        if action in {"turn_port", "turn_starboard"}:
+            if helm_disabled:
+                return {"ok": False, "reason": "helm_disabled", "message": "The helm is disabled and the ship cannot turn."}
+            if int(engagement.get("turns_remaining", 0) or 0) <= 0:
+                return {"ok": False, "reason": "turn_spent", "message": "No turns remain for this round."}
+            delta = -90.0 if action == "turn_port" else 90.0
+            next_facing = (float(ship.get("facing_deg", 0.0) or 0.0) + delta) % 360.0
+
+            def _apply_turn(current: Dict[str, Any]) -> Dict[str, Any]:
+                updated = self._normalize_ship_engagement_state(current, current_round=int(getattr(self, "round_num", 0) or 0))
+                updated["facing_deg"] = next_facing
+                updated_engagement = dict(updated.get("engagement_state") if isinstance(updated.get("engagement_state"), dict) else {})
+                updated_engagement["turns_remaining"] = max(0, int(updated_engagement.get("turns_remaining", 0) or 0) - 1)
+                updated["engagement_state"] = updated_engagement
+                structure_item = self._ship_structure_for_id(sid)
+                if structure_item is not None:
+                    payload = dict(structure_item.payload if isinstance(structure_item.payload, dict) else {})
+                    payload["facing_deg"] = float(next_facing)
+                    runtime_boarding = dict(updated.get("boarding") if isinstance(updated.get("boarding"), dict) else {})
+                    local_points = list(runtime_boarding.get("points_local") if isinstance(runtime_boarding.get("points_local"), list) else [])
+                    local_bridges = list(runtime_boarding.get("bridges_local") if isinstance(runtime_boarding.get("bridges_local"), list) else [])
+                    local_edges = list(runtime_boarding.get("edges_local") if isinstance(runtime_boarding.get("edges_local"), list) else [])
+                    if local_points:
+                        runtime_boarding["points"] = local_points
+                    if local_bridges:
+                        runtime_boarding["bridges"] = local_bridges
+                    if local_edges:
+                        runtime_boarding["edges"] = local_edges
+                    updated["boarding"] = self._transform_ship_boarding_runtime_metadata(
+                        boarding=runtime_boarding,
+                        anchor_col=int(structure_item.anchor_col),
+                        anchor_row=int(structure_item.anchor_row),
+                        facing_deg=float(next_facing),
+                    )
+                return updated
+
+            next_ship = self._update_ship_instance(str(ship.get("id") or ""), _apply_turn) or ship
+            transformed_boarding = dict(next_ship.get("boarding") if isinstance(next_ship.get("boarding"), dict) else {})
+
+            def _mutate_structure(state: MapState) -> None:
+                structure_map = dict(state.structures or {})
+                current_structure = structure_map.get(sid)
+                if not isinstance(current_structure, MapStructure):
+                    return
+                payload = dict(current_structure.payload if isinstance(current_structure.payload, dict) else {})
+                payload["facing_deg"] = float(next_facing)
+                payload["boardable_edges"] = list(transformed_boarding.get("edges") if isinstance(transformed_boarding.get("edges"), list) else [])
+                payload["boardable_edges_local"] = list(transformed_boarding.get("edges_local") if isinstance(transformed_boarding.get("edges_local"), list) else [])
+                payload["boarding_points"] = list(transformed_boarding.get("points") if isinstance(transformed_boarding.get("points"), list) else [])
+                payload["boarding_points_local"] = list(transformed_boarding.get("points_local") if isinstance(transformed_boarding.get("points_local"), list) else [])
+                payload["boarding_bridges"] = list(transformed_boarding.get("bridges") if isinstance(transformed_boarding.get("bridges"), list) else [])
+                payload["boarding_bridges_local"] = list(transformed_boarding.get("bridges_local") if isinstance(transformed_boarding.get("bridges_local"), list) else [])
+                structure_map[sid] = MapStructure(
+                    structure_id=str(current_structure.structure_id),
+                    kind=str(current_structure.kind),
+                    anchor_col=int(current_structure.anchor_col),
+                    anchor_row=int(current_structure.anchor_row),
+                    occupied_cells=list(current_structure.occupied_cells or []),
+                    payload=payload,
+                ).normalized()
+                state.structures = structure_map
+                self._reconcile_boarding_links_for_state(state)
+
+            self._mutate_canonical_map_state(_mutate_structure)
+            return {"ok": True, "structure_id": sid, "maneuver": action, "facing_deg": float(next_ship.get("facing_deg", next_facing) or next_facing)}
+        if action not in {"move_forward", "move_reverse"}:
+            return {"ok": False, "reason": "unsupported_maneuver", "message": "Unsupported maneuver."}
+        if helm_disabled:
+            return {"ok": False, "reason": "helm_disabled", "message": "The helm is disabled and the ship cannot move."}
+        if rigging_disabled:
+            return {"ok": False, "reason": "rigging_disabled", "message": "Rigging is disabled and the ship cannot move."}
+        move_budget = int(engagement.get("movement_remaining", 0) or 0)
+        move_steps = max(1, int(steps or 1))
+        if move_steps > move_budget:
+            return {"ok": False, "reason": "movement_spent", "message": "Not enough ship movement remaining this round."}
+        fwd_dc, fwd_dr = self._ship_forward_vector(ship.get("facing_deg", 0.0))
+        if action == "move_reverse":
+            fwd_dc, fwd_dr = -fwd_dc, -fwd_dr
+        total_moved = 0
+        for _ in range(move_steps):
+            query = self._map_query_api()
+            blockers = query.structure_move_blockers(sid, int(fwd_dc), int(fwd_dr))
+            if not bool(blockers.get("ok")):
+                self._last_ship_engagement_error = {"reason": "movement_blocked", "blockers": blockers}
+                return {
+                    "ok": False,
+                    "reason": "movement_blocked",
+                    "message": "Ship movement is blocked.",
+                    "blockers": blockers,
+                }
+            if not bool(self._move_map_structure(sid, int(fwd_dc), int(fwd_dr))):
+                return {"ok": False, "reason": "move_failed", "message": "Unable to move ship."}
+            total_moved += 1
+        ship_id = str(ship.get("id") or "").strip()
+
+        def _apply_move(current: Dict[str, Any]) -> Dict[str, Any]:
+            updated = self._normalize_ship_engagement_state(current, current_round=int(getattr(self, "round_num", 0) or 0))
+            updated_engagement = dict(updated.get("engagement_state") if isinstance(updated.get("engagement_state"), dict) else {})
+            updated_engagement["movement_remaining"] = max(0, int(updated_engagement.get("movement_remaining", 0) or 0) - int(total_moved))
+            updated["engagement_state"] = updated_engagement
+            return updated
+
+        self._update_ship_instance(ship_id, _apply_move)
+        semantics = self._structure_contact_semantics(sid)
+        return {
+            "ok": True,
+            "structure_id": sid,
+            "maneuver": action,
+            "moved_squares": int(total_moved),
+            "contact_count": len(semantics.get("ship_contact_structure_ids") if isinstance(semantics.get("ship_contact_structure_ids"), list) else []),
+        }
+
+    def _ship_engagement_fire_weapon(
+        self,
+        source_structure_id: Any,
+        weapon_id: Any,
+        target_structure_id: Any,
+        *,
+        target_component_id: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        source_id = str(source_structure_id or "").strip()
+        target_id = str(target_structure_id or "").strip()
+        wid = str(weapon_id or "").strip().lower()
+        if not source_id or not target_id or not wid:
+            return {"ok": False, "reason": "missing_parameters", "message": "Ship, weapon, and target are required."}
+        source_ship = self._ship_instance_for_structure(source_id)
+        target_ship = self._ship_instance_for_structure(target_id)
+        source_structure = self._ship_structure_for_id(source_id)
+        target_structure = self._ship_structure_for_id(target_id)
+        if not isinstance(source_ship, dict) or not isinstance(target_ship, dict) or source_structure is None or target_structure is None:
+            return {"ok": False, "reason": "ship_not_found", "message": "Source or target ship was not found."}
+        source_ship = self._normalize_ship_engagement_state(source_ship, current_round=int(getattr(self, "round_num", 0) or 0))
+        target_ship = self._normalize_ship_engagement_state(target_ship, current_round=int(getattr(self, "round_num", 0) or 0))
+        engagement = dict(source_ship.get("engagement_state") if isinstance(source_ship.get("engagement_state"), dict) else {})
+        if int(engagement.get("actions_remaining", 0) or 0) <= 0:
+            return {"ok": False, "reason": "actions_spent", "message": "No ship actions remain this round."}
+        weapon = next((entry for entry in (source_ship.get("mounted_weapons") if isinstance(source_ship.get("mounted_weapons"), list) else []) if str(entry.get("id") or "").strip().lower() == wid), None)
+        if not isinstance(weapon, dict):
+            return {"ok": False, "reason": "weapon_not_found", "message": "Selected mounted weapon was not found."}
+        weapon_state = dict((source_ship.get("weapon_state") if isinstance(source_ship.get("weapon_state"), dict) else {}).get(wid) or {})
+        if bool(weapon_state.get("disabled")):
+            return {"ok": False, "reason": "weapon_disabled", "message": "That weapon is disabled."}
+        if bool(weapon_state.get("spent")):
+            return {"ok": False, "reason": "weapon_reloading", "message": "That weapon is reloading."}
+        profile = self._ship_weapon_profile(weapon)
+        src_col, src_row = int(source_structure.anchor_col), int(source_structure.anchor_row)
+        dst_col, dst_row = int(target_structure.anchor_col), int(target_structure.anchor_row)
+        distance = math.sqrt(float((dst_col - src_col) ** 2 + (dst_row - src_row) ** 2))
+        if distance > float(profile["range"]):
+            return {"ok": False, "reason": "target_out_of_range", "message": "Target is out of range.", "range": int(profile["range"]), "distance": round(distance, 2)}
+        world_edge = self._ship_relative_world_edge(src_col, src_row, dst_col, dst_row)
+        allowed_edges = self._ship_arc_world_edges(weapon.get("arc", "broadside"), source_ship.get("facing_deg", 0.0))
+        if allowed_edges and world_edge not in allowed_edges:
+            return {"ok": False, "reason": "target_outside_arc", "message": "Target is outside the weapon arc.", "arc_edges": sorted(allowed_edges)}
+        target_component = str(target_component_id or "").strip().lower() or None
+        attack_roll_raw = random.randint(1, 20)
+        attack_total = int(attack_roll_raw + int(profile["to_hit"]))
+        target_ac = int((target_ship.get("hull_state") if isinstance(target_ship.get("hull_state"), dict) else {}).get("ac", 15) or 15)
+        target_components = dict(target_ship.get("component_state") if isinstance(target_ship.get("component_state"), dict) else {})
+        if target_component and isinstance(target_components.get(target_component), dict):
+            target_ac = int(target_components[target_component].get("ac", target_ac) or target_ac)
+        hit = attack_roll_raw == 20 or (attack_roll_raw != 1 and attack_total >= target_ac)
+        applied = 0
+        resolved_component = target_component
+        if hit:
+            damaged = self._ship_apply_damage(target_ship, damage=int(profile["damage"]), target_component_id=target_component)
+            target_ship = dict(damaged.get("ship") if isinstance(damaged.get("ship"), dict) else target_ship)
+            applied = int(damaged.get("applied_damage", 0) or 0)
+            resolved_component = str(damaged.get("target_component_id") or target_component or "")
+        source_ship_id = str(source_ship.get("id") or "")
+        target_ship_id = str(target_ship.get("id") or "")
+
+        def _apply_source(current: Dict[str, Any]) -> Dict[str, Any]:
+            updated = self._normalize_ship_engagement_state(current, current_round=int(getattr(self, "round_num", 0) or 0))
+            wstate = dict(updated.get("weapon_state") if isinstance(updated.get("weapon_state"), dict) else {})
+            entry = dict(wstate.get(wid) if isinstance(wstate.get(wid), dict) else {})
+            entry["spent"] = int(profile.get("reload_rounds", 0) or 0) > 0
+            entry["reload_rounds"] = int(profile.get("reload_rounds", 0) or 0)
+            entry["last_fired_round"] = int(getattr(self, "round_num", 0) or 0)
+            wstate[wid] = entry
+            updated["weapon_state"] = wstate
+            e_state = dict(updated.get("engagement_state") if isinstance(updated.get("engagement_state"), dict) else {})
+            e_state["actions_remaining"] = max(0, int(e_state.get("actions_remaining", 0) or 0) - 1)
+            updated["engagement_state"] = e_state
+            return updated
+
+        self._update_ship_instance(source_ship_id, _apply_source)
+        if hit:
+            self._update_ship_instance(target_ship_id, lambda _current: dict(target_ship))
+        return {
+            "ok": True,
+            "source_structure_id": source_id,
+            "target_structure_id": target_id,
+            "weapon_id": wid,
+            "hit": bool(hit),
+            "attack_roll": int(attack_roll_raw),
+            "attack_total": int(attack_total),
+            "target_ac": int(target_ac),
+            "damage": int(applied),
+            "target_component_id": resolved_component,
+        }
+
+    def _ship_engagement_ram(self, source_structure_id: Any, target_structure_id: Any) -> Dict[str, Any]:
+        source_id = str(source_structure_id or "").strip()
+        target_id = str(target_structure_id or "").strip()
+        if not source_id or not target_id or source_id == target_id:
+            return {"ok": False, "reason": "invalid_target", "message": "Select two different ships for ramming."}
+        source_ship = self._ship_instance_for_structure(source_id)
+        target_ship = self._ship_instance_for_structure(target_id)
+        source_structure = self._ship_structure_for_id(source_id)
+        target_structure = self._ship_structure_for_id(target_id)
+        if not isinstance(source_ship, dict) or not isinstance(target_ship, dict) or source_structure is None or target_structure is None:
+            return {"ok": False, "reason": "ship_not_found", "message": "Source or target ship was not found."}
+        source_ship = self._normalize_ship_engagement_state(source_ship, current_round=int(getattr(self, "round_num", 0) or 0))
+        engagement = dict(source_ship.get("engagement_state") if isinstance(source_ship.get("engagement_state"), dict) else {})
+        if bool(engagement.get("ram_used")):
+            return {"ok": False, "reason": "ram_spent", "message": "This ship already rammed this round."}
+        if int(engagement.get("actions_remaining", 0) or 0) <= 0:
+            return {"ok": False, "reason": "actions_spent", "message": "No ship actions remain this round."}
+        relation = self._map_query_api().ship_contact_relation(source_id, target_id)
+        if not isinstance(relation, dict) or not bool(relation.get("contact")):
+            return {"ok": False, "reason": "not_in_contact", "message": "Ships must be in contact to ram in this pass."}
+        source_hull_state = dict(source_ship.get("hull_state") if isinstance(source_ship.get("hull_state"), dict) else {})
+        target_hull_state = dict(target_ship.get("hull_state") if isinstance(target_ship.get("hull_state"), dict) else {})
+        source_hull = int(source_hull_state.get("max_hp", 100) or 100)
+        target_hull = int(target_hull_state.get("max_hp", 100) or 100)
+        ram_damage_to_target = max(8, int(round(source_hull * 0.08)))
+        backlash_to_source = max(4, int(round(target_hull * 0.04)))
+        source_after = self._ship_apply_damage(source_ship, damage=backlash_to_source)
+        target_after = self._ship_apply_damage(target_ship, damage=ram_damage_to_target)
+        source_ship = dict(source_after.get("ship") if isinstance(source_after.get("ship"), dict) else source_ship)
+        target_ship = dict(target_after.get("ship") if isinstance(target_after.get("ship"), dict) else target_ship)
+        source_ship_id = str(source_ship.get("id") or "")
+        target_ship_id = str(target_ship.get("id") or "")
+
+        def _apply_source(current: Dict[str, Any]) -> Dict[str, Any]:
+            updated = self._normalize_ship_engagement_state(current, current_round=int(getattr(self, "round_num", 0) or 0))
+            e_state = dict(updated.get("engagement_state") if isinstance(updated.get("engagement_state"), dict) else {})
+            e_state["ram_used"] = True
+            e_state["actions_remaining"] = max(0, int(e_state.get("actions_remaining", 0) or 0) - 1)
+            updated["engagement_state"] = e_state
+            updated["component_state"] = dict(source_ship.get("component_state") if isinstance(source_ship.get("component_state"), dict) else {})
+            updated["hull_state"] = dict(source_ship.get("hull_state") if isinstance(source_ship.get("hull_state"), dict) else {})
+            return updated
+
+        self._update_ship_instance(source_ship_id, _apply_source)
+        self._update_ship_instance(target_ship_id, lambda _current: dict(target_ship))
+        return {
+            "ok": True,
+            "source_structure_id": source_id,
+            "target_structure_id": target_id,
+            "target_damage": int(target_after.get("applied_damage", 0) or 0),
+            "source_damage": int(source_after.get("applied_damage", 0) or 0),
+            "contact_type": str((relation or {}).get("contact_type") or "contact"),
+        }
+
     def _selected_ship_summary(self, structure_id: Any) -> Dict[str, Any]:
         sid = str(structure_id or "").strip()
         if not sid:
@@ -9846,12 +10386,33 @@ class InitiativeTracker(base.InitiativeTracker):
         ship = self._ship_instance_for_structure(sid)
         if not isinstance(ship, dict):
             return {"ok": False, "reason": "ship_not_found"}
+        ship = self._normalize_ship_engagement_state(ship, current_round=int(getattr(self, "round_num", 0) or 0))
         semantics = self._structure_contact_semantics(sid)
         blueprint_id = str(ship.get("blueprint_id") or "").strip()
         blueprints = self._ship_blueprints()
         blueprint = blueprints.get(blueprint_id) if blueprint_id in blueprints else {}
         components = list(ship.get("components") if isinstance(ship.get("components"), list) else [])
         weapons = list(ship.get("mounted_weapons") if isinstance(ship.get("mounted_weapons"), list) else [])
+        component_state = dict(ship.get("component_state") if isinstance(ship.get("component_state"), dict) else {})
+        weapon_state = dict(ship.get("weapon_state") if isinstance(ship.get("weapon_state"), dict) else {})
+        crew_state = dict(ship.get("crew_state") if isinstance(ship.get("crew_state"), dict) else {})
+        hull_state = dict(ship.get("hull_state") if isinstance(ship.get("hull_state"), dict) else {})
+        engagement_state = dict(ship.get("engagement_state") if isinstance(ship.get("engagement_state"), dict) else {})
+        damaged_components = sum(
+            1
+            for entry in component_state.values()
+            if isinstance(entry, dict) and int(entry.get("hp", 0) or 0) < int(entry.get("max_hp", 0) or 0)
+        )
+        disabled_components = sum(1 for entry in component_state.values() if isinstance(entry, dict) and bool(entry.get("disabled")))
+        disabled_weapons = 0
+        reloading_weapons = 0
+        for weapon in weapons:
+            wid = str(weapon.get("id") or "").strip().lower()
+            state_entry = dict(weapon_state.get(wid) if isinstance(weapon_state.get(wid), dict) else {})
+            if bool(state_entry.get("disabled")):
+                disabled_weapons += 1
+            if bool(state_entry.get("spent")):
+                reloading_weapons += 1
         boardable = semantics.get("boarding_capable_structures") if isinstance(semantics.get("boarding_capable_structures"), list) else []
         active_boarding = semantics.get("active_boarding_structures") if isinstance(semantics.get("active_boarding_structures"), list) else []
         traversable_boarding = (
@@ -9868,11 +10429,29 @@ class InitiativeTracker(base.InitiativeTracker):
             "facing_deg": float(ship.get("facing_deg", 0.0) or 0.0),
             "component_count": len(components),
             "weapon_count": len(weapons),
+            "hull_hp": int(hull_state.get("hp", 0) or 0),
+            "hull_max_hp": int(hull_state.get("max_hp", 0) or 0),
+            "hull_status": str(hull_state.get("status") or "intact"),
+            "active_crew": int(crew_state.get("active_crew", 0) or 0),
+            "crew_ready": bool(crew_state.get("crew_ready", False)),
+            "crew_undercrewed": bool(crew_state.get("undercrewed", False)),
+            "damaged_component_count": int(damaged_components),
+            "disabled_component_count": int(disabled_components),
+            "disabled_weapon_count": int(disabled_weapons),
+            "reloading_weapon_count": int(reloading_weapons),
+            "movement_remaining": int(engagement_state.get("movement_remaining", 0) or 0),
+            "turns_remaining": int(engagement_state.get("turns_remaining", 0) or 0),
+            "actions_remaining": int(engagement_state.get("actions_remaining", 0) or 0),
             "boardable_contact_count": len(boardable),
             "active_boarding_count": len(active_boarding),
             "traversable_boarding_count": len(traversable_boarding),
             "components": components,
             "mounted_weapons": weapons,
+            "component_state": component_state,
+            "weapon_state": weapon_state,
+            "crew_state": crew_state,
+            "hull_state": hull_state,
+            "engagement_state": engagement_state,
             "boardable_contacts": boardable,
             "active_boarding_contacts": active_boarding,
             "traversable_boarding_contacts": traversable_boarding,
@@ -10895,6 +11474,15 @@ class InitiativeTracker(base.InitiativeTracker):
             display_name = str(name or "").strip() or str(blueprint.get("name") or bid.replace("_", " ").title())
             components = [dict(item) for item in (blueprint.get("components") if isinstance(blueprint.get("components"), list) else []) if isinstance(item, dict)]
             weapons = [dict(item) for item in (blueprint.get("mounted_weapons") if isinstance(blueprint.get("mounted_weapons"), list) else []) if isinstance(item, dict)]
+            crew_defaults = dict(blueprint.get("crew") if isinstance(blueprint.get("crew"), dict) else {})
+            try:
+                min_crew = max(0, int(crew_defaults.get("min_crew", 0) or 0))
+            except Exception:
+                min_crew = 0
+            try:
+                recommended_crew = max(min_crew, int(crew_defaults.get("recommended_crew", min_crew) or min_crew))
+            except Exception:
+                recommended_crew = min_crew
             ship_instances[ship_instance_id] = {
                 "id": ship_instance_id,
                 "name": display_name,
@@ -10906,14 +11494,20 @@ class InitiativeTracker(base.InitiativeTracker):
                 "components": components,
                 "mounted_weapons": weapons,
                 "boarding": dict(transformed_boarding),
-                "crew": dict(blueprint.get("crew") if isinstance(blueprint.get("crew"), dict) else {}),
+                "crew": {"min_crew": int(min_crew), "recommended_crew": int(recommended_crew)},
                 "decks": list(blueprint.get("decks") if isinstance(blueprint.get("decks"), list) else []),
                 "surfaces": list(blueprint.get("surfaces") if isinstance(blueprint.get("surfaces"), list) else []),
-                "crew_state": {"active_crew": 0, "crew_ready": True},
-                "hull_state": {"status": "intact", "hp": None},
+                "crew_state": {"active_crew": int(recommended_crew or min_crew), "crew_ready": bool((recommended_crew or min_crew) > 0)},
+                "hull_state": {"status": "intact"},
                 "component_state": {},
                 "weapon_state": {},
+                "movement_profile": {},
+                "engagement_state": {},
             }
+            ship_instances[ship_instance_id] = self._normalize_ship_engagement_state(
+                dict(ship_instances[ship_instance_id]),
+                current_round=int(getattr(self, "round_num", 0) or 0),
+            )
             payload = dict(structure.payload if isinstance(structure.payload, dict) else {})
             payload.update(
                 {
@@ -14620,15 +15214,27 @@ class InitiativeTracker(base.InitiativeTracker):
         for ship in ship_instances.values():
             if not isinstance(ship, dict):
                 continue
+            normalized_ship = self._normalize_ship_engagement_state(dict(ship), current_round=int(getattr(self, "round_num", 0) or 0))
+            hull_state = dict(normalized_ship.get("hull_state") if isinstance(normalized_ship.get("hull_state"), dict) else {})
+            crew_state = dict(normalized_ship.get("crew_state") if isinstance(normalized_ship.get("crew_state"), dict) else {})
+            engagement_state = dict(normalized_ship.get("engagement_state") if isinstance(normalized_ship.get("engagement_state"), dict) else {})
             ships_payload.append(
                 {
-                    "id": str(ship.get("id") or ""),
-                    "name": str(ship.get("name") or ""),
-                    "blueprint_id": str(ship.get("blueprint_id") or ""),
-                    "parent_structure_id": str(ship.get("parent_structure_id") or ""),
-                    "facing_deg": float(ship.get("facing_deg", 0.0) or 0.0),
-                    "component_count": len(ship.get("components") if isinstance(ship.get("components"), list) else []),
-                    "weapon_count": len(ship.get("mounted_weapons") if isinstance(ship.get("mounted_weapons"), list) else []),
+                    "id": str(normalized_ship.get("id") or ""),
+                    "name": str(normalized_ship.get("name") or ""),
+                    "blueprint_id": str(normalized_ship.get("blueprint_id") or ""),
+                    "parent_structure_id": str(normalized_ship.get("parent_structure_id") or ""),
+                    "facing_deg": float(normalized_ship.get("facing_deg", 0.0) or 0.0),
+                    "component_count": len(normalized_ship.get("components") if isinstance(normalized_ship.get("components"), list) else []),
+                    "weapon_count": len(normalized_ship.get("mounted_weapons") if isinstance(normalized_ship.get("mounted_weapons"), list) else []),
+                    "hull_hp": int(hull_state.get("hp", 0) or 0),
+                    "hull_max_hp": int(hull_state.get("max_hp", 0) or 0),
+                    "hull_status": str(hull_state.get("status") or "intact"),
+                    "active_crew": int(crew_state.get("active_crew", 0) or 0),
+                    "crew_ready": bool(crew_state.get("crew_ready", False)),
+                    "movement_remaining": int(engagement_state.get("movement_remaining", 0) or 0),
+                    "turns_remaining": int(engagement_state.get("turns_remaining", 0) or 0),
+                    "actions_remaining": int(engagement_state.get("actions_remaining", 0) or 0),
                 }
             )
         for index, structure_entry in enumerate(structure_entries):
@@ -14664,9 +15270,24 @@ class InitiativeTracker(base.InitiativeTracker):
                     "facing_deg": float(ship_summary.get("facing_deg", 0.0) or 0.0),
                     "component_count": int(ship_summary.get("component_count", 0) or 0),
                     "weapon_count": int(ship_summary.get("weapon_count", 0) or 0),
+                    "hull_hp": int(ship_summary.get("hull_hp", 0) or 0),
+                    "hull_max_hp": int(ship_summary.get("hull_max_hp", 0) or 0),
+                    "hull_status": str(ship_summary.get("hull_status") or "intact"),
+                    "active_crew": int(ship_summary.get("active_crew", 0) or 0),
+                    "crew_ready": bool(ship_summary.get("crew_ready", False)),
+                    "crew_undercrewed": bool(ship_summary.get("crew_undercrewed", False)),
+                    "disabled_component_count": int(ship_summary.get("disabled_component_count", 0) or 0),
+                    "disabled_weapon_count": int(ship_summary.get("disabled_weapon_count", 0) or 0),
+                    "reloading_weapon_count": int(ship_summary.get("reloading_weapon_count", 0) or 0),
+                    "movement_remaining": int(ship_summary.get("movement_remaining", 0) or 0),
+                    "turns_remaining": int(ship_summary.get("turns_remaining", 0) or 0),
+                    "actions_remaining": int(ship_summary.get("actions_remaining", 0) or 0),
                     "boardable_contact_count": int(ship_summary.get("boardable_contact_count", 0) or 0),
                     "active_boarding_count": int(ship_summary.get("active_boarding_count", 0) or 0),
                     "traversable_boarding_count": int(ship_summary.get("traversable_boarding_count", 0) or 0),
+                    "hull_state": dict(ship_summary.get("hull_state") if isinstance(ship_summary.get("hull_state"), dict) else {}),
+                    "crew_state": dict(ship_summary.get("crew_state") if isinstance(ship_summary.get("crew_state"), dict) else {}),
+                    "engagement_state": dict(ship_summary.get("engagement_state") if isinstance(ship_summary.get("engagement_state"), dict) else {}),
                 }
             structure_entries[index] = structure_entry
         snap["structures"] = structure_entries

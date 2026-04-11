@@ -14176,9 +14176,18 @@ __DAMAGE_TYPE_OPTIONS__
     const facingDeg = Number(shipState.facing_deg || 0);
     const componentCount = Number(shipState.component_count || 0);
     const weaponCount = Number(shipState.weapon_count || 0);
+    const hullHp = Number(shipState.hull_hp || 0);
+    const hullMaxHp = Number(shipState.hull_max_hp || 0);
+    const activeCrew = Number(shipState.active_crew || 0);
+    const movementRemaining = Number(shipState.movement_remaining || 0);
+    const turnsRemaining = Number(shipState.turns_remaining || 0);
+    const actionsRemaining = Number(shipState.actions_remaining || 0);
+    const disabledComponents = Number(shipState.disabled_component_count || 0);
+    const disabledWeapons = Number(shipState.disabled_weapon_count || 0);
+    const reloadingWeapons = Number(shipState.reloading_weapon_count || 0);
     const activeBoardingCount = Number(shipState.active_boarding_count || activeBoarding.length || 0);
     const traversableBoardingCount = Number(shipState.traversable_boarding_count || traversableBoarding.length || 0);
-    return `Selected ship: ${String(shipState.name || displayName)} · Blueprint: ${blueprintName} · Facing: ${Math.round(facingDeg)}° · Components: ${componentCount} · Weapons: ${weaponCount} · Adjacent: ${adjacentText} · Boardable: ${boardableText} · Active Boarding: ${activeBoardingCount} (${activeBoardingText}) · Traversable: ${traversableBoardingCount} (${traversableBoardingText})`;
+    return `Selected ship: ${String(shipState.name || displayName)} · Blueprint: ${blueprintName} · Facing: ${Math.round(facingDeg)}° · Hull: ${hullHp}/${hullMaxHp} · Crew: ${activeCrew} · Components: ${componentCount} (${disabledComponents} disabled) · Weapons: ${weaponCount} (${disabledWeapons} disabled, ${reloadingWeapons} reloading) · Move/Turn/Act: ${movementRemaining}/${turnsRemaining}/${actionsRemaining} · Adjacent: ${adjacentText} · Boardable: ${boardableText} · Active Boarding: ${activeBoardingCount} (${activeBoardingText}) · Traversable: ${traversableBoardingCount} (${traversableBoardingText})`;
   }
 
   function updateTurnOrder(){

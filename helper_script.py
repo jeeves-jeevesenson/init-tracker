@@ -6236,11 +6236,17 @@ class BattleMapWindow(tk.Toplevel):
         self.map_ship_facing_var = tk.StringVar(value="0")
         self.map_ship_name_var = tk.StringVar(value="")
         self.map_ship_summary_var = tk.StringVar(value="Ships: select a structure cell or place a ship blueprint.")
+        self.map_ship_engagement_status_var = tk.StringVar(value="Engagement: select a ship for maneuver and weapons.")
+        self.map_ship_move_steps_var = tk.StringVar(value="1")
+        self.map_ship_weapon_var = tk.StringVar(value="")
+        self.map_ship_target_component_var = tk.StringVar(value="")
         self.map_boarding_target_var = tk.StringVar(value="")
         self.map_boarding_status_var = tk.StringVar(value="Boarding: select a ship to inspect/create/break boarding links.")
         self.map_boarding_traversal_status_var = tk.StringVar(value="Boarding traversal: select a creature on a boarded ship.")
         self._ship_blueprint_lookup: Dict[str, str] = {}
         self._boarding_target_lookup: Dict[str, str] = {}
+        self._ship_weapon_lookup: Dict[str, str] = {}
+        self._ship_target_component_lookup: Dict[str, str] = {}
         self._map_author_selected_cell: Optional[Tuple[int, int]] = None
         self._map_author_preset_lookup: Dict[str, str] = {}
         self._map_author_painting: bool = False
@@ -6933,8 +6939,35 @@ class BattleMapWindow(tk.Toplevel):
         self._ship_name_entry = ttk.Entry(ship_row, textvariable=self.map_ship_name_var, width=14)
         self._ship_name_entry.pack(side=tk.LEFT, padx=(6, 0))
         ttk.Button(ship_row, text="Place Ship @ Cell", command=self._place_ship_blueprint_at_selected_cell).pack(side=tk.LEFT, padx=(8, 0))
+        engagement_row = ttk.Frame(tactical)
+        engagement_row.grid(row=10, column=0, columnspan=4, sticky="ew", pady=(6, 0))
+        ttk.Label(engagement_row, text="Move:").pack(side=tk.LEFT)
+        ttk.Entry(engagement_row, textvariable=self.map_ship_move_steps_var, width=4).pack(side=tk.LEFT, padx=(4, 0))
+        ttk.Button(engagement_row, text="Forward", command=lambda: self._ship_maneuver_action("move_forward")).pack(side=tk.LEFT, padx=(6, 0))
+        ttk.Button(engagement_row, text="Reverse", command=lambda: self._ship_maneuver_action("move_reverse")).pack(side=tk.LEFT, padx=(4, 0))
+        ttk.Button(engagement_row, text="Turn Port", command=lambda: self._ship_maneuver_action("turn_port")).pack(side=tk.LEFT, padx=(8, 0))
+        ttk.Button(engagement_row, text="Turn Starboard", command=lambda: self._ship_maneuver_action("turn_starboard")).pack(side=tk.LEFT, padx=(4, 0))
+        ttk.Button(engagement_row, text="Ram", command=self._ship_ram_action).pack(side=tk.LEFT, padx=(8, 0))
         boarding_row = ttk.Frame(tactical)
-        boarding_row.grid(row=10, column=0, columnspan=4, sticky="ew", pady=(6, 0))
+        boarding_row.grid(row=11, column=0, columnspan=4, sticky="ew", pady=(6, 0))
+        ttk.Label(boarding_row, text="Weapon:").pack(side=tk.LEFT)
+        self._ship_weapon_combo = ttk.Combobox(
+            boarding_row,
+            textvariable=self.map_ship_weapon_var,
+            values=[],
+            width=18,
+            state="readonly",
+        )
+        self._ship_weapon_combo.pack(side=tk.LEFT, padx=(6, 0))
+        ttk.Label(boarding_row, text="Component:").pack(side=tk.LEFT, padx=(8, 0))
+        self._ship_component_combo = ttk.Combobox(
+            boarding_row,
+            textvariable=self.map_ship_target_component_var,
+            values=[],
+            width=16,
+            state="readonly",
+        )
+        self._ship_component_combo.pack(side=tk.LEFT, padx=(6, 0))
         ttk.Label(boarding_row, text="Boarding Target:").pack(side=tk.LEFT)
         self._boarding_target_combo = ttk.Combobox(
             boarding_row,
@@ -6944,20 +6977,24 @@ class BattleMapWindow(tk.Toplevel):
             state="readonly",
         )
         self._boarding_target_combo.pack(side=tk.LEFT, padx=(6, 0))
+        ttk.Button(boarding_row, text="Fire Weapon", command=self._ship_fire_weapon_action).pack(side=tk.LEFT, padx=(8, 0))
         ttk.Button(boarding_row, text="Create Link", command=self._create_boarding_link_from_selected_ship).pack(side=tk.LEFT, padx=(8, 0))
         ttk.Button(boarding_row, text="Break Link", command=self._break_boarding_link_from_selected_ship).pack(side=tk.LEFT, padx=(6, 0))
         ttk.Button(boarding_row, text="Traverse Selected Unit", command=self._traverse_selected_creature_boarding).pack(side=tk.LEFT, padx=(6, 0))
         ttk.Label(tactical, textvariable=self.map_ship_summary_var, justify="left", wraplength=440).grid(
-            row=11, column=0, columnspan=4, sticky="w", pady=(4, 0)
-        )
-        ttk.Label(tactical, textvariable=self.map_boarding_status_var, justify="left", wraplength=440).grid(
             row=12, column=0, columnspan=4, sticky="w", pady=(4, 0)
         )
-        ttk.Label(tactical, textvariable=self.map_boarding_traversal_status_var, justify="left", wraplength=440).grid(
+        ttk.Label(tactical, textvariable=self.map_ship_engagement_status_var, justify="left", wraplength=440).grid(
             row=13, column=0, columnspan=4, sticky="w", pady=(4, 0)
         )
+        ttk.Label(tactical, textvariable=self.map_boarding_status_var, justify="left", wraplength=440).grid(
+            row=14, column=0, columnspan=4, sticky="w", pady=(4, 0)
+        )
+        ttk.Label(tactical, textvariable=self.map_boarding_traversal_status_var, justify="left", wraplength=440).grid(
+            row=15, column=0, columnspan=4, sticky="w", pady=(4, 0)
+        )
         ttk.Label(tactical, textvariable=self.map_structure_contact_status_var, justify="left", wraplength=440).grid(
-            row=14, column=0, columnspan=4, sticky="w", pady=(6, 0)
+            row=16, column=0, columnspan=4, sticky="w", pady=(6, 0)
         )
         tactical.columnconfigure(3, weight=1)
         tool_combo.bind("<<ComboboxSelected>>", lambda _e: self._refresh_tactical_preset_selection(sync_mode=True))
@@ -8548,16 +8585,20 @@ class BattleMapWindow(tk.Toplevel):
         if cell is None:
             self.map_structure_contact_status_var.set("Structure contacts: select a structure cell.")
             self.map_ship_summary_var.set("Ships: select a structure cell or place a ship blueprint.")
+            self.map_ship_engagement_status_var.set("Engagement: select a ship for maneuver and weapons.")
             self.map_boarding_status_var.set("Boarding: select a ship to inspect/create/break boarding links.")
             self._refresh_selected_ship_boarding_options(None, None)
+            self._refresh_selected_ship_engagement_options({})
             self._update_selected_creature_boarding_status()
             return
         sid = self._selected_structure_id_at_cell(int(cell[0]), int(cell[1]))
         if not sid:
             self.map_structure_contact_status_var.set(f"Structure contacts @ ({int(cell[0])},{int(cell[1])}): none")
             self.map_ship_summary_var.set("Ships: no ship selected.")
+            self.map_ship_engagement_status_var.set("Engagement: no ship selected.")
             self.map_boarding_status_var.set("Boarding: no ship selected.")
             self._refresh_selected_ship_boarding_options(None, None)
+            self._refresh_selected_ship_engagement_options({})
             self._update_selected_creature_boarding_status()
             return
         semantics = {}
@@ -8568,6 +8609,7 @@ class BattleMapWindow(tk.Toplevel):
         if not isinstance(semantics, dict) or not bool(semantics.get("ok")):
             self.map_structure_contact_status_var.set(f"Structure {sid}: contact data unavailable")
             self._refresh_selected_ship_boarding_options(None, semantics if isinstance(semantics, dict) else None)
+            self._refresh_selected_ship_engagement_options({})
             self._update_selected_creature_boarding_status()
             return
         adjacent = semantics.get("adjacent_structures") if isinstance(semantics.get("adjacent_structures"), list) else []
@@ -8596,8 +8638,10 @@ class BattleMapWindow(tk.Toplevel):
             ship_summary = {}
         if not isinstance(ship_summary, dict) or not bool(ship_summary.get("ok")):
             self.map_ship_summary_var.set("Ships: selected structure is not a ship instance.")
+            self.map_ship_engagement_status_var.set("Engagement: selected structure is not a ship.")
             self.map_boarding_status_var.set("Boarding: selected structure is not a ship instance.")
             self._refresh_selected_ship_boarding_options(None, semantics)
+            self._refresh_selected_ship_engagement_options({})
             self._update_selected_creature_boarding_status()
             return
         active_boarding_count = int(ship_summary.get("active_boarding_count", 0) or 0)
@@ -8609,12 +8653,74 @@ class BattleMapWindow(tk.Toplevel):
             f"· Facing: {int(round(float(ship_summary.get('facing_deg', 0.0) or 0.0))) % 360}° "
             f"· Components: {int(ship_summary.get('component_count', 0) or 0)} "
             f"· Weapons: {int(ship_summary.get('weapon_count', 0) or 0)} "
+            f"· Hull: {int(ship_summary.get('hull_hp', 0) or 0)}/{int(ship_summary.get('hull_max_hp', 0) or 0)} "
+            f"· Crew: {int(ship_summary.get('active_crew', 0) or 0)} "
             f"· Boarding contacts: {int(ship_summary.get('boardable_contact_count', 0) or 0)} "
             f"· Active links: {active_boarding_count} "
             f"· Traversable links: {traversable_boarding_count}"
         )
+        self.map_ship_engagement_status_var.set(
+            f"Engagement: Move {int(ship_summary.get('movement_remaining', 0) or 0)} "
+            f"· Turns {int(ship_summary.get('turns_remaining', 0) or 0)} "
+            f"· Actions {int(ship_summary.get('actions_remaining', 0) or 0)} "
+            f"· Disabled components {int(ship_summary.get('disabled_component_count', 0) or 0)} "
+            f"· Reloading weapons {int(ship_summary.get('reloading_weapon_count', 0) or 0)}"
+        )
         self._refresh_selected_ship_boarding_options(sid, semantics)
+        self._refresh_selected_ship_engagement_options(ship_summary)
         self._update_selected_creature_boarding_status()
+
+    def _refresh_selected_ship_engagement_options(self, ship_summary: Dict[str, Any]) -> None:
+        summary = ship_summary if isinstance(ship_summary, dict) else {}
+        weapons = summary.get("mounted_weapons") if isinstance(summary.get("mounted_weapons"), list) else []
+        weapon_labels: List[str] = []
+        weapon_lookup: Dict[str, str] = {}
+        weapon_state = summary.get("weapon_state") if isinstance(summary.get("weapon_state"), dict) else {}
+        for weapon in weapons:
+            if not isinstance(weapon, dict):
+                continue
+            wid = str(weapon.get("id") or "").strip().lower()
+            if not wid:
+                continue
+            wname = str(weapon.get("name") or wid).strip() or wid
+            state = dict(weapon_state.get(wid) if isinstance(weapon_state.get(wid), dict) else {})
+            suffix = "reloading" if bool(state.get("spent")) else "ready"
+            if bool(state.get("disabled")):
+                suffix = "disabled"
+            label = f"{wname} ({wid}) · {suffix}"
+            weapon_labels.append(label)
+            weapon_lookup[label] = wid
+        components = summary.get("components") if isinstance(summary.get("components"), list) else []
+        component_labels: List[str] = ["Hull (hull)"]
+        component_lookup: Dict[str, str] = {"Hull (hull)": "hull"}
+        for component in components:
+            if not isinstance(component, dict):
+                continue
+            cid = str(component.get("id") or "").strip().lower()
+            if not cid:
+                continue
+            cname = str(component.get("name") or cid).strip() or cid
+            label = f"{cname} ({cid})"
+            component_labels.append(label)
+            component_lookup[label] = cid
+        self._ship_weapon_lookup = weapon_lookup
+        self._ship_target_component_lookup = component_lookup
+        if hasattr(self, "_ship_weapon_combo"):
+            try:
+                self._ship_weapon_combo.configure(values=weapon_labels)
+            except Exception:
+                pass
+        if hasattr(self, "_ship_component_combo"):
+            try:
+                self._ship_component_combo.configure(values=component_labels)
+            except Exception:
+                pass
+        selected_weapon = str(self.map_ship_weapon_var.get() or "").strip()
+        if selected_weapon not in weapon_lookup:
+            self.map_ship_weapon_var.set(weapon_labels[0] if weapon_labels else "")
+        selected_component = str(self.map_ship_target_component_var.get() or "").strip()
+        if selected_component not in component_lookup:
+            self.map_ship_target_component_var.set(component_labels[0] if component_labels else "")
 
     def _refresh_selected_ship_boarding_options(self, structure_id: Optional[str], semantics: Optional[Dict[str, Any]]) -> None:
         sid = str(structure_id or "").strip()
@@ -8671,6 +8777,90 @@ class BattleMapWindow(tk.Toplevel):
         if cell is None:
             return None
         return self._selected_structure_id_at_cell(int(cell[0]), int(cell[1]))
+
+    def _ship_maneuver_action(self, maneuver: str) -> None:
+        source_id = self._selected_ship_for_boarding_action()
+        if not source_id:
+            messagebox.showinfo("Ship Engagement", "Select a ship cell first.", parent=self)
+            return
+        steps = 1
+        if maneuver in {"move_forward", "move_reverse"}:
+            try:
+                steps = max(1, int(str(self.map_ship_move_steps_var.get() or "1").strip() or 1))
+            except Exception:
+                messagebox.showerror("Ship Engagement", "Move steps must be a positive integer.", parent=self)
+                return
+        result = self.app._ship_engagement_maneuver(source_id, maneuver, steps=steps)
+        if not bool(result.get("ok")):
+            detail = ""
+            blockers = result.get("blockers") if isinstance(result.get("blockers"), dict) else {}
+            payload = blockers.get("blockers") if isinstance(blockers.get("blockers"), dict) else {}
+            blocker_lines = []
+            for key in ("out_of_bounds", "obstacles", "features", "structures", "hazards"):
+                entries = payload.get(key) if isinstance(payload, dict) else []
+                if entries:
+                    blocker_lines.append(f"{key}: {len(entries)}")
+            if blocker_lines:
+                detail = f"\nBlockers: {', '.join(blocker_lines)}"
+            messagebox.showerror("Ship Engagement", f"{result.get('message') or result.get('reason')}{detail}", parent=self)
+            return
+        self._post_tactical_map_mutation(redraw_all=True, schedule_broadcast=True)
+        self._update_selected_structure_contact_status()
+
+    def _ship_fire_weapon_action(self) -> None:
+        source_id = self._selected_ship_for_boarding_action()
+        if not source_id:
+            messagebox.showinfo("Ship Engagement", "Select a ship cell first.", parent=self)
+            return
+        target_label = str(self.map_boarding_target_var.get() or "").strip()
+        target_id = str((self._boarding_target_lookup or {}).get(target_label) or "").strip()
+        if not target_id:
+            messagebox.showinfo("Ship Engagement", "Select a target ship relation first.", parent=self)
+            return
+        weapon_label = str(self.map_ship_weapon_var.get() or "").strip()
+        weapon_id = str((self._ship_weapon_lookup or {}).get(weapon_label) or "").strip()
+        if not weapon_id:
+            messagebox.showinfo("Ship Engagement", "Select a mounted weapon first.", parent=self)
+            return
+        component_label = str(self.map_ship_target_component_var.get() or "").strip()
+        component_id = str((self._ship_target_component_lookup or {}).get(component_label) or "").strip() or None
+        result = self.app._ship_engagement_fire_weapon(
+            source_id,
+            weapon_id,
+            target_id,
+            target_component_id=component_id,
+        )
+        if not bool(result.get("ok")):
+            messagebox.showerror("Ship Engagement", str(result.get("message") or result.get("reason") or "Weapon action failed."), parent=self)
+            return
+        hit_text = "hit" if bool(result.get("hit")) else "missed"
+        self.map_ship_engagement_status_var.set(
+            f"Engagement: {weapon_id} {hit_text} ({result.get('attack_total')} vs AC {result.get('target_ac')}) "
+            f"for {int(result.get('damage', 0) or 0)} damage."
+        )
+        self._post_tactical_map_mutation(redraw_all=True, schedule_broadcast=True)
+        self._update_selected_structure_contact_status()
+
+    def _ship_ram_action(self) -> None:
+        source_id = self._selected_ship_for_boarding_action()
+        if not source_id:
+            messagebox.showinfo("Ship Engagement", "Select a ship cell first.", parent=self)
+            return
+        target_label = str(self.map_boarding_target_var.get() or "").strip()
+        target_id = str((self._boarding_target_lookup or {}).get(target_label) or "").strip()
+        if not target_id:
+            messagebox.showinfo("Ship Engagement", "Select a target ship relation first.", parent=self)
+            return
+        result = self.app._ship_engagement_ram(source_id, target_id)
+        if not bool(result.get("ok")):
+            messagebox.showerror("Ship Engagement", str(result.get("message") or result.get("reason") or "Ramming failed."), parent=self)
+            return
+        self.map_ship_engagement_status_var.set(
+            f"Engagement: Ram resolved. Target took {int(result.get('target_damage', 0) or 0)} "
+            f"and source took {int(result.get('source_damage', 0) or 0)}."
+        )
+        self._post_tactical_map_mutation(redraw_all=True, schedule_broadcast=True)
+        self._update_selected_structure_contact_status()
 
     def _create_boarding_link_from_selected_ship(self) -> None:
         source_id = self._selected_ship_for_boarding_action()
