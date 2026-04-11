@@ -8981,6 +8981,12 @@ class InitiativeTracker(base.InitiativeTracker):
         """Apply canonical map state and project compatibility fields for legacy/LAN consumers."""
         normalized = state.normalized()
         self._map_state = normalized
+        try:
+            self._map_state_version = int(self.__dict__.get("_map_state_version", 0) or 0) + 1
+        except Exception:
+            self._map_state_version = 1
+        self._structure_contact_semantics_cache = {}
+        self._selected_ship_summary_cache = {}
         legacy = normalized.to_legacy()
         self._lan_grid_cols = int(legacy.get("cols", 20) or 20)
         self._lan_grid_rows = int(legacy.get("rows", 20) or 20)
@@ -9022,6 +9028,12 @@ class InitiativeTracker(base.InitiativeTracker):
     def _map_query_api(self) -> MapQueryAPI:
         return MapQueryAPI(self._capture_canonical_map_state(prefer_window=True))
 
+    def _map_state_cache_key(self) -> int:
+        try:
+            return int(self.__dict__.get("_map_state_version", 0) or 0)
+        except Exception:
+            return 0
+
     def _structure_move_blockers(
         self,
         state: MapState,
@@ -9032,14 +9044,28 @@ class InitiativeTracker(base.InitiativeTracker):
         query = MapQueryAPI(state if isinstance(state, MapState) else MapState())
         return query.structure_move_blockers(structure_id, int(delta_col), int(delta_row))
 
-    def _structure_contact_semantics(self, structure_id: Any) -> Dict[str, Any]:
+    def _structure_contact_semantics(
+        self,
+        structure_id: Any,
+        *,
+        state: Optional[MapState] = None,
+        query: Optional[MapQueryAPI] = None,
+    ) -> Dict[str, Any]:
         sid = str(structure_id or "").strip()
         if not sid:
             return {"ok": False, "reason": "missing_structure_id"}
-        query = self._map_query_api()
-        relations = query.structure_contacts(sid)
-        state = query.state if isinstance(getattr(query, "state", None), MapState) else MapState()
-        structure_map = state.structures if isinstance(state.structures, dict) else {}
+        use_cache = state is None and query is None
+        cache_key = (self._map_state_cache_key(), sid)
+        cache = self.__dict__.get("_structure_contact_semantics_cache", {})
+        if use_cache and isinstance(cache, dict):
+            cached = cache.get(cache_key)
+            if isinstance(cached, dict):
+                return dict(cached)
+        source_state = state if isinstance(state, MapState) else self._capture_canonical_map_state(prefer_window=True)
+        source_query = query if isinstance(query, MapQueryAPI) else MapQueryAPI(source_state)
+        relations = source_query.structure_contacts(sid)
+        query_state = source_query.state if isinstance(getattr(source_query, "state", None), MapState) else MapState()
+        structure_map = query_state.structures if isinstance(query_state.structures, dict) else {}
 
         def _structure_display_name(raw_id: Any) -> str:
             key = str(raw_id or "").strip()
@@ -9057,7 +9083,7 @@ class InitiativeTracker(base.InitiativeTracker):
         adjacent_ids = [str(item.get("target_id") or "") for item in enriched_relations if bool(item.get("adjacent"))]
         boardable_ids = [str(item.get("target_id") or "") for item in enriched_relations if bool(item.get("boardable"))]
         ship_relations: List[Dict[str, Any]] = []
-        for relation in query.ship_boarding_relations(sid):
+        for relation in source_query.ship_boarding_relations(sid):
             if not isinstance(relation, dict):
                 continue
             item = dict(relation)
@@ -9074,15 +9100,15 @@ class InitiativeTracker(base.InitiativeTracker):
             and str(item.get("boarding_status") or "").strip().lower() in {"prepared", "active"}
         ]
         traversable_boarding_ids = [str(item.get("target_id") or "") for item in ship_relations if bool(item.get("boarding_traversable"))]
-        boarding_links = query.boarding_links_for_structure(sid)
-        traversable_relations = query.traversable_boarding_relations_for_structure(sid)
+        boarding_links = source_query.boarding_links_for_structure(sid)
+        traversable_relations = source_query.traversable_boarding_relations_for_structure(sid)
         for item in traversable_relations:
             target_id = str(item.get("target_id") or "").strip()
             if not target_id:
                 continue
             item["target_name"] = _structure_display_name(target_id)
-            item["landing_candidates"] = query.candidate_boarding_landing_cells(sid, target_id, traversable_only=True)
-        return {
+            item["landing_candidates"] = source_query.candidate_boarding_landing_cells(sid, target_id, traversable_only=True)
+        result = {
             "ok": True,
             "structure_id": sid,
             "structure_name": _structure_display_name(sid),
@@ -9103,6 +9129,12 @@ class InitiativeTracker(base.InitiativeTracker):
             "traversable_boarding_relations": traversable_relations,
             "boarding_links": boarding_links,
         }
+        if use_cache:
+            if not isinstance(cache, dict):
+                cache = {}
+            cache[cache_key] = dict(result)
+            self._structure_contact_semantics_cache = cache
+        return result
 
     def _structure_display_name(self, structure_id: Any, *, state: Optional[MapState] = None) -> str:
         sid = str(structure_id or "").strip()
@@ -9811,7 +9843,15 @@ class InitiativeTracker(base.InitiativeTracker):
         item["engagement_state"] = engagement_state
         return item
 
-    def _update_ship_instance(self, ship_id: Any, update_fn: Callable[[Dict[str, Any]], Dict[str, Any]]) -> Optional[Dict[str, Any]]:
+    def _update_ship_instance(
+        self,
+        ship_id: Any,
+        update_fn: Callable[[Dict[str, Any]], Dict[str, Any]],
+        *,
+        hydrate_window: bool = True,
+        broadcast: bool = True,
+        defer_broadcast: bool = False,
+    ) -> Optional[Dict[str, Any]]:
         target_id = str(ship_id or "").strip()
         if not target_id:
             return None
@@ -9830,7 +9870,12 @@ class InitiativeTracker(base.InitiativeTracker):
             presentation["ship_instances"] = ship_instances
             state.presentation = presentation
 
-        self._mutate_canonical_map_state(_mutate)
+        self._mutate_canonical_map_state(
+            _mutate,
+            hydrate_window=hydrate_window,
+            broadcast=broadcast,
+            defer_broadcast=defer_broadcast,
+        )
         return dict(updated_item) if isinstance(updated_item, dict) else None
 
     def _boarding_links(self) -> List[Dict[str, Any]]:
@@ -10176,9 +10221,11 @@ class InitiativeTracker(base.InitiativeTracker):
                 updated["boarding"] = dict(transformed_boarding)
                 return updated
 
-            next_ship = self._update_ship_instance(str(ship.get("id") or ""), _apply_turn) or ship
+            next_ship: Dict[str, Any] = dict(ship)
+            ship_instance_id = str(ship.get("id") or "").strip()
 
             def _mutate_structure(state: MapState) -> None:
+                nonlocal next_ship
                 structure_map = dict(state.structures or {})
                 current_structure = structure_map.get(sid)
                 if not isinstance(current_structure, MapStructure):
@@ -10217,9 +10264,17 @@ class InitiativeTracker(base.InitiativeTracker):
                             payload=dict(update.get("payload") if isinstance(update.get("payload"), dict) else current_feature.payload or {}),
                         ).normalized()
                     state.features = feature_map
+                presentation = dict(state.presentation if isinstance(state.presentation, dict) else {})
+                ship_instances = dict(presentation.get("ship_instances") if isinstance(presentation.get("ship_instances"), dict) else {})
+                if ship_instance_id:
+                    current_ship = dict(ship_instances.get(ship_instance_id) if isinstance(ship_instances.get(ship_instance_id), dict) else ship)
+                    next_ship = _apply_turn(current_ship)
+                    ship_instances[ship_instance_id] = dict(next_ship)
+                    presentation["ship_instances"] = ship_instances
+                    state.presentation = presentation
                 self._reconcile_boarding_links_for_state(state)
 
-            self._mutate_canonical_map_state(_mutate_structure)
+            self._mutate_canonical_map_state(_mutate_structure, hydrate_window=False, broadcast=False)
             return {"ok": True, "structure_id": sid, "maneuver": action, "facing_deg": float(next_ship.get("facing_deg", next_facing) or next_facing)}
         if action not in {"move_forward", "move_reverse"}:
             return {"ok": False, "reason": "unsupported_maneuver", "message": "Unsupported maneuver."}
@@ -10234,10 +10289,10 @@ class InitiativeTracker(base.InitiativeTracker):
         fwd_dc, fwd_dr = self._ship_forward_vector(ship.get("facing_deg", 0.0))
         if action == "move_reverse":
             fwd_dc, fwd_dr = -fwd_dc, -fwd_dr
+        working_state = self._capture_canonical_map_state(prefer_window=True).normalized()
         total_moved = 0
         for _ in range(move_steps):
-            query = self._map_query_api()
-            blockers = query.structure_move_blockers(sid, int(fwd_dc), int(fwd_dr))
+            blockers = self._structure_move_blockers(working_state, sid, int(fwd_dc), int(fwd_dr))
             if not bool(blockers.get("ok")):
                 self._last_ship_engagement_error = {"reason": "movement_blocked", "blockers": blockers}
                 return {
@@ -10246,7 +10301,7 @@ class InitiativeTracker(base.InitiativeTracker):
                     "message": "Ship movement is blocked.",
                     "blockers": blockers,
                 }
-            if not bool(self._move_map_structure(sid, int(fwd_dc), int(fwd_dr))):
+            if not bool(self._translate_structure_in_state(working_state, sid, int(fwd_dc), int(fwd_dr), reconcile_boarding=False)):
                 return {"ok": False, "reason": "move_failed", "message": "Unable to move ship."}
             total_moved += 1
         ship_id = str(ship.get("id") or "").strip()
@@ -10258,8 +10313,16 @@ class InitiativeTracker(base.InitiativeTracker):
             updated["engagement_state"] = updated_engagement
             return updated
 
-        self._update_ship_instance(ship_id, _apply_move)
-        semantics = self._structure_contact_semantics(sid)
+        if ship_id:
+            presentation = dict(working_state.presentation if isinstance(working_state.presentation, dict) else {})
+            ship_instances = dict(presentation.get("ship_instances") if isinstance(presentation.get("ship_instances"), dict) else {})
+            current_ship = dict(ship_instances.get(ship_id) if isinstance(ship_instances.get(ship_id), dict) else ship)
+            ship_instances[ship_id] = _apply_move(current_ship)
+            presentation["ship_instances"] = ship_instances
+            working_state.presentation = presentation
+        self._reconcile_boarding_links_for_state(working_state)
+        self._apply_canonical_map_state(working_state.normalized(), hydrate_window=False)
+        semantics = self._structure_contact_semantics(sid, state=working_state)
         return {
             "ok": True,
             "structure_id": sid,
@@ -10342,9 +10405,18 @@ class InitiativeTracker(base.InitiativeTracker):
             updated["engagement_state"] = e_state
             return updated
 
-        self._update_ship_instance(source_ship_id, _apply_source)
-        if hit:
-            self._update_ship_instance(target_ship_id, lambda _current: dict(target_ship))
+        def _mutate(state: MapState) -> None:
+            presentation = dict(state.presentation if isinstance(state.presentation, dict) else {})
+            ship_instances = dict(presentation.get("ship_instances") if isinstance(presentation.get("ship_instances"), dict) else {})
+            if source_ship_id:
+                source_current = dict(ship_instances.get(source_ship_id) if isinstance(ship_instances.get(source_ship_id), dict) else source_ship)
+                ship_instances[source_ship_id] = _apply_source(source_current)
+            if hit and target_ship_id:
+                ship_instances[target_ship_id] = dict(target_ship)
+            presentation["ship_instances"] = ship_instances
+            state.presentation = presentation
+
+        self._mutate_canonical_map_state(_mutate, hydrate_window=False, broadcast=False)
         return {
             "ok": True,
             "source_structure_id": source_id,
@@ -10401,8 +10473,18 @@ class InitiativeTracker(base.InitiativeTracker):
             updated["hull_state"] = dict(source_ship.get("hull_state") if isinstance(source_ship.get("hull_state"), dict) else {})
             return updated
 
-        self._update_ship_instance(source_ship_id, _apply_source)
-        self._update_ship_instance(target_ship_id, lambda _current: dict(target_ship))
+        def _mutate(state: MapState) -> None:
+            presentation = dict(state.presentation if isinstance(state.presentation, dict) else {})
+            ship_instances = dict(presentation.get("ship_instances") if isinstance(presentation.get("ship_instances"), dict) else {})
+            if source_ship_id:
+                source_current = dict(ship_instances.get(source_ship_id) if isinstance(ship_instances.get(source_ship_id), dict) else source_ship)
+                ship_instances[source_ship_id] = _apply_source(source_current)
+            if target_ship_id:
+                ship_instances[target_ship_id] = dict(target_ship)
+            presentation["ship_instances"] = ship_instances
+            state.presentation = presentation
+
+        self._mutate_canonical_map_state(_mutate, hydrate_window=False, broadcast=False)
         return {
             "ok": True,
             "source_structure_id": source_id,
@@ -10412,15 +10494,29 @@ class InitiativeTracker(base.InitiativeTracker):
             "contact_type": str((relation or {}).get("contact_type") or "contact"),
         }
 
-    def _selected_ship_summary(self, structure_id: Any) -> Dict[str, Any]:
+    def _selected_ship_summary(
+        self,
+        structure_id: Any,
+        *,
+        semantics: Optional[Dict[str, Any]] = None,
+    ) -> Dict[str, Any]:
         sid = str(structure_id or "").strip()
         if not sid:
             return {"ok": False, "reason": "missing_structure_id"}
+        current_round = int(getattr(self, "round_num", 0) or 0)
+        use_cache = semantics is None
+        cache_key = (self._map_state_cache_key(), current_round, sid)
+        cache = self.__dict__.get("_selected_ship_summary_cache", {})
+        if use_cache and isinstance(cache, dict):
+            cached = cache.get(cache_key)
+            if isinstance(cached, dict):
+                return dict(cached)
         ship = self._ship_instance_for_structure(sid)
         if not isinstance(ship, dict):
             return {"ok": False, "reason": "ship_not_found"}
-        ship = self._normalize_ship_engagement_state(ship, current_round=int(getattr(self, "round_num", 0) or 0))
-        semantics = self._structure_contact_semantics(sid)
+        ship = self._normalize_ship_engagement_state(ship, current_round=current_round)
+        if not isinstance(semantics, dict):
+            semantics = self._structure_contact_semantics(sid)
         blueprint_id = str(ship.get("blueprint_id") or "").strip()
         blueprints = self._ship_blueprints()
         blueprint = blueprints.get(blueprint_id) if blueprint_id in blueprints else {}
@@ -10453,7 +10549,7 @@ class InitiativeTracker(base.InitiativeTracker):
             if isinstance(semantics.get("traversable_boarding_structures"), list)
             else []
         )
-        return {
+        result = {
             "ok": True,
             "ship_id": str(ship.get("id") or ""),
             "name": str(ship.get("name") or ""),
@@ -10490,6 +10586,12 @@ class InitiativeTracker(base.InitiativeTracker):
             "traversable_boarding_contacts": traversable_boarding,
             "contact_summary": semantics,
         }
+        if use_cache:
+            if not isinstance(cache, dict):
+                cache = {}
+            cache[cache_key] = dict(result)
+            self._selected_ship_summary_cache = cache
+        return result
 
     def _normalize_structure_template_payload(
         self,
@@ -10940,6 +11042,90 @@ class InitiativeTracker(base.InitiativeTracker):
         presentation["boarding_links"] = updated_links
         state.presentation = presentation
 
+    def _translate_structure_in_state(
+        self,
+        state: MapState,
+        structure_id: str,
+        delta_col: int,
+        delta_row: int,
+        *,
+        reconcile_boarding: bool = True,
+    ) -> bool:
+        sid = str(structure_id or "").strip()
+        item = (state.structures or {}).get(sid)
+        if item is None:
+            self._last_map_structure_move_error = "structure_not_found"
+            return False
+        dc = int(delta_col)
+        dr = int(delta_row)
+        old_structure_cells = set(item.occupied_cells or [])
+        old_structure_cells.add((int(item.anchor_col), int(item.anchor_row)))
+        occupied = [(int(c) + dc, int(r) + dr) for c, r in list(item.occupied_cells or [])]
+        next_anchor = (int(item.anchor_col) + dc, int(item.anchor_row) + dr)
+        updated = MapStructure(
+            structure_id=str(item.structure_id),
+            kind=str(item.kind),
+            anchor_col=next_anchor[0],
+            anchor_row=next_anchor[1],
+            occupied_cells=occupied,
+            payload=dict(item.payload or {}),
+        ).normalized()
+        structures = dict(state.structures or {})
+        structures[sid] = updated
+        state.structures = structures
+        features = dict(state.features or {})
+        for feature in list(features.values()):
+            feature_payload = feature.payload if isinstance(feature.payload, dict) else {}
+            if str(feature_payload.get("attached_structure_id") or "") != sid:
+                continue
+            feature_cells = feature_payload.get("occupied_cells")
+            shifted_cells: List[Dict[str, int]] = []
+            if isinstance(feature_cells, list):
+                for raw in feature_cells:
+                    if isinstance(raw, dict):
+                        shifted_cells.append(
+                            {
+                                "col": int(raw.get("col", 0)) + dc,
+                                "row": int(raw.get("row", 0)) + dr,
+                            }
+                        )
+            feature_footprint = feature_payload.get("footprint")
+            shifted_footprint: List[Dict[str, int]] = []
+            if isinstance(feature_footprint, list):
+                for raw in feature_footprint:
+                    if not isinstance(raw, dict):
+                        continue
+                    shifted_footprint.append(
+                        {
+                            "col": int(raw.get("col", 0)) + dc,
+                            "row": int(raw.get("row", 0)) + dr,
+                        }
+                    )
+            next_payload = dict(feature_payload)
+            if shifted_cells:
+                next_payload["occupied_cells"] = shifted_cells
+            if shifted_footprint:
+                next_payload["footprint"] = shifted_footprint
+            features[str(feature.feature_id)] = MapFeature(
+                feature_id=str(feature.feature_id),
+                col=int(feature.col) + dc,
+                row=int(feature.row) + dr,
+                kind=str(feature.kind),
+                payload=next_payload,
+            ).normalized()
+        state.features = features
+        token_positions = dict(state.token_positions or {})
+        for cid, pos in list(token_positions.items()):
+            if tuple(pos) not in old_structure_cells:
+                continue
+            token_positions[int(cid)] = (int(pos[0]) + dc, int(pos[1]) + dr)
+        state.token_positions = token_positions
+        if reconcile_boarding:
+            self._reconcile_boarding_links_for_state(state)
+        self._last_map_structure_move_error = ""
+        self._last_map_structure_move_blockers = {}
+        return True
+
     def _move_map_structure(self, structure_id: Any, delta_col: int, delta_row: int) -> bool:
         sid = str(structure_id or "").strip()
         if not sid:
@@ -10967,72 +11153,7 @@ class InitiativeTracker(base.InitiativeTracker):
                 self._last_map_structure_move_error = "blocked"
                 self._last_map_structure_move_blockers = blockers
                 return
-            old_structure_cells = set(item.occupied_cells or [])
-            old_structure_cells.add((int(item.anchor_col), int(item.anchor_row)))
-            occupied = [(int(c) + dc, int(r) + dr) for c, r in list(item.occupied_cells or [])]
-            next_anchor = (int(item.anchor_col) + dc, int(item.anchor_row) + dr)
-            updated = MapStructure(
-                structure_id=str(item.structure_id),
-                kind=str(item.kind),
-                anchor_col=next_anchor[0],
-                anchor_row=next_anchor[1],
-                occupied_cells=occupied,
-                payload=dict(item.payload or {}),
-            ).normalized()
-            structures = dict(state.structures or {})
-            structures[sid] = updated
-            state.structures = structures
-            for feature in list((state.features or {}).values()):
-                feature_payload = feature.payload if isinstance(feature.payload, dict) else {}
-                if str(feature_payload.get("attached_structure_id") or "") != sid:
-                    continue
-                feature_cells = feature_payload.get("occupied_cells")
-                shifted_cells: List[Dict[str, int]] = []
-                if isinstance(feature_cells, list):
-                    for raw in feature_cells:
-                        if isinstance(raw, dict):
-                            shifted_cells.append(
-                                {
-                                    "col": int(raw.get("col", 0)) + dc,
-                                    "row": int(raw.get("row", 0)) + dr,
-                                }
-                            )
-                feature_footprint = feature_payload.get("footprint")
-                shifted_footprint: List[Dict[str, int]] = []
-                if isinstance(feature_footprint, list):
-                    for raw in feature_footprint:
-                        if not isinstance(raw, dict):
-                            continue
-                        shifted_footprint.append(
-                            {
-                                "col": int(raw.get("col", 0)) + dc,
-                                "row": int(raw.get("row", 0)) + dr,
-                            }
-                        )
-                next_payload = dict(feature_payload)
-                if shifted_cells:
-                    next_payload["occupied_cells"] = shifted_cells
-                if shifted_footprint:
-                    next_payload["footprint"] = shifted_footprint
-                features = dict(state.features or {})
-                features[str(feature.feature_id)] = MapFeature(
-                    feature_id=str(feature.feature_id),
-                    col=int(feature.col) + dc,
-                    row=int(feature.row) + dr,
-                    kind=str(feature.kind),
-                    payload=next_payload,
-                ).normalized()
-                state.features = features
-            token_positions = dict(state.token_positions or {})
-            for cid, pos in list(token_positions.items()):
-                if tuple(pos) not in old_structure_cells:
-                    continue
-                token_positions[int(cid)] = (int(pos[0]) + dc, int(pos[1]) + dr)
-            state.token_positions = token_positions
-            self._reconcile_boarding_links_for_state(state)
-            moved = True
-            self._last_map_structure_move_error = ""
-            self._last_map_structure_move_blockers = {}
+            moved = bool(self._translate_structure_in_state(state, sid, dc, dr, reconcile_boarding=True))
 
         self._mutate_canonical_map_state(_mutate)
         return bool(moved)
