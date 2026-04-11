@@ -14159,16 +14159,26 @@ __DAMAGE_TYPE_OPTIONS__
     const boardable = Array.isArray(semantics.boardable_structures)
       ? semantics.boardable_structures.map((entry) => String(entry?.name || entry?.id || "").trim()).filter(Boolean)
       : [];
+    const activeBoarding = Array.isArray(semantics.active_boarding_structures)
+      ? semantics.active_boarding_structures.map((entry) => String(entry?.name || entry?.id || "").trim()).filter(Boolean)
+      : [];
+    const traversableBoarding = Array.isArray(semantics.traversable_boarding_structures)
+      ? semantics.traversable_boarding_structures.map((entry) => String(entry?.name || entry?.id || "").trim()).filter(Boolean)
+      : [];
     const adjacentText = adjacent.length ? adjacent.slice(0, 3).join(", ") : "none";
     const boardableText = boardable.length ? boardable.slice(0, 3).join(", ") : "none";
+    const activeBoardingText = activeBoarding.length ? activeBoarding.slice(0, 3).join(", ") : "none";
+    const traversableBoardingText = traversableBoarding.length ? traversableBoarding.slice(0, 3).join(", ") : "none";
     if (!shipState){
-      return `Selected structure: ${displayName} · Adjacent: ${adjacentText} · Boardable: ${boardableText}`;
+      return `Selected structure: ${displayName} · Adjacent: ${adjacentText} · Boardable: ${boardableText} · Boarding Active: ${activeBoardingText}`;
     }
     const blueprintName = String(shipState.blueprint_name || shipState.blueprint_id || "").trim() || "Unknown Blueprint";
     const facingDeg = Number(shipState.facing_deg || 0);
     const componentCount = Number(shipState.component_count || 0);
     const weaponCount = Number(shipState.weapon_count || 0);
-    return `Selected ship: ${String(shipState.name || displayName)} · Blueprint: ${blueprintName} · Facing: ${Math.round(facingDeg)}° · Components: ${componentCount} · Weapons: ${weaponCount} · Adjacent: ${adjacentText} · Boardable: ${boardableText}`;
+    const activeBoardingCount = Number(shipState.active_boarding_count || activeBoarding.length || 0);
+    const traversableBoardingCount = Number(shipState.traversable_boarding_count || traversableBoarding.length || 0);
+    return `Selected ship: ${String(shipState.name || displayName)} · Blueprint: ${blueprintName} · Facing: ${Math.round(facingDeg)}° · Components: ${componentCount} · Weapons: ${weaponCount} · Adjacent: ${adjacentText} · Boardable: ${boardableText} · Active Boarding: ${activeBoardingCount} (${activeBoardingText}) · Traversable: ${traversableBoardingCount} (${traversableBoardingText})`;
   }
 
   function updateTurnOrder(){

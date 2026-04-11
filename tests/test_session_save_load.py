@@ -907,6 +907,35 @@ class SessionSaveLoadTests(unittest.TestCase):
             self.assertTrue(relation.get("boarding_capable"))
             self.assertIn({"col": 10, "row": 10}, relation.get("boarding_points") or [])
 
+    def test_boarding_link_transaction_and_snapshot_roundtrip(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            app = self._make_app(Path(tmpdir) / "battle.log")
+            app._map_state = tracker_mod.MapState.from_dict({"grid": {"cols": 30, "rows": 30, "feet_per_square": 5}})
+            app._lan_grid_cols = 30
+            app._lan_grid_rows = 30
+            src = app._instantiate_ship_blueprint("rowboat_launch", anchor_col=10, anchor_row=10, facing_deg=90)
+            dst = app._instantiate_ship_blueprint("rowboat_launch", anchor_col=11, anchor_row=10, facing_deg=0)
+            self.assertIsNotNone(src)
+            self.assertIsNotNone(dst)
+            created = app._create_boarding_link(src, dst, initiator="dm")
+            self.assertTrue(created.get("ok"))
+            semantics = app._structure_contact_semantics(src)
+            self.assertEqual(semantics.get("active_boarding_structure_ids"), [str(dst)])
+            snap_path = Path(tmpdir) / "boarding_session.json"
+            app._save_session_to_path(snap_path, label="boarding")
+
+            restored = self._make_app(Path(tmpdir) / "battle_restored.log")
+            restored._load_session_from_path(snap_path)
+            restored_semantics = restored._structure_contact_semantics(src)
+            self.assertEqual(restored_semantics.get("active_boarding_structure_ids"), [str(dst)])
+            links = restored._boarding_links()
+            self.assertEqual(len(links), 1)
+            self.assertEqual(links[0].get("status"), "active")
+            withdrawn = restored._set_boarding_link_status(source_structure_id=src, target_structure_id=dst, status="withdrawn")
+            self.assertTrue(withdrawn.get("ok"))
+            post_semantics = restored._structure_contact_semantics(src)
+            self.assertEqual(post_semantics.get("active_boarding_structure_ids"), [])
+
     def test_ship_blueprints_coexist_with_structure_templates(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             app = self._make_app(Path(tmpdir) / "battle.log")

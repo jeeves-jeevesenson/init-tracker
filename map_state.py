@@ -86,6 +86,40 @@ def _merge_tags(default_tags: Any, existing_tags: Any) -> List[str]:
     return merged
 
 
+BOARDING_LINK_STATUSES = {"available", "prepared", "active", "broken", "blocked", "withdrawn"}
+BOARDING_LINK_TRAVERSABLE_STATUSES = {"prepared", "active"}
+
+
+def _normalize_boarding_status(value: Any, default: str = "active") -> str:
+    status = str(value or "").strip().lower()
+    if status in BOARDING_LINK_STATUSES:
+        return status
+    return default
+
+
+def _normalize_boarding_point(raw: Any) -> Optional[Dict[str, Any]]:
+    if not isinstance(raw, dict):
+        return None
+    if raw.get("col") is None or raw.get("row") is None:
+        return None
+    try:
+        col = int(raw.get("col"))
+        row = int(raw.get("row"))
+    except Exception:
+        return None
+    payload: Dict[str, Any] = {"col": col, "row": row}
+    point_id = str(raw.get("id") or "").strip()
+    if point_id:
+        payload["id"] = point_id
+    point_name = str(raw.get("name") or "").strip()
+    if point_name:
+        payload["name"] = point_name
+    tags = [str(tag).strip().lower() for tag in (raw.get("tags") if isinstance(raw.get("tags"), list) else []) if str(tag).strip()]
+    if tags:
+        payload["tags"] = tags
+    return payload
+
+
 TACTICAL_PRESET_STACK_RULES: Dict[str, Dict[str, Any]] = {
     "barrel": {
         "light": {"max_count": 1, "blocks_movement": False, "cover": "none", "is_difficult_terrain": False},
@@ -1604,6 +1638,26 @@ class MapQueryAPI:
                     "contact_type": contact_type,
                     "source_ship": self._is_ship_structure(source),
                     "target_ship": self._is_ship_structure(target),
+                    "source_boarding_points": source_points,
+                    "target_boarding_points": target_points,
+                    "source_boardable_edges": [
+                        str(edge).strip().lower()
+                        for edge in (
+                            source_payload.get("boardable_edges")
+                            if isinstance(source_payload.get("boardable_edges"), list)
+                            else []
+                        )
+                        if str(edge).strip()
+                    ],
+                    "target_boardable_edges": [
+                        str(edge).strip().lower()
+                        for edge in (
+                            target_payload.get("boardable_edges")
+                            if isinstance(target_payload.get("boardable_edges"), list)
+                            else []
+                        )
+                        if str(edge).strip()
+                    ],
                     "boarding_points": shared_boarding_cells,
                     "bridge_links": bridge_links,
                     "boarding_capable": boarding_capable,
@@ -1613,6 +1667,205 @@ class MapQueryAPI:
 
     def ship_boardable_structure_ids(self, structure_id: Any) -> List[str]:
         return [str(item.get("target_id") or "") for item in self.ship_contacts(structure_id) if bool(item.get("boarding_capable"))]
+
+    def ship_contact_relation(self, source_id: Any, target_id: Any) -> Optional[Dict[str, Any]]:
+        sid = str(source_id or "").strip()
+        tid = str(target_id or "").strip()
+        if not sid or not tid:
+            return None
+        for relation in self.ship_contacts(sid):
+            if str(relation.get("target_id") or "").strip() == tid:
+                return dict(relation)
+        return None
+
+    @staticmethod
+    def _pair_matches(source_id: str, target_id: str, relation_source: str, relation_target: str) -> bool:
+        return (source_id == relation_source and target_id == relation_target) or (
+            source_id == relation_target and target_id == relation_source
+        )
+
+    def _raw_boarding_links(self) -> List[Dict[str, Any]]:
+        presentation = self.state.presentation if isinstance(self.state.presentation, dict) else {}
+        raw_links = presentation.get("boarding_links")
+        links: List[Dict[str, Any]] = []
+        for raw in raw_links if isinstance(raw_links, list) else []:
+            if isinstance(raw, dict):
+                links.append(dict(raw))
+        return links
+
+    def _normalize_boarding_link(self, raw_link: Dict[str, Any], index: int) -> Dict[str, Any]:
+        source_id = str(raw_link.get("source_id") or "").strip()
+        target_id = str(raw_link.get("target_id") or "").strip()
+        link_id = str(raw_link.get("id") or f"boarding_link_{index + 1}").strip() or f"boarding_link_{index + 1}"
+        source_point = _normalize_boarding_point(raw_link.get("source_point"))
+        target_point = _normalize_boarding_point(raw_link.get("target_point"))
+        shared_points: List[Dict[str, Any]] = []
+        for raw_point in (raw_link.get("shared_points") if isinstance(raw_link.get("shared_points"), list) else []):
+            point = _normalize_boarding_point(raw_point)
+            if point is None:
+                continue
+            shared_points.append(point)
+        normalized: Dict[str, Any] = {
+            "id": link_id,
+            "source_id": source_id,
+            "target_id": target_id,
+            "source_ship_id": str(raw_link.get("source_ship_id") or "").strip(),
+            "target_ship_id": str(raw_link.get("target_ship_id") or "").strip(),
+            "source_edge": str(raw_link.get("source_edge") or "").strip().lower() or None,
+            "target_edge": str(raw_link.get("target_edge") or "").strip().lower() or None,
+            "bridge_kind": str(raw_link.get("bridge_kind") or "").strip().lower() or None,
+            "status": _normalize_boarding_status(raw_link.get("status"), default="active"),
+            "initiator": str(raw_link.get("initiator") or "").strip() or None,
+            "opened_round": _normalize_int(raw_link.get("opened_round"), 0) or None,
+            "opened_turn_cid": _normalize_int(raw_link.get("opened_turn_cid"), 0) or None,
+            "reason": str(raw_link.get("reason") or "").strip() or None,
+            "notes": str(raw_link.get("notes") or "").strip() or None,
+            "created_at": str(raw_link.get("created_at") or "").strip() or None,
+            "updated_at": str(raw_link.get("updated_at") or "").strip() or None,
+            "source_point": source_point,
+            "target_point": target_point,
+            "shared_points": shared_points,
+        }
+        return normalized
+
+    def boarding_links(self) -> List[Dict[str, Any]]:
+        links: List[Dict[str, Any]] = []
+        for index, raw_link in enumerate(self._raw_boarding_links()):
+            link = self._normalize_boarding_link(raw_link, index)
+            source_id = str(link.get("source_id") or "").strip()
+            target_id = str(link.get("target_id") or "").strip()
+            relation = self.ship_contact_relation(source_id, target_id) if source_id and target_id else None
+            status = _normalize_boarding_status(link.get("status"), default="active")
+            blocking_reason: Optional[str] = None
+            if relation is None and status in BOARDING_LINK_TRAVERSABLE_STATUSES:
+                status = "broken"
+                blocking_reason = "relation_not_found"
+            elif relation is not None and not bool(relation.get("boarding_capable")) and status in BOARDING_LINK_TRAVERSABLE_STATUSES:
+                status = "blocked"
+                blocking_reason = "relation_not_boarding_capable"
+            elif relation is not None and not bool(relation.get("contact")) and status in BOARDING_LINK_TRAVERSABLE_STATUSES:
+                status = "broken"
+                blocking_reason = "contact_lost"
+            traversable = bool(
+                status in BOARDING_LINK_TRAVERSABLE_STATUSES
+                and relation is not None
+                and bool(relation.get("boarding_capable"))
+                and bool(relation.get("contact"))
+            )
+            links.append(
+                {
+                    **link,
+                    "status": status,
+                    "relation_found": relation is not None,
+                    "contact": bool(relation.get("contact")) if isinstance(relation, dict) else False,
+                    "boarding_capable": bool(relation.get("boarding_capable")) if isinstance(relation, dict) else False,
+                    "contact_type": str(relation.get("contact_type") or "none") if isinstance(relation, dict) else "none",
+                    "boarding_points": list(relation.get("boarding_points") if isinstance(relation, dict) and isinstance(relation.get("boarding_points"), list) else []),
+                    "bridge_links": list(relation.get("bridge_links") if isinstance(relation, dict) and isinstance(relation.get("bridge_links"), list) else []),
+                    "blocking_reason": blocking_reason,
+                    "traversable": traversable,
+                }
+            )
+        links.sort(key=lambda item: str(item.get("id") or ""))
+        return links
+
+    def boarding_links_for_structure(self, structure_id: Any) -> List[Dict[str, Any]]:
+        sid = str(structure_id or "").strip()
+        if not sid:
+            return []
+        return [
+            dict(link)
+            for link in self.boarding_links()
+            if sid in {str(link.get("source_id") or "").strip(), str(link.get("target_id") or "").strip()}
+        ]
+
+    def active_boarding_links_for_structure(self, structure_id: Any) -> List[Dict[str, Any]]:
+        return [
+            dict(link)
+            for link in self.boarding_links_for_structure(structure_id)
+            if _normalize_boarding_status(link.get("status"), default="active") in BOARDING_LINK_TRAVERSABLE_STATUSES
+        ]
+
+    def traversable_boarding_links_for_structure(self, structure_id: Any) -> List[Dict[str, Any]]:
+        return [dict(link) for link in self.boarding_links_for_structure(structure_id) if bool(link.get("traversable"))]
+
+    def ship_boarding_relations(self, structure_id: Any) -> List[Dict[str, Any]]:
+        sid = str(structure_id or "").strip()
+        if not sid:
+            return []
+        relations: Dict[str, Dict[str, Any]] = {}
+        links_by_target: Dict[str, List[Dict[str, Any]]] = {}
+        for link in self.boarding_links_for_structure(sid):
+            source_id = str(link.get("source_id") or "").strip()
+            target_id = str(link.get("target_id") or "").strip()
+            other_id = target_id if source_id == sid else source_id
+            if not other_id:
+                continue
+            links_by_target.setdefault(other_id, []).append(dict(link))
+        for relation in self.ship_contacts(sid):
+            target_id = str(relation.get("target_id") or "").strip()
+            if not target_id:
+                continue
+            relation_links = links_by_target.get(target_id, [])
+            traversable = any(bool(item.get("traversable")) for item in relation_links)
+            status = "available" if bool(relation.get("boarding_capable")) else "blocked"
+            if relation_links:
+                status = str(relation_links[0].get("status") or status)
+            relations[target_id] = {
+                **dict(relation),
+                "boarding_status": status,
+                "boarding_link_ids": [str(item.get("id") or "") for item in relation_links if str(item.get("id") or "").strip()],
+                "boarding_links": relation_links,
+                "boarding_active": bool(relation_links),
+                "boarding_traversable": traversable,
+                "boarding_blocked": bool(status in {"blocked", "broken", "withdrawn"}),
+            }
+        for target_id, relation_links in links_by_target.items():
+            if target_id in relations:
+                continue
+            status = str(relation_links[0].get("status") or "broken") if relation_links else "broken"
+            traversable = any(bool(item.get("traversable")) for item in relation_links)
+            relations[target_id] = {
+                "source_id": sid,
+                "target_id": target_id,
+                "ship_contact": False,
+                "contact": False,
+                "adjacent": False,
+                "boarding_capable": False,
+                "contact_type": "none",
+                "boarding_points": [],
+                "bridge_links": [],
+                "boarding_status": status,
+                "boarding_link_ids": [str(item.get("id") or "") for item in relation_links if str(item.get("id") or "").strip()],
+                "boarding_links": relation_links,
+                "boarding_active": bool(relation_links),
+                "boarding_traversable": traversable,
+                "boarding_blocked": bool(status in {"blocked", "broken", "withdrawn"}),
+            }
+        return [relations[key] for key in sorted(relations.keys())]
+
+    def connected_boarding_structure_ids(self, structure_id: Any, *, traversable_only: bool = True) -> List[str]:
+        sid = str(structure_id or "").strip()
+        if not sid:
+            return []
+        visited = {sid}
+        pending = [sid]
+        while pending:
+            current = pending.pop(0)
+            links = (
+                self.traversable_boarding_links_for_structure(current)
+                if traversable_only
+                else self.boarding_links_for_structure(current)
+            )
+            for link in links:
+                source_id = str(link.get("source_id") or "").strip()
+                target_id = str(link.get("target_id") or "").strip()
+                next_id = target_id if source_id == current else source_id
+                if not next_id or next_id in visited:
+                    continue
+                visited.add(next_id)
+                pending.append(next_id)
+        return sorted(item for item in visited if item != sid)
 
 
 def build_map_delta(prev: MapState, curr: MapState) -> Dict[str, Any]:
