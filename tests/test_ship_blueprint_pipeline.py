@@ -19,6 +19,8 @@ class ShipBlueprintPipelineTests(unittest.TestCase):
         self.assertIn("sloop", runtime)
         self.assertIn("brig", runtime)
         self.assertEqual(((runtime["sloop"].get("render") or {}).get("style")), "polygon")
+        self.assertEqual(((runtime["sloop"].get("render") or {}).get("base_image_key")), "sloop_hull")
+        self.assertEqual(((runtime["sloop"].get("render") or {}).get("fallback_style")), "polygon")
         self.assertTrue(((runtime["brig"].get("local_space") or {}).get("hull_cells")))
 
     def test_composite_schema_validation_rejects_invalid_anchor(self):
@@ -65,6 +67,9 @@ class ShipBlueprintPipelineTests(unittest.TestCase):
         self.assertIn("brig", blueprints)
         self.assertEqual(((blueprints["sloop"].get("render") or {}).get("style")), "polygon")
         self.assertTrue(((blueprints["brig"].get("local_space") or {}).get("hull_cells")))
+        path = app._ship_render_asset_path_for_key("sloop_hull")
+        self.assertTrue(path)
+        self.assertTrue(Path(path).exists())
 
     def test_normalized_blueprint_files_validate(self):
         repo_root = Path(__file__).resolve().parents[1]
@@ -73,6 +78,36 @@ class ShipBlueprintPipelineTests(unittest.TestCase):
         self.assertFalse(errors, msg=errors)
         self.assertIn("sloop", blueprints)
         self.assertIn("brig", blueprints)
+
+    def test_render_metadata_supports_asset_fields_and_facing_overrides(self):
+        normalized, errors = normalize_composite_ship_blueprint(
+            {
+                "schema": COMPOSITE_SHIP_SCHEMA,
+                "id": "asset_ship",
+                "display_name": "Asset Ship",
+                "local_space": {"render_anchor": {"col": 0, "row": 0}, "hull_cells": [{"col": 0, "row": 0}]},
+                "render": {
+                    "style": "asset_or_polygon",
+                    "base_image_key": "asset_ship_base",
+                    "base_image_path": "assets/ships/art/asset_ship.png",
+                    "image_anchor": "center",
+                    "image_offset_col": 1,
+                    "image_offset_row": -1,
+                    "facing_assets": {
+                        "90": {"image_key": "asset_ship_east", "offset_col": 2, "offset_row": 0},
+                        "180": {"image_path": "assets/ships/art/asset_ship_south.png", "image_anchor": "s"},
+                    },
+                },
+            }
+        )
+        self.assertFalse(errors, msg=errors)
+        render = normalized.get("render") or {}
+        self.assertEqual(render.get("base_image_key"), "asset_ship_base")
+        self.assertEqual(render.get("base_image_path"), "assets/ships/art/asset_ship.png")
+        self.assertEqual(render.get("image_anchor"), "center")
+        self.assertEqual(render.get("image_offset_col"), 1)
+        self.assertEqual(render.get("image_offset_row"), -1)
+        self.assertIn("90", render.get("facing_assets") or {})
 
 
 if __name__ == "__main__":

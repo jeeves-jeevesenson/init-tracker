@@ -7967,39 +7967,231 @@ class BattleMapWindow(tk.Toplevel):
         return bool("ship" in kind or payload.get("ship_instance_id") or payload.get("ship_blueprint_id"))
 
     @staticmethod
-    def _convex_hull(points: List[Tuple[float, float]]) -> List[Tuple[float, float]]:
-        pts = sorted(set(points))
-        if len(pts) <= 2:
-            return pts
+    def _polygon_area(points: List[Tuple[int, int]]) -> float:
+        if len(points) < 3:
+            return 0.0
+        area = 0.0
+        for idx, (x1, y1) in enumerate(points):
+            x2, y2 = points[(idx + 1) % len(points)]
+            area += float(x1) * float(y2) - float(x2) * float(y1)
+        return area / 2.0
 
-        def cross(o: Tuple[float, float], a: Tuple[float, float], b: Tuple[float, float]) -> float:
-            return (a[0] - o[0]) * (b[1] - o[1]) - (a[1] - o[1]) * (b[0] - o[0])
-
-        lower: List[Tuple[float, float]] = []
-        for p in pts:
-            while len(lower) >= 2 and cross(lower[-2], lower[-1], p) <= 0:
-                lower.pop()
-            lower.append(p)
-        upper: List[Tuple[float, float]] = []
-        for p in reversed(pts):
-            while len(upper) >= 2 and cross(upper[-2], upper[-1], p) <= 0:
-                upper.pop()
-            upper.append(p)
-        return lower[:-1] + upper[:-1]
+    @classmethod
+    def _ship_cell_union_boundary_vertices(cls, occupied: List[Tuple[int, int]]) -> List[Tuple[int, int]]:
+        cell_set = {(int(col), int(row)) for col, row in occupied}
+        if not cell_set:
+            return []
+        directed_edges: List[Tuple[Tuple[int, int], Tuple[int, int]]] = []
+        for col, row in sorted(cell_set):
+            if (col, row - 1) not in cell_set:
+                directed_edges.append(((int(col), int(row)), (int(col + 1), int(row))))
+            if (col + 1, row) not in cell_set:
+                directed_edges.append(((int(col + 1), int(row)), (int(col + 1), int(row + 1))))
+            if (col, row + 1) not in cell_set:
+                directed_edges.append(((int(col + 1), int(row + 1)), (int(col), int(row + 1))))
+            if (col - 1, row) not in cell_set:
+                directed_edges.append(((int(col), int(row + 1)), (int(col), int(row))))
+        if not directed_edges:
+            return []
+        outgoing: Dict[Tuple[int, int], List[Tuple[int, int]]] = {}
+        for start, end in directed_edges:
+            outgoing.setdefault((int(start[0]), int(start[1])), []).append((int(end[0]), int(end[1])))
+        for key in list(outgoing.keys()):
+            outgoing[key] = sorted(set(outgoing[key]), key=lambda p: (int(p[1]), int(p[0])))
+        remaining_edges = {(start, end) for start, end in directed_edges}
+        loops: List[List[Tuple[int, int]]] = []
+        while remaining_edges:
+            start_edge = min(remaining_edges, key=lambda edge: (int(edge[0][1]), int(edge[0][0]), int(edge[1][1]), int(edge[1][0])))
+            start = (int(start_edge[0][0]), int(start_edge[0][1]))
+            current = start
+            loop: List[Tuple[int, int]] = []
+            guard = max(8, len(directed_edges) * 4)
+            while guard > 0:
+                guard -= 1
+                loop.append((int(current[0]), int(current[1])))
+                candidates = [end for end in outgoing.get(current, []) if (current, end) in remaining_edges]
+                if not candidates:
+                    break
+                next_vertex = candidates[0]
+                remaining_edges.discard((current, next_vertex))
+                current = (int(next_vertex[0]), int(next_vertex[1]))
+                if current == start:
+                    break
+            if len(loop) >= 3 and current == start:
+                loops.append(loop)
+            else:
+                break
+        if not loops:
+            return []
+        loops.sort(key=lambda pts: abs(cls._polygon_area(pts)), reverse=True)
+        return [(int(x), int(y)) for x, y in loops[0]]
 
     def _ship_hull_polygon_points(self, occupied: List[Tuple[int, int]]) -> List[float]:
-        corners: List[Tuple[float, float]] = []
-        for col, row in occupied:
-            x1 = self.x0 + float(col) * self.cell
-            y1 = self.y0 + float(row) * self.cell
-            x2 = x1 + self.cell
-            y2 = y1 + self.cell
-            corners.extend([(x1, y1), (x2, y1), (x2, y2), (x1, y2)])
-        hull = self._convex_hull(corners)
+        hull = self._ship_cell_union_boundary_vertices(occupied)
         flat: List[float] = []
-        for x, y in hull:
+        for col, row in hull:
+            x = self.x0 + float(col) * self.cell
+            y = self.y0 + float(row) * self.cell
             flat.extend([float(x), float(y)])
         return flat
+
+    @staticmethod
+    def _ship_render_rotation_steps(facing_deg: Any) -> int:
+        try:
+            return int(round(float(facing_deg) / 90.0)) % 4
+        except Exception:
+            return 0
+
+    @staticmethod
+    def _ship_render_asset_entry_for_facing(render: Dict[str, Any], facing_deg: Any) -> Dict[str, Any]:
+        render_data = dict(render if isinstance(render, dict) else {})
+        facing_assets = render_data.get("facing_assets") if isinstance(render_data.get("facing_assets"), dict) else {}
+        if not facing_assets:
+            return {}
+        step = BattleMapWindow._ship_render_rotation_steps(facing_deg)
+        keys = (
+            str((step * 90) % 360),
+            str(step),
+            str(int((step * 90) % 360)),
+            str(int(step)),
+        )
+        for key in keys:
+            candidate = facing_assets.get(key)
+            if isinstance(candidate, dict):
+                return dict(candidate)
+        return {}
+
+    def _resolve_ship_asset_path(self, *, image_path: str, image_key: str) -> Optional[str]:
+        raw_path = str(image_path or "").strip()
+        if raw_path:
+            candidate = Path(raw_path).expanduser()
+            if not candidate.is_absolute():
+                candidate = (_app_base_dir() / candidate).resolve()
+            if candidate.exists() and candidate.is_file():
+                return str(candidate)
+        key = str(image_key or "").strip()
+        if key:
+            app = getattr(self, "app", None)
+            resolver = getattr(app, "_ship_render_asset_path_for_key", None)
+            if callable(resolver):
+                try:
+                    resolved = resolver(key)
+                except Exception:
+                    resolved = None
+                resolved_path = str(resolved or "").strip()
+                if resolved_path:
+                    candidate = Path(resolved_path).expanduser()
+                    if not candidate.is_absolute():
+                        candidate = (_app_base_dir() / candidate).resolve()
+                    if candidate.exists() and candidate.is_file():
+                        return str(candidate)
+        return None
+
+    def _ship_asset_tk_image(self, *, path: str, width: int, height: int) -> Any:
+        if Image is None or ImageTk is None:
+            return None
+        if width <= 0 or height <= 0:
+            return None
+        cache = getattr(self, "_ship_asset_cache", None)
+        if not isinstance(cache, dict):
+            cache = {}
+            self._ship_asset_cache = cache
+        key = (str(path), int(width), int(height))
+        cached = cache.get(key)
+        if cached is not None:
+            return cached
+        try:
+            pil = Image.open(str(path)).convert("RGBA")
+            resized = pil.resize((int(width), int(height)), Image.LANCZOS)
+            tk_image = ImageTk.PhotoImage(resized)
+        except Exception:
+            return None
+        cache[key] = tk_image
+        return tk_image
+
+    def _draw_ship_asset(
+        self,
+        *,
+        sid: str,
+        occupied: List[Tuple[int, int]],
+        render: Dict[str, Any],
+        facing_deg: Any,
+    ) -> bool:
+        if not occupied:
+            return False
+        render_data = dict(render if isinstance(render, dict) else {})
+        facing_entry = self._ship_render_asset_entry_for_facing(render_data, facing_deg)
+        image_path = str(facing_entry.get("image_path") or render_data.get("base_image_path") or "").strip()
+        image_key = str(facing_entry.get("image_key") or render_data.get("base_image_key") or "").strip()
+        resolved_path = self._resolve_ship_asset_path(image_path=image_path, image_key=image_key)
+        if not resolved_path:
+            return False
+        anchor = str(facing_entry.get("image_anchor") or render_data.get("image_anchor") or "center").strip().lower() or "center"
+        offset_col = float(facing_entry.get("offset_col", render_data.get("image_offset_col", 0.0)) or 0.0)
+        offset_row = float(facing_entry.get("offset_row", render_data.get("image_offset_row", 0.0)) or 0.0)
+        min_col = min(int(col) for col, _ in occupied)
+        max_col = max(int(col) for col, _ in occupied)
+        min_row = min(int(row) for _, row in occupied)
+        max_row = max(int(row) for _, row in occupied)
+        x1 = self.x0 + float(min_col) * self.cell
+        y1 = self.y0 + float(min_row) * self.cell
+        x2 = self.x0 + float(max_col + 1) * self.cell
+        y2 = self.y0 + float(max_row + 1) * self.cell
+        width = max(1, int(round(abs(x2 - x1))))
+        height = max(1, int(round(abs(y2 - y1))))
+        tk_image = self._ship_asset_tk_image(path=resolved_path, width=width, height=height)
+        if tk_image is None:
+            return False
+        anchors = {
+            "center": ((x1 + x2) / 2.0, (y1 + y2) / 2.0, "center"),
+            "n": ((x1 + x2) / 2.0, y1, "n"),
+            "s": ((x1 + x2) / 2.0, y2, "s"),
+            "e": (x2, (y1 + y2) / 2.0, "e"),
+            "w": (x1, (y1 + y2) / 2.0, "w"),
+            "ne": (x2, y1, "ne"),
+            "nw": (x1, y1, "nw"),
+            "se": (x2, y2, "se"),
+            "sw": (x1, y2, "sw"),
+        }
+        base_x, base_y, tk_anchor = anchors.get(anchor, anchors["center"])
+        draw_x = float(base_x) + offset_col * self.cell
+        draw_y = float(base_y) + offset_row * self.cell
+        try:
+            self.canvas.create_image(
+                draw_x,
+                draw_y,
+                image=tk_image,
+                anchor=tk_anchor,
+                tags=("structure", f"structure:{sid}", "ship_hull", "ship_asset"),
+            )
+        except Exception:
+            return False
+        return True
+
+    def _ship_render_metadata_for_structure(self, sid: str, structure: Dict[str, Any]) -> Dict[str, Any]:
+        payload = structure.get("payload") if isinstance(structure.get("payload"), dict) else {}
+        render = payload.get("ship_render") if isinstance(payload.get("ship_render"), dict) else {}
+        if render:
+            return dict(render)
+        try:
+            ship_state = self.app._ship_instance_for_structure(sid) if hasattr(self, "app") else None
+        except Exception:
+            ship_state = None
+        blueprint_id = str(
+            (ship_state or {}).get("blueprint_id")
+            or payload.get("ship_blueprint_id")
+            or ""
+        ).strip().lower()
+        if not blueprint_id:
+            return {}
+        try:
+            blueprints = self.app._ship_blueprints() if hasattr(self, "app") else {}
+        except Exception:
+            blueprints = {}
+        blueprint = blueprints.get(blueprint_id) if isinstance(blueprints, dict) else {}
+        if isinstance(blueprint, dict) and isinstance(blueprint.get("render"), dict):
+            return dict(blueprint.get("render"))
+        return {}
 
     def _ship_overlay_world_from_local(
         self,
@@ -8045,12 +8237,12 @@ class BattleMapWindow(tk.Toplevel):
             px, py = self._grid_to_pixel(world_col, world_row)
             try:
                 self.canvas.create_oval(
-                    px - max(3.0, self.cell * 0.11),
-                    py - max(3.0, self.cell * 0.11),
-                    px + max(3.0, self.cell * 0.11),
-                    py + max(3.0, self.cell * 0.11),
-                    fill="#f7f1d2",
-                    outline="#8a5a00",
+                    px - max(2.0, self.cell * 0.09),
+                    py - max(2.0, self.cell * 0.09),
+                    px + max(2.0, self.cell * 0.09),
+                    py + max(2.0, self.cell * 0.09),
+                    fill="#dfe8f1",
+                    outline="#5a6f85",
                     width=1,
                     tags=("structure", f"structure:{sid}", "ship_overlay"),
                 )
@@ -8069,8 +8261,8 @@ class BattleMapWindow(tk.Toplevel):
                     py - size,
                     px + size,
                     py + size,
-                    fill="#3f7fbf",
-                    outline="#163a66",
+                    fill="#afc8dd",
+                    outline="#406383",
                     width=1,
                     tags=("structure", f"structure:{sid}", "ship_overlay"),
                 )
@@ -8127,14 +8319,27 @@ class BattleMapWindow(tk.Toplevel):
             is_ship = self._is_ship_structure_payload(structure)
             selected = bool(selected_sid and sid == selected_sid)
             if is_ship and occupied:
+                ship_state = {}
+                try:
+                    ship_state = self.app._ship_instance_for_structure(sid) if hasattr(self, "app") else {}
+                except Exception:
+                    ship_state = {}
+                facing_deg = float(ship_state.get("facing_deg", payload.get("facing_deg", 0.0)) or 0.0)
+                render_metadata = self._ship_render_metadata_for_structure(sid, structure)
                 polygon_points = self._ship_hull_polygon_points(occupied)
+                asset_drawn = self._draw_ship_asset(
+                    sid=sid,
+                    occupied=occupied,
+                    render=render_metadata,
+                    facing_deg=facing_deg,
+                )
                 if len(polygon_points) >= 6:
                     try:
                         self.canvas.create_polygon(
                             polygon_points,
-                            fill="#6f8ca4" if not selected else "#89a9c6",
+                            fill="" if asset_drawn else "#6f8ca4" if not selected else "#89a9c6",
                             outline="#2f3f4f" if not selected else "#203040",
-                            width=max(1, int(self.cell * (0.06 if not selected else 0.1))),
+                            width=max(1, int(self.cell * (0.045 if (asset_drawn and not selected) else 0.06 if not selected else 0.1))),
                             smooth=False,
                             tags=("structure", f"structure:{sid}", "ship_hull"),
                         )

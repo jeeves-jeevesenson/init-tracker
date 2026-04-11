@@ -61,6 +61,32 @@ def _normalize_local_entities(raw: Any, *, prefix: str) -> List[Dict[str, Any]]:
     return out
 
 
+def _normalize_render_facing_assets(raw: Any) -> Dict[str, Dict[str, Any]]:
+    if not isinstance(raw, dict):
+        return {}
+    normalized: Dict[str, Dict[str, Any]] = {}
+    for key, value in raw.items():
+        if not isinstance(value, dict):
+            continue
+        facing_key = str(key).strip().lower()
+        if not facing_key:
+            continue
+        item: Dict[str, Any] = {}
+        if value.get("image_key") is not None:
+            item["image_key"] = str(value.get("image_key")).strip()
+        if value.get("image_path") is not None:
+            item["image_path"] = str(value.get("image_path")).strip()
+        if value.get("image_anchor") is not None:
+            item["image_anchor"] = str(value.get("image_anchor")).strip().lower()
+        if value.get("offset_col") is not None:
+            item["offset_col"] = _as_int(value.get("offset_col"))
+        if value.get("offset_row") is not None:
+            item["offset_row"] = _as_int(value.get("offset_row"))
+        if item:
+            normalized[facing_key] = item
+    return normalized
+
+
 def normalize_composite_ship_blueprint(payload: Any, *, source: str = "") -> Tuple[Dict[str, Any], List[str]]:
     data = dict(payload) if isinstance(payload, dict) else {}
     errors: List[str] = []
@@ -90,6 +116,13 @@ def normalize_composite_ship_blueprint(payload: Any, *, source: str = "") -> Tup
     if not boarding_edges:
         boarding_edges = ["port", "starboard"]
     render = dict(data.get("render") if isinstance(data.get("render"), dict) else {})
+    base_image_key = str(render.get("base_image_key") or "").strip()
+    base_image_path = str(render.get("base_image_path") or "").strip()
+    image_anchor = str(render.get("image_anchor") or "center").strip().lower() or "center"
+    facing_assets = _normalize_render_facing_assets(render.get("facing_assets"))
+    image_offset_col = _as_int(render.get("image_offset_col"), 0)
+    image_offset_row = _as_int(render.get("image_offset_row"), 0)
+    fallback_style = str(render.get("fallback_style") or "polygon").strip().lower() or "polygon"
     engagement_defaults = dict(data.get("engagement_defaults") if isinstance(data.get("engagement_defaults"), dict) else {})
     crew = dict(engagement_defaults.get("crew") if isinstance(engagement_defaults.get("crew"), dict) else {})
     normalized = {
@@ -116,7 +149,13 @@ def normalize_composite_ship_blueprint(payload: Any, *, source: str = "") -> Tup
         },
         "render": {
             "style": str(render.get("style") or "polygon").strip().lower() or "polygon",
-            "base_image_key": str(render.get("base_image_key") or "").strip(),
+            "fallback_style": fallback_style,
+            "base_image_key": base_image_key,
+            "base_image_path": base_image_path,
+            "image_anchor": image_anchor,
+            "image_offset_col": image_offset_col,
+            "image_offset_row": image_offset_row,
+            "facing_assets": facing_assets,
             "overlay_hints": _normalize_tags(render.get("overlay_hints")),
             "preview": dict(render.get("preview") if isinstance(render.get("preview"), dict) else {}),
         },
