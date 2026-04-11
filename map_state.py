@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import copy
 import math
 from dataclasses import dataclass, field
 from typing import Any, Dict, Iterable, List, Optional, Tuple
@@ -70,6 +71,550 @@ def _entity_cells(col: int, row: int, payload: Any) -> List[CellKey]:
     if footprint:
         return footprint
     return [base]
+
+
+def _merge_tags(default_tags: Any, existing_tags: Any) -> List[str]:
+    merged: List[str] = []
+    seen = set()
+    for source in (default_tags, existing_tags):
+        for raw in source if isinstance(source, list) else []:
+            text = str(raw or "").strip().lower()
+            if not text or text in seen:
+                continue
+            merged.append(text)
+            seen.add(text)
+    return merged
+
+
+TACTICAL_PRESET_STACK_RULES: Dict[str, Dict[str, Any]] = {
+    "barrel": {
+        "light": {"max_count": 1, "blocks_movement": False, "cover": "none", "is_difficult_terrain": False},
+        "medium": {"max_count": 3, "blocks_movement": False, "cover": "half", "is_difficult_terrain": True},
+        "dense": {"max_count": None, "blocks_movement": True, "cover": "three_quarters", "is_difficult_terrain": True},
+    },
+    "crate_stack": {
+        "light": {"max_count": 1, "blocks_movement": False, "cover": "half", "is_difficult_terrain": False},
+        "medium": {"max_count": 3, "blocks_movement": True, "cover": "three_quarters", "is_difficult_terrain": True},
+        "dense": {"max_count": None, "blocks_movement": True, "cover": "full", "is_difficult_terrain": True},
+    },
+    "debris": {
+        "light": {"max_count": 1, "blocks_movement": False, "cover": "none", "is_difficult_terrain": True},
+        "medium": {"max_count": 3, "blocks_movement": False, "cover": "half", "is_difficult_terrain": True},
+        "dense": {"max_count": None, "blocks_movement": True, "cover": "half", "is_difficult_terrain": True},
+    },
+    "difficult_patch": {
+        "light": {"max_count": 1, "blocks_movement": False, "cover": "none", "is_difficult_terrain": True},
+        "medium": {"max_count": 3, "blocks_movement": False, "cover": "none", "is_difficult_terrain": True},
+        "dense": {"max_count": None, "blocks_movement": True, "cover": "half", "is_difficult_terrain": True},
+    },
+}
+
+
+TACTICAL_PRESET_CATALOG: Dict[str, Dict[str, Any]] = {
+    "barrel": {
+        "id": "barrel",
+        "display_name": "Barrel",
+        "family": "Clutter / Props",
+        "category": "feature",
+        "kind": "barrel",
+        "stackable": True,
+        "default_count": 1,
+        "payload": {
+            "name": "Barrel",
+            "tags": ["prop", "barrel", "cover"],
+            "blocks_movement": False,
+            "cover": "none",
+            "destructible": True,
+            "flammable": True,
+            "hp": 8,
+            "ac": 11,
+            "damage_threshold": 0,
+            "on_destroy_spawn_hazard": {"kind": "fire", "payload": {"duration_turns": 2, "remaining_turns": 2, "tags": ["fire", "environment"]}},
+        },
+    },
+    "powder_barrel": {
+        "id": "powder_barrel",
+        "display_name": "Powder Barrel",
+        "family": "Clutter / Props",
+        "category": "feature",
+        "kind": "powder_barrel",
+        "payload": {
+            "name": "Powder Barrel",
+            "tags": ["prop", "powder", "explosive", "flammable"],
+            "blocks_movement": False,
+            "destructible": True,
+            "flammable": True,
+            "explosive": True,
+            "hp": 6,
+            "ac": 11,
+            "damage_threshold": 0,
+            "on_ignite_spawn_hazard": {"kind": "fire", "payload": {"duration_turns": 3, "remaining_turns": 3, "tags": ["fire", "environment"], "movement_multiplier": 2.0}},
+            "on_destroy_spawn_hazard": {"kind": "fire", "payload": {"duration_turns": 4, "remaining_turns": 4, "tags": ["fire", "explosion", "environment"], "movement_multiplier": 2.0, "blocks_movement": True}},
+        },
+    },
+    "crate_stack": {
+        "id": "crate_stack",
+        "display_name": "Crate Stack",
+        "family": "Clutter / Props",
+        "category": "feature",
+        "kind": "crate",
+        "stackable": True,
+        "default_count": 2,
+        "payload": {
+            "name": "Crate Stack",
+            "tags": ["prop", "crate", "cover"],
+            "blocks_movement": True,
+            "cover": "half",
+            "destructible": True,
+            "flammable": True,
+            "hp": 15,
+            "ac": 12,
+            "damage_threshold": 0,
+        },
+    },
+    "debris": {
+        "id": "debris",
+        "display_name": "Difficult Debris",
+        "family": "Clutter / Props",
+        "category": "feature",
+        "kind": "difficult_terrain",
+        "stackable": True,
+        "default_count": 2,
+        "payload": {
+            "name": "Debris",
+            "tags": ["debris", "difficult_terrain"],
+            "blocks_movement": False,
+            "is_difficult_terrain": True,
+            "cover": "none",
+        },
+    },
+    "cannon": {
+        "id": "cannon",
+        "display_name": "Cannon",
+        "family": "Ship Fixtures",
+        "category": "feature",
+        "kind": "cannon",
+        "payload": {
+            "name": "Cannon",
+            "tags": ["weapon", "siege", "ship_fixture", "cover"],
+            "blocks_movement": True,
+            "cover": "half",
+            "destructible": True,
+            "hp": 22,
+            "ac": 19,
+            "damage_threshold": 5,
+        },
+    },
+    "ballista": {
+        "id": "ballista",
+        "display_name": "Ballista",
+        "family": "Ship Fixtures",
+        "category": "feature",
+        "kind": "ballista",
+        "payload": {
+            "name": "Ballista",
+            "tags": ["weapon", "siege", "ship_fixture"],
+            "blocks_movement": True,
+            "cover": "half",
+            "destructible": True,
+            "hp": 20,
+            "ac": 15,
+            "damage_threshold": 3,
+        },
+    },
+    "railing": {
+        "id": "railing",
+        "display_name": "Railing",
+        "family": "Ship Fixtures",
+        "category": "feature",
+        "kind": "railing",
+        "payload": {
+            "name": "Railing",
+            "tags": ["ship_fixture", "cover", "railing"],
+            "blocks_movement": False,
+            "cover": "half",
+            "destructible": True,
+            "hp": 10,
+            "ac": 13,
+        },
+    },
+    "hatch": {
+        "id": "hatch",
+        "display_name": "Hatch",
+        "family": "Ship Fixtures",
+        "category": "feature",
+        "kind": "hatch",
+        "payload": {
+            "name": "Hatch",
+            "tags": ["ship_fixture", "hatch", "traversal"],
+            "blocks_movement": False,
+            "destructible": True,
+            "hp": 12,
+            "ac": 13,
+        },
+    },
+    "ladder": {
+        "id": "ladder",
+        "display_name": "Ladder",
+        "family": "Ship Fixtures",
+        "category": "feature",
+        "kind": "ladder",
+        "payload": {
+            "name": "Ladder",
+            "tags": ["ship_fixture", "ladder", "climbable", "traversal"],
+            "blocks_movement": False,
+            "destructible": True,
+            "hp": 8,
+            "ac": 12,
+            "max_climb_delta": 20,
+        },
+    },
+    "mast": {
+        "id": "mast",
+        "display_name": "Mast",
+        "family": "Ship Fixtures",
+        "category": "feature",
+        "kind": "mast",
+        "payload": {
+            "name": "Mast",
+            "tags": ["ship_fixture", "mast", "climbable", "requires_climb_transition"],
+            "blocks_movement": True,
+            "cover": "half",
+            "destructible": True,
+            "flammable": True,
+            "hp": 30,
+            "ac": 15,
+            "damage_threshold": 5,
+            "max_climb_delta": 25,
+        },
+    },
+    "stairs": {
+        "id": "stairs",
+        "display_name": "Stairs",
+        "family": "Ship Fixtures",
+        "category": "feature",
+        "kind": "stairs",
+        "payload": {
+            "name": "Stairs",
+            "tags": ["ship_fixture", "stairs", "climbable", "traversal"],
+            "blocks_movement": False,
+            "max_climb_delta": 15,
+        },
+    },
+    "gangplank": {
+        "id": "gangplank",
+        "display_name": "Gangplank",
+        "family": "Ship Fixtures",
+        "category": "feature",
+        "kind": "gangplank",
+        "payload": {
+            "name": "Gangplank",
+            "tags": ["ship_fixture", "gangplank", "bridge", "boarding_bridge", "traversal"],
+            "blocks_movement": False,
+            "destructible": True,
+            "hp": 16,
+            "ac": 12,
+            "cover": "none",
+            "max_climb_delta": 10,
+        },
+    },
+    "door": {
+        "id": "door",
+        "display_name": "Door",
+        "family": "Ship Fixtures",
+        "category": "feature",
+        "kind": "door",
+        "payload": {
+            "name": "Door",
+            "tags": ["ship_fixture", "door"],
+            "blocks_movement": True,
+            "destructible": True,
+            "hp": 18,
+            "ac": 15,
+            "damage_threshold": 3,
+        },
+    },
+    "fire": {
+        "id": "fire",
+        "display_name": "Fire Patch",
+        "family": "Hazards / Effects",
+        "category": "hazard",
+        "kind": "fire",
+        "payload": {
+            "name": "Fire",
+            "tags": ["fire", "environment", "hazard"],
+            "duration_turns": 3,
+            "remaining_turns": 3,
+            "movement_multiplier": 2.0,
+            "blocks_movement": False,
+        },
+    },
+    "smoke": {
+        "id": "smoke",
+        "display_name": "Smoke Patch",
+        "family": "Hazards / Effects",
+        "category": "hazard",
+        "kind": "smoke",
+        "payload": {
+            "name": "Smoke",
+            "tags": ["smoke", "obscurement", "hazard"],
+            "duration_turns": 3,
+            "remaining_turns": 3,
+            "movement_multiplier": 1.0,
+            "blocks_movement": False,
+            "cover": "half",
+        },
+    },
+    "oil": {
+        "id": "oil",
+        "display_name": "Oil / Grease",
+        "family": "Hazards / Effects",
+        "category": "hazard",
+        "kind": "grease",
+        "payload": {
+            "name": "Oil Slick",
+            "tags": ["oil", "grease", "hazard", "flammable"],
+            "duration_turns": 4,
+            "remaining_turns": 4,
+            "movement_multiplier": 2.0,
+            "blocks_movement": False,
+            "flammable": True,
+        },
+    },
+    "burning_debris": {
+        "id": "burning_debris",
+        "display_name": "Burning Debris",
+        "family": "Hazards / Effects",
+        "category": "hazard",
+        "kind": "burning_debris",
+        "payload": {
+            "name": "Burning Debris",
+            "tags": ["fire", "debris", "hazard"],
+            "duration_turns": 3,
+            "remaining_turns": 3,
+            "movement_multiplier": 2.0,
+            "blocks_movement": True,
+            "cover": "half",
+        },
+    },
+    "dock_platform": {
+        "id": "dock_platform",
+        "display_name": "Dock Platform",
+        "family": "Support / World",
+        "category": "structure",
+        "kind": "dock",
+        "occupied_offsets": [{"col": 0, "row": 0}, {"col": 1, "row": 0}, {"col": 0, "row": 1}, {"col": 1, "row": 1}],
+        "payload": {
+            "name": "Dock Platform",
+            "tags": ["dock", "platform", "boardable"],
+            "blocks_movement": True,
+            "boardable": True,
+        },
+    },
+    "cover_obstacle": {
+        "id": "cover_obstacle",
+        "display_name": "Cover Obstacle",
+        "family": "Support / World",
+        "category": "feature",
+        "kind": "cover_prop",
+        "payload": {
+            "name": "Cover Obstacle",
+            "tags": ["cover", "obstacle"],
+            "blocks_movement": False,
+            "cover": "half",
+            "destructible": True,
+            "hp": 12,
+            "ac": 12,
+        },
+    },
+    "difficult_patch": {
+        "id": "difficult_patch",
+        "display_name": "Difficult Terrain Patch",
+        "family": "Support / World",
+        "category": "feature",
+        "kind": "difficult_terrain",
+        "stackable": True,
+        "default_count": 2,
+        "payload": {
+            "name": "Difficult Terrain",
+            "tags": ["difficult_terrain"],
+            "blocks_movement": False,
+            "is_difficult_terrain": True,
+            "cover": "none",
+        },
+    },
+    "brazier": {
+        "id": "brazier",
+        "display_name": "Brazier",
+        "family": "Hazards / Effects",
+        "category": "feature",
+        "kind": "brazier",
+        "payload": {
+            "name": "Brazier",
+            "tags": ["brazier", "fire_source", "flammable"],
+            "blocks_movement": False,
+            "destructible": True,
+            "flammable": True,
+            "hp": 10,
+            "ac": 13,
+            "on_destroy_spawn_hazard": {"kind": "fire", "payload": {"duration_turns": 2, "remaining_turns": 2, "tags": ["fire", "environment"]}},
+        },
+    },
+}
+
+TACTICAL_PRESET_ALIASES: Dict[str, str] = {
+    "crate": "crate_stack",
+    "blocking_prop": "cover_obstacle",
+    "cover_prop": "cover_obstacle",
+    "difficult_terrain": "difficult_patch",
+    "magical_zone": "smoke",
+    "blocked_zone": "cover_obstacle",
+    "moving_platform": "dock_platform",
+}
+
+
+def tactical_preset_catalog() -> Dict[str, Dict[str, Any]]:
+    return copy.deepcopy(TACTICAL_PRESET_CATALOG)
+
+
+def tactical_preset_families() -> List[str]:
+    families = {str(preset.get("family") or "Other") for preset in TACTICAL_PRESET_CATALOG.values()}
+    return sorted(families)
+
+
+def _stack_state_for_count(preset_id: str, count: int) -> Optional[str]:
+    rules = TACTICAL_PRESET_STACK_RULES.get(str(preset_id))
+    if not isinstance(rules, dict):
+        return None
+    normalized_count = max(1, int(count))
+    for state in ("light", "medium", "dense"):
+        limit = rules.get(state, {}).get("max_count") if isinstance(rules.get(state), dict) else None
+        if limit is None:
+            return state
+        if normalized_count <= int(limit):
+            return state
+    return "dense"
+
+
+def _resolve_preset_id(preset_id: Any = None, kind: Any = None) -> str:
+    direct = str(preset_id or "").strip().lower()
+    if direct in TACTICAL_PRESET_CATALOG:
+        return direct
+    kind_key = str(kind or "").strip().lower()
+    if kind_key in TACTICAL_PRESET_CATALOG:
+        return kind_key
+    if kind_key in TACTICAL_PRESET_ALIASES:
+        mapped = str(TACTICAL_PRESET_ALIASES.get(kind_key) or "").strip().lower()
+        if mapped in TACTICAL_PRESET_CATALOG:
+            return mapped
+    return ""
+
+
+def normalize_tactical_payload(
+    *,
+    category: Any,
+    kind: Any,
+    payload: Any = None,
+    preset_id: Any = None,
+    count: Any = None,
+) -> Dict[str, Any]:
+    category_key = str(category or "").strip().lower() or "feature"
+    kind_key = str(kind or "").strip().lower() or category_key
+    payload_dict = dict(payload if isinstance(payload, dict) else {})
+    resolved_preset_id = _resolve_preset_id(preset_id=preset_id, kind=kind_key)
+    if not resolved_preset_id:
+        if "name" not in payload_dict and kind_key:
+            payload_dict["name"] = kind_key
+        return {
+            "preset_id": "",
+            "display_name": str(payload_dict.get("name") or kind_key),
+            "category": category_key,
+            "kind": kind_key,
+            "payload": payload_dict,
+            "occupied_offsets": [],
+        }
+    preset = TACTICAL_PRESET_CATALOG.get(resolved_preset_id, {})
+    preset_payload = dict(preset.get("payload") if isinstance(preset.get("payload"), dict) else {})
+    merged = {**preset_payload, **payload_dict}
+    merged["tags"] = _merge_tags(preset_payload.get("tags"), payload_dict.get("tags"))
+    display_name = str(payload_dict.get("name") or preset.get("display_name") or kind_key or "Object")
+    merged["name"] = display_name
+    merged["tactical_preset_id"] = resolved_preset_id
+    merged["display_name"] = display_name
+    if merged.get("duration_turns") is not None and payload_dict.get("remaining_turns") is None:
+        try:
+            merged["remaining_turns"] = int(merged.get("duration_turns"))
+        except Exception:
+            pass
+
+    stackable = bool(preset.get("stackable"))
+    if stackable:
+        fallback_count = int(preset.get("default_count", 1) or 1)
+        try:
+            normalized_count = int(count if count is not None else merged.get("count", fallback_count))
+        except Exception:
+            normalized_count = fallback_count
+        normalized_count = max(1, normalized_count)
+        merged["count"] = normalized_count
+        stack_state = _stack_state_for_count(resolved_preset_id, normalized_count) or "light"
+        merged["stack_state"] = stack_state
+        rules = TACTICAL_PRESET_STACK_RULES.get(resolved_preset_id, {})
+        state_rules = rules.get(stack_state) if isinstance(rules, dict) else {}
+        if isinstance(state_rules, dict):
+            merged.update({key: value for key, value in state_rules.items() if key in {"blocks_movement", "cover", "is_difficult_terrain"}})
+        merged["tags"] = _merge_tags(merged.get("tags"), [f"stack_{stack_state}"])
+    else:
+        merged.pop("stack_state", None)
+        if "count" in merged:
+            try:
+                merged["count"] = max(1, int(merged.get("count", 1)))
+            except Exception:
+                merged.pop("count", None)
+
+    normalized_category = str(preset.get("category") or category_key).strip().lower() or category_key
+    occupied_offsets = _normalize_cell_list(preset.get("occupied_offsets"))
+    normalized_kind = str(preset.get("kind") or kind_key).strip().lower() or kind_key
+    return {
+        "preset_id": resolved_preset_id,
+        "display_name": display_name,
+        "category": normalized_category,
+        "kind": normalized_kind,
+        "payload": merged,
+        "occupied_offsets": [{"col": int(col), "row": int(row)} for col, row in occupied_offsets],
+    }
+
+
+def tactical_preset_author_summary(preset_id: Any, count: Any = None) -> str:
+    resolved = _resolve_preset_id(preset_id=preset_id, kind="")
+    if not resolved:
+        return "Custom tactical object"
+    preset = TACTICAL_PRESET_CATALOG.get(resolved, {})
+    normalized = normalize_tactical_payload(
+        category=preset.get("category"),
+        kind=preset.get("kind"),
+        payload={},
+        preset_id=resolved,
+        count=count,
+    )
+    payload = normalized.get("payload") if isinstance(normalized.get("payload"), dict) else {}
+    parts = [
+        str(preset.get("display_name") or resolved),
+        f"as {str(normalized.get('category') or 'feature')}",
+    ]
+    if payload.get("count") is not None:
+        parts.append(f"x{int(payload.get('count') or 1)} ({str(payload.get('stack_state') or 'light')})")
+    if payload.get("cover"):
+        parts.append(f"cover={payload.get('cover')}")
+    if payload.get("blocks_movement"):
+        parts.append("blocking")
+    if payload.get("destructible"):
+        hp = payload.get("hp")
+        ac = payload.get("ac")
+        if hp is not None and ac is not None:
+            parts.append(f"HP {hp}/AC {ac}")
+        else:
+            parts.append("destructible")
+    return " · ".join(parts)
 
 
 @dataclass

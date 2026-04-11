@@ -265,6 +265,15 @@ class LanSnapshotStaticTests(unittest.TestCase):
                         "payload": {"name": "Interceptor", "allow_boarding": True},
                     },
                 ],
+                "features": [
+                    {
+                        "id": "f1",
+                        "col": 6,
+                        "row": 5,
+                        "kind": "barrel",
+                        "payload": {"name": "Deck Barrel"},
+                    }
+                ],
             }
         )
         app._capture_canonical_map_state = lambda prefer_window=True: app._map_state.normalized()
@@ -275,6 +284,9 @@ class LanSnapshotStaticTests(unittest.TestCase):
         semantics = structure_a.get("contact_semantics") or {}
         self.assertEqual(semantics.get("boardable_structure_ids"), ["b"])
         self.assertEqual((semantics.get("boardable_structures") or [])[0]["name"], "Interceptor")
+        feature = next(item for item in snap["features"] if item["id"] == "f1")
+        self.assertEqual(feature.get("preset_id"), "barrel")
+        self.assertEqual(feature.get("display_name"), "Deck Barrel")
 
     def test_units_include_max_hp_field(self):
         app = object.__new__(tracker_mod.InitiativeTracker)
