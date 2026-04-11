@@ -46,7 +46,17 @@ import tkinter.font as tkfont
 from dataclasses import dataclass, field
 from typing import Any, Callable, Dict, List, Optional, Tuple, Set, Union
 from tkinter import messagebox, ttk, simpledialog, filedialog
-from map_state import ElevationCell, MapFeature, MapHazard, MapQueryAPI, MapState, MapStructure
+from map_state import (
+    ElevationCell,
+    MapFeature,
+    MapHazard,
+    MapQueryAPI,
+    MapState,
+    MapStructure,
+    normalize_tactical_payload,
+    tactical_preset_author_summary,
+    tactical_preset_catalog,
+)
 
 PIL_IMAGE_IMPORT_ERROR: Optional[str] = None
 PIL_IMAGETK_IMPORT_ERROR: Optional[str] = None
@@ -6209,11 +6219,17 @@ class BattleMapWindow(tk.Toplevel):
         self.map_structures: Dict[str, Dict[str, Any]] = {}
         self.map_elevation_cells: Dict[Tuple[int, int], float] = {}
         self.map_structure_templates: Dict[str, Dict[str, Any]] = {}
+        self._tactical_presets = tactical_preset_catalog()
         self.map_author_mode_var = tk.StringVar(value="off")
         self.map_author_kind_var = tk.StringVar(value="barrel")
+        self.map_author_family_var = tk.StringVar(value="")
+        self.map_author_preset_var = tk.StringVar(value="barrel")
+        self.map_author_count_var = tk.StringVar(value="1")
         self.map_author_label_var = tk.StringVar(value="")
         self.map_author_duration_var = tk.StringVar(value="3")
         self.map_author_blocking_var = tk.BooleanVar(value=False)
+        self.map_author_advanced_var = tk.BooleanVar(value=False)
+        self.map_author_summary_var = tk.StringVar(value="")
         self.map_author_elevation_var = tk.StringVar(value="5")
         self.map_structure_contact_status_var = tk.StringVar(value="Structure contacts: select a structure cell.")
         self._map_author_selected_cell: Optional[Tuple[int, int]] = None
@@ -6819,62 +6835,66 @@ class BattleMapWindow(tk.Toplevel):
         mode_combo = ttk.Combobox(
             tactical,
             textvariable=self.map_author_mode_var,
-            values=["off", "feature", "hazard", "structure", "elevation"],
+            values=["off", "preset", "feature", "hazard", "structure", "elevation"],
             state="readonly",
             width=11,
         )
         mode_combo.grid(row=0, column=1, sticky="w", padx=(6, 0))
-        ttk.Label(tactical, text="Kind:").grid(row=0, column=2, sticky="w", padx=(8, 0))
-        kind_combo = ttk.Combobox(
-            tactical,
-            textvariable=self.map_author_kind_var,
-            values=[
-                "barrel",
-                "powder_barrel",
-                "cannon",
-                "crate",
-                "ladder",
-                "hatch",
-                "railing",
-                "mast",
-                "door",
-                "blocking_prop",
-                "cover_prop",
-                "fire",
-                "smoke",
-                "grease",
-                "difficult_terrain",
-                "magical_zone",
-                "blocked_zone",
-                "ship_hull",
-                "rowboat",
-                "dock",
-                "moving_platform",
-                "wagon",
-            ],
-            width=16,
+        ttk.Label(tactical, text="Preset Family:").grid(row=0, column=2, sticky="w", padx=(8, 0))
+        family_values = sorted(
+            {str(item.get("family") or "Other") for item in self._tactical_presets.values() if isinstance(item, dict)}
         )
-        kind_combo.grid(row=0, column=3, sticky="ew", padx=(6, 0))
-        ttk.Label(tactical, text="Label:").grid(row=1, column=0, sticky="w", pady=(6, 0))
-        ttk.Entry(tactical, textvariable=self.map_author_label_var, width=14).grid(row=1, column=1, sticky="ew", padx=(6, 0), pady=(6, 0))
-        ttk.Label(tactical, text="Duration/Elev:").grid(row=1, column=2, sticky="w", padx=(8, 0), pady=(6, 0))
+        if family_values:
+            self.map_author_family_var.set(family_values[0])
+        family_combo = ttk.Combobox(
+            tactical,
+            textvariable=self.map_author_family_var,
+            values=family_values,
+            state="readonly",
+            width=18,
+        )
+        family_combo.grid(row=0, column=3, sticky="ew", padx=(6, 0))
+        ttk.Label(tactical, text="Preset:").grid(row=1, column=0, sticky="w", pady=(6, 0))
+        self._map_author_preset_combo = ttk.Combobox(
+            tactical,
+            textvariable=self.map_author_preset_var,
+            values=[],
+            width=20,
+        )
+        self._map_author_preset_combo.grid(row=1, column=2, columnspan=2, sticky="ew", padx=(6, 0), pady=(6, 0))
+        ttk.Label(tactical, text="Label:").grid(row=2, column=0, sticky="w", pady=(6, 0))
+        ttk.Entry(tactical, textvariable=self.map_author_label_var, width=14).grid(row=2, column=1, sticky="ew", padx=(6, 0), pady=(6, 0))
+        ttk.Label(tactical, text="Count:").grid(row=2, column=2, sticky="w", padx=(8, 0), pady=(6, 0))
+        count_entry = ttk.Entry(tactical, textvariable=self.map_author_count_var, width=8)
+        count_entry.grid(row=2, column=3, sticky="w", padx=(6, 0), pady=(6, 0))
+        count_entry.bind("<FocusOut>", lambda _e: self._refresh_tactical_preset_selection(sync_mode=False))
+        ttk.Label(tactical, text="Duration/Elev:").grid(row=3, column=0, sticky="w", pady=(6, 0))
         author_value = ttk.Entry(tactical, textvariable=self.map_author_duration_var, width=8)
-        author_value.grid(row=1, column=3, sticky="w", padx=(6, 0), pady=(6, 0))
+        author_value.grid(row=3, column=1, sticky="w", padx=(6, 0), pady=(6, 0))
         ttk.Checkbutton(tactical, text="Blocking", variable=self.map_author_blocking_var).grid(
-            row=2, column=0, columnspan=2, sticky="w", pady=(6, 0)
+            row=3, column=2, sticky="w", pady=(6, 0)
+        )
+        ttk.Checkbutton(tactical, text="Advanced", variable=self.map_author_advanced_var).grid(
+            row=3, column=3, sticky="w", pady=(6, 0)
         )
         btn_row = ttk.Frame(tactical)
-        btn_row.grid(row=2, column=2, columnspan=2, sticky="e", pady=(6, 0))
+        btn_row.grid(row=4, column=0, columnspan=4, sticky="ew", pady=(6, 0))
         ttk.Button(btn_row, text="Apply @ Cell", command=self._apply_tactical_author_to_selected_cell).pack(side=tk.LEFT)
         ttk.Button(btn_row, text="Remove @ Cell", command=self._remove_tactical_entities_at_selected_cell).pack(side=tk.LEFT, padx=(6, 0))
         ttk.Button(btn_row, text="Move Struct…", command=self._move_structure_from_selected_cell).pack(side=tk.LEFT, padx=(6, 0))
         ttk.Button(btn_row, text="Save Template…", command=self._save_template_from_selected_structure).pack(side=tk.LEFT, padx=(6, 0))
         ttk.Button(btn_row, text="Place Template…", command=self._place_template_at_selected_cell).pack(side=tk.LEFT, padx=(6, 0))
         ttk.Button(btn_row, text="Resolve Env", command=self._resolve_environment_turn).pack(side=tk.LEFT, padx=(6, 0))
+        ttk.Label(tactical, textvariable=self.map_author_summary_var, justify="left", wraplength=440).grid(
+            row=5, column=0, columnspan=4, sticky="w", pady=(4, 0)
+        )
         ttk.Label(tactical, textvariable=self.map_structure_contact_status_var, justify="left", wraplength=440).grid(
-            row=3, column=0, columnspan=4, sticky="w", pady=(6, 0)
+            row=6, column=0, columnspan=4, sticky="w", pady=(6, 0)
         )
         tactical.columnconfigure(3, weight=1)
+        family_combo.bind("<<ComboboxSelected>>", lambda _e: self._refresh_tactical_preset_selection())
+        self._map_author_preset_combo.bind("<<ComboboxSelected>>", lambda _e: self._refresh_tactical_preset_selection(sync_mode=True))
+        self._refresh_tactical_preset_selection(sync_mode=True)
 
         # --- Units panel ---
         ttk.Label(left, text="Units (drag onto map)").pack(anchor="w")
@@ -7971,6 +7991,57 @@ class BattleMapWindow(tk.Toplevel):
         except Exception:
             pass
 
+    def _refresh_tactical_preset_selection(self, *, sync_mode: bool = False) -> None:
+        presets = self._tactical_presets if isinstance(self._tactical_presets, dict) else {}
+        family = str(self.map_author_family_var.get() or "").strip()
+        ids = [
+            str(pid)
+            for pid, preset in presets.items()
+            if isinstance(preset, dict) and str(preset.get("family") or "Other") == family
+        ]
+        if not ids:
+            ids = [str(pid) for pid in presets.keys()]
+        ids = sorted(ids)
+        current = str(self.map_author_preset_var.get() or "").strip()
+        if current not in ids and ids:
+            current = ids[0]
+            self.map_author_preset_var.set(current)
+        combo = getattr(self, "_map_author_preset_combo", None)
+        if combo is not None:
+            try:
+                combo.configure(values=ids)
+            except Exception:
+                pass
+        normalized = normalize_tactical_payload(
+            category=self.map_author_mode_var.get(),
+            kind=self.map_author_kind_var.get(),
+            preset_id=current,
+            payload={},
+            count=self.map_author_count_var.get(),
+        )
+        if sync_mode:
+            current_mode = str(self.map_author_mode_var.get() or "off").strip().lower()
+            preset_category = str(normalized.get("category") or "feature")
+            if current_mode in {"feature", "hazard", "structure"}:
+                self.map_author_mode_var.set(preset_category)
+            self.map_author_kind_var.set(str(normalized.get("kind") or current or "feature"))
+            payload = normalized.get("payload") if isinstance(normalized.get("payload"), dict) else {}
+            self.map_author_blocking_var.set(bool(payload.get("blocks_movement")))
+            if payload.get("count") is not None:
+                self.map_author_count_var.set(str(payload.get("count")))
+            duration_value = payload.get("duration_turns")
+            if duration_value is not None:
+                self.map_author_duration_var.set(str(duration_value))
+        self.map_author_summary_var.set(tactical_preset_author_summary(current, self.map_author_count_var.get()))
+
+    def _selected_tactical_preset(self) -> Dict[str, Any]:
+        preset_id = str(self.map_author_preset_var.get() or "").strip().lower()
+        return (
+            self._tactical_presets.get(preset_id)
+            if isinstance(self._tactical_presets, dict) and isinstance(self._tactical_presets.get(preset_id), dict)
+            else {}
+        )
+
     def _apply_tactical_author_to_selected_cell(self) -> None:
         cell = self._map_author_selected_cell
         if cell is None:
@@ -7982,10 +8053,35 @@ class BattleMapWindow(tk.Toplevel):
         label = str(self.map_author_label_var.get() or "").strip()
         blocking = bool(self.map_author_blocking_var.get())
         duration_raw = str(self.map_author_duration_var.get() or "").strip()
+        preset_id = str(getattr(self, "map_author_preset_var", None).get() if hasattr(self, "map_author_preset_var") else "").strip().lower()
+        count_raw = str(getattr(self, "map_author_count_var", None).get() if hasattr(self, "map_author_count_var") else "").strip()
+        count_value: Optional[int] = None
+        if count_raw:
+            try:
+                count_value = max(1, int(count_raw))
+            except Exception:
+                messagebox.showerror("Tactical Entities", "Count must be a positive integer.", parent=self)
+                return
         if mode == "off":
             return
+        normalized = normalize_tactical_payload(
+            category="feature" if mode == "preset" else mode,
+            kind=kind,
+            payload={"name": label} if label else {},
+            preset_id=preset_id,
+            count=count_value,
+        )
+        if mode == "preset":
+            mode = str(normalized.get("category") or "feature").strip().lower()
+        kind = str(normalized.get("kind") or kind).strip().lower()
+        payload = dict(normalized.get("payload") if isinstance(normalized.get("payload"), dict) else {})
+        if label:
+            payload["name"] = label
+        payload["blocks_movement"] = bool(payload.get("blocks_movement", blocking))
+        if blocking and bool(getattr(self, "map_author_advanced_var", None).get() if hasattr(self, "map_author_advanced_var") else True):
+            payload["blocks_movement"] = True
         if mode == "feature":
-            payload = {"name": label or kind, "tags": [kind], "blocks_movement": blocking}
+            payload.setdefault("tags", [kind] if kind else [])
             self.app._upsert_map_feature(
                 col=col,
                 row=row,
@@ -7995,9 +8091,9 @@ class BattleMapWindow(tk.Toplevel):
                 broadcast=False,
             )
         elif mode == "hazard":
-            payload = {"name": label or kind, "tags": [kind], "blocks_movement": blocking}
+            payload.setdefault("tags", [kind] if kind else [])
             try:
-                duration = int(duration_raw)
+                duration = int(duration_raw) if duration_raw else int(payload.get("duration_turns") or 0)
             except Exception:
                 messagebox.showerror("Tactical Entities", "Duration must be an integer.", parent=self)
                 return
@@ -8013,8 +8109,22 @@ class BattleMapWindow(tk.Toplevel):
                 broadcast=False,
             )
         elif mode == "structure":
-            occupied = [(col, row), (min(self.cols - 1, col + 1), row), (col, min(self.rows - 1, row + 1))]
-            payload = {"name": label or kind, "blocks_movement": blocking}
+            offsets = normalized.get("occupied_offsets") if isinstance(normalized.get("occupied_offsets"), list) else []
+            occupied = []
+            for raw in offsets:
+                if not isinstance(raw, dict):
+                    continue
+                try:
+                    occupied.append(
+                        (
+                            max(0, min(self.cols - 1, col + int(raw.get("col", 0) or 0))),
+                            max(0, min(self.rows - 1, row + int(raw.get("row", 0) or 0))),
+                        )
+                    )
+                except Exception:
+                    continue
+            if not occupied:
+                occupied = [(col, row), (min(self.cols - 1, col + 1), row), (col, min(self.rows - 1, row + 1))]
             self.app._upsert_map_structure(
                 kind=kind,
                 anchor_col=col,

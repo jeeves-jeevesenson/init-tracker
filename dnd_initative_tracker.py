@@ -85,6 +85,7 @@ from map_state import (
     MapStructure,
     apply_map_delta,
     build_map_delta,
+    normalize_tactical_payload,
     map_delta_has_changes,
 )
 
@@ -9027,6 +9028,49 @@ class InitiativeTracker(base.InitiativeTracker):
                 pass
         return normalized
 
+    def _normalize_tactical_entity_payload(
+        self,
+        *,
+        category: str,
+        kind: str,
+        payload: Optional[Dict[str, Any]] = None,
+        preset_id: Optional[str] = None,
+    ) -> Tuple[str, Dict[str, Any]]:
+        normalized = normalize_tactical_payload(
+            category=category,
+            kind=kind,
+            payload=payload or {},
+            preset_id=preset_id,
+            count=(payload or {}).get("count") if isinstance(payload, dict) else None,
+        )
+        normalized_kind = str(normalized.get("kind") or kind or category).strip().lower() or str(kind or category or "feature").lower()
+        normalized_payload = dict(normalized.get("payload") if isinstance(normalized.get("payload"), dict) else (payload or {}))
+        return normalized_kind, normalized_payload
+
+    def _lan_tactical_entity_view(self, entry: Dict[str, Any], *, category: str) -> Dict[str, Any]:
+        item = dict(entry if isinstance(entry, dict) else {})
+        payload = dict(item.get("payload") if isinstance(item.get("payload"), dict) else {})
+        normalized = normalize_tactical_payload(
+            category=category,
+            kind=item.get("kind"),
+            payload=payload,
+            preset_id=payload.get("tactical_preset_id"),
+            count=payload.get("count"),
+        )
+        normalized_payload = dict(normalized.get("payload") if isinstance(normalized.get("payload"), dict) else payload)
+        item["kind"] = str(normalized.get("kind") or item.get("kind") or category)
+        item["payload"] = normalized_payload
+        item["preset_id"] = str(normalized_payload.get("tactical_preset_id") or "")
+        item["display_name"] = str(normalized_payload.get("display_name") or normalized_payload.get("name") or item.get("kind") or "")
+        if normalized_payload.get("stack_state") is not None:
+            item["stack_state"] = str(normalized_payload.get("stack_state"))
+        if normalized_payload.get("count") is not None:
+            try:
+                item["count"] = int(normalized_payload.get("count"))
+            except Exception:
+                pass
+        return item
+
     def _upsert_map_feature(
         self,
         *,
@@ -9039,7 +9083,12 @@ class InitiativeTracker(base.InitiativeTracker):
         broadcast: bool = True,
         defer_broadcast: bool = False,
     ) -> str:
-        payload_dict = dict(payload or {})
+        normalized_kind, payload_dict = self._normalize_tactical_entity_payload(
+            category="feature",
+            kind=kind,
+            payload=dict(payload or {}),
+            preset_id=(payload or {}).get("tactical_preset_id") if isinstance(payload, dict) else None,
+        )
 
         def _mutate(state: MapState) -> None:
             nonlocal feature_id
@@ -9050,7 +9099,7 @@ class InitiativeTracker(base.InitiativeTracker):
                 feature_id=str(feature_id),
                 col=int(col),
                 row=int(row),
-                kind=str(kind or "feature"),
+                kind=str(normalized_kind or "feature"),
                 payload=payload_dict,
             ).normalized()
             feature_map[item.feature_id] = item
@@ -9088,7 +9137,12 @@ class InitiativeTracker(base.InitiativeTracker):
         broadcast: bool = True,
         defer_broadcast: bool = False,
     ) -> str:
-        payload_dict = dict(payload or {})
+        normalized_kind, payload_dict = self._normalize_tactical_entity_payload(
+            category="hazard",
+            kind=kind,
+            payload=dict(payload or {}),
+            preset_id=(payload or {}).get("tactical_preset_id") if isinstance(payload, dict) else None,
+        )
 
         def _mutate(state: MapState) -> None:
             nonlocal hazard_id
@@ -9099,7 +9153,7 @@ class InitiativeTracker(base.InitiativeTracker):
                 hazard_id=str(hazard_id),
                 col=int(col),
                 row=int(row),
-                kind=str(kind or "hazard"),
+                kind=str(normalized_kind or "hazard"),
                 payload=payload_dict,
             ).normalized()
             hazard_map[item.hazard_id] = item
@@ -9138,7 +9192,12 @@ class InitiativeTracker(base.InitiativeTracker):
         broadcast: bool = True,
         defer_broadcast: bool = False,
     ) -> str:
-        payload_dict = dict(payload or {})
+        normalized_kind, payload_dict = self._normalize_tactical_entity_payload(
+            category="structure",
+            kind=kind,
+            payload=dict(payload or {}),
+            preset_id=(payload or {}).get("tactical_preset_id") if isinstance(payload, dict) else None,
+        )
         occupied = list(occupied_cells or [])
 
         def _mutate(state: MapState) -> None:
@@ -9148,7 +9207,7 @@ class InitiativeTracker(base.InitiativeTracker):
                 structure_id = self._next_map_entity_id("structure", structure_map.keys())
             item = MapStructure(
                 structure_id=str(structure_id),
-                kind=str(kind or "structure"),
+                kind=str(normalized_kind or "structure"),
                 anchor_col=int(anchor_col),
                 anchor_row=int(anchor_row),
                 occupied_cells=[(int(c), int(r)) for c, r in occupied],
@@ -9843,9 +9902,33 @@ class InitiativeTracker(base.InitiativeTracker):
 
     def _canonical_map_state_from_snapshot_map_payload(self, map_state: Any) -> MapState:
         source = map_state if isinstance(map_state, dict) else {}
+
+        def _normalize_tactical_entries(entries: Any, *, category: str) -> List[Dict[str, Any]]:
+            normalized_entries: List[Dict[str, Any]] = []
+            for raw in entries if isinstance(entries, list) else []:
+                if not isinstance(raw, dict):
+                    continue
+                item = dict(raw)
+                item_payload = dict(item.get("payload") if isinstance(item.get("payload"), dict) else {})
+                normalized = normalize_tactical_payload(
+                    category=category,
+                    kind=item.get("kind"),
+                    payload=item_payload,
+                    preset_id=item_payload.get("tactical_preset_id"),
+                    count=item_payload.get("count"),
+                )
+                item["kind"] = str(normalized.get("kind") or item.get("kind") or category)
+                item["payload"] = dict(normalized.get("payload") if isinstance(normalized.get("payload"), dict) else item_payload)
+                normalized_entries.append(item)
+            return normalized_entries
+
         canonical_payload = source.get("canonical")
         if isinstance(canonical_payload, dict):
-            return MapState.from_dict(canonical_payload)
+            normalized_payload = dict(canonical_payload)
+            normalized_payload["features"] = _normalize_tactical_entries(normalized_payload.get("features"), category="feature")
+            normalized_payload["hazards"] = _normalize_tactical_entries(normalized_payload.get("hazards"), category="hazard")
+            normalized_payload["structures"] = _normalize_tactical_entries(normalized_payload.get("structures"), category="structure")
+            return MapState.from_dict(normalized_payload)
 
         def _normalize_cell_key(raw_key: Any) -> Optional[Tuple[int, int]]:
             if isinstance(raw_key, str):
@@ -9956,9 +10039,9 @@ class InitiativeTracker(base.InitiativeTracker):
                 "obstacles": obstacles,
                 "token_positions": token_positions,
                 "aoes": aoes,
-                "features": list(source.get("features") if isinstance(source.get("features"), list) else []),
-                "hazards": list(source.get("hazards") if isinstance(source.get("hazards"), list) else []),
-                "structures": list(source.get("structures") if isinstance(source.get("structures"), list) else []),
+                "features": _normalize_tactical_entries(source.get("features"), category="feature"),
+                "hazards": _normalize_tactical_entries(source.get("hazards"), category="hazard"),
+                "structures": _normalize_tactical_entries(source.get("structures"), category="structure"),
                 "elevation_cells": list(source.get("elevation_cells") if isinstance(source.get("elevation_cells"), list) else []),
                 "presentation": {
                     "auras_enabled": bool(source.get("auras_enabled", True)),
@@ -13164,8 +13247,16 @@ class InitiativeTracker(base.InitiativeTracker):
             "rough_terrain": rough_payload,
             "aoes": aoes,
             "map_state": canonical_payload,
-            "features": canonical_payload.get("features", []),
-            "hazards": canonical_payload.get("hazards", []),
+            "features": [
+                self._lan_tactical_entity_view(item, category="feature")
+                for item in (canonical_payload.get("features") if isinstance(canonical_payload.get("features"), list) else [])
+                if isinstance(item, dict)
+            ],
+            "hazards": [
+                self._lan_tactical_entity_view(item, category="hazard")
+                for item in (canonical_payload.get("hazards") if isinstance(canonical_payload.get("hazards"), list) else [])
+                if isinstance(item, dict)
+            ],
             "structures": [],
             "elevation_cells": canonical_payload.get("elevation_cells", []),
             "units": units,
@@ -13177,10 +13268,11 @@ class InitiativeTracker(base.InitiativeTracker):
             "auras_enabled": bool(self.__dict__.get("_lan_auras_enabled", True)),
         }
         structure_entries = [dict(item) for item in (canonical_payload.get("structures") if isinstance(canonical_payload.get("structures"), list) else []) if isinstance(item, dict)]
-        for structure_entry in structure_entries:
+        for index, structure_entry in enumerate(structure_entries):
             sid = str(structure_entry.get("id") or "").strip()
             if not sid:
                 continue
+            structure_entry = self._lan_tactical_entity_view(structure_entry, category="structure")
             semantics = self._structure_contact_semantics(sid)
             if bool(semantics.get("ok")):
                 structure_entry["contact_semantics"] = {
@@ -13190,6 +13282,7 @@ class InitiativeTracker(base.InitiativeTracker):
                     "boardable_structures": list(semantics.get("boardable_structures") if isinstance(semantics.get("boardable_structures"), list) else []),
                     "relations": list(semantics.get("relations") if isinstance(semantics.get("relations"), list) else []),
                 }
+            structure_entries[index] = structure_entry
         snap["structures"] = structure_entries
         if self._lan_reaction_debug_enabled():
             snap["reaction_debug"] = self._lan_reaction_debug_payload(

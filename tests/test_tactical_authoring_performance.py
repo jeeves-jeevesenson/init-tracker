@@ -69,6 +69,45 @@ class TacticalAuthoringPerformanceTests(unittest.TestCase):
         self.assertEqual(app_calls["scheduled_flush"], 1)
         self.assertEqual(redraw_calls["count"], 1)
 
+    def test_apply_tactical_author_preset_mode_routes_to_hazard_with_defaults(self):
+        app_calls = {"upsert_hazard": 0}
+        state_obj = object()
+
+        def _upsert_map_hazard(**kwargs):
+            app_calls["upsert_hazard"] += 1
+            self.assertEqual(kwargs.get("kind"), "fire")
+            payload = kwargs.get("payload") or {}
+            self.assertEqual(payload.get("tactical_preset_id"), "fire")
+            return "hazard_1"
+
+        app = types.SimpleNamespace(
+            _upsert_map_hazard=_upsert_map_hazard,
+            _capture_canonical_map_state=lambda prefer_window=False: state_obj,
+            _schedule_lan_state_broadcast=lambda: None,
+        )
+
+        redraw_calls = {"count": 0}
+        helper = types.SimpleNamespace(
+            _map_author_selected_cell=(2, 3),
+            map_author_mode_var=_Var("preset"),
+            map_author_kind_var=_Var("fire"),
+            map_author_preset_var=_Var("fire"),
+            map_author_count_var=_Var("1"),
+            map_author_label_var=_Var(""),
+            map_author_blocking_var=_Var(False),
+            map_author_advanced_var=_Var(False),
+            map_author_duration_var=_Var(""),
+            app=app,
+            cols=20,
+            rows=20,
+            _apply_canonical_map_layers_from_state=lambda state: self.assertIs(state, state_obj),
+            _redraw_tactical_layers=lambda: redraw_calls.__setitem__("count", redraw_calls["count"] + 1),
+        )
+
+        helper_script.BattleMapWindow._apply_tactical_author_to_selected_cell(helper)
+        self.assertEqual(app_calls["upsert_hazard"], 1)
+        self.assertEqual(redraw_calls["count"], 1)
+
     def test_tactical_upserts_still_build_expected_canonical_state_without_immediate_hydrate_or_broadcast(self):
         app = self._make_minimal_app()
 
