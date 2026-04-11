@@ -56,6 +56,42 @@ class MapInteractionModeTests(unittest.TestCase):
         helper._map_author_selected_cell = None
         self.assertFalse(helper_mod.BattleMapWindow._selected_ship_command_available(helper))
 
+    def test_refresh_tactical_palette_state_uses_mode_aware_status_copy(self):
+        helper = types.SimpleNamespace(
+            map_author_tool_var=_Var("select"),
+            map_place_source_var=_Var("tactical"),
+            map_author_active_status_var=_Var(""),
+            map_author_elevation_var=_Var("0"),
+            rough_mode_var=_Var(False),
+            obstacle_mode_var=_Var(False),
+            _active_map_interaction_mode=lambda: helper_mod.MAP_INTERACTION_MODE_MEASURE,
+            _selected_tactical_preset_id=lambda: "",
+            _selected_tactical_preset=lambda: {},
+        )
+        helper_mod.BattleMapWindow._refresh_tactical_palette_state(
+            helper,
+            normalized={"category": "feature", "display_name": "Crate"},
+        )
+        self.assertIn("Measure", helper.map_author_active_status_var.get())
+        self.assertIn("Click two points", helper.map_author_active_status_var.get())
+
+        helper._active_map_interaction_mode = lambda: helper_mod.MAP_INTERACTION_MODE_SHIP
+        helper_mod.BattleMapWindow._refresh_tactical_palette_state(
+            helper,
+            normalized={"category": "feature", "display_name": "Crate"},
+        )
+        self.assertIn("Ship Command", helper.map_author_active_status_var.get())
+        self.assertIn("right-click cancels", helper.map_author_active_status_var.get())
+
+        helper._active_map_interaction_mode = lambda: helper_mod.MAP_INTERACTION_MODE_PLACE
+        helper.map_author_tool_var.set("stamp")
+        helper.map_place_source_var.set("tactical")
+        helper_mod.BattleMapWindow._refresh_tactical_palette_state(
+            helper,
+            normalized={"category": "feature", "display_name": "Crate"},
+        )
+        self.assertIn("right-click/Esc to Select", helper.map_author_active_status_var.get())
+
 
 if __name__ == "__main__":
     unittest.main()
