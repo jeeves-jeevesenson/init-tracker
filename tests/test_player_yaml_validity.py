@@ -159,6 +159,18 @@ class PlayerYamlValidityTests(unittest.TestCase):
         self.assertEqual(by_name.get("Bane Platemail +1", {}).get("slot"), "armour")
         self.assertTrue(by_name.get("Bane Platemail +1", {}).get("equipped"))
 
+    def test_stikhiya_level_11_harm_and_level_6_spell_slot_present(self):
+        data = self._load("players/стихия.yaml")
+        leveling = data.get("leveling") if isinstance(data.get("leveling"), dict) else {}
+        classes = {(entry or {}).get("name"): (entry or {}) for entry in (leveling.get("classes") or [])}
+        self.assertEqual(int(leveling.get("level") or 0), 11)
+        self.assertEqual(int((classes.get("Cleric") or {}).get("level") or 0), 11)
+        prepared = (((data.get("spellcasting") or {}).get("prepared_spells") or {}).get("prepared")) or []
+        self.assertIn("harm", prepared)
+        level_six_slot = (((data.get("spellcasting") or {}).get("spell_slots") or {}).get("6")) or {}
+        self.assertEqual(int(level_six_slot.get("max") or 0), 1)
+        self.assertEqual(int(level_six_slot.get("current") or 0), 1)
+
     def test_throat_goat_level_11_pact_magic_slots_present(self):
         data = self._load("players/throat_goat.yaml")
         self.assertEqual(int(((data.get("leveling") or {}).get("level") or 0)), 11)

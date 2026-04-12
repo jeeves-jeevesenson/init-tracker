@@ -162,6 +162,9 @@ class SessionSaveLoadTests(unittest.TestCase):
                 concentration_aoe_ids=[],
                 concentrating=False,
                 concentration_spell=None,
+                summon_source_spell="create-undead",
+                summon_requires_command=True,
+                summon_commanded_turn=(3, 5),
             )
             app.combatants = {1: c1, 2: c2}
             app.current_cid = 1
@@ -219,6 +222,9 @@ class SessionSaveLoadTests(unittest.TestCase):
             self.assertEqual(app.combatants[1].temp_hp, 4)
             self.assertEqual(app.combatants[1].concentration_aoe_ids, [10])
             self.assertEqual(app.combatants[1].condition_stacks[0].ctype, "prone")
+            self.assertEqual(getattr(app.combatants[2], "summon_source_spell", ""), "create-undead")
+            self.assertTrue(bool(getattr(app.combatants[2], "summon_requires_command", False)))
+            self.assertEqual(tuple(getattr(app.combatants[2], "summon_commanded_turn", ()) or ()), (3, 5))
             self.assertEqual(app.current_cid, 1)
             self.assertEqual(app.round_num, 3)
             self.assertEqual(app.turn_num, 6)

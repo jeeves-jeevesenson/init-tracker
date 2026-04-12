@@ -7863,6 +7863,7 @@ class InitiativeTracker(base.InitiativeTracker):
             if self._has_condition(c, "otto_dancing"):
                 setattr(c, "move_remaining", 0)
                 msg = "; ".join(filter(None, [msg, "Otto's Dance: movement spent dancing in place this turn."]))
+            self._sync_otto_collect_action(c)
             slow_next_turn_penalty = max(0, int(getattr(c, "_slow_next_turn_penalty", 0) or 0))
             if slow_next_turn_penalty > 0:
                 move_total = max(0, int(getattr(c, "move_total", 0) or 0) - slow_next_turn_penalty)
@@ -8533,11 +8534,24 @@ class InitiativeTracker(base.InitiativeTracker):
         self._run_combatant_turn_hooks(c, "end_turn")
         save_riders = list(getattr(c, "end_turn_save_riders", []) or [])
         if save_riders:
+            current_turn_marker = (
+                int(getattr(self, "round_num", 0) or 0),
+                int(getattr(self, "turn_num", 0) or 0),
+            )
             remaining_save_riders: List[Dict[str, Any]] = []
             cleared_groups: set[str] = set()
             for rider in save_riders:
                 if not isinstance(rider, dict):
                     continue
+                skip_turn_marker = rider.get("skip_turn_marker")
+                if isinstance(skip_turn_marker, (list, tuple)) and len(skip_turn_marker) == 2:
+                    try:
+                        marker = (int(skip_turn_marker[0]), int(skip_turn_marker[1]))
+                    except Exception:
+                        marker = None
+                    if marker is not None and marker == current_turn_marker:
+                        remaining_save_riders.append(dict(rider))
+                        continue
                 save_ability = str(rider.get("save_ability") or "").strip().lower()
                 try:
                     save_dc = int(rider.get("save_dc"))
@@ -15979,6 +15993,10 @@ class InitiativeTracker(base.InitiativeTracker):
             pos = positions.get(c.cid, (max(0, cols // 2), max(0, rows // 2)))
             boarding_context = self._creature_boarding_context(int(c.cid), state=canonical_map_state, query=map_query)
             invisibility_suppressed = self._has_starry_wisp_reveal(c)
+            has_muddled_thoughts = self._has_muddled_thoughts(c)
+            has_otto_dancing = self._has_condition(c, "otto_dancing")
+            summon_requires_command = bool(getattr(c, "summon_requires_command", False))
+            summon_commanded_this_turn = bool(summon_requires_command and not self._is_create_undead_uncommanded_this_turn(c))
             is_invisible = bool(self._has_condition(c, "invisible") and not invisibility_suppressed)
             is_hidden = bool(getattr(c, "is_hidden", False))
             marks = self._lan_marks_for(c)
@@ -16050,7 +16068,7 @@ class InitiativeTracker(base.InitiativeTracker):
                     "is_invisible": bool(is_invisible),
                     "is_unseen": bool(is_hidden or is_invisible),
                     "invisibility_suppressed": bool(invisibility_suppressed),
-                    "ability_check_penalty_die": "1d6" if self._has_muddled_thoughts(c) else None,
+                    "ability_check_penalty_die": "1d6" if has_muddled_thoughts else None,
                     "rider_cid": _normalize_cid_value(getattr(c, "rider_cid", None), "snapshot.rider_cid"),
                     "mounted_by_cid": _normalize_cid_value(getattr(c, "mounted_by_cid", None), "snapshot.mounted_by"),
                     "mount_shared_turn": bool(getattr(c, "mount_shared_turn", False)),
@@ -16086,11 +16104,17 @@ class InitiativeTracker(base.InitiativeTracker):
                     "summon_type_override": str(getattr(c, "summon_type_override", "") or "") or None,
                     "summon_lifecycle": self._json_safe(getattr(c, "summon_lifecycle", None)),
                     "summon_dismissed": bool(getattr(c, "summon_dismissed", False)),
+                    "summon_requires_command": bool(summon_requires_command),
+                    "summon_commanded_turn": self._json_safe(getattr(c, "summon_commanded_turn", None)),
+                    "summon_commanded_this_turn": bool(summon_commanded_this_turn),
                     "slot_level": getattr(c, "summon_slot_level", None),
                     "pos": {"col": int(pos[0]), "row": int(pos[1])},
                     "marks": marks,
                     "effects": effect_icons,
                     "beguiling_magic_window_s": float(beguiling_magic_window_s),
+                    "starry_wisp_revealed": bool(invisibility_suppressed),
+                    "otto_dancing": bool(has_otto_dancing),
+                    "muddled_thoughts": bool(has_muddled_thoughts),
                 }
             )
 
@@ -17875,7 +17899,57 @@ class InitiativeTracker(base.InitiativeTracker):
     def _has_starry_wisp_reveal(self, combatant: Any) -> bool:
         if combatant is None:
             return False
-        return bool(self._has_condition(combatant, "starry_wisp_revealed"))
+        if bool(self._has_condition(combatant, "starry_wisp_revealed")):
+            return True
+        for entry in list(getattr(combatant, "ongoing_spell_effects", []) or []):
+            if not isinstance(entry, dict):
+                continue
+            if str(entry.get("spell_key") or "").strip().lower() != "starry-wisp":
+                continue
+            primitives = entry.get("primitives") if isinstance(entry.get("primitives"), dict) else {}
+            applied = [str(cond or "").strip().lower() for cond in list(primitives.get("condition_apply") or [])]
+            if "starry_wisp_revealed" in applied:
+                return True
+            tags = {str(tag or "").strip().lower() for tag in list(entry.get("effect_tags") or [])}
+            if "condition:starry_wisp_revealed" in tags:
+                return True
+        return False
+
+    @staticmethod
+    def _is_otto_repeat_save_rider(rider: Any) -> bool:
+        if not isinstance(rider, dict):
+            return False
+        if str(rider.get("condition") or "").strip().lower() != "charmed":
+            return False
+        clear_group = str(rider.get("clear_group") or "").strip().lower()
+        return clear_group.startswith("ottos_dance_")
+
+    def _target_has_otto_dance_active(self, target: Any) -> bool:
+        if target is None:
+            return False
+        if not bool(self._has_condition(target, "otto_dancing")):
+            return False
+        for rider in list(getattr(target, "end_turn_save_riders", []) or []):
+            if self._is_otto_repeat_save_rider(rider):
+                return True
+        return False
+
+    def _sync_otto_collect_action(self, target: Any) -> None:
+        if target is None:
+            return
+        action_name = "Collect Yourself (Otto's Dance)"
+        action_key = self._action_name_key(action_name)
+        actions = self._normalize_action_entries(getattr(target, "actions", []), "action")
+        actions = [entry for entry in actions if self._action_name_key((entry or {}).get("name")) != action_key]
+        if self._target_has_otto_dance_active(target):
+            actions.append(
+                {
+                    "name": action_name,
+                    "description": "Use your action to collect yourself and repeat Otto's Wisdom save now.",
+                    "type": "action",
+                }
+            )
+        setattr(target, "actions", actions)
 
     def _attack_roll_mode_against_target(self, attacker: Any, target: Any) -> str:
         attacker_mods = self._collect_combat_modifiers(attacker)
@@ -27185,12 +27259,33 @@ class InitiativeTracker(base.InitiativeTracker):
         except Exception:
             return 0
 
+    def _reactor_has_pending_reaction_offer(self, reactor_cid: int, *, exclude_trigger: str = "") -> bool:
+        trigger_exclusion = str(exclude_trigger or "").strip().lower()
+        for offer in list((self.__dict__.get("_pending_reaction_offers", {}) or {}).values()):
+            if not isinstance(offer, dict):
+                continue
+            offer_reactor = _normalize_cid_value(offer.get("reactor_cid"), "reaction_offer.pending.reactor")
+            if offer_reactor is None or int(offer_reactor) != int(reactor_cid):
+                continue
+            offer_trigger = str(offer.get("trigger") or "").strip().lower()
+            if trigger_exclusion and offer_trigger == trigger_exclusion:
+                continue
+            if str(offer.get("status") or "offered").strip().lower() not in {"offered", "accepted"}:
+                continue
+            return True
+        return False
+
     def _can_offer_interception_reaction(self, reactor: Any) -> bool:
         if reactor is None:
             return False
         if self._combatant_reactions_blocked(reactor):
             return False
         if int(getattr(reactor, "reaction_remaining", 0) or 0) <= 0:
+            return False
+        reactor_cid = _normalize_cid_value(getattr(reactor, "cid", None), "interception.reactor")
+        if reactor_cid is None:
+            return False
+        if self._reactor_has_pending_reaction_offer(int(reactor_cid), exclude_trigger="interception"):
             return False
         if self._has_reaction_named(reactor, "interception"):
             return True
@@ -31842,6 +31937,9 @@ class InitiativeTracker(base.InitiativeTracker):
                 return
 
             action_key = self._action_name_key(action_name)
+            if action_key in {"collect yourself (otto's dance)", "collect yourself"} and not self._target_has_otto_dance_active(c):
+                self._lan.toast(ws_id, "Ye ain't under Otto's dance right now.")
+                return
             action_uses = action_entry.get("uses") if isinstance(action_entry.get("uses"), dict) else {}
             action_pool_id = str(action_uses.get("pool") or action_uses.get("id") or "").strip()
             try:
@@ -31953,6 +32051,14 @@ class InitiativeTracker(base.InitiativeTracker):
                             {"type": "rage_upkeep", "when": "end_turn", "source": "rage"},
                         )
                 action_effect = str(action_entry.get("effect") or "").strip().lower()
+                if action_key in {"collect yourself (otto's dance)", "collect yourself"}:
+                    passed, summary = self._attempt_otto_collect_self_action(c)
+                    self._log(summary, cid=cid)
+                    self._lan.toast(ws_id, summary)
+                    self._rebuild_table(scroll_to_current=True)
+                    if passed:
+                        return
+                    return
                 if action_key == "command created undead":
                     commanded_count = int(self._command_created_undead_for_caster(int(cid)))
                     self._log(
@@ -37299,6 +37405,7 @@ class InitiativeTracker(base.InitiativeTracker):
     def _materialize_registered_spell_effect(self, target: Any, effect_entry: Dict[str, Any]) -> None:
         if target is None or not isinstance(effect_entry, dict):
             return
+        spell_key = str(effect_entry.get("spell_key") or "").strip().lower()
         primitives = effect_entry.get("primitives") if isinstance(effect_entry.get("primitives"), dict) else {}
         for condition in list(primitives.get("condition_apply") or []):
             condition_key = str(condition or "").strip().lower()
@@ -37345,10 +37452,13 @@ class InitiativeTracker(base.InitiativeTracker):
             if int(getattr(self, "current_cid", 0) or 0) == int(getattr(target, "cid", 0) or 0):
                 target.action_remaining = int(getattr(target, "action_remaining", 0) or 0) + 1
                 target.action_total = int(getattr(target, "action_total", 0) or 0) + 1
+        if spell_key == "otto-s-irresistible-dance":
+            self._sync_otto_collect_action(target)
 
     def _dematerialize_registered_spell_effect(self, target: Any, effect_entry: Dict[str, Any], *, reason: str = "") -> None:
         if target is None or not isinstance(effect_entry, dict):
             return
+        spell_key = str(effect_entry.get("spell_key") or "").strip().lower()
         primitives = effect_entry.get("primitives") if isinstance(effect_entry.get("primitives"), dict) else {}
         for condition in list(primitives.get("condition_clear") or []):
             condition_key = str(condition or "").strip().lower()
@@ -37377,6 +37487,8 @@ class InitiativeTracker(base.InitiativeTracker):
         adapter = str(effect_entry.get("adapter") or "").strip().lower()
         if adapter == "haste":
             self._clear_haste_effect(target, apply_lethargy=str(reason or "").strip().lower() == "concentration broken", reason=reason or "concentration broken")
+        if spell_key == "otto-s-irresistible-dance":
+            self._sync_otto_collect_action(target)
 
     def _register_target_spell_effect(
         self,
@@ -37896,6 +38008,99 @@ class InitiativeTracker(base.InitiativeTracker):
         ]
         setattr(caster, "concentration_target", current_targets)
 
+    def _attempt_otto_collect_self_action(self, target: Any) -> Tuple[bool, str]:
+        if target is None:
+            return False, "No target for Otto's repeat save."
+        rider = next(
+            (
+                entry
+                for entry in list(getattr(target, "end_turn_save_riders", []) or [])
+                if self._is_otto_repeat_save_rider(entry)
+            ),
+            None,
+        )
+        if not isinstance(rider, dict):
+            self._sync_otto_collect_action(target)
+            return False, f"{getattr(target, 'name', 'Target')} has no active Otto repeat save."
+        save_ability = str(rider.get("save_ability") or "wis").strip().lower()
+        try:
+            save_dc = int(rider.get("save_dc"))
+        except Exception:
+            save_dc = 0
+        if not save_ability or save_dc <= 0:
+            return False, "Otto repeat save is missing a valid save profile."
+        save_mode = self._combatant_save_roll_mode(target, save_ability)
+        save_roll, _alt_roll = self._roll_save_with_mode(
+            target,
+            save_ability,
+            disadvantage=save_mode == "disadvantage",
+            advantage=save_mode == "advantage",
+        )
+        save_mod = 0
+        saves = getattr(target, "saving_throws", None)
+        if isinstance(saves, dict):
+            try:
+                save_mod = int(saves.get(save_ability) or 0)
+            except Exception:
+                save_mod = 0
+        if save_mod == 0:
+            mods = getattr(target, "ability_mods", None)
+            if isinstance(mods, dict):
+                try:
+                    save_mod = int(mods.get(save_ability) or 0)
+                except Exception:
+                    save_mod = 0
+        save_total = int(save_roll) + int(save_mod)
+        save_passed = bool(save_roll != 1 and save_total >= int(save_dc))
+        clear_group = str(rider.get("clear_group") or "").strip().lower()
+        if save_passed:
+            source_cid = None
+            for entry in list(getattr(target, "ongoing_spell_effects", []) or []):
+                if not isinstance(entry, dict):
+                    continue
+                if str(entry.get("clear_group") or "").strip().lower() != clear_group:
+                    continue
+                if str(entry.get("spell_key") or "").strip().lower() != "otto-s-irresistible-dance":
+                    continue
+                source_cid = _normalize_cid_value(entry.get("source_cid"), "otto.collect.source")
+                break
+            if clear_group:
+                self._clear_target_spell_effects_for_group(target, clear_group, reason="otto collect self")
+            self._remove_condition_type(target, "otto_dancing")
+            self._remove_condition_type(target, "charmed")
+            if source_cid is not None:
+                caster = self.combatants.get(int(source_cid))
+                if caster is not None:
+                    kept_targets = [
+                        int(tid)
+                        for tid in list(getattr(caster, "concentration_target", []) or [])
+                        if _normalize_cid_value(tid, "otto.collect.target") is not None
+                        and int(_normalize_cid_value(tid, "otto.collect.target")) != int(getattr(target, "cid", 0) or 0)
+                    ]
+                    setattr(caster, "concentration_target", kept_targets)
+            self._sync_otto_collect_action(target)
+            return (
+                True,
+                f"{getattr(target, 'name', 'Target')} collects themself and succeeds their {save_ability.upper()} save ({save_total} vs DC {save_dc}).",
+            )
+
+        marker = [int(getattr(self, "round_num", 0) or 0), int(getattr(self, "turn_num", 0) or 0)]
+        updated_riders: List[Dict[str, Any]] = []
+        for entry in list(getattr(target, "end_turn_save_riders", []) or []):
+            if not isinstance(entry, dict):
+                continue
+            updated = dict(entry)
+            if self._is_otto_repeat_save_rider(entry):
+                if not clear_group or str(entry.get("clear_group") or "").strip().lower() == clear_group:
+                    updated["skip_turn_marker"] = list(marker)
+            updated_riders.append(updated)
+        setattr(target, "end_turn_save_riders", updated_riders)
+        self._sync_otto_collect_action(target)
+        return (
+            False,
+            f"{getattr(target, 'name', 'Target')} fails to collect themself ({save_total} vs DC {save_dc}); Otto's dance continues.",
+        )
+
     def _apply_damage_to_target_with_temp_hp(self, target: Any, raw_damage: int) -> Dict[str, int]:
         damage = max(0, int(raw_damage or 0))
         temp_before = max(0, int(getattr(target, "temp_hp", 0) or 0))
@@ -38057,6 +38262,7 @@ class InitiativeTracker(base.InitiativeTracker):
             "hold-person",
             "slow",
             "haste",
+            "otto-s-irresistible-dance",
             "greater-invisibility",
             "shield-of-faith",
             "blur",

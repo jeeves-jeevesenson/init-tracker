@@ -255,6 +255,103 @@ class SummonSpawnTests(unittest.TestCase):
         )
         self.assertEqual(len(spawned), 2)
         self.assertTrue(all(str(getattr(h.combatants[cid], "summon_base_monster_slug", "")) == "mummy" for cid in spawned))
+        self.assertTrue(all(bool(getattr(h.combatants[cid], "summon_requires_command", False)) for cid in spawned))
+
+    def test_create_undead_spawn_marks_command_metadata_and_caster_bonus_action(self):
+        h = self._build_harness()
+        h.round_num = 3
+        h.turn_num = 2
+        preset = {
+            "slug": "create-undead",
+            "id": "create-undead",
+            "concentration": False,
+            "summon": {
+                "choices": [{"name": "Ghoul", "monster_slug": "ghoul"}],
+                "count": {"kind": "fixed", "min": 1, "max": 1},
+                "initiative": {"mode": "rolled_per_creature"},
+            },
+        }
+        spec = tracker_mod.MonsterSpec(
+            filename="ghoul.yaml",
+            name="Ghoul",
+            mtype="undead",
+            cr=1,
+            hp=22,
+            speed=30,
+            swim_speed=0,
+            fly_speed=0,
+            burrow_speed=0,
+            climb_speed=0,
+            dex=2,
+            init_mod=2,
+            saving_throws={},
+            ability_mods={},
+            raw_data={},
+        )
+        h._find_spell_preset = lambda *_args, **_kwargs: preset
+        h._find_monster_spec_by_slug = lambda _slug: spec
+        spawned = h._spawn_summons_from_cast(
+            caster_cid=100,
+            spell_slug="create-undead",
+            spell_id="",
+            slot_level=6,
+            summon_choice="ghoul",
+        )
+        self.assertEqual(len(spawned), 1)
+        summoned = h.combatants[spawned[0]]
+        self.assertTrue(bool(getattr(summoned, "summon_requires_command", False)))
+        self.assertEqual(tuple(getattr(summoned, "summon_commanded_turn", ()) or ()), (3, 2))
+        caster = h.combatants[100]
+        bonus_actions = list(getattr(caster, "bonus_actions", []) or [])
+        self.assertTrue(any(str((entry or {}).get("name") or "").strip() == "Command Created Undead" for entry in bonus_actions))
+
+    def test_create_undead_command_action_marks_current_turn_and_restriction_when_uncommanded(self):
+        h = self._build_harness()
+        h.round_num = 5
+        h.turn_num = 1
+        preset = {
+            "slug": "create-undead",
+            "id": "create-undead",
+            "concentration": False,
+            "summon": {
+                "choices": [{"name": "Ghoul", "monster_slug": "ghoul"}],
+                "count": {"kind": "fixed", "min": 1, "max": 1},
+                "initiative": {"mode": "rolled_per_creature"},
+            },
+        }
+        spec = tracker_mod.MonsterSpec(
+            filename="ghoul.yaml",
+            name="Ghoul",
+            mtype="undead",
+            cr=1,
+            hp=22,
+            speed=30,
+            swim_speed=0,
+            fly_speed=0,
+            burrow_speed=0,
+            climb_speed=0,
+            dex=2,
+            init_mod=2,
+            saving_throws={},
+            ability_mods={},
+            raw_data={},
+        )
+        h._find_spell_preset = lambda *_args, **_kwargs: preset
+        h._find_monster_spec_by_slug = lambda _slug: spec
+        spawned = h._spawn_summons_from_cast(
+            caster_cid=100,
+            spell_slug="create-undead",
+            spell_id="",
+            slot_level=6,
+            summon_choice="ghoul",
+        )
+        summoned = h.combatants[spawned[0]]
+        self.assertFalse(tracker_mod.InitiativeTracker._is_create_undead_uncommanded_this_turn(h, summoned))
+        h.turn_num = 2
+        self.assertTrue(tracker_mod.InitiativeTracker._is_create_undead_uncommanded_this_turn(h, summoned))
+        commanded_count = tracker_mod.InitiativeTracker._command_created_undead_for_caster(h, 100)
+        self.assertEqual(commanded_count, 1)
+        self.assertFalse(tracker_mod.InitiativeTracker._is_create_undead_uncommanded_this_turn(h, summoned))
 
     def test_shared_initiative_places_summons_immediately_after_caster(self):
         h = self._build_harness()
