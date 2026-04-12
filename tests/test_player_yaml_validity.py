@@ -23,6 +23,13 @@ class PlayerYamlValidityTests(unittest.TestCase):
         data = self._load("players/John_Twilight.yaml")
         self.assertIsInstance(data, dict)
         self.assertEqual(str(data.get("name") or "").strip(), "John Twilight")
+        self.assertEqual(int(((data.get("leveling") or {}).get("level") or 0)), 11)
+        fighter = next(
+            (entry for entry in (((data.get("leveling") or {}).get("classes") or [])) if str((entry or {}).get("name") or "").strip() == "Fighter"),
+            {},
+        )
+        self.assertEqual(int((fighter or {}).get("level") or 0), 11)
+        self.assertEqual(int((fighter or {}).get("attacks_per_action") or 0), 3)
         speed = ((data.get("vitals") or {}).get("speed") or {})
         self.assertEqual(set(speed.keys()), {"walk", "climb", "fly", "swim"})
 
@@ -151,6 +158,23 @@ class PlayerYamlValidityTests(unittest.TestCase):
         self.assertTrue(by_name.get("Gauntlets of Lesser Hill Giant Strength", {}).get("equipped"))
         self.assertEqual(by_name.get("Bane Platemail +1", {}).get("slot"), "armour")
         self.assertTrue(by_name.get("Bane Platemail +1", {}).get("equipped"))
+
+    def test_throat_goat_level_11_pact_magic_slots_present(self):
+        data = self._load("players/throat_goat.yaml")
+        self.assertEqual(int(((data.get("leveling") or {}).get("level") or 0)), 11)
+        classes = {(entry or {}).get("name"): (entry or {}) for entry in (((data.get("leveling") or {}).get("classes") or []))}
+        self.assertEqual(int((classes.get("Bard") or {}).get("level") or 0), 9)
+        self.assertEqual(int((classes.get("Warlock") or {}).get("level") or 0), 2)
+        pact = ((data.get("spellcasting") or {}).get("pact_magic_slots") or {})
+        self.assertEqual(int(pact.get("level") or 0), 1)
+        self.assertEqual(int(pact.get("count") or 0), 2)
+
+    def test_eldramar_meteorite_orb_is_equipped_and_attuned(self):
+        data = self._load("players/eldramar_thunderclopper.yaml")
+        items = (((data.get("inventory") or {}).get("items")) or [])
+        orb = next((entry for entry in items if str((entry or {}).get("id") or "") == "meteorite_orb"), {})
+        self.assertTrue(bool(orb.get("equipped")))
+        self.assertTrue(bool(orb.get("attuned")))
     def test_malagrou_defaults_to_two_handed_axe_mode(self):
         data = self._load("players/malagrou.yaml")
         weapons = (((data.get("attacks") or {}).get("weapons")) or [])

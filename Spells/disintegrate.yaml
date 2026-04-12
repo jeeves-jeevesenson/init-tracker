@@ -43,10 +43,35 @@ text:
   rules: null
   higher_level: null
 mechanics:
-  automation: partial
-  targeting: null
-  sequence: []
-  scaling: null
+  automation: full
+  targeting:
+    origin: creature_within_range
+    range:
+      kind: distance
+      distance_ft: 60
+    target_selection:
+      mode: single
+      friendly_fire: true
+  sequence:
+  - id: ray
+    name: Ray
+    check:
+      kind: saving_throw
+      ability: dexterity
+      dc: spell_save_dc
+    outcomes:
+      fail:
+      - effect: damage
+        damage_type: force
+        dice: 10d6+40
+        scaling: &id001
+          kind: slot_level
+          base_slot: 6
+          add_per_slot_above: 3d6
+      success: []
+  scaling: *id001
   ui:
     template_preview: false
-  notes: []
+  notes:
+  - Creatures reduced to 0 HP are removed from combat as disintegrated by tracker automation.
+  - Object/magical-force disintegration targeting is not fully automated in the map flow and must be resolved manually when relevant.

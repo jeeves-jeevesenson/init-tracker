@@ -182,6 +182,24 @@ class PlayerFeatureExecutionTests(unittest.TestCase):
         )
         self.assertEqual(app._compute_spell_save_dc(normalized), 17)
 
+    def test_meteorite_orb_spell_save_dc_bonus_applies(self):
+        app = self._new_app()
+        orb_path = Path("Items/Magic_Items/meteorite_orb.yaml")
+        self.assertTrue(orb_path.exists(), "Expected magic item YAML missing: meteorite_orb.yaml")
+        orb = yaml.safe_load(orb_path.read_text(encoding="utf-8"))
+        app._magic_items_registry_payload = lambda: {"meteorite_orb": orb}
+        normalized = app._normalize_player_profile(
+            {
+                "name": "Eldramar",
+                "abilities": {"int": 20},
+                "proficiency": {"bonus": 4},
+                "spellcasting": {"casting_ability": "int", "save_dc_formula": "8 + prof + casting_mod"},
+                "inventory": {"items": [{"id": "meteorite_orb", "equipped": True, "attuned": True}]},
+            },
+            "eldramar",
+        )
+        self.assertEqual(app._compute_spell_save_dc(normalized), 18)
+
     def test_requires_attunement_magic_item_does_not_apply_when_not_attuned(self):
         app = self._new_app()
         app._magic_items_registry_payload = lambda: {

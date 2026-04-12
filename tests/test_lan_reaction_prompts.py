@@ -37,6 +37,10 @@ class LanReactionPromptTests(unittest.TestCase):
             },
         )()
         self.app._name_role_memory = {"Sentinel": "pc", "Enemy": "enemy", "Victim": "enemy"}
+        self.app._lan_grid_cols = 20
+        self.app._lan_grid_rows = 20
+        self.app._lan_obstacles = set()
+        self.app._lan_rough_terrain = {}
         self.app._lan_positions = {1: (5, 5), 2: (6, 5), 3: (10, 10)}
         self.app._lan_live_map_data = lambda: (20, 20, set(), {}, dict(self.app._lan_positions))
         self.app._map_window = None
@@ -96,6 +100,50 @@ class LanReactionPromptTests(unittest.TestCase):
         self.app.combatants[1].action_remaining = 1
         self.app._lan_apply_action({"type": "attack_request", "cid": 1, "_claimed_cid": 1, "_ws_id": 77, "target_cid": 2, "weapon_id": "sword", "hit": True, "opportunity_attack": True, "reaction_request_id": "missing"})
         self.assertIn((77, "That reaction request expired, matey."), self.toasts)
+
+    def test_interception_reaction_offer_and_damage_reduction(self):
+        self.app._profile_for_player_name = lambda name: {
+            "features": [{"name": "Interception"}] if name == "Sentinel" else [],
+            "attacks": {"weapon_to_hit": 5, "weapons": [{"id": "sword", "name": "Sword", "to_hit": 6}]},
+            "leveling": {"level": 11, "classes": [{"name": "Fighter", "level": 11, "attacks_per_action": 1}]},
+        }
+        self.app.combatants[1].reactions = [
+            {"name": "Opportunity Attack", "type": "reaction"},
+            {"name": "Interception", "type": "reaction"},
+        ]
+        self.app.combatants[1].reaction_remaining = 1
+        self.app.combatants[3].hp = 20
+        self.app.combatants[3].max_hp = 20
+        self.app._lan_positions[1] = (6, 5)
+        self.app._lan_positions[3] = (7, 5)
+        self.app._name_role_memory["Victim"] = "pc"
+        self.app._lan_apply_action(
+            {
+                "type": "attack_request",
+                "cid": 2,
+                "_claimed_cid": 2,
+                "_ws_id": 90,
+                "target_cid": 3,
+                "weapon_id": "sword",
+                "hit": True,
+                "damage_entries": [{"amount": 10, "type": "slashing"}],
+            }
+        )
+        offers = [payload for _ws, payload in self.sent if isinstance(payload, dict) and payload.get("trigger") == "interception"]
+        self.assertTrue(offers)
+        req_id = str(offers[0].get("request_id") or "")
+        with unittest.mock.patch("dnd_initative_tracker.random.randint", return_value=6):
+            self.app._lan_apply_action(
+                {
+                    "type": "reaction_response",
+                    "cid": 1,
+                    "_claimed_cid": 1,
+                    "_ws_id": 101,
+                    "request_id": req_id,
+                    "choice": "interception_yes",
+                }
+            )
+        self.assertEqual(self.app.combatants[3].hp, 20)
 
 
 if __name__ == "__main__":

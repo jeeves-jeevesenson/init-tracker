@@ -1,0 +1,9 @@
+id: meteorite_orb
+name: Meteorite Orb
+requires_attunement: true
+grants:
+  modifiers:
+    - id: meteorite_orb_spell_save_dc_bonus
+      target: spell_save_dc
+      effect: spell_save_dc_bonus
+      amount: 1

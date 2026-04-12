@@ -51,7 +51,7 @@ mechanics:
     origin: point_within_range
     range:
       kind: distance
-      distance_ft: null
+      distance_ft: 120
     area:
       shape: sphere
       radius_ft: 20
@@ -70,6 +70,10 @@ mechanics:
       - effect: damage
         damage_type: psychic
         dice: 8d6
+      - effect: condition
+        condition: muddled_thoughts
+        duration_turns: 10
+        repeat_save_end_of_turn: true
       success:
       - effect: damage
         damage_type: psychic
@@ -78,4 +82,5 @@ mechanics:
   scaling: null
   ui:
     template_preview: true
-  notes: []
+  notes:
+  - Muddled Thoughts subtracts 1d6 from attack rolls, ability checks, and concentration Constitution saves while active.

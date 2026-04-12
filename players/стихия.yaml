@@ -58,7 +58,7 @@ vitals:
   temp_hp: 0
   hit_dice:
     die: d8
-    total: 10
+    total: 11
     spent: 0
   speed:
     walk: 35

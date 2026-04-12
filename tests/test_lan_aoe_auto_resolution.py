@@ -920,6 +920,104 @@ class LanAoeAutoResolutionTests(unittest.TestCase):
         aoe = next(iter(self.app._lan_aoes.values()))
         self.assertEqual(aoe.get("sculpted_cids"), [4, 5, 6, 7, 8, 9])
 
+    def test_wall_of_thorns_applies_initial_then_overtime_damage_buckets(self):
+        self.preset = {
+            "id": "wall-of-thorns",
+            "slug": "wall-of-thorns",
+            "name": "Wall of Thorns",
+            "automation": "full",
+            "tags": ["aoe", "automation_full"],
+            "mechanics": {
+                "automation": "full",
+                "sequence": [
+                    {
+                        "check": {"kind": "saving_throw", "ability": "dexterity", "dc": "spell_save_dc"},
+                        "outcomes": {
+                            "fail": [
+                                {"effect": "damage", "damage_type": "piercing", "dice": "7d8", "timing": "initial"},
+                                {"effect": "damage", "damage_type": "slashing", "dice": "7d8", "timing": "overtime"},
+                            ],
+                            "success": [],
+                        },
+                    }
+                ],
+            },
+        }
+        self.app._find_spell_preset = lambda **kwargs: self.preset
+        self.app._lan_positions[2] = (4, 4)
+        aoe = {
+            "kind": "wall",
+            "name": "Wall of Thorns",
+            "cx": 4.0,
+            "cy": 4.0,
+            "length_sq": 6.0,
+            "width_sq": 3.0,
+            "owner_cid": 1,
+            "owner_ws_id": 7,
+            "over_time": True,
+            "persistent": True,
+            "trigger_on_start_or_enter": "enter_or_end",
+            "spell_slug": "wall-of-thorns",
+            "spell_id": "wall-of-thorns",
+            "slot_level": 6,
+            "dc": 14,
+            "save_type": "dex",
+        }
+        self.app._register_map_spell_effect(1, aoe)
+        with mock.patch("dnd_initative_tracker.random.randint", side_effect=[2] + [1] * 7 + [2] + [1] * 7):
+            self.app._lan_auto_resolve_cast_aoe(
+                1,
+                aoe,
+                caster=self.app.combatants[1],
+                spell_slug="wall-of-thorns",
+                spell_id="wall-of-thorns",
+                slot_level=6,
+                preset=self.preset,
+            )
+            self.app._lan_apply_aoe_trigger_to_targets(1, aoe, target_cids=[2], turn_key=(1, 2, 2))
+        self.assertEqual(self.app.combatants[2].hp, 6)
+
+    def test_synaptic_static_applies_muddled_thoughts_and_repeat_save_rider(self):
+        self.preset = {
+            "id": "synaptic-static",
+            "slug": "synaptic-static",
+            "name": "Synaptic Static",
+            "automation": "full",
+            "tags": ["aoe", "automation_full"],
+            "mechanics": {
+                "automation": "full",
+                "sequence": [
+                    {
+                        "check": {"kind": "saving_throw", "ability": "intelligence", "dc": "spell_save_dc"},
+                        "outcomes": {
+                            "fail": [
+                                {"effect": "damage", "damage_type": "psychic", "dice": "8d6"},
+                                {"effect": "condition", "condition": "muddled_thoughts", "duration_turns": 10, "repeat_save_end_of_turn": True},
+                            ],
+                            "success": [{"effect": "damage", "damage_type": "psychic", "dice": "8d6", "multiplier": 0.5}],
+                        },
+                    }
+                ],
+            },
+        }
+        self.app._find_spell_preset = lambda **kwargs: self.preset
+        self.app.combatants[2].saving_throws = {"int": 0}
+        self.app.combatants[2].ability_mods = {"int": 0}
+        msg = {
+            "type": "cast_aoe",
+            "cid": 1,
+            "_claimed_cid": 1,
+            "_ws_id": 52,
+            "spell_slug": "synaptic-static",
+            "payload": {"shape": "sphere", "name": "Synaptic Static", "radius_ft": 40, "cx": 5, "cy": 4},
+        }
+        with mock.patch("dnd_initative_tracker.random.randint", side_effect=[3] + [1] * 8 + [18] + [1] * 8):
+            self.app._lan_apply_action(msg)
+        self.assertTrue(any(st.ctype == "muddled_thoughts" for st in self.app.combatants[2].condition_stacks))
+        riders = list(getattr(self.app.combatants[2], "end_turn_save_riders", []) or [])
+        self.assertTrue(riders)
+        self.assertEqual(str(riders[0].get("save_ability") or ""), "int")
+
 
 
 if __name__ == "__main__":

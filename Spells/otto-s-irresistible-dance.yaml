@@ -41,10 +41,55 @@ text:
   rules: null
   higher_level: null
 mechanics:
-  automation: partial
-  targeting: null
-  sequence: []
+  automation: full
+  targeting:
+    origin: creature_within_range
+    range:
+      kind: distance
+      distance_ft: 30
+    target_selection:
+      mode: single
+      friendly_fire: true
+  sequence:
+  - id: dance
+    name: Dance
+    check:
+      kind: saving_throw
+      ability: wisdom
+      dc: spell_save_dc
+    outcomes:
+      success:
+      - effect: condition
+        condition: otto_dancing
+        duration_turns: 1
+      fail:
+      - effect: condition
+        condition: otto_dancing
+        duration_turns: 0
+      - effect: condition
+        condition: charmed
+        duration_turns: 0
+        ongoing:
+          concentration_bound: true
+          clear_group: ottos_dance_{source_cid}_{target_cid}
+          condition_apply:
+          - otto_dancing
+          - charmed
+          condition_clear:
+          - otto_dancing
+          - charmed
+          modifiers:
+            save_disadvantage_by_ability:
+            - dex
+            target_attack_disadvantage: true
+            attackers_have_advantage_against_target: true
+          repeat_save_end_turn:
+            save_ability: wis
+            save_dc: spell_save_dc
+            condition: charmed
   scaling: null
   ui:
     template_preview: false
-  notes: []
+  notes:
+  - While dancing, the target spends its movement dancing in place.
+  - Failed save state supports end-of-turn save repeats; the tabletop-specific action-to-repeat-save can still be adjudicated manually when desired.

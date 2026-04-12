@@ -206,6 +206,56 @@ class SummonSpawnTests(unittest.TestCase):
             self.assertEqual(getattr(c, "summon_source_spell", None), "create-undead")
             self.assertTrue(getattr(c, "summon_group_id", ""))
 
+    def test_create_undead_slot_nine_supports_mummy_option_count(self):
+        h = self._build_harness()
+        preset = {
+            "slug": "create-undead",
+            "id": "create-undead",
+            "concentration": False,
+            "summon": {
+                "choices": [
+                    {"name": "Ghoul", "monster_slug": "ghoul"},
+                    {"name": "Mummy", "monster_slug": "mummy"},
+                ],
+                "count": {
+                    "kind": "variable_by_slot",
+                    "base": {"slot_level": 6, "quantity": 3, "creature_options": ["ghoul"]},
+                    "slot_overrides": [
+                        {"slot_level": 9, "options": [{"quantity": 2, "creature_options": ["mummy"]}]},
+                    ],
+                },
+                "initiative": {"mode": "rolled_per_creature"},
+            },
+        }
+        spec = tracker_mod.MonsterSpec(
+            filename="mummy.yaml",
+            name="Mummy",
+            mtype="undead",
+            cr=3,
+            hp=58,
+            speed=20,
+            swim_speed=0,
+            fly_speed=0,
+            burrow_speed=0,
+            climb_speed=0,
+            dex=1,
+            init_mod=1,
+            saving_throws={},
+            ability_mods={},
+            raw_data={},
+        )
+        h._find_spell_preset = lambda spell_slug, spell_id: preset
+        h._find_monster_spec_by_slug = lambda slug: spec
+        spawned = h._spawn_summons_from_cast(
+            caster_cid=100,
+            spell_slug="create-undead",
+            spell_id="",
+            slot_level=9,
+            summon_choice="mummy",
+        )
+        self.assertEqual(len(spawned), 2)
+        self.assertTrue(all(str(getattr(h.combatants[cid], "summon_base_monster_slug", "")) == "mummy" for cid in spawned))
+
     def test_shared_initiative_places_summons_immediately_after_caster(self):
         h = self._build_harness()
         enemy = tracker_mod.base.Combatant(

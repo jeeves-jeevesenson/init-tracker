@@ -53,7 +53,7 @@ text:
   rules: null
   higher_level: null
 mechanics:
-  automation: partial
+  automation: full
   targeting: null
   sequence: []
   scaling: null
@@ -107,8 +107,17 @@ mechanics:
       control_duration: 24 hours
       notes: Recast before 24 hours to maintain control.
     control: summoner
+    command:
+      required_each_turn: true
+      default_behavior_without_command: dodge_and_avoid_harm
+      action_type: bonus_action
+      action_name: Command Created Undead
+    reassert_control:
+      supported: practical
+      notes: Recast flow can be used to refresh command handling on existing summoned undead groups.
     initiative:
       mode: rolled_per_creature
   ui:
     template_preview: false
-  notes: []
+  notes:
+  - Casting-time/night restrictions still require DM validation in play flow.

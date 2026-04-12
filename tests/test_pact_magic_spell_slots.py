@@ -15,6 +15,10 @@ class PactMagicSpellSlotRegressionTests(unittest.TestCase):
     def setUp(self):
         self.app = object.__new__(tracker_mod.InitiativeTracker)
 
+    @staticmethod
+    def _load_throat_goat_profile():
+        return yaml.safe_load(Path("players/throat_goat.yaml").read_text(encoding="utf-8"))
+
     def test_progression_inference_does_not_default_rogue_warlock_to_full(self):
         progression = self.app._spell_slot_progression_from_profile(
             {
@@ -55,6 +59,17 @@ class PactMagicSpellSlotRegressionTests(unittest.TestCase):
 
         slots = (((normalized.get("spellcasting") or {}).get("spell_slots")) or {})
         self.assertTrue(all(int((slots.get(str(level), {}) or {}).get("max", 0)) == 0 for level in range(1, 10)))
+
+    def test_throat_goat_keeps_bard_slots_and_pact_slots(self):
+        raw = self._load_throat_goat_profile()
+        normalized = self.app._normalize_player_profile(copy.deepcopy(raw), "Throat Goat")
+        spellcasting = normalized.get("spellcasting") if isinstance(normalized.get("spellcasting"), dict) else {}
+        slots = spellcasting.get("spell_slots") if isinstance(spellcasting.get("spell_slots"), dict) else {}
+        self.assertEqual(int((slots.get("5") or {}).get("max") or 0), 1)
+        self.assertEqual(int((slots.get("4") or {}).get("max") or 0), 3)
+        pact = spellcasting.get("pact_magic_slots") if isinstance(spellcasting.get("pact_magic_slots"), dict) else {}
+        self.assertEqual(int(pact.get("count") or 0), 2)
+        self.assertEqual(int(pact.get("level") or 0), 1)
 
 
 if __name__ == "__main__":

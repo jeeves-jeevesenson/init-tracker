@@ -41,7 +41,7 @@ text:
   rules: null
   higher_level: null
 mechanics:
-  automation: partial
+  automation: full
   upcastable: false
   targeting:
     origin: creature_within_range
@@ -71,10 +71,11 @@ mechanics:
             17:
               add: 1d8
       - effect: condition
-        condition: invisible
-        duration_turns: 1
+        condition: starry_wisp_revealed
+        duration_turns: 2
       miss: []
   scaling: *id001
   ui:
     template_preview: false
-  notes: []
+  notes:
+  - On hit, target emits dim light and cannot benefit from Invisible while the Starry Wisp reveal condition is active.

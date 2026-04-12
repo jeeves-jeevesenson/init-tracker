@@ -8,12 +8,12 @@ identity:
   alignment: chaotic good
   description: ''
 leveling:
-  level: 10
+  level: 11
   classes:
   - name: Fighter
     subclass: Echo Knight
-    level: 10
-    attacks_per_action: 2
+    level: 11
+    attacks_per_action: 3
 abilities:
   str: 20
   dex: 11
@@ -41,12 +41,12 @@ proficiency:
   - Elvish
   - Gnomish
 vitals:
-  max_hp: 112
-  current_hp: 112
+  max_hp: 123
+  current_hp: 123
   temp_hp: 0
   hit_dice:
     die: d10
-    total: 10
+    total: 11
     spent: 0
   speed:
     walk: 30 ft.

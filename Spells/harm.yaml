@@ -36,10 +36,34 @@ text:
   rules: null
   higher_level: null
 mechanics:
-  automation: partial
-  targeting: null
-  sequence: []
+  automation: full
+  targeting:
+    origin: creature_within_range
+    range:
+      kind: distance
+      distance_ft: 60
+    target_selection:
+      mode: single
+      friendly_fire: true
+  sequence:
+  - id: effect
+    name: Effect
+    check:
+      kind: saving_throw
+      ability: constitution
+      dc: spell_save_dc
+    outcomes:
+      fail:
+      - effect: damage
+        damage_type: necrotic
+        dice: 14d6
+      success:
+      - effect: damage
+        damage_type: necrotic
+        dice: 14d6
+        multiplier: 0.5
   scaling: null
   ui:
     template_preview: false
-  notes: []
+  notes:
+  - On a failed save, the target's max HP is reduced by the necrotic damage it actually takes (minimum max HP 1).
