@@ -103,6 +103,18 @@ class ShipBlueprintPipelineTests(unittest.TestCase):
         self.assertIn("Main Battery", frigate_labels)
         self.assertIn("Helm / Captain's Stern", frigate_labels)
 
+    def test_frigate_heavy_hull_bounds_scaled_to_triple_size(self):
+        runtime, errors = load_repo_runtime_ship_blueprints()
+        self.assertFalse(errors, msg=errors)
+        frigate = runtime.get("frigate_heavy") or {}
+        hull_cells = list(((frigate.get("local_space") or {}).get("hull_cells") or []))
+        self.assertTrue(hull_cells)
+        cols = [int(cell.get("col", 0)) for cell in hull_cells if isinstance(cell, dict)]
+        rows = [int(cell.get("row", 0)) for cell in hull_cells if isinstance(cell, dict)]
+        self.assertTrue(cols and rows)
+        self.assertEqual((max(cols) - min(cols) + 1), 33)
+        self.assertEqual((max(rows) - min(rows) + 1), 66)
+
     def test_render_metadata_supports_asset_fields_and_facing_overrides(self):
         normalized, errors = normalize_composite_ship_blueprint(
             {
