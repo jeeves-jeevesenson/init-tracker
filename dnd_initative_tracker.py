@@ -5880,6 +5880,7 @@ class InitiativeTracker(base.InitiativeTracker):
         self._pending_shield_resolutions: Dict[str, Dict[str, Any]] = {}
         self._pending_hellish_rebuke_resolutions: Dict[str, Dict[str, Any]] = {}
         self._pending_absorb_elements_resolutions: Dict[str, Dict[str, Any]] = {}
+        self._pending_interception_resolutions: Dict[str, Dict[str, Any]] = {}
         self._session_has_saved = False
 
         # POC helpers: start the LAN server automatically.
@@ -7859,6 +7860,9 @@ class InitiativeTracker(base.InitiativeTracker):
         except Exception:
             pass
         if getattr(c, "cid", None) in self.combatants:
+            if self._has_condition(c, "otto_dancing"):
+                setattr(c, "move_remaining", 0)
+                msg = "; ".join(filter(None, [msg, "Otto's Dance: movement spent dancing in place this turn."]))
             slow_next_turn_penalty = max(0, int(getattr(c, "_slow_next_turn_penalty", 0) or 0))
             if slow_next_turn_penalty > 0:
                 move_total = max(0, int(getattr(c, "move_total", 0) or 0) - slow_next_turn_penalty)
@@ -12996,6 +13000,7 @@ class InitiativeTracker(base.InitiativeTracker):
                 "pending_reaction_offers": self._json_safe(self.__dict__.get("_pending_reaction_offers", {})),
                 "pending_shield_resolutions": self._json_safe(self.__dict__.get("_pending_shield_resolutions", {})),
                 "pending_absorb_elements_resolutions": self._json_safe(self.__dict__.get("_pending_absorb_elements_resolutions", {})),
+                "pending_interception_resolutions": self._json_safe(self.__dict__.get("_pending_interception_resolutions", {})),
                 "concentration_save_state": self._json_safe(self.__dict__.get("_concentration_save_state", {})),
                 "cadence_scheduler": self._json_safe({
                     "current_turn_kind": str(self.__dict__.get("_current_turn_kind", "normal") or "normal"),
@@ -13191,6 +13196,11 @@ class InitiativeTracker(base.InitiativeTracker):
         self._pending_absorb_elements_resolutions = dict(
             combat.get("pending_absorb_elements_resolutions")
             if isinstance(combat.get("pending_absorb_elements_resolutions"), dict)
+            else {}
+        )
+        self._pending_interception_resolutions = dict(
+            combat.get("pending_interception_resolutions")
+            if isinstance(combat.get("pending_interception_resolutions"), dict)
             else {}
         )
         self._concentration_save_state = dict(combat.get("concentration_save_state") if isinstance(combat.get("concentration_save_state"), dict) else {})
@@ -14136,6 +14146,7 @@ class InitiativeTracker(base.InitiativeTracker):
         self._pending_reaction_offers = {}
         self._pending_shield_resolutions = {}
         self._pending_absorb_elements_resolutions = {}
+        self._pending_interception_resolutions = {}
         self._concentration_save_state = {}
         self._session_has_saved = False
 
@@ -15937,7 +15948,8 @@ class InitiativeTracker(base.InitiativeTracker):
             role = self._name_role_memory.get(str(c.name), "enemy")
             pos = positions.get(c.cid, (max(0, cols // 2), max(0, rows // 2)))
             boarding_context = self._creature_boarding_context(int(c.cid), state=canonical_map_state, query=map_query)
-            is_invisible = self._has_condition(c, "invisible")
+            invisibility_suppressed = self._has_starry_wisp_reveal(c)
+            is_invisible = bool(self._has_condition(c, "invisible") and not invisibility_suppressed)
             is_hidden = bool(getattr(c, "is_hidden", False))
             marks = self._lan_marks_for(c)
             actions = self._normalize_action_entries(getattr(c, "actions", []), "action")
@@ -16007,6 +16019,8 @@ class InitiativeTracker(base.InitiativeTracker):
                     "is_hidden": bool(is_hidden),
                     "is_invisible": bool(is_invisible),
                     "is_unseen": bool(is_hidden or is_invisible),
+                    "invisibility_suppressed": bool(invisibility_suppressed),
+                    "ability_check_penalty_die": "1d6" if self._has_muddled_thoughts(c) else None,
                     "rider_cid": _normalize_cid_value(getattr(c, "rider_cid", None), "snapshot.rider_cid"),
                     "mounted_by_cid": _normalize_cid_value(getattr(c, "mounted_by_cid", None), "snapshot.mounted_by"),
                     "mount_shared_turn": bool(getattr(c, "mount_shared_turn", False)),
@@ -17807,6 +17821,29 @@ class InitiativeTracker(base.InitiativeTracker):
             return "disadvantage"
         return "normal"
 
+    def _has_muddled_thoughts(self, combatant: Any) -> bool:
+        if combatant is None:
+            return False
+        if self._has_condition(combatant, "muddled_thoughts"):
+            return True
+        for entry in list(getattr(combatant, "ongoing_spell_effects", []) or []):
+            if not isinstance(entry, dict):
+                continue
+            if str(entry.get("spell_key") or "").strip().lower() != "synaptic-static":
+                continue
+            return True
+        return False
+
+    def _muddled_thoughts_penalty_roll(self, combatant: Any) -> int:
+        if not self._has_muddled_thoughts(combatant):
+            return 0
+        return int(random.randint(1, 6))
+
+    def _has_starry_wisp_reveal(self, combatant: Any) -> bool:
+        if combatant is None:
+            return False
+        return bool(self._has_condition(combatant, "starry_wisp_revealed"))
+
     def _attack_roll_mode_against_target(self, attacker: Any, target: Any) -> str:
         attacker_mods = self._collect_combat_modifiers(attacker)
         target_mods = self._collect_combat_modifiers(target)
@@ -18149,6 +18186,7 @@ class InitiativeTracker(base.InitiativeTracker):
         if requires_save and (dc is None or dc <= 0):
             return False
         outcomes = step.get("outcomes") if isinstance(step.get("outcomes"), dict) else {}
+        trigger_phase = "initial" if bool(remove_after_resolve) else "overtime"
         included = list(included_override) if isinstance(included_override, list) else self._map_spell_effect_targets(aoe)
         sculpt_enabled, sculpt_max_protected = self._lan_sculpt_spells_context(caster, preset, slot_level=slot_level)
         sculpted_targets: set[int] = set()
@@ -18370,6 +18408,11 @@ class InitiativeTracker(base.InitiativeTracker):
             forced_moves: List[Dict[str, Any]] = []
             for effect in bucket if isinstance(bucket, list) else []:
                 if not isinstance(effect, dict):
+                    continue
+                effect_timing = str(effect.get("timing") or effect.get("trigger_timing") or "").strip().lower()
+                if effect_timing in {"initial", "on_cast", "cast"} and trigger_phase != "initial":
+                    continue
+                if effect_timing in {"overtime", "over_time", "enter", "end", "trigger"} and trigger_phase != "overtime":
                     continue
                 effect_name = str(effect.get("effect") or "").strip().lower()
                 if effect_name == "damage":
@@ -26453,7 +26496,7 @@ class InitiativeTracker(base.InitiativeTracker):
         normalized: Dict[str, str] = {}
         for key, value in prefs.items():
             kind = str(key or "").strip().lower()
-            if kind not in ("opportunity_attack", "war_caster", "shield", "hellish_rebuke", "absorb_elements"):
+            if kind not in ("opportunity_attack", "war_caster", "shield", "hellish_rebuke", "absorb_elements", "interception"):
                 continue
             mode = str(value or "").strip().lower()
             if mode not in ("off", "ask", "auto"):
@@ -26585,6 +26628,8 @@ class InitiativeTracker(base.InitiativeTracker):
                 self._pending_hellish_rebuke_resolutions.pop(str(req_id), None)
             if isinstance(getattr(self, "_pending_absorb_elements_resolutions", None), dict):
                 self._pending_absorb_elements_resolutions.pop(str(req_id), None)
+            if isinstance(getattr(self, "_pending_interception_resolutions", None), dict):
+                self._pending_interception_resolutions.pop(str(req_id), None)
 
     def _build_oa_reaction_choices(self, reactor: Any, include_war_caster: bool = True) -> List[Dict[str, Any]]:
         if reactor is None:
@@ -26668,28 +26713,30 @@ class InitiativeTracker(base.InitiativeTracker):
         roll_a = random.randint(1, 20)
         roll_b = random.randint(1, 20) if has_war_caster else None
         roll_used = max(roll_a, int(roll_b)) if roll_b is not None else roll_a
-        total = int(roll_used) + int(con_mod)
+        muddled_penalty = int(self._muddled_thoughts_penalty_roll(c))
+        total = int(roll_used) + int(con_mod) - int(muddled_penalty)
         spell_name = str(getattr(c, "concentration_spell", "") or "").replace("-", " ").strip().title() or "their spell"
+        penalty_suffix = f" - {int(muddled_penalty)} (muddled thoughts)" if muddled_penalty > 0 else ""
         if total >= int(dc):
             if roll_b is None:
                 self._log(
-                    f"{c.name} maintains concentration on {spell_name}: CON save {int(roll_used)} + {int(con_mod)} = {int(total)} vs DC {int(dc)}.",
+                    f"{c.name} maintains concentration on {spell_name}: CON save {int(roll_used)} + {int(con_mod)}{penalty_suffix} = {int(total)} vs DC {int(dc)}.",
                     cid=int(getattr(c, "cid", 0) or 0),
                 )
             else:
                 self._log(
-                    f"{c.name} maintains concentration on {spell_name}: CON save with advantage ({int(roll_a)}/{int(roll_b)}) + {int(con_mod)} = {int(total)} vs DC {int(dc)}.",
+                    f"{c.name} maintains concentration on {spell_name}: CON save with advantage ({int(roll_a)}/{int(roll_b)}) + {int(con_mod)}{penalty_suffix} = {int(total)} vs DC {int(dc)}.",
                     cid=int(getattr(c, "cid", 0) or 0),
                 )
             return
         if roll_b is None:
             self._log(
-                f"{c.name} fails concentration on {spell_name}: CON save {int(roll_used)} + {int(con_mod)} = {int(total)} vs DC {int(dc)}.",
+                f"{c.name} fails concentration on {spell_name}: CON save {int(roll_used)} + {int(con_mod)}{penalty_suffix} = {int(total)} vs DC {int(dc)}.",
                 cid=int(getattr(c, "cid", 0) or 0),
             )
         else:
             self._log(
-                f"{c.name} fails concentration on {spell_name}: CON save with advantage ({int(roll_a)}/{int(roll_b)}) + {int(con_mod)} = {int(total)} vs DC {int(dc)}.",
+                f"{c.name} fails concentration on {spell_name}: CON save with advantage ({int(roll_a)}/{int(roll_b)}) + {int(con_mod)}{penalty_suffix} = {int(total)} vs DC {int(dc)}.",
                 cid=int(getattr(c, "cid", 0) or 0),
             )
         self._end_concentration(c)
@@ -27086,6 +27133,119 @@ class InitiativeTracker(base.InitiativeTracker):
                 "status": "offered",
             }
             self._oplog(f"reaction_offer:hellish_rebuke pending request_id={req_id} victim={int(victim_cid)} attacker={int(attacker_cid)} dist_ft={dist_ft:.1f}", level="info")
+        return req_id
+
+    def _interception_reduction_bonus(self, combatant: Any) -> int:
+        if combatant is None:
+            return 0
+        player_name = self._pc_name_for(int(getattr(combatant, "cid", 0) or 0))
+        profile = self._profile_for_player_name(player_name)
+        if not isinstance(profile, dict):
+            return 0
+        leveling = profile.get("leveling") if isinstance(profile.get("leveling"), dict) else {}
+        level_value = self._coerce_level_value(leveling)
+        if level_value > 0:
+            return int(self._proficiency_bonus_for_level(level_value))
+        proficiency = profile.get("proficiency") if isinstance(profile.get("proficiency"), dict) else {}
+        try:
+            return int(proficiency.get("bonus") or 0)
+        except Exception:
+            return 0
+
+    def _can_offer_interception_reaction(self, reactor: Any) -> bool:
+        if reactor is None:
+            return False
+        if self._combatant_reactions_blocked(reactor):
+            return False
+        if int(getattr(reactor, "reaction_remaining", 0) or 0) <= 0:
+            return False
+        if self._has_reaction_named(reactor, "interception"):
+            return True
+        player_name = self._pc_name_for(int(getattr(reactor, "cid", 0) or 0))
+        profile = self._profile_for_player_name(player_name)
+        features = profile.get("features") if isinstance(profile, dict) else []
+        for feature in features if isinstance(features, list) else []:
+            if isinstance(feature, str) and str(feature).strip().lower() == "interception":
+                return True
+            if isinstance(feature, dict):
+                name_key = str(feature.get("name") or "").strip().lower()
+                feature_id = str(feature.get("id") or "").strip().lower()
+                if name_key == "interception" or feature_id == "interception":
+                    return True
+        return False
+
+    def _maybe_offer_interception(
+        self,
+        victim_cid: int,
+        attacker_cid: Optional[int],
+        *,
+        pending_msg: Optional[Dict[str, Any]],
+        damage_entries: List[Dict[str, Any]],
+    ) -> Optional[str]:
+        attacker_cid = _normalize_cid_value(attacker_cid, "interception.attacker")
+        if attacker_cid is None or int(attacker_cid) == int(victim_cid):
+            return None
+        victim = self.combatants.get(int(victim_cid))
+        attacker = self.combatants.get(int(attacker_cid))
+        if victim is None or attacker is None:
+            return None
+        if int(sum(int((entry or {}).get("amount") or 0) for entry in damage_entries if isinstance(entry, dict))) <= 0:
+            return None
+        positions = dict(getattr(self, "_lan_positions", {}) or {})
+        victim_pos = positions.get(int(victim_cid)) or self._lan_current_position(int(victim_cid))
+        if victim_pos is None:
+            return None
+        fps = self._lan_feet_per_square()
+        best_reactor: Optional[Any] = None
+        for reactor_cid, reactor in list(self.combatants.items()):
+            try:
+                rcid = int(reactor_cid)
+            except Exception:
+                continue
+            if rcid in (int(victim_cid), int(attacker_cid)):
+                continue
+            if self._lan_is_friendly_unit(int(rcid)) != self._lan_is_friendly_unit(int(victim_cid)):
+                continue
+            if not self._can_offer_interception_reaction(reactor):
+                continue
+            reactor_pos = positions.get(int(rcid)) or self._lan_current_position(int(rcid))
+            if not (isinstance(reactor_pos, tuple) and len(reactor_pos) == 2):
+                continue
+            dist_ft = max(abs(int(reactor_pos[0]) - int(victim_pos[0])), abs(int(reactor_pos[1]) - int(victim_pos[1]))) * fps
+            if dist_ft - 5.0 > 1e-6:
+                continue
+            best_reactor = reactor
+            break
+        if best_reactor is None:
+            return None
+        mode = self._reaction_mode_for(int(getattr(best_reactor, "cid", 0) or 0), "interception", default="ask")
+        if mode == "off":
+            return None
+        ws_targets = self._find_ws_for_cid(int(getattr(best_reactor, "cid", 0) or 0))
+        choices = [
+            {"kind": "interception_yes", "label": "Interception", "mode": mode},
+            {"kind": "interception_no", "label": "No", "mode": "ask"},
+            {"kind": "interception_never", "label": "No (don't ask again)", "mode": "ask"},
+        ]
+        req_id = self._create_reaction_offer(
+            int(getattr(best_reactor, "cid", 0) or 0),
+            "interception",
+            int(attacker_cid),
+            int(victim_cid),
+            choices,
+            ws_targets,
+            extra_payload={
+                "prompt": f"{getattr(victim, 'name', 'Ally')} was hit by {getattr(attacker, 'name', 'an attacker')}. Use Interception?",
+            },
+        )
+        if req_id:
+            self._pending_interception_resolutions[str(req_id)] = {
+                "reactor_cid": int(getattr(best_reactor, "cid", 0) or 0),
+                "victim_cid": int(victim_cid),
+                "attacker_cid": int(attacker_cid),
+                "msg": dict(pending_msg) if isinstance(pending_msg, dict) else {},
+                "status": "offered",
+            }
         return req_id
 
     def _consume_shield_cast(self, target: Any) -> Tuple[bool, str]:
@@ -27893,6 +28053,7 @@ class InitiativeTracker(base.InitiativeTracker):
         group_id = f"summon:{int(time.time() * 1000)}:{caster_cid}:{len(self._summon_groups) + 1}"
         controller_mode = str(resolved.get("control_mode") or self._normalize_summon_controller_mode(summon_cfg))
         source_spell = str(resolved.get("source_spell") or preset.get("slug") or preset.get("id") or spell_slug or spell_id or "").strip()
+        normalized_source_spell = str(source_spell or "").strip().lower()
         lifecycle = self._resolve_summon_lifecycle(resolved, summon_cfg)
         if bool(lifecycle.get("replace_existing_same_spell")):
             self._dismiss_spell_summon_groups_for_caster(int(caster_cid), source_spell)
@@ -27942,6 +28103,9 @@ class InitiativeTracker(base.InitiativeTracker):
             setattr(summoned, "summon_base_monster_slug", chosen_slug)
             setattr(summoned, "summon_lifecycle", dict(lifecycle))
             setattr(summoned, "summon_type_override", resolved.get("type_override") if isinstance(resolved.get("type_override"), str) else None)
+            if normalized_source_spell == "create-undead":
+                setattr(summoned, "summon_requires_command", True)
+                setattr(summoned, "summon_commanded_turn", None)
             if color_override:
                 setattr(summoned, "token_color", color_override)
             spawned.append(cid)
@@ -27980,7 +28144,52 @@ class InitiativeTracker(base.InitiativeTracker):
                 "lifecycle": dict(lifecycle),
                 "summon_type_override": resolved.get("type_override") if isinstance(resolved.get("type_override"), str) else None,
             }
+            if normalized_source_spell == "create-undead":
+                marker = (int(getattr(self, "round_num", 0) or 0), int(getattr(self, "turn_num", 0) or 0))
+                for summoned_cid in spawned:
+                    summoned_unit = self.combatants.get(int(summoned_cid))
+                    if summoned_unit is not None:
+                        setattr(summoned_unit, "summon_commanded_turn", marker)
+                bonus_actions = self._normalize_action_entries(getattr(caster, "bonus_actions", []), "bonus_action")
+                if not any(self._action_name_key(entry.get("name")) == "command created undead" for entry in bonus_actions):
+                    bonus_actions.append(
+                        {
+                            "name": "Command Created Undead",
+                            "description": "Use a bonus action to command undead created by your Create Undead spell this turn.",
+                            "type": "bonus_action",
+                        }
+                    )
+                    setattr(caster, "bonus_actions", bonus_actions)
+                self._log(
+                    "Create Undead note: nighttime casting and 24-hour control windows must be tracked manually.",
+                    cid=int(caster_cid),
+                )
         return spawned
+
+    def _command_created_undead_for_caster(self, caster_cid: int) -> int:
+        marker = (int(getattr(self, "round_num", 0) or 0), int(getattr(self, "turn_num", 0) or 0))
+        updated = 0
+        for unit in list(self.combatants.values()):
+            if unit is None:
+                continue
+            if _normalize_cid_value(getattr(unit, "summoned_by_cid", None), "create_undead.command.owner") != int(caster_cid):
+                continue
+            if str(getattr(unit, "summon_source_spell", "") or "").strip().lower() != "create-undead":
+                continue
+            setattr(unit, "summon_commanded_turn", marker)
+            updated += 1
+        return int(updated)
+
+    def _is_create_undead_uncommanded_this_turn(self, combatant: Any) -> bool:
+        if combatant is None:
+            return False
+        if not bool(getattr(combatant, "summon_requires_command", False)):
+            return False
+        if str(getattr(combatant, "summon_source_spell", "") or "").strip().lower() != "create-undead":
+            return False
+        marker = tuple(getattr(combatant, "summon_commanded_turn", ()) or ())
+        expected = (int(getattr(self, "round_num", 0) or 0), int(getattr(self, "turn_num", 0) or 0))
+        return marker != expected
 
     @staticmethod
     def _normalize_custom_monster_slug(name: Any) -> str:
@@ -31276,6 +31485,44 @@ class InitiativeTracker(base.InitiativeTracker):
                     resume_msg["_absorb_elements_resolution_done"] = True
                     self._lan_apply_action(resume_msg)
                 return
+            if str(offer.get("trigger") or "").strip().lower() == "interception":
+                pending = (getattr(self, "_pending_interception_resolutions", {}) or {}).pop(request_id, None)
+                self._pending_reaction_offers.pop(request_id, None)
+                if not isinstance(pending, dict):
+                    self._lan.toast(ws_id, "That Interception offer expired, matey.")
+                    return
+                reactor_cid = _normalize_cid_value(offer.get("reactor_cid"), "reaction_response.interception.reactor")
+                reactor = self.combatants.get(int(reactor_cid)) if reactor_cid is not None else None
+                if reactor is None:
+                    return
+                resume_msg = dict(pending.get("msg") or {})
+                if choice in ("interception_never", "never"):
+                    self._set_reaction_prefs(int(reactor_cid), {"interception": "off"})
+                if choice in ("interception_never", "never", "", "decline", "ignore", "interception_no"):
+                    if isinstance(resume_msg, dict):
+                        resume_msg["_interception_resolution_done"] = True
+                        self._lan_apply_action(resume_msg)
+                    return
+                if choice not in ("interception_yes", "interception"):
+                    if isinstance(resume_msg, dict):
+                        resume_msg["_interception_resolution_done"] = True
+                        self._lan_apply_action(resume_msg)
+                    return
+                pending["status"] = "accepted"
+                if not self._use_reaction(reactor):
+                    self._lan.toast(ws_id, "No reactions left for Interception, matey.")
+                    if isinstance(resume_msg, dict):
+                        resume_msg["_interception_resolution_done"] = True
+                        self._lan_apply_action(resume_msg)
+                    return
+                reduction_roll = int(random.randint(1, 10))
+                reduction = int(reduction_roll) + int(self._interception_reduction_bonus(reactor))
+                if isinstance(resume_msg, dict):
+                    resume_msg["_interception_resolution_done"] = True
+                    resume_msg["_interception_reduction"] = max(0, int(reduction))
+                    resume_msg["_interception_reactor_cid"] = int(reactor_cid)
+                    self._lan_apply_action(resume_msg)
+                return
             if choice in ("", "decline", "ignore"):
                 self._pending_reaction_offers.pop(request_id, None)
                 return
@@ -31549,6 +31796,9 @@ class InitiativeTracker(base.InitiativeTracker):
             if not action_entry:
                 self._lan.toast(ws_id, "That action ain't in yer sheet, matey.")
                 return
+            if self._is_create_undead_uncommanded_this_turn(c) and self._action_name_key(action_name) != "dodge":
+                self._lan.toast(ws_id, "Uncommanded created undead can only Dodge, matey.")
+                return
             if self._mount_action_is_restricted(c, action_name):
                 self._lan.toast(ws_id, "Mounted steed can only Dash, Disengage, or Dodge while rider is active.")
                 return
@@ -31665,6 +31915,15 @@ class InitiativeTracker(base.InitiativeTracker):
                             {"type": "rage_upkeep", "when": "end_turn", "source": "rage"},
                         )
                 action_effect = str(action_entry.get("effect") or "").strip().lower()
+                if action_key == "command created undead":
+                    commanded_count = int(self._command_created_undead_for_caster(int(cid)))
+                    self._log(
+                        f"{c.name} commands created undead ({commanded_count} unit{'s' if commanded_count != 1 else ''}).",
+                        cid=cid,
+                    )
+                    self._lan.toast(ws_id, f"Commanded {commanded_count} created undead.")
+                    self._rebuild_table(scroll_to_current=True)
+                    return
                 if action_key == "disengage":
                     setattr(c, "disengage_active", True)
                     fps = self._lan_feet_per_square()
@@ -32902,6 +33161,20 @@ class InitiativeTracker(base.InitiativeTracker):
                     continue
                 self._lan.toast(ws_id, "Hold fast — waiting on a reaction to resolve.")
                 return
+            for pending_req in list((self.__dict__.get("_pending_interception_resolutions", {}) or {}).values()):
+                if not isinstance(pending_req, dict):
+                    continue
+                pending_status = str(pending_req.get("status") or "").strip().lower()
+                if pending_status not in ("offered", "accepted"):
+                    continue
+                pending_attacker = _normalize_cid_value(
+                    pending_req.get("attacker_cid"),
+                    "attack_request.pending_interception.attacker",
+                )
+                if pending_attacker is None or int(pending_attacker) != int(cid):
+                    continue
+                self._lan.toast(ws_id, "Hold fast — waiting on a reaction to resolve.")
+                return
             self._clear_hide_state(int(cid), reason=f"{c.name} attacks and reveals themself.")
             resource_c = c
             try:
@@ -32915,6 +33188,9 @@ class InitiativeTracker(base.InitiativeTracker):
                 owner = self.combatants.get(int(summoned_by_cid))
                 if owner is not None:
                     resource_c = owner
+            if self._is_create_undead_uncommanded_this_turn(c):
+                self._lan.toast(ws_id, "Uncommanded created undead can’t attack this turn, matey.")
+                return
             max_damage_dice_count = 100
             max_damage_die_sides = 1000
             min_damage_type_length = 3
@@ -33484,7 +33760,8 @@ class InitiativeTracker(base.InitiativeTracker):
             to_hit += int(magic_bonus)
             to_hit += int(self._attack_roll_bonus_from_augments(attack_augments))
             roll_total = int(attack_roll) if attack_roll is not None else 0
-            total_to_hit = int(roll_total) + int(to_hit)
+            muddled_attack_penalty = int(self._muddled_thoughts_penalty_roll(c))
+            total_to_hit = int(roll_total) + int(to_hit) - int(muddled_attack_penalty)
             target_ac = _parse_int(getattr(target, "ac", None), 10) or 10
             target_ac += int(self._shield_ac_bonus_for_target(target))
             target_ac += int(self._combatant_ac_modifier(target))
@@ -33843,6 +34120,37 @@ class InitiativeTracker(base.InitiativeTracker):
             adjustment_notes = list(adjustment.get("notes") or [])
             total_damage = int(sum(int(entry.get("amount", 0) or 0) for entry in damage_entries))
             damage_applied = bool(hit or graze_applied)
+            if damage_applied and total_damage > 0 and not bool(msg.get("_interception_resolution_done")):
+                interception_req_id = self._maybe_offer_interception(
+                    int(target_cid),
+                    int(cid),
+                    pending_msg=msg,
+                    damage_entries=damage_entries,
+                )
+                if interception_req_id:
+                    attacker_ws_targets = self._find_ws_for_cid(int(cid))
+                    for attacker_ws in attacker_ws_targets:
+                        self._lan.toast(int(attacker_ws), "Waiting for Interception response…")
+                    return
+            interception_reduction = max(0, _parse_int(msg.get("_interception_reduction"), 0) or 0)
+            if damage_applied and total_damage > 0 and interception_reduction > 0:
+                remaining_reduce = int(interception_reduction)
+                reduced_entries: List[Dict[str, Any]] = []
+                for entry in damage_entries:
+                    if not isinstance(entry, dict):
+                        continue
+                    amount = max(0, int(entry.get("amount", 0) or 0))
+                    if amount <= 0:
+                        continue
+                    cut = min(int(amount), int(remaining_reduce))
+                    new_amount = max(0, int(amount) - int(cut))
+                    remaining_reduce = max(0, int(remaining_reduce) - int(cut))
+                    if new_amount > 0:
+                        new_entry = dict(entry)
+                        new_entry["amount"] = int(new_amount)
+                        reduced_entries.append(new_entry)
+                damage_entries = reduced_entries
+                total_damage = int(sum(int(entry.get("amount", 0) or 0) for entry in damage_entries))
             deflect_attacks_result: Optional[Dict[str, Any]] = None
             if damage_applied and total_damage > 0:
                 target_monk_level = 0
@@ -34155,6 +34463,7 @@ class InitiativeTracker(base.InitiativeTracker):
                 "attack_roll": int(roll_total),
                 "to_hit": int(to_hit),
                 "total_to_hit": int(total_to_hit),
+                "attack_penalty": int(muddled_attack_penalty),
                 "hit": hit,
                 "critical": is_critical,
                 "damage_total": int(total_damage if damage_applied else 0),
@@ -34175,6 +34484,14 @@ class InitiativeTracker(base.InitiativeTracker):
                     result_payload["smite"] = dict(rider_results[0])
             if isinstance(deflect_attacks_result, dict):
                 result_payload["deflect_attacks"] = dict(deflect_attacks_result)
+            interception_reactor_cid = _normalize_cid_value(msg.get("_interception_reactor_cid"), "attack_result.interception.reactor")
+            if interception_reduction > 0 and interception_reactor_cid is not None:
+                reactor = self.combatants.get(int(interception_reactor_cid))
+                result_payload["interception"] = {
+                    "reactor_cid": int(interception_reactor_cid),
+                    "reactor_name": str(getattr(reactor, "name", "Interceptor") or "Interceptor"),
+                    "reduction": int(interception_reduction),
+                }
             if isinstance(stunning_strike_result, dict):
                 result_payload["stunning_strike"] = dict(stunning_strike_result)
             save_ability = str(effect_block.get("save_ability") or "").strip().lower()
@@ -34188,9 +34505,10 @@ class InitiativeTracker(base.InitiativeTracker):
                 result_payload["vicious_mockery_consumed"] = True
             msg["_attack_result"] = dict(result_payload)
             if attack_roll is not None:
+                penalty_text = f" - {int(muddled_attack_penalty)} (muddled thoughts)" if muddled_attack_penalty > 0 else ""
                 self._log(
                     f"{c.name} attacks {result_payload['target_name']} with {result_payload['weapon_name']} "
-                    f"(roll {attack_roll} + {to_hit} = {total_to_hit}) and {'hits' if hit else 'misses'}"
+                    f"(roll {attack_roll} + {to_hit}{penalty_text} = {total_to_hit}) and {'hits' if hit else 'misses'}"
                     f"{' (CRIT)' if is_critical else ''}.",
                     cid=cid,
                 )
@@ -34200,6 +34518,12 @@ class InitiativeTracker(base.InitiativeTracker):
                     f"and {'hits' if hit else 'misses'}"
                     f"{' (CRIT)' if is_critical else ''}.",
                     cid=cid,
+                )
+            if interception_reduction > 0 and interception_reactor_cid is not None:
+                interceptor = self.combatants.get(int(interception_reactor_cid))
+                self._log(
+                    f"{getattr(interceptor, 'name', 'Interceptor')} uses Interception and reduces damage by {int(interception_reduction)}.",
+                    cid=int(target_cid),
                 )
             if damage_applied and total_damage > 0:
                 def _adjustment_note_text(reasons: List[str]) -> str:
@@ -35789,9 +36113,17 @@ class InitiativeTracker(base.InitiativeTracker):
             stacks = list(getattr(target, "condition_stacks", []) or [])
             if any(str(getattr(st, "ctype", "") or "").strip().lower() == condition_key for st in stacks):
                 return
+            remaining_turns = None
+            duration_turns = effect.get("duration_turns")
+            if duration_turns not in (None, ""):
+                try:
+                    parsed_turns = int(duration_turns)
+                    remaining_turns = None if parsed_turns <= 0 else int(parsed_turns)
+                except Exception:
+                    remaining_turns = None
             next_sid = int(getattr(self, "_next_stack_id", 1) or 1)
             setattr(self, "_next_stack_id", int(next_sid) + 1)
-            stacks.append(base.ConditionStack(sid=int(next_sid), ctype=condition_key, remaining_turns=None))
+            stacks.append(base.ConditionStack(sid=int(next_sid), ctype=condition_key, remaining_turns=remaining_turns))
             setattr(target, "condition_stacks", stacks)
 
     def _resolve_spell_effects(self, ctx: Dict[str, Any], check_result: Dict[str, Any], result_payload: Dict[str, Any]) -> None:
@@ -35952,6 +36284,18 @@ class InitiativeTracker(base.InitiativeTracker):
         if total_damage > 0 and hit:
             before_hp = self._parse_int_value(getattr(target, "hp", None), 0) or 0
             setattr(target, "hp", max(0, int(before_hp) - int(total_damage)))
+        if hit and total_damage > 0 and spell_key == "harm":
+            save_result = check_result.get("save_result") if isinstance(check_result.get("save_result"), dict) else {}
+            if not bool(save_result.get("passed")):
+                existing_reduction = self._parse_int_value(getattr(target, "harm_max_hp_reduction", 0), 0) or 0
+                new_reduction = max(0, int(existing_reduction) + int(total_damage))
+                base_max_hp = self._parse_int_value(getattr(target, "max_hp", None), 1) or 1
+                new_max_hp = max(1, int(base_max_hp) - int(total_damage))
+                setattr(target, "harm_max_hp_reduction", int(new_reduction))
+                setattr(target, "max_hp", int(new_max_hp))
+                current_hp = self._parse_int_value(getattr(target, "hp", None), 0) or 0
+                if int(current_hp) > int(new_max_hp):
+                    setattr(target, "hp", int(new_max_hp))
         healing_applied = 0
         if total_healing > 0:
             before_hp = self._parse_int_value(getattr(target, "hp", None), 0) or 0
@@ -35976,6 +36320,9 @@ class InitiativeTracker(base.InitiativeTracker):
         relocation_notes = list(ctx.get("relocation_notes") or [])
         if relocation_notes:
             result_payload["relocation"] = relocation_notes
+        if spell_key == "harm":
+            result_payload["harm_max_hp_reduction"] = int(self._parse_int_value(getattr(target, "harm_max_hp_reduction", 0), 0) or 0)
+            result_payload["target_max_hp"] = int(self._parse_int_value(getattr(target, "max_hp", 1), 1) or 1)
         if bool(ctx.get("relocation_needs_destination")):
             result_payload["needs_relocation_destination"] = True
             msg["_spell_target_result"] = dict(result_payload)
@@ -36029,6 +36376,20 @@ class InitiativeTracker(base.InitiativeTracker):
             hit=bool(hit),
             save_result=check_result.get("save_result") if isinstance(check_result.get("save_result"), dict) else None,
         )
+        if spell_key == "disintegrate" and bool(hit) and int(getattr(target, "hp", 0) or 0) <= 0 and int(target_cid) in self.combatants:
+            try:
+                pre_order = [x.cid for x in self._display_order()]
+            except Exception:
+                pre_order = []
+            try:
+                self._remove_combatants_with_lan_cleanup([int(target_cid)])
+            except Exception:
+                self.combatants.pop(int(target_cid), None)
+            try:
+                self._retarget_current_after_removal([int(target_cid)], pre_order=pre_order)
+            except Exception:
+                pass
+            result_payload["disintegrated"] = True
 
         msg["_spell_target_result"] = dict(result_payload)
         detail = self._format_single_target_spell_outcome(result_payload)

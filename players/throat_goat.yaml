@@ -8,11 +8,11 @@ identity:
   alignment: null
   description: null
 leveling:
-  level: 10
+  level: 11
   classes:
   - name: Bard
     subclass: College of Glamour
-    level: 8
+    level: 9
   - name: Warlock
     subclass: Hexblade
     level: 2
@@ -36,6 +36,8 @@ proficiency:
     - Persuasion
     expertise:
     - Deception
+    - Performance
+    - Acrobatics
   tools:
   - Bagpipes
   - Shawm
@@ -49,12 +51,12 @@ proficiency:
   - Draconic
   - Orc
 vitals:
-  max_hp: 95
-  current_hp: 95
+  max_hp: 102
+  current_hp: 102
   temp_hp: 0
   hit_dice:
     die: d8
-    total: 10
+    total: 11
     spent: 0
   speed:
     walk: 35
@@ -137,6 +139,11 @@ features:
         consumes:
           pool: mantle_of_majesty
           cost: 1
+- id: interception
+  name: Interception
+  category: DM Granted Feature
+  source: House Rule
+  description: Reaction. When a creature you can see hits a target other than you within 5 feet of you with an attack, reduce the damage by 1d10 + proficiency bonus.
 actions:
 - name: Attack
   description: Make a weapon or unarmed attack against a target within range.
@@ -197,6 +204,9 @@ reactions:
   description: When you or a creature within 30 feet fails a save against Charmed
     or Frightened, use your reaction to let it reroll with advantage.
   type: reaction
+- name: Interception
+  description: When a creature you can see hits a target other than you within 5 feet of you with an attack, use your reaction to reduce the damage by 1d10 + your proficiency bonus.
+  type: reaction
 bonus_actions:
 - name: Bonus Action
   description: You can take a bonus action only when a feature, spell, or ability
@@ -237,7 +247,7 @@ spellcasting:
     known:
     - vicious-mockery
     - mending
-    - message
+    - starry-wisp
     - eldritch-blast
     - toll-the-dead
   known_spells:
@@ -264,6 +274,8 @@ spellcasting:
     - slow
     - phantasmal-killer
     - fount-of-moonlight
+    - synaptic-static
+    - dimension-door
   spell_slots:
     '1':
       max: 4
@@ -275,11 +287,11 @@ spellcasting:
       max: 3
       current: 3
     '4':
-      max: 4
-      current: 4
+      max: 3
+      current: 3
     '5':
-      max: 0
-      current: 0
+      max: 1
+      current: 1
     '6':
       max: 0
       current: 0
@@ -292,6 +304,9 @@ spellcasting:
     '9':
       max: 0
       current: 0
+  pact_magic_slots:
+    level: 1
+    count: 2
 inventory:
   currency:
     gp: 5014

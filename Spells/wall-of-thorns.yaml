@@ -12,6 +12,7 @@ school: conjuration
 tags:
 - aoe
 - save
+- automation_full
 casting_time: Action
 range: 120 feet
 components: V, S, M (a handful of thorns)
@@ -47,7 +48,7 @@ text:
   rules: null
   higher_level: null
 mechanics:
-  automation: partial
+  automation: full
   targeting:
     origin: point_within_range
     range:
@@ -77,15 +78,38 @@ mechanics:
           kind: slot_level
           base_slot: 6
           add_per_slot_above: 1d8
+        timing: initial
+      - effect: damage
+        damage_type: slashing
+        dice: 7d8
+        scaling: *id001
+        timing: overtime
       success:
       - effect: damage
         damage_type: piercing
         dice: 7d8
         scaling: *id001
         multiplier: 0.5
+        timing: initial
+      - effect: damage
+        damage_type: slashing
+        dice: 7d8
+        scaling: *id001
+        multiplier: 0.5
+        timing: overtime
   scaling: *id001
   ui:
     template_preview: false
+  aoe_behavior:
+    persistent_default: true
+    over_time_default: true
+    trigger_mode: enter_or_end
+    pinned_default: true
+    move_action_type: none
+  map_environment:
+    movement_cost_multiplier: 4
+    obscured: true
   notes:
   - Alternate form: circle with a 20-foot diameter, 20 feet high, and 5 feet thick.
   - Creatures take additional slashing damage on entry or when ending their turn in the wall.
+  - Ring placement mode is not currently separate in template controls; use available wall placement and resolve exact ring geometry manually if needed.
