@@ -13,11 +13,11 @@ identity:
   alignment: Chaotic Neutral
   description: Bird :V
 leveling:
-  level: 10
+  level: 11
   classes:
   - name: Cleric
     subclass: Tempest
-    level: 10
+    level: 11
 abilities:
   str: 17
   dex: 10
@@ -426,6 +426,7 @@ spellcasting:
     - destructive-wave
     - insect-plague
     - flame-strike
+    - harm
     - dispel-evil-and-good
     - lightning-bolt
   spell_slots:
@@ -445,8 +446,8 @@ spellcasting:
       max: 2
       current: 2
     '6':
-      max: 0
-      current: 0
+      max: 1
+      current: 1
     '7':
       max: 0
       current: 0

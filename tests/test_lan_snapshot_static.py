@@ -407,6 +407,101 @@ class LanSnapshotStaticTests(unittest.TestCase):
         self.assertTrue(active_boarding.get("on_ship"))
         self.assertEqual(active_boarding.get("source_structure_id"), "a")
 
+    def test_lan_snapshot_units_expose_new_condition_and_create_undead_command_flags(self):
+        app = object.__new__(tracker_mod.InitiativeTracker)
+        app._lan_grid_cols = 20
+        app._lan_grid_rows = 20
+        app._lan_obstacles = set()
+        app._lan_positions = {101: (5, 5)}
+        app._lan_aoes = {}
+        app._lan_rough_terrain = {}
+        app._lan_next_aoe_id = 1
+        app.current_cid = 101
+        app.round_num = 2
+        app.turn_num = 4
+        app._display_order = lambda: [type("OrderC", (), {"cid": 101})()]
+        app._peek_next_turn_cid = lambda _cid: None
+        app._oplog = lambda *args, **kwargs: None
+        app._name_role_memory = {"Boarder": "pc"}
+        app._lan_marks_for = lambda _c: []
+        app._normalize_action_entries = lambda entries, _kind: list(entries or [])
+        app._token_color_payload = lambda _c: None
+        app._token_border_color_payload = lambda _c: None
+        app._has_condition = tracker_mod.InitiativeTracker._has_condition.__get__(app, tracker_mod.InitiativeTracker)
+        app._collect_combat_modifiers = tracker_mod.InitiativeTracker._collect_combat_modifiers.__get__(app, tracker_mod.InitiativeTracker)
+        app._has_starry_wisp_reveal = tracker_mod.InitiativeTracker._has_starry_wisp_reveal.__get__(app, tracker_mod.InitiativeTracker)
+        app._has_muddled_thoughts = tracker_mod.InitiativeTracker._has_muddled_thoughts.__get__(app, tracker_mod.InitiativeTracker)
+        app._is_create_undead_uncommanded_this_turn = tracker_mod.InitiativeTracker._is_create_undead_uncommanded_this_turn.__get__(app, tracker_mod.InitiativeTracker)
+        app._lan_seed_missing_positions = lambda positions, *_args: positions
+        app._build_you_payload = lambda _ws_id=None: {"claimed_cid": None, "claimed_name": None}
+        app._spell_presets_payload = lambda: []
+        app._player_spell_config_payload = lambda: {}
+        app._player_profiles_payload = lambda: {}
+        app._player_resource_pools_payload = lambda: {}
+        app._consumables_registry_list_payload = lambda: []
+        app._load_beast_forms = lambda: []
+        app._elemental_attunement_active = lambda _c: False
+        app._json_safe = lambda value: value
+        app._concentration_total_rounds_for_combatant = lambda _c: 0
+        app._active_produce_flame_state = lambda _c: None
+        app._beguiling_magic_window_remaining = lambda _c: 0.0
+        app._lan_active_aura_contexts = lambda **_kwargs: []
+        app._lan_reaction_debug_enabled = lambda: False
+        app._movement_mode_label = lambda mode: str(mode or "normal")
+        app._creature_boarding_context = lambda *_args, **_kwargs: {}
+        app._lan = type("LanStub", (), {"_cached_snapshot": {}})()
+        app._map_state = tracker_mod.MapState.from_dict({"grid": {"cols": 20, "rows": 20, "feet_per_square": 5}, "token_positions": []})
+        app._capture_canonical_map_state = lambda prefer_window=True: app._map_state.normalized()
+        app._apply_canonical_map_state = lambda state, hydrate_window=False: setattr(app, "_map_state", state.normalized())
+        app.combatants = {
+            101: type(
+                "C",
+                (),
+                {
+                    "cid": 101,
+                    "name": "Boarder",
+                    "hp": 9,
+                    "max_hp": 9,
+                    "speed": 30,
+                    "move_remaining": 30,
+                    "move_total": 30,
+                    "action_remaining": 1,
+                    "action_total": 1,
+                    "attack_resource_remaining": 0,
+                    "bonus_action_remaining": 1,
+                    "reaction_remaining": 1,
+                    "spell_cast_remaining": 1,
+                    "actions": [{"name": "Attack"}],
+                    "bonus_actions": [],
+                    "reactions": [],
+                    "is_spellcaster": False,
+                    "is_wild_shaped": False,
+                    "condition_stacks": [
+                        tracker_mod.base.ConditionStack(sid=1, ctype="invisible", remaining_turns=None),
+                        tracker_mod.base.ConditionStack(sid=2, ctype="starry_wisp_revealed", remaining_turns=1),
+                        tracker_mod.base.ConditionStack(sid=3, ctype="otto_dancing", remaining_turns=None),
+                        tracker_mod.base.ConditionStack(sid=4, ctype="muddled_thoughts", remaining_turns=3),
+                    ],
+                    "ongoing_spell_effects": [],
+                    "saving_throws": {},
+                    "ability_mods": {},
+                    "summon_requires_command": True,
+                    "summon_commanded_turn": [2, 4],
+                },
+            )(),
+        }
+
+        snap = app._lan_snapshot(include_static=False, hydrate_static=False)
+        unit = (snap.get("units") or [])[0]
+        self.assertTrue(bool(unit.get("starry_wisp_revealed")))
+        self.assertTrue(bool(unit.get("otto_dancing")))
+        self.assertTrue(bool(unit.get("muddled_thoughts")))
+        self.assertTrue(bool(unit.get("invisibility_suppressed")))
+        self.assertFalse(bool(unit.get("is_invisible")))
+        self.assertTrue(bool(unit.get("summon_requires_command")))
+        self.assertTrue(bool(unit.get("summon_commanded_this_turn")))
+        self.assertEqual(unit.get("summon_commanded_turn"), [2, 4])
+
     def test_lan_snapshot_exposes_ship_render_metadata_and_texture_candidates(self):
         app = object.__new__(tracker_mod.InitiativeTracker)
         app._lan_grid_cols = 20

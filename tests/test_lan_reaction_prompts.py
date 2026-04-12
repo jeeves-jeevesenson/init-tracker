@@ -145,6 +145,42 @@ class LanReactionPromptTests(unittest.TestCase):
             )
         self.assertEqual(self.app.combatants[3].hp, 20)
 
+    def test_interception_not_offered_when_reactor_has_other_pending_reaction_offer(self):
+        self.app._profile_for_player_name = lambda name: {
+            "features": [{"name": "Interception"}] if name == "Sentinel" else [],
+            "attacks": {"weapon_to_hit": 5, "weapons": [{"id": "sword", "name": "Sword", "to_hit": 6}]},
+            "leveling": {"level": 11, "classes": [{"name": "Fighter", "level": 11, "attacks_per_action": 1}]},
+        }
+        self.app.combatants[1].reactions = [
+            {"name": "Opportunity Attack", "type": "reaction"},
+            {"name": "Interception", "type": "reaction"},
+        ]
+        self.app.combatants[1].reaction_remaining = 1
+        self.app._lan_positions[1] = (6, 5)
+        self.app._lan_positions[3] = (7, 5)
+        self.app._name_role_memory["Victim"] = "pc"
+        self.app._pending_reaction_offers["busy"] = {
+            "reactor_cid": 1,
+            "trigger": "shield",
+            "status": "offered",
+            "expires_at": 9999999999,
+        }
+
+        self.app._lan_apply_action(
+            {
+                "type": "attack_request",
+                "cid": 2,
+                "_claimed_cid": 2,
+                "_ws_id": 91,
+                "target_cid": 3,
+                "weapon_id": "sword",
+                "hit": True,
+                "damage_entries": [{"amount": 10, "type": "slashing"}],
+            }
+        )
+        offers = [payload for _ws, payload in self.sent if isinstance(payload, dict) and payload.get("trigger") == "interception"]
+        self.assertFalse(offers)
+
 
 if __name__ == "__main__":
     unittest.main()

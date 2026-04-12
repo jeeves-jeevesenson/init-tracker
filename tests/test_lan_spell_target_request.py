@@ -2871,6 +2871,243 @@ class LanSpellTargetRequestTests(unittest.TestCase):
         self.assertEqual(self.app.combatants[2].hp, 20)
         self.assertIn((35, "Arrr, that token ain’t yers."), self.toasts)
 
+    def test_otto_initial_success_applies_short_dance_without_ongoing_penalties(self):
+        preset = self._load_spell_preset("otto-s-irresistible-dance")
+        self.app._find_spell_preset = lambda *_args, **_kwargs: preset
+        self.app._profile_for_player_name = lambda _name: {"spellcasting": {"save_dc": 17}}
+        self.app.combatants[2].saving_throws = {"wis": 10, "wisdom": 10}
+        msg = {
+            "type": "spell_target_request",
+            "cid": 1,
+            "_claimed_cid": 1,
+            "_ws_id": 41,
+            "target_cid": 2,
+            "spell_name": "Otto's Irresistible Dance",
+            "spell_slug": "otto-s-irresistible-dance",
+            "save_type": "wis",
+            "save_dc": 17,
+            "roll_save": True,
+        }
+        with mock.patch("dnd_initative_tracker.random.randint", return_value=15):
+            self.app._lan_apply_action(msg)
+        target = self.app.combatants[2]
+        self.assertTrue(self.app._has_condition(target, "otto_dancing"))
+        self.assertFalse(self.app._has_condition(target, "charmed"))
+        self.assertFalse(self.app._target_has_otto_dance_active(target))
+        self.assertFalse(
+            any(self.app._action_name_key((entry or {}).get("name")) == "collect yourself (otto's dance)" for entry in list(getattr(target, "actions", []) or []))
+        )
+
+    def test_otto_failed_save_applies_penalties_and_collect_action(self):
+        preset = self._load_spell_preset("otto-s-irresistible-dance")
+        self.app._find_spell_preset = lambda *_args, **_kwargs: preset
+        self.app._profile_for_player_name = lambda _name: {"spellcasting": {"save_dc": 17}}
+        self.app.combatants[2].saving_throws = {"wis": -1, "wisdom": -1, "dex": 2}
+        self.app.combatants[2].ability_mods = {"wis": -1, "dex": 2}
+        msg = {
+            "type": "spell_target_request",
+            "cid": 1,
+            "_claimed_cid": 1,
+            "_ws_id": 42,
+            "target_cid": 2,
+            "spell_name": "Otto's Irresistible Dance",
+            "spell_slug": "otto-s-irresistible-dance",
+            "save_type": "wis",
+            "save_dc": 17,
+            "roll_save": True,
+        }
+        with mock.patch("dnd_initative_tracker.random.randint", return_value=2):
+            self.app._lan_apply_action(msg)
+        target = self.app.combatants[2]
+        self.assertTrue(self.app._has_condition(target, "otto_dancing"))
+        self.assertTrue(self.app._has_condition(target, "charmed"))
+        mods = self.app._collect_combat_modifiers(target)
+        self.assertIn("dex", set(mods.get("save_disadvantage_by_ability") or set()))
+        self.assertTrue(bool(mods.get("target_attack_disadvantage")))
+        self.assertTrue(bool(mods.get("attackers_have_advantage_against_target")))
+        self.assertTrue(self.app._target_has_otto_dance_active(target))
+        self.assertTrue(
+            any(self.app._action_name_key((entry or {}).get("name")) == "collect yourself (otto's dance)" for entry in list(getattr(target, "actions", []) or []))
+        )
+
+    def test_otto_collect_yourself_action_clears_effect_on_success(self):
+        preset = self._load_spell_preset("otto-s-irresistible-dance")
+        self.app._find_spell_preset = lambda *_args, **_kwargs: preset
+        self.app._profile_for_player_name = lambda _name: {"spellcasting": {"save_dc": 17}}
+        self.app.combatants[2].saving_throws = {"wis": -1, "wisdom": -1}
+        cast_msg = {
+            "type": "spell_target_request",
+            "cid": 1,
+            "_claimed_cid": 1,
+            "_ws_id": 43,
+            "target_cid": 2,
+            "spell_name": "Otto's Irresistible Dance",
+            "spell_slug": "otto-s-irresistible-dance",
+            "save_type": "wis",
+            "save_dc": 17,
+            "roll_save": True,
+        }
+        with mock.patch("dnd_initative_tracker.random.randint", return_value=2):
+            self.app._lan_apply_action(cast_msg)
+        target = self.app.combatants[2]
+        target.action_remaining = 1
+        action_msg = {
+            "type": "perform_action",
+            "cid": 2,
+            "_claimed_cid": 2,
+            "_ws_id": 44,
+            "spend": "action",
+            "action": "Collect Yourself (Otto's Dance)",
+        }
+        with mock.patch("dnd_initative_tracker.random.randint", return_value=18):
+            self.app._lan_apply_action(action_msg)
+        self.assertFalse(self.app._has_condition(target, "otto_dancing"))
+        self.assertFalse(self.app._has_condition(target, "charmed"))
+        self.assertFalse(self.app._target_has_otto_dance_active(target))
+        self.assertFalse(
+            any(self.app._action_name_key((entry or {}).get("name")) == "collect yourself (otto's dance)" for entry in list(getattr(target, "actions", []) or []))
+        )
+
+    def test_otto_collect_yourself_failed_action_skips_duplicate_end_turn_repeat_save(self):
+        preset = self._load_spell_preset("otto-s-irresistible-dance")
+        self.app._find_spell_preset = lambda *_args, **_kwargs: preset
+        self.app._profile_for_player_name = lambda _name: {"spellcasting": {"save_dc": 17}}
+        self.app.combatants[2].saving_throws = {"wis": -1, "wisdom": -1}
+        cast_msg = {
+            "type": "spell_target_request",
+            "cid": 1,
+            "_claimed_cid": 1,
+            "_ws_id": 45,
+            "target_cid": 2,
+            "spell_name": "Otto's Irresistible Dance",
+            "spell_slug": "otto-s-irresistible-dance",
+            "save_type": "wis",
+            "save_dc": 17,
+            "roll_save": True,
+        }
+        with mock.patch("dnd_initative_tracker.random.randint", return_value=2):
+            self.app._lan_apply_action(cast_msg)
+        target = self.app.combatants[2]
+        target.action_remaining = 1
+        action_msg = {
+            "type": "perform_action",
+            "cid": 2,
+            "_claimed_cid": 2,
+            "_ws_id": 46,
+            "spend": "action",
+            "action": "Collect Yourself (Otto's Dance)",
+        }
+        with mock.patch("dnd_initative_tracker.random.randint", side_effect=[2, 20]):
+            self.app._lan_apply_action(action_msg)
+            self.app._end_turn_cleanup(2)
+        self.assertTrue(self.app._has_condition(target, "otto_dancing"))
+        self.assertTrue(self.app._has_condition(target, "charmed"))
+
+    def test_otto_concentration_break_clears_linked_effect_state(self):
+        preset = self._load_spell_preset("otto-s-irresistible-dance")
+        self.app._find_spell_preset = lambda *_args, **_kwargs: preset
+        self.app._profile_for_player_name = lambda _name: {"spellcasting": {"save_dc": 17}}
+        self.app.combatants[2].saving_throws = {"wis": -1, "wisdom": -1}
+        msg = {
+            "type": "spell_target_request",
+            "cid": 1,
+            "_claimed_cid": 1,
+            "_ws_id": 47,
+            "target_cid": 2,
+            "spell_name": "Otto's Irresistible Dance",
+            "spell_slug": "otto-s-irresistible-dance",
+            "save_type": "wis",
+            "save_dc": 17,
+            "roll_save": True,
+        }
+        with mock.patch("dnd_initative_tracker.random.randint", return_value=2):
+            self.app._lan_apply_action(msg)
+        caster = self.app.combatants[1]
+        target = self.app.combatants[2]
+        self.assertTrue(self.app._target_has_otto_dance_active(target))
+        self.app._end_concentration(caster)
+        self.assertFalse(self.app._has_condition(target, "otto_dancing"))
+        self.assertFalse(self.app._has_condition(target, "charmed"))
+        self.assertEqual(list(getattr(target, "ongoing_spell_effects", []) or []), [])
+
+    def test_starry_wisp_hit_suppresses_invisibility_without_removing_condition(self):
+        preset = self._load_spell_preset("starry-wisp")
+        self.app._find_spell_preset = lambda *_args, **_kwargs: preset
+        next_sid = int(getattr(self.app, "_next_stack_id", 1) or 1)
+        self.app._next_stack_id = next_sid + 1
+        self.app.combatants[2].condition_stacks = [
+            tracker_mod.base.ConditionStack(sid=next_sid, ctype="invisible", remaining_turns=None)
+        ]
+        msg = {
+            "type": "spell_target_request",
+            "cid": 1,
+            "_claimed_cid": 1,
+            "_ws_id": 48,
+            "target_cid": 2,
+            "spell_name": "Starry Wisp",
+            "spell_slug": "starry-wisp",
+            "spell_mode": "attack",
+            "hit": True,
+        }
+        with mock.patch("dnd_initative_tracker.random.randint", return_value=5):
+            self.app._lan_apply_action(msg)
+        target = self.app.combatants[2]
+        self.assertTrue(self.app._has_condition(target, "invisible"))
+        self.assertTrue(self.app._has_condition(target, "starry_wisp_revealed"))
+        self.assertTrue(self.app._has_starry_wisp_reveal(target))
+
+    def test_starry_wisp_damage_scaling_and_reveal_expiry_restore_invisibility_benefit(self):
+        preset = self._load_spell_preset("starry-wisp")
+        self.app._find_spell_preset = lambda *_args, **_kwargs: preset
+        self.app._profile_for_player_name = lambda _name: {"leveling": {"level": 11}}
+        next_sid = int(getattr(self.app, "_next_stack_id", 1) or 1)
+        self.app._next_stack_id = next_sid + 1
+        self.app.combatants[2].condition_stacks = [
+            tracker_mod.base.ConditionStack(sid=next_sid, ctype="invisible", remaining_turns=None)
+        ]
+        msg = {
+            "type": "spell_target_request",
+            "cid": 1,
+            "_claimed_cid": 1,
+            "_ws_id": 49,
+            "target_cid": 2,
+            "spell_name": "Starry Wisp",
+            "spell_slug": "starry-wisp",
+            "spell_mode": "attack",
+            "hit": True,
+        }
+        with mock.patch("dnd_initative_tracker.random.randint", side_effect=[4, 3, 2]):
+            self.app._lan_apply_action(msg)
+        result = msg.get("_spell_target_result") or {}
+        self.assertEqual(int(result.get("damage_total") or 0), 9)
+        target = self.app.combatants[2]
+        self.assertTrue(self.app._has_starry_wisp_reveal(target))
+        self.app._end_turn_cleanup(2)
+        self.app._end_turn_cleanup(2)
+        self.assertFalse(self.app._has_starry_wisp_reveal(target))
+        self.assertTrue(self.app._has_condition(target, "invisible"))
+
+    def test_starry_wisp_does_not_apply_invisible_condition(self):
+        preset = self._load_spell_preset("starry-wisp")
+        self.app._find_spell_preset = lambda *_args, **_kwargs: preset
+        self.app.combatants[2].condition_stacks = []
+        msg = {
+            "type": "spell_target_request",
+            "cid": 1,
+            "_claimed_cid": 1,
+            "_ws_id": 50,
+            "target_cid": 2,
+            "spell_name": "Starry Wisp",
+            "spell_slug": "starry-wisp",
+            "spell_mode": "attack",
+            "hit": True,
+        }
+        with mock.patch("dnd_initative_tracker.random.randint", return_value=6):
+            self.app._lan_apply_action(msg)
+        target = self.app.combatants[2]
+        self.assertFalse(self.app._has_condition(target, "invisible"))
+        self.assertTrue(self.app._has_condition(target, "starry_wisp_revealed"))
+
 
 if __name__ == "__main__":
     unittest.main()
