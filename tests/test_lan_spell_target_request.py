@@ -224,6 +224,117 @@ class LanSpellTargetRequestTests(unittest.TestCase):
 
         self.assertIn((31, "Beam 2/3: Eldritch Blast hits: 7 damage (7 force)."), self.toasts)
 
+    def test_disintegrate_failed_save_removes_target(self):
+        self.app._find_spell_preset = lambda *_args, **_kwargs: {
+            "slug": "disintegrate",
+            "id": "disintegrate",
+            "name": "Disintegrate",
+            "level": 6,
+            "mechanics": {
+                "sequence": [
+                    {
+                        "check": {"kind": "saving_throw", "ability": "dexterity", "dc": "spell_save_dc"},
+                        "outcomes": {
+                            "fail": [{"effect": "damage", "damage_type": "force", "dice": "10d6+40"}],
+                            "success": [],
+                        },
+                    }
+                ]
+            },
+        }
+        self.app._profile_for_player_name = lambda name: {"spellcasting": {"save_dc": 17}}
+        msg = {
+            "type": "spell_target_request",
+            "cid": 1,
+            "_claimed_cid": 1,
+            "_ws_id": 35,
+            "target_cid": 2,
+            "spell_slug": "disintegrate",
+            "spell_name": "Disintegrate",
+        }
+        with mock.patch("dnd_initative_tracker.random.randint", side_effect=[2] + [6] * 10):
+            self.app._lan_apply_action(msg)
+        self.assertNotIn(2, self.app.combatants)
+        result = msg.get("_spell_target_result") or {}
+        self.assertTrue(bool(result.get("disintegrated")))
+
+    def test_disintegrate_successful_save_deals_no_damage(self):
+        self.app._find_spell_preset = lambda *_args, **_kwargs: {
+            "slug": "disintegrate",
+            "id": "disintegrate",
+            "name": "Disintegrate",
+            "level": 6,
+            "mechanics": {
+                "sequence": [
+                    {
+                        "check": {"kind": "saving_throw", "ability": "dexterity", "dc": "spell_save_dc"},
+                        "outcomes": {
+                            "fail": [{"effect": "damage", "damage_type": "force", "dice": "10d6+40"}],
+                            "success": [],
+                        },
+                    }
+                ]
+            },
+        }
+        self.app.combatants[2].saving_throws = {"dex": 10}
+        self.app.combatants[2].saving_throws["dexterity"] = 10
+        self.app._profile_for_player_name = lambda name: {"spellcasting": {"save_dc": 17}}
+        msg = {
+            "type": "spell_target_request",
+            "cid": 1,
+            "_claimed_cid": 1,
+            "_ws_id": 36,
+            "target_cid": 2,
+            "spell_slug": "disintegrate",
+            "spell_name": "Disintegrate",
+            "spell_mode": "save",
+            "save_type": "dex",
+            "save_dc": 17,
+            "roll_save": True,
+        }
+        with mock.patch("dnd_initative_tracker.random.randint", return_value=18):
+            self.app._lan_apply_action(msg)
+        self.assertEqual(self.app.combatants[2].hp, 20)
+        result = msg.get("_spell_target_result") or {}
+        self.assertEqual(int(result.get("damage_total") or 0), 0)
+
+    def test_harm_failed_save_reduces_max_hp(self):
+        self.app.combatants[2].hp = 60
+        self.app.combatants[2].max_hp = 60
+        self.app.combatants[2].saving_throws = {"con": 0}
+        self.app._find_spell_preset = lambda *_args, **_kwargs: {
+            "slug": "harm",
+            "id": "harm",
+            "name": "Harm",
+            "level": 6,
+            "mechanics": {
+                "sequence": [
+                    {
+                        "check": {"kind": "saving_throw", "ability": "constitution", "dc": "spell_save_dc"},
+                        "outcomes": {
+                            "fail": [{"effect": "damage", "damage_type": "necrotic", "dice": "14d6"}],
+                            "success": [{"effect": "damage", "damage_type": "necrotic", "dice": "14d6", "multiplier": 0.5}],
+                        },
+                    }
+                ]
+            },
+        }
+        self.app._profile_for_player_name = lambda name: {"spellcasting": {"save_dc": 17}}
+        msg = {
+            "type": "spell_target_request",
+            "cid": 1,
+            "_claimed_cid": 1,
+            "_ws_id": 37,
+            "target_cid": 2,
+            "spell_slug": "harm",
+            "spell_name": "Harm",
+        }
+        with mock.patch("dnd_initative_tracker.random.randint", side_effect=[2] + [2] * 14):
+            self.app._lan_apply_action(msg)
+        self.assertEqual(self.app.combatants[2].hp, 32)
+        self.assertEqual(self.app.combatants[2].max_hp, 32)
+        self.assertEqual(int(getattr(self.app.combatants[2], "harm_max_hp_reduction", 0) or 0), 28)
+
     def test_format_single_target_spell_outcome_save_toast_includes_damage_and_adjustment_notes(self):
         detail = self.app._format_single_target_spell_outcome(
             {

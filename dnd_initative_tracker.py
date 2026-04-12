@@ -7732,33 +7732,33 @@ class InitiativeTracker(base.InitiativeTracker):
 
     def _init_cadence_scheduler_state(self, reset_history: bool = True) -> None:
         cadence_cids = self._cadence_cids_in_order()
-        counters = {int(cid): int((getattr(self, "_cadence_counters", {}) or {}).get(int(cid), 0) or 0) for cid in cadence_cids}
+        counters = {int(cid): int((self.__dict__.get("_cadence_counters", {}) or {}).get(int(cid), 0) or 0) for cid in cadence_cids}
         self._current_turn_kind = str(self.__dict__.get("_current_turn_kind", "normal") or "normal")
         self._cadence_counters = counters
         pending = []
-        existing_pending = list(getattr(self, "_cadence_pending_queue", []) or [])
+        existing_pending = list(self.__dict__.get("_cadence_pending_queue", []) or [])
         for cid in existing_pending:
             cid_norm = _normalize_cid_value(cid, "turn.cadence.pending")
             if cid_norm is None or int(cid_norm) not in counters:
                 continue
             pending.append(int(cid_norm))
         self._cadence_pending_queue = pending
-        self._cadence_resume_normal_cid = _normalize_cid_value(getattr(self, "_cadence_resume_normal_cid", None), "turn.cadence.resume")
-        self._normal_turns_completed = int(getattr(self, "_normal_turns_completed", 0) or 0)
+        self._cadence_resume_normal_cid = _normalize_cid_value(self.__dict__.get("_cadence_resume_normal_cid", None), "turn.cadence.resume")
+        self._normal_turns_completed = int(self.__dict__.get("_normal_turns_completed", 0) or 0)
         if reset_history:
             self._turn_history = []
 
     def _record_turn_history(self) -> None:
-        history = list(getattr(self, "_turn_history", []) or [])
+        history = list(self.__dict__.get("_turn_history", []) or [])
         history.append({
             "current_cid": _normalize_cid_value(getattr(self, "current_cid", None), "turn.history.current"),
             "round_num": int(getattr(self, "round_num", 1) or 1),
             "turn_num": int(getattr(self, "turn_num", 0) or 0),
             "turn_kind": str(self.__dict__.get("_current_turn_kind", "normal") or "normal"),
-            "cadence_counters": dict(getattr(self, "_cadence_counters", {}) or {}),
-            "cadence_pending_queue": list(getattr(self, "_cadence_pending_queue", []) or []),
-            "cadence_resume_normal_cid": _normalize_cid_value(getattr(self, "_cadence_resume_normal_cid", None), "turn.history.resume"),
-            "normal_turns_completed": int(getattr(self, "_normal_turns_completed", 0) or 0),
+            "cadence_counters": dict(self.__dict__.get("_cadence_counters", {}) or {}),
+            "cadence_pending_queue": list(self.__dict__.get("_cadence_pending_queue", []) or []),
+            "cadence_resume_normal_cid": _normalize_cid_value(self.__dict__.get("_cadence_resume_normal_cid", None), "turn.history.resume"),
+            "normal_turns_completed": int(self.__dict__.get("_normal_turns_completed", 0) or 0),
         })
         self._turn_history = history
 
@@ -8887,13 +8887,13 @@ class InitiativeTracker(base.InitiativeTracker):
             map_open = False
             mw = None
 
-        cols = int(getattr(self, "_lan_grid_cols", 20) or 20)
-        rows = int(getattr(self, "_lan_grid_rows", 20) or 20)
+        cols = int(self.__dict__.get("_lan_grid_cols", 20) or 20)
+        rows = int(self.__dict__.get("_lan_grid_rows", 20) or 20)
         feet_per_square = 5.0
-        positions = dict(getattr(self, "_lan_positions", {}) or {})
-        obstacles = set(getattr(self, "_lan_obstacles", set()) or set())
-        rough_terrain = dict(getattr(self, "_lan_rough_terrain", {}) or {})
-        aoes = dict(getattr(self, "_lan_aoes", {}) or {})
+        positions = dict(self.__dict__.get("_lan_positions", {}) or {})
+        obstacles = set(self.__dict__.get("_lan_obstacles", set()) or set())
+        rough_terrain = dict(self.__dict__.get("_lan_rough_terrain", {}) or {})
+        aoes = dict(self.__dict__.get("_lan_aoes", {}) or {})
         presentation = {
             "auras_enabled": bool(self.__dict__.get("_lan_auras_enabled", True)),
             "bg_images": list(self.__dict__.get("_session_bg_images", []) or []),
@@ -15569,16 +15569,40 @@ class InitiativeTracker(base.InitiativeTracker):
         source_cell: Optional[Tuple[int, int]] = None,
         direction_step: Optional[Tuple[int, int]] = None,
     ) -> bool:
+        raw_positions = dict(self.__dict__.get("_lan_positions", {}) or {})
         try:
             _cols, _rows, _obstacles, _rough, live_positions = self._lan_live_map_data()
-            target = dict(live_positions or {}).get(int(target_cid))
-            source = None
-            if source_cell is not None:
-                source = (int(source_cell[0]), int(source_cell[1]))
-            elif source_cid is not None:
-                source = dict(live_positions or {}).get(int(source_cid))
         except Exception:
-            return False
+            live_positions = dict(raw_positions or {})
+        target = dict(live_positions or {}).get(int(target_cid))
+        if target is None:
+            target = dict(raw_positions or {}).get(int(target_cid))
+        source = None
+        if source_cell is not None:
+            source = (int(source_cell[0]), int(source_cell[1]))
+        elif source_cid is not None:
+            source = dict(live_positions or {}).get(int(source_cid))
+            if source is None:
+                fallback_positions = dict(raw_positions or {})
+                source = fallback_positions.get(int(source_cid))
+        if not (isinstance(target, tuple) and len(target) == 2):
+            mw = self.__dict__.get("_map_window")
+            try:
+                if mw is not None and hasattr(mw, "winfo_exists") and mw.winfo_exists():
+                    tok = (getattr(mw, "unit_tokens", {}) or {}).get(int(target_cid))
+                    if isinstance(tok, dict):
+                        target = (int(tok.get("col")), int(tok.get("row")))
+            except Exception:
+                pass
+        if source is None and source_cid is not None:
+            mw = self.__dict__.get("_map_window")
+            try:
+                if mw is not None and hasattr(mw, "winfo_exists") and mw.winfo_exists():
+                    tok = (getattr(mw, "unit_tokens", {}) or {}).get(int(source_cid))
+                    if isinstance(tok, dict):
+                        source = (int(tok.get("col")), int(tok.get("row")))
+            except Exception:
+                pass
         if not (isinstance(target, tuple) and len(target) == 2):
             return False
         if direction_step is None and not (isinstance(source, tuple) and len(source) == 2):
@@ -15623,7 +15647,13 @@ class InitiativeTracker(base.InitiativeTracker):
             step_y *= -1
         if step_x == 0 and step_y == 0:
             return False
-        cols, rows, obstacles, _rough, _positions = self._lan_live_map_data()
+        try:
+            cols, rows, obstacles, _rough, _positions = self._lan_live_map_data()
+        except Exception:
+            cols = int(self.__dict__.get("_lan_grid_cols", 20) or 20)
+            rows = int(self.__dict__.get("_lan_grid_rows", 20) or 20)
+            obstacles = set(self.__dict__.get("_lan_obstacles", set()) or set())
+            _positions = dict(raw_positions or {})
         col, row = tc, tr
         moved = False
         origin_cell = (int(tc), int(tr))
@@ -17248,7 +17278,9 @@ class InitiativeTracker(base.InitiativeTracker):
         has_verbal = self._spell_has_verbal_component(spell_preset)
         modifiers = self._collect_environmental_modifiers_for_combatant(caster, destination=destination)
         if bool(modifiers.get("ambiguous")):
-            return (True, "The environment is unclear here, so spellcasting is blocked for now, matey.")
+            if list(modifiers.get("cast_rules") or []):
+                return (True, "The environment is unclear here, so spellcasting is blocked for now, matey.")
+            return (False, "")
         for rule in list(modifiers.get("cast_rules") or []):
             if not isinstance(rule, dict):
                 continue
@@ -17824,7 +17856,8 @@ class InitiativeTracker(base.InitiativeTracker):
     def _has_muddled_thoughts(self, combatant: Any) -> bool:
         if combatant is None:
             return False
-        if self._has_condition(combatant, "muddled_thoughts"):
+        stacks = list(getattr(combatant, "condition_stacks", []) or [])
+        if any(str(getattr(st, "ctype", "") or "").strip().lower() == "muddled_thoughts" for st in stacks):
             return True
         for entry in list(getattr(combatant, "ongoing_spell_effects", []) or []):
             if not isinstance(entry, dict):
@@ -27239,7 +27272,11 @@ class InitiativeTracker(base.InitiativeTracker):
             },
         )
         if req_id:
-            self._pending_interception_resolutions[str(req_id)] = {
+            pending_store = self.__dict__.get("_pending_interception_resolutions")
+            if not isinstance(pending_store, dict):
+                pending_store = {}
+                self._pending_interception_resolutions = pending_store
+            pending_store[str(req_id)] = {
                 "reactor_cid": int(getattr(best_reactor, "cid", 0) or 0),
                 "victim_cid": int(victim_cid),
                 "attacker_cid": int(attacker_cid),
@@ -28160,10 +28197,11 @@ class InitiativeTracker(base.InitiativeTracker):
                         }
                     )
                     setattr(caster, "bonus_actions", bonus_actions)
-                self._log(
-                    "Create Undead note: nighttime casting and 24-hour control windows must be tracked manually.",
-                    cid=int(caster_cid),
-                )
+                if callable(getattr(self, "_log", None)):
+                    self._log(
+                        "Create Undead note: nighttime casting and 24-hour control windows must be tracked manually.",
+                        cid=int(caster_cid),
+                    )
         return spawned
 
     def _command_created_undead_for_caster(self, caster_cid: int) -> int:
@@ -31486,7 +31524,7 @@ class InitiativeTracker(base.InitiativeTracker):
                     self._lan_apply_action(resume_msg)
                 return
             if str(offer.get("trigger") or "").strip().lower() == "interception":
-                pending = (getattr(self, "_pending_interception_resolutions", {}) or {}).pop(request_id, None)
+                pending = (self.__dict__.get("_pending_interception_resolutions", {}) or {}).pop(request_id, None)
                 self._pending_reaction_offers.pop(request_id, None)
                 if not isinstance(pending, dict):
                     self._lan.toast(ws_id, "That Interception offer expired, matey.")
@@ -35951,6 +35989,15 @@ class InitiativeTracker(base.InitiativeTracker):
                 source_cell = (int(explicit_cell[0]), int(explicit_cell[1]))
             except Exception:
                 source_cell = None
+        source_available = False
+        if source_cid is not None:
+            try:
+                live_source = self._lan_current_position(int(source_cid))
+            except Exception:
+                live_source = None
+            if not (isinstance(live_source, tuple) and len(live_source) == 2):
+                live_source = dict(self.__dict__.get("_lan_positions", {}) or {}).get(int(source_cid))
+            source_available = bool(isinstance(live_source, tuple) and len(live_source) == 2)
 
         if origin == "aoe_center":
             if isinstance(aoe, dict):
@@ -35967,7 +36014,7 @@ class InitiativeTracker(base.InitiativeTracker):
             direction_step = self._lan_direction_step_from_angle(angle)
             source_cid = None
         elif origin == "caster":
-            if source_cid is None and source_cell is None and fallback_origin_cell is not None:
+            if source_cell is None and not source_available and fallback_origin_cell is not None:
                 source_cell = (int(fallback_origin_cell[0]), int(fallback_origin_cell[1]))
 
         if target_cid is None:

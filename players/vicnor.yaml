@@ -238,6 +238,7 @@ spellcasting:
   prepared_spells:
     max_formula: '10'
     prepared:
+    - absorb-elements
     - chaos-bolt-izzet
     - distort-value
     - hellish-rebuke
@@ -248,6 +249,8 @@ spellcasting:
     - phantasmal-killer
     - disguise-self
     - silent-image
+    free:
+    - absorb-elements
   spell_slots:
     '1':
       max: 0
