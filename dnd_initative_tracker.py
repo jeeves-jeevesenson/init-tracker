@@ -36834,8 +36834,12 @@ class InitiativeTracker(base.InitiativeTracker):
         if condition_clear:
             primitives["condition_clear"] = [str(c or "").strip().lower() for c in condition_clear if str(c or "").strip()]
 
+        ongoing_modifiers = ongoing.get("modifiers") if isinstance(ongoing.get("modifiers"), dict) else {}
+
         for ongoing_key, primitive_key in (("repeat_save_end_turn", "end_turn_save_riders"), ("repeat_save_on_damage", "on_damage_save_riders")):
             rider = ongoing.get(ongoing_key) if isinstance(ongoing.get(ongoing_key), dict) else None
+            if not isinstance(rider, dict) and isinstance(ongoing_modifiers.get(ongoing_key), dict):
+                rider = ongoing_modifiers.get(ongoing_key)
             if not isinstance(rider, dict):
                 continue
             save_ability = self._coerce_spell_ability_key(rider.get("save_ability") or rider.get("ability") or ctx.get("save_type"), fallback="")
@@ -36871,7 +36875,6 @@ class InitiativeTracker(base.InitiativeTracker):
             if turn_state:
                 primitives["turn_state"] = turn_state
 
-        ongoing_modifiers = ongoing.get("modifiers") if isinstance(ongoing.get("modifiers"), dict) else {}
         if ongoing_modifiers:
             modifiers: Dict[str, Any] = {}
             for int_key in ("ac_bonus", "speed_bonus"):
@@ -36893,6 +36896,7 @@ class InitiativeTracker(base.InitiativeTracker):
                 if abilities:
                     modifiers[ability_key] = sorted(abilities)
             for bool_key in (
+                "attackers_have_advantage_against_target",
                 "attackers_have_disadvantage_against_target",
                 "target_attack_disadvantage",
                 "reactions_blocked",

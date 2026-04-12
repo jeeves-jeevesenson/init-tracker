@@ -2875,7 +2875,7 @@ class LanSpellTargetRequestTests(unittest.TestCase):
         preset = self._load_spell_preset("otto-s-irresistible-dance")
         self.app._find_spell_preset = lambda *_args, **_kwargs: preset
         self.app._profile_for_player_name = lambda _name: {"spellcasting": {"save_dc": 17}}
-        self.app.combatants[2].saving_throws = {"wis": 10}
+        self.app.combatants[2].saving_throws = {"wis": 10, "wisdom": 10}
         msg = {
             "type": "spell_target_request",
             "cid": 1,
@@ -2884,7 +2884,9 @@ class LanSpellTargetRequestTests(unittest.TestCase):
             "target_cid": 2,
             "spell_name": "Otto's Irresistible Dance",
             "spell_slug": "otto-s-irresistible-dance",
-            "spell_mode": "save",
+            "save_type": "wis",
+            "save_dc": 17,
+            "roll_save": True,
         }
         with mock.patch("dnd_initative_tracker.random.randint", return_value=15):
             self.app._lan_apply_action(msg)
@@ -2900,7 +2902,7 @@ class LanSpellTargetRequestTests(unittest.TestCase):
         preset = self._load_spell_preset("otto-s-irresistible-dance")
         self.app._find_spell_preset = lambda *_args, **_kwargs: preset
         self.app._profile_for_player_name = lambda _name: {"spellcasting": {"save_dc": 17}}
-        self.app.combatants[2].saving_throws = {"wis": -1, "dex": 2}
+        self.app.combatants[2].saving_throws = {"wis": -1, "wisdom": -1, "dex": 2}
         self.app.combatants[2].ability_mods = {"wis": -1, "dex": 2}
         msg = {
             "type": "spell_target_request",
@@ -2910,7 +2912,9 @@ class LanSpellTargetRequestTests(unittest.TestCase):
             "target_cid": 2,
             "spell_name": "Otto's Irresistible Dance",
             "spell_slug": "otto-s-irresistible-dance",
-            "spell_mode": "save",
+            "save_type": "wis",
+            "save_dc": 17,
+            "roll_save": True,
         }
         with mock.patch("dnd_initative_tracker.random.randint", return_value=2):
             self.app._lan_apply_action(msg)
@@ -2930,7 +2934,7 @@ class LanSpellTargetRequestTests(unittest.TestCase):
         preset = self._load_spell_preset("otto-s-irresistible-dance")
         self.app._find_spell_preset = lambda *_args, **_kwargs: preset
         self.app._profile_for_player_name = lambda _name: {"spellcasting": {"save_dc": 17}}
-        self.app.combatants[2].saving_throws = {"wis": -1}
+        self.app.combatants[2].saving_throws = {"wis": -1, "wisdom": -1}
         cast_msg = {
             "type": "spell_target_request",
             "cid": 1,
@@ -2939,7 +2943,9 @@ class LanSpellTargetRequestTests(unittest.TestCase):
             "target_cid": 2,
             "spell_name": "Otto's Irresistible Dance",
             "spell_slug": "otto-s-irresistible-dance",
-            "spell_mode": "save",
+            "save_type": "wis",
+            "save_dc": 17,
+            "roll_save": True,
         }
         with mock.patch("dnd_initative_tracker.random.randint", return_value=2):
             self.app._lan_apply_action(cast_msg)
@@ -2966,7 +2972,7 @@ class LanSpellTargetRequestTests(unittest.TestCase):
         preset = self._load_spell_preset("otto-s-irresistible-dance")
         self.app._find_spell_preset = lambda *_args, **_kwargs: preset
         self.app._profile_for_player_name = lambda _name: {"spellcasting": {"save_dc": 17}}
-        self.app.combatants[2].saving_throws = {"wis": -1}
+        self.app.combatants[2].saving_throws = {"wis": -1, "wisdom": -1}
         cast_msg = {
             "type": "spell_target_request",
             "cid": 1,
@@ -2975,7 +2981,9 @@ class LanSpellTargetRequestTests(unittest.TestCase):
             "target_cid": 2,
             "spell_name": "Otto's Irresistible Dance",
             "spell_slug": "otto-s-irresistible-dance",
-            "spell_mode": "save",
+            "save_type": "wis",
+            "save_dc": 17,
+            "roll_save": True,
         }
         with mock.patch("dnd_initative_tracker.random.randint", return_value=2):
             self.app._lan_apply_action(cast_msg)
@@ -2999,7 +3007,7 @@ class LanSpellTargetRequestTests(unittest.TestCase):
         preset = self._load_spell_preset("otto-s-irresistible-dance")
         self.app._find_spell_preset = lambda *_args, **_kwargs: preset
         self.app._profile_for_player_name = lambda _name: {"spellcasting": {"save_dc": 17}}
-        self.app.combatants[2].saving_throws = {"wis": -1}
+        self.app.combatants[2].saving_throws = {"wis": -1, "wisdom": -1}
         msg = {
             "type": "spell_target_request",
             "cid": 1,
@@ -3008,7 +3016,9 @@ class LanSpellTargetRequestTests(unittest.TestCase):
             "target_cid": 2,
             "spell_name": "Otto's Irresistible Dance",
             "spell_slug": "otto-s-irresistible-dance",
-            "spell_mode": "save",
+            "save_type": "wis",
+            "save_dc": 17,
+            "roll_save": True,
         }
         with mock.patch("dnd_initative_tracker.random.randint", return_value=2):
             self.app._lan_apply_action(msg)
