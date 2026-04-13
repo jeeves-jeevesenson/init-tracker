@@ -14,11 +14,14 @@ from .github_dispatch import (
     build_dispatch_payload_summary,
     describe_dispatch_mode,
     dispatch_task_to_github_copilot,
+    mark_pr_ready_for_review,
 )
 from .models import (
     APPROVAL_APPROVED,
     APPROVAL_PENDING,
     APPROVAL_REJECTED,
+    BLOCKER_WAITING_FOR_PR_READY,
+    BLOCKER_WAITING_FOR_WORKFLOW_APPROVAL,
     RUN_STATUS_AWAITING_WORKER_START,
     RUN_STATUS_AWAITING_REVIEW,
     RUN_STATUS_BLOCKED,
@@ -46,11 +49,18 @@ from .models import (
     TASK_STATUS_WORKER_FAILED,
     TASK_STATUS_WORKING,
     AgentRun,
+    Program,
     TaskPacket,
 )
 from .openai_planning import plan_task_packet
 from .openai_review import summarize_work_update
-from .programs import apply_reviewer_decision, ensure_program_for_task, link_run_to_slice, mark_slice_approved
+from .programs import (
+    advance_program_on_pr_merge,
+    apply_reviewer_decision,
+    ensure_program_for_task,
+    link_run_to_slice,
+    mark_slice_approved,
+)
 
 
 ISSUE_REF_RE = re.compile(r"#(\d+)")
@@ -658,6 +668,18 @@ def process_issue_event(session: Session, *, settings: Settings, payload: dict[s
         task.updated_at = _utc_now()
         _save(session, task)
 
+    # Trusted kickoff: if the issue carries the trusted kickoff label and policy
+    # allows, auto-confirm after planning so the operator does not need a second
+    # manual approval step.
+    has_kickoff_label = bool(settings.trusted_kickoff_label and settings.trusted_kickoff_label in labels)
+    if (
+        has_kickoff_label
+        and settings.program_trusted_auto_confirm
+        and task.status == TASK_STATUS_AWAITING_APPROVAL
+        and task.approval_state == APPROVAL_PENDING
+    ):
+        process_approval(session, settings=settings, task=task, approved=True, source="trusted_kickoff_label")
+
     if action == "labeled":
         if label_name == settings.task_approved_label:
             process_approval(session, settings=settings, task=task, approved=True, source="label")
@@ -919,6 +941,7 @@ def _summarize_and_store(
     run_status: str,
     event_key: str,
     checks_passed: bool,
+    pr_is_draft: bool = False,
 ) -> None:
     try:
         summary = summarize_work_update(settings=settings, update_context=context)
@@ -955,6 +978,10 @@ def _summarize_and_store(
     task.updated_at = _utc_now()
     _save(session, run, task)
     link_run_to_slice(session, run=run, task=task)
+
+    def _dispatch_fn(new_task: TaskPacket) -> None:
+        dispatch_task_if_ready(session, settings=settings, task=new_task)
+
     decision = apply_reviewer_decision(
         session,
         settings=settings,
@@ -962,13 +989,49 @@ def _summarize_and_store(
         run=run,
         event_key=event_key,
         checks_passed=checks_passed,
+        dispatch_fn=_dispatch_fn,
     )
+
     if decision == "revise":
         task.status = TASK_STATUS_APPROVED
         task.latest_summary = "Revision requested by reviewer; redispatching"
         task.updated_at = _utc_now()
         _save(session, task)
         dispatch_task_if_ready(session, settings=settings, task=task, force=True)
+        return
+
+    # If the reviewer says continue/complete but the PR is still a draft, attempt
+    # to mark it ready for review so it can be merged.  Surface a blocker if it fails.
+    if decision in {"continue", "complete"} and pr_is_draft and run.github_pr_number:
+        success, msg = mark_pr_ready_for_review(
+            settings=settings,
+            repo=task.github_repo,
+            pr_number=run.github_pr_number,
+        )
+        if success:
+            notify_discord(
+                f"Draft PR #{run.github_pr_number} marked ready for review: {task.github_repo}#{task.github_issue_number}"
+            )
+        else:
+            # Un-draft failed; surface an explicit blocker so the operator can act.
+            if task.program_id:
+                from .models import Program as _Program
+                prog = session.get(_Program, task.program_id)
+                if prog is not None:
+                    prog.blocker_state_json = json.dumps(
+                        {
+                            "reason": BLOCKER_WAITING_FOR_PR_READY,
+                            "pr_number": run.github_pr_number,
+                            "detail": msg,
+                        },
+                        ensure_ascii=False,
+                    )
+                    prog.latest_summary = f"Waiting: PR draft could not be un-drafted automatically. {msg}"
+                    prog.updated_at = _utc_now()
+                    _save(session, prog)
+            notify_discord(
+                f"Draft PR stall detected for {task.github_repo}#{task.github_issue_number}: {msg}"
+            )
 
 
 def _review_summary_suffix(run: AgentRun) -> str:
@@ -1017,6 +1080,7 @@ def process_pull_request_event(
         run.github_pr_number = pr_number
 
     html_url = str(pr.get("html_url") or "")
+    pr_is_draft = bool(pr.get("draft"))
     if action in {"opened", "reopened", "ready_for_review"}:
         context = json.dumps(
             {
@@ -1054,6 +1118,7 @@ def process_pull_request_event(
             run_status=RUN_STATUS_PR_OPENED,
             event_key=f"pull_request:{pr.get('id')}:{action}:{pr.get('updated_at')}",
             checks_passed=False,
+            pr_is_draft=pr_is_draft,
         )
         task.status = TASK_STATUS_PR_OPENED
         task.updated_at = _utc_now()
@@ -1077,6 +1142,19 @@ def process_pull_request_event(
             _save(session, run, task)
             link_run_to_slice(session, run=run, task=task)
             notify_discord(f"Task completed: {github_repo}#{task.github_issue_number}")
+
+            # Critical: advance the program after a successful merge so the next
+            # slice is created and dispatched automatically.
+            def _dispatch_fn(new_task: TaskPacket) -> None:
+                dispatch_task_if_ready(session, settings=settings, task=new_task)
+
+            advance_program_on_pr_merge(
+                session,
+                settings=settings,
+                task=task,
+                run=run,
+                dispatch_fn=_dispatch_fn,
+            )
             return
 
         run.status = RUN_STATUS_BLOCKED
@@ -1199,6 +1277,41 @@ def process_workflow_run_event(
         notify_discord(
             f"Checks failed / task blocked: {github_repo} PR #{run.github_pr_number} -> {_worker_display_name(task)}"
             f"{_review_summary_suffix(run)}"
+        )
+        return
+
+    # Workflow waiting for approval — surface an explicit blocker so the chain
+    # does not appear as a silent "working" stall.
+    if status == "waiting" or action == "waiting":
+        run.status = RUN_STATUS_BLOCKED
+        run.last_summary = (
+            f"Workflow awaiting approval: {name} ({html_url or 'no url'}). "
+            "A repository maintainer must approve this workflow run in GitHub Actions."
+        )
+        run.updated_at = _utc_now()
+        task.status = TASK_STATUS_BLOCKED
+        task.latest_summary = run.last_summary
+        task.updated_at = _utc_now()
+        _save(session, run, task)
+        link_run_to_slice(session, run=run, task=task)
+        if task.program_id:
+            prog = session.get(Program, task.program_id)
+            if prog is not None:
+                prog.blocker_state_json = json.dumps(
+                    {
+                        "reason": BLOCKER_WAITING_FOR_WORKFLOW_APPROVAL,
+                        "workflow_name": name,
+                        "workflow_url": html_url,
+                        "pr_numbers": pr_numbers,
+                    },
+                    ensure_ascii=False,
+                )
+                prog.latest_summary = f"Workflow approval required: {name}"
+                prog.updated_at = _utc_now()
+                _save(session, prog)
+        notify_discord(
+            f"Workflow approval required: {github_repo} PR #{pr_numbers} workflow={name!r}. "
+            "Approve in GitHub Actions to continue."
         )
         return
 

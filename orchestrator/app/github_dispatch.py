@@ -363,3 +363,26 @@ def dispatch_task_to_github_copilot(*, settings: Settings, task: TaskPacket) -> 
             state="blocked",
             summary=f"Dispatch request failed: {exc}. {dispatch_mode_summary}",
         )
+
+
+def mark_pr_ready_for_review(*, settings: Settings, repo: str, pr_number: int) -> tuple[bool, str]:
+    """Attempt to convert a draft PR to ready-for-review.
+
+    Returns (success, message).  Safe to call when the PR is already non-draft.
+    """
+    if not settings.github_api_token:
+        return False, "GitHub API token missing; cannot un-draft PR"
+    api_base = settings.github_api_url.rstrip("/")
+    url = f"{api_base}/repos/{repo}/pulls/{pr_number}"
+    try:
+        with httpx.Client(timeout=15.0) as client:
+            response = client.patch(
+                url,
+                headers=_build_headers(settings),
+                json={"draft": False},
+            )
+            if response.status_code >= 400:
+                return False, f"GitHub returned {response.status_code} when un-drafting PR #{pr_number}: {response.text[:300]}"
+            return True, f"PR #{pr_number} marked ready for review"
+    except Exception as exc:
+        return False, f"Failed to un-draft PR #{pr_number}: {exc}"

@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import json
 from datetime import datetime, timezone
-from typing import Any
+from typing import Any, Callable
 
 import httpx
 from sqlmodel import Session, select
@@ -10,6 +10,10 @@ from sqlmodel import Session, select
 from .config import Settings
 from .models import (
     APPROVAL_APPROVED,
+    BLOCKER_ESCALATED_TO_HUMAN,
+    BLOCKER_WAITING_FOR_ISSUE_CREATION,
+    BLOCKER_WAITING_FOR_MERGE,
+    BLOCKER_WAITING_FOR_PR_READY,
     PROGRAM_STATUS_ACTIVE,
     PROGRAM_STATUS_BLOCKED,
     PROGRAM_STATUS_COMPLETED,
@@ -273,6 +277,7 @@ def program_to_dict(program: Program, slices: list[ProgramSlice]) -> dict[str, A
         "current_slice_number": program.current_slice_number,
         "latest_decision": program.latest_decision,
         "latest_summary": program.latest_summary,
+        "wait_reason": _derive_wait_reason(program),
         "auto_policy": {
             "auto_plan": program.auto_plan,
             "auto_approve": program.auto_approve,
@@ -429,6 +434,7 @@ def apply_reviewer_decision(
     run: AgentRun,
     event_key: str,
     checks_passed: bool,
+    dispatch_fn: Callable[[TaskPacket], None] | None = None,
 ) -> str | None:
     if not task.program_id or not task.program_slice_id:
         return None
@@ -459,7 +465,7 @@ def apply_reviewer_decision(
         slice_record.status = SLICE_STATUS_ESCALATED
         program.status = PROGRAM_STATUS_ESCALATED
         program.blocker_state_json = json.dumps(
-            {"reason": "reviewer_escalation", "slice_id": slice_record.id, "run_id": run.id},
+            {"reason": BLOCKER_ESCALATED_TO_HUMAN, "slice_id": slice_record.id, "run_id": run.id},
             ensure_ascii=False,
         )
         program.latest_summary = "Reviewer requested escalation"
@@ -511,43 +517,140 @@ def apply_reviewer_decision(
             slice_record.status = SLICE_STATUS_COMPLETED
         else:
             slice_record.status = SLICE_STATUS_WAITING_FOR_MERGE
+            program.blocker_state_json = json.dumps(
+                {
+                    "reason": BLOCKER_WAITING_FOR_MERGE,
+                    "slice_id": slice_record.id,
+                    "linked_pr_number": slice_record.linked_pr_number,
+                },
+                ensure_ascii=False,
+            )
             program.latest_summary = "Waiting for merge before continuing program slices"
             _save(session, run, slice_record, program)
             return decision
 
-        next_slice = _next_slice(session, program_id=program.id or 0, current_slice_number=slice_record.slice_number)
-        if next_slice is None:
-            program.status = PROGRAM_STATUS_COMPLETED
-            program.current_slice_number = slice_record.slice_number
-            program.latest_summary = "Program completed"
-            _save(session, run, slice_record, program)
-            return "complete"
-
-        program.current_slice_number = next_slice.slice_number
-        program.status = PROGRAM_STATUS_ACTIVE
-        program.latest_summary = f"Advancing to slice {next_slice.slice_number}"
-        next_slice.status = SLICE_STATUS_PLANNED if next_slice.task_packet_id is None else next_slice.status
-        _save(session, run, slice_record, next_slice, program)
-
-        if program.auto_continue and next_slice.task_packet_id is None:
-            task_record = _create_followup_task_for_slice(
-                session,
-                settings=settings,
-                program=program,
-                slice_record=next_slice,
-                prior_task=task,
-            )
-            if task_record is None:
-                next_slice.status = SLICE_STATUS_BLOCKED
-                program.status = PROGRAM_STATUS_BLOCKED
-                program.blocker_state_json = json.dumps(
-                    {"reason": "issue_creation_failed", "slice_id": next_slice.id},
-                    ensure_ascii=False,
-                )
-                program.latest_summary = "Failed to auto-create issue for next slice"
-                _save(session, next_slice, program)
-        return decision
+        return _complete_slice_and_advance(
+            session,
+            settings=settings,
+            program=program,
+            slice_record=slice_record,
+            task=task,
+            run=run,
+            dispatch_fn=dispatch_fn,
+        )
 
     program.latest_summary = f"Unhandled reviewer decision: {decision}"
     _save(session, run, slice_record, program)
     return decision
+
+
+def _complete_slice_and_advance(
+    session: Session,
+    *,
+    settings: Settings,
+    program: Program,
+    slice_record: ProgramSlice,
+    task: TaskPacket,
+    run: AgentRun,
+    dispatch_fn: Callable[[TaskPacket], None] | None = None,
+) -> str:
+    """Mark the current slice complete and advance the program to the next slice.
+
+    Returns the effective continuation decision string ("continue" or "complete").
+    """
+    slice_record.status = SLICE_STATUS_COMPLETED
+    next_slice = _next_slice(session, program_id=program.id or 0, current_slice_number=slice_record.slice_number)
+    if next_slice is None:
+        program.status = PROGRAM_STATUS_COMPLETED
+        program.current_slice_number = slice_record.slice_number
+        program.blocker_state_json = json.dumps({}, ensure_ascii=False)
+        program.latest_summary = "Program completed"
+        _save(session, run, slice_record, program)
+        return "complete"
+
+    program.current_slice_number = next_slice.slice_number
+    program.status = PROGRAM_STATUS_ACTIVE
+    program.blocker_state_json = json.dumps({}, ensure_ascii=False)
+    program.latest_summary = f"Advancing to slice {next_slice.slice_number}"
+    next_slice.status = SLICE_STATUS_PLANNED if next_slice.task_packet_id is None else next_slice.status
+    _save(session, run, slice_record, next_slice, program)
+
+    if program.auto_continue and next_slice.task_packet_id is None:
+        task_record = _create_followup_task_for_slice(
+            session,
+            settings=settings,
+            program=program,
+            slice_record=next_slice,
+            prior_task=task,
+        )
+        if task_record is None:
+            next_slice.status = SLICE_STATUS_BLOCKED
+            program.status = PROGRAM_STATUS_BLOCKED
+            program.blocker_state_json = json.dumps(
+                {"reason": BLOCKER_WAITING_FOR_ISSUE_CREATION, "slice_id": next_slice.id},
+                ensure_ascii=False,
+            )
+            program.latest_summary = "Failed to auto-create issue for next slice"
+            _save(session, next_slice, program)
+        elif dispatch_fn is not None and program.auto_dispatch:
+            dispatch_fn(task_record)
+    return "continue"
+
+
+def advance_program_on_pr_merge(
+    session: Session,
+    *,
+    settings: Settings,
+    task: TaskPacket,
+    run: AgentRun,
+    dispatch_fn: Callable[[TaskPacket], None] | None = None,
+) -> None:
+    """Called after a PR is merged.  Advances the program if the slice was waiting for merge.
+
+    This is the critical link that makes merge-and-continue actually fire.  It is idempotent:
+    if the slice is already completed (e.g., auto-merge path), it is a no-op.
+    """
+    if not task.program_id or not task.program_slice_id:
+        return
+    program = session.get(Program, task.program_id)
+    slice_record = session.get(ProgramSlice, task.program_slice_id)
+    if program is None or slice_record is None:
+        return
+
+    # If the slice was explicitly waiting for the merge, advance now.
+    if slice_record.status == SLICE_STATUS_WAITING_FOR_MERGE:
+        _complete_slice_and_advance(
+            session,
+            settings=settings,
+            program=program,
+            slice_record=slice_record,
+            task=task,
+            run=run,
+            dispatch_fn=dispatch_fn,
+        )
+        return
+
+    # If the slice was still in-progress (reviewer hadn't run yet) but the PR was merged,
+    # mark the slice complete and advance so the program doesn't stall.
+    if slice_record.status in {SLICE_STATUS_IN_PROGRESS, SLICE_STATUS_APPROVED, SLICE_STATUS_PLANNED}:
+        _complete_slice_and_advance(
+            session,
+            settings=settings,
+            program=program,
+            slice_record=slice_record,
+            task=task,
+            run=run,
+            dispatch_fn=dispatch_fn,
+        )
+
+
+def _derive_wait_reason(program: Program) -> str | None:
+    """Return a human-readable wait reason derived from program/blocker state."""
+    blocker = _parse_dict_json(program.blocker_state_json)
+    if blocker:
+        return str(blocker.get("reason") or "")
+    if program.status == PROGRAM_STATUS_BLOCKED:
+        return "blocked"
+    if program.status == PROGRAM_STATUS_ESCALATED:
+        return BLOCKER_ESCALATED_TO_HUMAN
+    return None

@@ -179,8 +179,81 @@ Optional tuning:
 - `OPENAI_CONTROL_PLANE_MODE` (default `sync`; `background_ready` reserved for async control-plane wiring)
 - `OPENAI_ENABLE_BACKGROUND_REQUESTS` (default `false`; enabling requires webhook/poller completion flow)
 - `GITHUB_API_URL` (default `https://api.github.com`)
+- `TRUSTED_KICKOFF_LABEL` (default `program:kickoff`) — issues with this label plus `TASK_LABEL` are auto-confirmed after planning without requiring a second manual approval step
+- `PROGRAM_TRUSTED_AUTO_CONFIRM` (default `true`) — when `false`, the trusted kickoff label is present but inert; full two-step approval is required
+
+## Trusted kickoff flow
+
+A trusted user can start a broad program with a single action:
+
+1. Create a GitHub issue with both `agent:task` and `program:kickoff` labels.
+2. The orchestrator plans the task and immediately auto-approves it (no second `/approve` or `agent:approved` step required).
+3. Dispatch proceeds automatically.
+
+The regular two-step flow (issue → planning → manual approval via `agent:approved` label or `/approve` comment) is preserved for issues that do not carry `program:kickoff`.
+
+To disable the trusted-kickoff shortcut: set `PROGRAM_TRUSTED_AUTO_CONFIRM=false`.
+
+## PR readiness handling
+
+When a PR is opened or updated:
+- The orchestrator reviews the PR and check state via OpenAI.
+- If the reviewer says `continue` or `complete` and the PR is still a draft, the orchestrator attempts to mark it ready for review automatically via `PATCH /repos/{owner}/{repo}/pulls/{number}` with `{"draft": false}`.
+- If the GitHub API call succeeds: the PR is un-drafted and a Discord notification is sent.
+- If the API call fails (e.g., token permissions insufficient): a `waiting_for_pr_ready` blocker is persisted on the program record and a Discord notification surfaces the stall explicitly.
+- A draft PR no longer silently stalls; the operator can always inspect `/programs/{id}` to see the exact reason.
+
+## Workflow approval blocker handling
+
+When a `workflow_run` webhook fires with `status="waiting"` or `action="waiting"`, the orchestrator now:
+- Sets the task status to `blocked`.
+- Sets the program `blocker_state` to `{"reason": "waiting_for_workflow_approval", ...}`.
+- Sends a Discord notification asking a maintainer to approve the run in GitHub Actions.
+- Surfaces the workflow name and URL in the blocker state for direct action.
+
+Previously this appeared as a silent "working" state.
+
+**Note**: Whether a workflow requires approval depends on repository Actions settings (first-time contributor rules, fork policies, explicit environment protection rules). These cannot be changed from orchestrator code alone. If the approval is caused by first-time-contributor rules, those can be resolved by allowing the contributor. If it is caused by environment protection rules in the workflow file, review those rules in `.github/workflows/`.
+
+## Merge-and-continue (automatic next-slice dispatch)
+
+After a PR is merged:
+1. The `pull_request` closed+merged webhook fires.
+2. If the current program slice was `waiting_for_merge` (reviewer had already said `continue` or `complete` and was waiting for the merge), the orchestrator immediately:
+   - Marks the slice `completed`.
+   - Advances the program to the next slice.
+   - If `auto_continue=true` and the next slice has no task yet, creates a GitHub issue for it.
+   - If `auto_dispatch=true`, dispatches plain Copilot on the new issue.
+3. If the slice was still `in_progress` (reviewer had not run yet), the slice is also completed and the program advances.
+4. If there is no next slice, the program is marked `completed`.
+
+This chain fires automatically — no human needs to "push it along" after each merge.
+
+The continuation is idempotent: repeated webhooks for the same merged PR do not create duplicate slices or dispatch calls.
+
+**Blocked cases surfaced explicitly:**
+- Next slice issue creation failed → `waiting_for_issue_creation_capability` blocker on program
+- GitHub API token missing → surfaced in Discord + blocker state
+- Program already completed → no-op
+
+## Explicit blocker states
+
+All blocked/waiting states are now surfaced via structured `blocker_state` on the program record, accessible at `GET /programs/{id}` and `GET /programs`.
+
+| `reason` | Meaning |
+|---|---|
+| `waiting_for_merge` | Reviewer said continue/complete; waiting for PR to be merged |
+| `waiting_for_pr_ready` | PR is a draft and auto-un-draft failed; manual action required |
+| `waiting_for_workflow_approval` | GitHub Actions workflow is waiting for a maintainer approval |
+| `waiting_for_issue_creation_capability` | Auto-continuation failed because GitHub issue creation was unavailable |
+| `escalated_to_human` | Reviewer requested escalation or max revision attempts exceeded |
+| `max_revisions_exceeded` | Slice exceeded allowed revision cycles; escalated |
+
+The `wait_reason` field in `GET /programs` responses provides the reason string directly for easy consumption.
 
 ## Manual steps that still exist
 
 - If GitHub dispatch is blocked by auth/plan/API limitations, a human must manually dispatch in GitHub.
-- Human review/approval and merge decisions remain manual.
+- If workflow approval is required due to repository-level Actions settings (fork policies, environment rules), a maintainer must approve in GitHub Actions — the orchestrator detects this and notifies, but cannot approve on the user's behalf.
+- If GitHub token permissions do not allow PATCH on PR draft state, the operator must manually un-draft the PR after seeing the `waiting_for_pr_ready` Discord notification.
+- Auto-merge (`PROGRAM_AUTO_MERGE=true`) remains opt-in; the default is `false` and requires a human to merge (after which the continuation fires automatically).
