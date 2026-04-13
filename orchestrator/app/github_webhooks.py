@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 import hmac
 import json
+import logging
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import JSONResponse
@@ -24,6 +25,8 @@ from .tasks import (
 
 router = APIRouter(prefix="/github", tags=["github"])
 
+_webhook_logger = logging.getLogger("orchestrator.webhooks")
+
 
 def _verify_github_signature(body: bytes, signature_header: str | None, secret: str | None) -> bool:
     if not signature_header or not secret:
@@ -35,13 +38,24 @@ def _verify_github_signature(body: bytes, signature_header: str | None, secret: 
 @router.post("/webhook")
 async def github_webhook(request: Request, session: Session = Depends(get_session)):
     settings = get_settings()
+    event_type = request.headers.get("X-GitHub-Event", "unknown")
+    delivery_id = request.headers.get("X-GitHub-Delivery", "unknown")
     try:
         body = await request.body()
-    except ClientDisconnect as exc:
-        raise HTTPException(
+    except ClientDisconnect:
+        _webhook_logger.warning(
+            "GitHub webhook body read failed: client disconnected "
+            "(event=%s, delivery=%s). GitHub should retry delivery.",
+            event_type,
+            delivery_id,
+        )
+        return JSONResponse(
             status_code=503,
-            detail="github webhook body unavailable (client disconnected); please retry delivery",
-        ) from exc
+            content={
+                "ok": False,
+                "detail": "github webhook body unavailable (client disconnected); please retry delivery",
+            },
+        )
     except Exception as exc:
         raise HTTPException(
             status_code=400,
@@ -56,8 +70,7 @@ async def github_webhook(request: Request, session: Session = Depends(get_sessio
     except json.JSONDecodeError as exc:
         raise HTTPException(status_code=400, detail="invalid JSON payload") from exc
 
-    event_type = request.headers.get("X-GitHub-Event", "unknown")
-    external_id = request.headers.get("X-GitHub-Delivery")
+    external_id = delivery_id
     action = payload.get("action") if isinstance(payload, dict) else None
 
     if event_type == "ping":
