@@ -4,3 +4,4 @@ sqlmodel
 openai
 httpx
 python-dotenv
+pydantic-settings
