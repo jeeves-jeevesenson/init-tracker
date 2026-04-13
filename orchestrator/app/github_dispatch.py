@@ -39,6 +39,17 @@ class DispatchResult:
     dispatch_url: str | None = None
 
 
+@dataclass
+class PullRequestInspection:
+    ok: bool
+    changed_files: int | None
+    commits: int | None
+    draft: bool | None
+    state: str | None
+    merged: bool | None
+    summary: str
+
+
 def _build_headers(settings: Settings) -> dict[str, str]:
     headers = {
         "Accept": "application/vnd.github+json",
@@ -423,6 +434,56 @@ def merge_pr(
             return False, f"GitHub returned {response.status_code} when merging PR #{pr_number}: {detail}"
     except Exception as exc:
         return False, f"Failed to merge PR #{pr_number}: {exc}"
+
+
+def inspect_pull_request(*, settings: Settings, repo: str, pr_number: int) -> PullRequestInspection:
+    if not settings.github_api_token:
+        return PullRequestInspection(
+            ok=False,
+            changed_files=None,
+            commits=None,
+            draft=None,
+            state=None,
+            merged=None,
+            summary="GitHub API token missing; cannot inspect PR",
+        )
+    api_base = settings.github_api_url.rstrip("/")
+    url = f"{api_base}/repos/{repo}/pulls/{pr_number}"
+    try:
+        with httpx.Client(timeout=15.0) as client:
+            response = client.get(url, headers=_build_headers(settings))
+            if response.status_code >= 400:
+                return PullRequestInspection(
+                    ok=False,
+                    changed_files=None,
+                    commits=None,
+                    draft=None,
+                    state=None,
+                    merged=None,
+                    summary=f"GitHub returned {response.status_code} when inspecting PR #{pr_number}: {response.text[:300]}",
+                )
+            payload = response.json() if response.headers.get("content-type", "").startswith("application/json") else {}
+            changed_files_raw = payload.get("changed_files")
+            commits_raw = payload.get("commits")
+            return PullRequestInspection(
+                ok=True,
+                changed_files=int(changed_files_raw) if isinstance(changed_files_raw, int) else None,
+                commits=int(commits_raw) if isinstance(commits_raw, int) else None,
+                draft=bool(payload.get("draft")) if payload.get("draft") is not None else None,
+                state=str(payload.get("state") or "") or None,
+                merged=bool(payload.get("merged")) if payload.get("merged") is not None else None,
+                summary=f"PR #{pr_number} inspected successfully",
+            )
+    except Exception as exc:
+        return PullRequestInspection(
+            ok=False,
+            changed_files=None,
+            commits=None,
+            draft=None,
+            state=None,
+            merged=None,
+            summary=f"Failed to inspect PR #{pr_number}: {exc}",
+        )
 
 
 def run_preflight_checks(*, settings: Settings, repo: str | None = None) -> dict:

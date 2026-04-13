@@ -2,18 +2,19 @@ from __future__ import annotations
 
 import json
 import re
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any
 
 from sqlmodel import Session, select
 
-from .config import Settings
+from .config import Settings, get_settings
 from .copilot_identity import is_copilot_actor
 from .discord_notify import notify_discord
 from .github_dispatch import (
     build_dispatch_payload_summary,
     describe_dispatch_mode,
     dispatch_task_to_github_copilot,
+    inspect_pull_request,
     mark_pr_ready_for_review,
 )
 from .models import (
@@ -70,6 +71,8 @@ REJECT_RE = re.compile(r"(?im)(^|\n)\s*/reject\b")
 WORKER_START_FAILURE_RE = re.compile(
     r"(?is)(encountered an error.*unable to start working|unable to start working|agent failed to start)"
 )
+WEAK_EVIDENCE_PREFIX = "Weak worker-start evidence:"
+RECONCILIATION_INCOMPLETE_PREFIX = "Reconciliation incomplete:"
 
 CUSTOM_AGENT_INITIATIVE_SMITH = "Initiative Smith"
 CUSTOM_AGENT_TRACKER_ENGINEER = "Initiative Tracker Engineer"
@@ -313,6 +316,7 @@ def _mark_worker_started(
     *,
     task: TaskPacket,
     reason: str,
+    weak: bool = False,
 ) -> None:
     if task.approval_state != APPROVAL_APPROVED:
         return
@@ -323,17 +327,107 @@ def _mark_worker_started(
         return
     if run.status in {RUN_STATUS_PR_OPENED, RUN_STATUS_AWAITING_REVIEW, RUN_STATUS_COMPLETED}:
         return
-    run.status = RUN_STATUS_WORKING
+    if weak:
+        run.status = RUN_STATUS_AWAITING_WORKER_START
+        run.last_summary = (
+            f"{WEAK_EVIDENCE_PREFIX} {reason}. "
+            "Awaiting authoritative evidence: linked PR + checks/review."
+        )
+        run.updated_at = _utc_now()
+        task.status = TASK_STATUS_AWAITING_WORKER_START
+        task.latest_summary = run.last_summary
+        task.updated_at = _utc_now()
+    else:
+        run.status = RUN_STATUS_WORKING
+        run.last_summary = reason
+        run.updated_at = _utc_now()
+        task.status = TASK_STATUS_WORKING
+        task.latest_summary = reason
+        task.updated_at = _utc_now()
+    _save(session, run, task)
+    link_run_to_slice(session, run=run, task=task)
+    if weak:
+        notify_discord(
+            "Weak worker-start evidence observed: "
+            f"{task.github_repo}#{task.github_issue_number} -> {_worker_display_name(task)}"
+        )
+    else:
+        notify_discord(
+            f"Worker started: {task.github_repo}#{task.github_issue_number} -> {_worker_display_name(task)}"
+        )
+
+
+def _is_weak_worker_start_run(task: TaskPacket, run: AgentRun) -> bool:
+    summary = (run.last_summary or task.latest_summary or "").lower()
+    has_weak_summary = "worker start signal" in summary or WEAK_EVIDENCE_PREFIX.lower() in summary
+    has_authoritative = bool(run.github_pr_number or run.review_artifact_json or run.continuation_decision)
+    return has_weak_summary and not has_authoritative
+
+
+def reconcile_stale_weak_evidence_run(
+    session: Session,
+    *,
+    task: TaskPacket,
+    run: AgentRun,
+    trigger: str,
+    force: bool = False,
+) -> bool:
+    if run.status in {RUN_STATUS_COMPLETED, RUN_STATUS_FAILED, RUN_STATUS_BLOCKED, RUN_STATUS_WORKER_FAILED}:
+        return False
+    if not _is_weak_worker_start_run(task, run):
+        return False
+    settings = get_settings()
+    threshold_minutes = max(5, int(getattr(settings, "worker_weak_evidence_stale_minutes", 90) or 90))
+    age = _utc_now() - _as_utc(run.updated_at or run.created_at)
+    if not force and age < timedelta(minutes=threshold_minutes):
+        return False
+    missing: list[str] = []
+    if not run.github_pr_number:
+        missing.append("github_pr_number")
+    if not run.review_artifact_json:
+        missing.append("review_artifact_json")
+    if not run.continuation_decision:
+        missing.append("continuation_decision")
+    reason = (
+        "Stale weak worker-start evidence reconciled to blocked. "
+        f"trigger={trigger}; missing={', '.join(missing) or 'none'}; "
+        f"age_minutes={int(age.total_seconds() // 60)}"
+    )
+    run.status = RUN_STATUS_BLOCKED
     run.last_summary = reason
     run.updated_at = _utc_now()
-    task.status = TASK_STATUS_WORKING
+    task.status = TASK_STATUS_BLOCKED
     task.latest_summary = reason
     task.updated_at = _utc_now()
     _save(session, run, task)
     link_run_to_slice(session, run=run, task=task)
     notify_discord(
-        f"Worker started: {task.github_repo}#{task.github_issue_number} -> {_worker_display_name(task)}"
+        f"Stale weak evidence blocked: {task.github_repo}#{task.github_issue_number} -> {_worker_display_name(task)}"
     )
+    return True
+
+
+def mark_reconciliation_incomplete(
+    session: Session,
+    *,
+    task: TaskPacket,
+    summary: str,
+) -> None:
+    if task.id is None:
+        return
+    run = _latest_run_for_task(session, task.id)
+    if run is None:
+        return
+    if run.status in {RUN_STATUS_COMPLETED, RUN_STATUS_FAILED}:
+        return
+    run.status = RUN_STATUS_BLOCKED
+    run.last_summary = f"{RECONCILIATION_INCOMPLETE_PREFIX} {summary}"
+    run.updated_at = _utc_now()
+    task.status = TASK_STATUS_BLOCKED
+    task.latest_summary = run.last_summary
+    task.updated_at = _utc_now()
+    _save(session, run, task)
+    link_run_to_slice(session, run=run, task=task)
 
 
 def _mark_worker_failed(
@@ -387,6 +481,14 @@ def _parse_json_object(raw_json: str | None) -> dict[str, Any] | None:
     except json.JSONDecodeError:
         return None
     return parsed if isinstance(parsed, dict) else None
+
+
+def _as_utc(dt: datetime | None) -> datetime:
+    if dt is None:
+        return _utc_now()
+    if dt.tzinfo is None:
+        return dt.replace(tzinfo=timezone.utc)
+    return dt.astimezone(timezone.utc)
 
 
 def _default_worker_brief(task: TaskPacket, internal_plan: dict[str, Any]) -> dict[str, Any]:
@@ -526,7 +628,12 @@ def get_task_with_latest_run(session: Session, task_id: int) -> tuple[TaskPacket
     task = session.get(TaskPacket, task_id)
     if task is None or task.id is None:
         return task, None
-    return task, _latest_run_for_task(session, task.id)
+    run = _latest_run_for_task(session, task.id)
+    if task is not None and run is not None:
+        reconcile_stale_weak_evidence_run(session, task=task, run=run, trigger="inspection")
+        run = _latest_run_for_task(session, task.id)
+        task = session.get(TaskPacket, task_id)
+    return task, run
 
 
 def _run_planning(
@@ -694,7 +801,12 @@ def process_issue_event(session: Session, *, settings: Settings, payload: dict[s
                 session,
                 task=task,
                 reason=f"Worker start signal: issue assigned to {actor}",
+                weak=True,
             )
+    if task.id:
+        latest_run = _latest_run_for_task(session, task.id)
+        if latest_run is not None:
+            reconcile_stale_weak_evidence_run(session, task=task, run=latest_run, trigger="issue_event")
 
 
 def process_approval(
@@ -786,7 +898,12 @@ def process_issue_comment_event(session: Session, *, settings: Settings, payload
                     session,
                     task=task,
                     reason=f"Worker start signal: activity comment from {actor}",
+                    weak=True,
                 )
+        if task.id:
+            latest_run = _latest_run_for_task(session, task.id)
+            if latest_run is not None:
+                reconcile_stale_weak_evidence_run(session, task=task, run=latest_run, trigger="issue_comment")
         return
 
     process_approval(session, settings=settings, task=task, approved=approved, source="comment")
@@ -902,6 +1019,21 @@ def dispatch_task_if_ready(session: Session, *, settings: Settings, task: TaskPa
 
 
 def _task_for_pr_payload(session: Session, *, github_repo: str, pr_payload: dict[str, Any]) -> TaskPacket | None:
+    pr_number = pr_payload.get("number")
+    if isinstance(pr_number, int):
+        run_query = (
+            select(AgentRun)
+            .where(AgentRun.github_repo == github_repo)
+            .where(AgentRun.github_pr_number == pr_number)
+            .order_by(AgentRun.updated_at.desc())
+            .limit(1)
+        )
+        existing_run = session.exec(run_query).first()
+        if existing_run is not None:
+            linked_task = session.get(TaskPacket, existing_run.task_packet_id)
+            if linked_task is not None:
+                return linked_task
+
     body = str(pr_payload.get("body") or "")
     title = str(pr_payload.get("title") or "")
     refs = ISSUE_REF_RE.findall(f"{title}\n{body}")
@@ -909,27 +1041,7 @@ def _task_for_pr_payload(session: Session, *, github_repo: str, pr_payload: dict
         task = _get_task_by_repo_issue(session, github_repo=github_repo, github_issue_number=int(issue_ref))
         if task is not None:
             return task
-
-    query = (
-        select(TaskPacket)
-        .where(TaskPacket.github_repo == github_repo)
-        .where(
-            TaskPacket.status.in_(
-                [
-                    TASK_STATUS_DISPATCH_REQUESTED,
-                    TASK_STATUS_AWAITING_WORKER_START,
-                    TASK_STATUS_DISPATCHED,
-                    TASK_STATUS_WORKING,
-                    TASK_STATUS_WORKER_FAILED,
-                    TASK_STATUS_PR_OPENED,
-                    TASK_STATUS_MANUAL_DISPATCH_NEEDED,
-                ]
-            )
-        )
-        .order_by(TaskPacket.updated_at.desc())
-        .limit(1)
-    )
-    return session.exec(query).first()
+    return None
 
 
 def _summarize_and_store(
@@ -1057,15 +1169,43 @@ def process_pull_request_event(
     settings: Settings,
     payload: dict[str, Any],
     action: str | None,
-) -> None:
+) -> bool:
     github_repo = _repo_name(payload)
     pr = payload.get("pull_request") or {}
     if not github_repo or not isinstance(pr, dict):
-        return
+        return False
 
     task = _task_for_pr_payload(session, github_repo=github_repo, pr_payload=pr)
     if task is None or task.id is None:
-        return
+        pr_number = pr.get("number")
+        if isinstance(pr_number, int):
+            candidate_query = (
+                select(TaskPacket)
+                .where(TaskPacket.github_repo == github_repo)
+                .where(
+                    TaskPacket.status.in_(
+                        [
+                            TASK_STATUS_AWAITING_WORKER_START,
+                            TASK_STATUS_WORKING,
+                            TASK_STATUS_MANUAL_DISPATCH_NEEDED,
+                            TASK_STATUS_DISPATCH_REQUESTED,
+                        ]
+                    )
+                )
+                .order_by(TaskPacket.updated_at.desc())
+                .limit(1)
+            )
+            candidate = session.exec(candidate_query).first()
+            if candidate is not None:
+                mark_reconciliation_incomplete(
+                    session,
+                    task=candidate,
+                    summary=(
+                        f"external PR activity seen but no internal linkage for PR #{pr_number} "
+                        f"(action={action or 'unknown'})"
+                    ),
+                )
+        return False
 
     run = _latest_run_for_task(session, task.id)
     if run is None:
@@ -1086,7 +1226,25 @@ def process_pull_request_event(
 
     html_url = str(pr.get("html_url") or "")
     pr_is_draft = bool(pr.get("draft"))
+    changed_files_count = pr.get("changed_files") if isinstance(pr.get("changed_files"), int) else None
+    commits_count = pr.get("commits") if isinstance(pr.get("commits"), int) else None
+    if isinstance(pr_number, int) and changed_files_count is None and action in {"opened", "reopened", "ready_for_review"}:
+        inspection = inspect_pull_request(settings=settings, repo=github_repo, pr_number=pr_number)
+        if inspection.ok:
+            changed_files_count = inspection.changed_files
+            commits_count = inspection.commits
     if action in {"opened", "reopened", "ready_for_review"}:
+        if changed_files_count is not None and changed_files_count <= 0:
+            run.status = RUN_STATUS_BLOCKED
+            run.last_summary = f"Rejected empty PR #{pr_number} as implementation progress: changed_files={changed_files_count}."
+            run.updated_at = _utc_now()
+            task.status = TASK_STATUS_BLOCKED
+            task.latest_summary = run.last_summary
+            task.updated_at = _utc_now()
+            _save(session, run, task)
+            link_run_to_slice(session, run=run, task=task)
+            notify_discord(f"Empty PR rejected as progress: {github_repo} PR #{pr_number} -> {_worker_display_name(task)}")
+            return True
         context = json.dumps(
             {
                 "event": "pull_request",
@@ -1104,8 +1262,8 @@ def process_pull_request_event(
                     "draft": pr.get("draft"),
                     "mergeable": pr.get("mergeable"),
                     "mergeable_state": pr.get("mergeable_state"),
-                    "changed_files_count": pr.get("changed_files"),
-                    "commits_count": pr.get("commits"),
+                    "changed_files_count": changed_files_count,
+                    "commits_count": commits_count,
                 },
                 "slice_objective": task.title,
                 "acceptance_criteria": json.loads(task.acceptance_criteria_json or "[]"),
@@ -1133,11 +1291,22 @@ def process_pull_request_event(
             f"PR opened / ready for review: {github_repo} PR #{pr.get('number')} -> {_worker_display_name(task)}"
             f"{_review_summary_suffix(run)}"
         )
-        return
+        return True
 
     if action == "closed":
         merged = bool(pr.get("merged"))
         if merged:
+            if not run.review_artifact_json or not run.continuation_decision:
+                mark_reconciliation_incomplete(
+                    session,
+                    task=task,
+                    summary=(
+                        f"merged PR #{pr_number} missing required review evidence "
+                        f"(review_artifact_json={'present' if bool(run.review_artifact_json) else 'missing'}, "
+                        f"continuation_decision={'present' if bool(run.continuation_decision) else 'missing'})"
+                    ),
+                )
+                return True
             run.status = RUN_STATUS_COMPLETED
             run.last_summary = f"PR merged: {html_url}" if html_url else "PR merged"
             run.updated_at = _utc_now()
@@ -1160,7 +1329,7 @@ def process_pull_request_event(
                 run=run,
                 dispatch_fn=_dispatch_fn,
             )
-            return
+            return True
 
         run.status = RUN_STATUS_BLOCKED
         run.last_summary = f"PR closed without merge: {html_url}" if html_url else "PR closed without merge"
@@ -1171,7 +1340,7 @@ def process_pull_request_event(
         _save(session, run, task)
         link_run_to_slice(session, run=run, task=task)
         notify_discord(f"Task blocked (PR closed): {github_repo}#{task.github_issue_number}")
-        return
+        return True
 
     run.status = RUN_STATUS_WORKING
     run.last_summary = f"PR action observed: {action}"
@@ -1181,6 +1350,7 @@ def process_pull_request_event(
     task.updated_at = _utc_now()
     _save(session, run, task)
     link_run_to_slice(session, run=run, task=task)
+    return True
 
 
 def process_workflow_run_event(
@@ -1189,16 +1359,16 @@ def process_workflow_run_event(
     settings: Settings,
     payload: dict[str, Any],
     action: str | None,
-) -> None:
+) -> bool:
     github_repo = _repo_name(payload)
     workflow_run = payload.get("workflow_run") or {}
     if not github_repo or not isinstance(workflow_run, dict):
-        return
+        return False
 
     pr_entries = workflow_run.get("pull_requests") or []
     pr_numbers = [pr.get("number") for pr in pr_entries if isinstance(pr, dict) and isinstance(pr.get("number"), int)]
     if not pr_numbers:
-        return
+        return False
 
     query = (
         select(AgentRun)
@@ -1209,11 +1379,37 @@ def process_workflow_run_event(
     )
     run = session.exec(query).first()
     if run is None:
-        return
+        candidate_query = (
+            select(TaskPacket)
+            .where(TaskPacket.github_repo == github_repo)
+            .where(
+                TaskPacket.status.in_(
+                    [
+                        TASK_STATUS_AWAITING_WORKER_START,
+                        TASK_STATUS_WORKING,
+                        TASK_STATUS_MANUAL_DISPATCH_NEEDED,
+                        TASK_STATUS_DISPATCH_REQUESTED,
+                    ]
+                )
+            )
+            .order_by(TaskPacket.updated_at.desc())
+            .limit(1)
+        )
+        candidate = session.exec(candidate_query).first()
+        if candidate is not None:
+            mark_reconciliation_incomplete(
+                session,
+                task=candidate,
+                summary=(
+                    "workflow activity seen but no linked internal run for PR(s) "
+                    f"{pr_numbers}"
+                ),
+            )
+        return False
 
     task = session.get(TaskPacket, run.task_packet_id)
     if task is None:
-        return
+        return False
 
     conclusion = str(workflow_run.get("conclusion") or "")
     status = str(workflow_run.get("status") or "")
@@ -1262,7 +1458,7 @@ def process_workflow_run_event(
             f"Checks complete and ready for review: {github_repo} PR #{run.github_pr_number} -> {_worker_display_name(task)}"
             f"{_review_summary_suffix(run)}"
         )
-        return
+        return True
 
     if status == "completed" and conclusion in {"failure", "cancelled", "timed_out", "startup_failure"}:
         _summarize_and_store(
@@ -1283,7 +1479,7 @@ def process_workflow_run_event(
             f"Checks failed / task blocked: {github_repo} PR #{run.github_pr_number} -> {_worker_display_name(task)}"
             f"{_review_summary_suffix(run)}"
         )
-        return
+        return True
 
     # Workflow waiting for approval — surface an explicit blocker so the chain
     # does not appear as a silent "working" stall.
@@ -1318,7 +1514,7 @@ def process_workflow_run_event(
             f"Workflow approval required: {github_repo} PR #{pr_numbers} workflow={name!r}. "
             "Approve in GitHub Actions to continue."
         )
-        return
+        return True
 
     run.status = RUN_STATUS_WORKING
     run.last_summary = f"Workflow update observed: {name} ({status}/{conclusion or 'n/a'})"
@@ -1328,3 +1524,4 @@ def process_workflow_run_event(
     task.updated_at = _utc_now()
     _save(session, run, task)
     link_run_to_slice(session, run=run, task=task)
+    return True

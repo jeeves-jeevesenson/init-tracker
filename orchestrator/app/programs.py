@@ -13,6 +13,8 @@ from .models import (
     APPROVAL_APPROVED,
     BLOCKER_AUTO_MERGE_DISABLED,
     BLOCKER_ESCALATED_TO_HUMAN,
+    BLOCKER_REVIEW_EVIDENCE_MISSING,
+    BLOCKER_WAITING_FOR_CHECKS,
     BLOCKER_WAITING_FOR_ISSUE_CREATION,
     BLOCKER_WAITING_FOR_MERGE,
     BLOCKER_WAITING_FOR_PERMISSIONS,
@@ -22,7 +24,10 @@ from .models import (
     PROGRAM_STATUS_BLOCKED,
     PROGRAM_STATUS_COMPLETED,
     PROGRAM_STATUS_ESCALATED,
+    RUN_STATUS_BLOCKED,
     RUN_STATUS_COMPLETED,
+    RUN_STATUS_FAILED,
+    RUN_STATUS_WORKER_FAILED,
     AgentRun,
     Program,
     ProgramSlice,
@@ -349,6 +354,22 @@ def _merge_policy_allows_auto_merge(artifact: dict[str, Any], *, checks_passed: 
     return not any("high" in str(item).lower() for item in risk_findings)
 
 
+def _continuation_guard_failures(*, run: AgentRun, artifact: dict[str, Any], checks_passed: bool) -> list[str]:
+    failures: list[str] = []
+    if not run.github_pr_number:
+        failures.append("missing github_pr_number")
+    if run.status in {RUN_STATUS_BLOCKED, RUN_STATUS_WORKER_FAILED, RUN_STATUS_FAILED}:
+        failures.append(f"run status is non-successful ({run.status})")
+    if artifact.get("merge_recommendation") != "merge_ready":
+        failures.append("merge_recommendation is not merge_ready")
+    if artifact.get("status") in {"drifted", "blocked"}:
+        failures.append(f"artifact status is {artifact.get('status')}")
+    risk_findings = _json_list(artifact.get("risk_findings"))
+    if any("empty pr" in str(item).lower() or "zero" in str(item).lower() for item in risk_findings):
+        failures.append("artifact indicates empty/zero-diff PR")
+    return failures
+
+
 def _attempt_pr_merge(
     session: Session,
     *,
@@ -574,6 +595,43 @@ def apply_reviewer_decision(
         return decision
 
     if decision in {"continue", "complete"}:
+        if not checks_passed and run.status != RUN_STATUS_COMPLETED:
+            program.blocker_state_json = json.dumps(
+                {
+                    "reason": BLOCKER_WAITING_FOR_CHECKS,
+                    "slice_id": slice_record.id,
+                    "run_id": run.id,
+                    "linked_pr_number": run.github_pr_number,
+                },
+                ensure_ascii=False,
+            )
+            program.latest_summary = "Continuation deferred: waiting for successful checks"
+            _save(session, run, slice_record, program)
+            return decision
+
+        guard_failures = _continuation_guard_failures(run=run, artifact=artifact, checks_passed=checks_passed)
+        if guard_failures:
+            slice_record.status = SLICE_STATUS_BLOCKED
+            program.status = PROGRAM_STATUS_BLOCKED
+            program.blocker_state_json = json.dumps(
+                {
+                    "reason": BLOCKER_REVIEW_EVIDENCE_MISSING,
+                    "slice_id": slice_record.id,
+                    "run_id": run.id,
+                    "missing_evidence": guard_failures,
+                    "linked_pr_number": run.github_pr_number,
+                },
+                ensure_ascii=False,
+            )
+            run.last_summary = (
+                "Continuation rejected: "
+                f"{'; '.join(guard_failures)}"
+            )
+            run.updated_at = _utc_now()
+            program.latest_summary = "Continuation blocked: required merge/review evidence is missing or contradictory"
+            _save(session, run, slice_record, program)
+            return "blocked"
+
         if run.status == RUN_STATUS_COMPLETED:
             slice_record.status = SLICE_STATUS_COMPLETED
         elif program.auto_merge and _merge_policy_allows_auto_merge(artifact, checks_passed=checks_passed):
