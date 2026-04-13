@@ -61,6 +61,12 @@ class OrchestratorMilestone2Tests(unittest.TestCase):
         "COPILOT_MODEL",
         "OPENAI_PLANNING_MODEL",
         "OPENAI_REVIEW_MODEL",
+        "OPENAI_PLANNING_REASONING_EFFORT",
+        "OPENAI_REVIEW_REASONING_EFFORT",
+        "OPENAI_ESCALATE_REASONING_FOR_BROAD_TASKS",
+        "OPENAI_PLANNING_BROAD_REASONING_EFFORT",
+        "OPENAI_CONTROL_PLANE_MODE",
+        "OPENAI_ENABLE_BACKGROUND_REQUESTS",
     }
 
     def setUp(self):
@@ -1930,6 +1936,418 @@ class OrchestratorMilestone2Tests(unittest.TestCase):
                         if call.args and "Task planned / awaiting approval" in str(call.args[0])
                     ]
                     self.assertEqual(len(planned_messages), 1)
+
+    def test_structured_internal_plan_and_worker_brief_persist_separately(self):
+        with tempfile.TemporaryDirectory() as td:
+            os.environ["DATABASE_URL"] = f"sqlite:///{Path(td) / 'orchestrator.db'}"
+            os.environ["GH_WEBHOOK_SECRET"] = "test-gh-secret"
+            main, _ = _reload_orchestrator_modules()
+
+            issue_payload = {
+                "action": "opened",
+                "repository": {"full_name": "jeeves-jeevesenson/init-tracker"},
+                "issue": {
+                    "number": 301,
+                    "node_id": "I_301",
+                    "title": "Structured planning persistence",
+                    "body": "Persist internal plan and worker brief separately",
+                    "labels": [{"name": "agent:task"}],
+                },
+            }
+
+            with patch(
+                "orchestrator.app.tasks.plan_task_packet",
+                return_value={
+                    "internal_plan": {
+                        "objective": "Upgrade planner",
+                        "scope": ["Persist plan artifacts"],
+                        "non_goals": ["No worker migration"],
+                        "acceptance_criteria": ["Artifacts persisted"],
+                        "validation_guidance": ["python -m compileall orchestrator"],
+                        "implementation_brief": "Store internal and worker artifacts distinctly.",
+                        "task_type": "feature",
+                        "difficulty": "medium",
+                        "repo_areas": ["orchestrator/app/tasks.py"],
+                        "execution_risks": ["state drift"],
+                        "reviewer_focus": ["payload separation"],
+                        "recommended_scope_class": "broad",
+                        "recommended_worker": "initiative-smith",
+                    },
+                    "worker_brief": {
+                        "objective": "Implement structured planning storage",
+                        "concise_scope": ["Persist internal plan JSON", "Persist worker brief JSON"],
+                        "implementation_brief": "Keep worker-facing dispatch brief concise.",
+                        "acceptance_criteria": ["Data available via /tasks routes"],
+                        "validation_commands": ["python -m compileall orchestrator"],
+                        "non_goals": ["No architecture redesign"],
+                        "target_branch": "main",
+                        "repo_grounded_hints": ["orchestrator/app/models.py"],
+                    },
+                },
+            ):
+                with TestClient(main.app) as client:
+                    response = self._post_github(
+                        client,
+                        secret="test-gh-secret",
+                        delivery="delivery-task-opened-301",
+                        event="issues",
+                        payload=issue_payload,
+                    )
+                    self.assertEqual(response.status_code, 200)
+                    task = client.get("/tasks").json()["tasks"][0]
+                    self.assertIsInstance(task["internal_plan"], dict)
+                    self.assertIsInstance(task["worker_brief"], dict)
+                    self.assertEqual(task["internal_plan"]["task_type"], "feature")
+                    self.assertEqual(task["worker_brief"]["target_branch"], "main")
+                    self.assertNotIn("recommended_worker", task["worker_brief"])
+
+    def test_plain_fallback_dispatch_comment_omits_internal_worker_labels(self):
+        with patch.dict(
+            os.environ,
+            {
+                "GITHUB_API_TOKEN": "token",
+                "GITHUB_API_URL": "https://api.github.com",
+                "COPILOT_DISPATCH_ASSIGNEE": DOCUMENTED_COPILOT_ASSIGNEE_LOGIN,
+                "ENABLE_GITHUB_CUSTOM_AGENT_DISPATCH": "false",
+            },
+            clear=False,
+        ):
+            settings = Settings()
+        task = TaskPacket(
+            id=302,
+            github_repo="jeeves-jeevesenson/init-tracker",
+            github_issue_number=302,
+            title="Dispatch packet should be worker-only",
+            selected_custom_agent=CUSTOM_AGENT_INITIATIVE_SMITH,
+            recommended_worker="initiative-smith",
+            recommended_scope_class="broad",
+            worker_brief_json=json.dumps(
+                {
+                    "objective": "Apply worker brief",
+                    "concise_scope": ["Update planner stage"],
+                    "implementation_brief": "Use worker brief only for dispatch packet.",
+                    "acceptance_criteria": ["No internal labels in comment"],
+                    "validation_commands": ["python -m compileall orchestrator"],
+                    "non_goals": ["Do not expose internal routing"],
+                    "target_branch": "main",
+                    "repo_grounded_hints": ["orchestrator/app/github_dispatch.py"],
+                }
+            ),
+        )
+
+        with patch("orchestrator.app.github_dispatch.httpx.Client") as mocked_client_cls:
+            mocked_client = mocked_client_cls.return_value.__enter__.return_value
+            preflight_response = Mock(status_code=200, headers={"content-type": "application/json"})
+            preflight_response.json.return_value = {
+                "data": {
+                    "repository": {
+                        "suggestedActors": {
+                            "nodes": [
+                                {
+                                    "login": DOCUMENTED_COPILOT_ASSIGNEE_LOGIN,
+                                    "__typename": "Bot",
+                                    "id": "BOT_302",
+                                }
+                            ]
+                        }
+                    }
+                }
+            }
+            assign_response = Mock(status_code=201, headers={"content-type": "application/json"})
+            assign_response.json.return_value = {
+                "id": 9302,
+                "html_url": "https://github.com/jeeves-jeevesenson/init-tracker/issues/302",
+                "assignees": [{"login": DOCUMENTED_COPILOT_ASSIGNEE_LOGIN}],
+            }
+            comment_response = Mock(status_code=201, headers={"content-type": "application/json"}, text="")
+            mocked_client.post.side_effect = [preflight_response, assign_response, comment_response]
+
+            result = dispatch_task_to_github_copilot(settings=settings, task=task)
+            self.assertTrue(result.accepted)
+            comment_payload = mocked_client.post.call_args_list[2].kwargs["json"]
+            body = comment_payload["body"]
+            self.assertNotIn("recommended_worker", body)
+            self.assertNotIn("selected_custom_agent", body)
+            self.assertNotIn("Initiative Smith", body)
+            self.assertIn('"execution_mode": "plain_copilot_fallback"', body)
+
+    def test_review_artifact_generation_and_storage(self):
+        with tempfile.TemporaryDirectory() as td:
+            os.environ["DATABASE_URL"] = f"sqlite:///{Path(td) / 'orchestrator.db'}"
+            os.environ["GH_WEBHOOK_SECRET"] = "test-gh-secret"
+            os.environ["GITHUB_API_TOKEN"] = "dummy-token"
+            main, _ = _reload_orchestrator_modules()
+
+            issue_payload = {
+                "action": "opened",
+                "repository": {"full_name": "jeeves-jeevesenson/init-tracker"},
+                "issue": {
+                    "number": 303,
+                    "node_id": "I_303",
+                    "title": "Review artifact persistence",
+                    "body": "Need review artifact storage",
+                    "labels": [{"name": "agent:task"}],
+                },
+            }
+            approve_payload = {
+                "action": "created",
+                "repository": {"full_name": "jeeves-jeevesenson/init-tracker"},
+                "issue": {"number": 303},
+                "comment": {"body": "/approve"},
+            }
+            pr_payload = {
+                "action": "opened",
+                "repository": {"full_name": "jeeves-jeevesenson/init-tracker"},
+                "pull_request": {
+                    "number": 88,
+                    "title": "Implements #303",
+                    "body": "Closes #303",
+                    "html_url": "https://github.com/jeeves-jeevesenson/init-tracker/pull/88",
+                },
+            }
+
+            with patch(
+                "orchestrator.app.tasks.plan_task_packet",
+                return_value={
+                    "objective": "Plan for review artifact",
+                    "scope": ["dispatch and review"],
+                    "non_goals": [],
+                    "acceptance_criteria": ["review saved"],
+                    "validation_guidance": ["unit tests"],
+                    "implementation_brief": "produce run review artifact",
+                },
+            ), patch(
+                "orchestrator.app.tasks.dispatch_task_to_github_copilot",
+                return_value=DispatchResult(
+                    attempted=True,
+                    accepted=True,
+                    manual_required=False,
+                    state="accepted",
+                    summary="Dispatch accepted",
+                ),
+            ), patch(
+                "orchestrator.app.tasks.summarize_work_update",
+                return_value={
+                    "review_artifact": {
+                        "what_changed": ["Planner and reviewer paths updated"],
+                        "scope_status": "met",
+                        "likely_risks": ["none identified"],
+                        "missing_validation": [],
+                        "merge_recommendation": "merge_ready",
+                        "send_back_recommendation": "not_needed",
+                        "concise_summary": ["Scope met and ready for review."],
+                    },
+                    "summary_bullets": ["Scope met and ready for review."],
+                    "next_action": "review",
+                },
+            ):
+                with TestClient(main.app) as client:
+                    self._post_github(
+                        client,
+                        secret="test-gh-secret",
+                        delivery="delivery-task-opened-303",
+                        event="issues",
+                        payload=issue_payload,
+                    )
+                    self._post_github(
+                        client,
+                        secret="test-gh-secret",
+                        delivery="delivery-approve-303",
+                        event="issue_comment",
+                        payload=approve_payload,
+                    )
+                    self._post_github(
+                        client,
+                        secret="test-gh-secret",
+                        delivery="delivery-pr-opened-303",
+                        event="pull_request",
+                        payload=pr_payload,
+                    )
+                    task = client.get("/tasks").json()["tasks"][0]
+                    review_artifact = task["latest_run"]["review_artifact"]
+                    self.assertIsInstance(review_artifact, dict)
+                    self.assertEqual(review_artifact["scope_status"], "met")
+                    self.assertEqual(review_artifact["merge_recommendation"], "merge_ready")
+
+    def test_fallback_mode_keeps_routing_metadata_separate_from_worker_brief(self):
+        with tempfile.TemporaryDirectory() as td:
+            os.environ["DATABASE_URL"] = f"sqlite:///{Path(td) / 'orchestrator.db'}"
+            os.environ["GH_WEBHOOK_SECRET"] = "test-gh-secret"
+            os.environ["GITHUB_API_TOKEN"] = "dummy-token"
+            main, _ = _reload_orchestrator_modules()
+
+            issue_payload = {
+                "action": "opened",
+                "repository": {"full_name": "jeeves-jeevesenson/init-tracker"},
+                "issue": {
+                    "number": 304,
+                    "node_id": "I_304",
+                    "title": "Migration architecture pass",
+                    "body": "broad architecture migration",
+                    "labels": [{"name": "agent:task"}],
+                },
+            }
+            approve_payload = {
+                "action": "created",
+                "repository": {"full_name": "jeeves-jeevesenson/init-tracker"},
+                "issue": {"number": 304},
+                "comment": {"body": "/approve"},
+            }
+            with patch(
+                "orchestrator.app.tasks.plan_task_packet",
+                return_value={
+                    "internal_plan": {
+                        "objective": "Broad migration",
+                        "scope": ["cross-system"],
+                        "non_goals": [],
+                        "acceptance_criteria": ["migration complete"],
+                        "validation_guidance": ["python -m unittest orchestrator.tests.test_milestone2"],
+                        "implementation_brief": "broad pass",
+                        "task_type": "migration",
+                        "difficulty": "large",
+                        "repo_areas": ["orchestrator/app/tasks.py"],
+                        "execution_risks": ["coordination"],
+                        "reviewer_focus": ["scope"],
+                        "recommended_scope_class": "broad",
+                        "recommended_worker": "initiative-smith",
+                    },
+                    "worker_brief": {
+                        "objective": "Implement broad migration slice",
+                        "concise_scope": ["planning pipeline"],
+                        "implementation_brief": "worker-facing brief",
+                        "acceptance_criteria": ["dispatch is clear"],
+                        "validation_commands": ["python -m compileall orchestrator"],
+                        "non_goals": ["no persona labels"],
+                        "target_branch": "main",
+                        "repo_grounded_hints": ["orchestrator/app/openai_planning.py"],
+                    },
+                },
+            ), patch(
+                "orchestrator.app.tasks.dispatch_task_to_github_copilot",
+                return_value=DispatchResult(
+                    attempted=True,
+                    accepted=True,
+                    manual_required=False,
+                    state="accepted",
+                    summary="Dispatch accepted",
+                ),
+            ):
+                with TestClient(main.app) as client:
+                    self._post_github(
+                        client,
+                        secret="test-gh-secret",
+                        delivery="delivery-task-opened-304",
+                        event="issues",
+                        payload=issue_payload,
+                    )
+                    self._post_github(
+                        client,
+                        secret="test-gh-secret",
+                        delivery="delivery-approve-304",
+                        event="issue_comment",
+                        payload=approve_payload,
+                    )
+                    task = client.get("/tasks").json()["tasks"][0]
+                    self.assertEqual(task["routing"]["selected_custom_agent"], CUSTOM_AGENT_INITIATIVE_SMITH)
+                    self.assertEqual(task["github_execution_mode"], "plain_copilot_fallback")
+                    self.assertNotIn("selected_custom_agent", json.dumps(task["worker_brief"]))
+
+    def test_malformed_planning_output_is_handled_cleanly(self):
+        with tempfile.TemporaryDirectory() as td:
+            os.environ["DATABASE_URL"] = f"sqlite:///{Path(td) / 'orchestrator.db'}"
+            os.environ["GH_WEBHOOK_SECRET"] = "test-gh-secret"
+            main, _ = _reload_orchestrator_modules()
+
+            issue_payload = {
+                "action": "opened",
+                "repository": {"full_name": "jeeves-jeevesenson/init-tracker"},
+                "issue": {
+                    "number": 305,
+                    "node_id": "I_305",
+                    "title": "Malformed planning output",
+                    "body": "Planner returns malformed content",
+                    "labels": [{"name": "agent:task"}],
+                },
+            }
+            with patch(
+                "orchestrator.app.tasks.plan_task_packet",
+                side_effect=RuntimeError("planning validation failed: missing objective"),
+            ):
+                with TestClient(main.app) as client:
+                    response = self._post_github(
+                        client,
+                        secret="test-gh-secret",
+                        delivery="delivery-task-opened-305",
+                        event="issues",
+                        payload=issue_payload,
+                    )
+                    self.assertEqual(response.status_code, 200)
+                    task = client.get("/tasks").json()["tasks"][0]
+                    self.assertEqual(task["status"], "failed")
+                    self.assertIn("Planning failed", task["latest_summary"])
+                    self.assertIn("missing objective", task["latest_summary"])
+
+    def test_deterministic_routing_and_worker_brief_remain_separate(self):
+        with tempfile.TemporaryDirectory() as td:
+            os.environ["DATABASE_URL"] = f"sqlite:///{Path(td) / 'orchestrator.db'}"
+            os.environ["GH_WEBHOOK_SECRET"] = "test-gh-secret"
+            main, _ = _reload_orchestrator_modules()
+
+            issue_payload = {
+                "action": "opened",
+                "repository": {"full_name": "jeeves-jeevesenson/init-tracker"},
+                "issue": {
+                    "number": 306,
+                    "node_id": "I_306",
+                    "title": "Bugfix follow-up separation",
+                    "body": "narrow bug fix should force deterministic narrow route",
+                    "labels": [{"name": "agent:task"}],
+                },
+            }
+
+            with patch(
+                "orchestrator.app.tasks.plan_task_packet",
+                return_value={
+                    "internal_plan": {
+                        "objective": "Fix bug",
+                        "scope": ["narrow fix"],
+                        "non_goals": [],
+                        "acceptance_criteria": ["bug fixed"],
+                        "validation_guidance": ["unit tests"],
+                        "implementation_brief": "narrow patch",
+                        "task_type": "bugfix",
+                        "difficulty": "small",
+                        "repo_areas": ["orchestrator/app/tasks.py"],
+                        "execution_risks": ["regression"],
+                        "reviewer_focus": ["deterministic route"],
+                        "recommended_scope_class": "broad",
+                        "recommended_worker": "initiative-smith",
+                    },
+                    "worker_brief": {
+                        "objective": "Fix the narrow bug",
+                        "concise_scope": ["patch bug path"],
+                        "implementation_brief": "apply a contained fix",
+                        "acceptance_criteria": ["bug fixed"],
+                        "validation_commands": ["python -m unittest orchestrator.tests.test_milestone2"],
+                        "non_goals": ["no broad migration"],
+                        "target_branch": "main",
+                        "repo_grounded_hints": ["orchestrator/app/tasks.py"],
+                    },
+                },
+            ):
+                with TestClient(main.app) as client:
+                    response = self._post_github(
+                        client,
+                        secret="test-gh-secret",
+                        delivery="delivery-task-opened-306",
+                        event="issues",
+                        payload=issue_payload,
+                    )
+                    self.assertEqual(response.status_code, 200)
+                    task = client.get("/tasks").json()["tasks"][0]
+                    self.assertEqual(task["routing"]["recommended_worker"], "tracker-engineer")
+                    self.assertEqual(task["worker_brief"]["objective"], "Fix the narrow bug")
+                    self.assertNotIn("recommended_worker", task["worker_brief"])
 
 
 if __name__ == "__main__":

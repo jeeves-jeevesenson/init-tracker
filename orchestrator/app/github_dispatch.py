@@ -92,7 +92,9 @@ def build_dispatch_request_payload(settings: Settings, task: TaskPacket) -> dict
 
 def build_dispatch_payload_summary(settings: Settings, task: TaskPacket) -> dict[str, Any]:
     payload = build_dispatch_request_payload(settings, task)
+    dispatch_mode, _ = _dispatch_mode(settings, task)
     payload["dispatch_mode_summary"] = describe_dispatch_mode(settings, task)
+    payload["github_execution_mode"] = dispatch_mode
     return payload
 
 
@@ -105,18 +107,39 @@ def _extract_assignee_logins(payload: dict[str, Any]) -> set[str]:
     }
 
 
-def _task_packet_comment(task: TaskPacket, *, target_branch: str) -> str:
-    packet = {
-        "task_packet_id": task.id,
-        "title": task.title,
-        "normalized_task_text": task.normalized_task_text,
+def _load_worker_brief(task: TaskPacket, *, target_branch: str) -> dict[str, Any]:
+    if task.worker_brief_json:
+        try:
+            parsed = json.loads(task.worker_brief_json)
+            if isinstance(parsed, dict):
+                return parsed
+        except json.JSONDecodeError:
+            pass
+    return {
+        "objective": task.title or "Implement task objective",
+        "concise_scope": [],
+        "implementation_brief": task.normalized_task_text or "",
         "acceptance_criteria": json.loads(task.acceptance_criteria_json or "[]"),
         "validation_commands": json.loads(task.validation_commands_json or "[]"),
-        "recommended_worker": task.recommended_worker,
-        "recommended_scope_class": task.recommended_scope_class,
-        "selected_custom_agent": task.selected_custom_agent,
-        "worker_selection_mode": task.worker_selection_mode,
+        "non_goals": [],
         "target_branch": target_branch,
+        "repo_grounded_hints": [],
+    }
+
+
+def _task_packet_comment(task: TaskPacket, *, target_branch: str, execution_mode: str) -> str:
+    worker_brief = _load_worker_brief(task, target_branch=target_branch)
+    packet = {
+        "task_packet_id": task.id,
+        "objective": worker_brief.get("objective"),
+        "concise_scope": worker_brief.get("concise_scope") or [],
+        "implementation_brief": worker_brief.get("implementation_brief"),
+        "acceptance_criteria": worker_brief.get("acceptance_criteria") or [],
+        "validation_commands": worker_brief.get("validation_commands") or [],
+        "non_goals": worker_brief.get("non_goals") or [],
+        "target_branch": worker_brief.get("target_branch") or target_branch,
+        "repo_grounded_hints": worker_brief.get("repo_grounded_hints") or [],
+        "execution_mode": execution_mode,
     }
     return (
         "Orchestrator dispatch packet for GitHub Copilot coding agent.\n\n"
@@ -150,6 +173,7 @@ def _suggested_actors_summary(actor_logins: list[str]) -> str:
 
 
 def dispatch_task_to_github_copilot(*, settings: Settings, task: TaskPacket) -> DispatchResult:
+    dispatch_mode, _ = _dispatch_mode(settings, task)
     dispatch_mode_summary = describe_dispatch_mode(settings, task)
     if not settings.github_api_token:
         return DispatchResult(
@@ -301,7 +325,13 @@ def dispatch_task_to_github_copilot(*, settings: Settings, task: TaskPacket) -> 
             comment_response = client.post(
                 comment_url,
                 headers=_build_headers(settings),
-                json={"body": _task_packet_comment(task, target_branch=settings.copilot_target_branch)},
+                json={
+                    "body": _task_packet_comment(
+                        task,
+                        target_branch=settings.copilot_target_branch,
+                        execution_mode=dispatch_mode,
+                    )
+                },
             )
             if comment_response.status_code >= 400:
                 comment_warning = (

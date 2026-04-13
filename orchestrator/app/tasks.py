@@ -365,6 +365,43 @@ def _render_normalized_text(plan: dict[str, Any]) -> str:
     )
 
 
+def _parse_json_object(raw_json: str | None) -> dict[str, Any] | None:
+    if not raw_json:
+        return None
+    try:
+        parsed = json.loads(raw_json)
+    except json.JSONDecodeError:
+        return None
+    return parsed if isinstance(parsed, dict) else None
+
+
+def _default_worker_brief(task: TaskPacket, internal_plan: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "objective": internal_plan.get("objective") or task.title or "",
+        "concise_scope": internal_plan.get("scope") or [],
+        "implementation_brief": internal_plan.get("implementation_brief") or "",
+        "acceptance_criteria": internal_plan.get("acceptance_criteria") or [],
+        "validation_commands": internal_plan.get("validation_guidance") or [],
+        "non_goals": internal_plan.get("non_goals") or [],
+        "target_branch": "main",
+        "repo_grounded_hints": internal_plan.get("repo_areas") or [],
+    }
+
+
+def _extract_plan_artifacts(task: TaskPacket, plan_payload: dict[str, Any]) -> tuple[dict[str, Any], dict[str, Any]]:
+    if isinstance(plan_payload.get("internal_plan"), dict):
+        internal_plan = plan_payload["internal_plan"]
+    else:
+        internal_plan = plan_payload
+
+    worker_brief = (
+        plan_payload.get("worker_brief")
+        if isinstance(plan_payload.get("worker_brief"), dict)
+        else _default_worker_brief(task, internal_plan)
+    )
+    return internal_plan, worker_brief
+
+
 def task_to_dict(task: TaskPacket, latest_run: AgentRun | None = None) -> dict[str, Any]:
     dispatch_payload_summary: dict[str, Any] | None = None
     if latest_run and latest_run.dispatch_payload_json:
@@ -373,6 +410,22 @@ def task_to_dict(task: TaskPacket, latest_run: AgentRun | None = None) -> dict[s
         except json.JSONDecodeError:
             dispatch_payload_summary = {"raw": latest_run.dispatch_payload_json}
 
+    internal_plan = _parse_json_object(task.internal_plan_json)
+    worker_brief = _parse_json_object(task.worker_brief_json)
+    routing = {
+        "recommended_worker": task.recommended_worker,
+        "recommended_scope_class": task.recommended_scope_class,
+        "selected_custom_agent": task.selected_custom_agent,
+        "worker_selection_mode": task.worker_selection_mode,
+        "worker_selection_reason": task.worker_selection_reason,
+        "worker_override_label": task.worker_override_label,
+    }
+    github_execution_mode = (
+        dispatch_payload_summary.get("github_execution_mode")
+        if isinstance(dispatch_payload_summary, dict)
+        else None
+    )
+
     return {
         "id": task.id,
         "github_repo": task.github_repo,
@@ -380,6 +433,12 @@ def task_to_dict(task: TaskPacket, latest_run: AgentRun | None = None) -> dict[s
         "github_issue_node_id": task.github_issue_node_id,
         "title": task.title,
         "raw_body": task.raw_body,
+        "internal_plan": internal_plan,
+        "worker_brief": worker_brief,
+        "routing": routing,
+        "github_execution_mode": github_execution_mode,
+        "internal_plan_json": task.internal_plan_json,
+        "worker_brief_json": task.worker_brief_json,
         "normalized_task_text": task.normalized_task_text,
         "acceptance_criteria_json": task.acceptance_criteria_json,
         "validation_commands_json": task.validation_commands_json,
@@ -415,6 +474,7 @@ def run_to_dict(run: AgentRun | None) -> dict[str, Any] | None:
             dispatch_payload_summary = json.loads(run.dispatch_payload_json)
         except json.JSONDecodeError:
             dispatch_payload_summary = {"raw": run.dispatch_payload_json}
+    review_artifact = _parse_json_object(run.review_artifact_json)
     return {
         "id": run.id,
         "task_packet_id": run.task_packet_id,
@@ -427,6 +487,8 @@ def run_to_dict(run: AgentRun | None) -> dict[str, Any] | None:
         "selected_custom_agent": run.selected_custom_agent,
         "worker_selection_mode": run.worker_selection_mode,
         "dispatch_payload_summary": dispatch_payload_summary,
+        "review_artifact": review_artifact,
+        "review_artifact_json": run.review_artifact_json,
         "status": run.status,
         "last_summary": run.last_summary,
         "created_at": run.created_at.isoformat() if run.created_at else None,
@@ -462,18 +524,21 @@ def _run_planning(
     task.updated_at = _utc_now()
     _save(session, task)
     try:
-        plan = plan_task_packet(
+        plan_payload = plan_task_packet(
             settings=settings,
             repo=task.github_repo,
             issue_number=task.github_issue_number,
             issue_title=task.title,
             issue_body=task.raw_body,
         )
-        task.normalized_task_text = _render_normalized_text(plan)
-        task.acceptance_criteria_json = json.dumps(plan.get("acceptance_criteria") or [], ensure_ascii=False)
-        task.validation_commands_json = json.dumps(plan.get("validation_guidance") or [], ensure_ascii=False)
-        task.recommended_worker = _normalize_worker_slug(plan.get("recommended_worker"))
-        task.recommended_scope_class = _normalize_scope_class(plan.get("recommended_scope_class"))
+        internal_plan, worker_brief = _extract_plan_artifacts(task, plan_payload)
+        task.internal_plan_json = json.dumps(internal_plan, ensure_ascii=False)
+        task.worker_brief_json = json.dumps(worker_brief, ensure_ascii=False)
+        task.normalized_task_text = _render_normalized_text(internal_plan)
+        task.acceptance_criteria_json = json.dumps(worker_brief.get("acceptance_criteria") or [], ensure_ascii=False)
+        task.validation_commands_json = json.dumps(worker_brief.get("validation_commands") or [], ensure_ascii=False)
+        task.recommended_worker = _normalize_worker_slug(internal_plan.get("recommended_worker"))
+        task.recommended_scope_class = _normalize_scope_class(internal_plan.get("recommended_scope_class"))
         _apply_worker_selection(task=task, settings=settings, issue_labels=issue_labels)
         task.status = TASK_STATUS_AWAITING_APPROVAL
         task.approval_state = APPROVAL_PENDING
@@ -830,12 +895,26 @@ def _summarize_and_store(
 ) -> None:
     try:
         summary = summarize_work_update(settings=settings, update_context=context)
-        bullets = summary.get("summary_bullets") or []
-        next_action = summary.get("next_action") or "review"
+        artifact = summary.get("review_artifact") if isinstance(summary.get("review_artifact"), dict) else {}
+        bullets = summary.get("summary_bullets") or artifact.get("concise_summary") or []
+        next_action = summary.get("next_action") or artifact.get("merge_recommendation") or "review"
         rendered = "\n".join(f"- {line}" for line in bullets)
         full_summary = f"{rendered}\nNext action: {next_action}".strip()
+        run.review_artifact_json = json.dumps(artifact, ensure_ascii=False) if artifact else None
     except Exception as exc:
         full_summary = f"Summary unavailable: {exc}"
+        run.review_artifact_json = json.dumps(
+            {
+                "what_changed": [],
+                "scope_status": "unclear",
+                "likely_risks": [],
+                "missing_validation": [],
+                "merge_recommendation": "review_required",
+                "send_back_recommendation": "not_needed",
+                "concise_summary": [str(exc)],
+            },
+            ensure_ascii=False,
+        )
 
     run.status = run_status
     run.last_summary = full_summary
@@ -844,6 +923,18 @@ def _summarize_and_store(
     task.latest_summary = full_summary
     task.updated_at = _utc_now()
     _save(session, run, task)
+
+
+def _review_summary_suffix(run: AgentRun) -> str:
+    artifact = _parse_json_object(run.review_artifact_json)
+    if not artifact:
+        return ""
+    concise = artifact.get("concise_summary")
+    if isinstance(concise, list) and concise:
+        first = str(concise[0]).strip()
+        if first:
+            return f" | {first[:140]}"
+    return ""
 
 
 def process_pull_request_event(
@@ -898,6 +989,7 @@ def process_pull_request_event(
         _save(session, task)
         notify_discord(
             f"PR opened / ready for review: {github_repo} PR #{pr.get('number')} -> {_worker_display_name(task)}"
+            f"{_review_summary_suffix(run)}"
         )
         return
 
@@ -993,6 +1085,7 @@ def process_workflow_run_event(
         _save(session, task)
         notify_discord(
             f"Checks complete and ready for review: {github_repo} PR #{run.github_pr_number} -> {_worker_display_name(task)}"
+            f"{_review_summary_suffix(run)}"
         )
         return
 
@@ -1010,6 +1103,7 @@ def process_workflow_run_event(
         _save(session, task)
         notify_discord(
             f"Checks failed / task blocked: {github_repo} PR #{run.github_pr_number} -> {_worker_display_name(task)}"
+            f"{_review_summary_suffix(run)}"
         )
         return
 

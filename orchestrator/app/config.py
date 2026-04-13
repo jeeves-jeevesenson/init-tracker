@@ -56,8 +56,29 @@ class Settings(BaseSettings):
     )
     copilot_model: str | None = Field(default=None, alias="COPILOT_MODEL")
 
-    openai_planning_model: str = Field(default="gpt-4.1-mini", alias="OPENAI_PLANNING_MODEL")
-    openai_review_model: str = Field(default="gpt-4.1-mini", alias="OPENAI_REVIEW_MODEL")
+    openai_planning_model: str = Field(default="gpt-5.4", alias="OPENAI_PLANNING_MODEL")
+    openai_review_model: str = Field(default="gpt-5.4", alias="OPENAI_REVIEW_MODEL")
+    openai_planning_reasoning_effort: str = Field(
+        default="medium",
+        alias="OPENAI_PLANNING_REASONING_EFFORT",
+    )
+    openai_review_reasoning_effort: str = Field(
+        default="medium",
+        alias="OPENAI_REVIEW_REASONING_EFFORT",
+    )
+    openai_escalate_reasoning_for_broad_tasks: bool = Field(
+        default=True,
+        alias="OPENAI_ESCALATE_REASONING_FOR_BROAD_TASKS",
+    )
+    openai_planning_broad_reasoning_effort: str = Field(
+        default="high",
+        alias="OPENAI_PLANNING_BROAD_REASONING_EFFORT",
+    )
+    openai_control_plane_mode: str = Field(default="sync", alias="OPENAI_CONTROL_PLANE_MODE")
+    openai_enable_background_requests: bool = Field(
+        default=False,
+        alias="OPENAI_ENABLE_BACKGROUND_REQUESTS",
+    )
 
 
 @lru_cache(maxsize=1)
