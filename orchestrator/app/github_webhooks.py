@@ -10,7 +10,7 @@ from sqlmodel import Session
 from .config import get_settings
 from .db import get_session
 from .discord_notify import notify_discord
-from .runs import record_run_event
+from .runs import record_run_event_idempotent
 
 router = APIRouter(prefix="/github", tags=["github"])
 
@@ -40,7 +40,7 @@ async def github_webhook(request: Request, session: Session = Depends(get_sessio
     action = payload.get("action") if isinstance(payload, dict) else None
 
     if event_type == "ping":
-        record_run_event(
+        _, is_new = record_run_event_idempotent(
             session,
             source="github",
             external_id=external_id,
@@ -50,10 +50,11 @@ async def github_webhook(request: Request, session: Session = Depends(get_sessio
             summary="GitHub webhook ping accepted",
             payload_json=body.decode("utf-8"),
         )
-        notify_discord("Orchestrator: GitHub ping accepted.")
-        return {"ok": True, "message": "pong"}
+        if is_new:
+            notify_discord("Orchestrator: GitHub ping accepted.")
+        return {"ok": True, "message": "pong", "duplicate": not is_new}
 
-    record_run_event(
+    _, is_new = record_run_event_idempotent(
         session,
         source="github",
         external_id=external_id,
@@ -63,5 +64,6 @@ async def github_webhook(request: Request, session: Session = Depends(get_sessio
         summary=f"GitHub event recorded: {event_type}",
         payload_json=body.decode("utf-8"),
     )
-    notify_discord(f"Orchestrator: GitHub event recorded ({event_type}).")
-    return {"ok": True, "source": "github", "event_type": event_type}
+    if is_new:
+        notify_discord(f"Orchestrator: GitHub event recorded ({event_type}).")
+    return {"ok": True, "source": "github", "event_type": event_type, "duplicate": not is_new}

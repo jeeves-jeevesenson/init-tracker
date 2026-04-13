@@ -17,7 +17,13 @@ async def lifespan(_: FastAPI):
     yield
 
 
-app = FastAPI(title="init-orchestrator", lifespan=lifespan)
+app = FastAPI(
+    title="init-orchestrator",
+    lifespan=lifespan,
+    docs_url=None,
+    redoc_url=None,
+    openapi_url=None,
+)
 app.include_router(github_router)
 app.include_router(openai_router)
 

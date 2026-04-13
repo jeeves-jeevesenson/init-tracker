@@ -10,7 +10,7 @@ from sqlmodel import Session
 from .config import get_settings
 from .db import get_session
 from .discord_notify import notify_discord
-from .runs import record_run_event
+from .runs import record_run_event_idempotent
 
 router = APIRouter(prefix="/openai", tags=["openai"])
 
@@ -58,7 +58,7 @@ async def openai_webhook(request: Request, session: Session = Depends(get_sessio
     external_id = _extract_value(event, "id")
     action = _extract_value(event, "status")
 
-    record_run_event(
+    _, is_new = record_run_event_idempotent(
         session,
         source="openai",
         external_id=external_id,
@@ -68,5 +68,6 @@ async def openai_webhook(request: Request, session: Session = Depends(get_sessio
         summary=f"OpenAI event recorded: {event_type}",
         payload_json=raw_body_text,
     )
-    notify_discord(f"Orchestrator: OpenAI event recorded ({event_type}).")
-    return {"ok": True, "source": "openai", "event_type": event_type}
+    if is_new:
+        notify_discord(f"Orchestrator: OpenAI event recorded ({event_type}).")
+    return {"ok": True, "source": "openai", "event_type": event_type, "duplicate": not is_new}
