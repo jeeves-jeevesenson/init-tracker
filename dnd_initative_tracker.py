@@ -2299,7 +2299,7 @@ class LanController:
             response = await call_next(request)
             path = request.url.path
             # Never cache HTML shells; they decide which JS/CSS to load.
-            if path in ("/", "/planning", "/new_character", "/edit_character", "/shop_admin", "/shop"):
+            if path in ("/", "/planning", "/new_character", "/edit_character", "/shop_admin", "/shop", "/dm"):
                 response.headers["Cache-Control"] = "no-store"
             # Force revalidation of the web editors so updates show up immediately.
             elif (
@@ -3536,6 +3536,157 @@ class LanController:
                     self.app._oplog(f"LAN session disconnected ws_id={ws_id} (claimed {name})")
                 else:
                     self.app._oplog(f"LAN session disconnected ws_id={ws_id}")
+
+        # ── DM Console routes ──────────────────────────────────────────────
+        # These routes form the canonical backend API for the DM web console.
+        # All combat/session mutations delegate to CombatService which wraps
+        # the InitiativeTracker game engine.  No combat rules live in these
+        # handlers; they are thin adapters over the service seam.
+        try:
+            from combat_service import CombatService  # noqa: PLC0415
+            _dm_service = CombatService(self.app)
+        except Exception as _dm_import_err:
+            _dm_service = None
+            self.app._oplog(f"DM combat service unavailable: {_dm_import_err}", level="warning")
+
+        def _check_dm_auth(request: "Request") -> None:
+            """Allow requests when no admin password is set (LAN trust model).
+            Require a valid admin token when a password is configured."""
+            if not self._admin_password_hash:
+                return  # open LAN – no password configured
+            header = request.headers.get("authorization", "")
+            token = ""
+            if header.lower().startswith("bearer "):
+                token = header.split(" ", 1)[1].strip()
+            if not self._is_admin_token_valid(token):
+                raise HTTPException(status_code=401, detail="Admin authentication required.")
+
+        dm_entrypoint = assets_dir / "web" / "dm" / "index.html"
+
+        @self._fastapi_app.get("/dm")
+        async def dm_console(request: Request):
+            """Serve the DM web console."""
+            if not dm_entrypoint.exists():
+                raise HTTPException(status_code=404, detail="DM console page missing.")
+            return HTMLResponse(dm_entrypoint.read_text(encoding="utf-8"))
+
+        @self._fastapi_app.get("/api/dm/combat")
+        async def dm_combat_snapshot(request: Request):
+            """Return the current DM combat/session snapshot.
+
+            Shape: {in_combat, round, turn, active_cid, turn_order,
+                    combatants:[{cid, name, hp, max_hp, temp_hp, ac, initiative,
+                                 is_pc, role, conditions, is_current}],
+                    battle_log:[str]}
+            """
+            _check_dm_auth(request)
+            if _dm_service is None:
+                raise HTTPException(status_code=503, detail="DM combat service unavailable.")
+            try:
+                return _dm_service.combat_snapshot()
+            except Exception as exc:
+                raise HTTPException(status_code=500, detail=str(exc))
+
+        @self._fastapi_app.post("/api/dm/combat/next-turn")
+        async def dm_next_turn(request: Request):
+            """Advance to the next combatant's turn.
+
+            Delegates to the same _next_turn() logic used by the desktop Next
+            Turn button, then broadcasts state to all connected LAN clients.
+            Returns: {ok, snapshot}
+            """
+            _check_dm_auth(request)
+            if _dm_service is None:
+                raise HTTPException(status_code=503, detail="DM combat service unavailable.")
+            try:
+                result = _dm_service.next_turn()
+                if not result.get("ok"):
+                    raise HTTPException(status_code=500, detail=result.get("error", "next_turn failed"))
+                return {"ok": True, "snapshot": result.get("snapshot") or _dm_service.combat_snapshot()}
+            except HTTPException:
+                raise
+            except Exception as exc:
+                raise HTTPException(status_code=500, detail=str(exc))
+
+        @self._fastapi_app.post("/api/dm/combat/combatants/{cid}/hp")
+        async def dm_adjust_hp(cid: int, request: Request, payload: Dict[str, Any] = Body(...)):
+            """Adjust HP for a combatant.
+
+            Body: {delta: int}  — negative = damage, positive = healing.
+            Returns: {ok, cid, hp_before, hp_after, delta, snapshot}
+            """
+            _check_dm_auth(request)
+            if _dm_service is None:
+                raise HTTPException(status_code=503, detail="DM combat service unavailable.")
+            if not isinstance(payload, dict):
+                raise HTTPException(status_code=400, detail="Invalid payload.")
+            try:
+                delta = int(payload.get("delta") or 0)
+            except Exception:
+                raise HTTPException(status_code=400, detail="delta must be an integer.")
+            if delta == 0:
+                raise HTTPException(status_code=400, detail="delta must be non-zero.")
+            try:
+                result = _dm_service.adjust_hp(cid=int(cid), delta=delta)
+                if not result.get("ok"):
+                    raise HTTPException(status_code=400, detail=result.get("error", "adjust_hp failed"))
+                return {
+                    "ok": True,
+                    "cid": result.get("cid"),
+                    "hp_before": result.get("hp_before"),
+                    "hp_after": result.get("hp_after"),
+                    "delta": result.get("delta"),
+                    "snapshot": _dm_service.combat_snapshot(),
+                }
+            except HTTPException:
+                raise
+            except Exception as exc:
+                raise HTTPException(status_code=500, detail=str(exc))
+
+        @self._fastapi_app.post("/api/dm/combat/combatants/{cid}/condition")
+        async def dm_set_condition(cid: int, request: Request, payload: Dict[str, Any] = Body(...)):
+            """Add or remove a condition on a combatant.
+
+            Body: {ctype: str, action: "add"|"remove", remaining_turns?: int|null}
+            Returns: {ok, cid, ctype, action, snapshot}
+            """
+            _check_dm_auth(request)
+            if _dm_service is None:
+                raise HTTPException(status_code=503, detail="DM combat service unavailable.")
+            if not isinstance(payload, dict):
+                raise HTTPException(status_code=400, detail="Invalid payload.")
+            ctype = str(payload.get("ctype") or "").strip().lower()
+            action = str(payload.get("action") or "").strip().lower()
+            if not ctype:
+                raise HTTPException(status_code=400, detail="ctype is required.")
+            if action not in ("add", "remove"):
+                raise HTTPException(status_code=400, detail="action must be 'add' or 'remove'.")
+            remaining_turns_raw = payload.get("remaining_turns")
+            remaining_turns: Optional[int] = None
+            if remaining_turns_raw is not None:
+                try:
+                    remaining_turns = max(1, int(remaining_turns_raw))
+                except Exception:
+                    raise HTTPException(status_code=400, detail="remaining_turns must be a positive integer.")
+            try:
+                result = _dm_service.set_condition(
+                    cid=int(cid), ctype=ctype, action=action, remaining_turns=remaining_turns
+                )
+                if not result.get("ok"):
+                    raise HTTPException(status_code=400, detail=result.get("error", "set_condition failed"))
+                return {
+                    "ok": True,
+                    "cid": result.get("cid"),
+                    "ctype": result.get("ctype"),
+                    "action": result.get("action"),
+                    "snapshot": _dm_service.combat_snapshot(),
+                }
+            except HTTPException:
+                raise
+            except Exception as exc:
+                raise HTTPException(status_code=500, detail=str(exc))
+
+        # ── End DM Console routes ──────────────────────────────────────────
 
         # Start uvicorn server in a thread (with its own event loop).
         try:

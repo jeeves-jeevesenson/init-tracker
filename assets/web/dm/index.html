@@ -1,0 +1,617 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>DM Console – Initiative Tracker</title>
+  <style>
+    :root {
+      --bg: #0b0d10;
+      --panel: #141923;
+      --panel2: #0f1320;
+      --border: rgba(214,186,126,0.22);
+      --text: #e8eef7;
+      --muted: #93a2b8;
+      --accent: #6aa9ff;
+      --gold: #d6ba7e;
+      --danger: #ff5b5b;
+      --heal: #4caf82;
+      --warn: #f5a623;
+      --radius: 8px;
+    }
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    html, body { height: 100%; background: var(--bg); color: var(--text);
+      font-family: system-ui,-apple-system,Segoe UI,Roboto,sans-serif; font-size: 14px; }
+    body { display: flex; flex-direction: column; min-height: 100vh; }
+
+    /* ── Topbar ─────────────────────────────────────────────────── */
+    .topbar {
+      background: var(--panel);
+      border-bottom: 1px solid var(--border);
+      padding: 10px 16px;
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      flex-shrink: 0;
+    }
+    .topbar h1 { font-size: 16px; color: var(--gold); letter-spacing: .04em; flex: 1; }
+    .topbar .status-badge {
+      font-size: 12px; padding: 3px 10px; border-radius: 999px;
+      background: rgba(255,255,255,.07); color: var(--muted);
+    }
+    .topbar .status-badge.active { background: rgba(76,175,130,.18); color: var(--heal); }
+    #refreshBtn {
+      background: none; border: 1px solid var(--border); color: var(--muted);
+      border-radius: var(--radius); padding: 5px 12px; cursor: pointer; font-size: 12px;
+    }
+    #refreshBtn:hover { border-color: var(--accent); color: var(--accent); }
+    #autoRefreshLabel { font-size: 12px; color: var(--muted); display: flex; align-items: center; gap: 5px; }
+
+    /* ── Auth overlay ───────────────────────────────────────────── */
+    #authOverlay {
+      position: fixed; inset: 0; background: rgba(0,0,0,.7);
+      display: flex; align-items: center; justify-content: center; z-index: 100;
+    }
+    #authOverlay.hidden { display: none; }
+    .auth-card {
+      background: var(--panel); border: 1px solid var(--border); border-radius: 12px;
+      padding: 28px 28px 24px; width: 320px; display: flex; flex-direction: column; gap: 14px;
+    }
+    .auth-card h2 { font-size: 16px; color: var(--gold); }
+    .auth-card p { font-size: 13px; color: var(--muted); }
+    .auth-card input {
+      background: var(--bg); border: 1px solid var(--border); color: var(--text);
+      padding: 8px 12px; border-radius: var(--radius); font-size: 14px; width: 100%;
+    }
+    .auth-card input:focus { outline: none; border-color: var(--accent); }
+    .auth-card .btn-primary {
+      background: var(--accent); color: #fff; border: none; border-radius: var(--radius);
+      padding: 9px 0; cursor: pointer; font-size: 14px; font-weight: 600; width: 100%;
+    }
+    .auth-card .btn-primary:hover { opacity: .88; }
+    #authError { color: var(--danger); font-size: 12px; display: none; }
+
+    /* ── Main layout ────────────────────────────────────────────── */
+    .main {
+      flex: 1; display: grid;
+      grid-template-columns: 1fr 320px;
+      grid-template-rows: auto 1fr;
+      gap: 0;
+      overflow: hidden;
+    }
+    @media (max-width: 768px) {
+      .main { grid-template-columns: 1fr; grid-template-rows: auto auto auto; }
+    }
+
+    /* ── Round/turn banner ──────────────────────────────────────── */
+    .round-banner {
+      grid-column: 1 / -1;
+      background: var(--panel2);
+      border-bottom: 1px solid var(--border);
+      padding: 10px 16px;
+      display: flex; align-items: center; gap: 20px;
+    }
+    .round-banner .stat { display: flex; flex-direction: column; align-items: center; min-width: 60px; }
+    .round-banner .stat-label { font-size: 10px; color: var(--muted); text-transform: uppercase; letter-spacing: .06em; }
+    .round-banner .stat-value { font-size: 22px; font-weight: 700; color: var(--gold); line-height: 1.1; }
+    .round-banner .divider { width: 1px; height: 36px; background: var(--border); }
+    .round-banner .active-label { font-size: 12px; color: var(--muted); }
+    .round-banner .active-name { font-size: 16px; font-weight: 600; color: var(--accent); }
+    .next-turn-btn {
+      margin-left: auto;
+      background: var(--accent); color: #fff; border: none;
+      border-radius: var(--radius); padding: 9px 22px;
+      font-size: 14px; font-weight: 600; cursor: pointer;
+    }
+    .next-turn-btn:hover { opacity: .88; }
+    .next-turn-btn:disabled { opacity: .45; cursor: not-allowed; }
+    #combatStateMsg { font-size: 12px; color: var(--warn); margin-left: 8px; display: none; }
+
+    /* ── Initiative table ───────────────────────────────────────── */
+    .initiative-panel {
+      overflow-y: auto;
+      padding: 12px 12px 12px 16px;
+      border-right: 1px solid var(--border);
+    }
+    .section-title {
+      font-size: 11px; text-transform: uppercase; letter-spacing: .08em;
+      color: var(--muted); margin-bottom: 8px; padding-bottom: 4px;
+      border-bottom: 1px solid var(--border);
+    }
+    .combatant-row {
+      background: var(--panel); border: 1px solid var(--border);
+      border-radius: var(--radius); padding: 10px 12px; margin-bottom: 6px;
+      display: grid; grid-template-columns: 24px 1fr auto; gap: 8px; align-items: start;
+      transition: border-color .15s;
+    }
+    .combatant-row.is-current { border-color: var(--accent); background: rgba(106,169,255,.08); }
+    .combatant-row.is-dead { opacity: .45; }
+    .turn-marker { font-size: 14px; line-height: 1; padding-top: 1px; }
+    .combatant-name { font-weight: 600; font-size: 14px; }
+    .combatant-name .role-tag {
+      font-size: 10px; font-weight: 400; color: var(--muted);
+      background: rgba(255,255,255,.06); padding: 1px 5px;
+      border-radius: 999px; margin-left: 5px;
+    }
+    .combatant-meta { font-size: 11px; color: var(--muted); margin-top: 2px; }
+    .hp-bar-wrap { height: 4px; background: rgba(255,255,255,.1); border-radius: 2px; margin-top: 5px; }
+    .hp-bar { height: 4px; border-radius: 2px; background: var(--heal); transition: width .3s; }
+    .hp-bar.low { background: var(--warn); }
+    .hp-bar.critical { background: var(--danger); }
+    .conditions-row {
+      display: flex; flex-wrap: wrap; gap: 4px; margin-top: 5px;
+    }
+    .condition-chip {
+      font-size: 10px; padding: 2px 7px; border-radius: 999px;
+      background: rgba(245,166,35,.15); color: var(--warn); border: 1px solid rgba(245,166,35,.3);
+    }
+    .combatant-actions { display: flex; flex-direction: column; gap: 4px; align-items: flex-end; }
+    .btn-sm {
+      background: none; border: 1px solid var(--border); color: var(--muted);
+      border-radius: 6px; padding: 3px 8px; font-size: 11px; cursor: pointer; white-space: nowrap;
+    }
+    .btn-sm:hover { border-color: var(--accent); color: var(--accent); }
+    .btn-sm.danger:hover { border-color: var(--danger); color: var(--danger); }
+    .hp-display { font-size: 13px; font-weight: 600; text-align: right; }
+    .hp-display .temp { font-size: 10px; color: var(--accent); }
+
+    /* ── Mutation panel ─────────────────────────────────────────── */
+    .mutation-panel {
+      overflow-y: auto; padding: 12px 16px 12px 12px;
+      display: flex; flex-direction: column; gap: 14px;
+    }
+    .mut-card {
+      background: var(--panel); border: 1px solid var(--border);
+      border-radius: var(--radius); padding: 12px;
+    }
+    .mut-card h3 { font-size: 12px; color: var(--gold); margin-bottom: 10px; text-transform: uppercase; letter-spacing: .06em; }
+    .form-group { display: flex; flex-direction: column; gap: 6px; margin-bottom: 8px; }
+    .form-group label { font-size: 11px; color: var(--muted); }
+    .form-group select, .form-group input {
+      background: var(--bg); border: 1px solid var(--border); color: var(--text);
+      padding: 6px 10px; border-radius: var(--radius); font-size: 13px; width: 100%;
+    }
+    .form-group select:focus, .form-group input:focus { outline: none; border-color: var(--accent); }
+    .btn-action {
+      background: rgba(106,169,255,.15); border: 1px solid var(--accent); color: var(--accent);
+      border-radius: var(--radius); padding: 7px 0; cursor: pointer; font-size: 13px;
+      width: 100%; font-weight: 600;
+    }
+    .btn-action:hover { background: rgba(106,169,255,.28); }
+    .btn-action.remove {
+      background: rgba(255,91,91,.1); border-color: var(--danger); color: var(--danger);
+    }
+    .btn-action.remove:hover { background: rgba(255,91,91,.22); }
+    .btn-action.heal {
+      background: rgba(76,175,130,.12); border-color: var(--heal); color: var(--heal);
+    }
+    .btn-action.heal:hover { background: rgba(76,175,130,.25); }
+    .mut-result { font-size: 11px; margin-top: 6px; min-height: 16px; color: var(--heal); }
+    .mut-result.error { color: var(--danger); }
+
+    /* ── Battle log ─────────────────────────────────────────────── */
+    .log-panel {
+      grid-column: 1 / -1;
+      background: var(--panel2); border-top: 1px solid var(--border);
+      padding: 8px 16px; max-height: 150px; overflow-y: auto;
+      flex-shrink: 0;
+    }
+    .log-panel .section-title { margin-bottom: 6px; }
+    .log-line { font-size: 11px; color: var(--muted); font-family: monospace; line-height: 1.6; }
+    .log-line.highlight { color: var(--text); }
+
+    /* ── Empty / loading states ──────────────────────────────────── */
+    .empty-state {
+      padding: 32px 16px; text-align: center; color: var(--muted); font-size: 13px;
+    }
+    .loading-pulse { animation: pulse 1.2s ease-in-out infinite; }
+    @keyframes pulse { 0%,100%{opacity:.5} 50%{opacity:1} }
+  </style>
+</head>
+<body>
+
+<!-- ── Auth overlay ──────────────────────────────────────────────── -->
+<div id="authOverlay">
+  <div class="auth-card">
+    <h2>🎲 DM Console</h2>
+    <p>Enter the admin password to access the DM console.
+       If no password is configured the console opens automatically.</p>
+    <input type="password" id="passwordInput" placeholder="Admin password" />
+    <div id="authError">Incorrect password.</div>
+    <button class="btn-primary" id="loginBtn">Enter</button>
+  </div>
+</div>
+
+<!-- ── Topbar ─────────────────────────────────────────────────────── -->
+<div class="topbar">
+  <h1>⚔️ DM Console</h1>
+  <span class="status-badge" id="combatBadge">Not in combat</span>
+  <label id="autoRefreshLabel">
+    <input type="checkbox" id="autoRefreshCb" checked /> Auto-refresh
+  </label>
+  <button id="refreshBtn">↺ Refresh</button>
+</div>
+
+<!-- ── Main ──────────────────────────────────────────────────────── -->
+<div class="main" id="mainContent">
+
+  <!-- Round / turn banner -->
+  <div class="round-banner">
+    <div class="stat">
+      <span class="stat-label">Round</span>
+      <span class="stat-value" id="roundVal">—</span>
+    </div>
+    <div class="divider"></div>
+    <div class="stat">
+      <span class="stat-label">Turn</span>
+      <span class="stat-value" id="turnVal">—</span>
+    </div>
+    <div class="divider"></div>
+    <div style="display:flex;flex-direction:column;gap:2px">
+      <span class="active-label">Current combatant</span>
+      <span class="active-name" id="activeName">—</span>
+    </div>
+    <button class="next-turn-btn" id="nextTurnBtn" disabled>▶ Next Turn</button>
+    <span id="combatStateMsg"></span>
+  </div>
+
+  <!-- Initiative order -->
+  <div class="initiative-panel">
+    <div class="section-title">Initiative Order</div>
+    <div id="combatantList">
+      <div class="empty-state loading-pulse">Loading combat state…</div>
+    </div>
+  </div>
+
+  <!-- Mutation panel -->
+  <div class="mutation-panel">
+    <!-- HP adjustment -->
+    <div class="mut-card">
+      <h3>HP Adjustment</h3>
+      <div class="form-group">
+        <label>Target combatant</label>
+        <select id="hpCidSelect"><option value="">— select —</option></select>
+      </div>
+      <div class="form-group">
+        <label>Amount</label>
+        <input type="number" id="hpDelta" placeholder="e.g. -5 (damage) or 8 (heal)" />
+      </div>
+      <button class="btn-action heal" id="applyHpBtn">Apply HP Change</button>
+      <div class="mut-result" id="hpResult"></div>
+    </div>
+
+    <!-- Condition management -->
+    <div class="mut-card">
+      <h3>Conditions</h3>
+      <div class="form-group">
+        <label>Target combatant</label>
+        <select id="condCidSelect"><option value="">— select —</option></select>
+      </div>
+      <div class="form-group">
+        <label>Condition</label>
+        <select id="condTypeSelect">
+          <option value="blinded">Blinded</option>
+          <option value="charmed">Charmed</option>
+          <option value="deafened">Deafened</option>
+          <option value="exhaustion">Exhaustion</option>
+          <option value="frightened">Frightened</option>
+          <option value="grappled">Grappled</option>
+          <option value="incapacitated">Incapacitated</option>
+          <option value="invisible">Invisible</option>
+          <option value="paralyzed">Paralyzed</option>
+          <option value="petrified">Petrified</option>
+          <option value="poisoned">Poisoned</option>
+          <option value="prone">Prone</option>
+          <option value="restrained">Restrained</option>
+          <option value="stunned">Stunned</option>
+          <option value="unconscious">Unconscious</option>
+        </select>
+      </div>
+      <div class="form-group">
+        <label>Duration (turns, blank = indefinite)</label>
+        <input type="number" id="condTurns" placeholder="e.g. 3 or leave blank" min="1" />
+      </div>
+      <div style="display:flex;gap:6px">
+        <button class="btn-action" id="addCondBtn" style="flex:1">+ Add</button>
+        <button class="btn-action remove" id="removeCondBtn" style="flex:1">− Remove</button>
+      </div>
+      <div class="mut-result" id="condResult"></div>
+    </div>
+  </div>
+
+</div>
+
+<!-- ── Battle log ─────────────────────────────────────────────────── -->
+<div class="log-panel">
+  <div class="section-title">Battle Log</div>
+  <div id="battleLog"><div class="empty-state" style="padding:4px 0">No entries yet.</div></div>
+</div>
+
+<script>
+/* ────────────────────────────────────────────────────────────────────
+   DM Console — communicates with the backend DM API
+   Endpoints used:
+     GET  /api/dm/combat                         → snapshot
+     POST /api/dm/combat/next-turn               → advance turn
+     POST /api/dm/combat/combatants/{cid}/hp     → HP adjustment
+     POST /api/dm/combat/combatants/{cid}/condition → add/remove condition
+     POST /api/admin/login                       → optional admin login
+   ───────────────────────────────────────────────────────────────── */
+
+const BASE = '';  // same origin
+
+let adminToken = null;      // null → no auth required (or not yet obtained)
+let currentSnapshot = null;
+let autoRefreshTimer = null;
+const POLL_INTERVAL_MS = 2500;
+
+// ── Auth ─────────────────────────────────────────────────────────────
+function authHeaders() {
+  const h = { 'Content-Type': 'application/json' };
+  if (adminToken) h['Authorization'] = 'Bearer ' + adminToken;
+  return h;
+}
+
+async function tryAutoLogin() {
+  // First attempt: try to load snapshot without auth.
+  // If 403 → admin password is configured → show login overlay.
+  try {
+    const r = await fetch(`${BASE}/api/dm/combat`, { headers: authHeaders() });
+    if (r.ok) {
+      document.getElementById('authOverlay').classList.add('hidden');
+      const data = await r.json();
+      applySnapshot(data);
+      startAutoRefresh();
+      return;
+    }
+    if (r.status === 403 || r.status === 401) {
+      // Need password
+      return;  // overlay stays visible
+    }
+    // Other error – hide overlay and try anyway
+    document.getElementById('authOverlay').classList.add('hidden');
+    startAutoRefresh();
+  } catch (e) {
+    // Server not reachable yet; retry
+    setTimeout(tryAutoLogin, 2000);
+  }
+}
+
+document.getElementById('loginBtn').addEventListener('click', async () => {
+  const pw = document.getElementById('passwordInput').value;
+  const errEl = document.getElementById('authError');
+  errEl.style.display = 'none';
+  try {
+    const r = await fetch(`${BASE}/api/admin/login`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ password: pw }),
+    });
+    if (!r.ok) { errEl.style.display = 'block'; return; }
+    const data = await r.json();
+    adminToken = data.token;
+    document.getElementById('authOverlay').classList.add('hidden');
+    startAutoRefresh();
+    fetchSnapshot();
+  } catch (e) {
+    errEl.textContent = 'Could not reach server.';
+    errEl.style.display = 'block';
+  }
+});
+document.getElementById('passwordInput').addEventListener('keydown', e => {
+  if (e.key === 'Enter') document.getElementById('loginBtn').click();
+});
+
+// ── Polling ───────────────────────────────────────────────────────────
+function startAutoRefresh() {
+  if (autoRefreshTimer) return;
+  autoRefreshTimer = setInterval(() => {
+    if (document.getElementById('autoRefreshCb').checked) fetchSnapshot();
+  }, POLL_INTERVAL_MS);
+}
+
+document.getElementById('autoRefreshCb').addEventListener('change', () => {
+  if (document.getElementById('autoRefreshCb').checked) fetchSnapshot();
+});
+document.getElementById('refreshBtn').addEventListener('click', () => fetchSnapshot());
+
+async function fetchSnapshot() {
+  try {
+    const r = await fetch(`${BASE}/api/dm/combat`, { headers: authHeaders() });
+    if (r.status === 401 || r.status === 403) {
+      // Token expired – show login again
+      document.getElementById('authOverlay').classList.remove('hidden');
+      adminToken = null;
+      if (autoRefreshTimer) { clearInterval(autoRefreshTimer); autoRefreshTimer = null; }
+      return;
+    }
+    if (!r.ok) return;
+    const data = await r.json();
+    applySnapshot(data);
+  } catch (_) { /* network error; ignore */ }
+}
+
+// ── Render snapshot ───────────────────────────────────────────────────
+function applySnapshot(snap) {
+  currentSnapshot = snap;
+
+  // Badge
+  const badge = document.getElementById('combatBadge');
+  if (snap.in_combat) {
+    badge.textContent = 'In combat';
+    badge.classList.add('active');
+  } else {
+    badge.textContent = 'Not in combat';
+    badge.classList.remove('active');
+  }
+
+  // Round / turn
+  document.getElementById('roundVal').textContent = snap.round || '—';
+  document.getElementById('turnVal').textContent = snap.turn || '—';
+
+  // Active combatant
+  const activeRow = (snap.combatants || []).find(c => c.cid === snap.active_cid);
+  document.getElementById('activeName').textContent =
+    activeRow ? activeRow.name : (snap.in_combat ? '—' : 'No combat active');
+
+  // Next turn button
+  const ntBtn = document.getElementById('nextTurnBtn');
+  ntBtn.disabled = !snap.in_combat || !(snap.combatants && snap.combatants.length > 0);
+
+  // Populate combatant selects
+  const combatants = snap.combatants || [];
+  populateCidSelect('hpCidSelect', combatants);
+  populateCidSelect('condCidSelect', combatants);
+
+  // Render list
+  renderCombatants(snap);
+
+  // Battle log
+  renderLog(snap.battle_log || []);
+}
+
+function populateCidSelect(selectId, combatants) {
+  const sel = document.getElementById(selectId);
+  const prev = sel.value;
+  sel.innerHTML = '<option value="">— select —</option>';
+  for (const c of combatants) {
+    const opt = document.createElement('option');
+    opt.value = c.cid;
+    opt.textContent = c.name;
+    sel.appendChild(opt);
+  }
+  if (prev) sel.value = prev;
+}
+
+function renderCombatants(snap) {
+  const list = document.getElementById('combatantList');
+  const combatants = snap.combatants || [];
+  if (!combatants.length) {
+    list.innerHTML = '<div class="empty-state">No combatants in initiative order.</div>';
+    return;
+  }
+  const rows = combatants.map(c => {
+    const isCurrent = c.cid === snap.active_cid;
+    const isDead = c.hp <= 0 && c.max_hp > 0;
+    const hpPct = c.max_hp > 0 ? Math.max(0, Math.min(100, (c.hp / c.max_hp) * 100)) : 100;
+    const barClass = hpPct <= 25 ? 'critical' : hpPct <= 50 ? 'low' : '';
+    const condChips = (c.conditions || []).map(cond =>
+      `<span class="condition-chip">${cond.type}${cond.remaining_turns != null ? ' ('+cond.remaining_turns+')' : ''}</span>`
+    ).join('');
+    const roleTag = c.role !== 'enemy' ? `<span class="role-tag">${c.role}</span>` : '';
+    const tempHpDisplay = c.temp_hp > 0 ? `<span class="temp"> +${c.temp_hp}tmp</span>` : '';
+    return `
+      <div class="combatant-row${isCurrent ? ' is-current' : ''}${isDead ? ' is-dead' : ''}" data-cid="${c.cid}">
+        <div class="turn-marker">${isCurrent ? '▶' : ''}</div>
+        <div>
+          <div class="combatant-name">${escHtml(c.name)}${roleTag}</div>
+          <div class="combatant-meta">Init ${c.initiative} · AC ${c.ac}</div>
+          <div class="hp-bar-wrap"><div class="hp-bar ${barClass}" style="width:${hpPct.toFixed(1)}%"></div></div>
+          ${condChips ? `<div class="conditions-row">${condChips}</div>` : ''}
+        </div>
+        <div class="combatant-actions">
+          <div class="hp-display">${c.hp}/${c.max_hp}${tempHpDisplay}</div>
+          <button class="btn-sm" onclick="quickSelect(${c.cid})">Select</button>
+        </div>
+      </div>`;
+  });
+  list.innerHTML = rows.join('');
+}
+
+function renderLog(lines) {
+  const el = document.getElementById('battleLog');
+  if (!lines.length) {
+    el.innerHTML = '<div class="empty-state" style="padding:4px 0">No entries yet.</div>';
+    return;
+  }
+  const shown = lines.slice(-30).reverse();
+  el.innerHTML = shown.map((l, i) =>
+    `<div class="log-line${i === 0 ? ' highlight' : ''}">${escHtml(l)}</div>`
+  ).join('');
+}
+
+function quickSelect(cid) {
+  document.getElementById('hpCidSelect').value = cid;
+  document.getElementById('condCidSelect').value = cid;
+}
+
+// ── Mutations ─────────────────────────────────────────────────────────
+document.getElementById('nextTurnBtn').addEventListener('click', async () => {
+  const btn = document.getElementById('nextTurnBtn');
+  btn.disabled = true;
+  try {
+    const r = await fetch(`${BASE}/api/dm/combat/next-turn`, {
+      method: 'POST', headers: authHeaders(), body: JSON.stringify({}),
+    });
+    const data = await r.json();
+    if (data.snapshot) applySnapshot(data.snapshot);
+    const msg = document.getElementById('combatStateMsg');
+    if (!r.ok) { msg.textContent = data.detail || 'Error.'; msg.style.display = 'inline'; }
+    else { msg.style.display = 'none'; }
+  } catch (e) {
+    /* ignore */
+  } finally {
+    btn.disabled = false;
+  }
+});
+
+document.getElementById('applyHpBtn').addEventListener('click', async () => {
+  const cid = document.getElementById('hpCidSelect').value;
+  const delta = parseInt(document.getElementById('hpDelta').value, 10);
+  const res = document.getElementById('hpResult');
+  res.className = 'mut-result';
+  if (!cid) { res.textContent = 'Select a combatant.'; res.classList.add('error'); return; }
+  if (isNaN(delta) || delta === 0) { res.textContent = 'Enter a non-zero amount.'; res.classList.add('error'); return; }
+  try {
+    const r = await fetch(`${BASE}/api/dm/combat/combatants/${cid}/hp`, {
+      method: 'POST', headers: authHeaders(),
+      body: JSON.stringify({ delta }),
+    });
+    const data = await r.json();
+    if (r.ok && data.ok) {
+      res.textContent = `HP: ${data.hp_before} → ${data.hp_after} (${delta > 0 ? '+' : ''}${delta})`;
+      if (data.snapshot) applySnapshot(data.snapshot);
+    } else {
+      res.textContent = data.detail || data.error || 'Error.';
+      res.classList.add('error');
+    }
+  } catch (e) { res.textContent = 'Request failed.'; res.classList.add('error'); }
+});
+
+document.getElementById('addCondBtn').addEventListener('click', () => applyCondition('add'));
+document.getElementById('removeCondBtn').addEventListener('click', () => applyCondition('remove'));
+
+async function applyCondition(action) {
+  const cid = document.getElementById('condCidSelect').value;
+  const ctype = document.getElementById('condTypeSelect').value;
+  const turnsRaw = document.getElementById('condTurns').value.trim();
+  const turns = turnsRaw ? parseInt(turnsRaw, 10) : null;
+  const res = document.getElementById('condResult');
+  res.className = 'mut-result';
+  if (!cid) { res.textContent = 'Select a combatant.'; res.classList.add('error'); return; }
+  try {
+    const r = await fetch(`${BASE}/api/dm/combat/combatants/${cid}/condition`, {
+      method: 'POST', headers: authHeaders(),
+      body: JSON.stringify({ ctype, action, remaining_turns: turns }),
+    });
+    const data = await r.json();
+    if (r.ok && data.ok) {
+      res.textContent = `${action === 'add' ? 'Added' : 'Removed'} ${ctype}.`;
+      if (data.snapshot) applySnapshot(data.snapshot);
+    } else {
+      res.textContent = data.detail || data.error || 'Error.';
+      res.classList.add('error');
+    }
+  } catch (e) { res.textContent = 'Request failed.'; res.classList.add('error'); }
+}
+
+// ── Helpers ───────────────────────────────────────────────────────────
+function escHtml(s) {
+  return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+}
+
+// ── Boot ──────────────────────────────────────────────────────────────
+tryAutoLogin();
+</script>
+</body>
+</html>
