@@ -3724,6 +3724,49 @@ class LanController:
             except Exception:
                 raise HTTPException(status_code=500, detail="Failed to set temp HP.")
 
+        @self._fastapi_app.post("/api/dm/combat/start")
+        async def dm_start_combat(request: Request):
+            """Start combat (begin initiative turn order).
+
+            Requires combatants to already be in the initiative list.
+            Delegates to _start_turns() — the same method used by the desktop
+            Start/Reset button — then sets in_combat=True and broadcasts state.
+            Returns: {ok, snapshot}
+            """
+            _check_dm_auth(request)
+            if _dm_service is None:
+                raise HTTPException(status_code=503, detail="DM combat service unavailable.")
+            try:
+                result = _dm_service.start_combat()
+                if not result.get("ok"):
+                    raise HTTPException(status_code=400, detail=result.get("error", "Cannot start combat."))
+                return {"ok": True, "snapshot": result.get("snapshot") or _dm_service.combat_snapshot()}
+            except HTTPException:
+                raise
+            except Exception:
+                raise HTTPException(status_code=500, detail="Failed to start combat.")
+
+        @self._fastapi_app.post("/api/dm/combat/end")
+        async def dm_end_combat(request: Request):
+            """End the current combat session.
+
+            Resets the initiative turn state and broadcasts the updated state.
+            Combatants remain in the list so the DM can review the encounter.
+            Returns: {ok, snapshot}
+            """
+            _check_dm_auth(request)
+            if _dm_service is None:
+                raise HTTPException(status_code=503, detail="DM combat service unavailable.")
+            try:
+                result = _dm_service.end_combat()
+                if not result.get("ok"):
+                    raise HTTPException(status_code=400, detail=result.get("error", "Cannot end combat."))
+                return {"ok": True, "snapshot": result.get("snapshot") or _dm_service.combat_snapshot()}
+            except HTTPException:
+                raise
+            except Exception:
+                raise HTTPException(status_code=500, detail="Failed to end combat.")
+
         @self._fastapi_app.websocket("/ws/dm")
         async def ws_dm_endpoint(ws: WebSocket):
             """Real-time DM snapshot push channel.

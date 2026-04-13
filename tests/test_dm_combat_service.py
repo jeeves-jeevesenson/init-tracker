@@ -376,5 +376,171 @@ class CombatServiceLockTests(unittest.TestCase):
         self.assertGreaterEqual(c.hp, 0)
 
 
+class CombatServiceUpNextTests(unittest.TestCase):
+    """Tests for up_next_cid / up_next_name in the snapshot."""
+
+    def _make_tracker_with_peek(self):
+        """Make a tracker that has a _peek_next_turn_cid method."""
+        app = _make_tracker(num_combatants=3)
+        app.current_cid = 1
+
+        def _peek_next_turn_cid(current_cid):
+            ids = sorted(app.combatants.keys())
+            if not ids or current_cid is None or current_cid not in ids:
+                return None
+            idx = ids.index(int(current_cid))
+            return ids[(idx + 1) % len(ids)]
+
+        app._peek_next_turn_cid = _peek_next_turn_cid
+        return app
+
+    def test_snapshot_has_up_next_keys(self):
+        tracker = self._make_tracker_with_peek()
+        service = CombatService(tracker)
+        snap = service.combat_snapshot()
+        self.assertIn("up_next_cid", snap)
+        self.assertIn("up_next_name", snap)
+
+    def test_up_next_cid_is_next_in_order(self):
+        tracker = self._make_tracker_with_peek()
+        service = CombatService(tracker)
+        # current_cid = 1, next should be 2
+        snap = service.combat_snapshot()
+        self.assertEqual(snap["up_next_cid"], 2)
+
+    def test_up_next_name_matches_cid(self):
+        tracker = self._make_tracker_with_peek()
+        service = CombatService(tracker)
+        snap = service.combat_snapshot()
+        expected_name = tracker.combatants[snap["up_next_cid"]].name
+        self.assertEqual(snap["up_next_name"], expected_name)
+
+    def test_up_next_none_when_no_peek_method(self):
+        tracker = _make_tracker(num_combatants=3)
+        # no _peek_next_turn_cid defined
+        service = CombatService(tracker)
+        snap = service.combat_snapshot()
+        self.assertIsNone(snap["up_next_cid"])
+        self.assertIsNone(snap["up_next_name"])
+
+    def test_up_next_none_when_no_current(self):
+        tracker = self._make_tracker_with_peek()
+        tracker.current_cid = None
+        service = CombatService(tracker)
+        snap = service.combat_snapshot()
+        self.assertIsNone(snap["up_next_cid"])
+
+
+class CombatServiceStartCombatTests(unittest.TestCase):
+    """Tests for CombatService.start_combat()."""
+
+    def _make_tracker_with_start(self):
+        app = _make_tracker(num_combatants=3)
+        app.in_combat = False
+        app.current_cid = None
+        app._start_turns_calls = []
+
+        def _start_turns():
+            app._start_turns_calls.append(1)
+            ids = sorted(app.combatants.keys())
+            if ids:
+                app.current_cid = ids[0]
+                app.round_num = 1
+                app.turn_num = 1
+
+        app._start_turns = _start_turns
+        return app
+
+    def test_start_combat_returns_ok(self):
+        tracker = self._make_tracker_with_start()
+        service = CombatService(tracker)
+        result = service.start_combat()
+        self.assertTrue(result["ok"])
+
+    def test_start_combat_sets_in_combat(self):
+        tracker = self._make_tracker_with_start()
+        service = CombatService(tracker)
+        service.start_combat()
+        self.assertTrue(tracker.in_combat)
+
+    def test_start_combat_calls_start_turns(self):
+        tracker = self._make_tracker_with_start()
+        service = CombatService(tracker)
+        service.start_combat()
+        self.assertEqual(len(tracker._start_turns_calls), 1)
+
+    def test_start_combat_returns_snapshot(self):
+        tracker = self._make_tracker_with_start()
+        service = CombatService(tracker)
+        result = service.start_combat()
+        self.assertIn("snapshot", result)
+        self.assertIn("combatants", result["snapshot"])
+
+    def test_start_combat_snapshot_shows_in_combat(self):
+        tracker = self._make_tracker_with_start()
+        service = CombatService(tracker)
+        result = service.start_combat()
+        self.assertTrue(result["snapshot"]["in_combat"])
+
+    def test_start_combat_no_combatants_returns_error(self):
+        tracker = self._make_tracker_with_start()
+        tracker.combatants = {}
+        service = CombatService(tracker)
+        result = service.start_combat()
+        self.assertFalse(result["ok"])
+        self.assertIn("error", result)
+
+    def test_start_combat_triggers_broadcast(self):
+        tracker = self._make_tracker_with_start()
+        service = CombatService(tracker)
+        service.start_combat()
+        self.assertGreater(len(tracker._broadcast_calls), 0)
+
+
+class CombatServiceEndCombatTests(unittest.TestCase):
+    """Tests for CombatService.end_combat()."""
+
+    def setUp(self):
+        self.tracker = _make_tracker()
+        self.tracker.in_combat = True
+        self.tracker.current_cid = 1
+        self.service = CombatService(self.tracker)
+
+    def test_end_combat_returns_ok(self):
+        result = self.service.end_combat()
+        self.assertTrue(result["ok"])
+
+    def test_end_combat_clears_in_combat(self):
+        self.service.end_combat()
+        self.assertFalse(self.tracker.in_combat)
+
+    def test_end_combat_clears_current_cid(self):
+        self.service.end_combat()
+        self.assertIsNone(self.tracker.current_cid)
+
+    def test_end_combat_returns_snapshot(self):
+        result = self.service.end_combat()
+        self.assertIn("snapshot", result)
+
+    def test_end_combat_snapshot_not_in_combat(self):
+        result = self.service.end_combat()
+        self.assertFalse(result["snapshot"]["in_combat"])
+
+    def test_end_combat_snapshot_no_active_cid(self):
+        result = self.service.end_combat()
+        self.assertIsNone(result["snapshot"]["active_cid"])
+
+    def test_end_combat_triggers_broadcast(self):
+        self.service.end_combat()
+        self.assertGreater(len(self.tracker._broadcast_calls), 0)
+
+    def test_end_combat_logs_round(self):
+        self.tracker.round_num = 4
+        self.service.end_combat()
+        # Check that a log message mentioning round 4 was emitted
+        logged_msgs = [m for m, _ in self.tracker._log_calls]
+        self.assertTrue(any("4" in m for m in logged_msgs))
+
+
 if __name__ == "__main__":
     unittest.main()

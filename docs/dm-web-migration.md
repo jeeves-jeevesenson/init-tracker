@@ -16,6 +16,8 @@ The following slice of combat/session state is now authoritatively owned by
 | Capability | Endpoint |
 |---|---|
 | Read combat/session snapshot | `GET /api/dm/combat` |
+| Start combat (begin initiative turn order) | `POST /api/dm/combat/start` |
+| End combat (reset turn state) | `POST /api/dm/combat/end` |
 | Advance to next turn | `POST /api/dm/combat/next-turn` |
 | Adjust combatant HP | `POST /api/dm/combat/combatants/{cid}/hp` |
 | Add/remove condition | `POST /api/dm/combat/combatants/{cid}/condition` |
@@ -30,6 +32,8 @@ The **snapshot shape** (from `GET /api/dm/combat`):
   "round": 3,
   "turn": 7,
   "active_cid": 2,
+  "up_next_cid": 1,
+  "up_next_name": "Fighter",
   "turn_order": [2, 1, 3],
   "combatants": [
     {
@@ -65,6 +69,13 @@ The DM console lives at `http://<lan-ip>:<port>/dm` and provides:
 - **Conditions** – active conditions shown as chips per combatant
 - **Round / turn counter**
 - **Current combatant** highlight and name display
+- **Up-next combatant** – shows the next combatant in initiative order so the
+  DM can alert the incoming player
+- **⚔ Start Combat** – starts the initiative turn cycle (shown when combatants
+  are present but combat has not started yet); delegates to the same
+  `_start_turns()` logic used by the desktop Start/Reset button
+- **✕ End Combat** – ends the active combat, resetting turn state while
+  preserving the combatant list for review
 - **▶ Next Turn** – advances the initiative order on the backend
 - **HP Adjustment** – apply damage (negative) or healing (positive)
 - **Set Temp HP** – set (or clear) temporary HP for any combatant
@@ -152,20 +163,20 @@ via the web.
 
 ## Recommended next migration targets
 
-1. **Combatant creation / encounter start**: Expose encounter setup
-   (add combatants, roll initiative, start/stop combat) through the service
-   so the DM console can manage a full session.
-
-2. **Desktop rewiring**: Route the desktop "Next Turn" button and HP/condition
+1. **Desktop rewiring**: Route the desktop "Next Turn" button and HP/condition
    mutations through `CombatService` explicitly so the service lock covers
    desktop-originated mutations too.
+
+2. **Combatant creation / encounter setup**: Expose adding combatants and
+   rolling initiative through the service so the DM console can manage a full
+   session end-to-end without opening the desktop app.
 
 3. **Token refresh**: The DM console does not yet auto-renew the admin token
    before expiry.  Add a background refresh 2 minutes before the 15-minute
    expiry window.
 
-4. **Snapshot enhancements**: Add `up_next_cid` / `up_next_name` to the
-   snapshot payload so the DM console can show the upcoming combatant.
+4. **Snapshot enhancements**: Additional fields (e.g. per-combatant AC tooltip,
+   resource pools) can be added as the DM console grows.
 
 ---
 
