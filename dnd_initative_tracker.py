@@ -3783,20 +3783,30 @@ class LanController:
             name = str(payload.get("name") or "").strip()
             if not name:
                 raise HTTPException(status_code=400, detail="name is required.")
+            hp_raw = payload.get("hp")
+            if hp_raw is None:
+                raise HTTPException(status_code=400, detail="hp is required.")
             try:
-                hp = max(0, int(payload.get("hp") or 0))
+                hp = int(hp_raw)
             except Exception:
                 raise HTTPException(status_code=400, detail="hp must be a non-negative integer.")
+            if hp < 0:
+                raise HTTPException(status_code=400, detail="hp must be a non-negative integer.")
+            initiative_raw = payload.get("initiative")
+            if initiative_raw is None:
+                raise HTTPException(status_code=400, detail="initiative is required.")
             try:
-                initiative = int(payload.get("initiative") or 0)
+                initiative = int(initiative_raw)
             except Exception:
                 raise HTTPException(status_code=400, detail="initiative must be an integer.")
             max_hp_raw = payload.get("max_hp")
             max_hp: Optional[int] = None
             if max_hp_raw is not None:
                 try:
-                    max_hp = max(0, int(max_hp_raw))
+                    max_hp = int(max_hp_raw)
                 except Exception:
+                    raise HTTPException(status_code=400, detail="max_hp must be a non-negative integer.")
+                if max_hp < 0:
                     raise HTTPException(status_code=400, detail="max_hp must be a non-negative integer.")
             try:
                 ac = max(0, int(payload.get("ac") or 10))
@@ -3806,8 +3816,13 @@ class LanController:
                 speed = max(0, int(payload.get("speed") or 30))
             except Exception:
                 speed = 30
-            ally = bool(payload.get("ally", False))
-            is_pc = bool(payload.get("is_pc", False))
+            ally_raw = payload.get("ally", False)
+            if not isinstance(ally_raw, bool):
+                raise HTTPException(status_code=400, detail="ally must be a boolean.")
+            ally = ally_raw
+            is_pc_raw = payload.get("is_pc", False)
+            if not isinstance(is_pc_raw, bool):
+                raise HTTPException(status_code=400, detail="is_pc must be a boolean.")
             try:
                 result = _dm_service.add_combatant(
                     name=name, hp=hp, initiative=initiative,
@@ -8865,13 +8880,20 @@ class InitiativeTracker(base.InitiativeTracker):
         ``CombatService.next_turn()`` so the lock, persist, and broadcast
         paths are shared between desktop and web callers.  Falls back to a
         direct ``_next_turn()`` + broadcast when the service is not running
-        (e.g. LAN server not started).
+        (e.g. LAN server not started) or when the service call reports a
+        failure.
         """
         dm_svc = getattr(self, "_dm_service", None)
         if dm_svc is not None:
             try:
-                dm_svc.next_turn()
-                return
+                result = dm_svc.next_turn()
+                if result.get("ok"):
+                    return
+                # Service reported failure — log and fall through to direct path
+                self._oplog(
+                    f"CombatService.next_turn failed: {result.get('error', 'unknown error')}",
+                    level="warning",
+                )
             except Exception:
                 pass
         # Fallback: direct engine call + best-effort broadcast

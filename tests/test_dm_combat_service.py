@@ -556,11 +556,12 @@ def _make_tracker_with_encounter_setup(num_combatants: int = 2):
     def _create_combatant(name, hp, speed, initiative, dex, ally, is_pc=False, **_kw):
         cid = app._next_id
         app._next_id += 1
+        # Intentionally do NOT pre-set max_hp so CombatService's post-creation
+        # logic is the only thing that sets it.
         c = types.SimpleNamespace(
             cid=cid,
             name=name,
             hp=int(hp),
-            max_hp=int(hp),
             ac=10,
             temp_hp=0,
             initiative=int(initiative),
@@ -568,7 +569,13 @@ def _make_tracker_with_encounter_setup(num_combatants: int = 2):
             condition_stacks=[],
         )
         app.combatants[cid] = c
-        app._create_combatant_calls.append({"name": name, "hp": hp, "initiative": initiative})
+        app._create_combatant_calls.append({
+            "name": name,
+            "hp": hp,
+            "initiative": initiative,
+            "ally": ally,
+            "is_pc": is_pc,
+        })
         return cid
 
     def _remove_combatants_with_lan_cleanup(cids):
@@ -617,14 +624,44 @@ class CombatServiceAddCombatantTests(unittest.TestCase):
         result = self.service.add_combatant("Orc", hp=20, initiative=10)
         cid = result["cid"]
         c = self.tracker.combatants[cid]
-        self.assertEqual(getattr(c, "max_hp", 20), 20)
+        # max_hp must be set by the service (stub does NOT pre-set it)
+        self.assertEqual(getattr(c, "max_hp", None), 20)
 
-    def test_add_combatant_ally_flag(self):
-        result = self.service.add_combatant("Guard", hp=12, initiative=8, ally=True)
-        self.assertTrue(result["ok"])
+    def test_add_combatant_explicit_max_hp_applied(self):
+        """When max_hp is explicitly provided it should be set on the combatant."""
+        result = self.service.add_combatant("Orc", hp=10, initiative=10, max_hp=30)
         cid = result["cid"]
-        # _create_combatant stub sets combatant; check it was called with ally=True
-        self.assertTrue(any(call["name"] == "Guard" for call in self.tracker._create_combatant_calls))
+        c = self.tracker.combatants[cid]
+        self.assertEqual(getattr(c, "max_hp", None), 30)
+
+    def test_add_combatant_hp_clamped_to_max_hp(self):
+        """hp must be clamped to max_hp when caller passes hp > max_hp."""
+        result = self.service.add_combatant("Orc", hp=50, initiative=10, max_hp=30)
+        cid = result["cid"]
+        c = self.tracker.combatants[cid]
+        # The service clamps hp ≤ max_hp before creating the combatant
+        self.assertLessEqual(getattr(c, "hp", 50), 30)
+
+    def test_add_combatant_ally_flag_passed_to_create(self):
+        """ally=True must be forwarded to _create_combatant."""
+        self.service.add_combatant("Guard", hp=12, initiative=8, ally=True)
+        ally_calls = [c for c in self.tracker._create_combatant_calls if c["name"] == "Guard"]
+        self.assertTrue(ally_calls, "No _create_combatant call recorded for Guard")
+        self.assertTrue(ally_calls[0]["ally"])
+
+    def test_add_combatant_ally_defaults_to_false(self):
+        """ally should default to False when not provided."""
+        self.service.add_combatant("Goblin", hp=7, initiative=14)
+        goblin_calls = [c for c in self.tracker._create_combatant_calls if c["name"] == "Goblin"]
+        self.assertTrue(goblin_calls, "No _create_combatant call recorded for Goblin")
+        self.assertFalse(goblin_calls[0]["ally"])
+
+    def test_add_combatant_is_pc_flag_passed_to_create(self):
+        """is_pc=True must be forwarded to _create_combatant."""
+        self.service.add_combatant("Hero", hp=30, initiative=18, is_pc=True)
+        hero_calls = [c for c in self.tracker._create_combatant_calls if c["name"] == "Hero"]
+        self.assertTrue(hero_calls, "No _create_combatant call recorded for Hero")
+        self.assertTrue(hero_calls[0]["is_pc"])
 
     def test_add_combatant_logs_action(self):
         self.service.add_combatant("Troll", hp=84, initiative=5)

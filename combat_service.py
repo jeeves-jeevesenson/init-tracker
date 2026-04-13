@@ -511,6 +511,9 @@ class CombatService:
             max_hp = max(0, int(max_hp))
         except Exception:
             max_hp = hp
+        # Enforce invariant: 0 <= hp <= max_hp
+        if max_hp > 0:
+            hp = min(hp, max_hp)
         try:
             ac = max(0, int(ac))
         except Exception:
