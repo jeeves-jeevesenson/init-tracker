@@ -386,3 +386,114 @@ def mark_pr_ready_for_review(*, settings: Settings, repo: str, pr_number: int) -
             return True, f"PR #{pr_number} marked ready for review"
     except Exception as exc:
         return False, f"Failed to un-draft PR #{pr_number}: {exc}"
+
+
+def merge_pr(
+    *,
+    settings: Settings,
+    repo: str,
+    pr_number: int,
+    merge_method: str = "squash",
+) -> tuple[bool, str]:
+    """Attempt to merge a PR via the GitHub REST API.
+
+    Returns (success, message).
+
+    Status codes:
+    - 200/204: merged successfully
+    - 403: insufficient token permissions (contents:write required)
+    - 405: merge not allowed (protected branch, checks still running, etc.)
+    - 409: merge conflict
+    - 422: unprocessable (e.g., already merged, branch deleted)
+    """
+    if not settings.github_api_token:
+        return False, "GitHub API token missing; cannot merge PR"
+    api_base = settings.github_api_url.rstrip("/")
+    url = f"{api_base}/repos/{repo}/pulls/{pr_number}/merge"
+    try:
+        with httpx.Client(timeout=15.0) as client:
+            response = client.put(
+                url,
+                headers=_build_headers(settings),
+                json={"merge_method": merge_method},
+            )
+            if response.status_code in {200, 204}:
+                return True, f"PR #{pr_number} merged successfully"
+            detail = response.text[:300]
+            return False, f"GitHub returned {response.status_code} when merging PR #{pr_number}: {detail}"
+    except Exception as exc:
+        return False, f"Failed to merge PR #{pr_number}: {exc}"
+
+
+def run_preflight_checks(*, settings: Settings, repo: str | None = None) -> dict:
+    """Run a preflight diagnostic against the current environment configuration.
+
+    Returns a structured dict describing which capabilities are available for
+    unattended trusted continuation. Intended for the GET /preflight endpoint.
+    """
+    result: dict = {
+        "github_api_token": bool(settings.github_api_token),
+        "auto_merge_enabled": settings.program_auto_merge,
+        "auto_continue_enabled": settings.program_auto_continue,
+        "auto_dispatch_enabled": settings.program_auto_dispatch,
+        "auto_approve_enabled": settings.program_auto_approve,
+        "trusted_kickoff_enabled": settings.program_trusted_auto_confirm,
+        "trusted_kickoff_label": settings.trusted_kickoff_label,
+        "dispatch_assignee": settings.copilot_dispatch_assignee,
+        "copilot_target_branch": settings.copilot_target_branch,
+        "capabilities": {},
+        "blockers": [],
+        "admin_prerequisites": [],
+    }
+
+    caps = result["capabilities"]
+    blockers: list[str] = result["blockers"]
+    prereqs: list[str] = result["admin_prerequisites"]
+
+    caps["issue_creation"] = bool(settings.github_api_token)
+    caps["pr_ready_for_review"] = bool(settings.github_api_token)
+    caps["pr_merge"] = bool(settings.github_api_token)
+    caps["dispatch"] = bool(settings.github_api_token)
+    caps["next_slice_dispatch"] = bool(settings.github_api_token and settings.program_auto_continue and settings.program_auto_dispatch)
+    caps["unattended_continuation"] = bool(
+        settings.github_api_token
+        and settings.program_auto_continue
+        and settings.program_auto_dispatch
+        and settings.program_auto_merge
+        and settings.program_trusted_auto_confirm
+    )
+
+    if not settings.github_api_token:
+        blockers.append("GITHUB_API_TOKEN not configured; all GitHub API operations will fail")
+        prereqs.append("Set GITHUB_API_TOKEN to a fine-grained or classic token with repo:write and pull_requests:write scope")
+
+    if not settings.program_auto_merge:
+        blockers.append("PROGRAM_AUTO_MERGE=false (default); the orchestrator will not automatically merge PRs")
+        prereqs.append(
+            "Set PROGRAM_AUTO_MERGE=true in orchestrator environment to enable automatic PR merge for trusted programs. "
+            "Requires the token to have contents:write permission on the target repository."
+        )
+
+    if not settings.program_auto_continue:
+        blockers.append("PROGRAM_AUTO_CONTINUE=false; next-slice creation is disabled")
+
+    if not settings.program_auto_dispatch:
+        blockers.append("PROGRAM_AUTO_DISPATCH=false; next-slice auto-dispatch is disabled")
+
+    if not settings.program_trusted_auto_confirm:
+        blockers.append("PROGRAM_TRUSTED_AUTO_CONFIRM=false; trusted kickoff auto-confirm is disabled")
+        prereqs.append("Set PROGRAM_TRUSTED_AUTO_CONFIRM=true to allow trusted program kickoffs to skip manual approval")
+
+    prereqs.append(
+        "GitHub repository Actions settings: ensure 'Allow GitHub Actions to create and approve pull requests' is enabled "
+        "under Settings > Actions > General if the orchestrator token is used for any workflow-triggering activity. "
+        "If Copilot PRs trigger workflow approval gating (status='waiting'), check Settings > Actions > General > "
+        "'Fork pull request workflows from outside collaborators' and set it to 'Require approval for first-time contributors "
+        "who are new to GitHub' (least restrictive) or add the Copilot bot as a repository collaborator."
+    )
+    prereqs.append(
+        "For auto-merge to work end-to-end: enable 'Allow auto-merge' under repository Settings > General. "
+        "The orchestrator will attempt to merge directly via the API; GitHub will enforce required status checks."
+    )
+
+    return result

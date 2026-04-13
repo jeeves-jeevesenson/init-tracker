@@ -31,6 +31,9 @@ from orchestrator.app.models import (
     BLOCKER_WAITING_FOR_MERGE,
     BLOCKER_WAITING_FOR_WORKFLOW_APPROVAL,
     BLOCKER_WAITING_FOR_PR_READY,
+    BLOCKER_WAITING_FOR_PERMISSIONS,
+    BLOCKER_WAITING_FOR_REPO_SETTING,
+    BLOCKER_AUTO_MERGE_DISABLED,
     BLOCKER_WAITING_FOR_ISSUE_CREATION,
     AgentRun,
     Program,
@@ -1157,7 +1160,8 @@ class DraftPRHandlingTests(unittest.TestCase):
             with Session(db.get_engine()) as session:
                 updated_program = session.get(Program, prog_id)
                 blocker = json.loads(updated_program.blocker_state_json or "{}")
-                self.assertEqual(blocker.get("reason"), BLOCKER_WAITING_FOR_PR_READY)
+                # A 403 error is classified as a permissions failure, not a generic PR-ready stall.
+                self.assertEqual(blocker.get("reason"), BLOCKER_WAITING_FOR_PERMISSIONS)
 
             notify_calls = [str(c.args[0]) for c in mocked_notify.call_args_list if c.args]
             self.assertTrue(any("stall" in msg.lower() or "draft" in msg.lower() for msg in notify_calls))
@@ -1391,6 +1395,573 @@ class AutoDispatchAfterSliceCreationTests(unittest.TestCase):
 
             # The next slice task should have been dispatched automatically
             mocked_dispatch.assert_called_once()
+
+
+class MergePRTests(unittest.TestCase):
+    """Tests for the merge_pr GitHub API function and auto-merge integration."""
+
+    def setUp(self):
+        self._saved_env = {key: os.environ.get(key) for key in ENV_KEYS}
+
+    def tearDown(self):
+        for key, value in self._saved_env.items():
+            if value is None:
+                os.environ.pop(key, None)
+            else:
+                os.environ[key] = value
+
+    def test_merge_pr_success(self):
+        """merge_pr should return (True, ...) on HTTP 200."""
+        from orchestrator.app.github_dispatch import merge_pr
+        from orchestrator.app.config import Settings
+        import httpx
+
+        settings = Settings(GITHUB_API_TOKEN="dummy-token", GITHUB_API_URL="https://api.github.com")
+
+        mock_response = MagicMock()
+        mock_response.status_code = 200
+
+        with patch("orchestrator.app.github_dispatch.httpx.Client") as mock_client_cls:
+            mock_client = MagicMock()
+            mock_client.__enter__ = lambda s: mock_client
+            mock_client.__exit__ = MagicMock(return_value=False)
+            mock_client.put.return_value = mock_response
+            mock_client_cls.return_value = mock_client
+
+            success, msg = merge_pr(settings=settings, repo="owner/repo", pr_number=42)
+
+        self.assertTrue(success)
+        self.assertIn("42", msg)
+        mock_client.put.assert_called_once()
+        call_kwargs = mock_client.put.call_args
+        self.assertIn("/pulls/42/merge", call_kwargs.args[0])
+
+    def test_merge_pr_missing_token(self):
+        """merge_pr should return (False, ...) when no token is configured."""
+        from orchestrator.app.github_dispatch import merge_pr
+        from orchestrator.app.config import Settings
+
+        settings = Settings(GITHUB_API_TOKEN=None)
+        success, msg = merge_pr(settings=settings, repo="owner/repo", pr_number=42)
+        self.assertFalse(success)
+        self.assertIn("token", msg.lower())
+
+    def test_merge_pr_403_returns_failure(self):
+        """merge_pr should return (False, ...) on a 403 response."""
+        from orchestrator.app.github_dispatch import merge_pr
+        from orchestrator.app.config import Settings
+
+        settings = Settings(GITHUB_API_TOKEN="dummy-token")
+
+        mock_response = MagicMock()
+        mock_response.status_code = 403
+        mock_response.text = "Resource not accessible by integration"
+
+        with patch("orchestrator.app.github_dispatch.httpx.Client") as mock_client_cls:
+            mock_client = MagicMock()
+            mock_client.__enter__ = lambda s: mock_client
+            mock_client.__exit__ = MagicMock(return_value=False)
+            mock_client.put.return_value = mock_response
+            mock_client_cls.return_value = mock_client
+
+            success, msg = merge_pr(settings=settings, repo="owner/repo", pr_number=42)
+
+        self.assertFalse(success)
+        self.assertIn("403", msg)
+
+    def test_auto_merge_attempts_github_merge(self):
+        """When auto_merge=True and checks pass and merge policy allows, the
+        orchestrator should call merge_pr on GitHub."""
+        with tempfile.TemporaryDirectory() as td:
+            os.environ["DATABASE_URL"] = f"sqlite:///{Path(td) / 'orchestrator.db'}"
+            os.environ["GH_WEBHOOK_SECRET"] = "test-gh-secret"
+            os.environ["GITHUB_API_TOKEN"] = "dummy-token"
+            os.environ["PROGRAM_AUTO_MERGE"] = "true"
+            main, db = _reload_orchestrator_modules()
+
+            repo = "jeeves-jeevesenson/init-tracker"
+            issue_number = 901
+            pr_number = 51
+
+            workflow_success_payload = {
+                "action": "completed",
+                "repository": {"full_name": repo},
+                "workflow_run": {
+                    "id": 30001,
+                    "name": "CI",
+                    "status": "completed",
+                    "conclusion": "success",
+                    "html_url": f"https://github.com/{repo}/actions/runs/30001",
+                    "pull_requests": [{"number": pr_number}],
+                },
+            }
+
+            continue_artifact = {
+                "decision": "continue",
+                "status": "complete",
+                "confidence": 0.95,
+                "scope_alignment": [],
+                "acceptance_assessment": ["done"],
+                "risk_findings": [],
+                "merge_recommendation": "merge_ready",
+                "revision_instructions": [],
+                "audit_recommendation": "",
+                "next_slice_hint": "",
+                "summary": ["All good"],
+            }
+
+            with patch(
+                "orchestrator.app.tasks.summarize_work_update",
+                return_value={"review_artifact": continue_artifact, "summary_bullets": ["Good"], "next_action": "continue"},
+            ), patch(
+                "orchestrator.app.programs._create_github_issue_for_slice",
+                return_value=902,
+            ), patch(
+                "orchestrator.app.tasks.dispatch_task_to_github_copilot",
+                return_value=DispatchResult(
+                    attempted=True, accepted=True, manual_required=False,
+                    state="accepted", summary="Dispatched",
+                ),
+            ), patch(
+                "orchestrator.app.programs.merge_pr",
+                return_value=(True, "PR #51 merged successfully"),
+            ) as mocked_merge, patch("orchestrator.app.tasks.notify_discord"):
+                with TestClient(main.app) as client:
+                    with Session(db.get_engine()) as session:
+                        task = TaskPacket(
+                            github_repo=repo,
+                            github_issue_number=issue_number,
+                            title="Merge test",
+                            raw_body="body",
+                            status="working",
+                            approval_state="approved",
+                            acceptance_criteria_json='["done"]',
+                            task_kind="program_slice",
+                        )
+                        session.add(task)
+                        session.commit()
+                        session.refresh(task)
+
+                        program = Program(
+                            github_repo=repo,
+                            root_issue_number=issue_number,
+                            title="Merge program",
+                            normalized_goal="complete",
+                            status=PROGRAM_STATUS_ACTIVE,
+                            current_slice_number=1,
+                            auto_continue=True,
+                            auto_dispatch=True,
+                            auto_merge=True,
+                        )
+                        session.add(program)
+                        session.commit()
+                        session.refresh(program)
+
+                        slice1 = ProgramSlice(
+                            program_id=program.id,
+                            slice_number=1,
+                            milestone_key="M1",
+                            title="Slice One",
+                            objective="First slice",
+                            acceptance_criteria_json='["done"]',
+                            status="in_progress",
+                            task_packet_id=task.id,
+                        )
+                        session.add(slice1)
+                        slice2 = ProgramSlice(
+                            program_id=program.id,
+                            slice_number=2,
+                            milestone_key="M2",
+                            title="Slice Two",
+                            objective="Second slice",
+                            acceptance_criteria_json='["slice 2 done"]',
+                            status="planned",
+                        )
+                        session.add(slice2)
+                        session.commit()
+                        session.refresh(slice1)
+                        session.refresh(slice2)
+
+                        task.program_id = program.id
+                        task.program_slice_id = slice1.id
+                        session.add(task)
+
+                        run = AgentRun(
+                            task_packet_id=task.id,
+                            program_id=program.id,
+                            program_slice_id=slice1.id,
+                            provider="github_copilot",
+                            github_repo=repo,
+                            github_issue_number=issue_number,
+                            github_pr_number=pr_number,
+                            status="pr_opened",
+                            last_summary="pr opened",
+                        )
+                        session.add(run)
+                        session.commit()
+
+                    resp = _post_github(
+                        client,
+                        secret="test-gh-secret",
+                        delivery="delivery-merge-test-901",
+                        event="workflow_run",
+                        payload=workflow_success_payload,
+                    )
+                    self.assertEqual(resp.status_code, 200)
+
+            # merge_pr should have been called with the correct PR number
+            mocked_merge.assert_called_once_with(
+                settings=unittest.mock.ANY,
+                repo=repo,
+                pr_number=pr_number,
+            )
+
+    def test_auto_merge_403_sets_permissions_blocker(self):
+        """When merge_pr returns 403, the program should show a waiting_for_permissions blocker."""
+        with tempfile.TemporaryDirectory() as td:
+            os.environ["DATABASE_URL"] = f"sqlite:///{Path(td) / 'orchestrator.db'}"
+            os.environ["GH_WEBHOOK_SECRET"] = "test-gh-secret"
+            os.environ["GITHUB_API_TOKEN"] = "dummy-token"
+            os.environ["PROGRAM_AUTO_MERGE"] = "true"
+            main, db = _reload_orchestrator_modules()
+
+            repo = "jeeves-jeevesenson/init-tracker"
+            issue_number = 903
+            pr_number = 52
+
+            workflow_success_payload = {
+                "action": "completed",
+                "repository": {"full_name": repo},
+                "workflow_run": {
+                    "id": 30003,
+                    "name": "CI",
+                    "status": "completed",
+                    "conclusion": "success",
+                    "html_url": f"https://github.com/{repo}/actions/runs/30003",
+                    "pull_requests": [{"number": pr_number}],
+                },
+            }
+
+            continue_artifact = {
+                "decision": "continue",
+                "status": "complete",
+                "confidence": 0.95,
+                "scope_alignment": [],
+                "acceptance_assessment": ["done"],
+                "risk_findings": [],
+                "merge_recommendation": "merge_ready",
+                "revision_instructions": [],
+                "audit_recommendation": "",
+                "next_slice_hint": "",
+                "summary": ["All good"],
+            }
+
+            with patch(
+                "orchestrator.app.tasks.summarize_work_update",
+                return_value={"review_artifact": continue_artifact, "summary_bullets": ["Good"], "next_action": "continue"},
+            ), patch(
+                "orchestrator.app.programs._create_github_issue_for_slice",
+                return_value=904,
+            ), patch(
+                "orchestrator.app.tasks.dispatch_task_to_github_copilot",
+                return_value=DispatchResult(
+                    attempted=True, accepted=True, manual_required=False,
+                    state="accepted", summary="Dispatched",
+                ),
+            ), patch(
+                "orchestrator.app.programs.merge_pr",
+                return_value=(False, "GitHub returned 403 when merging PR #52: Resource not accessible"),
+            ), patch("orchestrator.app.tasks.notify_discord"):
+                with TestClient(main.app) as client:
+                    with Session(db.get_engine()) as session:
+                        task = TaskPacket(
+                            github_repo=repo,
+                            github_issue_number=issue_number,
+                            title="Merge perm test",
+                            raw_body="body",
+                            status="working",
+                            approval_state="approved",
+                            acceptance_criteria_json='["done"]',
+                            task_kind="program_slice",
+                        )
+                        session.add(task)
+                        session.commit()
+                        session.refresh(task)
+
+                        program = Program(
+                            github_repo=repo,
+                            root_issue_number=issue_number,
+                            title="Perm test program",
+                            normalized_goal="complete",
+                            status=PROGRAM_STATUS_ACTIVE,
+                            current_slice_number=1,
+                            auto_continue=True,
+                            auto_dispatch=True,
+                            auto_merge=True,
+                        )
+                        session.add(program)
+                        session.commit()
+                        session.refresh(program)
+
+                        slice1 = ProgramSlice(
+                            program_id=program.id,
+                            slice_number=1,
+                            milestone_key="M1",
+                            title="Slice One",
+                            objective="First slice",
+                            acceptance_criteria_json='["done"]',
+                            status="in_progress",
+                            task_packet_id=task.id,
+                        )
+                        session.add(slice1)
+                        slice2 = ProgramSlice(
+                            program_id=program.id,
+                            slice_number=2,
+                            milestone_key="M2",
+                            title="Slice Two",
+                            objective="Second slice",
+                            acceptance_criteria_json='["slice 2 done"]',
+                            status="planned",
+                        )
+                        session.add(slice2)
+                        session.commit()
+                        session.refresh(slice1)
+
+                        task.program_id = program.id
+                        task.program_slice_id = slice1.id
+                        session.add(task)
+
+                        run = AgentRun(
+                            task_packet_id=task.id,
+                            program_id=program.id,
+                            program_slice_id=slice1.id,
+                            provider="github_copilot",
+                            github_repo=repo,
+                            github_issue_number=issue_number,
+                            github_pr_number=pr_number,
+                            status="pr_opened",
+                            last_summary="pr opened",
+                        )
+                        session.add(run)
+                        session.commit()
+                        prog_id = program.id
+
+                    _post_github(
+                        client,
+                        secret="test-gh-secret",
+                        delivery="delivery-merge-perm-903",
+                        event="workflow_run",
+                        payload=workflow_success_payload,
+                    )
+
+            with Session(db.get_engine()) as session:
+                updated_program = session.get(Program, prog_id)
+                blocker = json.loads(updated_program.blocker_state_json or "{}")
+                self.assertEqual(blocker.get("reason"), BLOCKER_WAITING_FOR_PERMISSIONS)
+
+    def test_non_permission_undraft_failure_sets_pr_ready_blocker(self):
+        """A non-403 un-draft failure should set the generic waiting_for_pr_ready blocker."""
+        with tempfile.TemporaryDirectory() as td:
+            os.environ["DATABASE_URL"] = f"sqlite:///{Path(td) / 'orchestrator.db'}"
+            os.environ["GH_WEBHOOK_SECRET"] = "test-gh-secret"
+            os.environ["GITHUB_API_TOKEN"] = "dummy-token"
+            main, db = _reload_orchestrator_modules()
+
+            repo = "jeeves-jeevesenson/init-tracker"
+            issue_number = 905
+            pr_number = 55
+
+            draft_pr_payload = {
+                "action": "opened",
+                "repository": {"full_name": repo},
+                "pull_request": {
+                    "number": pr_number,
+                    "id": pr_number * 100,
+                    "title": f"Draft: fix #{issue_number}",
+                    "body": f"Closes #{issue_number}",
+                    "html_url": f"https://github.com/{repo}/pull/{pr_number}",
+                    "merged": False,
+                    "draft": True,
+                    "mergeable": None,
+                    "mergeable_state": "unknown",
+                    "changed_files": 1,
+                    "commits": 1,
+                    "updated_at": "2024-01-01T00:00:00Z",
+                },
+            }
+
+            continue_artifact = {
+                "decision": "continue",
+                "status": "complete",
+                "confidence": 0.9,
+                "scope_alignment": [],
+                "acceptance_assessment": ["done"],
+                "risk_findings": [],
+                "merge_recommendation": "merge_ready",
+                "revision_instructions": [],
+                "audit_recommendation": "",
+                "next_slice_hint": "",
+                "summary": ["Looks good"],
+            }
+
+            with patch(
+                "orchestrator.app.tasks.summarize_work_update",
+                return_value={"review_artifact": continue_artifact, "summary_bullets": ["Good"], "next_action": "continue"},
+            ), patch(
+                "orchestrator.app.tasks.mark_pr_ready_for_review",
+                return_value=(False, "GitHub returned 500 when un-drafting PR #55: server error"),
+            ), patch("orchestrator.app.tasks.notify_discord"):
+                with TestClient(main.app) as client:
+                    with Session(db.get_engine()) as session:
+                        task = TaskPacket(
+                            github_repo=repo,
+                            github_issue_number=issue_number,
+                            title="Non-perm undraft test",
+                            raw_body="body",
+                            status="working",
+                            approval_state="approved",
+                            acceptance_criteria_json='["done"]',
+                            task_kind="program_slice",
+                        )
+                        session.add(task)
+                        session.commit()
+                        session.refresh(task)
+
+                        program = Program(
+                            github_repo=repo,
+                            root_issue_number=issue_number,
+                            title="Non-perm test",
+                            normalized_goal="complete",
+                            status=PROGRAM_STATUS_ACTIVE,
+                            current_slice_number=1,
+                            auto_merge=False,
+                        )
+                        session.add(program)
+                        session.commit()
+                        session.refresh(program)
+
+                        slice1 = ProgramSlice(
+                            program_id=program.id,
+                            slice_number=1,
+                            milestone_key="M1",
+                            title="Slice",
+                            objective="do it",
+                            acceptance_criteria_json='["done"]',
+                            status="in_progress",
+                            task_packet_id=task.id,
+                        )
+                        session.add(slice1)
+                        session.commit()
+                        session.refresh(slice1)
+
+                        task.program_id = program.id
+                        task.program_slice_id = slice1.id
+                        session.add(task)
+                        session.commit()
+                        prog_id = program.id
+
+                    _post_github(
+                        client,
+                        secret="test-gh-secret",
+                        delivery="delivery-non-perm-905",
+                        event="pull_request",
+                        payload=draft_pr_payload,
+                    )
+
+            with Session(db.get_engine()) as session:
+                updated_program = session.get(Program, prog_id)
+                blocker = json.loads(updated_program.blocker_state_json or "{}")
+                # A non-403 error uses the generic waiting_for_pr_ready reason
+                self.assertEqual(blocker.get("reason"), BLOCKER_WAITING_FOR_PR_READY)
+
+
+class PreflightEndpointTests(unittest.TestCase):
+    """Tests for GET /preflight diagnostic endpoint."""
+
+    def setUp(self):
+        self._saved_env = {key: os.environ.get(key) for key in ENV_KEYS}
+
+    def tearDown(self):
+        for key, value in self._saved_env.items():
+            if value is None:
+                os.environ.pop(key, None)
+            else:
+                os.environ[key] = value
+
+    def test_preflight_returns_ok(self):
+        """GET /preflight should return a structured report."""
+        with tempfile.TemporaryDirectory() as td:
+            os.environ["DATABASE_URL"] = f"sqlite:///{Path(td) / 'orchestrator.db'}"
+            os.environ["GITHUB_API_TOKEN"] = "dummy-token"
+            os.environ["PROGRAM_AUTO_MERGE"] = "false"
+            main, db = _reload_orchestrator_modules()
+
+            with TestClient(main.app) as client:
+                resp = client.get("/preflight")
+
+            self.assertEqual(resp.status_code, 200)
+            body = resp.json()
+            self.assertTrue(body["ok"])
+            pf = body["preflight"]
+            self.assertIn("github_api_token", pf)
+            self.assertIn("auto_merge_enabled", pf)
+            self.assertIn("capabilities", pf)
+            self.assertIn("blockers", pf)
+            self.assertIn("admin_prerequisites", pf)
+            self.assertIn("unattended_continuation", pf["capabilities"])
+
+    def test_preflight_unattended_false_when_auto_merge_disabled(self):
+        """When PROGRAM_AUTO_MERGE=false, unattended_continuation should be False."""
+        with tempfile.TemporaryDirectory() as td:
+            os.environ["DATABASE_URL"] = f"sqlite:///{Path(td) / 'orchestrator.db'}"
+            os.environ["GITHUB_API_TOKEN"] = "dummy-token"
+            os.environ["PROGRAM_AUTO_MERGE"] = "false"
+            main, db = _reload_orchestrator_modules()
+
+            with TestClient(main.app) as client:
+                resp = client.get("/preflight")
+
+            body = resp.json()
+            self.assertFalse(body["preflight"]["capabilities"]["unattended_continuation"])
+            # Should mention auto_merge in blockers
+            blockers = body["preflight"]["blockers"]
+            self.assertTrue(any("auto_merge" in b.lower() or "auto-merge" in b.lower() for b in blockers))
+
+    def test_preflight_unattended_true_when_all_enabled(self):
+        """When all auto-* settings and the token are present, unattended_continuation is True."""
+        with tempfile.TemporaryDirectory() as td:
+            os.environ["DATABASE_URL"] = f"sqlite:///{Path(td) / 'orchestrator.db'}"
+            os.environ["GITHUB_API_TOKEN"] = "dummy-token"
+            os.environ["PROGRAM_AUTO_MERGE"] = "true"
+            os.environ["PROGRAM_AUTO_CONTINUE"] = "true"
+            os.environ["PROGRAM_AUTO_DISPATCH"] = "true"
+            os.environ["PROGRAM_AUTO_APPROVE"] = "true"
+            os.environ["PROGRAM_TRUSTED_AUTO_CONFIRM"] = "true"
+            main, db = _reload_orchestrator_modules()
+
+            with TestClient(main.app) as client:
+                resp = client.get("/preflight")
+
+            body = resp.json()
+            self.assertTrue(body["preflight"]["capabilities"]["unattended_continuation"])
+            self.assertTrue(body["preflight"]["github_api_token"])
+            self.assertTrue(body["preflight"]["auto_merge_enabled"])
+
+    def test_preflight_no_token_surfaces_blocker(self):
+        """When GITHUB_API_TOKEN is absent, preflight should surface a blocker."""
+        with tempfile.TemporaryDirectory() as td:
+            os.environ["DATABASE_URL"] = f"sqlite:///{Path(td) / 'orchestrator.db'}"
+            os.environ.pop("GITHUB_API_TOKEN", None)
+            main, db = _reload_orchestrator_modules()
+
+            with TestClient(main.app) as client:
+                resp = client.get("/preflight")
+
+            body = resp.json()
+            self.assertFalse(body["preflight"]["github_api_token"])
+            self.assertFalse(body["preflight"]["capabilities"]["unattended_continuation"])
+            blockers = body["preflight"]["blockers"]
+            self.assertTrue(any("token" in b.lower() or "github_api_token" in b for b in blockers))
 
 
 if __name__ == "__main__":

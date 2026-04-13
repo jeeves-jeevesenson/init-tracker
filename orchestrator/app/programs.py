@@ -8,12 +8,16 @@ import httpx
 from sqlmodel import Session, select
 
 from .config import Settings
+from .github_dispatch import merge_pr
 from .models import (
     APPROVAL_APPROVED,
+    BLOCKER_AUTO_MERGE_DISABLED,
     BLOCKER_ESCALATED_TO_HUMAN,
     BLOCKER_WAITING_FOR_ISSUE_CREATION,
     BLOCKER_WAITING_FOR_MERGE,
+    BLOCKER_WAITING_FOR_PERMISSIONS,
     BLOCKER_WAITING_FOR_PR_READY,
+    BLOCKER_WAITING_FOR_REPO_SETTING,
     PROGRAM_STATUS_ACTIVE,
     PROGRAM_STATUS_BLOCKED,
     PROGRAM_STATUS_COMPLETED,
@@ -345,6 +349,65 @@ def _merge_policy_allows_auto_merge(artifact: dict[str, Any], *, checks_passed: 
     return not any("high" in str(item).lower() for item in risk_findings)
 
 
+def _attempt_pr_merge(
+    session: Session,
+    *,
+    settings: Settings,
+    program: Program,
+    pr_number: int,
+) -> None:
+    """Best-effort attempt to merge a PR on GitHub when auto_merge is enabled.
+
+    Surfaces a structured blocker on the program record when the merge fails due to
+    missing token permissions or a repository setting that disallows direct merge.
+    A failure here does NOT block the orchestrator state machine — the program still
+    advances internally; the human or GitHub auto-merge can complete the actual merge.
+    """
+    success, message = merge_pr(settings=settings, repo=program.github_repo, pr_number=pr_number)
+    if success:
+        program.blocker_state_json = json.dumps({}, ensure_ascii=False)
+        program.updated_at = _utc_now()
+        _save(session, program)
+        return
+
+    # Classify the failure for the operator.
+    lower = message.lower()
+    if "403" in message or "forbidden" in lower or "permission" in lower:
+        reason = BLOCKER_WAITING_FOR_PERMISSIONS
+        summary = (
+            f"Auto-merge attempted but token lacks required permissions to merge PR #{pr_number}. "
+            "Grant contents:write to the GITHUB_API_TOKEN and ensure 'Allow auto-merge' is enabled "
+            "in repository Settings > General."
+        )
+    elif "405" in message or "not allowed" in lower or "protected" in lower:
+        reason = BLOCKER_WAITING_FOR_REPO_SETTING
+        summary = (
+            f"Auto-merge attempted but the repository does not allow direct merge for PR #{pr_number}. "
+            "Enable 'Allow auto-merge' in repository Settings > General, or check branch protection rules."
+        )
+    elif "422" in message and ("auto-merge" in lower or "automerge" in lower):
+        reason = BLOCKER_AUTO_MERGE_DISABLED
+        summary = (
+            f"Auto-merge is not enabled on PR #{pr_number}. "
+            "Enable 'Allow auto-merge' in repository Settings > General."
+        )
+    else:
+        reason = BLOCKER_WAITING_FOR_MERGE
+        summary = f"Auto-merge attempted but failed for PR #{pr_number}: {message}"
+
+    program.blocker_state_json = json.dumps(
+        {
+            "reason": reason,
+            "pr_number": pr_number,
+            "detail": message,
+        },
+        ensure_ascii=False,
+    )
+    program.latest_summary = summary
+    program.updated_at = _utc_now()
+    _save(session, program)
+
+
 def _create_github_issue_for_slice(
     *,
     settings: Settings,
@@ -529,7 +592,7 @@ def apply_reviewer_decision(
             _save(session, run, slice_record, program)
             return decision
 
-        return _complete_slice_and_advance(
+        continuation = _complete_slice_and_advance(
             session,
             settings=settings,
             program=program,
@@ -538,6 +601,28 @@ def apply_reviewer_decision(
             run=run,
             dispatch_fn=dispatch_fn,
         )
+
+        # After advancing internally, attempt to actually merge the PR on GitHub.
+        # This is done after _complete_slice_and_advance so that any merge failure
+        # blocker is set last and is visible in program state.  A failure does NOT
+        # roll back the internal advancement; the human or GitHub can complete the
+        # actual merge and the webhook handler will be a no-op on an already-completed slice.
+        if (
+            program.auto_merge
+            and _merge_policy_allows_auto_merge(artifact, checks_passed=checks_passed)
+            and run.github_pr_number
+            and run.status != RUN_STATUS_COMPLETED
+        ):
+            # Refresh program from session after _complete_slice_and_advance saved it
+            session.refresh(program)
+            _attempt_pr_merge(
+                session,
+                settings=settings,
+                program=program,
+                pr_number=run.github_pr_number,
+            )
+
+        return continuation
 
     program.latest_summary = f"Unhandled reviewer decision: {decision}"
     _save(session, run, slice_record, program)

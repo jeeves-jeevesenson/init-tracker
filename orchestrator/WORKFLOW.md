@@ -246,14 +246,105 @@ All blocked/waiting states are now surfaced via structured `blocker_state` on th
 | `waiting_for_pr_ready` | PR is a draft and auto-un-draft failed; manual action required |
 | `waiting_for_workflow_approval` | GitHub Actions workflow is waiting for a maintainer approval |
 | `waiting_for_issue_creation_capability` | Auto-continuation failed because GitHub issue creation was unavailable |
+| `waiting_for_permissions` | GitHub API call failed due to insufficient token permissions (403) |
+| `waiting_for_repo_setting` | GitHub rejected an operation because a required repo setting is disabled (e.g. Allow auto-merge) |
+| `auto_merge_disabled` | Auto-merge is not enabled on the PR; enable in repository Settings > General |
 | `escalated_to_human` | Reviewer requested escalation or max revision attempts exceeded |
 | `max_revisions_exceeded` | Slice exceeded allowed revision cycles; escalated |
 
 The `wait_reason` field in `GET /programs` responses provides the reason string directly for easy consumption.
+
+## Preflight diagnostic endpoint
+
+`GET /preflight` reports whether the current environment is capable of unattended trusted continuation.
+
+```json
+{
+  "ok": true,
+  "preflight": {
+    "github_api_token": true,
+    "auto_merge_enabled": false,
+    "auto_continue_enabled": true,
+    "auto_dispatch_enabled": true,
+    "auto_approve_enabled": true,
+    "trusted_kickoff_enabled": true,
+    "trusted_kickoff_label": "program:kickoff",
+    "dispatch_assignee": "copilot-swe-agent[bot]",
+    "copilot_target_branch": "main",
+    "capabilities": {
+      "issue_creation": true,
+      "pr_ready_for_review": true,
+      "pr_merge": true,
+      "dispatch": true,
+      "next_slice_dispatch": true,
+      "unattended_continuation": false
+    },
+    "blockers": [
+      "PROGRAM_AUTO_MERGE=false (default); the orchestrator will not automatically merge PRs"
+    ],
+    "admin_prerequisites": [
+      "Set PROGRAM_AUTO_MERGE=true ...",
+      "GitHub repository Actions settings: ..."
+    ]
+  }
+}
+```
+
+Run this before starting a trusted multi-slice program to confirm the chain can proceed without human intervention.
+
+## PR auto-merge behavior
+
+When `PROGRAM_AUTO_MERGE=true` and the OpenAI reviewer returns `decision=continue` with `merge_recommendation=merge_ready` and checks have passed:
+
+1. The orchestrator marks the slice as completed in its internal state.
+2. It calls `PUT /repos/{owner}/{repo}/pulls/{number}/merge` to directly merge the PR on GitHub.
+3. If the merge call succeeds: the PR closes, the `pull_request.closed` webhook fires, and `advance_program_on_pr_merge` confirms the advancement and dispatches the next slice.
+4. If the merge call fails:
+   - `403 Forbidden`: blocker `waiting_for_permissions` is set. Fix: grant `contents:write` to the GITHUB_API_TOKEN.
+   - `405 Method Not Allowed`: blocker `waiting_for_repo_setting` is set. Fix: enable "Allow auto-merge" in repository Settings > General, or check branch protection rules.
+   - `422` with auto-merge message: blocker `auto_merge_disabled` is set. Fix: enable "Allow auto-merge" in repository Settings > General.
+   - Other: blocker `waiting_for_merge` is set. A human must merge manually.
+5. In all failure cases, the orchestrator has already advanced its internal state; the human merge (or a retry) will trigger the webhook path.
 
 ## Manual steps that still exist
 
 - If GitHub dispatch is blocked by auth/plan/API limitations, a human must manually dispatch in GitHub.
 - If workflow approval is required due to repository-level Actions settings (fork policies, environment rules), a maintainer must approve in GitHub Actions — the orchestrator detects this and notifies, but cannot approve on the user's behalf.
 - If GitHub token permissions do not allow PATCH on PR draft state, the operator must manually un-draft the PR after seeing the `waiting_for_pr_ready` Discord notification.
-- Auto-merge (`PROGRAM_AUTO_MERGE=true`) remains opt-in; the default is `false` and requires a human to merge (after which the continuation fires automatically).
+- Auto-merge (`PROGRAM_AUTO_MERGE=true`) is opt-in; the default is `false` and requires a human to merge (after which the continuation fires automatically).
+
+## GitHub/admin prerequisites for fully unattended continuation
+
+The following one-time repository/organization actions are required before a trusted program can run end-to-end without any human touchpoints:
+
+### 1. GITHUB_API_TOKEN scope
+
+The orchestrator token must have:
+- `repo` or `contents:write` — required for merging PRs
+- `issues:write` — required for creating follow-up slice issues
+- `pull_requests:write` — required for un-drafting PRs
+
+### 2. Repository: Allow auto-merge
+
+- Go to repository Settings > General > Pull Requests
+- Enable **Allow auto-merge**
+- This allows the merge API call to succeed and lets GitHub enforce required status checks before merging
+
+### 3. Orchestrator environment: enable auto-merge
+
+```env
+PROGRAM_AUTO_MERGE=true
+```
+
+### 4. Repository Actions settings: reduce workflow approval gating
+
+If GitHub Actions workflows require approval for Copilot bot PRs:
+- Go to repository Settings > Actions > General
+- Under "Fork pull request workflows from outside collaborators": set to **"Require approval for first-time contributors who are new to GitHub"** (or less restrictive)
+- Alternatively: add the `copilot-swe-agent[bot]` as a repository collaborator to avoid first-time-contributor gating
+
+### 5. GitHub Actions workflow permissions
+
+The `.github/workflows/lan-inline-script-check.yml` workflow uses explicit `permissions: contents: read; pull-requests: read` to minimize the token scope granted to workflow runs. This is intentional and safe.
+
+If a workflow needs to *write* to the repository (e.g., auto-labeling, commenting), add the specific write permissions required rather than using `permissions: write-all`.
