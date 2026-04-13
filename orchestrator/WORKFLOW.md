@@ -71,7 +71,8 @@ Dispatch uses GitHub REST API for existing issue assignment:
 Dispatch state semantics are intentionally conservative:
 - `dispatch_requested` = orchestrator attempted assignment
 - `awaiting_worker_start` = API accepted assignment request, worker-start still unconfirmed
-- `working` / `pr_opened` = worker-start evidence arrived
+- `working` / `pr_opened` = worker-start evidence arrived (assignment/comment/PR evidence can upgrade prior dispatch classifications)
+- `worker_failed` = Copilot worker started but then reported startup failure (for example “encountered an error and was unable to start working”)
 - `manual_dispatch_needed` = API/token/permission path did not accept assignment in the expected form
 
 The orchestrator does not treat "packet comment posted" as dispatch success.
@@ -90,8 +91,10 @@ Behavior:
 - run/task summary is updated with concise AI-generated review/summarization
 - worker-start confirmation signals include:
   - issue assigned to configured Copilot assignee
-  - issue comment from configured Copilot identity
+  - issue comment from configured Copilot identity (login or display-name forms)
   - PR activity tied to the task
+- worker startup failure signals include:
+  - Copilot comment indicating the worker encountered an error and was unable to start working
 
 ## OpenAI usage
 
@@ -107,6 +110,7 @@ Sent for meaningful transitions:
 - task planned / awaiting approval
 - task approved
 - task dispatched
+- worker started / worker failed after start
 - approved but manual dispatch required
 - task rejected
 - PR opened/updated for review

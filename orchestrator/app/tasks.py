@@ -25,6 +25,7 @@ from .models import (
     RUN_STATUS_MANUAL_DISPATCH_NEEDED,
     RUN_STATUS_PR_OPENED,
     RUN_STATUS_QUEUED,
+    RUN_STATUS_WORKER_FAILED,
     RUN_STATUS_WORKING,
     TASK_STATUS_APPROVED,
     TASK_STATUS_AWAITING_WORKER_START,
@@ -38,6 +39,7 @@ from .models import (
     TASK_STATUS_PLANNING,
     TASK_STATUS_PR_OPENED,
     TASK_STATUS_RECEIVED,
+    TASK_STATUS_WORKER_FAILED,
     TASK_STATUS_WORKING,
     AgentRun,
     TaskPacket,
@@ -49,6 +51,9 @@ from .openai_review import summarize_work_update
 ISSUE_REF_RE = re.compile(r"#(\d+)")
 APPROVE_RE = re.compile(r"(?im)(^|\n)\s*/approve\b")
 REJECT_RE = re.compile(r"(?im)(^|\n)\s*/reject\b")
+WORKER_START_FAILURE_RE = re.compile(
+    r"(?is)(encountered an error.*unable to start working|unable to start working|agent failed to start)"
+)
 
 CUSTOM_AGENT_INITIATIVE_SMITH = "Initiative Smith"
 CUSTOM_AGENT_TRACKER_ENGINEER = "Initiative Tracker Engineer"
@@ -84,6 +89,13 @@ WORKER_AUTO_NARROW_KEYWORDS = (
     "patch",
     "narrow",
 )
+COPILOT_DISPLAY_NAME_ALIASES = {
+    "copilot",
+    "github copilot",
+    "copilot coding agent",
+    "copilot swe agent",
+    "copilot / copilot swe agent",
+}
 
 
 def _utc_now() -> datetime:
@@ -140,6 +152,31 @@ def _save(session: Session, *objects: Any) -> None:
 
 def _is_copilot_identity(settings: Settings, login: str | None) -> bool:
     return is_copilot_identity(login, settings.copilot_dispatch_assignee)
+
+
+def _normalize_display_name(value: str | None) -> str:
+    if not value:
+        return ""
+    normalized = re.sub(r"[\[\]()/._-]+", " ", value.strip().lower())
+    normalized = re.sub(r"\s+", " ", normalized).strip()
+    return normalized
+
+
+def _is_copilot_actor(*, settings: Settings, login: str | None, display_name: str | None) -> bool:
+    if _is_copilot_identity(settings, login):
+        return True
+    normalized_display_name = _normalize_display_name(display_name)
+    if not normalized_display_name:
+        return False
+    if normalized_display_name in COPILOT_DISPLAY_NAME_ALIASES:
+        return True
+    return "copilot" in normalized_display_name and (
+        "agent" in normalized_display_name or "github" in normalized_display_name or "swe" in normalized_display_name
+    )
+
+
+def _is_worker_start_failure_comment(comment_body: str) -> bool:
+    return bool(WORKER_START_FAILURE_RE.search(comment_body or ""))
 
 
 def _parse_approval_command(comment_body: str) -> bool | None:
@@ -295,6 +332,33 @@ def _mark_worker_started(
     )
 
 
+def _mark_worker_failed(
+    session: Session,
+    *,
+    task: TaskPacket,
+    reason: str,
+) -> None:
+    if task.approval_state != APPROVAL_APPROVED:
+        return
+    if task.id is None:
+        return
+    run = _latest_run_for_task(session, task.id)
+    if run is None:
+        return
+    if run.status in {RUN_STATUS_PR_OPENED, RUN_STATUS_AWAITING_REVIEW, RUN_STATUS_COMPLETED}:
+        return
+    run.status = RUN_STATUS_WORKER_FAILED
+    run.last_summary = reason
+    run.updated_at = _utc_now()
+    task.status = TASK_STATUS_WORKER_FAILED
+    task.latest_summary = reason
+    task.updated_at = _utc_now()
+    _save(session, run, task)
+    notify_discord(
+        f"Worker started but failed: {task.github_repo}#{task.github_issue_number} -> {_worker_display_name(task)}"
+    )
+
+
 def _render_normalized_text(plan: dict[str, Any]) -> str:
     scope_lines = "\n".join(f"- {item}" for item in plan.get("scope", []))
     non_goal_lines = "\n".join(f"- {item}" for item in plan.get("non_goals", []))
@@ -398,6 +462,11 @@ def _run_planning(
     task: TaskPacket,
     issue_labels: set[str],
 ) -> None:
+    previous_status = task.status
+    previous_approval_state = task.approval_state
+    previous_summary = task.latest_summary or ""
+    had_successful_plan = bool(task.normalized_task_text)
+
     task.status = TASK_STATUS_PLANNING
     task.updated_at = _utc_now()
     _save(session, task)
@@ -427,10 +496,35 @@ def _run_planning(
             f"Task planned / awaiting approval: {task.github_repo}#{task.github_issue_number} -> {_worker_display_name(task)}"
         )
     except Exception as exc:
+        if had_successful_plan and previous_status in {
+            TASK_STATUS_AWAITING_APPROVAL,
+            TASK_STATUS_APPROVED,
+            TASK_STATUS_DISPATCH_REQUESTED,
+            TASK_STATUS_AWAITING_WORKER_START,
+            TASK_STATUS_DISPATCHED,
+            TASK_STATUS_WORKING,
+            TASK_STATUS_WORKER_FAILED,
+            TASK_STATUS_PR_OPENED,
+            TASK_STATUS_MANUAL_DISPATCH_NEEDED,
+            TASK_STATUS_BLOCKED,
+            TASK_STATUS_COMPLETED,
+        }:
+            task.status = previous_status
+            task.approval_state = previous_approval_state
+            task.latest_summary = (
+                "Planning retry failed after a previous successful plan; "
+                f"keeping current state ({previous_status}): {exc}"
+            )
+            task.updated_at = _utc_now()
+            _save(session, task)
+            return
+
         task.status = TASK_STATUS_FAILED
         task.latest_summary = f"Planning failed: {exc}"
         task.updated_at = _utc_now()
         _save(session, task)
+        if previous_status == TASK_STATUS_FAILED and previous_summary.startswith("Planning failed:"):
+            return
         notify_discord(
             f"Task failed during planning: {task.github_repo}#{task.github_issue_number} ({exc})"
         )
@@ -495,11 +589,13 @@ def process_issue_event(session: Session, *, settings: Settings, payload: dict[s
     elif action == "assigned":
         assignee = payload.get("assignee") or {}
         assignee_login = assignee.get("login") if isinstance(assignee, dict) else None
-        if _is_copilot_identity(settings, assignee_login):
+        assignee_name = assignee.get("name") if isinstance(assignee, dict) else None
+        if _is_copilot_actor(settings=settings, login=assignee_login, display_name=assignee_name):
+            actor = assignee_login or assignee_name or "copilot"
             _mark_worker_started(
                 session,
                 task=task,
-                reason=f"Worker start signal: issue assigned to {assignee_login}",
+                reason=f"Worker start signal: issue assigned to {actor}",
             )
 
 
@@ -517,6 +613,7 @@ def process_approval(
             TASK_STATUS_AWAITING_WORKER_START,
             TASK_STATUS_DISPATCHED,
             TASK_STATUS_WORKING,
+            TASK_STATUS_WORKER_FAILED,
             TASK_STATUS_PR_OPENED,
             TASK_STATUS_COMPLETED,
         }:
@@ -576,12 +673,21 @@ def process_issue_comment_event(session: Session, *, settings: Settings, payload
     if approved is None:
         user = comment.get("user") if isinstance(comment, dict) else None
         commenter_login = user.get("login") if isinstance(user, dict) else None
-        if _is_copilot_identity(settings, commenter_login):
-            _mark_worker_started(
-                session,
-                task=task,
-                reason=f"Worker start signal: activity comment from {commenter_login}",
-            )
+        commenter_name = user.get("name") if isinstance(user, dict) else None
+        if _is_copilot_actor(settings=settings, login=commenter_login, display_name=commenter_name):
+            actor = commenter_login or commenter_name or "copilot"
+            if _is_worker_start_failure_comment(body):
+                _mark_worker_failed(
+                    session,
+                    task=task,
+                    reason=f"Worker failed after start attempt: {actor} reported startup failure.",
+                )
+            else:
+                _mark_worker_started(
+                    session,
+                    task=task,
+                    reason=f"Worker start signal: activity comment from {actor}",
+                )
         return
 
     process_approval(session, settings=settings, task=task, approved=approved, source="comment")
@@ -598,6 +704,7 @@ def dispatch_task_if_ready(session: Session, *, settings: Settings, task: TaskPa
         RUN_STATUS_AWAITING_WORKER_START,
         RUN_STATUS_DISPATCHED,
         RUN_STATUS_WORKING,
+        RUN_STATUS_WORKER_FAILED,
         RUN_STATUS_PR_OPENED,
         RUN_STATUS_AWAITING_REVIEW,
         RUN_STATUS_COMPLETED,
@@ -695,7 +802,9 @@ def _task_for_pr_payload(session: Session, *, github_repo: str, pr_payload: dict
                     TASK_STATUS_AWAITING_WORKER_START,
                     TASK_STATUS_DISPATCHED,
                     TASK_STATUS_WORKING,
+                    TASK_STATUS_WORKER_FAILED,
                     TASK_STATUS_PR_OPENED,
+                    TASK_STATUS_MANUAL_DISPATCH_NEEDED,
                 ]
             )
         )
