@@ -10,6 +10,22 @@ from .config import Settings
 from .copilot_identity import normalize_configured_copilot_login, normalize_copilot_login
 from .models import TaskPacket
 
+_SUGGESTED_ACTORS_QUERY = """
+query($owner: String!, $name: String!) {
+  repository(owner: $owner, name: $name) {
+    suggestedActors(capabilities: [CAN_BE_ASSIGNED], first: 100) {
+      nodes {
+        login
+        __typename
+        ... on Bot {
+          id
+        }
+      }
+    }
+  }
+}
+"""
+
 
 @dataclass
 class DispatchResult:
@@ -73,6 +89,29 @@ def _task_packet_comment(task: TaskPacket, *, target_branch: str) -> str:
     )
 
 
+def _extract_repo_owner_name(repo_path: str) -> tuple[str, str] | None:
+    owner, sep, name = repo_path.partition("/")
+    if not sep or not owner or not name:
+        return None
+    return owner, name
+
+
+def _extract_suggested_actor_logins(payload: dict[str, Any]) -> list[str]:
+    nodes = (
+        (((payload.get("data") or {}).get("repository") or {}).get("suggestedActors") or {}).get("nodes")
+        or []
+    )
+    logins: list[str] = []
+    for node in nodes:
+        if isinstance(node, dict) and isinstance(node.get("login"), str):
+            logins.append(node["login"])
+    return sorted(set(logins))
+
+
+def _suggested_actors_summary(actor_logins: list[str]) -> str:
+    return f"suggestedActors={actor_logins or ['(none)']}"
+
+
 def dispatch_task_to_github_copilot(*, settings: Settings, task: TaskPacket) -> DispatchResult:
     if not settings.github_api_token:
         return DispatchResult(
@@ -86,19 +125,87 @@ def dispatch_task_to_github_copilot(*, settings: Settings, task: TaskPacket) -> 
     api_base = settings.github_api_url.rstrip("/")
     repo_path = task.github_repo
     issue_number = task.github_issue_number
+    repo_parts = _extract_repo_owner_name(repo_path)
+    if repo_parts is None:
+        return DispatchResult(
+            attempted=False,
+            accepted=False,
+            manual_required=True,
+            state="blocked",
+            summary=f"Invalid task repository path for dispatch: {repo_path!r}",
+        )
+    owner, name = repo_parts
 
     assign_url = f"{api_base}/repos/{repo_path}/issues/{issue_number}/assignees"
     comment_url = f"{api_base}/repos/{repo_path}/issues/{issue_number}/comments"
+    graphql_url = f"{api_base}/graphql"
+    expected_assignee_login, normalization_applied = normalize_configured_copilot_login(
+        settings.copilot_dispatch_assignee
+    )
 
     try:
         with httpx.Client(timeout=15.0) as client:
+            preflight_response = client.post(
+                graphql_url,
+                headers=_build_headers(settings),
+                json={
+                    "query": _SUGGESTED_ACTORS_QUERY,
+                    "variables": {"owner": owner, "name": name},
+                },
+            )
+            if preflight_response.status_code >= 400:
+                details = preflight_response.text[:500]
+                return DispatchResult(
+                    attempted=True,
+                    accepted=False,
+                    manual_required=True,
+                    state="blocked",
+                    summary=(
+                        "GitHub Copilot preflight suggestedActors query failed "
+                        f"({preflight_response.status_code}): {details}"
+                    ),
+                    api_status_code=preflight_response.status_code,
+                )
+
+            preflight_payload = (
+                preflight_response.json()
+                if preflight_response.headers.get("content-type", "").startswith("application/json")
+                else {}
+            )
+            if preflight_payload.get("errors"):
+                return DispatchResult(
+                    attempted=True,
+                    accepted=False,
+                    manual_required=True,
+                    state="blocked",
+                    summary=(
+                        "GitHub Copilot preflight suggestedActors query returned errors: "
+                        f"{str(preflight_payload.get('errors'))[:500]}"
+                    ),
+                    api_status_code=preflight_response.status_code,
+                )
+            suggested_actor_logins = _extract_suggested_actor_logins(preflight_payload)
+            preflight_summary = _suggested_actors_summary(suggested_actor_logins)
+            normalized_suggested_actor_logins = {
+                normalize_copilot_login(login) for login in suggested_actor_logins
+            }
+            if expected_assignee_login not in normalized_suggested_actor_logins:
+                return DispatchResult(
+                    attempted=True,
+                    accepted=False,
+                    manual_required=True,
+                    state="blocked",
+                    summary=(
+                        "Copilot cloud agent not enabled or not assignable in this repository. "
+                        f"{preflight_summary}"
+                    ),
+                    api_status_code=preflight_response.status_code,
+                )
+
             request_payload = {
                 "assignees": [],
                 "agent_assignment": _build_agent_assignment_payload(settings, task),
             }
-            expected_assignee_login, normalization_applied = normalize_configured_copilot_login(
-                settings.copilot_dispatch_assignee
-            )
             request_payload["assignees"] = [expected_assignee_login]
             assign_response = client.post(
                 assign_url,
@@ -115,7 +222,8 @@ def dispatch_task_to_github_copilot(*, settings: Settings, task: TaskPacket) -> 
                     state="blocked" if manual else "failed",
                     summary=(
                         "GitHub Copilot dispatch assignment failed "
-                        f"({assign_response.status_code}): {details}"
+                        f"({assign_response.status_code}): {details} "
+                        f"{preflight_summary}"
                     ),
                     api_status_code=assign_response.status_code,
                 )
@@ -138,7 +246,8 @@ def dispatch_task_to_github_copilot(*, settings: Settings, task: TaskPacket) -> 
                         "manual dispatch needed. "
                         f"expected={expected_assignee_login}; "
                         f"actual={raw_assignee_logins or ['(none)']}; "
-                        f"normalization_applied={normalization_applied}"
+                        f"normalization_applied={normalization_applied}; "
+                        f"{preflight_summary}"
                     ),
                     api_status_code=assign_response.status_code,
                 )
@@ -164,6 +273,7 @@ def dispatch_task_to_github_copilot(*, settings: Settings, task: TaskPacket) -> 
                 summary=(
                     "Copilot assignment request accepted via issues assignee API"
                     f" for {expected_assignee_login}."
+                    f" {preflight_summary}."
                     f"{comment_warning or ''}"
                 ),
                 api_status_code=assign_response.status_code,

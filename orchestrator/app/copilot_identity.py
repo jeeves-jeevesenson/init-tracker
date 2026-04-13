@@ -1,10 +1,12 @@
 from __future__ import annotations
 
-DOCUMENTED_COPILOT_ASSIGNEE_LOGIN = "github-copilot[bot]"
+DOCUMENTED_COPILOT_ASSIGNEE_LOGIN = "copilot-swe-agent[bot]"
 
 _LEGACY_LOGIN_ALIASES = {
     "copilot-swe-agent": DOCUMENTED_COPILOT_ASSIGNEE_LOGIN,
+    "copilot-swe-agent[bot]": DOCUMENTED_COPILOT_ASSIGNEE_LOGIN,
     "github-copilot": DOCUMENTED_COPILOT_ASSIGNEE_LOGIN,
+    "github-copilot[bot]": DOCUMENTED_COPILOT_ASSIGNEE_LOGIN,
 }
 
 

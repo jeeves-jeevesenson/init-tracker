@@ -253,6 +253,21 @@ class OrchestratorMilestone2Tests(unittest.TestCase):
 
         with patch("orchestrator.app.github_dispatch.httpx.Client") as mocked_client_cls:
             mocked_client = mocked_client_cls.return_value.__enter__.return_value
+            preflight_response = Mock(
+                status_code=200,
+                headers={"content-type": "application/json"},
+            )
+            preflight_response.json.return_value = {
+                "data": {
+                    "repository": {
+                        "suggestedActors": {
+                            "nodes": [
+                                {"login": "copilot-swe-agent", "__typename": "Bot", "id": "BOT_1"},
+                            ]
+                        }
+                    }
+                }
+            }
             assign_response = Mock(
                 status_code=201,
                 headers={"content-type": "application/json"},
@@ -263,18 +278,24 @@ class OrchestratorMilestone2Tests(unittest.TestCase):
                 "assignees": [{"login": DOCUMENTED_COPILOT_ASSIGNEE_LOGIN}],
             }
             comment_response = Mock(status_code=201, headers={"content-type": "application/json"}, text="")
-            mocked_client.post.side_effect = [assign_response, comment_response]
+            mocked_client.post.side_effect = [preflight_response, assign_response, comment_response]
 
             result = dispatch_task_to_github_copilot(settings=settings, task=task)
             self.assertTrue(result.accepted)
             self.assertFalse(result.manual_required)
+            self.assertIn("suggestedActors=['copilot-swe-agent']", result.summary)
 
             first_call = mocked_client.post.call_args_list[0]
             self.assertEqual(
                 first_call.args[0],
+                "https://api.github.com/graphql",
+            )
+            second_call = mocked_client.post.call_args_list[1]
+            self.assertEqual(
+                second_call.args[0],
                 "https://api.github.com/repos/jeeves-jeevesenson/init-tracker/issues/126/assignees",
             )
-            payload = first_call.kwargs["json"]
+            payload = second_call.kwargs["json"]
             self.assertEqual(payload["assignees"], [DOCUMENTED_COPILOT_ASSIGNEE_LOGIN])
             self.assertEqual(payload["agent_assignment"]["target_repo"], "jeeves-jeevesenson/init-tracker")
             self.assertEqual(payload["agent_assignment"]["base_branch"], "main")
@@ -311,6 +332,21 @@ class OrchestratorMilestone2Tests(unittest.TestCase):
 
         with patch("orchestrator.app.github_dispatch.httpx.Client") as mocked_client_cls:
             mocked_client = mocked_client_cls.return_value.__enter__.return_value
+            preflight_response = Mock(
+                status_code=200,
+                headers={"content-type": "application/json"},
+            )
+            preflight_response.json.return_value = {
+                "data": {
+                    "repository": {
+                        "suggestedActors": {
+                            "nodes": [
+                                {"login": "copilot-swe-agent", "__typename": "Bot", "id": "BOT_2"},
+                            ]
+                        }
+                    }
+                }
+            }
             assign_response = Mock(
                 status_code=201,
                 headers={"content-type": "application/json"},
@@ -321,13 +357,13 @@ class OrchestratorMilestone2Tests(unittest.TestCase):
                 "assignees": [{"login": DOCUMENTED_COPILOT_ASSIGNEE_LOGIN}],
             }
             comment_response = Mock(status_code=201, headers={"content-type": "application/json"}, text="")
-            mocked_client.post.side_effect = [assign_response, comment_response]
+            mocked_client.post.side_effect = [preflight_response, assign_response, comment_response]
 
             result = dispatch_task_to_github_copilot(settings=settings, task=task)
             self.assertTrue(result.accepted)
             self.assertFalse(result.manual_required)
-            first_call = mocked_client.post.call_args_list[0]
-            self.assertEqual(first_call.kwargs["json"]["assignees"], [DOCUMENTED_COPILOT_ASSIGNEE_LOGIN])
+            second_call = mocked_client.post.call_args_list[1]
+            self.assertEqual(second_call.kwargs["json"]["assignees"], [DOCUMENTED_COPILOT_ASSIGNEE_LOGIN])
 
     def test_dispatch_manual_required_when_response_omits_copilot_assignee(self):
         with patch.dict(
@@ -352,6 +388,21 @@ class OrchestratorMilestone2Tests(unittest.TestCase):
 
         with patch("orchestrator.app.github_dispatch.httpx.Client") as mocked_client_cls:
             mocked_client = mocked_client_cls.return_value.__enter__.return_value
+            preflight_response = Mock(
+                status_code=200,
+                headers={"content-type": "application/json"},
+            )
+            preflight_response.json.return_value = {
+                "data": {
+                    "repository": {
+                        "suggestedActors": {
+                            "nodes": [
+                                {"login": "copilot-swe-agent", "__typename": "Bot", "id": "BOT_3"},
+                            ]
+                        }
+                    }
+                }
+            }
             assign_response = Mock(
                 status_code=201,
                 headers={"content-type": "application/json"},
@@ -361,13 +412,61 @@ class OrchestratorMilestone2Tests(unittest.TestCase):
                 "html_url": "https://github.com/jeeves-jeevesenson/init-tracker/issues/131",
                 "assignees": [{"login": "someone-else"}],
             }
-            mocked_client.post.side_effect = [assign_response]
+            mocked_client.post.side_effect = [preflight_response, assign_response]
 
             result = dispatch_task_to_github_copilot(settings=settings, task=task)
             self.assertFalse(result.accepted)
             self.assertTrue(result.manual_required)
             self.assertIn(f"expected={DOCUMENTED_COPILOT_ASSIGNEE_LOGIN}", result.summary)
             self.assertIn("actual=['someone-else']", result.summary)
+
+    def test_dispatch_preflight_blocks_when_suggested_actors_lack_copilot(self):
+        with patch.dict(
+            os.environ,
+            {
+                "GITHUB_API_TOKEN": "token",
+                "GITHUB_API_URL": "https://api.github.com",
+                "COPILOT_DISPATCH_ASSIGNEE": DOCUMENTED_COPILOT_ASSIGNEE_LOGIN,
+            },
+            clear=False,
+        ):
+            settings = Settings()
+        task = TaskPacket(
+            id=45,
+            github_repo="jeeves-jeevesenson/init-tracker",
+            github_issue_number=132,
+            title="Dispatch preflight failure",
+            normalized_task_text="Normalized text",
+            acceptance_criteria_json='["A"]',
+            validation_commands_json='["python -m compileall orchestrator"]',
+        )
+
+        with patch("orchestrator.app.github_dispatch.httpx.Client") as mocked_client_cls:
+            mocked_client = mocked_client_cls.return_value.__enter__.return_value
+            preflight_response = Mock(
+                status_code=200,
+                headers={"content-type": "application/json"},
+            )
+            preflight_response.json.return_value = {
+                "data": {
+                    "repository": {
+                        "suggestedActors": {
+                            "nodes": [
+                                {"login": "some-other-bot[bot]", "__typename": "Bot", "id": "BOT_4"},
+                            ]
+                        }
+                    }
+                }
+            }
+            mocked_client.post.side_effect = [preflight_response]
+
+            result = dispatch_task_to_github_copilot(settings=settings, task=task)
+            self.assertFalse(result.accepted)
+            self.assertTrue(result.manual_required)
+            self.assertEqual(result.state, "blocked")
+            self.assertIn("Copilot cloud agent not enabled or not assignable in this repository", result.summary)
+            self.assertIn("suggestedActors=['some-other-bot[bot]']", result.summary)
+            self.assertEqual(len(mocked_client.post.call_args_list), 1)
 
     def test_dispatch_rejection_sets_manual_dispatch_needed(self):
         with tempfile.TemporaryDirectory() as td:
