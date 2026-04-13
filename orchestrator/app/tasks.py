@@ -483,9 +483,10 @@ def _run_planning(
         )
         task.updated_at = _utc_now()
         _save(session, task)
-        notify_discord(
-            f"Task planned / awaiting approval: {task.github_repo}#{task.github_issue_number} -> {_worker_display_name(task)}"
-        )
+        if previous_status != TASK_STATUS_AWAITING_APPROVAL:
+            notify_discord(
+                f"Task planned / awaiting approval: {task.github_repo}#{task.github_issue_number} -> {_worker_display_name(task)}"
+            )
     except Exception as exc:
         if had_successful_plan and previous_status in {
             TASK_STATUS_AWAITING_APPROVAL,
