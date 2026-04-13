@@ -1,6 +1,8 @@
 import unittest
 from pathlib import Path
 
+# Tests for reserved map panning key enforcement.
+
 
 class ReservedMapPanningKeysTests(unittest.TestCase):
     def test_main_window_no_wasd_or_arrow_binds(self):
