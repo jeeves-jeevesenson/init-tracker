@@ -124,6 +124,7 @@ def _ensure_agent_run_columns() -> None:
         AgentRun.__tablename__,
         {
             "review_artifact_json": "TEXT",
+            "governor_state_json": "TEXT",
             "program_id": "INTEGER",
             "program_slice_id": "INTEGER",
             "continuation_decision": "TEXT",

@@ -11,6 +11,14 @@ from .schema_validation import validate_strict_json_schema
 _ALLOWED_SCOPE_STATUS = {"met", "partial", "drifted", "blocked"}
 _ALLOWED_MERGE_RECOMMENDATION = {"merge_ready", "review_required", "do_not_merge"}
 _ALLOWED_DECISION = {"continue", "revise", "audit", "escalate", "complete"}
+_ALLOWED_GOVERNOR_DECISION = {
+    "wait",
+    "request_revision",
+    "escalate_human",
+    "ready_for_review",
+    "approve_and_merge",
+    "complete_without_merge",
+}
 _ALLOWED_REASONING_EFFORT = {"low", "medium", "high"}
 
 REVIEW_ARTIFACT_SCHEMA: dict[str, Any] = {
@@ -51,6 +59,27 @@ REVIEW_SYSTEM_PROMPT = (
     "You are a PR/workflow reviewer for an orchestrator control plane. "
     "Return strict JSON matching the schema with clear merge/send-back recommendations."
 )
+GOVERNOR_SYSTEM_PROMPT = (
+    "You are a PR governor for an orchestrator control plane. "
+    "Decide safe, idempotent next action for autonomous PR progression."
+)
+
+GOVERNOR_ARTIFACT_SCHEMA: dict[str, Any] = {
+    "type": "object",
+    "additionalProperties": False,
+    "required": [
+        "decision",
+        "summary",
+        "revision_requests",
+        "escalation_reason",
+    ],
+    "properties": {
+        "decision": {"type": "string", "enum": sorted(_ALLOWED_GOVERNOR_DECISION)},
+        "summary": {"type": "array", "items": {"type": "string"}},
+        "revision_requests": {"type": "array", "items": {"type": "string"}},
+        "escalation_reason": {"type": "string"},
+    },
+}
 
 
 def _extract_text(response: Any) -> str:
@@ -238,4 +267,121 @@ def summarize_work_update(*, settings: Settings, update_context: str) -> dict[st
         "review_artifact": artifact,
         "summary_bullets": artifact["summary"],
         "next_action": next_action,
+    }
+
+
+def _governor_response_payload(
+    *,
+    model: str,
+    update_context: str,
+    settings: Settings,
+    reasoning_effort: str,
+) -> dict[str, Any]:
+    payload: dict[str, Any] = {
+        "model": model,
+        "input": [
+            {
+                "role": "system",
+                "content": [{"type": "input_text", "text": GOVERNOR_SYSTEM_PROMPT}],
+            },
+            {
+                "role": "user",
+                "content": [{"type": "input_text", "text": update_context}],
+            },
+        ],
+        "text": {
+            "format": {
+                "type": "json_schema",
+                "name": "pr_governor_artifact",
+                "strict": True,
+                "schema": GOVERNOR_ARTIFACT_SCHEMA,
+            }
+        },
+    }
+    normalized_effort = reasoning_effort.strip().lower()
+    if normalized_effort in _ALLOWED_REASONING_EFFORT:
+        payload["reasoning"] = {"effort": normalized_effort}
+    if settings.openai_enable_background_requests:
+        payload["background"] = True
+    return payload
+
+
+def _validate_governor_artifact(raw: dict[str, Any]) -> dict[str, Any]:
+    summary = _coerce_string_list(raw.get("summary"), "summary")[:5]
+    if not summary:
+        summary = ["Governor decision generated."]
+    return {
+        "decision": _coerce_enum(
+            raw.get("decision"),
+            field_name="decision",
+            allowed=_ALLOWED_GOVERNOR_DECISION,
+        ),
+        "summary": summary,
+        "revision_requests": _coerce_string_list(raw.get("revision_requests"), "revision_requests")[:10],
+        "escalation_reason": str(raw.get("escalation_reason") or ""),
+    }
+
+
+def _fallback_governor_artifact(update_context: str) -> dict[str, Any]:
+    try:
+        parsed = json.loads(update_context)
+    except Exception:
+        parsed = {}
+    if not isinstance(parsed, dict):
+        parsed = {}
+    pr = parsed.get("pr") if isinstance(parsed.get("pr"), dict) else {}
+    unresolved = parsed.get("unresolved_copilot_findings")
+    unresolved_count = len(unresolved) if isinstance(unresolved, list) else 0
+    checks_passed = bool(parsed.get("checks_passed"))
+    draft = bool(pr.get("draft"))
+    guarded = bool(parsed.get("guarded_paths_touched"))
+    decision = "wait"
+    if guarded:
+        decision = "escalate_human"
+    elif unresolved_count > 0:
+        decision = "request_revision"
+    elif checks_passed and not draft:
+        decision = "approve_and_merge"
+    elif checks_passed and draft:
+        decision = "ready_for_review"
+    return {
+        "decision": decision,
+        "summary": ["Governor fallback decision generated from available context."],
+        "revision_requests": [],
+        "escalation_reason": "",
+    }
+
+
+def summarize_governor_update(*, settings: Settings, update_context: str) -> dict[str, Any]:
+    validate_strict_json_schema(schema_name="pr_governor_artifact", schema=GOVERNOR_ARTIFACT_SCHEMA)
+    if not settings.openai_api_key:
+        artifact = _fallback_governor_artifact(update_context)
+        return {
+            "governor_artifact": artifact,
+            "summary_bullets": artifact["summary"],
+            "next_action": artifact["decision"],
+        }
+
+    client = OpenAI(api_key=settings.openai_api_key)
+    response = client.responses.create(
+        **_governor_response_payload(
+            model=settings.openai_review_model,
+            update_context=update_context,
+            settings=settings,
+            reasoning_effort=settings.openai_review_reasoning_effort,
+        )
+    )
+    parsed = _extract_structured_object(response, stage="governor")
+    if settings.openai_enable_background_requests and not parsed:
+        response_id = getattr(response, "id", None)
+        raise RuntimeError(
+            "OpenAI background responses require async completion handling before governor can continue"
+            f" (response_id={response_id or 'unknown'})"
+        )
+
+    artifact = _validate_governor_artifact(parsed)
+    return {
+        "governor_artifact": artifact,
+        "summary_bullets": artifact["summary"],
+        "next_action": artifact["decision"],
     }

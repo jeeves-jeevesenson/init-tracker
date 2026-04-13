@@ -86,6 +86,13 @@ class Settings(BaseSettings):
     program_auto_merge: bool = Field(default=False, alias="PROGRAM_AUTO_MERGE")
     program_max_revision_attempts: int = Field(default=2, alias="PROGRAM_MAX_REVISION_ATTEMPTS")
     worker_weak_evidence_stale_minutes: int = Field(default=90, alias="WORKER_WEAK_EVIDENCE_STALE_MINUTES")
+    governor_max_revision_cycles: int = Field(default=2, alias="GOVERNOR_MAX_REVISION_CYCLES")
+    governor_remove_reviewer_login: str = Field(default="jeeves-jeevesenson", alias="GOVERNOR_REMOVE_REVIEWER_LOGIN")
+    governor_fallback_reviewer: str | None = Field(default=None, alias="GOVERNOR_FALLBACK_REVIEWER")
+    governor_guarded_paths: str = Field(
+        default=".github/workflows/**,orchestrator/app/config.py,orchestrator/app/github_dispatch.py,orchestrator/app/github_webhooks.py",
+        alias="GOVERNOR_GUARDED_PATHS",
+    )
 
     # Trusted kickoff: issues with this label (in addition to task_label) are
     # auto-confirmed after planning without requiring a second human approval.

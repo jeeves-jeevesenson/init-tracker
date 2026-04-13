@@ -486,6 +486,206 @@ def inspect_pull_request(*, settings: Settings, repo: str, pr_number: int) -> Pu
         )
 
 
+def remove_requested_reviewers(
+    *,
+    settings: Settings,
+    repo: str,
+    pr_number: int,
+    reviewers: list[str],
+) -> tuple[bool, str]:
+    if not settings.github_api_token:
+        return False, "GitHub API token missing; cannot remove PR reviewers"
+    sanitized = sorted({item.strip() for item in reviewers if isinstance(item, str) and item.strip()})
+    if not sanitized:
+        return True, "No reviewers requested for removal"
+    api_base = settings.github_api_url.rstrip("/")
+    url = f"{api_base}/repos/{repo}/pulls/{pr_number}/requested_reviewers"
+    try:
+        with httpx.Client(timeout=15.0) as client:
+            response = client.request(
+                "DELETE",
+                url,
+                headers=_build_headers(settings),
+                json={"reviewers": sanitized},
+            )
+            if response.status_code >= 400:
+                return False, (
+                    f"GitHub returned {response.status_code} when removing requested reviewers from PR #{pr_number}: "
+                    f"{response.text[:300]}"
+                )
+            return True, f"Removed requested reviewers from PR #{pr_number}: {sanitized}"
+    except Exception as exc:
+        return False, f"Failed to remove requested reviewers from PR #{pr_number}: {exc}"
+
+
+def request_reviewers(
+    *,
+    settings: Settings,
+    repo: str,
+    pr_number: int,
+    reviewers: list[str],
+) -> tuple[bool, str]:
+    if not settings.github_api_token:
+        return False, "GitHub API token missing; cannot request PR reviewers"
+    sanitized = sorted({item.strip() for item in reviewers if isinstance(item, str) and item.strip()})
+    if not sanitized:
+        return True, "No reviewers requested"
+    api_base = settings.github_api_url.rstrip("/")
+    url = f"{api_base}/repos/{repo}/pulls/{pr_number}/requested_reviewers"
+    try:
+        with httpx.Client(timeout=15.0) as client:
+            response = client.post(
+                url,
+                headers=_build_headers(settings),
+                json={"reviewers": sanitized},
+            )
+            if response.status_code >= 400:
+                return False, f"GitHub returned {response.status_code} when requesting reviewers on PR #{pr_number}: {response.text[:300]}"
+            return True, f"Requested reviewers for PR #{pr_number}: {sanitized}"
+    except Exception as exc:
+        return False, f"Failed to request reviewers for PR #{pr_number}: {exc}"
+
+
+def list_pull_request_reviews(*, settings: Settings, repo: str, pr_number: int) -> tuple[list[dict[str, Any]], str]:
+    if not settings.github_api_token:
+        return [], "GitHub API token missing; cannot list PR reviews"
+    api_base = settings.github_api_url.rstrip("/")
+    url = f"{api_base}/repos/{repo}/pulls/{pr_number}/reviews?per_page=100"
+    try:
+        with httpx.Client(timeout=15.0) as client:
+            response = client.get(url, headers=_build_headers(settings))
+            if response.status_code >= 400:
+                return [], f"GitHub returned {response.status_code} when listing reviews for PR #{pr_number}: {response.text[:300]}"
+            if not response.headers.get("content-type", "").startswith("application/json"):
+                return [], f"GitHub returned non-JSON review list for PR #{pr_number}"
+            payload = response.json()
+            if not isinstance(payload, list):
+                return [], f"GitHub returned invalid review list for PR #{pr_number}"
+            reviews = [item for item in payload if isinstance(item, dict)]
+            return reviews, f"Fetched {len(reviews)} reviews for PR #{pr_number}"
+    except Exception as exc:
+        return [], f"Failed to list reviews for PR #{pr_number}: {exc}"
+
+
+def list_pull_request_review_comments(*, settings: Settings, repo: str, pr_number: int) -> tuple[list[dict[str, Any]], str]:
+    if not settings.github_api_token:
+        return [], "GitHub API token missing; cannot list PR review comments"
+    api_base = settings.github_api_url.rstrip("/")
+    url = f"{api_base}/repos/{repo}/pulls/{pr_number}/comments?per_page=100"
+    try:
+        with httpx.Client(timeout=15.0) as client:
+            response = client.get(url, headers=_build_headers(settings))
+            if response.status_code >= 400:
+                return [], (
+                    f"GitHub returned {response.status_code} when listing review comments for PR #{pr_number}: "
+                    f"{response.text[:300]}"
+                )
+            if not response.headers.get("content-type", "").startswith("application/json"):
+                return [], f"GitHub returned non-JSON review comment list for PR #{pr_number}"
+            payload = response.json()
+            if not isinstance(payload, list):
+                return [], f"GitHub returned invalid review comment list for PR #{pr_number}"
+            comments = [item for item in payload if isinstance(item, dict)]
+            return comments, f"Fetched {len(comments)} review comments for PR #{pr_number}"
+    except Exception as exc:
+        return [], f"Failed to list review comments for PR #{pr_number}: {exc}"
+
+
+def list_pull_request_files(*, settings: Settings, repo: str, pr_number: int) -> tuple[list[str], str]:
+    if not settings.github_api_token:
+        return [], "GitHub API token missing; cannot list PR files"
+    api_base = settings.github_api_url.rstrip("/")
+    url = f"{api_base}/repos/{repo}/pulls/{pr_number}/files?per_page=100"
+    try:
+        with httpx.Client(timeout=15.0) as client:
+            response = client.get(url, headers=_build_headers(settings))
+            if response.status_code >= 400:
+                return [], f"GitHub returned {response.status_code} when listing files for PR #{pr_number}: {response.text[:300]}"
+            if not response.headers.get("content-type", "").startswith("application/json"):
+                return [], f"GitHub returned non-JSON file list for PR #{pr_number}"
+            payload = response.json()
+            if not isinstance(payload, list):
+                return [], f"GitHub returned invalid file list for PR #{pr_number}"
+            files = []
+            for item in payload:
+                if not isinstance(item, dict):
+                    continue
+                filename = item.get("filename")
+                if isinstance(filename, str) and filename:
+                    files.append(filename)
+            return files, f"Fetched {len(files)} files for PR #{pr_number}"
+    except Exception as exc:
+        return [], f"Failed to list files for PR #{pr_number}: {exc}"
+
+
+def list_issue_comments(*, settings: Settings, repo: str, issue_number: int) -> tuple[list[dict[str, Any]], str]:
+    if not settings.github_api_token:
+        return [], "GitHub API token missing; cannot list issue comments"
+    api_base = settings.github_api_url.rstrip("/")
+    url = f"{api_base}/repos/{repo}/issues/{issue_number}/comments?per_page=100"
+    try:
+        with httpx.Client(timeout=15.0) as client:
+            response = client.get(url, headers=_build_headers(settings))
+            if response.status_code >= 400:
+                return [], f"GitHub returned {response.status_code} when listing issue comments #{issue_number}: {response.text[:300]}"
+            if not response.headers.get("content-type", "").startswith("application/json"):
+                return [], f"GitHub returned non-JSON issue comment list for issue #{issue_number}"
+            payload = response.json()
+            if not isinstance(payload, list):
+                return [], f"GitHub returned invalid issue comment list for issue #{issue_number}"
+            comments = [item for item in payload if isinstance(item, dict)]
+            return comments, f"Fetched {len(comments)} comments for issue #{issue_number}"
+    except Exception as exc:
+        return [], f"Failed to list issue comments for issue #{issue_number}: {exc}"
+
+
+def post_issue_comment(*, settings: Settings, repo: str, issue_number: int, body: str) -> tuple[bool, str]:
+    if not settings.github_api_token:
+        return False, "GitHub API token missing; cannot post issue comment"
+    comment_body = str(body or "").strip()
+    if not comment_body:
+        return False, "Comment body is empty"
+    api_base = settings.github_api_url.rstrip("/")
+    url = f"{api_base}/repos/{repo}/issues/{issue_number}/comments"
+    try:
+        with httpx.Client(timeout=15.0) as client:
+            response = client.post(
+                url,
+                headers=_build_headers(settings),
+                json={"body": comment_body},
+            )
+            if response.status_code >= 400:
+                return False, f"GitHub returned {response.status_code} when posting issue comment on #{issue_number}: {response.text[:300]}"
+            return True, f"Posted issue comment on #{issue_number}"
+    except Exception as exc:
+        return False, f"Failed to post issue comment on #{issue_number}: {exc}"
+
+
+def submit_approving_review(
+    *,
+    settings: Settings,
+    repo: str,
+    pr_number: int,
+    body: str = "Automated governor approval after successful checks and resolved findings.",
+) -> tuple[bool, str]:
+    if not settings.github_api_token:
+        return False, "GitHub API token missing; cannot submit approving review"
+    api_base = settings.github_api_url.rstrip("/")
+    url = f"{api_base}/repos/{repo}/pulls/{pr_number}/reviews"
+    try:
+        with httpx.Client(timeout=15.0) as client:
+            response = client.post(
+                url,
+                headers=_build_headers(settings),
+                json={"event": "APPROVE", "body": body},
+            )
+            if response.status_code >= 400:
+                return False, f"GitHub returned {response.status_code} when submitting approval review for PR #{pr_number}: {response.text[:300]}"
+            return True, f"Submitted approving review for PR #{pr_number}"
+    except Exception as exc:
+        return False, f"Failed to submit approving review for PR #{pr_number}: {exc}"
+
+
 def run_preflight_checks(*, settings: Settings, repo: str | None = None) -> dict:
     """Run a preflight diagnostic against the current environment configuration.
 
@@ -502,6 +702,16 @@ def run_preflight_checks(*, settings: Settings, repo: str | None = None) -> dict
         "trusted_kickoff_label": settings.trusted_kickoff_label,
         "dispatch_assignee": settings.copilot_dispatch_assignee,
         "copilot_target_branch": settings.copilot_target_branch,
+        "governor": {
+            "max_revision_cycles": max(1, int(getattr(settings, "governor_max_revision_cycles", 2) or 2)),
+            "remove_reviewer_login": str(getattr(settings, "governor_remove_reviewer_login", "") or ""),
+            "fallback_reviewer": getattr(settings, "governor_fallback_reviewer", None),
+            "guarded_paths": [
+                item.strip()
+                for item in str(getattr(settings, "governor_guarded_paths", "") or "").split(",")
+                if item.strip()
+            ],
+        },
         "capabilities": {},
         "blockers": [],
         "admin_prerequisites": [],
@@ -515,6 +725,14 @@ def run_preflight_checks(*, settings: Settings, repo: str | None = None) -> dict
     caps["pr_ready_for_review"] = bool(settings.github_api_token)
     caps["pr_merge"] = bool(settings.github_api_token)
     caps["dispatch"] = bool(settings.github_api_token)
+    caps["governor_review_loop"] = bool(settings.github_api_token)
+    caps["governor_auto_approval"] = bool(settings.github_api_token and settings.program_auto_merge)
+    caps["unattended_single_slice_execution"] = bool(
+        settings.github_api_token
+        and settings.program_auto_approve
+        and settings.program_auto_dispatch
+        and settings.program_auto_merge
+    )
     caps["next_slice_dispatch"] = bool(settings.github_api_token and settings.program_auto_continue and settings.program_auto_dispatch)
     caps["unattended_continuation"] = bool(
         settings.github_api_token
@@ -534,6 +752,16 @@ def run_preflight_checks(*, settings: Settings, repo: str | None = None) -> dict
             "Set PROGRAM_AUTO_MERGE=true in orchestrator environment to enable automatic PR merge for trusted programs. "
             "Requires the token to have contents:write permission on the target repository."
         )
+    if not settings.program_auto_approve:
+        blockers.append("PROGRAM_AUTO_APPROVE=false; governor cannot submit unattended approvals")
+    guarded_paths = [
+        item.strip()
+        for item in str(getattr(settings, "governor_guarded_paths", "") or "").split(",")
+        if item.strip()
+    ]
+    if not guarded_paths:
+        blockers.append("GOVERNOR_GUARDED_PATHS is empty; sensitive-path escalation policy is not configured")
+        prereqs.append("Set GOVERNOR_GUARDED_PATHS to include sensitive paths that require human review")
 
     if not settings.program_auto_continue:
         blockers.append("PROGRAM_AUTO_CONTINUE=false; next-slice creation is disabled")
@@ -550,7 +778,8 @@ def run_preflight_checks(*, settings: Settings, repo: str | None = None) -> dict
         "under Settings > Actions > General if the orchestrator token is used for any workflow-triggering activity. "
         "If Copilot PRs trigger workflow approval gating (status='waiting'), check Settings > Actions > General > "
         "'Fork pull request workflows from outside collaborators' and set it to 'Require approval for first-time contributors "
-        "who are new to GitHub' (least restrictive) or add the Copilot bot as a repository collaborator."
+        "who are new to GitHub' (least restrictive) or add the Copilot bot as a repository collaborator. "
+        "If approvals are still required, treat it as configuration drift for unattended governor execution."
     )
     prereqs.append(
         "For auto-merge to work end-to-end: enable 'Allow auto-merge' under repository Settings > General. "
