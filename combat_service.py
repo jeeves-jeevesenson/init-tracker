@@ -34,6 +34,7 @@ Usage (from LanController routes):
 """
 from __future__ import annotations
 
+import threading
 from typing import TYPE_CHECKING, Any, Dict, List, Optional
 
 if TYPE_CHECKING:
@@ -76,6 +77,7 @@ class CombatService:
         if tracker is None:
             raise ValueError("CombatService requires an InitiativeTracker instance.")
         self._tracker = tracker
+        self._lock = threading.Lock()
 
     # ------------------------------------------------------------------
     # Read: snapshot
@@ -194,20 +196,21 @@ class CombatService:
         Next Turn button invokes), then broadcasts state to all LAN clients and
         returns the updated snapshot.
         """
-        t = self._tracker
-        try:
-            t._next_turn()
-        except Exception as exc:
-            return {"ok": False, "error": str(exc), "snapshot": self.combat_snapshot()}
-        try:
-            t._rebuild_table(scroll_to_current=True)
-        except Exception:
-            pass
-        try:
-            t._lan_force_state_broadcast()
-        except Exception:
-            pass
-        return {"ok": True, "snapshot": self.combat_snapshot()}
+        with self._lock:
+            t = self._tracker
+            try:
+                t._next_turn()
+            except Exception as exc:
+                return {"ok": False, "error": str(exc), "snapshot": self.combat_snapshot()}
+            try:
+                t._rebuild_table(scroll_to_current=True)
+            except Exception:
+                pass
+            try:
+                t._lan_force_state_broadcast()
+            except Exception:
+                pass
+            return {"ok": True, "snapshot": self.combat_snapshot()}
 
     def adjust_hp(self, cid: int, delta: int) -> Dict[str, Any]:
         """Adjust HP for combatant ``cid`` by ``delta`` (negative = damage, positive = healing).
@@ -215,43 +218,44 @@ class CombatService:
         Clamps result to [0, max_hp].  Delegates to the same logic used by
         manual_override_hp in _lan_apply_action.
         """
-        t = self._tracker
-        combatants = getattr(t, "combatants", {}) or {}
-        c = combatants.get(int(cid))
-        if c is None:
-            return {"ok": False, "error": f"Combatant {cid} not found."}
+        with self._lock:
+            t = self._tracker
+            combatants = getattr(t, "combatants", {}) or {}
+            c = combatants.get(int(cid))
+            if c is None:
+                return {"ok": False, "error": f"Combatant {cid} not found."}
 
-        old_hp = int(getattr(c, "hp", 0) or 0)
-        max_hp = int(getattr(c, "max_hp", old_hp) or old_hp)
-        new_hp = max(0, old_hp + int(delta))
-        if max_hp > 0:
-            new_hp = min(new_hp, max_hp)
-        setattr(c, "hp", new_hp)
+            old_hp = int(getattr(c, "hp", 0) or 0)
+            max_hp = int(getattr(c, "max_hp", old_hp) or old_hp)
+            new_hp = max(0, old_hp + int(delta))
+            if max_hp > 0:
+                new_hp = min(new_hp, max_hp)
+            setattr(c, "hp", new_hp)
 
-        direction = "healed" if delta > 0 else "damaged"
-        try:
-            t._log(
-                f"{getattr(c, 'name', 'Combatant')} {direction} by {abs(delta)}"
-                f" (HP {old_hp} → {new_hp}).",
-                cid=int(cid),
-            )
-        except Exception:
-            pass
-        try:
-            t._rebuild_table(scroll_to_current=True)
-        except Exception:
-            pass
-        try:
-            t._lan_force_state_broadcast()
-        except Exception:
-            pass
-        return {
-            "ok": True,
-            "cid": int(cid),
-            "hp_before": old_hp,
-            "hp_after": new_hp,
-            "delta": int(delta),
-        }
+            direction = "healed" if delta > 0 else "damaged"
+            try:
+                t._log(
+                    f"{getattr(c, 'name', 'Combatant')} {direction} by {abs(delta)}"
+                    f" (HP {old_hp} → {new_hp}).",
+                    cid=int(cid),
+                )
+            except Exception:
+                pass
+            try:
+                t._rebuild_table(scroll_to_current=True)
+            except Exception:
+                pass
+            try:
+                t._lan_force_state_broadcast()
+            except Exception:
+                pass
+            return {
+                "ok": True,
+                "cid": int(cid),
+                "hp_before": old_hp,
+                "hp_after": new_hp,
+                "delta": int(delta),
+            }
 
     def set_condition(
         self,
@@ -271,57 +275,98 @@ class CombatService:
         Delegates to ``_ensure_condition_stack`` / ``_remove_condition_type``
         which are the same helpers used throughout the tracker engine.
         """
-        t = self._tracker
-        combatants = getattr(t, "combatants", {}) or {}
-        c = combatants.get(int(cid))
-        if c is None:
-            return {"ok": False, "error": f"Combatant {cid} not found."}
+        with self._lock:
+            t = self._tracker
+            combatants = getattr(t, "combatants", {}) or {}
+            c = combatants.get(int(cid))
+            if c is None:
+                return {"ok": False, "error": f"Combatant {cid} not found."}
 
-        ctype_key = str(ctype or "").strip().lower()
-        if not ctype_key:
-            return {"ok": False, "error": "Condition type must not be empty."}
+            ctype_key = str(ctype or "").strip().lower()
+            if not ctype_key:
+                return {"ok": False, "error": "Condition type must not be empty."}
 
-        action_key = str(action or "").strip().lower()
-        if action_key not in ("add", "remove"):
-            return {"ok": False, "error": "Action must be 'add' or 'remove'."}
+            action_key = str(action or "").strip().lower()
+            if action_key not in ("add", "remove"):
+                return {"ok": False, "error": "Action must be 'add' or 'remove'."}
 
-        if action_key == "add":
+            if action_key == "add":
+                try:
+                    t._ensure_condition_stack(c, ctype_key, remaining_turns)
+                except Exception as exc:
+                    return {"ok": False, "error": str(exc)}
+                try:
+                    t._log(
+                        f"{getattr(c, 'name', 'Combatant')} gained condition: {ctype_key}.",
+                        cid=int(cid),
+                    )
+                except Exception:
+                    pass
+            else:
+                try:
+                    t._remove_condition_type(c, ctype_key)
+                except Exception as exc:
+                    return {"ok": False, "error": str(exc)}
+                try:
+                    t._log(
+                        f"{getattr(c, 'name', 'Combatant')} lost condition: {ctype_key}.",
+                        cid=int(cid),
+                    )
+                except Exception:
+                    pass
+
             try:
-                t._ensure_condition_stack(c, ctype_key, remaining_turns)
-            except Exception as exc:
-                return {"ok": False, "error": str(exc)}
+                t._rebuild_table(scroll_to_current=True)
+            except Exception:
+                pass
+            try:
+                t._lan_force_state_broadcast()
+            except Exception:
+                pass
+
+            return {
+                "ok": True,
+                "cid": int(cid),
+                "ctype": ctype_key,
+                "action": action_key,
+            }
+
+    def set_temp_hp(self, cid: int, amount: int) -> Dict[str, Any]:
+        """Set temporary HP for combatant ``cid`` to ``amount`` (0 clears temp HP).
+
+        Unlike HP adjustments, temp HP is set to an absolute value rather than
+        adjusted by a delta.  Setting to 0 removes all temporary HP.
+        """
+        with self._lock:
+            t = self._tracker
+            combatants = getattr(t, "combatants", {}) or {}
+            c = combatants.get(int(cid))
+            if c is None:
+                return {"ok": False, "error": f"Combatant {cid} not found."}
+
+            amount = max(0, int(amount))
+            old_temp = int(getattr(c, "temp_hp", 0) or 0)
+            setattr(c, "temp_hp", amount)
+
             try:
                 t._log(
-                    f"{getattr(c, 'name', 'Combatant')} gained condition: {ctype_key}.",
+                    f"{getattr(c, 'name', 'Combatant')} temp HP set to {amount}"
+                    f" (was {old_temp}).",
                     cid=int(cid),
                 )
             except Exception:
                 pass
-        else:
             try:
-                t._remove_condition_type(c, ctype_key)
-            except Exception as exc:
-                return {"ok": False, "error": str(exc)}
-            try:
-                t._log(
-                    f"{getattr(c, 'name', 'Combatant')} lost condition: {ctype_key}.",
-                    cid=int(cid),
-                )
+                t._rebuild_table(scroll_to_current=True)
             except Exception:
                 pass
-
-        try:
-            t._rebuild_table(scroll_to_current=True)
-        except Exception:
-            pass
-        try:
-            t._lan_force_state_broadcast()
-        except Exception:
-            pass
-
-        return {
-            "ok": True,
-            "cid": int(cid),
-            "ctype": ctype_key,
-            "action": action_key,
-        }
+            try:
+                t._lan_force_state_broadcast()
+            except Exception:
+                pass
+            return {
+                "ok": True,
+                "cid": int(cid),
+                "temp_hp_before": old_temp,
+                "temp_hp_after": amount,
+            }

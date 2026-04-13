@@ -296,5 +296,85 @@ class CombatServiceConditionTests(unittest.TestCase):
         self.assertNotIn("frightened", ctypes)
 
 
+class CombatServiceTempHpTests(unittest.TestCase):
+    def setUp(self):
+        self.tracker = _make_tracker()
+        self.service = CombatService(self.tracker)
+
+    def test_set_temp_hp_returns_ok(self):
+        result = self.service.set_temp_hp(cid=1, amount=10)
+        self.assertTrue(result["ok"])
+
+    def test_set_temp_hp_updates_value(self):
+        c = self.tracker.combatants[1]
+        self.service.set_temp_hp(cid=1, amount=8)
+        self.assertEqual(c.temp_hp, 8)
+
+    def test_set_temp_hp_result_fields(self):
+        result = self.service.set_temp_hp(cid=1, amount=5)
+        self.assertIn("temp_hp_before", result)
+        self.assertIn("temp_hp_after", result)
+        self.assertEqual(result["temp_hp_after"], 5)
+
+    def test_clear_temp_hp_with_zero(self):
+        c = self.tracker.combatants[1]
+        c.temp_hp = 15
+        result = self.service.set_temp_hp(cid=1, amount=0)
+        self.assertTrue(result["ok"])
+        self.assertEqual(c.temp_hp, 0)
+        self.assertEqual(result["temp_hp_after"], 0)
+
+    def test_negative_amount_clamped_to_zero(self):
+        result = self.service.set_temp_hp(cid=1, amount=-5)
+        self.assertTrue(result["ok"])
+        self.assertEqual(result["temp_hp_after"], 0)
+
+    def test_unknown_cid_returns_error(self):
+        result = self.service.set_temp_hp(cid=999, amount=10)
+        self.assertFalse(result["ok"])
+        self.assertIn("error", result)
+
+    def test_set_temp_hp_triggers_broadcast(self):
+        self.service.set_temp_hp(cid=1, amount=4)
+        self.assertGreater(len(self.tracker._broadcast_calls), 0)
+
+    def test_temp_hp_appears_in_snapshot(self):
+        self.service.set_temp_hp(cid=2, amount=12)
+        snap = self.service.combat_snapshot()
+        c_row = next(c for c in snap["combatants"] if c["cid"] == 2)
+        self.assertEqual(c_row["temp_hp"], 12)
+
+
+class CombatServiceLockTests(unittest.TestCase):
+    def setUp(self):
+        self.tracker = _make_tracker()
+        self.service = CombatService(self.tracker)
+
+    def test_service_has_lock(self):
+        import threading
+        self.assertIsInstance(self.service._lock, type(threading.Lock()))
+
+    def test_concurrent_hp_adjustments_safe(self):
+        """Two threads can call adjust_hp concurrently without raising."""
+        import threading
+        errors = []
+
+        def adjust():
+            try:
+                self.service.adjust_hp(cid=1, delta=-1)
+            except Exception as e:
+                errors.append(e)
+
+        threads = [threading.Thread(target=adjust) for _ in range(10)]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join()
+
+        self.assertEqual(errors, [])
+        c = self.tracker.combatants[1]
+        self.assertGreaterEqual(c.hp, 0)
+
+
 if __name__ == "__main__":
     unittest.main()
