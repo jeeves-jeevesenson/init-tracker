@@ -50,17 +50,26 @@ def _build_headers(settings: Settings) -> dict[str, str]:
 
 
 def _build_agent_assignment_payload(settings: Settings, task: TaskPacket) -> dict[str, Any]:
+    selected_custom_agent = task.selected_custom_agent or settings.copilot_custom_agent
     payload: dict[str, Any] = {
         "target_repo": settings.copilot_target_repo or task.github_repo,
         "base_branch": settings.copilot_target_branch,
     }
     if settings.copilot_custom_instructions:
         payload["custom_instructions"] = settings.copilot_custom_instructions
-    if settings.copilot_custom_agent:
-        payload["custom_agent"] = settings.copilot_custom_agent
+    if selected_custom_agent:
+        payload["custom_agent"] = selected_custom_agent
     if settings.copilot_model:
         payload["model"] = settings.copilot_model
     return payload
+
+
+def build_dispatch_payload_summary(settings: Settings, task: TaskPacket) -> dict[str, Any]:
+    expected_assignee_login, _ = normalize_configured_copilot_login(settings.copilot_dispatch_assignee)
+    return {
+        "assignees": [expected_assignee_login],
+        "agent_assignment": _build_agent_assignment_payload(settings, task),
+    }
 
 
 def _extract_assignee_logins(payload: dict[str, Any]) -> set[str]:
@@ -79,6 +88,10 @@ def _task_packet_comment(task: TaskPacket, *, target_branch: str) -> str:
         "normalized_task_text": task.normalized_task_text,
         "acceptance_criteria": json.loads(task.acceptance_criteria_json or "[]"),
         "validation_commands": json.loads(task.validation_commands_json or "[]"),
+        "recommended_worker": task.recommended_worker,
+        "recommended_scope_class": task.recommended_scope_class,
+        "selected_custom_agent": task.selected_custom_agent,
+        "worker_selection_mode": task.worker_selection_mode,
         "target_branch": target_branch,
     }
     return (
@@ -202,11 +215,8 @@ def dispatch_task_to_github_copilot(*, settings: Settings, task: TaskPacket) -> 
                     api_status_code=preflight_response.status_code,
                 )
 
-            request_payload = {
-                "assignees": [],
-                "agent_assignment": _build_agent_assignment_payload(settings, task),
-            }
-            request_payload["assignees"] = [expected_assignee_login]
+            request_payload = build_dispatch_payload_summary(settings, task)
+            requested_custom_agent = (request_payload.get("agent_assignment") or {}).get("custom_agent")
             assign_response = client.post(
                 assign_url,
                 headers=_build_headers(settings),
@@ -273,6 +283,7 @@ def dispatch_task_to_github_copilot(*, settings: Settings, task: TaskPacket) -> 
                 summary=(
                     "Copilot assignment request accepted via issues assignee API"
                     f" for {expected_assignee_login}."
+                    f" custom_agent={requested_custom_agent or '(none)'}."
                     f" {preflight_summary}."
                     f"{comment_warning or ''}"
                 ),

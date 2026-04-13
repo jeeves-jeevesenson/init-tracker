@@ -11,7 +11,9 @@ PLANNING_SYSTEM_PROMPT = (
     "You are a software task planner for an orchestrator. "
     "Return strict JSON with keys: objective (string), scope (array of strings), "
     "non_goals (array of strings), acceptance_criteria (array of strings), "
-    "validation_guidance (array of strings), implementation_brief (string)."
+    "validation_guidance (array of strings), implementation_brief (string), "
+    "recommended_worker (string; one of initiative-smith or tracker-engineer), "
+    "recommended_scope_class (string; one of broad or narrow)."
 )
 
 
@@ -86,4 +88,10 @@ def plan_task_packet(*, settings: Settings, repo: str, issue_number: int, issue_
     missing = sorted(required_keys - set(parsed.keys()))
     if missing:
         raise RuntimeError(f"OpenAI planning response missing keys: {', '.join(missing)}")
+    recommended_worker = parsed.get("recommended_worker")
+    if recommended_worker not in {"initiative-smith", "tracker-engineer"}:
+        parsed["recommended_worker"] = None
+    recommended_scope_class = parsed.get("recommended_scope_class")
+    if recommended_scope_class not in {"broad", "narrow"}:
+        parsed["recommended_scope_class"] = None
     return parsed
