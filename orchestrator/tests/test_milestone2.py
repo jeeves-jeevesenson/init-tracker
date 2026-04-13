@@ -17,6 +17,7 @@ from orchestrator.app.config import Settings
 from orchestrator.app.copilot_identity import DOCUMENTED_COPILOT_ASSIGNEE_LOGIN
 from orchestrator.app.github_dispatch import DispatchResult, dispatch_task_to_github_copilot
 from orchestrator.app.models import AgentRun, TaskPacket
+from orchestrator.app import openai_planning
 from orchestrator.app.tasks import CUSTOM_AGENT_INITIATIVE_SMITH, CUSTOM_AGENT_TRACKER_ENGINEER
 
 
@@ -2348,6 +2349,86 @@ class OrchestratorMilestone2Tests(unittest.TestCase):
                     self.assertEqual(task["routing"]["recommended_worker"], "tracker-engineer")
                     self.assertEqual(task["worker_brief"]["objective"], "Fix the narrow bug")
                     self.assertNotIn("recommended_worker", task["worker_brief"])
+
+
+class OpenAIPlanningSchemaTests(unittest.TestCase):
+    def test_internal_task_plan_schema_required_matches_properties(self):
+        schema = openai_planning.INTERNAL_TASK_PLAN_SCHEMA
+        self.assertEqual(set(schema["properties"].keys()), set(schema["required"]))
+        openai_planning._validate_schema_required_keys(schema_name="internal_task_plan", schema=schema)
+
+    def test_recommended_worker_is_nullable_required(self):
+        schema = openai_planning.INTERNAL_TASK_PLAN_SCHEMA
+        field_schema = schema["properties"]["recommended_worker"]
+        self.assertIn("recommended_worker", schema["required"])
+        self.assertEqual(field_schema["type"], ["string", "null"])
+        self.assertIn(None, field_schema["enum"])
+
+    def test_recommended_scope_class_is_nullable_required(self):
+        schema = openai_planning.INTERNAL_TASK_PLAN_SCHEMA
+        field_schema = schema["properties"]["recommended_scope_class"]
+        self.assertIn("recommended_scope_class", schema["required"])
+        self.assertEqual(field_schema["type"], ["string", "null"])
+        self.assertIn(None, field_schema["enum"])
+
+    def test_schema_validation_fails_clearly_when_property_missing_from_required(self):
+        schema = json.loads(json.dumps(openai_planning.INTERNAL_TASK_PLAN_SCHEMA))
+        schema["required"].remove("recommended_worker")
+        with self.assertRaises(RuntimeError) as ctx:
+            openai_planning._validate_schema_required_keys(schema_name="internal_task_plan", schema=schema)
+        message = str(ctx.exception)
+        self.assertIn("internal_task_plan", message)
+        self.assertIn("missing from required", message)
+        self.assertIn("recommended_worker", message)
+
+    def test_plan_task_packet_accepts_nullable_required_internal_plan_fields(self):
+        planning_response = Mock(
+            output_parsed={
+                "objective": "Harden planner schema",
+                "scope": ["planner"],
+                "non_goals": [],
+                "acceptance_criteria": ["schema accepted"],
+                "validation_guidance": ["python -m compileall orchestrator"],
+                "implementation_brief": "fix structured output contract",
+                "task_type": "bugfix",
+                "difficulty": "small",
+                "repo_areas": ["orchestrator/app/openai_planning.py"],
+                "execution_risks": ["none"],
+                "reviewer_focus": ["schema contract"],
+                "recommended_scope_class": None,
+                "recommended_worker": None,
+                "internal_routing_metadata": None,
+            }
+        )
+        worker_brief_response = Mock(
+            output_parsed={
+                "objective": "Implement planner schema hardening",
+                "concise_scope": ["fix planner schema parity"],
+                "implementation_brief": "keep worker brief stable",
+                "acceptance_criteria": ["planner path succeeds"],
+                "validation_commands": ["python -m unittest orchestrator.tests.test_milestone2"],
+                "non_goals": ["no dispatcher redesign"],
+                "target_branch": "main",
+                "repo_grounded_hints": ["orchestrator/app/openai_planning.py"],
+            }
+        )
+
+        with patch.dict(os.environ, {"OPENAI_API_KEY": "test-key"}, clear=False):
+            settings = Settings()
+        with patch("orchestrator.app.openai_planning.OpenAI") as mocked_openai:
+            mocked_client = mocked_openai.return_value
+            mocked_client.responses.create.side_effect = [planning_response, worker_brief_response]
+            packet = openai_planning.plan_task_packet(
+                settings=settings,
+                repo="jeeves-jeevesenson/init-tracker",
+                issue_number=999,
+                issue_title="Planner schema fix",
+                issue_body="Fix structured planner schema mismatch",
+            )
+
+        self.assertEqual(packet["internal_plan"]["recommended_worker"], None)
+        self.assertEqual(packet["internal_plan"]["recommended_scope_class"], None)
+        self.assertEqual(mocked_client.responses.create.call_count, 2)
 
 
 if __name__ == "__main__":

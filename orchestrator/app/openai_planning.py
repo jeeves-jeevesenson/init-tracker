@@ -44,6 +44,8 @@ INTERNAL_TASK_PLAN_SCHEMA: dict[str, Any] = {
         "execution_risks",
         "reviewer_focus",
         "recommended_scope_class",
+        "recommended_worker",
+        "internal_routing_metadata",
     ],
     "properties": {
         "objective": {"type": "string", "minLength": 1},
@@ -57,13 +59,8 @@ INTERNAL_TASK_PLAN_SCHEMA: dict[str, Any] = {
         "repo_areas": {"type": "array", "items": {"type": "string"}},
         "execution_risks": {"type": "array", "items": {"type": "string"}},
         "reviewer_focus": {"type": "array", "items": {"type": "string"}},
-        "recommended_scope_class": {"type": "string", "enum": sorted(_ALLOWED_SCOPE_CLASS)},
-        "recommended_worker": {
-            "anyOf": [
-                {"type": "string", "enum": sorted(_ALLOWED_WORKERS)},
-                {"type": "null"},
-            ]
-        },
+        "recommended_scope_class": {"type": ["string", "null"], "enum": [*sorted(_ALLOWED_SCOPE_CLASS), None]},
+        "recommended_worker": {"type": ["string", "null"], "enum": [*sorted(_ALLOWED_WORKERS), None]},
         "internal_routing_metadata": {
             "anyOf": [
                 {
@@ -179,13 +176,34 @@ def _coerce_optional_worker(value: Any) -> str | None:
     return normalized
 
 
-def _coerce_scope_class(value: Any) -> str:
+def _coerce_scope_class(value: Any) -> str | None:
+    if value is None:
+        return None
     if not isinstance(value, str):
         raise RuntimeError("Planning output field 'recommended_scope_class' must be a string")
     normalized = value.strip().lower()
     if normalized not in _ALLOWED_SCOPE_CLASS:
         raise RuntimeError("Planning output field 'recommended_scope_class' is invalid")
     return normalized
+
+
+def _validate_schema_required_keys(*, schema_name: str, schema: dict[str, Any]) -> None:
+    properties = schema.get("properties")
+    required = schema.get("required")
+    if not isinstance(properties, dict) or not isinstance(required, list):
+        raise RuntimeError(f"Structured-output schema '{schema_name}' must define object properties and required keys")
+    property_keys = set(properties.keys())
+    required_keys = {key for key in required if isinstance(key, str)}
+    if property_keys != required_keys:
+        missing = sorted(property_keys - required_keys)
+        extra = sorted(required_keys - property_keys)
+        issues: list[str] = []
+        if missing:
+            issues.append(f"missing from required: {', '.join(missing)}")
+        if extra:
+            issues.append(f"not present in properties: {', '.join(extra)}")
+        detail = "; ".join(issues) if issues else "properties/required mismatch"
+        raise RuntimeError(f"Structured-output schema '{schema_name}' is invalid ({detail})")
 
 
 def _coerce_task_type(value: Any) -> str:
@@ -433,6 +451,7 @@ def plan_task_packet(*, settings: Settings, repo: str, issue_number: int, issue_
 
     client = OpenAI(api_key=settings.openai_api_key)
     planning_effort = _planning_reasoning_effort(settings, issue_title=issue_title, issue_body=issue_body)
+    _validate_schema_required_keys(schema_name="internal_task_plan", schema=INTERNAL_TASK_PLAN_SCHEMA)
 
     internal_plan_raw = _invoke_structured_response(
         client=client,
