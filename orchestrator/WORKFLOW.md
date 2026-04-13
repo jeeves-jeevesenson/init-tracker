@@ -37,7 +37,7 @@ Approval comments are parsed case-insensitively and can appear on later lines in
 Dispatch uses GitHub REST API for existing issue assignment:
 1. `POST /repos/{owner}/{repo}/issues/{issue_number}/assignees`
 2. body includes:
-   - `assignees: [COPILOT_DISPATCH_ASSIGNEE]` (default `copilot-swe-agent`)
+   - `assignees: [COPILOT_DISPATCH_ASSIGNEE]` (default `github-copilot[bot]`; legacy `copilot-swe-agent` is normalized)
    - `agent_assignment` fields:
      - `target_repo`
      - `base_branch`
@@ -122,7 +122,7 @@ Minimum GitHub token requirement for Copilot issue assignment:
 Optional tuning:
 - `TASK_LABEL` (default `agent:task`)
 - `TASK_APPROVED_LABEL` (default `agent:approved`)
-- `COPILOT_DISPATCH_ASSIGNEE` (default `copilot-swe-agent`)
+- `COPILOT_DISPATCH_ASSIGNEE` (default `github-copilot[bot]`; legacy `copilot-swe-agent` is normalized)
 - `COPILOT_TARGET_BRANCH` (default `main`)
 - `COPILOT_TARGET_REPO` (default task repository)
 - `COPILOT_CUSTOM_INSTRUCTIONS` (optional extra instructions sent in `agent_assignment`)

@@ -8,6 +8,7 @@ from typing import Any
 from sqlmodel import Session, select
 
 from .config import Settings
+from .copilot_identity import is_copilot_identity
 from .discord_notify import notify_discord
 from .github_dispatch import dispatch_task_to_github_copilot
 from .models import (
@@ -102,14 +103,8 @@ def _save(session: Session, *objects: Any) -> None:
         session.refresh(obj)
 
 
-def _normalize_login(value: str | None) -> str:
-    if not value:
-        return ""
-    return value.strip().lower().removesuffix("[bot]")
-
-
 def _is_copilot_identity(settings: Settings, login: str | None) -> bool:
-    return _normalize_login(login) == _normalize_login(settings.copilot_dispatch_assignee)
+    return is_copilot_identity(login, settings.copilot_dispatch_assignee)
 
 
 def _parse_approval_command(comment_body: str) -> bool | None:

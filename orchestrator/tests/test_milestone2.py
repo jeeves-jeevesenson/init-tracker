@@ -14,6 +14,7 @@ from fastapi.testclient import TestClient
 from sqlmodel import Session, select
 
 from orchestrator.app.config import Settings
+from orchestrator.app.copilot_identity import DOCUMENTED_COPILOT_ASSIGNEE_LOGIN
 from orchestrator.app.github_dispatch import DispatchResult, dispatch_task_to_github_copilot
 from orchestrator.app.models import AgentRun, TaskPacket
 
@@ -259,7 +260,7 @@ class OrchestratorMilestone2Tests(unittest.TestCase):
             assign_response.json.return_value = {
                 "id": 9001,
                 "html_url": "https://github.com/jeeves-jeevesenson/init-tracker/issues/126",
-                "assignees": [{"login": "copilot-swe-agent"}],
+                "assignees": [{"login": DOCUMENTED_COPILOT_ASSIGNEE_LOGIN}],
             }
             comment_response = Mock(status_code=201, headers={"content-type": "application/json"}, text="")
             mocked_client.post.side_effect = [assign_response, comment_response]
@@ -274,12 +275,99 @@ class OrchestratorMilestone2Tests(unittest.TestCase):
                 "https://api.github.com/repos/jeeves-jeevesenson/init-tracker/issues/126/assignees",
             )
             payload = first_call.kwargs["json"]
-            self.assertEqual(payload["assignees"], ["copilot-swe-agent"])
+            self.assertEqual(payload["assignees"], [DOCUMENTED_COPILOT_ASSIGNEE_LOGIN])
             self.assertEqual(payload["agent_assignment"]["target_repo"], "jeeves-jeevesenson/init-tracker")
             self.assertEqual(payload["agent_assignment"]["base_branch"], "main")
             self.assertEqual(payload["agent_assignment"]["custom_instructions"], "Follow repo workflow.")
             self.assertEqual(payload["agent_assignment"]["custom_agent"], "Initiative Smith")
             self.assertEqual(payload["agent_assignment"]["model"], "gpt-4.1-mini")
+
+    def test_default_dispatch_assignee_uses_documented_copilot_bot_login(self):
+        with patch.dict(os.environ, {"COPILOT_DISPATCH_ASSIGNEE": ""}, clear=False):
+            os.environ.pop("COPILOT_DISPATCH_ASSIGNEE", None)
+            settings = Settings()
+        self.assertEqual(settings.copilot_dispatch_assignee, DOCUMENTED_COPILOT_ASSIGNEE_LOGIN)
+
+    def test_dispatch_accepts_legacy_copilot_assignee_config_via_normalization(self):
+        with patch.dict(
+            os.environ,
+            {
+                "GITHUB_API_TOKEN": "token",
+                "GITHUB_API_URL": "https://api.github.com",
+                "COPILOT_DISPATCH_ASSIGNEE": "copilot-swe-agent",
+            },
+            clear=False,
+        ):
+            settings = Settings()
+        task = TaskPacket(
+            id=43,
+            github_repo="jeeves-jeevesenson/init-tracker",
+            github_issue_number=130,
+            title="Dispatch normalization validation",
+            normalized_task_text="Normalized text",
+            acceptance_criteria_json='["A"]',
+            validation_commands_json='["python -m compileall orchestrator"]',
+        )
+
+        with patch("orchestrator.app.github_dispatch.httpx.Client") as mocked_client_cls:
+            mocked_client = mocked_client_cls.return_value.__enter__.return_value
+            assign_response = Mock(
+                status_code=201,
+                headers={"content-type": "application/json"},
+            )
+            assign_response.json.return_value = {
+                "id": 9002,
+                "html_url": "https://github.com/jeeves-jeevesenson/init-tracker/issues/130",
+                "assignees": [{"login": DOCUMENTED_COPILOT_ASSIGNEE_LOGIN}],
+            }
+            comment_response = Mock(status_code=201, headers={"content-type": "application/json"}, text="")
+            mocked_client.post.side_effect = [assign_response, comment_response]
+
+            result = dispatch_task_to_github_copilot(settings=settings, task=task)
+            self.assertTrue(result.accepted)
+            self.assertFalse(result.manual_required)
+            first_call = mocked_client.post.call_args_list[0]
+            self.assertEqual(first_call.kwargs["json"]["assignees"], [DOCUMENTED_COPILOT_ASSIGNEE_LOGIN])
+
+    def test_dispatch_manual_required_when_response_omits_copilot_assignee(self):
+        with patch.dict(
+            os.environ,
+            {
+                "GITHUB_API_TOKEN": "token",
+                "GITHUB_API_URL": "https://api.github.com",
+                "COPILOT_DISPATCH_ASSIGNEE": DOCUMENTED_COPILOT_ASSIGNEE_LOGIN,
+            },
+            clear=False,
+        ):
+            settings = Settings()
+        task = TaskPacket(
+            id=44,
+            github_repo="jeeves-jeevesenson/init-tracker",
+            github_issue_number=131,
+            title="Dispatch response assignee verification",
+            normalized_task_text="Normalized text",
+            acceptance_criteria_json='["A"]',
+            validation_commands_json='["python -m compileall orchestrator"]',
+        )
+
+        with patch("orchestrator.app.github_dispatch.httpx.Client") as mocked_client_cls:
+            mocked_client = mocked_client_cls.return_value.__enter__.return_value
+            assign_response = Mock(
+                status_code=201,
+                headers={"content-type": "application/json"},
+            )
+            assign_response.json.return_value = {
+                "id": 9003,
+                "html_url": "https://github.com/jeeves-jeevesenson/init-tracker/issues/131",
+                "assignees": [{"login": "someone-else"}],
+            }
+            mocked_client.post.side_effect = [assign_response]
+
+            result = dispatch_task_to_github_copilot(settings=settings, task=task)
+            self.assertFalse(result.accepted)
+            self.assertTrue(result.manual_required)
+            self.assertIn(f"expected={DOCUMENTED_COPILOT_ASSIGNEE_LOGIN}", result.summary)
+            self.assertIn("actual=['someone-else']", result.summary)
 
     def test_dispatch_rejection_sets_manual_dispatch_needed(self):
         with tempfile.TemporaryDirectory() as td:
@@ -498,6 +586,90 @@ class OrchestratorMilestone2Tests(unittest.TestCase):
                         client,
                         secret="test-gh-secret",
                         delivery="delivery-assigned-5",
+                        event="issues",
+                        payload=assigned_payload,
+                    )
+                    self.assertEqual(assigned.status_code, 200)
+                    task = client.get("/tasks").json()["tasks"][0]
+                    self.assertEqual(task["status"], "working")
+                    self.assertEqual(task["latest_run"]["status"], "working")
+
+    def test_worker_start_signal_from_issue_assignment_recognizes_documented_bot_login(self):
+        with tempfile.TemporaryDirectory() as td:
+            os.environ["DATABASE_URL"] = f"sqlite:///{Path(td) / 'orchestrator.db'}"
+            os.environ["GH_WEBHOOK_SECRET"] = "test-gh-secret"
+            os.environ["GITHUB_API_TOKEN"] = "dummy-token"
+            main, _ = _reload_orchestrator_modules()
+
+            issue_opened_payload = {
+                "action": "opened",
+                "repository": {"full_name": "jeeves-jeevesenson/init-tracker"},
+                "issue": {
+                    "number": 132,
+                    "node_id": "I_132",
+                    "title": "Worker start signal documented login",
+                    "body": "Await worker start",
+                    "labels": [{"name": "agent:task"}],
+                },
+            }
+            approve_payload = {
+                "action": "created",
+                "repository": {"full_name": "jeeves-jeevesenson/init-tracker"},
+                "issue": {"number": 132},
+                "comment": {"body": "/approve"},
+            }
+            assigned_payload = {
+                "action": "assigned",
+                "repository": {"full_name": "jeeves-jeevesenson/init-tracker"},
+                "issue": {
+                    "number": 132,
+                    "node_id": "I_132",
+                    "title": "Worker start signal documented login",
+                    "body": "Await worker start",
+                    "labels": [{"name": "agent:task"}, {"name": "agent:approved"}],
+                },
+                "assignee": {"login": DOCUMENTED_COPILOT_ASSIGNEE_LOGIN},
+            }
+
+            with patch(
+                "orchestrator.app.tasks.plan_task_packet",
+                return_value={
+                    "objective": "Dispatch task",
+                    "scope": ["dispatch"],
+                    "non_goals": [],
+                    "acceptance_criteria": ["worker start signal promotes status"],
+                    "validation_guidance": ["unit tests"],
+                    "implementation_brief": "dispatch this",
+                },
+            ), patch(
+                "orchestrator.app.tasks.dispatch_task_to_github_copilot",
+                return_value=DispatchResult(
+                    attempted=True,
+                    accepted=True,
+                    manual_required=False,
+                    state="accepted",
+                    summary="Dispatch accepted",
+                ),
+            ):
+                with TestClient(main.app) as client:
+                    self._post_github(
+                        client,
+                        secret="test-gh-secret",
+                        delivery="delivery-task-opened-7",
+                        event="issues",
+                        payload=issue_opened_payload,
+                    )
+                    self._post_github(
+                        client,
+                        secret="test-gh-secret",
+                        delivery="delivery-approve-7",
+                        event="issue_comment",
+                        payload=approve_payload,
+                    )
+                    assigned = self._post_github(
+                        client,
+                        secret="test-gh-secret",
+                        delivery="delivery-assigned-7",
                         event="issues",
                         payload=assigned_payload,
                     )

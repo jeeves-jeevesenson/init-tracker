@@ -7,6 +7,7 @@ from typing import Any
 import httpx
 
 from .config import Settings
+from .copilot_identity import normalize_configured_copilot_login, normalize_copilot_login
 from .models import TaskPacket
 
 
@@ -55,12 +56,6 @@ def _extract_assignee_logins(payload: dict[str, Any]) -> set[str]:
     }
 
 
-def _normalize_login(value: str | None) -> str:
-    if not value:
-        return ""
-    return value.strip().lower().removesuffix("[bot]")
-
-
 def _task_packet_comment(task: TaskPacket, *, target_branch: str) -> str:
     packet = {
         "task_packet_id": task.id,
@@ -98,9 +93,13 @@ def dispatch_task_to_github_copilot(*, settings: Settings, task: TaskPacket) -> 
     try:
         with httpx.Client(timeout=15.0) as client:
             request_payload = {
-                "assignees": [settings.copilot_dispatch_assignee],
+                "assignees": [],
                 "agent_assignment": _build_agent_assignment_payload(settings, task),
             }
+            expected_assignee_login, normalization_applied = normalize_configured_copilot_login(
+                settings.copilot_dispatch_assignee
+            )
+            request_payload["assignees"] = [expected_assignee_login]
             assign_response = client.post(
                 assign_url,
                 headers=_build_headers(settings),
@@ -126,9 +125,9 @@ def dispatch_task_to_github_copilot(*, settings: Settings, task: TaskPacket) -> 
                 if assign_response.headers.get("content-type", "").startswith("application/json")
                 else {}
             )
-            assignee_logins = {_normalize_login(login) for login in _extract_assignee_logins(assign_payload)}
-            if _normalize_login(settings.copilot_dispatch_assignee) not in assignee_logins:
-                details = json.dumps(assign_payload)[:500]
+            raw_assignee_logins = sorted(_extract_assignee_logins(assign_payload))
+            assignee_logins = {normalize_copilot_login(login) for login in raw_assignee_logins}
+            if expected_assignee_login not in assignee_logins:
                 return DispatchResult(
                     attempted=True,
                     accepted=False,
@@ -136,7 +135,10 @@ def dispatch_task_to_github_copilot(*, settings: Settings, task: TaskPacket) -> 
                     state="blocked",
                     summary=(
                         "GitHub accepted the request but Copilot assignee was not applied; "
-                        f"manual dispatch needed. Response snapshot: {details}"
+                        "manual dispatch needed. "
+                        f"expected={expected_assignee_login}; "
+                        f"actual={raw_assignee_logins or ['(none)']}; "
+                        f"normalization_applied={normalization_applied}"
                     ),
                     api_status_code=assign_response.status_code,
                 )
@@ -161,7 +163,7 @@ def dispatch_task_to_github_copilot(*, settings: Settings, task: TaskPacket) -> 
                 state="accepted",
                 summary=(
                     "Copilot assignment request accepted via issues assignee API"
-                    f" for {settings.copilot_dispatch_assignee}."
+                    f" for {expected_assignee_login}."
                     f"{comment_warning or ''}"
                 ),
                 api_status_code=assign_response.status_code,
