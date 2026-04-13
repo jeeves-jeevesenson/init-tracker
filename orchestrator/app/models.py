@@ -59,6 +59,14 @@ SLICE_STATUS_COMPLETED = "completed"
 SLICE_STATUS_ESCALATED = "escalated"
 SLICE_STATUS_BLOCKED = "blocked"
 
+BLOCKER_WAITING_FOR_TRUSTED_CONFIRM = "waiting_for_trusted_confirm"
+BLOCKER_WAITING_FOR_PR_READY = "waiting_for_pr_ready"
+BLOCKER_WAITING_FOR_WORKFLOW_APPROVAL = "waiting_for_workflow_approval"
+BLOCKER_WAITING_FOR_CHECKS = "waiting_for_checks"
+BLOCKER_WAITING_FOR_MERGE = "waiting_for_merge"
+BLOCKER_WAITING_FOR_ISSUE_CREATION = "waiting_for_issue_creation_capability"
+BLOCKER_ESCALATED_TO_HUMAN = "escalated_to_human"
+
 
 class Program(SQLModel, table=True):
     id: int | None = Field(default=None, primary_key=True)

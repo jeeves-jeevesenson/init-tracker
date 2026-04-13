@@ -86,6 +86,13 @@ class Settings(BaseSettings):
     program_auto_merge: bool = Field(default=False, alias="PROGRAM_AUTO_MERGE")
     program_max_revision_attempts: int = Field(default=2, alias="PROGRAM_MAX_REVISION_ATTEMPTS")
 
+    # Trusted kickoff: issues with this label (in addition to task_label) are
+    # auto-confirmed after planning without requiring a second human approval.
+    trusted_kickoff_label: str = Field(default="program:kickoff", alias="TRUSTED_KICKOFF_LABEL")
+    # When True (default), the trusted_kickoff_label path auto-confirms after planning.
+    # Set to False to disable the trusted-kickoff shortcut while keeping the label inert.
+    program_trusted_auto_confirm: bool = Field(default=True, alias="PROGRAM_TRUSTED_AUTO_CONFIRM")
+
 
 @lru_cache(maxsize=1)
 def get_settings() -> Settings:
