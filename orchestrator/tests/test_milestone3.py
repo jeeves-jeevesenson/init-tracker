@@ -1512,6 +1512,76 @@ class MergePRTests(unittest.TestCase):
             else:
                 os.environ[key] = value
 
+    def test_mark_pr_ready_for_review_uses_graphql_mutation(self):
+        """mark_pr_ready_for_review should use GraphQL markPullRequestReadyForReview."""
+        from orchestrator.app.github_dispatch import mark_pr_ready_for_review
+
+        settings = Settings(GITHUB_API_TOKEN="dummy-token", GITHUB_API_URL="https://api.github.com")
+
+        query_response = MagicMock()
+        query_response.status_code = 200
+        query_response.json.return_value = {
+            "data": {"repository": {"pullRequest": {"id": "PR_node_id_123", "isDraft": True}}}
+        }
+        mutation_response = MagicMock()
+        mutation_response.status_code = 200
+        mutation_response.json.return_value = {
+            "data": {
+                "markPullRequestReadyForReview": {
+                    "pullRequest": {"number": 42, "isDraft": False}
+                }
+            }
+        }
+
+        with patch("orchestrator.app.github_dispatch.httpx.Client") as mock_client_cls:
+            mock_client = MagicMock()
+            mock_client.__enter__ = lambda s: mock_client
+            mock_client.__exit__ = MagicMock(return_value=False)
+            mock_client.post.side_effect = [query_response, mutation_response]
+            mock_client_cls.return_value = mock_client
+
+            success, msg = mark_pr_ready_for_review(settings=settings, repo="owner/repo", pr_number=42)
+
+        self.assertTrue(success)
+        self.assertIn("marked ready for review", msg)
+        self.assertEqual(mock_client.post.call_count, 2)
+        second_call = mock_client.post.call_args_list[1]
+        self.assertIn("/graphql", second_call.args[0])
+        self.assertIn("markPullRequestReadyForReview", second_call.kwargs["json"]["query"])
+        mock_client.patch.assert_not_called()
+
+    def test_mark_pr_ready_for_review_graphql_error_returns_failure(self):
+        """mark_pr_ready_for_review should return failure when mutation reports GraphQL errors."""
+        from orchestrator.app.github_dispatch import mark_pr_ready_for_review
+
+        settings = Settings(GITHUB_API_TOKEN="dummy-token", GITHUB_API_URL="https://api.github.com")
+
+        query_response = MagicMock()
+        query_response.status_code = 200
+        query_response.json.return_value = {
+            "data": {"repository": {"pullRequest": {"id": "PR_node_id_456", "isDraft": True}}}
+        }
+        mutation_response = MagicMock()
+        mutation_response.status_code = 200
+        mutation_response.json.return_value = {
+            "errors": [{"message": "Resource not accessible by integration"}]
+        }
+
+        with patch("orchestrator.app.github_dispatch.httpx.Client") as mock_client_cls:
+            mock_client = MagicMock()
+            mock_client.__enter__ = lambda s: mock_client
+            mock_client.__exit__ = MagicMock(return_value=False)
+            mock_client.post.side_effect = [query_response, mutation_response]
+            mock_client_cls.return_value = mock_client
+
+            success, msg = mark_pr_ready_for_review(settings=settings, repo="owner/repo", pr_number=42)
+
+        self.assertFalse(success)
+        self.assertIn("GraphQL", msg)
+        self.assertEqual(mock_client.post.call_count, 2)
+        second_call = mock_client.post.call_args_list[1]
+        self.assertIn("markPullRequestReadyForReview", second_call.kwargs["json"]["query"])
+
     def test_merge_pr_success(self):
         """merge_pr should return (True, ...) on HTTP 200."""
         from orchestrator.app.github_dispatch import merge_pr

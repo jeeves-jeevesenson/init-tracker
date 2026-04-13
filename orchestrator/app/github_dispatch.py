@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import logging
 from dataclasses import dataclass
 from typing import Any
 
@@ -25,6 +26,30 @@ query($owner: String!, $name: String!) {
   }
 }
 """
+
+_PULL_REQUEST_ID_QUERY = """
+query($owner: String!, $name: String!, $number: Int!) {
+  repository(owner: $owner, name: $name) {
+    pullRequest(number: $number) {
+      id
+      isDraft
+    }
+  }
+}
+"""
+
+_MARK_PR_READY_MUTATION = """
+mutation($pullRequestId: ID!) {
+  markPullRequestReadyForReview(input: {pullRequestId: $pullRequestId}) {
+    pullRequest {
+      number
+      isDraft
+    }
+  }
+}
+"""
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -384,19 +409,129 @@ def mark_pr_ready_for_review(*, settings: Settings, repo: str, pr_number: int) -
     if not settings.github_api_token:
         return False, "GitHub API token missing; cannot un-draft PR"
     api_base = settings.github_api_url.rstrip("/")
-    url = f"{api_base}/repos/{repo}/pulls/{pr_number}"
+    graphql_url = f"{api_base}/graphql"
+    repo_parts = _extract_repo_owner_name(repo)
+    if repo_parts is None:
+        msg = f"Invalid repository path {repo!r}; cannot mark PR #{pr_number} ready for review"
+        logger.warning(msg)
+        return False, msg
+    owner, name = repo_parts
+    logger.info(
+        "Attempting ready-for-review transition via GraphQL: repo=%s pr_number=%s",
+        repo,
+        pr_number,
+    )
     try:
         with httpx.Client(timeout=15.0) as client:
-            response = client.patch(
-                url,
+            pr_query_response = client.post(
+                graphql_url,
                 headers=_build_headers(settings),
-                json={"draft": False},
+                json={
+                    "query": _PULL_REQUEST_ID_QUERY,
+                    "variables": {"owner": owner, "name": name, "number": pr_number},
+                },
             )
-            if response.status_code >= 400:
-                return False, f"GitHub returned {response.status_code} when un-drafting PR #{pr_number}: {response.text[:300]}"
-            return True, f"PR #{pr_number} marked ready for review"
+            if pr_query_response.status_code >= 400:
+                msg = (
+                    f"GitHub returned {pr_query_response.status_code} when preparing ready-for-review "
+                    f"for PR #{pr_number}: {pr_query_response.text[:300]}"
+                )
+                logger.warning(
+                    "Ready-for-review transition failed: repo=%s pr_number=%s error=%s",
+                    repo,
+                    pr_number,
+                    msg,
+                )
+                return False, msg
+
+            query_payload = pr_query_response.json()
+            if query_payload.get("errors"):
+                msg = (
+                    f"GitHub GraphQL errors when preparing ready-for-review for PR #{pr_number}: "
+                    f"{str(query_payload.get('errors'))[:300]}"
+                )
+                logger.warning(
+                    "Ready-for-review transition failed: repo=%s pr_number=%s error=%s",
+                    repo,
+                    pr_number,
+                    msg,
+                )
+                return False, msg
+
+            pull_request = (((query_payload.get("data") or {}).get("repository") or {}).get("pullRequest") or {})
+            pull_request_id = pull_request.get("id")
+            if not isinstance(pull_request_id, str) or not pull_request_id.strip():
+                msg = f"PR #{pr_number} not found via GraphQL; cannot mark ready for review"
+                logger.warning(
+                    "Ready-for-review transition failed: repo=%s pr_number=%s error=%s",
+                    repo,
+                    pr_number,
+                    msg,
+                )
+                return False, msg
+
+            if pull_request.get("isDraft") is False:
+                msg = f"PR #{pr_number} is already ready for review"
+                logger.info(
+                    "Ready-for-review transition complete: repo=%s pr_number=%s result=%s",
+                    repo,
+                    pr_number,
+                    msg,
+                )
+                return True, msg
+
+            mutation_response = client.post(
+                graphql_url,
+                headers=_build_headers(settings),
+                json={
+                    "query": _MARK_PR_READY_MUTATION,
+                    "variables": {"pullRequestId": pull_request_id},
+                },
+            )
+            if mutation_response.status_code >= 400:
+                msg = (
+                    f"GitHub returned {mutation_response.status_code} when marking PR #{pr_number} ready for review: "
+                    f"{mutation_response.text[:300]}"
+                )
+                logger.warning(
+                    "Ready-for-review transition failed: repo=%s pr_number=%s error=%s",
+                    repo,
+                    pr_number,
+                    msg,
+                )
+                return False, msg
+
+            mutation_payload = mutation_response.json()
+            if mutation_payload.get("errors"):
+                msg = (
+                    f"GitHub GraphQL errors when marking PR #{pr_number} ready for review: "
+                    f"{str(mutation_payload.get('errors'))[:300]}"
+                )
+                logger.warning(
+                    "Ready-for-review transition failed: repo=%s pr_number=%s error=%s",
+                    repo,
+                    pr_number,
+                    msg,
+                )
+                return False, msg
+
+            msg = f"PR #{pr_number} marked ready for review"
+            logger.info(
+                "Ready-for-review transition complete: repo=%s pr_number=%s result=%s",
+                repo,
+                pr_number,
+                msg,
+            )
+            return True, msg
     except Exception as exc:
-        return False, f"Failed to un-draft PR #{pr_number}: {exc}"
+        msg = f"Failed to mark PR #{pr_number} ready for review: {exc}"
+        logger.warning(
+            "Ready-for-review transition failed: repo=%s pr_number=%s error=%s",
+            repo,
+            pr_number,
+            msg,
+        )
+        return False, msg
 
 
 def merge_pr(
