@@ -50,6 +50,7 @@ from .models import (
 )
 from .openai_planning import plan_task_packet
 from .openai_review import summarize_work_update
+from .programs import apply_reviewer_decision, ensure_program_for_task, link_run_to_slice, mark_slice_approved
 
 
 ISSUE_REF_RE = re.compile(r"#(\d+)")
@@ -318,6 +319,7 @@ def _mark_worker_started(
     task.latest_summary = reason
     task.updated_at = _utc_now()
     _save(session, run, task)
+    link_run_to_slice(session, run=run, task=task)
     notify_discord(
         f"Worker started: {task.github_repo}#{task.github_issue_number} -> {_worker_display_name(task)}"
     )
@@ -345,6 +347,7 @@ def _mark_worker_failed(
     task.latest_summary = reason
     task.updated_at = _utc_now()
     _save(session, run, task)
+    link_run_to_slice(session, run=run, task=task)
     notify_discord(
         f"Worker started but failed: {task.github_repo}#{task.github_issue_number} -> {_worker_display_name(task)}"
     )
@@ -388,7 +391,7 @@ def _default_worker_brief(task: TaskPacket, internal_plan: dict[str, Any]) -> di
     }
 
 
-def _extract_plan_artifacts(task: TaskPacket, plan_payload: dict[str, Any]) -> tuple[dict[str, Any], dict[str, Any]]:
+def _extract_plan_artifacts(task: TaskPacket, plan_payload: dict[str, Any]) -> tuple[dict[str, Any], dict[str, Any], dict[str, Any] | None]:
     if isinstance(plan_payload.get("internal_plan"), dict):
         internal_plan = plan_payload["internal_plan"]
     else:
@@ -399,7 +402,8 @@ def _extract_plan_artifacts(task: TaskPacket, plan_payload: dict[str, Any]) -> t
         if isinstance(plan_payload.get("worker_brief"), dict)
         else _default_worker_brief(task, internal_plan)
     )
-    return internal_plan, worker_brief
+    program_plan = plan_payload.get("program_plan") if isinstance(plan_payload.get("program_plan"), dict) else None
+    return internal_plan, worker_brief, program_plan
 
 
 def task_to_dict(task: TaskPacket, latest_run: AgentRun | None = None) -> dict[str, Any]:
@@ -430,6 +434,9 @@ def task_to_dict(task: TaskPacket, latest_run: AgentRun | None = None) -> dict[s
         "id": task.id,
         "github_repo": task.github_repo,
         "github_issue_number": task.github_issue_number,
+        "program_id": task.program_id,
+        "program_slice_id": task.program_slice_id,
+        "task_kind": task.task_kind,
         "github_issue_node_id": task.github_issue_node_id,
         "title": task.title,
         "raw_body": task.raw_body,
@@ -478,6 +485,8 @@ def run_to_dict(run: AgentRun | None) -> dict[str, Any] | None:
     return {
         "id": run.id,
         "task_packet_id": run.task_packet_id,
+        "program_id": run.program_id,
+        "program_slice_id": run.program_slice_id,
         "provider": run.provider,
         "github_repo": run.github_repo,
         "github_issue_number": run.github_issue_number,
@@ -489,6 +498,7 @@ def run_to_dict(run: AgentRun | None) -> dict[str, Any] | None:
         "dispatch_payload_summary": dispatch_payload_summary,
         "review_artifact": review_artifact,
         "review_artifact_json": run.review_artifact_json,
+        "continuation_decision": run.continuation_decision,
         "status": run.status,
         "last_summary": run.last_summary,
         "created_at": run.created_at.isoformat() if run.created_at else None,
@@ -531,7 +541,7 @@ def _run_planning(
             issue_title=task.title,
             issue_body=task.raw_body,
         )
-        internal_plan, worker_brief = _extract_plan_artifacts(task, plan_payload)
+        internal_plan, worker_brief, program_plan = _extract_plan_artifacts(task, plan_payload)
         task.internal_plan_json = json.dumps(internal_plan, ensure_ascii=False)
         task.worker_brief_json = json.dumps(worker_brief, ensure_ascii=False)
         task.normalized_task_text = _render_normalized_text(internal_plan)
@@ -540,6 +550,14 @@ def _run_planning(
         task.recommended_worker = _normalize_worker_slug(internal_plan.get("recommended_worker"))
         task.recommended_scope_class = _normalize_scope_class(internal_plan.get("recommended_scope_class"))
         _apply_worker_selection(task=task, settings=settings, issue_labels=issue_labels)
+        ensure_program_for_task(
+            session,
+            settings=settings,
+            task=task,
+            internal_plan=internal_plan,
+            worker_brief=worker_brief,
+            program_plan=program_plan,
+        )
         task.status = TASK_STATUS_AWAITING_APPROVAL
         task.approval_state = APPROVAL_PENDING
         task.latest_summary = (
@@ -693,6 +711,7 @@ def process_approval(
         task.latest_summary = f"Approved via {source}; worker={_worker_display_name(task)}"
         task.updated_at = _utc_now()
         _save(session, task)
+        mark_slice_approved(session, task=task)
         notify_discord(f"Task approved: {task.github_repo}#{task.github_issue_number} -> {_worker_display_name(task)}")
         dispatch_task_if_ready(session, settings=settings, task=task)
         return
@@ -750,13 +769,13 @@ def process_issue_comment_event(session: Session, *, settings: Settings, payload
     process_approval(session, settings=settings, task=task, approved=approved, source="comment")
 
 
-def dispatch_task_if_ready(session: Session, *, settings: Settings, task: TaskPacket) -> None:
+def dispatch_task_if_ready(session: Session, *, settings: Settings, task: TaskPacket, force: bool = False) -> None:
     if task.id is None:
         return
     if task.approval_state != APPROVAL_APPROVED:
         return
     latest_run = _latest_run_for_task(session, task.id)
-    if latest_run and latest_run.status in {
+    if not force and latest_run and latest_run.status in {
         RUN_STATUS_DISPATCH_REQUESTED,
         RUN_STATUS_AWAITING_WORKER_START,
         RUN_STATUS_DISPATCHED,
@@ -771,6 +790,8 @@ def dispatch_task_if_ready(session: Session, *, settings: Settings, task: TaskPa
     dispatch_mode_summary = describe_dispatch_mode(settings, task)
     run = AgentRun(
         task_packet_id=task.id,
+        program_id=task.program_id,
+        program_slice_id=task.program_slice_id,
         provider="github_copilot",
         github_repo=task.github_repo,
         github_issue_number=task.github_issue_number,
@@ -781,6 +802,7 @@ def dispatch_task_if_ready(session: Session, *, settings: Settings, task: TaskPa
         last_summary="Dispatch queued",
     )
     _save(session, run)
+    link_run_to_slice(session, run=run, task=task)
 
     run.status = RUN_STATUS_DISPATCH_REQUESTED
     run.last_summary = (
@@ -813,6 +835,7 @@ def dispatch_task_if_ready(session: Session, *, settings: Settings, task: TaskPa
         task.latest_summary = f"{result_summary} Awaiting worker-start signal."
         task.updated_at = _utc_now()
         _save(session, run, task)
+        link_run_to_slice(session, run=run, task=task)
         notify_discord(
             "Task dispatched: "
             f"{task.github_repo}#{task.github_issue_number} -> {_worker_display_name(task)} "
@@ -831,6 +854,7 @@ def dispatch_task_if_ready(session: Session, *, settings: Settings, task: TaskPa
         task.latest_summary = result_summary
         task.updated_at = _utc_now()
         _save(session, run, task)
+        link_run_to_slice(session, run=run, task=task)
         notify_discord(
             "Manual dispatch needed: "
             f"{task.github_repo}#{task.github_issue_number} -> {_worker_display_name(task)} "
@@ -846,6 +870,7 @@ def dispatch_task_if_ready(session: Session, *, settings: Settings, task: TaskPa
     task.latest_summary = result_summary
     task.updated_at = _utc_now()
     _save(session, run, task)
+    link_run_to_slice(session, run=run, task=task)
     notify_discord(
         "Task failed to dispatch: "
         f"{task.github_repo}#{task.github_issue_number} -> {_worker_display_name(task)} "
@@ -892,12 +917,14 @@ def _summarize_and_store(
     run: AgentRun,
     context: str,
     run_status: str,
+    event_key: str,
+    checks_passed: bool,
 ) -> None:
     try:
         summary = summarize_work_update(settings=settings, update_context=context)
         artifact = summary.get("review_artifact") if isinstance(summary.get("review_artifact"), dict) else {}
-        bullets = summary.get("summary_bullets") or artifact.get("concise_summary") or []
-        next_action = summary.get("next_action") or artifact.get("merge_recommendation") or "review"
+        bullets = summary.get("summary_bullets") or artifact.get("summary") or []
+        next_action = summary.get("next_action") or artifact.get("decision") or "revise"
         rendered = "\n".join(f"- {line}" for line in bullets)
         full_summary = f"{rendered}\nNext action: {next_action}".strip()
         run.review_artifact_json = json.dumps(artifact, ensure_ascii=False) if artifact else None
@@ -905,13 +932,17 @@ def _summarize_and_store(
         full_summary = f"Summary unavailable: {exc}"
         run.review_artifact_json = json.dumps(
             {
-                "what_changed": [],
-                "scope_status": "unclear",
-                "likely_risks": [],
-                "missing_validation": [],
+                "decision": "revise",
+                "status": "blocked",
+                "confidence": 0.0,
+                "scope_alignment": [],
+                "acceptance_assessment": [],
+                "risk_findings": [],
                 "merge_recommendation": "review_required",
-                "send_back_recommendation": "not_needed",
-                "concise_summary": [str(exc)],
+                "revision_instructions": [str(exc)],
+                "audit_recommendation": "",
+                "next_slice_hint": "",
+                "summary": [str(exc)],
             },
             ensure_ascii=False,
         )
@@ -923,13 +954,28 @@ def _summarize_and_store(
     task.latest_summary = full_summary
     task.updated_at = _utc_now()
     _save(session, run, task)
+    link_run_to_slice(session, run=run, task=task)
+    decision = apply_reviewer_decision(
+        session,
+        settings=settings,
+        task=task,
+        run=run,
+        event_key=event_key,
+        checks_passed=checks_passed,
+    )
+    if decision == "revise":
+        task.status = TASK_STATUS_APPROVED
+        task.latest_summary = "Revision requested by reviewer; redispatching"
+        task.updated_at = _utc_now()
+        _save(session, task)
+        dispatch_task_if_ready(session, settings=settings, task=task, force=True)
 
 
 def _review_summary_suffix(run: AgentRun) -> str:
     artifact = _parse_json_object(run.review_artifact_json)
     if not artifact:
         return ""
-    concise = artifact.get("concise_summary")
+    concise = artifact.get("summary")
     if isinstance(concise, list) and concise:
         first = str(concise[0]).strip()
         if first:
@@ -957,6 +1003,8 @@ def process_pull_request_event(
     if run is None:
         run = AgentRun(
             task_packet_id=task.id,
+            program_id=task.program_id,
+            program_slice_id=task.program_slice_id,
             provider="github_copilot",
             github_repo=task.github_repo,
             github_issue_number=task.github_issue_number,
@@ -970,11 +1018,32 @@ def process_pull_request_event(
 
     html_url = str(pr.get("html_url") or "")
     if action in {"opened", "reopened", "ready_for_review"}:
-        context = (
-            f"PR update for {github_repo}#{task.github_issue_number}\n"
-            f"Action: {action}\n"
-            f"PR: #{pr.get('number')} {pr.get('title')}\n"
-            f"URL: {html_url}"
+        context = json.dumps(
+            {
+                "event": "pull_request",
+                "action": action,
+                "repo": github_repo,
+                "issue_number": task.github_issue_number,
+                "task_kind": task.task_kind,
+                "program_id": task.program_id,
+                "program_slice_id": task.program_slice_id,
+                "pr": {
+                    "number": pr.get("number"),
+                    "title": pr.get("title"),
+                    "body": pr.get("body"),
+                    "url": html_url,
+                    "draft": pr.get("draft"),
+                    "mergeable": pr.get("mergeable"),
+                    "mergeable_state": pr.get("mergeable_state"),
+                    "changed_files_count": pr.get("changed_files"),
+                    "commits_count": pr.get("commits"),
+                },
+                "slice_objective": task.title,
+                "acceptance_criteria": json.loads(task.acceptance_criteria_json or "[]"),
+                "non_goals": [],
+                "worker_summary": run.last_summary,
+            },
+            ensure_ascii=False,
         )
         _summarize_and_store(
             session,
@@ -983,10 +1052,13 @@ def process_pull_request_event(
             run=run,
             context=context,
             run_status=RUN_STATUS_PR_OPENED,
+            event_key=f"pull_request:{pr.get('id')}:{action}:{pr.get('updated_at')}",
+            checks_passed=False,
         )
         task.status = TASK_STATUS_PR_OPENED
         task.updated_at = _utc_now()
         _save(session, task)
+        link_run_to_slice(session, run=run, task=task)
         notify_discord(
             f"PR opened / ready for review: {github_repo} PR #{pr.get('number')} -> {_worker_display_name(task)}"
             f"{_review_summary_suffix(run)}"
@@ -1003,6 +1075,7 @@ def process_pull_request_event(
             task.latest_summary = run.last_summary
             task.updated_at = _utc_now()
             _save(session, run, task)
+            link_run_to_slice(session, run=run, task=task)
             notify_discord(f"Task completed: {github_repo}#{task.github_issue_number}")
             return
 
@@ -1013,6 +1086,7 @@ def process_pull_request_event(
         task.latest_summary = run.last_summary
         task.updated_at = _utc_now()
         _save(session, run, task)
+        link_run_to_slice(session, run=run, task=task)
         notify_discord(f"Task blocked (PR closed): {github_repo}#{task.github_issue_number}")
         return
 
@@ -1023,6 +1097,7 @@ def process_pull_request_event(
     task.latest_summary = run.last_summary
     task.updated_at = _utc_now()
     _save(session, run, task)
+    link_run_to_slice(session, run=run, task=task)
 
 
 def process_workflow_run_event(
@@ -1062,13 +1137,27 @@ def process_workflow_run_event(
     name = str(workflow_run.get("name") or "workflow")
     html_url = str(workflow_run.get("html_url") or "")
 
-    context = (
-        f"Workflow update for {github_repo}#{task.github_issue_number}\n"
-        f"Action: {action}\n"
-        f"Workflow: {name}\n"
-        f"Status: {status}\n"
-        f"Conclusion: {conclusion}\n"
-        f"Run URL: {html_url}"
+    context = json.dumps(
+        {
+            "event": "workflow_run",
+            "action": action,
+            "repo": github_repo,
+            "issue_number": task.github_issue_number,
+            "program_id": task.program_id,
+            "program_slice_id": task.program_slice_id,
+            "workflow": {
+                "id": workflow_run.get("id"),
+                "name": name,
+                "status": status,
+                "conclusion": conclusion,
+                "url": html_url,
+            },
+            "pull_requests": pr_entries,
+            "acceptance_criteria": json.loads(task.acceptance_criteria_json or "[]"),
+            "latest_worker_summary": run.last_summary,
+            "previous_review_artifact": _parse_json_object(run.review_artifact_json),
+        },
+        ensure_ascii=False,
     )
 
     if status == "completed" and conclusion == "success":
@@ -1079,10 +1168,13 @@ def process_workflow_run_event(
             run=run,
             context=context,
             run_status=RUN_STATUS_AWAITING_REVIEW,
+            event_key=f"workflow_run:{workflow_run.get('id')}:{status}:{conclusion}",
+            checks_passed=True,
         )
         task.status = TASK_STATUS_PR_OPENED
         task.updated_at = _utc_now()
         _save(session, task)
+        link_run_to_slice(session, run=run, task=task)
         notify_discord(
             f"Checks complete and ready for review: {github_repo} PR #{run.github_pr_number} -> {_worker_display_name(task)}"
             f"{_review_summary_suffix(run)}"
@@ -1097,10 +1189,13 @@ def process_workflow_run_event(
             run=run,
             context=context,
             run_status=RUN_STATUS_BLOCKED,
+            event_key=f"workflow_run:{workflow_run.get('id')}:{status}:{conclusion}",
+            checks_passed=False,
         )
         task.status = TASK_STATUS_BLOCKED
         task.updated_at = _utc_now()
         _save(session, task)
+        link_run_to_slice(session, run=run, task=task)
         notify_discord(
             f"Checks failed / task blocked: {github_repo} PR #{run.github_pr_number} -> {_worker_display_name(task)}"
             f"{_review_summary_suffix(run)}"
@@ -1114,3 +1209,4 @@ def process_workflow_run_event(
     task.latest_summary = run.last_summary
     task.updated_at = _utc_now()
     _save(session, run, task)
+    link_run_to_slice(session, run=run, task=task)

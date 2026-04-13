@@ -6,35 +6,44 @@ from typing import Any
 from openai import OpenAI
 
 from .config import Settings
+from .schema_validation import validate_strict_json_schema
 
-_ALLOWED_SCOPE_STATUS = {"met", "partially_met", "not_met", "unclear"}
+_ALLOWED_SCOPE_STATUS = {"met", "partial", "drifted", "blocked"}
 _ALLOWED_MERGE_RECOMMENDATION = {"merge_ready", "review_required", "do_not_merge"}
-_ALLOWED_SEND_BACK = {"send_back", "not_needed"}
+_ALLOWED_DECISION = {"continue", "revise", "audit", "escalate", "complete"}
 _ALLOWED_REASONING_EFFORT = {"low", "medium", "high"}
 
 REVIEW_ARTIFACT_SCHEMA: dict[str, Any] = {
     "type": "object",
     "additionalProperties": False,
     "required": [
-        "what_changed",
-        "scope_status",
-        "likely_risks",
-        "missing_validation",
+        "decision",
+        "status",
+        "confidence",
+        "scope_alignment",
+        "acceptance_assessment",
+        "risk_findings",
         "merge_recommendation",
-        "send_back_recommendation",
-        "concise_summary",
+        "revision_instructions",
+        "audit_recommendation",
+        "next_slice_hint",
+        "summary",
     ],
     "properties": {
-        "what_changed": {"type": "array", "items": {"type": "string"}},
-        "scope_status": {"type": "string", "enum": sorted(_ALLOWED_SCOPE_STATUS)},
-        "likely_risks": {"type": "array", "items": {"type": "string"}},
-        "missing_validation": {"type": "array", "items": {"type": "string"}},
+        "decision": {"type": "string", "enum": sorted(_ALLOWED_DECISION)},
+        "status": {"type": "string", "enum": sorted(_ALLOWED_SCOPE_STATUS)},
+        "confidence": {"type": "number", "minimum": 0, "maximum": 1},
+        "scope_alignment": {"type": "array", "items": {"type": "string"}},
+        "acceptance_assessment": {"type": "array", "items": {"type": "string"}},
+        "risk_findings": {"type": "array", "items": {"type": "string"}},
         "merge_recommendation": {
             "type": "string",
             "enum": sorted(_ALLOWED_MERGE_RECOMMENDATION),
         },
-        "send_back_recommendation": {"type": "string", "enum": sorted(_ALLOWED_SEND_BACK)},
-        "concise_summary": {"type": "array", "items": {"type": "string"}},
+        "revision_instructions": {"type": "array", "items": {"type": "string"}},
+        "audit_recommendation": {"type": "string"},
+        "next_slice_hint": {"type": "string"},
+        "summary": {"type": "array", "items": {"type": "string"}},
     },
 }
 
@@ -151,28 +160,29 @@ def _response_payload(
 
 
 def _validate_review_artifact(raw: dict[str, Any]) -> dict[str, Any]:
-    concise_summary = _coerce_string_list(raw.get("concise_summary"), "concise_summary")[:4]
-    what_changed = _coerce_string_list(raw.get("what_changed"), "what_changed")[:8]
-    likely_risks = _coerce_string_list(raw.get("likely_risks"), "likely_risks")[:8]
-    missing_validation = _coerce_string_list(raw.get("missing_validation"), "missing_validation")[:8]
-    if not concise_summary:
-        concise_summary = ["Review completed; see artifact for details."]
+    summary = _coerce_string_list(raw.get("summary"), "summary")[:4]
+    if not summary:
+        summary = ["Review completed; see artifact for details."]
+    confidence_value = raw.get("confidence")
+    if not isinstance(confidence_value, (int, float)):
+        raise RuntimeError("OpenAI review response field 'confidence' must be a number")
+    confidence = min(1.0, max(0.0, float(confidence_value)))
     return {
-        "what_changed": what_changed,
-        "scope_status": _coerce_enum(raw.get("scope_status"), field_name="scope_status", allowed=_ALLOWED_SCOPE_STATUS),
-        "likely_risks": likely_risks,
-        "missing_validation": missing_validation,
+        "decision": _coerce_enum(raw.get("decision"), field_name="decision", allowed=_ALLOWED_DECISION),
+        "status": _coerce_enum(raw.get("status"), field_name="status", allowed=_ALLOWED_SCOPE_STATUS),
+        "confidence": confidence,
+        "scope_alignment": _coerce_string_list(raw.get("scope_alignment"), "scope_alignment")[:8],
+        "acceptance_assessment": _coerce_string_list(raw.get("acceptance_assessment"), "acceptance_assessment")[:8],
+        "risk_findings": _coerce_string_list(raw.get("risk_findings"), "risk_findings")[:8],
         "merge_recommendation": _coerce_enum(
             raw.get("merge_recommendation"),
             field_name="merge_recommendation",
             allowed=_ALLOWED_MERGE_RECOMMENDATION,
         ),
-        "send_back_recommendation": _coerce_enum(
-            raw.get("send_back_recommendation"),
-            field_name="send_back_recommendation",
-            allowed=_ALLOWED_SEND_BACK,
-        ),
-        "concise_summary": concise_summary,
+        "revision_instructions": _coerce_string_list(raw.get("revision_instructions"), "revision_instructions")[:10],
+        "audit_recommendation": str(raw.get("audit_recommendation") or ""),
+        "next_slice_hint": str(raw.get("next_slice_hint") or ""),
+        "summary": summary,
     }
 
 
@@ -180,23 +190,28 @@ def _fallback_review_artifact(update_context: str) -> dict[str, Any]:
     lines = [line.strip() for line in update_context.splitlines() if line.strip()]
     bullets = lines[:3] or ["No update details were provided."]
     return {
-        "what_changed": bullets,
-        "scope_status": "unclear",
-        "likely_risks": [],
-        "missing_validation": ["Validation evidence not supplied in event context."],
+        "decision": "revise",
+        "status": "partial",
+        "confidence": 0.2,
+        "scope_alignment": bullets,
+        "acceptance_assessment": bullets,
+        "risk_findings": ["Validation evidence not supplied in event context."],
         "merge_recommendation": "review_required",
-        "send_back_recommendation": "not_needed",
-        "concise_summary": bullets,
+        "revision_instructions": ["Collect stronger validation evidence before merge."],
+        "audit_recommendation": "",
+        "next_slice_hint": "",
+        "summary": bullets,
     }
 
 
 def summarize_work_update(*, settings: Settings, update_context: str) -> dict[str, Any]:
+    validate_strict_json_schema(schema_name="pr_review_artifact", schema=REVIEW_ARTIFACT_SCHEMA)
     if not settings.openai_api_key:
         artifact = _fallback_review_artifact(update_context)
         return {
             "review_artifact": artifact,
-            "summary_bullets": artifact["concise_summary"],
-            "next_action": "review",
+            "summary_bullets": artifact["summary"],
+            "next_action": artifact["decision"],
         }
 
     client = OpenAI(api_key=settings.openai_api_key)
@@ -217,15 +232,10 @@ def summarize_work_update(*, settings: Settings, update_context: str) -> dict[st
         )
 
     artifact = _validate_review_artifact(parsed)
-    if artifact["send_back_recommendation"] == "send_back":
-        next_action = "send_back_to_agent"
-    elif artifact["merge_recommendation"] == "do_not_merge":
-        next_action = "blocked"
-    else:
-        next_action = "review"
+    next_action = artifact["decision"]
 
     return {
         "review_artifact": artifact,
-        "summary_bullets": artifact["concise_summary"],
+        "summary_bullets": artifact["summary"],
         "next_action": next_action,
     }
