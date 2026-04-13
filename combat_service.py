@@ -412,8 +412,8 @@ class CombatService:
                 return {"ok": False, "error": "No combatants in the initiative list."}
             try:
                 t._start_turns()
-            except Exception as exc:
-                return {"ok": False, "error": str(exc), "snapshot": self.combat_snapshot()}
+            except Exception:
+                return {"ok": False, "error": "Could not start combat.", "snapshot": self.combat_snapshot()}
             # Explicitly mark in_combat so the flag is truthful for this session.
             t.in_combat = True
             try:
