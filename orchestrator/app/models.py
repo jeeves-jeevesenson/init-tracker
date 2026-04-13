@@ -9,6 +9,29 @@ def utc_now() -> datetime:
     return datetime.now(timezone.utc)
 
 
+TASK_STATUS_RECEIVED = "received"
+TASK_STATUS_PLANNING = "planning"
+TASK_STATUS_AWAITING_APPROVAL = "awaiting_approval"
+TASK_STATUS_APPROVED = "approved"
+TASK_STATUS_DISPATCHED = "dispatched"
+TASK_STATUS_BLOCKED = "blocked"
+TASK_STATUS_COMPLETED = "completed"
+TASK_STATUS_FAILED = "failed"
+
+APPROVAL_PENDING = "pending"
+APPROVAL_APPROVED = "approved"
+APPROVAL_REJECTED = "rejected"
+
+RUN_STATUS_QUEUED = "queued"
+RUN_STATUS_DISPATCHED = "dispatched"
+RUN_STATUS_WORKING = "working"
+RUN_STATUS_PR_OPENED = "pr_opened"
+RUN_STATUS_AWAITING_REVIEW = "awaiting_review"
+RUN_STATUS_BLOCKED = "blocked"
+RUN_STATUS_COMPLETED = "completed"
+RUN_STATUS_FAILED = "failed"
+
+
 class RunEvent(SQLModel, table=True):
     id: int | None = Field(default=None, primary_key=True)
     source: str = Field(index=True)
@@ -18,5 +41,38 @@ class RunEvent(SQLModel, table=True):
     status: str = Field(default="received", index=True)
     summary: str | None = Field(default=None)
     payload_json: str = Field(default="{}")
+    created_at: datetime = Field(default_factory=utc_now, index=True)
+    updated_at: datetime = Field(default_factory=utc_now, index=True)
+
+
+class TaskPacket(SQLModel, table=True):
+    id: int | None = Field(default=None, primary_key=True)
+    github_repo: str = Field(index=True)
+    github_issue_number: int = Field(index=True)
+    github_issue_node_id: str | None = Field(default=None)
+    title: str = Field(default="")
+    raw_body: str = Field(default="")
+    normalized_task_text: str | None = Field(default=None)
+    acceptance_criteria_json: str | None = Field(default=None)
+    validation_commands_json: str | None = Field(default=None)
+    status: str = Field(default=TASK_STATUS_RECEIVED, index=True)
+    approval_state: str = Field(default=APPROVAL_PENDING, index=True)
+    priority: int | None = Field(default=None, index=True)
+    latest_summary: str | None = Field(default=None)
+    created_at: datetime = Field(default_factory=utc_now, index=True)
+    updated_at: datetime = Field(default_factory=utc_now, index=True)
+
+
+class AgentRun(SQLModel, table=True):
+    id: int | None = Field(default=None, primary_key=True)
+    task_packet_id: int = Field(foreign_key="taskpacket.id", index=True)
+    provider: str = Field(default="github_copilot", index=True)
+    github_repo: str = Field(index=True)
+    github_issue_number: int = Field(index=True)
+    github_pr_number: int | None = Field(default=None, index=True)
+    github_dispatch_id: str | None = Field(default=None, index=True)
+    github_dispatch_url: str | None = Field(default=None)
+    status: str = Field(default=RUN_STATUS_QUEUED, index=True)
+    last_summary: str | None = Field(default=None)
     created_at: datetime = Field(default_factory=utc_now, index=True)
     updated_at: datetime = Field(default_factory=utc_now, index=True)

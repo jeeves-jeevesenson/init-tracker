@@ -1,0 +1,570 @@
+from __future__ import annotations
+
+import json
+import re
+from datetime import datetime, timezone
+from typing import Any
+
+from sqlmodel import Session, select
+
+from .config import Settings
+from .discord_notify import notify_discord
+from .github_dispatch import dispatch_task_to_github_copilot
+from .models import (
+    APPROVAL_APPROVED,
+    APPROVAL_PENDING,
+    APPROVAL_REJECTED,
+    RUN_STATUS_AWAITING_REVIEW,
+    RUN_STATUS_BLOCKED,
+    RUN_STATUS_COMPLETED,
+    RUN_STATUS_DISPATCHED,
+    RUN_STATUS_FAILED,
+    RUN_STATUS_PR_OPENED,
+    RUN_STATUS_QUEUED,
+    RUN_STATUS_WORKING,
+    TASK_STATUS_APPROVED,
+    TASK_STATUS_AWAITING_APPROVAL,
+    TASK_STATUS_BLOCKED,
+    TASK_STATUS_COMPLETED,
+    TASK_STATUS_DISPATCHED,
+    TASK_STATUS_FAILED,
+    TASK_STATUS_PLANNING,
+    TASK_STATUS_RECEIVED,
+    AgentRun,
+    TaskPacket,
+)
+from .openai_planning import plan_task_packet
+from .openai_review import summarize_work_update
+
+
+ISSUE_REF_RE = re.compile(r"#(\d+)")
+
+
+def _utc_now() -> datetime:
+    return datetime.now(timezone.utc)
+
+
+def _labels(payload_issue: dict[str, Any]) -> set[str]:
+    labels = payload_issue.get("labels") or []
+    result: set[str] = set()
+    for label in labels:
+        if isinstance(label, dict) and isinstance(label.get("name"), str):
+            result.add(label["name"])
+    return result
+
+
+def _repo_name(payload: dict[str, Any]) -> str:
+    repo = payload.get("repository") or {}
+    return str(repo.get("full_name") or "")
+
+
+def _issue_number(payload: dict[str, Any]) -> int | None:
+    issue = payload.get("issue") or {}
+    number = issue.get("number")
+    return int(number) if isinstance(number, int) else None
+
+
+def _get_task_by_repo_issue(session: Session, *, github_repo: str, github_issue_number: int) -> TaskPacket | None:
+    query = (
+        select(TaskPacket)
+        .where(TaskPacket.github_repo == github_repo)
+        .where(TaskPacket.github_issue_number == github_issue_number)
+        .limit(1)
+    )
+    return session.exec(query).first()
+
+
+def _latest_run_for_task(session: Session, task_id: int) -> AgentRun | None:
+    query = (
+        select(AgentRun)
+        .where(AgentRun.task_packet_id == task_id)
+        .order_by(AgentRun.created_at.desc())
+        .limit(1)
+    )
+    return session.exec(query).first()
+
+
+def _save(session: Session, *objects: Any) -> None:
+    for obj in objects:
+        session.add(obj)
+    session.commit()
+    for obj in objects:
+        session.refresh(obj)
+
+
+def _render_normalized_text(plan: dict[str, Any]) -> str:
+    scope_lines = "\n".join(f"- {item}" for item in plan.get("scope", []))
+    non_goal_lines = "\n".join(f"- {item}" for item in plan.get("non_goals", []))
+    acceptance_lines = "\n".join(f"- {item}" for item in plan.get("acceptance_criteria", []))
+    validation_lines = "\n".join(f"- {item}" for item in plan.get("validation_guidance", []))
+    return (
+        f"Objective:\n{plan.get('objective', '')}\n\n"
+        f"Scope:\n{scope_lines or '- (none)'}\n\n"
+        f"Non-goals:\n{non_goal_lines or '- (none)'}\n\n"
+        f"Implementation brief:\n{plan.get('implementation_brief', '')}\n\n"
+        f"Acceptance criteria:\n{acceptance_lines or '- (none)'}\n\n"
+        f"Validation guidance:\n{validation_lines or '- (none)'}"
+    )
+
+
+def task_to_dict(task: TaskPacket, latest_run: AgentRun | None = None) -> dict[str, Any]:
+    return {
+        "id": task.id,
+        "github_repo": task.github_repo,
+        "github_issue_number": task.github_issue_number,
+        "github_issue_node_id": task.github_issue_node_id,
+        "title": task.title,
+        "raw_body": task.raw_body,
+        "normalized_task_text": task.normalized_task_text,
+        "acceptance_criteria_json": task.acceptance_criteria_json,
+        "validation_commands_json": task.validation_commands_json,
+        "status": task.status,
+        "approval_state": task.approval_state,
+        "priority": task.priority,
+        "latest_summary": task.latest_summary,
+        "created_at": task.created_at.isoformat() if task.created_at else None,
+        "updated_at": task.updated_at.isoformat() if task.updated_at else None,
+        "latest_run": run_to_dict(latest_run) if latest_run else None,
+    }
+
+
+def run_to_dict(run: AgentRun | None) -> dict[str, Any] | None:
+    if run is None:
+        return None
+    return {
+        "id": run.id,
+        "task_packet_id": run.task_packet_id,
+        "provider": run.provider,
+        "github_repo": run.github_repo,
+        "github_issue_number": run.github_issue_number,
+        "github_pr_number": run.github_pr_number,
+        "github_dispatch_id": run.github_dispatch_id,
+        "github_dispatch_url": run.github_dispatch_url,
+        "status": run.status,
+        "last_summary": run.last_summary,
+        "created_at": run.created_at.isoformat() if run.created_at else None,
+        "updated_at": run.updated_at.isoformat() if run.updated_at else None,
+    }
+
+
+def list_tasks(session: Session, *, limit: int = 100) -> list[TaskPacket]:
+    query = select(TaskPacket).order_by(TaskPacket.created_at.desc()).limit(limit)
+    return list(session.exec(query).all())
+
+
+def get_task_with_latest_run(session: Session, task_id: int) -> tuple[TaskPacket | None, AgentRun | None]:
+    task = session.get(TaskPacket, task_id)
+    if task is None or task.id is None:
+        return task, None
+    return task, _latest_run_for_task(session, task.id)
+
+
+def _run_planning(session: Session, *, settings: Settings, task: TaskPacket) -> None:
+    task.status = TASK_STATUS_PLANNING
+    task.updated_at = _utc_now()
+    _save(session, task)
+    try:
+        plan = plan_task_packet(
+            settings=settings,
+            repo=task.github_repo,
+            issue_number=task.github_issue_number,
+            issue_title=task.title,
+            issue_body=task.raw_body,
+        )
+        task.normalized_task_text = _render_normalized_text(plan)
+        task.acceptance_criteria_json = json.dumps(plan.get("acceptance_criteria") or [], ensure_ascii=False)
+        task.validation_commands_json = json.dumps(plan.get("validation_guidance") or [], ensure_ascii=False)
+        task.status = TASK_STATUS_AWAITING_APPROVAL
+        task.approval_state = APPROVAL_PENDING
+        task.latest_summary = "Task planned and awaiting approval"
+        task.updated_at = _utc_now()
+        _save(session, task)
+        notify_discord(
+            f"Task planned and awaiting approval: {task.github_repo}#{task.github_issue_number}"
+        )
+    except Exception as exc:
+        task.status = TASK_STATUS_FAILED
+        task.latest_summary = f"Planning failed: {exc}"
+        task.updated_at = _utc_now()
+        _save(session, task)
+        notify_discord(
+            f"Task failed during planning: {task.github_repo}#{task.github_issue_number} ({exc})"
+        )
+
+
+def _create_or_update_task_from_issue(
+    session: Session,
+    *,
+    github_repo: str,
+    issue: dict[str, Any],
+) -> tuple[TaskPacket, bool]:
+    issue_number = int(issue["number"])
+    task = _get_task_by_repo_issue(session, github_repo=github_repo, github_issue_number=issue_number)
+    created = False
+    if task is None:
+        task = TaskPacket(
+            github_repo=github_repo,
+            github_issue_number=issue_number,
+            status=TASK_STATUS_RECEIVED,
+            approval_state=APPROVAL_PENDING,
+        )
+        created = True
+
+    task.github_issue_node_id = issue.get("node_id")
+    task.title = str(issue.get("title") or "")
+    task.raw_body = str(issue.get("body") or "")
+    task.updated_at = _utc_now()
+    _save(session, task)
+    return task, created
+
+
+def process_issue_event(session: Session, *, settings: Settings, payload: dict[str, Any], action: str | None) -> None:
+    github_repo = _repo_name(payload)
+    issue = payload.get("issue") or {}
+    if not github_repo or not isinstance(issue, dict) or not isinstance(issue.get("number"), int):
+        return
+
+    labels = _labels(issue)
+    has_task_label = settings.task_label in labels
+    if not has_task_label:
+        return
+
+    task, created = _create_or_update_task_from_issue(session, github_repo=github_repo, issue=issue)
+    if created:
+        notify_discord(f"Task packet created: {task.github_repo}#{task.github_issue_number}")
+
+    if action in {"opened", "edited", "reopened", "labeled"}:
+        _run_planning(session, settings=settings, task=task)
+
+    if action == "labeled":
+        label_name = ((payload.get("label") or {}).get("name") if isinstance(payload.get("label"), dict) else None)
+        if label_name == settings.task_approved_label:
+            process_approval(session, settings=settings, task=task, approved=True, source="label")
+
+
+def process_approval(
+    session: Session,
+    *,
+    settings: Settings,
+    task: TaskPacket,
+    approved: bool,
+    source: str,
+) -> None:
+    if approved:
+        if task.status in {TASK_STATUS_DISPATCHED, TASK_STATUS_COMPLETED}:
+            return
+        task.approval_state = APPROVAL_APPROVED
+        task.status = TASK_STATUS_APPROVED
+        task.latest_summary = f"Approved via {source}"
+        task.updated_at = _utc_now()
+        _save(session, task)
+        notify_discord(f"Task approved: {task.github_repo}#{task.github_issue_number}")
+        dispatch_task_if_ready(session, settings=settings, task=task)
+        return
+
+    task.approval_state = APPROVAL_REJECTED
+    task.status = TASK_STATUS_BLOCKED
+    task.latest_summary = f"Rejected via {source}"
+    task.updated_at = _utc_now()
+    _save(session, task)
+    notify_discord(f"Task rejected: {task.github_repo}#{task.github_issue_number}")
+
+
+def process_issue_comment_event(session: Session, *, settings: Settings, payload: dict[str, Any], action: str | None) -> None:
+    if action != "created":
+        return
+    comment = payload.get("comment") or {}
+    body = str(comment.get("body") or "").strip().lower()
+    if not body:
+        return
+
+    approved = None
+    if body.startswith("/approve"):
+        approved = True
+    elif body.startswith("/reject"):
+        approved = False
+    if approved is None:
+        return
+
+    github_repo = _repo_name(payload)
+    issue_number = _issue_number(payload)
+    if not github_repo or issue_number is None:
+        return
+
+    task = _get_task_by_repo_issue(session, github_repo=github_repo, github_issue_number=issue_number)
+    if task is None:
+        return
+    process_approval(session, settings=settings, task=task, approved=approved, source="comment")
+
+
+def dispatch_task_if_ready(session: Session, *, settings: Settings, task: TaskPacket) -> None:
+    if task.id is None:
+        return
+    if task.approval_state != APPROVAL_APPROVED:
+        return
+    latest_run = _latest_run_for_task(session, task.id)
+    if latest_run and latest_run.status in {
+        RUN_STATUS_DISPATCHED,
+        RUN_STATUS_WORKING,
+        RUN_STATUS_PR_OPENED,
+        RUN_STATUS_AWAITING_REVIEW,
+        RUN_STATUS_COMPLETED,
+    }:
+        return
+
+    run = AgentRun(
+        task_packet_id=task.id,
+        provider="github_copilot",
+        github_repo=task.github_repo,
+        github_issue_number=task.github_issue_number,
+        status=RUN_STATUS_QUEUED,
+        last_summary="Dispatch queued",
+    )
+    _save(session, run)
+
+    result = dispatch_task_to_github_copilot(settings=settings, task=task)
+    if result.success:
+        run.status = RUN_STATUS_DISPATCHED
+        run.last_summary = result.summary
+        run.github_dispatch_id = result.dispatch_id
+        run.github_dispatch_url = result.dispatch_url
+        run.updated_at = _utc_now()
+
+        task.status = TASK_STATUS_DISPATCHED
+        task.latest_summary = result.summary
+        task.updated_at = _utc_now()
+        _save(session, run, task)
+        notify_discord(f"Task dispatched: {task.github_repo}#{task.github_issue_number}")
+        return
+
+    if result.manual_required:
+        run.status = RUN_STATUS_BLOCKED
+        run.last_summary = result.summary
+        run.updated_at = _utc_now()
+
+        task.status = TASK_STATUS_APPROVED
+        task.latest_summary = result.summary
+        task.updated_at = _utc_now()
+        _save(session, run, task)
+        notify_discord(
+            f"Task approved but awaiting manual dispatch: {task.github_repo}#{task.github_issue_number}"
+        )
+        return
+
+    run.status = RUN_STATUS_FAILED
+    run.last_summary = result.summary
+    run.updated_at = _utc_now()
+
+    task.status = TASK_STATUS_FAILED
+    task.latest_summary = result.summary
+    task.updated_at = _utc_now()
+    _save(session, run, task)
+    notify_discord(f"Task failed to dispatch: {task.github_repo}#{task.github_issue_number}")
+
+
+def _task_for_pr_payload(session: Session, *, github_repo: str, pr_payload: dict[str, Any]) -> TaskPacket | None:
+    body = str(pr_payload.get("body") or "")
+    title = str(pr_payload.get("title") or "")
+    refs = ISSUE_REF_RE.findall(f"{title}\n{body}")
+    for issue_ref in refs:
+        task = _get_task_by_repo_issue(session, github_repo=github_repo, github_issue_number=int(issue_ref))
+        if task is not None:
+            return task
+
+    query = (
+        select(TaskPacket)
+        .where(TaskPacket.github_repo == github_repo)
+        .where(TaskPacket.status == TASK_STATUS_DISPATCHED)
+        .order_by(TaskPacket.updated_at.desc())
+        .limit(1)
+    )
+    return session.exec(query).first()
+
+
+def _summarize_and_store(
+    session: Session,
+    *,
+    settings: Settings,
+    task: TaskPacket,
+    run: AgentRun,
+    context: str,
+    run_status: str,
+) -> None:
+    try:
+        summary = summarize_work_update(settings=settings, update_context=context)
+        bullets = summary.get("summary_bullets") or []
+        next_action = summary.get("next_action") or "review"
+        rendered = "\n".join(f"- {line}" for line in bullets)
+        full_summary = f"{rendered}\nNext action: {next_action}".strip()
+    except Exception as exc:
+        full_summary = f"Summary unavailable: {exc}"
+
+    run.status = run_status
+    run.last_summary = full_summary
+    run.updated_at = _utc_now()
+
+    task.latest_summary = full_summary
+    task.updated_at = _utc_now()
+    _save(session, run, task)
+
+
+def process_pull_request_event(
+    session: Session,
+    *,
+    settings: Settings,
+    payload: dict[str, Any],
+    action: str | None,
+) -> None:
+    github_repo = _repo_name(payload)
+    pr = payload.get("pull_request") or {}
+    if not github_repo or not isinstance(pr, dict):
+        return
+
+    task = _task_for_pr_payload(session, github_repo=github_repo, pr_payload=pr)
+    if task is None or task.id is None:
+        return
+
+    run = _latest_run_for_task(session, task.id)
+    if run is None:
+        run = AgentRun(
+            task_packet_id=task.id,
+            provider="github_copilot",
+            github_repo=task.github_repo,
+            github_issue_number=task.github_issue_number,
+            status=RUN_STATUS_WORKING,
+        )
+        _save(session, run)
+
+    pr_number = pr.get("number")
+    if isinstance(pr_number, int):
+        run.github_pr_number = pr_number
+
+    html_url = str(pr.get("html_url") or "")
+    if action in {"opened", "reopened", "ready_for_review"}:
+        context = (
+            f"PR update for {github_repo}#{task.github_issue_number}\n"
+            f"Action: {action}\n"
+            f"PR: #{pr.get('number')} {pr.get('title')}\n"
+            f"URL: {html_url}"
+        )
+        _summarize_and_store(
+            session,
+            settings=settings,
+            task=task,
+            run=run,
+            context=context,
+            run_status=RUN_STATUS_PR_OPENED,
+        )
+        notify_discord(f"PR opened/updated for review: {github_repo} PR #{pr.get('number')}")
+        return
+
+    if action == "closed":
+        merged = bool(pr.get("merged"))
+        if merged:
+            run.status = RUN_STATUS_COMPLETED
+            run.last_summary = f"PR merged: {html_url}" if html_url else "PR merged"
+            run.updated_at = _utc_now()
+            task.status = TASK_STATUS_COMPLETED
+            task.latest_summary = run.last_summary
+            task.updated_at = _utc_now()
+            _save(session, run, task)
+            notify_discord(f"Task completed: {github_repo}#{task.github_issue_number}")
+            return
+
+        run.status = RUN_STATUS_BLOCKED
+        run.last_summary = f"PR closed without merge: {html_url}" if html_url else "PR closed without merge"
+        run.updated_at = _utc_now()
+        task.status = TASK_STATUS_BLOCKED
+        task.latest_summary = run.last_summary
+        task.updated_at = _utc_now()
+        _save(session, run, task)
+        notify_discord(f"Task blocked (PR closed): {github_repo}#{task.github_issue_number}")
+        return
+
+    run.status = RUN_STATUS_WORKING
+    run.last_summary = f"PR action observed: {action}"
+    run.updated_at = _utc_now()
+    task.latest_summary = run.last_summary
+    task.updated_at = _utc_now()
+    _save(session, run, task)
+
+
+def process_workflow_run_event(
+    session: Session,
+    *,
+    settings: Settings,
+    payload: dict[str, Any],
+    action: str | None,
+) -> None:
+    github_repo = _repo_name(payload)
+    workflow_run = payload.get("workflow_run") or {}
+    if not github_repo or not isinstance(workflow_run, dict):
+        return
+
+    pr_entries = workflow_run.get("pull_requests") or []
+    pr_numbers = [pr.get("number") for pr in pr_entries if isinstance(pr, dict) and isinstance(pr.get("number"), int)]
+    if not pr_numbers:
+        return
+
+    query = (
+        select(AgentRun)
+        .where(AgentRun.github_repo == github_repo)
+        .where(AgentRun.github_pr_number.in_(pr_numbers))
+        .order_by(AgentRun.updated_at.desc())
+        .limit(1)
+    )
+    run = session.exec(query).first()
+    if run is None:
+        return
+
+    task = session.get(TaskPacket, run.task_packet_id)
+    if task is None:
+        return
+
+    conclusion = str(workflow_run.get("conclusion") or "")
+    status = str(workflow_run.get("status") or "")
+    name = str(workflow_run.get("name") or "workflow")
+    html_url = str(workflow_run.get("html_url") or "")
+
+    context = (
+        f"Workflow update for {github_repo}#{task.github_issue_number}\n"
+        f"Action: {action}\n"
+        f"Workflow: {name}\n"
+        f"Status: {status}\n"
+        f"Conclusion: {conclusion}\n"
+        f"Run URL: {html_url}"
+    )
+
+    if status == "completed" and conclusion == "success":
+        _summarize_and_store(
+            session,
+            settings=settings,
+            task=task,
+            run=run,
+            context=context,
+            run_status=RUN_STATUS_AWAITING_REVIEW,
+        )
+        notify_discord(f"Checks complete and ready for review: {github_repo} PR #{run.github_pr_number}")
+        return
+
+    if status == "completed" and conclusion in {"failure", "cancelled", "timed_out", "startup_failure"}:
+        _summarize_and_store(
+            session,
+            settings=settings,
+            task=task,
+            run=run,
+            context=context,
+            run_status=RUN_STATUS_BLOCKED,
+        )
+        task.status = TASK_STATUS_BLOCKED
+        task.updated_at = _utc_now()
+        _save(session, task)
+        notify_discord(f"Checks failed / task blocked: {github_repo} PR #{run.github_pr_number}")
+        return
+
+    run.status = RUN_STATUS_WORKING
+    run.last_summary = f"Workflow update observed: {name} ({status}/{conclusion or 'n/a'})"
+    run.updated_at = _utc_now()
+    task.latest_summary = run.last_summary
+    task.updated_at = _utc_now()
+    _save(session, run, task)

@@ -31,6 +31,21 @@ class Settings(BaseSettings):
     orchestrator_secret_key: str | None = Field(default=None, alias="ORCHESTRATOR_SECRET_KEY")
     database_url: str = Field(default=DEFAULT_DATABASE_URL, alias="DATABASE_URL")
 
+    github_api_token: str | None = Field(default=None, alias="GITHUB_API_TOKEN")
+    github_api_url: str = Field(default="https://api.github.com", alias="GITHUB_API_URL")
+
+    default_repo_owner: str | None = Field(default=None, alias="DEFAULT_REPO_OWNER")
+    default_repo_name: str | None = Field(default=None, alias="DEFAULT_REPO_NAME")
+
+    task_label: str = Field(default="agent:task", alias="TASK_LABEL")
+    task_approved_label: str = Field(default="agent:approved", alias="TASK_APPROVED_LABEL")
+
+    copilot_dispatch_assignee: str = Field(default="copilot", alias="COPILOT_DISPATCH_ASSIGNEE")
+    copilot_target_branch: str = Field(default="main", alias="COPILOT_TARGET_BRANCH")
+
+    openai_planning_model: str = Field(default="gpt-4.1-mini", alias="OPENAI_PLANNING_MODEL")
+    openai_review_model: str = Field(default="gpt-4.1-mini", alias="OPENAI_REVIEW_MODEL")
+
 
 @lru_cache(maxsize=1)
 def get_settings() -> Settings:

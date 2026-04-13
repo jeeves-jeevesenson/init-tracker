@@ -7,7 +7,7 @@ from sqlalchemy import text
 from sqlmodel import Session, SQLModel, create_engine
 
 from .config import get_settings
-from .models import RunEvent
+from .models import AgentRun, RunEvent, TaskPacket
 
 
 def _ensure_database_parent_dir(database_url: str) -> None:
@@ -79,10 +79,40 @@ def _ensure_run_event_indexes() -> None:
         )
 
 
+def _ensure_task_packet_indexes() -> None:
+    engine = get_engine()
+    table_name = TaskPacket.__tablename__
+    with engine.begin() as connection:
+        connection.execute(
+            text(
+                f"""
+                CREATE UNIQUE INDEX IF NOT EXISTS ux_{table_name}_repo_issue
+                ON {table_name} (github_repo, github_issue_number)
+                """
+            )
+        )
+
+
+def _ensure_agent_run_indexes() -> None:
+    engine = get_engine()
+    table_name = AgentRun.__tablename__
+    with engine.begin() as connection:
+        connection.execute(
+            text(
+                f"""
+                CREATE INDEX IF NOT EXISTS ix_{table_name}_task_created
+                ON {table_name} (task_packet_id, created_at DESC)
+                """
+            )
+        )
+
+
 def init_db() -> None:
     SQLModel.metadata.create_all(get_engine())
     _dedupe_existing_run_events()
     _ensure_run_event_indexes()
+    _ensure_task_packet_indexes()
+    _ensure_agent_run_indexes()
 
 
 def get_session():

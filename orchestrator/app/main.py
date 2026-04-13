@@ -9,6 +9,7 @@ from .db import get_session, init_db
 from .github_webhooks import router as github_router
 from .openai_webhooks import router as openai_router
 from .runs import list_recent_runs, run_to_dict
+from .task_routes import router as task_router
 
 
 @asynccontextmanager
@@ -26,6 +27,7 @@ app = FastAPI(
 )
 app.include_router(github_router)
 app.include_router(openai_router)
+app.include_router(task_router)
 
 
 @app.get("/healthz")
