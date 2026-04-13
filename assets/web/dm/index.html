@@ -106,6 +106,16 @@
     .next-turn-btn:hover { opacity: .88; }
     .next-turn-btn:disabled { opacity: .45; cursor: not-allowed; }
     #combatStateMsg { font-size: 12px; color: var(--warn); margin-left: 8px; display: none; }
+    .lifecycle-btn {
+      border: none; border-radius: var(--radius); padding: 7px 16px;
+      font-size: 13px; font-weight: 600; cursor: pointer;
+    }
+    .lifecycle-btn.start { background: var(--heal); color: #fff; }
+    .lifecycle-btn.start:hover { opacity: .88; }
+    .lifecycle-btn.end { background: var(--danger); color: #fff; }
+    .lifecycle-btn.end:hover { opacity: .88; }
+    .lifecycle-btn:disabled { opacity: .45; cursor: not-allowed; }
+    #lifecycleMsg { font-size: 12px; color: var(--warn); margin-left: 4px; display: none; }
 
     /* ── Initiative table ───────────────────────────────────────── */
     .initiative-panel {
@@ -251,8 +261,17 @@
       <span class="active-label">Current combatant</span>
       <span class="active-name" id="activeName">—</span>
     </div>
+    <div class="divider" id="upNextDivider" style="display:none"></div>
+    <div id="upNextBlock" style="display:none;flex-direction:column;gap:2px">
+      <span class="active-label">Up next</span>
+      <span class="active-name" id="upNextName" style="color:var(--muted);font-size:14px">—</span>
+    </div>
     <button class="next-turn-btn" id="nextTurnBtn" disabled>▶ Next Turn</button>
     <span id="combatStateMsg"></span>
+    <div class="divider"></div>
+    <button class="lifecycle-btn start" id="startCombatBtn" style="display:none">⚔ Start Combat</button>
+    <button class="lifecycle-btn end" id="endCombatBtn" style="display:none">✕ End Combat</button>
+    <span id="lifecycleMsg"></span>
   </div>
 
   <!-- Initiative order -->
@@ -348,6 +367,8 @@
    Endpoints used:
      GET  /api/dm/combat                               → snapshot
      POST /api/dm/combat/next-turn                     → advance turn
+     POST /api/dm/combat/start                         → start combat
+     POST /api/dm/combat/end                           → end combat
      POST /api/dm/combat/combatants/{cid}/hp           → HP adjustment
      POST /api/dm/combat/combatants/{cid}/condition    → add/remove condition
      POST /api/dm/combat/combatants/{cid}/temp-hp      → set temp HP
@@ -499,9 +520,33 @@ function applySnapshot(snap) {
   document.getElementById('activeName').textContent =
     activeRow ? activeRow.name : (snap.in_combat ? '—' : 'No combat active');
 
+  // Up-next combatant
+  const upNextBlock = document.getElementById('upNextBlock');
+  const upNextDivider = document.getElementById('upNextDivider');
+  if (snap.in_combat && snap.up_next_name && snap.up_next_cid !== snap.active_cid) {
+    document.getElementById('upNextName').textContent = snap.up_next_name;
+    upNextBlock.style.display = 'flex';
+    upNextDivider.style.display = '';
+  } else {
+    upNextBlock.style.display = 'none';
+    upNextDivider.style.display = 'none';
+  }
+
   // Next turn button
   const ntBtn = document.getElementById('nextTurnBtn');
   ntBtn.disabled = !snap.in_combat || !(snap.combatants && snap.combatants.length > 0);
+
+  // Start / End Combat lifecycle buttons
+  const startBtn = document.getElementById('startCombatBtn');
+  const endBtn = document.getElementById('endCombatBtn');
+  const hasCombatants = !!(snap.combatants && snap.combatants.length > 0);
+  if (snap.in_combat) {
+    startBtn.style.display = 'none';
+    endBtn.style.display = '';
+  } else {
+    startBtn.style.display = hasCombatants ? '' : 'none';
+    endBtn.style.display = 'none';
+  }
 
   // Populate combatant selects
   const combatants = snap.combatants || [];
@@ -583,6 +628,44 @@ function quickSelect(cid) {
 }
 
 // ── Mutations ─────────────────────────────────────────────────────────
+document.getElementById('startCombatBtn').addEventListener('click', async () => {
+  const btn = document.getElementById('startCombatBtn');
+  const msg = document.getElementById('lifecycleMsg');
+  btn.disabled = true;
+  msg.style.display = 'none';
+  try {
+    const r = await fetch(`${BASE}/api/dm/combat/start`, {
+      method: 'POST', headers: authHeaders(), body: JSON.stringify({}),
+    });
+    const data = await r.json();
+    if (data.snapshot) applySnapshot(data.snapshot);
+    if (!r.ok) { msg.textContent = data.detail || 'Could not start combat.'; msg.style.display = 'inline'; }
+  } catch (e) {
+    msg.textContent = 'Request failed.'; msg.style.display = 'inline';
+  } finally {
+    btn.disabled = false;
+  }
+});
+
+document.getElementById('endCombatBtn').addEventListener('click', async () => {
+  const btn = document.getElementById('endCombatBtn');
+  const msg = document.getElementById('lifecycleMsg');
+  btn.disabled = true;
+  msg.style.display = 'none';
+  try {
+    const r = await fetch(`${BASE}/api/dm/combat/end`, {
+      method: 'POST', headers: authHeaders(), body: JSON.stringify({}),
+    });
+    const data = await r.json();
+    if (data.snapshot) applySnapshot(data.snapshot);
+    if (!r.ok) { msg.textContent = data.detail || 'Could not end combat.'; msg.style.display = 'inline'; }
+  } catch (e) {
+    msg.textContent = 'Request failed.'; msg.style.display = 'inline';
+  } finally {
+    btn.disabled = false;
+  }
+});
+
 document.getElementById('nextTurnBtn').addEventListener('click', async () => {
   const btn = document.getElementById('nextTurnBtn');
   btn.disabled = true;

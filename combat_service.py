@@ -7,10 +7,13 @@ this service rather than owning separate state.
 Ownership model after this migration pass
 ------------------------------------------
 Backend-owned (this service + API routes):
+  - combat lifecycle: start (begin initiative turn order), end (reset turn state)
   - initiative order / turn order
   - current combatant / round / turn counters
+  - up-next combatant preview
   - HP adjustments (damage and healing) for any combatant
   - condition add/remove/toggle for any combatant
+  - temp HP set/clear for any combatant
   - recent event/battle-log lines
 
 Still hybrid / desktop-primary:
@@ -19,18 +22,20 @@ Still hybrid / desktop-primary:
   - Player-facing LAN client (existing /ws WebSocket + /lan routes)
   - Character editor, shop, spell/resource management
   - YAML-backed save/load (unchanged; mutations here persist via existing path)
+  - Combatant creation / initiative rolling (still desktop-owned for now)
 
 Next recommended migration targets:
   - HP/condition mutations from desktop directly wired through this service
-  - A real-time WebSocket push from service → DM console
-  - Parity with the full set of desktop DM actions
+  - Combatant creation and initiative rolling through the service seam
 
 Usage (from LanController routes):
   service = CombatService(tracker_instance)
   snap = service.combat_snapshot()
+  service.start_combat()
   service.next_turn()
   service.adjust_hp(cid=3, delta=-5)
   service.set_condition(cid=3, ctype="poisoned", action="add")
+  service.end_combat()
 """
 from __future__ import annotations
 
@@ -92,14 +97,16 @@ class CombatService:
 
         Shape:
           {
-            "in_combat":   bool,
-            "round":       int,
-            "turn":        int,
-            "active_cid":  int | None,
-            "turn_order":  [int, ...],
-            "combatants":  [{cid, name, hp, max_hp, ac, role,
-                             is_pc, conditions, initiative}, ...],
-            "battle_log":  [str, ...],    # last 30 lines
+            "in_combat":    bool,
+            "round":        int,
+            "turn":         int,
+            "active_cid":   int | None,
+            "up_next_cid":  int | None,
+            "up_next_name": str | None,
+            "turn_order":   [int, ...],
+            "combatants":   [{cid, name, hp, max_hp, ac, role,
+                              is_pc, conditions, initiative}, ...],
+            "battle_log":   [str, ...],    # last 30 lines
           }
         """
         t = self._tracker
@@ -168,6 +175,21 @@ class CombatService:
                 }
             )
 
+        # Up-next combatant (useful for "you're up after X" display in DM console)
+        up_next_cid: Optional[int] = None
+        up_next_name: Optional[str] = None
+        try:
+            peek = getattr(t, "_peek_next_turn_cid", None)
+            if callable(peek):
+                raw_next = peek(current_cid)
+                if raw_next is not None:
+                    up_next_cid = int(raw_next)
+                    up_next_c = combatants.get(up_next_cid)
+                    if up_next_c is not None:
+                        up_next_name = str(getattr(up_next_c, "name", "") or "")
+        except Exception:
+            pass
+
         # Battle log: last 30 lines from the tracker's history file
         battle_log: List[str] = []
         try:
@@ -180,6 +202,8 @@ class CombatService:
             "round": round_num,
             "turn": turn_num,
             "active_cid": int(current_cid) if current_cid is not None else None,
+            "up_next_cid": up_next_cid,
+            "up_next_name": up_next_name,
             "turn_order": ordered_cids,
             "combatants": combatant_rows,
             "battle_log": battle_log,
@@ -370,3 +394,59 @@ class CombatService:
                 "temp_hp_before": old_temp,
                 "temp_hp_after": amount,
             }
+
+    def start_combat(self) -> Dict[str, Any]:
+        """Start combat by beginning the initiative turn order.
+
+        Delegates to ``_start_turns()`` on the tracker — the same method
+        the desktop Start/Reset button uses.  Sets ``in_combat = True`` so
+        the DM web surface and LAN clients see an active combat state.
+
+        Requires at least one combatant to be present in the initiative list.
+        Returns: {ok, snapshot}  or  {ok: False, error: str}
+        """
+        with self._lock:
+            t = self._tracker
+            combatants = getattr(t, "combatants", {}) or {}
+            if not combatants:
+                return {"ok": False, "error": "No combatants in the initiative list."}
+            try:
+                t._start_turns()
+            except Exception as exc:
+                return {"ok": False, "error": str(exc), "snapshot": self.combat_snapshot()}
+            # Explicitly mark in_combat so the flag is truthful for this session.
+            t.in_combat = True
+            try:
+                t._lan_force_state_broadcast()
+            except Exception:
+                pass
+            return {"ok": True, "snapshot": self.combat_snapshot()}
+
+    def end_combat(self) -> Dict[str, Any]:
+        """End the current combat, resetting turn tracking.
+
+        Clears the active combatant turn, marks ``in_combat = False``, and
+        broadcasts the updated state to all connected clients.  The
+        combatant list and battle log are preserved so the DM can review
+        the final encounter state.
+
+        Returns: {ok, snapshot}
+        """
+        with self._lock:
+            t = self._tracker
+            old_round = int(getattr(t, "round_num", 1) or 1)
+            t.in_combat = False
+            t.current_cid = None
+            try:
+                t._log(f"--- COMBAT ENDED (after round {old_round}) ---")
+            except Exception:
+                pass
+            try:
+                t._rebuild_table(scroll_to_current=True)
+            except Exception:
+                pass
+            try:
+                t._lan_force_state_broadcast()
+            except Exception:
+                pass
+            return {"ok": True, "snapshot": self.combat_snapshot()}
