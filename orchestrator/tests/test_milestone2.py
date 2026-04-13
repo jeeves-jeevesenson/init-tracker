@@ -1863,6 +1863,74 @@ class OrchestratorMilestone2Tests(unittest.TestCase):
                     ]
                     self.assertEqual(failure_messages, [])
 
+    def test_planning_retry_success_after_success_avoids_duplicate_planned_notification(self):
+        with tempfile.TemporaryDirectory() as td:
+            os.environ["DATABASE_URL"] = f"sqlite:///{Path(td) / 'orchestrator.db'}"
+            os.environ["GH_WEBHOOK_SECRET"] = "test-gh-secret"
+            main, _ = _reload_orchestrator_modules()
+
+            issue_opened_payload = {
+                "action": "opened",
+                "repository": {"full_name": "jeeves-jeevesenson/init-tracker"},
+                "issue": {
+                    "number": 144,
+                    "node_id": "I_144",
+                    "title": "plain copilot fallback proof",
+                    "body": "Fix duplicate planned messages in orchestrator notifications.",
+                    "labels": [{"name": "agent:task"}],
+                },
+            }
+            issue_edited_payload = {
+                "action": "edited",
+                "repository": {"full_name": "jeeves-jeevesenson/init-tracker"},
+                "issue": {
+                    "number": 144,
+                    "node_id": "I_144",
+                    "title": "plain copilot fallback proof",
+                    "body": "Fix duplicate planned messages in orchestrator notifications (edited).",
+                    "labels": [{"name": "agent:task"}],
+                },
+            }
+
+            plan_result = {
+                "objective": "Fix duplicate notifications",
+                "scope": ["orchestrator"],
+                "non_goals": [],
+                "acceptance_criteria": ["no duplicate planned messages"],
+                "validation_guidance": ["unit tests"],
+                "implementation_brief": "add guard on re-plan",
+            }
+
+            with patch(
+                "orchestrator.app.tasks.plan_task_packet",
+                side_effect=[plan_result, plan_result],
+            ), patch("orchestrator.app.tasks.notify_discord") as mocked_notify:
+                with TestClient(main.app) as client:
+                    first = self._post_github(
+                        client,
+                        secret="test-gh-secret",
+                        delivery="delivery-task-opened-144",
+                        event="issues",
+                        payload=issue_opened_payload,
+                    )
+                    second = self._post_github(
+                        client,
+                        secret="test-gh-secret",
+                        delivery="delivery-task-edited-144",
+                        event="issues",
+                        payload=issue_edited_payload,
+                    )
+                    self.assertEqual(first.status_code, 200)
+                    self.assertEqual(second.status_code, 200)
+                    task = client.get("/tasks").json()["tasks"][0]
+                    self.assertEqual(task["status"], "awaiting_approval")
+                    planned_messages = [
+                        str(call.args[0])
+                        for call in mocked_notify.call_args_list
+                        if call.args and "Task planned / awaiting approval" in str(call.args[0])
+                    ]
+                    self.assertEqual(len(planned_messages), 1)
+
 
 if __name__ == "__main__":
     unittest.main()
