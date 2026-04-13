@@ -1042,5 +1042,232 @@ class CombatServiceManualOverrideTests(unittest.TestCase):
         self.assertEqual(c.temp_hp, old_temp)
 
 
+# ---------------------------------------------------------------------------
+# Slice 7: CombatService.prev_turn() tests
+# ---------------------------------------------------------------------------
+
+
+class CombatServicePrevTurnTests(unittest.TestCase):
+    """Tests for CombatService.prev_turn()."""
+
+    def _make_tracker_with_prev(self):
+        app = _make_tracker(num_combatants=3)
+        app.in_combat = True
+        app.current_cid = 2  # Start on the second combatant
+        app._prev_turn_calls = []
+
+        def _prev_turn():
+            app._prev_turn_calls.append(1)
+            ids = sorted(app.combatants.keys())
+            if not ids:
+                return
+            if app.current_cid not in ids:
+                app.current_cid = ids[0]
+                return
+            idx = ids.index(app.current_cid)
+            prv = idx - 1
+            if prv < 0:
+                prv = len(ids) - 1
+                app.round_num = max(1, app.round_num - 1)
+            app.current_cid = ids[prv]
+            app.turn_num = max(0, app.turn_num - 1)
+
+        app._prev_turn = _prev_turn
+        return app
+
+    def test_prev_turn_returns_ok(self):
+        tracker = self._make_tracker_with_prev()
+        service = CombatService(tracker)
+        result = service.prev_turn()
+        self.assertTrue(result["ok"])
+
+    def test_prev_turn_calls_prev_turn(self):
+        tracker = self._make_tracker_with_prev()
+        service = CombatService(tracker)
+        service.prev_turn()
+        self.assertEqual(len(tracker._prev_turn_calls), 1)
+
+    def test_prev_turn_returns_snapshot(self):
+        tracker = self._make_tracker_with_prev()
+        service = CombatService(tracker)
+        result = service.prev_turn()
+        self.assertIn("snapshot", result)
+        self.assertIn("combatants", result["snapshot"])
+
+    def test_prev_turn_changes_current_cid(self):
+        tracker = self._make_tracker_with_prev()
+        tracker.current_cid = 2
+        service = CombatService(tracker)
+        service.prev_turn()
+        self.assertEqual(tracker.current_cid, 1)
+
+    def test_prev_turn_triggers_broadcast(self):
+        tracker = self._make_tracker_with_prev()
+        service = CombatService(tracker)
+        before = len(tracker._broadcast_calls)
+        service.prev_turn()
+        self.assertGreater(len(tracker._broadcast_calls), before)
+
+    def test_prev_turn_triggers_rebuild(self):
+        tracker = self._make_tracker_with_prev()
+        service = CombatService(tracker)
+        before = len(tracker._rebuild_calls)
+        service.prev_turn()
+        self.assertGreater(len(tracker._rebuild_calls), before)
+
+    def test_prev_turn_wraps_around_decrements_round(self):
+        tracker = self._make_tracker_with_prev()
+        tracker.current_cid = 1  # First combatant
+        tracker.round_num = 3
+        service = CombatService(tracker)
+        service.prev_turn()
+        # Should wrap to last combatant and decrement round
+        self.assertEqual(tracker.current_cid, 3)
+        self.assertEqual(tracker.round_num, 2)
+
+
+# ---------------------------------------------------------------------------
+# Slice 7: _start_combat_via_service and _prev_turn_via_service wrapper tests
+# ---------------------------------------------------------------------------
+
+
+class StartCombatViaServiceTests(unittest.TestCase):
+    """Tests for InitiativeTracker._start_combat_via_service()."""
+
+    def _make_tracker_with_start_service(self):
+        tracker = _make_tracker(num_combatants=3)
+        tracker.in_combat = False
+        tracker.current_cid = None
+        tracker._start_turns_calls = []
+
+        def _start_turns():
+            tracker._start_turns_calls.append(1)
+            ids = sorted(tracker.combatants.keys())
+            if ids:
+                tracker.current_cid = ids[0]
+                tracker.round_num = 1
+                tracker.turn_num = 1
+
+        tracker._start_turns = _start_turns
+        service = CombatService(tracker)
+        tracker._dm_service = service
+        return tracker, service
+
+    def test_start_combat_via_service_routes_through_service(self):
+        tracker, service = self._make_tracker_with_start_service()
+        InitiativeTracker._start_combat_via_service(tracker)
+        self.assertTrue(tracker.in_combat)
+        self.assertIsNotNone(tracker.current_cid)
+
+    def test_start_combat_via_service_triggers_broadcast(self):
+        tracker, service = self._make_tracker_with_start_service()
+        before = len(tracker._broadcast_calls)
+        InitiativeTracker._start_combat_via_service(tracker)
+        self.assertGreater(len(tracker._broadcast_calls), before)
+
+    def test_start_combat_via_service_fallback_without_service(self):
+        tracker = _make_tracker(num_combatants=3)
+        tracker.in_combat = False
+        tracker.current_cid = None
+        tracker._dm_service = None
+        tracker._start_turns_calls = []
+
+        def _start_turns():
+            tracker._start_turns_calls.append(1)
+            ids = sorted(tracker.combatants.keys())
+            if ids:
+                tracker.current_cid = ids[0]
+
+        tracker._start_turns = _start_turns
+        InitiativeTracker._start_combat_via_service(tracker)
+        self.assertEqual(len(tracker._start_turns_calls), 1)
+
+    def test_start_combat_via_service_logs_on_failure(self):
+        tracker = _make_tracker(num_combatants=0)
+        tracker._dm_service = CombatService(tracker)
+        tracker._start_turns_calls = []
+
+        def _start_turns():
+            tracker._start_turns_calls.append(1)
+
+        tracker._start_turns = _start_turns
+        # Service will fail because no combatants
+        InitiativeTracker._start_combat_via_service(tracker)
+        warnings = [(m, l) for m, l in tracker._oplog_calls if l == "warning"]
+        self.assertTrue(any("start_combat" in m for m, _ in warnings))
+
+
+class PrevTurnViaServiceTests(unittest.TestCase):
+    """Tests for InitiativeTracker._prev_turn_via_service()."""
+
+    def _make_tracker_with_prev_service(self):
+        tracker = _make_tracker(num_combatants=3)
+        tracker.in_combat = True
+        tracker.current_cid = 2
+        tracker._prev_turn_calls = []
+
+        def _prev_turn():
+            tracker._prev_turn_calls.append(1)
+            ids = sorted(tracker.combatants.keys())
+            if not ids:
+                return
+            idx = ids.index(tracker.current_cid) if tracker.current_cid in ids else 0
+            prv = idx - 1
+            if prv < 0:
+                prv = len(ids) - 1
+            tracker.current_cid = ids[prv]
+
+        tracker._prev_turn = _prev_turn
+        service = CombatService(tracker)
+        tracker._dm_service = service
+        return tracker, service
+
+    def test_prev_turn_via_service_routes_through_service(self):
+        tracker, service = self._make_tracker_with_prev_service()
+        old_cid = tracker.current_cid
+        InitiativeTracker._prev_turn_via_service(tracker)
+        self.assertNotEqual(tracker.current_cid, old_cid)
+
+    def test_prev_turn_via_service_triggers_broadcast(self):
+        tracker, service = self._make_tracker_with_prev_service()
+        before = len(tracker._broadcast_calls)
+        InitiativeTracker._prev_turn_via_service(tracker)
+        self.assertGreater(len(tracker._broadcast_calls), before)
+
+    def test_prev_turn_via_service_fallback_without_service(self):
+        tracker = _make_tracker(num_combatants=3)
+        tracker._dm_service = None
+        tracker.current_cid = 2
+        tracker._prev_turn_calls = []
+
+        def _prev_turn():
+            tracker._prev_turn_calls.append(1)
+            tracker.current_cid = 1
+
+        tracker._prev_turn = _prev_turn
+        InitiativeTracker._prev_turn_via_service(tracker)
+        self.assertEqual(len(tracker._prev_turn_calls), 1)
+        self.assertEqual(tracker.current_cid, 1)
+
+    def test_prev_turn_via_service_logs_on_failure(self):
+        tracker = _make_tracker(num_combatants=3)
+        tracker.current_cid = 2
+        broken = CombatService(tracker)
+        broken.prev_turn = lambda: {"ok": False, "error": "test failure"}
+        tracker._dm_service = broken
+        tracker._prev_turn_calls = []
+
+        def _prev_turn():
+            tracker._prev_turn_calls.append(1)
+            tracker.current_cid = 1
+
+        tracker._prev_turn = _prev_turn
+        InitiativeTracker._prev_turn_via_service(tracker)
+        warnings = [(m, l) for m, l in tracker._oplog_calls if l == "warning"]
+        self.assertTrue(any("prev_turn" in m for m, _ in warnings))
+        # Should fall back to direct call
+        self.assertEqual(len(tracker._prev_turn_calls), 1)
+
+
 if __name__ == "__main__":
     unittest.main()

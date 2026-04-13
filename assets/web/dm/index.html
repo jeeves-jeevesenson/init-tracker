@@ -266,6 +266,7 @@
       <span class="active-label">Up next</span>
       <span class="active-name" id="upNextName" style="color:var(--muted);font-size:14px">—</span>
     </div>
+    <button class="next-turn-btn" id="prevTurnBtn" disabled style="background:var(--accent-secondary,#555);font-size:13px;padding:6px 14px">◀ Prev</button>
     <button class="next-turn-btn" id="nextTurnBtn" disabled>▶ Next Turn</button>
     <span id="combatStateMsg"></span>
     <div class="divider"></div>
@@ -599,9 +600,11 @@ function applySnapshot(snap) {
     upNextDivider.style.display = 'none';
   }
 
-  // Next turn button
+  // Next turn / Prev turn buttons
   const ntBtn = document.getElementById('nextTurnBtn');
   ntBtn.disabled = !snap.in_combat || !(snap.combatants && snap.combatants.length > 0);
+  const ptBtn = document.getElementById('prevTurnBtn');
+  ptBtn.disabled = !snap.in_combat || !(snap.combatants && snap.combatants.length > 0);
 
   // Start / End Combat lifecycle buttons
   const startBtn = document.getElementById('startCombatBtn');
@@ -742,6 +745,25 @@ document.getElementById('nextTurnBtn').addEventListener('click', async () => {
   btn.disabled = true;
   try {
     const r = await fetch(`${BASE}/api/dm/combat/next-turn`, {
+      method: 'POST', headers: authHeaders(), body: JSON.stringify({}),
+    });
+    const data = await r.json();
+    if (data.snapshot) applySnapshot(data.snapshot);
+    const msg = document.getElementById('combatStateMsg');
+    if (!r.ok) { msg.textContent = data.detail || 'Error.'; msg.style.display = 'inline'; }
+    else { msg.style.display = 'none'; }
+  } catch (e) {
+    /* ignore */
+  } finally {
+    btn.disabled = false;
+  }
+});
+
+document.getElementById('prevTurnBtn').addEventListener('click', async () => {
+  const btn = document.getElementById('prevTurnBtn');
+  btn.disabled = true;
+  try {
+    const r = await fetch(`${BASE}/api/dm/combat/prev-turn`, {
       method: 'POST', headers: authHeaders(), body: JSON.stringify({}),
     });
     const data = await r.json();

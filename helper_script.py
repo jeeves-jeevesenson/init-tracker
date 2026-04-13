@@ -826,9 +826,9 @@ class InitiativeTracker(tk.Tk):
         btn_row = ttk.Frame(turn_frame)
         btn_row.grid(row=1, column=0, columnspan=8, sticky="w", pady=(6, 0))
 
-        ttk.Button(btn_row, text="Start/Reset", command=self._start_turns).pack(side=tk.LEFT, padx=(0, 8))
+        ttk.Button(btn_row, text="Start/Reset", command=self._start_combat_via_service).pack(side=tk.LEFT, padx=(0, 8))
         ttk.Button(btn_row, text="Set Turn Here", command=self._set_turn_here).pack(side=tk.LEFT, padx=(0, 8))
-        ttk.Button(btn_row, text="Prev Turn", command=self._prev_turn).pack(side=tk.LEFT, padx=(0, 8))
+        ttk.Button(btn_row, text="Prev Turn", command=self._prev_turn_via_service).pack(side=tk.LEFT, padx=(0, 8))
         ttk.Button(btn_row, text="Next Turn", command=self._next_turn_via_service).pack(side=tk.LEFT, padx=(0, 8))
         ttk.Button(btn_row, text="Stand Up", command=self._stand_up_current).pack(side=tk.LEFT, padx=(0, 8))
         ttk.Button(btn_row, text="Move…", command=self._open_move_tool).pack(side=tk.LEFT, padx=(0, 8))
@@ -942,7 +942,7 @@ class InitiativeTracker(tk.Tk):
         self.tree.bind("<Button-3>", self._on_tree_right_click)
         self.tree.bind("<<TreeviewSelect>>", lambda _e: self._sync_move_mode_selector())
         self.bind("<space>", lambda e: self._next_turn_via_service())
-        self.bind("<Shift-space>", lambda e: self._prev_turn())
+        self.bind("<Shift-space>", lambda e: self._prev_turn_via_service())
         self.bind("<KeyPress-g>", lambda e: self._open_damage_tool())
         self.bind("<KeyPress-h>", lambda e: self._open_heal_tool())
         self.bind("<KeyPress-c>", lambda e: self._open_condition_tool())
@@ -2661,6 +2661,24 @@ class InitiativeTracker(tk.Tk):
         server is running.  This fallback just calls _next_turn() directly.
         """
         self._next_turn()
+
+    def _prev_turn_via_service(self) -> None:
+        """Go back one turn, routing through CombatService when available.
+
+        Base-class fallback: subclass (InitiativeTracker in dnd_initative_tracker)
+        overrides this to route through CombatService.prev_turn() when the LAN
+        server is running.  This fallback just calls _prev_turn() directly.
+        """
+        self._prev_turn()
+
+    def _start_combat_via_service(self) -> None:
+        """Start combat, routing through CombatService when available.
+
+        Base-class fallback: subclass (InitiativeTracker in dnd_initative_tracker)
+        overrides this to route through CombatService.start_combat() when the
+        LAN server is running.  This fallback just calls _start_turns() directly.
+        """
+        self._start_turns()
 
     def _enter_turn_with_auto_skip(self, starting: bool) -> None:
         """Enter the current creature's turn.
@@ -7598,7 +7616,7 @@ class BattleMapWindow(tk.Toplevel):
         self.app._next_turn_via_service()
 
     def _dm_prev_turn(self) -> None:
-        self.app._prev_turn()
+        self.app._prev_turn_via_service()
 
     def _dm_dash_target(self) -> None:
         cid = self._dm_action_target_cid()
