@@ -225,16 +225,21 @@ class OrchestratorMilestone2Tests(unittest.TestCase):
                     self.assertEqual(run_count, 1)
 
     def test_dispatch_request_payload_uses_agent_assignment_fields(self):
-        settings = Settings(
-            github_api_token="token",
-            github_api_url="https://api.github.com",
-            copilot_dispatch_assignee="copilot-swe-agent",
-            copilot_target_branch="main",
-            copilot_target_repo="jeeves-jeevesenson/init-tracker",
-            copilot_custom_instructions="Follow repo workflow.",
-            copilot_custom_agent="Initiative Smith",
-            copilot_model="gpt-4.1-mini",
-        )
+        with patch.dict(
+            os.environ,
+            {
+                "GITHUB_API_TOKEN": "token",
+                "GITHUB_API_URL": "https://api.github.com",
+                "COPILOT_DISPATCH_ASSIGNEE": "copilot-swe-agent",
+                "COPILOT_TARGET_BRANCH": "main",
+                "COPILOT_TARGET_REPO": "jeeves-jeevesenson/init-tracker",
+                "COPILOT_CUSTOM_INSTRUCTIONS": "Follow repo workflow.",
+                "COPILOT_CUSTOM_AGENT": "Initiative Smith",
+                "COPILOT_MODEL": "gpt-4.1-mini",
+            },
+            clear=False,
+        ):
+            settings = Settings()
         task = TaskPacket(
             id=42,
             github_repo="jeeves-jeevesenson/init-tracker",
