@@ -10,7 +10,11 @@ from sqlmodel import Session, select
 from .config import Settings
 from .copilot_identity import is_copilot_actor
 from .discord_notify import notify_discord
-from .github_dispatch import build_dispatch_payload_summary, dispatch_task_to_github_copilot
+from .github_dispatch import (
+    build_dispatch_payload_summary,
+    describe_dispatch_mode,
+    dispatch_task_to_github_copilot,
+)
 from .models import (
     APPROVAL_APPROVED,
     APPROVAL_PENDING,
@@ -698,6 +702,7 @@ def dispatch_task_if_ready(session: Session, *, settings: Settings, task: TaskPa
     }:
         return
 
+    dispatch_mode_summary = describe_dispatch_mode(settings, task)
     run = AgentRun(
         task_packet_id=task.id,
         provider="github_copilot",
@@ -715,10 +720,14 @@ def dispatch_task_if_ready(session: Session, *, settings: Settings, task: TaskPa
     run.last_summary = (
         "Dispatch requested via GitHub issue assignment API"
         f" (worker={_worker_display_name(task)})"
+        f" ({dispatch_mode_summary})"
     )
     run.updated_at = _utc_now()
     task.status = TASK_STATUS_DISPATCH_REQUESTED
-    task.latest_summary = f"Dispatch requested for {_worker_display_name(task)}; awaiting GitHub acceptance"
+    task.latest_summary = (
+        f"Dispatch requested for {_worker_display_name(task)}; awaiting GitHub acceptance "
+        f"({dispatch_mode_summary})"
+    )
     task.updated_at = _utc_now()
     _save(session, run, task)
 
@@ -739,7 +748,9 @@ def dispatch_task_if_ready(session: Session, *, settings: Settings, task: TaskPa
         task.updated_at = _utc_now()
         _save(session, run, task)
         notify_discord(
-            f"Task dispatched: {task.github_repo}#{task.github_issue_number} -> {_worker_display_name(task)}"
+            "Task dispatched: "
+            f"{task.github_repo}#{task.github_issue_number} -> {_worker_display_name(task)} "
+            f"({dispatch_mode_summary})"
         )
         return
 
@@ -755,7 +766,9 @@ def dispatch_task_if_ready(session: Session, *, settings: Settings, task: TaskPa
         task.updated_at = _utc_now()
         _save(session, run, task)
         notify_discord(
-            f"Manual dispatch needed: {task.github_repo}#{task.github_issue_number} -> {_worker_display_name(task)}"
+            "Manual dispatch needed: "
+            f"{task.github_repo}#{task.github_issue_number} -> {_worker_display_name(task)} "
+            f"({dispatch_mode_summary})"
         )
         return
 
@@ -767,7 +780,11 @@ def dispatch_task_if_ready(session: Session, *, settings: Settings, task: TaskPa
     task.latest_summary = result_summary
     task.updated_at = _utc_now()
     _save(session, run, task)
-    notify_discord(f"Task failed to dispatch: {task.github_repo}#{task.github_issue_number} -> {_worker_display_name(task)}")
+    notify_discord(
+        "Task failed to dispatch: "
+        f"{task.github_repo}#{task.github_issue_number} -> {_worker_display_name(task)} "
+        f"({dispatch_mode_summary})"
+    )
 
 
 def _task_for_pr_payload(session: Session, *, github_repo: str, pr_payload: dict[str, Any]) -> TaskPacket | None:

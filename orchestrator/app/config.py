@@ -50,6 +50,10 @@ class Settings(BaseSettings):
     copilot_target_repo: str | None = Field(default=None, alias="COPILOT_TARGET_REPO")
     copilot_custom_instructions: str | None = Field(default=None, alias="COPILOT_CUSTOM_INSTRUCTIONS")
     copilot_custom_agent: str | None = Field(default=None, alias="COPILOT_CUSTOM_AGENT")
+    enable_github_custom_agent_dispatch: bool = Field(
+        default=False,
+        alias="ENABLE_GITHUB_CUSTOM_AGENT_DISPATCH",
+    )
     copilot_model: str | None = Field(default=None, alias="COPILOT_MODEL")
 
     openai_planning_model: str = Field(default="gpt-4.1-mini", alias="OPENAI_PLANNING_MODEL")
