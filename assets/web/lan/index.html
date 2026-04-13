@@ -2562,31 +2562,31 @@
         </button>
         <div class="conn-popover" id="connPopover" role="dialog" aria-hidden="true">
           <div class="conn-popover-status" id="connPopoverStatus">Connecting…</div>
-          <button class="btn" id="connReconnectBtn" type="button">Reconnect</button>
+          <button class="btn" id="connReconnectBtn" type="button" title="Reconnect to server">Reconnect</button>
         </div>
       </div>
-      <button class="btn end-turn-top" id="endTurn">End Turn</button>
+      <button class="btn end-turn-top" id="endTurn" title="End your turn">End Turn</button>
       <div class="spacer"></div>
-      <button class="btn" id="planningBtn" type="button">Planning Mode</button>
+      <button class="btn" id="planningBtn" type="button" title="Toggle planning mode">Planning Mode</button>
       <button class="btn" id="inventoryBtn" type="button" aria-pressed="false" aria-controls="inventoryModal" aria-expanded="false">Inventory</button>
-      <button class="btn" id="manualOverrideBtn" type="button">Manual Override</button>
-      <button class="btn" id="planningAoeBtn" type="button">Place AoE</button>
-      <button class="btn" id="planningChatBtn" type="button" aria-pressed="false">Chat</button>
-      <button class="btn" id="spellLibraryBtn" type="button">Spellbook</button>
-      <button class="btn" id="helpBtn" type="button" aria-controls="helpModal" aria-expanded="false">Help</button>
-      <button class="btn" id="configBtn" aria-controls="configModal" aria-expanded="false">Config</button>
+      <button class="btn" id="manualOverrideBtn" type="button" title="Open manual stat override">Manual Override</button>
+      <button class="btn" id="planningAoeBtn" type="button" title="Place area of effect on the map">Place AoE</button>
+      <button class="btn" id="planningChatBtn" type="button" aria-pressed="false" title="Open planning chat">Chat</button>
+      <button class="btn" id="spellLibraryBtn" type="button" title="Open spellbook">Spellbook</button>
+      <button class="btn" id="helpBtn" type="button" aria-controls="helpModal" aria-expanded="false" title="Open help">Help</button>
+      <button class="btn" id="configBtn" aria-controls="configModal" aria-expanded="false" title="Open settings">Config</button>
       <div class="topbar-controls">
-        <button class="btn" id="lockMap">Lock Map</button>
+        <button class="btn" id="lockMap" title="Lock or unlock map panning">Lock Map</button>
         <button class="btn compact-optional" id="lockAoeToggle" type="button" aria-pressed="true">Unlock my AOEs</button>
         <button class="btn compact-optional" id="auraToggle" type="button" aria-pressed="true">Auras: On</button>
-        <button class="btn" id="centerMap">Center on Me</button>
+        <button class="btn" id="centerMap" title="Center map on your token">Center on Me</button>
         <button class="btn compact-optional" id="tokenColorModeBtn">Token Color</button>
-        <button class="btn" id="measureToggle" aria-pressed="false">Measure</button>
-        <button class="btn compact-optional" id="measureClear">Clear Measure</button>
-        <button class="btn accent" id="zoomIn">Zoom +</button>
-        <button class="btn accent" id="zoomOut">Zoom −</button>
-        <button class="btn compact-optional" id="battleLog">Battle Log</button>
-        <button class="btn" id="toggleSheetPanel" aria-pressed="false">Hide Panel</button>
+        <button class="btn" id="measureToggle" aria-pressed="false" title="Toggle distance measurement tool">Measure</button>
+        <button class="btn compact-optional" id="measureClear" title="Clear all measurements">Clear Measure</button>
+        <button class="btn accent" id="zoomIn" title="Zoom in">Zoom +</button>
+        <button class="btn accent" id="zoomOut" title="Zoom out">Zoom −</button>
+        <button class="btn compact-optional" id="battleLog" title="Show battle log">Battle Log</button>
+        <button class="btn" id="toggleSheetPanel" aria-pressed="false" title="Toggle character sheet panel">Hide Panel</button>
       </div>
     </div>
     <div class="topbar-initiative" id="initiativeBarWrap" aria-label="Initiative bar">
@@ -3255,7 +3255,7 @@
                   <select id="inventoryConsumableSelect" style="flex:1; min-width:160px;">
                     <option value="">Add consumable…</option>
                   </select>
-                  <button class="btn" id="inventoryConsumableAddBtn" type="button">+1</button>
+                  <button class="btn" id="inventoryConsumableAddBtn" type="button" aria-label="Add selected consumable" title="Add selected consumable">+1</button>
                 </div>
                 <ul class="inventory-items-list" id="inventoryItemsList">
                   <li class="inventory-items-empty">No items in inventory.</li>
@@ -3814,9 +3814,9 @@ __DAMAGE_TYPE_OPTIONS__
     <h2>Manage Wild Shape Resource Pool</h2>
     <div class="spellbook-status" id="wildShapePoolSummary"></div>
     <div class="wildshape-pool-row">
-      <button class="btn" id="wildShapePoolDec" type="button">−</button>
+      <button class="btn" id="wildShapePoolDec" type="button" aria-label="Decrease wild shape pool">−</button>
       <input id="wildShapePoolCurrentInput" type="number" min="0" step="1" />
-      <button class="btn" id="wildShapePoolInc" type="button">+</button>
+      <button class="btn" id="wildShapePoolInc" type="button" aria-label="Increase wild shape pool">+</button>
     </div>
     <div class="modal-actions" style="margin-top:10px;">
       <button class="btn" id="wildShapePoolBack" type="button">Back</button>
