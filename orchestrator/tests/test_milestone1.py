@@ -46,6 +46,10 @@ class OrchestratorMilestone1Tests(unittest.TestCase):
         "TASK_APPROVED_LABEL",
         "COPILOT_DISPATCH_ASSIGNEE",
         "COPILOT_TARGET_BRANCH",
+        "COPILOT_TARGET_REPO",
+        "COPILOT_CUSTOM_INSTRUCTIONS",
+        "COPILOT_CUSTOM_AGENT",
+        "COPILOT_MODEL",
         "OPENAI_PLANNING_MODEL",
         "OPENAI_REVIEW_MODEL",
     }

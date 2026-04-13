@@ -30,14 +30,29 @@ On rejection:
 - task `status` -> `blocked`
 
 Duplicate approval signals are safe: once dispatched/completed, additional approvals do not create duplicate dispatch runs.
+Approval comments are parsed case-insensitively and can appear on later lines in a comment body.
 
 ## Dispatch behavior
 
-Dispatch currently uses GitHub REST API:
-1. assign issue to configured Copilot assignee (`COPILOT_DISPATCH_ASSIGNEE`, default `copilot`)
-2. post normalized task packet as an issue comment
+Dispatch uses GitHub REST API for existing issue assignment:
+1. `POST /repos/{owner}/{repo}/issues/{issue_number}/assignees`
+2. body includes:
+   - `assignees: [COPILOT_DISPATCH_ASSIGNEE]` (default `copilot-swe-agent`)
+   - `agent_assignment` fields:
+     - `target_repo`
+     - `base_branch`
+     - `custom_instructions` (optional)
+     - `custom_agent` (optional)
+     - `model` (optional)
+3. normalized task packet comment is posted after accepted assignment as a secondary artifact
 
-If dispatch API/auth is unavailable, task remains approved for manual dispatch and the `AgentRun` is marked blocked with a reason.
+Dispatch state semantics are intentionally conservative:
+- `dispatch_requested` = orchestrator attempted assignment
+- `awaiting_worker_start` = API accepted assignment request, worker-start still unconfirmed
+- `working` / `pr_opened` = worker-start evidence arrived
+- `manual_dispatch_needed` = API/token/permission path did not accept assignment in the expected form
+
+The orchestrator does not treat "packet comment posted" as dispatch success.
 
 ## Worker progress tracking
 
@@ -48,9 +63,13 @@ Tracked webhook event types:
 - `issues` (task intake + optional label approval)
 
 Behavior:
-- PR events are correlated back to task/agent run (issue references preferred, fallback to latest dispatched task in repo)
+- PR events are correlated back to task/agent run (issue references preferred, fallback to latest active dispatched task in repo)
 - workflow run events are correlated via PR numbers
 - run/task summary is updated with concise AI-generated review/summarization
+- worker-start confirmation signals include:
+  - issue assigned to configured Copilot assignee
+  - issue comment from configured Copilot identity
+  - PR activity tied to the task
 
 ## OpenAI usage
 
@@ -90,11 +109,25 @@ Routes are plain JSON for operational inspection.
 - `DISCORD_WEBHOOK_URL` - optional notifications
 - `DATABASE_URL` - SQLite URL by default
 
+GitHub webhook subscriptions must include at minimum:
+- `issues`
+- `issue_comment`
+- `pull_request`
+- `workflow_run`
+
+Minimum GitHub token requirement for Copilot issue assignment:
+- must satisfy GitHub's Copilot issue-assignment API requirements (not issues-only access)
+- include repository issue write capability plus the Copilot-assignment capability required by GitHub for cloud agent assignment
+
 Optional tuning:
 - `TASK_LABEL` (default `agent:task`)
 - `TASK_APPROVED_LABEL` (default `agent:approved`)
-- `COPILOT_DISPATCH_ASSIGNEE` (default `copilot`)
+- `COPILOT_DISPATCH_ASSIGNEE` (default `copilot-swe-agent`)
 - `COPILOT_TARGET_BRANCH` (default `main`)
+- `COPILOT_TARGET_REPO` (default task repository)
+- `COPILOT_CUSTOM_INSTRUCTIONS` (optional extra instructions sent in `agent_assignment`)
+- `COPILOT_CUSTOM_AGENT` (optional GitHub custom agent identifier)
+- `COPILOT_MODEL` (optional model override in `agent_assignment`)
 - `OPENAI_PLANNING_MODEL` (default `gpt-4.1-mini`)
 - `OPENAI_REVIEW_MODEL` (default `gpt-4.1-mini`)
 - `GITHUB_API_URL` (default `https://api.github.com`)

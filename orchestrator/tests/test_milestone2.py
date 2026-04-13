@@ -8,13 +8,14 @@ import os
 import tempfile
 import unittest
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 from fastapi.testclient import TestClient
 from sqlmodel import Session, select
 
-from orchestrator.app.github_dispatch import DispatchResult
-from orchestrator.app.models import AgentRun
+from orchestrator.app.config import Settings
+from orchestrator.app.github_dispatch import DispatchResult, dispatch_task_to_github_copilot
+from orchestrator.app.models import AgentRun, TaskPacket
 
 
 def _reload_orchestrator_modules():
@@ -51,6 +52,10 @@ class OrchestratorMilestone2Tests(unittest.TestCase):
         "TASK_APPROVED_LABEL",
         "COPILOT_DISPATCH_ASSIGNEE",
         "COPILOT_TARGET_BRANCH",
+        "COPILOT_TARGET_REPO",
+        "COPILOT_CUSTOM_INSTRUCTIONS",
+        "COPILOT_CUSTOM_AGENT",
+        "COPILOT_MODEL",
         "OPENAI_PLANNING_MODEL",
         "OPENAI_REVIEW_MODEL",
     }
@@ -171,8 +176,10 @@ class OrchestratorMilestone2Tests(unittest.TestCase):
             ), patch(
                 "orchestrator.app.tasks.dispatch_task_to_github_copilot",
                 return_value=DispatchResult(
-                    success=True,
+                    attempted=True,
+                    accepted=True,
                     manual_required=False,
+                    state="accepted",
                     summary="Dispatched successfully",
                     dispatch_id="c_1",
                     dispatch_url="https://github.com/example/comment/1",
@@ -207,15 +214,356 @@ class OrchestratorMilestone2Tests(unittest.TestCase):
 
                     task_response = client.get("/tasks")
                     task = task_response.json()["tasks"][0]
-                    self.assertEqual(task["status"], "dispatched")
+                    self.assertEqual(task["status"], "awaiting_worker_start")
                     self.assertEqual(task["approval_state"], "approved")
-                    self.assertEqual(task["latest_run"]["status"], "dispatched")
+                    self.assertEqual(task["latest_run"]["status"], "awaiting_worker_start")
 
                 self.assertEqual(mocked_dispatch.call_count, 1)
 
                 with Session(db.get_engine()) as session:
                     run_count = len(list(session.exec(select(AgentRun)).all()))
                     self.assertEqual(run_count, 1)
+
+    def test_dispatch_request_payload_uses_agent_assignment_fields(self):
+        settings = Settings(
+            github_api_token="token",
+            github_api_url="https://api.github.com",
+            copilot_dispatch_assignee="copilot-swe-agent",
+            copilot_target_branch="main",
+            copilot_target_repo="jeeves-jeevesenson/init-tracker",
+            copilot_custom_instructions="Follow repo workflow.",
+            copilot_custom_agent="Initiative Smith",
+            copilot_model="gpt-4.1-mini",
+        )
+        task = TaskPacket(
+            id=42,
+            github_repo="jeeves-jeevesenson/init-tracker",
+            github_issue_number=126,
+            title="Dispatch payload validation",
+            normalized_task_text="Normalized text",
+            acceptance_criteria_json='["A"]',
+            validation_commands_json='["python -m compileall orchestrator"]',
+        )
+
+        with patch("orchestrator.app.github_dispatch.httpx.Client") as mocked_client_cls:
+            mocked_client = mocked_client_cls.return_value.__enter__.return_value
+            assign_response = Mock(
+                status_code=201,
+                headers={"content-type": "application/json"},
+            )
+            assign_response.json.return_value = {
+                "id": 9001,
+                "html_url": "https://github.com/jeeves-jeevesenson/init-tracker/issues/126",
+                "assignees": [{"login": "copilot-swe-agent"}],
+            }
+            comment_response = Mock(status_code=201, headers={"content-type": "application/json"}, text="")
+            mocked_client.post.side_effect = [assign_response, comment_response]
+
+            result = dispatch_task_to_github_copilot(settings=settings, task=task)
+            self.assertTrue(result.accepted)
+            self.assertFalse(result.manual_required)
+
+            first_call = mocked_client.post.call_args_list[0]
+            self.assertEqual(
+                first_call.args[0],
+                "https://api.github.com/repos/jeeves-jeevesenson/init-tracker/issues/126/assignees",
+            )
+            payload = first_call.kwargs["json"]
+            self.assertEqual(payload["assignees"], ["copilot-swe-agent"])
+            self.assertEqual(payload["agent_assignment"]["target_repo"], "jeeves-jeevesenson/init-tracker")
+            self.assertEqual(payload["agent_assignment"]["base_branch"], "main")
+            self.assertEqual(payload["agent_assignment"]["custom_instructions"], "Follow repo workflow.")
+            self.assertEqual(payload["agent_assignment"]["custom_agent"], "Initiative Smith")
+            self.assertEqual(payload["agent_assignment"]["model"], "gpt-4.1-mini")
+
+    def test_dispatch_rejection_sets_manual_dispatch_needed(self):
+        with tempfile.TemporaryDirectory() as td:
+            os.environ["DATABASE_URL"] = f"sqlite:///{Path(td) / 'orchestrator.db'}"
+            os.environ["GH_WEBHOOK_SECRET"] = "test-gh-secret"
+            os.environ["GITHUB_API_TOKEN"] = "dummy-token"
+            main, _ = _reload_orchestrator_modules()
+
+            issue_payload = {
+                "action": "opened",
+                "repository": {"full_name": "jeeves-jeevesenson/init-tracker"},
+                "issue": {
+                    "number": 126,
+                    "node_id": "I_126",
+                    "title": "Dispatch rejection",
+                    "body": "Should require manual intervention",
+                    "labels": [{"name": "agent:task"}],
+                },
+            }
+            approve_payload = {
+                "action": "created",
+                "repository": {"full_name": "jeeves-jeevesenson/init-tracker"},
+                "issue": {"number": 126},
+                "comment": {"body": "/approve"},
+            }
+
+            with patch(
+                "orchestrator.app.tasks.plan_task_packet",
+                return_value={
+                    "objective": "Dispatch task",
+                    "scope": ["dispatch"],
+                    "non_goals": [],
+                    "acceptance_criteria": ["manual state on rejection"],
+                    "validation_guidance": ["unit tests"],
+                    "implementation_brief": "dispatch this",
+                },
+            ), patch(
+                "orchestrator.app.tasks.dispatch_task_to_github_copilot",
+                return_value=DispatchResult(
+                    attempted=True,
+                    accepted=False,
+                    manual_required=True,
+                    state="blocked",
+                    summary="GitHub API rejected assignment (403)",
+                ),
+            ):
+                with TestClient(main.app) as client:
+                    opened = self._post_github(
+                        client,
+                        secret="test-gh-secret",
+                        delivery="delivery-task-opened-3",
+                        event="issues",
+                        payload=issue_payload,
+                    )
+                    self.assertEqual(opened.status_code, 200)
+
+                    approved = self._post_github(
+                        client,
+                        secret="test-gh-secret",
+                        delivery="delivery-approve-3",
+                        event="issue_comment",
+                        payload=approve_payload,
+                    )
+                    self.assertEqual(approved.status_code, 200)
+
+                    task = client.get("/tasks").json()["tasks"][0]
+                    self.assertEqual(task["status"], "manual_dispatch_needed")
+                    self.assertEqual(task["latest_run"]["status"], "manual_dispatch_needed")
+                    self.assertIn("rejected", task["latest_summary"].lower())
+
+    def test_label_approval_dispatches(self):
+        with tempfile.TemporaryDirectory() as td:
+            os.environ["DATABASE_URL"] = f"sqlite:///{Path(td) / 'orchestrator.db'}"
+            os.environ["GH_WEBHOOK_SECRET"] = "test-gh-secret"
+            os.environ["GITHUB_API_TOKEN"] = "dummy-token"
+            main, _ = _reload_orchestrator_modules()
+
+            issue_opened_payload = {
+                "action": "opened",
+                "repository": {"full_name": "jeeves-jeevesenson/init-tracker"},
+                "issue": {
+                    "number": 127,
+                    "node_id": "I_127",
+                    "title": "Label approval",
+                    "body": "Label should approve",
+                    "labels": [{"name": "agent:task"}],
+                },
+            }
+            issue_labeled_payload = {
+                "action": "labeled",
+                "repository": {"full_name": "jeeves-jeevesenson/init-tracker"},
+                "issue": {
+                    "number": 127,
+                    "node_id": "I_127",
+                    "title": "Label approval",
+                    "body": "Label should approve",
+                    "labels": [{"name": "agent:task"}, {"name": "agent:approved"}],
+                },
+                "label": {"name": "agent:approved"},
+            }
+
+            with patch(
+                "orchestrator.app.tasks.plan_task_packet",
+                return_value={
+                    "objective": "Dispatch task",
+                    "scope": ["dispatch"],
+                    "non_goals": [],
+                    "acceptance_criteria": ["label approval dispatches"],
+                    "validation_guidance": ["unit tests"],
+                    "implementation_brief": "dispatch this",
+                },
+            ), patch(
+                "orchestrator.app.tasks.dispatch_task_to_github_copilot",
+                return_value=DispatchResult(
+                    attempted=True,
+                    accepted=True,
+                    manual_required=False,
+                    state="accepted",
+                    summary="Dispatch accepted",
+                ),
+            ):
+                with TestClient(main.app) as client:
+                    self._post_github(
+                        client,
+                        secret="test-gh-secret",
+                        delivery="delivery-task-opened-4",
+                        event="issues",
+                        payload=issue_opened_payload,
+                    )
+                    labeled = self._post_github(
+                        client,
+                        secret="test-gh-secret",
+                        delivery="delivery-labeled-4",
+                        event="issues",
+                        payload=issue_labeled_payload,
+                    )
+                    self.assertEqual(labeled.status_code, 200)
+                    task = client.get("/tasks").json()["tasks"][0]
+                    self.assertEqual(task["approval_state"], "approved")
+                    self.assertEqual(task["status"], "awaiting_worker_start")
+                    self.assertEqual(task["latest_run"]["status"], "awaiting_worker_start")
+
+    def test_worker_start_signal_from_issue_assignment_transitions_to_working(self):
+        with tempfile.TemporaryDirectory() as td:
+            os.environ["DATABASE_URL"] = f"sqlite:///{Path(td) / 'orchestrator.db'}"
+            os.environ["GH_WEBHOOK_SECRET"] = "test-gh-secret"
+            os.environ["GITHUB_API_TOKEN"] = "dummy-token"
+            main, _ = _reload_orchestrator_modules()
+
+            issue_opened_payload = {
+                "action": "opened",
+                "repository": {"full_name": "jeeves-jeevesenson/init-tracker"},
+                "issue": {
+                    "number": 128,
+                    "node_id": "I_128",
+                    "title": "Worker start signal",
+                    "body": "Await worker start",
+                    "labels": [{"name": "agent:task"}],
+                },
+            }
+            approve_payload = {
+                "action": "created",
+                "repository": {"full_name": "jeeves-jeevesenson/init-tracker"},
+                "issue": {"number": 128},
+                "comment": {"body": "/approve"},
+            }
+            assigned_payload = {
+                "action": "assigned",
+                "repository": {"full_name": "jeeves-jeevesenson/init-tracker"},
+                "issue": {
+                    "number": 128,
+                    "node_id": "I_128",
+                    "title": "Worker start signal",
+                    "body": "Await worker start",
+                    "labels": [{"name": "agent:task"}, {"name": "agent:approved"}],
+                },
+                "assignee": {"login": "copilot-swe-agent"},
+            }
+
+            with patch(
+                "orchestrator.app.tasks.plan_task_packet",
+                return_value={
+                    "objective": "Dispatch task",
+                    "scope": ["dispatch"],
+                    "non_goals": [],
+                    "acceptance_criteria": ["worker start signal promotes status"],
+                    "validation_guidance": ["unit tests"],
+                    "implementation_brief": "dispatch this",
+                },
+            ), patch(
+                "orchestrator.app.tasks.dispatch_task_to_github_copilot",
+                return_value=DispatchResult(
+                    attempted=True,
+                    accepted=True,
+                    manual_required=False,
+                    state="accepted",
+                    summary="Dispatch accepted",
+                ),
+            ):
+                with TestClient(main.app) as client:
+                    self._post_github(
+                        client,
+                        secret="test-gh-secret",
+                        delivery="delivery-task-opened-5",
+                        event="issues",
+                        payload=issue_opened_payload,
+                    )
+                    self._post_github(
+                        client,
+                        secret="test-gh-secret",
+                        delivery="delivery-approve-5",
+                        event="issue_comment",
+                        payload=approve_payload,
+                    )
+                    assigned = self._post_github(
+                        client,
+                        secret="test-gh-secret",
+                        delivery="delivery-assigned-5",
+                        event="issues",
+                        payload=assigned_payload,
+                    )
+                    self.assertEqual(assigned.status_code, 200)
+                    task = client.get("/tasks").json()["tasks"][0]
+                    self.assertEqual(task["status"], "working")
+                    self.assertEqual(task["latest_run"]["status"], "working")
+
+    def test_issue_comment_multiline_approve_is_accepted(self):
+        with tempfile.TemporaryDirectory() as td:
+            os.environ["DATABASE_URL"] = f"sqlite:///{Path(td) / 'orchestrator.db'}"
+            os.environ["GH_WEBHOOK_SECRET"] = "test-gh-secret"
+            os.environ["GITHUB_API_TOKEN"] = "dummy-token"
+            main, _ = _reload_orchestrator_modules()
+
+            issue_payload = {
+                "action": "opened",
+                "repository": {"full_name": "jeeves-jeevesenson/init-tracker"},
+                "issue": {
+                    "number": 129,
+                    "node_id": "I_129",
+                    "title": "Multiline approve command",
+                    "body": "Command may appear on later line",
+                    "labels": [{"name": "agent:task"}],
+                },
+            }
+            approve_payload = {
+                "action": "created",
+                "repository": {"full_name": "jeeves-jeevesenson/init-tracker"},
+                "issue": {"number": 129},
+                "comment": {"body": "Looks good.\n\n/approve please continue"},
+            }
+
+            with patch(
+                "orchestrator.app.tasks.plan_task_packet",
+                return_value={
+                    "objective": "Dispatch task",
+                    "scope": ["dispatch"],
+                    "non_goals": [],
+                    "acceptance_criteria": ["multiline approval command works"],
+                    "validation_guidance": ["unit tests"],
+                    "implementation_brief": "dispatch this",
+                },
+            ), patch(
+                "orchestrator.app.tasks.dispatch_task_to_github_copilot",
+                return_value=DispatchResult(
+                    attempted=True,
+                    accepted=True,
+                    manual_required=False,
+                    state="accepted",
+                    summary="Dispatch accepted",
+                ),
+            ):
+                with TestClient(main.app) as client:
+                    self._post_github(
+                        client,
+                        secret="test-gh-secret",
+                        delivery="delivery-task-opened-6",
+                        event="issues",
+                        payload=issue_payload,
+                    )
+                    approved = self._post_github(
+                        client,
+                        secret="test-gh-secret",
+                        delivery="delivery-approve-6",
+                        event="issue_comment",
+                        payload=approve_payload,
+                    )
+                    self.assertEqual(approved.status_code, 200)
+                    task = client.get("/tasks").json()["tasks"][0]
+                    self.assertEqual(task["approval_state"], "approved")
 
     def test_tasks_detail_route_and_duplicate_issue_delivery(self):
         with tempfile.TemporaryDirectory() as td:

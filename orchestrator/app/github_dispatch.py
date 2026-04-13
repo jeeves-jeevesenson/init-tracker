@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 from dataclasses import dataclass
+from typing import Any
 
 import httpx
 
@@ -11,9 +12,12 @@ from .models import TaskPacket
 
 @dataclass
 class DispatchResult:
-    success: bool
+    attempted: bool
+    accepted: bool
     manual_required: bool
+    state: str
     summary: str
+    api_status_code: int | None = None
     dispatch_id: str | None = None
     dispatch_url: str | None = None
 
@@ -26,6 +30,35 @@ def _build_headers(settings: Settings) -> dict[str, str]:
     if settings.github_api_token:
         headers["Authorization"] = f"Bearer {settings.github_api_token}"
     return headers
+
+
+def _build_agent_assignment_payload(settings: Settings, task: TaskPacket) -> dict[str, Any]:
+    payload: dict[str, Any] = {
+        "target_repo": settings.copilot_target_repo or task.github_repo,
+        "base_branch": settings.copilot_target_branch,
+    }
+    if settings.copilot_custom_instructions:
+        payload["custom_instructions"] = settings.copilot_custom_instructions
+    if settings.copilot_custom_agent:
+        payload["custom_agent"] = settings.copilot_custom_agent
+    if settings.copilot_model:
+        payload["model"] = settings.copilot_model
+    return payload
+
+
+def _extract_assignee_logins(payload: dict[str, Any]) -> set[str]:
+    assignees = payload.get("assignees") or []
+    return {
+        str(item.get("login"))
+        for item in assignees
+        if isinstance(item, dict) and isinstance(item.get("login"), str)
+    }
+
+
+def _normalize_login(value: str | None) -> str:
+    if not value:
+        return ""
+    return value.strip().lower().removesuffix("[bot]")
 
 
 def _task_packet_comment(task: TaskPacket, *, target_branch: str) -> str:
@@ -48,8 +81,10 @@ def _task_packet_comment(task: TaskPacket, *, target_branch: str) -> str:
 def dispatch_task_to_github_copilot(*, settings: Settings, task: TaskPacket) -> DispatchResult:
     if not settings.github_api_token:
         return DispatchResult(
-            success=False,
+            attempted=False,
+            accepted=False,
             manual_required=True,
+            state="blocked",
             summary="GitHub API token missing; task remains approved for manual dispatch.",
         )
 
@@ -62,52 +97,82 @@ def dispatch_task_to_github_copilot(*, settings: Settings, task: TaskPacket) -> 
 
     try:
         with httpx.Client(timeout=15.0) as client:
+            request_payload = {
+                "assignees": [settings.copilot_dispatch_assignee],
+                "agent_assignment": _build_agent_assignment_payload(settings, task),
+            }
             assign_response = client.post(
                 assign_url,
                 headers=_build_headers(settings),
-                json={"assignees": [settings.copilot_dispatch_assignee]},
+                json=request_payload,
             )
             if assign_response.status_code >= 400:
                 details = assign_response.text[:500]
                 manual = assign_response.status_code in {401, 403, 404, 422}
                 return DispatchResult(
-                    success=False,
+                    attempted=True,
+                    accepted=False,
                     manual_required=manual,
+                    state="blocked" if manual else "failed",
                     summary=(
                         "GitHub Copilot dispatch assignment failed "
                         f"({assign_response.status_code}): {details}"
                     ),
+                    api_status_code=assign_response.status_code,
                 )
 
+            assign_payload = (
+                assign_response.json()
+                if assign_response.headers.get("content-type", "").startswith("application/json")
+                else {}
+            )
+            assignee_logins = {_normalize_login(login) for login in _extract_assignee_logins(assign_payload)}
+            if _normalize_login(settings.copilot_dispatch_assignee) not in assignee_logins:
+                details = json.dumps(assign_payload)[:500]
+                return DispatchResult(
+                    attempted=True,
+                    accepted=False,
+                    manual_required=True,
+                    state="blocked",
+                    summary=(
+                        "GitHub accepted the request but Copilot assignee was not applied; "
+                        f"manual dispatch needed. Response snapshot: {details}"
+                    ),
+                    api_status_code=assign_response.status_code,
+                )
+
+            dispatch_id = str(assign_payload.get("id")) if assign_payload.get("id") is not None else None
+            dispatch_url = assign_payload.get("html_url")
+            comment_warning: str | None = None
             comment_response = client.post(
                 comment_url,
                 headers=_build_headers(settings),
                 json={"body": _task_packet_comment(task, target_branch=settings.copilot_target_branch)},
             )
             if comment_response.status_code >= 400:
-                details = comment_response.text[:500]
-                return DispatchResult(
-                    success=False,
-                    manual_required=comment_response.status_code in {401, 403, 404, 422},
-                    summary=(
-                        "Task packet comment failed after assignment "
-                        f"({comment_response.status_code}): {details}"
-                    ),
+                comment_warning = (
+                    f" Task packet comment failed ({comment_response.status_code}): "
+                    f"{comment_response.text[:200]}"
                 )
-
-            comment_payload = comment_response.json() if comment_response.headers.get("content-type", "").startswith("application/json") else {}
-            dispatch_id = str(comment_payload.get("id")) if comment_payload.get("id") is not None else None
-            dispatch_url = comment_payload.get("html_url")
             return DispatchResult(
-                success=True,
+                attempted=True,
+                accepted=True,
                 manual_required=False,
-                summary=f"Dispatched via issue assignment to {settings.copilot_dispatch_assignee}.",
+                state="accepted",
+                summary=(
+                    "Copilot assignment request accepted via issues assignee API"
+                    f" for {settings.copilot_dispatch_assignee}."
+                    f"{comment_warning or ''}"
+                ),
+                api_status_code=assign_response.status_code,
                 dispatch_id=dispatch_id,
                 dispatch_url=dispatch_url,
             )
     except Exception as exc:
         return DispatchResult(
-            success=False,
+            attempted=True,
+            accepted=False,
             manual_required=True,
+            state="blocked",
             summary=f"Dispatch request failed: {exc}",
         )
