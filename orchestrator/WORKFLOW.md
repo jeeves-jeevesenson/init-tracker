@@ -5,13 +5,9 @@
 1. GitHub sends an `issues` webhook.
 2. Orchestrator only creates/updates a task packet when the issue has label `agent:task` (configurable with `TASK_LABEL`).
 3. The issue title/body is persisted in `TaskPacket`.
-4. Orchestrator runs OpenAI planning (`Responses API`) to normalize the issue into:
-   - objective
-   - scope
-   - non-goals
-   - acceptance criteria
-   - validation guidance
-   - implementation brief
+4. Orchestrator runs OpenAI planning (`Responses API` with strict JSON schema) to produce:
+   - durable **internal plan** (`internal_plan_json`): objective, scope, non-goals, acceptance criteria, validation guidance, implementation brief, task classification/risk/reviewer fields, and optional internal routing metadata
+   - durable **worker brief** (`worker_brief_json`): plain-Copilot execution brief with objective, concise scope, implementation brief, acceptance criteria, validation commands, non-goals, target branch, and repo-grounded hints
 5. Task status moves to `awaiting_approval`.
 
 ## Worker routing (internal custom-agent selection)
@@ -67,7 +63,7 @@ Dispatch uses GitHub REST API for existing issue assignment:
        - `custom_instructions` (optional)
        - `custom_agent` (only when `ENABLE_GITHUB_CUSTOM_AGENT_DISPATCH=true`)
        - `model` (optional)
-4. normalized task packet comment is posted after accepted assignment as a secondary artifact
+4. worker brief dispatch packet comment is posted after accepted assignment as a secondary artifact
 
 Dispatch worker mode is intentionally split:
 - **internal routing worker** = persisted `selected_custom_agent` used for orchestration visibility and notifications
@@ -75,6 +71,7 @@ Dispatch worker mode is intentionally split:
   - default (`ENABLE_GITHUB_CUSTOM_AGENT_DISPATCH=false`): plain Copilot assignee flow; `agent_assignment.custom_agent` is omitted as a production workaround for custom-agent startup failures
   - optional test mode (`ENABLE_GITHUB_CUSTOM_AGENT_DISPATCH=true`): includes `agent_assignment.custom_agent` for custom-agent launch attempts
 - task/run summaries and `/tasks` payload `dispatch_payload_summary` include `dispatch_mode_summary` so fallback vs custom-agent launch is explicit
+- plain Copilot fallback packets/comments do **not** expose internal worker labels (`Initiative Smith` / `Initiative Tracker Engineer`)
 
 Dispatch state semantics are intentionally conservative:
 - `dispatch_requested` = orchestrator attempted assignment
@@ -108,9 +105,9 @@ Behavior:
 ## OpenAI usage
 
 Used in two places:
-1. **Planning**: issue -> normalized task packet (stored on `TaskPacket`)
-   - planner can also provide compact routing hints: `recommended_worker`, `recommended_scope_class`
-2. **Review summarization**: PR/check updates -> concise bullets + suggested next action
+1. **Planning stage**: issue -> schema-enforced internal plan (`internal_plan_json`)
+2. **Worker brief stage**: internal plan -> schema-enforced plain Copilot brief (`worker_brief_json`)
+3. **Review stage**: PR/check updates -> schema-enforced review artifact (`review_artifact_json`) with merge/send-back recommendations
 
 ## Discord notifications
 
@@ -136,7 +133,12 @@ Task planned/approved/dispatched/manual-dispatch and PR/check notifications incl
 - `GET /tasks`
 - `GET /tasks/{id}`
 
-Routes are plain JSON for operational inspection and include selected worker, selection source/reason, dispatch payload summary, worker state, and PR linkage.
+Routes are plain JSON for operational inspection and clearly separate:
+- internal plan
+- worker brief
+- routing metadata
+- GitHub execution mode (plain fallback vs custom-agent launch)
+- dispatch payload summary, worker state, and PR linkage
 
 ## Required environment variables
 
@@ -168,8 +170,14 @@ Optional tuning:
 - `COPILOT_CUSTOM_AGENT` (optional fallback custom agent if task routing did not set one)
 - `ENABLE_GITHUB_CUSTOM_AGENT_DISPATCH` (default `false`; when `true`, includes `agent_assignment.custom_agent` in dispatch payload)
 - `COPILOT_MODEL` (optional model override in `agent_assignment`)
-- `OPENAI_PLANNING_MODEL` (default `gpt-4.1-mini`)
-- `OPENAI_REVIEW_MODEL` (default `gpt-4.1-mini`)
+- `OPENAI_PLANNING_MODEL` (default `gpt-5.4`)
+- `OPENAI_REVIEW_MODEL` (default `gpt-5.4`)
+- `OPENAI_PLANNING_REASONING_EFFORT` (default `medium`)
+- `OPENAI_REVIEW_REASONING_EFFORT` (default `medium`)
+- `OPENAI_ESCALATE_REASONING_FOR_BROAD_TASKS` (default `true`)
+- `OPENAI_PLANNING_BROAD_REASONING_EFFORT` (default `high`)
+- `OPENAI_CONTROL_PLANE_MODE` (default `sync`; `background_ready` reserved for async control-plane wiring)
+- `OPENAI_ENABLE_BACKGROUND_REQUESTS` (default `false`; enabling requires webhook/poller completion flow)
 - `GITHUB_API_URL` (default `https://api.github.com`)
 
 ## Manual steps that still exist
