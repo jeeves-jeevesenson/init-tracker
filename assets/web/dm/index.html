@@ -351,6 +351,69 @@
       <button class="btn-action" id="applyTempHpBtn">Set Temp HP</button>
       <div class="mut-result" id="tempHpResult"></div>
     </div>
+
+    <!-- Encounter setup: add combatant -->
+    <div class="mut-card">
+      <h3>Add Combatant</h3>
+      <div class="form-group">
+        <label>Name</label>
+        <input type="text" id="newCombatantName" placeholder="e.g. Goblin A" />
+      </div>
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px">
+        <div class="form-group">
+          <label>HP</label>
+          <input type="number" id="newCombatantHp" placeholder="e.g. 15" min="0" />
+        </div>
+        <div class="form-group">
+          <label>Max HP (blank = HP)</label>
+          <input type="number" id="newCombatantMaxHp" placeholder="same as HP" min="0" />
+        </div>
+        <div class="form-group">
+          <label>Initiative</label>
+          <input type="number" id="newCombatantInit" placeholder="e.g. 14" />
+        </div>
+        <div class="form-group">
+          <label>AC</label>
+          <input type="number" id="newCombatantAc" placeholder="e.g. 13" min="0" />
+        </div>
+        <div class="form-group">
+          <label>Speed (ft)</label>
+          <input type="number" id="newCombatantSpeed" placeholder="30" min="0" />
+        </div>
+        <div class="form-group" style="justify-content:flex-end;flex-direction:row;align-items:center;gap:8px;padding-top:18px">
+          <label style="font-size:11px;color:var(--muted)">Ally</label>
+          <input type="checkbox" id="newCombatantAlly" style="width:auto" />
+        </div>
+      </div>
+      <button class="btn-action" id="addCombatantBtn">+ Add to Encounter</button>
+      <div class="mut-result" id="addCombatantResult"></div>
+    </div>
+
+    <!-- Encounter setup: set initiative -->
+    <div class="mut-card">
+      <h3>Set Initiative</h3>
+      <div class="form-group">
+        <label>Combatant</label>
+        <select id="initCidSelect"><option value="">— select —</option></select>
+      </div>
+      <div class="form-group">
+        <label>New Initiative</label>
+        <input type="number" id="initValue" placeholder="e.g. 18" />
+      </div>
+      <button class="btn-action" id="setInitBtn">Set Initiative</button>
+      <div class="mut-result" id="initResult"></div>
+    </div>
+
+    <!-- Encounter setup: remove combatant -->
+    <div class="mut-card">
+      <h3>Remove Combatant</h3>
+      <div class="form-group">
+        <label>Combatant</label>
+        <select id="removeCidSelect"><option value="">— select —</option></select>
+      </div>
+      <button class="btn-action remove" id="removeCombatantBtn">Remove from Encounter</button>
+      <div class="mut-result" id="removeCombatantResult"></div>
+    </div>
   </div>
 
 </div>
@@ -365,15 +428,18 @@
 /* ────────────────────────────────────────────────────────────────────
    DM Console — communicates with the backend DM API
    Endpoints used:
-     GET  /api/dm/combat                               → snapshot
-     POST /api/dm/combat/next-turn                     → advance turn
-     POST /api/dm/combat/start                         → start combat
-     POST /api/dm/combat/end                           → end combat
-     POST /api/dm/combat/combatants/{cid}/hp           → HP adjustment
-     POST /api/dm/combat/combatants/{cid}/condition    → add/remove condition
-     POST /api/dm/combat/combatants/{cid}/temp-hp      → set temp HP
-     POST /api/admin/login                             → optional admin login
-     WS   /ws/dm[?token=…]                             → real-time DM state push
+     GET    /api/dm/combat                                  → snapshot
+     POST   /api/dm/combat/next-turn                        → advance turn
+     POST   /api/dm/combat/start                            → start combat
+     POST   /api/dm/combat/end                              → end combat
+     POST   /api/dm/combat/combatants                       → add combatant
+     POST   /api/dm/combat/combatants/{cid}/hp              → HP adjustment
+     POST   /api/dm/combat/combatants/{cid}/condition       → add/remove condition
+     POST   /api/dm/combat/combatants/{cid}/temp-hp         → set temp HP
+     POST   /api/dm/combat/combatants/{cid}/initiative      → set initiative
+     DELETE /api/dm/combat/combatants/{cid}                 → remove combatant
+     POST   /api/admin/login                                → optional admin login
+     WS     /ws/dm[?token=…]                                → real-time DM state push
    ───────────────────────────────────────────────────────────────── */
 
 const BASE = '';  // same origin
@@ -553,6 +619,8 @@ function applySnapshot(snap) {
   populateCidSelect('hpCidSelect', combatants);
   populateCidSelect('condCidSelect', combatants);
   populateCidSelect('tempHpCidSelect', combatants);
+  populateCidSelect('initCidSelect', combatants);
+  populateCidSelect('removeCidSelect', combatants);
 
   // Render list
   renderCombatants(snap);
@@ -625,6 +693,8 @@ function quickSelect(cid) {
   document.getElementById('hpCidSelect').value = cid;
   document.getElementById('condCidSelect').value = cid;
   document.getElementById('tempHpCidSelect').value = cid;
+  document.getElementById('initCidSelect').value = cid;
+  document.getElementById('removeCidSelect').value = cid;
 }
 
 // ── Mutations ─────────────────────────────────────────────────────────
@@ -750,6 +820,91 @@ document.getElementById('applyTempHpBtn').addEventListener('click', async () => 
     const data = await r.json();
     if (r.ok && data.ok) {
       res.textContent = `Temp HP: ${data.temp_hp_before} → ${data.temp_hp_after}`;
+      if (data.snapshot) applySnapshot(data.snapshot);
+    } else {
+      res.textContent = data.detail || data.error || 'Error.';
+      res.classList.add('error');
+    }
+  } catch (e) { res.textContent = 'Request failed.'; res.classList.add('error'); }
+});
+
+// ── Encounter setup: add combatant ───────────────────────────────────
+document.getElementById('addCombatantBtn').addEventListener('click', async () => {
+  const name = document.getElementById('newCombatantName').value.trim();
+  const hp = parseInt(document.getElementById('newCombatantHp').value, 10);
+  const maxHpRaw = document.getElementById('newCombatantMaxHp').value.trim();
+  const initiative = parseInt(document.getElementById('newCombatantInit').value, 10);
+  const acRaw = document.getElementById('newCombatantAc').value.trim();
+  const speedRaw = document.getElementById('newCombatantSpeed').value.trim();
+  const ally = document.getElementById('newCombatantAlly').checked;
+  const res = document.getElementById('addCombatantResult');
+  res.className = 'mut-result';
+  if (!name) { res.textContent = 'Name is required.'; res.classList.add('error'); return; }
+  if (isNaN(hp) || hp < 0) { res.textContent = 'HP must be a non-negative number.'; res.classList.add('error'); return; }
+  if (isNaN(initiative)) { res.textContent = 'Initiative is required.'; res.classList.add('error'); return; }
+  const body = { name, hp, initiative, ally };
+  if (maxHpRaw !== '') body.max_hp = parseInt(maxHpRaw, 10);
+  if (acRaw !== '') body.ac = parseInt(acRaw, 10);
+  if (speedRaw !== '') body.speed = parseInt(speedRaw, 10);
+  try {
+    const r = await fetch(`${BASE}/api/dm/combat/combatants`, {
+      method: 'POST', headers: authHeaders(), body: JSON.stringify(body),
+    });
+    const data = await r.json();
+    if (r.ok && data.ok) {
+      res.textContent = `Added ${name} (cid ${data.cid}).`;
+      // Clear form
+      document.getElementById('newCombatantName').value = '';
+      document.getElementById('newCombatantHp').value = '';
+      document.getElementById('newCombatantMaxHp').value = '';
+      document.getElementById('newCombatantInit').value = '';
+      document.getElementById('newCombatantAc').value = '';
+      document.getElementById('newCombatantSpeed').value = '';
+      document.getElementById('newCombatantAlly').checked = false;
+      if (data.snapshot) applySnapshot(data.snapshot);
+    } else {
+      res.textContent = data.detail || data.error || 'Error.';
+      res.classList.add('error');
+    }
+  } catch (e) { res.textContent = 'Request failed.'; res.classList.add('error'); }
+});
+
+// ── Encounter setup: set initiative ──────────────────────────────────
+document.getElementById('setInitBtn').addEventListener('click', async () => {
+  const cid = document.getElementById('initCidSelect').value;
+  const initiative = parseInt(document.getElementById('initValue').value, 10);
+  const res = document.getElementById('initResult');
+  res.className = 'mut-result';
+  if (!cid) { res.textContent = 'Select a combatant.'; res.classList.add('error'); return; }
+  if (isNaN(initiative)) { res.textContent = 'Enter a valid initiative.'; res.classList.add('error'); return; }
+  try {
+    const r = await fetch(`${BASE}/api/dm/combat/combatants/${cid}/initiative`, {
+      method: 'POST', headers: authHeaders(), body: JSON.stringify({ initiative }),
+    });
+    const data = await r.json();
+    if (r.ok && data.ok) {
+      res.textContent = `Initiative: ${data.initiative_before} → ${data.initiative_after}`;
+      if (data.snapshot) applySnapshot(data.snapshot);
+    } else {
+      res.textContent = data.detail || data.error || 'Error.';
+      res.classList.add('error');
+    }
+  } catch (e) { res.textContent = 'Request failed.'; res.classList.add('error'); }
+});
+
+// ── Encounter setup: remove combatant ────────────────────────────────
+document.getElementById('removeCombatantBtn').addEventListener('click', async () => {
+  const cid = document.getElementById('removeCidSelect').value;
+  const res = document.getElementById('removeCombatantResult');
+  res.className = 'mut-result';
+  if (!cid) { res.textContent = 'Select a combatant.'; res.classList.add('error'); return; }
+  try {
+    const r = await fetch(`${BASE}/api/dm/combat/combatants/${cid}`, {
+      method: 'DELETE', headers: authHeaders(),
+    });
+    const data = await r.json();
+    if (r.ok && data.ok) {
+      res.textContent = `Combatant removed (cid ${data.cid}).`;
       if (data.snapshot) applySnapshot(data.snapshot);
     } else {
       res.textContent = data.detail || data.error || 'Error.';

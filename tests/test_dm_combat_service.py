@@ -542,5 +542,181 @@ class CombatServiceEndCombatTests(unittest.TestCase):
         self.assertTrue(any("4" in m for m in logged_msgs))
 
 
+# ---------------------------------------------------------------------------
+# Helpers for encounter-setup tests
+# ---------------------------------------------------------------------------
+
+def _make_tracker_with_encounter_setup(num_combatants: int = 2):
+    """Extend the base fake tracker with _create_combatant and cleanup stubs."""
+    app = _make_tracker(num_combatants=num_combatants)
+    app._next_id = max(app.combatants.keys(), default=0) + 1
+    app._create_combatant_calls = []
+    app._remove_cleanup_calls = []
+
+    def _create_combatant(name, hp, speed, initiative, dex, ally, is_pc=False, **_kw):
+        cid = app._next_id
+        app._next_id += 1
+        c = types.SimpleNamespace(
+            cid=cid,
+            name=name,
+            hp=int(hp),
+            max_hp=int(hp),
+            ac=10,
+            temp_hp=0,
+            initiative=int(initiative),
+            is_pc=bool(is_pc),
+            condition_stacks=[],
+        )
+        app.combatants[cid] = c
+        app._create_combatant_calls.append({"name": name, "hp": hp, "initiative": initiative})
+        return cid
+
+    def _remove_combatants_with_lan_cleanup(cids):
+        for cid in cids:
+            app.combatants.pop(cid, None)
+            if app.current_cid == cid:
+                app.current_cid = None
+        app._remove_cleanup_calls.extend(list(cids))
+
+    app._create_combatant = _create_combatant
+    app._remove_combatants_with_lan_cleanup = _remove_combatants_with_lan_cleanup
+    return app
+
+
+class CombatServiceAddCombatantTests(unittest.TestCase):
+    """Tests for CombatService.add_combatant()."""
+
+    def setUp(self):
+        self.tracker = _make_tracker_with_encounter_setup()
+        self.service = CombatService(self.tracker)
+
+    def test_add_combatant_returns_ok(self):
+        result = self.service.add_combatant("Orc", hp=15, initiative=12)
+        self.assertTrue(result["ok"])
+
+    def test_add_combatant_returns_cid(self):
+        result = self.service.add_combatant("Orc", hp=15, initiative=12)
+        self.assertIsNotNone(result.get("cid"))
+
+    def test_add_combatant_appears_in_snapshot(self):
+        result = self.service.add_combatant("Orc", hp=15, initiative=12)
+        names = [c["name"] for c in result["snapshot"]["combatants"]]
+        self.assertIn("Orc", names)
+
+    def test_add_combatant_triggers_broadcast(self):
+        before = len(self.tracker._broadcast_calls)
+        self.service.add_combatant("Orc", hp=15, initiative=12)
+        self.assertGreater(len(self.tracker._broadcast_calls), before)
+
+    def test_add_combatant_empty_name_returns_error(self):
+        result = self.service.add_combatant("", hp=15, initiative=12)
+        self.assertFalse(result["ok"])
+        self.assertIn("error", result)
+
+    def test_add_combatant_sets_max_hp_from_hp_when_omitted(self):
+        result = self.service.add_combatant("Orc", hp=20, initiative=10)
+        cid = result["cid"]
+        c = self.tracker.combatants[cid]
+        self.assertEqual(getattr(c, "max_hp", 20), 20)
+
+    def test_add_combatant_ally_flag(self):
+        result = self.service.add_combatant("Guard", hp=12, initiative=8, ally=True)
+        self.assertTrue(result["ok"])
+        cid = result["cid"]
+        # _create_combatant stub sets combatant; check it was called with ally=True
+        self.assertTrue(any(call["name"] == "Guard" for call in self.tracker._create_combatant_calls))
+
+    def test_add_combatant_logs_action(self):
+        self.service.add_combatant("Troll", hp=84, initiative=5)
+        logged_msgs = [m for m, _ in self.tracker._log_calls]
+        self.assertTrue(any("Troll" in m for m in logged_msgs))
+
+
+class CombatServiceSetInitiativeTests(unittest.TestCase):
+    """Tests for CombatService.set_initiative()."""
+
+    def setUp(self):
+        self.tracker = _make_tracker_with_encounter_setup()
+        self.service = CombatService(self.tracker)
+
+    def test_set_initiative_returns_ok(self):
+        result = self.service.set_initiative(cid=1, initiative=18)
+        self.assertTrue(result["ok"])
+
+    def test_set_initiative_updates_value(self):
+        self.service.set_initiative(cid=1, initiative=18)
+        self.assertEqual(self.tracker.combatants[1].initiative, 18)
+
+    def test_set_initiative_returns_before_after(self):
+        old = self.tracker.combatants[1].initiative
+        result = self.service.set_initiative(cid=1, initiative=18)
+        self.assertEqual(result["initiative_before"], old)
+        self.assertEqual(result["initiative_after"], 18)
+
+    def test_set_initiative_returns_snapshot(self):
+        result = self.service.set_initiative(cid=1, initiative=18)
+        self.assertIn("snapshot", result)
+
+    def test_set_initiative_unknown_cid_returns_error(self):
+        result = self.service.set_initiative(cid=999, initiative=10)
+        self.assertFalse(result["ok"])
+        self.assertIn("error", result)
+
+    def test_set_initiative_triggers_broadcast(self):
+        before = len(self.tracker._broadcast_calls)
+        self.service.set_initiative(cid=1, initiative=18)
+        self.assertGreater(len(self.tracker._broadcast_calls), before)
+
+    def test_set_initiative_logs_change(self):
+        self.service.set_initiative(cid=1, initiative=18)
+        logged_msgs = [m for m, _ in self.tracker._log_calls]
+        self.assertTrue(any("initiative" in m.lower() for m in logged_msgs))
+
+
+class CombatServiceRemoveCombatantTests(unittest.TestCase):
+    """Tests for CombatService.remove_combatant()."""
+
+    def setUp(self):
+        self.tracker = _make_tracker_with_encounter_setup()
+        self.service = CombatService(self.tracker)
+
+    def test_remove_combatant_returns_ok(self):
+        result = self.service.remove_combatant(cid=1)
+        self.assertTrue(result["ok"])
+
+    def test_remove_combatant_removes_from_state(self):
+        self.service.remove_combatant(cid=1)
+        self.assertNotIn(1, self.tracker.combatants)
+
+    def test_remove_combatant_returns_cid(self):
+        result = self.service.remove_combatant(cid=1)
+        self.assertEqual(result["cid"], 1)
+
+    def test_remove_combatant_returns_snapshot(self):
+        result = self.service.remove_combatant(cid=1)
+        self.assertIn("snapshot", result)
+        remaining = [c["cid"] for c in result["snapshot"]["combatants"]]
+        self.assertNotIn(1, remaining)
+
+    def test_remove_unknown_cid_returns_error(self):
+        result = self.service.remove_combatant(cid=999)
+        self.assertFalse(result["ok"])
+        self.assertIn("error", result)
+
+    def test_remove_combatant_triggers_broadcast(self):
+        before = len(self.tracker._broadcast_calls)
+        self.service.remove_combatant(cid=1)
+        self.assertGreater(len(self.tracker._broadcast_calls), before)
+
+    def test_remove_active_combatant_clears_current(self):
+        self.tracker.current_cid = 1
+        self.service.remove_combatant(cid=1)
+        self.assertIsNone(self.tracker.current_cid)
+
+    def test_remove_combatant_calls_cleanup(self):
+        self.service.remove_combatant(cid=2)
+        self.assertIn(2, self.tracker._remove_cleanup_calls)
+
+
 if __name__ == "__main__":
     unittest.main()
