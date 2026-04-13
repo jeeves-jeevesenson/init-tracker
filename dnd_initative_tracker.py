@@ -3767,6 +3767,101 @@ class LanController:
             except Exception:
                 raise HTTPException(status_code=500, detail="Failed to end combat.")
 
+        # ── Encounter setup routes ─────────────────────────────────────────
+
+        @self._fastapi_app.post("/api/dm/combat/combatants")
+        async def dm_add_combatant(request: Request, payload: Dict[str, Any] = Body(...)):
+            """Add a new NPC/enemy combatant to the initiative list.
+
+            Body: {name: str, hp: int, max_hp?: int, ac?: int,
+                   initiative?: int, ally?: bool, is_pc?: bool}
+            Returns: {ok, cid, snapshot}
+            """
+            _check_dm_auth(request)
+            if _dm_service is None:
+                raise HTTPException(status_code=503, detail="DM combat service unavailable.")
+            if not isinstance(payload, dict):
+                raise HTTPException(status_code=400, detail="JSON body required.")
+            name = str(payload.get("name") or "").strip()
+            if not name:
+                raise HTTPException(status_code=400, detail="'name' is required.")
+            try:
+                hp = max(0, int(payload.get("hp") or 0))
+            except (TypeError, ValueError):
+                raise HTTPException(status_code=400, detail="'hp' must be an integer.")
+            max_hp = payload.get("max_hp")
+            if max_hp is not None:
+                try:
+                    max_hp = max(0, int(max_hp))
+                except (TypeError, ValueError):
+                    raise HTTPException(status_code=400, detail="'max_hp' must be an integer.")
+            try:
+                ac = max(0, int(payload.get("ac") or 0))
+            except (TypeError, ValueError):
+                raise HTTPException(status_code=400, detail="'ac' must be an integer.")
+            try:
+                initiative = int(payload.get("initiative") or 0)
+            except (TypeError, ValueError):
+                raise HTTPException(status_code=400, detail="'initiative' must be an integer.")
+            ally = bool(payload.get("ally", False))
+            is_pc = bool(payload.get("is_pc", False))
+            try:
+                result = _dm_service.add_combatant(
+                    name=name,
+                    hp=hp,
+                    max_hp=max_hp,
+                    ac=ac,
+                    initiative=initiative,
+                    ally=ally,
+                    is_pc=is_pc,
+                )
+            except Exception as exc:
+                raise HTTPException(status_code=500, detail=f"Failed to add combatant: {exc}")
+            if not result.get("ok"):
+                raise HTTPException(status_code=400, detail=result.get("error", "Cannot add combatant."))
+            return result
+
+        @self._fastapi_app.post("/api/dm/combat/combatants/{cid}/initiative")
+        async def dm_set_initiative(cid: int, request: Request, payload: Dict[str, Any] = Body(...)):
+            """Set the initiative value for a specific combatant.
+
+            Body: {value: int}
+            Returns: {ok, cid, initiative_before, initiative_after}
+            """
+            _check_dm_auth(request)
+            if _dm_service is None:
+                raise HTTPException(status_code=503, detail="DM combat service unavailable.")
+            if not isinstance(payload, dict):
+                raise HTTPException(status_code=400, detail="JSON body required.")
+            try:
+                value = int(payload.get("value") or 0)
+            except (TypeError, ValueError):
+                raise HTTPException(status_code=400, detail="'value' must be an integer.")
+            try:
+                result = _dm_service.set_initiative(cid=int(cid), value=value)
+            except Exception as exc:
+                raise HTTPException(status_code=500, detail=f"Failed to set initiative: {exc}")
+            if not result.get("ok"):
+                raise HTTPException(status_code=404, detail=result.get("error", "Combatant not found."))
+            return result
+
+        @self._fastapi_app.delete("/api/dm/combat/combatants/{cid}")
+        async def dm_remove_combatant(cid: int, request: Request):
+            """Remove a combatant from the initiative list.
+
+            Returns: {ok, cid, name, snapshot}
+            """
+            _check_dm_auth(request)
+            if _dm_service is None:
+                raise HTTPException(status_code=503, detail="DM combat service unavailable.")
+            try:
+                result = _dm_service.remove_combatant(cid=int(cid))
+            except Exception as exc:
+                raise HTTPException(status_code=500, detail=f"Failed to remove combatant: {exc}")
+            if not result.get("ok"):
+                raise HTTPException(status_code=404, detail=result.get("error", "Combatant not found."))
+            return result
+
         @self._fastapi_app.websocket("/ws/dm")
         async def ws_dm_endpoint(ws: WebSocket):
             """Real-time DM snapshot push channel.
@@ -8686,6 +8781,27 @@ class InitiativeTracker(base.InitiativeTracker):
                 setattr(summoned, "summon_anchor_after_cid", int(owner_cid))
                 setattr(summoned, "summon_anchor_seq", int(anchor_seq))
             setattr(caster, "summon_anchor_seq", int(len(summon_cids)))
+
+    def _next_turn_via_service(self) -> None:
+        """Route Next Turn through CombatService when a service is available.
+
+        When the LAN server is running the CombatService is wired up on
+        ``self._lan._dm_service``.  Routing through the service ensures that:
+          - the service ``threading.Lock`` serialises concurrent desktop + web mutations
+          - ``_lan_force_state_broadcast()`` is always called so the DM web console
+            and player clients receive an immediate snapshot push
+
+        Falls back to the direct ``_next_turn()`` call when no service is set up
+        (e.g., during unit tests, or when the LAN server is disabled).
+        """
+        svc = getattr(getattr(self, "_lan", None), "_dm_service", None)
+        if svc is not None:
+            try:
+                svc.next_turn()
+                return
+            except Exception:
+                pass
+        self._next_turn()
 
     def _next_turn(self) -> None:
         self._normalize_summons_shared_turn_state()
@@ -35852,7 +35968,7 @@ class InitiativeTracker(base.InitiativeTracker):
             try:
                 for combatant in self.combatants.values():
                     setattr(combatant, "wild_resurgence_turn_used", False)
-                self._next_turn()
+                self._next_turn_via_service()
                 self._tick_polymorph_durations()
                 self._lan.toast(ws_id, "Turn ended.")
             except Exception as exc:

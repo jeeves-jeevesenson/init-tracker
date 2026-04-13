@@ -829,7 +829,7 @@ class InitiativeTracker(tk.Tk):
         ttk.Button(btn_row, text="Start/Reset", command=self._start_turns).pack(side=tk.LEFT, padx=(0, 8))
         ttk.Button(btn_row, text="Set Turn Here", command=self._set_turn_here).pack(side=tk.LEFT, padx=(0, 8))
         ttk.Button(btn_row, text="Prev Turn", command=self._prev_turn).pack(side=tk.LEFT, padx=(0, 8))
-        ttk.Button(btn_row, text="Next Turn", command=self._next_turn).pack(side=tk.LEFT, padx=(0, 8))
+        ttk.Button(btn_row, text="Next Turn", command=self._next_turn_via_service).pack(side=tk.LEFT, padx=(0, 8))
         ttk.Button(btn_row, text="Stand Up", command=self._stand_up_current).pack(side=tk.LEFT, padx=(0, 8))
         ttk.Button(btn_row, text="Move…", command=self._open_move_tool).pack(side=tk.LEFT, padx=(0, 8))
         ttk.Button(btn_row, text="Dash", command=self._dash_current).pack(side=tk.LEFT, padx=(0, 8))
@@ -941,7 +941,7 @@ class InitiativeTracker(tk.Tk):
         self.tree.bind("<Double-1>", self._on_tree_double_click)
         self.tree.bind("<Button-3>", self._on_tree_right_click)
         self.tree.bind("<<TreeviewSelect>>", lambda _e: self._sync_move_mode_selector())
-        self.bind("<space>", lambda e: self._next_turn())
+        self.bind("<space>", lambda e: self._next_turn_via_service())
         self.bind("<Shift-space>", lambda e: self._prev_turn())
         self.bind("<KeyPress-g>", lambda e: self._open_damage_tool())
         self.bind("<KeyPress-h>", lambda e: self._open_heal_tool())
@@ -2652,6 +2652,17 @@ class InitiativeTracker(tk.Tk):
 
         self._enter_turn_with_auto_skip(starting=False)
         self._rebuild_table(scroll_to_current=True)
+
+    def _next_turn_via_service(self) -> None:
+        """Advance to the next turn, routing through CombatService if available.
+
+        Subclasses that wire up a CombatService override this method to acquire
+        the service lock and trigger a broadcast.  The base implementation is a
+        plain ``_next_turn()`` fallback for environments where no service is
+        configured (tests, standalone base-class usage).
+        """
+        self._next_turn()
+
     def _enter_turn_with_auto_skip(self, starting: bool) -> None:
         """Enter the current creature's turn.
 
@@ -7585,7 +7596,7 @@ class BattleMapWindow(tk.Toplevel):
         return None
 
     def _dm_next_turn(self) -> None:
-        self.app._next_turn()
+        self.app._next_turn_via_service()
 
     def _dm_prev_turn(self) -> None:
         self.app._prev_turn()

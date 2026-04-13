@@ -197,6 +197,7 @@
     }
     .btn-action.heal:hover { background: rgba(76,175,130,.25); }
     .mut-result { font-size: 11px; margin-top: 6px; min-height: 16px; color: var(--heal); }
+    .mut-result.ok { color: var(--heal); }
     .mut-result.error { color: var(--danger); }
 
     /* ── Battle log ─────────────────────────────────────────────── */
@@ -351,6 +352,63 @@
       <button class="btn-action" id="applyTempHpBtn">Set Temp HP</button>
       <div class="mut-result" id="tempHpResult"></div>
     </div>
+
+    <!-- Initiative override -->
+    <div class="mut-card">
+      <h3>Set Initiative</h3>
+      <div class="form-group">
+        <label>Target combatant</label>
+        <select id="initCidSelect"><option value="">— select —</option></select>
+      </div>
+      <div class="form-group">
+        <label>Initiative value</label>
+        <input type="number" id="initValue" placeholder="e.g. 18" />
+      </div>
+      <button class="btn-action" id="setInitBtn">Set Initiative</button>
+      <div class="mut-result" id="initResult"></div>
+    </div>
+
+    <!-- Add combatant -->
+    <div class="mut-card">
+      <h3>Add Combatant</h3>
+      <div class="form-group">
+        <label>Name</label>
+        <input type="text" id="addCombatantName" placeholder="e.g. Goblin" />
+      </div>
+      <div class="form-group">
+        <label>HP</label>
+        <input type="number" id="addCombatantHp" placeholder="e.g. 7" min="0" />
+      </div>
+      <div class="form-group">
+        <label>Max HP (leave blank = same as HP)</label>
+        <input type="number" id="addCombatantMaxHp" placeholder="optional" min="0" />
+      </div>
+      <div class="form-group">
+        <label>AC</label>
+        <input type="number" id="addCombatantAc" placeholder="e.g. 13" min="0" />
+      </div>
+      <div class="form-group">
+        <label>Initiative</label>
+        <input type="number" id="addCombatantInit" placeholder="e.g. 14" />
+      </div>
+      <div class="form-group" style="flex-direction:row;align-items:center;gap:8px">
+        <input type="checkbox" id="addCombatantAlly" />
+        <label for="addCombatantAlly" style="margin:0">Ally (not enemy)</label>
+      </div>
+      <button class="btn-action" id="addCombatantBtn">+ Add to Initiative</button>
+      <div class="mut-result" id="addCombatantResult"></div>
+    </div>
+
+    <!-- Remove combatant -->
+    <div class="mut-card">
+      <h3>Remove Combatant</h3>
+      <div class="form-group">
+        <label>Combatant to remove</label>
+        <select id="removeCidSelect"><option value="">— select —</option></select>
+      </div>
+      <button class="btn-action" id="removeCombatantBtn" style="background:var(--danger,#c0392b)">✕ Remove</button>
+      <div class="mut-result" id="removeCombatantResult"></div>
+    </div>
   </div>
 
 </div>
@@ -365,15 +423,18 @@
 /* ────────────────────────────────────────────────────────────────────
    DM Console — communicates with the backend DM API
    Endpoints used:
-     GET  /api/dm/combat                               → snapshot
-     POST /api/dm/combat/next-turn                     → advance turn
-     POST /api/dm/combat/start                         → start combat
-     POST /api/dm/combat/end                           → end combat
-     POST /api/dm/combat/combatants/{cid}/hp           → HP adjustment
-     POST /api/dm/combat/combatants/{cid}/condition    → add/remove condition
-     POST /api/dm/combat/combatants/{cid}/temp-hp      → set temp HP
-     POST /api/admin/login                             → optional admin login
-     WS   /ws/dm[?token=…]                             → real-time DM state push
+     GET    /api/dm/combat                               → snapshot
+     POST   /api/dm/combat/next-turn                     → advance turn
+     POST   /api/dm/combat/start                         → start combat
+     POST   /api/dm/combat/end                           → end combat
+     POST   /api/dm/combat/combatants                    → add combatant
+     POST   /api/dm/combat/combatants/{cid}/hp           → HP adjustment
+     POST   /api/dm/combat/combatants/{cid}/condition    → add/remove condition
+     POST   /api/dm/combat/combatants/{cid}/temp-hp      → set temp HP
+     POST   /api/dm/combat/combatants/{cid}/initiative   → set initiative
+     DELETE /api/dm/combat/combatants/{cid}              → remove combatant
+     POST   /api/admin/login                             → optional admin login
+     WS     /ws/dm[?token=…]                             → real-time DM state push
    ───────────────────────────────────────────────────────────────── */
 
 const BASE = '';  // same origin
@@ -553,6 +614,8 @@ function applySnapshot(snap) {
   populateCidSelect('hpCidSelect', combatants);
   populateCidSelect('condCidSelect', combatants);
   populateCidSelect('tempHpCidSelect', combatants);
+  populateCidSelect('initCidSelect', combatants);
+  populateCidSelect('removeCidSelect', combatants);
 
   // Render list
   renderCombatants(snap);
@@ -625,6 +688,8 @@ function quickSelect(cid) {
   document.getElementById('hpCidSelect').value = cid;
   document.getElementById('condCidSelect').value = cid;
   document.getElementById('tempHpCidSelect').value = cid;
+  document.getElementById('initCidSelect').value = cid;
+  document.getElementById('removeCidSelect').value = cid;
 }
 
 // ── Mutations ─────────────────────────────────────────────────────────
@@ -750,6 +815,95 @@ document.getElementById('applyTempHpBtn').addEventListener('click', async () => 
     const data = await r.json();
     if (r.ok && data.ok) {
       res.textContent = `Temp HP: ${data.temp_hp_before} → ${data.temp_hp_after}`;
+      if (data.snapshot) applySnapshot(data.snapshot);
+    } else {
+      res.textContent = data.detail || data.error || 'Error.';
+      res.classList.add('error');
+    }
+  } catch (e) { res.textContent = 'Request failed.'; res.classList.add('error'); }
+});
+
+document.getElementById('setInitBtn').addEventListener('click', async () => {
+  const cid = document.getElementById('initCidSelect').value;
+  const value = parseInt(document.getElementById('initValue').value, 10);
+  const res = document.getElementById('initResult');
+  res.className = 'mut-result';
+  if (!cid) { res.textContent = 'Select a combatant.'; res.classList.add('error'); return; }
+  if (isNaN(value)) { res.textContent = 'Enter a valid initiative value.'; res.classList.add('error'); return; }
+  try {
+    const r = await fetch(`${BASE}/api/dm/combat/combatants/${cid}/initiative`, {
+      method: 'POST', headers: authHeaders(),
+      body: JSON.stringify({ value }),
+    });
+    const data = await r.json();
+    if (r.ok && data.ok) {
+      res.textContent = `Initiative: ${data.initiative_before} → ${data.initiative_after}`;
+      res.classList.add('ok');
+      fetchSnapshot();
+    } else {
+      res.textContent = data.detail || data.error || 'Error.';
+      res.classList.add('error');
+    }
+  } catch (e) { res.textContent = 'Request failed.'; res.classList.add('error'); }
+});
+
+document.getElementById('addCombatantBtn').addEventListener('click', async () => {
+  const name = document.getElementById('addCombatantName').value.trim();
+  const hp = parseInt(document.getElementById('addCombatantHp').value, 10);
+  const maxHpRaw = document.getElementById('addCombatantMaxHp').value.trim();
+  const ac = parseInt(document.getElementById('addCombatantAc').value, 10) || 10;
+  const initiative = parseInt(document.getElementById('addCombatantInit').value, 10) || 0;
+  const ally = document.getElementById('addCombatantAlly').checked;
+  const res = document.getElementById('addCombatantResult');
+  res.className = 'mut-result';
+  if (!name) { res.textContent = 'Name is required.'; res.classList.add('error'); return; }
+  if (isNaN(hp) || hp < 0) { res.textContent = 'HP must be a non-negative integer.'; res.classList.add('error'); return; }
+  const body = { name, hp, ac, initiative, ally };
+  if (maxHpRaw !== '') {
+    const maxHp = parseInt(maxHpRaw, 10);
+    if (isNaN(maxHp) || maxHp < 0) { res.textContent = 'Max HP must be a non-negative integer.'; res.classList.add('error'); return; }
+    body.max_hp = maxHp;
+  }
+  try {
+    const r = await fetch(`${BASE}/api/dm/combat/combatants`, {
+      method: 'POST', headers: authHeaders(),
+      body: JSON.stringify(body),
+    });
+    const data = await r.json();
+    if (r.ok && data.ok) {
+      res.textContent = `Added: ${escHtml(name)} (cid ${data.cid})`;
+      res.classList.add('ok');
+      // Clear form
+      document.getElementById('addCombatantName').value = '';
+      document.getElementById('addCombatantHp').value = '';
+      document.getElementById('addCombatantMaxHp').value = '';
+      document.getElementById('addCombatantAc').value = '';
+      document.getElementById('addCombatantInit').value = '';
+      document.getElementById('addCombatantAlly').checked = false;
+      if (data.snapshot) applySnapshot(data.snapshot);
+    } else {
+      res.textContent = data.detail || data.error || 'Error.';
+      res.classList.add('error');
+    }
+  } catch (e) { res.textContent = 'Request failed.'; res.classList.add('error'); }
+});
+
+document.getElementById('removeCombatantBtn').addEventListener('click', async () => {
+  const cid = document.getElementById('removeCidSelect').value;
+  const res = document.getElementById('removeCombatantResult');
+  res.className = 'mut-result';
+  if (!cid) { res.textContent = 'Select a combatant to remove.'; res.classList.add('error'); return; }
+  const selEl = document.getElementById('removeCidSelect');
+  const name = selEl.options[selEl.selectedIndex]?.text || `#${cid}`;
+  if (!confirm(`Remove "${name}" from the initiative list?`)) return;
+  try {
+    const r = await fetch(`${BASE}/api/dm/combat/combatants/${cid}`, {
+      method: 'DELETE', headers: authHeaders(),
+    });
+    const data = await r.json();
+    if (r.ok && data.ok) {
+      res.textContent = `Removed: ${escHtml(data.name || name)}`;
+      res.classList.add('ok');
       if (data.snapshot) applySnapshot(data.snapshot);
     } else {
       res.textContent = data.detail || data.error || 'Error.';

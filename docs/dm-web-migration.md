@@ -22,6 +22,9 @@ The following slice of combat/session state is now authoritatively owned by
 | Adjust combatant HP | `POST /api/dm/combat/combatants/{cid}/hp` |
 | Add/remove condition | `POST /api/dm/combat/combatants/{cid}/condition` |
 | Set temporary HP | `POST /api/dm/combat/combatants/{cid}/temp-hp` |
+| Add NPC/enemy combatant | `POST /api/dm/combat/combatants` |
+| Set combatant initiative | `POST /api/dm/combat/combatants/{cid}/initiative` |
+| Remove combatant | `DELETE /api/dm/combat/combatants/{cid}` |
 | Real-time DM state push | `WS /ws/dm[?token=…]` |
 
 The **snapshot shape** (from `GET /api/dm/combat`):
@@ -80,6 +83,12 @@ The DM console lives at `http://<lan-ip>:<port>/dm` and provides:
 - **HP Adjustment** – apply damage (negative) or healing (positive)
 - **Set Temp HP** – set (or clear) temporary HP for any combatant
 - **Add / Remove Condition** – apply any of the 15 standard D&D 5e conditions
+- **Set Initiative** – update the initiative roll for any combatant in the
+  encounter, with immediate re-sort and broadcast
+- **Add Combatant** – add a new NPC/enemy (name, HP, max HP, AC, initiative,
+  ally flag) directly from the web console without opening the desktop app
+- **Remove Combatant** – remove any combatant from the initiative list with
+  a confirmation prompt
 - **Battle Log** – last 30 lines from the tracker's history file
 - **Real-time updates** – receives instant snapshots via WebSocket (`/ws/dm`);
   falls back to 2.5-second polling if WebSocket is unavailable
@@ -89,6 +98,25 @@ in-memory `InitiativeTracker` state that the desktop app reads.  The
 WebSocket broadcast after each mutation ensures the player LAN client also
 receives the update immediately, and the DM console `/ws/dm` channel
 receives its own snapshot push without waiting for the next poll.
+
+---
+
+## Desktop Next Turn is now routed through CombatService
+
+The desktop "Next Turn" button (`Space` shortcut), the map-window DM panel
+"Next Turn" button, and the LAN player `end_turn` action all now call
+`_next_turn_via_service()` instead of `_next_turn()` directly.
+
+`_next_turn_via_service()` (defined in `InitiativeTracker`):
+- Checks for `self._lan._dm_service`; if present, routes through
+  `CombatService.next_turn()`, acquiring the service lock and triggering
+  `_lan_force_state_broadcast()` after each mutation.
+- Falls back to the direct `_next_turn()` call when the LAN server is not
+  running (desktop-only mode, unit tests).
+
+Effect: the DM web console and player clients now receive immediate state
+pushes after desktop-originated turn advances, and concurrent desktop + web
+mutations are serialised through the same lock.
 
 ---
 
@@ -118,12 +146,12 @@ The following areas remain desktop-primary (hybrid) after this pass:
 - Character editor, sheet management (`/edit_character`, `/new_character`)
 - Shop, item and spell management
 - YAML-backed save / load (files are still owned by the desktop flow)
-- All combatant creation, initiative rolling, and encounter setup
-
-The desktop app now **shares** the initiative/turn, HP, and condition
-authority with the DM web console – they operate on the same in-memory
-state through the same `_next_turn()` / `_apply_damage_to_combatant()` /
-`_ensure_condition_stack()` methods.
+- PC creation from YAML profiles (desktop-only; `POST /api/encounter/players/add`
+  covers web-initiated PC adds)
+- Complex HP mutation dialogs (damage/heal tool, spell attack flows) — these
+  still call tracker engine methods directly; they trigger
+  `_lan_force_state_broadcast()` after mutations so the web surface stays
+  current via broadcast
 
 ---
 
@@ -133,21 +161,20 @@ Both the desktop UI and the DM web console can mutate combat state
 concurrently.  The current safeguard model:
 
 - HTTP route handlers run on the FastAPI thread and call tracker methods
-  directly, following the same pattern as existing LAN HTTP routes
-  (e.g., `/api/encounter/players/add`).
-- `CombatService` holds a `threading.Lock` that serialises concurrent
-  mutations (next-turn, HP adjust, condition, temp HP) from the web API.
+  through `CombatService`, which holds a `threading.Lock`.
+- Desktop-originated `_next_turn_via_service()` also acquires this lock,
+  serialising concurrent desktop + web turn advances.
 - Each mutation calls `_lan_force_state_broadcast()` which pushes updated
   state to all player WebSocket clients **and** to all connected DM
   WebSocket clients (`/ws/dm`).
 - The desktop UI re-reads its state from the same `combatants` dict and
   `_rebuild_table()` call.
 
-**Remaining risk**: The `CombatService` lock only covers mutations that go
-through the service.  Desktop-originated mutations (button clicks in the
-Tkinter UI) do not acquire this lock, so a simultaneous desktop + web
-mutation could still race.  This is an acceptable risk for the single-session
-LAN use case.
+**Remaining hybrid risk**: Desktop-originated HP/condition mutations
+(damage tool, attack flows) still call tracker engine methods directly and
+do not acquire the `CombatService` lock.  A simultaneous desktop HP mutation
+and web HP mutation could still race.  This is an acceptable risk for the
+single-session LAN use case and is a recommended target for the next slice.
 
 ---
 
@@ -156,20 +183,20 @@ LAN use case.
 The `CombatService` mutations modify the in-memory `Combatant` objects that
 the existing `_save_session()` / `_load_session()` serialisation paths
 already serialise.  There are no schema changes.  Saving after DM console
-mutations will correctly persist any HP, temp HP, or condition changes made
-via the web.
+mutations will correctly persist any HP, temp HP, condition, initiative, or
+combatant-list changes made via the web.
 
 ---
 
 ## Recommended next migration targets
 
-1. **Desktop rewiring**: Route the desktop "Next Turn" button and HP/condition
-   mutations through `CombatService` explicitly so the service lock covers
-   desktop-originated mutations too.
+1. **Desktop HP mutation routing**: Route the desktop damage/heal tool and
+   attack-flow HP mutations through `CombatService.adjust_hp()` so the
+   service lock covers desktop-originated HP changes too.
 
-2. **Combatant creation / encounter setup**: Expose adding combatants and
-   rolling initiative through the service so the DM console can manage a full
-   session end-to-end without opening the desktop app.
+2. **Monster-library-backed NPC creation**: Extend `POST /api/dm/combat/combatants`
+   to accept a `monster_slug` or `monster_name` and populate the combatant
+   from the YAML monster library, matching the desktop monster-add workflow.
 
 3. **Token refresh**: The DM console does not yet auto-renew the admin token
    before expiry.  Add a background refresh 2 minutes before the 15-minute

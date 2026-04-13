@@ -15,6 +15,9 @@ Backend-owned (this service + API routes):
   - condition add/remove/toggle for any combatant
   - temp HP set/clear for any combatant
   - recent event/battle-log lines
+  - NPC/enemy combatant creation and removal (encounter setup)
+  - per-combatant initiative updates
+  - desktop Next Turn is now routed through this service (lock + broadcast)
 
 Still hybrid / desktop-primary:
   - Full Tkinter canvas UI rendering
@@ -22,11 +25,16 @@ Still hybrid / desktop-primary:
   - Player-facing LAN client (existing /ws WebSocket + /lan routes)
   - Character editor, shop, spell/resource management
   - YAML-backed save/load (unchanged; mutations here persist via existing path)
-  - Combatant creation / initiative rolling (still desktop-owned for now)
+  - PC creation from YAML profiles (desktop workflow; /api/encounter/players/add
+    for web-initiated adds)
+  - Complex desktop HP dialogs (damage/heal tool, attack flows) — still call
+    tracker engine directly; broadcast is now triggered by the same
+    _lan_force_state_broadcast() path
 
 Next recommended migration targets:
-  - HP/condition mutations from desktop directly wired through this service
-  - Combatant creation and initiative rolling through the service seam
+  - Desktop HP mutation dialogs routed through CombatService so the web surface
+    can observe all HP changes without relying solely on broadcast latency
+  - Monster-library-backed NPC creation via the backend encounter setup path
 
 Usage (from LanController routes):
   service = CombatService(tracker_instance)
@@ -450,3 +458,175 @@ class CombatService:
             except Exception:
                 pass
             return {"ok": True, "snapshot": self.combat_snapshot()}
+
+    # ------------------------------------------------------------------
+    # Encounter setup: combatant creation / removal / initiative
+    # ------------------------------------------------------------------
+
+    def add_combatant(
+        self,
+        name: str,
+        hp: int,
+        *,
+        max_hp: Optional[int] = None,
+        ac: int = 10,
+        initiative: int = 0,
+        ally: bool = False,
+        is_pc: bool = False,
+    ) -> Dict[str, Any]:
+        """Add a new NPC/enemy combatant to the initiative list.
+
+        Creates the combatant via the tracker's ``_create_combatant`` engine
+        method (same code path as desktop and save/load uses) so HP, AC,
+        initiative, and name are stored consistently.
+
+        Args:
+            name:       Display name (will be made unique if duplicate).
+            hp:         Starting and, if ``max_hp`` is not given, maximum HP.
+            max_hp:     Maximum HP; defaults to ``hp``.
+            ac:         Armour class.
+            initiative: Initiative value (roll result to use in ordering).
+            ally:       True for allied NPC; False for enemy.
+            is_pc:      True to mark as a player character slot.
+
+        Returns: {ok, cid, snapshot}  or  {ok: False, error: str}
+        """
+        with self._lock:
+            t = self._tracker
+            name = str(name or "").strip()
+            if not name:
+                return {"ok": False, "error": "Combatant name is required."}
+
+            hp = max(0, int(hp or 0))
+            max_hp_val = max(0, int(max_hp if max_hp is not None else hp) or hp)
+            ac = max(0, int(ac or 0))
+            initiative = int(initiative or 0)
+
+            # Delegate to the same engine method used by the rest of the tracker.
+            try:
+                unique_name = t._unique_name(name)
+            except Exception:
+                unique_name = name
+            try:
+                cid = t._create_combatant(
+                    name=unique_name,
+                    hp=hp,
+                    speed=30,
+                    swim_speed=0,
+                    fly_speed=0,
+                    burrow_speed=0,
+                    climb_speed=0,
+                    movement_mode="Normal",
+                    initiative=initiative,
+                    dex=None,
+                    ally=bool(ally),
+                    is_pc=bool(is_pc),
+                )
+            except Exception as exc:
+                return {"ok": False, "error": f"Could not create combatant: {exc}"}
+
+            # Set max_hp and ac after creation (not all callers pass them to
+            # _create_combatant directly; AC/max_hp are attribute assignments).
+            c = t.combatants.get(int(cid))
+            if c is not None:
+                c.max_hp = max_hp_val
+                c.ac = ac
+            try:
+                t._log(
+                    f"Combatant added: {unique_name} (HP {hp}/{max_hp_val}, AC {ac}, init {initiative})."
+                )
+            except Exception:
+                pass
+            try:
+                t._rebuild_table(scroll_to_current=True)
+            except Exception:
+                pass
+            try:
+                t._lan_force_state_broadcast()
+            except Exception:
+                pass
+            return {"ok": True, "cid": int(cid), "snapshot": self.combat_snapshot()}
+
+    def set_initiative(self, cid: int, value: int) -> Dict[str, Any]:
+        """Update the initiative value for combatant ``cid``.
+
+        Rebuilds the display order so the initiative table is immediately
+        re-sorted, and broadcasts the update to all connected clients.
+
+        Returns: {ok, cid, initiative_before, initiative_after}  or  {ok: False, error: str}
+        """
+        with self._lock:
+            t = self._tracker
+            c = (getattr(t, "combatants", {}) or {}).get(int(cid))
+            if c is None:
+                return {"ok": False, "error": f"Combatant {cid} not found."}
+
+            old_init = int(getattr(c, "initiative", 0) or 0)
+            c.initiative = int(value)
+
+            try:
+                t._log(
+                    f"{getattr(c, 'name', 'Combatant')} initiative set to {int(value)}"
+                    f" (was {old_init}).",
+                    cid=int(cid),
+                )
+            except Exception:
+                pass
+            try:
+                t._rebuild_table(scroll_to_current=True)
+            except Exception:
+                pass
+            try:
+                t._lan_force_state_broadcast()
+            except Exception:
+                pass
+            return {
+                "ok": True,
+                "cid": int(cid),
+                "initiative_before": old_init,
+                "initiative_after": int(value),
+            }
+
+    def remove_combatant(self, cid: int) -> Dict[str, Any]:
+        """Remove combatant ``cid`` from the initiative list.
+
+        Delegates to ``_remove_combatants_with_lan_cleanup`` if available
+        (the same method the desktop uses for removal), falling back to a
+        direct dict removal.  The battle log records the removal.
+
+        Returns: {ok, cid, name, snapshot}  or  {ok: False, error: str}
+        """
+        with self._lock:
+            t = self._tracker
+            combatants = getattr(t, "combatants", {}) or {}
+            cid = int(cid)
+            c = combatants.get(cid)
+            if c is None:
+                return {"ok": False, "error": f"Combatant {cid} not found."}
+
+            name = str(getattr(c, "name", "") or "")
+
+            # Prefer the full cleanup path which handles summon groups,
+            # mount/rider links, map positions, and turn snapshots.
+            remove_fn = getattr(t, "_remove_combatants_with_lan_cleanup", None)
+            if callable(remove_fn):
+                try:
+                    remove_fn([cid])
+                except Exception:
+                    combatants.pop(cid, None)
+            else:
+                combatants.pop(cid, None)
+
+            try:
+                t._log(f"Combatant removed: {name}.")
+            except Exception:
+                pass
+            try:
+                t._rebuild_table(scroll_to_current=True)
+            except Exception:
+                pass
+            try:
+                t._lan_force_state_broadcast()
+            except Exception:
+                pass
+            return {"ok": True, "cid": cid, "name": name, "snapshot": self.combat_snapshot()}
