@@ -1779,6 +1779,8 @@ class LanController:
         self._host_presets: Dict[str, Dict[str, Any]] = self._load_host_presets()
         self._cid_push_subscriptions: Dict[int, List[Dict[str, Any]]] = {}
         self._battle_log_subscribers: set[int] = set()
+        self._dm_ws_clients: Dict[int, Any] = {}  # id(websocket) -> websocket for DM console WS
+        self._dm_service: Any = None  # set by _start_server once CombatService is constructed
         self._battle_log_limit_default: int = 200
         self._battle_log_follow_offset: int = 0
         self._battle_log_follow_partial: bytes = b""
@@ -3545,8 +3547,10 @@ class LanController:
         try:
             from combat_service import CombatService  # noqa: PLC0415
             _dm_service = CombatService(self.app)
+            self._dm_service = _dm_service
         except Exception as _dm_import_err:
             _dm_service = None
+            self._dm_service = None
             self.app._oplog(f"DM combat service unavailable: {_dm_import_err}", level="warning")
 
         def _check_dm_auth(request: "Request") -> None:
@@ -3584,8 +3588,8 @@ class LanController:
                 raise HTTPException(status_code=503, detail="DM combat service unavailable.")
             try:
                 return _dm_service.combat_snapshot()
-            except Exception as exc:
-                raise HTTPException(status_code=500, detail=str(exc))
+            except Exception:
+                raise HTTPException(status_code=500, detail="Failed to read combat snapshot.")
 
         @self._fastapi_app.post("/api/dm/combat/next-turn")
         async def dm_next_turn(request: Request):
@@ -3601,12 +3605,12 @@ class LanController:
             try:
                 result = _dm_service.next_turn()
                 if not result.get("ok"):
-                    raise HTTPException(status_code=500, detail=result.get("error", "next_turn failed"))
+                    raise HTTPException(status_code=500, detail="Combat service failed to advance turn.")
                 return {"ok": True, "snapshot": result.get("snapshot") or _dm_service.combat_snapshot()}
             except HTTPException:
                 raise
-            except Exception as exc:
-                raise HTTPException(status_code=500, detail=str(exc))
+            except Exception:
+                raise HTTPException(status_code=500, detail="Failed to advance turn.")
 
         @self._fastapi_app.post("/api/dm/combat/combatants/{cid}/hp")
         async def dm_adjust_hp(cid: int, request: Request, payload: Dict[str, Any] = Body(...)):
@@ -3629,7 +3633,7 @@ class LanController:
             try:
                 result = _dm_service.adjust_hp(cid=int(cid), delta=delta)
                 if not result.get("ok"):
-                    raise HTTPException(status_code=400, detail=result.get("error", "adjust_hp failed"))
+                    raise HTTPException(status_code=400, detail=result.get("error", "Combatant not found."))
                 return {
                     "ok": True,
                     "cid": result.get("cid"),
@@ -3640,8 +3644,8 @@ class LanController:
                 }
             except HTTPException:
                 raise
-            except Exception as exc:
-                raise HTTPException(status_code=500, detail=str(exc))
+            except Exception:
+                raise HTTPException(status_code=500, detail="Failed to adjust HP.")
 
         @self._fastapi_app.post("/api/dm/combat/combatants/{cid}/condition")
         async def dm_set_condition(cid: int, request: Request, payload: Dict[str, Any] = Body(...)):
@@ -3673,7 +3677,7 @@ class LanController:
                     cid=int(cid), ctype=ctype, action=action, remaining_turns=remaining_turns
                 )
                 if not result.get("ok"):
-                    raise HTTPException(status_code=400, detail=result.get("error", "set_condition failed"))
+                    raise HTTPException(status_code=400, detail=result.get("error", "Combatant not found."))
                 return {
                     "ok": True,
                     "cid": result.get("cid"),
@@ -3683,8 +3687,76 @@ class LanController:
                 }
             except HTTPException:
                 raise
-            except Exception as exc:
-                raise HTTPException(status_code=500, detail=str(exc))
+            except Exception:
+                raise HTTPException(status_code=500, detail="Failed to apply condition.")
+
+        @self._fastapi_app.post("/api/dm/combat/combatants/{cid}/temp-hp")
+        async def dm_set_temp_hp(cid: int, request: Request, payload: Dict[str, Any] = Body(...)):
+            """Set temporary HP for a combatant.
+
+            Body: {amount: int}  — 0 clears temp HP.
+            Returns: {ok, cid, temp_hp_before, temp_hp_after, snapshot}
+            """
+            _check_dm_auth(request)
+            if _dm_service is None:
+                raise HTTPException(status_code=503, detail="DM combat service unavailable.")
+            if not isinstance(payload, dict):
+                raise HTTPException(status_code=400, detail="Invalid payload.")
+            try:
+                amount = int(payload.get("amount") or 0)
+            except Exception:
+                raise HTTPException(status_code=400, detail="amount must be a non-negative integer.")
+            if amount < 0:
+                raise HTTPException(status_code=400, detail="amount must be >= 0.")
+            try:
+                result = _dm_service.set_temp_hp(cid=int(cid), amount=amount)
+                if not result.get("ok"):
+                    raise HTTPException(status_code=400, detail=result.get("error", "Combatant not found."))
+                return {
+                    "ok": True,
+                    "cid": result.get("cid"),
+                    "temp_hp_before": result.get("temp_hp_before"),
+                    "temp_hp_after": result.get("temp_hp_after"),
+                    "snapshot": _dm_service.combat_snapshot(),
+                }
+            except HTTPException:
+                raise
+            except Exception:
+                raise HTTPException(status_code=500, detail="Failed to set temp HP.")
+
+        @self._fastapi_app.websocket("/ws/dm")
+        async def ws_dm_endpoint(ws: WebSocket):
+            """Real-time DM snapshot push channel.
+
+            Clients connect here to receive DM combat snapshots immediately
+            after each mutation instead of relying solely on polling.
+            Auth: pass ?token=<adminToken> query param when a password is configured.
+            """
+            if self._admin_password_hash:
+                token = ws.query_params.get("token", "")
+                if not self._is_admin_token_valid(token):
+                    await ws.close(code=1008, reason="Admin authentication required.")
+                    return
+            await ws.accept()
+            ws_id = id(ws)
+            with self._clients_lock:
+                self._dm_ws_clients[ws_id] = ws
+            # Send initial snapshot immediately on connect
+            try:
+                if _dm_service is not None:
+                    snap = _dm_service.combat_snapshot()
+                    await ws.send_text(json.dumps({"type": "dm_state", "snapshot": snap}))
+            except Exception:
+                pass
+            # Hold the connection open; messages from client are ignored
+            try:
+                while True:
+                    await ws.receive_text()
+            except Exception:
+                pass
+            finally:
+                with self._clients_lock:
+                    self._dm_ws_clients.pop(ws_id, None)
 
         # ── End DM Console routes ──────────────────────────────────────────
 
@@ -4791,6 +4863,34 @@ class LanController:
                     self._clients.pop(ws_id, None)
                     self._clients_meta.pop(ws_id, None)
                     self._client_hosts.pop(ws_id, None)
+
+    def _push_dm_snapshot_to_ws_clients(self, snapshot: Dict[str, Any]) -> None:
+        """Push a DM-specific snapshot to all connected DM WebSocket clients."""
+        if not self._loop:
+            return
+        coro = self._push_dm_snapshot_async(snapshot)
+        try:
+            asyncio.run_coroutine_threadsafe(coro, self._loop)
+        except Exception as exc:
+            self._log_lan_exception("DM WS push scheduling failed", exc)
+
+    async def _push_dm_snapshot_async(self, snapshot: Dict[str, Any]) -> None:
+        try:
+            payload = json.dumps({"type": "dm_state", "snapshot": snapshot})
+        except Exception:
+            return
+        with self._clients_lock:
+            items = list(self._dm_ws_clients.items())
+        to_drop: List[int] = []
+        for ws_id, ws in items:
+            try:
+                await ws.send_text(payload)
+            except Exception:
+                to_drop.append(ws_id)
+        if to_drop:
+            with self._clients_lock:
+                for ws_id in to_drop:
+                    self._dm_ws_clients.pop(ws_id, None)
 
     def _broadcast_grid_update(self, grid: Dict[str, Any]) -> None:
         if not self._loop:
@@ -16535,6 +16635,14 @@ class InitiativeTracker(base.InitiativeTracker):
                 except Exception:
                     pass
             self._lan._broadcast_state(snap)
+        except Exception:
+            pass
+        # Push DM snapshot to any connected DM WebSocket clients
+        try:
+            dm_svc = getattr(self._lan, "_dm_service", None)
+            if dm_svc is not None:
+                dm_snap = dm_svc.combat_snapshot()
+                self._lan._push_dm_snapshot_to_ws_clients(dm_snap)
         except Exception:
             pass
 

@@ -317,6 +317,21 @@
       </div>
       <div class="mut-result" id="condResult"></div>
     </div>
+
+    <!-- Temp HP -->
+    <div class="mut-card">
+      <h3>Temp HP</h3>
+      <div class="form-group">
+        <label>Target combatant</label>
+        <select id="tempHpCidSelect"><option value="">— select —</option></select>
+      </div>
+      <div class="form-group">
+        <label>Amount (0 = clear temp HP)</label>
+        <input type="number" id="tempHpAmount" placeholder="e.g. 10" min="0" />
+      </div>
+      <button class="btn-action" id="applyTempHpBtn">Set Temp HP</button>
+      <div class="mut-result" id="tempHpResult"></div>
+    </div>
   </div>
 
 </div>
@@ -331,11 +346,13 @@
 /* ────────────────────────────────────────────────────────────────────
    DM Console — communicates with the backend DM API
    Endpoints used:
-     GET  /api/dm/combat                         → snapshot
-     POST /api/dm/combat/next-turn               → advance turn
-     POST /api/dm/combat/combatants/{cid}/hp     → HP adjustment
-     POST /api/dm/combat/combatants/{cid}/condition → add/remove condition
-     POST /api/admin/login                       → optional admin login
+     GET  /api/dm/combat                               → snapshot
+     POST /api/dm/combat/next-turn                     → advance turn
+     POST /api/dm/combat/combatants/{cid}/hp           → HP adjustment
+     POST /api/dm/combat/combatants/{cid}/condition    → add/remove condition
+     POST /api/dm/combat/combatants/{cid}/temp-hp      → set temp HP
+     POST /api/admin/login                             → optional admin login
+     WS   /ws/dm[?token=…]                             → real-time DM state push
    ───────────────────────────────────────────────────────────────── */
 
 const BASE = '';  // same origin
@@ -343,7 +360,10 @@ const BASE = '';  // same origin
 let adminToken = null;      // null → no auth required (or not yet obtained)
 let currentSnapshot = null;
 let autoRefreshTimer = null;
+let dmWs = null;
+let wsReconnectTimer = null;
 const POLL_INTERVAL_MS = 2500;
+const WS_RECONNECT_MS = 5000;
 
 // ── Auth ─────────────────────────────────────────────────────────────
 function authHeaders() {
@@ -408,6 +428,31 @@ function startAutoRefresh() {
   autoRefreshTimer = setInterval(() => {
     if (document.getElementById('autoRefreshCb').checked) fetchSnapshot();
   }, POLL_INTERVAL_MS);
+  connectDmWs();
+}
+
+// ── Real-time WebSocket push ──────────────────────────────────────────
+function connectDmWs() {
+  if (dmWs && dmWs.readyState <= 1) return;  // already connecting or open
+  if (wsReconnectTimer) { clearTimeout(wsReconnectTimer); wsReconnectTimer = null; }
+  try {
+    const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
+    const tokenParam = adminToken ? `?token=${encodeURIComponent(adminToken)}` : '';
+    dmWs = new WebSocket(`${proto}//${location.host}/ws/dm${tokenParam}`);
+    dmWs.onmessage = (evt) => {
+      try {
+        const msg = JSON.parse(evt.data);
+        if (msg.type === 'dm_state' && msg.snapshot) applySnapshot(msg.snapshot);
+      } catch (_) {}
+    };
+    dmWs.onclose = () => {
+      dmWs = null;
+      wsReconnectTimer = setTimeout(connectDmWs, WS_RECONNECT_MS);
+    };
+    dmWs.onerror = () => {
+      dmWs = null;
+    };
+  } catch (_) {}
 }
 
 document.getElementById('autoRefreshCb').addEventListener('change', () => {
@@ -462,6 +507,7 @@ function applySnapshot(snap) {
   const combatants = snap.combatants || [];
   populateCidSelect('hpCidSelect', combatants);
   populateCidSelect('condCidSelect', combatants);
+  populateCidSelect('tempHpCidSelect', combatants);
 
   // Render list
   renderCombatants(snap);
@@ -533,6 +579,7 @@ function renderLog(lines) {
 function quickSelect(cid) {
   document.getElementById('hpCidSelect').value = cid;
   document.getElementById('condCidSelect').value = cid;
+  document.getElementById('tempHpCidSelect').value = cid;
 }
 
 // ── Mutations ─────────────────────────────────────────────────────────
@@ -604,6 +651,29 @@ async function applyCondition(action) {
     }
   } catch (e) { res.textContent = 'Request failed.'; res.classList.add('error'); }
 }
+
+document.getElementById('applyTempHpBtn').addEventListener('click', async () => {
+  const cid = document.getElementById('tempHpCidSelect').value;
+  const amount = parseInt(document.getElementById('tempHpAmount').value, 10);
+  const res = document.getElementById('tempHpResult');
+  res.className = 'mut-result';
+  if (!cid) { res.textContent = 'Select a combatant.'; res.classList.add('error'); return; }
+  if (isNaN(amount) || amount < 0) { res.textContent = 'Enter a valid amount (0 or more).'; res.classList.add('error'); return; }
+  try {
+    const r = await fetch(`${BASE}/api/dm/combat/combatants/${cid}/temp-hp`, {
+      method: 'POST', headers: authHeaders(),
+      body: JSON.stringify({ amount }),
+    });
+    const data = await r.json();
+    if (r.ok && data.ok) {
+      res.textContent = `Temp HP: ${data.temp_hp_before} → ${data.temp_hp_after}`;
+      if (data.snapshot) applySnapshot(data.snapshot);
+    } else {
+      res.textContent = data.detail || data.error || 'Error.';
+      res.classList.add('error');
+    }
+  } catch (e) { res.textContent = 'Request failed.'; res.classList.add('error'); }
+});
 
 // ── Helpers ───────────────────────────────────────────────────────────
 function escHtml(s) {
