@@ -2485,5 +2485,552 @@ class PreflightEndpointTests(unittest.TestCase):
             self.assertTrue(any("token" in b.lower() or "github_api_token" in b for b in blockers))
 
 
+class GovernorHardeningTests(unittest.TestCase):
+    """Tests for governor hardening: deterministic safe-draft promotion,
+    revision-in-flight blocking, mark-ready failure truthfulness,
+    webhook ClientDisconnect, and reviewer cleanup idempotency."""
+
+    def setUp(self):
+        self._saved_env = {key: os.environ.get(key) for key in ENV_KEYS}
+
+    def tearDown(self):
+        for key, value in self._saved_env.items():
+            if value is None:
+                os.environ.pop(key, None)
+            else:
+                os.environ[key] = value
+
+    def _create_linked_task_run(
+        self,
+        db,
+        *,
+        repo: str,
+        issue_number: int,
+        pr_number: int,
+        with_program: bool = True,
+        governor_state_json: str | None = None,
+    ) -> tuple[int, int | None]:
+        with Session(db.get_engine()) as session:
+            task = TaskPacket(
+                github_repo=repo,
+                github_issue_number=issue_number,
+                title="Governor hardening test task",
+                raw_body="body",
+                status="working",
+                approval_state="approved",
+                acceptance_criteria_json='["done"]',
+                task_kind="program_slice" if with_program else "single_task",
+            )
+            session.add(task)
+            session.commit()
+            session.refresh(task)
+
+            program_id = None
+            if with_program:
+                program = Program(
+                    github_repo=repo,
+                    root_issue_number=issue_number,
+                    title="Governor hardening test program",
+                    normalized_goal="goal",
+                    status=PROGRAM_STATUS_ACTIVE,
+                    current_slice_number=1,
+                    auto_merge=True,
+                    auto_dispatch=True,
+                    auto_continue=True,
+                )
+                session.add(program)
+                session.commit()
+                session.refresh(program)
+                program_id = program.id
+
+                slice1 = ProgramSlice(
+                    program_id=program.id,
+                    slice_number=1,
+                    milestone_key="M1",
+                    title="Slice",
+                    objective="Objective",
+                    acceptance_criteria_json='["done"]',
+                    status="in_progress",
+                    task_packet_id=task.id,
+                )
+                session.add(slice1)
+                session.commit()
+                session.refresh(slice1)
+                task.program_id = program.id
+                task.program_slice_id = slice1.id
+                session.add(task)
+                session.commit()
+
+            run = AgentRun(
+                task_packet_id=task.id,
+                program_id=task.program_id,
+                program_slice_id=task.program_slice_id,
+                provider="github_copilot",
+                github_repo=repo,
+                github_issue_number=issue_number,
+                github_pr_number=pr_number,
+                status="working",
+                last_summary="working",
+                governor_state_json=governor_state_json,
+            )
+            session.add(run)
+            session.commit()
+            session.refresh(run)
+            return task.id, program_id
+
+    def test_safe_draft_green_checks_no_guarded_paths_auto_promotes(self):
+        """A draft PR with green checks, no guarded paths, no unresolved findings,
+        and no revision-in-flight should be deterministically promoted to ready
+        for review without requiring OpenAI."""
+        with tempfile.TemporaryDirectory() as td:
+            os.environ["DATABASE_URL"] = f"sqlite:///{Path(td) / 'orchestrator.db'}"
+            os.environ["GH_WEBHOOK_SECRET"] = "test-gh-secret"
+            os.environ["GITHUB_API_TOKEN"] = "dummy-token"
+            main, db = _reload_orchestrator_modules()
+
+            repo = "jeeves-jeevesenson/init-tracker"
+            issue_number = 2001
+            pr_number = 201
+
+            # Simulate: workflow_run completed with success → checks_passed=True
+            # PR is draft, no guarded paths
+            workflow_payload = {
+                "action": "completed",
+                "repository": {"full_name": repo},
+                "workflow_run": {
+                    "id": 90001,
+                    "name": "CI",
+                    "status": "completed",
+                    "conclusion": "success",
+                    "html_url": f"https://github.com/{repo}/actions/runs/90001",
+                    "pull_requests": [{"number": pr_number}],
+                },
+            }
+
+            with patch("orchestrator.app.tasks.summarize_work_update", return_value={
+                "review_artifact": {
+                    "decision": "continue", "status": "met", "confidence": 0.8,
+                    "scope_alignment": [], "acceptance_assessment": [], "risk_findings": [],
+                    "merge_recommendation": "review_required", "revision_instructions": [],
+                    "audit_recommendation": "", "next_slice_hint": "", "summary": ["ok"],
+                },
+                "summary_bullets": ["ok"],
+                "next_action": "continue",
+            }), \
+                 patch("orchestrator.app.tasks.mark_pr_ready_for_review", return_value=(True, "PR #201 marked ready for review")) as mocked_undraft, \
+                 patch("orchestrator.app.tasks.summarize_governor_update") as mocked_openai_governor, \
+                 patch("orchestrator.app.tasks.list_pull_request_files", return_value=(["orchestrator/app/tasks.py"], "ok")), \
+                 patch("orchestrator.app.tasks.list_pull_request_reviews", return_value=([], "ok")), \
+                 patch("orchestrator.app.tasks.list_pull_request_review_comments", return_value=([], "ok")), \
+                 patch("orchestrator.app.tasks.notify_discord"):
+                with TestClient(main.app) as client:
+                    # Pre-create a task/run with pr_draft=True in governor state
+                    self._create_linked_task_run(
+                        db,
+                        repo=repo,
+                        issue_number=issue_number,
+                        pr_number=pr_number,
+                        with_program=True,
+                        governor_state_json=json.dumps({"pr_draft": True}),
+                    )
+                    resp = _post_github(
+                        client,
+                        secret="test-gh-secret",
+                        delivery="delivery-safe-draft-promote-1",
+                        event="workflow_run",
+                        payload=workflow_payload,
+                    )
+                    self.assertEqual(resp.status_code, 200)
+            # The deterministic promotion should have called mark_pr_ready_for_review
+            mocked_undraft.assert_called_once()
+            # The OpenAI governor should NOT have been called — deterministic path short-circuits
+            mocked_openai_governor.assert_not_called()
+
+    def test_guarded_paths_touched_blocks_auto_promotion(self):
+        """A draft PR touching guarded paths should NOT be auto-promoted,
+        even if checks are green and there are no findings."""
+        with tempfile.TemporaryDirectory() as td:
+            os.environ["DATABASE_URL"] = f"sqlite:///{Path(td) / 'orchestrator.db'}"
+            os.environ["GH_WEBHOOK_SECRET"] = "test-gh-secret"
+            os.environ["GITHUB_API_TOKEN"] = "dummy-token"
+            os.environ["GOVERNOR_GUARDED_PATHS"] = ".github/workflows/*"
+            main, db = _reload_orchestrator_modules()
+
+            repo = "jeeves-jeevesenson/init-tracker"
+            issue_number = 2002
+            pr_number = 202
+
+            workflow_payload = {
+                "action": "completed",
+                "repository": {"full_name": repo},
+                "workflow_run": {
+                    "id": 90002,
+                    "name": "CI",
+                    "status": "completed",
+                    "conclusion": "success",
+                    "html_url": f"https://github.com/{repo}/actions/runs/90002",
+                    "pull_requests": [{"number": pr_number}],
+                },
+            }
+
+            with patch("orchestrator.app.tasks.summarize_work_update", return_value={
+                "review_artifact": {
+                    "decision": "continue", "status": "met", "confidence": 0.8,
+                    "scope_alignment": [], "acceptance_assessment": [], "risk_findings": [],
+                    "merge_recommendation": "review_required", "revision_instructions": [],
+                    "audit_recommendation": "", "next_slice_hint": "", "summary": ["ok"],
+                },
+                "summary_bullets": ["ok"],
+                "next_action": "continue",
+            }), \
+                 patch("orchestrator.app.tasks.mark_pr_ready_for_review") as mocked_undraft, \
+                 patch("orchestrator.app.tasks.summarize_governor_update", return_value={
+                     "governor_artifact": {"decision": "escalate_human", "summary": ["guarded"], "revision_requests": [], "escalation_reason": "guarded paths"},
+                 }), \
+                 patch("orchestrator.app.tasks.list_pull_request_files", return_value=([".github/workflows/ci.yml"], "ok")), \
+                 patch("orchestrator.app.tasks.list_pull_request_reviews", return_value=([], "ok")), \
+                 patch("orchestrator.app.tasks.list_pull_request_review_comments", return_value=([], "ok")), \
+                 patch("orchestrator.app.tasks.notify_discord"):
+                with TestClient(main.app) as client:
+                    self._create_linked_task_run(
+                        db,
+                        repo=repo,
+                        issue_number=issue_number,
+                        pr_number=pr_number,
+                        with_program=True,
+                        governor_state_json=json.dumps({"pr_draft": True}),
+                    )
+                    resp = _post_github(
+                        client,
+                        secret="test-gh-secret",
+                        delivery="delivery-guarded-no-promote-1",
+                        event="workflow_run",
+                        payload=workflow_payload,
+                    )
+                    self.assertEqual(resp.status_code, 200)
+            # Must NOT auto-promote because guarded paths are touched
+            mocked_undraft.assert_not_called()
+
+    def test_revision_in_flight_blocks_auto_promotion(self):
+        """A draft PR with waiting_for_revision_push=True should NOT be
+        auto-promoted even if checks are green and findings are resolved."""
+        with tempfile.TemporaryDirectory() as td:
+            os.environ["DATABASE_URL"] = f"sqlite:///{Path(td) / 'orchestrator.db'}"
+            os.environ["GH_WEBHOOK_SECRET"] = "test-gh-secret"
+            os.environ["GITHUB_API_TOKEN"] = "dummy-token"
+            main, db = _reload_orchestrator_modules()
+
+            repo = "jeeves-jeevesenson/init-tracker"
+            issue_number = 2003
+            pr_number = 203
+
+            workflow_payload = {
+                "action": "completed",
+                "repository": {"full_name": repo},
+                "workflow_run": {
+                    "id": 90003,
+                    "name": "CI",
+                    "status": "completed",
+                    "conclusion": "success",
+                    "html_url": f"https://github.com/{repo}/actions/runs/90003",
+                    "pull_requests": [{"number": pr_number}],
+                },
+            }
+
+            # Governor state: revision was posted and we're still waiting for push
+            # BUT there are still unresolved findings (so waiting_for_revision_push stays True)
+            governor_state = json.dumps({
+                "pr_draft": True,
+                "waiting_for_revision_push": True,
+                "last_revision_comment_fingerprint": "abc123",
+                "revision_cycle_count": 1,
+            })
+
+            with patch("orchestrator.app.tasks.summarize_work_update", return_value={
+                "review_artifact": {
+                    "decision": "revise", "status": "partial", "confidence": 0.6,
+                    "scope_alignment": [], "acceptance_assessment": [], "risk_findings": [],
+                    "merge_recommendation": "review_required", "revision_instructions": ["fix test"],
+                    "audit_recommendation": "", "next_slice_hint": "", "summary": ["needs changes"],
+                },
+                "summary_bullets": ["needs changes"],
+                "next_action": "revise",
+            }), \
+                 patch("orchestrator.app.tasks.mark_pr_ready_for_review") as mocked_undraft, \
+                 patch("orchestrator.app.tasks.summarize_governor_update", return_value={
+                     "governor_artifact": {"decision": "wait", "summary": ["waiting"], "revision_requests": [], "escalation_reason": ""},
+                 }), \
+                 patch("orchestrator.app.tasks.list_pull_request_files", return_value=(["orchestrator/app/tasks.py"], "ok")), \
+                 patch("orchestrator.app.tasks.list_pull_request_reviews", return_value=([
+                     {"user": {"login": "copilot"}, "state": "CHANGES_REQUESTED", "body": "Fix null check"},
+                 ], "ok")), \
+                 patch("orchestrator.app.tasks.list_pull_request_review_comments", return_value=([], "ok")), \
+                 patch("orchestrator.app.tasks.notify_discord"):
+                with TestClient(main.app) as client:
+                    self._create_linked_task_run(
+                        db,
+                        repo=repo,
+                        issue_number=issue_number,
+                        pr_number=pr_number,
+                        with_program=True,
+                        governor_state_json=governor_state,
+                    )
+                    resp = _post_github(
+                        client,
+                        secret="test-gh-secret",
+                        delivery="delivery-revision-in-flight-1",
+                        event="workflow_run",
+                        payload=workflow_payload,
+                    )
+                    self.assertEqual(resp.status_code, 200)
+            # Must NOT auto-promote because revision is in flight with unresolved findings
+            mocked_undraft.assert_not_called()
+
+    def test_mark_ready_failure_surfaces_blocker(self):
+        """When the safe-draft promotion API call fails, the governor must persist
+        a truthful blocker state and not report successful promotion."""
+        with tempfile.TemporaryDirectory() as td:
+            os.environ["DATABASE_URL"] = f"sqlite:///{Path(td) / 'orchestrator.db'}"
+            os.environ["GH_WEBHOOK_SECRET"] = "test-gh-secret"
+            os.environ["GITHUB_API_TOKEN"] = "dummy-token"
+            main, db = _reload_orchestrator_modules()
+
+            repo = "jeeves-jeevesenson/init-tracker"
+            issue_number = 2004
+            pr_number = 204
+
+            workflow_payload = {
+                "action": "completed",
+                "repository": {"full_name": repo},
+                "workflow_run": {
+                    "id": 90004,
+                    "name": "CI",
+                    "status": "completed",
+                    "conclusion": "success",
+                    "html_url": f"https://github.com/{repo}/actions/runs/90004",
+                    "pull_requests": [{"number": pr_number}],
+                },
+            }
+
+            with patch("orchestrator.app.tasks.summarize_work_update", return_value={
+                "review_artifact": {
+                    "decision": "continue", "status": "met", "confidence": 0.8,
+                    "scope_alignment": [], "acceptance_assessment": [], "risk_findings": [],
+                    "merge_recommendation": "review_required", "revision_instructions": [],
+                    "audit_recommendation": "", "next_slice_hint": "", "summary": ["ok"],
+                },
+                "summary_bullets": ["ok"],
+                "next_action": "continue",
+            }), \
+                 patch("orchestrator.app.tasks.mark_pr_ready_for_review", return_value=(False, "GitHub returned 403: insufficient permissions")) as mocked_undraft, \
+                 patch("orchestrator.app.tasks.summarize_governor_update") as mocked_openai_governor, \
+                 patch("orchestrator.app.tasks.list_pull_request_files", return_value=(["orchestrator/app/tasks.py"], "ok")), \
+                 patch("orchestrator.app.tasks.list_pull_request_reviews", return_value=([], "ok")), \
+                 patch("orchestrator.app.tasks.list_pull_request_review_comments", return_value=([], "ok")), \
+                 patch("orchestrator.app.tasks.notify_discord"):
+                with TestClient(main.app) as client:
+                    _, program_id = self._create_linked_task_run(
+                        db,
+                        repo=repo,
+                        issue_number=issue_number,
+                        pr_number=pr_number,
+                        with_program=True,
+                        governor_state_json=json.dumps({"pr_draft": True}),
+                    )
+                    resp = _post_github(
+                        client,
+                        secret="test-gh-secret",
+                        delivery="delivery-mark-ready-fail-1",
+                        event="workflow_run",
+                        payload=workflow_payload,
+                    )
+                    self.assertEqual(resp.status_code, 200)
+            # mark_pr_ready_for_review was called but failed
+            mocked_undraft.assert_called_once()
+            # OpenAI governor should still not be called — the deterministic path handled it
+            mocked_openai_governor.assert_not_called()
+            # Program should be blocked with BLOCKER_WAITING_FOR_PR_READY
+            with Session(db.get_engine()) as session:
+                program = session.get(Program, program_id)
+                blocker = json.loads(program.blocker_state_json or "{}")
+                self.assertEqual(blocker.get("reason"), BLOCKER_WAITING_FOR_PR_READY)
+                self.assertIn("403", blocker.get("detail", ""))
+
+    def test_webhook_client_disconnect_handled_cleanly(self):
+        """ClientDisconnect during webhook body read returns 503 JSONResponse
+        without raising an unhandled ASGI exception, and logs contextual info."""
+        from unittest.mock import AsyncMock
+        from starlette.requests import ClientDisconnect as CD
+        with tempfile.TemporaryDirectory() as td:
+            os.environ["DATABASE_URL"] = f"sqlite:///{Path(td) / 'orchestrator.db'}"
+            os.environ["GH_WEBHOOK_SECRET"] = "test-gh-secret"
+            main, _ = _reload_orchestrator_modules()
+            with patch("orchestrator.app.github_webhooks.Request.body", new=AsyncMock(side_effect=CD())):
+                with TestClient(main.app, raise_server_exceptions=False) as client:
+                    response = client.post(
+                        "/github/webhook",
+                        headers={
+                            "X-GitHub-Event": "pull_request",
+                            "X-GitHub-Delivery": "disconnect-test-99",
+                        },
+                        content=b"",
+                    )
+                    self.assertEqual(response.status_code, 503)
+                    body = response.json()
+                    self.assertFalse(body.get("ok"))
+                    self.assertIn("disconnected", body.get("detail", "").lower())
+
+    def test_reviewer_cleanup_is_idempotent_on_repeated_runs(self):
+        """Reviewer cleanup should work correctly on repeated governor invocations
+        and track the cleanup result in governor state."""
+        with tempfile.TemporaryDirectory() as td:
+            os.environ["DATABASE_URL"] = f"sqlite:///{Path(td) / 'orchestrator.db'}"
+            os.environ["GH_WEBHOOK_SECRET"] = "test-gh-secret"
+            os.environ["GITHUB_API_TOKEN"] = "dummy-token"
+            main, db = _reload_orchestrator_modules()
+
+            repo = "jeeves-jeevesenson/init-tracker"
+            issue_number = 2006
+            pr_number = 206
+
+            payload_1 = {
+                "action": "opened",
+                "repository": {"full_name": repo},
+                "pull_request": {
+                    "number": pr_number,
+                    "id": 20600,
+                    "title": f"Fix #{issue_number}",
+                    "body": f"Closes #{issue_number}",
+                    "html_url": f"https://github.com/{repo}/pull/{pr_number}",
+                    "merged": False,
+                    "draft": False,
+                    "state": "open",
+                    "requested_reviewers": [{"login": "jeeves-jeevesenson"}],
+                    "changed_files": 1,
+                    "commits": 1,
+                    "updated_at": "2024-01-01T00:00:00Z",
+                },
+            }
+            # Second delivery: reviewer already removed
+            payload_2 = {
+                "action": "synchronize",
+                "repository": {"full_name": repo},
+                "pull_request": {
+                    "number": pr_number,
+                    "id": 20600,
+                    "title": f"Fix #{issue_number}",
+                    "body": f"Closes #{issue_number}",
+                    "html_url": f"https://github.com/{repo}/pull/{pr_number}",
+                    "merged": False,
+                    "draft": False,
+                    "state": "open",
+                    "requested_reviewers": [],
+                    "changed_files": 1,
+                    "commits": 2,
+                    "updated_at": "2024-01-01T01:00:00Z",
+                },
+            }
+
+            with patch("orchestrator.app.tasks.summarize_work_update", return_value={
+                "review_artifact": {
+                    "decision": "continue", "status": "met", "confidence": 0.8,
+                    "scope_alignment": [], "acceptance_assessment": [], "risk_findings": [],
+                    "merge_recommendation": "review_required", "revision_instructions": [],
+                    "audit_recommendation": "", "next_slice_hint": "", "summary": ["ok"],
+                },
+                "summary_bullets": ["ok"],
+                "next_action": "continue",
+            }), \
+                 patch("orchestrator.app.tasks.summarize_governor_update", return_value={
+                     "governor_artifact": {"decision": "wait", "summary": ["wait"], "revision_requests": [], "escalation_reason": ""},
+                 }), \
+                 patch("orchestrator.app.tasks.remove_requested_reviewers", return_value=(True, "ok")) as mocked_remove, \
+                 patch("orchestrator.app.tasks.list_pull_request_files", return_value=(["orchestrator/app/tasks.py"], "ok")), \
+                 patch("orchestrator.app.tasks.list_pull_request_reviews", return_value=([], "ok")), \
+                 patch("orchestrator.app.tasks.list_pull_request_review_comments", return_value=([], "ok")), \
+                 patch("orchestrator.app.tasks.notify_discord"):
+                with TestClient(main.app) as client:
+                    self._create_linked_task_run(
+                        db,
+                        repo=repo,
+                        issue_number=issue_number,
+                        pr_number=pr_number,
+                        with_program=False,
+                    )
+                    # First delivery: reviewer present → should remove
+                    resp1 = _post_github(
+                        client,
+                        secret="test-gh-secret",
+                        delivery="delivery-cleanup-idem-1",
+                        event="pull_request",
+                        payload=payload_1,
+                    )
+                    self.assertEqual(resp1.status_code, 200)
+                    # Second delivery: reviewer already gone → should not re-call remove
+                    resp2 = _post_github(
+                        client,
+                        secret="test-gh-secret",
+                        delivery="delivery-cleanup-idem-2",
+                        event="pull_request",
+                        payload=payload_2,
+                    )
+                    self.assertEqual(resp2.status_code, 200)
+            # remove was called only once (first delivery had the reviewer)
+            self.assertEqual(mocked_remove.call_count, 1)
+
+    def test_safe_draft_predicate_unit(self):
+        """Unit test for the safe_draft_can_be_promoted predicate."""
+        from orchestrator.app.tasks import safe_draft_can_be_promoted
+
+        # Happy path: all conditions met
+        self.assertTrue(safe_draft_can_be_promoted(
+            pr_draft=True,
+            checks_passed=True,
+            guarded_paths_touched=False,
+            unresolved_findings=[],
+            waiting_for_revision_push=False,
+        ))
+        # Not a draft → no promotion needed
+        self.assertFalse(safe_draft_can_be_promoted(
+            pr_draft=False,
+            checks_passed=True,
+            guarded_paths_touched=False,
+            unresolved_findings=[],
+            waiting_for_revision_push=False,
+        ))
+        # Checks not passed
+        self.assertFalse(safe_draft_can_be_promoted(
+            pr_draft=True,
+            checks_passed=False,
+            guarded_paths_touched=False,
+            unresolved_findings=[],
+            waiting_for_revision_push=False,
+        ))
+        # Guarded paths
+        self.assertFalse(safe_draft_can_be_promoted(
+            pr_draft=True,
+            checks_passed=True,
+            guarded_paths_touched=True,
+            unresolved_findings=[],
+            waiting_for_revision_push=False,
+        ))
+        # Unresolved findings
+        self.assertFalse(safe_draft_can_be_promoted(
+            pr_draft=True,
+            checks_passed=True,
+            guarded_paths_touched=False,
+            unresolved_findings=["Fix null check"],
+            waiting_for_revision_push=False,
+        ))
+        # Waiting for revision push
+        self.assertFalse(safe_draft_can_be_promoted(
+            pr_draft=True,
+            checks_passed=True,
+            guarded_paths_touched=False,
+            unresolved_findings=[],
+            waiting_for_revision_push=True,
+        ))
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import fnmatch
 import hashlib
+import logging
 import re
 from datetime import datetime, timedelta, timezone
 from typing import Any
@@ -548,11 +549,48 @@ def _load_governor_state(run: AgentRun) -> dict[str, Any]:
     state.setdefault("last_revision_comment_body", "")
     state.setdefault("approval_submitted", False)
     state.setdefault("merge_completed", False)
+    state.setdefault("waiting_for_revision_push", False)
+    state.setdefault("reviewer_cleanup_result", "")
+    state.setdefault("safe_draft_promoted", False)
+    state.setdefault("safe_draft_promotion_failed", False)
     return state
 
 
 def _save_governor_state(run: AgentRun, state: dict[str, Any]) -> None:
     run.governor_state_json = json.dumps(state, ensure_ascii=False)
+
+
+_governor_logger = logging.getLogger("orchestrator.governor")
+
+
+def safe_draft_can_be_promoted(
+    *,
+    pr_draft: bool,
+    checks_passed: bool,
+    guarded_paths_touched: bool,
+    unresolved_findings: list[str],
+    waiting_for_revision_push: bool,
+) -> bool:
+    """Deterministic predicate: can this safe draft PR be promoted to ready-for-review?
+
+    Returns True only when ALL of the following hold:
+    - PR is still a draft
+    - All required checks are green (checks_passed)
+    - No guarded paths are touched
+    - No unresolved blocking findings
+    - No outstanding revision request awaiting a new Copilot push
+    """
+    if not pr_draft:
+        return False
+    if not checks_passed:
+        return False
+    if guarded_paths_touched:
+        return False
+    if unresolved_findings:
+        return False
+    if waiting_for_revision_push:
+        return False
+    return True
 
 
 def _copilot_findings_from_reviews(
@@ -651,15 +689,26 @@ def _run_governor_loop(
     guarded_files = [path for path in changed_files if _matches_guarded_path(path, guarded_patterns)]
     guarded_paths_touched = bool(guarded_files)
 
+    # --- Reviewer cleanup with truthful result tracking ---
     remove_login = str(getattr(settings, "governor_remove_reviewer_login", "") or "").strip()
     if remove_login and remove_login in {str(item).strip() for item in requested_reviewers}:
-        remove_requested_reviewers(
+        cleanup_ok, cleanup_msg = remove_requested_reviewers(
             settings=settings,
             repo=task.github_repo,
             pr_number=pr_number,
             reviewers=[remove_login],
         )
-        requested_reviewers = [item for item in requested_reviewers if item != remove_login]
+        if cleanup_ok:
+            requested_reviewers = [item for item in requested_reviewers if item != remove_login]
+            state["reviewer_cleanup_result"] = f"removed:{remove_login}"
+            _governor_logger.info("Governor reviewer cleanup: removed %s from PR #%s", remove_login, pr_number)
+        else:
+            state["reviewer_cleanup_result"] = f"failed:{cleanup_msg}"
+            _governor_logger.warning("Governor reviewer cleanup failed for %s on PR #%s: %s", remove_login, pr_number, cleanup_msg)
+    elif remove_login:
+        state["reviewer_cleanup_result"] = "not_applicable"
+    else:
+        state["reviewer_cleanup_result"] = "skipped:no_login_configured"
 
     reviews, _ = list_pull_request_reviews(settings=settings, repo=task.github_repo, pr_number=pr_number)
     review_comments, _ = list_pull_request_review_comments(settings=settings, repo=task.github_repo, pr_number=pr_number)
@@ -668,6 +717,79 @@ def _run_governor_loop(
         reviews=reviews,
         comments=review_comments,
     )
+
+    # --- Update waiting_for_revision_push: clear when findings resolved ---
+    waiting_for_revision_push = bool(state.get("waiting_for_revision_push"))
+    if waiting_for_revision_push and not unresolved_findings:
+        waiting_for_revision_push = False
+        state["waiting_for_revision_push"] = False
+
+    # --- Deterministic safe-draft promotion (before OpenAI) ---
+    if safe_draft_can_be_promoted(
+        pr_draft=pr_draft,
+        checks_passed=checks_passed,
+        guarded_paths_touched=guarded_paths_touched,
+        unresolved_findings=unresolved_findings,
+        waiting_for_revision_push=waiting_for_revision_push,
+    ):
+        _governor_logger.info(
+            "Governor deterministic promotion: PR #%s is safe draft with green checks, "
+            "no guarded paths, no unresolved findings, no pending revision push — marking ready for review.",
+            pr_number,
+        )
+        success, msg = mark_pr_ready_for_review(settings=settings, repo=task.github_repo, pr_number=pr_number)
+        state["pr_draft"] = pr_draft
+        state["pr_state"] = pr_state
+        state["requested_reviewers"] = requested_reviewers
+        state["changed_files"] = changed_files
+        state["copilot_review_observed"] = copilot_review_observed
+        state["unresolved_copilot_findings"] = unresolved_findings
+        state["guarded_paths_touched"] = guarded_paths_touched
+        state["guarded_files"] = guarded_files
+        state["last_event_key"] = event_key
+        if success:
+            state["safe_draft_promoted"] = True
+            state["safe_draft_promotion_failed"] = False
+            state["last_governor_decision"] = "safe_draft_promoted"
+            state["last_governor_summary"] = ["Deterministic safe-draft promotion: PR marked ready for review."]
+            run.last_summary = f"{run.last_summary or ''}\nGovernor: safe_draft_promoted (deterministic policy)".strip()
+            run.updated_at = _utc_now()
+            _save_governor_state(run, state)
+            _save(session, run)
+            notify_discord(
+                f"Governor auto-promoted draft PR #{pr_number} to ready for review: {task.github_repo}#{task.github_issue_number}"
+            )
+            _governor_logger.info("Governor: PR #%s successfully promoted to ready for review.", pr_number)
+            return
+        else:
+            state["safe_draft_promoted"] = False
+            state["safe_draft_promotion_failed"] = True
+            state["last_governor_decision"] = "safe_draft_promotion_failed"
+            state["last_governor_summary"] = [f"Deterministic safe-draft promotion failed: {msg}"]
+            _governor_logger.warning("Governor: failed to promote PR #%s: %s", pr_number, msg)
+            if task.program_id:
+                program = session.get(Program, task.program_id)
+                if program is not None:
+                    program.status = "blocked"
+                    program.blocker_state_json = json.dumps(
+                        {
+                            "reason": BLOCKER_WAITING_FOR_PR_READY,
+                            "slice_id": task.program_slice_id,
+                            "run_id": run.id,
+                            "pr_number": pr_number,
+                            "detail": msg,
+                        },
+                        ensure_ascii=False,
+                    )
+                    program.latest_summary = f"Draft PR #{pr_number} promotion failed: {msg}"
+                    program.updated_at = _utc_now()
+                    _save(session, program)
+            run.last_summary = f"{run.last_summary or ''}\nGovernor: safe_draft_promotion_failed ({msg})".strip()
+            run.updated_at = _utc_now()
+            _save_governor_state(run, state)
+            _save(session, run)
+            return
+
     review_artifact = _parse_json_object(run.review_artifact_json) or {}
     governor_context = {
         "event_key": event_key,
@@ -751,13 +873,16 @@ def _run_governor_loop(
             state["last_revision_comment_fingerprint"] = fingerprint
             state["last_revision_comment_body"] = comment_body
             state["revision_cycle_count"] = int(state.get("revision_cycle_count") or 0) + 1
+            state["waiting_for_revision_push"] = True
         max_cycles = max(1, int(getattr(settings, "governor_max_revision_cycles", 2) or 2))
         if int(state.get("revision_cycle_count") or 0) > max_cycles:
             decision = "escalate_human"
             escalation_reason = "Max governor revision cycles exceeded."
 
     if decision == "ready_for_review" and pr_draft:
-        mark_pr_ready_for_review(settings=settings, repo=task.github_repo, pr_number=pr_number)
+        success, msg = mark_pr_ready_for_review(settings=settings, repo=task.github_repo, pr_number=pr_number)
+        if not success:
+            _governor_logger.warning("Governor: OpenAI-directed ready_for_review failed for PR #%s: %s", pr_number, msg)
     if decision == "approve_and_merge":
         if guarded_paths_touched or unresolved_findings or pr_draft or not checks_passed:
             decision = "wait"
