@@ -532,8 +532,8 @@ class CombatService:
                     ally=bool(ally),
                     is_pc=bool(is_pc),
                 )
-            except Exception as exc:
-                return {"ok": False, "error": f"Could not add combatant: {exc}"}
+            except Exception:
+                return {"ok": False, "error": "Could not add combatant."}
 
             # Set max_hp and ac after creation (not all tracker builds accept them
             # as _create_combatant kwargs).
@@ -639,8 +639,8 @@ class CombatService:
             if callable(cleanup):
                 try:
                     cleanup([cid])
-                except Exception as exc:
-                    return {"ok": False, "error": f"Could not remove combatant: {exc}"}
+                except Exception:
+                    return {"ok": False, "error": "Could not remove combatant."}
             else:
                 combatants.pop(cid, None)
                 if getattr(t, "current_cid", None) == cid:
