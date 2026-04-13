@@ -7,7 +7,7 @@ from sqlalchemy import inspect, text
 from sqlmodel import Session, SQLModel, create_engine
 
 from .config import get_settings
-from .models import AgentRun, RunEvent, TaskPacket
+from .models import AgentRun, ProgramSlice, RunEvent, TaskPacket
 
 
 def _ensure_database_parent_dir(database_url: str) -> None:
@@ -112,6 +112,9 @@ def _ensure_task_packet_columns() -> None:
         {
             "internal_plan_json": "TEXT",
             "worker_brief_json": "TEXT",
+            "program_id": "INTEGER",
+            "program_slice_id": "INTEGER",
+            "task_kind": "TEXT DEFAULT 'single_task'",
         },
     )
 
@@ -121,6 +124,9 @@ def _ensure_agent_run_columns() -> None:
         AgentRun.__tablename__,
         {
             "review_artifact_json": "TEXT",
+            "program_id": "INTEGER",
+            "program_slice_id": "INTEGER",
+            "continuation_decision": "TEXT",
         },
     )
 
@@ -137,6 +143,28 @@ def _ensure_agent_run_indexes() -> None:
                 """
             )
         )
+        connection.execute(
+            text(
+                f"""
+                CREATE INDEX IF NOT EXISTS ix_{table_name}_program_slice_created
+                ON {table_name} (program_slice_id, created_at DESC)
+                """
+            )
+        )
+
+
+def _ensure_program_slice_indexes() -> None:
+    engine = get_engine()
+    table_name = ProgramSlice.__tablename__
+    with engine.begin() as connection:
+        connection.execute(
+            text(
+                f"""
+                CREATE UNIQUE INDEX IF NOT EXISTS ux_{table_name}_program_slice_number
+                ON {table_name} (program_id, slice_number)
+                """
+            )
+        )
 
 
 def init_db() -> None:
@@ -147,6 +175,7 @@ def init_db() -> None:
     _ensure_run_event_indexes()
     _ensure_task_packet_indexes()
     _ensure_agent_run_indexes()
+    _ensure_program_slice_indexes()
 
 
 def get_session():

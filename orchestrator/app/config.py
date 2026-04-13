@@ -79,6 +79,12 @@ class Settings(BaseSettings):
         default=False,
         alias="OPENAI_ENABLE_BACKGROUND_REQUESTS",
     )
+    program_auto_plan: bool = Field(default=True, alias="PROGRAM_AUTO_PLAN")
+    program_auto_approve: bool = Field(default=True, alias="PROGRAM_AUTO_APPROVE")
+    program_auto_dispatch: bool = Field(default=True, alias="PROGRAM_AUTO_DISPATCH")
+    program_auto_continue: bool = Field(default=True, alias="PROGRAM_AUTO_CONTINUE")
+    program_auto_merge: bool = Field(default=False, alias="PROGRAM_AUTO_MERGE")
+    program_max_revision_attempts: int = Field(default=2, alias="PROGRAM_MAX_REVISION_ATTEMPTS")
 
 
 @lru_cache(maxsize=1)

@@ -59,6 +59,12 @@ class OrchestratorMilestone1Tests(unittest.TestCase):
         "OPENAI_PLANNING_BROAD_REASONING_EFFORT",
         "OPENAI_CONTROL_PLANE_MODE",
         "OPENAI_ENABLE_BACKGROUND_REQUESTS",
+        "PROGRAM_AUTO_PLAN",
+        "PROGRAM_AUTO_APPROVE",
+        "PROGRAM_AUTO_DISPATCH",
+        "PROGRAM_AUTO_CONTINUE",
+        "PROGRAM_AUTO_MERGE",
+        "PROGRAM_MAX_REVISION_ATTEMPTS",
     }
 
     def setUp(self):

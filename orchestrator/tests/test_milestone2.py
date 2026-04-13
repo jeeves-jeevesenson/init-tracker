@@ -68,6 +68,12 @@ class OrchestratorMilestone2Tests(unittest.TestCase):
         "OPENAI_PLANNING_BROAD_REASONING_EFFORT",
         "OPENAI_CONTROL_PLANE_MODE",
         "OPENAI_ENABLE_BACKGROUND_REQUESTS",
+        "PROGRAM_AUTO_PLAN",
+        "PROGRAM_AUTO_APPROVE",
+        "PROGRAM_AUTO_DISPATCH",
+        "PROGRAM_AUTO_CONTINUE",
+        "PROGRAM_AUTO_MERGE",
+        "PROGRAM_MAX_REVISION_ATTEMPTS",
     }
 
     def setUp(self):
@@ -2130,16 +2136,20 @@ class OrchestratorMilestone2Tests(unittest.TestCase):
                 "orchestrator.app.tasks.summarize_work_update",
                 return_value={
                     "review_artifact": {
-                        "what_changed": ["Planner and reviewer paths updated"],
-                        "scope_status": "met",
-                        "likely_risks": ["none identified"],
-                        "missing_validation": [],
+                        "decision": "continue",
+                        "status": "met",
+                        "confidence": 0.9,
+                        "scope_alignment": ["Planner and reviewer paths updated"],
+                        "acceptance_assessment": ["scope met"],
+                        "risk_findings": ["none identified"],
                         "merge_recommendation": "merge_ready",
-                        "send_back_recommendation": "not_needed",
-                        "concise_summary": ["Scope met and ready for review."],
+                        "revision_instructions": [],
+                        "audit_recommendation": "",
+                        "next_slice_hint": "",
+                        "summary": ["Scope met and ready for review."],
                     },
                     "summary_bullets": ["Scope met and ready for review."],
-                    "next_action": "review",
+                    "next_action": "continue",
                 },
             ):
                 with TestClient(main.app) as client:
@@ -2167,7 +2177,7 @@ class OrchestratorMilestone2Tests(unittest.TestCase):
                     task = client.get("/tasks").json()["tasks"][0]
                     review_artifact = task["latest_run"]["review_artifact"]
                     self.assertIsInstance(review_artifact, dict)
-                    self.assertEqual(review_artifact["scope_status"], "met")
+                    self.assertEqual(review_artifact["status"], "met")
                     self.assertEqual(review_artifact["merge_recommendation"], "merge_ready")
 
     def test_fallback_mode_keeps_routing_metadata_separate_from_worker_brief(self):
@@ -2350,6 +2360,250 @@ class OrchestratorMilestone2Tests(unittest.TestCase):
                     self.assertEqual(task["worker_brief"]["objective"], "Fix the narrow bug")
                     self.assertNotIn("recommended_worker", task["worker_brief"])
 
+    def test_program_routes_show_program_and_slice_linkage(self):
+        with tempfile.TemporaryDirectory() as td:
+            os.environ["DATABASE_URL"] = f"sqlite:///{Path(td) / 'orchestrator.db'}"
+            os.environ["GH_WEBHOOK_SECRET"] = "test-gh-secret"
+            main, _ = _reload_orchestrator_modules()
+
+            issue_payload = {
+                "action": "opened",
+                "repository": {"full_name": "jeeves-jeevesenson/init-tracker"},
+                "issue": {
+                    "number": 550,
+                    "node_id": "I_550",
+                    "title": "Program route coverage",
+                    "body": "Large approved objective",
+                    "labels": [{"name": "agent:task"}],
+                },
+            }
+
+            with patch(
+                "orchestrator.app.tasks.plan_task_packet",
+                return_value={
+                    "internal_plan": {
+                        "objective": "Deliver broad objective",
+                        "scope": ["program model", "review loop"],
+                        "non_goals": [],
+                        "acceptance_criteria": ["program visible"],
+                        "validation_guidance": ["python -m pytest orchestrator/tests -q"],
+                        "implementation_brief": "land additive program runner",
+                        "task_type": "feature",
+                        "difficulty": "large",
+                        "repo_areas": ["orchestrator/app"],
+                        "execution_risks": ["event duplication"],
+                        "reviewer_focus": ["program linkage"],
+                        "recommended_scope_class": "broad",
+                        "recommended_worker": "initiative-smith",
+                        "internal_routing_metadata": {},
+                    },
+                    "worker_brief": {
+                        "objective": "Deliver slice 1",
+                        "concise_scope": ["program model"],
+                        "implementation_brief": "implement first slice",
+                        "acceptance_criteria": ["slice 1 complete"],
+                        "validation_commands": ["python -m pytest orchestrator/tests -q"],
+                        "non_goals": [],
+                        "target_branch": "main",
+                        "repo_grounded_hints": ["orchestrator/app/tasks.py"],
+                    },
+                    "program_plan": {
+                        "normalized_program_objective": "Deliver broad objective",
+                        "definition_of_done": ["all slices complete"],
+                        "non_goals": [],
+                        "milestones": [{"key": "M1", "title": "M1", "goal": "slice done"}],
+                        "slices": [
+                            {
+                                "slice_number": 1,
+                                "milestone_key": "M1",
+                                "title": "Slice 1",
+                                "objective": "Deliver slice 1",
+                                "acceptance_criteria": ["slice 1 complete"],
+                                "non_goals": [],
+                                "expected_file_zones": ["orchestrator/app/tasks.py"],
+                                "continuation_hint": "continue",
+                                "slice_type": "implementation",
+                            }
+                        ],
+                        "current_slice_brief": "Deliver slice 1",
+                        "acceptance_criteria": ["slice 1 complete"],
+                        "risk_profile": ["event duplication"],
+                        "recommended_worker": "initiative-smith",
+                        "recommended_scope_class": "broad",
+                        "continuation_hints": ["continue"],
+                    },
+                },
+            ):
+                with TestClient(main.app) as client:
+                    response = self._post_github(
+                        client,
+                        secret="test-gh-secret",
+                        delivery="delivery-program-550",
+                        event="issues",
+                        payload=issue_payload,
+                    )
+                    self.assertEqual(response.status_code, 200)
+                    task = client.get("/tasks").json()["tasks"][0]
+                    self.assertIsNotNone(task["program_id"])
+                    self.assertIsNotNone(task["program_slice_id"])
+
+                    programs_response = client.get("/programs")
+                    self.assertEqual(programs_response.status_code, 200)
+                    programs = programs_response.json()["programs"]
+                    self.assertEqual(len(programs), 1)
+                    self.assertEqual(programs[0]["current_slice"]["task_packet_id"], task["id"])
+
+    def test_reviewer_revise_decision_redispatches_same_slice(self):
+        with tempfile.TemporaryDirectory() as td:
+            os.environ["DATABASE_URL"] = f"sqlite:///{Path(td) / 'orchestrator.db'}"
+            os.environ["GH_WEBHOOK_SECRET"] = "test-gh-secret"
+            os.environ["GITHUB_API_TOKEN"] = "dummy-token"
+            main, db = _reload_orchestrator_modules()
+
+            issue_payload = {
+                "action": "opened",
+                "repository": {"full_name": "jeeves-jeevesenson/init-tracker"},
+                "issue": {
+                    "number": 551,
+                    "node_id": "I_551",
+                    "title": "Revision loop objective",
+                    "body": "Need iterative revisions",
+                    "labels": [{"name": "agent:task"}],
+                },
+            }
+            approve_payload = {
+                "action": "created",
+                "repository": {"full_name": "jeeves-jeevesenson/init-tracker"},
+                "issue": {"number": 551},
+                "comment": {"body": "/approve"},
+            }
+            pr_payload = {
+                "action": "opened",
+                "repository": {"full_name": "jeeves-jeevesenson/init-tracker"},
+                "pull_request": {
+                    "id": 55101,
+                    "number": 5511,
+                    "title": "Implements #551",
+                    "body": "Closes #551",
+                    "html_url": "https://github.com/jeeves-jeevesenson/init-tracker/pull/5511",
+                    "updated_at": "2026-01-01T00:00:00Z",
+                },
+            }
+            workflow_payload = {
+                "action": "completed",
+                "repository": {"full_name": "jeeves-jeevesenson/init-tracker"},
+                "workflow_run": {
+                    "id": 9988,
+                    "name": "CI",
+                    "status": "completed",
+                    "conclusion": "success",
+                    "html_url": "https://github.com/jeeves-jeevesenson/init-tracker/actions/runs/9988",
+                    "pull_requests": [{"number": 5511}],
+                },
+            }
+
+            with patch(
+                "orchestrator.app.tasks.plan_task_packet",
+                return_value={
+                    "objective": "Iterative revision objective",
+                    "scope": ["review loop"],
+                    "non_goals": [],
+                    "acceptance_criteria": ["revision handled"],
+                    "validation_guidance": ["python -m pytest orchestrator/tests -q"],
+                    "implementation_brief": "enable reviewer-driven revisions",
+                    "task_type": "feature",
+                    "difficulty": "medium",
+                    "repo_areas": ["orchestrator/app/tasks.py"],
+                    "execution_risks": ["looping revisions"],
+                    "reviewer_focus": ["revision path"],
+                    "recommended_scope_class": "narrow",
+                    "recommended_worker": "tracker-engineer",
+                    "internal_routing_metadata": {},
+                },
+            ), patch(
+                "orchestrator.app.tasks.dispatch_task_to_github_copilot",
+                return_value=DispatchResult(
+                    attempted=True,
+                    accepted=True,
+                    manual_required=False,
+                    state="accepted",
+                    summary="Dispatch accepted",
+                ),
+            ) as mocked_dispatch, patch(
+                "orchestrator.app.tasks.summarize_work_update",
+                return_value={
+                    "review_artifact": {
+                        "decision": "revise",
+                        "status": "partial",
+                        "confidence": 0.7,
+                        "scope_alignment": ["scope partially met"],
+                        "acceptance_assessment": ["needs another pass"],
+                        "risk_findings": ["minor gaps"],
+                        "merge_recommendation": "review_required",
+                        "revision_instructions": ["address failing edge case"],
+                        "audit_recommendation": "",
+                        "next_slice_hint": "",
+                        "summary": ["Revision requested"],
+                    },
+                    "summary_bullets": ["Revision requested"],
+                    "next_action": "revise",
+                },
+            ):
+                with TestClient(main.app) as client:
+                    self.assertEqual(
+                        self._post_github(
+                            client,
+                            secret="test-gh-secret",
+                            delivery="delivery-program-551-open",
+                            event="issues",
+                            payload=issue_payload,
+                        ).status_code,
+                        200,
+                    )
+                    self.assertEqual(
+                        self._post_github(
+                            client,
+                            secret="test-gh-secret",
+                            delivery="delivery-program-551-approve",
+                            event="issue_comment",
+                            payload=approve_payload,
+                        ).status_code,
+                        200,
+                    )
+                    self.assertEqual(
+                        self._post_github(
+                            client,
+                            secret="test-gh-secret",
+                            delivery="delivery-program-551-pr",
+                            event="pull_request",
+                            payload=pr_payload,
+                        ).status_code,
+                        200,
+                    )
+                    self.assertEqual(
+                        self._post_github(
+                            client,
+                            secret="test-gh-secret",
+                            delivery="delivery-program-551-wf",
+                            event="workflow_run",
+                            payload=workflow_payload,
+                        ).status_code,
+                        200,
+                    )
+
+            self.assertGreaterEqual(mocked_dispatch.call_count, 2)
+            with Session(db.get_engine()) as session:
+                query = (
+                    select(AgentRun)
+                    .where(AgentRun.github_repo == "jeeves-jeevesenson/init-tracker")
+                    .where(AgentRun.github_issue_number == 551)
+                    .order_by(AgentRun.created_at.desc())
+                )
+                runs = list(session.exec(query).all())
+                self.assertGreaterEqual(len(runs), 2)
+                decisions = {run.continuation_decision for run in runs}
+                self.assertIn("revise", decisions)
+
 
 class OpenAIPlanningSchemaTests(unittest.TestCase):
     def test_internal_task_plan_schema_required_matches_properties(self):
@@ -2428,7 +2682,8 @@ class OpenAIPlanningSchemaTests(unittest.TestCase):
 
         self.assertEqual(packet["internal_plan"]["recommended_worker"], None)
         self.assertEqual(packet["internal_plan"]["recommended_scope_class"], None)
-        self.assertEqual(mocked_client.responses.create.call_count, 2)
+        self.assertGreaterEqual(mocked_client.responses.create.call_count, 2)
+        self.assertIn("program_plan", packet)
 
 
 if __name__ == "__main__":

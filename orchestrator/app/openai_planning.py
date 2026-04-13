@@ -6,6 +6,7 @@ from typing import Any
 from openai import OpenAI
 
 from .config import Settings
+from .schema_validation import validate_strict_json_schema
 
 _ALLOWED_WORKERS = {"initiative-smith", "tracker-engineer"}
 _ALLOWED_SCOPE_CLASS = {"broad", "narrow"}
@@ -98,6 +99,77 @@ WORKER_BRIEF_SCHEMA: dict[str, Any] = {
     },
 }
 
+PROGRAM_PLAN_SCHEMA: dict[str, Any] = {
+    "type": "object",
+    "additionalProperties": False,
+    "required": [
+        "normalized_program_objective",
+        "definition_of_done",
+        "non_goals",
+        "milestones",
+        "slices",
+        "current_slice_brief",
+        "acceptance_criteria",
+        "risk_profile",
+        "recommended_worker",
+        "recommended_scope_class",
+        "continuation_hints",
+    ],
+    "properties": {
+        "normalized_program_objective": {"type": "string", "minLength": 1},
+        "definition_of_done": {"type": "array", "items": {"type": "string"}},
+        "non_goals": {"type": "array", "items": {"type": "string"}},
+        "milestones": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "additionalProperties": False,
+                "required": ["key", "title", "goal"],
+                "properties": {
+                    "key": {"type": "string", "minLength": 1},
+                    "title": {"type": "string", "minLength": 1},
+                    "goal": {"type": "string", "minLength": 1},
+                },
+            },
+        },
+        "slices": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "additionalProperties": False,
+                "required": [
+                    "slice_number",
+                    "milestone_key",
+                    "title",
+                    "objective",
+                    "acceptance_criteria",
+                    "non_goals",
+                    "expected_file_zones",
+                    "continuation_hint",
+                    "slice_type",
+                ],
+                "properties": {
+                    "slice_number": {"type": "integer", "minimum": 1},
+                    "milestone_key": {"type": "string", "minLength": 1},
+                    "title": {"type": "string", "minLength": 1},
+                    "objective": {"type": "string", "minLength": 1},
+                    "acceptance_criteria": {"type": "array", "items": {"type": "string"}},
+                    "non_goals": {"type": "array", "items": {"type": "string"}},
+                    "expected_file_zones": {"type": "array", "items": {"type": "string"}},
+                    "continuation_hint": {"type": "string"},
+                    "slice_type": {"type": "string", "enum": ["implementation", "audit"]},
+                },
+            },
+        },
+        "current_slice_brief": {"type": "string", "minLength": 1},
+        "acceptance_criteria": {"type": "array", "items": {"type": "string"}},
+        "risk_profile": {"type": "array", "items": {"type": "string"}},
+        "recommended_worker": {"type": ["string", "null"], "enum": [*sorted(_ALLOWED_WORKERS), None]},
+        "recommended_scope_class": {"type": ["string", "null"], "enum": [*sorted(_ALLOWED_SCOPE_CLASS), None]},
+        "continuation_hints": {"type": "array", "items": {"type": "string"}},
+    },
+}
+
 PLANNING_SYSTEM_PROMPT = (
     "You are the internal planner for a software orchestrator. "
     "Produce a strict JSON object matching the provided schema. "
@@ -187,25 +259,6 @@ def _coerce_scope_class(value: Any) -> str | None:
     return normalized
 
 
-def _validate_schema_required_keys(*, schema_name: str, schema: dict[str, Any]) -> None:
-    properties = schema.get("properties")
-    required = schema.get("required")
-    if not isinstance(properties, dict) or not isinstance(required, list):
-        raise RuntimeError(f"Structured-output schema '{schema_name}' must define object properties and required keys")
-    property_keys = set(properties.keys())
-    required_keys = {key for key in required if isinstance(key, str)}
-    if property_keys != required_keys:
-        missing = sorted(property_keys - required_keys)
-        extra = sorted(required_keys - property_keys)
-        issues: list[str] = []
-        if missing:
-            issues.append(f"missing from required: {', '.join(missing)}")
-        if extra:
-            issues.append(f"not present in properties: {', '.join(extra)}")
-        detail = "; ".join(issues) if issues else "properties/required mismatch"
-        raise RuntimeError(f"Structured-output schema '{schema_name}' is invalid ({detail})")
-
-
 def _coerce_task_type(value: Any) -> str:
     if not isinstance(value, str):
         raise RuntimeError("Planning output field 'task_type' must be a string")
@@ -213,6 +266,10 @@ def _coerce_task_type(value: Any) -> str:
     if normalized not in _ALLOWED_TASK_TYPE:
         raise RuntimeError("Planning output field 'task_type' is invalid")
     return normalized
+
+
+def _validate_schema_required_keys(*, schema_name: str, schema: dict[str, Any]) -> None:
+    validate_strict_json_schema(schema_name=schema_name, schema=schema)
 
 
 def _coerce_difficulty(value: Any) -> str:
@@ -445,13 +502,53 @@ def _build_worker_brief_fallback(*, internal_plan: dict[str, Any], target_branch
     }
 
 
+def _validate_program_plan(raw: dict[str, Any], *, fallback_plan: dict[str, Any]) -> dict[str, Any]:
+    slices = raw.get("slices")
+    if not isinstance(slices, list) or not slices:
+        slices = [
+            {
+                "slice_number": 1,
+                "milestone_key": "M1",
+                "title": "Initial implementation slice",
+                "objective": fallback_plan.get("objective", ""),
+                "acceptance_criteria": fallback_plan.get("acceptance_criteria", []),
+                "non_goals": fallback_plan.get("non_goals", []),
+                "expected_file_zones": fallback_plan.get("repo_areas", []),
+                "continuation_hint": "",
+                "slice_type": "implementation",
+            }
+        ]
+    return {
+        "normalized_program_objective": _coerce_string(
+            raw.get("normalized_program_objective") or fallback_plan.get("objective"),
+            "normalized_program_objective",
+        ),
+        "definition_of_done": _coerce_string_list(raw.get("definition_of_done"), "definition_of_done")
+        or _coerce_string_list(fallback_plan.get("acceptance_criteria"), "acceptance_criteria"),
+        "non_goals": _coerce_string_list(raw.get("non_goals"), "non_goals"),
+        "milestones": raw.get("milestones") if isinstance(raw.get("milestones"), list) else [],
+        "slices": slices,
+        "current_slice_brief": _coerce_string(
+            raw.get("current_slice_brief") or fallback_plan.get("implementation_brief"),
+            "current_slice_brief",
+        ),
+        "acceptance_criteria": _coerce_string_list(raw.get("acceptance_criteria"), "acceptance_criteria"),
+        "risk_profile": _coerce_string_list(raw.get("risk_profile"), "risk_profile"),
+        "recommended_worker": _coerce_optional_worker(raw.get("recommended_worker")),
+        "recommended_scope_class": _coerce_scope_class(raw.get("recommended_scope_class")),
+        "continuation_hints": _coerce_string_list(raw.get("continuation_hints"), "continuation_hints"),
+    }
+
+
 def plan_task_packet(*, settings: Settings, repo: str, issue_number: int, issue_title: str, issue_body: str) -> dict[str, Any]:
     if not settings.openai_api_key:
         raise RuntimeError("OPENAI_API_KEY is required for planning")
 
     client = OpenAI(api_key=settings.openai_api_key)
     planning_effort = _planning_reasoning_effort(settings, issue_title=issue_title, issue_body=issue_body)
-    _validate_schema_required_keys(schema_name="internal_task_plan", schema=INTERNAL_TASK_PLAN_SCHEMA)
+    validate_strict_json_schema(schema_name="internal_task_plan", schema=INTERNAL_TASK_PLAN_SCHEMA)
+    validate_strict_json_schema(schema_name="worker_execution_brief", schema=WORKER_BRIEF_SCHEMA)
+    validate_strict_json_schema(schema_name="program_plan", schema=PROGRAM_PLAN_SCHEMA)
 
     internal_plan_raw = _invoke_structured_response(
         client=client,
@@ -497,9 +594,59 @@ def plan_task_packet(*, settings: Settings, repo: str, issue_number: int, issue_
 
     worker_brief = _validate_worker_brief(worker_brief_raw)
 
+    program_plan_raw: dict[str, Any]
+    try:
+        program_plan_raw = _invoke_structured_response(
+            client=client,
+            model=settings.openai_planning_model,
+            system_prompt=PLANNING_SYSTEM_PROMPT,
+            user_prompt=(
+                _internal_plan_prompt(
+                    repo=repo,
+                    issue_number=issue_number,
+                    issue_title=issue_title,
+                    issue_body=issue_body,
+                )
+                + "\n\nDecompose this into ordered milestone/slice program execution plan."
+            ),
+            schema_name="program_plan",
+            schema=PROGRAM_PLAN_SCHEMA,
+            reasoning_effort=planning_effort,
+            settings=settings,
+            stage="program-planning",
+        )
+    except Exception:
+        program_plan_raw = {
+            "normalized_program_objective": internal_plan.get("objective", ""),
+            "definition_of_done": internal_plan.get("acceptance_criteria", []),
+            "non_goals": internal_plan.get("non_goals", []),
+            "milestones": [{"key": "M1", "title": "Milestone 1", "goal": internal_plan.get("objective", "")}],
+            "slices": [
+                {
+                    "slice_number": 1,
+                    "milestone_key": "M1",
+                    "title": "Initial implementation slice",
+                    "objective": internal_plan.get("objective", ""),
+                    "acceptance_criteria": internal_plan.get("acceptance_criteria", []),
+                    "non_goals": internal_plan.get("non_goals", []),
+                    "expected_file_zones": internal_plan.get("repo_areas", []),
+                    "continuation_hint": "",
+                    "slice_type": "implementation",
+                }
+            ],
+            "current_slice_brief": internal_plan.get("implementation_brief", ""),
+            "acceptance_criteria": internal_plan.get("acceptance_criteria", []),
+            "risk_profile": internal_plan.get("execution_risks", []),
+            "recommended_worker": internal_plan.get("recommended_worker"),
+            "recommended_scope_class": internal_plan.get("recommended_scope_class"),
+            "continuation_hints": [],
+        }
+    program_plan = _validate_program_plan(program_plan_raw, fallback_plan=internal_plan)
+
     return {
         "internal_plan": internal_plan,
         "worker_brief": worker_brief,
+        "program_plan": program_plan,
         "planning_meta": {
             "model": settings.openai_planning_model,
             "reasoning_effort": planning_effort,
