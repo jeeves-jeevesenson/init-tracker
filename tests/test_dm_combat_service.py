@@ -10,6 +10,7 @@ import unittest
 from helper_script import ConditionStack
 
 from combat_service import CombatService
+from dnd_initative_tracker import InitiativeTracker
 
 
 def _make_tracker(num_combatants: int = 3):
@@ -86,119 +87,6 @@ def _make_tracker(num_combatants: int = 3):
         app._oplog_calls.append((msg, level))
 
     app._oplog = _oplog
-
-    # Service-routing wrappers (mirror the real tracker methods).
-    def _next_turn_via_service():
-        dm_svc = getattr(app, "_dm_service", None)
-        if dm_svc is not None:
-            try:
-                result = dm_svc.next_turn()
-                if result.get("ok"):
-                    return
-            except Exception:
-                pass
-        _next_turn()
-        try:
-            _lan_force_state_broadcast()
-        except Exception:
-            pass
-
-    def _adjust_hp_via_service(cid, delta):
-        dm_svc = getattr(app, "_dm_service", None)
-        if dm_svc is not None:
-            try:
-                result = dm_svc.adjust_hp(cid=int(cid), delta=int(delta))
-                if result.get("ok"):
-                    return True
-            except Exception:
-                pass
-        c = app.combatants.get(int(cid))
-        if c is None:
-            return False
-        old_hp = int(getattr(c, "hp", 0) or 0)
-        max_hp = int(getattr(c, "max_hp", old_hp) or old_hp)
-        new_hp = max(0, old_hp + int(delta))
-        if max_hp > 0:
-            new_hp = min(new_hp, max_hp)
-        setattr(c, "hp", new_hp)
-        try:
-            _rebuild_table(scroll_to_current=True)
-        except Exception:
-            pass
-        try:
-            _lan_force_state_broadcast()
-        except Exception:
-            pass
-        return True
-
-    def _set_condition_via_service(cid, ctype, action, remaining_turns=None):
-        dm_svc = getattr(app, "_dm_service", None)
-        if dm_svc is not None:
-            try:
-                result = dm_svc.set_condition(
-                    cid=int(cid), ctype=ctype, action=action,
-                    remaining_turns=remaining_turns,
-                )
-                if result.get("ok"):
-                    return True
-            except Exception:
-                pass
-        c = app.combatants.get(int(cid))
-        if c is None:
-            return False
-        ctype_key = str(ctype or "").strip().lower()
-        if not ctype_key:
-            return False
-        action_key = str(action or "").strip().lower()
-        if action_key == "add":
-            try:
-                _ensure_condition_stack(c, ctype_key, remaining_turns)
-            except Exception:
-                return False
-        elif action_key == "remove":
-            try:
-                _remove_condition_type(c, ctype_key)
-            except Exception:
-                return False
-        else:
-            return False
-        try:
-            _rebuild_table(scroll_to_current=True)
-        except Exception:
-            pass
-        try:
-            _lan_force_state_broadcast()
-        except Exception:
-            pass
-        return True
-
-    def _set_temp_hp_via_service(cid, amount):
-        dm_svc = getattr(app, "_dm_service", None)
-        if dm_svc is not None:
-            try:
-                result = dm_svc.set_temp_hp(cid=int(cid), amount=int(amount))
-                if result.get("ok"):
-                    return True
-            except Exception:
-                pass
-        c = app.combatants.get(int(cid))
-        if c is None:
-            return False
-        setattr(c, "temp_hp", max(0, int(amount)))
-        try:
-            _rebuild_table(scroll_to_current=True)
-        except Exception:
-            pass
-        try:
-            _lan_force_state_broadcast()
-        except Exception:
-            pass
-        return True
-
-    app._next_turn_via_service = _next_turn_via_service
-    app._adjust_hp_via_service = _adjust_hp_via_service
-    app._set_condition_via_service = _set_condition_via_service
-    app._set_temp_hp_via_service = _set_temp_hp_via_service
 
     # Populate combatants
     names = ["Fighter", "Goblin", "Wizard"]
@@ -933,11 +821,11 @@ class CombatServiceAdjustTempHpTests(unittest.TestCase):
 
 
 class ServiceRoutingWrapperTests(unittest.TestCase):
-    """Tests for the _*_via_service() wrapper methods on the tracker.
+    """Tests for the real InitiativeTracker._*_via_service() methods.
 
-    These verify that when _dm_service is set, the wrapper delegates to
-    CombatService, and when it is not set, the wrapper falls back to
-    direct mutation.
+    Uses InitiativeTracker unbound methods called against the
+    SimpleNamespace test double so we exercise the production code
+    without instantiating Tkinter.
     """
 
     def _make_tracker_with_service(self):
@@ -953,7 +841,7 @@ class ServiceRoutingWrapperTests(unittest.TestCase):
         tracker, service = self._make_tracker_with_service()
         c = tracker.combatants[1]
         old_hp = c.hp
-        result = tracker._adjust_hp_via_service(cid=1, delta=-5)
+        result = InitiativeTracker._adjust_hp_via_service(tracker, cid=1, delta=-5)
         self.assertTrue(result)
         self.assertEqual(c.hp, old_hp - 5)
 
@@ -962,26 +850,38 @@ class ServiceRoutingWrapperTests(unittest.TestCase):
         tracker._dm_service = None
         c = tracker.combatants[1]
         old_hp = c.hp
-        result = tracker._adjust_hp_via_service(cid=1, delta=-3)
+        result = InitiativeTracker._adjust_hp_via_service(tracker, cid=1, delta=-3)
         self.assertTrue(result)
         self.assertEqual(c.hp, old_hp - 3)
 
     def test_adjust_hp_via_service_invalid_cid(self):
         tracker, service = self._make_tracker_with_service()
-        result = tracker._adjust_hp_via_service(cid=999, delta=-5)
+        result = InitiativeTracker._adjust_hp_via_service(tracker, cid=999, delta=-5)
         self.assertFalse(result)
 
     def test_adjust_hp_via_service_broadcasts(self):
         tracker, service = self._make_tracker_with_service()
         before = len(tracker._broadcast_calls)
-        tracker._adjust_hp_via_service(cid=1, delta=-5)
+        InitiativeTracker._adjust_hp_via_service(tracker, cid=1, delta=-5)
         self.assertGreater(len(tracker._broadcast_calls), before)
+
+    def test_adjust_hp_via_service_logs_on_failure(self):
+        tracker = _make_tracker()
+        # Attach a broken service that always returns {ok: False}
+        broken = CombatService(tracker)
+        broken.adjust_hp = lambda **kw: {"ok": False, "error": "test failure"}
+        tracker._dm_service = broken
+        InitiativeTracker._adjust_hp_via_service(tracker, cid=1, delta=-5)
+        warnings = [(m, l) for m, l in tracker._oplog_calls if l == "warning"]
+        self.assertTrue(any("adjust_hp" in m for m, _ in warnings))
 
     # -- _set_condition_via_service --
 
     def test_set_condition_via_service_adds_condition(self):
         tracker, service = self._make_tracker_with_service()
-        result = tracker._set_condition_via_service(cid=1, ctype="poisoned", action="add")
+        result = InitiativeTracker._set_condition_via_service(
+            tracker, cid=1, ctype="poisoned", action="add"
+        )
         self.assertTrue(result)
         c = tracker.combatants[1]
         ctypes = [st.ctype for st in c.condition_stacks]
@@ -989,8 +889,12 @@ class ServiceRoutingWrapperTests(unittest.TestCase):
 
     def test_set_condition_via_service_removes_condition(self):
         tracker, service = self._make_tracker_with_service()
-        tracker._set_condition_via_service(cid=1, ctype="stunned", action="add")
-        result = tracker._set_condition_via_service(cid=1, ctype="stunned", action="remove")
+        InitiativeTracker._set_condition_via_service(
+            tracker, cid=1, ctype="stunned", action="add"
+        )
+        result = InitiativeTracker._set_condition_via_service(
+            tracker, cid=1, ctype="stunned", action="remove"
+        )
         self.assertTrue(result)
         c = tracker.combatants[1]
         ctypes = [st.ctype for st in c.condition_stacks]
@@ -999,7 +903,9 @@ class ServiceRoutingWrapperTests(unittest.TestCase):
     def test_set_condition_via_service_fallback(self):
         tracker = _make_tracker()
         tracker._dm_service = None
-        result = tracker._set_condition_via_service(cid=1, ctype="blinded", action="add")
+        result = InitiativeTracker._set_condition_via_service(
+            tracker, cid=1, ctype="blinded", action="add"
+        )
         self.assertTrue(result)
         c = tracker.combatants[1]
         ctypes = [st.ctype for st in c.condition_stacks]
@@ -1007,35 +913,133 @@ class ServiceRoutingWrapperTests(unittest.TestCase):
 
     def test_set_condition_via_service_invalid_cid(self):
         tracker, service = self._make_tracker_with_service()
-        result = tracker._set_condition_via_service(cid=999, ctype="poisoned", action="add")
+        result = InitiativeTracker._set_condition_via_service(
+            tracker, cid=999, ctype="poisoned", action="add"
+        )
         self.assertFalse(result)
+
+    def test_set_condition_via_service_logs_on_failure(self):
+        tracker = _make_tracker()
+        broken = CombatService(tracker)
+        broken.set_condition = lambda **kw: {"ok": False, "error": "test failure"}
+        tracker._dm_service = broken
+        InitiativeTracker._set_condition_via_service(
+            tracker, cid=1, ctype="poisoned", action="add"
+        )
+        warnings = [(m, l) for m, l in tracker._oplog_calls if l == "warning"]
+        self.assertTrue(any("set_condition" in m for m, _ in warnings))
 
     # -- _set_temp_hp_via_service --
 
     def test_set_temp_hp_via_service_sets_value(self):
         tracker, service = self._make_tracker_with_service()
-        result = tracker._set_temp_hp_via_service(cid=1, amount=10)
+        result = InitiativeTracker._set_temp_hp_via_service(tracker, cid=1, amount=10)
         self.assertTrue(result)
         self.assertEqual(tracker.combatants[1].temp_hp, 10)
 
     def test_set_temp_hp_via_service_clears_temp_hp(self):
         tracker, service = self._make_tracker_with_service()
         tracker.combatants[1].temp_hp = 8
-        result = tracker._set_temp_hp_via_service(cid=1, amount=0)
+        result = InitiativeTracker._set_temp_hp_via_service(tracker, cid=1, amount=0)
         self.assertTrue(result)
         self.assertEqual(tracker.combatants[1].temp_hp, 0)
 
     def test_set_temp_hp_via_service_fallback(self):
         tracker = _make_tracker()
         tracker._dm_service = None
-        result = tracker._set_temp_hp_via_service(cid=1, amount=15)
+        result = InitiativeTracker._set_temp_hp_via_service(tracker, cid=1, amount=15)
         self.assertTrue(result)
         self.assertEqual(tracker.combatants[1].temp_hp, 15)
 
     def test_set_temp_hp_via_service_invalid_cid(self):
         tracker, service = self._make_tracker_with_service()
-        result = tracker._set_temp_hp_via_service(cid=999, amount=10)
+        result = InitiativeTracker._set_temp_hp_via_service(tracker, cid=999, amount=10)
         self.assertFalse(result)
+
+    def test_set_temp_hp_via_service_logs_on_failure(self):
+        tracker = _make_tracker()
+        broken = CombatService(tracker)
+        broken.set_temp_hp = lambda **kw: {"ok": False, "error": "test failure"}
+        tracker._dm_service = broken
+        InitiativeTracker._set_temp_hp_via_service(tracker, cid=1, amount=10)
+        warnings = [(m, l) for m, l in tracker._oplog_calls if l == "warning"]
+        self.assertTrue(any("set_temp_hp" in m for m, _ in warnings))
+
+
+class CombatServiceManualOverrideTests(unittest.TestCase):
+    """Tests for CombatService.manual_override() (atomic HP + temp-HP)."""
+
+    def setUp(self):
+        self.tracker = _make_tracker()
+        self.service = CombatService(self.tracker)
+
+    def test_hp_only(self):
+        c = self.tracker.combatants[1]
+        old_hp = c.hp
+        result = self.service.manual_override(cid=1, hp_delta=-5)
+        self.assertTrue(result["ok"])
+        self.assertEqual(result["hp_after"], old_hp - 5)
+        self.assertEqual(c.hp, old_hp - 5)
+
+    def test_temp_hp_only(self):
+        c = self.tracker.combatants[1]
+        c.temp_hp = 0
+        result = self.service.manual_override(cid=1, temp_hp_delta=8)
+        self.assertTrue(result["ok"])
+        self.assertEqual(result["temp_hp_after"], 8)
+        self.assertEqual(c.temp_hp, 8)
+
+    def test_both_hp_and_temp_hp(self):
+        c = self.tracker.combatants[1]
+        old_hp = c.hp
+        c.temp_hp = 5
+        result = self.service.manual_override(cid=1, hp_delta=-3, temp_hp_delta=2)
+        self.assertTrue(result["ok"])
+        self.assertEqual(result["hp_after"], old_hp - 3)
+        self.assertEqual(result["temp_hp_after"], 7)
+        self.assertEqual(c.hp, old_hp - 3)
+        self.assertEqual(c.temp_hp, 7)
+
+    def test_hp_clamped_to_zero(self):
+        c = self.tracker.combatants[1]
+        result = self.service.manual_override(cid=1, hp_delta=-999)
+        self.assertTrue(result["ok"])
+        self.assertEqual(result["hp_after"], 0)
+        self.assertEqual(c.hp, 0)
+
+    def test_hp_clamped_to_max(self):
+        c = self.tracker.combatants[1]
+        result = self.service.manual_override(cid=1, hp_delta=999)
+        self.assertTrue(result["ok"])
+        self.assertEqual(result["hp_after"], c.max_hp)
+
+    def test_temp_hp_clamped_to_zero(self):
+        c = self.tracker.combatants[1]
+        c.temp_hp = 3
+        result = self.service.manual_override(cid=1, temp_hp_delta=-100)
+        self.assertTrue(result["ok"])
+        self.assertEqual(result["temp_hp_after"], 0)
+        self.assertEqual(c.temp_hp, 0)
+
+    def test_unknown_cid_returns_error(self):
+        result = self.service.manual_override(cid=999, hp_delta=-5)
+        self.assertFalse(result["ok"])
+        self.assertIn("error", result)
+
+    def test_triggers_single_broadcast(self):
+        before = len(self.tracker._broadcast_calls)
+        self.service.manual_override(cid=1, hp_delta=-5, temp_hp_delta=3)
+        # Should be exactly one broadcast, not two
+        self.assertEqual(len(self.tracker._broadcast_calls), before + 1)
+
+    def test_no_change_when_both_zero(self):
+        c = self.tracker.combatants[1]
+        old_hp = c.hp
+        old_temp = c.temp_hp
+        result = self.service.manual_override(cid=1, hp_delta=0, temp_hp_delta=0)
+        self.assertTrue(result["ok"])
+        self.assertEqual(c.hp, old_hp)
+        self.assertEqual(c.temp_hp, old_temp)
 
 
 if __name__ == "__main__":

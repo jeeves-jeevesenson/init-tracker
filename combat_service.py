@@ -459,6 +459,77 @@ class CombatService:
                 "delta": int(delta),
             }
 
+    def manual_override(
+        self, cid: int, hp_delta: int = 0, temp_hp_delta: int = 0
+    ) -> Dict[str, Any]:
+        """Atomically apply HP and/or temp-HP deltas under a single lock acquisition.
+
+        This is the backend equivalent of the LAN player ``manual_override_hp``
+        action.  Both deltas are applied inside one locked section so no other
+        service-routed mutation can interleave between them.
+
+        Args:
+            cid:           Combatant ID.
+            hp_delta:      Regular HP delta (negative = damage, positive = heal).
+            temp_hp_delta: Temporary HP delta (positive = add, negative = remove).
+
+        Returns: {ok, cid, hp_before, hp_after, temp_hp_before, temp_hp_after}
+          or  {ok: False, error: str}
+        """
+        with self._lock:
+            t = self._tracker
+            combatants = getattr(t, "combatants", {}) or {}
+            c = combatants.get(int(cid))
+            if c is None:
+                return {"ok": False, "error": f"Combatant {cid} not found."}
+
+            # HP adjustment
+            old_hp = int(getattr(c, "hp", 0) or 0)
+            max_hp = int(getattr(c, "max_hp", old_hp) or old_hp)
+            new_hp = old_hp
+            if hp_delta != 0:
+                new_hp = max(0, old_hp + int(hp_delta))
+                if max_hp > 0:
+                    new_hp = min(new_hp, max_hp)
+                setattr(c, "hp", new_hp)
+
+            # Temp HP adjustment
+            old_temp = int(getattr(c, "temp_hp", 0) or 0)
+            new_temp = old_temp
+            if temp_hp_delta != 0:
+                new_temp = max(0, old_temp + int(temp_hp_delta))
+                setattr(c, "temp_hp", new_temp)
+
+            # Log, rebuild, broadcast once for both changes
+            updates: List[str] = []
+            if hp_delta != 0:
+                updates.append(f"HP {old_hp}→{new_hp} ({hp_delta:+d})")
+            if temp_hp_delta != 0:
+                updates.append(f"Temp HP {old_temp}→{new_temp} ({temp_hp_delta:+d})")
+            try:
+                t._log(
+                    f"{getattr(c, 'name', 'Combatant')} manual override: {', '.join(updates)}.",
+                    cid=int(cid),
+                )
+            except Exception:
+                pass
+            try:
+                t._rebuild_table(scroll_to_current=True)
+            except Exception:
+                pass
+            try:
+                t._lan_force_state_broadcast()
+            except Exception:
+                pass
+            return {
+                "ok": True,
+                "cid": int(cid),
+                "hp_before": old_hp,
+                "hp_after": new_hp,
+                "temp_hp_before": old_temp,
+                "temp_hp_after": new_temp,
+            }
+
     def start_combat(self) -> Dict[str, Any]:
         """Start combat by beginning the initiative turn order.
 

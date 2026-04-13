@@ -8951,8 +8951,15 @@ class InitiativeTracker(base.InitiativeTracker):
                 result = dm_svc.adjust_hp(cid=int(cid), delta=int(delta))
                 if result.get("ok"):
                     return True
-            except Exception:
-                pass
+                self._oplog(
+                    f"CombatService.adjust_hp failed: {result.get('error', 'unknown error')}",
+                    level="warning",
+                )
+            except Exception as exc:
+                self._oplog(
+                    f"CombatService.adjust_hp exception: {exc}",
+                    level="warning",
+                )
         # Fallback: direct mutation
         c = self.combatants.get(int(cid))
         if c is None:
@@ -8974,7 +8981,7 @@ class InitiativeTracker(base.InitiativeTracker):
         return True
 
     def _set_condition_via_service(
-        self, cid: int, ctype: str, action: str, remaining_turns: int = None
+        self, cid: int, ctype: str, action: str, remaining_turns: Optional[int] = None
     ) -> bool:
         """Add or remove a condition, routing through CombatService when available.
 
@@ -8991,8 +8998,15 @@ class InitiativeTracker(base.InitiativeTracker):
                 )
                 if result.get("ok"):
                     return True
-            except Exception:
-                pass
+                self._oplog(
+                    f"CombatService.set_condition failed: {result.get('error', 'unknown error')}",
+                    level="warning",
+                )
+            except Exception as exc:
+                self._oplog(
+                    f"CombatService.set_condition exception: {exc}",
+                    level="warning",
+                )
         # Fallback: direct condition mutation
         c = self.combatants.get(int(cid))
         if c is None:
@@ -9036,8 +9050,15 @@ class InitiativeTracker(base.InitiativeTracker):
                 result = dm_svc.set_temp_hp(cid=int(cid), amount=int(amount))
                 if result.get("ok"):
                     return True
-            except Exception:
-                pass
+                self._oplog(
+                    f"CombatService.set_temp_hp failed: {result.get('error', 'unknown error')}",
+                    level="warning",
+                )
+            except Exception as exc:
+                self._oplog(
+                    f"CombatService.set_temp_hp exception: {exc}",
+                    level="warning",
+                )
         # Fallback: direct mutation
         c = self.combatants.get(int(cid))
         if c is None:
@@ -29644,14 +29665,13 @@ class InitiativeTracker(base.InitiativeTracker):
             if hp_delta == 0 and temp_hp_delta == 0:
                 self._lan.toast(ws_id, "Pick a non-zero override amount, matey.")
                 return
-            # Route through CombatService when available so the service lock
-            # and broadcast cover player-originated HP/temp-HP overrides.
+            # Route through CombatService.manual_override when available so
+            # both HP and temp-HP deltas are applied atomically under one lock.
             dm_svc = getattr(self, "_dm_service", None)
             if dm_svc is not None:
-                if hp_delta != 0:
-                    dm_svc.adjust_hp(cid=int(cid), delta=hp_delta)
-                if temp_hp_delta != 0:
-                    dm_svc.adjust_temp_hp(cid=int(cid), delta=temp_hp_delta)
+                dm_svc.manual_override(
+                    cid=int(cid), hp_delta=hp_delta, temp_hp_delta=temp_hp_delta,
+                )
                 self._lan.toast(ws_id, "Manual override applied.")
                 return
             # Fallback: direct mutation when service is not running.
