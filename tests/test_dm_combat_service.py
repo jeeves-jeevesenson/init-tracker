@@ -7,6 +7,8 @@ without requiring the Tkinter UI to be running.
 import types
 import unittest
 
+from helper_script import ConditionStack
+
 from combat_service import CombatService
 
 
@@ -55,7 +57,6 @@ def _make_tracker(num_combatants: int = 3):
         return [app.combatants[k] for k in sorted(app.combatants.keys())]
 
     def _ensure_condition_stack(c, ctype, remaining_turns):
-        from helper_script import ConditionStack
         for st in getattr(c, "condition_stacks", []):
             if st.ctype == ctype:
                 st.remaining_turns = remaining_turns
@@ -80,7 +81,6 @@ def _make_tracker(num_combatants: int = 3):
     app._lan_battle_log_lines = _lan_battle_log_lines
 
     # Populate combatants
-    from helper_script import ConditionStack
     names = ["Fighter", "Goblin", "Wizard"]
     for i in range(num_combatants):
         cid = i + 1

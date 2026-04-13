@@ -34,7 +34,6 @@ Usage (from LanController routes):
 """
 from __future__ import annotations
 
-import threading
 from typing import TYPE_CHECKING, Any, Dict, List, Optional
 
 if TYPE_CHECKING:
@@ -77,7 +76,6 @@ class CombatService:
         if tracker is None:
             raise ValueError("CombatService requires an InitiativeTracker instance.")
         self._tracker = tracker
-        self._lock = threading.Lock()
 
     # ------------------------------------------------------------------
     # Read: snapshot

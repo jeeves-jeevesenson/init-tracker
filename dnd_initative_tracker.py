@@ -3602,7 +3602,7 @@ class LanController:
                 result = _dm_service.next_turn()
                 if not result.get("ok"):
                     raise HTTPException(status_code=500, detail=result.get("error", "next_turn failed"))
-                return result
+                return {"ok": True, "snapshot": result.get("snapshot") or _dm_service.combat_snapshot()}
             except HTTPException:
                 raise
             except Exception as exc:
@@ -3630,8 +3630,14 @@ class LanController:
                 result = _dm_service.adjust_hp(cid=int(cid), delta=delta)
                 if not result.get("ok"):
                     raise HTTPException(status_code=400, detail=result.get("error", "adjust_hp failed"))
-                result["snapshot"] = _dm_service.combat_snapshot()
-                return result
+                return {
+                    "ok": True,
+                    "cid": result.get("cid"),
+                    "hp_before": result.get("hp_before"),
+                    "hp_after": result.get("hp_after"),
+                    "delta": result.get("delta"),
+                    "snapshot": _dm_service.combat_snapshot(),
+                }
             except HTTPException:
                 raise
             except Exception as exc:
@@ -3668,8 +3674,13 @@ class LanController:
                 )
                 if not result.get("ok"):
                     raise HTTPException(status_code=400, detail=result.get("error", "set_condition failed"))
-                result["snapshot"] = _dm_service.combat_snapshot()
-                return result
+                return {
+                    "ok": True,
+                    "cid": result.get("cid"),
+                    "ctype": result.get("ctype"),
+                    "action": result.get("action"),
+                    "snapshot": _dm_service.combat_snapshot(),
+                }
             except HTTPException:
                 raise
             except Exception as exc:

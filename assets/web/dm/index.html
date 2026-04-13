@@ -456,7 +456,7 @@ function applySnapshot(snap) {
 
   // Next turn button
   const ntBtn = document.getElementById('nextTurnBtn');
-  ntBtn.disabled = !snap.in_combat && !(snap.combatants && snap.combatants.length > 0);
+  ntBtn.disabled = !snap.in_combat || !(snap.combatants && snap.combatants.length > 0);
 
   // Populate combatant selects
   const combatants = snap.combatants || [];
