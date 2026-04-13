@@ -1065,11 +1065,11 @@ class CombatServicePrevTurnTests(unittest.TestCase):
                 app.current_cid = ids[0]
                 return
             idx = ids.index(app.current_cid)
-            prv = idx - 1
-            if prv < 0:
-                prv = len(ids) - 1
+            prev_idx = idx - 1
+            if prev_idx < 0:
+                prev_idx = len(ids) - 1
                 app.round_num = max(1, app.round_num - 1)
-            app.current_cid = ids[prv]
+            app.current_cid = ids[prev_idx]
             app.turn_num = max(0, app.turn_num - 1)
 
         app._prev_turn = _prev_turn
@@ -1212,10 +1212,10 @@ class PrevTurnViaServiceTests(unittest.TestCase):
             if not ids:
                 return
             idx = ids.index(tracker.current_cid) if tracker.current_cid in ids else 0
-            prv = idx - 1
-            if prv < 0:
-                prv = len(ids) - 1
-            tracker.current_cid = ids[prv]
+            prev_idx = idx - 1
+            if prev_idx < 0:
+                prev_idx = len(ids) - 1
+            tracker.current_cid = ids[prev_idx]
 
         tracker._prev_turn = _prev_turn
         service = CombatService(tracker)
