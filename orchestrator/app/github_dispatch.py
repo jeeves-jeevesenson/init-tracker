@@ -7,7 +7,7 @@ from typing import Any
 import httpx
 
 from .config import Settings
-from .copilot_identity import normalize_configured_copilot_login, normalize_login
+from .copilot_identity import normalize_configured_copilot_login, normalize_copilot_login
 from .models import TaskPacket
 
 
@@ -126,7 +126,7 @@ def dispatch_task_to_github_copilot(*, settings: Settings, task: TaskPacket) -> 
                 else {}
             )
             raw_assignee_logins = sorted(_extract_assignee_logins(assign_payload))
-            assignee_logins = {normalize_login(login) for login in raw_assignee_logins}
+            assignee_logins = {normalize_copilot_login(login) for login in raw_assignee_logins}
             if expected_assignee_login not in assignee_logins:
                 return DispatchResult(
                     attempted=True,
