@@ -3,7 +3,9 @@ from __future__ import annotations
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlmodel import Session
 
+from .config import get_settings
 from .db import get_session
+from .github_dispatch import run_preflight_checks
 from .programs import get_program_with_slices, list_programs, program_to_dict
 from .tasks import get_task_with_latest_run, list_tasks, task_to_dict
 
@@ -54,3 +56,23 @@ def get_program(program_id: int, session: Session = Depends(get_session)):
     if program is None:
         raise HTTPException(status_code=404, detail="program not found")
     return {"ok": True, "program": program_to_dict(program, slices)}
+
+
+@router.get("/preflight")
+def get_preflight():
+    """Run a preflight diagnostic and report whether this environment can support
+    unattended trusted program continuation.
+
+    Returns a structured report covering:
+    - GitHub API token presence
+    - auto_merge / auto_continue / auto_dispatch / auto_approve / trusted_kickoff settings
+    - capability assessment for: issue creation, PR readiness, PR merge, dispatch, next-slice dispatch
+    - unattended_continuation (true only when all prerequisites are met)
+    - blockers: list of strings describing what is currently preventing unattended operation
+    - admin_prerequisites: list of one-time GitHub/admin actions required
+
+    Use this endpoint before starting a trusted program run to confirm the chain can proceed.
+    """
+    settings = get_settings()
+    report = run_preflight_checks(settings=settings)
+    return {"ok": True, "preflight": report}

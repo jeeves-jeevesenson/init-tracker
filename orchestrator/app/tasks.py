@@ -20,6 +20,7 @@ from .models import (
     APPROVAL_APPROVED,
     APPROVAL_PENDING,
     APPROVAL_REJECTED,
+    BLOCKER_WAITING_FOR_PERMISSIONS,
     BLOCKER_WAITING_FOR_PR_READY,
     BLOCKER_WAITING_FOR_WORKFLOW_APPROVAL,
     RUN_STATUS_AWAITING_WORKER_START,
@@ -1014,13 +1015,17 @@ def _summarize_and_store(
             )
         else:
             # Un-draft failed; surface an explicit blocker so the operator can act.
+            # Distinguish permission failures (403) from other errors so the operator
+            # knows whether this is a token scope issue or a transient problem.
+            is_permissions_error = "403" in msg or "forbidden" in msg.lower() or "permission" in msg.lower()
+            blocker_reason = BLOCKER_WAITING_FOR_PERMISSIONS if is_permissions_error else BLOCKER_WAITING_FOR_PR_READY
             if task.program_id:
                 from .models import Program as _Program
                 prog = session.get(_Program, task.program_id)
                 if prog is not None:
                     prog.blocker_state_json = json.dumps(
                         {
-                            "reason": BLOCKER_WAITING_FOR_PR_READY,
+                            "reason": blocker_reason,
                             "pr_number": run.github_pr_number,
                             "detail": msg,
                         },

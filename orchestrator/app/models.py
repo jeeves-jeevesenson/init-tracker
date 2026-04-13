@@ -66,6 +66,9 @@ BLOCKER_WAITING_FOR_CHECKS = "waiting_for_checks"
 BLOCKER_WAITING_FOR_MERGE = "waiting_for_merge"
 BLOCKER_WAITING_FOR_ISSUE_CREATION = "waiting_for_issue_creation_capability"
 BLOCKER_ESCALATED_TO_HUMAN = "escalated_to_human"
+BLOCKER_WAITING_FOR_PERMISSIONS = "waiting_for_permissions"
+BLOCKER_WAITING_FOR_REPO_SETTING = "waiting_for_repo_setting"
+BLOCKER_AUTO_MERGE_DISABLED = "auto_merge_disabled"
 
 
 class Program(SQLModel, table=True):
