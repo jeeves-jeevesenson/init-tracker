@@ -706,7 +706,7 @@ def _run_governor_loop(
             state["reviewer_cleanup_result"] = f"failed:{cleanup_msg}"
             _governor_logger.warning("Governor reviewer cleanup failed for %s on PR #%s: %s", remove_login, pr_number, cleanup_msg)
     elif remove_login:
-        state["reviewer_cleanup_result"] = "not_applicable"
+        state["reviewer_cleanup_result"] = "not_applicable:reviewer_not_present"
     else:
         state["reviewer_cleanup_result"] = "skipped:no_login_configured"
 
