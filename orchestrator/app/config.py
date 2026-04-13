@@ -1,5 +1,13 @@
+import os
+
 from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+
+ENV_FILE = os.getenv(
+    "ORCHESTRATOR_ENV_FILE",
+    "/opt/init-orchestrator/secrets/orchestrator.env",
+)
 
 
 class Settings(BaseSettings):
@@ -10,7 +18,7 @@ class Settings(BaseSettings):
     orchestrator_secret_key: str
 
     model_config = SettingsConfigDict(
-        env_file="/home/jeeves/.config/init-orchestrator/secrets.env",
+        env_file=ENV_FILE,
         env_file_encoding="utf-8",
         extra="ignore",
     )
