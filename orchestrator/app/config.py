@@ -8,6 +8,8 @@ from dotenv import load_dotenv
 from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
+from .copilot_identity import DOCUMENTED_COPILOT_ASSIGNEE_LOGIN
+
 DEFAULT_ENV_FILE = Path("/opt/init-orchestrator/secrets/orchestrator.env")
 DEFAULT_DATABASE_URL = "sqlite:////opt/init-orchestrator/state/orchestrator.db"
 
@@ -40,7 +42,10 @@ class Settings(BaseSettings):
     task_label: str = Field(default="agent:task", alias="TASK_LABEL")
     task_approved_label: str = Field(default="agent:approved", alias="TASK_APPROVED_LABEL")
 
-    copilot_dispatch_assignee: str = Field(default="copilot-swe-agent", alias="COPILOT_DISPATCH_ASSIGNEE")
+    copilot_dispatch_assignee: str = Field(
+        default=DOCUMENTED_COPILOT_ASSIGNEE_LOGIN,
+        alias="COPILOT_DISPATCH_ASSIGNEE",
+    )
     copilot_target_branch: str = Field(default="main", alias="COPILOT_TARGET_BRANCH")
     copilot_target_repo: str | None = Field(default=None, alias="COPILOT_TARGET_REPO")
     copilot_custom_instructions: str | None = Field(default=None, alias="COPILOT_CUSTOM_INSTRUCTIONS")
