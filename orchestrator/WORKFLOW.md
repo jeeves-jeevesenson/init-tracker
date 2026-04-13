@@ -14,6 +14,25 @@
    - implementation brief
 5. Task status moves to `awaiting_approval`.
 
+## Worker routing (custom agents)
+
+Each task is routed to a GitHub custom agent and that selection is persisted on task/run state.
+
+Auto-routing defaults:
+- **Initiative Smith** (`Initiative Smith`) for broad work (migration, architecture, broad refactors, stabilization, end-to-end slices)
+- **Tracker Engineer** (`Initiative Tracker Engineer`) for focused work (bug fixes, follow-ups, polish, contained subsystem work, hardening patches)
+
+Routing is deterministic and inspectable:
+- OpenAI planning can include `recommended_worker` and `recommended_scope_class`
+- orchestrator applies simple fallback keyword rules
+- final fields persisted include `selected_custom_agent`, `worker_selection_mode`, and `worker_selection_reason`
+
+Manual override labels:
+- `agent:initiative-smith`
+- `agent:tracker-engineer`
+
+Override labels win over auto-routing. Unknown `agent:*` override values fail clearly and block approval until corrected.
+
 ## Approval flow
 
 Supported approval/rejection signals:
@@ -42,11 +61,11 @@ Dispatch uses GitHub REST API for existing issue assignment:
 3. body includes:
    - `assignees: [COPILOT_DISPATCH_ASSIGNEE]` (canonical/default `copilot-swe-agent[bot]`; legacy aliases are normalized)
    - `agent_assignment` fields:
-     - `target_repo`
-     - `base_branch`
-     - `custom_instructions` (optional)
-     - `custom_agent` (optional)
-     - `model` (optional)
+      - `target_repo`
+      - `base_branch`
+      - `custom_instructions` (optional)
+      - `custom_agent` (selected routed worker; optional only when no selection exists)
+      - `model` (optional)
 4. normalized task packet comment is posted after accepted assignment as a secondary artifact
 
 Dispatch state semantics are intentionally conservative:
@@ -78,6 +97,7 @@ Behavior:
 
 Used in two places:
 1. **Planning**: issue -> normalized task packet (stored on `TaskPacket`)
+   - planner can also provide compact routing hints: `recommended_worker`, `recommended_scope_class`
 2. **Review summarization**: PR/check updates -> concise bullets + suggested next action
 
 ## Discord notifications
@@ -95,13 +115,15 @@ Sent for meaningful transitions:
 - task failed
 - task completed
 
+Task planned/approved/dispatched/manual-dispatch and PR/check notifications include the selected worker.
+
 ## Inspection routes
 
 - `GET /runs` (existing)
 - `GET /tasks`
 - `GET /tasks/{id}`
 
-Routes are plain JSON for operational inspection.
+Routes are plain JSON for operational inspection and include selected worker, selection source/reason, dispatch payload summary, worker state, and PR linkage.
 
 ## Required environment variables
 
@@ -130,7 +152,7 @@ Optional tuning:
 - `COPILOT_TARGET_BRANCH` (default `main`)
 - `COPILOT_TARGET_REPO` (default task repository)
 - `COPILOT_CUSTOM_INSTRUCTIONS` (optional extra instructions sent in `agent_assignment`)
-- `COPILOT_CUSTOM_AGENT` (optional GitHub custom agent identifier)
+- `COPILOT_CUSTOM_AGENT` (optional fallback custom agent if task routing did not set one)
 - `COPILOT_MODEL` (optional model override in `agent_assignment`)
 - `OPENAI_PLANNING_MODEL` (default `gpt-4.1-mini`)
 - `OPENAI_REVIEW_MODEL` (default `gpt-4.1-mini`)
