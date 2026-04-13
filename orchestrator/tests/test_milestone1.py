@@ -38,6 +38,16 @@ class OrchestratorMilestone1Tests(unittest.TestCase):
         "OPENAI_API_KEY",
         "DISCORD_WEBHOOK_URL",
         "ORCHESTRATOR_SECRET_KEY",
+        "GITHUB_API_TOKEN",
+        "GITHUB_API_URL",
+        "DEFAULT_REPO_OWNER",
+        "DEFAULT_REPO_NAME",
+        "TASK_LABEL",
+        "TASK_APPROVED_LABEL",
+        "COPILOT_DISPATCH_ASSIGNEE",
+        "COPILOT_TARGET_BRANCH",
+        "OPENAI_PLANNING_MODEL",
+        "OPENAI_REVIEW_MODEL",
     }
 
     def setUp(self):
@@ -147,7 +157,7 @@ class OrchestratorMilestone1Tests(unittest.TestCase):
                     self.assertEqual(second.status_code, 200)
                     self.assertFalse(first.json()["duplicate"])
                     self.assertTrue(second.json()["duplicate"])
-                    self.assertEqual(mocked_notify.call_count, 1)
+                    self.assertEqual(mocked_notify.call_count, 0)
 
                     runs_response = client.get("/runs")
                     self.assertEqual(runs_response.status_code, 200)

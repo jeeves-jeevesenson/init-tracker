@@ -11,6 +11,12 @@ from .config import get_settings
 from .db import get_session
 from .discord_notify import notify_discord
 from .runs import record_run_event_idempotent
+from .tasks import (
+    process_issue_comment_event,
+    process_issue_event,
+    process_pull_request_event,
+    process_workflow_run_event,
+)
 
 router = APIRouter(prefix="/github", tags=["github"])
 
@@ -64,6 +70,17 @@ async def github_webhook(request: Request, session: Session = Depends(get_sessio
         summary=f"GitHub event recorded: {event_type}",
         payload_json=body.decode("utf-8"),
     )
-    if is_new:
-        notify_discord(f"Orchestrator: GitHub event recorded ({event_type}).")
-    return {"ok": True, "source": "github", "event_type": event_type, "duplicate": not is_new}
+    if not is_new:
+        return {"ok": True, "source": "github", "event_type": event_type, "duplicate": True}
+
+    if isinstance(payload, dict):
+        if event_type == "issues":
+            process_issue_event(session, settings=settings, payload=payload, action=action)
+        elif event_type == "issue_comment":
+            process_issue_comment_event(session, settings=settings, payload=payload, action=action)
+        elif event_type == "pull_request":
+            process_pull_request_event(session, settings=settings, payload=payload, action=action)
+        elif event_type == "workflow_run":
+            process_workflow_run_event(session, settings=settings, payload=payload, action=action)
+
+    return {"ok": True, "source": "github", "event_type": event_type, "duplicate": False}
