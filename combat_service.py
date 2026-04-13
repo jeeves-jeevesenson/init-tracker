@@ -434,7 +434,7 @@ class CombatService:
             new_temp = max(0, old_temp + int(delta))
             setattr(c, "temp_hp", new_temp)
 
-            direction = "gained" if delta > 0 else "lost"
+            direction = "gained" if delta > 0 else ("lost" if delta < 0 else "adjusted by 0")
             try:
                 t._log(
                     f"{getattr(c, 'name', 'Combatant')} {direction} {abs(delta)}"
