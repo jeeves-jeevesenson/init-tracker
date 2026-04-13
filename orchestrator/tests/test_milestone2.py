@@ -57,6 +57,7 @@ class OrchestratorMilestone2Tests(unittest.TestCase):
         "COPILOT_TARGET_REPO",
         "COPILOT_CUSTOM_INSTRUCTIONS",
         "COPILOT_CUSTOM_AGENT",
+        "ENABLE_GITHUB_CUSTOM_AGENT_DISPATCH",
         "COPILOT_MODEL",
         "OPENAI_PLANNING_MODEL",
         "OPENAI_REVIEW_MODEL",
@@ -463,7 +464,7 @@ class OrchestratorMilestone2Tests(unittest.TestCase):
                     dispatch_id="c_1",
                     dispatch_url="https://github.com/example/comment/1",
                 ),
-            ) as mocked_dispatch:
+            ) as mocked_dispatch, patch("orchestrator.app.tasks.notify_discord") as mocked_notify:
                 with TestClient(main.app) as client:
                     opened = self._post_github(
                         client,
@@ -498,12 +499,20 @@ class OrchestratorMilestone2Tests(unittest.TestCase):
                     self.assertEqual(task["latest_run"]["status"], "awaiting_worker_start")
                     self.assertEqual(task["selected_custom_agent"], CUSTOM_AGENT_TRACKER_ENGINEER)
                     self.assertIsInstance(task["dispatch_payload_summary"], dict)
-                    self.assertEqual(
-                        task["dispatch_payload_summary"]["agent_assignment"]["custom_agent"],
-                        CUSTOM_AGENT_TRACKER_ENGINEER,
+                    self.assertNotIn("custom_agent", task["dispatch_payload_summary"]["agent_assignment"])
+                    self.assertIn(
+                        "dispatch_mode=plain_copilot_fallback",
+                        task["dispatch_payload_summary"]["dispatch_mode_summary"],
                     )
 
                 self.assertEqual(mocked_dispatch.call_count, 1)
+                task_dispatch_messages = [
+                    str(call.args[0])
+                    for call in mocked_notify.call_args_list
+                    if call.args and str(call.args[0]).startswith("Task dispatched:")
+                ]
+                self.assertEqual(len(task_dispatch_messages), 1)
+                self.assertIn("dispatch_mode=plain_copilot_fallback", task_dispatch_messages[0])
 
                 with Session(db.get_engine()) as session:
                     run_count = len(list(session.exec(select(AgentRun)).all()))
@@ -695,8 +704,9 @@ class OrchestratorMilestone2Tests(unittest.TestCase):
             self.assertEqual(payload["agent_assignment"]["target_repo"], "jeeves-jeevesenson/init-tracker")
             self.assertEqual(payload["agent_assignment"]["base_branch"], "main")
             self.assertEqual(payload["agent_assignment"]["custom_instructions"], "Follow repo workflow.")
-            self.assertEqual(payload["agent_assignment"]["custom_agent"], "Initiative Smith")
+            self.assertNotIn("custom_agent", payload["agent_assignment"])
             self.assertEqual(payload["agent_assignment"]["model"], "gpt-4.1-mini")
+            self.assertIn("dispatch_mode=plain_copilot_fallback", result.summary)
 
     def test_dispatch_payload_prefers_task_selected_custom_agent(self):
         with patch.dict(
@@ -708,6 +718,7 @@ class OrchestratorMilestone2Tests(unittest.TestCase):
                 "COPILOT_TARGET_BRANCH": "main",
                 "COPILOT_TARGET_REPO": "jeeves-jeevesenson/init-tracker",
                 "COPILOT_CUSTOM_AGENT": "Initiative Smith",
+                "ENABLE_GITHUB_CUSTOM_AGENT_DISPATCH": "true",
             },
             clear=False,
         ):
@@ -747,6 +758,7 @@ class OrchestratorMilestone2Tests(unittest.TestCase):
             self.assertTrue(result.accepted)
             payload = mocked_client.post.call_args_list[1].kwargs["json"]
             self.assertEqual(payload["agent_assignment"]["custom_agent"], CUSTOM_AGENT_TRACKER_ENGINEER)
+            self.assertIn("dispatch_mode=custom_agent_launch", result.summary)
 
     def test_default_dispatch_assignee_uses_documented_copilot_bot_login(self):
         with patch.dict(os.environ, {"COPILOT_DISPATCH_ASSIGNEE": ""}, clear=False):

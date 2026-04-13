@@ -14,9 +14,9 @@
    - implementation brief
 5. Task status moves to `awaiting_approval`.
 
-## Worker routing (custom agents)
+## Worker routing (internal custom-agent selection)
 
-Each task is routed to a GitHub custom agent and that selection is persisted on task/run state.
+Each task is internally routed to a worker profile (`Initiative Smith` / `Initiative Tracker Engineer`) and that selection is persisted on task/run state.
 
 Auto-routing defaults:
 - **Initiative Smith** (`Initiative Smith`) for broad work (migration, architecture, broad refactors, stabilization, end-to-end slices)
@@ -26,6 +26,7 @@ Routing is deterministic and inspectable:
 - orchestrator applies deterministic keyword-first routing rules
 - OpenAI planning `recommended_worker` / `recommended_scope_class` are only secondary tiebreaker hints
 - final fields persisted include `selected_custom_agent`, `worker_selection_mode`, and `worker_selection_reason`
+- this internal routing metadata is always persisted even when GitHub dispatch uses plain Copilot fallback mode
 
 Manual override labels:
 - `agent:initiative-smith`
@@ -59,14 +60,21 @@ Dispatch uses GitHub REST API for existing issue assignment:
    - Copilot cloud agent must appear in `suggestedActors` or dispatch is blocked with manual dispatch required
 2. `POST /repos/{owner}/{repo}/issues/{issue_number}/assignees`
 3. body includes:
-   - `assignees: [COPILOT_DISPATCH_ASSIGNEE]` (canonical/default `copilot-swe-agent[bot]`; legacy aliases are normalized)
-   - `agent_assignment` fields:
-      - `target_repo`
-      - `base_branch`
-      - `custom_instructions` (optional)
-      - `custom_agent` (selected routed worker; optional only when no selection exists)
-      - `model` (optional)
+    - `assignees: [COPILOT_DISPATCH_ASSIGNEE]` (canonical/default `copilot-swe-agent[bot]`; legacy aliases are normalized)
+    - `agent_assignment` fields:
+       - `target_repo`
+       - `base_branch`
+       - `custom_instructions` (optional)
+       - `custom_agent` (only when `ENABLE_GITHUB_CUSTOM_AGENT_DISPATCH=true`)
+       - `model` (optional)
 4. normalized task packet comment is posted after accepted assignment as a secondary artifact
+
+Dispatch worker mode is intentionally split:
+- **internal routing worker** = persisted `selected_custom_agent` used for orchestration visibility and notifications
+- **GitHub execution worker**:
+  - default (`ENABLE_GITHUB_CUSTOM_AGENT_DISPATCH=false`): plain Copilot assignee flow; `agent_assignment.custom_agent` is omitted as a production workaround for custom-agent startup failures
+  - optional test mode (`ENABLE_GITHUB_CUSTOM_AGENT_DISPATCH=true`): includes `agent_assignment.custom_agent` for custom-agent launch attempts
+- task/run summaries and `/tasks` payload `dispatch_payload_summary` include `dispatch_mode_summary` so fallback vs custom-agent launch is explicit
 
 Dispatch state semantics are intentionally conservative:
 - `dispatch_requested` = orchestrator attempted assignment
@@ -158,6 +166,7 @@ Optional tuning:
 - `COPILOT_TARGET_REPO` (default task repository)
 - `COPILOT_CUSTOM_INSTRUCTIONS` (optional extra instructions sent in `agent_assignment`)
 - `COPILOT_CUSTOM_AGENT` (optional fallback custom agent if task routing did not set one)
+- `ENABLE_GITHUB_CUSTOM_AGENT_DISPATCH` (default `false`; when `true`, includes `agent_assignment.custom_agent` in dispatch payload)
 - `COPILOT_MODEL` (optional model override in `agent_assignment`)
 - `OPENAI_PLANNING_MODEL` (default `gpt-4.1-mini`)
 - `OPENAI_REVIEW_MODEL` (default `gpt-4.1-mini`)

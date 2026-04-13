@@ -49,6 +49,7 @@ class OrchestratorMilestone1Tests(unittest.TestCase):
         "COPILOT_TARGET_REPO",
         "COPILOT_CUSTOM_INSTRUCTIONS",
         "COPILOT_CUSTOM_AGENT",
+        "ENABLE_GITHUB_CUSTOM_AGENT_DISPATCH",
         "COPILOT_MODEL",
         "OPENAI_PLANNING_MODEL",
         "OPENAI_REVIEW_MODEL",
