@@ -3724,6 +3724,41 @@ class LanController:
             except Exception:
                 raise HTTPException(status_code=500, detail="Failed to set temp HP.")
 
+        @self._fastapi_app.post("/api/dm/combat/combatants/{cid}/temp-hp-adjust")
+        async def dm_adjust_temp_hp(cid: int, request: Request, payload: Dict[str, Any] = Body(...)):
+            """Adjust temporary HP for a combatant by a delta.
+
+            Body: {delta: int}  — positive adds temp HP, negative removes.
+            Returns: {ok, cid, temp_hp_before, temp_hp_after, delta, snapshot}
+            """
+            _check_dm_auth(request)
+            if _dm_service is None:
+                raise HTTPException(status_code=503, detail="DM combat service unavailable.")
+            if not isinstance(payload, dict):
+                raise HTTPException(status_code=400, detail="Invalid payload.")
+            try:
+                delta = int(payload.get("delta") or 0)
+            except Exception:
+                raise HTTPException(status_code=400, detail="delta must be an integer.")
+            if delta == 0:
+                raise HTTPException(status_code=400, detail="delta must be non-zero.")
+            try:
+                result = _dm_service.adjust_temp_hp(cid=int(cid), delta=delta)
+                if not result.get("ok"):
+                    raise HTTPException(status_code=400, detail=result.get("error", "Combatant not found."))
+                return {
+                    "ok": True,
+                    "cid": result.get("cid"),
+                    "temp_hp_before": result.get("temp_hp_before"),
+                    "temp_hp_after": result.get("temp_hp_after"),
+                    "delta": result.get("delta"),
+                    "snapshot": _dm_service.combat_snapshot(),
+                }
+            except HTTPException:
+                raise
+            except Exception:
+                raise HTTPException(status_code=500, detail="Failed to adjust temp HP.")
+
         @self._fastapi_app.post("/api/dm/combat/start")
         async def dm_start_combat(request: Request):
             """Start combat (begin initiative turn order).
@@ -8902,6 +8937,142 @@ class InitiativeTracker(base.InitiativeTracker):
             self._lan_force_state_broadcast()
         except Exception:
             pass
+
+    def _adjust_hp_via_service(self, cid: int, delta: int) -> bool:
+        """Adjust HP for combatant ``cid``, routing through CombatService when available.
+
+        Returns True if the mutation succeeded (via service or fallback).
+        Falls back to direct mutation + broadcast when the service is not
+        running or reports a failure.
+        """
+        dm_svc = getattr(self, "_dm_service", None)
+        if dm_svc is not None:
+            try:
+                result = dm_svc.adjust_hp(cid=int(cid), delta=int(delta))
+                if result.get("ok"):
+                    return True
+                self._oplog(
+                    f"CombatService.adjust_hp failed: {result.get('error', 'unknown error')}",
+                    level="warning",
+                )
+            except Exception as exc:
+                self._oplog(
+                    f"CombatService.adjust_hp exception: {exc}",
+                    level="warning",
+                )
+        # Fallback: direct mutation
+        c = self.combatants.get(int(cid))
+        if c is None:
+            return False
+        old_hp = int(getattr(c, "hp", 0) or 0)
+        max_hp = int(getattr(c, "max_hp", old_hp) or old_hp)
+        new_hp = max(0, old_hp + int(delta))
+        if max_hp > 0:
+            new_hp = min(new_hp, max_hp)
+        setattr(c, "hp", new_hp)
+        try:
+            self._rebuild_table(scroll_to_current=True)
+        except Exception:
+            pass
+        try:
+            self._lan_force_state_broadcast()
+        except Exception:
+            pass
+        return True
+
+    def _set_condition_via_service(
+        self, cid: int, ctype: str, action: str, remaining_turns: Optional[int] = None
+    ) -> bool:
+        """Add or remove a condition, routing through CombatService when available.
+
+        Returns True if the mutation succeeded (via service or fallback).
+        Falls back to direct condition manipulation + broadcast when the
+        service is not running or reports a failure.
+        """
+        dm_svc = getattr(self, "_dm_service", None)
+        if dm_svc is not None:
+            try:
+                result = dm_svc.set_condition(
+                    cid=int(cid), ctype=ctype, action=action,
+                    remaining_turns=remaining_turns,
+                )
+                if result.get("ok"):
+                    return True
+                self._oplog(
+                    f"CombatService.set_condition failed: {result.get('error', 'unknown error')}",
+                    level="warning",
+                )
+            except Exception as exc:
+                self._oplog(
+                    f"CombatService.set_condition exception: {exc}",
+                    level="warning",
+                )
+        # Fallback: direct condition mutation
+        c = self.combatants.get(int(cid))
+        if c is None:
+            return False
+        ctype_key = str(ctype or "").strip().lower()
+        if not ctype_key:
+            return False
+        action_key = str(action or "").strip().lower()
+        if action_key == "add":
+            try:
+                self._ensure_condition_stack(c, ctype_key, remaining_turns)
+            except Exception:
+                return False
+        elif action_key == "remove":
+            try:
+                self._remove_condition_type(c, ctype_key)
+            except Exception:
+                return False
+        else:
+            return False
+        try:
+            self._rebuild_table(scroll_to_current=True)
+        except Exception:
+            pass
+        try:
+            self._lan_force_state_broadcast()
+        except Exception:
+            pass
+        return True
+
+    def _set_temp_hp_via_service(self, cid: int, amount: int) -> bool:
+        """Set temp HP to an absolute value, routing through CombatService when available.
+
+        Returns True if the mutation succeeded (via service or fallback).
+        Falls back to direct mutation + broadcast when the service is not
+        running or reports a failure.
+        """
+        dm_svc = getattr(self, "_dm_service", None)
+        if dm_svc is not None:
+            try:
+                result = dm_svc.set_temp_hp(cid=int(cid), amount=int(amount))
+                if result.get("ok"):
+                    return True
+                self._oplog(
+                    f"CombatService.set_temp_hp failed: {result.get('error', 'unknown error')}",
+                    level="warning",
+                )
+            except Exception as exc:
+                self._oplog(
+                    f"CombatService.set_temp_hp exception: {exc}",
+                    level="warning",
+                )
+        # Fallback: direct mutation
+        c = self.combatants.get(int(cid))
+        if c is None:
+            return False
+        setattr(c, "temp_hp", max(0, int(amount)))
+        try:
+            self._rebuild_table(scroll_to_current=True)
+        except Exception:
+            pass
+        try:
+            self._lan_force_state_broadcast()
+        except Exception:
+            pass
+        return True
 
     def _advance_to_next_turn_candidate(self, ended_cid: int) -> Tuple[bool, bool]:
         wrapped = False
@@ -29494,6 +29665,16 @@ class InitiativeTracker(base.InitiativeTracker):
             if hp_delta == 0 and temp_hp_delta == 0:
                 self._lan.toast(ws_id, "Pick a non-zero override amount, matey.")
                 return
+            # Route through CombatService.manual_override when available so
+            # both HP and temp-HP deltas are applied atomically under one lock.
+            dm_svc = getattr(self, "_dm_service", None)
+            if dm_svc is not None:
+                dm_svc.manual_override(
+                    cid=int(cid), hp_delta=hp_delta, temp_hp_delta=temp_hp_delta,
+                )
+                self._lan.toast(ws_id, "Manual override applied.")
+                return
+            # Fallback: direct mutation when service is not running.
             old_hp = int(getattr(c, "hp", 0) or 0)
             max_hp = int(getattr(c, "max_hp", old_hp) or old_hp)
             old_temp_hp = int(getattr(c, "temp_hp", 0) or 0)
@@ -36010,7 +36191,7 @@ class InitiativeTracker(base.InitiativeTracker):
             try:
                 for combatant in self.combatants.values():
                     setattr(combatant, "wild_resurgence_turn_used", False)
-                self._next_turn()
+                self._next_turn_via_service()
                 self._tick_polymorph_durations()
                 self._lan.toast(ws_id, "Turn ended.")
             except Exception as exc:

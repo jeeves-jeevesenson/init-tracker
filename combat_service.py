@@ -4,7 +4,7 @@ This module is the authoritative source of truth for the migrated combat/session
 slice.  Both the desktop UI and the DM web console read from and write through
 this service rather than owning separate state.
 
-Ownership model after this migration pass (Slice 5)
+Ownership model after this migration pass (Slice 6)
 -----------------------------------------------------
 Backend-owned (this service + API routes):
   - combat lifecycle: start (begin initiative turn order), end (reset turn state)
@@ -13,15 +13,21 @@ Backend-owned (this service + API routes):
   - up-next combatant preview
   - HP adjustments (damage and healing) for any combatant
   - condition add/remove/toggle for any combatant
-  - temp HP set/clear for any combatant
+  - temp HP set/clear and delta-adjust for any combatant
   - recent event/battle-log lines
   - combatant creation / encounter population (quick-add via backend API)
   - initiative set / update for existing combatants
   - combatant removal
 
-Desktop-routed through this service (Slice 5):
-  - desktop Next Turn now routes through CombatService.next_turn() via
+Desktop-routed through this service (Slice 6):
+  - desktop Next Turn routes through CombatService.next_turn() via
     _next_turn_via_service() so the lock, log, and broadcast paths are shared
+  - LAN player "end turn" routes through _next_turn_via_service()
+  - LAN player manual_override_hp routes through CombatService.adjust_hp /
+    adjust_temp_hp so the service lock and broadcast cover player-originated
+    HP/temp-HP overrides
+  - Desktop HP adjust, condition set, and temp HP set have _*_via_service()
+    wrappers available for progressive adoption
 
 Still hybrid / desktop-primary:
   - Full Tkinter canvas UI rendering
@@ -31,9 +37,11 @@ Still hybrid / desktop-primary:
   - YAML-backed save/load (unchanged; mutations here persist via existing path)
   - Full monster-spec / player-profile based combatant creation (desktop only)
   - Advanced initiative manipulation (set-turn-here, prev-turn, start/reset)
+  - Deep combat engine damage paths (_apply_damage_to_target_with_temp_hp)
+    still mutate state directly; these are candidates for future slices
 
 Next recommended migration targets:
-  - Route desktop HP / condition mutations through this service for the DM panel
+  - Route deep combat engine damage/heal paths through service wrappers
   - Expose full initiative-roll support so DM web can trigger rolls
   - Player-facing LAN client state sync improvements
 
@@ -402,6 +410,124 @@ class CombatService:
                 "cid": int(cid),
                 "temp_hp_before": old_temp,
                 "temp_hp_after": amount,
+            }
+
+    def adjust_temp_hp(self, cid: int, delta: int) -> Dict[str, Any]:
+        """Adjust temporary HP for combatant ``cid`` by ``delta``.
+
+        Unlike ``set_temp_hp`` which sets an absolute value, this method
+        applies a delta (positive to add, negative to remove temp HP).
+        The result is clamped to a minimum of 0.  This is the temp-HP
+        counterpart to ``adjust_hp``.
+
+        Returns: {ok, cid, temp_hp_before, temp_hp_after, delta}
+          or  {ok: False, error: str}
+        """
+        with self._lock:
+            t = self._tracker
+            combatants = getattr(t, "combatants", {}) or {}
+            c = combatants.get(int(cid))
+            if c is None:
+                return {"ok": False, "error": f"Combatant {cid} not found."}
+
+            old_temp = int(getattr(c, "temp_hp", 0) or 0)
+            new_temp = max(0, old_temp + int(delta))
+            setattr(c, "temp_hp", new_temp)
+
+            direction = "gained" if delta > 0 else ("lost" if delta < 0 else "adjusted by 0")
+            try:
+                t._log(
+                    f"{getattr(c, 'name', 'Combatant')} {direction} {abs(delta)}"
+                    f" temp HP ({old_temp} → {new_temp}).",
+                    cid=int(cid),
+                )
+            except Exception:
+                pass
+            try:
+                t._rebuild_table(scroll_to_current=True)
+            except Exception:
+                pass
+            try:
+                t._lan_force_state_broadcast()
+            except Exception:
+                pass
+            return {
+                "ok": True,
+                "cid": int(cid),
+                "temp_hp_before": old_temp,
+                "temp_hp_after": new_temp,
+                "delta": int(delta),
+            }
+
+    def manual_override(
+        self, cid: int, hp_delta: int = 0, temp_hp_delta: int = 0
+    ) -> Dict[str, Any]:
+        """Atomically apply HP and/or temp-HP deltas under a single lock acquisition.
+
+        This is the backend equivalent of the LAN player ``manual_override_hp``
+        action.  Both deltas are applied inside one locked section so no other
+        service-routed mutation can interleave between them.
+
+        Args:
+            cid:           Combatant ID.
+            hp_delta:      Regular HP delta (negative = damage, positive = heal).
+            temp_hp_delta: Temporary HP delta (positive = add, negative = remove).
+
+        Returns: {ok, cid, hp_before, hp_after, temp_hp_before, temp_hp_after}
+          or  {ok: False, error: str}
+        """
+        with self._lock:
+            t = self._tracker
+            combatants = getattr(t, "combatants", {}) or {}
+            c = combatants.get(int(cid))
+            if c is None:
+                return {"ok": False, "error": f"Combatant {cid} not found."}
+
+            # HP adjustment
+            old_hp = int(getattr(c, "hp", 0) or 0)
+            max_hp = int(getattr(c, "max_hp", old_hp) or old_hp)
+            new_hp = old_hp
+            if hp_delta != 0:
+                new_hp = max(0, old_hp + int(hp_delta))
+                if max_hp > 0:
+                    new_hp = min(new_hp, max_hp)
+                setattr(c, "hp", new_hp)
+
+            # Temp HP adjustment
+            old_temp = int(getattr(c, "temp_hp", 0) or 0)
+            new_temp = old_temp
+            if temp_hp_delta != 0:
+                new_temp = max(0, old_temp + int(temp_hp_delta))
+                setattr(c, "temp_hp", new_temp)
+
+            # Log, rebuild, broadcast once for both changes
+            updates: List[str] = []
+            if hp_delta != 0:
+                updates.append(f"HP {old_hp}→{new_hp} ({hp_delta:+d})")
+            if temp_hp_delta != 0:
+                updates.append(f"Temp HP {old_temp}→{new_temp} ({temp_hp_delta:+d})")
+            try:
+                t._log(
+                    f"{getattr(c, 'name', 'Combatant')} manual override: {', '.join(updates)}.",
+                    cid=int(cid),
+                )
+            except Exception:
+                pass
+            try:
+                t._rebuild_table(scroll_to_current=True)
+            except Exception:
+                pass
+            try:
+                t._lan_force_state_broadcast()
+            except Exception:
+                pass
+            return {
+                "ok": True,
+                "cid": int(cid),
+                "hp_before": old_hp,
+                "hp_after": new_hp,
+                "temp_hp_before": old_temp,
+                "temp_hp_after": new_temp,
             }
 
     def start_combat(self) -> Dict[str, Any]:

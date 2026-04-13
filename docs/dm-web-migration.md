@@ -22,6 +22,10 @@ The following slice of combat/session state is now authoritatively owned by
 | Adjust combatant HP | `POST /api/dm/combat/combatants/{cid}/hp` |
 | Add/remove condition | `POST /api/dm/combat/combatants/{cid}/condition` |
 | Set temporary HP | `POST /api/dm/combat/combatants/{cid}/temp-hp` |
+| Adjust temporary HP (delta) | `POST /api/dm/combat/combatants/{cid}/temp-hp-adjust` |
+| Add combatant | `POST /api/dm/combat/combatants` |
+| Set initiative | `POST /api/dm/combat/combatants/{cid}/initiative` |
+| Remove combatant | `DELETE /api/dm/combat/combatants/{cid}` |
 | Real-time DM state push | `WS /ws/dm[?token=…]` |
 
 The **snapshot shape** (from `GET /api/dm/combat`):
@@ -118,12 +122,34 @@ The following areas remain desktop-primary (hybrid) after this pass:
 - Character editor, sheet management (`/edit_character`, `/new_character`)
 - Shop, item and spell management
 - YAML-backed save / load (files are still owned by the desktop flow)
-- All combatant creation, initiative rolling, and encounter setup
+- Full monster-spec / player-profile based combatant creation (desktop only)
+- Advanced initiative manipulation (set-turn-here, prev-turn, start/reset)
+- Deep combat engine damage paths (`_apply_damage_to_target_with_temp_hp` and
+  related spell/attack damage application) still mutate state directly
 
 The desktop app now **shares** the initiative/turn, HP, and condition
 authority with the DM web console – they operate on the same in-memory
 state through the same `_next_turn()` / `_apply_damage_to_combatant()` /
 `_ensure_condition_stack()` methods.
+
+### Desktop-routed through CombatService (Slice 6)
+
+The following desktop/LAN-originated mutations now route through
+`CombatService` when the service is running:
+
+- **Desktop Next Turn** → `_next_turn_via_service()` → `CombatService.next_turn()`
+- **LAN player "end turn"** → `_next_turn_via_service()` → `CombatService.next_turn()`
+- **LAN player manual HP override** → `CombatService.adjust_hp()` /
+  `CombatService.adjust_temp_hp()`
+- **Desktop `_adjust_hp_via_service()`** → `CombatService.adjust_hp()` (wrapper
+  available for progressive adoption by other desktop code paths)
+- **Desktop `_set_condition_via_service()`** → `CombatService.set_condition()`
+  (wrapper available for progressive adoption)
+- **Desktop `_set_temp_hp_via_service()`** → `CombatService.set_temp_hp()`
+  (wrapper available for progressive adoption)
+
+All wrappers fall back to direct mutation + broadcast when the service is
+not running (e.g. LAN server not started).
 
 ---
 
@@ -143,11 +169,14 @@ concurrently.  The current safeguard model:
 - The desktop UI re-reads its state from the same `combatants` dict and
   `_rebuild_table()` call.
 
-**Remaining risk**: The `CombatService` lock only covers mutations that go
-through the service.  Desktop-originated mutations (button clicks in the
-Tkinter UI) do not acquire this lock, so a simultaneous desktop + web
-mutation could still race.  This is an acceptable risk for the single-session
-LAN use case.
+**Remaining risk**: The `CombatService` lock covers all mutations that go
+through the service, including web-originated and the newly-routed
+desktop/LAN paths (Next Turn, manual HP override).  Desktop-originated
+mutations that do **not** yet use the `_*_via_service()` wrappers (e.g.
+deep combat engine damage from spell/attack resolution) do not acquire
+this lock, so a simultaneous desktop engine mutation + web mutation could
+still race.  This is an acceptable risk for the single-session LAN use
+case, and the wrapper adoption can continue incrementally.
 
 ---
 
@@ -163,13 +192,15 @@ via the web.
 
 ## Recommended next migration targets
 
-1. **Desktop rewiring**: Route the desktop "Next Turn" button and HP/condition
-   mutations through `CombatService` explicitly so the service lock covers
-   desktop-originated mutations too.
+1. **Deep combat engine routing**: Adopt `_adjust_hp_via_service()` and
+   `_set_condition_via_service()` in the combat engine's damage/heal paths
+   (`_apply_damage_to_target_with_temp_hp`, `_apply_heal_to_combatant`,
+   spell effect condition application) so the service lock covers
+   engine-originated mutations too.
 
-2. **Combatant creation / encounter setup**: Expose adding combatants and
-   rolling initiative through the service so the DM console can manage a full
-   session end-to-end without opening the desktop app.
+2. **Initiative-roll support**: Expose full initiative-roll support through
+   the backend service so the DM web console can trigger initiative rolls
+   without Tkinter fallback.
 
 3. **Token refresh**: The DM console does not yet auto-renew the admin token
    before expiry.  Add a background refresh 2 minutes before the 15-minute
@@ -177,6 +208,9 @@ via the web.
 
 4. **Snapshot enhancements**: Additional fields (e.g. per-combatant AC tooltip,
    resource pools) can be added as the DM console grows.
+
+5. **Player-facing LAN client state sync**: Improve broadcast reliability
+   and reconnect behavior for the player-facing LAN WebSocket client.
 
 ---
 
