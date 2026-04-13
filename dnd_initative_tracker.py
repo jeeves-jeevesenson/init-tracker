@@ -3767,6 +3767,134 @@ class LanController:
             except Exception:
                 raise HTTPException(status_code=500, detail="Failed to end combat.")
 
+        @self._fastapi_app.post("/api/dm/combat/combatants")
+        async def dm_add_combatant(request: Request, payload: Dict[str, Any] = Body(...)):
+            """Add a combatant to the encounter via the backend service path.
+
+            Body: {name: str, hp: int, initiative: int,
+                   max_hp?: int, ac?: int, speed?: int, ally?: bool, is_pc?: bool}
+            Returns: {ok, cid, snapshot}
+            """
+            _check_dm_auth(request)
+            if _dm_service is None:
+                raise HTTPException(status_code=503, detail="DM combat service unavailable.")
+            if not isinstance(payload, dict):
+                raise HTTPException(status_code=400, detail="Invalid payload.")
+            name = str(payload.get("name") or "").strip()
+            if not name:
+                raise HTTPException(status_code=400, detail="name is required.")
+            hp_raw = payload.get("hp")
+            if hp_raw is None:
+                raise HTTPException(status_code=400, detail="hp is required.")
+            try:
+                hp = int(hp_raw)
+            except Exception:
+                raise HTTPException(status_code=400, detail="hp must be a non-negative integer.")
+            if hp < 0:
+                raise HTTPException(status_code=400, detail="hp must be a non-negative integer.")
+            initiative_raw = payload.get("initiative")
+            if initiative_raw is None:
+                raise HTTPException(status_code=400, detail="initiative is required.")
+            try:
+                initiative = int(initiative_raw)
+            except Exception:
+                raise HTTPException(status_code=400, detail="initiative must be an integer.")
+            max_hp_raw = payload.get("max_hp")
+            max_hp: Optional[int] = None
+            if max_hp_raw is not None:
+                try:
+                    max_hp = int(max_hp_raw)
+                except Exception:
+                    raise HTTPException(status_code=400, detail="max_hp must be a non-negative integer.")
+                if max_hp < 0:
+                    raise HTTPException(status_code=400, detail="max_hp must be a non-negative integer.")
+            try:
+                ac = max(0, int(payload.get("ac") or 10))
+            except Exception:
+                ac = 10
+            try:
+                speed = max(0, int(payload.get("speed") or 30))
+            except Exception:
+                speed = 30
+            ally_raw = payload.get("ally", False)
+            if not isinstance(ally_raw, bool):
+                raise HTTPException(status_code=400, detail="ally must be a boolean.")
+            ally = ally_raw
+            is_pc_raw = payload.get("is_pc", False)
+            if not isinstance(is_pc_raw, bool):
+                raise HTTPException(status_code=400, detail="is_pc must be a boolean.")
+            try:
+                result = _dm_service.add_combatant(
+                    name=name, hp=hp, initiative=initiative,
+                    max_hp=max_hp, ac=ac, speed=speed, ally=ally, is_pc=is_pc,
+                )
+                if not result.get("ok"):
+                    raise HTTPException(status_code=400, detail=result.get("error", "Could not add combatant."))
+                return {
+                    "ok": True,
+                    "cid": result.get("cid"),
+                    "snapshot": result.get("snapshot") or _dm_service.combat_snapshot(),
+                }
+            except HTTPException:
+                raise
+            except Exception:
+                raise HTTPException(status_code=500, detail="Failed to add combatant.")
+
+        @self._fastapi_app.post("/api/dm/combat/combatants/{cid}/initiative")
+        async def dm_set_initiative(cid: int, request: Request, payload: Dict[str, Any] = Body(...)):
+            """Update the initiative value for an existing combatant.
+
+            Body: {initiative: int}
+            Returns: {ok, cid, initiative_before, initiative_after, snapshot}
+            """
+            _check_dm_auth(request)
+            if _dm_service is None:
+                raise HTTPException(status_code=503, detail="DM combat service unavailable.")
+            if not isinstance(payload, dict):
+                raise HTTPException(status_code=400, detail="Invalid payload.")
+            try:
+                initiative = int(payload.get("initiative") or 0)
+            except Exception:
+                raise HTTPException(status_code=400, detail="initiative must be an integer.")
+            try:
+                result = _dm_service.set_initiative(cid=int(cid), initiative=initiative)
+                if not result.get("ok"):
+                    raise HTTPException(status_code=400, detail=result.get("error", "Combatant not found."))
+                return {
+                    "ok": True,
+                    "cid": result.get("cid"),
+                    "initiative_before": result.get("initiative_before"),
+                    "initiative_after": result.get("initiative_after"),
+                    "snapshot": result.get("snapshot") or _dm_service.combat_snapshot(),
+                }
+            except HTTPException:
+                raise
+            except Exception:
+                raise HTTPException(status_code=500, detail="Failed to set initiative.")
+
+        @self._fastapi_app.delete("/api/dm/combat/combatants/{cid}")
+        async def dm_remove_combatant(cid: int, request: Request):
+            """Remove a combatant from the encounter.
+
+            Returns: {ok, cid, snapshot}
+            """
+            _check_dm_auth(request)
+            if _dm_service is None:
+                raise HTTPException(status_code=503, detail="DM combat service unavailable.")
+            try:
+                result = _dm_service.remove_combatant(cid=int(cid))
+                if not result.get("ok"):
+                    raise HTTPException(status_code=404, detail=result.get("error", "Combatant not found."))
+                return {
+                    "ok": True,
+                    "cid": result.get("cid"),
+                    "snapshot": result.get("snapshot") or _dm_service.combat_snapshot(),
+                }
+            except HTTPException:
+                raise
+            except Exception:
+                raise HTTPException(status_code=500, detail="Failed to remove combatant.")
+
         @self._fastapi_app.websocket("/ws/dm")
         async def ws_dm_endpoint(ws: WebSocket):
             """Real-time DM snapshot push channel.
@@ -8744,6 +8872,36 @@ class InitiativeTracker(base.InitiativeTracker):
                 if move_limit > 0:
                     aoe["move_remaining_ft"] = float(move_limit)
         self._rebuild_table(scroll_to_current=True)
+
+    def _next_turn_via_service(self) -> None:
+        """Advance the turn, routing through CombatService when available.
+
+        When the DM service seam is active this delegates to
+        ``CombatService.next_turn()`` so the lock, persist, and broadcast
+        paths are shared between desktop and web callers.  Falls back to a
+        direct ``_next_turn()`` + broadcast when the service is not running
+        (e.g. LAN server not started) or when the service call reports a
+        failure.
+        """
+        dm_svc = getattr(self, "_dm_service", None)
+        if dm_svc is not None:
+            try:
+                result = dm_svc.next_turn()
+                if result.get("ok"):
+                    return
+                # Service reported failure — log and fall through to direct path
+                self._oplog(
+                    f"CombatService.next_turn failed: {result.get('error', 'unknown error')}",
+                    level="warning",
+                )
+            except Exception:
+                pass
+        # Fallback: direct engine call + best-effort broadcast
+        self._next_turn()
+        try:
+            self._lan_force_state_broadcast()
+        except Exception:
+            pass
 
     def _advance_to_next_turn_candidate(self, ended_cid: int) -> Tuple[bool, bool]:
         wrapped = False

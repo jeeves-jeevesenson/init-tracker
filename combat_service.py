@@ -4,8 +4,8 @@ This module is the authoritative source of truth for the migrated combat/session
 slice.  Both the desktop UI and the DM web console read from and write through
 this service rather than owning separate state.
 
-Ownership model after this migration pass
-------------------------------------------
+Ownership model after this migration pass (Slice 5)
+-----------------------------------------------------
 Backend-owned (this service + API routes):
   - combat lifecycle: start (begin initiative turn order), end (reset turn state)
   - initiative order / turn order
@@ -15,6 +15,13 @@ Backend-owned (this service + API routes):
   - condition add/remove/toggle for any combatant
   - temp HP set/clear for any combatant
   - recent event/battle-log lines
+  - combatant creation / encounter population (quick-add via backend API)
+  - initiative set / update for existing combatants
+  - combatant removal
+
+Desktop-routed through this service (Slice 5):
+  - desktop Next Turn now routes through CombatService.next_turn() via
+    _next_turn_via_service() so the lock, log, and broadcast paths are shared
 
 Still hybrid / desktop-primary:
   - Full Tkinter canvas UI rendering
@@ -22,11 +29,13 @@ Still hybrid / desktop-primary:
   - Player-facing LAN client (existing /ws WebSocket + /lan routes)
   - Character editor, shop, spell/resource management
   - YAML-backed save/load (unchanged; mutations here persist via existing path)
-  - Combatant creation / initiative rolling (still desktop-owned for now)
+  - Full monster-spec / player-profile based combatant creation (desktop only)
+  - Advanced initiative manipulation (set-turn-here, prev-turn, start/reset)
 
 Next recommended migration targets:
-  - HP/condition mutations from desktop directly wired through this service
-  - Combatant creation and initiative rolling through the service seam
+  - Route desktop HP / condition mutations through this service for the DM panel
+  - Expose full initiative-roll support so DM web can trigger rolls
+  - Player-facing LAN client state sync improvements
 
 Usage (from LanController routes):
   service = CombatService(tracker_instance)
@@ -450,3 +459,206 @@ class CombatService:
             except Exception:
                 pass
             return {"ok": True, "snapshot": self.combat_snapshot()}
+
+    # ------------------------------------------------------------------
+    # Encounter setup: combatant management
+    # ------------------------------------------------------------------
+
+    def add_combatant(
+        self,
+        name: str,
+        hp: int,
+        initiative: int,
+        *,
+        max_hp: Optional[int] = None,
+        ac: int = 10,
+        speed: int = 30,
+        ally: bool = False,
+        is_pc: bool = False,
+    ) -> Dict[str, Any]:
+        """Add a combatant to the encounter via the backend service path.
+
+        This is a lightweight quick-add that creates a minimal combatant
+        (name, HP, initiative, AC, speed, ally/is_pc flags).  For full
+        monster-spec or player-profile based creation, use the desktop UI.
+
+        Args:
+            name:       Combatant display name.
+            hp:         Starting HP (also used as max_hp when max_hp is None).
+            initiative: Initiative value (higher goes earlier).
+            max_hp:     Maximum HP; defaults to hp when omitted.
+            ac:         Armour class (default 10).
+            speed:      Movement speed in feet (default 30).
+            ally:       True for allied NPCs; False for enemies (default False).
+            is_pc:      True for player characters (default False).
+
+        Returns: {ok, cid, snapshot}  or  {ok: False, error: str}
+        """
+        name = str(name or "").strip()
+        if not name:
+            return {"ok": False, "error": "Combatant name must not be empty."}
+        try:
+            hp = max(0, int(hp))
+        except Exception:
+            return {"ok": False, "error": "hp must be a non-negative integer."}
+        try:
+            initiative = int(initiative)
+        except Exception:
+            return {"ok": False, "error": "initiative must be an integer."}
+        if max_hp is None:
+            max_hp = hp
+        try:
+            max_hp = max(0, int(max_hp))
+        except Exception:
+            max_hp = hp
+        # Enforce invariant: 0 <= hp <= max_hp
+        if max_hp > 0:
+            hp = min(hp, max_hp)
+        try:
+            ac = max(0, int(ac))
+        except Exception:
+            ac = 10
+        try:
+            speed = max(0, int(speed))
+        except Exception:
+            speed = 30
+
+        with self._lock:
+            t = self._tracker
+            try:
+                cid = t._create_combatant(
+                    name=name,
+                    hp=hp,
+                    speed=speed,
+                    initiative=initiative,
+                    dex=None,
+                    ally=bool(ally),
+                    is_pc=bool(is_pc),
+                )
+            except Exception:
+                return {"ok": False, "error": "Could not add combatant."}
+
+            # Set max_hp and ac after creation (not all tracker builds accept them
+            # as _create_combatant kwargs).
+            c = (getattr(t, "combatants", {}) or {}).get(cid)
+            if c is not None:
+                if not hasattr(c, "max_hp") or getattr(c, "max_hp", None) is None:
+                    setattr(c, "max_hp", max_hp)
+                if not hasattr(c, "ac") or getattr(c, "ac", None) is None:
+                    setattr(c, "ac", ac)
+                else:
+                    # Overwrite AC if caller passed a non-default value.
+                    if ac != 10:
+                        setattr(c, "ac", ac)
+
+            try:
+                t._log(
+                    f"Combatant added via backend: {name} (HP {hp}, init {initiative}).",
+                    cid=cid,
+                )
+            except Exception:
+                pass
+            try:
+                t._rebuild_table(scroll_to_current=True)
+            except Exception:
+                pass
+            try:
+                t._lan_force_state_broadcast()
+            except Exception:
+                pass
+            return {"ok": True, "cid": cid, "snapshot": self.combat_snapshot()}
+
+    def set_initiative(self, cid: int, initiative: int) -> Dict[str, Any]:
+        """Update the initiative value for an existing combatant.
+
+        Triggers a table rebuild and state broadcast so desktop and web
+        consumers see the updated initiative order immediately.
+
+        Args:
+            cid:        Combatant ID.
+            initiative: New initiative value.
+
+        Returns: {ok, cid, initiative_before, initiative_after, snapshot}
+          or  {ok: False, error: str}
+        """
+        try:
+            initiative = int(initiative)
+        except Exception:
+            return {"ok": False, "error": "initiative must be an integer."}
+
+        with self._lock:
+            t = self._tracker
+            combatants = getattr(t, "combatants", {}) or {}
+            c = combatants.get(int(cid))
+            if c is None:
+                return {"ok": False, "error": f"Combatant {cid} not found."}
+
+            old_init = int(getattr(c, "initiative", 0) or 0)
+            c.initiative = initiative
+
+            try:
+                t._log(
+                    f"{getattr(c, 'name', 'Combatant')} initiative changed:"
+                    f" {old_init} → {initiative}.",
+                    cid=int(cid),
+                )
+            except Exception:
+                pass
+            try:
+                t._rebuild_table(scroll_to_current=True)
+            except Exception:
+                pass
+            try:
+                t._lan_force_state_broadcast()
+            except Exception:
+                pass
+            return {
+                "ok": True,
+                "cid": int(cid),
+                "initiative_before": old_init,
+                "initiative_after": initiative,
+                "snapshot": self.combat_snapshot(),
+            }
+
+    def remove_combatant(self, cid: int) -> Dict[str, Any]:
+        """Remove a combatant from the encounter.
+
+        Delegates to ``_remove_combatants_with_lan_cleanup`` when available
+        (preferred: properly handles LAN aoe / tracking cleanup), otherwise
+        falls back to a direct combatants-dict pop.
+
+        Returns: {ok, cid, snapshot}  or  {ok: False, error: str}
+        """
+        with self._lock:
+            t = self._tracker
+            combatants = getattr(t, "combatants", {}) or {}
+            cid = int(cid)
+            c = combatants.get(cid)
+            if c is None:
+                return {"ok": False, "error": f"Combatant {cid} not found."}
+
+            name = str(getattr(c, "name", "") or "")
+            cleanup = getattr(t, "_remove_combatants_with_lan_cleanup", None)
+            if callable(cleanup):
+                try:
+                    cleanup([cid])
+                except Exception:
+                    return {"ok": False, "error": "Could not remove combatant."}
+            else:
+                combatants.pop(cid, None)
+                if getattr(t, "current_cid", None) == cid:
+                    t.current_cid = None
+
+            try:
+                t._log(f"Combatant removed via backend: {name} (cid {cid}).")
+            except Exception:
+                pass
+            try:
+                t._rebuild_table(scroll_to_current=True)
+            except Exception:
+                pass
+            try:
+                t._lan_force_state_broadcast()
+            except Exception:
+                pass
+            return {"ok": True, "cid": cid, "snapshot": self.combat_snapshot()}
