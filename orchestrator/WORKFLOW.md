@@ -23,8 +23,8 @@ Auto-routing defaults:
 - **Tracker Engineer** (`Initiative Tracker Engineer`) for focused work (bug fixes, follow-ups, polish, contained subsystem work, hardening patches)
 
 Routing is deterministic and inspectable:
-- OpenAI planning can include `recommended_worker` and `recommended_scope_class`
-- orchestrator applies simple fallback keyword rules
+- orchestrator applies deterministic keyword-first routing rules
+- OpenAI planning `recommended_worker` / `recommended_scope_class` are only secondary tiebreaker hints
 - final fields persisted include `selected_custom_agent`, `worker_selection_mode`, and `worker_selection_reason`
 
 Manual override labels:
@@ -91,8 +91,9 @@ Behavior:
 - run/task summary is updated with concise AI-generated review/summarization
 - worker-start confirmation signals include:
   - issue assigned to configured Copilot assignee
-  - issue comment from configured Copilot identity (login or display-name forms)
+  - issue/comment activity from Copilot identities in login/display-name forms (`Copilot`, `copilot-swe-agent`, `copilot-swe-agent[bot]`)
   - PR activity tied to the task
+- later webhook evidence always reconciles stale `manual_dispatch_needed` states to `working` / `pr_opened` / `worker_failed` when worker activity is visible
 - worker startup failure signals include:
   - Copilot comment indicating the worker encountered an error and was unable to start working
 

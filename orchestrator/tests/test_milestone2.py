@@ -187,6 +187,96 @@ class OrchestratorMilestone2Tests(unittest.TestCase):
                     self.assertEqual(task["recommended_scope_class"], "broad")
                     self.assertEqual(task["worker_selection_mode"], "automatic")
 
+    def test_auto_routing_prefers_deterministic_narrow_over_planner_hint(self):
+        with tempfile.TemporaryDirectory() as td:
+            os.environ["DATABASE_URL"] = f"sqlite:///{Path(td) / 'orchestrator.db'}"
+            os.environ["GH_WEBHOOK_SECRET"] = "test-gh-secret"
+            main, _ = _reload_orchestrator_modules()
+
+            issue_payload = {
+                "action": "opened",
+                "repository": {"full_name": "jeeves-jeevesenson/init-tracker"},
+                "issue": {
+                    "number": 211,
+                    "node_id": "I_211",
+                    "title": "Bugfix follow-up polish",
+                    "body": "Contained fix for a narrow regression",
+                    "labels": [{"name": "agent:task"}],
+                },
+            }
+            with patch(
+                "orchestrator.app.tasks.plan_task_packet",
+                return_value={
+                    "objective": "Fix bug",
+                    "scope": ["narrow bugfix"],
+                    "non_goals": [],
+                    "acceptance_criteria": ["bug fixed"],
+                    "validation_guidance": ["python -m unittest orchestrator.tests.test_milestone2"],
+                    "implementation_brief": "narrow pass",
+                    "recommended_worker": "initiative-smith",
+                    "recommended_scope_class": "broad",
+                },
+            ):
+                with TestClient(main.app) as client:
+                    response = self._post_github(
+                        client,
+                        secret="test-gh-secret",
+                        delivery="delivery-task-opened-narrow-deterministic-1",
+                        event="issues",
+                        payload=issue_payload,
+                    )
+                    self.assertEqual(response.status_code, 200)
+                    task = client.get("/tasks").json()["tasks"][0]
+                    self.assertEqual(task["selected_custom_agent"], CUSTOM_AGENT_TRACKER_ENGINEER)
+                    self.assertEqual(task["recommended_worker"], "tracker-engineer")
+                    self.assertEqual(task["recommended_scope_class"], "narrow")
+                    self.assertIn("deterministic", (task["worker_selection_reason"] or "").lower())
+
+    def test_auto_routing_prefers_deterministic_broad_over_planner_hint(self):
+        with tempfile.TemporaryDirectory() as td:
+            os.environ["DATABASE_URL"] = f"sqlite:///{Path(td) / 'orchestrator.db'}"
+            os.environ["GH_WEBHOOK_SECRET"] = "test-gh-secret"
+            main, _ = _reload_orchestrator_modules()
+
+            issue_payload = {
+                "action": "opened",
+                "repository": {"full_name": "jeeves-jeevesenson/init-tracker"},
+                "issue": {
+                    "number": 212,
+                    "node_id": "I_212",
+                    "title": "Architecture migration stabilization workstream",
+                    "body": "Broad refactor and foundation migration",
+                    "labels": [{"name": "agent:task"}],
+                },
+            }
+            with patch(
+                "orchestrator.app.tasks.plan_task_packet",
+                return_value={
+                    "objective": "Broad migration",
+                    "scope": ["migration"],
+                    "non_goals": [],
+                    "acceptance_criteria": ["migration complete"],
+                    "validation_guidance": ["python -m unittest orchestrator.tests.test_milestone2"],
+                    "implementation_brief": "broad pass",
+                    "recommended_worker": "tracker-engineer",
+                    "recommended_scope_class": "narrow",
+                },
+            ):
+                with TestClient(main.app) as client:
+                    response = self._post_github(
+                        client,
+                        secret="test-gh-secret",
+                        delivery="delivery-task-opened-broad-deterministic-1",
+                        event="issues",
+                        payload=issue_payload,
+                    )
+                    self.assertEqual(response.status_code, 200)
+                    task = client.get("/tasks").json()["tasks"][0]
+                    self.assertEqual(task["selected_custom_agent"], CUSTOM_AGENT_INITIATIVE_SMITH)
+                    self.assertEqual(task["recommended_worker"], "initiative-smith")
+                    self.assertEqual(task["recommended_scope_class"], "broad")
+                    self.assertIn("deterministic", (task["worker_selection_reason"] or "").lower())
+
     def test_manual_override_label_wins_over_auto_routing(self):
         with tempfile.TemporaryDirectory() as td:
             os.environ["DATABASE_URL"] = f"sqlite:///{Path(td) / 'orchestrator.db'}"
@@ -986,6 +1076,178 @@ class OrchestratorMilestone2Tests(unittest.TestCase):
                         CUSTOM_AGENT_TRACKER_ENGINEER,
                     )
 
+    def test_worker_comment_evidence_upgrades_manual_dispatch_needed(self):
+        with tempfile.TemporaryDirectory() as td:
+            os.environ["DATABASE_URL"] = f"sqlite:///{Path(td) / 'orchestrator.db'}"
+            os.environ["GH_WEBHOOK_SECRET"] = "test-gh-secret"
+            os.environ["GITHUB_API_TOKEN"] = "dummy-token"
+            main, _ = _reload_orchestrator_modules()
+
+            issue_payload = {
+                "action": "opened",
+                "repository": {"full_name": "jeeves-jeevesenson/init-tracker"},
+                "issue": {
+                    "number": 144,
+                    "node_id": "I_144",
+                    "title": "Manual dispatch reconciliation by comment",
+                    "body": "Comment signal should upgrade stale manual state",
+                    "labels": [{"name": "agent:task"}],
+                },
+            }
+            approve_payload = {
+                "action": "created",
+                "repository": {"full_name": "jeeves-jeevesenson/init-tracker"},
+                "issue": {"number": 144},
+                "comment": {"body": "/approve"},
+            }
+            worker_comment_payload = {
+                "action": "created",
+                "repository": {"full_name": "jeeves-jeevesenson/init-tracker"},
+                "issue": {"number": 144},
+                "comment": {
+                    "body": "Picking this up now.",
+                    "user": {"name": "Copilot"},
+                },
+            }
+
+            with patch(
+                "orchestrator.app.tasks.plan_task_packet",
+                return_value={
+                    "objective": "Dispatch task",
+                    "scope": ["dispatch"],
+                    "non_goals": [],
+                    "acceptance_criteria": ["comment evidence upgrades stale manual state"],
+                    "validation_guidance": ["unit tests"],
+                    "implementation_brief": "dispatch this",
+                },
+            ), patch(
+                "orchestrator.app.tasks.dispatch_task_to_github_copilot",
+                return_value=DispatchResult(
+                    attempted=True,
+                    accepted=False,
+                    manual_required=True,
+                    state="blocked",
+                    summary="Initial assignment verification failed",
+                ),
+            ):
+                with TestClient(main.app) as client:
+                    self._post_github(
+                        client,
+                        secret="test-gh-secret",
+                        delivery="delivery-task-opened-144",
+                        event="issues",
+                        payload=issue_payload,
+                    )
+                    self._post_github(
+                        client,
+                        secret="test-gh-secret",
+                        delivery="delivery-approve-144",
+                        event="issue_comment",
+                        payload=approve_payload,
+                    )
+                    task_before = client.get("/tasks").json()["tasks"][0]
+                    self.assertEqual(task_before["status"], "manual_dispatch_needed")
+
+                    comment = self._post_github(
+                        client,
+                        secret="test-gh-secret",
+                        delivery="delivery-worker-comment-144",
+                        event="issue_comment",
+                        payload=worker_comment_payload,
+                    )
+                    self.assertEqual(comment.status_code, 200)
+                    task_after = client.get("/tasks").json()["tasks"][0]
+                    self.assertEqual(task_after["status"], "working")
+                    self.assertEqual(task_after["latest_run"]["status"], "working")
+
+    def test_pr_evidence_upgrades_manual_dispatch_needed(self):
+        with tempfile.TemporaryDirectory() as td:
+            os.environ["DATABASE_URL"] = f"sqlite:///{Path(td) / 'orchestrator.db'}"
+            os.environ["GH_WEBHOOK_SECRET"] = "test-gh-secret"
+            os.environ["GITHUB_API_TOKEN"] = "dummy-token"
+            main, _ = _reload_orchestrator_modules()
+
+            issue_payload = {
+                "action": "opened",
+                "repository": {"full_name": "jeeves-jeevesenson/init-tracker"},
+                "issue": {
+                    "number": 145,
+                    "node_id": "I_145",
+                    "title": "Manual dispatch reconciliation by PR evidence",
+                    "body": "PR evidence should upgrade stale manual state",
+                    "labels": [{"name": "agent:task"}],
+                },
+            }
+            approve_payload = {
+                "action": "created",
+                "repository": {"full_name": "jeeves-jeevesenson/init-tracker"},
+                "issue": {"number": 145},
+                "comment": {"body": "/approve"},
+            }
+            pr_payload = {
+                "action": "opened",
+                "repository": {"full_name": "jeeves-jeevesenson/init-tracker"},
+                "pull_request": {
+                    "number": 345,
+                    "title": "Fixes #145",
+                    "body": "Implements the requested fix",
+                    "html_url": "https://github.com/jeeves-jeevesenson/init-tracker/pull/345",
+                },
+            }
+
+            with patch(
+                "orchestrator.app.tasks.plan_task_packet",
+                return_value={
+                    "objective": "Dispatch task",
+                    "scope": ["dispatch"],
+                    "non_goals": [],
+                    "acceptance_criteria": ["PR evidence upgrades stale manual state"],
+                    "validation_guidance": ["unit tests"],
+                    "implementation_brief": "dispatch this",
+                },
+            ), patch(
+                "orchestrator.app.tasks.dispatch_task_to_github_copilot",
+                return_value=DispatchResult(
+                    attempted=True,
+                    accepted=False,
+                    manual_required=True,
+                    state="blocked",
+                    summary="Initial assignment verification failed",
+                ),
+            ), patch(
+                "orchestrator.app.tasks.summarize_work_update",
+                return_value={"summary_bullets": ["PR linked"], "next_action": "review"},
+            ):
+                with TestClient(main.app) as client:
+                    self._post_github(
+                        client,
+                        secret="test-gh-secret",
+                        delivery="delivery-task-opened-145",
+                        event="issues",
+                        payload=issue_payload,
+                    )
+                    self._post_github(
+                        client,
+                        secret="test-gh-secret",
+                        delivery="delivery-approve-145",
+                        event="issue_comment",
+                        payload=approve_payload,
+                    )
+                    task_before = client.get("/tasks").json()["tasks"][0]
+                    self.assertEqual(task_before["status"], "manual_dispatch_needed")
+
+                    pr_event = self._post_github(
+                        client,
+                        secret="test-gh-secret",
+                        delivery="delivery-pr-opened-145",
+                        event="pull_request",
+                        payload=pr_payload,
+                    )
+                    self.assertEqual(pr_event.status_code, 200)
+                    task_after = client.get("/tasks").json()["tasks"][0]
+                    self.assertEqual(task_after["status"], "pr_opened")
+                    self.assertEqual(task_after["latest_run"]["status"], "pr_opened")
+
     def test_label_approval_dispatches(self):
         with tempfile.TemporaryDirectory() as td:
             os.environ["DATABASE_URL"] = f"sqlite:///{Path(td) / 'orchestrator.db'}"
@@ -1223,6 +1485,91 @@ class OrchestratorMilestone2Tests(unittest.TestCase):
                     self.assertEqual(task["status"], "worker_failed")
                     self.assertEqual(task["latest_run"]["status"], "worker_failed")
                     self.assertIn("startup failure", task["latest_summary"].lower())
+
+    def test_worker_failure_comment_reconciles_stale_manual_dispatch_needed(self):
+        with tempfile.TemporaryDirectory() as td:
+            os.environ["DATABASE_URL"] = f"sqlite:///{Path(td) / 'orchestrator.db'}"
+            os.environ["GH_WEBHOOK_SECRET"] = "test-gh-secret"
+            os.environ["GITHUB_API_TOKEN"] = "dummy-token"
+            main, _ = _reload_orchestrator_modules()
+
+            issue_opened_payload = {
+                "action": "opened",
+                "repository": {"full_name": "jeeves-jeevesenson/init-tracker"},
+                "issue": {
+                    "number": 146,
+                    "node_id": "I_146",
+                    "title": "Worker startup failure from stale manual state",
+                    "body": "Map startup failure to worker_failed from manual dispatch state",
+                    "labels": [{"name": "agent:task"}],
+                },
+            }
+            approve_payload = {
+                "action": "created",
+                "repository": {"full_name": "jeeves-jeevesenson/init-tracker"},
+                "issue": {"number": 146},
+                "comment": {"body": "/approve"},
+            }
+            failure_comment_payload = {
+                "action": "created",
+                "repository": {"full_name": "jeeves-jeevesenson/init-tracker"},
+                "issue": {"number": 146},
+                "comment": {
+                    "body": "The agent encountered an error and was unable to start working on this task.",
+                    "user": {"login": "copilot-swe-agent"},
+                },
+            }
+
+            with patch(
+                "orchestrator.app.tasks.plan_task_packet",
+                return_value={
+                    "objective": "Dispatch task",
+                    "scope": ["dispatch"],
+                    "non_goals": [],
+                    "acceptance_criteria": ["startup failure from stale manual state is classified"],
+                    "validation_guidance": ["unit tests"],
+                    "implementation_brief": "dispatch this",
+                },
+            ), patch(
+                "orchestrator.app.tasks.dispatch_task_to_github_copilot",
+                return_value=DispatchResult(
+                    attempted=True,
+                    accepted=False,
+                    manual_required=True,
+                    state="blocked",
+                    summary="Initial assignment verification failed",
+                ),
+            ):
+                with TestClient(main.app) as client:
+                    self._post_github(
+                        client,
+                        secret="test-gh-secret",
+                        delivery="delivery-task-opened-146",
+                        event="issues",
+                        payload=issue_opened_payload,
+                    )
+                    self._post_github(
+                        client,
+                        secret="test-gh-secret",
+                        delivery="delivery-approve-146",
+                        event="issue_comment",
+                        payload=approve_payload,
+                    )
+                    task_before = client.get("/tasks").json()["tasks"][0]
+                    self.assertEqual(task_before["status"], "manual_dispatch_needed")
+
+                    failed = self._post_github(
+                        client,
+                        secret="test-gh-secret",
+                        delivery="delivery-failed-comment-146",
+                        event="issue_comment",
+                        payload=failure_comment_payload,
+                    )
+                    self.assertEqual(failed.status_code, 200)
+                    task_after = client.get("/tasks").json()["tasks"][0]
+                    self.assertEqual(task_after["status"], "worker_failed")
+                    self.assertEqual(task_after["latest_run"]["status"], "worker_failed")
+                    self.assertIn("startup failure", (task_after["latest_summary"] or "").lower())
 
     def test_worker_start_signal_from_issue_assignment_recognizes_documented_bot_login(self):
         with tempfile.TemporaryDirectory() as td:
