@@ -50,6 +50,10 @@ class OrchestratorMilestone1Tests(unittest.TestCase):
             else:
                 os.environ[key] = value
 
+    @staticmethod
+    def _github_signature(secret: str, body: bytes) -> str:
+        return "sha256=" + hmac.new(secret.encode("utf-8"), body, hashlib.sha256).hexdigest()
+
     def test_config_loads_from_env_file(self):
         with tempfile.TemporaryDirectory() as td:
             env_file = Path(td) / "orchestrator.env"
@@ -98,9 +102,7 @@ class OrchestratorMilestone1Tests(unittest.TestCase):
             os.environ["GH_WEBHOOK_SECRET"] = "test-gh-secret"
             main = _reload_orchestrator_modules()
             body = json.dumps({"zen": "ping"}).encode("utf-8")
-            signature = "sha256=" + hmac.new(
-                b"test-gh-secret", body, hashlib.sha256
-            ).hexdigest()
+            signature = self._github_signature("test-gh-secret", body)
             with TestClient(main.app) as client:
                 response = client.post(
                     "/github/webhook",
@@ -114,6 +116,7 @@ class OrchestratorMilestone1Tests(unittest.TestCase):
                 )
                 self.assertEqual(response.status_code, 200)
                 self.assertEqual(response.json()["message"], "pong")
+                self.assertFalse(response.json()["duplicate"])
 
                 runs_response = client.get("/runs")
                 self.assertEqual(runs_response.status_code, 200)
@@ -121,6 +124,34 @@ class OrchestratorMilestone1Tests(unittest.TestCase):
                 self.assertEqual(data["count"], 1)
                 self.assertEqual(data["runs"][0]["source"], "github")
                 self.assertEqual(data["runs"][0]["status"], "pong")
+
+    def test_github_duplicate_delivery_is_accepted_without_duplicate_row_or_notification(self):
+        with tempfile.TemporaryDirectory() as td:
+            os.environ["DATABASE_URL"] = f"sqlite:///{Path(td) / 'orchestrator.db'}"
+            os.environ["GH_WEBHOOK_SECRET"] = "test-gh-secret"
+            main = _reload_orchestrator_modules()
+            body = json.dumps({"action": "opened"}).encode("utf-8")
+            signature = self._github_signature("test-gh-secret", body)
+            with patch("orchestrator.app.github_webhooks.notify_discord") as mocked_notify:
+                with TestClient(main.app) as client:
+                    headers = {
+                        "Content-Type": "application/json",
+                        "X-Hub-Signature-256": signature,
+                        "X-GitHub-Event": "pull_request",
+                        "X-GitHub-Delivery": "delivery-dedupe-1",
+                    }
+                    first = client.post("/github/webhook", headers=headers, content=body)
+                    second = client.post("/github/webhook", headers=headers, content=body)
+
+                    self.assertEqual(first.status_code, 200)
+                    self.assertEqual(second.status_code, 200)
+                    self.assertFalse(first.json()["duplicate"])
+                    self.assertTrue(second.json()["duplicate"])
+                    self.assertEqual(mocked_notify.call_count, 1)
+
+                    runs_response = client.get("/runs")
+                    self.assertEqual(runs_response.status_code, 200)
+                    self.assertEqual(runs_response.json()["count"], 1)
 
     def test_openai_webhook_verification_path_is_wired(self):
         with tempfile.TemporaryDirectory() as td:
@@ -138,7 +169,41 @@ class OrchestratorMilestone1Tests(unittest.TestCase):
                         content=json.dumps({"id": "evt_123", "type": "response.completed"}),
                     )
                     self.assertEqual(response.status_code, 200)
+                    self.assertFalse(response.json()["duplicate"])
                     mocked_verify.assert_called_once()
+
+    def test_openai_duplicate_delivery_is_accepted_without_duplicate_row_or_notification(self):
+        with tempfile.TemporaryDirectory() as td:
+            os.environ["DATABASE_URL"] = f"sqlite:///{Path(td) / 'orchestrator.db'}"
+            os.environ["OPENAI_WEBHOOK_SECRET"] = "test-openai-secret"
+            main = _reload_orchestrator_modules()
+            with patch(
+                "orchestrator.app.openai_webhooks._verify_openai_webhook",
+                return_value={"id": "evt_dup_1", "type": "response.completed", "status": "completed"},
+            ) as mocked_verify:
+                with patch("orchestrator.app.openai_webhooks.notify_discord") as mocked_notify:
+                    with TestClient(main.app) as client:
+                        payload = json.dumps({"id": "evt_dup_1", "type": "response.completed"})
+                        first = client.post(
+                            "/openai/webhook",
+                            headers={"Content-Type": "application/json"},
+                            content=payload,
+                        )
+                        second = client.post(
+                            "/openai/webhook",
+                            headers={"Content-Type": "application/json"},
+                            content=payload,
+                        )
+                        self.assertEqual(first.status_code, 200)
+                        self.assertEqual(second.status_code, 200)
+                        self.assertFalse(first.json()["duplicate"])
+                        self.assertTrue(second.json()["duplicate"])
+                        self.assertEqual(mocked_notify.call_count, 1)
+                        self.assertEqual(mocked_verify.call_count, 2)
+
+                        runs_response = client.get("/runs")
+                        self.assertEqual(runs_response.status_code, 200)
+                        self.assertEqual(runs_response.json()["count"], 1)
 
     def test_runs_route_is_sane_when_empty(self):
         with tempfile.TemporaryDirectory() as td:
@@ -148,6 +213,14 @@ class OrchestratorMilestone1Tests(unittest.TestCase):
                 response = client.get("/runs")
                 self.assertEqual(response.status_code, 200)
                 self.assertEqual(response.json()["count"], 0)
+
+    def test_unknown_route_returns_404(self):
+        with tempfile.TemporaryDirectory() as td:
+            os.environ["DATABASE_URL"] = f"sqlite:///{Path(td) / 'orchestrator.db'}"
+            main = _reload_orchestrator_modules()
+            with TestClient(main.app) as client:
+                response = client.get("/phpinfo")
+                self.assertEqual(response.status_code, 404)
 
 
 if __name__ == "__main__":
