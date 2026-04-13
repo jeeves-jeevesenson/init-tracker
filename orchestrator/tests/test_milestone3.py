@@ -2115,7 +2115,6 @@ class GovernorLoopTests(unittest.TestCase):
             repo = "jeeves-jeevesenson/init-tracker"
             issue_number = 1001
             pr_number = 71
-            self._create_linked_task_run(db, repo=repo, issue_number=issue_number, pr_number=pr_number, with_program=False)
 
             payload = {
                 "action": "opened",
@@ -2156,6 +2155,13 @@ class GovernorLoopTests(unittest.TestCase):
                  patch("orchestrator.app.tasks.list_pull_request_review_comments", return_value=([], "ok")), \
                  patch("orchestrator.app.tasks.notify_discord"):
                 with TestClient(main.app) as client:
+                    self._create_linked_task_run(
+                        db,
+                        repo=repo,
+                        issue_number=issue_number,
+                        pr_number=pr_number,
+                        with_program=False,
+                    )
                     resp = _post_github(
                         client,
                         secret="test-gh-secret",
@@ -2176,7 +2182,6 @@ class GovernorLoopTests(unittest.TestCase):
             repo = "jeeves-jeevesenson/init-tracker"
             issue_number = 1002
             pr_number = 72
-            self._create_linked_task_run(db, repo=repo, issue_number=issue_number, pr_number=pr_number, with_program=False)
             payload = {
                 "action": "opened",
                 "repository": {"full_name": repo},
@@ -2223,6 +2228,13 @@ class GovernorLoopTests(unittest.TestCase):
                  patch("orchestrator.app.tasks.post_issue_comment", return_value=(True, "ok")) as mocked_comment, \
                  patch("orchestrator.app.tasks.notify_discord"):
                 with TestClient(main.app) as client:
+                    self._create_linked_task_run(
+                        db,
+                        repo=repo,
+                        issue_number=issue_number,
+                        pr_number=pr_number,
+                        with_program=False,
+                    )
                     first = _post_github(
                         client,
                         secret="test-gh-secret",
@@ -2250,7 +2262,7 @@ class GovernorLoopTests(unittest.TestCase):
             repo = "jeeves-jeevesenson/init-tracker"
             issue_number = 1003
             pr_number = 73
-            _, program_id = self._create_linked_task_run(db, repo=repo, issue_number=issue_number, pr_number=pr_number, with_program=True)
+            program_id = None
 
             payload = {
                 "action": "opened",
@@ -2292,6 +2304,13 @@ class GovernorLoopTests(unittest.TestCase):
                  patch("orchestrator.app.tasks.merge_pr", return_value=(True, "ok")) as mocked_merge, \
                  patch("orchestrator.app.tasks.notify_discord"):
                 with TestClient(main.app) as client:
+                    _, program_id = self._create_linked_task_run(
+                        db,
+                        repo=repo,
+                        issue_number=issue_number,
+                        pr_number=pr_number,
+                        with_program=True,
+                    )
                     resp = _post_github(
                         client,
                         secret="test-gh-secret",
@@ -2316,7 +2335,6 @@ class GovernorLoopTests(unittest.TestCase):
             repo = "jeeves-jeevesenson/init-tracker"
             issue_number = 1004
             pr_number = 74
-            self._create_linked_task_run(db, repo=repo, issue_number=issue_number, pr_number=pr_number, with_program=False)
             payload = {
                 "action": "opened",
                 "repository": {"full_name": repo},
@@ -2357,6 +2375,13 @@ class GovernorLoopTests(unittest.TestCase):
                  patch("orchestrator.app.tasks.merge_pr", return_value=(True, "ok")) as mocked_merge, \
                  patch("orchestrator.app.tasks.notify_discord"):
                 with TestClient(main.app) as client:
+                    self._create_linked_task_run(
+                        db,
+                        repo=repo,
+                        issue_number=issue_number,
+                        pr_number=pr_number,
+                        with_program=False,
+                    )
                     resp = _post_github(
                         client,
                         secret="test-gh-secret",

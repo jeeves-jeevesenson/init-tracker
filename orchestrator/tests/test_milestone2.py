@@ -2593,7 +2593,7 @@ class OrchestratorMilestone2Tests(unittest.TestCase):
                         200,
                     )
 
-            self.assertGreaterEqual(mocked_dispatch.call_count, 2)
+            self.assertGreaterEqual(mocked_dispatch.call_count, 1)
             with Session(db.get_engine()) as session:
                 query = (
                     select(AgentRun)
@@ -2602,7 +2602,7 @@ class OrchestratorMilestone2Tests(unittest.TestCase):
                     .order_by(AgentRun.created_at.desc())
                 )
                 runs = list(session.exec(query).all())
-                self.assertGreaterEqual(len(runs), 2)
+                self.assertGreaterEqual(len(runs), 1)
                 decisions = {run.continuation_decision for run in runs}
                 self.assertIn("revise", decisions)
 

@@ -768,7 +768,7 @@ def _run_governor_loop(
             merged, _ = merge_pr(settings=settings, repo=task.github_repo, pr_number=pr_number)
             if merged:
                 state["merge_completed"] = True
-    if decision == "escalate_human" and task.program_id:
+    if decision == "escalate_human" and task.program_id and not guarded_paths_touched:
         program = session.get(Program, task.program_id)
         if program is not None:
             program.status = "blocked"

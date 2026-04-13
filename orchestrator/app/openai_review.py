@@ -323,15 +323,26 @@ def _validate_governor_artifact(raw: dict[str, Any]) -> dict[str, Any]:
 
 
 def _fallback_governor_artifact(update_context: str) -> dict[str, Any]:
-    lowered = update_context.lower()
+    try:
+        parsed = json.loads(update_context)
+    except Exception:
+        parsed = {}
+    if not isinstance(parsed, dict):
+        parsed = {}
+    pr = parsed.get("pr") if isinstance(parsed.get("pr"), dict) else {}
+    unresolved = parsed.get("unresolved_copilot_findings")
+    unresolved_count = len(unresolved) if isinstance(unresolved, list) else 0
+    checks_passed = bool(parsed.get("checks_passed"))
+    draft = bool(pr.get("draft"))
+    guarded = bool(parsed.get("guarded_paths_touched"))
     decision = "wait"
-    if "guarded_paths_touched" in lowered and "true" in lowered:
+    if guarded:
         decision = "escalate_human"
-    elif "unresolved_copilot_findings" in lowered and "[]" not in lowered:
+    elif unresolved_count > 0:
         decision = "request_revision"
-    elif '"checks_passed": true' in lowered and '"draft": false' in lowered:
+    elif checks_passed and not draft:
         decision = "approve_and_merge"
-    elif '"checks_passed": true' in lowered and '"draft": true' in lowered:
+    elif checks_passed and draft:
         decision = "ready_for_review"
     return {
         "decision": decision,
