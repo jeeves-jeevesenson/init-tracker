@@ -14,22 +14,30 @@ from .models import (
     APPROVAL_APPROVED,
     APPROVAL_PENDING,
     APPROVAL_REJECTED,
+    RUN_STATUS_AWAITING_WORKER_START,
     RUN_STATUS_AWAITING_REVIEW,
     RUN_STATUS_BLOCKED,
     RUN_STATUS_COMPLETED,
+    RUN_STATUS_DISPATCH_REQUESTED,
     RUN_STATUS_DISPATCHED,
     RUN_STATUS_FAILED,
+    RUN_STATUS_MANUAL_DISPATCH_NEEDED,
     RUN_STATUS_PR_OPENED,
     RUN_STATUS_QUEUED,
     RUN_STATUS_WORKING,
     TASK_STATUS_APPROVED,
+    TASK_STATUS_AWAITING_WORKER_START,
     TASK_STATUS_AWAITING_APPROVAL,
     TASK_STATUS_BLOCKED,
     TASK_STATUS_COMPLETED,
+    TASK_STATUS_DISPATCH_REQUESTED,
     TASK_STATUS_DISPATCHED,
     TASK_STATUS_FAILED,
+    TASK_STATUS_MANUAL_DISPATCH_NEEDED,
     TASK_STATUS_PLANNING,
+    TASK_STATUS_PR_OPENED,
     TASK_STATUS_RECEIVED,
+    TASK_STATUS_WORKING,
     AgentRun,
     TaskPacket,
 )
@@ -38,6 +46,8 @@ from .openai_review import summarize_work_update
 
 
 ISSUE_REF_RE = re.compile(r"#(\d+)")
+APPROVE_RE = re.compile(r"(?im)(^|\n)\s*/approve\b")
+REJECT_RE = re.compile(r"(?im)(^|\n)\s*/reject\b")
 
 
 def _utc_now() -> datetime:
@@ -90,6 +100,49 @@ def _save(session: Session, *objects: Any) -> None:
     session.commit()
     for obj in objects:
         session.refresh(obj)
+
+
+def _normalize_login(value: str | None) -> str:
+    if not value:
+        return ""
+    return value.strip().lower().removesuffix("[bot]")
+
+
+def _is_copilot_identity(settings: Settings, login: str | None) -> bool:
+    return _normalize_login(login) == _normalize_login(settings.copilot_dispatch_assignee)
+
+
+def _parse_approval_command(comment_body: str) -> bool | None:
+    if APPROVE_RE.search(comment_body):
+        return True
+    if REJECT_RE.search(comment_body):
+        return False
+    return None
+
+
+def _mark_worker_started(
+    session: Session,
+    *,
+    task: TaskPacket,
+    reason: str,
+) -> None:
+    if task.approval_state != APPROVAL_APPROVED:
+        return
+    if task.id is None:
+        return
+    run = _latest_run_for_task(session, task.id)
+    if run is None:
+        return
+    if run.status in {RUN_STATUS_PR_OPENED, RUN_STATUS_AWAITING_REVIEW, RUN_STATUS_COMPLETED}:
+        return
+    run.status = RUN_STATUS_WORKING
+    run.last_summary = reason
+    run.updated_at = _utc_now()
+    task.status = TASK_STATUS_WORKING
+    task.latest_summary = reason
+    task.updated_at = _utc_now()
+    _save(session, run, task)
+    notify_discord(f"Worker started: {task.github_repo}#{task.github_issue_number}")
 
 
 def _render_normalized_text(plan: dict[str, Any]) -> str:
@@ -240,6 +293,15 @@ def process_issue_event(session: Session, *, settings: Settings, payload: dict[s
         label_name = ((payload.get("label") or {}).get("name") if isinstance(payload.get("label"), dict) else None)
         if label_name == settings.task_approved_label:
             process_approval(session, settings=settings, task=task, approved=True, source="label")
+    elif action == "assigned":
+        assignee = payload.get("assignee") or {}
+        assignee_login = assignee.get("login") if isinstance(assignee, dict) else None
+        if _is_copilot_identity(settings, assignee_login):
+            _mark_worker_started(
+                session,
+                task=task,
+                reason=f"Worker start signal: issue assigned to {assignee_login}",
+            )
 
 
 def process_approval(
@@ -251,7 +313,14 @@ def process_approval(
     source: str,
 ) -> None:
     if approved:
-        if task.status in {TASK_STATUS_DISPATCHED, TASK_STATUS_COMPLETED}:
+        if task.status in {
+            TASK_STATUS_DISPATCH_REQUESTED,
+            TASK_STATUS_AWAITING_WORKER_START,
+            TASK_STATUS_DISPATCHED,
+            TASK_STATUS_WORKING,
+            TASK_STATUS_PR_OPENED,
+            TASK_STATUS_COMPLETED,
+        }:
             return
         task.approval_state = APPROVAL_APPROVED
         task.status = TASK_STATUS_APPROVED
@@ -273,17 +342,8 @@ def process_approval(
 def process_issue_comment_event(session: Session, *, settings: Settings, payload: dict[str, Any], action: str | None) -> None:
     if action != "created":
         return
-    comment = payload.get("comment") or {}
-    body = str(comment.get("body") or "").strip().lower()
-    if not body:
-        return
-
-    approved = None
-    if body.startswith("/approve"):
-        approved = True
-    elif body.startswith("/reject"):
-        approved = False
-    if approved is None:
+    issue = payload.get("issue") or {}
+    if isinstance(issue, dict) and issue.get("pull_request") is not None:
         return
 
     github_repo = _repo_name(payload)
@@ -294,6 +354,24 @@ def process_issue_comment_event(session: Session, *, settings: Settings, payload
     task = _get_task_by_repo_issue(session, github_repo=github_repo, github_issue_number=issue_number)
     if task is None:
         return
+
+    comment = payload.get("comment") or {}
+    body = str(comment.get("body") or "")
+    if not body:
+        return
+
+    approved = _parse_approval_command(body)
+    if approved is None:
+        user = comment.get("user") if isinstance(comment, dict) else None
+        commenter_login = user.get("login") if isinstance(user, dict) else None
+        if _is_copilot_identity(settings, commenter_login):
+            _mark_worker_started(
+                session,
+                task=task,
+                reason=f"Worker start signal: activity comment from {commenter_login}",
+            )
+        return
+
     process_approval(session, settings=settings, task=task, approved=approved, source="comment")
 
 
@@ -304,6 +382,8 @@ def dispatch_task_if_ready(session: Session, *, settings: Settings, task: TaskPa
         return
     latest_run = _latest_run_for_task(session, task.id)
     if latest_run and latest_run.status in {
+        RUN_STATUS_DISPATCH_REQUESTED,
+        RUN_STATUS_AWAITING_WORKER_START,
         RUN_STATUS_DISPATCHED,
         RUN_STATUS_WORKING,
         RUN_STATUS_PR_OPENED,
@@ -322,28 +402,42 @@ def dispatch_task_if_ready(session: Session, *, settings: Settings, task: TaskPa
     )
     _save(session, run)
 
+    run.status = RUN_STATUS_DISPATCH_REQUESTED
+    run.last_summary = "Dispatch requested via GitHub issue assignment API"
+    run.updated_at = _utc_now()
+    task.status = TASK_STATUS_DISPATCH_REQUESTED
+    task.latest_summary = "Dispatch requested; awaiting GitHub acceptance"
+    task.updated_at = _utc_now()
+    _save(session, run, task)
+
     result = dispatch_task_to_github_copilot(settings=settings, task=task)
-    if result.success:
-        run.status = RUN_STATUS_DISPATCHED
-        run.last_summary = result.summary
+    result_summary = (
+        f"{result.summary} "
+        f"(dispatch_state={result.state}, api_status={result.api_status_code if result.api_status_code is not None else 'n/a'})"
+    )
+    if result.accepted:
+        run.status = RUN_STATUS_AWAITING_WORKER_START
+        run.last_summary = result_summary
         run.github_dispatch_id = result.dispatch_id
         run.github_dispatch_url = result.dispatch_url
         run.updated_at = _utc_now()
 
-        task.status = TASK_STATUS_DISPATCHED
-        task.latest_summary = result.summary
+        task.status = TASK_STATUS_AWAITING_WORKER_START
+        task.latest_summary = f"{result_summary} Awaiting worker-start signal."
         task.updated_at = _utc_now()
         _save(session, run, task)
-        notify_discord(f"Task dispatched: {task.github_repo}#{task.github_issue_number}")
+        notify_discord(f"Dispatch accepted; awaiting worker start: {task.github_repo}#{task.github_issue_number}")
         return
 
     if result.manual_required:
-        run.status = RUN_STATUS_BLOCKED
-        run.last_summary = result.summary
+        run.status = RUN_STATUS_MANUAL_DISPATCH_NEEDED
+        run.last_summary = result_summary
+        run.github_dispatch_id = result.dispatch_id
+        run.github_dispatch_url = result.dispatch_url
         run.updated_at = _utc_now()
 
-        task.status = TASK_STATUS_APPROVED
-        task.latest_summary = result.summary
+        task.status = TASK_STATUS_MANUAL_DISPATCH_NEEDED
+        task.latest_summary = result_summary
         task.updated_at = _utc_now()
         _save(session, run, task)
         notify_discord(
@@ -352,11 +446,11 @@ def dispatch_task_if_ready(session: Session, *, settings: Settings, task: TaskPa
         return
 
     run.status = RUN_STATUS_FAILED
-    run.last_summary = result.summary
+    run.last_summary = result_summary
     run.updated_at = _utc_now()
 
     task.status = TASK_STATUS_FAILED
-    task.latest_summary = result.summary
+    task.latest_summary = result_summary
     task.updated_at = _utc_now()
     _save(session, run, task)
     notify_discord(f"Task failed to dispatch: {task.github_repo}#{task.github_issue_number}")
@@ -374,7 +468,17 @@ def _task_for_pr_payload(session: Session, *, github_repo: str, pr_payload: dict
     query = (
         select(TaskPacket)
         .where(TaskPacket.github_repo == github_repo)
-        .where(TaskPacket.status == TASK_STATUS_DISPATCHED)
+        .where(
+            TaskPacket.status.in_(
+                [
+                    TASK_STATUS_DISPATCH_REQUESTED,
+                    TASK_STATUS_AWAITING_WORKER_START,
+                    TASK_STATUS_DISPATCHED,
+                    TASK_STATUS_WORKING,
+                    TASK_STATUS_PR_OPENED,
+                ]
+            )
+        )
         .order_by(TaskPacket.updated_at.desc())
         .limit(1)
     )
@@ -455,6 +559,9 @@ def process_pull_request_event(
             context=context,
             run_status=RUN_STATUS_PR_OPENED,
         )
+        task.status = TASK_STATUS_PR_OPENED
+        task.updated_at = _utc_now()
+        _save(session, task)
         notify_discord(f"PR opened/updated for review: {github_repo} PR #{pr.get('number')}")
         return
 
@@ -484,6 +591,7 @@ def process_pull_request_event(
     run.status = RUN_STATUS_WORKING
     run.last_summary = f"PR action observed: {action}"
     run.updated_at = _utc_now()
+    task.status = TASK_STATUS_WORKING
     task.latest_summary = run.last_summary
     task.updated_at = _utc_now()
     _save(session, run, task)

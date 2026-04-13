@@ -40,8 +40,12 @@ class Settings(BaseSettings):
     task_label: str = Field(default="agent:task", alias="TASK_LABEL")
     task_approved_label: str = Field(default="agent:approved", alias="TASK_APPROVED_LABEL")
 
-    copilot_dispatch_assignee: str = Field(default="copilot", alias="COPILOT_DISPATCH_ASSIGNEE")
+    copilot_dispatch_assignee: str = Field(default="copilot-swe-agent", alias="COPILOT_DISPATCH_ASSIGNEE")
     copilot_target_branch: str = Field(default="main", alias="COPILOT_TARGET_BRANCH")
+    copilot_target_repo: str | None = Field(default=None, alias="COPILOT_TARGET_REPO")
+    copilot_custom_instructions: str | None = Field(default=None, alias="COPILOT_CUSTOM_INSTRUCTIONS")
+    copilot_custom_agent: str | None = Field(default=None, alias="COPILOT_CUSTOM_AGENT")
+    copilot_model: str | None = Field(default=None, alias="COPILOT_MODEL")
 
     openai_planning_model: str = Field(default="gpt-4.1-mini", alias="OPENAI_PLANNING_MODEL")
     openai_review_model: str = Field(default="gpt-4.1-mini", alias="OPENAI_REVIEW_MODEL")
