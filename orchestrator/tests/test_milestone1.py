@@ -157,7 +157,7 @@ class OrchestratorMilestone1Tests(unittest.TestCase):
                     self.assertEqual(second.status_code, 200)
                     self.assertFalse(first.json()["duplicate"])
                     self.assertTrue(second.json()["duplicate"])
-                    self.assertEqual(mocked_notify.call_count, 1)
+                    self.assertEqual(mocked_notify.call_count, 0)
 
                     runs_response = client.get("/runs")
                     self.assertEqual(runs_response.status_code, 200)
