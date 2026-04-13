@@ -8,7 +8,7 @@ from typing import Any
 from sqlmodel import Session, select
 
 from .config import Settings
-from .copilot_identity import is_copilot_identity
+from .copilot_identity import is_copilot_actor
 from .discord_notify import notify_discord
 from .github_dispatch import build_dispatch_payload_summary, dispatch_task_to_github_copilot
 from .models import (
@@ -89,15 +89,6 @@ WORKER_AUTO_NARROW_KEYWORDS = (
     "patch",
     "narrow",
 )
-COPILOT_DISPLAY_NAME_ALIASES = {
-    "copilot",
-    "github copilot",
-    "copilot coding agent",
-    "copilot swe agent",
-    "copilot / copilot swe agent",
-}
-
-
 def _utc_now() -> datetime:
     return datetime.now(timezone.utc)
 
@@ -150,28 +141,11 @@ def _save(session: Session, *objects: Any) -> None:
         session.refresh(obj)
 
 
-def _is_copilot_identity(settings: Settings, login: str | None) -> bool:
-    return is_copilot_identity(login, settings.copilot_dispatch_assignee)
-
-
-def _normalize_display_name(value: str | None) -> str:
-    if not value:
-        return ""
-    normalized = re.sub(r"[\[\]()/._-]+", " ", value.strip().lower())
-    normalized = re.sub(r"\s+", " ", normalized).strip()
-    return normalized
-
-
 def _is_copilot_actor(*, settings: Settings, login: str | None, display_name: str | None) -> bool:
-    if _is_copilot_identity(settings, login):
-        return True
-    normalized_display_name = _normalize_display_name(display_name)
-    if not normalized_display_name:
-        return False
-    if normalized_display_name in COPILOT_DISPLAY_NAME_ALIASES:
-        return True
-    return "copilot" in normalized_display_name and (
-        "agent" in normalized_display_name or "github" in normalized_display_name or "swe" in normalized_display_name
+    return is_copilot_actor(
+        login=login,
+        display_name=display_name,
+        configured_login=settings.copilot_dispatch_assignee,
     )
 
 
@@ -211,7 +185,7 @@ def _normalize_scope_class(value: Any) -> str | None:
     return None
 
 
-def _infer_recommendation_from_text(task: TaskPacket) -> tuple[str, str, str]:
+def _infer_deterministic_route_from_text(task: TaskPacket) -> tuple[str | None, str | None, str | None]:
     text = " ".join(
         [
             task.title or "",
@@ -221,17 +195,19 @@ def _infer_recommendation_from_text(task: TaskPacket) -> tuple[str, str, str]:
     ).lower()
     broad_hits = sum(1 for keyword in WORKER_AUTO_BROAD_KEYWORDS if keyword in text)
     narrow_hits = sum(1 for keyword in WORKER_AUTO_NARROW_KEYWORDS if keyword in text)
+    if narrow_hits > broad_hits:
+        return (
+            "tracker-engineer",
+            "narrow",
+            "Deterministic routing matched narrow/focused keywords",
+        )
     if broad_hits > narrow_hits:
         return (
             "initiative-smith",
             "broad",
-            "Auto-routing matched broad-scope keywords",
+            "Deterministic routing matched broad-scope keywords",
         )
-    return (
-        "tracker-engineer",
-        "narrow",
-        "Auto-routing defaulted to narrow/focused scope",
-    )
+    return None, None, None
 
 
 def _resolve_override(
@@ -288,14 +264,25 @@ def _apply_worker_selection(
         task.worker_override_label = override_label
         return
 
-    worker_slug = _normalize_worker_slug(task.recommended_worker)
-    scope_class = _normalize_scope_class(task.recommended_scope_class)
+    worker_slug, scope_class, reason = _infer_deterministic_route_from_text(task)
+    planner_worker_slug = _normalize_worker_slug(task.recommended_worker)
+    planner_scope_class = _normalize_scope_class(task.recommended_scope_class)
     if worker_slug is None:
-        worker_slug, scope_class, reason = _infer_recommendation_from_text(task)
+        if planner_worker_slug is None:
+            worker_slug = "tracker-engineer"
+            scope_class = "narrow"
+            reason = "Deterministic routing defaulted to narrow/focused scope"
+        else:
+            worker_slug = planner_worker_slug
+            reason = "Auto-routing used OpenAI planning recommendation as deterministic tiebreaker"
+            if planner_scope_class is None:
+                planner_scope_class = "broad" if worker_slug == "initiative-smith" else "narrow"
+            scope_class = planner_scope_class
     else:
-        reason = "Auto-routing used OpenAI planning recommendation"
-        if scope_class is None:
-            scope_class = "broad" if worker_slug == "initiative-smith" else "narrow"
+        if planner_worker_slug and planner_worker_slug != worker_slug:
+            reason = (
+                f"{reason}; planner hint ({planner_worker_slug}) ignored because deterministic route took precedence"
+            )
 
     task.recommended_worker = worker_slug
     task.recommended_scope_class = scope_class
@@ -983,6 +970,9 @@ def process_workflow_run_event(
             context=context,
             run_status=RUN_STATUS_AWAITING_REVIEW,
         )
+        task.status = TASK_STATUS_PR_OPENED
+        task.updated_at = _utc_now()
+        _save(session, task)
         notify_discord(
             f"Checks complete and ready for review: {github_repo} PR #{run.github_pr_number} -> {_worker_display_name(task)}"
         )
@@ -1008,6 +998,7 @@ def process_workflow_run_event(
     run.status = RUN_STATUS_WORKING
     run.last_summary = f"Workflow update observed: {name} ({status}/{conclusion or 'n/a'})"
     run.updated_at = _utc_now()
+    task.status = TASK_STATUS_WORKING
     task.latest_summary = run.last_summary
     task.updated_at = _utc_now()
     _save(session, run, task)
