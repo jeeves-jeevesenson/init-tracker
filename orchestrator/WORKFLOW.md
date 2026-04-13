@@ -76,7 +76,8 @@ Dispatch worker mode is intentionally split:
 Dispatch state semantics are intentionally conservative:
 - `dispatch_requested` = orchestrator attempted assignment
 - `awaiting_worker_start` = API accepted assignment request, worker-start still unconfirmed
-- `working` / `pr_opened` = worker-start evidence arrived (assignment/comment/PR evidence can upgrade prior dispatch classifications)
+- `working` / `pr_opened` = authoritative worker progress evidence arrived (linked PR/check/review state)
+- assignment/comment worker-start signals are treated as **weak evidence** and remain `awaiting_worker_start` until authoritative evidence arrives
 - `worker_failed` = Copilot worker started but then reported startup failure (for example “encountered an error and was unable to start working”)
 - `manual_dispatch_needed` = API/token/permission path did not accept assignment in the expected form
 
@@ -91,16 +92,20 @@ Tracked webhook event types:
 - `issues` (task intake + optional label approval)
 
 Behavior:
-- PR events are correlated back to task/agent run (issue references preferred, fallback to latest active dispatched task in repo)
+- PR events are correlated back to task/agent run using explicit linkage (issue reference and/or already-linked PR number)
 - workflow run events are correlated via PR numbers
 - run/task summary is updated with concise AI-generated review/summarization
 - worker-start confirmation signals include:
   - issue assigned to configured Copilot assignee
   - issue/comment activity from Copilot identities in login/display-name forms (`Copilot`, `copilot-swe-agent`, `copilot-swe-agent[bot]`)
   - PR activity tied to the task
-- later webhook evidence always reconciles stale `manual_dispatch_needed` states to `working` / `pr_opened` / `worker_failed` when worker activity is visible
+  - assignment/comment-only evidence does not satisfy review/merge/continuation requirements
+  - stale weak-evidence runs are auto-reconciled to blocked with explicit missing evidence reasons (`github_pr_number`, `review_artifact_json`, `continuation_decision`)
 - worker startup failure signals include:
   - Copilot comment indicating the worker encountered an error and was unable to start working
+- external PR/workflow activity without internal task/run linkage is surfaced as reconciliation-incomplete and does not count as progress
+- empty PRs (`changed_files == 0`) are rejected as progress
+- merged PR completion now requires internal review evidence linkage (`review_artifact_json` + `continuation_decision`)
 
 ## OpenAI usage
 
@@ -178,6 +183,7 @@ Optional tuning:
 - `OPENAI_PLANNING_BROAD_REASONING_EFFORT` (default `high`)
 - `OPENAI_CONTROL_PLANE_MODE` (default `sync`; `background_ready` reserved for async control-plane wiring)
 - `OPENAI_ENABLE_BACKGROUND_REQUESTS` (default `false`; enabling requires webhook/poller completion flow)
+- `WORKER_WEAK_EVIDENCE_STALE_MINUTES` (default `90`; threshold before weak assignment/comment-only evidence is auto-blocked as stale)
 - `GITHUB_API_URL` (default `https://api.github.com`)
 - `TRUSTED_KICKOFF_LABEL` (default `program:kickoff`) — issues with this label plus `TASK_LABEL` are auto-confirmed after planning without requiring a second manual approval step
 - `PROGRAM_TRUSTED_AUTO_CONFIRM` (default `true`) — when `false`, the trusted kickoff label is present but inert; full two-step approval is required
@@ -243,6 +249,8 @@ All blocked/waiting states are now surfaced via structured `blocker_state` on th
 | `reason` | Meaning |
 |---|---|
 | `waiting_for_merge` | Reviewer said continue/complete; waiting for PR to be merged |
+| `waiting_for_checks` | Reviewer signaled continue/complete but successful checks are still missing |
+| `review_evidence_missing` | Merge/continuation was rejected because PR linkage/review evidence was missing or contradictory |
 | `waiting_for_pr_ready` | PR is a draft and auto-un-draft failed; manual action required |
 | `waiting_for_workflow_approval` | GitHub Actions workflow is waiting for a maintainer approval |
 | `waiting_for_issue_creation_capability` | Auto-continuation failed because GitHub issue creation was unavailable |
@@ -251,6 +259,12 @@ All blocked/waiting states are now surfaced via structured `blocker_state` on th
 | `auto_merge_disabled` | Auto-merge is not enabled on the PR; enable in repository Settings > General |
 | `escalated_to_human` | Reviewer requested escalation or max revision attempts exceeded |
 | `max_revisions_exceeded` | Slice exceeded allowed revision cycles; escalated |
+
+## Webhook reliability and reconciliation truthfulness
+
+- GitHub webhook body-read failures (including client disconnects) return failure (`503`) so GitHub can retry delivery.
+- The orchestrator does not mark such deliveries as successfully processed.
+- When an event is accepted but cannot be reconciled to a task/run (for example external PR activity without linkage), the webhook returns `202` with `reconciliation_incomplete=true` and records a reconciliation-incomplete run event.
 
 The `wait_reason` field in `GET /programs` responses provides the reason string directly for easy consumption.
 

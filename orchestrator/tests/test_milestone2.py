@@ -7,11 +7,13 @@ import json
 import os
 import tempfile
 import unittest
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from unittest.mock import Mock, patch
+from unittest.mock import AsyncMock, Mock, patch
 
 from fastapi.testclient import TestClient
 from sqlmodel import Session, select
+from starlette.requests import ClientDisconnect
 
 from orchestrator.app.config import Settings
 from orchestrator.app.copilot_identity import DOCUMENTED_COPILOT_ASSIGNEE_LOGIN
@@ -635,7 +637,7 @@ class OrchestratorMilestone2Tests(unittest.TestCase):
                         payload=override_payload,
                     )
                     task = client.get("/tasks").json()["tasks"][0]
-                    self.assertEqual(task["status"], "working")
+                    self.assertEqual(task["status"], "awaiting_worker_start")
 
                 self.assertEqual(mocked_dispatch.call_count, 1)
                 with Session(db.get_engine()) as session:
@@ -1093,8 +1095,8 @@ class OrchestratorMilestone2Tests(unittest.TestCase):
                     )
                     self.assertEqual(assigned.status_code, 200)
                     task_after = client.get("/tasks").json()["tasks"][0]
-                    self.assertEqual(task_after["status"], "working")
-                    self.assertEqual(task_after["latest_run"]["status"], "working")
+                    self.assertEqual(task_after["status"], "awaiting_worker_start")
+                    self.assertEqual(task_after["latest_run"]["status"], "awaiting_worker_start")
                     self.assertEqual(task_after["selected_custom_agent"], CUSTOM_AGENT_TRACKER_ENGINEER)
                     self.assertEqual(
                         task_after["latest_run"]["selected_custom_agent"],
@@ -1182,8 +1184,8 @@ class OrchestratorMilestone2Tests(unittest.TestCase):
                     )
                     self.assertEqual(comment.status_code, 200)
                     task_after = client.get("/tasks").json()["tasks"][0]
-                    self.assertEqual(task_after["status"], "working")
-                    self.assertEqual(task_after["latest_run"]["status"], "working")
+                    self.assertEqual(task_after["status"], "awaiting_worker_start")
+                    self.assertEqual(task_after["latest_run"]["status"], "awaiting_worker_start")
 
     def test_pr_evidence_upgrades_manual_dispatch_needed(self):
         with tempfile.TemporaryDirectory() as td:
@@ -1426,8 +1428,8 @@ class OrchestratorMilestone2Tests(unittest.TestCase):
                     )
                     self.assertEqual(assigned.status_code, 200)
                     task = client.get("/tasks").json()["tasks"][0]
-                    self.assertEqual(task["status"], "working")
-                    self.assertEqual(task["latest_run"]["status"], "working")
+                    self.assertEqual(task["status"], "awaiting_worker_start")
+                    self.assertEqual(task["latest_run"]["status"], "awaiting_worker_start")
 
     def test_worker_failure_comment_sets_worker_failed_state(self):
         with tempfile.TemporaryDirectory() as td:
@@ -1677,8 +1679,8 @@ class OrchestratorMilestone2Tests(unittest.TestCase):
                     )
                     self.assertEqual(assigned.status_code, 200)
                     task = client.get("/tasks").json()["tasks"][0]
-                    self.assertEqual(task["status"], "working")
-                    self.assertEqual(task["latest_run"]["status"], "working")
+                    self.assertEqual(task["status"], "awaiting_worker_start")
+                    self.assertEqual(task["latest_run"]["status"], "awaiting_worker_start")
 
     def test_issue_comment_multiline_approve_is_accepted(self):
         with tempfile.TemporaryDirectory() as td:
@@ -2603,6 +2605,285 @@ class OrchestratorMilestone2Tests(unittest.TestCase):
                 self.assertGreaterEqual(len(runs), 2)
                 decisions = {run.continuation_decision for run in runs}
                 self.assertIn("revise", decisions)
+
+    def test_github_webhook_body_disconnect_returns_retryable_failure(self):
+        with tempfile.TemporaryDirectory() as td:
+            os.environ["DATABASE_URL"] = f"sqlite:///{Path(td) / 'orchestrator.db'}"
+            os.environ["GH_WEBHOOK_SECRET"] = "test-gh-secret"
+            main, _ = _reload_orchestrator_modules()
+            with patch("orchestrator.app.github_webhooks.Request.body", new=AsyncMock(side_effect=ClientDisconnect())):
+                with TestClient(main.app) as client:
+                    response = client.post(
+                        "/github/webhook",
+                        headers={"X-GitHub-Event": "issues", "X-GitHub-Delivery": "disconnect-1"},
+                        content=b"",
+                    )
+                    self.assertEqual(response.status_code, 503)
+                    self.assertIn("retry", response.json()["detail"].lower())
+                    runs = client.get("/runs").json()
+                    self.assertEqual(runs["count"], 0)
+
+    def test_stale_assignment_only_run_reconciles_to_blocked(self):
+        with tempfile.TemporaryDirectory() as td:
+            os.environ["DATABASE_URL"] = f"sqlite:///{Path(td) / 'orchestrator.db'}"
+            os.environ["GH_WEBHOOK_SECRET"] = "test-gh-secret"
+            os.environ["WORKER_WEAK_EVIDENCE_STALE_MINUTES"] = "1"
+            main, db = _reload_orchestrator_modules()
+
+            with TestClient(main.app) as client:
+                with Session(db.get_engine()) as session:
+                    task = TaskPacket(
+                        github_repo="jeeves-jeevesenson/init-tracker",
+                        github_issue_number=616,
+                        title="Stale weak evidence",
+                        raw_body="body",
+                        status="working",
+                        approval_state="approved",
+                        latest_summary="Worker start signal: issue assigned to Copilot",
+                    )
+                    session.add(task)
+                    session.commit()
+                    session.refresh(task)
+                    stale_time = datetime.now(timezone.utc) - timedelta(minutes=5)
+                    run = AgentRun(
+                        task_packet_id=task.id,
+                        provider="github_copilot",
+                        github_repo=task.github_repo,
+                        github_issue_number=task.github_issue_number,
+                        status="working",
+                        last_summary="Worker start signal: issue assigned to copilot-swe-agent",
+                        updated_at=stale_time,
+                        created_at=stale_time,
+                    )
+                    session.add(run)
+                    session.commit()
+
+                tasks = client.get("/tasks").json()["tasks"]
+                self.assertEqual(tasks[0]["status"], "blocked")
+                self.assertEqual(tasks[0]["latest_run"]["status"], "blocked")
+                self.assertIn("missing=github_pr_number", tasks[0]["latest_summary"])
+
+    def test_unlinked_external_pr_activity_does_not_count_as_progress(self):
+        with tempfile.TemporaryDirectory() as td:
+            os.environ["DATABASE_URL"] = f"sqlite:///{Path(td) / 'orchestrator.db'}"
+            os.environ["GH_WEBHOOK_SECRET"] = "test-gh-secret"
+            os.environ["GITHUB_API_TOKEN"] = "dummy-token"
+            main, _ = _reload_orchestrator_modules()
+
+            issue_payload = {
+                "action": "opened",
+                "repository": {"full_name": "jeeves-jeevesenson/init-tracker"},
+                "issue": {
+                    "number": 617,
+                    "node_id": "I_617",
+                    "title": "Unlinked PR reconciliation",
+                    "body": "Track PR linkage",
+                    "labels": [{"name": "agent:task"}],
+                },
+            }
+            approve_payload = {
+                "action": "created",
+                "repository": {"full_name": "jeeves-jeevesenson/init-tracker"},
+                "issue": {"number": 617},
+                "comment": {"body": "/approve"},
+            }
+            pr_payload = {
+                "action": "opened",
+                "repository": {"full_name": "jeeves-jeevesenson/init-tracker"},
+                "pull_request": {
+                    "number": 9991,
+                    "title": "Unrelated PR",
+                    "body": "No issue reference here.",
+                    "html_url": "https://github.com/jeeves-jeevesenson/init-tracker/pull/9991",
+                },
+            }
+
+            with patch(
+                "orchestrator.app.tasks.plan_task_packet",
+                return_value={
+                    "objective": "Dispatch task",
+                    "scope": ["dispatch"],
+                    "non_goals": [],
+                    "acceptance_criteria": ["linkage stays truthful"],
+                    "validation_guidance": ["unit tests"],
+                    "implementation_brief": "dispatch this",
+                },
+            ), patch(
+                "orchestrator.app.tasks.dispatch_task_to_github_copilot",
+                return_value=DispatchResult(
+                    attempted=True,
+                    accepted=True,
+                    manual_required=False,
+                    state="accepted",
+                    summary="Dispatch accepted",
+                ),
+            ):
+                with TestClient(main.app) as client:
+                    self._post_github(
+                        client,
+                        secret="test-gh-secret",
+                        delivery="delivery-task-opened-617",
+                        event="issues",
+                        payload=issue_payload,
+                    )
+                    self._post_github(
+                        client,
+                        secret="test-gh-secret",
+                        delivery="delivery-approve-617",
+                        event="issue_comment",
+                        payload=approve_payload,
+                    )
+                    response = self._post_github(
+                        client,
+                        secret="test-gh-secret",
+                        delivery="delivery-pr-opened-617",
+                        event="pull_request",
+                        payload=pr_payload,
+                    )
+                    self.assertEqual(response.status_code, 202)
+                    task = client.get("/tasks").json()["tasks"][0]
+                    self.assertEqual(task["status"], "blocked")
+                    self.assertIsNone(task["latest_run"]["github_pr_number"])
+                    self.assertIn("reconciliation incomplete", task["latest_summary"].lower())
+
+    def test_empty_pr_is_rejected_as_progress(self):
+        with tempfile.TemporaryDirectory() as td:
+            os.environ["DATABASE_URL"] = f"sqlite:///{Path(td) / 'orchestrator.db'}"
+            os.environ["GH_WEBHOOK_SECRET"] = "test-gh-secret"
+            os.environ["GITHUB_API_TOKEN"] = "dummy-token"
+            main, _ = _reload_orchestrator_modules()
+
+            issue_payload = {
+                "action": "opened",
+                "repository": {"full_name": "jeeves-jeevesenson/init-tracker"},
+                "issue": {
+                    "number": 618,
+                    "node_id": "I_618",
+                    "title": "Empty PR rejection",
+                    "body": "Reject empty PRs",
+                    "labels": [{"name": "agent:task"}],
+                },
+            }
+            approve_payload = {
+                "action": "created",
+                "repository": {"full_name": "jeeves-jeevesenson/init-tracker"},
+                "issue": {"number": 618},
+                "comment": {"body": "/approve"},
+            }
+            pr_payload = {
+                "action": "opened",
+                "repository": {"full_name": "jeeves-jeevesenson/init-tracker"},
+                "pull_request": {
+                    "number": 6181,
+                    "title": "Fixes #618",
+                    "body": "Implements nothing",
+                    "html_url": "https://github.com/jeeves-jeevesenson/init-tracker/pull/6181",
+                    "changed_files": 0,
+                    "commits": 1,
+                },
+            }
+
+            with patch(
+                "orchestrator.app.tasks.plan_task_packet",
+                return_value={
+                    "objective": "Dispatch task",
+                    "scope": ["dispatch"],
+                    "non_goals": [],
+                    "acceptance_criteria": ["empty PR blocked"],
+                    "validation_guidance": ["unit tests"],
+                    "implementation_brief": "dispatch this",
+                },
+            ), patch(
+                "orchestrator.app.tasks.dispatch_task_to_github_copilot",
+                return_value=DispatchResult(
+                    attempted=True,
+                    accepted=True,
+                    manual_required=False,
+                    state="accepted",
+                    summary="Dispatch accepted",
+                ),
+            ), patch("orchestrator.app.tasks.summarize_work_update") as mocked_summarize:
+                with TestClient(main.app) as client:
+                    self._post_github(
+                        client,
+                        secret="test-gh-secret",
+                        delivery="delivery-task-opened-618",
+                        event="issues",
+                        payload=issue_payload,
+                    )
+                    self._post_github(
+                        client,
+                        secret="test-gh-secret",
+                        delivery="delivery-approve-618",
+                        event="issue_comment",
+                        payload=approve_payload,
+                    )
+                    self._post_github(
+                        client,
+                        secret="test-gh-secret",
+                        delivery="delivery-pr-opened-618",
+                        event="pull_request",
+                        payload=pr_payload,
+                    )
+                    task = client.get("/tasks").json()["tasks"][0]
+                    self.assertEqual(task["status"], "blocked")
+                    self.assertIn("empty pr", task["latest_summary"].lower())
+                    mocked_summarize.assert_not_called()
+
+    def test_canceled_worker_session_is_not_successful_progress(self):
+        with tempfile.TemporaryDirectory() as td:
+            os.environ["DATABASE_URL"] = f"sqlite:///{Path(td) / 'orchestrator.db'}"
+            os.environ["GH_WEBHOOK_SECRET"] = "test-gh-secret"
+            main, db = _reload_orchestrator_modules()
+
+            with TestClient(main.app) as client:
+                with Session(db.get_engine()) as session:
+                    task = TaskPacket(
+                        github_repo="jeeves-jeevesenson/init-tracker",
+                        github_issue_number=619,
+                        title="Canceled worker session",
+                        raw_body="body",
+                        status="working",
+                        approval_state="approved",
+                    )
+                    session.add(task)
+                    session.commit()
+                    session.refresh(task)
+                    run = AgentRun(
+                        task_packet_id=task.id,
+                        provider="github_copilot",
+                        github_repo=task.github_repo,
+                        github_issue_number=task.github_issue_number,
+                        github_pr_number=6191,
+                        status="working",
+                        last_summary="worker running",
+                    )
+                    session.add(run)
+                    session.commit()
+
+                workflow_payload = {
+                    "action": "completed",
+                    "repository": {"full_name": "jeeves-jeevesenson/init-tracker"},
+                    "workflow_run": {
+                        "id": 61901,
+                        "name": "Copilot run",
+                        "status": "completed",
+                        "conclusion": "cancelled",
+                        "html_url": "https://github.com/jeeves-jeevesenson/init-tracker/actions/runs/61901",
+                        "pull_requests": [{"number": 6191}],
+                    },
+                }
+                response = self._post_github(
+                    client,
+                    secret="test-gh-secret",
+                    delivery="delivery-workflow-cancelled-619",
+                    event="workflow_run",
+                    payload=workflow_payload,
+                )
+                self.assertEqual(response.status_code, 200)
+                task_data = client.get("/tasks").json()["tasks"][0]
+                self.assertEqual(task_data["status"], "blocked")
+                self.assertEqual(task_data["latest_run"]["status"], "blocked")
 
 
 class OpenAIPlanningSchemaTests(unittest.TestCase):

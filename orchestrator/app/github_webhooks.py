@@ -5,6 +5,8 @@ import hmac
 import json
 
 from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi.responses import JSONResponse
+from starlette.requests import ClientDisconnect
 from sqlmodel import Session
 
 from .config import get_settings
@@ -31,7 +33,18 @@ def _verify_github_signature(body: bytes, signature_header: str | None, secret: 
 @router.post("/webhook")
 async def github_webhook(request: Request, session: Session = Depends(get_session)):
     settings = get_settings()
-    body = await request.body()
+    try:
+        body = await request.body()
+    except ClientDisconnect as exc:
+        raise HTTPException(
+            status_code=503,
+            detail="github webhook body unavailable (client disconnected); please retry delivery",
+        ) from exc
+    except Exception as exc:
+        raise HTTPException(
+            status_code=400,
+            detail=f"github webhook body read failed: {exc}",
+        ) from exc
     signature_header = request.headers.get("X-Hub-Signature-256")
     if not _verify_github_signature(body, signature_header, settings.gh_webhook_secret):
         raise HTTPException(status_code=403, detail="invalid github webhook signature")
@@ -60,7 +73,7 @@ async def github_webhook(request: Request, session: Session = Depends(get_sessio
             notify_discord("Orchestrator: GitHub ping accepted.")
         return {"ok": True, "message": "pong", "duplicate": not is_new}
 
-    _, is_new = record_run_event_idempotent(
+    run_event, is_new = record_run_event_idempotent(
         session,
         source="github",
         external_id=external_id,
@@ -73,14 +86,38 @@ async def github_webhook(request: Request, session: Session = Depends(get_sessio
     if not is_new:
         return {"ok": True, "source": "github", "event_type": event_type, "duplicate": True}
 
+    handled = True
     if isinstance(payload, dict):
         if event_type == "issues":
             process_issue_event(session, settings=settings, payload=payload, action=action)
         elif event_type == "issue_comment":
             process_issue_comment_event(session, settings=settings, payload=payload, action=action)
         elif event_type == "pull_request":
-            process_pull_request_event(session, settings=settings, payload=payload, action=action)
+            handled = process_pull_request_event(session, settings=settings, payload=payload, action=action)
         elif event_type == "workflow_run":
-            process_workflow_run_event(session, settings=settings, payload=payload, action=action)
+            handled = process_workflow_run_event(session, settings=settings, payload=payload, action=action)
 
-    return {"ok": True, "source": "github", "event_type": event_type, "duplicate": False}
+    if not handled:
+        run_event.status = "reconciliation_incomplete"
+        run_event.summary = f"GitHub event reconciliation incomplete: {event_type}/{action or 'n/a'}"
+        session.add(run_event)
+        session.commit()
+        session.refresh(run_event)
+        return JSONResponse(
+            status_code=202,
+            content={
+                "ok": False,
+                "source": "github",
+                "event_type": event_type,
+                "duplicate": False,
+                "reconciliation_incomplete": True,
+            },
+        )
+
+    return {
+        "ok": True,
+        "source": "github",
+        "event_type": event_type,
+        "duplicate": False,
+        "reconciliation_incomplete": False,
+    }

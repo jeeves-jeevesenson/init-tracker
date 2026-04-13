@@ -85,6 +85,7 @@ class Settings(BaseSettings):
     program_auto_continue: bool = Field(default=True, alias="PROGRAM_AUTO_CONTINUE")
     program_auto_merge: bool = Field(default=False, alias="PROGRAM_AUTO_MERGE")
     program_max_revision_attempts: int = Field(default=2, alias="PROGRAM_MAX_REVISION_ATTEMPTS")
+    worker_weak_evidence_stale_minutes: int = Field(default=90, alias="WORKER_WEAK_EVIDENCE_STALE_MINUTES")
 
     # Trusted kickoff: issues with this label (in addition to task_label) are
     # auto-confirmed after planning without requiring a second human approval.

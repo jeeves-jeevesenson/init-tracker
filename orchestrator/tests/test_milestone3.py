@@ -699,6 +699,7 @@ class MergeAndContinueTests(unittest.TestCase):
                             github_pr_number=pr_number,
                             status="pr_opened",
                             last_summary="pr opened",
+                            continuation_decision="complete",
                             review_artifact_json=json.dumps({"decision": "complete"}),
                         )
                         session.add(run)
@@ -718,6 +719,103 @@ class MergeAndContinueTests(unittest.TestCase):
             with Session(db.get_engine()) as session:
                 updated_program = session.get(Program, prog_id)
                 self.assertEqual(updated_program.status, PROGRAM_STATUS_COMPLETED)
+
+    def test_merged_pr_without_continuation_evidence_does_not_advance_program(self):
+        with tempfile.TemporaryDirectory() as td:
+            os.environ["DATABASE_URL"] = f"sqlite:///{Path(td) / 'orchestrator.db'}"
+            os.environ["GH_WEBHOOK_SECRET"] = "test-gh-secret"
+            main, db = _reload_orchestrator_modules()
+
+            repo = "jeeves-jeevesenson/init-tracker"
+            issue_number = 406
+            pr_number = 14
+            merge_payload = self._build_pr_merged_payload(pr_number, issue_number, repo)
+
+            with patch("orchestrator.app.tasks.notify_discord"):
+                with TestClient(main.app) as client:
+                    with Session(db.get_engine()) as session:
+                        task = TaskPacket(
+                            github_repo=repo,
+                            github_issue_number=issue_number,
+                            title="Missing continuation evidence",
+                            raw_body="body",
+                            status="pr_opened",
+                            approval_state="approved",
+                            acceptance_criteria_json="[]",
+                            selected_custom_agent="Initiative Tracker Engineer",
+                            worker_selection_mode="automatic",
+                            task_kind="program_slice",
+                        )
+                        session.add(task)
+                        session.commit()
+                        session.refresh(task)
+
+                        program = Program(
+                            github_repo=repo,
+                            root_issue_number=issue_number,
+                            title="Program",
+                            normalized_goal="goal",
+                            status=PROGRAM_STATUS_ACTIVE,
+                            current_slice_number=1,
+                        )
+                        session.add(program)
+                        session.commit()
+                        session.refresh(program)
+
+                        slice1 = ProgramSlice(
+                            program_id=program.id,
+                            slice_number=1,
+                            milestone_key="M1",
+                            title="Slice",
+                            objective="obj",
+                            acceptance_criteria_json="[]",
+                            status=SLICE_STATUS_WAITING_FOR_MERGE,
+                            task_packet_id=task.id,
+                            last_decision="continue",
+                            last_decision_event_key="t",
+                        )
+                        session.add(slice1)
+                        session.commit()
+                        session.refresh(slice1)
+
+                        task.program_id = program.id
+                        task.program_slice_id = slice1.id
+                        session.add(task)
+
+                        run = AgentRun(
+                            task_packet_id=task.id,
+                            program_id=program.id,
+                            program_slice_id=slice1.id,
+                            provider="github_copilot",
+                            github_repo=repo,
+                            github_issue_number=issue_number,
+                            github_pr_number=pr_number,
+                            status="pr_opened",
+                            last_summary="pr opened",
+                            review_artifact_json=json.dumps({"decision": "complete"}),
+                        )
+                        session.add(run)
+                        session.commit()
+                        session.refresh(run)
+                        task_id = task.id
+                        prog_id = program.id
+
+                    resp = _post_github(
+                        client,
+                        secret="test-gh-secret",
+                        delivery="delivery-single-slice-406",
+                        event="pull_request",
+                        payload=merge_payload,
+                    )
+                    self.assertEqual(resp.status_code, 200)
+
+                    task_payload = client.get(f"/tasks/{task_id}").json()["task"]
+                    self.assertEqual(task_payload["status"], "blocked")
+                    self.assertIn("reconciliation incomplete", (task_payload["latest_summary"] or "").lower())
+
+                with Session(db.get_engine()) as session:
+                    updated_program = session.get(Program, prog_id)
+                    self.assertEqual(updated_program.status, PROGRAM_STATUS_ACTIVE)
 
 
 class WorkflowApprovalBlockerTests(unittest.TestCase):
