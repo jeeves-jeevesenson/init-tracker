@@ -35,16 +35,19 @@ Approval comments are parsed case-insensitively and can appear on later lines in
 ## Dispatch behavior
 
 Dispatch uses GitHub REST API for existing issue assignment:
-1. `POST /repos/{owner}/{repo}/issues/{issue_number}/assignees`
-2. body includes:
-   - `assignees: [COPILOT_DISPATCH_ASSIGNEE]` (default `github-copilot[bot]`; legacy `copilot-swe-agent` is normalized)
+1. preflight `POST /graphql` checks:
+   - `repository(owner:, name:) { suggestedActors(capabilities:[CAN_BE_ASSIGNED], first:100) { nodes { login __typename ... on Bot { id } } } }`
+   - Copilot cloud agent must appear in `suggestedActors` or dispatch is blocked with manual dispatch required
+2. `POST /repos/{owner}/{repo}/issues/{issue_number}/assignees`
+3. body includes:
+   - `assignees: [COPILOT_DISPATCH_ASSIGNEE]` (canonical/default `copilot-swe-agent[bot]`; legacy aliases are normalized)
    - `agent_assignment` fields:
      - `target_repo`
      - `base_branch`
      - `custom_instructions` (optional)
      - `custom_agent` (optional)
      - `model` (optional)
-3. normalized task packet comment is posted after accepted assignment as a secondary artifact
+4. normalized task packet comment is posted after accepted assignment as a secondary artifact
 
 Dispatch state semantics are intentionally conservative:
 - `dispatch_requested` = orchestrator attempted assignment
@@ -118,11 +121,12 @@ GitHub webhook subscriptions must include at minimum:
 Minimum GitHub token requirement for Copilot issue assignment:
 - must satisfy GitHub's Copilot issue-assignment API requirements (not issues-only access)
 - include repository issue write capability plus the Copilot-assignment capability required by GitHub for cloud agent assignment
+- repository must have Copilot cloud agent enabled and assignable (verified via `suggestedActors`)
 
 Optional tuning:
 - `TASK_LABEL` (default `agent:task`)
 - `TASK_APPROVED_LABEL` (default `agent:approved`)
-- `COPILOT_DISPATCH_ASSIGNEE` (default `github-copilot[bot]`; legacy `copilot-swe-agent` is normalized)
+- `COPILOT_DISPATCH_ASSIGNEE` (default `copilot-swe-agent[bot]`; legacy aliases are normalized)
 - `COPILOT_TARGET_BRANCH` (default `main`)
 - `COPILOT_TARGET_REPO` (default task repository)
 - `COPILOT_CUSTOM_INSTRUCTIONS` (optional extra instructions sent in `agent_assignment`)
