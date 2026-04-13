@@ -70,6 +70,7 @@ BLOCKER_ESCALATED_TO_HUMAN = "escalated_to_human"
 BLOCKER_WAITING_FOR_PERMISSIONS = "waiting_for_permissions"
 BLOCKER_WAITING_FOR_REPO_SETTING = "waiting_for_repo_setting"
 BLOCKER_AUTO_MERGE_DISABLED = "auto_merge_disabled"
+BLOCKER_GUARDED_PATHS_REQUIRE_HUMAN = "guarded_paths_require_human_review"
 
 
 class Program(SQLModel, table=True):
@@ -180,6 +181,7 @@ class AgentRun(SQLModel, table=True):
     worker_selection_mode: str | None = Field(default=None, index=True)
     dispatch_payload_json: str | None = Field(default=None)
     review_artifact_json: str | None = Field(default=None)
+    governor_state_json: str | None = Field(default=None)
     continuation_decision: str | None = Field(default=None, index=True)
     status: str = Field(default=RUN_STATUS_QUEUED, index=True)
     last_summary: str | None = Field(default=None)

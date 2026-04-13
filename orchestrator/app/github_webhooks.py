@@ -17,6 +17,8 @@ from .tasks import (
     process_issue_comment_event,
     process_issue_event,
     process_pull_request_event,
+    process_pull_request_review_comment_event,
+    process_pull_request_review_event,
     process_workflow_run_event,
 )
 
@@ -94,6 +96,10 @@ async def github_webhook(request: Request, session: Session = Depends(get_sessio
             process_issue_comment_event(session, settings=settings, payload=payload, action=action)
         elif event_type == "pull_request":
             handled = process_pull_request_event(session, settings=settings, payload=payload, action=action)
+        elif event_type == "pull_request_review":
+            handled = process_pull_request_review_event(session, settings=settings, payload=payload, action=action)
+        elif event_type == "pull_request_review_comment":
+            handled = process_pull_request_review_comment_event(session, settings=settings, payload=payload, action=action)
         elif event_type == "workflow_run":
             handled = process_workflow_run_event(session, settings=settings, payload=payload, action=action)
 

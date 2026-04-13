@@ -171,6 +171,10 @@ ENV_KEYS = {
     "PROGRAM_AUTO_CONTINUE",
     "PROGRAM_AUTO_MERGE",
     "PROGRAM_MAX_REVISION_ATTEMPTS",
+    "GOVERNOR_MAX_REVISION_CYCLES",
+    "GOVERNOR_REMOVE_REVIEWER_LOGIN",
+    "GOVERNOR_FALLBACK_REVIEWER",
+    "GOVERNOR_GUARDED_PATHS",
 }
 
 
@@ -1973,6 +1977,398 @@ class MergePRTests(unittest.TestCase):
                 self.assertEqual(blocker.get("reason"), BLOCKER_WAITING_FOR_PR_READY)
 
 
+class GitHubDispatchHelperTests(unittest.TestCase):
+    def test_remove_requested_reviewers_helper_calls_delete_endpoint(self):
+        from orchestrator.app.github_dispatch import remove_requested_reviewers
+        settings = Settings(GITHUB_API_TOKEN="dummy-token", GITHUB_API_URL="https://api.github.com")
+
+        mock_response = MagicMock()
+        mock_response.status_code = 200
+        mock_response.text = ""
+        with patch("orchestrator.app.github_dispatch.httpx.Client") as mock_client_cls:
+            mock_client = MagicMock()
+            mock_client.__enter__ = lambda s: mock_client
+            mock_client.__exit__ = MagicMock(return_value=False)
+            mock_client.request.return_value = mock_response
+            mock_client_cls.return_value = mock_client
+            ok, _ = remove_requested_reviewers(
+                settings=settings,
+                repo="owner/repo",
+                pr_number=12,
+                reviewers=["jeeves-jeevesenson"],
+            )
+        self.assertTrue(ok)
+        self.assertTrue(mock_client.request.called)
+
+    def test_submit_approving_review_helper_calls_reviews_endpoint(self):
+        from orchestrator.app.github_dispatch import submit_approving_review
+        settings = Settings(GITHUB_API_TOKEN="dummy-token", GITHUB_API_URL="https://api.github.com")
+        mock_response = MagicMock()
+        mock_response.status_code = 200
+        mock_response.text = ""
+        with patch("orchestrator.app.github_dispatch.httpx.Client") as mock_client_cls:
+            mock_client = MagicMock()
+            mock_client.__enter__ = lambda s: mock_client
+            mock_client.__exit__ = MagicMock(return_value=False)
+            mock_client.post.return_value = mock_response
+            mock_client_cls.return_value = mock_client
+            ok, _ = submit_approving_review(settings=settings, repo="owner/repo", pr_number=44)
+        self.assertTrue(ok)
+        call_kwargs = mock_client.post.call_args
+        self.assertIn("/pulls/44/reviews", call_kwargs.args[0])
+
+
+class GovernorLoopTests(unittest.TestCase):
+    def setUp(self):
+        self._saved_env = {key: os.environ.get(key) for key in ENV_KEYS}
+
+    def tearDown(self):
+        for key, value in self._saved_env.items():
+            if value is None:
+                os.environ.pop(key, None)
+            else:
+                os.environ[key] = value
+
+    def _create_linked_task_run(
+        self,
+        db,
+        *,
+        repo: str,
+        issue_number: int,
+        pr_number: int,
+        with_program: bool = True,
+    ) -> tuple[int, int | None]:
+        with Session(db.get_engine()) as session:
+            task = TaskPacket(
+                github_repo=repo,
+                github_issue_number=issue_number,
+                title="Governor test task",
+                raw_body="body",
+                status="working",
+                approval_state="approved",
+                acceptance_criteria_json='["done"]',
+                task_kind="program_slice" if with_program else "single_task",
+            )
+            session.add(task)
+            session.commit()
+            session.refresh(task)
+
+            program_id = None
+            if with_program:
+                program = Program(
+                    github_repo=repo,
+                    root_issue_number=issue_number,
+                    title="Governor test program",
+                    normalized_goal="goal",
+                    status=PROGRAM_STATUS_ACTIVE,
+                    current_slice_number=1,
+                    auto_merge=True,
+                    auto_dispatch=True,
+                    auto_continue=True,
+                )
+                session.add(program)
+                session.commit()
+                session.refresh(program)
+                program_id = program.id
+
+                slice1 = ProgramSlice(
+                    program_id=program.id,
+                    slice_number=1,
+                    milestone_key="M1",
+                    title="Slice",
+                    objective="Objective",
+                    acceptance_criteria_json='["done"]',
+                    status="in_progress",
+                    task_packet_id=task.id,
+                )
+                session.add(slice1)
+                session.commit()
+                session.refresh(slice1)
+                task.program_id = program.id
+                task.program_slice_id = slice1.id
+                session.add(task)
+                session.commit()
+
+            run = AgentRun(
+                task_packet_id=task.id,
+                program_id=task.program_id,
+                program_slice_id=task.program_slice_id,
+                provider="github_copilot",
+                github_repo=repo,
+                github_issue_number=issue_number,
+                github_pr_number=pr_number,
+                status="working",
+                last_summary="working",
+            )
+            session.add(run)
+            session.commit()
+            session.refresh(run)
+            return task.id, program_id
+
+    def test_reviewer_cleanup_removes_jeeves_from_requested_reviewers(self):
+        with tempfile.TemporaryDirectory() as td:
+            os.environ["DATABASE_URL"] = f"sqlite:///{Path(td) / 'orchestrator.db'}"
+            os.environ["GH_WEBHOOK_SECRET"] = "test-gh-secret"
+            os.environ["GITHUB_API_TOKEN"] = "dummy-token"
+            main, db = _reload_orchestrator_modules()
+
+            repo = "jeeves-jeevesenson/init-tracker"
+            issue_number = 1001
+            pr_number = 71
+            self._create_linked_task_run(db, repo=repo, issue_number=issue_number, pr_number=pr_number, with_program=False)
+
+            payload = {
+                "action": "opened",
+                "repository": {"full_name": repo},
+                "pull_request": {
+                    "number": pr_number,
+                    "id": 7100,
+                    "title": f"Fix #{issue_number}",
+                    "body": f"Closes #{issue_number}",
+                    "html_url": f"https://github.com/{repo}/pull/{pr_number}",
+                    "merged": False,
+                    "draft": True,
+                    "state": "open",
+                    "requested_reviewers": [{"login": "jeeves-jeevesenson"}],
+                    "changed_files": 1,
+                    "commits": 1,
+                    "updated_at": "2024-01-01T00:00:00Z",
+                },
+            }
+            default_review = {
+                "decision": "continue",
+                "status": "met",
+                "confidence": 0.8,
+                "scope_alignment": [],
+                "acceptance_assessment": [],
+                "risk_findings": [],
+                "merge_recommendation": "review_required",
+                "revision_instructions": [],
+                "audit_recommendation": "",
+                "next_slice_hint": "",
+                "summary": ["ok"],
+            }
+            with patch("orchestrator.app.tasks.summarize_work_update", return_value={"review_artifact": default_review, "summary_bullets": ["ok"], "next_action": "continue"}), \
+                 patch("orchestrator.app.tasks.summarize_governor_update", return_value={"governor_artifact": {"decision": "wait", "summary": ["wait"], "revision_requests": [], "escalation_reason": ""}}), \
+                 patch("orchestrator.app.tasks.remove_requested_reviewers", return_value=(True, "ok")) as mocked_remove, \
+                 patch("orchestrator.app.tasks.list_pull_request_files", return_value=(["helper_script.py"], "ok")), \
+                 patch("orchestrator.app.tasks.list_pull_request_reviews", return_value=([], "ok")), \
+                 patch("orchestrator.app.tasks.list_pull_request_review_comments", return_value=([], "ok")), \
+                 patch("orchestrator.app.tasks.notify_discord"):
+                with TestClient(main.app) as client:
+                    resp = _post_github(
+                        client,
+                        secret="test-gh-secret",
+                        delivery="delivery-governor-cleanup-1",
+                        event="pull_request",
+                        payload=payload,
+                    )
+                    self.assertEqual(resp.status_code, 200)
+            mocked_remove.assert_called_once()
+
+    def test_revision_batching_comment_is_deduped_across_repeated_deliveries(self):
+        with tempfile.TemporaryDirectory() as td:
+            os.environ["DATABASE_URL"] = f"sqlite:///{Path(td) / 'orchestrator.db'}"
+            os.environ["GH_WEBHOOK_SECRET"] = "test-gh-secret"
+            os.environ["GITHUB_API_TOKEN"] = "dummy-token"
+            main, db = _reload_orchestrator_modules()
+
+            repo = "jeeves-jeevesenson/init-tracker"
+            issue_number = 1002
+            pr_number = 72
+            self._create_linked_task_run(db, repo=repo, issue_number=issue_number, pr_number=pr_number, with_program=False)
+            payload = {
+                "action": "opened",
+                "repository": {"full_name": repo},
+                "pull_request": {
+                    "number": pr_number,
+                    "id": 7200,
+                    "title": f"Fix #{issue_number}",
+                    "body": f"Closes #{issue_number}",
+                    "html_url": f"https://github.com/{repo}/pull/{pr_number}",
+                    "merged": False,
+                    "draft": False,
+                    "state": "open",
+                    "requested_reviewers": [],
+                    "changed_files": 2,
+                    "commits": 1,
+                    "updated_at": "2024-01-01T00:00:00Z",
+                },
+            }
+            default_review = {
+                "decision": "revise",
+                "status": "partial",
+                "confidence": 0.6,
+                "scope_alignment": [],
+                "acceptance_assessment": [],
+                "risk_findings": [],
+                "merge_recommendation": "review_required",
+                "revision_instructions": ["fix failing test"],
+                "audit_recommendation": "",
+                "next_slice_hint": "",
+                "summary": ["needs changes"],
+            }
+            governor_artifact = {
+                "decision": "request_revision",
+                "summary": ["Copilot findings need fixes"],
+                "revision_requests": ["Fix null handling in governor loop"],
+                "escalation_reason": "",
+            }
+            with patch("orchestrator.app.tasks.summarize_work_update", return_value={"review_artifact": default_review, "summary_bullets": ["revise"], "next_action": "revise"}), \
+                 patch("orchestrator.app.tasks.summarize_governor_update", return_value={"governor_artifact": governor_artifact}), \
+                 patch("orchestrator.app.tasks.list_pull_request_files", return_value=(["orchestrator/app/tasks.py"], "ok")), \
+                 patch("orchestrator.app.tasks.list_pull_request_reviews", return_value=([], "ok")), \
+                 patch("orchestrator.app.tasks.list_pull_request_review_comments", return_value=([], "ok")), \
+                 patch("orchestrator.app.tasks.list_issue_comments", return_value=([], "ok")), \
+                 patch("orchestrator.app.tasks.post_issue_comment", return_value=(True, "ok")) as mocked_comment, \
+                 patch("orchestrator.app.tasks.notify_discord"):
+                with TestClient(main.app) as client:
+                    first = _post_github(
+                        client,
+                        secret="test-gh-secret",
+                        delivery="delivery-governor-revision-1",
+                        event="pull_request",
+                        payload=payload,
+                    )
+                    second = _post_github(
+                        client,
+                        secret="test-gh-secret",
+                        delivery="delivery-governor-revision-2",
+                        event="pull_request",
+                        payload=payload,
+                    )
+                    self.assertEqual(first.status_code, 200)
+                    self.assertEqual(second.status_code, 200)
+            self.assertEqual(mocked_comment.call_count, 1)
+
+    def test_guarded_path_escalation_blocks_unattended_approve_and_merge(self):
+        with tempfile.TemporaryDirectory() as td:
+            os.environ["DATABASE_URL"] = f"sqlite:///{Path(td) / 'orchestrator.db'}"
+            os.environ["GH_WEBHOOK_SECRET"] = "test-gh-secret"
+            os.environ["GITHUB_API_TOKEN"] = "dummy-token"
+            main, db = _reload_orchestrator_modules()
+            repo = "jeeves-jeevesenson/init-tracker"
+            issue_number = 1003
+            pr_number = 73
+            _, program_id = self._create_linked_task_run(db, repo=repo, issue_number=issue_number, pr_number=pr_number, with_program=True)
+
+            payload = {
+                "action": "opened",
+                "repository": {"full_name": repo},
+                "pull_request": {
+                    "number": pr_number,
+                    "id": 7300,
+                    "title": f"Fix #{issue_number}",
+                    "body": f"Closes #{issue_number}",
+                    "html_url": f"https://github.com/{repo}/pull/{pr_number}",
+                    "merged": False,
+                    "draft": False,
+                    "state": "open",
+                    "requested_reviewers": [],
+                    "changed_files": 1,
+                    "commits": 1,
+                    "updated_at": "2024-01-01T00:00:00Z",
+                },
+            }
+            default_review = {
+                "decision": "continue",
+                "status": "met",
+                "confidence": 0.8,
+                "scope_alignment": [],
+                "acceptance_assessment": [],
+                "risk_findings": [],
+                "merge_recommendation": "merge_ready",
+                "revision_instructions": [],
+                "audit_recommendation": "",
+                "next_slice_hint": "",
+                "summary": ["ok"],
+            }
+            with patch("orchestrator.app.tasks.summarize_work_update", return_value={"review_artifact": default_review, "summary_bullets": ["ok"], "next_action": "continue"}), \
+                 patch("orchestrator.app.tasks.summarize_governor_update", return_value={"governor_artifact": {"decision": "approve_and_merge", "summary": ["merge"], "revision_requests": [], "escalation_reason": ""}}), \
+                 patch("orchestrator.app.tasks.list_pull_request_files", return_value=([".github/workflows/ci.yml"], "ok")), \
+                 patch("orchestrator.app.tasks.list_pull_request_reviews", return_value=([], "ok")), \
+                 patch("orchestrator.app.tasks.list_pull_request_review_comments", return_value=([], "ok")), \
+                 patch("orchestrator.app.tasks.submit_approving_review", return_value=(True, "ok")) as mocked_approve, \
+                 patch("orchestrator.app.tasks.merge_pr", return_value=(True, "ok")) as mocked_merge, \
+                 patch("orchestrator.app.tasks.notify_discord"):
+                with TestClient(main.app) as client:
+                    resp = _post_github(
+                        client,
+                        secret="test-gh-secret",
+                        delivery="delivery-governor-guarded-1",
+                        event="pull_request",
+                        payload=payload,
+                    )
+                    self.assertEqual(resp.status_code, 200)
+            mocked_approve.assert_not_called()
+            mocked_merge.assert_not_called()
+            with Session(db.get_engine()) as session:
+                program = session.get(Program, program_id)
+                blocker = json.loads(program.blocker_state_json or "{}")
+                self.assertEqual(blocker.get("reason"), "guarded_paths_require_human_review")
+
+    def test_approve_and_merge_is_gated_on_green_checks(self):
+        with tempfile.TemporaryDirectory() as td:
+            os.environ["DATABASE_URL"] = f"sqlite:///{Path(td) / 'orchestrator.db'}"
+            os.environ["GH_WEBHOOK_SECRET"] = "test-gh-secret"
+            os.environ["GITHUB_API_TOKEN"] = "dummy-token"
+            main, db = _reload_orchestrator_modules()
+            repo = "jeeves-jeevesenson/init-tracker"
+            issue_number = 1004
+            pr_number = 74
+            self._create_linked_task_run(db, repo=repo, issue_number=issue_number, pr_number=pr_number, with_program=False)
+            payload = {
+                "action": "opened",
+                "repository": {"full_name": repo},
+                "pull_request": {
+                    "number": pr_number,
+                    "id": 7400,
+                    "title": f"Fix #{issue_number}",
+                    "body": f"Closes #{issue_number}",
+                    "html_url": f"https://github.com/{repo}/pull/{pr_number}",
+                    "merged": False,
+                    "draft": False,
+                    "state": "open",
+                    "requested_reviewers": [],
+                    "changed_files": 1,
+                    "commits": 1,
+                    "updated_at": "2024-01-01T00:00:00Z",
+                },
+            }
+            default_review = {
+                "decision": "continue",
+                "status": "met",
+                "confidence": 0.8,
+                "scope_alignment": [],
+                "acceptance_assessment": [],
+                "risk_findings": [],
+                "merge_recommendation": "merge_ready",
+                "revision_instructions": [],
+                "audit_recommendation": "",
+                "next_slice_hint": "",
+                "summary": ["ok"],
+            }
+            with patch("orchestrator.app.tasks.summarize_work_update", return_value={"review_artifact": default_review, "summary_bullets": ["ok"], "next_action": "continue"}), \
+                 patch("orchestrator.app.tasks.summarize_governor_update", return_value={"governor_artifact": {"decision": "approve_and_merge", "summary": ["merge"], "revision_requests": [], "escalation_reason": ""}}), \
+                 patch("orchestrator.app.tasks.list_pull_request_files", return_value=(["orchestrator/app/tasks.py"], "ok")), \
+                 patch("orchestrator.app.tasks.list_pull_request_reviews", return_value=([], "ok")), \
+                 patch("orchestrator.app.tasks.list_pull_request_review_comments", return_value=([], "ok")), \
+                 patch("orchestrator.app.tasks.submit_approving_review", return_value=(True, "ok")) as mocked_approve, \
+                 patch("orchestrator.app.tasks.merge_pr", return_value=(True, "ok")) as mocked_merge, \
+                 patch("orchestrator.app.tasks.notify_discord"):
+                with TestClient(main.app) as client:
+                    resp = _post_github(
+                        client,
+                        secret="test-gh-secret",
+                        delivery="delivery-governor-check-gate-1",
+                        event="pull_request",
+                        payload=payload,
+                    )
+                    self.assertEqual(resp.status_code, 200)
+            mocked_approve.assert_not_called()
+            mocked_merge.assert_not_called()
+
+
 class PreflightEndpointTests(unittest.TestCase):
     """Tests for GET /preflight diagnostic endpoint."""
 
@@ -2007,6 +2403,8 @@ class PreflightEndpointTests(unittest.TestCase):
             self.assertIn("blockers", pf)
             self.assertIn("admin_prerequisites", pf)
             self.assertIn("unattended_continuation", pf["capabilities"])
+            self.assertIn("unattended_single_slice_execution", pf["capabilities"])
+            self.assertIn("governor", pf)
 
     def test_preflight_unattended_false_when_auto_merge_disabled(self):
         """When PROGRAM_AUTO_MERGE=false, unattended_continuation should be False."""

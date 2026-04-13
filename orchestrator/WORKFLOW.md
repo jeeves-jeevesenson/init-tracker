@@ -83,10 +83,12 @@ Dispatch state semantics are intentionally conservative:
 
 The orchestrator does not treat "packet comment posted" as dispatch success.
 
-## Worker progress tracking
+## Worker progress tracking + PR governor loop
 
 Tracked webhook event types:
 - `pull_request`
+- `pull_request_review`
+- `pull_request_review_comment`
 - `workflow_run`
 - `issue_comment` (approval commands)
 - `issues` (task intake + optional label approval)
@@ -106,6 +108,10 @@ Behavior:
 - external PR/workflow activity without internal task/run linkage is surfaced as reconciliation-incomplete and does not count as progress
 - empty PRs (`changed_files == 0`) are rejected as progress
 - merged PR completion now requires internal review evidence linkage (`review_artifact_json` + `continuation_decision`)
+- governor state is persisted on each run: draft/open state, requested reviewers, changed files, Copilot-review observations/findings, revision cycle count, and guarded-path detection
+- governor removes `jeeves-jeevesenson` from requested reviewers when it takes PR control
+- governor batches revision requests into one deduped top-level `@copilot` comment
+- for non-guarded PRs with green checks and resolved findings, governor can un-draft, approve, and merge automatically
 
 ## OpenAI usage
 
@@ -158,6 +164,8 @@ GitHub webhook subscriptions must include at minimum:
 - `issues`
 - `issue_comment`
 - `pull_request`
+- `pull_request_review`
+- `pull_request_review_comment`
 - `workflow_run`
 
 Minimum GitHub token requirement for Copilot issue assignment:
@@ -219,6 +227,8 @@ When a `workflow_run` webhook fires with `status="waiting"` or `action="waiting"
 
 Previously this appeared as a silent "working" state.
 
+In unattended governor mode, repeated workflow approvals should be treated as configuration drift until repository Actions policy is adjusted for Copilot PR runs.
+
 **Note**: Whether a workflow requires approval depends on repository Actions settings (first-time contributor rules, fork policies, explicit environment protection rules). These cannot be changed from orchestrator code alone. If the approval is caused by first-time-contributor rules, those can be resolved by allowing the contributor. If it is caused by environment protection rules in the workflow file, review those rules in `.github/workflows/`.
 
 ## Merge-and-continue (automatic next-slice dispatch)
@@ -270,7 +280,7 @@ The `wait_reason` field in `GET /programs` responses provides the reason string 
 
 ## Preflight diagnostic endpoint
 
-`GET /preflight` reports whether the current environment is capable of unattended trusted continuation.
+`GET /preflight` reports whether the current environment is capable of unattended trusted continuation and unattended single-slice governor execution.
 
 ```json
 {
@@ -290,6 +300,9 @@ The `wait_reason` field in `GET /programs` responses provides the reason string 
       "pr_ready_for_review": true,
       "pr_merge": true,
       "dispatch": true,
+      "governor_review_loop": true,
+      "governor_auto_approval": false,
+      "unattended_single_slice_execution": false,
       "next_slice_dispatch": true,
       "unattended_continuation": false
     },

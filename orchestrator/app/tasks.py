@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import json
+import fnmatch
+import hashlib
 import re
 from datetime import datetime, timedelta, timezone
 from typing import Any
@@ -15,7 +17,16 @@ from .github_dispatch import (
     describe_dispatch_mode,
     dispatch_task_to_github_copilot,
     inspect_pull_request,
+    list_issue_comments,
+    list_pull_request_files,
+    list_pull_request_review_comments,
+    list_pull_request_reviews,
     mark_pr_ready_for_review,
+    merge_pr,
+    post_issue_comment,
+    remove_requested_reviewers,
+    request_reviewers,
+    submit_approving_review,
 )
 from .models import (
     APPROVAL_APPROVED,
@@ -24,6 +35,7 @@ from .models import (
     BLOCKER_WAITING_FOR_PERMISSIONS,
     BLOCKER_WAITING_FOR_PR_READY,
     BLOCKER_WAITING_FOR_WORKFLOW_APPROVAL,
+    BLOCKER_GUARDED_PATHS_REQUIRE_HUMAN,
     RUN_STATUS_AWAITING_WORKER_START,
     RUN_STATUS_AWAITING_REVIEW,
     RUN_STATUS_BLOCKED,
@@ -56,6 +68,7 @@ from .models import (
 )
 from .openai_planning import plan_task_packet
 from .openai_review import summarize_work_update
+from .openai_review import summarize_governor_update
 from .programs import (
     advance_program_on_pr_merge,
     apply_reviewer_decision,
@@ -491,6 +504,108 @@ def _as_utc(dt: datetime | None) -> datetime:
     return dt.astimezone(timezone.utc)
 
 
+def _parse_json_list(raw_json: str | None) -> list[Any]:
+    if not raw_json:
+        return []
+    try:
+        parsed = json.loads(raw_json)
+    except json.JSONDecodeError:
+        return []
+    return parsed if isinstance(parsed, list) else []
+
+
+def _governor_guarded_patterns(settings: Settings) -> list[str]:
+    raw = str(getattr(settings, "governor_guarded_paths", "") or "")
+    return [item.strip() for item in raw.split(",") if item.strip()]
+
+
+def _matches_guarded_path(path: str, guarded_patterns: list[str]) -> bool:
+    normalized = path.strip().lstrip("/")
+    for pattern in guarded_patterns:
+        candidate = pattern.strip().lstrip("/")
+        if not candidate:
+            continue
+        if fnmatch.fnmatch(normalized, candidate):
+            return True
+    return False
+
+
+def _load_governor_state(run: AgentRun) -> dict[str, Any]:
+    state = _parse_json_object(run.governor_state_json)
+    if state is None:
+        state = {}
+    state.setdefault("pr_draft", None)
+    state.setdefault("pr_state", None)
+    state.setdefault("requested_reviewers", [])
+    state.setdefault("changed_files", [])
+    state.setdefault("copilot_review_observed", False)
+    state.setdefault("unresolved_copilot_findings", [])
+    state.setdefault("revision_cycle_count", 0)
+    state.setdefault("guarded_paths_touched", False)
+    state.setdefault("guarded_files", [])
+    state.setdefault("last_event_key", "")
+    state.setdefault("last_revision_comment_fingerprint", "")
+    state.setdefault("last_revision_comment_body", "")
+    state.setdefault("approval_submitted", False)
+    state.setdefault("merge_completed", False)
+    return state
+
+
+def _save_governor_state(run: AgentRun, state: dict[str, Any]) -> None:
+    run.governor_state_json = json.dumps(state, ensure_ascii=False)
+
+
+def _copilot_findings_from_reviews(
+    *,
+    settings: Settings,
+    reviews: list[dict[str, Any]],
+    comments: list[dict[str, Any]],
+) -> tuple[bool, list[str]]:
+    findings: list[str] = []
+    observed = False
+    for review in reviews:
+        user = review.get("user") if isinstance(review, dict) else None
+        login = user.get("login") if isinstance(user, dict) else None
+        if not _is_copilot_actor(settings=settings, login=login, display_name=None):
+            continue
+        observed = True
+        body = str(review.get("body") or "").strip()
+        state = str(review.get("state") or "").strip().upper()
+        if body and state in {"COMMENTED", "CHANGES_REQUESTED"}:
+            findings.append(body)
+    for comment in comments:
+        user = comment.get("user") if isinstance(comment, dict) else None
+        login = user.get("login") if isinstance(user, dict) else None
+        if not _is_copilot_actor(settings=settings, login=login, display_name=None):
+            continue
+        observed = True
+        body = str(comment.get("body") or "").strip()
+        if body:
+            findings.append(body)
+    deduped: list[str] = []
+    seen: set[str] = set()
+    for entry in findings:
+        compact = " ".join(entry.split())
+        if not compact:
+            continue
+        key = compact.lower()
+        if key in seen:
+            continue
+        seen.add(key)
+        deduped.append(compact)
+    return observed, deduped[:20]
+
+
+def _batched_revision_comment_body(*, governor_requests: list[str], copilot_findings: list[str]) -> str:
+    lines = ["@copilot Please apply the following revisions in this PR branch:"]
+    request_lines = governor_requests or copilot_findings
+    for index, item in enumerate(request_lines[:12], start=1):
+        lines.append(f"{index}. {item}")
+    if len(lines) == 1:
+        lines.append("1. Re-run your review, resolve outstanding findings, and update validation evidence.")
+    return "\n".join(lines)
+
+
 def _default_worker_brief(task: TaskPacket, internal_plan: dict[str, Any]) -> dict[str, Any]:
     return {
         "objective": internal_plan.get("objective") or task.title or "",
@@ -502,6 +617,188 @@ def _default_worker_brief(task: TaskPacket, internal_plan: dict[str, Any]) -> di
         "target_branch": "main",
         "repo_grounded_hints": internal_plan.get("repo_areas") or [],
     }
+
+
+def _run_governor_loop(
+    session: Session,
+    *,
+    settings: Settings,
+    task: TaskPacket,
+    run: AgentRun,
+    pr_payload: dict[str, Any],
+    event_key: str,
+    checks_passed: bool,
+) -> None:
+    pr_number = run.github_pr_number
+    if not isinstance(pr_number, int):
+        return
+    state = _load_governor_state(run)
+    if state.get("last_event_key") == event_key:
+        return
+
+    pr_draft = bool(pr_payload.get("draft"))
+    pr_state = str(pr_payload.get("state") or "open")
+    requested_reviewers = []
+    for item in pr_payload.get("requested_reviewers") or []:
+        if isinstance(item, dict) and isinstance(item.get("login"), str):
+            requested_reviewers.append(item["login"])
+
+    changed_files = [path for path in _parse_json_list(json.dumps(state.get("changed_files", []))) if isinstance(path, str)]
+    files, _ = list_pull_request_files(settings=settings, repo=task.github_repo, pr_number=pr_number)
+    if files:
+        changed_files = files
+    guarded_patterns = _governor_guarded_patterns(settings)
+    guarded_files = [path for path in changed_files if _matches_guarded_path(path, guarded_patterns)]
+    guarded_paths_touched = bool(guarded_files)
+
+    remove_login = str(getattr(settings, "governor_remove_reviewer_login", "") or "").strip()
+    if remove_login and remove_login in {str(item).strip() for item in requested_reviewers}:
+        remove_requested_reviewers(
+            settings=settings,
+            repo=task.github_repo,
+            pr_number=pr_number,
+            reviewers=[remove_login],
+        )
+        requested_reviewers = [item for item in requested_reviewers if item != remove_login]
+
+    reviews, _ = list_pull_request_reviews(settings=settings, repo=task.github_repo, pr_number=pr_number)
+    review_comments, _ = list_pull_request_review_comments(settings=settings, repo=task.github_repo, pr_number=pr_number)
+    copilot_review_observed, unresolved_findings = _copilot_findings_from_reviews(
+        settings=settings,
+        reviews=reviews,
+        comments=review_comments,
+    )
+    review_artifact = _parse_json_object(run.review_artifact_json) or {}
+    governor_context = {
+        "event_key": event_key,
+        "repo": task.github_repo,
+        "issue_number": task.github_issue_number,
+        "pr_number": pr_number,
+        "pr": {
+            "draft": pr_draft,
+            "state": pr_state,
+            "requested_reviewers": requested_reviewers,
+        },
+        "checks_passed": checks_passed,
+        "review_artifact": review_artifact,
+        "copilot_review_observed": copilot_review_observed,
+        "unresolved_copilot_findings": unresolved_findings,
+        "changed_files": changed_files,
+        "guarded_paths_touched": guarded_paths_touched,
+        "guarded_files": guarded_files,
+        "revision_cycle_count": int(state.get("revision_cycle_count") or 0),
+    }
+    decision_payload = summarize_governor_update(
+        settings=settings,
+        update_context=json.dumps(governor_context, ensure_ascii=False),
+    )
+    artifact = decision_payload.get("governor_artifact") if isinstance(decision_payload, dict) else {}
+    decision = str((artifact or {}).get("decision") or "wait")
+    summary_bullets = artifact.get("summary") if isinstance(artifact.get("summary"), list) else []
+    revision_requests = artifact.get("revision_requests") if isinstance(artifact.get("revision_requests"), list) else []
+    escalation_reason = str(artifact.get("escalation_reason") or "")
+
+    state["pr_draft"] = pr_draft
+    state["pr_state"] = pr_state
+    state["requested_reviewers"] = requested_reviewers
+    state["changed_files"] = changed_files
+    state["copilot_review_observed"] = copilot_review_observed
+    state["unresolved_copilot_findings"] = unresolved_findings
+    state["guarded_paths_touched"] = guarded_paths_touched
+    state["guarded_files"] = guarded_files
+    state["last_event_key"] = event_key
+    state["last_governor_decision"] = decision
+    state["last_governor_summary"] = summary_bullets
+
+    if guarded_paths_touched:
+        decision = "escalate_human"
+        escalation_reason = escalation_reason or "Guarded paths changed; unattended approve/merge is blocked."
+        if task.program_id:
+            program = session.get(Program, task.program_id)
+            if program is not None:
+                program.status = "blocked"
+                program.blocker_state_json = json.dumps(
+                    {
+                        "reason": BLOCKER_GUARDED_PATHS_REQUIRE_HUMAN,
+                        "slice_id": task.program_slice_id,
+                        "run_id": run.id,
+                        "pr_number": pr_number,
+                        "guarded_files": guarded_files,
+                    },
+                    ensure_ascii=False,
+                )
+                program.latest_summary = escalation_reason
+                program.updated_at = _utc_now()
+                _save(session, program)
+
+    if decision == "request_revision":
+        rendered_requests = [str(item).strip() for item in revision_requests if str(item).strip()]
+        rendered_findings = [str(item).strip() for item in unresolved_findings if str(item).strip()]
+        comment_body = _batched_revision_comment_body(
+            governor_requests=rendered_requests,
+            copilot_findings=rendered_findings,
+        )
+        fingerprint = hashlib.sha1(comment_body.encode("utf-8")).hexdigest()
+        already_posted = state.get("last_revision_comment_fingerprint") == fingerprint
+        if not already_posted:
+            existing_comments, _ = list_issue_comments(settings=settings, repo=task.github_repo, issue_number=pr_number)
+            exists_remote = any(
+                isinstance(item, dict) and str(item.get("body") or "").strip() == comment_body.strip()
+                for item in existing_comments
+            )
+            if not exists_remote:
+                post_issue_comment(settings=settings, repo=task.github_repo, issue_number=pr_number, body=comment_body)
+            state["last_revision_comment_fingerprint"] = fingerprint
+            state["last_revision_comment_body"] = comment_body
+            state["revision_cycle_count"] = int(state.get("revision_cycle_count") or 0) + 1
+        max_cycles = max(1, int(getattr(settings, "governor_max_revision_cycles", 2) or 2))
+        if int(state.get("revision_cycle_count") or 0) > max_cycles:
+            decision = "escalate_human"
+            escalation_reason = "Max governor revision cycles exceeded."
+
+    if decision == "ready_for_review" and pr_draft:
+        mark_pr_ready_for_review(settings=settings, repo=task.github_repo, pr_number=pr_number)
+    if decision == "approve_and_merge":
+        if guarded_paths_touched or unresolved_findings or pr_draft or not checks_passed:
+            decision = "wait"
+        else:
+            if not bool(state.get("approval_submitted")):
+                submit_approving_review(settings=settings, repo=task.github_repo, pr_number=pr_number)
+                state["approval_submitted"] = True
+            merged, _ = merge_pr(settings=settings, repo=task.github_repo, pr_number=pr_number)
+            if merged:
+                state["merge_completed"] = True
+    if decision == "escalate_human" and task.program_id:
+        program = session.get(Program, task.program_id)
+        if program is not None:
+            program.status = "blocked"
+            program.blocker_state_json = json.dumps(
+                {
+                    "reason": "escalated_to_human",
+                    "slice_id": task.program_slice_id,
+                    "run_id": run.id,
+                    "pr_number": pr_number,
+                    "detail": escalation_reason or "Governor requested escalation.",
+                },
+                ensure_ascii=False,
+            )
+            program.latest_summary = escalation_reason or "Governor requested escalation."
+            program.updated_at = _utc_now()
+            _save(session, program)
+            fallback = str(getattr(settings, "governor_fallback_reviewer", "") or "").strip()
+            if fallback:
+                request_reviewers(
+                    settings=settings,
+                    repo=task.github_repo,
+                    pr_number=pr_number,
+                    reviewers=[fallback],
+                )
+
+    suffix = "; ".join(summary_bullets[:2]) if summary_bullets else decision
+    run.last_summary = f"{run.last_summary or ''}\nGovernor: {decision} ({suffix})".strip()
+    run.updated_at = _utc_now()
+    _save_governor_state(run, state)
+    _save(session, run)
 
 
 def _extract_plan_artifacts(task: TaskPacket, plan_payload: dict[str, Any]) -> tuple[dict[str, Any], dict[str, Any], dict[str, Any] | None]:
@@ -595,6 +892,7 @@ def run_to_dict(run: AgentRun | None) -> dict[str, Any] | None:
         except json.JSONDecodeError:
             dispatch_payload_summary = {"raw": run.dispatch_payload_json}
     review_artifact = _parse_json_object(run.review_artifact_json)
+    governor_state = _parse_json_object(run.governor_state_json)
     return {
         "id": run.id,
         "task_packet_id": run.task_packet_id,
@@ -611,6 +909,8 @@ def run_to_dict(run: AgentRun | None) -> dict[str, Any] | None:
         "dispatch_payload_summary": dispatch_payload_summary,
         "review_artifact": review_artifact,
         "review_artifact_json": run.review_artifact_json,
+        "governor_state": governor_state,
+        "governor_state_json": run.governor_state_json,
         "continuation_decision": run.continuation_decision,
         "status": run.status,
         "last_summary": run.last_summary,
@@ -1106,11 +1406,15 @@ def _summarize_and_store(
     )
 
     if decision == "revise":
-        task.status = TASK_STATUS_APPROVED
-        task.latest_summary = "Revision requested by reviewer; redispatching"
+        task.status = TASK_STATUS_WORKING
+        if run.github_pr_number:
+            task.latest_summary = "Revision requested by reviewer; waiting for Copilot updates on existing PR branch"
+        else:
+            task.latest_summary = "Revision requested by reviewer; redispatching"
         task.updated_at = _utc_now()
         _save(session, task)
-        dispatch_task_if_ready(session, settings=settings, task=task, force=True)
+        if not run.github_pr_number:
+            dispatch_task_if_ready(session, settings=settings, task=task, force=True)
         return
 
     # If the reviewer says continue/complete but the PR is still a draft, attempt
@@ -1291,6 +1595,15 @@ def process_pull_request_event(
             f"PR opened / ready for review: {github_repo} PR #{pr.get('number')} -> {_worker_display_name(task)}"
             f"{_review_summary_suffix(run)}"
         )
+        _run_governor_loop(
+            session,
+            settings=settings,
+            task=task,
+            run=run,
+            pr_payload=pr,
+            event_key=f"governor:pull_request:{pr.get('id')}:{action}:{pr.get('updated_at')}",
+            checks_passed=False,
+        )
         return True
 
     if action == "closed":
@@ -1350,6 +1663,15 @@ def process_pull_request_event(
     task.updated_at = _utc_now()
     _save(session, run, task)
     link_run_to_slice(session, run=run, task=task)
+    _run_governor_loop(
+        session,
+        settings=settings,
+        task=task,
+        run=run,
+        pr_payload=pr,
+        event_key=f"governor:pull_request:{pr.get('id')}:{action}:{pr.get('updated_at')}",
+        checks_passed=False,
+    )
     return True
 
 
@@ -1458,6 +1780,21 @@ def process_workflow_run_event(
             f"Checks complete and ready for review: {github_repo} PR #{run.github_pr_number} -> {_worker_display_name(task)}"
             f"{_review_summary_suffix(run)}"
         )
+        previous_state = _load_governor_state(run)
+        _run_governor_loop(
+            session,
+            settings=settings,
+            task=task,
+            run=run,
+            pr_payload={
+                "number": run.github_pr_number,
+                "draft": bool(previous_state.get("pr_draft")),
+                "state": "open",
+                "requested_reviewers": [{"login": item} for item in previous_state.get("requested_reviewers", [])],
+            },
+            event_key=f"governor:workflow_run:{workflow_run.get('id')}:{status}:{conclusion}",
+            checks_passed=True,
+        )
         return True
 
     if status == "completed" and conclusion in {"failure", "cancelled", "timed_out", "startup_failure"}:
@@ -1478,6 +1815,21 @@ def process_workflow_run_event(
         notify_discord(
             f"Checks failed / task blocked: {github_repo} PR #{run.github_pr_number} -> {_worker_display_name(task)}"
             f"{_review_summary_suffix(run)}"
+        )
+        previous_state = _load_governor_state(run)
+        _run_governor_loop(
+            session,
+            settings=settings,
+            task=task,
+            run=run,
+            pr_payload={
+                "number": run.github_pr_number,
+                "draft": bool(previous_state.get("pr_draft")),
+                "state": "open",
+                "requested_reviewers": [{"login": item} for item in previous_state.get("requested_reviewers", [])],
+            },
+            event_key=f"governor:workflow_run:{workflow_run.get('id')}:{status}:{conclusion}",
+            checks_passed=False,
         )
         return True
 
@@ -1514,6 +1866,21 @@ def process_workflow_run_event(
             f"Workflow approval required: {github_repo} PR #{pr_numbers} workflow={name!r}. "
             "Approve in GitHub Actions to continue."
         )
+        previous_state = _load_governor_state(run)
+        _run_governor_loop(
+            session,
+            settings=settings,
+            task=task,
+            run=run,
+            pr_payload={
+                "number": run.github_pr_number,
+                "draft": bool(previous_state.get("pr_draft")),
+                "state": "open",
+                "requested_reviewers": [{"login": item} for item in previous_state.get("requested_reviewers", [])],
+            },
+            event_key=f"governor:workflow_run:{workflow_run.get('id')}:{status}:{conclusion}:{action}",
+            checks_passed=False,
+        )
         return True
 
     run.status = RUN_STATUS_WORKING
@@ -1524,4 +1891,92 @@ def process_workflow_run_event(
     task.updated_at = _utc_now()
     _save(session, run, task)
     link_run_to_slice(session, run=run, task=task)
+    return True
+
+
+def process_pull_request_review_event(
+    session: Session,
+    *,
+    settings: Settings,
+    payload: dict[str, Any],
+    action: str | None,
+) -> bool:
+    github_repo = _repo_name(payload)
+    review = payload.get("review") or {}
+    pr = payload.get("pull_request") or {}
+    if not github_repo or not isinstance(pr, dict):
+        return False
+    pr_number = pr.get("number")
+    if not isinstance(pr_number, int):
+        return False
+
+    query = (
+        select(AgentRun)
+        .where(AgentRun.github_repo == github_repo)
+        .where(AgentRun.github_pr_number == pr_number)
+        .order_by(AgentRun.updated_at.desc())
+        .limit(1)
+    )
+    run = session.exec(query).first()
+    if run is None:
+        return False
+    task = session.get(TaskPacket, run.task_packet_id)
+    if task is None:
+        return False
+
+    actor = (review.get("user") or {}) if isinstance(review, dict) else {}
+    actor_login = actor.get("login") if isinstance(actor, dict) else None
+    if _is_copilot_actor(settings=settings, login=actor_login, display_name=None):
+        _run_governor_loop(
+            session,
+            settings=settings,
+            task=task,
+            run=run,
+            pr_payload=pr,
+            event_key=f"governor:pull_request_review:{pr.get('id')}:{review.get('id')}:{action}:{review.get('submitted_at')}",
+            checks_passed=False,
+        )
+    return True
+
+
+def process_pull_request_review_comment_event(
+    session: Session,
+    *,
+    settings: Settings,
+    payload: dict[str, Any],
+    action: str | None,
+) -> bool:
+    github_repo = _repo_name(payload)
+    pr = payload.get("pull_request") or {}
+    comment = payload.get("comment") or {}
+    if not github_repo or not isinstance(pr, dict):
+        return False
+    pr_number = pr.get("number")
+    if not isinstance(pr_number, int):
+        return False
+    query = (
+        select(AgentRun)
+        .where(AgentRun.github_repo == github_repo)
+        .where(AgentRun.github_pr_number == pr_number)
+        .order_by(AgentRun.updated_at.desc())
+        .limit(1)
+    )
+    run = session.exec(query).first()
+    if run is None:
+        return False
+    task = session.get(TaskPacket, run.task_packet_id)
+    if task is None:
+        return False
+    actor = (comment.get("user") or {}) if isinstance(comment, dict) else {}
+    actor_login = actor.get("login") if isinstance(actor, dict) else None
+    if _is_copilot_actor(settings=settings, login=actor_login, display_name=None):
+        _run_governor_loop(
+            session,
+            settings=settings,
+            task=task,
+            run=run,
+            pr_payload=pr,
+            event_key=f"governor:pull_request_review_comment:{pr.get('id')}:{comment.get('id')}:{action}:{comment.get('updated_at')}",
+            checks_passed=False,
+        )
     return True
