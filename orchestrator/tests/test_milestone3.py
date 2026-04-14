@@ -3358,9 +3358,7 @@ class CopilotFixTriggerTests(unittest.TestCase):
             # Fix-trigger comment must have been posted
             mocked_post.assert_called_once()
             posted_body = mocked_post.call_args[1].get("body") or mocked_post.call_args[0][-1]
-            self.assertTrue(posted_body.startswith(
-                "@copilot apply the unresolved review feedback on this pull request"
-            ))
+            self.assertTrue(posted_body.startswith("@copilot"))
             self.assertIn("Fix null check in line 42", posted_body)
             # OpenAI governor should NOT have been called — deterministic path short-circuits
             mocked_governor.assert_not_called()

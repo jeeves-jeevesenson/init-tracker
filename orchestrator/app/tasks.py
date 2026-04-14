@@ -772,7 +772,14 @@ def _run_governor_loop(
 
     reviews, reviews_msg = list_pull_request_reviews(settings=settings, repo=task.github_repo, pr_number=pr_number)
     review_comments, review_comments_msg = list_pull_request_review_comments(settings=settings, repo=task.github_repo, pr_number=pr_number)
-    review_harvested = reviews_msg.startswith("Fetched") and review_comments_msg.startswith("Fetched")
+    lower_reviews_msg = str(reviews_msg or "").lower()
+    lower_review_comments_msg = str(review_comments_msg or "").lower()
+    review_harvested = (
+        "failure" not in lower_reviews_msg
+        and "cannot list" not in lower_reviews_msg
+        and "failure" not in lower_review_comments_msg
+        and "cannot list" not in lower_review_comments_msg
+    )
     state["review_harvest_summary"] = f"reviews={reviews_msg}; review_comments={review_comments_msg}"
     _set_checkpoint(
         state,
