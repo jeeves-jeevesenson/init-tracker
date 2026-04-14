@@ -620,7 +620,7 @@ def plan_task_packet(
         schema=INTERNAL_TASK_PLAN_SCHEMA,
         reasoning_effort=planning_effort,
         settings=settings,
-        stage="planning",
+        stage="planner",
         repo=repo,
         previous_response_id=chain_response_id,
         model_tier=planner_tier,
@@ -631,7 +631,7 @@ def plan_task_packet(
 
     worker_brief_raw: dict[str, Any]
     worker_brief_meta: dict[str, Any] = {
-        "stage": "worker-brief",
+        "stage": "worker_brief",
         "model": worker_brief_model,
         "model_tier": worker_brief_tier,
         "response_id": None,
@@ -651,7 +651,7 @@ def plan_task_packet(
             schema=WORKER_BRIEF_SCHEMA,
             reasoning_effort=settings.openai_planning_reasoning_effort,
             settings=settings,
-            stage="worker-brief",
+            stage="worker_brief",
             repo=repo,
             previous_response_id=chain_response_id,
             model_tier=worker_brief_tier,
@@ -668,7 +668,7 @@ def plan_task_packet(
 
     program_plan_raw: dict[str, Any]
     program_plan_meta: dict[str, Any] = {
-        "stage": "program-planning",
+        "stage": "program_planning",
         "model": planner_model,
         "model_tier": planner_tier,
         "response_id": None,
@@ -691,7 +691,7 @@ def plan_task_packet(
             schema=PROGRAM_PLAN_SCHEMA,
             reasoning_effort=planning_effort,
             settings=settings,
-            stage="program-planning",
+            stage="planner",
             repo=repo,
             previous_response_id=chain_response_id,
             model_tier=planner_tier,

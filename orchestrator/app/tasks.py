@@ -1050,7 +1050,6 @@ def task_to_dict(task: TaskPacket, latest_run: AgentRun | None = None) -> dict[s
     routing = {
         "recommended_worker": task.recommended_worker,
         "recommended_scope_class": task.recommended_scope_class,
-        "openai_last_response_id": task.openai_last_response_id,
         "selected_custom_agent": task.selected_custom_agent,
         "worker_selection_mode": task.worker_selection_mode,
         "worker_selection_reason": task.worker_selection_reason,
@@ -1083,6 +1082,7 @@ def task_to_dict(task: TaskPacket, latest_run: AgentRun | None = None) -> dict[s
         "validation_commands_json": task.validation_commands_json,
         "recommended_worker": task.recommended_worker,
         "recommended_scope_class": task.recommended_scope_class,
+        "openai_last_response_id": task.openai_last_response_id,
         "selected_custom_agent": task.selected_custom_agent,
         "worker_selection_mode": task.worker_selection_mode,
         "worker_selection_reason": task.worker_selection_reason,
