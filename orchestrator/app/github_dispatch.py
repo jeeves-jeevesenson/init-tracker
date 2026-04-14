@@ -62,6 +62,32 @@ mutation($pullRequestId: ID!) {
 logger = logging.getLogger(__name__)
 
 
+def _log_github_action(
+    *,
+    action: str,
+    repo: str,
+    number: int,
+    number_kind: str,
+    auth_lane: str,
+    api_type: str,
+    success: bool,
+    summary: str,
+) -> None:
+    level = logging.INFO if success else logging.WARNING
+    logger.log(
+        level,
+        "github_action=%s repo=%s %s=%s auth_lane=%s api_type=%s success=%s summary=%s",
+        action,
+        repo,
+        number_kind,
+        number,
+        auth_lane,
+        api_type,
+        success,
+        summary,
+    )
+
+
 @dataclass
 class DispatchResult:
     attempted: bool
@@ -220,7 +246,7 @@ def dispatch_task_to_github_copilot(*, settings: Settings, task: TaskPacket) -> 
     dispatch_mode, _ = _dispatch_mode(settings, task)
     dispatch_mode_summary = describe_dispatch_mode(settings, task)
     if not has_dispatch_auth(settings):
-        return DispatchResult(
+        result = DispatchResult(
             attempted=False,
             accepted=False,
             manual_required=True,
@@ -230,6 +256,17 @@ def dispatch_task_to_github_copilot(*, settings: Settings, task: TaskPacket) -> 
                 f"{dispatch_mode_summary}"
             ),
         )
+        _log_github_action(
+            action="issue_dispatch_assignment",
+            repo=task.github_repo,
+            number=int(task.github_issue_number),
+            number_kind="issue_number",
+            auth_lane="dispatch_user_token",
+            api_type="GraphQL+REST",
+            success=False,
+            summary=result.summary,
+        )
+        return result
 
     api_base = settings.github_api_url.rstrip("/")
     repo_path = task.github_repo
@@ -264,7 +301,7 @@ def dispatch_task_to_github_copilot(*, settings: Settings, task: TaskPacket) -> 
             )
             if preflight_response.status_code >= 400:
                 details = preflight_response.text[:500]
-                return DispatchResult(
+                result = DispatchResult(
                     attempted=True,
                     accepted=False,
                     manual_required=True,
@@ -276,6 +313,17 @@ def dispatch_task_to_github_copilot(*, settings: Settings, task: TaskPacket) -> 
                     ),
                     api_status_code=preflight_response.status_code,
                 )
+                _log_github_action(
+                    action="issue_dispatch_assignment",
+                    repo=repo_path,
+                    number=issue_number,
+                    number_kind="issue_number",
+                    auth_lane="dispatch_user_token",
+                    api_type="GraphQL",
+                    success=False,
+                    summary=result.summary,
+                )
+                return result
 
             preflight_payload = (
                 preflight_response.json()
@@ -283,7 +331,7 @@ def dispatch_task_to_github_copilot(*, settings: Settings, task: TaskPacket) -> 
                 else {}
             )
             if preflight_payload.get("errors"):
-                return DispatchResult(
+                result = DispatchResult(
                     attempted=True,
                     accepted=False,
                     manual_required=True,
@@ -295,13 +343,24 @@ def dispatch_task_to_github_copilot(*, settings: Settings, task: TaskPacket) -> 
                     ),
                     api_status_code=preflight_response.status_code,
                 )
+                _log_github_action(
+                    action="issue_dispatch_assignment",
+                    repo=repo_path,
+                    number=issue_number,
+                    number_kind="issue_number",
+                    auth_lane="dispatch_user_token",
+                    api_type="GraphQL",
+                    success=False,
+                    summary=result.summary,
+                )
+                return result
             suggested_actor_logins = _extract_suggested_actor_logins(preflight_payload)
             preflight_summary = _suggested_actors_summary(suggested_actor_logins)
             normalized_suggested_actor_logins = {
                 normalize_copilot_login(login) for login in suggested_actor_logins
             }
             if expected_assignee_login not in normalized_suggested_actor_logins:
-                return DispatchResult(
+                result = DispatchResult(
                     attempted=True,
                     accepted=False,
                     manual_required=True,
@@ -313,6 +372,17 @@ def dispatch_task_to_github_copilot(*, settings: Settings, task: TaskPacket) -> 
                     ),
                     api_status_code=preflight_response.status_code,
                 )
+                _log_github_action(
+                    action="issue_dispatch_assignment",
+                    repo=repo_path,
+                    number=issue_number,
+                    number_kind="issue_number",
+                    auth_lane="dispatch_user_token",
+                    api_type="GraphQL",
+                    success=False,
+                    summary=result.summary,
+                )
+                return result
 
             request_payload = build_dispatch_request_payload(settings, task)
             requested_custom_agent = (request_payload.get("agent_assignment") or {}).get("custom_agent")
@@ -324,7 +394,7 @@ def dispatch_task_to_github_copilot(*, settings: Settings, task: TaskPacket) -> 
             if assign_response.status_code >= 400:
                 details = assign_response.text[:500]
                 manual = assign_response.status_code in {401, 403, 404, 422}
-                return DispatchResult(
+                result = DispatchResult(
                     attempted=True,
                     accepted=False,
                     manual_required=manual,
@@ -337,6 +407,17 @@ def dispatch_task_to_github_copilot(*, settings: Settings, task: TaskPacket) -> 
                     ),
                     api_status_code=assign_response.status_code,
                 )
+                _log_github_action(
+                    action="issue_dispatch_assignment",
+                    repo=repo_path,
+                    number=issue_number,
+                    number_kind="issue_number",
+                    auth_lane="dispatch_user_token",
+                    api_type="REST",
+                    success=False,
+                    summary=result.summary,
+                )
+                return result
 
             assign_payload = (
                 assign_response.json()
@@ -346,7 +427,7 @@ def dispatch_task_to_github_copilot(*, settings: Settings, task: TaskPacket) -> 
             raw_assignee_logins = sorted(_extract_assignee_logins(assign_payload))
             assignee_logins = {normalize_copilot_login(login) for login in raw_assignee_logins}
             if expected_assignee_login not in assignee_logins:
-                return DispatchResult(
+                result = DispatchResult(
                     attempted=True,
                     accepted=False,
                     manual_required=True,
@@ -362,6 +443,17 @@ def dispatch_task_to_github_copilot(*, settings: Settings, task: TaskPacket) -> 
                     ),
                     api_status_code=assign_response.status_code,
                 )
+                _log_github_action(
+                    action="issue_dispatch_assignment",
+                    repo=repo_path,
+                    number=issue_number,
+                    number_kind="issue_number",
+                    auth_lane="dispatch_user_token",
+                    api_type="REST",
+                    success=False,
+                    summary=result.summary,
+                )
+                return result
 
             dispatch_id = str(assign_payload.get("id")) if assign_payload.get("id") is not None else None
             dispatch_url = assign_payload.get("html_url")
@@ -382,7 +474,7 @@ def dispatch_task_to_github_copilot(*, settings: Settings, task: TaskPacket) -> 
                     f" Task packet comment failed ({comment_response.status_code}): "
                     f"{comment_response.text[:200]}"
                 )
-            return DispatchResult(
+            result = DispatchResult(
                 attempted=True,
                 accepted=True,
                 manual_required=False,
@@ -399,14 +491,36 @@ def dispatch_task_to_github_copilot(*, settings: Settings, task: TaskPacket) -> 
                 dispatch_id=dispatch_id,
                 dispatch_url=dispatch_url,
             )
+            _log_github_action(
+                action="issue_dispatch_assignment",
+                repo=repo_path,
+                number=issue_number,
+                number_kind="issue_number",
+                auth_lane="dispatch_user_token",
+                api_type="GraphQL+REST",
+                success=True,
+                summary=result.summary,
+            )
+            return result
     except Exception as exc:
-        return DispatchResult(
+        result = DispatchResult(
             attempted=True,
             accepted=False,
             manual_required=True,
             state="blocked",
             summary=f"Dispatch auth/assignment failure: {exc}. {dispatch_mode_summary}",
         )
+        _log_github_action(
+            action="issue_dispatch_assignment",
+            repo=repo_path,
+            number=issue_number,
+            number_kind="issue_number",
+            auth_lane="dispatch_user_token",
+            api_type="GraphQL+REST",
+            success=False,
+            summary=result.summary,
+        )
+        return result
 
 
 def mark_pr_ready_for_review(*, settings: Settings, repo: str, pr_number: int) -> tuple[bool, str]:
@@ -414,18 +528,43 @@ def mark_pr_ready_for_review(*, settings: Settings, repo: str, pr_number: int) -
 
     Returns (success, message).  Safe to call when the PR is already non-draft.
     """
-    if not has_governor_auth(settings):
-        return False, "Governor auth failure: auth not configured; cannot mark PR ready for review"
+    action = "mark_pr_ready_for_review"
+    if not has_dispatch_auth(settings):
+        msg = (
+            "Ready-for-review failure: dispatch user-token auth not configured; "
+            "cannot mark PR ready for review"
+        )
+        _log_github_action(
+            action=action,
+            repo=repo,
+            number=pr_number,
+            number_kind="pr_number",
+            auth_lane="dispatch_user_token",
+            api_type="GraphQL",
+            success=False,
+            summary=msg,
+        )
+        return False, msg
     api_base = settings.github_api_url.rstrip("/")
     graphql_url = f"{api_base}/graphql"
     repo_parts = _extract_repo_owner_name(repo)
     if repo_parts is None:
         msg = f"Invalid repository path {repo!r}; cannot mark PR #{pr_number} ready for review"
-        logger.warning(msg)
+        _log_github_action(
+            action=action,
+            repo=repo,
+            number=pr_number,
+            number_kind="pr_number",
+            auth_lane="dispatch_user_token",
+            api_type="GraphQL",
+            success=False,
+            summary=msg,
+        )
         return False, msg
     owner, name = repo_parts
     logger.info(
-        "Attempting ready-for-review transition via GraphQL: repo=%s pr_number=%s",
+        "github_action=%s repo=%s pr_number=%s auth_lane=dispatch_user_token api_type=GraphQL mutation=markPullRequestReadyForReview step=prepare",
+        action,
         repo,
         pr_number,
     )
@@ -433,7 +572,7 @@ def mark_pr_ready_for_review(*, settings: Settings, repo: str, pr_number: int) -
         with httpx.Client(timeout=15.0) as client:
             pr_query_response = client.post(
                 graphql_url,
-                headers=_build_governor_headers(settings),
+                headers=_build_dispatch_headers(settings),
                 json={
                     "query": _PULL_REQUEST_ID_QUERY,
                     "variables": {"owner": owner, "name": name, "number": pr_number},
@@ -444,13 +583,17 @@ def mark_pr_ready_for_review(*, settings: Settings, repo: str, pr_number: int) -
                     f"GitHub returned {pr_query_response.status_code} when preparing ready-for-review "
                     f"for PR #{pr_number}: {pr_query_response.text[:300]}"
                 )
-                logger.warning(
-                    "Ready-for-review transition failed: repo=%s pr_number=%s error=%s",
-                    repo,
-                    pr_number,
-                    msg,
+                _log_github_action(
+                    action=action,
+                    repo=repo,
+                    number=pr_number,
+                    number_kind="pr_number",
+                    auth_lane="dispatch_user_token",
+                    api_type="GraphQL",
+                    success=False,
+                    summary=f"Ready-for-review failure: {msg}",
                 )
-                return False, f"PR lifecycle automation failure: {msg}"
+                return False, f"Ready-for-review failure: {msg}"
 
             query_payload = pr_query_response.json()
             if query_payload.get("errors"):
@@ -458,39 +601,51 @@ def mark_pr_ready_for_review(*, settings: Settings, repo: str, pr_number: int) -
                     f"GitHub GraphQL errors when preparing ready-for-review for PR #{pr_number}: "
                     f"{str(query_payload.get('errors'))[:300]}"
                 )
-                logger.warning(
-                    "Ready-for-review transition failed: repo=%s pr_number=%s error=%s",
-                    repo,
-                    pr_number,
-                    msg,
+                _log_github_action(
+                    action=action,
+                    repo=repo,
+                    number=pr_number,
+                    number_kind="pr_number",
+                    auth_lane="dispatch_user_token",
+                    api_type="GraphQL",
+                    success=False,
+                    summary=f"Ready-for-review failure: {msg}",
                 )
-                return False, f"PR lifecycle automation failure: {msg}"
+                return False, f"Ready-for-review failure: {msg}"
 
             pull_request = (((query_payload.get("data") or {}).get("repository") or {}).get("pullRequest") or {})
             pull_request_id = pull_request.get("id")
             if not isinstance(pull_request_id, str) or not pull_request_id.strip():
                 msg = f"PR #{pr_number} not found via GraphQL; cannot mark ready for review"
-                logger.warning(
-                    "Ready-for-review transition failed: repo=%s pr_number=%s error=%s",
-                    repo,
-                    pr_number,
-                    msg,
+                _log_github_action(
+                    action=action,
+                    repo=repo,
+                    number=pr_number,
+                    number_kind="pr_number",
+                    auth_lane="dispatch_user_token",
+                    api_type="GraphQL",
+                    success=False,
+                    summary=f"Ready-for-review failure: {msg}",
                 )
-                return False, f"PR lifecycle automation failure: {msg}"
+                return False, f"Ready-for-review failure: {msg}"
 
             if pull_request.get("isDraft") is False:
                 msg = f"PR #{pr_number} is already ready for review"
-                logger.info(
-                    "Ready-for-review transition complete: repo=%s pr_number=%s result=%s",
-                    repo,
-                    pr_number,
-                    msg,
+                _log_github_action(
+                    action=action,
+                    repo=repo,
+                    number=pr_number,
+                    number_kind="pr_number",
+                    auth_lane="dispatch_user_token",
+                    api_type="GraphQL",
+                    success=True,
+                    summary=f"{msg}; post_mutation_is_draft=False",
                 )
                 return True, msg
 
             mutation_response = client.post(
                 graphql_url,
-                headers=_build_governor_headers(settings),
+                headers=_build_dispatch_headers(settings),
                 json={
                     "query": _MARK_PR_READY_MUTATION,
                     "variables": {"pullRequestId": pull_request_id},
@@ -501,13 +656,17 @@ def mark_pr_ready_for_review(*, settings: Settings, repo: str, pr_number: int) -
                     f"GitHub returned {mutation_response.status_code} when marking PR #{pr_number} ready for review: "
                     f"{mutation_response.text[:300]}"
                 )
-                logger.warning(
-                    "Ready-for-review transition failed: repo=%s pr_number=%s error=%s",
-                    repo,
-                    pr_number,
-                    msg,
+                _log_github_action(
+                    action=action,
+                    repo=repo,
+                    number=pr_number,
+                    number_kind="pr_number",
+                    auth_lane="dispatch_user_token",
+                    api_type="GraphQL",
+                    success=False,
+                    summary=f"Ready-for-review failure: mutation=markPullRequestReadyForReview; {msg}",
                 )
-                return False, f"PR lifecycle automation failure: {msg}"
+                return False, f"Ready-for-review failure: {msg}"
 
             mutation_payload = mutation_response.json()
             if mutation_payload.get("errors"):
@@ -515,31 +674,51 @@ def mark_pr_ready_for_review(*, settings: Settings, repo: str, pr_number: int) -
                     f"GitHub GraphQL errors when marking PR #{pr_number} ready for review: "
                     f"{str(mutation_payload.get('errors'))[:300]}"
                 )
-                logger.warning(
-                    "Ready-for-review transition failed: repo=%s pr_number=%s error=%s",
-                    repo,
-                    pr_number,
-                    msg,
+                _log_github_action(
+                    action=action,
+                    repo=repo,
+                    number=pr_number,
+                    number_kind="pr_number",
+                    auth_lane="dispatch_user_token",
+                    api_type="GraphQL",
+                    success=False,
+                    summary=f"Ready-for-review failure: mutation=markPullRequestReadyForReview; {msg}",
                 )
-                return False, f"PR lifecycle automation failure: {msg}"
+                return False, f"Ready-for-review failure: {msg}"
+
+            post_draft_state = (
+                ((mutation_payload.get("data") or {}).get("markPullRequestReadyForReview") or {}).get("pullRequest")
+                or {}
+            ).get("isDraft")
 
             msg = f"PR #{pr_number} marked ready for review"
-            logger.info(
-                "Ready-for-review transition complete: repo=%s pr_number=%s result=%s",
-                repo,
-                pr_number,
-                msg,
+            _log_github_action(
+                action=action,
+                repo=repo,
+                number=pr_number,
+                number_kind="pr_number",
+                auth_lane="dispatch_user_token",
+                api_type="GraphQL",
+                success=True,
+                summary=(
+                    f"{msg}; mutation=markPullRequestReadyForReview; "
+                    f"post_mutation_is_draft={post_draft_state!r}"
+                ),
             )
             return True, msg
     except Exception as exc:
         msg = f"Failed to mark PR #{pr_number} ready for review: {exc}"
-        logger.warning(
-            "Ready-for-review transition failed: repo=%s pr_number=%s error=%s",
-            repo,
-            pr_number,
-            msg,
+        _log_github_action(
+            action=action,
+            repo=repo,
+            number=pr_number,
+            number_kind="pr_number",
+            auth_lane="dispatch_user_token",
+            api_type="GraphQL",
+            success=False,
+            summary=f"Ready-for-review failure: {msg}",
         )
-        return False, f"PR lifecycle automation failure: {msg}"
+        return False, f"Ready-for-review failure: {msg}"
 
 
 def merge_pr(
@@ -572,11 +751,44 @@ def merge_pr(
                 json={"merge_method": merge_method},
             )
             if response.status_code in {200, 204}:
-                return True, f"PR #{pr_number} merged successfully"
+                msg = f"PR #{pr_number} merged successfully"
+                _log_github_action(
+                    action="merge_pr",
+                    repo=repo,
+                    number=pr_number,
+                    number_kind="pr_number",
+                    auth_lane="governor",
+                    api_type="REST",
+                    success=True,
+                    summary=msg,
+                )
+                return True, msg
             detail = response.text[:300]
-            return False, f"PR lifecycle automation failure: GitHub returned {response.status_code} when merging PR #{pr_number}: {detail}"
+            msg = f"PR lifecycle automation failure: GitHub returned {response.status_code} when merging PR #{pr_number}: {detail}"
+            _log_github_action(
+                action="merge_pr",
+                repo=repo,
+                number=pr_number,
+                number_kind="pr_number",
+                auth_lane="governor",
+                api_type="REST",
+                success=False,
+                summary=msg,
+            )
+            return False, msg
     except Exception as exc:
-        return False, f"PR lifecycle automation failure: Failed to merge PR #{pr_number}: {exc}"
+        msg = f"PR lifecycle automation failure: Failed to merge PR #{pr_number}: {exc}"
+        _log_github_action(
+            action="merge_pr",
+            repo=repo,
+            number=pr_number,
+            number_kind="pr_number",
+            auth_lane="governor",
+            api_type="REST",
+            success=False,
+            summary=msg,
+        )
+        return False, msg
 
 
 def inspect_pull_request(*, settings: Settings, repo: str, pr_number: int) -> PullRequestInspection:
@@ -652,13 +864,46 @@ def remove_requested_reviewers(
                 json={"reviewers": sanitized},
             )
             if response.status_code >= 400:
-                return False, (
+                msg = (
                     f"PR lifecycle automation failure: GitHub returned {response.status_code} when removing requested reviewers from PR #{pr_number}: "
                     f"{response.text[:300]}"
                 )
-            return True, f"Removed requested reviewers from PR #{pr_number}: {sanitized}"
+                _log_github_action(
+                    action="remove_requested_reviewers",
+                    repo=repo,
+                    number=pr_number,
+                    number_kind="pr_number",
+                    auth_lane="governor",
+                    api_type="REST",
+                    success=False,
+                    summary=msg,
+                )
+                return False, msg
+            msg = f"Removed requested reviewers from PR #{pr_number}: {sanitized}"
+            _log_github_action(
+                action="remove_requested_reviewers",
+                repo=repo,
+                number=pr_number,
+                number_kind="pr_number",
+                auth_lane="governor",
+                api_type="REST",
+                success=True,
+                summary=msg,
+            )
+            return True, msg
     except Exception as exc:
-        return False, f"PR lifecycle automation failure: Failed to remove requested reviewers from PR #{pr_number}: {exc}"
+        msg = f"PR lifecycle automation failure: Failed to remove requested reviewers from PR #{pr_number}: {exc}"
+        _log_github_action(
+            action="remove_requested_reviewers",
+            repo=repo,
+            number=pr_number,
+            number_kind="pr_number",
+            auth_lane="governor",
+            api_type="REST",
+            success=False,
+            summary=msg,
+        )
+        return False, msg
 
 
 def request_reviewers(
@@ -798,10 +1043,135 @@ def post_issue_comment(*, settings: Settings, repo: str, issue_number: int, body
                 json={"body": comment_body},
             )
             if response.status_code >= 400:
-                return False, f"PR lifecycle automation failure: GitHub returned {response.status_code} when posting issue comment on #{issue_number}: {response.text[:300]}"
-            return True, f"Posted issue comment on #{issue_number}"
+                msg = (
+                    f"App-token governor failure: GitHub returned {response.status_code} "
+                    f"when posting issue comment on #{issue_number}: {response.text[:300]}"
+                )
+                _log_github_action(
+                    action="post_issue_comment",
+                    repo=repo,
+                    number=issue_number,
+                    number_kind="issue_number",
+                    auth_lane="governor",
+                    api_type="REST",
+                    success=False,
+                    summary=msg,
+                )
+                return False, msg
+            msg = f"Posted issue comment on #{issue_number}"
+            _log_github_action(
+                action="post_issue_comment",
+                repo=repo,
+                number=issue_number,
+                number_kind="issue_number",
+                auth_lane="governor",
+                api_type="REST",
+                success=True,
+                summary=msg,
+            )
+            return True, msg
     except Exception as exc:
-        return False, f"PR lifecycle automation failure: Failed to post issue comment on #{issue_number}: {exc}"
+        msg = f"App-token governor failure: Failed to post issue comment on #{issue_number}: {exc}"
+        _log_github_action(
+            action="post_issue_comment",
+            repo=repo,
+            number=issue_number,
+            number_kind="issue_number",
+            auth_lane="governor",
+            api_type="REST",
+            success=False,
+            summary=msg,
+        )
+        return False, msg
+
+
+def post_copilot_follow_up_comment(
+    *,
+    settings: Settings,
+    repo: str,
+    issue_number: int,
+    body: str,
+) -> tuple[bool, str]:
+    if not has_dispatch_auth(settings):
+        msg = (
+            "Copilot follow-up comment failure: dispatch user-token auth not configured; "
+            "cannot post @copilot follow-up comment"
+        )
+        _log_github_action(
+            action="post_copilot_follow_up_comment",
+            repo=repo,
+            number=issue_number,
+            number_kind="issue_number",
+            auth_lane="dispatch_user_token",
+            api_type="REST",
+            success=False,
+            summary=msg,
+        )
+        return False, msg
+    comment_body = str(body or "").strip()
+    if not comment_body:
+        msg = "Copilot follow-up comment failure: comment body is empty"
+        _log_github_action(
+            action="post_copilot_follow_up_comment",
+            repo=repo,
+            number=issue_number,
+            number_kind="issue_number",
+            auth_lane="dispatch_user_token",
+            api_type="REST",
+            success=False,
+            summary=msg,
+        )
+        return False, msg
+    api_base = settings.github_api_url.rstrip("/")
+    url = f"{api_base}/repos/{repo}/issues/{issue_number}/comments"
+    try:
+        with httpx.Client(timeout=15.0) as client:
+            response = client.post(
+                url,
+                headers=_build_dispatch_headers(settings),
+                json={"body": comment_body},
+            )
+            if response.status_code >= 400:
+                msg = (
+                    f"Copilot follow-up comment failure: GitHub returned {response.status_code} "
+                    f"when posting issue comment on #{issue_number}: {response.text[:300]}"
+                )
+                _log_github_action(
+                    action="post_copilot_follow_up_comment",
+                    repo=repo,
+                    number=issue_number,
+                    number_kind="issue_number",
+                    auth_lane="dispatch_user_token",
+                    api_type="REST",
+                    success=False,
+                    summary=msg,
+                )
+                return False, msg
+            msg = f"Posted @copilot follow-up comment on #{issue_number}"
+            _log_github_action(
+                action="post_copilot_follow_up_comment",
+                repo=repo,
+                number=issue_number,
+                number_kind="issue_number",
+                auth_lane="dispatch_user_token",
+                api_type="REST",
+                success=True,
+                summary=msg,
+            )
+            return True, msg
+    except Exception as exc:
+        msg = f"Copilot follow-up comment failure: Failed to post issue comment on #{issue_number}: {exc}"
+        _log_github_action(
+            action="post_copilot_follow_up_comment",
+            repo=repo,
+            number=issue_number,
+            number_kind="issue_number",
+            auth_lane="dispatch_user_token",
+            api_type="REST",
+            success=False,
+            summary=msg,
+        )
+        return False, msg
 
 
 def submit_approving_review(
@@ -823,10 +1193,46 @@ def submit_approving_review(
                 json={"event": "APPROVE", "body": body},
             )
             if response.status_code >= 400:
-                return False, f"PR lifecycle automation failure: GitHub returned {response.status_code} when submitting approval review for PR #{pr_number}: {response.text[:300]}"
-            return True, f"Submitted approving review for PR #{pr_number}"
+                msg = (
+                    f"Merge/approval failure: GitHub returned {response.status_code} when submitting "
+                    f"approval review for PR #{pr_number}: {response.text[:300]}"
+                )
+                _log_github_action(
+                    action="submit_approving_review",
+                    repo=repo,
+                    number=pr_number,
+                    number_kind="pr_number",
+                    auth_lane="governor",
+                    api_type="REST",
+                    success=False,
+                    summary=msg,
+                )
+                return False, msg
+            msg = f"Submitted approving review for PR #{pr_number}"
+            _log_github_action(
+                action="submit_approving_review",
+                repo=repo,
+                number=pr_number,
+                number_kind="pr_number",
+                auth_lane="governor",
+                api_type="REST",
+                success=True,
+                summary=msg,
+            )
+            return True, msg
     except Exception as exc:
-        return False, f"PR lifecycle automation failure: Failed to submit approving review for PR #{pr_number}: {exc}"
+        msg = f"Merge/approval failure: Failed to submit approving review for PR #{pr_number}: {exc}"
+        _log_github_action(
+            action="submit_approving_review",
+            repo=repo,
+            number=pr_number,
+            number_kind="pr_number",
+            auth_lane="governor",
+            api_type="REST",
+            success=False,
+            summary=msg,
+        )
+        return False, msg
 
 
 def run_preflight_checks(*, settings: Settings, repo: str | None = None) -> dict:
@@ -846,8 +1252,12 @@ def run_preflight_checks(*, settings: Settings, repo: str | None = None) -> dict
         "dispatch_auth_mode": dispatch_auth_label(settings),
         "dispatch_user_token_present": bool(settings.github_dispatch_user_token),
         "dispatch_auth_ready": dispatch_ready,
+        "user_token_lane_available": dispatch_ready,
         "governor_auth_mode": governor_auth_mode_label(settings),
         "governor_auth_ready": governor_ready,
+        "governor_lane_available": governor_ready,
+        "app_token_lane_available": False,
+        "token_governor_lane_available": bool((not governor_is_app) and governor_ready),
         "governor_app_config_present": bool(
             settings.github_app_client_id
             and settings.github_app_installation_id
@@ -881,6 +1291,7 @@ def run_preflight_checks(*, settings: Settings, repo: str | None = None) -> dict
         mint_ok, mint_msg = try_mint_governor_app_token(settings)
         result["app_token_mint"] = {"ok": mint_ok, "detail": mint_msg}
         result["app_outbound_auth_usable"] = mint_ok
+        result["app_token_lane_available"] = bool(governor_ready and mint_ok)
     else:
         result["app_token_mint"] = {"ok": False, "detail": "Governor auth mode is not 'app'"}
         result["app_outbound_auth_usable"] = False
@@ -891,10 +1302,21 @@ def run_preflight_checks(*, settings: Settings, repo: str | None = None) -> dict
 
     caps["issue_creation"] = dispatch_ready
     caps["dispatch"] = dispatch_ready
-    caps["pr_ready_for_review"] = governor_ready
+    caps["pr_ready_for_review"] = dispatch_ready
+    caps["copilot_follow_up_comment"] = dispatch_ready
     caps["pr_merge"] = governor_ready
     caps["governor_review_loop"] = governor_ready
     caps["governor_auto_approval"] = bool(governor_ready and settings.program_auto_merge)
+    caps["unattended_issue_dispatch_readiness"] = bool(dispatch_ready and settings.program_auto_dispatch)
+    caps["unattended_draft_to_review_readiness"] = bool(
+        dispatch_ready and settings.program_auto_dispatch and settings.program_auto_approve
+    )
+    caps["unattended_review_to_fix_comment_readiness"] = bool(
+        dispatch_ready and settings.program_auto_dispatch and settings.program_auto_approve
+    )
+    caps["unattended_approve_merge_readiness"] = bool(
+        governor_ready and settings.program_auto_approve and settings.program_auto_merge
+    )
     caps["unattended_issue_to_pr_dispatch"] = bool(
         dispatch_ready and settings.program_auto_approve and settings.program_auto_dispatch
     )

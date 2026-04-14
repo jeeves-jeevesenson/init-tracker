@@ -57,6 +57,7 @@ from orchestrator.app.github_dispatch import (
     dispatch_task_to_github_copilot,
     run_preflight_checks,
     mark_pr_ready_for_review,
+    post_copilot_follow_up_comment,
     post_issue_comment,
     submit_approving_review,
     merge_pr,
@@ -478,8 +479,9 @@ class OutboundAuthWiringTests(unittest.TestCase):
             except OSError:
                 pass
 
-    def test_mark_pr_ready_for_review_uses_app_auth(self):
+    def test_mark_pr_ready_for_review_uses_dispatch_auth(self):
         settings = self._app_settings()
+        settings.github_dispatch_user_token = "dispatch-ready-token"
         try:
             mock_pr_resp = Mock()
             mock_pr_resp.status_code = 200
@@ -512,11 +514,37 @@ class OutboundAuthWiringTests(unittest.TestCase):
             self.assertTrue(success)
             self.assertIn("ready for review", msg)
 
-            # Verify the headers used include the app token
+            # Verify the headers used include the dispatch user token, not app token.
             calls = MockClient.return_value.post.call_args_list
             for c in calls:
                 headers = c.kwargs.get("headers") or c[1].get("headers", {})
-                self.assertEqual(headers.get("Authorization"), "Bearer app-install-token")
+                self.assertEqual(headers.get("Authorization"), "Bearer dispatch-ready-token")
+        finally:
+            self._cleanup_key()
+
+    def test_post_copilot_follow_up_comment_uses_dispatch_auth(self):
+        settings = self._app_settings()
+        settings.github_dispatch_user_token = "dispatch-comment-token"
+        try:
+            mock_resp = Mock()
+            mock_resp.status_code = 201
+
+            with patch("orchestrator.app.github_dispatch.httpx.Client") as MockClient:
+                MockClient.return_value.__enter__ = Mock(return_value=MockClient.return_value)
+                MockClient.return_value.__exit__ = Mock(return_value=False)
+                MockClient.return_value.post.return_value = mock_resp
+
+                success, msg = post_copilot_follow_up_comment(
+                    settings=settings,
+                    repo="owner/repo",
+                    issue_number=1,
+                    body="@copilot please fix",
+                )
+
+            self.assertTrue(success)
+            self.assertIn("@copilot", msg)
+            headers = MockClient.return_value.post.call_args.kwargs.get("headers") or MockClient.return_value.post.call_args[1].get("headers", {})
+            self.assertEqual(headers.get("Authorization"), "Bearer dispatch-comment-token")
         finally:
             self._cleanup_key()
 
@@ -597,6 +625,30 @@ class OutboundAuthWiringTests(unittest.TestCase):
         finally:
             self._cleanup_key()
 
+    def test_remove_requested_reviewers_uses_app_auth(self):
+        settings = self._app_settings()
+        try:
+            mock_resp = Mock()
+            mock_resp.status_code = 200
+
+            with patch("orchestrator.app.github_dispatch.httpx.Client") as MockClient:
+                MockClient.return_value.__enter__ = Mock(return_value=MockClient.return_value)
+                MockClient.return_value.__exit__ = Mock(return_value=False)
+                MockClient.return_value.request.return_value = mock_resp
+
+                ok, _ = remove_requested_reviewers(
+                    settings=settings,
+                    repo="owner/repo",
+                    pr_number=22,
+                    reviewers=["someone"],
+                )
+
+            self.assertTrue(ok)
+            headers = MockClient.return_value.request.call_args.kwargs.get("headers") or MockClient.return_value.request.call_args[1].get("headers", {})
+            self.assertEqual(headers.get("Authorization"), "Bearer app-install-token")
+        finally:
+            self._cleanup_key()
+
     def test_dispatch_issue_assignment_uses_dispatch_token_not_app_token(self):
         settings = self._app_settings()
         settings.github_dispatch_user_token = "dispatch-user-token"
@@ -647,9 +699,14 @@ class OutboundAuthWiringTests(unittest.TestCase):
         settings = _make_settings(GITHUB_API_TOKEN=None, GITHUB_DISPATCH_USER_TOKEN=None, GITHUB_GOVERNOR_AUTH_MODE="token")
         success, msg = mark_pr_ready_for_review(settings=settings, repo="owner/repo", pr_number=1)
         self.assertFalse(success)
-        self.assertIn("governor auth failure", msg.lower())
+        self.assertIn("dispatch user-token auth", msg.lower())
 
-        success, msg = post_issue_comment(settings=settings, repo="owner/repo", issue_number=1, body="x")
+        success, msg = post_copilot_follow_up_comment(
+            settings=settings,
+            repo="owner/repo",
+            issue_number=1,
+            body="@copilot fix this",
+        )
         self.assertFalse(success)
 
         success, msg = submit_approving_review(settings=settings, repo="owner/repo", pr_number=1)
@@ -859,7 +916,7 @@ class WebhookIdempotencyTests(unittest.TestCase):
                  patch("orchestrator.app.tasks.list_pull_request_reviews", return_value=([copilot_review], "ok")), \
                  patch("orchestrator.app.tasks.list_pull_request_review_comments", return_value=([], "ok")), \
                  patch("orchestrator.app.tasks.list_issue_comments", return_value=([], "ok")), \
-                 patch("orchestrator.app.tasks.post_issue_comment", side_effect=mock_post_comment) as mock_post, \
+                 patch("orchestrator.app.tasks.post_copilot_follow_up_comment", side_effect=mock_post_comment) as mock_post, \
                  patch("orchestrator.app.tasks.remove_requested_reviewers", return_value=(True, "ok")), \
                  patch("orchestrator.app.tasks.summarize_governor_update"), \
                  patch("orchestrator.app.tasks.notify_discord"):
@@ -955,8 +1012,14 @@ class PreflightAppModeTests(unittest.TestCase):
             self.assertTrue(pf["github_auth_available"])
             self.assertFalse(pf["app_outbound_auth_usable"])
             self.assertTrue(pf["dispatch_auth_ready"])
+            self.assertTrue(pf["user_token_lane_available"])
             self.assertTrue(pf["governor_auth_ready"])
+            self.assertTrue(pf["governor_lane_available"])
+            self.assertFalse(pf["app_token_lane_available"])
             self.assertTrue(pf["capabilities"]["unattended_issue_to_pr_dispatch"])
+            self.assertTrue(pf["capabilities"]["unattended_draft_to_review_readiness"])
+            self.assertTrue(pf["capabilities"]["unattended_review_to_fix_comment_readiness"])
+            self.assertFalse(pf["capabilities"]["unattended_approve_merge_readiness"])
 
     def test_preflight_reports_app_mode_with_incomplete_config(self):
         with tempfile.TemporaryDirectory() as td:
@@ -978,6 +1041,8 @@ class PreflightAppModeTests(unittest.TestCase):
             self.assertFalse(pf["app_outbound_auth_usable"])
             self.assertTrue(pf["dispatch_auth_ready"])
             self.assertFalse(pf["governor_auth_ready"])
+            self.assertTrue(pf["capabilities"]["pr_ready_for_review"])
+            self.assertFalse(pf["capabilities"]["unattended_approve_merge_readiness"])
             blockers = pf["blockers"]
             self.assertTrue(any("Governor auth is not ready" in b for b in blockers))
 
@@ -1019,6 +1084,8 @@ class PreflightAppModeTests(unittest.TestCase):
             self.assertTrue(pf["app_token_mint"]["ok"])
             self.assertTrue(pf["dispatch_auth_ready"])
             self.assertTrue(pf["governor_auth_ready"])
+            self.assertTrue(pf["app_token_lane_available"])
+            self.assertTrue(pf["capabilities"]["pr_ready_for_review"])
             invalidate_cached_token()
 
     def test_preflight_unattended_single_slice_under_app_mode(self):
@@ -1113,12 +1180,72 @@ class AuthLaneFailureReportingTests(unittest.TestCase):
     def test_governor_auth_failure_message_is_explicit(self):
         settings = _make_settings(
             GITHUB_API_TOKEN=None,
-            GITHUB_DISPATCH_USER_TOKEN="dispatch-user-token",
+            GITHUB_DISPATCH_USER_TOKEN=None,
             GITHUB_GOVERNOR_AUTH_MODE="token",
         )
         success, msg = mark_pr_ready_for_review(settings=settings, repo="owner/repo", pr_number=77)
         self.assertFalse(success)
-        self.assertIn("Governor auth failure", msg)
+        self.assertIn("Ready-for-review failure", msg)
+        self.assertIn("dispatch user-token auth", msg)
+
+
+class AuthLaneLoggingTests(unittest.TestCase):
+    def test_ready_for_review_logs_dispatch_lane_and_graphql(self):
+        settings = _make_settings(
+            GITHUB_API_TOKEN=None,
+            GITHUB_DISPATCH_USER_TOKEN="dispatch-token",
+        )
+        query_response = MagicMock()
+        query_response.status_code = 200
+        query_response.json.return_value = {
+            "data": {"repository": {"pullRequest": {"id": "PR_node_id_789", "isDraft": True}}}
+        }
+        mutation_response = MagicMock()
+        mutation_response.status_code = 200
+        mutation_response.json.return_value = {
+            "data": {
+                "markPullRequestReadyForReview": {
+                    "pullRequest": {"number": 42, "isDraft": False}
+                }
+            }
+        }
+        with patch("orchestrator.app.github_dispatch.httpx.Client") as mock_client_cls:
+            mock_client = MagicMock()
+            mock_client.__enter__ = lambda s: mock_client
+            mock_client.__exit__ = MagicMock(return_value=False)
+            mock_client.post.side_effect = [query_response, mutation_response]
+            mock_client_cls.return_value = mock_client
+            with self.assertLogs("orchestrator.app.github_dispatch", level="INFO") as logs:
+                ok, _ = mark_pr_ready_for_review(settings=settings, repo="owner/repo", pr_number=42)
+        self.assertTrue(ok)
+        joined = "\n".join(logs.output)
+        self.assertIn("github_action=mark_pr_ready_for_review", joined)
+        self.assertIn("auth_lane=dispatch_user_token", joined)
+        self.assertIn("api_type=GraphQL", joined)
+
+    def test_copilot_follow_up_logs_dispatch_lane_and_rest(self):
+        settings = _make_settings(
+            GITHUB_API_TOKEN="governor-token",
+            GITHUB_DISPATCH_USER_TOKEN="dispatch-token",
+        )
+        mock_resp = Mock()
+        mock_resp.status_code = 201
+        with patch("orchestrator.app.github_dispatch.httpx.Client") as MockClient:
+            MockClient.return_value.__enter__ = Mock(return_value=MockClient.return_value)
+            MockClient.return_value.__exit__ = Mock(return_value=False)
+            MockClient.return_value.post.return_value = mock_resp
+            with self.assertLogs("orchestrator.app.github_dispatch", level="INFO") as logs:
+                ok, _ = post_copilot_follow_up_comment(
+                    settings=settings,
+                    repo="owner/repo",
+                    issue_number=12,
+                    body="@copilot test",
+                )
+        self.assertTrue(ok)
+        joined = "\n".join(logs.output)
+        self.assertIn("github_action=post_copilot_follow_up_comment", joined)
+        self.assertIn("auth_lane=dispatch_user_token", joined)
+        self.assertIn("api_type=REST", joined)
 
 
 class TryMintAppTokenTests(unittest.TestCase):

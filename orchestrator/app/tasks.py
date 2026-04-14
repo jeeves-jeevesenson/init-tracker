@@ -24,7 +24,7 @@ from .github_dispatch import (
     list_pull_request_reviews,
     mark_pr_ready_for_review,
     merge_pr,
-    post_issue_comment,
+    post_copilot_follow_up_comment,
     remove_requested_reviewers,
     request_reviewers,
     submit_approving_review,
@@ -764,9 +764,20 @@ def _run_governor_loop(
                 for c in existing_comments
             )
             if not exists_remote:
-                post_issue_comment(
+                comment_ok, comment_msg = post_copilot_follow_up_comment(
                     settings=settings, repo=task.github_repo, issue_number=pr_number, body=trigger_body,
                 )
+                if not comment_ok:
+                    state["last_event_key"] = event_key
+                    state["last_governor_decision"] = "copilot_follow_up_comment_failed"
+                    state["last_governor_summary"] = [comment_msg]
+                    run.last_summary = (
+                        f"{run.last_summary or ''}\nGovernor: copilot_follow_up_comment_failed ({comment_msg})"
+                    ).strip()
+                    run.updated_at = _utc_now()
+                    _save_governor_state(run, state)
+                    _save(session, run)
+                    return
             state["fix_trigger_fingerprint"] = trigger_fp
             state["revision_cycle_count"] = int(state.get("revision_cycle_count") or 0) + 1
             state["waiting_for_revision_push"] = True
@@ -965,7 +976,23 @@ def _run_governor_loop(
                 for item in existing_comments
             )
             if not exists_remote:
-                post_issue_comment(settings=settings, repo=task.github_repo, issue_number=pr_number, body=comment_body)
+                comment_ok, comment_msg = post_copilot_follow_up_comment(
+                    settings=settings,
+                    repo=task.github_repo,
+                    issue_number=pr_number,
+                    body=comment_body,
+                )
+                if not comment_ok:
+                    state["last_event_key"] = event_key
+                    state["last_governor_decision"] = "copilot_follow_up_comment_failed"
+                    state["last_governor_summary"] = [comment_msg]
+                    run.last_summary = (
+                        f"{run.last_summary or ''}\nGovernor: copilot_follow_up_comment_failed ({comment_msg})"
+                    ).strip()
+                    run.updated_at = _utc_now()
+                    _save_governor_state(run, state)
+                    _save(session, run)
+                    return
             state["last_revision_comment_fingerprint"] = fingerprint
             state["last_revision_comment_body"] = comment_body
             state["revision_cycle_count"] = int(state.get("revision_cycle_count") or 0) + 1

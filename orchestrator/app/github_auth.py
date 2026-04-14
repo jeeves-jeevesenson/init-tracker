@@ -5,7 +5,7 @@ Dispatch lane:
 - uses GITHUB_DISPATCH_USER_TOKEN (fallback: GITHUB_API_TOKEN)
 
 Governor lane:
-- post-PR lifecycle operations (ready-for-review/comments/reviews/merge)
+- neutral PR lifecycle governance operations (reviews/merge/reviewer cleanup/inspection)
 - mode from GITHUB_GOVERNOR_AUTH_MODE (fallback: GITHUB_AUTH_MODE)
 - token mode uses GITHUB_API_TOKEN
 - app mode mints GitHub App installation token
