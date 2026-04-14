@@ -431,6 +431,8 @@
    Endpoints used:
      GET    /api/dm/combat                                  → snapshot
      POST   /api/dm/combat/next-turn                        → advance turn
+     POST   /api/dm/combat/prev-turn                        → go to previous turn
+     POST   /api/dm/combat/set-turn                         → set active combatant
      POST   /api/dm/combat/start                            → start combat
      POST   /api/dm/combat/end                              → end combat
      POST   /api/dm/combat/combatants                       → add combatant
@@ -663,6 +665,9 @@ function renderCombatants(snap) {
     ).join('');
     const roleTag = c.role !== 'enemy' ? `<span class="role-tag">${c.role}</span>` : '';
     const tempHpDisplay = c.temp_hp > 0 ? `<span class="temp"> +${c.temp_hp}tmp</span>` : '';
+    const setTurnBtn = snap.in_combat && !isCurrent
+      ? `<button class="btn-sm" onclick="setTurnHere(${parseInt(c.cid, 10)})" style="background:var(--accent-secondary,#555)">Set Turn</button>`
+      : '';
     return `
       <div class="combatant-row${isCurrent ? ' is-current' : ''}${isDead ? ' is-dead' : ''}" data-cid="${c.cid}">
         <div class="turn-marker">${isCurrent ? '▶' : ''}</div>
@@ -675,6 +680,7 @@ function renderCombatants(snap) {
         <div class="combatant-actions">
           <div class="hp-display">${c.hp}/${c.max_hp}${tempHpDisplay}</div>
           <button class="btn-sm" onclick="quickSelect(${c.cid})">Select</button>
+          ${setTurnBtn}
         </div>
       </div>`;
   });
@@ -699,6 +705,21 @@ function quickSelect(cid) {
   document.getElementById('tempHpCidSelect').value = cid;
   document.getElementById('initCidSelect').value = cid;
   document.getElementById('removeCidSelect').value = cid;
+}
+
+async function setTurnHere(cid) {
+  try {
+    const r = await fetch(`${BASE}/api/dm/combat/set-turn`, {
+      method: 'POST', headers: authHeaders(), body: JSON.stringify({ cid }),
+    });
+    const data = await r.json();
+    if (data.snapshot) applySnapshot(data.snapshot);
+    const msg = document.getElementById('combatStateMsg');
+    if (!r.ok) { msg.textContent = data.detail || 'Error.'; msg.style.display = 'inline'; }
+    else { msg.style.display = 'none'; }
+  } catch (e) {
+    /* ignore */
+  }
 }
 
 // ── Mutations ─────────────────────────────────────────────────────────

@@ -4,11 +4,12 @@ This module is the authoritative source of truth for the migrated combat/session
 slice.  Both the desktop UI and the DM web console read from and write through
 this service rather than owning separate state.
 
-Ownership model after this migration pass (Slice 7)
+Ownership model after this migration pass (Slice 8)
 -----------------------------------------------------
 Backend-owned (this service + API routes):
   - combat lifecycle: start (begin initiative turn order), end (reset turn state)
   - initiative order / turn order (forward and backward)
+  - set-turn-here / select active combatant
   - current combatant / round / turn counters
   - up-next combatant preview
   - HP adjustments (damage and healing) for any combatant
@@ -20,13 +21,15 @@ Backend-owned (this service + API routes):
   - combatant removal
   - prev-turn (go back one step in initiative order)
 
-Desktop-routed through this service (Slice 7):
+Desktop-routed through this service (Slice 8):
   - desktop Next Turn routes through CombatService.next_turn() via
     _next_turn_via_service() so the lock, log, and broadcast paths are shared
   - desktop Prev Turn routes through CombatService.prev_turn() via
     _prev_turn_via_service() so the lock and broadcast paths are shared
   - desktop Start/Reset routes through CombatService.start_combat() via
     _start_combat_via_service() so the lock and broadcast paths are shared
+  - desktop Set Turn Here routes through CombatService.set_turn_here() via
+    _set_turn_here_via_service() so the lock and broadcast paths are shared
   - LAN player "end turn" routes through _next_turn_via_service()
   - LAN player manual_override_hp routes through CombatService.adjust_hp /
     adjust_temp_hp so the service lock and broadcast cover player-originated
@@ -41,13 +44,11 @@ Still hybrid / desktop-primary:
   - Character editor, shop, spell/resource management
   - YAML-backed save/load (unchanged; mutations here persist via existing path)
   - Full monster-spec / player-profile based combatant creation (desktop only)
-  - Advanced initiative manipulation (set-turn-here still desktop-only)
   - Deep combat engine damage paths (_apply_damage_to_target_with_temp_hp)
     still mutate state directly; these are candidates for future slices
 
 Next recommended migration targets:
   - Route deep combat engine damage/heal paths through service wrappers
-  - Route set-turn-here through CombatService
   - Expose full initiative-roll support so DM web can trigger rolls
   - Player-facing LAN client state sync improvements
 
@@ -57,6 +58,7 @@ Usage (from LanController routes):
   service.start_combat()
   service.next_turn()
   service.prev_turn()
+  service.set_turn_here(cid=2)
   service.adjust_hp(cid=3, delta=-5)
   service.set_condition(cid=3, ctype="poisoned", action="add")
   service.end_combat()
@@ -284,6 +286,65 @@ class CombatService:
             except Exception:
                 pass
             return {"ok": True, "snapshot": self.combat_snapshot()}
+
+    def set_turn_here(self, cid: int) -> Dict[str, Any]:
+        """Set the active combatant to the one identified by ``cid``.
+
+        This is the backend-owned equivalent of the desktop "Set Turn Here"
+        button.  It sets ``current_cid``, ensures ``turn_num >= 1``, runs
+        ``_enter_turn_with_auto_skip`` when available, then rebuilds the table
+        and broadcasts state.
+
+        Args:
+            cid: The combatant ID to make active.
+
+        Returns: {ok, cid, previous_cid, snapshot}
+          or  {ok: False, error: str}
+        """
+        with self._lock:
+            t = self._tracker
+            if not getattr(t, "in_combat", False):
+                return {"ok": False, "error": "No active combat."}
+
+            combatants = getattr(t, "combatants", {}) or {}
+            cid = int(cid)
+            if cid not in combatants:
+                return {"ok": False, "error": f"Combatant {cid} not found."}
+
+            previous_cid = getattr(t, "current_cid", None)
+            t.current_cid = cid
+            if int(getattr(t, "turn_num", 0) or 0) <= 0:
+                t.turn_num = 1
+
+            # Run start-of-turn effects (auto-skip stunned/paralyzed, etc.)
+            enter = getattr(t, "_enter_turn_with_auto_skip", None)
+            if callable(enter):
+                try:
+                    enter(starting=True)
+                except Exception:
+                    pass
+
+            try:
+                t._log(
+                    f"Turn set to {getattr(combatants.get(cid), 'name', 'Combatant')} (cid {cid}).",
+                    cid=cid,
+                )
+            except Exception:
+                pass
+            try:
+                t._rebuild_table(scroll_to_current=True)
+            except Exception:
+                pass
+            try:
+                t._lan_force_state_broadcast()
+            except Exception:
+                pass
+            return {
+                "ok": True,
+                "cid": cid,
+                "previous_cid": int(previous_cid) if previous_cid is not None else None,
+                "snapshot": self.combat_snapshot(),
+            }
 
     def adjust_hp(self, cid: int, delta: int) -> Dict[str, Any]:
         """Adjust HP for combatant ``cid`` by ``delta`` (negative = damage, positive = healing).

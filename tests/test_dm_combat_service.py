@@ -1269,5 +1269,204 @@ class PrevTurnViaServiceTests(unittest.TestCase):
         self.assertEqual(len(tracker._prev_turn_calls), 1)
 
 
+# ---------------------------------------------------------------------------
+# Slice 8: CombatService.set_turn_here() tests
+# ---------------------------------------------------------------------------
+
+
+class CombatServiceSetTurnHereTests(unittest.TestCase):
+    """Tests for CombatService.set_turn_here()."""
+
+    def _make_service(self, num_combatants=3, in_combat=True, current_cid=1):
+        app = _make_tracker(num_combatants=num_combatants)
+        app.in_combat = in_combat
+        app.current_cid = current_cid
+        app.turn_num = 1
+        app._enter_turn_calls = []
+
+        def _enter_turn_with_auto_skip(starting=True):
+            app._enter_turn_calls.append(starting)
+
+        app._enter_turn_with_auto_skip = _enter_turn_with_auto_skip
+        service = CombatService(app)
+        return app, service
+
+    def test_set_turn_here_valid_cid(self):
+        app, service = self._make_service()
+        result = service.set_turn_here(cid=2)
+        self.assertTrue(result["ok"])
+        self.assertEqual(result["cid"], 2)
+        self.assertEqual(result["previous_cid"], 1)
+        self.assertEqual(app.current_cid, 2)
+
+    def test_set_turn_here_returns_snapshot(self):
+        app, service = self._make_service()
+        result = service.set_turn_here(cid=2)
+        self.assertIn("snapshot", result)
+        snap = result["snapshot"]
+        self.assertEqual(snap["active_cid"], 2)
+
+    def test_set_turn_here_invalid_cid(self):
+        app, service = self._make_service()
+        result = service.set_turn_here(cid=999)
+        self.assertFalse(result["ok"])
+        self.assertIn("not found", result["error"])
+
+    def test_set_turn_here_no_combat(self):
+        app, service = self._make_service(in_combat=False)
+        result = service.set_turn_here(cid=1)
+        self.assertFalse(result["ok"])
+        self.assertIn("No active combat", result["error"])
+
+    def test_set_turn_here_triggers_rebuild(self):
+        app, service = self._make_service()
+        before = len(app._rebuild_calls)
+        service.set_turn_here(cid=2)
+        self.assertGreater(len(app._rebuild_calls), before)
+
+    def test_set_turn_here_triggers_broadcast(self):
+        app, service = self._make_service()
+        before = len(app._broadcast_calls)
+        service.set_turn_here(cid=2)
+        self.assertGreater(len(app._broadcast_calls), before)
+
+    def test_set_turn_here_calls_enter_turn(self):
+        app, service = self._make_service()
+        service.set_turn_here(cid=2)
+        self.assertEqual(len(app._enter_turn_calls), 1)
+        self.assertTrue(app._enter_turn_calls[0])  # starting=True
+
+    def test_set_turn_here_logs_turn_change(self):
+        app, service = self._make_service()
+        before = len(app._log_calls)
+        service.set_turn_here(cid=2)
+        self.assertGreater(len(app._log_calls), before)
+        # Should mention the combatant name
+        log_msgs = [m for m, _ in app._log_calls]
+        self.assertTrue(any("Goblin" in m for m in log_msgs))
+
+    def test_set_turn_here_sets_turn_num_if_zero(self):
+        app, service = self._make_service()
+        app.turn_num = 0
+        service.set_turn_here(cid=2)
+        self.assertGreaterEqual(app.turn_num, 1)
+
+    def test_set_turn_here_preserves_turn_num_if_positive(self):
+        app, service = self._make_service()
+        app.turn_num = 5
+        service.set_turn_here(cid=2)
+        # turn_num should remain unchanged
+        self.assertEqual(app.turn_num, 5)
+
+    def test_set_turn_here_previous_cid_none(self):
+        app, service = self._make_service(current_cid=None)
+        # Ensure turn_num is at least 1 for in_combat
+        app.turn_num = 1
+        result = service.set_turn_here(cid=2)
+        self.assertTrue(result["ok"])
+        self.assertIsNone(result["previous_cid"])
+        self.assertEqual(result["cid"], 2)
+
+    def test_set_turn_here_same_cid(self):
+        """Setting turn to the already-active combatant should still succeed."""
+        app, service = self._make_service(current_cid=1)
+        result = service.set_turn_here(cid=1)
+        self.assertTrue(result["ok"])
+        self.assertEqual(result["cid"], 1)
+        self.assertEqual(result["previous_cid"], 1)
+
+    def test_set_turn_here_without_enter_method(self):
+        """Should work even if _enter_turn_with_auto_skip is not available."""
+        app, service = self._make_service()
+        del app._enter_turn_with_auto_skip
+        result = service.set_turn_here(cid=2)
+        self.assertTrue(result["ok"])
+        self.assertEqual(app.current_cid, 2)
+
+
+# ---------------------------------------------------------------------------
+# Slice 8: _set_turn_here_via_service wrapper tests
+# ---------------------------------------------------------------------------
+
+
+class SetTurnHereViaServiceTests(unittest.TestCase):
+    """Tests for InitiativeTracker._set_turn_here_via_service()."""
+
+    def _make_tracker_with_service(self):
+        tracker = _make_tracker(num_combatants=3)
+        tracker.in_combat = True
+        tracker.current_cid = 1
+        tracker.turn_num = 1
+        tracker._enter_turn_calls = []
+
+        def _enter_turn_with_auto_skip(starting=True):
+            tracker._enter_turn_calls.append(starting)
+
+        tracker._enter_turn_with_auto_skip = _enter_turn_with_auto_skip
+
+        # Simulate tree selection
+        import types as _t
+        tree = _t.SimpleNamespace()
+        tree._selection = ("2",)
+        tree.selection = lambda: tree._selection
+        tracker.tree = tree
+
+        service = CombatService(tracker)
+        tracker._dm_service = service
+        return tracker, service
+
+    def test_routes_through_service(self):
+        tracker, service = self._make_tracker_with_service()
+        InitiativeTracker._set_turn_here_via_service(tracker)
+        self.assertEqual(tracker.current_cid, 2)
+
+    def test_triggers_broadcast(self):
+        tracker, service = self._make_tracker_with_service()
+        before = len(tracker._broadcast_calls)
+        InitiativeTracker._set_turn_here_via_service(tracker)
+        self.assertGreater(len(tracker._broadcast_calls), before)
+
+    def test_fallback_without_service(self):
+        tracker, _ = self._make_tracker_with_service()
+        tracker._dm_service = None
+        InitiativeTracker._set_turn_here_via_service(tracker)
+        # Fallback direct mutation should still set current_cid
+        self.assertEqual(tracker.current_cid, 2)
+
+    def test_fallback_on_service_failure(self):
+        tracker, _ = self._make_tracker_with_service()
+        broken = CombatService(tracker)
+        broken.set_turn_here = lambda cid: {"ok": False, "error": "test failure"}
+        tracker._dm_service = broken
+        InitiativeTracker._set_turn_here_via_service(tracker)
+        # Should fall back and still set the turn
+        self.assertEqual(tracker.current_cid, 2)
+        warnings = [(m, l) for m, l in tracker._oplog_calls if l == "warning"]
+        self.assertTrue(any("set_turn_here" in m for m, _ in warnings))
+
+    def test_no_selection_does_nothing(self):
+        tracker, _ = self._make_tracker_with_service()
+        tracker.tree._selection = ()
+        tracker.tree.selection = lambda: ()
+        old_cid = tracker.current_cid
+        InitiativeTracker._set_turn_here_via_service(tracker)
+        self.assertEqual(tracker.current_cid, old_cid)
+
+    def test_invalid_cid_selection_does_nothing(self):
+        tracker, _ = self._make_tracker_with_service()
+        tracker.tree._selection = ("999",)
+        tracker.tree.selection = lambda: ("999",)
+        old_cid = tracker.current_cid
+        InitiativeTracker._set_turn_here_via_service(tracker)
+        self.assertEqual(tracker.current_cid, old_cid)
+
+    def test_no_tree_does_nothing(self):
+        tracker, _ = self._make_tracker_with_service()
+        tracker.tree = None
+        old_cid = tracker.current_cid
+        InitiativeTracker._set_turn_here_via_service(tracker)
+        self.assertEqual(tracker.current_cid, old_cid)
+
+
 if __name__ == "__main__":
     unittest.main()

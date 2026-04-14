@@ -827,7 +827,7 @@ class InitiativeTracker(tk.Tk):
         btn_row.grid(row=1, column=0, columnspan=8, sticky="w", pady=(6, 0))
 
         ttk.Button(btn_row, text="Start/Reset", command=self._start_combat_via_service).pack(side=tk.LEFT, padx=(0, 8))
-        ttk.Button(btn_row, text="Set Turn Here", command=self._set_turn_here).pack(side=tk.LEFT, padx=(0, 8))
+        ttk.Button(btn_row, text="Set Turn Here", command=self._set_turn_here_via_service).pack(side=tk.LEFT, padx=(0, 8))
         ttk.Button(btn_row, text="Prev Turn", command=self._prev_turn_via_service).pack(side=tk.LEFT, padx=(0, 8))
         ttk.Button(btn_row, text="Next Turn", command=self._next_turn_via_service).pack(side=tk.LEFT, padx=(0, 8))
         ttk.Button(btn_row, text="Stand Up", command=self._stand_up_current).pack(side=tk.LEFT, padx=(0, 8))
