@@ -64,9 +64,10 @@ def get_preflight():
     unattended trusted program continuation.
 
     Returns a structured report covering:
-    - GitHub API token presence
+    - dispatch lane token presence/readiness
+    - governor lane auth mode/readiness (token or app)
     - auto_merge / auto_continue / auto_dispatch / auto_approve / trusted_kickoff settings
-    - capability assessment for: issue creation, PR readiness, PR merge, dispatch, next-slice dispatch
+    - capability assessment for issue dispatch and PR governance lanes
     - unattended_continuation (true only when all prerequisites are met)
     - blockers: list of strings describing what is currently preventing unattended operation
     - admin_prerequisites: list of one-time GitHub/admin actions required

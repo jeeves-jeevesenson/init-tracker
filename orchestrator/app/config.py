@@ -34,10 +34,13 @@ class Settings(BaseSettings):
     database_url: str = Field(default=DEFAULT_DATABASE_URL, alias="DATABASE_URL")
 
     github_api_token: str | None = Field(default=None, alias="GITHUB_API_TOKEN")
+    github_dispatch_user_token: str | None = Field(default=None, alias="GITHUB_DISPATCH_USER_TOKEN")
     github_api_url: str = Field(default="https://api.github.com", alias="GITHUB_API_URL")
 
-    # GitHub App auth (preferred when GITHUB_AUTH_MODE=app)
+    # Legacy/shared auth mode (kept for compatibility; governor now uses
+    # GITHUB_GOVERNOR_AUTH_MODE when provided).
     github_auth_mode: str = Field(default="token", alias="GITHUB_AUTH_MODE")
+    github_governor_auth_mode: str | None = Field(default=None, alias="GITHUB_GOVERNOR_AUTH_MODE")
     github_app_client_id: str | None = Field(default=None, alias="GITHUB_APP_CLIENT_ID")
     github_app_installation_id: str | None = Field(default=None, alias="GITHUB_APP_INSTALLATION_ID")
     github_app_private_key_path: str | None = Field(default=None, alias="GITHUB_APP_PRIVATE_KEY_PATH")

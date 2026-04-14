@@ -35,15 +35,26 @@ from orchestrator.app.github_auth import (
     _token_lock,
     _REFRESH_MARGIN_SECONDS,
     build_auth_headers,
+    build_dispatch_auth_headers,
+    build_governor_auth_headers,
+    dispatch_auth_label,
     get_github_token,
+    get_dispatch_token,
+    get_governor_token,
     has_github_auth,
+    has_dispatch_auth,
+    has_governor_auth,
     invalidate_cached_token,
     is_app_mode,
+    is_governor_app_mode,
     auth_mode_label,
+    governor_auth_mode_label,
     try_mint_app_token,
+    try_mint_governor_app_token,
 )
 from orchestrator.app.github_dispatch import (
     DispatchResult,
+    dispatch_task_to_github_copilot,
     run_preflight_checks,
     mark_pr_ready_for_review,
     post_issue_comment,
@@ -80,7 +91,9 @@ ENV_KEYS = {
     "DISCORD_WEBHOOK_URL",
     "ORCHESTRATOR_SECRET_KEY",
     "GITHUB_API_TOKEN",
+    "GITHUB_DISPATCH_USER_TOKEN",
     "GITHUB_AUTH_MODE",
+    "GITHUB_GOVERNOR_AUTH_MODE",
     "GITHUB_APP_CLIENT_ID",
     "GITHUB_APP_INSTALLATION_ID",
     "GITHUB_APP_PRIVATE_KEY_PATH",
@@ -146,8 +159,10 @@ def _make_settings(**overrides) -> Settings:
     """Construct a Settings object with defaults suitable for unit tests."""
     defaults = {
         "GITHUB_API_TOKEN": "dummy-token",
+        "GITHUB_DISPATCH_USER_TOKEN": "dispatch-user-token",
         "GITHUB_API_URL": "https://api.github.com",
         "GITHUB_AUTH_MODE": "token",
+        "GITHUB_GOVERNOR_AUTH_MODE": "token",
     }
     defaults.update(overrides)
     return Settings(**defaults)
@@ -156,11 +171,12 @@ def _make_settings(**overrides) -> Settings:
 def _make_app_settings(*, key_path: str, **overrides) -> Settings:
     """Construct Settings configured for GitHub App auth mode."""
     defaults = {
-        "GITHUB_AUTH_MODE": "app",
+        "GITHUB_GOVERNOR_AUTH_MODE": "app",
         "GITHUB_APP_CLIENT_ID": "Iv1.test_client_id",
         "GITHUB_APP_INSTALLATION_ID": "12345",
         "GITHUB_APP_PRIVATE_KEY_PATH": key_path,
         "GITHUB_API_URL": "https://api.github.com",
+        "GITHUB_DISPATCH_USER_TOKEN": "dispatch-user-token",
     }
     defaults.update(overrides)
     return Settings(**defaults)
@@ -295,15 +311,18 @@ class AuthModeDetectionTests(unittest.TestCase):
     def test_default_mode_is_token(self):
         settings = _make_settings()
         self.assertFalse(is_app_mode(settings))
+        self.assertFalse(is_governor_app_mode(settings))
         self.assertEqual(auth_mode_label(settings), "token (legacy PAT)")
+        self.assertEqual(governor_auth_mode_label(settings), "token (GITHUB_API_TOKEN)")
 
     def test_app_mode_detected(self):
         with tempfile.NamedTemporaryFile(mode="w", suffix=".pem", delete=False) as f:
             f.write("dummy")
             key_path = f.name
         try:
-            settings = _make_app_settings(key_path=key_path)
+            settings = _make_app_settings(key_path=key_path, GITHUB_AUTH_MODE="app")
             self.assertTrue(is_app_mode(settings))
+            self.assertTrue(is_governor_app_mode(settings))
             self.assertEqual(auth_mode_label(settings), "app (GitHub App installation token)")
         finally:
             os.unlink(key_path)
@@ -311,10 +330,12 @@ class AuthModeDetectionTests(unittest.TestCase):
     def test_has_github_auth_token_mode(self):
         settings = _make_settings(GITHUB_API_TOKEN="some-token")
         self.assertTrue(has_github_auth(settings))
+        self.assertTrue(has_governor_auth(settings))
 
     def test_has_github_auth_token_mode_no_token(self):
-        settings = _make_settings(GITHUB_API_TOKEN=None)
+        settings = _make_settings(GITHUB_API_TOKEN=None, GITHUB_DISPATCH_USER_TOKEN=None)
         self.assertFalse(has_github_auth(settings))
+        self.assertFalse(has_governor_auth(settings))
 
     def test_has_github_auth_app_mode_complete(self):
         with tempfile.NamedTemporaryFile(mode="w", suffix=".pem", delete=False) as f:
@@ -323,26 +344,64 @@ class AuthModeDetectionTests(unittest.TestCase):
         try:
             settings = _make_app_settings(key_path=key_path)
             self.assertTrue(has_github_auth(settings))
+            self.assertTrue(has_governor_auth(settings))
         finally:
             os.unlink(key_path)
 
     def test_has_github_auth_app_mode_incomplete(self):
         settings = Settings(
-            GITHUB_AUTH_MODE="app",
+            GITHUB_GOVERNOR_AUTH_MODE="app",
             GITHUB_APP_CLIENT_ID="Iv1.abc",
             # missing installation_id and key_path
         )
         self.assertFalse(has_github_auth(settings))
+        self.assertFalse(has_governor_auth(settings))
 
     def test_get_github_token_token_mode(self):
         settings = _make_settings(GITHUB_API_TOKEN="my-pat")
         token = get_github_token(settings)
         self.assertEqual(token, "my-pat")
+        self.assertEqual(get_governor_token(settings), "my-pat")
 
     def test_get_github_token_token_mode_missing_raises(self):
         settings = _make_settings(GITHUB_API_TOKEN=None)
         with self.assertRaises(RuntimeError):
             get_github_token(settings)
+
+    def test_dispatch_lane_uses_dispatch_user_token(self):
+        settings = _make_settings(
+            GITHUB_API_TOKEN="legacy-governor-token",
+            GITHUB_DISPATCH_USER_TOKEN="dispatch-only-token",
+        )
+        self.assertTrue(has_dispatch_auth(settings))
+        self.assertEqual(get_dispatch_token(settings), "dispatch-only-token")
+        self.assertIn("GITHUB_DISPATCH_USER_TOKEN", dispatch_auth_label(settings))
+
+    def test_dispatch_lane_falls_back_to_legacy_token(self):
+        settings = _make_settings(
+            GITHUB_API_TOKEN="legacy-token",
+            GITHUB_DISPATCH_USER_TOKEN=None,
+        )
+        self.assertTrue(has_dispatch_auth(settings))
+        self.assertEqual(get_dispatch_token(settings), "legacy-token")
+
+    def test_governor_mode_falls_back_to_legacy_github_auth_mode(self):
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".pem", delete=False) as f:
+            f.write("dummy")
+            key_path = f.name
+        try:
+            settings = _make_settings(
+                GITHUB_GOVERNOR_AUTH_MODE=None,
+                GITHUB_AUTH_MODE="app",
+                GITHUB_API_TOKEN=None,
+                GITHUB_APP_CLIENT_ID="Iv1.abc",
+                GITHUB_APP_INSTALLATION_ID="123",
+                GITHUB_APP_PRIVATE_KEY_PATH=key_path,
+            )
+            self.assertTrue(is_governor_app_mode(settings))
+            self.assertTrue(has_governor_auth(settings))
+        finally:
+            os.unlink(key_path)
 
 
 class BuildAuthHeadersTests(unittest.TestCase):
@@ -368,15 +427,25 @@ class BuildAuthHeadersTests(unittest.TestCase):
             settings = _make_app_settings(key_path=key_path)
             headers = build_auth_headers(settings)
             self.assertEqual(headers["Authorization"], "Bearer inst-token-456")
+            governor_headers = build_governor_auth_headers(settings)
+            self.assertEqual(governor_headers["Authorization"], "Bearer inst-token-456")
         finally:
             os.unlink(key_path)
             invalidate_cached_token()
 
     def test_no_auth_fallback_headers(self):
-        settings = _make_settings(GITHUB_API_TOKEN=None)
+        settings = _make_settings(GITHUB_API_TOKEN=None, GITHUB_DISPATCH_USER_TOKEN=None)
         headers = build_auth_headers(settings)
         self.assertNotIn("Authorization", headers)
         self.assertIn("Accept", headers)
+
+    def test_dispatch_headers_use_dispatch_user_token(self):
+        settings = _make_settings(
+            GITHUB_API_TOKEN="legacy-token",
+            GITHUB_DISPATCH_USER_TOKEN="dispatch-token",
+        )
+        headers = build_dispatch_auth_headers(settings)
+        self.assertEqual(headers["Authorization"], "Bearer dispatch-token")
 
 
 class OutboundAuthWiringTests(unittest.TestCase):
@@ -523,12 +592,57 @@ class OutboundAuthWiringTests(unittest.TestCase):
         finally:
             self._cleanup_key()
 
+    def test_dispatch_issue_assignment_uses_dispatch_token_not_app_token(self):
+        settings = self._app_settings()
+        settings.github_dispatch_user_token = "dispatch-user-token"
+        task = TaskPacket(
+            id=501,
+            github_repo="owner/repo",
+            github_issue_number=123,
+            title="Dispatch auth lane test",
+            normalized_task_text="Dispatch lane should use user token",
+            acceptance_criteria_json="[]",
+            validation_commands_json="[]",
+        )
+        try:
+            preflight_response = Mock(status_code=200, headers={"content-type": "application/json"})
+            preflight_response.json.return_value = {
+                "data": {
+                    "repository": {
+                        "suggestedActors": {
+                            "nodes": [{"login": "copilot-swe-agent", "__typename": "Bot", "id": "BOT_501"}]
+                        }
+                    }
+                }
+            }
+            assign_response = Mock(status_code=201, headers={"content-type": "application/json"})
+            assign_response.json.return_value = {
+                "id": 501,
+                "html_url": "https://github.com/owner/repo/issues/123",
+                "assignees": [{"login": "copilot-swe-agent"}],
+            }
+            comment_response = Mock(status_code=201, headers={"content-type": "application/json"}, text="")
+
+            with patch("orchestrator.app.github_dispatch.httpx.Client") as MockClient:
+                MockClient.return_value.__enter__ = Mock(return_value=MockClient.return_value)
+                MockClient.return_value.__exit__ = Mock(return_value=False)
+                MockClient.return_value.post.side_effect = [preflight_response, assign_response, comment_response]
+
+                result = dispatch_task_to_github_copilot(settings=settings, task=task)
+
+            self.assertTrue(result.accepted)
+            for call_ in MockClient.return_value.post.call_args_list:
+                headers = call_.kwargs.get("headers") or call_[1].get("headers", {})
+                self.assertEqual(headers.get("Authorization"), "Bearer dispatch-user-token")
+        finally:
+            self._cleanup_key()
+
     def test_no_auth_returns_error(self):
         """Functions should return errors when auth is not available."""
-        settings = _make_settings(GITHUB_API_TOKEN=None, GITHUB_AUTH_MODE="token")
+        settings = _make_settings(GITHUB_API_TOKEN=None, GITHUB_DISPATCH_USER_TOKEN=None, GITHUB_GOVERNOR_AUTH_MODE="token")
         success, msg = mark_pr_ready_for_review(settings=settings, repo="owner/repo", pr_number=1)
         self.assertFalse(success)
-        self.assertIn("token", msg.lower())
+        self.assertIn("governor auth failure", msg.lower())
 
         success, msg = post_issue_comment(settings=settings, repo="owner/repo", issue_number=1, body="x")
         self.assertFalse(success)
@@ -823,7 +937,9 @@ class PreflightAppModeTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as td:
             os.environ["DATABASE_URL"] = f"sqlite:///{Path(td) / 'orchestrator.db'}"
             os.environ["GITHUB_API_TOKEN"] = "dummy-token"
+            os.environ["GITHUB_DISPATCH_USER_TOKEN"] = "dispatch-user-token"
             os.environ.pop("GITHUB_AUTH_MODE", None)
+            os.environ.pop("GITHUB_GOVERNOR_AUTH_MODE", None)
             main, db = _reload_orchestrator_modules()
 
             with TestClient(main.app) as client:
@@ -833,11 +949,15 @@ class PreflightAppModeTests(unittest.TestCase):
             self.assertIn("token", pf["github_auth_mode"])
             self.assertTrue(pf["github_auth_available"])
             self.assertFalse(pf["app_outbound_auth_usable"])
+            self.assertTrue(pf["dispatch_auth_ready"])
+            self.assertTrue(pf["governor_auth_ready"])
+            self.assertTrue(pf["capabilities"]["unattended_issue_to_pr_dispatch"])
 
     def test_preflight_reports_app_mode_with_incomplete_config(self):
         with tempfile.TemporaryDirectory() as td:
             os.environ["DATABASE_URL"] = f"sqlite:///{Path(td) / 'orchestrator.db'}"
-            os.environ["GITHUB_AUTH_MODE"] = "app"
+            os.environ["GITHUB_GOVERNOR_AUTH_MODE"] = "app"
+            os.environ["GITHUB_DISPATCH_USER_TOKEN"] = "dispatch-user-token"
             os.environ["GITHUB_APP_CLIENT_ID"] = "Iv1.test"
             os.environ.pop("GITHUB_APP_INSTALLATION_ID", None)
             os.environ.pop("GITHUB_APP_PRIVATE_KEY_PATH", None)
@@ -851,8 +971,10 @@ class PreflightAppModeTests(unittest.TestCase):
             self.assertIn("app", pf["github_auth_mode"])
             self.assertFalse(pf["github_auth_available"])
             self.assertFalse(pf["app_outbound_auth_usable"])
+            self.assertTrue(pf["dispatch_auth_ready"])
+            self.assertFalse(pf["governor_auth_ready"])
             blockers = pf["blockers"]
-            self.assertTrue(any("app config is incomplete" in b for b in blockers))
+            self.assertTrue(any("Governor auth is not ready" in b for b in blockers))
 
     def test_preflight_reports_app_mode_with_complete_config(self):
         key_pem = _get_test_rsa_key()
@@ -860,7 +982,8 @@ class PreflightAppModeTests(unittest.TestCase):
             os.environ["DATABASE_URL"] = f"sqlite:///{Path(td) / 'orchestrator.db'}"
             key_file = Path(td) / "test.pem"
             key_file.write_text(key_pem)
-            os.environ["GITHUB_AUTH_MODE"] = "app"
+            os.environ["GITHUB_GOVERNOR_AUTH_MODE"] = "app"
+            os.environ["GITHUB_DISPATCH_USER_TOKEN"] = "dispatch-user-token"
             os.environ["GITHUB_APP_CLIENT_ID"] = "Iv1.test"
             os.environ["GITHUB_APP_INSTALLATION_ID"] = "12345"
             os.environ["GITHUB_APP_PRIVATE_KEY_PATH"] = str(key_file)
@@ -889,6 +1012,8 @@ class PreflightAppModeTests(unittest.TestCase):
             self.assertTrue(pf["github_auth_available"])
             self.assertTrue(pf["app_outbound_auth_usable"])
             self.assertTrue(pf["app_token_mint"]["ok"])
+            self.assertTrue(pf["dispatch_auth_ready"])
+            self.assertTrue(pf["governor_auth_ready"])
             invalidate_cached_token()
 
     def test_preflight_unattended_single_slice_under_app_mode(self):
@@ -898,7 +1023,8 @@ class PreflightAppModeTests(unittest.TestCase):
             os.environ["DATABASE_URL"] = f"sqlite:///{Path(td) / 'orchestrator.db'}"
             key_file = Path(td) / "test.pem"
             key_file.write_text(key_pem)
-            os.environ["GITHUB_AUTH_MODE"] = "app"
+            os.environ["GITHUB_GOVERNOR_AUTH_MODE"] = "app"
+            os.environ["GITHUB_DISPATCH_USER_TOKEN"] = "dispatch-user-token"
             os.environ["GITHUB_APP_CLIENT_ID"] = "Iv1.test"
             os.environ["GITHUB_APP_INSTALLATION_ID"] = "12345"
             os.environ["GITHUB_APP_PRIVATE_KEY_PATH"] = str(key_file)
@@ -930,6 +1056,8 @@ class PreflightAppModeTests(unittest.TestCase):
             pf = body["preflight"]
             self.assertTrue(pf["capabilities"]["unattended_single_slice_execution"])
             self.assertTrue(pf["capabilities"]["unattended_continuation"])
+            self.assertTrue(pf["capabilities"]["unattended_issue_to_pr_dispatch"])
+            self.assertTrue(pf["capabilities"]["unattended_pr_governance"])
             invalidate_cached_token()
 
 
@@ -954,6 +1082,38 @@ class LegacyTokenFallbackTests(unittest.TestCase):
         self.assertIn("github_api_token", result)
         self.assertTrue(result["github_api_token"])
         self.assertIn("github_auth_mode", result)
+
+
+class AuthLaneFailureReportingTests(unittest.TestCase):
+    def test_dispatch_auth_failure_message_is_explicit(self):
+        settings = _make_settings(
+            GITHUB_API_TOKEN=None,
+            GITHUB_DISPATCH_USER_TOKEN=None,
+            GITHUB_GOVERNOR_AUTH_MODE="app",
+        )
+        task = TaskPacket(
+            id=900,
+            github_repo="owner/repo",
+            github_issue_number=9,
+            title="Dispatch failure message",
+            normalized_task_text="",
+            acceptance_criteria_json="[]",
+            validation_commands_json="[]",
+        )
+        result = dispatch_task_to_github_copilot(settings=settings, task=task)
+        self.assertFalse(result.accepted)
+        self.assertTrue(result.manual_required)
+        self.assertIn("Dispatch auth failure", result.summary)
+
+    def test_governor_auth_failure_message_is_explicit(self):
+        settings = _make_settings(
+            GITHUB_API_TOKEN=None,
+            GITHUB_DISPATCH_USER_TOKEN="dispatch-user-token",
+            GITHUB_GOVERNOR_AUTH_MODE="token",
+        )
+        success, msg = mark_pr_ready_for_review(settings=settings, repo="owner/repo", pr_number=77)
+        self.assertFalse(success)
+        self.assertIn("Governor auth failure", msg)
 
 
 class TryMintAppTokenTests(unittest.TestCase):

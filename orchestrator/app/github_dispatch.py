@@ -9,7 +9,16 @@ import httpx
 
 from .config import Settings
 from .copilot_identity import normalize_configured_copilot_login, normalize_copilot_login
-from .github_auth import build_auth_headers, has_github_auth, auth_mode_label, is_app_mode, try_mint_app_token
+from .github_auth import (
+    build_dispatch_auth_headers,
+    build_governor_auth_headers,
+    dispatch_auth_label,
+    governor_auth_mode_label,
+    has_dispatch_auth,
+    has_governor_auth,
+    is_governor_app_mode,
+    try_mint_governor_app_token,
+)
 from .models import TaskPacket
 
 _SUGGESTED_ACTORS_QUERY = """
@@ -76,8 +85,12 @@ class PullRequestInspection:
     summary: str
 
 
-def _build_headers(settings: Settings) -> dict[str, str]:
-    return build_auth_headers(settings)
+def _build_dispatch_headers(settings: Settings) -> dict[str, str]:
+    return build_dispatch_auth_headers(settings)
+
+
+def _build_governor_headers(settings: Settings) -> dict[str, str]:
+    return build_governor_auth_headers(settings)
 
 
 def _build_agent_assignment_payload(settings: Settings, task: TaskPacket) -> dict[str, Any]:
@@ -206,14 +219,14 @@ def _suggested_actors_summary(actor_logins: list[str]) -> str:
 def dispatch_task_to_github_copilot(*, settings: Settings, task: TaskPacket) -> DispatchResult:
     dispatch_mode, _ = _dispatch_mode(settings, task)
     dispatch_mode_summary = describe_dispatch_mode(settings, task)
-    if not has_github_auth(settings):
+    if not has_dispatch_auth(settings):
         return DispatchResult(
             attempted=False,
             accepted=False,
             manual_required=True,
             state="blocked",
             summary=(
-                "GitHub API token missing; task remains approved for manual dispatch. "
+                "Dispatch auth failure: dispatch user token not configured; task remains approved for manual dispatch. "
                 f"{dispatch_mode_summary}"
             ),
         )
@@ -243,7 +256,7 @@ def dispatch_task_to_github_copilot(*, settings: Settings, task: TaskPacket) -> 
         with httpx.Client(timeout=15.0) as client:
             preflight_response = client.post(
                 graphql_url,
-                headers=_build_headers(settings),
+                headers=_build_dispatch_headers(settings),
                 json={
                     "query": _SUGGESTED_ACTORS_QUERY,
                     "variables": {"owner": owner, "name": name},
@@ -257,7 +270,7 @@ def dispatch_task_to_github_copilot(*, settings: Settings, task: TaskPacket) -> 
                     manual_required=True,
                     state="blocked",
                     summary=(
-                        "GitHub Copilot preflight suggestedActors query failed "
+                        "Actor assignment preflight failed: GitHub suggestedActors query failed "
                         f"({preflight_response.status_code}): {details}. "
                         f"{dispatch_mode_summary}"
                     ),
@@ -276,7 +289,7 @@ def dispatch_task_to_github_copilot(*, settings: Settings, task: TaskPacket) -> 
                     manual_required=True,
                     state="blocked",
                     summary=(
-                        "GitHub Copilot preflight suggestedActors query returned errors: "
+                        "Actor assignment preflight failed: GitHub suggestedActors query returned errors: "
                         f"{str(preflight_payload.get('errors'))[:500]}. "
                         f"{dispatch_mode_summary}"
                     ),
@@ -294,7 +307,7 @@ def dispatch_task_to_github_copilot(*, settings: Settings, task: TaskPacket) -> 
                     manual_required=True,
                     state="blocked",
                     summary=(
-                        "Copilot cloud agent not enabled or not assignable in this repository. "
+                        "Actor assignment blocked: Copilot cloud agent not enabled or not assignable in this repository. "
                         f"{preflight_summary}. "
                         f"{dispatch_mode_summary}"
                     ),
@@ -305,7 +318,7 @@ def dispatch_task_to_github_copilot(*, settings: Settings, task: TaskPacket) -> 
             requested_custom_agent = (request_payload.get("agent_assignment") or {}).get("custom_agent")
             assign_response = client.post(
                 assign_url,
-                headers=_build_headers(settings),
+                headers=_build_dispatch_headers(settings),
                 json=request_payload,
             )
             if assign_response.status_code >= 400:
@@ -317,7 +330,7 @@ def dispatch_task_to_github_copilot(*, settings: Settings, task: TaskPacket) -> 
                     manual_required=manual,
                     state="blocked" if manual else "failed",
                     summary=(
-                        "GitHub Copilot dispatch assignment failed "
+                        "Actor assignment failed: GitHub Copilot dispatch assignment failed "
                         f"({assign_response.status_code}): {details} "
                         f"{preflight_summary}. "
                         f"{dispatch_mode_summary}"
@@ -339,7 +352,7 @@ def dispatch_task_to_github_copilot(*, settings: Settings, task: TaskPacket) -> 
                     manual_required=True,
                     state="blocked",
                     summary=(
-                        "GitHub accepted the request but Copilot assignee was not applied; "
+                        "Actor assignment failed: GitHub accepted the request but Copilot assignee was not applied; "
                         "manual dispatch needed. "
                         f"expected={expected_assignee_login}; "
                         f"actual={raw_assignee_logins or ['(none)']}; "
@@ -355,7 +368,7 @@ def dispatch_task_to_github_copilot(*, settings: Settings, task: TaskPacket) -> 
             comment_warning: str | None = None
             comment_response = client.post(
                 comment_url,
-                headers=_build_headers(settings),
+                headers=_build_dispatch_headers(settings),
                 json={
                     "body": _task_packet_comment(
                         task,
@@ -375,7 +388,7 @@ def dispatch_task_to_github_copilot(*, settings: Settings, task: TaskPacket) -> 
                 manual_required=False,
                 state="accepted",
                 summary=(
-                    "Copilot assignment request accepted via issues assignee API"
+                    "Actor assignment succeeded: Copilot assignment request accepted via issues assignee API"
                     f" for {expected_assignee_login}."
                     f" custom_agent={requested_custom_agent or '(none)'}."
                     f" {preflight_summary}."
@@ -392,7 +405,7 @@ def dispatch_task_to_github_copilot(*, settings: Settings, task: TaskPacket) -> 
             accepted=False,
             manual_required=True,
             state="blocked",
-            summary=f"Dispatch request failed: {exc}. {dispatch_mode_summary}",
+            summary=f"Dispatch auth/assignment failure: {exc}. {dispatch_mode_summary}",
         )
 
 
@@ -401,8 +414,8 @@ def mark_pr_ready_for_review(*, settings: Settings, repo: str, pr_number: int) -
 
     Returns (success, message).  Safe to call when the PR is already non-draft.
     """
-    if not has_github_auth(settings):
-        return False, "GitHub API token missing; cannot un-draft PR"
+    if not has_governor_auth(settings):
+        return False, "Governor auth failure: auth not configured; cannot mark PR ready for review"
     api_base = settings.github_api_url.rstrip("/")
     graphql_url = f"{api_base}/graphql"
     repo_parts = _extract_repo_owner_name(repo)
@@ -420,7 +433,7 @@ def mark_pr_ready_for_review(*, settings: Settings, repo: str, pr_number: int) -
         with httpx.Client(timeout=15.0) as client:
             pr_query_response = client.post(
                 graphql_url,
-                headers=_build_headers(settings),
+                headers=_build_governor_headers(settings),
                 json={
                     "query": _PULL_REQUEST_ID_QUERY,
                     "variables": {"owner": owner, "name": name, "number": pr_number},
@@ -437,7 +450,7 @@ def mark_pr_ready_for_review(*, settings: Settings, repo: str, pr_number: int) -
                     pr_number,
                     msg,
                 )
-                return False, msg
+                return False, f"PR lifecycle automation failure: {msg}"
 
             query_payload = pr_query_response.json()
             if query_payload.get("errors"):
@@ -451,7 +464,7 @@ def mark_pr_ready_for_review(*, settings: Settings, repo: str, pr_number: int) -
                     pr_number,
                     msg,
                 )
-                return False, msg
+                return False, f"PR lifecycle automation failure: {msg}"
 
             pull_request = (((query_payload.get("data") or {}).get("repository") or {}).get("pullRequest") or {})
             pull_request_id = pull_request.get("id")
@@ -463,7 +476,7 @@ def mark_pr_ready_for_review(*, settings: Settings, repo: str, pr_number: int) -
                     pr_number,
                     msg,
                 )
-                return False, msg
+                return False, f"PR lifecycle automation failure: {msg}"
 
             if pull_request.get("isDraft") is False:
                 msg = f"PR #{pr_number} is already ready for review"
@@ -477,7 +490,7 @@ def mark_pr_ready_for_review(*, settings: Settings, repo: str, pr_number: int) -
 
             mutation_response = client.post(
                 graphql_url,
-                headers=_build_headers(settings),
+                headers=_build_governor_headers(settings),
                 json={
                     "query": _MARK_PR_READY_MUTATION,
                     "variables": {"pullRequestId": pull_request_id},
@@ -494,7 +507,7 @@ def mark_pr_ready_for_review(*, settings: Settings, repo: str, pr_number: int) -
                     pr_number,
                     msg,
                 )
-                return False, msg
+                return False, f"PR lifecycle automation failure: {msg}"
 
             mutation_payload = mutation_response.json()
             if mutation_payload.get("errors"):
@@ -508,7 +521,7 @@ def mark_pr_ready_for_review(*, settings: Settings, repo: str, pr_number: int) -
                     pr_number,
                     msg,
                 )
-                return False, msg
+                return False, f"PR lifecycle automation failure: {msg}"
 
             msg = f"PR #{pr_number} marked ready for review"
             logger.info(
@@ -526,7 +539,7 @@ def mark_pr_ready_for_review(*, settings: Settings, repo: str, pr_number: int) -
             pr_number,
             msg,
         )
-        return False, msg
+        return False, f"PR lifecycle automation failure: {msg}"
 
 
 def merge_pr(
@@ -547,27 +560,27 @@ def merge_pr(
     - 409: merge conflict
     - 422: unprocessable (e.g., already merged, branch deleted)
     """
-    if not has_github_auth(settings):
-        return False, "GitHub API token missing; cannot merge PR"
+    if not has_governor_auth(settings):
+        return False, "Governor auth failure: auth not configured; cannot merge PR"
     api_base = settings.github_api_url.rstrip("/")
     url = f"{api_base}/repos/{repo}/pulls/{pr_number}/merge"
     try:
         with httpx.Client(timeout=15.0) as client:
             response = client.put(
                 url,
-                headers=_build_headers(settings),
+                headers=_build_governor_headers(settings),
                 json={"merge_method": merge_method},
             )
             if response.status_code in {200, 204}:
                 return True, f"PR #{pr_number} merged successfully"
             detail = response.text[:300]
-            return False, f"GitHub returned {response.status_code} when merging PR #{pr_number}: {detail}"
+            return False, f"PR lifecycle automation failure: GitHub returned {response.status_code} when merging PR #{pr_number}: {detail}"
     except Exception as exc:
-        return False, f"Failed to merge PR #{pr_number}: {exc}"
+        return False, f"PR lifecycle automation failure: Failed to merge PR #{pr_number}: {exc}"
 
 
 def inspect_pull_request(*, settings: Settings, repo: str, pr_number: int) -> PullRequestInspection:
-    if not has_github_auth(settings):
+    if not has_governor_auth(settings):
         return PullRequestInspection(
             ok=False,
             changed_files=None,
@@ -575,13 +588,13 @@ def inspect_pull_request(*, settings: Settings, repo: str, pr_number: int) -> Pu
             draft=None,
             state=None,
             merged=None,
-            summary="GitHub API token missing; cannot inspect PR",
+            summary="Governor auth failure: auth not configured; cannot inspect PR",
         )
     api_base = settings.github_api_url.rstrip("/")
     url = f"{api_base}/repos/{repo}/pulls/{pr_number}"
     try:
         with httpx.Client(timeout=15.0) as client:
-            response = client.get(url, headers=_build_headers(settings))
+            response = client.get(url, headers=_build_governor_headers(settings))
             if response.status_code >= 400:
                 return PullRequestInspection(
                     ok=False,
@@ -590,7 +603,7 @@ def inspect_pull_request(*, settings: Settings, repo: str, pr_number: int) -> Pu
                     draft=None,
                     state=None,
                     merged=None,
-                    summary=f"GitHub returned {response.status_code} when inspecting PR #{pr_number}: {response.text[:300]}",
+                    summary=f"PR lifecycle automation failure: GitHub returned {response.status_code} when inspecting PR #{pr_number}: {response.text[:300]}",
                 )
             payload = response.json() if response.headers.get("content-type", "").startswith("application/json") else {}
             changed_files_raw = payload.get("changed_files")
@@ -612,7 +625,7 @@ def inspect_pull_request(*, settings: Settings, repo: str, pr_number: int) -> Pu
             draft=None,
             state=None,
             merged=None,
-            summary=f"Failed to inspect PR #{pr_number}: {exc}",
+            summary=f"PR lifecycle automation failure: Failed to inspect PR #{pr_number}: {exc}",
         )
 
 
@@ -623,8 +636,8 @@ def remove_requested_reviewers(
     pr_number: int,
     reviewers: list[str],
 ) -> tuple[bool, str]:
-    if not has_github_auth(settings):
-        return False, "GitHub API token missing; cannot remove PR reviewers"
+    if not has_governor_auth(settings):
+        return False, "Governor auth failure: auth not configured; cannot remove PR reviewers"
     sanitized = sorted({item.strip() for item in reviewers if isinstance(item, str) and item.strip()})
     if not sanitized:
         return True, "No reviewers requested for removal"
@@ -635,17 +648,17 @@ def remove_requested_reviewers(
             response = client.request(
                 "DELETE",
                 url,
-                headers=_build_headers(settings),
+                headers=_build_governor_headers(settings),
                 json={"reviewers": sanitized},
             )
             if response.status_code >= 400:
                 return False, (
-                    f"GitHub returned {response.status_code} when removing requested reviewers from PR #{pr_number}: "
+                    f"PR lifecycle automation failure: GitHub returned {response.status_code} when removing requested reviewers from PR #{pr_number}: "
                     f"{response.text[:300]}"
                 )
             return True, f"Removed requested reviewers from PR #{pr_number}: {sanitized}"
     except Exception as exc:
-        return False, f"Failed to remove requested reviewers from PR #{pr_number}: {exc}"
+        return False, f"PR lifecycle automation failure: Failed to remove requested reviewers from PR #{pr_number}: {exc}"
 
 
 def request_reviewers(
@@ -655,8 +668,8 @@ def request_reviewers(
     pr_number: int,
     reviewers: list[str],
 ) -> tuple[bool, str]:
-    if not has_github_auth(settings):
-        return False, "GitHub API token missing; cannot request PR reviewers"
+    if not has_governor_auth(settings):
+        return False, "Governor auth failure: auth not configured; cannot request PR reviewers"
     sanitized = sorted({item.strip() for item in reviewers if isinstance(item, str) and item.strip()})
     if not sanitized:
         return True, "No reviewers requested"
@@ -666,26 +679,26 @@ def request_reviewers(
         with httpx.Client(timeout=15.0) as client:
             response = client.post(
                 url,
-                headers=_build_headers(settings),
+                headers=_build_governor_headers(settings),
                 json={"reviewers": sanitized},
             )
             if response.status_code >= 400:
-                return False, f"GitHub returned {response.status_code} when requesting reviewers on PR #{pr_number}: {response.text[:300]}"
+                return False, f"PR lifecycle automation failure: GitHub returned {response.status_code} when requesting reviewers on PR #{pr_number}: {response.text[:300]}"
             return True, f"Requested reviewers for PR #{pr_number}: {sanitized}"
     except Exception as exc:
-        return False, f"Failed to request reviewers for PR #{pr_number}: {exc}"
+        return False, f"PR lifecycle automation failure: Failed to request reviewers for PR #{pr_number}: {exc}"
 
 
 def list_pull_request_reviews(*, settings: Settings, repo: str, pr_number: int) -> tuple[list[dict[str, Any]], str]:
-    if not has_github_auth(settings):
-        return [], "GitHub API token missing; cannot list PR reviews"
+    if not has_governor_auth(settings):
+        return [], "Governor auth failure: auth not configured; cannot list PR reviews"
     api_base = settings.github_api_url.rstrip("/")
     url = f"{api_base}/repos/{repo}/pulls/{pr_number}/reviews?per_page=100"
     try:
         with httpx.Client(timeout=15.0) as client:
-            response = client.get(url, headers=_build_headers(settings))
+            response = client.get(url, headers=_build_governor_headers(settings))
             if response.status_code >= 400:
-                return [], f"GitHub returned {response.status_code} when listing reviews for PR #{pr_number}: {response.text[:300]}"
+                return [], f"PR lifecycle automation failure: GitHub returned {response.status_code} when listing reviews for PR #{pr_number}: {response.text[:300]}"
             if not response.headers.get("content-type", "").startswith("application/json"):
                 return [], f"GitHub returned non-JSON review list for PR #{pr_number}"
             payload = response.json()
@@ -694,20 +707,20 @@ def list_pull_request_reviews(*, settings: Settings, repo: str, pr_number: int) 
             reviews = [item for item in payload if isinstance(item, dict)]
             return reviews, f"Fetched {len(reviews)} reviews for PR #{pr_number}"
     except Exception as exc:
-        return [], f"Failed to list reviews for PR #{pr_number}: {exc}"
+        return [], f"PR lifecycle automation failure: Failed to list reviews for PR #{pr_number}: {exc}"
 
 
 def list_pull_request_review_comments(*, settings: Settings, repo: str, pr_number: int) -> tuple[list[dict[str, Any]], str]:
-    if not has_github_auth(settings):
-        return [], "GitHub API token missing; cannot list PR review comments"
+    if not has_governor_auth(settings):
+        return [], "Governor auth failure: auth not configured; cannot list PR review comments"
     api_base = settings.github_api_url.rstrip("/")
     url = f"{api_base}/repos/{repo}/pulls/{pr_number}/comments?per_page=100"
     try:
         with httpx.Client(timeout=15.0) as client:
-            response = client.get(url, headers=_build_headers(settings))
+            response = client.get(url, headers=_build_governor_headers(settings))
             if response.status_code >= 400:
                 return [], (
-                    f"GitHub returned {response.status_code} when listing review comments for PR #{pr_number}: "
+                    f"PR lifecycle automation failure: GitHub returned {response.status_code} when listing review comments for PR #{pr_number}: "
                     f"{response.text[:300]}"
                 )
             if not response.headers.get("content-type", "").startswith("application/json"):
@@ -718,19 +731,19 @@ def list_pull_request_review_comments(*, settings: Settings, repo: str, pr_numbe
             comments = [item for item in payload if isinstance(item, dict)]
             return comments, f"Fetched {len(comments)} review comments for PR #{pr_number}"
     except Exception as exc:
-        return [], f"Failed to list review comments for PR #{pr_number}: {exc}"
+        return [], f"PR lifecycle automation failure: Failed to list review comments for PR #{pr_number}: {exc}"
 
 
 def list_pull_request_files(*, settings: Settings, repo: str, pr_number: int) -> tuple[list[str], str]:
-    if not has_github_auth(settings):
-        return [], "GitHub API token missing; cannot list PR files"
+    if not has_governor_auth(settings):
+        return [], "Governor auth failure: auth not configured; cannot list PR files"
     api_base = settings.github_api_url.rstrip("/")
     url = f"{api_base}/repos/{repo}/pulls/{pr_number}/files?per_page=100"
     try:
         with httpx.Client(timeout=15.0) as client:
-            response = client.get(url, headers=_build_headers(settings))
+            response = client.get(url, headers=_build_governor_headers(settings))
             if response.status_code >= 400:
-                return [], f"GitHub returned {response.status_code} when listing files for PR #{pr_number}: {response.text[:300]}"
+                return [], f"PR lifecycle automation failure: GitHub returned {response.status_code} when listing files for PR #{pr_number}: {response.text[:300]}"
             if not response.headers.get("content-type", "").startswith("application/json"):
                 return [], f"GitHub returned non-JSON file list for PR #{pr_number}"
             payload = response.json()
@@ -745,19 +758,19 @@ def list_pull_request_files(*, settings: Settings, repo: str, pr_number: int) ->
                     files.append(filename)
             return files, f"Fetched {len(files)} files for PR #{pr_number}"
     except Exception as exc:
-        return [], f"Failed to list files for PR #{pr_number}: {exc}"
+        return [], f"PR lifecycle automation failure: Failed to list files for PR #{pr_number}: {exc}"
 
 
 def list_issue_comments(*, settings: Settings, repo: str, issue_number: int) -> tuple[list[dict[str, Any]], str]:
-    if not has_github_auth(settings):
-        return [], "GitHub API token missing; cannot list issue comments"
+    if not has_governor_auth(settings):
+        return [], "Governor auth failure: auth not configured; cannot list issue comments"
     api_base = settings.github_api_url.rstrip("/")
     url = f"{api_base}/repos/{repo}/issues/{issue_number}/comments?per_page=100"
     try:
         with httpx.Client(timeout=15.0) as client:
-            response = client.get(url, headers=_build_headers(settings))
+            response = client.get(url, headers=_build_governor_headers(settings))
             if response.status_code >= 400:
-                return [], f"GitHub returned {response.status_code} when listing issue comments #{issue_number}: {response.text[:300]}"
+                return [], f"PR lifecycle automation failure: GitHub returned {response.status_code} when listing issue comments #{issue_number}: {response.text[:300]}"
             if not response.headers.get("content-type", "").startswith("application/json"):
                 return [], f"GitHub returned non-JSON issue comment list for issue #{issue_number}"
             payload = response.json()
@@ -766,12 +779,12 @@ def list_issue_comments(*, settings: Settings, repo: str, issue_number: int) -> 
             comments = [item for item in payload if isinstance(item, dict)]
             return comments, f"Fetched {len(comments)} comments for issue #{issue_number}"
     except Exception as exc:
-        return [], f"Failed to list issue comments for issue #{issue_number}: {exc}"
+        return [], f"PR lifecycle automation failure: Failed to list issue comments for issue #{issue_number}: {exc}"
 
 
 def post_issue_comment(*, settings: Settings, repo: str, issue_number: int, body: str) -> tuple[bool, str]:
-    if not has_github_auth(settings):
-        return False, "GitHub API token missing; cannot post issue comment"
+    if not has_governor_auth(settings):
+        return False, "Governor auth failure: auth not configured; cannot post issue comment"
     comment_body = str(body or "").strip()
     if not comment_body:
         return False, "Comment body is empty"
@@ -781,14 +794,14 @@ def post_issue_comment(*, settings: Settings, repo: str, issue_number: int, body
         with httpx.Client(timeout=15.0) as client:
             response = client.post(
                 url,
-                headers=_build_headers(settings),
+                headers=_build_governor_headers(settings),
                 json={"body": comment_body},
             )
             if response.status_code >= 400:
-                return False, f"GitHub returned {response.status_code} when posting issue comment on #{issue_number}: {response.text[:300]}"
+                return False, f"PR lifecycle automation failure: GitHub returned {response.status_code} when posting issue comment on #{issue_number}: {response.text[:300]}"
             return True, f"Posted issue comment on #{issue_number}"
     except Exception as exc:
-        return False, f"Failed to post issue comment on #{issue_number}: {exc}"
+        return False, f"PR lifecycle automation failure: Failed to post issue comment on #{issue_number}: {exc}"
 
 
 def submit_approving_review(
@@ -798,22 +811,22 @@ def submit_approving_review(
     pr_number: int,
     body: str = "Automated governor approval after successful checks and resolved findings.",
 ) -> tuple[bool, str]:
-    if not has_github_auth(settings):
-        return False, "GitHub API token missing; cannot submit approving review"
+    if not has_governor_auth(settings):
+        return False, "Governor auth failure: auth not configured; cannot submit approving review"
     api_base = settings.github_api_url.rstrip("/")
     url = f"{api_base}/repos/{repo}/pulls/{pr_number}/reviews"
     try:
         with httpx.Client(timeout=15.0) as client:
             response = client.post(
                 url,
-                headers=_build_headers(settings),
+                headers=_build_governor_headers(settings),
                 json={"event": "APPROVE", "body": body},
             )
             if response.status_code >= 400:
-                return False, f"GitHub returned {response.status_code} when submitting approval review for PR #{pr_number}: {response.text[:300]}"
+                return False, f"PR lifecycle automation failure: GitHub returned {response.status_code} when submitting approval review for PR #{pr_number}: {response.text[:300]}"
             return True, f"Submitted approving review for PR #{pr_number}"
     except Exception as exc:
-        return False, f"Failed to submit approving review for PR #{pr_number}: {exc}"
+        return False, f"PR lifecycle automation failure: Failed to submit approving review for PR #{pr_number}: {exc}"
 
 
 def run_preflight_checks(*, settings: Settings, repo: str | None = None) -> dict:
@@ -822,13 +835,24 @@ def run_preflight_checks(*, settings: Settings, repo: str | None = None) -> dict
     Returns a structured dict describing which capabilities are available for
     unattended trusted continuation. Intended for the GET /preflight endpoint.
     """
-    _has_auth = has_github_auth(settings)
-    _is_app = is_app_mode(settings)
+    dispatch_ready = has_dispatch_auth(settings)
+    governor_ready = has_governor_auth(settings)
+    governor_is_app = is_governor_app_mode(settings)
 
     result: dict = {
-        "github_auth_mode": auth_mode_label(settings),
-        "github_auth_available": _has_auth,
+        "github_auth_mode": governor_auth_mode_label(settings),  # legacy compatibility key
+        "github_auth_available": governor_ready,  # legacy compatibility key
         "github_api_token": bool(settings.github_api_token),
+        "dispatch_auth_mode": dispatch_auth_label(settings),
+        "dispatch_user_token_present": bool(settings.github_dispatch_user_token),
+        "dispatch_auth_ready": dispatch_ready,
+        "governor_auth_mode": governor_auth_mode_label(settings),
+        "governor_auth_ready": governor_ready,
+        "governor_app_config_present": bool(
+            settings.github_app_client_id
+            and settings.github_app_installation_id
+            and settings.github_app_private_key_path
+        ),
         "auto_merge_enabled": settings.program_auto_merge,
         "auto_continue_enabled": settings.program_auto_continue,
         "auto_dispatch_enabled": settings.program_auto_dispatch,
@@ -853,57 +877,77 @@ def run_preflight_checks(*, settings: Settings, repo: str | None = None) -> dict
     }
 
     # App-mode token minting probe
-    if _is_app:
-        mint_ok, mint_msg = try_mint_app_token(settings)
+    if governor_is_app:
+        mint_ok, mint_msg = try_mint_governor_app_token(settings)
         result["app_token_mint"] = {"ok": mint_ok, "detail": mint_msg}
         result["app_outbound_auth_usable"] = mint_ok
     else:
-        result["app_token_mint"] = {"ok": False, "detail": "Auth mode is not 'app'"}
+        result["app_token_mint"] = {"ok": False, "detail": "Governor auth mode is not 'app'"}
         result["app_outbound_auth_usable"] = False
 
     caps = result["capabilities"]
     blockers: list[str] = result["blockers"]
     prereqs: list[str] = result["admin_prerequisites"]
 
-    caps["issue_creation"] = _has_auth
-    caps["pr_ready_for_review"] = _has_auth
-    caps["pr_merge"] = _has_auth
-    caps["dispatch"] = _has_auth
-    caps["governor_review_loop"] = _has_auth
-    caps["governor_auto_approval"] = bool(_has_auth and settings.program_auto_merge)
+    caps["issue_creation"] = dispatch_ready
+    caps["dispatch"] = dispatch_ready
+    caps["pr_ready_for_review"] = governor_ready
+    caps["pr_merge"] = governor_ready
+    caps["governor_review_loop"] = governor_ready
+    caps["governor_auto_approval"] = bool(governor_ready and settings.program_auto_merge)
+    caps["unattended_issue_to_pr_dispatch"] = bool(
+        dispatch_ready and settings.program_auto_approve and settings.program_auto_dispatch
+    )
+    caps["unattended_pr_governance"] = bool(
+        governor_ready and settings.program_auto_approve and settings.program_auto_merge
+    )
     caps["unattended_single_slice_execution"] = bool(
-        _has_auth
+        dispatch_ready
+        and governor_ready
         and settings.program_auto_approve
         and settings.program_auto_dispatch
         and settings.program_auto_merge
     )
-    caps["next_slice_dispatch"] = bool(_has_auth and settings.program_auto_continue and settings.program_auto_dispatch)
+    caps["next_slice_dispatch"] = bool(dispatch_ready and settings.program_auto_continue and settings.program_auto_dispatch)
     caps["unattended_continuation"] = bool(
-        _has_auth
+        dispatch_ready
+        and governor_ready
         and settings.program_auto_continue
         and settings.program_auto_dispatch
         and settings.program_auto_merge
         and settings.program_trusted_auto_confirm
     )
 
-    if not _has_auth:
-        if _is_app:
+    if not dispatch_ready:
+        blockers.append(
+            "Dispatch auth is not ready: set GITHUB_DISPATCH_USER_TOKEN "
+            "(or legacy GITHUB_API_TOKEN fallback) for issue assignment/dispatch."
+        )
+        prereqs.append(
+            "Configure GITHUB_DISPATCH_USER_TOKEN with a user token that can query suggested actors and assign issues."
+        )
+
+    if not governor_ready:
+        if governor_is_app:
             blockers.append(
-                "GITHUB_AUTH_MODE=app but app config is incomplete; "
-                "ensure GITHUB_APP_CLIENT_ID, GITHUB_APP_INSTALLATION_ID, and "
-                "GITHUB_APP_PRIVATE_KEY_PATH are all set"
+                "Governor auth is not ready: GITHUB_GOVERNOR_AUTH_MODE=app requires "
+                "GITHUB_APP_CLIENT_ID, GITHUB_APP_INSTALLATION_ID, and GITHUB_APP_PRIVATE_KEY_PATH."
             )
             prereqs.append(
-                "Configure GITHUB_APP_CLIENT_ID, GITHUB_APP_INSTALLATION_ID, and "
-                "GITHUB_APP_PRIVATE_KEY_PATH for GitHub App installation token auth"
+                "Configure GitHub App governor auth: GITHUB_GOVERNOR_AUTH_MODE=app plus "
+                "GITHUB_APP_CLIENT_ID, GITHUB_APP_INSTALLATION_ID, and GITHUB_APP_PRIVATE_KEY_PATH."
             )
         else:
-            blockers.append("GITHUB_API_TOKEN not configured; all GitHub API operations will fail")
-            prereqs.append("Set GITHUB_API_TOKEN to a fine-grained or classic token with repo:write and pull_requests:write scope")
-    elif _is_app:
+            blockers.append(
+                "Governor auth is not ready: token mode requires GITHUB_API_TOKEN for PR lifecycle automation."
+            )
+            prereqs.append(
+                "Set GITHUB_API_TOKEN for governor token mode or switch to app mode via GITHUB_GOVERNOR_AUTH_MODE=app."
+            )
+    elif governor_is_app:
         mint_ok = result["app_token_mint"]["ok"]
         if not mint_ok:
-            blockers.append(f"App token minting failed: {result['app_token_mint']['detail']}")
+            blockers.append(f"Governor auth is not usable: app token minting failed: {result['app_token_mint']['detail']}")
 
     if not settings.program_auto_merge:
         blockers.append("PROGRAM_AUTO_MERGE=false (default); the orchestrator will not automatically merge PRs")

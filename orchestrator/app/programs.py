@@ -8,6 +8,7 @@ import httpx
 from sqlmodel import Session, select
 
 from .config import Settings
+from .github_auth import build_dispatch_auth_headers, has_dispatch_auth
 from .github_dispatch import merge_pr
 from .models import (
     APPROVAL_APPROVED,
@@ -396,8 +397,8 @@ def _attempt_pr_merge(
     if "403" in message or "forbidden" in lower or "permission" in lower:
         reason = BLOCKER_WAITING_FOR_PERMISSIONS
         summary = (
-            f"Auto-merge attempted but token lacks required permissions to merge PR #{pr_number}. "
-            "Grant contents:write to the GITHUB_API_TOKEN and ensure 'Allow auto-merge' is enabled "
+            f"Auto-merge attempted but governor auth lacks required permissions to merge PR #{pr_number}. "
+            "Grant contents:write to the configured governor identity and ensure 'Allow auto-merge' is enabled "
             "in repository Settings > General."
         )
     elif "405" in message or "not allowed" in lower or "protected" in lower:
@@ -436,14 +437,10 @@ def _create_github_issue_for_slice(
     title: str,
     body: str,
 ) -> int | None:
-    if not settings.github_api_token:
+    if not has_dispatch_auth(settings):
         return None
     api_base = settings.github_api_url.rstrip("/")
-    headers = {
-        "Authorization": f"Bearer {settings.github_api_token}",
-        "Accept": "application/vnd.github+json",
-        "X-GitHub-Api-Version": "2022-11-28",
-    }
+    headers = build_dispatch_auth_headers(settings)
     try:
         with httpx.Client(timeout=15.0) as client:
             response = client.post(
