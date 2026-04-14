@@ -2306,7 +2306,7 @@ class GovernorLoopTests(unittest.TestCase):
                  patch("orchestrator.app.tasks.list_pull_request_reviews", return_value=([], "ok")), \
                  patch("orchestrator.app.tasks.list_pull_request_review_comments", return_value=([], "ok")), \
                  patch("orchestrator.app.tasks.list_issue_comments", return_value=([], "ok")), \
-                 patch("orchestrator.app.tasks.post_issue_comment", return_value=(True, "ok")) as mocked_comment, \
+                 patch("orchestrator.app.tasks.post_copilot_follow_up_comment", return_value=(True, "ok")) as mocked_comment, \
                  patch("orchestrator.app.tasks.notify_discord"):
                 with TestClient(main.app) as client:
                     self._create_linked_task_run(
@@ -3304,7 +3304,7 @@ class CopilotFixTriggerTests(unittest.TestCase):
                 "next_action": "continue",
             }), \
                  patch("orchestrator.app.tasks.summarize_governor_update") as mocked_governor, \
-                 patch("orchestrator.app.tasks.post_issue_comment") as mocked_post, \
+                 patch("orchestrator.app.tasks.post_copilot_follow_up_comment", return_value=(True, "ok")) as mocked_post, \
                  patch("orchestrator.app.tasks.list_issue_comments", return_value=([], "ok")), \
                  patch("orchestrator.app.tasks.list_pull_request_files", return_value=(["src/main.py"], "ok")), \
                  patch("orchestrator.app.tasks.list_pull_request_reviews", return_value=([
@@ -3414,7 +3414,7 @@ class CopilotFixTriggerTests(unittest.TestCase):
                 "next_action": "continue",
             }), \
                  patch("orchestrator.app.tasks.summarize_governor_update") as mocked_governor, \
-                 patch("orchestrator.app.tasks.post_issue_comment") as mocked_post, \
+                 patch("orchestrator.app.tasks.post_copilot_follow_up_comment", return_value=(True, "ok")) as mocked_post, \
                  patch("orchestrator.app.tasks.list_issue_comments", return_value=([], "ok")), \
                  patch("orchestrator.app.tasks.list_pull_request_files", return_value=(["src/main.py"], "ok")), \
                  patch("orchestrator.app.tasks.list_pull_request_reviews", return_value=([
@@ -3503,7 +3503,7 @@ class CopilotFixTriggerTests(unittest.TestCase):
                 "next_action": "continue",
             }), \
                  patch("orchestrator.app.tasks.summarize_governor_update") as mocked_governor, \
-                 patch("orchestrator.app.tasks.post_issue_comment") as mocked_post, \
+                 patch("orchestrator.app.tasks.post_copilot_follow_up_comment", return_value=(True, "ok")) as mocked_post, \
                  patch("orchestrator.app.tasks.list_issue_comments", return_value=([], "ok")), \
                  patch("orchestrator.app.tasks.submit_approving_review") as mocked_approve, \
                  patch("orchestrator.app.tasks.merge_pr") as mocked_merge, \
@@ -3680,7 +3680,7 @@ class CopilotFixTriggerTests(unittest.TestCase):
                 "next_action": "continue",
             }), \
                  patch("orchestrator.app.tasks.summarize_governor_update") as mocked_governor, \
-                 patch("orchestrator.app.tasks.post_issue_comment") as mocked_post, \
+                 patch("orchestrator.app.tasks.post_copilot_follow_up_comment", return_value=(True, "ok")) as mocked_post, \
                  patch("orchestrator.app.tasks.list_issue_comments", return_value=([], "ok")), \
                  patch("orchestrator.app.tasks.submit_approving_review") as mocked_approve, \
                  patch("orchestrator.app.tasks.merge_pr") as mocked_merge, \
@@ -3768,7 +3768,7 @@ class CopilotFixTriggerTests(unittest.TestCase):
                  patch("orchestrator.app.tasks.summarize_governor_update", return_value={
                      "governor_artifact": {"decision": "escalate_human", "summary": ["guarded"], "revision_requests": [], "escalation_reason": "guarded paths"},
                  }), \
-                 patch("orchestrator.app.tasks.post_issue_comment") as mocked_post, \
+                 patch("orchestrator.app.tasks.post_copilot_follow_up_comment", return_value=(True, "ok")) as mocked_post, \
                  patch("orchestrator.app.tasks.list_issue_comments", return_value=([], "ok")), \
                  patch("orchestrator.app.tasks.list_pull_request_files", return_value=([".github/workflows/ci.yml"], "ok")), \
                  patch("orchestrator.app.tasks.list_pull_request_reviews", return_value=([
@@ -3847,7 +3847,7 @@ class CopilotFixTriggerTests(unittest.TestCase):
                  patch("orchestrator.app.tasks.summarize_governor_update", return_value={
                      "governor_artifact": {"decision": "request_revision", "summary": ["needs fix"], "revision_requests": ["Fix null check"], "escalation_reason": ""},
                  }) as mocked_governor, \
-                 patch("orchestrator.app.tasks.post_issue_comment") as mocked_post, \
+                 patch("orchestrator.app.tasks.post_copilot_follow_up_comment", return_value=(True, "ok")) as mocked_post, \
                  patch("orchestrator.app.tasks.list_issue_comments", return_value=([], "ok")), \
                  patch("orchestrator.app.tasks.list_pull_request_files", return_value=(["src/main.py"], "ok")), \
                  patch("orchestrator.app.tasks.list_pull_request_reviews", return_value=([
