@@ -88,6 +88,44 @@ def _make_tracker(num_combatants: int = 3):
 
     app._oplog = _oplog
 
+    # Deep damage / heal stubs for CombatService.apply_damage / apply_heal
+    app._apply_damage_calls = []
+
+    def _apply_damage_to_target_with_temp_hp(target, raw_damage):
+        """Minimal temp HP absorption matching the real tracker semantics."""
+        damage = max(0, int(raw_damage or 0))
+        temp_before = max(0, int(getattr(target, "temp_hp", 0) or 0))
+        hp_before = max(0, int(getattr(target, "hp", 0) or 0))
+        absorbed = min(temp_before, damage)
+        temp_after = max(0, temp_before - absorbed)
+        hp_damage = max(0, damage - absorbed)
+        hp_after = max(0, hp_before - hp_damage)
+        target.temp_hp = int(temp_after)
+        target.hp = int(hp_after)
+        app._apply_damage_calls.append(
+            {"cid": int(getattr(target, "cid", 0) or 0), "raw_damage": damage}
+        )
+        return {"temp_absorbed": absorbed, "hp_damage": hp_damage, "hp_after": hp_after}
+
+    app._apply_damage_to_target_with_temp_hp = _apply_damage_to_target_with_temp_hp
+
+    app._apply_heal_calls = []
+
+    def _apply_heal_to_combatant(cid, amount, *, is_temp_hp=False):
+        c = app.combatants.get(int(cid))
+        if c is None:
+            return False
+        if is_temp_hp:
+            c.temp_hp = max(0, int(amount))
+        else:
+            c.hp = max(0, int(c.hp) + int(amount))
+        app._apply_heal_calls.append(
+            {"cid": int(cid), "amount": amount, "is_temp_hp": is_temp_hp}
+        )
+        return True
+
+    app._apply_heal_to_combatant = _apply_heal_to_combatant
+
     # Populate combatants
     names = ["Fighter", "Goblin", "Wizard"]
     for i in range(num_combatants):
@@ -1466,6 +1504,353 @@ class SetTurnHereViaServiceTests(unittest.TestCase):
         old_cid = tracker.current_cid
         InitiativeTracker._set_turn_here_via_service(tracker)
         self.assertEqual(tracker.current_cid, old_cid)
+
+
+# ===================================================================
+# CombatService.apply_damage tests (Slice 9)
+# ===================================================================
+
+
+class CombatServiceApplyDamageTests(unittest.TestCase):
+    """Tests for CombatService.apply_damage() — canonical deep damage path."""
+
+    def setUp(self):
+        self.tracker = _make_tracker()
+        self.service = CombatService(self.tracker)
+
+    def test_basic_damage_reduces_hp(self):
+        c = self.tracker.combatants[1]
+        c.hp = 20
+        c.temp_hp = 0
+        result = self.service.apply_damage(cid=1, raw_damage=7)
+        self.assertTrue(result["ok"])
+        self.assertEqual(result["hp_after"], 13)
+        self.assertEqual(result["hp_damage"], 7)
+        self.assertEqual(result["temp_absorbed"], 0)
+        self.assertEqual(c.hp, 13)
+
+    def test_damage_absorbs_temp_hp_first(self):
+        c = self.tracker.combatants[1]
+        c.hp = 20
+        c.temp_hp = 5
+        result = self.service.apply_damage(cid=1, raw_damage=3)
+        self.assertTrue(result["ok"])
+        self.assertEqual(result["temp_absorbed"], 3)
+        self.assertEqual(result["hp_damage"], 0)
+        self.assertEqual(result["hp_after"], 20)
+        self.assertEqual(c.temp_hp, 2)
+        self.assertEqual(c.hp, 20)
+
+    def test_damage_overflows_temp_hp_into_main_hp(self):
+        c = self.tracker.combatants[1]
+        c.hp = 20
+        c.temp_hp = 4
+        result = self.service.apply_damage(cid=1, raw_damage=10)
+        self.assertTrue(result["ok"])
+        self.assertEqual(result["temp_absorbed"], 4)
+        self.assertEqual(result["hp_damage"], 6)
+        self.assertEqual(result["hp_after"], 14)
+        self.assertEqual(c.temp_hp, 0)
+        self.assertEqual(c.hp, 14)
+
+    def test_zero_damage_is_noop(self):
+        c = self.tracker.combatants[1]
+        c.hp = 20
+        result = self.service.apply_damage(cid=1, raw_damage=0)
+        self.assertTrue(result["ok"])
+        self.assertEqual(result["hp_after"], 20)
+        self.assertEqual(result["hp_damage"], 0)
+        self.assertEqual(result["temp_absorbed"], 0)
+        self.assertEqual(c.hp, 20)
+
+    def test_negative_damage_treated_as_zero(self):
+        c = self.tracker.combatants[1]
+        c.hp = 20
+        result = self.service.apply_damage(cid=1, raw_damage=-5)
+        self.assertTrue(result["ok"])
+        self.assertEqual(result["hp_after"], 20)
+
+    def test_damage_to_nonexistent_cid_fails(self):
+        result = self.service.apply_damage(cid=999, raw_damage=10)
+        self.assertFalse(result["ok"])
+        self.assertIn("not found", result["error"])
+
+    def test_damage_triggers_rebuild_and_broadcast(self):
+        self.service.apply_damage(cid=1, raw_damage=5)
+        self.assertTrue(len(self.tracker._rebuild_calls) > 0)
+        self.assertTrue(len(self.tracker._broadcast_calls) > 0)
+
+    def test_damage_delegates_to_tracker_method(self):
+        self.service.apply_damage(cid=1, raw_damage=5)
+        self.assertEqual(len(self.tracker._apply_damage_calls), 1)
+        self.assertEqual(self.tracker._apply_damage_calls[0]["cid"], 1)
+        self.assertEqual(self.tracker._apply_damage_calls[0]["raw_damage"], 5)
+
+    def test_damage_clamps_hp_to_zero(self):
+        c = self.tracker.combatants[1]
+        c.hp = 5
+        c.temp_hp = 0
+        result = self.service.apply_damage(cid=1, raw_damage=100)
+        self.assertTrue(result["ok"])
+        self.assertEqual(result["hp_after"], 0)
+        self.assertEqual(c.hp, 0)
+
+    def test_damage_fully_absorbed_by_temp_hp(self):
+        c = self.tracker.combatants[1]
+        c.hp = 10
+        c.temp_hp = 20
+        result = self.service.apply_damage(cid=1, raw_damage=15)
+        self.assertTrue(result["ok"])
+        self.assertEqual(result["temp_absorbed"], 15)
+        self.assertEqual(result["hp_damage"], 0)
+        self.assertEqual(result["hp_after"], 10)
+        self.assertEqual(c.temp_hp, 5)
+        self.assertEqual(c.hp, 10)
+
+
+# ===================================================================
+# CombatService.apply_heal tests (Slice 9)
+# ===================================================================
+
+
+class CombatServiceApplyHealTests(unittest.TestCase):
+    """Tests for CombatService.apply_heal() — canonical heal path."""
+
+    def setUp(self):
+        self.tracker = _make_tracker()
+        self.service = CombatService(self.tracker)
+
+    def test_basic_heal_increases_hp(self):
+        c = self.tracker.combatants[1]
+        c.hp = 10
+        c.max_hp = 20
+        result = self.service.apply_heal(cid=1, amount=5)
+        self.assertTrue(result["ok"])
+        self.assertEqual(result["hp_after"], 15)
+        self.assertEqual(result["hp_before"], 10)
+
+    def test_heal_delegates_to_tracker(self):
+        self.service.apply_heal(cid=1, amount=5)
+        self.assertEqual(len(self.tracker._apply_heal_calls), 1)
+        self.assertEqual(self.tracker._apply_heal_calls[0]["cid"], 1)
+        self.assertEqual(self.tracker._apply_heal_calls[0]["amount"], 5)
+        self.assertFalse(self.tracker._apply_heal_calls[0]["is_temp_hp"])
+
+    def test_heal_temp_hp_mode_sets_temp_hp(self):
+        c = self.tracker.combatants[1]
+        c.temp_hp = 0
+        result = self.service.apply_heal(cid=1, amount=8, is_temp_hp=True)
+        self.assertTrue(result["ok"])
+        self.assertEqual(result["temp_hp_after"], 8)
+        self.assertEqual(c.temp_hp, 8)
+
+    def test_heal_nonexistent_cid_fails(self):
+        result = self.service.apply_heal(cid=999, amount=5)
+        self.assertFalse(result["ok"])
+        self.assertIn("not found", result["error"])
+
+    def test_heal_triggers_rebuild_and_broadcast(self):
+        self.service.apply_heal(cid=1, amount=3)
+        self.assertTrue(len(self.tracker._rebuild_calls) > 0)
+        self.assertTrue(len(self.tracker._broadcast_calls) > 0)
+
+    def test_heal_logs_message(self):
+        self.service.apply_heal(cid=1, amount=5)
+        self.assertTrue(
+            any("healed" in msg for msg, _ in self.tracker._log_calls)
+        )
+
+    def test_heal_temp_hp_logs_message(self):
+        self.service.apply_heal(cid=1, amount=10, is_temp_hp=True)
+        self.assertTrue(
+            any("temp HP set" in msg for msg, _ in self.tracker._log_calls)
+        )
+
+
+# ===================================================================
+# _apply_damage_via_service wrapper tests (Slice 9)
+# ===================================================================
+
+
+class ApplyDamageViaServiceWrapperTests(unittest.TestCase):
+    """Tests for InitiativeTracker._apply_damage_via_service() wrapper."""
+
+    def _make_tracker_with_service(self):
+        tracker = _make_tracker()
+        service = CombatService(tracker)
+        tracker._dm_service = service
+        return tracker, service
+
+    def test_routes_through_service(self):
+        tracker, service = self._make_tracker_with_service()
+        c = tracker.combatants[1]
+        c.hp = 20
+        c.temp_hp = 5
+        result = InitiativeTracker._apply_damage_via_service(tracker, c, 8)
+        self.assertEqual(result["temp_absorbed"], 5)
+        self.assertEqual(result["hp_damage"], 3)
+        self.assertEqual(result["hp_after"], 17)
+
+    def test_fallback_without_service(self):
+        tracker = _make_tracker()
+        tracker._dm_service = None
+        c = tracker.combatants[1]
+        c.hp = 20
+        c.temp_hp = 0
+        result = InitiativeTracker._apply_damage_via_service(tracker, c, 7)
+        self.assertEqual(result["hp_after"], 13)
+        self.assertEqual(c.hp, 13)
+
+    def test_fallback_on_service_failure(self):
+        tracker = _make_tracker()
+        broken = types.SimpleNamespace()
+        broken.apply_damage = lambda **kw: {"ok": False, "error": "test error"}
+        tracker._dm_service = broken
+        c = tracker.combatants[1]
+        c.hp = 20
+        c.temp_hp = 0
+        result = InitiativeTracker._apply_damage_via_service(tracker, c, 5)
+        self.assertEqual(result["hp_after"], 15)
+        self.assertTrue(
+            any("failed" in msg.lower() for msg, _ in tracker._oplog_calls)
+        )
+
+    def test_fallback_on_service_exception(self):
+        tracker = _make_tracker()
+        broken = types.SimpleNamespace()
+        broken.apply_damage = lambda **kw: (_ for _ in ()).throw(RuntimeError("boom"))
+        tracker._dm_service = broken
+        c = tracker.combatants[1]
+        c.hp = 20
+        result = InitiativeTracker._apply_damage_via_service(tracker, c, 5)
+        self.assertEqual(result["hp_after"], 15)
+        self.assertTrue(
+            any("exception" in msg.lower() for msg, _ in tracker._oplog_calls)
+        )
+
+    def test_service_rebuild_and_broadcast(self):
+        tracker, _ = self._make_tracker_with_service()
+        c = tracker.combatants[1]
+        c.hp = 20
+        InitiativeTracker._apply_damage_via_service(tracker, c, 5)
+        self.assertTrue(len(tracker._rebuild_calls) > 0)
+        self.assertTrue(len(tracker._broadcast_calls) > 0)
+
+    def test_invalid_cid_falls_back(self):
+        tracker, _ = self._make_tracker_with_service()
+        c = types.SimpleNamespace(cid=0, hp=20, temp_hp=0)
+        # cid=0 won't route through service (guard: cid > 0)
+        result = InitiativeTracker._apply_damage_via_service(tracker, c, 5)
+        self.assertEqual(result["hp_after"], 15)
+
+
+# ===================================================================
+# _apply_heal_via_service wrapper tests (Slice 9)
+# ===================================================================
+
+
+class ApplyHealViaServiceWrapperTests(unittest.TestCase):
+    """Tests for InitiativeTracker._apply_heal_via_service() wrapper."""
+
+    def _make_tracker_with_service(self):
+        tracker = _make_tracker()
+        service = CombatService(tracker)
+        tracker._dm_service = service
+        return tracker, service
+
+    def test_routes_through_service(self):
+        tracker, _ = self._make_tracker_with_service()
+        c = tracker.combatants[1]
+        c.hp = 10
+        result = InitiativeTracker._apply_heal_via_service(tracker, cid=1, amount=5)
+        self.assertTrue(result)
+        self.assertEqual(c.hp, 15)
+
+    def test_temp_hp_routes_through_service(self):
+        tracker, _ = self._make_tracker_with_service()
+        c = tracker.combatants[1]
+        c.temp_hp = 0
+        result = InitiativeTracker._apply_heal_via_service(
+            tracker, cid=1, amount=8, is_temp_hp=True
+        )
+        self.assertTrue(result)
+        self.assertEqual(c.temp_hp, 8)
+
+    def test_fallback_without_service(self):
+        tracker = _make_tracker()
+        tracker._dm_service = None
+        c = tracker.combatants[1]
+        c.hp = 10
+        result = InitiativeTracker._apply_heal_via_service(tracker, cid=1, amount=5)
+        self.assertTrue(result)
+        self.assertEqual(c.hp, 15)
+
+    def test_fallback_on_service_failure(self):
+        tracker = _make_tracker()
+        broken = types.SimpleNamespace()
+        broken.apply_heal = lambda **kw: {"ok": False, "error": "test error"}
+        tracker._dm_service = broken
+        c = tracker.combatants[1]
+        c.hp = 10
+        result = InitiativeTracker._apply_heal_via_service(tracker, cid=1, amount=3)
+        self.assertTrue(result)
+        self.assertEqual(c.hp, 13)
+
+    def test_fallback_on_service_exception(self):
+        tracker = _make_tracker()
+        broken = types.SimpleNamespace()
+        broken.apply_heal = lambda **kw: (_ for _ in ()).throw(RuntimeError("boom"))
+        tracker._dm_service = broken
+        c = tracker.combatants[1]
+        c.hp = 10
+        result = InitiativeTracker._apply_heal_via_service(tracker, cid=1, amount=3)
+        self.assertTrue(result)
+        self.assertTrue(
+            any("exception" in msg.lower() for msg, _ in tracker._oplog_calls)
+        )
+
+    def test_invalid_cid_fails(self):
+        tracker, _ = self._make_tracker_with_service()
+        result = InitiativeTracker._apply_heal_via_service(tracker, cid=999, amount=5)
+        self.assertFalse(result)
+
+    def test_service_rebuild_and_broadcast(self):
+        tracker, _ = self._make_tracker_with_service()
+        c = tracker.combatants[1]
+        c.hp = 10
+        InitiativeTracker._apply_heal_via_service(tracker, cid=1, amount=5)
+        self.assertTrue(len(tracker._rebuild_calls) > 0)
+        self.assertTrue(len(tracker._broadcast_calls) > 0)
+
+
+# ===================================================================
+# RLock re-entrancy tests (Slice 9)
+# ===================================================================
+
+
+class CombatServiceRLockReentrancyTests(unittest.TestCase):
+    """Verify the RLock allows re-entrant calls without deadlock."""
+
+    def test_rlock_allows_reentrant_acquisition(self):
+        """Simulate next_turn triggering damage (which acquires the lock again)."""
+        tracker = _make_tracker()
+
+        # Make _next_turn call apply_damage internally (simulates end-of-turn damage)
+        service = CombatService(tracker)
+        original_next_turn = tracker._next_turn
+
+        def _next_turn_with_damage():
+            original_next_turn()
+            # Simulate end-of-turn damage rider calling apply_damage
+            c = tracker.combatants.get(1)
+            if c is not None:
+                service.apply_damage(cid=1, raw_damage=3)
+
+        tracker._next_turn = _next_turn_with_damage
+
+        # This should NOT deadlock — RLock allows re-entrant acquisition
+        result = service.next_turn()
+        self.assertTrue(result["ok"])
 
 
 if __name__ == "__main__":
