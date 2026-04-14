@@ -397,8 +397,7 @@ class CombatServiceLockTests(unittest.TestCase):
         self.service = CombatService(self.tracker)
 
     def test_service_has_lock(self):
-        import threading
-        self.assertIsInstance(self.service._lock, type(threading.RLock()))
+        self.assertEqual(type(self.service._lock).__name__, "RLock")
 
     def test_concurrent_hp_adjustments_safe(self):
         """Two threads can call adjust_hp concurrently without raising."""
@@ -1718,7 +1717,9 @@ class ApplyDamageViaServiceWrapperTests(unittest.TestCase):
     def test_fallback_on_service_exception(self):
         tracker = _make_tracker()
         broken = types.SimpleNamespace()
-        broken.apply_damage = lambda **kw: (_ for _ in ()).throw(RuntimeError("boom"))
+        def _raise(**kw):
+            raise RuntimeError("boom")
+        broken.apply_damage = _raise
         tracker._dm_service = broken
         c = tracker.combatants[1]
         c.hp = 20
@@ -1799,7 +1800,9 @@ class ApplyHealViaServiceWrapperTests(unittest.TestCase):
     def test_fallback_on_service_exception(self):
         tracker = _make_tracker()
         broken = types.SimpleNamespace()
-        broken.apply_heal = lambda **kw: (_ for _ in ()).throw(RuntimeError("boom"))
+        def _raise(**kw):
+            raise RuntimeError("boom")
+        broken.apply_heal = _raise
         tracker._dm_service = broken
         c = tracker.combatants[1]
         c.hp = 10
