@@ -42,6 +42,7 @@ _token_lock = threading.Lock()
 
 # Tokens are valid for ~60 min; refresh when < 5 min remain.
 _REFRESH_MARGIN_SECONDS = 300
+_DEFAULT_TOKEN_LIFETIME_SECONDS = 3600
 
 
 def _read_private_key(path: str) -> str:
@@ -106,7 +107,7 @@ def _exchange_jwt_for_installation_token(
         from datetime import datetime, timezone
         expires_at = datetime.fromisoformat(expires_at_str.replace("Z", "+00:00")).timestamp()
     except Exception:
-        expires_at = time.time() + 3600  # default 1 hour
+        expires_at = time.time() + _DEFAULT_TOKEN_LIFETIME_SECONDS
     return token, expires_at
 
 
@@ -203,7 +204,8 @@ def build_auth_headers(settings: "Settings") -> dict[str, str]:
         token = get_github_token(settings)
         headers["Authorization"] = f"Bearer {token}"
     except RuntimeError as exc:
-        logger.warning("Unable to obtain GitHub auth token: %s", exc)
+        mode = "app" if is_app_mode(settings) else "token"
+        logger.warning("Unable to obtain GitHub auth token in %s mode: %s", mode, exc)
     return headers
 
 

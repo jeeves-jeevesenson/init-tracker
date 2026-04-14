@@ -204,7 +204,7 @@ class GitHubAppJWTTests(unittest.TestCase):
         self.assertEqual(decoded["iss"], "Iv1.abc123")
         self.assertIn("iat", decoded)
         self.assertIn("exp", decoded)
-        self.assertEqual(decoded["exp"] - decoded["iat"], 660)  # iat is now-60, exp is now+600
+        self.assertEqual(decoded["exp"] - decoded["iat"], 660)  # iat = now_ts-60, exp = now_ts+600
 
     def test_generate_app_jwt_uses_client_id_as_issuer(self):
         import jwt
@@ -765,7 +765,7 @@ class WebhookIdempotencyTests(unittest.TestCase):
                     client.post("/github/webhook", headers=headers2, content=body)
 
             # The fix comment should only be posted once (deduped by fingerprint)
-            self.assertLessEqual(len(post_comment_calls), 1)
+            self.assertEqual(len(post_comment_calls), 1)
 
 
 class GuardedPathPreservationTests(unittest.TestCase):
