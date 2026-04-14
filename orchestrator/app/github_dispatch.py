@@ -62,6 +62,43 @@ mutation($pullRequestId: ID!) {
 logger = logging.getLogger(__name__)
 
 
+def _github_debug_enabled(settings: Settings) -> bool:
+    return bool(getattr(settings, "orchestrator_debug_github", False))
+
+
+def _log_github_debug(
+    settings: Settings,
+    *,
+    event: str,
+    repo: str,
+    issue_number: int | None = None,
+    pr_number: int | None = None,
+    auth_lane: str,
+    api_type: str,
+    success: bool,
+    summary: str,
+    postcondition: str | None = None,
+    http_status: int | None = None,
+    result_class: str | None = None,
+) -> None:
+    if not _github_debug_enabled(settings):
+        return
+    logger.info(
+        "github_debug event=%s repo=%s issue_number=%s pr_number=%s auth_lane=%s api_type=%s success=%s http_status=%s result_class=%s postcondition=%s summary=%s",
+        event,
+        repo,
+        issue_number if issue_number is not None else "n/a",
+        pr_number if pr_number is not None else "n/a",
+        auth_lane,
+        api_type,
+        success,
+        http_status if http_status is not None else "n/a",
+        result_class or "n/a",
+        postcondition or "n/a",
+        summary,
+    )
+
+
 def _log_github_action(
     *,
     action: str,
@@ -529,6 +566,16 @@ def mark_pr_ready_for_review(*, settings: Settings, repo: str, pr_number: int) -
     Returns (success, message).  Safe to call when the PR is already non-draft.
     """
     action = "mark_pr_ready_for_review"
+    _log_github_debug(
+        settings,
+        event="ready_for_review_attempted",
+        repo=repo,
+        pr_number=pr_number,
+        auth_lane="dispatch_user_token",
+        api_type="GraphQL",
+        success=True,
+        summary="Starting ready-for-review flow.",
+    )
     if not has_dispatch_auth(settings):
         msg = (
             "Ready-for-review failure: dispatch user-token auth not configured; "
@@ -594,6 +641,18 @@ def mark_pr_ready_for_review(*, settings: Settings, repo: str, pr_number: int) -
                     summary=f"Ready-for-review failure: {msg}",
                 )
                 return False, f"Ready-for-review failure: {msg}"
+            _log_github_debug(
+                settings,
+                event="ready_for_review_node_lookup",
+                repo=repo,
+                pr_number=pr_number,
+                auth_lane="dispatch_user_token",
+                api_type="GraphQL",
+                success=True,
+                http_status=pr_query_response.status_code,
+                result_class="query_ok",
+                summary="PR node-id lookup attempted.",
+            )
 
             query_payload = pr_query_response.json()
             if query_payload.get("errors"):
@@ -628,6 +687,17 @@ def mark_pr_ready_for_review(*, settings: Settings, repo: str, pr_number: int) -
                     summary=f"Ready-for-review failure: {msg}",
                 )
                 return False, f"Ready-for-review failure: {msg}"
+            _log_github_debug(
+                settings,
+                event="ready_for_review_node_lookup",
+                repo=repo,
+                pr_number=pr_number,
+                auth_lane="dispatch_user_token",
+                api_type="GraphQL",
+                success=True,
+                result_class="node_found",
+                summary=f"PR node id located; draft={pull_request.get('isDraft')!r}",
+            )
 
             if pull_request.get("isDraft") is False:
                 msg = f"PR #{pr_number} is already ready for review"
@@ -667,6 +737,18 @@ def mark_pr_ready_for_review(*, settings: Settings, repo: str, pr_number: int) -
                     summary=f"Ready-for-review failure: mutation=markPullRequestReadyForReview; {msg}",
                 )
                 return False, f"Ready-for-review failure: {msg}"
+            _log_github_debug(
+                settings,
+                event="ready_for_review_mutation_attempted",
+                repo=repo,
+                pr_number=pr_number,
+                auth_lane="dispatch_user_token",
+                api_type="GraphQL",
+                success=True,
+                http_status=mutation_response.status_code,
+                result_class="mutation_http_ok",
+                summary="markPullRequestReadyForReview mutation attempted.",
+            )
 
             mutation_payload = mutation_response.json()
             if mutation_payload.get("errors"):
@@ -751,6 +833,18 @@ def mark_pr_ready_for_review(*, settings: Settings, repo: str, pr_number: int) -
                     summary=msg,
                 )
                 return False, msg
+            _log_github_debug(
+                settings,
+                event="ready_for_review_verified",
+                repo=repo,
+                pr_number=pr_number,
+                auth_lane="dispatch_user_token",
+                api_type="GraphQL",
+                success=True,
+                result_class="verified_non_draft",
+                postcondition=f"isDraft={post_verify_draft_state!r}",
+                summary="Ready-for-review postcondition verified; proceeding.",
+            )
 
             msg = f"PR #{pr_number} marked ready for review"
             _log_github_action(
@@ -803,6 +897,16 @@ def merge_pr(
     """
     if not has_dispatch_auth(settings):
         return False, "Merge failure: dispatch user-token auth not configured; cannot merge PR"
+    _log_github_debug(
+        settings,
+        event="merge_attempted",
+        repo=repo,
+        pr_number=pr_number,
+        auth_lane="dispatch_user_token",
+        api_type="REST",
+        success=True,
+        summary="Starting merge flow with latest SHA fetch.",
+    )
     api_base = settings.github_api_url.rstrip("/")
     pr_url = f"{api_base}/repos/{repo}/pulls/{pr_number}"
     merge_url = f"{api_base}/repos/{repo}/pulls/{pr_number}/merge"
@@ -861,11 +965,34 @@ def merge_pr(
                     summary=first_fetch_msg,
                 )
                 return False, first_fetch_msg
+            _log_github_debug(
+                settings,
+                event="merge_latest_sha_fetched",
+                repo=repo,
+                pr_number=pr_number,
+                auth_lane="dispatch_user_token",
+                api_type="REST",
+                success=True,
+                result_class="head_sha_loaded",
+                summary=f"Fetched latest head SHA before merge: {first_head_sha}",
+            )
 
             merged, status_code, detail = _attempt_merge(client, head_sha=first_head_sha)
             merge_attempt_sha = first_head_sha
             retry_used = False
             if not merged and status_code == 409:
+                _log_github_debug(
+                    settings,
+                    event="merge_retry_409",
+                    repo=repo,
+                    pr_number=pr_number,
+                    auth_lane="dispatch_user_token",
+                    api_type="REST",
+                    success=False,
+                    http_status=409,
+                    result_class="merge_conflict_retry",
+                    summary="First merge attempt returned 409; retrying with refreshed SHA.",
+                )
                 refreshed_head_sha, _, refresh_msg = _fetch_latest_head_and_merge_state(client)
                 if refreshed_head_sha is None:
                     _log_github_action(
@@ -917,6 +1044,18 @@ def merge_pr(
                     summary=msg,
                 )
                 return False, msg
+            _log_github_debug(
+                settings,
+                event="merge_verified",
+                repo=repo,
+                pr_number=pr_number,
+                auth_lane="dispatch_user_token",
+                api_type="REST",
+                success=True,
+                result_class="merged_true",
+                postcondition="merged=true",
+                summary=f"Merge verified after sha={merge_attempt_sha}",
+            )
             msg = (
                 f"PR #{pr_number} merged successfully "
                 f"(merge_sha={merge_attempt_sha}, retry_used={retry_used}, merge_observed=True)"
@@ -1436,6 +1575,10 @@ def run_preflight_checks(*, settings: Settings, repo: str | None = None) -> dict
                 for item in str(getattr(settings, "governor_guarded_paths", "") or "").split(",")
                 if item.strip()
             ],
+        },
+        "debug": {
+            "workflow_debug_enabled": bool(getattr(settings, "orchestrator_debug_workflow", False)),
+            "github_debug_enabled": bool(getattr(settings, "orchestrator_debug_github", False)),
         },
         "capabilities": {},
         "blockers": [],

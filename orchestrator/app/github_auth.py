@@ -42,6 +42,37 @@ _REFRESH_MARGIN_SECONDS = 300
 _DEFAULT_TOKEN_LIFETIME_SECONDS = 3600
 
 
+def _debug_github_enabled(settings: "Settings") -> bool:
+    return bool(getattr(settings, "orchestrator_debug_github", False))
+
+
+def _log_auth_debug(
+    settings: "Settings",
+    *,
+    event: str,
+    auth_lane: str,
+    success: bool,
+    summary: str,
+    credential_present: bool | None = None,
+    validation_succeeded: bool | None = None,
+    http_status: int | None = None,
+    result_class: str | None = None,
+) -> None:
+    if not _debug_github_enabled(settings):
+        return
+    logger.info(
+        "github_debug event=%s auth_lane=%s credential_present=%s validation_succeeded=%s http_status=%s result_class=%s success=%s summary=%s",
+        event,
+        auth_lane,
+        credential_present if credential_present is not None else "n/a",
+        validation_succeeded if validation_succeeded is not None else "n/a",
+        http_status if http_status is not None else "n/a",
+        result_class or "n/a",
+        success,
+        summary,
+    )
+
+
 def _read_private_key(path: str) -> str:
     """Read PEM private key from disk.  Raises on missing/empty file."""
     p = Path(path)
@@ -176,7 +207,18 @@ def is_governor_app_mode(settings: "Settings") -> bool:
 
 def has_dispatch_auth(settings: "Settings") -> bool:
     """Return True when dispatch auth can use a user token."""
-    return bool(settings.github_dispatch_user_token or settings.github_api_token)
+    ready = bool(settings.github_dispatch_user_token or settings.github_api_token)
+    _log_auth_debug(
+        settings,
+        event="dispatch_auth_checked",
+        auth_lane="dispatch_user_token",
+        credential_present=ready,
+        validation_succeeded=ready,
+        success=ready,
+        result_class="auth_ready" if ready else "auth_missing",
+        summary=dispatch_auth_label(settings),
+    )
+    return ready
 
 
 def get_dispatch_token(settings: "Settings") -> str:
@@ -212,12 +254,34 @@ def dispatch_auth_label(settings: "Settings") -> str:
 def has_governor_auth(settings: "Settings") -> bool:
     """Return True when governor auth config is available."""
     if is_governor_app_mode(settings):
-        return bool(
+        ready = bool(
             settings.github_app_client_id
             and settings.github_app_installation_id
             and settings.github_app_private_key_path
         )
-    return bool(settings.github_api_token)
+        _log_auth_debug(
+            settings,
+            event="governor_auth_checked",
+            auth_lane="governor_app",
+            credential_present=ready,
+            validation_succeeded=ready,
+            success=ready,
+            result_class="auth_ready" if ready else "auth_missing",
+            summary=governor_auth_mode_label(settings),
+        )
+        return ready
+    ready = bool(settings.github_api_token)
+    _log_auth_debug(
+        settings,
+        event="governor_auth_checked",
+        auth_lane="governor_token",
+        credential_present=ready,
+        validation_succeeded=ready,
+        success=ready,
+        result_class="auth_ready" if ready else "auth_missing",
+        summary=governor_auth_mode_label(settings),
+    )
+    return ready
 
 
 def get_governor_token(settings: "Settings") -> str:
@@ -256,8 +320,28 @@ def try_mint_governor_app_token(settings: "Settings") -> tuple[bool, str]:
         return False, "Governor auth mode is not 'app'"
     try:
         _mint_installation_token(settings)
+        _log_auth_debug(
+            settings,
+            event="governor_app_token_mint",
+            auth_lane="governor_app",
+            credential_present=True,
+            validation_succeeded=True,
+            success=True,
+            result_class="mint_ok",
+            summary="Installation token minted successfully",
+        )
         return True, "Installation token minted successfully"
     except Exception as exc:
+        _log_auth_debug(
+            settings,
+            event="governor_app_token_mint",
+            auth_lane="governor_app",
+            credential_present=True,
+            validation_succeeded=False,
+            success=False,
+            result_class="mint_failed",
+            summary=f"Installation token minting failed: {exc}",
+        )
         return False, f"Installation token minting failed: {exc}"
 
 
