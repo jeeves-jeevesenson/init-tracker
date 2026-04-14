@@ -9255,7 +9255,7 @@ class InitiativeTracker(base.InitiativeTracker):
         dm_svc = self.__dict__.get("_dm_service")
         if dm_svc is not None and cid > 0:
             try:
-                result = dm_svc.apply_damage(cid=cid, raw_damage=int(raw_damage))
+                result = dm_svc.apply_damage(cid=cid, raw_damage=int(raw_damage), _broadcast=False)
                 if result.get("ok"):
                     return {
                         "temp_absorbed": int(result.get("temp_absorbed", 0)),
@@ -9284,7 +9284,7 @@ class InitiativeTracker(base.InitiativeTracker):
         dm_svc = self.__dict__.get("_dm_service")
         if dm_svc is not None:
             try:
-                result = dm_svc.apply_heal(cid=int(cid), amount=int(amount), is_temp_hp=is_temp_hp)
+                result = dm_svc.apply_heal(cid=int(cid), amount=int(amount), is_temp_hp=is_temp_hp, _broadcast=False)
                 if result.get("ok"):
                     return True
                 self._oplog(

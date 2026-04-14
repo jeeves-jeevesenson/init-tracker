@@ -397,7 +397,13 @@ class CombatServiceLockTests(unittest.TestCase):
         self.service = CombatService(self.tracker)
 
     def test_service_has_lock(self):
-        self.assertEqual(type(self.service._lock).__name__, "RLock")
+        lock = self.service._lock
+        self.assertTrue(lock.acquire(blocking=False))
+        try:
+            self.assertTrue(lock.acquire(blocking=False))
+        finally:
+            lock.release()
+            lock.release()
 
     def test_concurrent_hp_adjustments_safe(self):
         """Two threads can call adjust_hp concurrently without raising."""
@@ -1606,6 +1612,24 @@ class CombatServiceApplyDamageTests(unittest.TestCase):
         self.assertEqual(c.temp_hp, 5)
         self.assertEqual(c.hp, 10)
 
+    def test_damage_deferred_broadcast_skips_rebuild_and_broadcast(self):
+        """apply_damage(_broadcast=False) should not rebuild or broadcast."""
+        self.tracker._rebuild_calls.clear()
+        self.tracker._broadcast_calls.clear()
+        result = self.service.apply_damage(cid=1, raw_damage=3, _broadcast=False)
+        self.assertTrue(result["ok"])
+        self.assertEqual(len(self.tracker._rebuild_calls), 0)
+        self.assertEqual(len(self.tracker._broadcast_calls), 0)
+
+    def test_damage_default_broadcast_rebuilds_and_broadcasts(self):
+        """apply_damage() with default _broadcast=True should rebuild and broadcast."""
+        self.tracker._rebuild_calls.clear()
+        self.tracker._broadcast_calls.clear()
+        result = self.service.apply_damage(cid=1, raw_damage=3)
+        self.assertTrue(result["ok"])
+        self.assertTrue(len(self.tracker._rebuild_calls) > 0)
+        self.assertTrue(len(self.tracker._broadcast_calls) > 0)
+
 
 # ===================================================================
 # CombatService.apply_heal tests (Slice 9)
@@ -1664,6 +1688,39 @@ class CombatServiceApplyHealTests(unittest.TestCase):
         self.assertTrue(
             any("temp HP set" in msg for msg, _ in self.tracker._log_calls)
         )
+
+    def test_heal_rejects_negative_amount(self):
+        c = self.tracker.combatants[1]
+        c.hp = 15
+        result = self.service.apply_heal(cid=1, amount=-5)
+        self.assertFalse(result["ok"])
+        self.assertIn("non-negative", result["error"])
+        self.assertEqual(c.hp, 15)
+
+    def test_heal_zero_amount_is_noop(self):
+        c = self.tracker.combatants[1]
+        c.hp = 10
+        result = self.service.apply_heal(cid=1, amount=0)
+        self.assertTrue(result["ok"])
+        self.assertEqual(result["hp_after"], 10)
+
+    def test_heal_deferred_broadcast_skips_rebuild_and_broadcast(self):
+        """apply_heal(_broadcast=False) should not rebuild or broadcast."""
+        self.tracker._rebuild_calls.clear()
+        self.tracker._broadcast_calls.clear()
+        result = self.service.apply_heal(cid=1, amount=3, _broadcast=False)
+        self.assertTrue(result["ok"])
+        self.assertEqual(len(self.tracker._rebuild_calls), 0)
+        self.assertEqual(len(self.tracker._broadcast_calls), 0)
+
+    def test_heal_default_broadcast_rebuilds_and_broadcasts(self):
+        """apply_heal() with default _broadcast=True should rebuild and broadcast."""
+        self.tracker._rebuild_calls.clear()
+        self.tracker._broadcast_calls.clear()
+        result = self.service.apply_heal(cid=1, amount=3)
+        self.assertTrue(result["ok"])
+        self.assertTrue(len(self.tracker._rebuild_calls) > 0)
+        self.assertTrue(len(self.tracker._broadcast_calls) > 0)
 
 
 # ===================================================================
@@ -1729,13 +1786,16 @@ class ApplyDamageViaServiceWrapperTests(unittest.TestCase):
             any("exception" in msg.lower() for msg, _ in tracker._oplog_calls)
         )
 
-    def test_service_rebuild_and_broadcast(self):
+    def test_service_skips_rebuild_and_broadcast(self):
+        """When routed via service, rebuild/broadcast are deferred (_broadcast=False)."""
         tracker, _ = self._make_tracker_with_service()
         c = tracker.combatants[1]
         c.hp = 20
+        tracker._rebuild_calls.clear()
+        tracker._broadcast_calls.clear()
         InitiativeTracker._apply_damage_via_service(tracker, c, 5)
-        self.assertTrue(len(tracker._rebuild_calls) > 0)
-        self.assertTrue(len(tracker._broadcast_calls) > 0)
+        self.assertEqual(len(tracker._rebuild_calls), 0)
+        self.assertEqual(len(tracker._broadcast_calls), 0)
 
     def test_invalid_cid_falls_back(self):
         tracker, _ = self._make_tracker_with_service()
@@ -1817,13 +1877,16 @@ class ApplyHealViaServiceWrapperTests(unittest.TestCase):
         result = InitiativeTracker._apply_heal_via_service(tracker, cid=999, amount=5)
         self.assertFalse(result)
 
-    def test_service_rebuild_and_broadcast(self):
+    def test_service_skips_rebuild_and_broadcast(self):
+        """When routed via service, rebuild/broadcast are deferred (_broadcast=False)."""
         tracker, _ = self._make_tracker_with_service()
         c = tracker.combatants[1]
         c.hp = 10
+        tracker._rebuild_calls.clear()
+        tracker._broadcast_calls.clear()
         InitiativeTracker._apply_heal_via_service(tracker, cid=1, amount=5)
-        self.assertTrue(len(tracker._rebuild_calls) > 0)
-        self.assertTrue(len(tracker._broadcast_calls) > 0)
+        self.assertEqual(len(tracker._rebuild_calls), 0)
+        self.assertEqual(len(tracker._broadcast_calls), 0)
 
 
 # ===================================================================

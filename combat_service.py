@@ -638,7 +638,9 @@ class CombatService:
     # Deep combat damage / heal (Slice 9)
     # ------------------------------------------------------------------
 
-    def apply_damage(self, cid: int, raw_damage: int) -> Dict[str, Any]:
+    def apply_damage(
+        self, cid: int, raw_damage: int, *, _broadcast: bool = True
+    ) -> Dict[str, Any]:
         """Apply raw damage to combatant ``cid`` using the canonical deep
         damage path with temp HP absorption.
 
@@ -649,11 +651,16 @@ class CombatService:
 
         The service acquires the lock (re-entrant — safe to call from within
         other service methods such as ``next_turn`` when end-of-turn effects
-        trigger damage), then rebuilds the table and broadcasts state.
+        trigger damage), then optionally rebuilds the table and broadcasts
+        state.
 
         Args:
-            cid:        Combatant ID.
-            raw_damage: Raw damage amount (before temp HP absorption).
+            cid:         Combatant ID.
+            raw_damage:  Raw damage amount (before temp HP absorption).
+            _broadcast:  If False, skip rebuild/broadcast after the mutation.
+                         Callers inside a composite mutation (turn-transition,
+                         AoE loop) should pass ``_broadcast=False`` and let
+                         the outer operation broadcast once.
 
         Returns: {ok, cid, temp_absorbed, hp_damage, hp_after}
           or  {ok: False, error: str}
@@ -680,14 +687,15 @@ class CombatService:
             except Exception as exc:
                 return {"ok": False, "error": f"Damage application failed: {exc}"}
 
-            try:
-                t._rebuild_table(scroll_to_current=True)
-            except Exception:
-                pass
-            try:
-                t._lan_force_state_broadcast()
-            except Exception:
-                pass
+            if _broadcast:
+                try:
+                    t._rebuild_table(scroll_to_current=True)
+                except Exception:
+                    pass
+                try:
+                    t._lan_force_state_broadcast()
+                except Exception:
+                    pass
             return {
                 "ok": True,
                 "cid": int(cid),
@@ -696,17 +704,27 @@ class CombatService:
                 "hp_after": int(damage_state.get("hp_after", 0)),
             }
 
-    def apply_heal(self, cid: int, amount: int, *, is_temp_hp: bool = False) -> Dict[str, Any]:
+    def apply_heal(
+        self, cid: int, amount: int, *, is_temp_hp: bool = False, _broadcast: bool = True
+    ) -> Dict[str, Any]:
         """Apply healing to combatant ``cid``.
 
         Delegates to the tracker's ``_apply_heal_to_combatant`` which handles
         regular healing (clamped to current + amount, with monster phase refresh)
         or temp HP setting when ``is_temp_hp=True``.
 
+        Negative ``amount`` values are rejected — callers needing negative HP
+        deltas should use ``adjust_hp()`` or ``apply_damage()`` instead.
+
         Args:
-            cid:        Combatant ID.
-            amount:     Healing amount (regular) or absolute temp HP value.
-            is_temp_hp: If True, sets temp HP to ``amount`` instead of healing.
+            cid:         Combatant ID.
+            amount:      Healing amount (regular) or absolute temp HP value.
+                         Must be >= 0.
+            is_temp_hp:  If True, sets temp HP to ``amount`` instead of healing.
+            _broadcast:  If False, skip rebuild/broadcast after the mutation.
+                         Callers inside a composite mutation should pass
+                         ``_broadcast=False`` and let the outer operation
+                         broadcast once.
 
         Returns: {ok, cid, hp_before, hp_after, temp_hp_before, temp_hp_after}
           or  {ok: False, error: str}
@@ -718,11 +736,18 @@ class CombatService:
             if c is None:
                 return {"ok": False, "error": f"Combatant {cid} not found."}
 
+            amount = int(amount)
+            if amount < 0:
+                return {
+                    "ok": False,
+                    "error": "Healing amount must be non-negative. Use adjust_hp() for negative deltas.",
+                }
+
             hp_before = int(getattr(c, "hp", 0) or 0)
             temp_hp_before = int(getattr(c, "temp_hp", 0) or 0)
 
             try:
-                success = t._apply_heal_to_combatant(int(cid), int(amount), is_temp_hp=is_temp_hp)
+                success = t._apply_heal_to_combatant(int(cid), amount, is_temp_hp=is_temp_hp)
             except Exception as exc:
                 return {"ok": False, "error": f"Heal application failed: {exc}"}
 
@@ -741,14 +766,15 @@ class CombatService:
                 )
             except Exception:
                 pass
-            try:
-                t._rebuild_table(scroll_to_current=True)
-            except Exception:
-                pass
-            try:
-                t._lan_force_state_broadcast()
-            except Exception:
-                pass
+            if _broadcast:
+                try:
+                    t._rebuild_table(scroll_to_current=True)
+                except Exception:
+                    pass
+                try:
+                    t._lan_force_state_broadcast()
+                except Exception:
+                    pass
             return {
                 "ok": True,
                 "cid": int(cid),
