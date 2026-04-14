@@ -1,17 +1,14 @@
-"""Shared GitHub auth helper — App installation tokens + legacy PAT fallback.
+"""GitHub auth helpers with explicit dispatch/governor auth lanes.
 
-This module is the single source of outbound GitHub auth for the orchestrator.
-All REST and GraphQL callers obtain tokens through :func:`get_github_token` or
-build headers via :func:`build_auth_headers`.
+Dispatch lane:
+- issue-assignment and actor-query operations
+- uses GITHUB_DISPATCH_USER_TOKEN (fallback: GITHUB_API_TOKEN)
 
-Auth modes
-----------
-- ``token``  (legacy): uses ``GITHUB_API_TOKEN`` directly.
-- ``app``   (preferred): mints a GitHub App JWT from the configured PEM key,
-  exchanges it for an installation access token, and caches/reuses the token
-  until near expiry.
-
-The active mode is determined by ``Settings.github_auth_mode``.
+Governor lane:
+- post-PR lifecycle operations (ready-for-review/comments/reviews/merge)
+- mode from GITHUB_GOVERNOR_AUTH_MODE (fallback: GITHUB_AUTH_MODE)
+- token mode uses GITHUB_API_TOKEN
+- app mode mints GitHub App installation token
 """
 from __future__ import annotations
 
@@ -127,7 +124,7 @@ def _mint_installation_token(settings: "Settings") -> str:
     key_path = settings.github_app_private_key_path
     if not client_id or not installation_id or not key_path:
         raise RuntimeError(
-            "GitHub App auth is misconfigured: "
+            "Governor app auth is misconfigured: "
             f"client_id={'set' if client_id else 'MISSING'}, "
             f"installation_id={'set' if installation_id else 'MISSING'}, "
             f"private_key_path={'set' if key_path else 'MISSING'}"
@@ -153,22 +150,68 @@ def _mint_installation_token(settings: "Settings") -> str:
 
 
 # ---------------------------------------------------------------------------
-# Public API
+# Public API (explicit lanes)
 # ---------------------------------------------------------------------------
 
-def is_app_mode(settings: "Settings") -> bool:
-    """Return True when the orchestrator is configured for GitHub App auth."""
-    return str(getattr(settings, "github_auth_mode", "token") or "token").strip().lower() == "app"
+def _normalized_governor_mode(settings: "Settings") -> str:
+    configured = getattr(settings, "github_governor_auth_mode", None)
+    if isinstance(configured, str) and configured.strip():
+        mode = configured.strip().lower()
+    else:
+        mode = str(getattr(settings, "github_auth_mode", "token") or "token").strip().lower()
+    return "app" if mode == "app" else "token"
 
 
-def has_github_auth(settings: "Settings") -> bool:
-    """Return True when *some* form of GitHub auth is available.
+def _base_headers() -> dict[str, str]:
+    return {
+        "Accept": "application/vnd.github+json",
+        "X-GitHub-Api-Version": "2022-11-28",
+    }
 
-    - In token mode: ``github_api_token`` must be set.
-    - In app mode: the three app config fields must be set (actual minting is
-      deferred to first use).
-    """
-    if is_app_mode(settings):
+
+def is_governor_app_mode(settings: "Settings") -> bool:
+    """Return True when governor auth is configured for GitHub App mode."""
+    return _normalized_governor_mode(settings) == "app"
+
+
+def has_dispatch_auth(settings: "Settings") -> bool:
+    """Return True when dispatch auth can use a user token."""
+    return bool(settings.github_dispatch_user_token or settings.github_api_token)
+
+
+def get_dispatch_token(settings: "Settings") -> str:
+    """Return dispatch user token (explicit token preferred; legacy fallback)."""
+    token = settings.github_dispatch_user_token or settings.github_api_token
+    if not token:
+        raise RuntimeError(
+            "Dispatch auth failure: dispatch user token missing "
+            "(set GITHUB_DISPATCH_USER_TOKEN or legacy GITHUB_API_TOKEN)"
+        )
+    return token
+
+
+def build_dispatch_auth_headers(settings: "Settings") -> dict[str, str]:
+    """Build headers for dispatch lane operations."""
+    headers = _base_headers()
+    try:
+        token = get_dispatch_token(settings)
+        headers["Authorization"] = f"Bearer {token}"
+    except RuntimeError as exc:
+        logger.warning("Unable to obtain dispatch auth token: %s", exc)
+    return headers
+
+
+def dispatch_auth_label(settings: "Settings") -> str:
+    if settings.github_dispatch_user_token:
+        return "dispatch user token (GITHUB_DISPATCH_USER_TOKEN)"
+    if settings.github_api_token:
+        return "legacy token fallback (GITHUB_API_TOKEN)"
+    return "missing dispatch token"
+
+
+def has_governor_auth(settings: "Settings") -> bool:
+    """Return True when governor auth config is available."""
+    if is_governor_app_mode(settings):
         return bool(
             settings.github_app_client_id
             and settings.github_app_installation_id
@@ -177,57 +220,75 @@ def has_github_auth(settings: "Settings") -> bool:
     return bool(settings.github_api_token)
 
 
-def get_github_token(settings: "Settings") -> str:
-    """Return the current GitHub access token for outbound API calls.
-
-    Raises ``RuntimeError`` when auth is not configured or token minting fails.
-    """
-    if is_app_mode(settings):
+def get_governor_token(settings: "Settings") -> str:
+    """Return governor auth token based on governor auth mode."""
+    if is_governor_app_mode(settings):
         return _mint_installation_token(settings)
     token = settings.github_api_token
     if not token:
-        raise RuntimeError("GitHub API token (GITHUB_API_TOKEN) is not configured")
+        raise RuntimeError(
+            "Governor auth failure: GITHUB_API_TOKEN is not configured for governor token mode"
+        )
     return token
 
 
-def build_auth_headers(settings: "Settings") -> dict[str, str]:
-    """Build GitHub API request headers with current auth.
-
-    Falls back gracefully — returns headers without Authorization when auth
-    is unavailable (callers should pre-check via :func:`has_github_auth`).
-    """
-    headers: dict[str, str] = {
-        "Accept": "application/vnd.github+json",
-        "X-GitHub-Api-Version": "2022-11-28",
-    }
+def build_governor_auth_headers(settings: "Settings") -> dict[str, str]:
+    """Build headers for governor lane operations."""
+    headers = _base_headers()
     try:
-        token = get_github_token(settings)
+        token = get_governor_token(settings)
         headers["Authorization"] = f"Bearer {token}"
     except RuntimeError as exc:
-        mode = "app" if is_app_mode(settings) else "token"
-        logger.warning("Unable to obtain GitHub auth token in %s mode: %s", mode, exc)
+        mode = _normalized_governor_mode(settings)
+        logger.warning("Unable to obtain governor auth token in %s mode: %s", mode, exc)
     return headers
 
 
-def auth_mode_label(settings: "Settings") -> str:
-    """Human-readable description of the current auth mode."""
-    if is_app_mode(settings):
+def governor_auth_mode_label(settings: "Settings") -> str:
+    if is_governor_app_mode(settings):
         return "app (GitHub App installation token)"
-    return "token (legacy PAT)"
+    return "token (GITHUB_API_TOKEN)"
 
 
-def try_mint_app_token(settings: "Settings") -> tuple[bool, str]:
-    """Attempt to mint an app installation token, returning (ok, message).
-
-    Used by preflight to report whether app auth is actually usable.
-    """
-    if not is_app_mode(settings):
-        return False, "Auth mode is not 'app'"
+def try_mint_governor_app_token(settings: "Settings") -> tuple[bool, str]:
+    """Attempt to mint governor app token, returning (ok, message)."""
+    if not is_governor_app_mode(settings):
+        return False, "Governor auth mode is not 'app'"
     try:
         _mint_installation_token(settings)
         return True, "Installation token minted successfully"
     except Exception as exc:
         return False, f"Installation token minting failed: {exc}"
+
+
+# ---------------------------------------------------------------------------
+# Backward-compatible shared helper aliases (governor lane semantics)
+# ---------------------------------------------------------------------------
+
+def is_app_mode(settings: "Settings") -> bool:
+    return is_governor_app_mode(settings)
+
+
+def has_github_auth(settings: "Settings") -> bool:
+    return has_governor_auth(settings)
+
+
+def get_github_token(settings: "Settings") -> str:
+    return get_governor_token(settings)
+
+
+def build_auth_headers(settings: "Settings") -> dict[str, str]:
+    return build_governor_auth_headers(settings)
+
+
+def auth_mode_label(settings: "Settings") -> str:
+    if is_governor_app_mode(settings):
+        return "app (GitHub App installation token)"
+    return "token (legacy PAT)"
+
+
+def try_mint_app_token(settings: "Settings") -> tuple[bool, str]:
+    return try_mint_governor_app_token(settings)
 
 
 def invalidate_cached_token() -> None:
