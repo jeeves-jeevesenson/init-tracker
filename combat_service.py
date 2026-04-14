@@ -316,7 +316,7 @@ class CombatService:
             if int(getattr(t, "turn_num", 0) or 0) <= 0:
                 t.turn_num = 1
 
-            # Run start-of-turn effects (auto-skip stunned/paralysed, etc.)
+            # Run start-of-turn effects (auto-skip stunned/paralyzed, etc.)
             enter = getattr(t, "_enter_turn_with_auto_skip", None)
             if callable(enter):
                 try:

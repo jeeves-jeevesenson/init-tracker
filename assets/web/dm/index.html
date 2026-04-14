@@ -666,7 +666,7 @@ function renderCombatants(snap) {
     const roleTag = c.role !== 'enemy' ? `<span class="role-tag">${c.role}</span>` : '';
     const tempHpDisplay = c.temp_hp > 0 ? `<span class="temp"> +${c.temp_hp}tmp</span>` : '';
     const setTurnBtn = snap.in_combat && !isCurrent
-      ? `<button class="btn-sm" onclick="setTurnHere(${c.cid})" style="background:var(--accent-secondary,#555)">Set Turn</button>`
+      ? `<button class="btn-sm" onclick="setTurnHere(${parseInt(c.cid, 10)})" style="background:var(--accent-secondary,#555)">Set Turn</button>`
       : '';
     return `
       <div class="combatant-row${isCurrent ? ' is-current' : ''}${isDead ? ' is-dead' : ''}" data-cid="${c.cid}">
