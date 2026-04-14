@@ -561,7 +561,7 @@ def merge_pr(
     - 422: unprocessable (e.g., already merged, branch deleted)
     """
     if not has_governor_auth(settings):
-        return False, "Governor auth failure: auth not configured; cannot merge PR"
+        return False, "Governor auth failure: token/app auth not configured; cannot merge PR"
     api_base = settings.github_api_url.rstrip("/")
     url = f"{api_base}/repos/{repo}/pulls/{pr_number}/merge"
     try:

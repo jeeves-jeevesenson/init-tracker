@@ -282,7 +282,9 @@ def build_auth_headers(settings: "Settings") -> dict[str, str]:
 
 
 def auth_mode_label(settings: "Settings") -> str:
-    return governor_auth_mode_label(settings)
+    if is_governor_app_mode(settings):
+        return "app (GitHub App installation token)"
+    return "token (legacy PAT)"
 
 
 def try_mint_app_token(settings: "Settings") -> tuple[bool, str]:
