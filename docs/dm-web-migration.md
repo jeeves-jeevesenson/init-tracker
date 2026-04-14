@@ -128,15 +128,17 @@ The following areas remain desktop-primary (hybrid) after this pass:
 - Shop, item and spell management
 - YAML-backed save / load (files are still owned by the desktop flow)
 - Full monster-spec / player-profile based combatant creation (desktop only)
-- Deep combat engine damage paths (`_apply_damage_to_target_with_temp_hp` and
-  related spell/attack damage application) still mutate state directly
+- Remaining spell-specific deep damage callers (Heat Metal, Hellish Rebuke,
+  weapon-mastery attack paths) still call `_apply_damage_to_target_with_temp_hp`
+  directly — these are candidates for future slices
 
-The desktop app now **shares** the initiative/turn, HP, and condition
-authority with the DM web console – they operate on the same in-memory
-state through the same `_next_turn()` / `_apply_damage_to_combatant()` /
+The desktop app now **shares** the initiative/turn, HP, condition, and
+deep damage/heal authority with the DM web console – they operate on the
+same in-memory state through the same `_next_turn()` /
+`_apply_damage_to_target_with_temp_hp()` / `_apply_heal_to_combatant()` /
 `_ensure_condition_stack()` methods.
 
-### Desktop-routed through CombatService (Slice 8)
+### Desktop-routed through CombatService (Slice 9)
 
 The following desktop/LAN-originated mutations now route through
 `CombatService` when the service is running:
@@ -154,6 +156,13 @@ The following desktop/LAN-originated mutations now route through
   (wrapper available for progressive adoption)
 - **Desktop `_set_temp_hp_via_service()`** → `CombatService.set_temp_hp()`
   (wrapper available for progressive adoption)
+- **Deep combat damage** → `_apply_damage_via_service()` →
+  `CombatService.apply_damage()` — routes 6 core callers: attack resolution,
+  spell AoE damage, start-of-turn damage riders, end-turn save-rider fail
+  damage, end-of-turn damage riders, and the `_apply_damage_to_combatant`
+  alias (Slice 9)
+- **Healing** → `_apply_heal_via_service()` → `CombatService.apply_heal()` —
+  wrapper available for progressive adoption by heal call sites (Slice 9)
 
 All wrappers fall back to direct mutation + broadcast when the service is
 not running (e.g. LAN server not started).
@@ -168,22 +177,29 @@ concurrently.  The current safeguard model:
 - HTTP route handlers run on the FastAPI thread and call tracker methods
   directly, following the same pattern as existing LAN HTTP routes
   (e.g., `/api/encounter/players/add`).
-- `CombatService` holds a `threading.Lock` that serialises concurrent
-  mutations (next-turn, prev-turn, set-turn-here, HP adjust, condition, temp HP) from the web API.
+- `CombatService` holds a `threading.RLock` (re-entrant) that serialises
+  concurrent mutations (next-turn, prev-turn, set-turn-here, HP adjust,
+  condition, temp HP, deep damage, heal) from the web API and
+  desktop-routed paths.  The RLock is re-entrant so that end-of-turn
+  or start-of-turn effects that trigger damage (which acquires the lock
+  via `apply_damage`) can safely nest inside `next_turn` (which already
+  holds the lock).
 - Each mutation calls `_lan_force_state_broadcast()` which pushes updated
   state to all player WebSocket clients **and** to all connected DM
   WebSocket clients (`/ws/dm`).
 - The desktop UI re-reads its state from the same `combatants` dict and
   `_rebuild_table()` call.
 
-**Remaining risk**: The `CombatService` lock covers all mutations that go
-through the service, including web-originated and the newly-routed
-desktop/LAN paths (Start/Reset, Prev Turn, Next Turn, Set Turn Here, manual HP override).
-Desktop-originated mutations that do **not** yet use the `_*_via_service()`
-wrappers (e.g. deep combat engine damage from spell/attack resolution) do
-not acquire this lock, so a simultaneous desktop engine mutation + web
-mutation could still race.  This is an acceptable risk for the single-session
-LAN use case, and the wrapper adoption can continue incrementally.
+**Remaining risk**: The `CombatService` lock now covers all mutations that
+go through the service, including web-originated, desktop-routed paths
+(Start/Reset, Prev Turn, Next Turn, Set Turn Here, manual HP override),
+and the newly-routed deep damage callers (attack resolution, spell AoE,
+start/end-of-turn damage riders).  Remaining desktop-originated mutations
+that do **not** yet use the `_*_via_service()` wrappers (e.g. Heat Metal,
+Hellish Rebuke, weapon-mastery attack damage) do not acquire this lock,
+so a simultaneous desktop engine mutation from those paths + web mutation
+could still race.  This is an acceptable risk for the single-session LAN
+use case, and the wrapper adoption can continue incrementally.
 
 ---
 
@@ -199,24 +215,28 @@ via the web.
 
 ## Recommended next migration targets
 
-1. **Deep combat engine routing**: Adopt `_adjust_hp_via_service()` and
-   `_set_condition_via_service()` in the combat engine's damage/heal paths
-   (`_apply_damage_to_target_with_temp_hp`, `_apply_heal_to_combatant`,
-   spell effect condition application) so the service lock covers
-   engine-originated mutations too.
+1. **Remaining spell-specific damage routing**: Route the remaining
+   direct `_apply_damage_to_target_with_temp_hp` callers (Heat Metal,
+   Hellish Rebuke, weapon-mastery attack paths) through
+   `_apply_damage_via_service()` so all damage mutations are covered
+   by the service lock.
 
-2. **Initiative-roll support**: Expose full initiative-roll support through
+2. **Heal call-site adoption**: Route remaining `_apply_heal_to_combatant`
+   callers through `_apply_heal_via_service()` for consistent heal
+   mutation coverage.
+
+3. **Initiative-roll support**: Expose full initiative-roll support through
    the backend service so the DM web console can trigger initiative rolls
    without Tkinter fallback.
 
-3. **Token refresh**: The DM console does not yet auto-renew the admin token
+4. **Token refresh**: The DM console does not yet auto-renew the admin token
    before expiry.  Add a background refresh 2 minutes before the 15-minute
    expiry window.
 
-4. **Snapshot enhancements**: Additional fields (e.g. per-combatant AC tooltip,
+5. **Snapshot enhancements**: Additional fields (e.g. per-combatant AC tooltip,
    resource pools) can be added as the DM console grows.
 
-5. **Player-facing LAN client state sync**: Improve broadcast reliability
+6. **Player-facing LAN client state sync**: Improve broadcast reliability
    and reconnect behavior for the player-facing LAN WebSocket client.
 
 ---

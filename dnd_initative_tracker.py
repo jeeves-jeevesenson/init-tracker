@@ -8412,7 +8412,7 @@ class InitiativeTracker(base.InitiativeTracker):
                     except Exception:
                         before_hp_int = None
                     if before_hp_int is not None and applied_amount > 0:
-                        damage_state = self._apply_damage_to_target_with_temp_hp(c, int(applied_amount))
+                        damage_state = self._apply_damage_via_service(c, int(applied_amount))
                         after_hp = int(damage_state.get("hp_after", before_hp_int))
                         rider_msgs.append(f"takes {int(applied_amount)} {dtype} from {source}")
                     elif before_hp_int is not None:
@@ -9237,6 +9237,68 @@ class InitiativeTracker(base.InitiativeTracker):
             pass
         return True
 
+    def _apply_damage_via_service(self, target: Any, raw_damage: int) -> Dict[str, int]:
+        """Apply damage with temp HP absorption, routing through CombatService when available.
+
+        This is the canonical desktop-side wrapper that delegates to
+        ``CombatService.apply_damage`` when the service is running, preserving
+        the existing ``_apply_damage_to_target_with_temp_hp`` semantics
+        (temp HP absorption, side effects, phase refresh, polymorph check).
+
+        Falls back to direct ``_apply_damage_to_target_with_temp_hp`` when the
+        service is not running or reports a failure.
+
+        Returns the same dict shape as ``_apply_damage_to_target_with_temp_hp``:
+        ``{temp_absorbed, hp_damage, hp_after}``.
+        """
+        cid = int(getattr(target, "cid", 0) or 0)
+        dm_svc = self.__dict__.get("_dm_service")
+        if dm_svc is not None and cid > 0:
+            try:
+                result = dm_svc.apply_damage(cid=cid, raw_damage=int(raw_damage), _broadcast=False)
+                if result.get("ok"):
+                    return {
+                        "temp_absorbed": int(result.get("temp_absorbed", 0)),
+                        "hp_damage": int(result.get("hp_damage", 0)),
+                        "hp_after": int(result.get("hp_after", 0)),
+                    }
+                self._oplog(
+                    f"CombatService.apply_damage failed: {result.get('error', 'unknown error')}",
+                    level="warning",
+                )
+            except Exception as exc:
+                self._oplog(
+                    f"CombatService.apply_damage exception: {exc}",
+                    level="warning",
+                )
+        # Fallback: direct mutation
+        return self._apply_damage_to_target_with_temp_hp(target, int(raw_damage))
+
+    def _apply_heal_via_service(self, cid: int, amount: int, *, is_temp_hp: bool = False) -> bool:
+        """Apply healing, routing through CombatService when available.
+
+        Returns True if the mutation succeeded (via service or fallback).
+        Falls back to direct ``_apply_heal_to_combatant`` when the service
+        is not running or reports a failure.
+        """
+        dm_svc = self.__dict__.get("_dm_service")
+        if dm_svc is not None:
+            try:
+                result = dm_svc.apply_heal(cid=int(cid), amount=int(amount), is_temp_hp=is_temp_hp, _broadcast=False)
+                if result.get("ok"):
+                    return True
+                self._oplog(
+                    f"CombatService.apply_heal failed: {result.get('error', 'unknown error')}",
+                    level="warning",
+                )
+            except Exception as exc:
+                self._oplog(
+                    f"CombatService.apply_heal exception: {exc}",
+                    level="warning",
+                )
+        # Fallback: direct mutation
+        return self._apply_heal_to_combatant(int(cid), int(amount), is_temp_hp=is_temp_hp)
+
     def _advance_to_next_turn_candidate(self, ended_cid: int) -> Tuple[bool, bool]:
         wrapped = False
         ended_kind = str(self.__dict__.get("_current_turn_kind", "normal") or "normal")
@@ -9395,7 +9457,7 @@ class InitiativeTracker(base.InitiativeTracker):
                         applied_entries = list(adjusted.get("entries") or [])
                         applied_amount = int(sum(int(entry.get("amount", 0) or 0) for entry in applied_entries))
                         if applied_amount > 0:
-                            self._apply_damage_to_target_with_temp_hp(c, int(applied_amount))
+                            self._apply_damage_via_service(c, int(applied_amount))
                             self._log(
                                 f"{c.name} takes {int(applied_amount)} {dtype} damage from {str(rider.get('source') or 'an effect')}.",
                                 cid=cid,
@@ -9437,7 +9499,7 @@ class InitiativeTracker(base.InitiativeTracker):
             except Exception:
                 before_hp_int = None
             if before_hp_int is not None and applied_amount > 0:
-                damage_state = self._apply_damage_to_target_with_temp_hp(c, int(applied_amount))
+                damage_state = self._apply_damage_via_service(c, int(applied_amount))
                 after_hp = int(damage_state.get("hp_after", before_hp_int))
                 self._log(
                     f"{c.name} takes {int(applied_amount)} {dtype} damage from {source} at end of turn.",
@@ -19499,7 +19561,7 @@ class InitiativeTracker(base.InitiativeTracker):
                 except Exception:
                     pass
             if total_damage > 0:
-                damage_state = self._apply_damage_to_target_with_temp_hp(target, int(total_damage))
+                damage_state = self._apply_damage_via_service(target, int(total_damage))
                 after = int(damage_state.get("hp_after", before))
                 self._queue_concentration_save(target, "aoe")
             else:
@@ -25782,7 +25844,7 @@ class InitiativeTracker(base.InitiativeTracker):
             }
 
         old_hp = int(getattr(target, "hp", 0) or 0)
-        damage_state = self._apply_damage_to_target_with_temp_hp(target, int(total_damage))
+        damage_state = self._apply_damage_via_service(target, int(total_damage))
         new_hp = int(damage_state.get("hp_after", old_hp))
         if new_hp < old_hp:
             self._queue_concentration_save(target, "damage")
@@ -38208,7 +38270,7 @@ class InitiativeTracker(base.InitiativeTracker):
         return True
 
     def _apply_damage_to_combatant(self, c: Any, amount: int) -> Dict[str, int]:
-        return self._apply_damage_to_target_with_temp_hp(c, amount)
+        return self._apply_damage_via_service(c, amount)
 
     def _materialize_registered_spell_effect(self, target: Any, effect_entry: Dict[str, Any]) -> None:
         if target is None or not isinstance(effect_entry, dict):

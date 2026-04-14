@@ -4,7 +4,7 @@ This module is the authoritative source of truth for the migrated combat/session
 slice.  Both the desktop UI and the DM web console read from and write through
 this service rather than owning separate state.
 
-Ownership model after this migration pass (Slice 8)
+Ownership model after this migration pass (Slice 9)
 -----------------------------------------------------
 Backend-owned (this service + API routes):
   - combat lifecycle: start (begin initiative turn order), end (reset turn state)
@@ -20,8 +20,10 @@ Backend-owned (this service + API routes):
   - initiative set / update for existing combatants
   - combatant removal
   - prev-turn (go back one step in initiative order)
+  - deep combat damage with temp HP absorption (apply_damage) — Slice 9
+  - healing (apply_heal) — Slice 9
 
-Desktop-routed through this service (Slice 8):
+Desktop-routed through this service (Slice 9):
   - desktop Next Turn routes through CombatService.next_turn() via
     _next_turn_via_service() so the lock, log, and broadcast paths are shared
   - desktop Prev Turn routes through CombatService.prev_turn() via
@@ -36,6 +38,12 @@ Desktop-routed through this service (Slice 8):
     HP/temp-HP overrides
   - Desktop HP adjust, condition set, and temp HP set have _*_via_service()
     wrappers available for progressive adoption
+  - Deep combat damage (_apply_damage_to_target_with_temp_hp) routes through
+    CombatService.apply_damage via _apply_damage_via_service() for a bounded
+    subset of core callers (attack resolution, spell AoE, start/end-of-turn
+    damage riders) — Slice 9
+  - Healing (_apply_heal_to_combatant) routes through
+    CombatService.apply_heal via _apply_heal_via_service() — Slice 9
 
 Still hybrid / desktop-primary:
   - Full Tkinter canvas UI rendering
@@ -44,11 +52,12 @@ Still hybrid / desktop-primary:
   - Character editor, shop, spell/resource management
   - YAML-backed save/load (unchanged; mutations here persist via existing path)
   - Full monster-spec / player-profile based combatant creation (desktop only)
-  - Deep combat engine damage paths (_apply_damage_to_target_with_temp_hp)
-    still mutate state directly; these are candidates for future slices
+  - Remaining deep combat damage callers (Heat Metal, Hellish Rebuke,
+    weapon-mastery attack paths) still call _apply_damage_to_target_with_temp_hp
+    directly; these are candidates for future slices
 
 Next recommended migration targets:
-  - Route deep combat engine damage/heal paths through service wrappers
+  - Route remaining spell-specific damage callers through apply_damage
   - Expose full initiative-roll support so DM web can trigger rolls
   - Player-facing LAN client state sync improvements
 
@@ -60,6 +69,8 @@ Usage (from LanController routes):
   service.prev_turn()
   service.set_turn_here(cid=2)
   service.adjust_hp(cid=3, delta=-5)
+  service.apply_damage(cid=3, raw_damage=12)
+  service.apply_heal(cid=3, amount=8)
   service.set_condition(cid=3, ctype="poisoned", action="add")
   service.end_combat()
 """
@@ -108,7 +119,7 @@ class CombatService:
         if tracker is None:
             raise ValueError("CombatService requires an InitiativeTracker instance.")
         self._tracker = tracker
-        self._lock = threading.Lock()
+        self._lock = threading.RLock()
 
     # ------------------------------------------------------------------
     # Read: snapshot
@@ -621,6 +632,156 @@ class CombatService:
                 "hp_after": new_hp,
                 "temp_hp_before": old_temp,
                 "temp_hp_after": new_temp,
+            }
+
+    # ------------------------------------------------------------------
+    # Deep combat damage / heal (Slice 9)
+    # ------------------------------------------------------------------
+
+    def apply_damage(
+        self, cid: int, raw_damage: int, *, _broadcast: bool = True
+    ) -> Dict[str, Any]:
+        """Apply raw damage to combatant ``cid`` using the canonical deep
+        damage path with temp HP absorption.
+
+        This delegates to the tracker's ``_apply_damage_to_target_with_temp_hp``
+        which handles temp HP absorption order, monster phase refresh,
+        star-advantage removal, on-damage save riders, damage-clear condition
+        riders, and polymorph temp-HP checks.
+
+        The service acquires the lock (re-entrant — safe to call from within
+        other service methods such as ``next_turn`` when end-of-turn effects
+        trigger damage), then optionally rebuilds the table and broadcasts
+        state.
+
+        Args:
+            cid:         Combatant ID.
+            raw_damage:  Raw damage amount (before temp HP absorption).
+            _broadcast:  If False, skip rebuild/broadcast after the mutation.
+                         Callers inside a composite mutation (turn-transition,
+                         AoE loop) should pass ``_broadcast=False`` and let
+                         the outer operation broadcast once.
+
+        Returns: {ok, cid, temp_absorbed, hp_damage, hp_after}
+          or  {ok: False, error: str}
+        """
+        with self._lock:
+            t = self._tracker
+            combatants = getattr(t, "combatants", {}) or {}
+            c = combatants.get(int(cid))
+            if c is None:
+                return {"ok": False, "error": f"Combatant {cid} not found."}
+
+            raw_damage = max(0, int(raw_damage or 0))
+            if raw_damage == 0:
+                return {
+                    "ok": True,
+                    "cid": int(cid),
+                    "temp_absorbed": 0,
+                    "hp_damage": 0,
+                    "hp_after": int(getattr(c, "hp", 0) or 0),
+                }
+
+            try:
+                damage_state = t._apply_damage_to_target_with_temp_hp(c, raw_damage)
+            except Exception as exc:
+                return {"ok": False, "error": f"Damage application failed: {exc}"}
+
+            if _broadcast:
+                try:
+                    t._rebuild_table(scroll_to_current=True)
+                except Exception:
+                    pass
+                try:
+                    t._lan_force_state_broadcast()
+                except Exception:
+                    pass
+            return {
+                "ok": True,
+                "cid": int(cid),
+                "temp_absorbed": int(damage_state.get("temp_absorbed", 0)),
+                "hp_damage": int(damage_state.get("hp_damage", 0)),
+                "hp_after": int(damage_state.get("hp_after", 0)),
+            }
+
+    def apply_heal(
+        self, cid: int, amount: int, *, is_temp_hp: bool = False, _broadcast: bool = True
+    ) -> Dict[str, Any]:
+        """Apply healing to combatant ``cid``.
+
+        Delegates to the tracker's ``_apply_heal_to_combatant`` which handles
+        regular healing (clamped to current + amount, with monster phase refresh)
+        or temp HP setting when ``is_temp_hp=True``.
+
+        Negative ``amount`` values are rejected — callers needing negative HP
+        deltas should use ``adjust_hp()`` or ``apply_damage()`` instead.
+
+        Args:
+            cid:         Combatant ID.
+            amount:      Healing amount (regular) or absolute temp HP value.
+                         Must be >= 0.
+            is_temp_hp:  If True, sets temp HP to ``amount`` instead of healing.
+            _broadcast:  If False, skip rebuild/broadcast after the mutation.
+                         Callers inside a composite mutation should pass
+                         ``_broadcast=False`` and let the outer operation
+                         broadcast once.
+
+        Returns: {ok, cid, hp_before, hp_after, temp_hp_before, temp_hp_after}
+          or  {ok: False, error: str}
+        """
+        with self._lock:
+            t = self._tracker
+            combatants = getattr(t, "combatants", {}) or {}
+            c = combatants.get(int(cid))
+            if c is None:
+                return {"ok": False, "error": f"Combatant {cid} not found."}
+
+            amount = int(amount)
+            if amount < 0:
+                return {
+                    "ok": False,
+                    "error": "Healing amount must be non-negative. Use adjust_hp() for negative deltas.",
+                }
+
+            hp_before = int(getattr(c, "hp", 0) or 0)
+            temp_hp_before = int(getattr(c, "temp_hp", 0) or 0)
+
+            try:
+                success = t._apply_heal_to_combatant(int(cid), amount, is_temp_hp=is_temp_hp)
+            except Exception as exc:
+                return {"ok": False, "error": f"Heal application failed: {exc}"}
+
+            if not success:
+                return {"ok": False, "error": f"Combatant {cid} could not be healed."}
+
+            hp_after = int(getattr(c, "hp", 0) or 0)
+            temp_hp_after = int(getattr(c, "temp_hp", 0) or 0)
+
+            label = "temp HP set" if is_temp_hp else "healed"
+            try:
+                t._log(
+                    f"{getattr(c, 'name', 'Combatant')} {label} by {amount}"
+                    f" (HP {hp_before}→{hp_after}, temp {temp_hp_before}→{temp_hp_after}).",
+                    cid=int(cid),
+                )
+            except Exception:
+                pass
+            if _broadcast:
+                try:
+                    t._rebuild_table(scroll_to_current=True)
+                except Exception:
+                    pass
+                try:
+                    t._lan_force_state_broadcast()
+                except Exception:
+                    pass
+            return {
+                "ok": True,
+                "cid": int(cid),
+                "hp_before": hp_before,
+                "hp_after": hp_after,
+                "temp_hp_before": temp_hp_before,
+                "temp_hp_after": temp_hp_after,
             }
 
     def start_combat(self) -> Dict[str, Any]:
