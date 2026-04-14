@@ -3612,6 +3612,27 @@ class LanController:
             except Exception:
                 raise HTTPException(status_code=500, detail="Failed to advance turn.")
 
+        @self._fastapi_app.post("/api/dm/combat/prev-turn")
+        async def dm_prev_turn(request: Request):
+            """Go back to the previous combatant's turn.
+
+            Delegates to the same _prev_turn() logic used by the desktop Prev
+            Turn button, then broadcasts state to all connected LAN clients.
+            Returns: {ok, snapshot}
+            """
+            _check_dm_auth(request)
+            if _dm_service is None:
+                raise HTTPException(status_code=503, detail="DM combat service unavailable.")
+            try:
+                result = _dm_service.prev_turn()
+                if not result.get("ok"):
+                    raise HTTPException(status_code=500, detail="Combat service failed to go to previous turn.")
+                return {"ok": True, "snapshot": result.get("snapshot") or _dm_service.combat_snapshot()}
+            except HTTPException:
+                raise
+            except Exception:
+                raise HTTPException(status_code=500, detail="Failed to go to previous turn.")
+
         @self._fastapi_app.post("/api/dm/combat/combatants/{cid}/hp")
         async def dm_adjust_hp(cid: int, request: Request, payload: Dict[str, Any] = Body(...)):
             """Adjust HP for a combatant.
@@ -8937,6 +8958,58 @@ class InitiativeTracker(base.InitiativeTracker):
             self._lan_force_state_broadcast()
         except Exception:
             pass
+
+    def _prev_turn_via_service(self) -> None:
+        """Go back one turn, routing through CombatService when available.
+
+        When the DM service seam is active this delegates to
+        ``CombatService.prev_turn()`` so the lock and broadcast paths are
+        shared between desktop and web callers.  Falls back to a direct
+        ``_prev_turn()`` + broadcast when the service is not running or
+        when the service call reports a failure.
+        """
+        dm_svc = getattr(self, "_dm_service", None)
+        if dm_svc is not None:
+            try:
+                result = dm_svc.prev_turn()
+                if result.get("ok"):
+                    return
+                self._oplog(
+                    f"CombatService.prev_turn failed: {result.get('error', 'unknown error')}",
+                    level="warning",
+                )
+            except Exception:
+                pass
+        # Fallback: direct engine call + best-effort broadcast
+        self._prev_turn()
+        try:
+            self._lan_force_state_broadcast()
+        except Exception:
+            pass
+
+    def _start_combat_via_service(self) -> None:
+        """Start combat, routing through CombatService when available.
+
+        When the DM service seam is active this delegates to
+        ``CombatService.start_combat()`` so the lock, in_combat flag,
+        and broadcast paths are shared between desktop and web callers.
+        Falls back to a direct ``_start_turns()`` when the service is not
+        running or when the service call reports a failure.
+        """
+        dm_svc = getattr(self, "_dm_service", None)
+        if dm_svc is not None:
+            try:
+                result = dm_svc.start_combat()
+                if result.get("ok"):
+                    return
+                self._oplog(
+                    f"CombatService.start_combat failed: {result.get('error', 'unknown error')}",
+                    level="warning",
+                )
+            except Exception:
+                pass
+        # Fallback: direct engine call
+        self._start_turns()
 
     def _adjust_hp_via_service(self, cid: int, delta: int) -> bool:
         """Adjust HP for combatant ``cid``, routing through CombatService when available.

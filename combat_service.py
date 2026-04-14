@@ -4,11 +4,11 @@ This module is the authoritative source of truth for the migrated combat/session
 slice.  Both the desktop UI and the DM web console read from and write through
 this service rather than owning separate state.
 
-Ownership model after this migration pass (Slice 6)
+Ownership model after this migration pass (Slice 7)
 -----------------------------------------------------
 Backend-owned (this service + API routes):
   - combat lifecycle: start (begin initiative turn order), end (reset turn state)
-  - initiative order / turn order
+  - initiative order / turn order (forward and backward)
   - current combatant / round / turn counters
   - up-next combatant preview
   - HP adjustments (damage and healing) for any combatant
@@ -18,10 +18,15 @@ Backend-owned (this service + API routes):
   - combatant creation / encounter population (quick-add via backend API)
   - initiative set / update for existing combatants
   - combatant removal
+  - prev-turn (go back one step in initiative order)
 
-Desktop-routed through this service (Slice 6):
+Desktop-routed through this service (Slice 7):
   - desktop Next Turn routes through CombatService.next_turn() via
     _next_turn_via_service() so the lock, log, and broadcast paths are shared
+  - desktop Prev Turn routes through CombatService.prev_turn() via
+    _prev_turn_via_service() so the lock and broadcast paths are shared
+  - desktop Start/Reset routes through CombatService.start_combat() via
+    _start_combat_via_service() so the lock and broadcast paths are shared
   - LAN player "end turn" routes through _next_turn_via_service()
   - LAN player manual_override_hp routes through CombatService.adjust_hp /
     adjust_temp_hp so the service lock and broadcast cover player-originated
@@ -36,12 +41,13 @@ Still hybrid / desktop-primary:
   - Character editor, shop, spell/resource management
   - YAML-backed save/load (unchanged; mutations here persist via existing path)
   - Full monster-spec / player-profile based combatant creation (desktop only)
-  - Advanced initiative manipulation (set-turn-here, prev-turn, start/reset)
+  - Advanced initiative manipulation (set-turn-here still desktop-only)
   - Deep combat engine damage paths (_apply_damage_to_target_with_temp_hp)
     still mutate state directly; these are candidates for future slices
 
 Next recommended migration targets:
   - Route deep combat engine damage/heal paths through service wrappers
+  - Route set-turn-here through CombatService
   - Expose full initiative-roll support so DM web can trigger rolls
   - Player-facing LAN client state sync improvements
 
@@ -50,6 +56,7 @@ Usage (from LanController routes):
   snap = service.combat_snapshot()
   service.start_combat()
   service.next_turn()
+  service.prev_turn()
   service.adjust_hp(cid=3, delta=-5)
   service.set_condition(cid=3, ctype="poisoned", action="add")
   service.end_combat()
@@ -241,6 +248,31 @@ class CombatService:
             t = self._tracker
             try:
                 t._next_turn()
+            except Exception as exc:
+                return {"ok": False, "error": str(exc), "snapshot": self.combat_snapshot()}
+            try:
+                t._rebuild_table(scroll_to_current=True)
+            except Exception:
+                pass
+            try:
+                t._lan_force_state_broadcast()
+            except Exception:
+                pass
+            return {"ok": True, "snapshot": self.combat_snapshot()}
+
+    def prev_turn(self) -> Dict[str, Any]:
+        """Go back to the previous combatant's turn.
+
+        Delegates to ``_prev_turn()`` on the tracker (same method the desktop
+        Prev Turn button invokes), then broadcasts state to all LAN clients
+        and returns the updated snapshot.
+
+        Returns: {ok, snapshot}  or  {ok: False, error: str}
+        """
+        with self._lock:
+            t = self._tracker
+            try:
+                t._prev_turn()
             except Exception as exc:
                 return {"ok": False, "error": str(exc), "snapshot": self.combat_snapshot()}
             try:
