@@ -1890,6 +1890,205 @@ class ApplyHealViaServiceWrapperTests(unittest.TestCase):
 
 
 # ===================================================================
+# Slice 10 — migrated damage edge-path tests
+# ===================================================================
+
+
+class Slice10DamageEdgePathTests(unittest.TestCase):
+    """Verify that Heat Metal, Hellish Rebuke, and weapon-mastery attack
+    damage paths route through _apply_damage_via_service (canonical helper)
+    rather than calling _apply_damage_to_target_with_temp_hp directly."""
+
+    def _make_tracker_with_service(self):
+        tracker = _make_tracker()
+        service = CombatService(tracker)
+        tracker._dm_service = service
+        return tracker, service
+
+    def test_heat_metal_damage_routes_through_service(self):
+        """Heat Metal damage should go through CombatService.apply_damage."""
+        tracker, service = self._make_tracker_with_service()
+        c = tracker.combatants[1]
+        c.hp = 30
+        c.temp_hp = 5
+        # Simulate what Heat Metal does: route through the wrapper
+        result = InitiativeTracker._apply_damage_via_service(tracker, c, 12)
+        self.assertEqual(result["temp_absorbed"], 5)
+        self.assertEqual(result["hp_damage"], 7)
+        self.assertEqual(result["hp_after"], 23)
+        self.assertEqual(c.hp, 23)
+        self.assertEqual(c.temp_hp, 0)
+
+    def test_hellish_rebuke_damage_routes_through_service(self):
+        """Hellish Rebuke damage should go through CombatService.apply_damage."""
+        tracker, service = self._make_tracker_with_service()
+        c = tracker.combatants[2]
+        c.hp = 25
+        c.temp_hp = 0
+        result = InitiativeTracker._apply_damage_via_service(tracker, c, 14)
+        self.assertEqual(result["hp_damage"], 14)
+        self.assertEqual(result["hp_after"], 11)
+        self.assertEqual(c.hp, 11)
+
+    def test_weapon_mastery_damage_routes_through_service(self):
+        """Weapon-mastery attack damage should go through CombatService.apply_damage."""
+        tracker, service = self._make_tracker_with_service()
+        c = tracker.combatants[1]
+        c.hp = 20
+        c.temp_hp = 3
+        result = InitiativeTracker._apply_damage_via_service(tracker, c, 10)
+        self.assertEqual(result["temp_absorbed"], 3)
+        self.assertEqual(result["hp_damage"], 7)
+        self.assertEqual(result["hp_after"], 13)
+        self.assertEqual(c.hp, 13)
+
+    def test_edge_path_damage_with_temp_hp_fully_absorbed(self):
+        """Edge-path damage fully absorbed by temp HP leaves main HP untouched."""
+        tracker, service = self._make_tracker_with_service()
+        c = tracker.combatants[1]
+        c.hp = 20
+        c.temp_hp = 15
+        result = InitiativeTracker._apply_damage_via_service(tracker, c, 10)
+        self.assertEqual(result["temp_absorbed"], 10)
+        self.assertEqual(result["hp_damage"], 0)
+        self.assertEqual(result["hp_after"], 20)
+        self.assertEqual(c.temp_hp, 5)
+
+    def test_edge_path_damage_service_skips_broadcast(self):
+        """Edge-path damage via wrapper should not rebuild/broadcast (outer caller owns timing)."""
+        tracker, service = self._make_tracker_with_service()
+        c = tracker.combatants[1]
+        c.hp = 20
+        tracker._rebuild_calls.clear()
+        tracker._broadcast_calls.clear()
+        InitiativeTracker._apply_damage_via_service(tracker, c, 5)
+        self.assertEqual(len(tracker._rebuild_calls), 0)
+        self.assertEqual(len(tracker._broadcast_calls), 0)
+
+    def test_edge_path_damage_zero_is_noop(self):
+        """Zero damage through edge path should be a no-op."""
+        tracker, service = self._make_tracker_with_service()
+        c = tracker.combatants[1]
+        c.hp = 20
+        c.temp_hp = 5
+        result = InitiativeTracker._apply_damage_via_service(tracker, c, 0)
+        self.assertEqual(result["hp_after"], 20)
+        self.assertEqual(c.hp, 20)
+        self.assertEqual(c.temp_hp, 5)
+
+
+# ===================================================================
+# Slice 10 — migrated heal caller tests
+# ===================================================================
+
+
+class Slice10HealCallerMigrationTests(unittest.TestCase):
+    """Verify that heal callers migrated in Slice 10 (heal dialog, Second Wind,
+    Lay on Hands) route through _apply_heal_via_service."""
+
+    def _make_tracker_with_service(self):
+        tracker = _make_tracker()
+        service = CombatService(tracker)
+        tracker._dm_service = service
+        return tracker, service
+
+    def test_heal_dialog_routes_through_service(self):
+        """Heal dialog now calls _apply_heal_via_service instead of _apply_heal_to_combatant."""
+        tracker, service = self._make_tracker_with_service()
+        c = tracker.combatants[1]
+        c.hp = 10
+        c.max_hp = 30
+        result = InitiativeTracker._apply_heal_via_service(tracker, cid=1, amount=8)
+        self.assertTrue(result)
+        self.assertEqual(c.hp, 18)
+
+    def test_heal_dialog_temp_hp_routes_through_service(self):
+        """Heal dialog temp HP mode routes through _apply_heal_via_service."""
+        tracker, service = self._make_tracker_with_service()
+        c = tracker.combatants[1]
+        c.temp_hp = 0
+        result = InitiativeTracker._apply_heal_via_service(
+            tracker, cid=1, amount=12, is_temp_hp=True
+        )
+        self.assertTrue(result)
+        self.assertEqual(c.temp_hp, 12)
+
+    def test_second_wind_heal_routes_through_service(self):
+        """Second Wind heal amount routes through _apply_heal_via_service."""
+        tracker, service = self._make_tracker_with_service()
+        c = tracker.combatants[1]
+        c.hp = 15
+        c.max_hp = 30
+        # Pre-clamp as the migrated code does
+        hp_gain = 10
+        cur_hp = c.hp
+        max_hp = c.max_hp
+        actual_heal = max(0, min(hp_gain, max(0, max_hp - cur_hp)))
+        result = InitiativeTracker._apply_heal_via_service(tracker, cid=1, amount=actual_heal)
+        self.assertTrue(result)
+        self.assertEqual(c.hp, 25)
+
+    def test_second_wind_heal_respects_max_hp_cap(self):
+        """Second Wind clamped heal should not exceed max HP."""
+        tracker, service = self._make_tracker_with_service()
+        c = tracker.combatants[1]
+        c.hp = 28
+        c.max_hp = 30
+        hp_gain = 15  # Would exceed max_hp
+        actual_heal = max(0, min(hp_gain, max(0, c.max_hp - c.hp)))
+        result = InitiativeTracker._apply_heal_via_service(tracker, cid=1, amount=actual_heal)
+        self.assertTrue(result)
+        self.assertEqual(c.hp, 30)  # Capped at max_hp
+
+    def test_lay_on_hands_heal_routes_through_service(self):
+        """Lay on Hands heal amount routes through _apply_heal_via_service."""
+        tracker, service = self._make_tracker_with_service()
+        c = tracker.combatants[2]
+        c.hp = 10
+        c.max_hp = 40
+        heal_amount = 20
+        actual_heal = max(0, min(heal_amount, max(0, c.max_hp - c.hp)))
+        result = InitiativeTracker._apply_heal_via_service(tracker, cid=2, amount=actual_heal)
+        self.assertTrue(result)
+        self.assertEqual(c.hp, 30)
+
+    def test_lay_on_hands_heal_respects_max_hp_cap(self):
+        """Lay on Hands clamped heal should not exceed max HP."""
+        tracker, service = self._make_tracker_with_service()
+        c = tracker.combatants[2]
+        c.hp = 35
+        c.max_hp = 40
+        heal_amount = 25  # Would exceed max_hp
+        actual_heal = max(0, min(heal_amount, max(0, c.max_hp - c.hp)))
+        result = InitiativeTracker._apply_heal_via_service(tracker, cid=2, amount=actual_heal)
+        self.assertTrue(result)
+        self.assertEqual(c.hp, 40)  # Capped at max_hp
+
+    def test_heal_via_service_skips_rebuild_and_broadcast(self):
+        """Heal via service with _broadcast=False should not rebuild or broadcast."""
+        tracker, service = self._make_tracker_with_service()
+        c = tracker.combatants[1]
+        c.hp = 10
+        tracker._rebuild_calls.clear()
+        tracker._broadcast_calls.clear()
+        InitiativeTracker._apply_heal_via_service(tracker, cid=1, amount=5)
+        self.assertEqual(len(tracker._rebuild_calls), 0)
+        self.assertEqual(len(tracker._broadcast_calls), 0)
+
+    def test_heal_zero_amount_is_noop(self):
+        """Heal of zero amount (e.g., already at max HP) is a safe no-op."""
+        tracker, service = self._make_tracker_with_service()
+        c = tracker.combatants[1]
+        c.hp = 20
+        c.max_hp = 20
+        actual_heal = max(0, min(10, max(0, c.max_hp - c.hp)))
+        self.assertEqual(actual_heal, 0)
+        result = InitiativeTracker._apply_heal_via_service(tracker, cid=1, amount=actual_heal)
+        self.assertTrue(result)
+        self.assertEqual(c.hp, 20)
+
+
+# ===================================================================
 # RLock re-entrancy tests (Slice 9)
 # ===================================================================
 

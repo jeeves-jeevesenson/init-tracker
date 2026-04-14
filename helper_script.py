@@ -5876,7 +5876,7 @@ class InitiativeTracker(tk.Tk):
                     messagebox.showerror("Heal", f"Row {idx}: Amount must be positive.", parent=dlg)
                     return
 
-                if not self._apply_heal_to_combatant(cid, amt, is_temp_hp=temp_hp_mode.get()):
+                if not self._apply_heal_via_service(cid, amt, is_temp_hp=temp_hp_mode.get()):
                     continue
 
                 c = self.combatants.get(cid)
