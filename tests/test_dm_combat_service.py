@@ -360,7 +360,7 @@ class CombatServiceLockTests(unittest.TestCase):
 
     def test_service_has_lock(self):
         import threading
-        self.assertIsInstance(self.service._lock, type(threading.Lock()))
+        self.assertIsInstance(self.service._lock, type(threading.RLock()))
 
     def test_concurrent_hp_adjustments_safe(self):
         """Two threads can call adjust_hp concurrently without raising."""
