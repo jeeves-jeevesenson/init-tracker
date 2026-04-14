@@ -553,6 +553,7 @@ def _load_governor_state(run: AgentRun) -> dict[str, Any]:
     state.setdefault("reviewer_cleanup_result", "")
     state.setdefault("safe_draft_promoted", False)
     state.setdefault("safe_draft_promotion_failed", False)
+    state.setdefault("fix_trigger_fingerprint", "")
     return state
 
 
@@ -644,6 +645,26 @@ def _batched_revision_comment_body(*, governor_requests: list[str], copilot_find
     return "\n".join(lines)
 
 
+def _copilot_fix_trigger_body(*, findings: list[str]) -> str:
+    """Build the deterministic @copilot fix-trigger comment for unresolved review findings."""
+    lines = [
+        "@copilot apply the unresolved review feedback on this pull request "
+        "and push fixes directly to this branch.",
+        "",
+        "Focus on:",
+    ]
+    for finding in findings[:12]:
+        lines.append(f"- {finding}")
+    if not findings:
+        lines.append("- Re-run your review, resolve outstanding findings, and update validation evidence.")
+    lines.append("")
+    lines.append(
+        "If a finding is not valid, explain briefly in the PR conversation "
+        "instead of changing code."
+    )
+    return "\n".join(lines)
+
+
 def _default_worker_brief(task: TaskPacket, internal_plan: dict[str, Any]) -> dict[str, Any]:
     return {
         "objective": internal_plan.get("objective") or task.title or "",
@@ -723,6 +744,76 @@ def _run_governor_loop(
     if waiting_for_revision_push and not unresolved_findings:
         waiting_for_revision_push = False
         state["waiting_for_revision_push"] = False
+
+    # --- Deterministic fix-trigger for ready PRs with unresolved Copilot findings ---
+    if (
+        not pr_draft
+        and copilot_review_observed
+        and unresolved_findings
+        and not guarded_paths_touched
+    ):
+        trigger_body = _copilot_fix_trigger_body(findings=unresolved_findings)
+        trigger_fp = hashlib.sha1(trigger_body.encode("utf-8")).hexdigest()
+        already_triggered = state.get("fix_trigger_fingerprint") == trigger_fp
+        if not already_triggered:
+            existing_comments, _ = list_issue_comments(
+                settings=settings, repo=task.github_repo, issue_number=pr_number,
+            )
+            exists_remote = any(
+                isinstance(c, dict) and str(c.get("body") or "").strip() == trigger_body.strip()
+                for c in existing_comments
+            )
+            if not exists_remote:
+                post_issue_comment(
+                    settings=settings, repo=task.github_repo, issue_number=pr_number, body=trigger_body,
+                )
+            state["fix_trigger_fingerprint"] = trigger_fp
+            state["revision_cycle_count"] = int(state.get("revision_cycle_count") or 0) + 1
+            state["waiting_for_revision_push"] = True
+            waiting_for_revision_push = True
+        # Persist and short-circuit — no OpenAI call needed.
+        state["pr_draft"] = pr_draft
+        state["pr_state"] = pr_state
+        state["requested_reviewers"] = requested_reviewers
+        state["changed_files"] = changed_files
+        state["copilot_review_observed"] = copilot_review_observed
+        state["unresolved_copilot_findings"] = unresolved_findings
+        state["guarded_paths_touched"] = guarded_paths_touched
+        state["guarded_files"] = guarded_files
+        state["last_event_key"] = event_key
+        state["last_governor_decision"] = "fix_trigger_posted" if not already_triggered else "fix_trigger_waiting"
+        state["last_governor_summary"] = [
+            "Deterministic fix-trigger: posted @copilot fix request for unresolved review findings."
+        ] if not already_triggered else [
+            "Deterministic fix-trigger: waiting for Copilot push (trigger already posted)."
+        ]
+        max_cycles = max(1, int(getattr(settings, "governor_max_revision_cycles", 2) or 2))
+        if int(state.get("revision_cycle_count") or 0) > max_cycles:
+            state["last_governor_decision"] = "escalate_human"
+            state["last_governor_summary"] = ["Max governor revision cycles exceeded."]
+            if task.program_id:
+                program = session.get(Program, task.program_id)
+                if program is not None:
+                    program.status = "blocked"
+                    program.blocker_state_json = json.dumps(
+                        {
+                            "reason": "escalated_to_human",
+                            "slice_id": task.program_slice_id,
+                            "run_id": run.id,
+                            "pr_number": pr_number,
+                            "detail": "Max governor revision cycles exceeded.",
+                        },
+                        ensure_ascii=False,
+                    )
+                    program.latest_summary = "Max governor revision cycles exceeded."
+                    program.updated_at = _utc_now()
+                    _save(session, program)
+        suffix = state["last_governor_summary"][0] if state["last_governor_summary"] else state["last_governor_decision"]
+        run.last_summary = f"{run.last_summary or ''}\nGovernor: {state['last_governor_decision']} ({suffix})".strip()
+        run.updated_at = _utc_now()
+        _save_governor_state(run, state)
+        _save(session, run)
+        return
 
     # --- Deterministic safe-draft promotion (before OpenAI) ---
     if safe_draft_can_be_promoted(
@@ -884,7 +975,7 @@ def _run_governor_loop(
         if not success:
             _governor_logger.warning("Governor: OpenAI-directed ready_for_review failed for PR #%s: %s", pr_number, msg)
     if decision == "approve_and_merge":
-        if guarded_paths_touched or unresolved_findings or pr_draft or not checks_passed:
+        if guarded_paths_touched or unresolved_findings or pr_draft or not checks_passed or waiting_for_revision_push:
             decision = "wait"
         else:
             if not bool(state.get("approval_submitted")):
