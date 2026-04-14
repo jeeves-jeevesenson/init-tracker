@@ -70,6 +70,7 @@ from .models import (
 from .openai_planning import plan_task_packet
 from .openai_review import summarize_work_update
 from .openai_review import summarize_governor_update
+from .openai_review import summarize_copilot_review_batch
 from .programs import (
     advance_program_on_pr_merge,
     apply_reviewer_decision,
@@ -554,6 +555,9 @@ def _load_governor_state(run: AgentRun) -> dict[str, Any]:
     state.setdefault("safe_draft_promoted", False)
     state.setdefault("safe_draft_promotion_failed", False)
     state.setdefault("fix_trigger_fingerprint", "")
+    state.setdefault("review_harvest_summary", "")
+    state.setdefault("review_batch_artifact", {})
+    state.setdefault("checkpoints", {})
     return state
 
 
@@ -562,6 +566,21 @@ def _save_governor_state(run: AgentRun, state: dict[str, Any]) -> None:
 
 
 _governor_logger = logging.getLogger("orchestrator.governor")
+
+
+def _set_checkpoint(
+    state: dict[str, Any],
+    *,
+    name: str,
+    success: bool,
+    summary: str,
+) -> None:
+    checkpoints = state.setdefault("checkpoints", {})
+    checkpoints[name] = {
+        "success": bool(success),
+        "summary": str(summary or ""),
+        "updated_at": _utc_now().isoformat(),
+    }
 
 
 def safe_draft_can_be_promoted(
@@ -694,9 +713,29 @@ def _run_governor_loop(
     state = _load_governor_state(run)
     if state.get("last_event_key") == event_key:
         return
+    _set_checkpoint(
+        state,
+        name="issue_dispatched",
+        success=bool(run.github_dispatch_id or run.github_dispatch_url or run.status != RUN_STATUS_QUEUED),
+        summary="Dispatch evidence observed for run." if (run.github_dispatch_id or run.github_dispatch_url or run.status != RUN_STATUS_QUEUED) else "Dispatch evidence missing.",
+    )
+    _set_checkpoint(
+        state,
+        name="pr_discovered",
+        success=True,
+        summary=f"PR linkage discovered: #{pr_number}.",
+    )
+    event_has_push_signal = ":synchronize:" in event_key
+    event_has_review_signal = ("pull_request_review:" in event_key) or ("pull_request_review_comment:" in event_key)
 
     pr_draft = bool(pr_payload.get("draft"))
     pr_state = str(pr_payload.get("state") or "open")
+    _set_checkpoint(
+        state,
+        name="pr_ready_verified",
+        success=not pr_draft,
+        summary="PR is non-draft (ready for review)." if not pr_draft else "PR remains draft.",
+    )
     requested_reviewers = []
     for item in pr_payload.get("requested_reviewers") or []:
         if isinstance(item, dict) and isinstance(item.get("login"), str):
@@ -731,8 +770,23 @@ def _run_governor_loop(
     else:
         state["reviewer_cleanup_result"] = "skipped:no_login_configured"
 
-    reviews, _ = list_pull_request_reviews(settings=settings, repo=task.github_repo, pr_number=pr_number)
-    review_comments, _ = list_pull_request_review_comments(settings=settings, repo=task.github_repo, pr_number=pr_number)
+    reviews, reviews_msg = list_pull_request_reviews(settings=settings, repo=task.github_repo, pr_number=pr_number)
+    review_comments, review_comments_msg = list_pull_request_review_comments(settings=settings, repo=task.github_repo, pr_number=pr_number)
+    lower_reviews_msg = str(reviews_msg or "").lower()
+    lower_review_comments_msg = str(review_comments_msg or "").lower()
+    review_harvested = (
+        "failure" not in lower_reviews_msg
+        and "cannot list" not in lower_reviews_msg
+        and "failure" not in lower_review_comments_msg
+        and "cannot list" not in lower_review_comments_msg
+    )
+    state["review_harvest_summary"] = f"reviews={reviews_msg}; review_comments={review_comments_msg}"
+    _set_checkpoint(
+        state,
+        name="review_harvested",
+        success=review_harvested,
+        summary=state["review_harvest_summary"],
+    )
     copilot_review_observed, unresolved_findings = _copilot_findings_from_reviews(
         settings=settings,
         reviews=reviews,
@@ -744,6 +798,26 @@ def _run_governor_loop(
     if waiting_for_revision_push and not unresolved_findings:
         waiting_for_revision_push = False
         state["waiting_for_revision_push"] = False
+        _set_checkpoint(
+            state,
+            name="copilot_push_rereview_observed",
+            success=True,
+            summary="Revision findings cleared after waiting for Copilot revision push.",
+        )
+    elif waiting_for_revision_push and (event_has_push_signal or event_has_review_signal):
+        _set_checkpoint(
+            state,
+            name="copilot_push_rereview_observed",
+            success=True,
+            summary="Copilot push/re-review signal observed while waiting for revision.",
+        )
+    if not unresolved_findings:
+        _set_checkpoint(
+            state,
+            name="continuation_comment_posted",
+            success=True,
+            summary="No actionable unresolved review findings; no continuation comment needed.",
+        )
 
     # --- Deterministic fix-trigger for ready PRs with unresolved Copilot findings ---
     if (
@@ -752,10 +826,53 @@ def _run_governor_loop(
         and unresolved_findings
         and not guarded_paths_touched
     ):
-        trigger_body = _copilot_fix_trigger_body(findings=unresolved_findings)
+        mixed_review_states = {
+            str(item.get("state") or "").upper()
+            for item in reviews
+            if isinstance(item, dict) and isinstance(item.get("state"), str)
+        }
+        escalate_batch_model = bool(
+            len(unresolved_findings) > 12
+            or (len(reviews) + len(review_comments) > 80)
+            or ("CHANGES_REQUESTED" in mixed_review_states and "APPROVED" in mixed_review_states)
+        )
+        batch_context = json.dumps(
+            {
+                "repo": task.github_repo,
+                "issue_number": task.github_issue_number,
+                "pr_number": pr_number,
+                "unresolved_findings": unresolved_findings,
+                "reviews": reviews[:50],
+                "review_comments": review_comments[:120],
+                "max_items": 12,
+            },
+            ensure_ascii=False,
+        )
+        batch_payload = summarize_copilot_review_batch(
+            settings=settings,
+            update_context=batch_context,
+            previous_response_id=run.openai_last_response_id,
+            force_flagship=escalate_batch_model,
+        )
+        batch_openai_meta = batch_payload.get("openai_meta") if isinstance(batch_payload, dict) else {}
+        batch_response_id = batch_openai_meta.get("response_id") if isinstance(batch_openai_meta, dict) else None
+        if isinstance(batch_response_id, str) and batch_response_id.strip():
+            run.openai_last_response_id = batch_response_id.strip()
+        batch_artifact = (
+            batch_payload.get("review_batch_artifact")
+            if isinstance(batch_payload.get("review_batch_artifact"), dict)
+            else {}
+        )
+        state["review_batch_artifact"] = batch_artifact
+        should_trigger_copilot = bool(batch_artifact.get("should_trigger_copilot"))
+        trigger_body = str(batch_artifact.get("comment_body") or "").strip() or _copilot_fix_trigger_body(
+            findings=unresolved_findings
+        )
+        if not trigger_body.startswith("@copilot"):
+            trigger_body = f"@copilot {trigger_body}"
         trigger_fp = hashlib.sha1(trigger_body.encode("utf-8")).hexdigest()
         already_triggered = state.get("fix_trigger_fingerprint") == trigger_fp
-        if not already_triggered:
+        if should_trigger_copilot and not already_triggered:
             existing_comments, _ = list_issue_comments(
                 settings=settings, repo=task.github_repo, issue_number=pr_number,
             )
@@ -768,6 +885,12 @@ def _run_governor_loop(
                     settings=settings, repo=task.github_repo, issue_number=pr_number, body=trigger_body,
                 )
                 if not comment_ok:
+                    _set_checkpoint(
+                        state,
+                        name="continuation_comment_posted",
+                        success=False,
+                        summary=comment_msg,
+                    )
                     state["last_event_key"] = event_key
                     state["last_governor_decision"] = "copilot_follow_up_comment_failed"
                     state["last_governor_summary"] = [comment_msg]
@@ -778,10 +901,30 @@ def _run_governor_loop(
                     _save_governor_state(run, state)
                     _save(session, run)
                     return
+            _set_checkpoint(
+                state,
+                name="continuation_comment_posted",
+                success=True,
+                summary="Batched top-level @copilot continuation comment posted (or already present remotely).",
+            )
             state["fix_trigger_fingerprint"] = trigger_fp
             state["revision_cycle_count"] = int(state.get("revision_cycle_count") or 0) + 1
             state["waiting_for_revision_push"] = True
             waiting_for_revision_push = True
+        elif should_trigger_copilot and already_triggered:
+            _set_checkpoint(
+                state,
+                name="continuation_comment_posted",
+                success=True,
+                summary="Batched top-level @copilot continuation comment already posted for current fingerprint.",
+            )
+        else:
+            _set_checkpoint(
+                state,
+                name="continuation_comment_posted",
+                success=True,
+                summary="No actionable/deduplicated continuation comment required this cycle.",
+            )
         # Persist and short-circuit — no OpenAI call needed.
         state["pr_draft"] = pr_draft
         state["pr_state"] = pr_state
@@ -850,6 +993,12 @@ def _run_governor_loop(
         state["guarded_files"] = guarded_files
         state["last_event_key"] = event_key
         if success:
+            _set_checkpoint(
+                state,
+                name="pr_ready_verified",
+                success=True,
+                summary="Draft->ready transition completed and verified (draft=False).",
+            )
             state["safe_draft_promoted"] = True
             state["safe_draft_promotion_failed"] = False
             state["last_governor_decision"] = "safe_draft_promoted"
@@ -864,6 +1013,12 @@ def _run_governor_loop(
             _governor_logger.info("Governor: PR #%s successfully promoted to ready for review.", pr_number)
             return
         else:
+            _set_checkpoint(
+                state,
+                name="pr_ready_verified",
+                success=False,
+                summary=f"Draft->ready transition failed: {msg}",
+            )
             state["safe_draft_promoted"] = False
             state["safe_draft_promotion_failed"] = True
             state["last_governor_decision"] = "safe_draft_promotion_failed"
@@ -983,6 +1138,12 @@ def _run_governor_loop(
                     body=comment_body,
                 )
                 if not comment_ok:
+                    _set_checkpoint(
+                        state,
+                        name="continuation_comment_posted",
+                        success=False,
+                        summary=comment_msg,
+                    )
                     state["last_event_key"] = event_key
                     state["last_governor_decision"] = "copilot_follow_up_comment_failed"
                     state["last_governor_summary"] = [comment_msg]
@@ -993,10 +1154,29 @@ def _run_governor_loop(
                     _save_governor_state(run, state)
                     _save(session, run)
                     return
+            _set_checkpoint(
+                state,
+                name="continuation_comment_posted",
+                success=True,
+                summary="Top-level @copilot continuation comment posted for governor revision request.",
+            )
             state["last_revision_comment_fingerprint"] = fingerprint
             state["last_revision_comment_body"] = comment_body
             state["revision_cycle_count"] = int(state.get("revision_cycle_count") or 0) + 1
             state["waiting_for_revision_push"] = True
+            _set_checkpoint(
+                state,
+                name="copilot_push_rereview_observed",
+                success=False,
+                summary="Waiting for Copilot revision push/re-review after continuation comment.",
+            )
+        elif already_posted:
+            _set_checkpoint(
+                state,
+                name="continuation_comment_posted",
+                success=True,
+                summary="Matching continuation comment already posted; no duplicate comment sent.",
+            )
         max_cycles = max(1, int(getattr(settings, "governor_max_revision_cycles", 2) or 2))
         if int(state.get("revision_cycle_count") or 0) > max_cycles:
             decision = "escalate_human"
@@ -1004,18 +1184,57 @@ def _run_governor_loop(
 
     if decision == "ready_for_review" and pr_draft:
         success, msg = mark_pr_ready_for_review(settings=settings, repo=task.github_repo, pr_number=pr_number)
+        _set_checkpoint(
+            state,
+            name="pr_ready_verified",
+            success=bool(success),
+            summary=msg,
+        )
         if not success:
             _governor_logger.warning("Governor: OpenAI-directed ready_for_review failed for PR #%s: %s", pr_number, msg)
     if decision == "approve_and_merge":
-        if guarded_paths_touched or unresolved_findings or pr_draft or not checks_passed or waiting_for_revision_push:
+        ready_gate = bool((state.get("checkpoints") or {}).get("pr_ready_verified", {}).get("success"))
+        harvest_gate = bool((state.get("checkpoints") or {}).get("review_harvested", {}).get("success"))
+        pr_gate = bool((state.get("checkpoints") or {}).get("pr_discovered", {}).get("success"))
+        dispatch_gate = bool((state.get("checkpoints") or {}).get("issue_dispatched", {}).get("success"))
+        if (
+            guarded_paths_touched
+            or unresolved_findings
+            or pr_draft
+            or not checks_passed
+            or waiting_for_revision_push
+            or not ready_gate
+            or not harvest_gate
+            or not pr_gate
+            or not dispatch_gate
+        ):
             decision = "wait"
         else:
             if not bool(state.get("approval_submitted")):
                 submit_approving_review(settings=settings, repo=task.github_repo, pr_number=pr_number)
                 state["approval_submitted"] = True
-            merged, _ = merge_pr(settings=settings, repo=task.github_repo, pr_number=pr_number)
+            merged, merge_msg = merge_pr(settings=settings, repo=task.github_repo, pr_number=pr_number)
+            _set_checkpoint(
+                state,
+                name="merge_attempted_latest_sha",
+                success=bool(merged),
+                summary=merge_msg,
+            )
             if merged:
                 state["merge_completed"] = True
+                _set_checkpoint(
+                    state,
+                    name="merge_verified",
+                    success=True,
+                    summary="Merge completed and verified with merged=true postcondition.",
+                )
+            else:
+                _set_checkpoint(
+                    state,
+                    name="merge_verified",
+                    success=False,
+                    summary=merge_msg,
+                )
     if decision == "escalate_human" and task.program_id and not guarded_paths_touched:
         program = session.get(Program, task.program_id)
         if program is not None:

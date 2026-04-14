@@ -1543,22 +1543,29 @@ class MergePRTests(unittest.TestCase):
                 }
             }
         }
+        verify_response = MagicMock()
+        verify_response.status_code = 200
+        verify_response.json.return_value = {
+            "data": {"repository": {"pullRequest": {"id": "PR_node_id_123", "isDraft": False}}}
+        }
 
         with patch("orchestrator.app.github_dispatch.httpx.Client") as mock_client_cls:
             mock_client = MagicMock()
             mock_client.__enter__ = lambda s: mock_client
             mock_client.__exit__ = MagicMock(return_value=False)
-            mock_client.post.side_effect = [query_response, mutation_response]
+            mock_client.post.side_effect = [query_response, mutation_response, verify_response]
             mock_client_cls.return_value = mock_client
 
             success, msg = mark_pr_ready_for_review(settings=settings, repo="owner/repo", pr_number=42)
 
         self.assertTrue(success)
         self.assertIn("marked ready for review", msg)
-        self.assertEqual(mock_client.post.call_count, 2)
+        self.assertEqual(mock_client.post.call_count, 3)
         second_call = mock_client.post.call_args_list[1]
         self.assertIn("/graphql", second_call.args[0])
         self.assertIn("markPullRequestReadyForReview", second_call.kwargs["json"]["query"])
+        third_call = mock_client.post.call_args_list[2]
+        self.assertIn("pullRequest(number:", third_call.kwargs["json"]["query"])
         mock_client.patch.assert_not_called()
 
     def test_mark_pr_ready_for_review_graphql_error_returns_failure(self):
@@ -1582,7 +1589,12 @@ class MergePRTests(unittest.TestCase):
             mock_client = MagicMock()
             mock_client.__enter__ = lambda s: mock_client
             mock_client.__exit__ = MagicMock(return_value=False)
-            mock_client.post.side_effect = [query_response, mutation_response]
+            verify_response = MagicMock()
+            verify_response.status_code = 200
+            verify_response.json.return_value = {
+                "data": {"repository": {"pullRequest": {"id": "PR_node_id_456", "isDraft": False}}}
+            }
+            mock_client.post.side_effect = [query_response, mutation_response, verify_response]
             mock_client_cls.return_value = mock_client
 
             success, msg = mark_pr_ready_for_review(settings=settings, repo="owner/repo", pr_number=42)
@@ -1601,13 +1613,22 @@ class MergePRTests(unittest.TestCase):
 
         settings = Settings(GITHUB_API_TOKEN="dummy-token", GITHUB_API_URL="https://api.github.com")
 
+        inspect_before = MagicMock()
+        inspect_before.status_code = 200
+        inspect_before.headers = {"content-type": "application/json"}
+        inspect_before.json.return_value = {"head": {"sha": "sha-1"}, "merged": False}
         mock_response = MagicMock()
         mock_response.status_code = 200
+        inspect_after = MagicMock()
+        inspect_after.status_code = 200
+        inspect_after.headers = {"content-type": "application/json"}
+        inspect_after.json.return_value = {"head": {"sha": "sha-1"}, "merged": True}
 
         with patch("orchestrator.app.github_dispatch.httpx.Client") as mock_client_cls:
             mock_client = MagicMock()
             mock_client.__enter__ = lambda s: mock_client
             mock_client.__exit__ = MagicMock(return_value=False)
+            mock_client.get.side_effect = [inspect_before, inspect_after]
             mock_client.put.return_value = mock_response
             mock_client_cls.return_value = mock_client
 
@@ -1618,6 +1639,7 @@ class MergePRTests(unittest.TestCase):
         mock_client.put.assert_called_once()
         call_kwargs = mock_client.put.call_args
         self.assertIn("/pulls/42/merge", call_kwargs.args[0])
+        self.assertEqual((call_kwargs.kwargs.get("json") or {}).get("sha"), "sha-1")
 
     def test_merge_pr_missing_token(self):
         """merge_pr should return (False, ...) when no token is configured."""
@@ -1627,7 +1649,7 @@ class MergePRTests(unittest.TestCase):
         settings = Settings(GITHUB_API_TOKEN=None)
         success, msg = merge_pr(settings=settings, repo="owner/repo", pr_number=42)
         self.assertFalse(success)
-        self.assertIn("token", msg.lower())
+        self.assertIn("dispatch user-token", msg.lower())
 
     def test_merge_pr_403_returns_failure(self):
         """merge_pr should return (False, ...) on a 403 response."""
@@ -1636,6 +1658,10 @@ class MergePRTests(unittest.TestCase):
 
         settings = Settings(GITHUB_API_TOKEN="dummy-token")
 
+        inspect_before = MagicMock()
+        inspect_before.status_code = 200
+        inspect_before.headers = {"content-type": "application/json"}
+        inspect_before.json.return_value = {"head": {"sha": "sha-403"}, "merged": False}
         mock_response = MagicMock()
         mock_response.status_code = 403
         mock_response.text = "Resource not accessible by integration"
@@ -1644,6 +1670,7 @@ class MergePRTests(unittest.TestCase):
             mock_client = MagicMock()
             mock_client.__enter__ = lambda s: mock_client
             mock_client.__exit__ = MagicMock(return_value=False)
+            mock_client.get.return_value = inspect_before
             mock_client.put.return_value = mock_response
             mock_client_cls.return_value = mock_client
 
@@ -3331,9 +3358,7 @@ class CopilotFixTriggerTests(unittest.TestCase):
             # Fix-trigger comment must have been posted
             mocked_post.assert_called_once()
             posted_body = mocked_post.call_args[1].get("body") or mocked_post.call_args[0][-1]
-            self.assertTrue(posted_body.startswith(
-                "@copilot apply the unresolved review feedback on this pull request"
-            ))
+            self.assertTrue(posted_body.startswith("@copilot"))
             self.assertIn("Fix null check in line 42", posted_body)
             # OpenAI governor should NOT have been called — deterministic path short-circuits
             mocked_governor.assert_not_called()

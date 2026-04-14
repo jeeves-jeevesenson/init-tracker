@@ -686,10 +686,71 @@ def mark_pr_ready_for_review(*, settings: Settings, repo: str, pr_number: int) -
                 )
                 return False, f"Ready-for-review failure: {msg}"
 
-            post_draft_state = (
+            post_mutation_draft_state = (
                 ((mutation_payload.get("data") or {}).get("markPullRequestReadyForReview") or {}).get("pullRequest")
                 or {}
             ).get("isDraft")
+            # Required postcondition verification: re-read PR draft state.
+            verify_response = client.post(
+                graphql_url,
+                headers=_build_dispatch_headers(settings),
+                json={
+                    "query": _PULL_REQUEST_ID_QUERY,
+                    "variables": {"owner": owner, "name": name, "number": pr_number},
+                },
+            )
+            if verify_response.status_code >= 400:
+                msg = (
+                    f"GitHub returned {verify_response.status_code} when verifying ready-for-review "
+                    f"for PR #{pr_number}: {verify_response.text[:300]}"
+                )
+                _log_github_action(
+                    action=action,
+                    repo=repo,
+                    number=pr_number,
+                    number_kind="pr_number",
+                    auth_lane="dispatch_user_token",
+                    api_type="GraphQL",
+                    success=False,
+                    summary=f"Ready-for-review failure: verify step; {msg}",
+                )
+                return False, f"Ready-for-review failure: {msg}"
+            verify_payload = verify_response.json()
+            if verify_payload.get("errors"):
+                msg = (
+                    f"GitHub GraphQL errors when verifying ready-for-review for PR #{pr_number}: "
+                    f"{str(verify_payload.get('errors'))[:300]}"
+                )
+                _log_github_action(
+                    action=action,
+                    repo=repo,
+                    number=pr_number,
+                    number_kind="pr_number",
+                    auth_lane="dispatch_user_token",
+                    api_type="GraphQL",
+                    success=False,
+                    summary=f"Ready-for-review failure: verify step; {msg}",
+                )
+                return False, f"Ready-for-review failure: {msg}"
+            post_verify_draft_state = (
+                ((verify_payload.get("data") or {}).get("repository") or {}).get("pullRequest") or {}
+            ).get("isDraft")
+            if post_verify_draft_state is not False:
+                msg = (
+                    "Ready-for-review postcondition failed: expected draft=False after mutation, "
+                    f"observed draft={post_verify_draft_state!r}"
+                )
+                _log_github_action(
+                    action=action,
+                    repo=repo,
+                    number=pr_number,
+                    number_kind="pr_number",
+                    auth_lane="dispatch_user_token",
+                    api_type="GraphQL",
+                    success=False,
+                    summary=msg,
+                )
+                return False, msg
 
             msg = f"PR #{pr_number} marked ready for review"
             _log_github_action(
@@ -702,7 +763,8 @@ def mark_pr_ready_for_review(*, settings: Settings, repo: str, pr_number: int) -
                 success=True,
                 summary=(
                     f"{msg}; mutation=markPullRequestReadyForReview; "
-                    f"post_mutation_is_draft={post_draft_state!r}"
+                    f"post_mutation_is_draft={post_mutation_draft_state!r}; "
+                    f"post_verify_is_draft={post_verify_draft_state!r}"
                 ),
             )
             return True, msg
@@ -739,43 +801,137 @@ def merge_pr(
     - 409: merge conflict
     - 422: unprocessable (e.g., already merged, branch deleted)
     """
-    if not has_governor_auth(settings):
-        return False, "Governor auth failure: token/app auth not configured; cannot merge PR"
+    if not has_dispatch_auth(settings):
+        return False, "Merge failure: dispatch user-token auth not configured; cannot merge PR"
     api_base = settings.github_api_url.rstrip("/")
-    url = f"{api_base}/repos/{repo}/pulls/{pr_number}/merge"
+    pr_url = f"{api_base}/repos/{repo}/pulls/{pr_number}"
+    merge_url = f"{api_base}/repos/{repo}/pulls/{pr_number}/merge"
+
+    def _fetch_latest_head_and_merge_state(client: httpx.Client) -> tuple[str | None, bool | None, str]:
+        response = client.get(pr_url, headers=_build_dispatch_headers(settings))
+        if response.status_code >= 400:
+            return None, None, (
+                f"PR lifecycle automation failure: GitHub returned {response.status_code} when fetching PR #{pr_number} "
+                f"before merge: {response.text[:300]}"
+            )
+        payload = response.json() if response.headers.get("content-type", "").startswith("application/json") else {}
+        head = payload.get("head") if isinstance(payload.get("head"), dict) else {}
+        head_sha = head.get("sha") if isinstance(head.get("sha"), str) else None
+        merged_state = payload.get("merged")
+        merged = bool(merged_state) if merged_state is not None else None
+        if not head_sha:
+            return None, merged, f"PR lifecycle automation failure: Missing head.sha for PR #{pr_number}; cannot merge"
+        return head_sha, merged, "ok"
+
+    def _attempt_merge(client: httpx.Client, *, head_sha: str) -> tuple[bool, int, str]:
+        response = client.put(
+            merge_url,
+            headers=_build_dispatch_headers(settings),
+            json={"merge_method": merge_method, "sha": head_sha},
+        )
+        if response.status_code in {200, 204}:
+            return True, response.status_code, "ok"
+        return False, response.status_code, response.text[:300]
+
     try:
         with httpx.Client(timeout=15.0) as client:
-            response = client.put(
-                url,
-                headers=_build_governor_headers(settings),
-                json={"merge_method": merge_method},
-            )
-            if response.status_code in {200, 204}:
-                msg = f"PR #{pr_number} merged successfully"
+            first_head_sha, already_merged, first_fetch_msg = _fetch_latest_head_and_merge_state(client)
+            if already_merged is True:
+                msg = f"PR #{pr_number} already merged (merge_observed=True)"
                 _log_github_action(
                     action="merge_pr",
                     repo=repo,
                     number=pr_number,
                     number_kind="pr_number",
-                    auth_lane="governor",
+                    auth_lane="dispatch_user_token",
                     api_type="REST",
                     success=True,
                     summary=msg,
                 )
                 return True, msg
-            detail = response.text[:300]
-            msg = f"PR lifecycle automation failure: GitHub returned {response.status_code} when merging PR #{pr_number}: {detail}"
+            if first_head_sha is None:
+                _log_github_action(
+                    action="merge_pr",
+                    repo=repo,
+                    number=pr_number,
+                    number_kind="pr_number",
+                    auth_lane="dispatch_user_token",
+                    api_type="REST",
+                    success=False,
+                    summary=first_fetch_msg,
+                )
+                return False, first_fetch_msg
+
+            merged, status_code, detail = _attempt_merge(client, head_sha=first_head_sha)
+            merge_attempt_sha = first_head_sha
+            retry_used = False
+            if not merged and status_code == 409:
+                refreshed_head_sha, _, refresh_msg = _fetch_latest_head_and_merge_state(client)
+                if refreshed_head_sha is None:
+                    _log_github_action(
+                        action="merge_pr",
+                        repo=repo,
+                        number=pr_number,
+                        number_kind="pr_number",
+                        auth_lane="dispatch_user_token",
+                        api_type="REST",
+                        success=False,
+                        summary=f"Merge retry prep failed after 409: {refresh_msg}",
+                    )
+                    return False, f"Merge retry prep failed after 409: {refresh_msg}"
+                retry_used = True
+                merge_attempt_sha = refreshed_head_sha
+                merged, status_code, detail = _attempt_merge(client, head_sha=refreshed_head_sha)
+
+            if not merged:
+                msg = (
+                    f"PR lifecycle automation failure: GitHub returned {status_code} when merging PR #{pr_number}: {detail} "
+                    f"(merge_sha={merge_attempt_sha}, retry_used={retry_used})"
+                )
+                _log_github_action(
+                    action="merge_pr",
+                    repo=repo,
+                    number=pr_number,
+                    number_kind="pr_number",
+                    auth_lane="dispatch_user_token",
+                    api_type="REST",
+                    success=False,
+                    summary=msg,
+                )
+                return False, msg
+
+            _, merged_after, verify_msg = _fetch_latest_head_and_merge_state(client)
+            if merged_after is not True:
+                msg = (
+                    "PR lifecycle automation failure: Merge API returned success but merged postcondition verification "
+                    f"did not observe merged=true for PR #{pr_number}. detail={verify_msg}"
+                )
+                _log_github_action(
+                    action="merge_pr",
+                    repo=repo,
+                    number=pr_number,
+                    number_kind="pr_number",
+                    auth_lane="dispatch_user_token",
+                    api_type="REST",
+                    success=False,
+                    summary=msg,
+                )
+                return False, msg
+            msg = (
+                f"PR #{pr_number} merged successfully "
+                f"(merge_sha={merge_attempt_sha}, retry_used={retry_used}, merge_observed=True)"
+            )
             _log_github_action(
                 action="merge_pr",
                 repo=repo,
                 number=pr_number,
                 number_kind="pr_number",
-                auth_lane="governor",
+                auth_lane="dispatch_user_token",
                 api_type="REST",
-                success=False,
+                success=True,
                 summary=msg,
             )
-            return False, msg
+            return True, msg
     except Exception as exc:
         msg = f"PR lifecycle automation failure: Failed to merge PR #{pr_number}: {exc}"
         _log_github_action(
@@ -783,7 +939,7 @@ def merge_pr(
             repo=repo,
             number=pr_number,
             number_kind="pr_number",
-            auth_lane="governor",
+            auth_lane="dispatch_user_token",
             api_type="REST",
             success=False,
             summary=msg,
@@ -1304,7 +1460,7 @@ def run_preflight_checks(*, settings: Settings, repo: str | None = None) -> dict
     caps["dispatch"] = dispatch_ready
     caps["pr_ready_for_review"] = dispatch_ready
     caps["copilot_follow_up_comment"] = dispatch_ready
-    caps["pr_merge"] = governor_ready
+    caps["pr_merge"] = dispatch_ready
     caps["governor_review_loop"] = governor_ready
     caps["governor_auto_approval"] = bool(governor_ready and settings.program_auto_merge)
     caps["unattended_issue_dispatch_readiness"] = bool(dispatch_ready and settings.program_auto_dispatch)
@@ -1315,13 +1471,13 @@ def run_preflight_checks(*, settings: Settings, repo: str | None = None) -> dict
         dispatch_ready and settings.program_auto_dispatch and settings.program_auto_approve
     )
     caps["unattended_approve_merge_readiness"] = bool(
-        governor_ready and settings.program_auto_approve and settings.program_auto_merge
+        dispatch_ready and governor_ready and settings.program_auto_approve and settings.program_auto_merge
     )
     caps["unattended_issue_to_pr_dispatch"] = bool(
         dispatch_ready and settings.program_auto_approve and settings.program_auto_dispatch
     )
     caps["unattended_pr_governance"] = bool(
-        governor_ready and settings.program_auto_approve and settings.program_auto_merge
+        dispatch_ready and governor_ready and settings.program_auto_approve and settings.program_auto_merge
     )
     caps["unattended_single_slice_execution"] = bool(
         dispatch_ready

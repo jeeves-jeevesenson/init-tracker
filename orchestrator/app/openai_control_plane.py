@@ -9,7 +9,7 @@ from .config import Settings
 _logger = logging.getLogger("orchestrator.openai")
 
 _FLAGSHIP_STAGES = {"planner", "reviewer", "governor", "continuation_audit"}
-_HELPER_STAGES = {"worker_brief", "normalization", "summarization", "routing"}
+_HELPER_STAGES = {"worker_brief", "normalization", "summarization", "routing", "review_batching"}
 
 
 def select_model_for_stage(*, settings: Settings, stage: str, fallback_model: str) -> tuple[str, str]:
