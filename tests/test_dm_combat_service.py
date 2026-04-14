@@ -1787,7 +1787,7 @@ class ApplyDamageViaServiceWrapperTests(unittest.TestCase):
         )
 
     def test_service_skips_rebuild_and_broadcast(self):
-        """When routed via service, rebuild/broadcast are deferred (_broadcast=False)."""
+        """Wrapper internally passes _broadcast=False so outer caller controls timing."""
         tracker, _ = self._make_tracker_with_service()
         c = tracker.combatants[1]
         c.hp = 20
@@ -1878,7 +1878,7 @@ class ApplyHealViaServiceWrapperTests(unittest.TestCase):
         self.assertFalse(result)
 
     def test_service_skips_rebuild_and_broadcast(self):
-        """When routed via service, rebuild/broadcast are deferred (_broadcast=False)."""
+        """Wrapper internally passes _broadcast=False so outer caller controls timing."""
         tracker, _ = self._make_tracker_with_service()
         c = tracker.combatants[1]
         c.hp = 10
