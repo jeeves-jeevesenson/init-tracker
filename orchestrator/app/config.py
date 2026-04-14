@@ -36,6 +36,12 @@ class Settings(BaseSettings):
     github_api_token: str | None = Field(default=None, alias="GITHUB_API_TOKEN")
     github_api_url: str = Field(default="https://api.github.com", alias="GITHUB_API_URL")
 
+    # GitHub App auth (preferred when GITHUB_AUTH_MODE=app)
+    github_auth_mode: str = Field(default="token", alias="GITHUB_AUTH_MODE")
+    github_app_client_id: str | None = Field(default=None, alias="GITHUB_APP_CLIENT_ID")
+    github_app_installation_id: str | None = Field(default=None, alias="GITHUB_APP_INSTALLATION_ID")
+    github_app_private_key_path: str | None = Field(default=None, alias="GITHUB_APP_PRIVATE_KEY_PATH")
+
     default_repo_owner: str | None = Field(default=None, alias="DEFAULT_REPO_OWNER")
     default_repo_name: str | None = Field(default=None, alias="DEFAULT_REPO_NAME")
 

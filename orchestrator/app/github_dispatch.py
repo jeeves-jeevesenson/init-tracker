@@ -9,6 +9,7 @@ import httpx
 
 from .config import Settings
 from .copilot_identity import normalize_configured_copilot_login, normalize_copilot_login
+from .github_auth import build_auth_headers, has_github_auth, auth_mode_label, is_app_mode, try_mint_app_token
 from .models import TaskPacket
 
 _SUGGESTED_ACTORS_QUERY = """
@@ -76,13 +77,7 @@ class PullRequestInspection:
 
 
 def _build_headers(settings: Settings) -> dict[str, str]:
-    headers = {
-        "Accept": "application/vnd.github+json",
-        "X-GitHub-Api-Version": "2022-11-28",
-    }
-    if settings.github_api_token:
-        headers["Authorization"] = f"Bearer {settings.github_api_token}"
-    return headers
+    return build_auth_headers(settings)
 
 
 def _build_agent_assignment_payload(settings: Settings, task: TaskPacket) -> dict[str, Any]:
@@ -211,7 +206,7 @@ def _suggested_actors_summary(actor_logins: list[str]) -> str:
 def dispatch_task_to_github_copilot(*, settings: Settings, task: TaskPacket) -> DispatchResult:
     dispatch_mode, _ = _dispatch_mode(settings, task)
     dispatch_mode_summary = describe_dispatch_mode(settings, task)
-    if not settings.github_api_token:
+    if not has_github_auth(settings):
         return DispatchResult(
             attempted=False,
             accepted=False,
@@ -406,7 +401,7 @@ def mark_pr_ready_for_review(*, settings: Settings, repo: str, pr_number: int) -
 
     Returns (success, message).  Safe to call when the PR is already non-draft.
     """
-    if not settings.github_api_token:
+    if not has_github_auth(settings):
         return False, "GitHub API token missing; cannot un-draft PR"
     api_base = settings.github_api_url.rstrip("/")
     graphql_url = f"{api_base}/graphql"
@@ -552,7 +547,7 @@ def merge_pr(
     - 409: merge conflict
     - 422: unprocessable (e.g., already merged, branch deleted)
     """
-    if not settings.github_api_token:
+    if not has_github_auth(settings):
         return False, "GitHub API token missing; cannot merge PR"
     api_base = settings.github_api_url.rstrip("/")
     url = f"{api_base}/repos/{repo}/pulls/{pr_number}/merge"
@@ -572,7 +567,7 @@ def merge_pr(
 
 
 def inspect_pull_request(*, settings: Settings, repo: str, pr_number: int) -> PullRequestInspection:
-    if not settings.github_api_token:
+    if not has_github_auth(settings):
         return PullRequestInspection(
             ok=False,
             changed_files=None,
@@ -628,7 +623,7 @@ def remove_requested_reviewers(
     pr_number: int,
     reviewers: list[str],
 ) -> tuple[bool, str]:
-    if not settings.github_api_token:
+    if not has_github_auth(settings):
         return False, "GitHub API token missing; cannot remove PR reviewers"
     sanitized = sorted({item.strip() for item in reviewers if isinstance(item, str) and item.strip()})
     if not sanitized:
@@ -660,7 +655,7 @@ def request_reviewers(
     pr_number: int,
     reviewers: list[str],
 ) -> tuple[bool, str]:
-    if not settings.github_api_token:
+    if not has_github_auth(settings):
         return False, "GitHub API token missing; cannot request PR reviewers"
     sanitized = sorted({item.strip() for item in reviewers if isinstance(item, str) and item.strip()})
     if not sanitized:
@@ -682,7 +677,7 @@ def request_reviewers(
 
 
 def list_pull_request_reviews(*, settings: Settings, repo: str, pr_number: int) -> tuple[list[dict[str, Any]], str]:
-    if not settings.github_api_token:
+    if not has_github_auth(settings):
         return [], "GitHub API token missing; cannot list PR reviews"
     api_base = settings.github_api_url.rstrip("/")
     url = f"{api_base}/repos/{repo}/pulls/{pr_number}/reviews?per_page=100"
@@ -703,7 +698,7 @@ def list_pull_request_reviews(*, settings: Settings, repo: str, pr_number: int) 
 
 
 def list_pull_request_review_comments(*, settings: Settings, repo: str, pr_number: int) -> tuple[list[dict[str, Any]], str]:
-    if not settings.github_api_token:
+    if not has_github_auth(settings):
         return [], "GitHub API token missing; cannot list PR review comments"
     api_base = settings.github_api_url.rstrip("/")
     url = f"{api_base}/repos/{repo}/pulls/{pr_number}/comments?per_page=100"
@@ -727,7 +722,7 @@ def list_pull_request_review_comments(*, settings: Settings, repo: str, pr_numbe
 
 
 def list_pull_request_files(*, settings: Settings, repo: str, pr_number: int) -> tuple[list[str], str]:
-    if not settings.github_api_token:
+    if not has_github_auth(settings):
         return [], "GitHub API token missing; cannot list PR files"
     api_base = settings.github_api_url.rstrip("/")
     url = f"{api_base}/repos/{repo}/pulls/{pr_number}/files?per_page=100"
@@ -754,7 +749,7 @@ def list_pull_request_files(*, settings: Settings, repo: str, pr_number: int) ->
 
 
 def list_issue_comments(*, settings: Settings, repo: str, issue_number: int) -> tuple[list[dict[str, Any]], str]:
-    if not settings.github_api_token:
+    if not has_github_auth(settings):
         return [], "GitHub API token missing; cannot list issue comments"
     api_base = settings.github_api_url.rstrip("/")
     url = f"{api_base}/repos/{repo}/issues/{issue_number}/comments?per_page=100"
@@ -775,7 +770,7 @@ def list_issue_comments(*, settings: Settings, repo: str, issue_number: int) -> 
 
 
 def post_issue_comment(*, settings: Settings, repo: str, issue_number: int, body: str) -> tuple[bool, str]:
-    if not settings.github_api_token:
+    if not has_github_auth(settings):
         return False, "GitHub API token missing; cannot post issue comment"
     comment_body = str(body or "").strip()
     if not comment_body:
@@ -803,7 +798,7 @@ def submit_approving_review(
     pr_number: int,
     body: str = "Automated governor approval after successful checks and resolved findings.",
 ) -> tuple[bool, str]:
-    if not settings.github_api_token:
+    if not has_github_auth(settings):
         return False, "GitHub API token missing; cannot submit approving review"
     api_base = settings.github_api_url.rstrip("/")
     url = f"{api_base}/repos/{repo}/pulls/{pr_number}/reviews"
@@ -827,7 +822,12 @@ def run_preflight_checks(*, settings: Settings, repo: str | None = None) -> dict
     Returns a structured dict describing which capabilities are available for
     unattended trusted continuation. Intended for the GET /preflight endpoint.
     """
+    _has_auth = has_github_auth(settings)
+    _is_app = is_app_mode(settings)
+
     result: dict = {
+        "github_auth_mode": auth_mode_label(settings),
+        "github_auth_available": _has_auth,
         "github_api_token": bool(settings.github_api_token),
         "auto_merge_enabled": settings.program_auto_merge,
         "auto_continue_enabled": settings.program_auto_continue,
@@ -852,34 +852,58 @@ def run_preflight_checks(*, settings: Settings, repo: str | None = None) -> dict
         "admin_prerequisites": [],
     }
 
+    # App-mode token minting probe
+    if _is_app:
+        mint_ok, mint_msg = try_mint_app_token(settings)
+        result["app_token_mint"] = {"ok": mint_ok, "detail": mint_msg}
+        result["app_outbound_auth_usable"] = mint_ok
+    else:
+        result["app_token_mint"] = {"ok": False, "detail": "Auth mode is not 'app'"}
+        result["app_outbound_auth_usable"] = False
+
     caps = result["capabilities"]
     blockers: list[str] = result["blockers"]
     prereqs: list[str] = result["admin_prerequisites"]
 
-    caps["issue_creation"] = bool(settings.github_api_token)
-    caps["pr_ready_for_review"] = bool(settings.github_api_token)
-    caps["pr_merge"] = bool(settings.github_api_token)
-    caps["dispatch"] = bool(settings.github_api_token)
-    caps["governor_review_loop"] = bool(settings.github_api_token)
-    caps["governor_auto_approval"] = bool(settings.github_api_token and settings.program_auto_merge)
+    caps["issue_creation"] = _has_auth
+    caps["pr_ready_for_review"] = _has_auth
+    caps["pr_merge"] = _has_auth
+    caps["dispatch"] = _has_auth
+    caps["governor_review_loop"] = _has_auth
+    caps["governor_auto_approval"] = bool(_has_auth and settings.program_auto_merge)
     caps["unattended_single_slice_execution"] = bool(
-        settings.github_api_token
+        _has_auth
         and settings.program_auto_approve
         and settings.program_auto_dispatch
         and settings.program_auto_merge
     )
-    caps["next_slice_dispatch"] = bool(settings.github_api_token and settings.program_auto_continue and settings.program_auto_dispatch)
+    caps["next_slice_dispatch"] = bool(_has_auth and settings.program_auto_continue and settings.program_auto_dispatch)
     caps["unattended_continuation"] = bool(
-        settings.github_api_token
+        _has_auth
         and settings.program_auto_continue
         and settings.program_auto_dispatch
         and settings.program_auto_merge
         and settings.program_trusted_auto_confirm
     )
 
-    if not settings.github_api_token:
-        blockers.append("GITHUB_API_TOKEN not configured; all GitHub API operations will fail")
-        prereqs.append("Set GITHUB_API_TOKEN to a fine-grained or classic token with repo:write and pull_requests:write scope")
+    if not _has_auth:
+        if _is_app:
+            blockers.append(
+                "GITHUB_AUTH_MODE=app but app config is incomplete; "
+                "ensure GITHUB_APP_CLIENT_ID, GITHUB_APP_INSTALLATION_ID, and "
+                "GITHUB_APP_PRIVATE_KEY_PATH are all set"
+            )
+            prereqs.append(
+                "Configure GITHUB_APP_CLIENT_ID, GITHUB_APP_INSTALLATION_ID, and "
+                "GITHUB_APP_PRIVATE_KEY_PATH for GitHub App installation token auth"
+            )
+        else:
+            blockers.append("GITHUB_API_TOKEN not configured; all GitHub API operations will fail")
+            prereqs.append("Set GITHUB_API_TOKEN to a fine-grained or classic token with repo:write and pull_requests:write scope")
+    elif _is_app:
+        mint_ok = result["app_token_mint"]["ok"]
+        if not mint_ok:
+            blockers.append(f"App token minting failed: {result['app_token_mint']['detail']}")
 
     if not settings.program_auto_merge:
         blockers.append("PROGRAM_AUTO_MERGE=false (default); the orchestrator will not automatically merge PRs")
