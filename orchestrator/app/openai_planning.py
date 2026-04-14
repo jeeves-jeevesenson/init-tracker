@@ -1,11 +1,13 @@
 from __future__ import annotations
 
 import json
+import logging
 from typing import Any
 
 from openai import OpenAI
 
 from .config import Settings
+from .openai_control_plane import apply_openai_request_controls, select_model_for_stage
 from .schema_validation import validate_strict_json_schema
 
 _ALLOWED_WORKERS = {"initiative-smith", "tracker-engineer"}
@@ -28,6 +30,8 @@ _INTERNAL_LABEL_TERMS = {
     "initiative-smith",
     "tracker-engineer",
 }
+
+_logger = logging.getLogger("orchestrator.openai")
 
 INTERNAL_TASK_PLAN_SCHEMA: dict[str, Any] = {
     "type": "object",
@@ -322,6 +326,10 @@ def _response_payload(
     schema: dict[str, Any],
     reasoning_effort: str,
     settings: Settings,
+    stage: str,
+    repo: str,
+    previous_response_id: str | None,
+    model_tier: str,
 ) -> dict[str, Any]:
     payload: dict[str, Any] = {
         "model": model,
@@ -348,6 +356,15 @@ def _response_payload(
         payload["reasoning"] = {"effort": reasoning_effort}
     if settings.openai_enable_background_requests:
         payload["background"] = True
+    request_controls = apply_openai_request_controls(
+        payload=payload,
+        settings=settings,
+        stage=stage,
+        repo=repo,
+        previous_response_id=previous_response_id,
+    )
+    request_controls["model_tier"] = model_tier
+    payload["_openai_request_controls"] = request_controls
     return payload
 
 
@@ -362,18 +379,25 @@ def _invoke_structured_response(
     reasoning_effort: str,
     settings: Settings,
     stage: str,
-) -> dict[str, Any]:
-    response = client.responses.create(
-        **_response_payload(
-            model=model,
-            system_prompt=system_prompt,
-            user_prompt=user_prompt,
-            schema_name=schema_name,
-            schema=schema,
-            reasoning_effort=reasoning_effort,
-            settings=settings,
-        )
+    repo: str,
+    previous_response_id: str | None = None,
+    model_tier: str = "default",
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    payload = _response_payload(
+        model=model,
+        system_prompt=system_prompt,
+        user_prompt=user_prompt,
+        schema_name=schema_name,
+        schema=schema,
+        reasoning_effort=reasoning_effort,
+        settings=settings,
+        stage=stage,
+        repo=repo,
+        previous_response_id=previous_response_id,
+        model_tier=model_tier,
     )
+    request_controls = payload.pop("_openai_request_controls", {})
+    response = client.responses.create(**payload)
     parsed = _extract_structured_object(response, stage=stage)
     if settings.openai_enable_background_requests and not parsed:
         response_id = getattr(response, "id", None)
@@ -381,7 +405,20 @@ def _invoke_structured_response(
             "OpenAI background responses require async completion handling before planning can continue"
             f" (response_id={response_id or 'unknown'})"
         )
-    return parsed
+    response_id = getattr(response, "id", None)
+    _logger.info(
+        "openai_call stage=%s model=%s response_id=%s model_tier=%s",
+        stage,
+        model,
+        response_id or "",
+        request_controls.get("model_tier", ""),
+    )
+    return parsed, {
+        **request_controls,
+        "model": model,
+        "response_id": response_id,
+        "stage": stage,
+    }
 
 
 def _validate_internal_plan(raw: dict[str, Any]) -> dict[str, Any]:
@@ -540,19 +577,38 @@ def _validate_program_plan(raw: dict[str, Any], *, fallback_plan: dict[str, Any]
     }
 
 
-def plan_task_packet(*, settings: Settings, repo: str, issue_number: int, issue_title: str, issue_body: str) -> dict[str, Any]:
+def plan_task_packet(
+    *,
+    settings: Settings,
+    repo: str,
+    issue_number: int,
+    issue_title: str,
+    issue_body: str,
+    previous_response_id: str | None = None,
+) -> dict[str, Any]:
     if not settings.openai_api_key:
         raise RuntimeError("OPENAI_API_KEY is required for planning")
 
     client = OpenAI(api_key=settings.openai_api_key)
     planning_effort = _planning_reasoning_effort(settings, issue_title=issue_title, issue_body=issue_body)
+    planner_model, planner_tier = select_model_for_stage(
+        settings=settings,
+        stage="planner",
+        fallback_model=settings.openai_planning_model,
+    )
+    worker_brief_model, worker_brief_tier = select_model_for_stage(
+        settings=settings,
+        stage="worker_brief",
+        fallback_model=settings.openai_planning_model,
+    )
     validate_strict_json_schema(schema_name="internal_task_plan", schema=INTERNAL_TASK_PLAN_SCHEMA)
     validate_strict_json_schema(schema_name="worker_execution_brief", schema=WORKER_BRIEF_SCHEMA)
     validate_strict_json_schema(schema_name="program_plan", schema=PROGRAM_PLAN_SCHEMA)
 
-    internal_plan_raw = _invoke_structured_response(
+    chain_response_id = (previous_response_id or "").strip() or None
+    internal_plan_raw, planner_meta = _invoke_structured_response(
         client=client,
-        model=settings.openai_planning_model,
+        model=planner_model,
         system_prompt=PLANNING_SYSTEM_PROMPT,
         user_prompt=_internal_plan_prompt(
             repo=repo,
@@ -564,15 +620,26 @@ def plan_task_packet(*, settings: Settings, repo: str, issue_number: int, issue_
         schema=INTERNAL_TASK_PLAN_SCHEMA,
         reasoning_effort=planning_effort,
         settings=settings,
-        stage="planning",
+        stage="planner",
+        repo=repo,
+        previous_response_id=chain_response_id,
+        model_tier=planner_tier,
     )
+    planner_meta["model_tier"] = planner_tier
+    chain_response_id = planner_meta.get("response_id") or chain_response_id
     internal_plan = _validate_internal_plan(internal_plan_raw)
 
     worker_brief_raw: dict[str, Any]
+    worker_brief_meta: dict[str, Any] = {
+        "stage": "worker_brief",
+        "model": worker_brief_model,
+        "model_tier": worker_brief_tier,
+        "response_id": None,
+    }
     try:
-        worker_brief_raw = _invoke_structured_response(
+        worker_brief_raw, worker_brief_meta = _invoke_structured_response(
             client=client,
-            model=settings.openai_planning_model,
+            model=worker_brief_model,
             system_prompt=WORKER_BRIEF_SYSTEM_PROMPT,
             user_prompt=_worker_brief_prompt(
                 repo=repo,
@@ -584,8 +651,13 @@ def plan_task_packet(*, settings: Settings, repo: str, issue_number: int, issue_
             schema=WORKER_BRIEF_SCHEMA,
             reasoning_effort=settings.openai_planning_reasoning_effort,
             settings=settings,
-            stage="worker-brief",
+            stage="worker_brief",
+            repo=repo,
+            previous_response_id=chain_response_id,
+            model_tier=worker_brief_tier,
         )
+        worker_brief_meta["model_tier"] = worker_brief_tier
+        chain_response_id = worker_brief_meta.get("response_id") or chain_response_id
     except Exception:
         worker_brief_raw = _build_worker_brief_fallback(
             internal_plan=internal_plan,
@@ -595,10 +667,16 @@ def plan_task_packet(*, settings: Settings, repo: str, issue_number: int, issue_
     worker_brief = _validate_worker_brief(worker_brief_raw)
 
     program_plan_raw: dict[str, Any]
+    program_plan_meta: dict[str, Any] = {
+        "stage": "program_planning",
+        "model": planner_model,
+        "model_tier": planner_tier,
+        "response_id": None,
+    }
     try:
-        program_plan_raw = _invoke_structured_response(
+        program_plan_raw, program_plan_meta = _invoke_structured_response(
             client=client,
-            model=settings.openai_planning_model,
+            model=planner_model,
             system_prompt=PLANNING_SYSTEM_PROMPT,
             user_prompt=(
                 _internal_plan_prompt(
@@ -613,8 +691,13 @@ def plan_task_packet(*, settings: Settings, repo: str, issue_number: int, issue_
             schema=PROGRAM_PLAN_SCHEMA,
             reasoning_effort=planning_effort,
             settings=settings,
-            stage="program-planning",
+            stage="planner",
+            repo=repo,
+            previous_response_id=chain_response_id,
+            model_tier=planner_tier,
         )
+        program_plan_meta["model_tier"] = planner_tier
+        chain_response_id = program_plan_meta.get("response_id") or chain_response_id
     except Exception:
         program_plan_raw = {
             "normalized_program_objective": internal_plan.get("objective", ""),
@@ -648,8 +731,11 @@ def plan_task_packet(*, settings: Settings, repo: str, issue_number: int, issue_
         "worker_brief": worker_brief,
         "program_plan": program_plan,
         "planning_meta": {
-            "model": settings.openai_planning_model,
+            "model": planner_model,
             "reasoning_effort": planning_effort,
             "control_plane_mode": settings.openai_control_plane_mode,
+            "helper_model": worker_brief_model,
+            "openai_last_response_id": chain_response_id,
+            "calls": [planner_meta, worker_brief_meta, program_plan_meta],
         },
     }

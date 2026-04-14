@@ -1,11 +1,13 @@
 from __future__ import annotations
 
 import json
+import logging
 from typing import Any
 
 from openai import OpenAI
 
 from .config import Settings
+from .openai_control_plane import apply_openai_request_controls, select_model_for_stage
 from .schema_validation import validate_strict_json_schema
 
 _ALLOWED_SCOPE_STATUS = {"met", "partial", "drifted", "blocked"}
@@ -20,6 +22,7 @@ _ALLOWED_GOVERNOR_DECISION = {
     "complete_without_merge",
 }
 _ALLOWED_REASONING_EFFORT = {"low", "medium", "high"}
+_logger = logging.getLogger("orchestrator.openai")
 
 REVIEW_ARTIFACT_SCHEMA: dict[str, Any] = {
     "type": "object",
@@ -158,6 +161,10 @@ def _response_payload(
     update_context: str,
     settings: Settings,
     reasoning_effort: str,
+    stage: str,
+    repo: str | None,
+    previous_response_id: str | None,
+    model_tier: str,
 ) -> dict[str, Any]:
     payload: dict[str, Any] = {
         "model": model,
@@ -185,6 +192,15 @@ def _response_payload(
         payload["reasoning"] = {"effort": normalized_effort}
     if settings.openai_enable_background_requests:
         payload["background"] = True
+    request_controls = apply_openai_request_controls(
+        payload=payload,
+        settings=settings,
+        stage=stage,
+        repo=repo,
+        previous_response_id=previous_response_id,
+    )
+    request_controls["model_tier"] = model_tier
+    payload["_openai_request_controls"] = request_controls
     return payload
 
 
@@ -233,7 +249,24 @@ def _fallback_review_artifact(update_context: str) -> dict[str, Any]:
     }
 
 
-def summarize_work_update(*, settings: Settings, update_context: str) -> dict[str, Any]:
+def _extract_repo_from_context(update_context: str) -> str | None:
+    try:
+        parsed = json.loads(update_context)
+    except Exception:
+        return None
+    if isinstance(parsed, dict):
+        repo = parsed.get("repo")
+        if isinstance(repo, str) and repo.strip():
+            return repo.strip()
+    return None
+
+
+def summarize_work_update(
+    *,
+    settings: Settings,
+    update_context: str,
+    previous_response_id: str | None = None,
+) -> dict[str, Any]:
     validate_strict_json_schema(schema_name="pr_review_artifact", schema=REVIEW_ARTIFACT_SCHEMA)
     if not settings.openai_api_key:
         artifact = _fallback_review_artifact(update_context)
@@ -241,17 +274,35 @@ def summarize_work_update(*, settings: Settings, update_context: str) -> dict[st
             "review_artifact": artifact,
             "summary_bullets": artifact["summary"],
             "next_action": artifact["decision"],
+            "openai_meta": {
+                "stage": "reviewer",
+                "model_tier": "fallback",
+                "model": None,
+                "response_id": None,
+                "prompt_cache_attempted": False,
+                "previous_response_id_attempted": False,
+            },
         }
 
-    client = OpenAI(api_key=settings.openai_api_key)
-    response = client.responses.create(
-        **_response_payload(
-            model=settings.openai_review_model,
-            update_context=update_context,
-            settings=settings,
-            reasoning_effort=settings.openai_review_reasoning_effort,
-        )
+    review_model, model_tier = select_model_for_stage(
+        settings=settings,
+        stage="reviewer",
+        fallback_model=settings.openai_review_model,
     )
+    repo = _extract_repo_from_context(update_context)
+    client = OpenAI(api_key=settings.openai_api_key)
+    payload = _response_payload(
+        model=review_model,
+        update_context=update_context,
+        settings=settings,
+        reasoning_effort=settings.openai_review_reasoning_effort,
+        stage="reviewer",
+        repo=repo,
+        previous_response_id=previous_response_id,
+        model_tier=model_tier,
+    )
+    request_controls = payload.pop("_openai_request_controls", {})
+    response = client.responses.create(**payload)
     parsed = _extract_structured_object(response, stage="review")
     if settings.openai_enable_background_requests and not parsed:
         response_id = getattr(response, "id", None)
@@ -262,11 +313,25 @@ def summarize_work_update(*, settings: Settings, update_context: str) -> dict[st
 
     artifact = _validate_review_artifact(parsed)
     next_action = artifact["decision"]
+    response_id = getattr(response, "id", None)
+    _logger.info(
+        "openai_call stage=reviewer model=%s response_id=%s model_tier=%s",
+        review_model,
+        response_id or "",
+        model_tier,
+    )
 
     return {
         "review_artifact": artifact,
         "summary_bullets": artifact["summary"],
         "next_action": next_action,
+        "openai_meta": {
+            **request_controls,
+            "stage": "reviewer",
+            "model_tier": model_tier,
+            "model": review_model,
+            "response_id": response_id,
+        },
     }
 
 
@@ -276,6 +341,10 @@ def _governor_response_payload(
     update_context: str,
     settings: Settings,
     reasoning_effort: str,
+    stage: str,
+    repo: str | None,
+    previous_response_id: str | None,
+    model_tier: str,
 ) -> dict[str, Any]:
     payload: dict[str, Any] = {
         "model": model,
@@ -303,6 +372,15 @@ def _governor_response_payload(
         payload["reasoning"] = {"effort": normalized_effort}
     if settings.openai_enable_background_requests:
         payload["background"] = True
+    request_controls = apply_openai_request_controls(
+        payload=payload,
+        settings=settings,
+        stage=stage,
+        repo=repo,
+        previous_response_id=previous_response_id,
+    )
+    request_controls["model_tier"] = model_tier
+    payload["_openai_request_controls"] = request_controls
     return payload
 
 
@@ -352,7 +430,12 @@ def _fallback_governor_artifact(update_context: str) -> dict[str, Any]:
     }
 
 
-def summarize_governor_update(*, settings: Settings, update_context: str) -> dict[str, Any]:
+def summarize_governor_update(
+    *,
+    settings: Settings,
+    update_context: str,
+    previous_response_id: str | None = None,
+) -> dict[str, Any]:
     validate_strict_json_schema(schema_name="pr_governor_artifact", schema=GOVERNOR_ARTIFACT_SCHEMA)
     if not settings.openai_api_key:
         artifact = _fallback_governor_artifact(update_context)
@@ -360,17 +443,35 @@ def summarize_governor_update(*, settings: Settings, update_context: str) -> dic
             "governor_artifact": artifact,
             "summary_bullets": artifact["summary"],
             "next_action": artifact["decision"],
+            "openai_meta": {
+                "stage": "continuation_audit",
+                "model_tier": "fallback",
+                "model": None,
+                "response_id": None,
+                "prompt_cache_attempted": False,
+                "previous_response_id_attempted": False,
+            },
         }
 
-    client = OpenAI(api_key=settings.openai_api_key)
-    response = client.responses.create(
-        **_governor_response_payload(
-            model=settings.openai_review_model,
-            update_context=update_context,
-            settings=settings,
-            reasoning_effort=settings.openai_review_reasoning_effort,
-        )
+    governor_model, model_tier = select_model_for_stage(
+        settings=settings,
+        stage="continuation_audit",
+        fallback_model=settings.openai_review_model,
     )
+    repo = _extract_repo_from_context(update_context)
+    client = OpenAI(api_key=settings.openai_api_key)
+    payload = _governor_response_payload(
+        model=governor_model,
+        update_context=update_context,
+        settings=settings,
+        reasoning_effort=settings.openai_review_reasoning_effort,
+        stage="continuation_audit",
+        repo=repo,
+        previous_response_id=previous_response_id,
+        model_tier=model_tier,
+    )
+    request_controls = payload.pop("_openai_request_controls", {})
+    response = client.responses.create(**payload)
     parsed = _extract_structured_object(response, stage="governor")
     if settings.openai_enable_background_requests and not parsed:
         response_id = getattr(response, "id", None)
@@ -380,8 +481,22 @@ def summarize_governor_update(*, settings: Settings, update_context: str) -> dic
         )
 
     artifact = _validate_governor_artifact(parsed)
+    response_id = getattr(response, "id", None)
+    _logger.info(
+        "openai_call stage=continuation_audit model=%s response_id=%s model_tier=%s",
+        governor_model,
+        response_id or "",
+        model_tier,
+    )
     return {
         "governor_artifact": artifact,
         "summary_bullets": artifact["summary"],
         "next_action": artifact["decision"],
+        "openai_meta": {
+            **request_controls,
+            "stage": "continuation_audit",
+            "model_tier": model_tier,
+            "model": governor_model,
+            "response_id": response_id,
+        },
     }

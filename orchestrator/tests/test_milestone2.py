@@ -20,6 +20,8 @@ from orchestrator.app.copilot_identity import DOCUMENTED_COPILOT_ASSIGNEE_LOGIN
 from orchestrator.app.github_dispatch import DispatchResult, dispatch_task_to_github_copilot
 from orchestrator.app.models import AgentRun, TaskPacket
 from orchestrator.app import openai_planning
+from orchestrator.app import openai_review
+from orchestrator.app import openai_control_plane
 from orchestrator.app.tasks import CUSTOM_AGENT_INITIATIVE_SMITH, CUSTOM_AGENT_TRACKER_ENGINEER
 
 
@@ -76,6 +78,11 @@ class OrchestratorMilestone2Tests(unittest.TestCase):
         "OPENAI_PLANNING_BROAD_REASONING_EFFORT",
         "OPENAI_CONTROL_PLANE_MODE",
         "OPENAI_ENABLE_BACKGROUND_REQUESTS",
+        "OPENAI_FLAGSHIP_MODEL",
+        "OPENAI_HELPER_MODEL",
+        "OPENAI_ENABLE_PROMPT_CACHING",
+        "OPENAI_PROMPT_CACHE_RETENTION",
+        "OPENAI_ENABLE_RESPONSE_CHAINING",
         "PROGRAM_AUTO_PLAN",
         "PROGRAM_AUTO_APPROVE",
         "PROGRAM_AUTO_DISPATCH",
@@ -2188,6 +2195,141 @@ class OrchestratorMilestone2Tests(unittest.TestCase):
                     self.assertEqual(review_artifact["status"], "met")
                     self.assertEqual(review_artifact["merge_recommendation"], "merge_ready")
 
+    def test_task_lifecycle_response_chaining_persists_and_flows_review_to_governor(self):
+        with tempfile.TemporaryDirectory() as td:
+            os.environ["DATABASE_URL"] = f"sqlite:///{Path(td) / 'orchestrator.db'}"
+            os.environ["GH_WEBHOOK_SECRET"] = "test-gh-secret"
+            os.environ["GITHUB_API_TOKEN"] = "dummy-token"
+            main, _ = _reload_orchestrator_modules()
+
+            issue_payload = {
+                "action": "opened",
+                "repository": {"full_name": "jeeves-jeevesenson/init-tracker"},
+                "issue": {
+                    "number": 330,
+                    "node_id": "I_330",
+                    "title": "Lifecycle chaining persistence",
+                    "body": "Need chaining between review and governor calls",
+                    "labels": [{"name": "agent:task"}],
+                },
+            }
+            approve_payload = {
+                "action": "created",
+                "repository": {"full_name": "jeeves-jeevesenson/init-tracker"},
+                "issue": {"number": 330},
+                "comment": {"body": "/approve"},
+            }
+            pr_payload = {
+                "action": "opened",
+                "repository": {"full_name": "jeeves-jeevesenson/init-tracker"},
+                "pull_request": {
+                    "number": 130,
+                    "id": 9130,
+                    "title": "Implements #330",
+                    "body": "Closes #330",
+                    "html_url": "https://github.com/jeeves-jeevesenson/init-tracker/pull/130",
+                    "draft": False,
+                    "changed_files": 2,
+                    "commits": 1,
+                    "updated_at": "2026-01-01T00:00:00Z",
+                },
+            }
+            review_artifact = {
+                "decision": "continue",
+                "status": "met",
+                "confidence": 0.9,
+                "scope_alignment": ["review phase complete"],
+                "acceptance_assessment": ["good"],
+                "risk_findings": [],
+                "merge_recommendation": "merge_ready",
+                "revision_instructions": [],
+                "audit_recommendation": "",
+                "next_slice_hint": "",
+                "summary": ["Ready to continue."],
+            }
+
+            with patch(
+                "orchestrator.app.tasks.plan_task_packet",
+                return_value={
+                    "objective": "Plan task",
+                    "scope": ["scope"],
+                    "non_goals": [],
+                    "acceptance_criteria": ["done"],
+                    "validation_guidance": ["tests"],
+                    "implementation_brief": "brief",
+                    "planning_meta": {"openai_last_response_id": "resp_plan_330"},
+                },
+            ), patch(
+                "orchestrator.app.tasks.dispatch_task_to_github_copilot",
+                return_value=DispatchResult(
+                    attempted=True,
+                    accepted=True,
+                    manual_required=False,
+                    state="accepted",
+                    summary="Dispatch accepted",
+                ),
+            ), patch(
+                "orchestrator.app.tasks.summarize_work_update",
+                return_value={
+                    "review_artifact": review_artifact,
+                    "summary_bullets": ["Ready to continue."],
+                    "next_action": "continue",
+                    "openai_meta": {"response_id": "resp_review_330"},
+                },
+            ) as mocked_review, patch(
+                "orchestrator.app.tasks.summarize_governor_update",
+                return_value={
+                    "governor_artifact": {
+                        "decision": "wait",
+                        "summary": ["Waiting for checks/merge policy."],
+                        "revision_requests": [],
+                        "escalation_reason": "",
+                    },
+                    "summary_bullets": ["Waiting for checks/merge policy."],
+                    "next_action": "wait",
+                    "openai_meta": {"response_id": "resp_governor_330"},
+                },
+            ) as mocked_governor, patch(
+                "orchestrator.app.tasks.list_pull_request_files",
+                return_value=(["orchestrator/app/tasks.py"], ""),
+            ), patch(
+                "orchestrator.app.tasks.list_pull_request_reviews",
+                return_value=([], ""),
+            ), patch(
+                "orchestrator.app.tasks.list_pull_request_review_comments",
+                return_value=([], ""),
+            ):
+                with TestClient(main.app) as client:
+                    self._post_github(
+                        client,
+                        secret="test-gh-secret",
+                        delivery="delivery-task-opened-330",
+                        event="issues",
+                        payload=issue_payload,
+                    )
+                    self._post_github(
+                        client,
+                        secret="test-gh-secret",
+                        delivery="delivery-approve-330",
+                        event="issue_comment",
+                        payload=approve_payload,
+                    )
+                    self._post_github(
+                        client,
+                        secret="test-gh-secret",
+                        delivery="delivery-pr-opened-330",
+                        event="pull_request",
+                        payload=pr_payload,
+                    )
+                    task = client.get("/tasks").json()["tasks"][0]
+                    self.assertEqual(task["openai_last_response_id"], "resp_plan_330")
+                    self.assertEqual(task["latest_run"]["openai_last_response_id"], "resp_governor_330")
+                    self.assertIsNone(mocked_review.call_args.kwargs.get("previous_response_id"))
+                    self.assertEqual(
+                        mocked_governor.call_args.kwargs.get("previous_response_id"),
+                        "resp_review_330",
+                    )
+
     def test_fallback_mode_keeps_routing_metadata_separate_from_worker_brief(self):
         with tempfile.TemporaryDirectory() as td:
             os.environ["DATABASE_URL"] = f"sqlite:///{Path(td) / 'orchestrator.db'}"
@@ -2971,6 +3113,152 @@ class OpenAIPlanningSchemaTests(unittest.TestCase):
         self.assertEqual(packet["internal_plan"]["recommended_scope_class"], None)
         self.assertGreaterEqual(mocked_client.responses.create.call_count, 2)
         self.assertIn("program_plan", packet)
+
+    def test_prompt_cache_key_generation_is_stable(self):
+        first = openai_control_plane.build_prompt_cache_key(stage="planner", repo="Jeeves-Jeevesenson/init-tracker")
+        second = openai_control_plane.build_prompt_cache_key(stage="planner", repo="jeeves-jeevesenson/init-tracker")
+        third = openai_control_plane.build_prompt_cache_key(stage="worker_brief", repo="jeeves-jeevesenson/init-tracker")
+        self.assertEqual(first, second)
+        self.assertNotEqual(first, third)
+        self.assertTrue(first.startswith("orchestrator:planner:"))
+
+    def test_model_selection_uses_flagship_and_helper_tiers(self):
+        settings = Settings(
+            OPENAI_FLAGSHIP_MODEL="gpt-flagship-test",
+            OPENAI_HELPER_MODEL="gpt-helper-test",
+        )
+        planner_model, planner_tier = openai_control_plane.select_model_for_stage(
+            settings=settings,
+            stage="planner",
+            fallback_model="fallback-model",
+        )
+        brief_model, brief_tier = openai_control_plane.select_model_for_stage(
+            settings=settings,
+            stage="worker_brief",
+            fallback_model="fallback-model",
+        )
+        self.assertEqual(planner_model, "gpt-flagship-test")
+        self.assertEqual(planner_tier, "flagship")
+        self.assertEqual(brief_model, "gpt-helper-test")
+        self.assertEqual(brief_tier, "helper")
+
+    def test_plan_task_packet_wires_prompt_cache_and_response_chain(self):
+        planning_response = Mock(
+            id="resp_plan_1",
+            output_parsed={
+                "objective": "Harden planner controls",
+                "scope": ["planner"],
+                "non_goals": [],
+                "acceptance_criteria": ["schema accepted"],
+                "validation_guidance": ["python -m compileall orchestrator"],
+                "implementation_brief": "structured output",
+                "task_type": "feature",
+                "difficulty": "small",
+                "repo_areas": ["orchestrator/app/openai_planning.py"],
+                "execution_risks": ["none"],
+                "reviewer_focus": ["contract"],
+                "recommended_scope_class": "narrow",
+                "recommended_worker": "tracker-engineer",
+                "internal_routing_metadata": None,
+            },
+        )
+        worker_brief_response = Mock(
+            id="resp_brief_1",
+            output_parsed={
+                "objective": "Implement planner controls",
+                "concise_scope": ["cache + chaining"],
+                "implementation_brief": "keep behavior",
+                "acceptance_criteria": ["controls wired"],
+                "validation_commands": ["python -m pytest orchestrator/tests/test_milestone2.py -q"],
+                "non_goals": ["no workflow redesign"],
+                "target_branch": "main",
+                "repo_grounded_hints": ["orchestrator/app/openai_planning.py"],
+            },
+        )
+        program_response = Mock(
+            id="resp_program_1",
+            output_parsed={
+                "normalized_program_objective": "Improve OpenAI efficiency",
+                "definition_of_done": ["controls enabled"],
+                "non_goals": ["no auth refactor"],
+                "milestones": [{"key": "M1", "title": "Controls", "goal": "Wire controls"}],
+                "slices": [
+                    {
+                        "slice_number": 1,
+                        "milestone_key": "M1",
+                        "title": "Wire OpenAI controls",
+                        "objective": "Add cache + chaining",
+                        "acceptance_criteria": ["wired"],
+                        "non_goals": ["none"],
+                        "expected_file_zones": ["orchestrator/app"],
+                        "continuation_hint": "",
+                        "slice_type": "implementation",
+                    }
+                ],
+                "current_slice_brief": "Add controls now",
+                "acceptance_criteria": ["wired"],
+                "risk_profile": ["low"],
+                "recommended_worker": "tracker-engineer",
+                "recommended_scope_class": "narrow",
+                "continuation_hints": [],
+            },
+        )
+
+        settings = Settings(
+            OPENAI_API_KEY="test-key",
+            OPENAI_ENABLE_PROMPT_CACHING="true",
+            OPENAI_ENABLE_RESPONSE_CHAINING="true",
+            OPENAI_FLAGSHIP_MODEL="gpt-flagship-test",
+            OPENAI_HELPER_MODEL="gpt-helper-test",
+        )
+        with patch("orchestrator.app.openai_planning.OpenAI") as mocked_openai:
+            mocked_client = mocked_openai.return_value
+            mocked_client.responses.create.side_effect = [planning_response, worker_brief_response, program_response]
+            packet = openai_planning.plan_task_packet(
+                settings=settings,
+                repo="jeeves-jeevesenson/init-tracker",
+                issue_number=999,
+                issue_title="OpenAI controls",
+                issue_body="Add cache/chaining",
+                previous_response_id="resp_prev_123",
+            )
+
+        first_call = mocked_client.responses.create.call_args_list[0].kwargs
+        second_call = mocked_client.responses.create.call_args_list[1].kwargs
+        self.assertEqual(first_call.get("previous_response_id"), "resp_prev_123")
+        self.assertIn("prompt_cache_key", first_call)
+        self.assertIn("planner", first_call.get("prompt_cache_key", ""))
+        self.assertEqual(second_call.get("previous_response_id"), "resp_plan_1")
+        self.assertIn("worker_brief", second_call.get("prompt_cache_key", ""))
+        self.assertEqual(packet["planning_meta"]["openai_last_response_id"], "resp_program_1")
+
+    def test_review_structured_output_validation_rejects_invalid_decision(self):
+        bad_response = Mock(
+            id="resp_bad_review",
+            output_parsed={
+                "decision": "ship_it_now",
+                "status": "met",
+                "confidence": 0.9,
+                "scope_alignment": [],
+                "acceptance_assessment": [],
+                "risk_findings": [],
+                "merge_recommendation": "merge_ready",
+                "revision_instructions": [],
+                "audit_recommendation": "",
+                "next_slice_hint": "",
+                "summary": ["ok"],
+            },
+        )
+        settings = Settings(OPENAI_API_KEY="test-key")
+        with patch("orchestrator.app.openai_review.OpenAI") as mocked_openai:
+            mocked_client = mocked_openai.return_value
+            mocked_client.responses.create.return_value = bad_response
+            with self.assertRaises(RuntimeError):
+                openai_review.summarize_work_update(
+                    settings=settings,
+                    update_context=json.dumps({"repo": "jeeves-jeevesenson/init-tracker", "event": "pull_request"}),
+                    previous_response_id="resp_prev",
+                )
 
 
 if __name__ == "__main__":

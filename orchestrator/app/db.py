@@ -91,6 +91,14 @@ def _ensure_task_packet_indexes() -> None:
                 """
             )
         )
+        connection.execute(
+            text(
+                f"""
+                CREATE INDEX IF NOT EXISTS ix_{table_name}_openai_last_response_id
+                ON {table_name} (openai_last_response_id)
+                """
+            )
+        )
 
 
 def _ensure_columns(table_name: str, column_types: dict[str, str]) -> None:
@@ -115,6 +123,7 @@ def _ensure_task_packet_columns() -> None:
             "program_id": "INTEGER",
             "program_slice_id": "INTEGER",
             "task_kind": "TEXT DEFAULT 'single_task'",
+            "openai_last_response_id": "TEXT",
         },
     )
 
@@ -128,6 +137,7 @@ def _ensure_agent_run_columns() -> None:
             "program_id": "INTEGER",
             "program_slice_id": "INTEGER",
             "continuation_decision": "TEXT",
+            "openai_last_response_id": "TEXT",
         },
     )
 
@@ -149,6 +159,14 @@ def _ensure_agent_run_indexes() -> None:
                 f"""
                 CREATE INDEX IF NOT EXISTS ix_{table_name}_program_slice_created
                 ON {table_name} (program_slice_id, created_at DESC)
+                """
+            )
+        )
+        connection.execute(
+            text(
+                f"""
+                CREATE INDEX IF NOT EXISTS ix_{table_name}_openai_last_response_id
+                ON {table_name} (openai_last_response_id)
                 """
             )
         )
