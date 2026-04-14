@@ -22,6 +22,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING
 
+import httpx
+
 if TYPE_CHECKING:
     from .config import Settings
 
@@ -81,8 +83,6 @@ def _exchange_jwt_for_installation_token(
     Returns ``(token, expires_at_unix)``.
     Raises on HTTP or parse errors.
     """
-    import httpx
-
     url = f"{api_base}/app/installations/{installation_id}/access_tokens"
     headers = {
         "Accept": "application/vnd.github+json",
