@@ -3102,5 +3102,852 @@ class GovernorHardeningTests(unittest.TestCase):
         ))
 
 
+class CopilotFixTriggerTests(unittest.TestCase):
+    """Tests for the deterministic @copilot fix-trigger comment after Copilot
+    review findings, deduplication, waiting-for-push blocking, re-review
+    progression, and approval/merge gating."""
+
+    _saved_env: dict[str, str | None]
+
+    def setUp(self):
+        self._saved_env = {}
+        for key in (
+            "DATABASE_URL", "GH_WEBHOOK_SECRET", "GITHUB_API_TOKEN",
+            "GOVERNOR_GUARDED_PATHS", "GOVERNOR_REMOVE_REVIEWER_LOGIN",
+        ):
+            self._saved_env[key] = os.environ.get(key)
+
+    def tearDown(self):
+        for key, value in self._saved_env.items():
+            if value is None:
+                os.environ.pop(key, None)
+            else:
+                os.environ[key] = value
+
+    def _create_linked_task_run(
+        self,
+        db,
+        *,
+        repo: str,
+        issue_number: int,
+        pr_number: int,
+        with_program: bool = True,
+        governor_state_json: str | None = None,
+    ) -> tuple[int, int | None]:
+        with Session(db.get_engine()) as session:
+            task = TaskPacket(
+                github_repo=repo,
+                github_issue_number=issue_number,
+                title="Fix trigger test task",
+                raw_body="body",
+                status="working",
+                approval_state="approved",
+                acceptance_criteria_json='["done"]',
+                task_kind="program_slice" if with_program else "single_task",
+            )
+            session.add(task)
+            session.commit()
+            session.refresh(task)
+
+            program_id = None
+            if with_program:
+                program = Program(
+                    github_repo=repo,
+                    root_issue_number=issue_number,
+                    title="Fix trigger test program",
+                    normalized_goal="goal",
+                    status=PROGRAM_STATUS_ACTIVE,
+                    current_slice_number=1,
+                    auto_merge=True,
+                    auto_dispatch=True,
+                    auto_continue=True,
+                )
+                session.add(program)
+                session.commit()
+                session.refresh(program)
+                program_id = program.id
+
+                slice1 = ProgramSlice(
+                    program_id=program.id,
+                    slice_number=1,
+                    milestone_key="M1",
+                    title="Slice",
+                    objective="Objective",
+                    acceptance_criteria_json='["done"]',
+                    status="in_progress",
+                    task_packet_id=task.id,
+                )
+                session.add(slice1)
+                session.commit()
+                session.refresh(slice1)
+                task.program_id = program.id
+                task.program_slice_id = slice1.id
+                session.add(task)
+                session.commit()
+
+            run = AgentRun(
+                task_packet_id=task.id,
+                program_id=task.program_id,
+                program_slice_id=task.program_slice_id,
+                provider="github_copilot",
+                github_repo=repo,
+                github_issue_number=issue_number,
+                github_pr_number=pr_number,
+                status="working",
+                last_summary="working",
+                governor_state_json=governor_state_json,
+            )
+            session.add(run)
+            session.commit()
+            session.refresh(run)
+            return task.id, program_id
+
+    # ---- Unit tests for _copilot_fix_trigger_body ----
+
+    def test_fix_trigger_body_format(self):
+        """The fix-trigger body starts with the required sentence, includes
+        Focus on: with bullet findings, and ends with the guidance line."""
+        from orchestrator.app.tasks import _copilot_fix_trigger_body
+
+        body = _copilot_fix_trigger_body(findings=["Fix null check", "Add input validation"])
+        self.assertTrue(body.startswith(
+            "@copilot apply the unresolved review feedback on this pull request "
+            "and push fixes directly to this branch."
+        ))
+        self.assertIn("Focus on:", body)
+        self.assertIn("- Fix null check", body)
+        self.assertIn("- Add input validation", body)
+        self.assertIn(
+            "If a finding is not valid, explain briefly in the PR conversation "
+            "instead of changing code.",
+            body,
+        )
+
+    def test_fix_trigger_body_empty_findings_fallback(self):
+        """When no findings, the body includes a generic re-run bullet."""
+        from orchestrator.app.tasks import _copilot_fix_trigger_body
+
+        body = _copilot_fix_trigger_body(findings=[])
+        self.assertIn("Focus on:", body)
+        self.assertIn("Re-run your review", body)
+
+    def test_fix_trigger_body_truncates_at_12(self):
+        """Only the first 12 findings appear in the body."""
+        from orchestrator.app.tasks import _copilot_fix_trigger_body
+
+        findings = [f"Finding {i}" for i in range(20)]
+        body = _copilot_fix_trigger_body(findings=findings)
+        self.assertIn("- Finding 11", body)
+        self.assertNotIn("- Finding 12", body)
+
+    # ---- Integration tests: deterministic fix-trigger posting ----
+
+    def test_ready_pr_with_copilot_findings_posts_fix_trigger(self):
+        """A ready (non-draft) PR that receives Copilot review with unresolved
+        findings should deterministically post the @copilot fix-trigger comment
+        without requiring OpenAI."""
+        with tempfile.TemporaryDirectory() as td:
+            os.environ["DATABASE_URL"] = f"sqlite:///{Path(td) / 'orchestrator.db'}"
+            os.environ["GH_WEBHOOK_SECRET"] = "test-gh-secret"
+            os.environ["GITHUB_API_TOKEN"] = "dummy-token"
+            main, db = _reload_orchestrator_modules()
+
+            repo = "jeeves-jeevesenson/init-tracker"
+            issue_number = 3001
+            pr_number = 301
+
+            review_payload = {
+                "action": "submitted",
+                "repository": {"full_name": repo},
+                "review": {
+                    "id": 50001,
+                    "user": {"login": "copilot"},
+                    "state": "CHANGES_REQUESTED",
+                    "body": "Fix null check in line 42",
+                    "submitted_at": "2024-06-01T00:00:00Z",
+                },
+                "pull_request": {
+                    "number": pr_number,
+                    "id": 30100,
+                    "title": f"Fix #{issue_number}",
+                    "body": f"Closes #{issue_number}",
+                    "html_url": f"https://github.com/{repo}/pull/{pr_number}",
+                    "merged": False,
+                    "draft": False,
+                    "state": "open",
+                    "requested_reviewers": [],
+                    "changed_files": 1,
+                    "commits": 1,
+                    "updated_at": "2024-06-01T00:00:00Z",
+                },
+            }
+
+            with patch("orchestrator.app.tasks.summarize_work_update", return_value={
+                "review_artifact": {
+                    "decision": "continue", "status": "met", "confidence": 0.8,
+                    "scope_alignment": [], "acceptance_assessment": [], "risk_findings": [],
+                    "merge_recommendation": "review_required", "revision_instructions": [],
+                    "audit_recommendation": "", "next_slice_hint": "", "summary": ["ok"],
+                },
+                "summary_bullets": ["ok"],
+                "next_action": "continue",
+            }), \
+                 patch("orchestrator.app.tasks.summarize_governor_update") as mocked_governor, \
+                 patch("orchestrator.app.tasks.post_issue_comment") as mocked_post, \
+                 patch("orchestrator.app.tasks.list_issue_comments", return_value=([], "ok")), \
+                 patch("orchestrator.app.tasks.list_pull_request_files", return_value=(["src/main.py"], "ok")), \
+                 patch("orchestrator.app.tasks.list_pull_request_reviews", return_value=([
+                     {"user": {"login": "copilot"}, "state": "CHANGES_REQUESTED", "body": "Fix null check in line 42"},
+                 ], "ok")), \
+                 patch("orchestrator.app.tasks.list_pull_request_review_comments", return_value=([], "ok")), \
+                 patch("orchestrator.app.tasks.notify_discord"):
+                with TestClient(main.app) as client:
+                    self._create_linked_task_run(
+                        db,
+                        repo=repo,
+                        issue_number=issue_number,
+                        pr_number=pr_number,
+                        with_program=True,
+                    )
+                    resp = _post_github(
+                        client,
+                        secret="test-gh-secret",
+                        delivery="delivery-fix-trigger-1",
+                        event="pull_request_review",
+                        payload=review_payload,
+                    )
+                    self.assertEqual(resp.status_code, 200)
+            # Fix-trigger comment must have been posted
+            mocked_post.assert_called_once()
+            posted_body = mocked_post.call_args[1].get("body") or mocked_post.call_args[0][-1]
+            self.assertTrue(posted_body.startswith(
+                "@copilot apply the unresolved review feedback on this pull request"
+            ))
+            self.assertIn("Fix null check in line 42", posted_body)
+            # OpenAI governor should NOT have been called — deterministic path short-circuits
+            mocked_governor.assert_not_called()
+
+    def test_fix_trigger_deduplication_on_repeated_webhook(self):
+        """Reprocessing the same review webhook does not create a duplicate
+        fix-trigger comment because of fingerprint deduplication."""
+        with tempfile.TemporaryDirectory() as td:
+            os.environ["DATABASE_URL"] = f"sqlite:///{Path(td) / 'orchestrator.db'}"
+            os.environ["GH_WEBHOOK_SECRET"] = "test-gh-secret"
+            os.environ["GITHUB_API_TOKEN"] = "dummy-token"
+            main, db = _reload_orchestrator_modules()
+
+            repo = "jeeves-jeevesenson/init-tracker"
+            issue_number = 3002
+            pr_number = 302
+
+            review_payload_1 = {
+                "action": "submitted",
+                "repository": {"full_name": repo},
+                "review": {
+                    "id": 50002,
+                    "user": {"login": "copilot"},
+                    "state": "CHANGES_REQUESTED",
+                    "body": "Add error handling",
+                    "submitted_at": "2024-06-01T00:00:00Z",
+                },
+                "pull_request": {
+                    "number": pr_number,
+                    "id": 30200,
+                    "title": f"Fix #{issue_number}",
+                    "body": f"Closes #{issue_number}",
+                    "html_url": f"https://github.com/{repo}/pull/{pr_number}",
+                    "merged": False,
+                    "draft": False,
+                    "state": "open",
+                    "requested_reviewers": [],
+                    "changed_files": 1,
+                    "commits": 1,
+                    "updated_at": "2024-06-01T00:00:00Z",
+                },
+            }
+            # Second delivery: different event key but same findings
+            review_payload_2 = {
+                "action": "submitted",
+                "repository": {"full_name": repo},
+                "review": {
+                    "id": 50002,
+                    "user": {"login": "copilot"},
+                    "state": "CHANGES_REQUESTED",
+                    "body": "Add error handling",
+                    "submitted_at": "2024-06-01T00:01:00Z",
+                },
+                "pull_request": {
+                    "number": pr_number,
+                    "id": 30200,
+                    "title": f"Fix #{issue_number}",
+                    "body": f"Closes #{issue_number}",
+                    "html_url": f"https://github.com/{repo}/pull/{pr_number}",
+                    "merged": False,
+                    "draft": False,
+                    "state": "open",
+                    "requested_reviewers": [],
+                    "changed_files": 1,
+                    "commits": 1,
+                    "updated_at": "2024-06-01T00:01:00Z",
+                },
+            }
+
+            with patch("orchestrator.app.tasks.summarize_work_update", return_value={
+                "review_artifact": {
+                    "decision": "continue", "status": "met", "confidence": 0.8,
+                    "scope_alignment": [], "acceptance_assessment": [], "risk_findings": [],
+                    "merge_recommendation": "review_required", "revision_instructions": [],
+                    "audit_recommendation": "", "next_slice_hint": "", "summary": ["ok"],
+                },
+                "summary_bullets": ["ok"],
+                "next_action": "continue",
+            }), \
+                 patch("orchestrator.app.tasks.summarize_governor_update") as mocked_governor, \
+                 patch("orchestrator.app.tasks.post_issue_comment") as mocked_post, \
+                 patch("orchestrator.app.tasks.list_issue_comments", return_value=([], "ok")), \
+                 patch("orchestrator.app.tasks.list_pull_request_files", return_value=(["src/main.py"], "ok")), \
+                 patch("orchestrator.app.tasks.list_pull_request_reviews", return_value=([
+                     {"user": {"login": "copilot"}, "state": "CHANGES_REQUESTED", "body": "Add error handling"},
+                 ], "ok")), \
+                 patch("orchestrator.app.tasks.list_pull_request_review_comments", return_value=([], "ok")), \
+                 patch("orchestrator.app.tasks.notify_discord"):
+                with TestClient(main.app) as client:
+                    self._create_linked_task_run(
+                        db,
+                        repo=repo,
+                        issue_number=issue_number,
+                        pr_number=pr_number,
+                        with_program=True,
+                    )
+                    # First delivery
+                    resp1 = _post_github(
+                        client,
+                        secret="test-gh-secret",
+                        delivery="delivery-fix-trigger-dedup-1",
+                        event="pull_request_review",
+                        payload=review_payload_1,
+                    )
+                    self.assertEqual(resp1.status_code, 200)
+                    # Second delivery (redelivery with different timestamp)
+                    resp2 = _post_github(
+                        client,
+                        secret="test-gh-secret",
+                        delivery="delivery-fix-trigger-dedup-2",
+                        event="pull_request_review",
+                        payload=review_payload_2,
+                    )
+                    self.assertEqual(resp2.status_code, 200)
+            # Comment should only have been posted ONCE
+            self.assertEqual(mocked_post.call_count, 1)
+            # OpenAI governor should NOT have been called
+            mocked_governor.assert_not_called()
+
+    def test_fix_trigger_blocks_immediate_approve_and_merge(self):
+        """After the fix-trigger comment is posted, the workflow must NOT
+        approve or merge — it remains in waiting_for_revision_push state."""
+        with tempfile.TemporaryDirectory() as td:
+            os.environ["DATABASE_URL"] = f"sqlite:///{Path(td) / 'orchestrator.db'}"
+            os.environ["GH_WEBHOOK_SECRET"] = "test-gh-secret"
+            os.environ["GITHUB_API_TOKEN"] = "dummy-token"
+            main, db = _reload_orchestrator_modules()
+
+            repo = "jeeves-jeevesenson/init-tracker"
+            issue_number = 3003
+            pr_number = 303
+
+            review_payload = {
+                "action": "submitted",
+                "repository": {"full_name": repo},
+                "review": {
+                    "id": 50003,
+                    "user": {"login": "copilot"},
+                    "state": "CHANGES_REQUESTED",
+                    "body": "Validate input parameter",
+                    "submitted_at": "2024-06-01T00:00:00Z",
+                },
+                "pull_request": {
+                    "number": pr_number,
+                    "id": 30300,
+                    "title": f"Fix #{issue_number}",
+                    "body": f"Closes #{issue_number}",
+                    "html_url": f"https://github.com/{repo}/pull/{pr_number}",
+                    "merged": False,
+                    "draft": False,
+                    "state": "open",
+                    "requested_reviewers": [],
+                    "changed_files": 1,
+                    "commits": 1,
+                    "updated_at": "2024-06-01T00:00:00Z",
+                },
+            }
+
+            with patch("orchestrator.app.tasks.summarize_work_update", return_value={
+                "review_artifact": {
+                    "decision": "continue", "status": "met", "confidence": 0.8,
+                    "scope_alignment": [], "acceptance_assessment": [], "risk_findings": [],
+                    "merge_recommendation": "review_required", "revision_instructions": [],
+                    "audit_recommendation": "", "next_slice_hint": "", "summary": ["ok"],
+                },
+                "summary_bullets": ["ok"],
+                "next_action": "continue",
+            }), \
+                 patch("orchestrator.app.tasks.summarize_governor_update") as mocked_governor, \
+                 patch("orchestrator.app.tasks.post_issue_comment") as mocked_post, \
+                 patch("orchestrator.app.tasks.list_issue_comments", return_value=([], "ok")), \
+                 patch("orchestrator.app.tasks.submit_approving_review") as mocked_approve, \
+                 patch("orchestrator.app.tasks.merge_pr") as mocked_merge, \
+                 patch("orchestrator.app.tasks.list_pull_request_files", return_value=(["src/main.py"], "ok")), \
+                 patch("orchestrator.app.tasks.list_pull_request_reviews", return_value=([
+                     {"user": {"login": "copilot"}, "state": "CHANGES_REQUESTED", "body": "Validate input parameter"},
+                 ], "ok")), \
+                 patch("orchestrator.app.tasks.list_pull_request_review_comments", return_value=([], "ok")), \
+                 patch("orchestrator.app.tasks.notify_discord"):
+                with TestClient(main.app) as client:
+                    self._create_linked_task_run(
+                        db,
+                        repo=repo,
+                        issue_number=issue_number,
+                        pr_number=pr_number,
+                        with_program=True,
+                    )
+                    resp = _post_github(
+                        client,
+                        secret="test-gh-secret",
+                        delivery="delivery-fix-blocks-merge-1",
+                        event="pull_request_review",
+                        payload=review_payload,
+                    )
+                    self.assertEqual(resp.status_code, 200)
+            # Fix-trigger was posted
+            mocked_post.assert_called_once()
+            # But approve and merge were NOT called
+            mocked_approve.assert_not_called()
+            mocked_merge.assert_not_called()
+            # Governor state should have waiting_for_revision_push=True
+            with Session(db.get_engine()) as session:
+                run = session.exec(
+                    select(AgentRun)
+                    .where(AgentRun.github_repo == repo)
+                    .where(AgentRun.github_pr_number == pr_number)
+                ).first()
+                state = json.loads(run.governor_state_json or "{}")
+                self.assertTrue(state.get("waiting_for_revision_push"))
+                self.assertEqual(state.get("last_governor_decision"), "fix_trigger_posted")
+
+    def test_push_after_fix_trigger_reenters_review_pipeline(self):
+        """A push to the PR branch after the fix-trigger clears
+        waiting_for_revision_push when findings are resolved, allowing
+        the workflow to proceed to approval and merge."""
+        with tempfile.TemporaryDirectory() as td:
+            os.environ["DATABASE_URL"] = f"sqlite:///{Path(td) / 'orchestrator.db'}"
+            os.environ["GH_WEBHOOK_SECRET"] = "test-gh-secret"
+            os.environ["GITHUB_API_TOKEN"] = "dummy-token"
+            main, db = _reload_orchestrator_modules()
+
+            repo = "jeeves-jeevesenson/init-tracker"
+            issue_number = 3004
+            pr_number = 304
+
+            # Governor state: fix-trigger already posted, waiting for push
+            governor_state = json.dumps({
+                "pr_draft": False,
+                "waiting_for_revision_push": True,
+                "fix_trigger_fingerprint": "abc123",
+                "revision_cycle_count": 1,
+            })
+
+            # Simulate: workflow_run completed with success (after Copilot push)
+            workflow_payload = {
+                "action": "completed",
+                "repository": {"full_name": repo},
+                "workflow_run": {
+                    "id": 90010,
+                    "name": "CI",
+                    "status": "completed",
+                    "conclusion": "success",
+                    "html_url": f"https://github.com/{repo}/actions/runs/90010",
+                    "pull_requests": [{"number": pr_number}],
+                },
+            }
+
+            with patch("orchestrator.app.tasks.summarize_work_update", return_value={
+                "review_artifact": {
+                    "decision": "continue", "status": "met", "confidence": 0.8,
+                    "scope_alignment": [], "acceptance_assessment": [], "risk_findings": [],
+                    "merge_recommendation": "merge_ready", "revision_instructions": [],
+                    "audit_recommendation": "", "next_slice_hint": "", "summary": ["ok"],
+                },
+                "summary_bullets": ["ok"],
+                "next_action": "continue",
+            }), \
+                 patch("orchestrator.app.tasks.summarize_governor_update", return_value={
+                     "governor_artifact": {"decision": "approve_and_merge", "summary": ["ready"], "revision_requests": [], "escalation_reason": ""},
+                 }), \
+                 patch("orchestrator.app.tasks.submit_approving_review") as mocked_approve, \
+                 patch("orchestrator.app.tasks.merge_pr", return_value=(True, "merged")) as mocked_merge, \
+                 patch("orchestrator.app.tasks.list_pull_request_files", return_value=(["src/main.py"], "ok")), \
+                 patch("orchestrator.app.tasks.list_pull_request_reviews", return_value=([], "ok")), \
+                 patch("orchestrator.app.tasks.list_pull_request_review_comments", return_value=([], "ok")), \
+                 patch("orchestrator.app.tasks.notify_discord"):
+                with TestClient(main.app) as client:
+                    self._create_linked_task_run(
+                        db,
+                        repo=repo,
+                        issue_number=issue_number,
+                        pr_number=pr_number,
+                        with_program=True,
+                        governor_state_json=governor_state,
+                    )
+                    resp = _post_github(
+                        client,
+                        secret="test-gh-secret",
+                        delivery="delivery-push-after-trigger-1",
+                        event="workflow_run",
+                        payload=workflow_payload,
+                    )
+                    self.assertEqual(resp.status_code, 200)
+            # Findings resolved → approval + merge should proceed
+            mocked_approve.assert_called_once()
+            mocked_merge.assert_called_once()
+
+    def test_unresolved_findings_after_rereview_blocks_merge(self):
+        """If unresolved Copilot findings remain after re-review, the PR
+        is not approved or merged."""
+        with tempfile.TemporaryDirectory() as td:
+            os.environ["DATABASE_URL"] = f"sqlite:///{Path(td) / 'orchestrator.db'}"
+            os.environ["GH_WEBHOOK_SECRET"] = "test-gh-secret"
+            os.environ["GITHUB_API_TOKEN"] = "dummy-token"
+            main, db = _reload_orchestrator_modules()
+
+            repo = "jeeves-jeevesenson/init-tracker"
+            issue_number = 3005
+            pr_number = 305
+
+            # Governor state: fix-trigger posted, waiting for push
+            governor_state = json.dumps({
+                "pr_draft": False,
+                "waiting_for_revision_push": True,
+                "fix_trigger_fingerprint": "old-fp",
+                "revision_cycle_count": 1,
+            })
+
+            # Copilot re-review arrives with NEW findings
+            review_payload = {
+                "action": "submitted",
+                "repository": {"full_name": repo},
+                "review": {
+                    "id": 50005,
+                    "user": {"login": "copilot"},
+                    "state": "CHANGES_REQUESTED",
+                    "body": "New finding: missing error handler",
+                    "submitted_at": "2024-06-01T01:00:00Z",
+                },
+                "pull_request": {
+                    "number": pr_number,
+                    "id": 30500,
+                    "title": f"Fix #{issue_number}",
+                    "body": f"Closes #{issue_number}",
+                    "html_url": f"https://github.com/{repo}/pull/{pr_number}",
+                    "merged": False,
+                    "draft": False,
+                    "state": "open",
+                    "requested_reviewers": [],
+                    "changed_files": 1,
+                    "commits": 2,
+                    "updated_at": "2024-06-01T01:00:00Z",
+                },
+            }
+
+            with patch("orchestrator.app.tasks.summarize_work_update", return_value={
+                "review_artifact": {
+                    "decision": "continue", "status": "met", "confidence": 0.8,
+                    "scope_alignment": [], "acceptance_assessment": [], "risk_findings": [],
+                    "merge_recommendation": "review_required", "revision_instructions": [],
+                    "audit_recommendation": "", "next_slice_hint": "", "summary": ["ok"],
+                },
+                "summary_bullets": ["ok"],
+                "next_action": "continue",
+            }), \
+                 patch("orchestrator.app.tasks.summarize_governor_update") as mocked_governor, \
+                 patch("orchestrator.app.tasks.post_issue_comment") as mocked_post, \
+                 patch("orchestrator.app.tasks.list_issue_comments", return_value=([], "ok")), \
+                 patch("orchestrator.app.tasks.submit_approving_review") as mocked_approve, \
+                 patch("orchestrator.app.tasks.merge_pr") as mocked_merge, \
+                 patch("orchestrator.app.tasks.list_pull_request_files", return_value=(["src/main.py"], "ok")), \
+                 patch("orchestrator.app.tasks.list_pull_request_reviews", return_value=([
+                     {"user": {"login": "copilot"}, "state": "CHANGES_REQUESTED", "body": "New finding: missing error handler"},
+                 ], "ok")), \
+                 patch("orchestrator.app.tasks.list_pull_request_review_comments", return_value=([], "ok")), \
+                 patch("orchestrator.app.tasks.notify_discord"):
+                with TestClient(main.app) as client:
+                    self._create_linked_task_run(
+                        db,
+                        repo=repo,
+                        issue_number=issue_number,
+                        pr_number=pr_number,
+                        with_program=True,
+                        governor_state_json=governor_state,
+                    )
+                    resp = _post_github(
+                        client,
+                        secret="test-gh-secret",
+                        delivery="delivery-rereview-findings-1",
+                        event="pull_request_review",
+                        payload=review_payload,
+                    )
+                    self.assertEqual(resp.status_code, 200)
+            # New fix trigger should be posted for the NEW findings
+            mocked_post.assert_called_once()
+            posted_body = mocked_post.call_args[1].get("body") or mocked_post.call_args[0][-1]
+            self.assertIn("missing error handler", posted_body)
+            # Must NOT approve or merge
+            mocked_approve.assert_not_called()
+            mocked_merge.assert_not_called()
+
+    def test_guarded_paths_escalate_instead_of_fix_trigger(self):
+        """When guarded paths are touched, the governor escalates to human
+        rather than posting the fix-trigger comment."""
+        with tempfile.TemporaryDirectory() as td:
+            os.environ["DATABASE_URL"] = f"sqlite:///{Path(td) / 'orchestrator.db'}"
+            os.environ["GH_WEBHOOK_SECRET"] = "test-gh-secret"
+            os.environ["GITHUB_API_TOKEN"] = "dummy-token"
+            os.environ["GOVERNOR_GUARDED_PATHS"] = ".github/workflows/*"
+            main, db = _reload_orchestrator_modules()
+
+            repo = "jeeves-jeevesenson/init-tracker"
+            issue_number = 3006
+            pr_number = 306
+
+            review_payload = {
+                "action": "submitted",
+                "repository": {"full_name": repo},
+                "review": {
+                    "id": 50006,
+                    "user": {"login": "copilot"},
+                    "state": "CHANGES_REQUESTED",
+                    "body": "Fix workflow config",
+                    "submitted_at": "2024-06-01T00:00:00Z",
+                },
+                "pull_request": {
+                    "number": pr_number,
+                    "id": 30600,
+                    "title": f"Fix #{issue_number}",
+                    "body": f"Closes #{issue_number}",
+                    "html_url": f"https://github.com/{repo}/pull/{pr_number}",
+                    "merged": False,
+                    "draft": False,
+                    "state": "open",
+                    "requested_reviewers": [],
+                    "changed_files": 1,
+                    "commits": 1,
+                    "updated_at": "2024-06-01T00:00:00Z",
+                },
+            }
+
+            with patch("orchestrator.app.tasks.summarize_work_update", return_value={
+                "review_artifact": {
+                    "decision": "continue", "status": "met", "confidence": 0.8,
+                    "scope_alignment": [], "acceptance_assessment": [], "risk_findings": [],
+                    "merge_recommendation": "review_required", "revision_instructions": [],
+                    "audit_recommendation": "", "next_slice_hint": "", "summary": ["ok"],
+                },
+                "summary_bullets": ["ok"],
+                "next_action": "continue",
+            }), \
+                 patch("orchestrator.app.tasks.summarize_governor_update", return_value={
+                     "governor_artifact": {"decision": "escalate_human", "summary": ["guarded"], "revision_requests": [], "escalation_reason": "guarded paths"},
+                 }), \
+                 patch("orchestrator.app.tasks.post_issue_comment") as mocked_post, \
+                 patch("orchestrator.app.tasks.list_issue_comments", return_value=([], "ok")), \
+                 patch("orchestrator.app.tasks.list_pull_request_files", return_value=([".github/workflows/ci.yml"], "ok")), \
+                 patch("orchestrator.app.tasks.list_pull_request_reviews", return_value=([
+                     {"user": {"login": "copilot"}, "state": "CHANGES_REQUESTED", "body": "Fix workflow config"},
+                 ], "ok")), \
+                 patch("orchestrator.app.tasks.list_pull_request_review_comments", return_value=([], "ok")), \
+                 patch("orchestrator.app.tasks.notify_discord"):
+                with TestClient(main.app) as client:
+                    self._create_linked_task_run(
+                        db,
+                        repo=repo,
+                        issue_number=issue_number,
+                        pr_number=pr_number,
+                        with_program=True,
+                    )
+                    resp = _post_github(
+                        client,
+                        secret="test-gh-secret",
+                        delivery="delivery-guarded-escalate-1",
+                        event="pull_request_review",
+                        payload=review_payload,
+                    )
+                    self.assertEqual(resp.status_code, 200)
+            # The fix-trigger comment should NOT be posted (guarded path → escalation)
+            mocked_post.assert_not_called()
+
+    def test_draft_pr_with_findings_does_not_trigger_fix(self):
+        """A draft PR with Copilot findings should NOT fire the deterministic
+        fix-trigger; it should proceed to the normal OpenAI-directed path."""
+        with tempfile.TemporaryDirectory() as td:
+            os.environ["DATABASE_URL"] = f"sqlite:///{Path(td) / 'orchestrator.db'}"
+            os.environ["GH_WEBHOOK_SECRET"] = "test-gh-secret"
+            os.environ["GITHUB_API_TOKEN"] = "dummy-token"
+            main, db = _reload_orchestrator_modules()
+
+            repo = "jeeves-jeevesenson/init-tracker"
+            issue_number = 3007
+            pr_number = 307
+
+            review_payload = {
+                "action": "submitted",
+                "repository": {"full_name": repo},
+                "review": {
+                    "id": 50007,
+                    "user": {"login": "copilot"},
+                    "state": "CHANGES_REQUESTED",
+                    "body": "Fix null check",
+                    "submitted_at": "2024-06-01T00:00:00Z",
+                },
+                "pull_request": {
+                    "number": pr_number,
+                    "id": 30700,
+                    "title": f"Fix #{issue_number}",
+                    "body": f"Closes #{issue_number}",
+                    "html_url": f"https://github.com/{repo}/pull/{pr_number}",
+                    "merged": False,
+                    "draft": True,
+                    "state": "open",
+                    "requested_reviewers": [],
+                    "changed_files": 1,
+                    "commits": 1,
+                    "updated_at": "2024-06-01T00:00:00Z",
+                },
+            }
+
+            with patch("orchestrator.app.tasks.summarize_work_update", return_value={
+                "review_artifact": {
+                    "decision": "continue", "status": "met", "confidence": 0.8,
+                    "scope_alignment": [], "acceptance_assessment": [], "risk_findings": [],
+                    "merge_recommendation": "review_required", "revision_instructions": [],
+                    "audit_recommendation": "", "next_slice_hint": "", "summary": ["ok"],
+                },
+                "summary_bullets": ["ok"],
+                "next_action": "continue",
+            }), \
+                 patch("orchestrator.app.tasks.summarize_governor_update", return_value={
+                     "governor_artifact": {"decision": "request_revision", "summary": ["needs fix"], "revision_requests": ["Fix null check"], "escalation_reason": ""},
+                 }) as mocked_governor, \
+                 patch("orchestrator.app.tasks.post_issue_comment") as mocked_post, \
+                 patch("orchestrator.app.tasks.list_issue_comments", return_value=([], "ok")), \
+                 patch("orchestrator.app.tasks.list_pull_request_files", return_value=(["src/main.py"], "ok")), \
+                 patch("orchestrator.app.tasks.list_pull_request_reviews", return_value=([
+                     {"user": {"login": "copilot"}, "state": "CHANGES_REQUESTED", "body": "Fix null check"},
+                 ], "ok")), \
+                 patch("orchestrator.app.tasks.list_pull_request_review_comments", return_value=([], "ok")), \
+                 patch("orchestrator.app.tasks.notify_discord"):
+                with TestClient(main.app) as client:
+                    self._create_linked_task_run(
+                        db,
+                        repo=repo,
+                        issue_number=issue_number,
+                        pr_number=pr_number,
+                        with_program=True,
+                        governor_state_json=json.dumps({"pr_draft": True}),
+                    )
+                    resp = _post_github(
+                        client,
+                        secret="test-gh-secret",
+                        delivery="delivery-draft-no-trigger-1",
+                        event="pull_request_review",
+                        payload=review_payload,
+                    )
+                    self.assertEqual(resp.status_code, 200)
+            # Draft PR should go through OpenAI path, not deterministic fix trigger
+            mocked_governor.assert_called_once()
+            # The posted comment should use the old batched_revision format, not the fix-trigger format
+            if mocked_post.called:
+                posted_body = mocked_post.call_args[1].get("body") or mocked_post.call_args[0][-1]
+                self.assertNotIn(
+                    "apply the unresolved review feedback",
+                    posted_body,
+                )
+
+    def test_approve_and_merge_blocked_by_waiting_for_revision_push(self):
+        """Even if OpenAI says approve_and_merge, a PR in waiting_for_revision_push
+        state should not be approved or merged."""
+        with tempfile.TemporaryDirectory() as td:
+            os.environ["DATABASE_URL"] = f"sqlite:///{Path(td) / 'orchestrator.db'}"
+            os.environ["GH_WEBHOOK_SECRET"] = "test-gh-secret"
+            os.environ["GITHUB_API_TOKEN"] = "dummy-token"
+            main, db = _reload_orchestrator_modules()
+
+            repo = "jeeves-jeevesenson/init-tracker"
+            issue_number = 3008
+            pr_number = 308
+
+            # Governor state: waiting for revision push, but findings just cleared
+            # In this edge case, waiting_for_revision_push should block merge
+            governor_state = json.dumps({
+                "pr_draft": False,
+                "waiting_for_revision_push": True,
+                "fix_trigger_fingerprint": "some-fp",
+                "revision_cycle_count": 1,
+            })
+
+            workflow_payload = {
+                "action": "completed",
+                "repository": {"full_name": repo},
+                "workflow_run": {
+                    "id": 90020,
+                    "name": "CI",
+                    "status": "completed",
+                    "conclusion": "success",
+                    "html_url": f"https://github.com/{repo}/actions/runs/90020",
+                    "pull_requests": [{"number": pr_number}],
+                },
+            }
+
+            with patch("orchestrator.app.tasks.summarize_work_update", return_value={
+                "review_artifact": {
+                    "decision": "continue", "status": "met", "confidence": 0.8,
+                    "scope_alignment": [], "acceptance_assessment": [], "risk_findings": [],
+                    "merge_recommendation": "merge_ready", "revision_instructions": [],
+                    "audit_recommendation": "", "next_slice_hint": "", "summary": ["ok"],
+                },
+                "summary_bullets": ["ok"],
+                "next_action": "continue",
+            }), \
+                 patch("orchestrator.app.tasks.summarize_governor_update", return_value={
+                     "governor_artifact": {"decision": "approve_and_merge", "summary": ["ready"], "revision_requests": [], "escalation_reason": ""},
+                 }), \
+                 patch("orchestrator.app.tasks.submit_approving_review") as mocked_approve, \
+                 patch("orchestrator.app.tasks.merge_pr") as mocked_merge, \
+                 patch("orchestrator.app.tasks.list_pull_request_files", return_value=(["src/main.py"], "ok")), \
+                 patch("orchestrator.app.tasks.list_pull_request_reviews", return_value=([
+                     {"user": {"login": "copilot"}, "state": "CHANGES_REQUESTED", "body": "Stale finding"},
+                 ], "ok")), \
+                 patch("orchestrator.app.tasks.list_pull_request_review_comments", return_value=([], "ok")), \
+                 patch("orchestrator.app.tasks.notify_discord"):
+                with TestClient(main.app) as client:
+                    self._create_linked_task_run(
+                        db,
+                        repo=repo,
+                        issue_number=issue_number,
+                        pr_number=pr_number,
+                        with_program=True,
+                        governor_state_json=governor_state,
+                    )
+                    resp = _post_github(
+                        client,
+                        secret="test-gh-secret",
+                        delivery="delivery-waiting-blocks-merge-1",
+                        event="workflow_run",
+                        payload=workflow_payload,
+                    )
+                    self.assertEqual(resp.status_code, 200)
+            # Must NOT approve or merge while findings are unresolved
+            mocked_approve.assert_not_called()
+            mocked_merge.assert_not_called()
+
+
 if __name__ == "__main__":
     unittest.main()
