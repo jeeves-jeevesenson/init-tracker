@@ -66,6 +66,10 @@ GOVERNOR_SYSTEM_PROMPT = (
     "You are a PR governor for an orchestrator control plane. "
     "Decide safe, idempotent next action for autonomous PR progression."
 )
+REVIEW_BATCH_SYSTEM_PROMPT = (
+    "You synthesize actionable GitHub PR review feedback into one concise top-level @copilot continuation comment. "
+    "De-duplicate overlaps and keep output bounded."
+)
 
 GOVERNOR_ARTIFACT_SCHEMA: dict[str, Any] = {
     "type": "object",
@@ -81,6 +85,23 @@ GOVERNOR_ARTIFACT_SCHEMA: dict[str, Any] = {
         "summary": {"type": "array", "items": {"type": "string"}},
         "revision_requests": {"type": "array", "items": {"type": "string"}},
         "escalation_reason": {"type": "string"},
+    },
+}
+
+REVIEW_BATCH_ARTIFACT_SCHEMA: dict[str, Any] = {
+    "type": "object",
+    "additionalProperties": False,
+    "required": [
+        "summary",
+        "batched_items",
+        "comment_body",
+        "should_trigger_copilot",
+    ],
+    "properties": {
+        "summary": {"type": "array", "items": {"type": "string"}},
+        "batched_items": {"type": "array", "items": {"type": "string"}},
+        "comment_body": {"type": "string"},
+        "should_trigger_copilot": {"type": "boolean"},
     },
 }
 
@@ -497,6 +518,188 @@ def summarize_governor_update(
             "stage": "continuation_audit",
             "model_tier": model_tier,
             "model": governor_model,
+            "response_id": response_id,
+        },
+    }
+
+
+def _review_batch_response_payload(
+    *,
+    model: str,
+    update_context: str,
+    settings: Settings,
+    reasoning_effort: str,
+    stage: str,
+    repo: str | None,
+    previous_response_id: str | None,
+    model_tier: str,
+) -> dict[str, Any]:
+    payload: dict[str, Any] = {
+        "model": model,
+        "input": [
+            {
+                "role": "system",
+                "content": [{"type": "input_text", "text": REVIEW_BATCH_SYSTEM_PROMPT}],
+            },
+            {
+                "role": "user",
+                "content": [{"type": "input_text", "text": update_context}],
+            },
+        ],
+        "text": {
+            "format": {
+                "type": "json_schema",
+                "name": "pr_review_batch_artifact",
+                "strict": True,
+                "schema": REVIEW_BATCH_ARTIFACT_SCHEMA,
+            }
+        },
+    }
+    normalized_effort = reasoning_effort.strip().lower()
+    if normalized_effort in _ALLOWED_REASONING_EFFORT:
+        payload["reasoning"] = {"effort": normalized_effort}
+    if settings.openai_enable_background_requests:
+        payload["background"] = True
+    request_controls = apply_openai_request_controls(
+        payload=payload,
+        settings=settings,
+        stage=stage,
+        repo=repo,
+        previous_response_id=previous_response_id,
+    )
+    request_controls["model_tier"] = model_tier
+    payload["_openai_request_controls"] = request_controls
+    return payload
+
+
+def _fallback_review_batch_artifact(update_context: str) -> dict[str, Any]:
+    try:
+        parsed = json.loads(update_context)
+    except Exception:
+        parsed = {}
+    if not isinstance(parsed, dict):
+        parsed = {}
+    unresolved = parsed.get("unresolved_findings")
+    findings = [str(item).strip() for item in unresolved if str(item).strip()] if isinstance(unresolved, list) else []
+    deduped: list[str] = []
+    seen: set[str] = set()
+    for finding in findings:
+        key = " ".join(finding.split()).lower()
+        if not key or key in seen:
+            continue
+        seen.add(key)
+        deduped.append(" ".join(finding.split()))
+    batched_items = deduped[:12]
+    should_trigger = bool(batched_items)
+    if should_trigger:
+        lines = ["@copilot Please apply the following review fixes in this PR branch:"]
+        for index, item in enumerate(batched_items, start=1):
+            lines.append(f"{index}. {item}")
+        lines.append("")
+        lines.append("If any item is invalid, explain briefly in PR comments.")
+        comment_body = "\n".join(lines)
+    else:
+        comment_body = "@copilot Re-check this PR and post any remaining actionable findings."
+    summary = ["Review feedback batched for one top-level continuation comment."]
+    return {
+        "summary": summary,
+        "batched_items": batched_items,
+        "comment_body": comment_body,
+        "should_trigger_copilot": should_trigger,
+    }
+
+
+def _validate_review_batch_artifact(raw: dict[str, Any]) -> dict[str, Any]:
+    summary = _coerce_string_list(raw.get("summary"), "summary")[:4]
+    if not summary:
+        summary = ["Review feedback batched for continuation."]
+    batched_items = _coerce_string_list(raw.get("batched_items"), "batched_items")[:12]
+    should_trigger = bool(raw.get("should_trigger_copilot"))
+    comment_body = str(raw.get("comment_body") or "").strip()
+    if should_trigger and not comment_body:
+        raise RuntimeError("OpenAI review batch response field 'comment_body' must be non-empty when triggering")
+    if not comment_body:
+        comment_body = "@copilot Re-check this PR and post any remaining actionable findings."
+    if not comment_body.startswith("@copilot"):
+        comment_body = f"@copilot {comment_body}"
+    return {
+        "summary": summary,
+        "batched_items": batched_items,
+        "comment_body": comment_body,
+        "should_trigger_copilot": should_trigger,
+    }
+
+
+def summarize_copilot_review_batch(
+    *,
+    settings: Settings,
+    update_context: str,
+    previous_response_id: str | None = None,
+    force_flagship: bool = False,
+) -> dict[str, Any]:
+    validate_strict_json_schema(schema_name="pr_review_batch_artifact", schema=REVIEW_BATCH_ARTIFACT_SCHEMA)
+    if not settings.openai_api_key:
+        artifact = _fallback_review_batch_artifact(update_context)
+        return {
+            "review_batch_artifact": artifact,
+            "summary_bullets": artifact["summary"],
+            "next_action": "trigger" if artifact["should_trigger_copilot"] else "skip",
+            "openai_meta": {
+                "stage": "review_batching",
+                "model_tier": "fallback",
+                "model": None,
+                "response_id": None,
+                "prompt_cache_attempted": False,
+                "previous_response_id_attempted": False,
+            },
+        }
+
+    stage = "reviewer" if force_flagship else "review_batching"
+    fallback_model = settings.openai_review_model if force_flagship else settings.openai_helper_model
+    model, model_tier = select_model_for_stage(
+        settings=settings,
+        stage=stage,
+        fallback_model=fallback_model,
+    )
+    repo = _extract_repo_from_context(update_context)
+    client = OpenAI(api_key=settings.openai_api_key)
+    payload = _review_batch_response_payload(
+        model=model,
+        update_context=update_context,
+        settings=settings,
+        reasoning_effort=settings.openai_review_reasoning_effort,
+        stage=stage,
+        repo=repo,
+        previous_response_id=previous_response_id,
+        model_tier=model_tier,
+    )
+    request_controls = payload.pop("_openai_request_controls", {})
+    response = client.responses.create(**payload)
+    parsed = _extract_structured_object(response, stage="review batching")
+    if settings.openai_enable_background_requests and not parsed:
+        response_id = getattr(response, "id", None)
+        raise RuntimeError(
+            "OpenAI background responses require async completion handling before review batching can continue"
+            f" (response_id={response_id or 'unknown'})"
+        )
+    artifact = _validate_review_batch_artifact(parsed)
+    response_id = getattr(response, "id", None)
+    _logger.info(
+        "openai_call stage=%s model=%s response_id=%s model_tier=%s",
+        stage,
+        model,
+        response_id or "",
+        model_tier,
+    )
+    return {
+        "review_batch_artifact": artifact,
+        "summary_bullets": artifact["summary"],
+        "next_action": "trigger" if artifact["should_trigger_copilot"] else "skip",
+        "openai_meta": {
+            **request_controls,
+            "stage": stage,
+            "model_tier": model_tier,
+            "model": model,
             "response_id": response_id,
         },
     }

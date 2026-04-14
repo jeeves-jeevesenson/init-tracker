@@ -586,22 +586,41 @@ class OutboundAuthWiringTests(unittest.TestCase):
         finally:
             self._cleanup_key()
 
-    def test_merge_pr_uses_app_auth(self):
+    def test_merge_pr_uses_dispatch_auth_with_latest_sha(self):
         settings = self._app_settings()
+        settings.github_dispatch_user_token = "dispatch-merge-token"
         try:
-            mock_resp = Mock()
-            mock_resp.status_code = 200
+            inspect_resp_before = Mock()
+            inspect_resp_before.status_code = 200
+            inspect_resp_before.headers = {"content-type": "application/json"}
+            inspect_resp_before.json.return_value = {
+                "head": {"sha": "abc123"},
+                "merged": False,
+            }
+            merge_resp = Mock()
+            merge_resp.status_code = 200
+            inspect_resp_after = Mock()
+            inspect_resp_after.status_code = 200
+            inspect_resp_after.headers = {"content-type": "application/json"}
+            inspect_resp_after.json.return_value = {
+                "head": {"sha": "abc123"},
+                "merged": True,
+            }
 
             with patch("orchestrator.app.github_dispatch.httpx.Client") as MockClient:
                 MockClient.return_value.__enter__ = Mock(return_value=MockClient.return_value)
                 MockClient.return_value.__exit__ = Mock(return_value=False)
-                MockClient.return_value.put.return_value = mock_resp
+                MockClient.return_value.get.side_effect = [inspect_resp_before, inspect_resp_after]
+                MockClient.return_value.put.return_value = merge_resp
 
                 success, msg = merge_pr(settings=settings, repo="owner/repo", pr_number=1)
 
             self.assertTrue(success)
+            self.assertIn("merge_observed=True", msg)
             headers = MockClient.return_value.put.call_args.kwargs.get("headers") or MockClient.return_value.put.call_args[1].get("headers", {})
-            self.assertEqual(headers.get("Authorization"), "Bearer app-install-token")
+            self.assertEqual(headers.get("Authorization"), "Bearer dispatch-merge-token")
+            payload = MockClient.return_value.put.call_args.kwargs.get("json") or MockClient.return_value.put.call_args[1].get("json", {})
+            self.assertEqual(payload.get("sha"), "abc123")
         finally:
             self._cleanup_key()
 
@@ -777,10 +796,17 @@ class ReadyForReviewAppModeTests(unittest.TestCase):
                 "data": {"markPullRequestReadyForReview": {"pullRequest": {"number": 10, "isDraft": False}}}
             }
 
+            verify_resp = Mock()
+            verify_resp.status_code = 200
+            verify_resp.json.return_value = {
+                "data": {"repository": {"pullRequest": {"id": "PR_kwDO456", "isDraft": False}}}
+            }
+            verify_resp.headers = {"content-type": "application/json"}
+
             with patch("orchestrator.app.github_dispatch.httpx.Client") as MockClient:
                 MockClient.return_value.__enter__ = Mock(return_value=MockClient.return_value)
                 MockClient.return_value.__exit__ = Mock(return_value=False)
-                MockClient.return_value.post.side_effect = [mock_query_resp, mock_mutation_resp]
+                MockClient.return_value.post.side_effect = [mock_query_resp, mock_mutation_resp, verify_resp]
 
                 success, msg = mark_pr_ready_for_review(settings=settings, repo="owner/repo", pr_number=10)
 
