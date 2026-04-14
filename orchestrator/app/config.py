@@ -88,6 +88,11 @@ class Settings(BaseSettings):
         default=False,
         alias="OPENAI_ENABLE_BACKGROUND_REQUESTS",
     )
+    openai_flagship_model: str = Field(default="gpt-5.4", alias="OPENAI_FLAGSHIP_MODEL")
+    openai_helper_model: str = Field(default="gpt-5.4-mini", alias="OPENAI_HELPER_MODEL")
+    openai_enable_prompt_caching: bool = Field(default=True, alias="OPENAI_ENABLE_PROMPT_CACHING")
+    openai_prompt_cache_retention: str | None = Field(default=None, alias="OPENAI_PROMPT_CACHE_RETENTION")
+    openai_enable_response_chaining: bool = Field(default=True, alias="OPENAI_ENABLE_RESPONSE_CHAINING")
     program_auto_plan: bool = Field(default=True, alias="PROGRAM_AUTO_PLAN")
     program_auto_approve: bool = Field(default=True, alias="PROGRAM_AUTO_APPROVE")
     program_auto_dispatch: bool = Field(default=True, alias="PROGRAM_AUTO_DISPATCH")

@@ -904,7 +904,12 @@ def _run_governor_loop(
     decision_payload = summarize_governor_update(
         settings=settings,
         update_context=json.dumps(governor_context, ensure_ascii=False),
+        previous_response_id=run.openai_last_response_id,
     )
+    openai_meta = decision_payload.get("openai_meta") if isinstance(decision_payload, dict) else {}
+    response_id = openai_meta.get("response_id") if isinstance(openai_meta, dict) else None
+    if isinstance(response_id, str) and response_id.strip():
+        run.openai_last_response_id = response_id.strip()
     artifact = decision_payload.get("governor_artifact") if isinstance(decision_payload, dict) else {}
     decision = str((artifact or {}).get("decision") or "wait")
     summary_bullets = artifact.get("summary") if isinstance(artifact.get("summary"), list) else []
@@ -1045,6 +1050,7 @@ def task_to_dict(task: TaskPacket, latest_run: AgentRun | None = None) -> dict[s
     routing = {
         "recommended_worker": task.recommended_worker,
         "recommended_scope_class": task.recommended_scope_class,
+        "openai_last_response_id": task.openai_last_response_id,
         "selected_custom_agent": task.selected_custom_agent,
         "worker_selection_mode": task.worker_selection_mode,
         "worker_selection_reason": task.worker_selection_reason,
@@ -1127,6 +1133,7 @@ def run_to_dict(run: AgentRun | None) -> dict[str, Any] | None:
         "review_artifact_json": run.review_artifact_json,
         "governor_state": governor_state,
         "governor_state_json": run.governor_state_json,
+        "openai_last_response_id": run.openai_last_response_id,
         "continuation_decision": run.continuation_decision,
         "status": run.status,
         "last_summary": run.last_summary,
@@ -1174,6 +1181,7 @@ def _run_planning(
             issue_number=task.github_issue_number,
             issue_title=task.title,
             issue_body=task.raw_body,
+            previous_response_id=task.openai_last_response_id,
         )
         internal_plan, worker_brief, program_plan = _extract_plan_artifacts(task, plan_payload)
         task.internal_plan_json = json.dumps(internal_plan, ensure_ascii=False)
@@ -1184,6 +1192,10 @@ def _run_planning(
         task.recommended_worker = _normalize_worker_slug(internal_plan.get("recommended_worker"))
         task.recommended_scope_class = _normalize_scope_class(internal_plan.get("recommended_scope_class"))
         _apply_worker_selection(task=task, settings=settings, issue_labels=issue_labels)
+        planning_meta = plan_payload.get("planning_meta") if isinstance(plan_payload, dict) else {}
+        plan_response_id = planning_meta.get("openai_last_response_id") if isinstance(planning_meta, dict) else None
+        if isinstance(plan_response_id, str) and plan_response_id.strip():
+            task.openai_last_response_id = plan_response_id.strip()
         ensure_program_for_task(
             session,
             settings=settings,
@@ -1573,7 +1585,15 @@ def _summarize_and_store(
     pr_is_draft: bool = False,
 ) -> None:
     try:
-        summary = summarize_work_update(settings=settings, update_context=context)
+        summary = summarize_work_update(
+            settings=settings,
+            update_context=context,
+            previous_response_id=run.openai_last_response_id,
+        )
+        openai_meta = summary.get("openai_meta") if isinstance(summary, dict) else {}
+        response_id = openai_meta.get("response_id") if isinstance(openai_meta, dict) else None
+        if isinstance(response_id, str) and response_id.strip():
+            run.openai_last_response_id = response_id.strip()
         artifact = summary.get("review_artifact") if isinstance(summary.get("review_artifact"), dict) else {}
         bullets = summary.get("summary_bullets") or artifact.get("summary") or []
         next_action = summary.get("next_action") or artifact.get("decision") or "revise"
