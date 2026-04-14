@@ -687,8 +687,9 @@ def mark_pr_ready_for_review(*, settings: Settings, repo: str, pr_number: int) -
                 return False, f"Ready-for-review failure: {msg}"
 
             post_draft_state = (
-                ((((mutation_payload.get("data") or {}).get("markPullRequestReadyForReview") or {}).get("pullRequest") or {}).get("isDraft")
-            )
+                ((mutation_payload.get("data") or {}).get("markPullRequestReadyForReview") or {}).get("pullRequest")
+                or {}
+            ).get("isDraft")
 
             msg = f"PR #{pr_number} marked ready for review"
             _log_github_action(
