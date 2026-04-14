@@ -3633,6 +3633,40 @@ class LanController:
             except Exception:
                 raise HTTPException(status_code=500, detail="Failed to go to previous turn.")
 
+        @self._fastapi_app.post("/api/dm/combat/set-turn")
+        async def dm_set_turn(request: Request, payload: Dict[str, Any] = Body(...)):
+            """Set the active combatant to a specific combatant by cid.
+
+            Body: {cid: int}
+            Returns: {ok, cid, previous_cid, snapshot}
+            """
+            _check_dm_auth(request)
+            if _dm_service is None:
+                raise HTTPException(status_code=503, detail="DM combat service unavailable.")
+            if not isinstance(payload, dict):
+                raise HTTPException(status_code=400, detail="Invalid payload.")
+            cid_raw = payload.get("cid")
+            if cid_raw is None:
+                raise HTTPException(status_code=400, detail="cid is required.")
+            try:
+                cid = int(cid_raw)
+            except Exception:
+                raise HTTPException(status_code=400, detail="cid must be an integer.")
+            try:
+                result = _dm_service.set_turn_here(cid=cid)
+                if not result.get("ok"):
+                    raise HTTPException(status_code=400, detail=result.get("error", "Cannot set turn."))
+                return {
+                    "ok": True,
+                    "cid": result.get("cid"),
+                    "previous_cid": result.get("previous_cid"),
+                    "snapshot": result.get("snapshot") or _dm_service.combat_snapshot(),
+                }
+            except HTTPException:
+                raise
+            except Exception:
+                raise HTTPException(status_code=500, detail="Failed to set turn.")
+
         @self._fastapi_app.post("/api/dm/combat/combatants/{cid}/hp")
         async def dm_adjust_hp(cid: int, request: Request, payload: Dict[str, Any] = Body(...)):
             """Adjust HP for a combatant.
@@ -9010,6 +9044,62 @@ class InitiativeTracker(base.InitiativeTracker):
                 pass
         # Fallback: direct engine call
         self._start_turns()
+
+    def _set_turn_here_via_service(self) -> None:
+        """Set turn to the selected combatant, routing through CombatService when available.
+
+        When the DM service seam is active this delegates to
+        ``CombatService.set_turn_here()`` so the lock, start-of-turn effects,
+        and broadcast paths are shared between desktop and web callers.
+        Falls back to the direct ``_set_turn_here()`` method when the service
+        is not running or when the service call reports a failure.
+        """
+        # Resolve selected combatant from the tree (desktop UI)
+        items = getattr(self, "tree", None) and self.tree.selection()
+        if not items:
+            try:
+                from tkinter import messagebox
+                messagebox.showinfo("Turn Tracker", "Select a combatant row first.")
+            except Exception:
+                pass
+            return
+        try:
+            cid = int(items[0])
+        except (ValueError, TypeError):
+            return
+        if cid not in (getattr(self, "combatants", {}) or {}):
+            return
+
+        dm_svc = getattr(self, "_dm_service", None)
+        if dm_svc is not None:
+            try:
+                result = dm_svc.set_turn_here(cid=cid)
+                if result.get("ok"):
+                    return
+                self._oplog(
+                    f"CombatService.set_turn_here failed: {result.get('error', 'unknown error')}",
+                    level="warning",
+                )
+            except Exception:
+                pass
+        # Fallback: direct engine call + best-effort broadcast
+        self.current_cid = cid
+        if int(getattr(self, "turn_num", 0) or 0) <= 0:
+            self.turn_num = 1
+        enter = getattr(self, "_enter_turn_with_auto_skip", None)
+        if callable(enter):
+            try:
+                enter(starting=True)
+            except Exception:
+                pass
+        try:
+            self._rebuild_table(scroll_to_current=True)
+        except Exception:
+            pass
+        try:
+            self._lan_force_state_broadcast()
+        except Exception:
+            pass
 
     def _adjust_hp_via_service(self, cid: int, delta: int) -> bool:
         """Adjust HP for combatant ``cid``, routing through CombatService when available.

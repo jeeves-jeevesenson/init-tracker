@@ -20,6 +20,7 @@ The following slice of combat/session state is now authoritatively owned by
 | End combat (reset turn state) | `POST /api/dm/combat/end` |
 | Advance to next turn | `POST /api/dm/combat/next-turn` |
 | Go back to previous turn | `POST /api/dm/combat/prev-turn` |
+| Set active combatant / turn | `POST /api/dm/combat/set-turn` |
 | Adjust combatant HP | `POST /api/dm/combat/combatants/{cid}/hp` |
 | Add/remove condition | `POST /api/dm/combat/combatants/{cid}/condition` |
 | Set temporary HP | `POST /api/dm/combat/combatants/{cid}/temp-hp` |
@@ -83,6 +84,8 @@ The DM console lives at `http://<lan-ip>:<port>/dm` and provides:
   preserving the combatant list for review
 - **▶ Next Turn** – advances the initiative order on the backend
 - **◀ Prev Turn** – goes back to the previous combatant's turn on the backend
+- **Set Turn** – set the active combatant/turn to any combatant in the
+  initiative list (per-combatant button shown during active combat)
 - **HP Adjustment** – apply damage (negative) or healing (positive)
 - **Set Temp HP** – set (or clear) temporary HP for any combatant
 - **Add / Remove Condition** – apply any of the 15 standard D&D 5e conditions
@@ -125,7 +128,6 @@ The following areas remain desktop-primary (hybrid) after this pass:
 - Shop, item and spell management
 - YAML-backed save / load (files are still owned by the desktop flow)
 - Full monster-spec / player-profile based combatant creation (desktop only)
-- Advanced initiative manipulation (set-turn-here still desktop-only)
 - Deep combat engine damage paths (`_apply_damage_to_target_with_temp_hp` and
   related spell/attack damage application) still mutate state directly
 
@@ -134,7 +136,7 @@ authority with the DM web console – they operate on the same in-memory
 state through the same `_next_turn()` / `_apply_damage_to_combatant()` /
 `_ensure_condition_stack()` methods.
 
-### Desktop-routed through CombatService (Slice 7)
+### Desktop-routed through CombatService (Slice 8)
 
 The following desktop/LAN-originated mutations now route through
 `CombatService` when the service is running:
@@ -142,6 +144,7 @@ The following desktop/LAN-originated mutations now route through
 - **Desktop Start/Reset** → `_start_combat_via_service()` → `CombatService.start_combat()`
 - **Desktop Prev Turn** → `_prev_turn_via_service()` → `CombatService.prev_turn()`
 - **Desktop Next Turn** → `_next_turn_via_service()` → `CombatService.next_turn()`
+- **Desktop Set Turn Here** → `_set_turn_here_via_service()` → `CombatService.set_turn_here()`
 - **LAN player "end turn"** → `_next_turn_via_service()` → `CombatService.next_turn()`
 - **LAN player manual HP override** → `CombatService.adjust_hp()` /
   `CombatService.adjust_temp_hp()`
@@ -166,7 +169,7 @@ concurrently.  The current safeguard model:
   directly, following the same pattern as existing LAN HTTP routes
   (e.g., `/api/encounter/players/add`).
 - `CombatService` holds a `threading.Lock` that serialises concurrent
-  mutations (next-turn, HP adjust, condition, temp HP) from the web API.
+  mutations (next-turn, prev-turn, set-turn-here, HP adjust, condition, temp HP) from the web API.
 - Each mutation calls `_lan_force_state_broadcast()` which pushes updated
   state to all player WebSocket clients **and** to all connected DM
   WebSocket clients (`/ws/dm`).
@@ -175,7 +178,7 @@ concurrently.  The current safeguard model:
 
 **Remaining risk**: The `CombatService` lock covers all mutations that go
 through the service, including web-originated and the newly-routed
-desktop/LAN paths (Start/Reset, Prev Turn, Next Turn, manual HP override).
+desktop/LAN paths (Start/Reset, Prev Turn, Next Turn, Set Turn Here, manual HP override).
 Desktop-originated mutations that do **not** yet use the `_*_via_service()`
 wrappers (e.g. deep combat engine damage from spell/attack resolution) do
 not acquire this lock, so a simultaneous desktop engine mutation + web
@@ -202,21 +205,18 @@ via the web.
    spell effect condition application) so the service lock covers
    engine-originated mutations too.
 
-2. **Set-turn-here routing**: Route the desktop set-turn-here action through
-   CombatService and expose it to the DM web console.
-
-3. **Initiative-roll support**: Expose full initiative-roll support through
+2. **Initiative-roll support**: Expose full initiative-roll support through
    the backend service so the DM web console can trigger initiative rolls
    without Tkinter fallback.
 
-4. **Token refresh**: The DM console does not yet auto-renew the admin token
+3. **Token refresh**: The DM console does not yet auto-renew the admin token
    before expiry.  Add a background refresh 2 minutes before the 15-minute
    expiry window.
 
-5. **Snapshot enhancements**: Additional fields (e.g. per-combatant AC tooltip,
+4. **Snapshot enhancements**: Additional fields (e.g. per-combatant AC tooltip,
    resource pools) can be added as the DM console grows.
 
-6. **Player-facing LAN client state sync**: Improve broadcast reliability
+5. **Player-facing LAN client state sync**: Improve broadcast reliability
    and reconnect behavior for the player-facing LAN WebSocket client.
 
 ---
