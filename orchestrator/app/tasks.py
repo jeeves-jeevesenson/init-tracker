@@ -134,6 +134,11 @@ WORKER_AUTO_NARROW_KEYWORDS = (
     "patch",
     "narrow",
 )
+EXECUTION_MODE_STANDARD = "standard"
+EXECUTION_MODE_HIGH_AUTONOMY_PROGRAM = "high_autonomy_program"
+_NOISY_PR_ACTIONS = {"review_requested", "review_request_removed", "assigned", "edited"}
+
+
 def _utc_now() -> datetime:
     return datetime.now(timezone.utc)
 
@@ -846,6 +851,22 @@ def _load_governor_state(run: AgentRun) -> dict[str, Any]:
     state.setdefault("last_successful_checks_at", "")
     state.setdefault("last_observed_pr_head_sha", "")
     state.setdefault("effective_checks_passed", False)
+    state.setdefault("execution_mode", EXECUTION_MODE_STANDARD)
+    state.setdefault("active_slice_acceptance_criteria", [])
+    state.setdefault("active_slice_scope", [])
+    state.setdefault("active_slice_non_goals", [])
+    state.setdefault("active_slice_validation_guidance", [])
+    state.setdefault("active_slice_contract_hash", "")
+    state.setdefault("active_slice_contract_version", 0)
+    state.setdefault("material_state_hash", "")
+    state.setdefault("material_state_pr_head_sha", "")
+    state.setdefault("last_model_reuse_reason", "")
+    state.setdefault("last_reused_governor_decision", "")
+    state.setdefault("heavy_model_calls_total", 0)
+    state.setdefault("heavy_model_calls_by_head_sha", {})
+    state.setdefault("heavy_model_calls_by_slice", {})
+    state.setdefault("blocked_state_repeat_count", 0)
+    state.setdefault("last_blocked_state_hash", "")
     state.setdefault("final_audit_head_sha", "")
     state.setdefault("effective_checks_passed_at_final_audit", False)
     state.setdefault("final_audit_cache_key", "")
@@ -859,6 +880,101 @@ def _load_governor_state(run: AgentRun) -> dict[str, Any]:
     state.setdefault("ready_for_review_escalated", False)
     state.setdefault("checkpoints", {})
     return state
+
+
+def _current_execution_mode(*, task: TaskPacket, run: AgentRun, state: dict[str, Any]) -> str:
+    if state.get("execution_mode") == EXECUTION_MODE_HIGH_AUTONOMY_PROGRAM:
+        return EXECUTION_MODE_HIGH_AUTONOMY_PROGRAM
+    dispatch_payload = _parse_json_object(run.dispatch_payload_json) or {}
+    mode = str(dispatch_payload.get("execution_mode") or "").strip()
+    if mode:
+        return mode
+    if task.program_id and str(task.recommended_scope_class or "").strip().lower() == "broad":
+        return EXECUTION_MODE_HIGH_AUTONOMY_PROGRAM
+    return EXECUTION_MODE_STANDARD
+
+
+def _active_slice_contract(task: TaskPacket, state: dict[str, Any]) -> dict[str, Any]:
+    worker_brief = _parse_json_object(task.worker_brief_json) or {}
+    acceptance = state.get("active_slice_acceptance_criteria")
+    if not isinstance(acceptance, list) or not acceptance:
+        acceptance = worker_brief.get("acceptance_criteria")
+    if not isinstance(acceptance, list) or not acceptance:
+        acceptance = json.loads(task.acceptance_criteria_json or "[]")
+    scope = state.get("active_slice_scope")
+    if not isinstance(scope, list) or not scope:
+        scope = worker_brief.get("concise_scope") if isinstance(worker_brief.get("concise_scope"), list) else []
+    non_goals = state.get("active_slice_non_goals")
+    if not isinstance(non_goals, list) or not non_goals:
+        non_goals = worker_brief.get("non_goals") if isinstance(worker_brief.get("non_goals"), list) else []
+    validation = state.get("active_slice_validation_guidance")
+    if not isinstance(validation, list) or not validation:
+        validation = worker_brief.get("validation_commands") if isinstance(worker_brief.get("validation_commands"), list) else []
+    payload = {
+        "acceptance_criteria": [str(item).strip() for item in acceptance if str(item).strip()],
+        "scope": [str(item).strip() for item in scope if str(item).strip()],
+        "non_goals": [str(item).strip() for item in non_goals if str(item).strip()],
+        "validation_guidance": [str(item).strip() for item in validation if str(item).strip()],
+    }
+    payload["contract_hash"] = hashlib.sha1(
+        json.dumps(payload, sort_keys=True, ensure_ascii=False).encode("utf-8")
+    ).hexdigest()
+    return payload
+
+
+def _material_state_hash(*, payload: dict[str, Any]) -> str:
+    return hashlib.sha1(json.dumps(payload, sort_keys=True, ensure_ascii=False).encode("utf-8")).hexdigest()
+
+
+def _is_noisy_pr_event(event_key: str) -> bool:
+    if "governor:pull_request:" not in event_key:
+        return False
+    parts = event_key.split(":")
+    if len(parts) < 4:
+        return False
+    return parts[3] in _NOISY_PR_ACTIONS
+
+
+def _revision_cycle_limit(*, settings: Settings, execution_mode: str) -> int:
+    if execution_mode == EXECUTION_MODE_HIGH_AUTONOMY_PROGRAM:
+        return max(1, int(getattr(settings, "governor_high_autonomy_max_revision_cycles", 1) or 1))
+    return max(1, int(getattr(settings, "governor_max_revision_cycles", 2) or 2))
+
+
+def _heavy_budget_available(*, settings: Settings, state: dict[str, Any], pr_head_sha: str, slice_contract_hash: str) -> tuple[bool, str]:
+    total_limit = max(1, int(getattr(settings, "governor_heavy_max_calls_per_pr_total", 6) or 6))
+    head_limit = max(1, int(getattr(settings, "governor_heavy_max_calls_per_head_sha", 2) or 2))
+    slice_limit = max(1, int(getattr(settings, "governor_heavy_max_calls_per_slice", 4) or 4))
+    total = int(state.get("heavy_model_calls_total") or 0)
+    if total >= total_limit:
+        return False, "heavy_model_budget_exhausted:pr_total"
+    by_head = state.get("heavy_model_calls_by_head_sha")
+    if not isinstance(by_head, dict):
+        by_head = {}
+    if int(by_head.get(pr_head_sha or "<none>") or 0) >= head_limit:
+        return False, "heavy_model_budget_exhausted:head_sha"
+    by_slice = state.get("heavy_model_calls_by_slice")
+    if not isinstance(by_slice, dict):
+        by_slice = {}
+    if int(by_slice.get(slice_contract_hash or "<none>") or 0) >= slice_limit:
+        return False, "heavy_model_budget_exhausted:slice"
+    return True, ""
+
+
+def _record_heavy_model_call(*, state: dict[str, Any], pr_head_sha: str, slice_contract_hash: str) -> None:
+    state["heavy_model_calls_total"] = int(state.get("heavy_model_calls_total") or 0) + 1
+    by_head = state.get("heavy_model_calls_by_head_sha")
+    if not isinstance(by_head, dict):
+        by_head = {}
+    head_key = pr_head_sha or "<none>"
+    by_head[head_key] = int(by_head.get(head_key) or 0) + 1
+    state["heavy_model_calls_by_head_sha"] = by_head
+    by_slice = state.get("heavy_model_calls_by_slice")
+    if not isinstance(by_slice, dict):
+        by_slice = {}
+    slice_key = slice_contract_hash or "<none>"
+    by_slice[slice_key] = int(by_slice.get(slice_key) or 0) + 1
+    state["heavy_model_calls_by_slice"] = by_slice
 
 
 def _save_governor_state(run: AgentRun, state: dict[str, Any]) -> None:
@@ -1322,6 +1438,17 @@ def _run_governor_loop(
     state = _load_governor_state(run)
     if state.get("last_event_key") == event_key:
         return
+    execution_mode = _current_execution_mode(task=task, run=run, state=state)
+    state["execution_mode"] = execution_mode
+    active_contract = _active_slice_contract(task, state)
+    state["active_slice_acceptance_criteria"] = active_contract["acceptance_criteria"]
+    state["active_slice_scope"] = active_contract["scope"]
+    state["active_slice_non_goals"] = active_contract["non_goals"]
+    state["active_slice_validation_guidance"] = active_contract["validation_guidance"]
+    prior_contract_hash = str(state.get("active_slice_contract_hash") or "")
+    state["active_slice_contract_hash"] = active_contract["contract_hash"]
+    if prior_contract_hash != active_contract["contract_hash"]:
+        state["active_slice_contract_version"] = int(state.get("active_slice_contract_version") or 0) + 1
     _set_checkpoint(
         state,
         name="issue_dispatched",
@@ -1752,7 +1879,7 @@ def _run_governor_loop(
         ] if not already_triggered else [
             "Deterministic fix-trigger: waiting for Copilot push (trigger already posted)."
         ]
-        max_cycles = max(1, int(getattr(settings, "governor_max_revision_cycles", 2) or 2))
+        max_cycles = _revision_cycle_limit(settings=settings, execution_mode=execution_mode)
         if int(state.get("revision_cycle_count") or 0) > max_cycles:
             state["last_governor_decision"] = "escalate_human"
             state["last_governor_summary"] = ["Max governor revision cycles exceeded."]
@@ -1819,7 +1946,54 @@ def _run_governor_loop(
         "guarded_paths_touched": guarded_paths_touched,
         "guarded_files": guarded_files,
         "revision_cycle_count": int(state.get("revision_cycle_count") or 0),
+        "execution_mode": execution_mode,
+        "active_slice_contract": active_contract,
+        "program_acceptance_criteria": json.loads(task.acceptance_criteria_json or "[]"),
     }
+    material_state_payload = {
+        "repo": task.github_repo,
+        "pr_number": pr_number,
+        "pr_head_sha": pr_head_sha,
+        "effective_checks_passed": effective_checks_passed,
+        "unresolved_findings_hash": hashlib.sha1(
+            json.dumps(unresolved_findings, sort_keys=True, ensure_ascii=False).encode("utf-8")
+        ).hexdigest(),
+        "requested_reviewers_hash": hashlib.sha1(
+            json.dumps(sorted(requested_reviewers), ensure_ascii=False).encode("utf-8")
+        ).hexdigest(),
+        "review_decision": str(review_artifact.get("decision") or ""),
+        "review_status": str(review_artifact.get("status") or ""),
+        "guarded_paths_touched": guarded_paths_touched,
+        "guarded_files_hash": hashlib.sha1(
+            json.dumps(sorted(guarded_files), ensure_ascii=False).encode("utf-8")
+        ).hexdigest(),
+        "changed_files_hash": hashlib.sha1(
+            json.dumps(sorted(changed_files), ensure_ascii=False).encode("utf-8")
+        ).hexdigest(),
+        "mergeable": pr_mergeable,
+        "mergeable_state": pr_mergeable_state,
+        "slice_contract_hash": active_contract["contract_hash"],
+    }
+    material_hash = _material_state_hash(payload=material_state_payload)
+    prior_material_hash = str(state.get("material_state_hash") or "")
+    prior_material_head = str(state.get("material_state_pr_head_sha") or "")
+    material_unchanged = bool(
+        prior_material_hash
+        and prior_material_hash == material_hash
+        and prior_material_head == (pr_head_sha or "")
+    )
+    coarse_state_unchanged = bool(
+        prior_material_head
+        and prior_material_head == (pr_head_sha or "")
+        and str(state.get("active_slice_contract_hash") or "") == active_contract["contract_hash"]
+    )
+    merge_candidate = bool(
+        (not pr_draft)
+        and effective_checks_passed
+        and (not unresolved_findings)
+        and (not waiting_for_revision_push)
+    )
+    serious_review_pass_ready = bool(merge_candidate and (not requested_reviewers) and (not guarded_paths_touched))
     if merge_eligible_for_audit:
         prior_final_audit_artifact = state.get("final_audit_artifact") if isinstance(state.get("final_audit_artifact"), dict) else {}
         prior_final_audit_decision = str(state.get("final_audit_decision") or "")
@@ -1929,7 +2103,11 @@ def _run_governor_loop(
             "guarded_paths_touched": guarded_paths_touched,
             "guarded_files": guarded_files,
             "doc_only": docs_only,
-            "acceptance_criteria": json.loads(task.acceptance_criteria_json or "[]"),
+            "acceptance_criteria": active_contract["acceptance_criteria"],
+            "slice_scope": active_contract["scope"],
+            "slice_non_goals": active_contract["non_goals"],
+            "slice_validation_guidance": active_contract["validation_guidance"],
+            "program_acceptance_criteria": json.loads(task.acceptance_criteria_json or "[]"),
             "prior_final_audit_artifact": prior_final_audit_artifact,
             "prior_final_audit_decision": prior_final_audit_decision,
             "prior_final_audit_partial_or_stale": prior_partial_or_stale,
@@ -1996,11 +2174,39 @@ def _run_governor_loop(
                 merge_audit_cache_key[:12],
             )
         else:
-            decision_payload = summarize_merge_audit(
+            budget_ok, budget_reason = _heavy_budget_available(
                 settings=settings,
-                update_context=json.dumps(audit_context, ensure_ascii=False),
-                previous_response_id=run.openai_last_response_id,
+                state=state,
+                pr_head_sha=pr_head_sha,
+                slice_contract_hash=active_contract["contract_hash"],
             )
+            if not budget_ok:
+                decision_payload = {
+                    "merge_audit_artifact": {
+                        "decision": "wait",
+                        "confidence": 0.0,
+                        "doc_only": docs_only,
+                        "safe_to_merge": False,
+                        "requires_followup": True,
+                        "summary": [f"Merge audit paused: {budget_reason}."],
+                        "findings": [],
+                        "merge_rationale": "",
+                        "escalation_reason": budget_reason,
+                        "review_scope": ["budget_guardrail"],
+                    },
+                    "openai_meta": {"cache_hit": True, "reason": budget_reason},
+                }
+            else:
+                decision_payload = summarize_merge_audit(
+                    settings=settings,
+                    update_context=json.dumps(audit_context, ensure_ascii=False),
+                    previous_response_id=run.openai_last_response_id,
+                )
+                _record_heavy_model_call(
+                    state=state,
+                    pr_head_sha=pr_head_sha,
+                    slice_contract_hash=active_contract["contract_hash"],
+                )
         openai_meta = decision_payload.get("openai_meta") if isinstance(decision_payload, dict) else {}
         response_id = openai_meta.get("response_id") if isinstance(openai_meta, dict) else None
         if isinstance(response_id, str) and response_id.strip():
@@ -2031,20 +2237,53 @@ def _run_governor_loop(
         state["final_audit_changed_files_hash"] = changed_files_hash
         state["final_audit_no_evidence_state_hash"] = no_evidence_state_hash if evidence_missing else ""
     else:
-        decision_payload = summarize_governor_update(
-            settings=settings,
-            update_context=json.dumps(governor_context, ensure_ascii=False),
-            previous_response_id=run.openai_last_response_id,
+        reuse_previous = bool(
+            _is_noisy_pr_event(event_key)
+            and (material_unchanged or coarse_state_unchanged)
+            and execution_mode == EXECUTION_MODE_HIGH_AUTONOMY_PROGRAM
+            and bool(state.get("last_governor_decision"))
         )
-        openai_meta = decision_payload.get("openai_meta") if isinstance(decision_payload, dict) else {}
-        response_id = openai_meta.get("response_id") if isinstance(openai_meta, dict) else None
-        if isinstance(response_id, str) and response_id.strip():
-            run.openai_last_response_id = response_id.strip()
-        artifact = decision_payload.get("governor_artifact") if isinstance(decision_payload, dict) else {}
-        decision = str((artifact or {}).get("decision") or "wait")
-        summary_bullets = artifact.get("summary") if isinstance(artifact.get("summary"), list) else []
-        revision_requests = artifact.get("revision_requests") if isinstance(artifact.get("revision_requests"), list) else []
-        escalation_reason = str(artifact.get("escalation_reason") or "")
+        if reuse_previous:
+            decision = str(state.get("last_governor_decision") or "wait")
+            summary_bullets = [str(item) for item in (state.get("last_governor_summary") or []) if str(item).strip()]
+            state["last_model_reuse_reason"] = "suppressed_unchanged_material_state"
+            state["last_reused_governor_decision"] = decision
+            _governor_logger.info(
+                "Suppressed governor model call for PR #%s due to unchanged material state (head=%s hash=%s).",
+                pr_number,
+                pr_head_sha or "<unknown>",
+                material_hash[:12],
+            )
+        elif execution_mode == EXECUTION_MODE_HIGH_AUTONOMY_PROGRAM and not serious_review_pass_ready:
+            decision = "wait"
+            summary_bullets = [
+                "High-autonomy mode holding: serious review pass deferred until merge-candidate gates are met."
+            ]
+            state["last_model_reuse_reason"] = "high_autonomy_wait_for_serious_pass"
+            state["last_reused_governor_decision"] = decision
+        else:
+            governor_model = (
+                settings.openai_governor_model_fast
+                if execution_mode == EXECUTION_MODE_HIGH_AUTONOMY_PROGRAM
+                else settings.openai_governor_model_heavy
+            )
+            decision_payload = summarize_governor_update(
+                settings=settings,
+                update_context=json.dumps(governor_context, ensure_ascii=False),
+                previous_response_id=run.openai_last_response_id,
+                model=governor_model,
+                stage="governor_fast_path" if execution_mode == EXECUTION_MODE_HIGH_AUTONOMY_PROGRAM else "continuation_audit",
+            )
+            openai_meta = decision_payload.get("openai_meta") if isinstance(decision_payload, dict) else {}
+            response_id = openai_meta.get("response_id") if isinstance(openai_meta, dict) else None
+            if isinstance(response_id, str) and response_id.strip():
+                run.openai_last_response_id = response_id.strip()
+            artifact = decision_payload.get("governor_artifact") if isinstance(decision_payload, dict) else {}
+            decision = str((artifact or {}).get("decision") or "wait")
+            summary_bullets = artifact.get("summary") if isinstance(artifact.get("summary"), list) else []
+            revision_requests = artifact.get("revision_requests") if isinstance(artifact.get("revision_requests"), list) else []
+            escalation_reason = str(artifact.get("escalation_reason") or "")
+            state["last_model_reuse_reason"] = ""
 
     state["pr_draft"] = pr_draft
     state["pr_state"] = pr_state
@@ -2057,6 +2296,8 @@ def _run_governor_loop(
     state["unresolved_copilot_findings"] = unresolved_findings
     state["guarded_paths_touched"] = guarded_paths_touched
     state["guarded_files"] = guarded_files
+    state["material_state_hash"] = material_hash
+    state["material_state_pr_head_sha"] = pr_head_sha or ""
     state["last_event_key"] = event_key
     state["last_governor_decision"] = decision
     state["last_governor_summary"] = summary_bullets
@@ -2164,10 +2405,37 @@ def _run_governor_loop(
                 success=True,
                 summary="Matching continuation comment already posted; no duplicate comment sent.",
             )
-        max_cycles = max(1, int(getattr(settings, "governor_max_revision_cycles", 2) or 2))
+        max_cycles = _revision_cycle_limit(settings=settings, execution_mode=execution_mode)
         if int(state.get("revision_cycle_count") or 0) > max_cycles:
             decision = "escalate_human"
             escalation_reason = "Max governor revision cycles exceeded."
+
+    if decision in {"request_revision", "escalate_human"}:
+        blocked_state_hash = hashlib.sha1(
+            json.dumps(
+                {
+                    "decision": decision,
+                    "revision_requests": [str(item).strip() for item in revision_requests if str(item).strip()],
+                    "escalation_reason": escalation_reason,
+                    "slice_contract_hash": active_contract["contract_hash"],
+                },
+                sort_keys=True,
+                ensure_ascii=False,
+            ).encode("utf-8")
+        ).hexdigest()
+        if str(state.get("last_blocked_state_hash") or "") == blocked_state_hash:
+            state["blocked_state_repeat_count"] = int(state.get("blocked_state_repeat_count") or 0) + 1
+        else:
+            state["blocked_state_repeat_count"] = 1
+            state["last_blocked_state_hash"] = blocked_state_hash
+        max_repeats = max(1, int(getattr(settings, "governor_max_repeated_blocked_reviews", 2) or 2))
+        if int(state.get("blocked_state_repeat_count") or 0) > max_repeats:
+            decision = "escalate_human"
+            escalation_reason = "Repeated blocked governor state detected; summarize-and-stop enforced."
+            summary_bullets = [escalation_reason]
+    else:
+        state["blocked_state_repeat_count"] = 0
+        state["last_blocked_state_hash"] = ""
 
     if decision == "ready_for_review" and pr_draft:
         _log_workflow_checkpoint(
