@@ -540,7 +540,8 @@ def _discover_post_dispatch_pr_candidate(
     candidates, msg = list_recent_pull_requests(settings=settings, repo=task.github_repo, limit=40)
     if not candidates:
         return None, "no_recent_pr_candidates", []
-    issue_pattern = re.compile(rf"(?:^|\\W)#?{task.github_issue_number}(?:\\W|$)")
+    issue_pattern = re.compile(rf"(?<!\d)#?{task.github_issue_number}(?!\d)")
+    branch_issue_pattern = re.compile(rf"(?<!\d){task.github_issue_number}(?!\d)")
     scored: list[dict[str, Any]] = []
     for pr in candidates:
         number = pr.get("number")
@@ -558,16 +559,33 @@ def _discover_post_dispatch_pr_candidate(
             head_ref = str(head.get("ref") or "")
         score = 0
         reasons: list[str] = []
-        if issue_pattern.search(combined):
+        issue_link_present = bool(issue_pattern.search(combined))
+        branch_issue_link_present = bool(head_ref and branch_issue_pattern.search(head_ref))
+        copilot_actor = _is_copilot_actor(
+            settings=settings,
+            login=login if isinstance(login, str) else None,
+            display_name=None,
+        )
+        created_after_dispatch = bool(
+            created_at is not None and created_at >= dispatch_observed_at - timedelta(minutes=1)
+        )
+        authoritative = copilot_actor and created_after_dispatch and (
+            issue_link_present or branch_issue_link_present
+        )
+
+        if issue_link_present:
             score += 6
             reasons.append("issue_link_present")
-        if _is_copilot_actor(settings=settings, login=login if isinstance(login, str) else None, display_name=None):
+        if branch_issue_link_present:
+            score += 2
+            reasons.append("branch_issue_link_present")
+        if copilot_actor:
             score += 3
             reasons.append("copilot_actor")
-        if created_at is not None and created_at >= dispatch_observed_at - timedelta(minutes=1):
+        if created_after_dispatch:
             score += 2
             reasons.append("created_after_dispatch")
-        if head_ref and ("copilot" in head_ref.lower() or str(task.github_issue_number) in head_ref):
+        if head_ref and "copilot" in head_ref.lower():
             score += 1
             reasons.append("branch_pattern_matched")
         scored.append(
@@ -576,6 +594,7 @@ def _discover_post_dispatch_pr_candidate(
                 "score": score,
                 "reasons": reasons,
                 "created_at": created_at.isoformat() if created_at else None,
+                "authoritative": authoritative,
             }
         )
     if not scored:
@@ -587,10 +606,11 @@ def _discover_post_dispatch_pr_candidate(
         ),
         reverse=True,
     )
-    top_score = int(scored[0]["score"])
-    if top_score <= 0:
-        return None, "issue_link_not_present", scored[:8]
-    top = [entry for entry in scored if int(entry["score"]) == top_score]
+    authoritative_candidates = [entry for entry in scored if bool(entry.get("authoritative"))]
+    if not authoritative_candidates:
+        return None, "authoritative_linkage_not_found", scored[:8]
+    top_score = int(authoritative_candidates[0]["score"])
+    top = [entry for entry in authoritative_candidates if int(entry["score"]) == top_score]
     if len(top) > 1:
         return None, "candidate_prs_ambiguous", scored[:8]
     return top[0], "linked", scored[:8]
@@ -2247,6 +2267,7 @@ def dispatch_task_if_ready(session: Session, *, settings: Settings, task: TaskPa
                             "score": entry["score"],
                             "reasons": entry["reasons"],
                             "created_at": entry["created_at"],
+                            "authoritative": bool(entry.get("authoritative")),
                         }
                         for entry in scored_candidates
                     ],
