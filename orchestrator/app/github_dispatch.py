@@ -1249,11 +1249,40 @@ def lookup_pr_linked_issue_numbers(
     pr_number: int,
     timeline_limit: int = 40,
 ) -> tuple[set[int], str]:
+    auth_lane = "dispatch_user_token"
     if not has_dispatch_auth(settings):
-        return set(), "Dispatch auth failure: dispatch user-token auth not configured; cannot query PR graph links"
+        summary = "Dispatch auth failure: dispatch user-token auth not configured; cannot query PR graph links"
+        _log_github_debug(
+            settings,
+            event="lookup_pr_linked_issue_numbers",
+            repo=repo,
+            pr_number=pr_number,
+            auth_lane=auth_lane,
+            api_type="graphql",
+            success=False,
+            http_status=None,
+            result_class="dispatch_auth_missing",
+            summary=summary,
+            postcondition="no_lookup_performed",
+        )
+        return set(), summary
     repo_parts = _extract_repo_owner_name(repo)
     if repo_parts is None:
-        return set(), f"PR association failure: Invalid repository path: {repo!r}"
+        summary = f"PR association failure: Invalid repository path: {repo!r}"
+        _log_github_debug(
+            settings,
+            event="lookup_pr_linked_issue_numbers",
+            repo=repo,
+            pr_number=pr_number,
+            auth_lane=auth_lane,
+            api_type="graphql",
+            success=False,
+            http_status=None,
+            result_class="invalid_repo",
+            summary=summary,
+            postcondition="no_lookup_performed",
+        )
+        return set(), summary
     owner, name = repo_parts
     api_base = settings.github_api_url.rstrip("/")
     graphql_url = f"{api_base}/graphql"
@@ -1276,23 +1305,93 @@ def lookup_pr_linked_issue_numbers(
                 },
             )
             if response.status_code >= 400:
-                return set(), (
+                summary = (
                     "PR association failure: GitHub returned "
                     f"{response.status_code} when querying GraphQL links for PR #{pr_number}: {response.text[:300]}"
                 )
+                _log_github_debug(
+                    settings,
+                    event="lookup_pr_linked_issue_numbers",
+                    repo=repo,
+                    pr_number=pr_number,
+                    auth_lane=auth_lane,
+                    api_type="graphql",
+                    success=False,
+                    http_status=response.status_code,
+                    result_class="http_error",
+                    summary=summary,
+                    postcondition="lookup_failed",
+                )
+                return set(), summary
             if not response.headers.get("content-type", "").startswith("application/json"):
-                return set(), f"PR association failure: GitHub returned non-JSON GraphQL response for PR #{pr_number}"
+                summary = f"PR association failure: GitHub returned non-JSON GraphQL response for PR #{pr_number}"
+                _log_github_debug(
+                    settings,
+                    event="lookup_pr_linked_issue_numbers",
+                    repo=repo,
+                    pr_number=pr_number,
+                    auth_lane=auth_lane,
+                    api_type="graphql",
+                    success=False,
+                    http_status=response.status_code,
+                    result_class="non_json_response",
+                    summary=summary,
+                    postcondition="lookup_failed",
+                )
+                return set(), summary
             payload = response.json()
             if not isinstance(payload, dict):
-                return set(), f"PR association failure: GitHub returned invalid GraphQL payload for PR #{pr_number}"
+                summary = f"PR association failure: GitHub returned invalid GraphQL payload for PR #{pr_number}"
+                _log_github_debug(
+                    settings,
+                    event="lookup_pr_linked_issue_numbers",
+                    repo=repo,
+                    pr_number=pr_number,
+                    auth_lane=auth_lane,
+                    api_type="graphql",
+                    success=False,
+                    http_status=response.status_code,
+                    result_class="invalid_payload",
+                    summary=summary,
+                    postcondition="lookup_failed",
+                )
+                return set(), summary
             errors = payload.get("errors")
             if isinstance(errors, list) and errors:
-                return set(), f"PR association failure: GraphQL returned errors for PR #{pr_number}: {str(errors)[:300]}"
+                summary = f"PR association failure: GraphQL returned errors for PR #{pr_number}: {str(errors)[:300]}"
+                _log_github_debug(
+                    settings,
+                    event="lookup_pr_linked_issue_numbers",
+                    repo=repo,
+                    pr_number=pr_number,
+                    auth_lane=auth_lane,
+                    api_type="graphql",
+                    success=False,
+                    http_status=response.status_code,
+                    result_class="graphql_errors",
+                    summary=summary,
+                    postcondition="lookup_failed",
+                )
+                return set(), summary
             data = payload.get("data") if isinstance(payload.get("data"), dict) else {}
             repository = data.get("repository") if isinstance(data.get("repository"), dict) else {}
             pr = repository.get("pullRequest") if isinstance(repository.get("pullRequest"), dict) else {}
             if not pr:
-                return set(), f"PR association failure: GraphQL returned no pullRequest node for PR #{pr_number}"
+                summary = f"PR association failure: GraphQL returned no pullRequest node for PR #{pr_number}"
+                _log_github_debug(
+                    settings,
+                    event="lookup_pr_linked_issue_numbers",
+                    repo=repo,
+                    pr_number=pr_number,
+                    auth_lane=auth_lane,
+                    api_type="graphql",
+                    success=False,
+                    http_status=response.status_code,
+                    result_class="missing_pull_request",
+                    summary=summary,
+                    postcondition="lookup_failed",
+                )
+                return set(), summary
 
             linked_issue_numbers: set[int] = set()
             closing = pr.get("closingIssuesReferences") if isinstance(pr.get("closingIssuesReferences"), dict) else {}
@@ -1326,9 +1425,40 @@ def lookup_pr_linked_issue_numbers(
                 issue_repo = str(repo_obj.get("nameWithOwner") or "").strip().lower()
                 if isinstance(issue_number, int) and (not issue_repo or issue_repo == normalized_repo):
                     linked_issue_numbers.add(issue_number)
-            return linked_issue_numbers, f"GraphQL resolved {len(linked_issue_numbers)} linked issue(s) for PR #{pr_number}"
+            summary = (
+                f"GraphQL linked-issue lookup resolved {len(linked_issue_numbers)} linked issue(s) "
+                f"for PR #{pr_number}: {sorted(linked_issue_numbers)}"
+            )
+            _log_github_debug(
+                settings,
+                event="lookup_pr_linked_issue_numbers",
+                repo=repo,
+                pr_number=pr_number,
+                auth_lane=auth_lane,
+                api_type="graphql",
+                success=True,
+                http_status=response.status_code,
+                result_class="linked_issues_resolved" if linked_issue_numbers else "linked_issues_empty",
+                summary=summary,
+                postcondition="lookup_completed",
+            )
+            return linked_issue_numbers, summary
     except Exception as exc:
-        return set(), f"PR association failure: Failed GraphQL linked-issue lookup for PR #{pr_number}: {exc}"
+        summary = f"PR association failure: Failed GraphQL linked-issue lookup for PR #{pr_number}: {exc}"
+        _log_github_debug(
+            settings,
+            event="lookup_pr_linked_issue_numbers",
+            repo=repo,
+            pr_number=pr_number,
+            auth_lane=auth_lane,
+            api_type="graphql",
+            success=False,
+            http_status=None,
+            result_class="exception",
+            summary=summary,
+            postcondition="lookup_failed",
+        )
+        return set(), summary
 
 
 def remove_requested_reviewers(
