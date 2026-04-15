@@ -176,6 +176,28 @@ The following desktop/LAN-originated mutations now route through
 All wrappers fall back to direct mutation + broadcast when the service is
 not running (e.g. LAN server not started).
 
+### Milestone 1 – Damage/Heal migration progress
+
+Milestone 1 targets routing **all** damage and heal mutations through
+`CombatService` so that backend-owned state is the single authority.
+Current status after Slices 10–12:
+
+- **Slice 10** routed the remaining direct deep-damage callers (Heat Metal,
+  Hellish Rebuke, weapon-mastery attack paths) through
+  `_apply_damage_via_service`, and migrated the first heal callers (heal
+  dialog, Second Wind, Lay on Hands) through `_apply_heal_via_service`.
+- **Slice 11** migrated additional niche heal callers — Uncanny Metabolism,
+  healing consumable use, spell healing resolution (Cure Wounds / Healing
+  Word), Mantle of Inspiration temp HP, and Patient Defense Focus temp HP —
+  through the same `_apply_heal_via_service` wrapper.
+- **Slice 12** migrated Long Rest batch HP restore through
+  `CombatService.batch_long_rest_heal()`.
+
+**Milestone 1 is not yet complete.** Wild Shape temp HP management still
+sets `temp_hp` directly and is lifecycle-coupled to the Wild Shape
+enter/exit state machine; it remains the sole hybrid heal path (see
+*Recommended next migration targets* below).
+
 ---
 
 ## Hybrid concurrency model
