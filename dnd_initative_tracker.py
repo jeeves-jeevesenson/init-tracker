@@ -26543,7 +26543,9 @@ class InitiativeTracker(base.InitiativeTracker):
         mode_speed = int(self._mode_speed(c) or 0)
         setattr(c, "move_total", mode_speed)
         setattr(c, "move_remaining", mode_speed)
-        setattr(c, "temp_hp", int(getattr(c, "wild_shape_applied_temp_hp", 0) or 0))
+        applied_temp_hp = int(getattr(c, "wild_shape_applied_temp_hp", 0) or 0)
+        if not self._apply_heal_via_service(int(cid), applied_temp_hp, is_temp_hp=True):
+            return False, "Could not apply Wild Shape temporary HP, matey."
         setattr(c, "is_spellcaster", False)
         setattr(c, "is_wild_shaped", True)
         setattr(c, "name", f"{base_snapshot['name']} ({str(form.get('name') or '').strip()})")
@@ -26658,7 +26660,11 @@ class InitiativeTracker(base.InitiativeTracker):
         setattr(c, "actions", copy.deepcopy(base_snapshot.get("actions") if isinstance(base_snapshot.get("actions"), list) else []))
         setattr(c, "bonus_actions", copy.deepcopy(base_snapshot.get("bonus_actions") if isinstance(base_snapshot.get("bonus_actions"), list) else []))
         if int(getattr(c, "temp_hp", 0) or 0) == int(getattr(c, "wild_shape_applied_temp_hp", 0) or 0):
-            setattr(c, "temp_hp", int(getattr(c, "wild_shape_prev_temp_hp", 0) or 0))
+            self._apply_heal_via_service(
+                int(cid),
+                int(getattr(c, "wild_shape_prev_temp_hp", 0) or 0),
+                is_temp_hp=True,
+            )
         setattr(c, "is_wild_shaped", False)
         setattr(c, "wild_shape_form_id", None)
         setattr(c, "wild_shape_form_name", None)
@@ -35778,7 +35784,6 @@ class InitiativeTracker(base.InitiativeTracker):
             if not ok:
                 self._lan.toast(ws_id, err or "Could not revert Wild Shape, matey.")
                 return
-            setattr(c, "temp_hp", 0)
             if require_bonus_action:
                 setattr(c, "bonus_action_remaining", max(0, int(getattr(c, "bonus_action_remaining", 0)) - 1))
                 self._log(f"{getattr(c, 'name', 'Player')} used a bonus action to revert Wild Shape.", cid=cid)
