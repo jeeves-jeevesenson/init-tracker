@@ -112,6 +112,7 @@ Behavior:
 - governor removes `jeeves-jeevesenson` from requested reviewers when it takes PR control
 - governor batches revision requests into one deduped top-level `@copilot` comment
 - for non-guarded PRs with green checks and resolved findings, governor can un-draft, approve, and merge automatically
+- successful workflow/check state is persisted against the PR-linked head SHA (`last_successful_checks_head_sha`). Later PR events reuse that successful state only when the current PR head SHA still matches the stored SHA. If a newer commit is pushed, the head SHA changes and the previous green result is not carried forward — this prevents stale successful checks from being reused across newer commits.
 
 ## OpenAI usage
 
