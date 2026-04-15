@@ -1465,7 +1465,7 @@ class WorkflowDebugLoggingTests(unittest.TestCase):
         self.assertIn("workflow_event=issue_dispatch_attempted", joined)
         self.assertIn("skip_reason=task_not_approved", joined)
 
-    def test_continuation_comment_debug_events_present(self):
+    def test_linked_draft_handoff_debug_events_present(self):
         settings = _make_settings(ORCHESTRATOR_DEBUG_WORKFLOW="true")
         task = TaskPacket(
             id=10,
@@ -1501,7 +1501,8 @@ class WorkflowDebugLoggingTests(unittest.TestCase):
                     checks_passed=False,
                 )
         joined = "\n".join(logs.output)
-        self.assertIn("workflow_event=continuation_comment_synthesized", joined)
+        self.assertIn("workflow_event=linked_draft_pr_detected", joined)
+        self.assertIn("workflow_event=ready_for_review_attempted", joined)
 
 
 class TryMintAppTokenTests(unittest.TestCase):
