@@ -2278,6 +2278,160 @@ class Slice11NicheHealCallerMigrationTests(unittest.TestCase):
 
 
 # ===================================================================
+# Slice 12 — Long Rest batch HP restoration tests
+# ===================================================================
+
+
+class Slice12LongRestBatchHealTests(unittest.TestCase):
+    """Verify CombatService.batch_long_rest_heal() correctly restores HP
+    for multiple combatants through the canonical heal path, preserves
+    max-HP caps, truthfully skips already-full targets, and performs a
+    single batch rebuild/broadcast."""
+
+    def _make_tracker_with_service(self, num_combatants=3):
+        tracker = _make_tracker(num_combatants)
+        service = CombatService(tracker)
+        tracker._dm_service = service
+        return tracker, service
+
+    def test_full_restore_to_max_hp(self):
+        """Damaged combatant is restored to max HP."""
+        tracker, service = self._make_tracker_with_service()
+        c = tracker.combatants[1]
+        c.hp = 5
+        c.max_hp = 20
+        result = service.batch_long_rest_heal({1: 20})
+        self.assertTrue(result["ok"])
+        self.assertEqual(c.hp, 20)
+        self.assertEqual(result["healed"], 1)
+        self.assertEqual(result["skipped"], 0)
+        # Verify per-target result
+        self.assertEqual(len(result["results"]), 1)
+        r = result["results"][0]
+        self.assertEqual(r["cid"], 1)
+        self.assertEqual(r["hp_before"], 5)
+        self.assertEqual(r["hp_after"], 20)
+        self.assertFalse(r["skipped"])
+
+    def test_already_full_is_skipped(self):
+        """Combatant already at max HP is truthfully skipped."""
+        tracker, service = self._make_tracker_with_service()
+        c = tracker.combatants[1]
+        c.hp = 20
+        c.max_hp = 20
+        result = service.batch_long_rest_heal({1: 20})
+        self.assertTrue(result["ok"])
+        self.assertEqual(c.hp, 20)
+        self.assertEqual(result["healed"], 0)
+        self.assertEqual(result["skipped"], 1)
+        r = result["results"][0]
+        self.assertTrue(r["skipped"])
+        self.assertEqual(r["hp_before"], 20)
+        self.assertEqual(r["hp_after"], 20)
+
+    def test_batch_multiple_targets(self):
+        """Multiple combatants healed in a single batch call."""
+        tracker, service = self._make_tracker_with_service()
+        c1 = tracker.combatants[1]
+        c1.hp = 5
+        c1.max_hp = 20
+        c2 = tracker.combatants[2]
+        c2.hp = 10
+        c2.max_hp = 25
+        c3 = tracker.combatants[3]
+        c3.hp = 30
+        c3.max_hp = 30  # already full
+        result = service.batch_long_rest_heal({1: 20, 2: 25, 3: 30})
+        self.assertTrue(result["ok"])
+        self.assertEqual(c1.hp, 20)
+        self.assertEqual(c2.hp, 25)
+        self.assertEqual(c3.hp, 30)
+        self.assertEqual(result["healed"], 2)
+        self.assertEqual(result["skipped"], 1)
+        self.assertEqual(len(result["results"]), 3)
+
+    def test_batch_single_rebuild_and_broadcast(self):
+        """Batch heal performs exactly one rebuild + broadcast, not per-target."""
+        tracker, service = self._make_tracker_with_service()
+        tracker.combatants[1].hp = 5
+        tracker.combatants[1].max_hp = 20
+        tracker.combatants[2].hp = 10
+        tracker.combatants[2].max_hp = 25
+        tracker._rebuild_calls.clear()
+        tracker._broadcast_calls.clear()
+        service.batch_long_rest_heal({1: 20, 2: 25})
+        # Exactly one outer rebuild and one outer broadcast
+        self.assertEqual(len(tracker._rebuild_calls), 1)
+        self.assertEqual(len(tracker._broadcast_calls), 1)
+
+    def test_batch_routes_through_apply_heal(self):
+        """Batch heal delegates to apply_heal (canonical path) for each damaged target."""
+        tracker, service = self._make_tracker_with_service()
+        tracker.combatants[1].hp = 5
+        tracker.combatants[1].max_hp = 20
+        tracker.combatants[2].hp = 25
+        tracker.combatants[2].max_hp = 25  # already full — skipped
+        tracker._apply_heal_calls.clear()
+        service.batch_long_rest_heal({1: 20, 2: 25})
+        # Only combatant 1 should have been healed via apply_heal
+        heal_cids = [call["cid"] for call in tracker._apply_heal_calls]
+        self.assertIn(1, heal_cids)
+        self.assertNotIn(2, heal_cids)
+
+    def test_empty_targets_is_noop(self):
+        """Calling with no targets is a safe no-op."""
+        tracker, service = self._make_tracker_with_service()
+        tracker._rebuild_calls.clear()
+        tracker._broadcast_calls.clear()
+        result = service.batch_long_rest_heal({})
+        self.assertTrue(result["ok"])
+        self.assertEqual(result["healed"], 0)
+        self.assertEqual(result["skipped"], 0)
+        self.assertEqual(len(result["results"]), 0)
+        # Still does the outer broadcast even for empty batch
+        self.assertEqual(len(tracker._rebuild_calls), 1)
+        self.assertEqual(len(tracker._broadcast_calls), 1)
+
+    def test_nonexistent_cid_silently_skipped(self):
+        """Unknown CIDs in the batch are silently ignored."""
+        tracker, service = self._make_tracker_with_service()
+        result = service.batch_long_rest_heal({999: 50})
+        self.assertTrue(result["ok"])
+        self.assertEqual(result["healed"], 0)
+        self.assertEqual(result["skipped"], 0)
+        self.assertEqual(len(result["results"]), 0)
+
+    def test_heal_does_not_exceed_target_max_hp(self):
+        """Heal amount is computed from target_max - current, never over."""
+        tracker, service = self._make_tracker_with_service()
+        c = tracker.combatants[1]
+        c.hp = 18
+        c.max_hp = 20
+        result = service.batch_long_rest_heal({1: 20})
+        self.assertTrue(result["ok"])
+        self.assertEqual(c.hp, 20)
+        r = result["results"][0]
+        self.assertEqual(r["hp_before"], 18)
+        self.assertEqual(r["hp_after"], 20)
+
+    def test_mixed_damaged_and_full_batch(self):
+        """Mix of damaged and full combatants: only damaged ones are healed."""
+        tracker, service = self._make_tracker_with_service()
+        c1 = tracker.combatants[1]
+        c1.hp = 1
+        c1.max_hp = 20
+        c2 = tracker.combatants[2]
+        c2.hp = 25
+        c2.max_hp = 25
+        result = service.batch_long_rest_heal({1: 20, 2: 25})
+        self.assertTrue(result["ok"])
+        self.assertEqual(c1.hp, 20)
+        self.assertEqual(c2.hp, 25)
+        self.assertEqual(result["healed"], 1)
+        self.assertEqual(result["skipped"], 1)
+
+
+# ===================================================================
 # RLock re-entrancy tests (Slice 9)
 # ===================================================================
 

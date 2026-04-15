@@ -169,6 +169,9 @@ The following desktop/LAN-originated mutations now route through
   spell healing resolution (Cure Wounds / Healing Word), Mantle of
   Inspiration temp HP, and Patient Defense Focus temp HP now route
   through the wrapper (Slice 11)
+- **Long Rest batch HP restore** → `CombatService.batch_long_rest_heal()` →
+  `apply_heal(_broadcast=False)` per target with single outer
+  rebuild/broadcast (Slice 12)
 
 All wrappers fall back to direct mutation + broadcast when the service is
 not running (e.g. LAN server not started).
@@ -199,13 +202,13 @@ concurrently.  The current safeguard model:
 **Remaining risk**: The `CombatService` lock now covers all mutations that
 go through the service, including web-originated, desktop-routed paths
 (Start/Reset, Prev Turn, Next Turn, Set Turn Here, manual HP override),
-all identified deep damage callers, and all commonly used heal callers
+all identified deep damage callers, all commonly used heal callers
 (heal dialog, Second Wind, Lay on Hands, Uncanny Metabolism, healing
 consumable use, spell healing resolution, Mantle of Inspiration temp HP,
-Patient Defense Focus temp HP).  Remaining hybrid heal paths are limited
-to batch operations (Long Rest HP restore) and niche state management
-(Wild Shape temp HP).  This is an acceptable risk for the single-session
-LAN use case.
+Patient Defense Focus temp HP), and Long Rest batch HP restoration
+(Slice 12).  The only remaining hybrid heal path is Wild Shape temp HP
+management.  This is an acceptable risk for the single-session LAN use
+case.
 
 ---
 
@@ -221,9 +224,9 @@ via the web.
 
 ## Recommended next migration targets
 
-1. **Remaining hybrid heal paths**: Long Rest batch HP restore (desktop +
-   LAN) and Wild Shape temp HP management still set HP/temp HP directly.
-   These are lower-priority batch or niche state operations.
+1. **Remaining hybrid heal path**: Wild Shape temp HP management still sets
+   temp_hp directly.  This is the only remaining non-service heal path and
+   is lifecycle-coupled to the Wild Shape enter/exit state machine.
 
 2. **Initiative-roll support**: Expose full initiative-roll support through
    the backend service so the DM web console can trigger initiative rolls
