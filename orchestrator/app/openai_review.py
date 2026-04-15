@@ -79,7 +79,11 @@ REVIEW_BATCH_SYSTEM_PROMPT = (
 )
 MERGE_AUDIT_SYSTEM_PROMPT = (
     "You are the final autonomous merge-audit gate for orchestrator PR governance. "
-    "Use only provided evidence, be conservative when evidence is missing/truncated, and return strict JSON."
+    "Use only provided evidence, be conservative when evidence is missing/truncated, and return strict JSON. "
+    "For docs-only pull requests, treat file_details[].patch as the primary authoritative evidence for acceptance checks. "
+    "If patch text is present and not materially truncated, verify acceptance criteria directly from that patch and do not demand human review merely because it is documentation. "
+    "Choose approve_and_merge when patch evidence satisfies acceptance criteria and no blockers remain. "
+    "Choose wait or escalate_human only when evidence is actually insufficient, truncated, contradictory, or risky."
 )
 
 GOVERNOR_ARTIFACT_SCHEMA: dict[str, Any] = {

@@ -770,6 +770,13 @@ def _load_governor_state(run: AgentRun) -> dict[str, Any]:
     state.setdefault("final_audit_confidence", 0.0)
     state.setdefault("final_audit_last_error", "")
     state.setdefault("final_audit_summary", [])
+    state.setdefault("last_checks_passed", False)
+    state.setdefault("last_check_conclusion", "")
+    state.setdefault("last_successful_checks_head_sha", "")
+    state.setdefault("last_observed_pr_head_sha", "")
+    state.setdefault("effective_checks_passed", False)
+    state.setdefault("final_audit_head_sha", "")
+    state.setdefault("effective_checks_passed_at_final_audit", False)
     state.setdefault("ready_for_review_attempted", False)
     state.setdefault("ready_for_review_attempt_count", 0)
     state.setdefault("ready_for_review_retry_count", 0)
@@ -1294,8 +1301,41 @@ def _run_governor_loop(
 
     pr_title = str(pr_payload.get("title") or "")
     pr_body = str(pr_payload.get("body") or "")
+    pr_head = pr_payload.get("head") if isinstance(pr_payload.get("head"), dict) else {}
+    pr_head_sha = str(pr_head.get("sha") or pr_payload.get("head_sha") or "").strip()
+    if pr_head_sha:
+        state["last_observed_pr_head_sha"] = pr_head_sha
     pr_mergeable = pr_payload.get("mergeable")
     pr_mergeable_state = str(pr_payload.get("mergeable_state") or "")
+
+    last_successful_checks_head_sha = str(state.get("last_successful_checks_head_sha") or "").strip()
+    if checks_passed:
+        state["last_checks_passed"] = True
+        state["last_check_conclusion"] = "success"
+        if pr_head_sha:
+            state["last_successful_checks_head_sha"] = pr_head_sha
+            last_successful_checks_head_sha = pr_head_sha
+    elif pr_head_sha and last_successful_checks_head_sha and pr_head_sha != last_successful_checks_head_sha:
+        state["last_checks_passed"] = False
+        state["last_check_conclusion"] = "head_sha_mismatch"
+
+    effective_checks_passed = bool(
+        checks_passed
+        or (
+            bool(state.get("last_checks_passed"))
+            and pr_head_sha
+            and last_successful_checks_head_sha
+            and pr_head_sha == last_successful_checks_head_sha
+        )
+    )
+    if not pr_head_sha and bool(state.get("last_checks_passed")):
+        observed_head = str(state.get("last_observed_pr_head_sha") or "").strip()
+        effective_checks_passed = effective_checks_passed or bool(
+            observed_head
+            and last_successful_checks_head_sha
+            and observed_head == last_successful_checks_head_sha
+        )
+    state["effective_checks_passed"] = effective_checks_passed
 
     changed_files = [path for path in _parse_json_list(json.dumps(state.get("changed_files", []))) if isinstance(path, str)]
     file_details, file_details_msg = list_pull_request_file_details(settings=settings, repo=task.github_repo, pr_number=pr_number)
@@ -1638,7 +1678,7 @@ def _run_governor_loop(
     mergeable_for_audit = bool(pr_mergeable is True or pr_mergeable_state.lower() == "clean")
     merge_eligible_for_audit = (
         (not pr_draft)
-        and checks_passed
+        and effective_checks_passed
         and (not unresolved_findings)
         and (not waiting_for_revision_push)
         and (not guarded_paths_touched)
@@ -1660,6 +1700,9 @@ def _run_governor_loop(
             "requested_reviewers": requested_reviewers,
         },
         "checks_passed": checks_passed,
+        "effective_checks_passed": effective_checks_passed,
+        "pr_head_sha": pr_head_sha,
+        "last_successful_checks_head_sha": state.get("last_successful_checks_head_sha"),
         "review_artifact": review_artifact,
         "copilot_review_observed": copilot_review_observed,
         "unresolved_copilot_findings": unresolved_findings,
@@ -1672,6 +1715,15 @@ def _run_governor_loop(
         "revision_cycle_count": int(state.get("revision_cycle_count") or 0),
     }
     if merge_eligible_for_audit:
+        prior_final_audit_artifact = state.get("final_audit_artifact") if isinstance(state.get("final_audit_artifact"), dict) else {}
+        prior_final_audit_decision = str(state.get("final_audit_decision") or "")
+        prior_final_audit_head_sha = str(state.get("final_audit_head_sha") or "").strip()
+        prior_partial_or_stale = bool(
+            prior_final_audit_artifact.get("requires_followup")
+            or prior_final_audit_decision in {"wait", "escalate_human", "request_revision"}
+            or (pr_head_sha and prior_final_audit_head_sha and prior_final_audit_head_sha != pr_head_sha)
+            or (not state.get("effective_checks_passed_at_final_audit"))
+        )
         bounded_files: list[dict[str, Any]] = []
         truncated_patch_count = 0
         for file_item in file_details[:20]:
@@ -1704,7 +1756,13 @@ def _run_governor_loop(
                 "mergeable_state": pr_mergeable_state,
             },
             "checks_passed": checks_passed,
-            "check_status_summary": {"checks_passed": checks_passed},
+            "effective_checks_passed": effective_checks_passed,
+            "check_status_summary": {
+                "checks_passed": checks_passed,
+                "effective_checks_passed": effective_checks_passed,
+                "head_sha": pr_head_sha,
+                "last_successful_checks_head_sha": state.get("last_successful_checks_head_sha"),
+            },
             "mergeability_summary": {
                 "mergeable": pr_mergeable,
                 "mergeable_state": pr_mergeable_state,
@@ -1720,10 +1778,15 @@ def _run_governor_loop(
                 "files_included": len(bounded_files),
                 "file_details_message": file_details_msg,
                 "truncated_patch_count": truncated_patch_count,
+                "all_patches_present": all(bool(str(item.get("patch") or "").strip()) for item in bounded_files) if bounded_files else False,
             },
             "guarded_paths_touched": guarded_paths_touched,
             "guarded_files": guarded_files,
             "doc_only": docs_only,
+            "acceptance_criteria": json.loads(task.acceptance_criteria_json or "[]"),
+            "prior_final_audit_artifact": prior_final_audit_artifact,
+            "prior_final_audit_decision": prior_final_audit_decision,
+            "prior_final_audit_partial_or_stale": prior_partial_or_stale,
             "waiting_for_revision_push": waiting_for_revision_push,
             "approval_submitted": bool(state.get("approval_submitted")),
             "reviews_summary": state.get("review_harvest_summary"),
@@ -1748,6 +1811,8 @@ def _run_governor_loop(
         state["final_audit_confidence"] = float(artifact.get("confidence") or 0.0) if isinstance(artifact, dict) else 0.0
         state["final_audit_summary"] = summary_bullets
         state["final_audit_last_error"] = str((openai_meta or {}).get("validation_error") or "")
+        state["final_audit_head_sha"] = pr_head_sha
+        state["effective_checks_passed_at_final_audit"] = effective_checks_passed
     else:
         decision_payload = summarize_governor_update(
             settings=settings,
@@ -1911,7 +1976,7 @@ def _run_governor_loop(
             guarded_paths_touched
             or unresolved_findings
             or pr_draft
-            or not checks_passed
+            or not effective_checks_passed
             or waiting_for_revision_push
             or not governor_auth_ready
             or not dispatch_auth_ready
@@ -1931,7 +1996,8 @@ def _run_governor_loop(
                     f"ready_gate={ready_gate}, harvest_gate={harvest_gate}, pr_gate={pr_gate}, dispatch_gate={dispatch_gate}, "
                     f"governor_auth_ready={governor_auth_ready}, dispatch_auth_ready={dispatch_auth_ready}, "
                     f"guarded_paths_touched={guarded_paths_touched}, unresolved_findings={len(unresolved_findings)}, "
-                    f"pr_draft={pr_draft}, checks_passed={checks_passed}, waiting_for_revision_push={waiting_for_revision_push}"
+                    f"pr_draft={pr_draft}, checks_passed={checks_passed}, "
+                    f"effective_checks_passed={effective_checks_passed}, waiting_for_revision_push={waiting_for_revision_push}"
                 ),
                 skip_reason="missing_checkpoint_prerequisite",
                 state=state,
@@ -3653,6 +3719,7 @@ def process_workflow_run_event(
                 "draft": bool(previous_state.get("pr_draft")),
                 "state": "open",
                 "requested_reviewers": [{"login": item} for item in previous_state.get("requested_reviewers", [])],
+                "head_sha": str(workflow_run.get("head_sha") or ""),
             },
             event_key=f"governor:workflow_run:{workflow_run.get('id')}:{status}:{conclusion}",
             checks_passed=True,
