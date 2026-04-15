@@ -22,6 +22,7 @@ from .github_dispatch import (
     lookup_pr_linked_issue_numbers,
     list_issue_comments,
     list_issue_timeline_events,
+    list_pull_request_file_details,
     list_pull_request_files,
     list_pull_request_review_comments,
     list_pull_request_reviews,
@@ -32,7 +33,7 @@ from .github_dispatch import (
     request_reviewers,
     submit_approving_review,
 )
-from .github_auth import has_dispatch_auth
+from .github_auth import has_dispatch_auth, has_governor_auth
 from .models import (
     APPROVAL_APPROVED,
     APPROVAL_PENDING,
@@ -75,6 +76,7 @@ from .openai_planning import plan_task_packet
 from .openai_review import summarize_work_update
 from .openai_review import summarize_governor_update
 from .openai_review import summarize_copilot_review_batch
+from .openai_review import summarize_merge_audit
 from .programs import (
     advance_program_on_pr_merge,
     apply_reviewer_decision,
@@ -703,6 +705,41 @@ def _matches_guarded_path(path: str, guarded_patterns: list[str]) -> bool:
     return False
 
 
+def _looks_docs_only_path(path: str) -> bool:
+    normalized = str(path or "").strip().lower().lstrip("/")
+    if not normalized:
+        return False
+    docs_prefixes = ("docs/", ".github/", "mkdocs/", "changelog/", "guides/")
+    docs_suffixes = (
+        ".md",
+        ".mdx",
+        ".rst",
+        ".txt",
+        ".adoc",
+        ".png",
+        ".jpg",
+        ".jpeg",
+        ".gif",
+        ".svg",
+        ".webp",
+    )
+    if normalized in {"readme", "readme.md", "license", "license.md", "contributing.md"}:
+        return True
+    return normalized.startswith(docs_prefixes) or normalized.endswith(docs_suffixes)
+
+
+def _is_docs_only_change(changed_files: list[str]) -> bool:
+    if not changed_files:
+        return False
+    return all(_looks_docs_only_path(path) for path in changed_files)
+
+
+def _truncate_patch(patch: str, *, max_chars: int = 2000) -> tuple[str, bool]:
+    if len(patch) <= max_chars:
+        return patch, False
+    return patch[:max_chars], True
+
+
 def _load_governor_state(run: AgentRun) -> dict[str, Any]:
     state = _parse_json_object(run.governor_state_json)
     if state is None:
@@ -728,6 +765,11 @@ def _load_governor_state(run: AgentRun) -> dict[str, Any]:
     state.setdefault("fix_trigger_fingerprint", "")
     state.setdefault("review_harvest_summary", "")
     state.setdefault("review_batch_artifact", {})
+    state.setdefault("final_audit_artifact", {})
+    state.setdefault("final_audit_decision", "")
+    state.setdefault("final_audit_confidence", 0.0)
+    state.setdefault("final_audit_last_error", "")
+    state.setdefault("final_audit_summary", [])
     state.setdefault("ready_for_review_attempted", False)
     state.setdefault("ready_for_review_attempt_count", 0)
     state.setdefault("ready_for_review_retry_count", 0)
@@ -1250,13 +1292,23 @@ def _run_governor_loop(
         if isinstance(item, dict) and isinstance(item.get("login"), str):
             requested_reviewers.append(item["login"])
 
+    pr_title = str(pr_payload.get("title") or "")
+    pr_body = str(pr_payload.get("body") or "")
+    pr_mergeable = pr_payload.get("mergeable")
+    pr_mergeable_state = str(pr_payload.get("mergeable_state") or "")
+
     changed_files = [path for path in _parse_json_list(json.dumps(state.get("changed_files", []))) if isinstance(path, str)]
-    files, _ = list_pull_request_files(settings=settings, repo=task.github_repo, pr_number=pr_number)
-    if files:
-        changed_files = files
+    file_details, file_details_msg = list_pull_request_file_details(settings=settings, repo=task.github_repo, pr_number=pr_number)
+    if file_details:
+        changed_files = [str(item.get("filename") or "") for item in file_details if str(item.get("filename") or "").strip()]
+    elif not changed_files:
+        files, _ = list_pull_request_files(settings=settings, repo=task.github_repo, pr_number=pr_number)
+        if files:
+            changed_files = files
     guarded_patterns = _governor_guarded_patterns(settings)
     guarded_files = [path for path in changed_files if _matches_guarded_path(path, guarded_patterns)]
     guarded_paths_touched = bool(guarded_files)
+    docs_only = _is_docs_only_change(changed_files)
 
     # --- Reviewer cleanup with truthful result tracking ---
     remove_login = str(getattr(settings, "governor_remove_reviewer_login", "") or "").strip()
@@ -1389,6 +1441,12 @@ def _run_governor_loop(
         _save_governor_state(run, state)
         _save(session, run)
         return
+
+    if pr_mergeable is None and isinstance(pr_number, int):
+        inspection = inspect_pull_request(settings=settings, repo=task.github_repo, pr_number=pr_number)
+        if inspection.ok:
+            pr_mergeable = inspection.mergeable
+            pr_mergeable_state = inspection.mergeable_state or pr_mergeable_state
 
     # --- Deterministic fix-trigger for ready PRs with unresolved Copilot findings ---
     if (
@@ -1577,6 +1635,20 @@ def _run_governor_loop(
         return
 
     review_artifact = _parse_json_object(run.review_artifact_json) or {}
+    mergeable_for_audit = bool(pr_mergeable is True or pr_mergeable_state.lower() == "clean")
+    merge_eligible_for_audit = (
+        (not pr_draft)
+        and checks_passed
+        and (not unresolved_findings)
+        and (not waiting_for_revision_push)
+        and (not guarded_paths_touched)
+        and mergeable_for_audit
+    )
+    decision_payload: dict[str, Any]
+    decision = "wait"
+    summary_bullets: list[str] = []
+    revision_requests: list[str] = []
+    escalation_reason = ""
     governor_context = {
         "event_key": event_key,
         "repo": task.github_repo,
@@ -1592,29 +1664,113 @@ def _run_governor_loop(
         "copilot_review_observed": copilot_review_observed,
         "unresolved_copilot_findings": unresolved_findings,
         "changed_files": changed_files,
+        "docs_only": docs_only,
+        "mergeable": pr_mergeable,
+        "mergeable_state": pr_mergeable_state,
         "guarded_paths_touched": guarded_paths_touched,
         "guarded_files": guarded_files,
         "revision_cycle_count": int(state.get("revision_cycle_count") or 0),
     }
-    decision_payload = summarize_governor_update(
-        settings=settings,
-        update_context=json.dumps(governor_context, ensure_ascii=False),
-        previous_response_id=run.openai_last_response_id,
-    )
-    openai_meta = decision_payload.get("openai_meta") if isinstance(decision_payload, dict) else {}
-    response_id = openai_meta.get("response_id") if isinstance(openai_meta, dict) else None
-    if isinstance(response_id, str) and response_id.strip():
-        run.openai_last_response_id = response_id.strip()
-    artifact = decision_payload.get("governor_artifact") if isinstance(decision_payload, dict) else {}
-    decision = str((artifact or {}).get("decision") or "wait")
-    summary_bullets = artifact.get("summary") if isinstance(artifact.get("summary"), list) else []
-    revision_requests = artifact.get("revision_requests") if isinstance(artifact.get("revision_requests"), list) else []
-    escalation_reason = str(artifact.get("escalation_reason") or "")
+    if merge_eligible_for_audit:
+        bounded_files: list[dict[str, Any]] = []
+        truncated_patch_count = 0
+        for file_item in file_details[:20]:
+            filename = str(file_item.get("filename") or "")
+            patch_value = str(file_item.get("patch") or "")
+            truncated_patch, was_truncated = _truncate_patch(patch_value, max_chars=2000)
+            if was_truncated:
+                truncated_patch_count += 1
+            bounded_files.append(
+                {
+                    "filename": filename,
+                    "status": str(file_item.get("status") or "modified"),
+                    "additions": int(file_item.get("additions") or 0),
+                    "deletions": int(file_item.get("deletions") or 0),
+                    "patch": truncated_patch,
+                    "patch_truncated": was_truncated,
+                }
+            )
+        audit_context = {
+            "event_key": event_key,
+            "repo": task.github_repo,
+            "issue_number": task.github_issue_number,
+            "pr_number": pr_number,
+            "pr_title": pr_title,
+            "pr_body": pr_body,
+            "pr": {
+                "draft": pr_draft,
+                "state": pr_state,
+                "mergeable": pr_mergeable,
+                "mergeable_state": pr_mergeable_state,
+            },
+            "checks_passed": checks_passed,
+            "check_status_summary": {"checks_passed": checks_passed},
+            "mergeability_summary": {
+                "mergeable": pr_mergeable,
+                "mergeable_state": pr_mergeable_state,
+                "mergeable_for_audit": mergeable_for_audit,
+            },
+            "review_artifact": review_artifact,
+            "copilot_review_observed": copilot_review_observed,
+            "unresolved_copilot_findings": unresolved_findings,
+            "changed_files": changed_files[:80],
+            "file_details": bounded_files,
+            "file_detail_summary": {
+                "files_returned": len(file_details),
+                "files_included": len(bounded_files),
+                "file_details_message": file_details_msg,
+                "truncated_patch_count": truncated_patch_count,
+            },
+            "guarded_paths_touched": guarded_paths_touched,
+            "guarded_files": guarded_files,
+            "doc_only": docs_only,
+            "waiting_for_revision_push": waiting_for_revision_push,
+            "approval_submitted": bool(state.get("approval_submitted")),
+            "reviews_summary": state.get("review_harvest_summary"),
+            "requested_reviewers": requested_reviewers,
+        }
+        decision_payload = summarize_merge_audit(
+            settings=settings,
+            update_context=json.dumps(audit_context, ensure_ascii=False),
+            previous_response_id=run.openai_last_response_id,
+        )
+        openai_meta = decision_payload.get("openai_meta") if isinstance(decision_payload, dict) else {}
+        response_id = openai_meta.get("response_id") if isinstance(openai_meta, dict) else None
+        if isinstance(response_id, str) and response_id.strip():
+            run.openai_last_response_id = response_id.strip()
+        artifact = decision_payload.get("merge_audit_artifact") if isinstance(decision_payload, dict) else {}
+        decision = str((artifact or {}).get("decision") or "wait")
+        summary_bullets = artifact.get("summary") if isinstance(artifact.get("summary"), list) else []
+        revision_requests = [str(item.get("summary") or "").strip() for item in artifact.get("findings") or [] if isinstance(item, dict)]
+        escalation_reason = str(artifact.get("escalation_reason") or "")
+        state["final_audit_artifact"] = artifact if isinstance(artifact, dict) else {}
+        state["final_audit_decision"] = decision
+        state["final_audit_confidence"] = float(artifact.get("confidence") or 0.0) if isinstance(artifact, dict) else 0.0
+        state["final_audit_summary"] = summary_bullets
+        state["final_audit_last_error"] = str((openai_meta or {}).get("validation_error") or "")
+    else:
+        decision_payload = summarize_governor_update(
+            settings=settings,
+            update_context=json.dumps(governor_context, ensure_ascii=False),
+            previous_response_id=run.openai_last_response_id,
+        )
+        openai_meta = decision_payload.get("openai_meta") if isinstance(decision_payload, dict) else {}
+        response_id = openai_meta.get("response_id") if isinstance(openai_meta, dict) else None
+        if isinstance(response_id, str) and response_id.strip():
+            run.openai_last_response_id = response_id.strip()
+        artifact = decision_payload.get("governor_artifact") if isinstance(decision_payload, dict) else {}
+        decision = str((artifact or {}).get("decision") or "wait")
+        summary_bullets = artifact.get("summary") if isinstance(artifact.get("summary"), list) else []
+        revision_requests = artifact.get("revision_requests") if isinstance(artifact.get("revision_requests"), list) else []
+        escalation_reason = str(artifact.get("escalation_reason") or "")
 
     state["pr_draft"] = pr_draft
     state["pr_state"] = pr_state
     state["requested_reviewers"] = requested_reviewers
     state["changed_files"] = changed_files
+    state["docs_only"] = docs_only
+    state["pr_mergeable"] = pr_mergeable
+    state["pr_mergeable_state"] = pr_mergeable_state
     state["copilot_review_observed"] = copilot_review_observed
     state["unresolved_copilot_findings"] = unresolved_findings
     state["guarded_paths_touched"] = guarded_paths_touched
@@ -1622,6 +1778,14 @@ def _run_governor_loop(
     state["last_event_key"] = event_key
     state["last_governor_decision"] = decision
     state["last_governor_summary"] = summary_bullets
+    final_audit_safe_to_merge = bool(
+        merge_eligible_for_audit and isinstance(state.get("final_audit_artifact"), dict) and state["final_audit_artifact"].get("safe_to_merge")
+    )
+    if merge_eligible_for_audit and decision == "approve_and_merge" and not final_audit_safe_to_merge:
+        decision = "wait"
+        summary_bullets = summary_bullets or ["Final audit did not confirm safe_to_merge=true."]
+        state["last_governor_decision"] = decision
+        state["last_governor_summary"] = summary_bullets
 
     if guarded_paths_touched:
         decision = "escalate_human"
@@ -1741,12 +1905,16 @@ def _run_governor_loop(
         harvest_gate = bool((state.get("checkpoints") or {}).get("review_harvested", {}).get("success"))
         pr_gate = bool((state.get("checkpoints") or {}).get("pr_discovered", {}).get("success"))
         dispatch_gate = bool((state.get("checkpoints") or {}).get("issue_dispatched", {}).get("success"))
+        governor_auth_ready = has_governor_auth(settings)
+        dispatch_auth_ready = has_dispatch_auth(settings)
         if (
             guarded_paths_touched
             or unresolved_findings
             or pr_draft
             or not checks_passed
             or waiting_for_revision_push
+            or not governor_auth_ready
+            or not dispatch_auth_ready
             or not ready_gate
             or not harvest_gate
             or not pr_gate
@@ -1761,86 +1929,117 @@ def _run_governor_loop(
                 summary=(
                     "Merge path skipped due to unmet prerequisites: "
                     f"ready_gate={ready_gate}, harvest_gate={harvest_gate}, pr_gate={pr_gate}, dispatch_gate={dispatch_gate}, "
+                    f"governor_auth_ready={governor_auth_ready}, dispatch_auth_ready={dispatch_auth_ready}, "
                     f"guarded_paths_touched={guarded_paths_touched}, unresolved_findings={len(unresolved_findings)}, "
                     f"pr_draft={pr_draft}, checks_passed={checks_passed}, waiting_for_revision_push={waiting_for_revision_push}"
                 ),
                 skip_reason="missing_checkpoint_prerequisite",
                 state=state,
             )
-            decision = "wait"
+            decision = "escalate_human" if (not governor_auth_ready or not dispatch_auth_ready) else "wait"
+            if decision == "escalate_human":
+                escalation_reason = "Merge audit approved but GitHub auth for approval/merge is unavailable."
         else:
             if not bool(state.get("approval_submitted")):
-                submit_approving_review(settings=settings, repo=task.github_repo, pr_number=pr_number)
-                state["approval_submitted"] = True
-            _log_workflow_checkpoint(
-                settings,
-                event="merge_attempted",
-                task=task,
-                run=run,
-                success=True,
-                summary="Attempting merge with latest head SHA.",
-                auth_lane="dispatch_user_token",
-                api_type="REST",
-                state=state,
-            )
-            merged, merge_msg = merge_pr(settings=settings, repo=task.github_repo, pr_number=pr_number)
-            if "retry_used=True" in str(merge_msg):
-                _log_workflow_checkpoint(
-                    settings,
-                    event="merge_retry_409",
-                    task=task,
-                    run=run,
-                    success=True,
-                    summary=merge_msg,
-                    auth_lane="dispatch_user_token",
-                    api_type="REST",
-                    state=state,
-                )
-            _set_checkpoint(
-                state,
-                name="merge_attempted_latest_sha",
-                success=bool(merged),
-                summary=merge_msg,
-            )
-            if merged:
-                state["merge_completed"] = True
-                _set_checkpoint(
-                    state,
-                    name="merge_verified",
-                    success=True,
-                    summary="Merge completed and verified with merged=true postcondition.",
-                )
-                _log_workflow_checkpoint(
-                    settings,
-                    event="merge_verified",
-                    task=task,
-                    run=run,
-                    success=True,
-                    summary=merge_msg,
-                    postcondition="merged=true",
-                    auth_lane="dispatch_user_token",
-                    api_type="REST",
-                    state=state,
-                )
+                approval_ok, approval_msg = submit_approving_review(settings=settings, repo=task.github_repo, pr_number=pr_number)
+                if not approval_ok:
+                    decision = "escalate_human"
+                    escalation_reason = approval_msg
+                    _set_checkpoint(
+                        state,
+                        name="approval_submitted",
+                        success=False,
+                        summary=approval_msg,
+                    )
+                else:
+                    _set_checkpoint(
+                        state,
+                        name="approval_submitted",
+                        success=True,
+                        summary=approval_msg,
+                    )
+                    state["approval_submitted"] = True
+            if decision == "escalate_human":
+                state["last_governor_decision"] = decision
+                state["last_governor_summary"] = [escalation_reason or "Approval submission failed."]
             else:
-                _set_checkpoint(
-                    state,
-                    name="merge_verified",
-                    success=False,
-                    summary=merge_msg,
-                )
+                state["approval_submitted"] = True
                 _log_workflow_checkpoint(
                     settings,
-                    event="merge_failed",
+                    event="merge_attempted",
                     task=task,
                     run=run,
-                    success=False,
-                    summary=merge_msg,
-                    postcondition="merged!=true",
+                    success=True,
+                    summary="Attempting merge with latest head SHA.",
                     auth_lane="dispatch_user_token",
                     api_type="REST",
                     state=state,
                 )
+                merged, merge_msg = merge_pr(settings=settings, repo=task.github_repo, pr_number=pr_number)
+                if "retry_used=True" in str(merge_msg):
+                    _log_workflow_checkpoint(
+                        settings,
+                        event="merge_retry_409",
+                        task=task,
+                        run=run,
+                        success=True,
+                        summary=merge_msg,
+                        auth_lane="dispatch_user_token",
+                        api_type="REST",
+                        state=state,
+                    )
+                _set_checkpoint(
+                    state,
+                    name="merge_attempted_latest_sha",
+                    success=bool(merged),
+                    summary=merge_msg,
+                )
+                if merged:
+                    state["merge_completed"] = True
+                    _set_checkpoint(
+                        state,
+                        name="merge_verified",
+                        success=True,
+                        summary="Merge completed and verified with merged=true postcondition.",
+                    )
+                    _log_workflow_checkpoint(
+                        settings,
+                        event="merge_verified",
+                        task=task,
+                        run=run,
+                        success=True,
+                        summary=merge_msg,
+                        postcondition="merged=true",
+                        auth_lane="dispatch_user_token",
+                        api_type="REST",
+                        state=state,
+                    )
+                else:
+                    _set_checkpoint(
+                        state,
+                        name="merge_verified",
+                        success=False,
+                        summary=merge_msg,
+                    )
+                    _log_workflow_checkpoint(
+                        settings,
+                        event="merge_failed",
+                        task=task,
+                        run=run,
+                        success=False,
+                        summary=merge_msg,
+                        postcondition="merged!=true",
+                        auth_lane="dispatch_user_token",
+                        api_type="REST",
+                        state=state,
+                    )
+                    decision = "wait"
+                    summary_bullets = [merge_msg]
+                    state["last_governor_decision"] = decision
+                    state["last_governor_summary"] = summary_bullets
+    state["last_governor_decision"] = decision
+    state["last_governor_summary"] = summary_bullets if summary_bullets else [decision]
+
     if decision == "escalate_human" and task.program_id and not guarded_paths_touched:
         program = session.get(Program, task.program_id)
         if program is not None:

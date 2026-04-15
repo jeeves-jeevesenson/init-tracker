@@ -21,6 +21,13 @@ _ALLOWED_GOVERNOR_DECISION = {
     "approve_and_merge",
     "complete_without_merge",
 }
+_ALLOWED_FINAL_AUDIT_DECISION = {
+    "approve_and_merge",
+    "request_revision",
+    "wait",
+    "escalate_human",
+}
+_ALLOWED_FINDING_SEVERITY = {"low", "medium", "high"}
 _ALLOWED_REASONING_EFFORT = {"low", "medium", "high"}
 _logger = logging.getLogger("orchestrator.openai")
 
@@ -70,6 +77,10 @@ REVIEW_BATCH_SYSTEM_PROMPT = (
     "You synthesize actionable GitHub PR review feedback into one concise top-level @copilot continuation comment. "
     "De-duplicate overlaps and keep output bounded."
 )
+MERGE_AUDIT_SYSTEM_PROMPT = (
+    "You are the final autonomous merge-audit gate for orchestrator PR governance. "
+    "Use only provided evidence, be conservative when evidence is missing/truncated, and return strict JSON."
+)
 
 GOVERNOR_ARTIFACT_SCHEMA: dict[str, Any] = {
     "type": "object",
@@ -102,6 +113,49 @@ REVIEW_BATCH_ARTIFACT_SCHEMA: dict[str, Any] = {
         "batched_items": {"type": "array", "items": {"type": "string"}},
         "comment_body": {"type": "string"},
         "should_trigger_copilot": {"type": "boolean"},
+    },
+}
+
+MERGE_AUDIT_ARTIFACT_SCHEMA: dict[str, Any] = {
+    "type": "object",
+    "additionalProperties": False,
+    "required": [
+        "decision",
+        "confidence",
+        "doc_only",
+        "safe_to_merge",
+        "requires_followup",
+        "summary",
+        "findings",
+        "merge_rationale",
+        "escalation_reason",
+        "review_scope",
+    ],
+    "properties": {
+        "decision": {"type": "string", "enum": sorted(_ALLOWED_FINAL_AUDIT_DECISION)},
+        "confidence": {"type": "number", "minimum": 0, "maximum": 1},
+        "doc_only": {"type": "boolean"},
+        "safe_to_merge": {"type": "boolean"},
+        "requires_followup": {"type": "boolean"},
+        "summary": {"type": "array", "maxItems": 6, "items": {"type": "string"}},
+        "findings": {
+            "type": "array",
+            "maxItems": 12,
+            "items": {
+                "type": "object",
+                "additionalProperties": False,
+                "required": ["severity", "path", "summary", "suggested_fix"],
+                "properties": {
+                    "severity": {"type": "string", "enum": sorted(_ALLOWED_FINDING_SEVERITY)},
+                    "path": {"type": "string"},
+                    "summary": {"type": "string"},
+                    "suggested_fix": {"type": "string"},
+                },
+            },
+        },
+        "merge_rationale": {"type": "string"},
+        "escalation_reason": {"type": "string"},
+        "review_scope": {"type": "array", "maxItems": 8, "items": {"type": "string"}},
     },
 }
 
@@ -627,6 +681,192 @@ def _validate_review_batch_artifact(raw: dict[str, Any]) -> dict[str, Any]:
         "batched_items": batched_items,
         "comment_body": comment_body,
         "should_trigger_copilot": should_trigger,
+    }
+
+
+def _merge_audit_response_payload(
+    *,
+    model: str,
+    update_context: str,
+    settings: Settings,
+    reasoning_effort: str,
+    stage: str,
+    repo: str | None,
+    previous_response_id: str | None,
+    model_tier: str,
+) -> dict[str, Any]:
+    payload: dict[str, Any] = {
+        "model": model,
+        "input": [
+            {
+                "role": "system",
+                "content": [{"type": "input_text", "text": MERGE_AUDIT_SYSTEM_PROMPT}],
+            },
+            {
+                "role": "user",
+                "content": [{"type": "input_text", "text": update_context}],
+            },
+        ],
+        "text": {
+            "format": {
+                "type": "json_schema",
+                "name": "pr_merge_audit_artifact",
+                "strict": True,
+                "schema": MERGE_AUDIT_ARTIFACT_SCHEMA,
+            }
+        },
+    }
+    normalized_effort = reasoning_effort.strip().lower()
+    if normalized_effort in _ALLOWED_REASONING_EFFORT:
+        payload["reasoning"] = {"effort": normalized_effort}
+    if settings.openai_enable_background_requests:
+        payload["background"] = True
+    request_controls = apply_openai_request_controls(
+        payload=payload,
+        settings=settings,
+        stage=stage,
+        repo=repo,
+        previous_response_id=previous_response_id,
+    )
+    request_controls["model_tier"] = model_tier
+    payload["_openai_request_controls"] = request_controls
+    return payload
+
+
+def _validate_merge_audit_artifact(raw: dict[str, Any]) -> dict[str, Any]:
+    summary = _coerce_string_list(raw.get("summary"), "summary")[:6]
+    if not summary:
+        summary = ["Final merge audit completed."]
+    confidence_value = raw.get("confidence")
+    if not isinstance(confidence_value, (int, float)):
+        raise RuntimeError("OpenAI merge audit response field 'confidence' must be a number")
+    confidence = min(1.0, max(0.0, float(confidence_value)))
+    findings_raw = raw.get("findings")
+    if not isinstance(findings_raw, list):
+        raise RuntimeError("OpenAI merge audit response field 'findings' must be an array")
+    findings: list[dict[str, str]] = []
+    for index, item in enumerate(findings_raw[:12]):
+        if not isinstance(item, dict):
+            raise RuntimeError(f"OpenAI merge audit response field 'findings[{index}]' must be an object")
+        findings.append(
+            {
+                "severity": _coerce_enum(
+                    item.get("severity"),
+                    field_name=f"findings[{index}].severity",
+                    allowed=_ALLOWED_FINDING_SEVERITY,
+                ),
+                "path": str(item.get("path") or "")[:240],
+                "summary": str(item.get("summary") or "")[:400],
+                "suggested_fix": str(item.get("suggested_fix") or "")[:400],
+            }
+        )
+    review_scope = _coerce_string_list(raw.get("review_scope"), "review_scope")[:8]
+    return {
+        "decision": _coerce_enum(
+            raw.get("decision"),
+            field_name="decision",
+            allowed=_ALLOWED_FINAL_AUDIT_DECISION,
+        ),
+        "confidence": confidence,
+        "doc_only": bool(raw.get("doc_only")),
+        "safe_to_merge": bool(raw.get("safe_to_merge")),
+        "requires_followup": bool(raw.get("requires_followup")),
+        "summary": summary,
+        "findings": findings,
+        "merge_rationale": str(raw.get("merge_rationale") or "")[:400],
+        "escalation_reason": str(raw.get("escalation_reason") or "")[:400],
+        "review_scope": review_scope,
+    }
+
+
+def _fallback_merge_audit_artifact(update_context: str, *, error: str | None = None) -> dict[str, Any]:
+    lines = [line.strip() for line in update_context.splitlines() if line.strip()]
+    summary = lines[:2] if lines else ["Merge audit fallback used due to missing/invalid model output."]
+    return {
+        "decision": "wait",
+        "confidence": 0.0,
+        "doc_only": False,
+        "safe_to_merge": False,
+        "requires_followup": True,
+        "summary": summary,
+        "findings": [],
+        "merge_rationale": "Fallback merge audit was used; merge not approved automatically.",
+        "escalation_reason": (str(error or "").strip() or "Merge audit unavailable."),
+        "review_scope": ["fallback"],
+    }
+
+
+def summarize_merge_audit(
+    *,
+    settings: Settings,
+    update_context: str,
+    previous_response_id: str | None = None,
+) -> dict[str, Any]:
+    validate_strict_json_schema(schema_name="pr_merge_audit_artifact", schema=MERGE_AUDIT_ARTIFACT_SCHEMA)
+    if not settings.openai_api_key:
+        artifact = _fallback_merge_audit_artifact(update_context, error="OPENAI_API_KEY is not configured")
+        return {
+            "merge_audit_artifact": artifact,
+            "summary_bullets": artifact["summary"],
+            "next_action": artifact["decision"],
+            "openai_meta": {
+                "stage": "final_merge_audit",
+                "model_tier": "fallback",
+                "model": None,
+                "response_id": None,
+                "prompt_cache_attempted": False,
+                "previous_response_id_attempted": False,
+            },
+        }
+    audit_model, model_tier = select_model_for_stage(
+        settings=settings,
+        stage="final_merge_audit",
+        fallback_model=settings.openai_review_model,
+    )
+    repo = _extract_repo_from_context(update_context)
+    client = OpenAI(api_key=settings.openai_api_key)
+    payload = _merge_audit_response_payload(
+        model=audit_model,
+        update_context=update_context,
+        settings=settings,
+        reasoning_effort=settings.openai_review_reasoning_effort,
+        stage="final_merge_audit",
+        repo=repo,
+        previous_response_id=previous_response_id,
+        model_tier=model_tier,
+    )
+    request_controls = payload.pop("_openai_request_controls", {})
+    response = client.responses.create(**payload)
+    try:
+        parsed = _extract_structured_object(response, stage="merge_audit")
+        if settings.openai_enable_background_requests and not parsed:
+            response_id = getattr(response, "id", None)
+            raise RuntimeError(
+                "OpenAI background responses require async completion handling before merge audit can continue"
+                f" (response_id={response_id or 'unknown'})"
+            )
+        artifact = _validate_merge_audit_artifact(parsed)
+    except RuntimeError as exc:
+        artifact = _fallback_merge_audit_artifact(update_context, error=str(exc))
+        request_controls["validation_error"] = str(exc)
+    response_id = getattr(response, "id", None)
+    _logger.info(
+        "openai_call stage=final_merge_audit model=%s response_id=%s model_tier=%s",
+        audit_model,
+        response_id or "",
+        model_tier,
+    )
+    return {
+        "merge_audit_artifact": artifact,
+        "summary_bullets": artifact["summary"],
+        "next_action": artifact["decision"],
+        "openai_meta": {
+            **request_controls,
+            "stage": "final_merge_audit",
+            "model_tier": model_tier,
+            "model": audit_model,
+            "response_id": response_id,
+        },
     }
 
 
