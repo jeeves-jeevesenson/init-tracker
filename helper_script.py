@@ -980,30 +980,17 @@ class InitiativeTracker(tk.Tk):
                     batch_targets[int(c.cid)] = int(updated[key])
 
             dm_svc = self.__dict__.get("_dm_service")
+            routed = False
             if dm_svc is not None and batch_targets:
                 # Route through canonical service batch heal path (Slice 12)
                 try:
                     dm_svc.batch_long_rest_heal(batch_targets)
+                    routed = True
                 except Exception:
-                    # Fallback: direct mutation + manual broadcast
-                    for cid, max_hp_val in batch_targets.items():
-                        c = self.combatants.get(cid)
-                        if c is not None:
-                            try:
-                                c.hp = int(max_hp_val)
-                            except Exception:
-                                pass
-                    try:
-                        self._rebuild_table(scroll_to_current=True)
-                    except Exception:
-                        pass
-                    if hasattr(self, "_lan_force_state_broadcast"):
-                        try:
-                            self._lan_force_state_broadcast()
-                        except Exception:
-                            pass
-            elif batch_targets:
-                # No service — direct mutation + manual broadcast (pre-service fallback)
+                    pass
+
+            if not routed and batch_targets:
+                # Fallback: direct mutation + manual broadcast
                 for cid, max_hp_val in batch_targets.items():
                     c = self.combatants.get(cid)
                     if c is not None:
