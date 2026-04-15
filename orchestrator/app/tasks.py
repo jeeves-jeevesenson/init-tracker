@@ -975,11 +975,15 @@ def _load_governor_state(run: AgentRun) -> dict[str, Any]:
     state.setdefault("material_state_pr_head_sha", "")
     state.setdefault("last_model_reuse_reason", "")
     state.setdefault("last_reused_governor_decision", "")
+    state.setdefault("last_deterministic_skip_reason", "")
+    state.setdefault("last_heavy_block_reason", "")
     state.setdefault("heavy_model_calls_total", 0)
     state.setdefault("heavy_model_calls_by_head_sha", {})
     state.setdefault("heavy_model_calls_by_slice", {})
     state.setdefault("blocked_state_repeat_count", 0)
     state.setdefault("last_blocked_state_hash", "")
+    state.setdefault("budget_blocked_repeat_count", 0)
+    state.setdefault("last_budget_blocked_state_hash", "")
     state.setdefault("final_audit_head_sha", "")
     state.setdefault("effective_checks_passed_at_final_audit", False)
     state.setdefault("final_audit_cache_key", "")
@@ -1037,6 +1041,44 @@ def _active_slice_contract(task: TaskPacket, state: dict[str, Any]) -> dict[str,
 
 def _material_state_hash(*, payload: dict[str, Any]) -> str:
     return hashlib.sha1(json.dumps(payload, sort_keys=True, ensure_ascii=False).encode("utf-8")).hexdigest()
+
+
+def _material_transition_reasons(
+    *,
+    state: dict[str, Any],
+    pr_head_sha: str,
+    effective_checks_passed: bool,
+    active_contract_hash: str,
+    changed_files_hash: str,
+    unresolved_findings_hash: str,
+    mergeable_state: str,
+    file_details_count: int,
+    patch_fallback_used: bool,
+) -> list[str]:
+    reasons: list[str] = []
+    if (pr_head_sha or "") != str(state.get("material_state_pr_head_sha") or ""):
+        reasons.append("head_sha_changed")
+    if bool(effective_checks_passed) != bool(state.get("effective_checks_passed_at_final_audit")):
+        reasons.append("effective_checks_changed")
+    if active_contract_hash != str(state.get("active_slice_contract_hash") or ""):
+        reasons.append("slice_contract_changed")
+    if changed_files_hash and changed_files_hash != str(state.get("final_audit_changed_files_hash") or ""):
+        reasons.append("diff_evidence_changed")
+    prior_findings_hash = str(state.get("final_audit_unresolved_findings_hash") or "")
+    if unresolved_findings_hash and unresolved_findings_hash != prior_findings_hash:
+        reasons.append("review_evidence_changed")
+    if mergeable_state and mergeable_state != str(state.get("pr_mergeable_state") or ""):
+        reasons.append("mergeability_changed")
+    prior_file_details_count = int(state.get("final_audit_file_details_count") or 0)
+    if int(file_details_count or 0) != prior_file_details_count:
+        reasons.append("diff_evidence_changed")
+    if bool(state.get("final_audit_patch_fallback_used")) != bool(patch_fallback_used):
+        reasons.append("diff_evidence_changed")
+    if bool(state.get("final_audit_evidence_missing")) and int(file_details_count or 0) > 0:
+        reasons.append("diff_evidence_changed")
+    if int(state.get("blocked_state_repeat_count") or 0) > 0:
+        reasons.append("blocked_state_repeat_active")
+    return reasons
 
 
 def _is_noisy_pr_event(event_key: str) -> bool:
@@ -2035,6 +2077,10 @@ def _run_governor_loop(
     summary_bullets: list[str] = []
     revision_requests: list[str] = []
     escalation_reason = ""
+    program_acceptance_criteria = json.loads(task.acceptance_criteria_json or "[]")
+    prior_decision_exists = bool(state.get("last_governor_decision"))
+    contract_changed = str(state.get("active_slice_contract_hash") or "") != active_contract["contract_hash"]
+    include_full_program_acceptance = bool((not prior_decision_exists) or contract_changed)
     governor_context = {
         "event_key": event_key,
         "repo": task.github_repo,
@@ -2061,8 +2107,27 @@ def _run_governor_loop(
         "revision_cycle_count": int(state.get("revision_cycle_count") or 0),
         "execution_mode": execution_mode,
         "active_slice_contract": active_contract,
-        "program_acceptance_criteria": json.loads(task.acceptance_criteria_json or "[]"),
+        "prior_decision_summary": {
+            "decision": str(state.get("last_governor_decision") or ""),
+            "summary": [str(item).strip() for item in (state.get("last_governor_summary") or []) if str(item).strip()][:4],
+            "reuse_reason": str(state.get("last_model_reuse_reason") or ""),
+        },
+        "budget_counters": {
+            "heavy_calls_total": int(state.get("heavy_model_calls_total") or 0),
+            "heavy_calls_for_head": int((state.get("heavy_model_calls_by_head_sha") or {}).get(pr_head_sha or "<none>", 0)),
+            "heavy_calls_for_slice": int((state.get("heavy_model_calls_by_slice") or {}).get(active_contract["contract_hash"] or "<none>", 0)),
+            "blocked_state_repeat_count": int(state.get("blocked_state_repeat_count") or 0),
+            "budget_blocked_repeat_count": int(state.get("budget_blocked_repeat_count") or 0),
+        },
     }
+    if include_full_program_acceptance:
+        governor_context["program_acceptance_criteria"] = program_acceptance_criteria
+    else:
+        governor_context["program_acceptance_summary"] = {
+            "total_items": len(program_acceptance_criteria),
+            "contract_hash": active_contract["contract_hash"],
+        }
+        governor_context["umbrella_context_trimmed"] = True
     material_state_payload = {
         "repo": task.github_repo,
         "pr_number": pr_number,
@@ -2087,6 +2152,12 @@ def _run_governor_loop(
         "mergeable_state": pr_mergeable_state,
         "slice_contract_hash": active_contract["contract_hash"],
     }
+    unresolved_findings_hash = hashlib.sha1(
+        json.dumps(unresolved_findings, sort_keys=True, ensure_ascii=False).encode("utf-8")
+    ).hexdigest()
+    changed_files_hash = hashlib.sha1(
+        json.dumps(sorted(changed_files), ensure_ascii=False).encode("utf-8")
+    ).hexdigest()
     material_hash = _material_state_hash(payload=material_state_payload)
     prior_material_hash = str(state.get("material_state_hash") or "")
     prior_material_head = str(state.get("material_state_pr_head_sha") or "")
@@ -2100,6 +2171,12 @@ def _run_governor_loop(
         and prior_material_head == (pr_head_sha or "")
         and str(state.get("active_slice_contract_hash") or "") == active_contract["contract_hash"]
     )
+    deterministic_noisy_skip = bool(
+        execution_mode == EXECUTION_MODE_HIGH_AUTONOMY_PROGRAM
+        and _is_noisy_pr_event(event_key)
+        and (material_unchanged or coarse_state_unchanged)
+        and bool(state.get("last_governor_decision"))
+    )
     merge_candidate = bool(
         (not pr_draft)
         and effective_checks_passed
@@ -2107,7 +2184,76 @@ def _run_governor_loop(
         and (not waiting_for_revision_push)
     )
     serious_review_pass_ready = bool(merge_candidate and (not requested_reviewers) and (not guarded_paths_touched))
-    if merge_eligible_for_audit:
+    if deterministic_noisy_skip:
+        decision = str(state.get("last_governor_decision") or "wait")
+        summary_bullets = [str(item).strip() for item in (state.get("last_governor_summary") or []) if str(item).strip()]
+        state["last_model_reuse_reason"] = "suppressed_noisy_event_without_material_change"
+        state["last_reused_governor_decision"] = decision
+        state["last_deterministic_skip_reason"] = "suppressed_noisy_event_without_material_change"
+        _record_openai_telemetry(
+            session,
+            task=task,
+            run=run,
+            stage="governor_fast_path",
+            action="summarize_governor_update",
+            outcome="suppressed",
+            execution_mode=execution_mode,
+            event_key=event_key,
+            head_sha=pr_head_sha,
+            slice_contract_hash=active_contract["contract_hash"],
+            skip_reason="suppressed_noisy_event_without_material_change",
+            extra={"reused_decision": decision, "material_hash": material_hash},
+        )
+    elif merge_eligible_for_audit:
+        heavy_reasons = _material_transition_reasons(
+            state=state,
+            pr_head_sha=pr_head_sha,
+            effective_checks_passed=effective_checks_passed,
+            active_contract_hash=active_contract["contract_hash"],
+            changed_files_hash=changed_files_hash,
+            unresolved_findings_hash=unresolved_findings_hash,
+            mergeable_state=pr_mergeable_state,
+            file_details_count=len(file_details),
+            patch_fallback_used=patch_fallback_used,
+        )
+        if not heavy_reasons:
+            decision = "wait"
+            summary_bullets = [
+                "Heavy merge audit deferred: no meaningful transition since prior serious review state."
+            ]
+            decision_payload = {
+                "merge_audit_artifact": {
+                    "decision": "wait",
+                    "confidence": 0.0,
+                    "doc_only": docs_only,
+                    "safe_to_merge": False,
+                    "requires_followup": True,
+                    "summary": summary_bullets,
+                    "findings": [],
+                    "merge_rationale": "",
+                    "escalation_reason": "",
+                    "review_scope": ["material_transition_gate"],
+                },
+                "openai_meta": {"cache_hit": True, "reason": "heavy_review_gated_no_meaningful_transition"},
+            }
+            state["last_heavy_block_reason"] = "heavy_review_gated_no_meaningful_transition"
+            _record_openai_telemetry(
+                session,
+                task=task,
+                run=run,
+                stage="merge_audit",
+                action="summarize_merge_audit",
+                outcome="suppressed",
+                execution_mode=execution_mode,
+                event_key=event_key,
+                head_sha=pr_head_sha,
+                slice_contract_hash=active_contract["contract_hash"],
+                skip_reason="heavy_review_gated_no_meaningful_transition",
+            )
+        else:
+            state["last_heavy_block_reason"] = ""
+            governor_context["heavy_review_reasons"] = heavy_reasons
+            material_state_payload["heavy_review_reasons"] = heavy_reasons
         prior_final_audit_artifact = state.get("final_audit_artifact") if isinstance(state.get("final_audit_artifact"), dict) else {}
         prior_final_audit_decision = str(state.get("final_audit_decision") or "")
         prior_final_audit_head_sha = str(state.get("final_audit_head_sha") or "").strip()
@@ -2145,9 +2291,6 @@ def _run_governor_loop(
             if patch_fallback_truncated and not patch_fallback_text_truncated:
                 patch_fallback_text_truncated = True
         evidence_missing = not bounded_files and not patch_fallback_text_bounded.strip()
-        changed_files_hash = hashlib.sha1(
-            json.dumps(sorted(changed_files), ensure_ascii=False).encode("utf-8")
-        ).hexdigest()
         no_evidence_state_hash = hashlib.sha1(
             json.dumps(
                 {
@@ -2228,6 +2371,7 @@ def _run_governor_loop(
             "approval_submitted": bool(state.get("approval_submitted")),
             "reviews_summary": state.get("review_harvest_summary"),
             "requested_reviewers": requested_reviewers,
+            "heavy_review_reasons": heavy_reasons,
         }
         merge_audit_cache_payload = {
             "pr_number": pr_number,
@@ -2235,9 +2379,7 @@ def _run_governor_loop(
             "effective_checks_passed": effective_checks_passed,
             "pr_draft": pr_draft,
             "changed_files_hash": changed_files_hash,
-            "unresolved_findings_hash": hashlib.sha1(
-                json.dumps(unresolved_findings, sort_keys=True, ensure_ascii=False).encode("utf-8")
-            ).hexdigest(),
+            "unresolved_findings_hash": unresolved_findings_hash,
             "guarded_paths_touched": guarded_paths_touched,
             "guarded_files_hash": hashlib.sha1(
                 json.dumps(sorted(guarded_files), ensure_ascii=False).encode("utf-8")
@@ -2253,7 +2395,9 @@ def _run_governor_loop(
         ).hexdigest()
         prior_cache_key = str(state.get("final_audit_cache_key") or "").strip()
         prior_evidence_missing = bool(prior_final_audit_artifact.get("evidence_missing"))
-        if reuse_no_evidence_wait:
+        if not heavy_reasons:
+            pass
+        elif reuse_no_evidence_wait:
             artifact = prior_final_audit_artifact if prior_final_audit_artifact else {}
             if not artifact:
                 artifact = {
@@ -2355,6 +2499,29 @@ def _run_governor_loop(
                         "heavy_calls_for_slice": int((state.get("heavy_calls_by_slice") or {}).get(active_contract["contract_hash"], 0)),
                     },
                 )
+                state["last_heavy_block_reason"] = budget_reason
+                budget_blocked_state_hash = hashlib.sha1(
+                    json.dumps(
+                        {
+                            "reason": budget_reason,
+                            "head_sha": pr_head_sha,
+                            "slice_contract_hash": active_contract["contract_hash"],
+                        },
+                        sort_keys=True,
+                        ensure_ascii=False,
+                    ).encode("utf-8")
+                ).hexdigest()
+                if str(state.get("last_budget_blocked_state_hash") or "") == budget_blocked_state_hash:
+                    state["budget_blocked_repeat_count"] = int(state.get("budget_blocked_repeat_count") or 0) + 1
+                else:
+                    state["budget_blocked_repeat_count"] = 1
+                    state["last_budget_blocked_state_hash"] = budget_blocked_state_hash
+                max_repeats = max(1, int(getattr(settings, "governor_max_repeated_blocked_reviews", 2) or 2))
+                if int(state.get("budget_blocked_repeat_count") or 0) > max_repeats:
+                    decision = "escalate_human"
+                    escalation_reason = "Repeated heavy-review budget blocks detected; summarize-and-stop enforced."
+                    summary_bullets = [escalation_reason]
+                    state["last_heavy_block_reason"] = escalation_reason
             else:
                 decision_payload = summarize_merge_audit(
                     settings=settings,
@@ -2366,7 +2533,11 @@ def _run_governor_loop(
                     pr_head_sha=pr_head_sha,
                     slice_contract_hash=active_contract["contract_hash"],
                 )
+                state["budget_blocked_repeat_count"] = 0
+                state["last_budget_blocked_state_hash"] = ""
         openai_meta = decision_payload.get("openai_meta") if isinstance(decision_payload, dict) else {}
+        if not isinstance(openai_meta, dict):
+            openai_meta = {}
         if (openai_meta or {}).get("response_id"):
             _record_openai_telemetry(
                 session,
@@ -2480,6 +2651,8 @@ def _run_governor_loop(
                 stage="governor_fast_path" if execution_mode == EXECUTION_MODE_HIGH_AUTONOMY_PROGRAM else "continuation_audit",
             )
             openai_meta = decision_payload.get("openai_meta") if isinstance(decision_payload, dict) else {}
+            if not isinstance(openai_meta, dict):
+                openai_meta = {}
             _record_openai_telemetry(
                 session,
                 task=task,
@@ -2509,6 +2682,11 @@ def _run_governor_loop(
             escalation_reason = str(artifact.get("escalation_reason") or "")
             state["last_model_reuse_reason"] = ""
 
+    if not deterministic_noisy_skip:
+        state["last_deterministic_skip_reason"] = ""
+    if decision != "wait" or not str(state.get("last_heavy_block_reason") or "").startswith("heavy_model_budget_exhausted"):
+        if str(state.get("last_heavy_block_reason") or "").startswith("heavy_model_budget_exhausted"):
+            state["last_heavy_block_reason"] = ""
     state["pr_draft"] = pr_draft
     state["pr_state"] = pr_state
     state["requested_reviewers"] = requested_reviewers
@@ -2525,6 +2703,7 @@ def _run_governor_loop(
     state["last_event_key"] = event_key
     state["last_governor_decision"] = decision
     state["last_governor_summary"] = summary_bullets
+    state["final_audit_unresolved_findings_hash"] = unresolved_findings_hash
     final_audit_safe_to_merge = bool(
         merge_eligible_for_audit and isinstance(state.get("final_audit_artifact"), dict) and state["final_audit_artifact"].get("safe_to_merge")
     )
