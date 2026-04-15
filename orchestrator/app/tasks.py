@@ -449,6 +449,28 @@ def mark_reconciliation_incomplete(
     link_run_to_slice(session, run=run, task=task)
 
 
+def mark_pr_association_pending(
+    session: Session,
+    *,
+    task: TaskPacket,
+    summary: str,
+) -> None:
+    if task.id is None:
+        return
+    run = _latest_run_for_task(session, task.id)
+    if run is None:
+        return
+    if run.status in {RUN_STATUS_COMPLETED, RUN_STATUS_FAILED, RUN_STATUS_BLOCKED}:
+        return
+    pending_summary = f"PR association pending (retryable): {summary}"
+    run.last_summary = pending_summary
+    run.updated_at = _utc_now()
+    task.latest_summary = pending_summary
+    task.updated_at = _utc_now()
+    _save(session, run, task)
+    link_run_to_slice(session, run=run, task=task)
+
+
 def _mark_worker_failed(
     session: Session,
     *,
@@ -2803,7 +2825,7 @@ def process_pull_request_event(
             )
             candidate = session.exec(candidate_query).first()
             if candidate is not None:
-                mark_reconciliation_incomplete(
+                mark_pr_association_pending(
                     session,
                     task=candidate,
                     summary=(
@@ -2813,13 +2835,13 @@ def process_pull_request_event(
                 )
                 _log_workflow_checkpoint(
                     settings,
-                    event="pr_webhook_reconciliation_incomplete",
+                    event="pr_webhook_association_pending",
                     task=candidate,
                     success=False,
                     auth_lane="dispatch_user_token" if has_dispatch_auth(settings) else "missing",
                     api_type="graphql+timeline",
                     skip_reason=association_reason,
-                    summary=f"PR webhook could not link task for PR #{pr_number}",
+                    summary=f"PR webhook could not link task for PR #{pr_number}; marked retryable pending",
                 )
         return False
 

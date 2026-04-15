@@ -2951,9 +2951,9 @@ class OrchestratorMilestone2Tests(unittest.TestCase):
                     )
                     self.assertEqual(response.status_code, 202)
                     task = client.get("/tasks").json()["tasks"][0]
-                    self.assertEqual(task["status"], "blocked")
+                    self.assertEqual(task["status"], "awaiting_worker_start")
                     self.assertIsNone(task["latest_run"]["github_pr_number"])
-                    self.assertIn("reconciliation incomplete", task["latest_summary"].lower())
+                    self.assertIn("pr association pending (retryable)", task["latest_summary"].lower())
 
     def test_pull_request_webhook_explicit_issue_ref_links_task(self):
         with tempfile.TemporaryDirectory() as td:
@@ -3324,9 +3324,9 @@ class OrchestratorMilestone2Tests(unittest.TestCase):
                     response = self._post_github(client, secret="test-gh-secret", delivery="delivery-pr-opened-625", event="pull_request", payload=pr_payload)
                     self.assertEqual(response.status_code, 202)
                     task = client.get("/tasks").json()["tasks"][0]
-                    self.assertEqual(task["status"], "blocked")
+                    self.assertEqual(task["status"], "awaiting_worker_start")
                     self.assertIsNone(task["latest_run"]["github_pr_number"])
-                    self.assertIn("reconciliation incomplete", task["latest_summary"].lower())
+                    self.assertIn("pr association pending (retryable)", task["latest_summary"].lower())
 
     def test_pull_request_webhook_missing_dispatch_auth_reports_explicit_reconciliation_reason(self):
         with tempfile.TemporaryDirectory() as td:
@@ -3392,7 +3392,7 @@ class OrchestratorMilestone2Tests(unittest.TestCase):
                     self._post_github(client, secret="test-gh-secret", delivery="delivery-approve-626", event="issue_comment", payload=approve_payload)
                     self._post_github(client, secret="test-gh-secret", delivery="delivery-pr-opened-626", event="pull_request", payload=pr_payload)
                     task = client.get("/tasks").json()["tasks"][0]
-                    self.assertEqual(task["status"], "blocked")
+                    self.assertEqual(task["status"], "awaiting_worker_start")
                     self.assertIn("reason=dispatch_auth_missing", task["latest_summary"])
 
     def test_pull_request_webhook_authoritative_association_ambiguous_does_not_link(self):
@@ -3473,6 +3473,150 @@ class OrchestratorMilestone2Tests(unittest.TestCase):
                     self.assertFalse(any(task["latest_run"]["github_pr_number"] == 6231 for task in tasks))
                     self.assertFalse(any(task["status"] == "pr_opened" for task in tasks))
                     self.assertTrue(any("reason=candidate_match_ambiguous" in (task["latest_summary"] or "") for task in tasks))
+
+    def test_pull_request_webhook_assigned_retryable_miss_recovers_on_later_opened(self):
+        with tempfile.TemporaryDirectory() as td:
+            os.environ["DATABASE_URL"] = f"sqlite:///{Path(td) / 'orchestrator.db'}"
+            os.environ["GH_WEBHOOK_SECRET"] = "test-gh-secret"
+            os.environ["GITHUB_API_TOKEN"] = "dummy-token"
+            main, _ = _reload_orchestrator_modules()
+
+            issue_payload = {
+                "action": "opened",
+                "repository": {"full_name": "jeeves-jeevesenson/init-tracker"},
+                "issue": {
+                    "number": 106,
+                    "node_id": "I_106",
+                    "title": "Recover from early PR association miss",
+                    "body": "Assigned event can arrive before authoritative link exists",
+                    "labels": [{"name": "agent:task"}],
+                },
+            }
+            approve_payload = {
+                "action": "created",
+                "repository": {"full_name": "jeeves-jeevesenson/init-tracker"},
+                "issue": {"number": 106},
+                "comment": {"body": "/approve"},
+            }
+            assigned_payload = {
+                "action": "assigned",
+                "repository": {"full_name": "jeeves-jeevesenson/init-tracker"},
+                "pull_request": {
+                    "number": 107,
+                    "title": "Early assignment event",
+                    "body": "No textual refs yet",
+                    "html_url": "https://github.com/jeeves-jeevesenson/init-tracker/pull/107",
+                    "draft": True,
+                    "head": {"ref": "copilot/fix-106", "sha": "cafe0107"},
+                },
+            }
+            opened_payload = {
+                "action": "opened",
+                "repository": {"full_name": "jeeves-jeevesenson/init-tracker"},
+                "pull_request": {
+                    "number": 107,
+                    "title": "Early assignment event",
+                    "body": "No textual refs yet",
+                    "html_url": "https://github.com/jeeves-jeevesenson/init-tracker/pull/107",
+                    "draft": False,
+                    "changed_files": 2,
+                    "commits": 2,
+                    "head": {"ref": "copilot/fix-106", "sha": "cafe0107"},
+                    "updated_at": "2026-04-15T00:00:00Z",
+                },
+            }
+            graphql_payload = {
+                "data": {
+                    "repository": {
+                        "pullRequest": {
+                            "closingIssuesReferences": {
+                                "nodes": [
+                                    {
+                                        "number": 106,
+                                        "repository": {"nameWithOwner": "jeeves-jeevesenson/init-tracker"},
+                                    }
+                                ]
+                            },
+                            "timelineItems": {"nodes": []},
+                        }
+                    }
+                }
+            }
+
+            with patch(
+                "orchestrator.app.tasks.plan_task_packet",
+                return_value={
+                    "objective": "Dispatch task",
+                    "scope": ["dispatch"],
+                    "non_goals": [],
+                    "acceptance_criteria": ["retryable miss can recover"],
+                    "validation_guidance": ["unit tests"],
+                    "implementation_brief": "dispatch this",
+                },
+            ), patch(
+                "orchestrator.app.tasks.dispatch_task_to_github_copilot",
+                return_value=DispatchResult(
+                    attempted=True,
+                    accepted=True,
+                    manual_required=False,
+                    state="accepted",
+                    summary="Dispatch accepted",
+                ),
+            ), patch(
+                "orchestrator.app.tasks.list_recent_pull_requests",
+                return_value=([], "none"),
+            ), patch(
+                "orchestrator.app.tasks.lookup_pr_linked_issue_numbers",
+                side_effect=[([], "none"), ({106}, "ok")],
+            ), patch(
+                "orchestrator.app.tasks.list_issue_timeline_events",
+                return_value=([], "none"),
+            ), patch(
+                "orchestrator.app.tasks.summarize_work_update",
+                return_value={
+                    "review_artifact": {"decision": "wait", "summary": ["PR opened"], "revision_instructions": []},
+                    "summary_bullets": ["PR opened"],
+                    "next_action": "wait",
+                },
+            ), patch(
+                "orchestrator.app.github_dispatch.httpx.Client",
+            ) as mocked_client_cls:
+                mocked_client = mocked_client_cls.return_value.__enter__.return_value
+                graphql_response = Mock(
+                    status_code=200,
+                    headers={"content-type": "application/json"},
+                    text=json.dumps(graphql_payload),
+                )
+                graphql_response.json.return_value = graphql_payload
+                mocked_client.post.return_value = graphql_response
+                with TestClient(main.app) as client:
+                    self._post_github(client, secret="test-gh-secret", delivery="delivery-task-opened-106", event="issues", payload=issue_payload)
+                    self._post_github(client, secret="test-gh-secret", delivery="delivery-approve-106", event="issue_comment", payload=approve_payload)
+                    response_assigned = self._post_github(
+                        client,
+                        secret="test-gh-secret",
+                        delivery="delivery-pr-assigned-107",
+                        event="pull_request",
+                        payload=assigned_payload,
+                    )
+                    self.assertEqual(response_assigned.status_code, 202)
+                    task_after_assigned = client.get("/tasks").json()["tasks"][0]
+                    self.assertEqual(task_after_assigned["status"], "awaiting_worker_start")
+                    self.assertIn("pr association pending (retryable)", (task_after_assigned["latest_summary"] or "").lower())
+                    self.assertIsNone(task_after_assigned["latest_run"]["github_pr_number"])
+
+                    response_opened = self._post_github(
+                        client,
+                        secret="test-gh-secret",
+                        delivery="delivery-pr-opened-107",
+                        event="pull_request",
+                        payload=opened_payload,
+                    )
+                    self.assertEqual(response_opened.status_code, 200)
+                    task_after_opened = client.get("/tasks").json()["tasks"][0]
+                    self.assertEqual(task_after_opened["status"], "pr_opened")
+                    self.assertEqual(task_after_opened["latest_run"]["status"], "pr_opened")
+                    self.assertEqual(task_after_opened["latest_run"]["github_pr_number"], 107)
 
     def test_empty_pr_is_rejected_as_progress(self):
         with tempfile.TemporaryDirectory() as td:
