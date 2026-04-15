@@ -5898,6 +5898,10 @@ class InitiativeTracker(tk.Tk):
                         self._log(f"{target_name} heals {amt} HP")
 
             self._rebuild_table(scroll_to_current=True)
+            try:
+                self._lan_force_state_broadcast()
+            except Exception:
+                pass
 
             if close_after.get():
                 dlg.destroy()
