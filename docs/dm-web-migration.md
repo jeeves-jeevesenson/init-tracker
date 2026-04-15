@@ -205,10 +205,11 @@ go through the service, including web-originated, desktop-routed paths
 all identified deep damage callers, all commonly used heal callers
 (heal dialog, Second Wind, Lay on Hands, Uncanny Metabolism, healing
 consumable use, spell healing resolution, Mantle of Inspiration temp HP,
-Patient Defense Focus temp HP), and Long Rest batch HP restoration
-(Slice 12).  The only remaining hybrid heal path is Wild Shape temp HP
-management.  This is an acceptable risk for the single-session LAN use
-case.
+Patient Defense Focus temp HP, Wild Shape temp HP apply/revert), and Long
+Rest batch HP restoration (Slice 12).  Remaining hybrid risk is now
+primarily outside this mutation seam (e.g., encounter population and
+initiative preparation still have desktop-primary paths).  This is an
+acceptable risk for the single-session LAN use case.
 
 ---
 
@@ -224,9 +225,9 @@ via the web.
 
 ## Recommended next migration targets
 
-1. **Remaining hybrid heal path**: Wild Shape temp HP management still sets
-   temp_hp directly.  This is the only remaining non-service heal path and
-   is lifecycle-coupled to the Wild Shape enter/exit state machine.
+1. **Encounter population authority**: Move player-profile and monster-spec
+   combatant creation behind backend/service-owned paths so encounter setup
+   no longer depends on desktop-only direct mutation for core cases.
 
 2. **Initiative-roll support**: Expose full initiative-roll support through
    the backend service so the DM web console can trigger initiative rolls
