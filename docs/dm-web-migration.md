@@ -222,6 +222,37 @@ via the web.
 
 ---
 
+## Milestone 1 progress: damage / heal migration
+
+All desktop and LAN deep-damage callers and nearly all heal callers now
+route through `CombatService` via the `_apply_damage_via_service` /
+`_apply_heal_via_service` wrappers:
+
+- **Slice 9** – initial `apply_damage()` / `apply_heal()` service methods
+  and wrappers; six core damage callers routed (attack resolution, spell
+  AoE, start-of-turn riders, end-turn save-rider fail, end-of-turn riders,
+  `_apply_damage_to_combatant` alias).
+- **Slice 10** – remaining direct deep-damage callers (Heat Metal, Hellish
+  Rebuke, weapon-mastery) routed through the service; heal dialog, Second
+  Wind, and Lay on Hands routed through `_apply_heal_via_service`.
+- **Slice 11** – additional niche heal callers routed: Uncanny Metabolism,
+  healing consumable use (potions etc.), spell healing resolution (Cure
+  Wounds / Healing Word), Mantle of Inspiration temp HP, and Patient
+  Defense Focus temp HP.
+- **Slice 12** – Long Rest batch HP restore migrated via
+  `CombatService.batch_long_rest_heal()`.
+
+**Still hybrid / deferred**: Wild Shape temp HP management remains the only
+heal path that sets `temp_hp` directly rather than going through the
+service.  It is lifecycle-coupled to the Wild Shape enter/exit state
+machine, making it a poor fit for a simple wrapper migration.
+
+**Milestone 1 is not yet complete.**  Completing it requires migrating or
+explicitly deferring the Wild Shape temp HP path and any future heal/damage
+callers introduced before the milestone is closed.
+
+---
+
 ## Recommended next migration targets
 
 1. **Remaining hybrid heal path**: Wild Shape temp HP management still sets
