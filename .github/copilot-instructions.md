@@ -35,9 +35,10 @@ For automation/orchestrator work, assume this production model:
 
 - **OpenAI** = planner / reviewer / continuation brain
 - **orchestrator** = dispatcher / state machine / persistence / policy layer
-- **plain GitHub Copilot** = execution worker
+- **plain GitHub Copilot fallback** = execution worker and production default
 - **human** = reviewer / approver / escalation point
 
+Treat plain Copilot fallback as first-class production execution, not a degraded emergency mode.
 Do **not** depend on GitHub custom-agent launch as the required execution path.
 Internal worker labels such as Initiative Smith or Tracker Engineer are orchestration metadata only unless the task explicitly says otherwise.
 
@@ -62,11 +63,12 @@ Do not assume these are the only relevant files. Inspect before editing.
 
 When implementation is requested, default to:
 
-**inspect relevant files → implement scoped changes → run focused validation → report exact results**
+**inspect relevant files briefly → implement scoped changes → run focused validation → report exact results**
 
 Do this in one coherent pass unless there is a real blocker.
 
-Do not turn straightforward implementation requests into planning-only responses when the repo and tools make implementation possible.
+If issue/comment/dispatch context already provides scoped implementation instructions, begin implementation after minimal repo inspection.
+Do not convert implementation-ready requests into planning-only responses.
 
 ---
 
@@ -93,8 +95,13 @@ Discover them from the repository first.
 - Prefer repo evidence over generic theory.
 - Reuse existing patterns, models, routes, utilities, and tests where practical.
 - Avoid speculative refactors not tied to the requested outcome.
-- Large multi-file diffs are acceptable when they are the correct scoped solution.
-- Do not create repeated approval loops unless blocked by true ambiguity, missing prerequisites, or scope risk.
+- The goal is the **smallest complete correct scoped solution**, not the smallest diff.
+- Large multi-file or thousand-line diffs are acceptable when they are the smallest complete safe solution.
+- For umbrella issues, prefer one concrete bounded slice with real ownership movement over timid partial nibbling.
+- Do not under-deliver by stopping after one tiny path if sibling paths are clearly in-scope and required for a truthful slice.
+- Treat milestone sequencing, concise scope notes, implementation briefs, validation guidance, non-goals, and acceptable hybrid states in issue/comment/dispatch packets as authoritative task-shaping input.
+- Preserve compatibility constraints, but do not use them as excuses to avoid substantive implementation.
+- Do not create repeated approval loops unless blocked by true ambiguity, missing prerequisites, or explicit scope risk.
 
 ---
 
@@ -199,6 +206,7 @@ If the task touches autonomous execution/program flow:
 ## Validation expectations
 
 Use the smallest validation loop that proves the requested outcome.
+Validation should be focused and proportional to touched code, not reflexively maximal.
 
 Default order:
 1. targeted reproduction or inspection
@@ -257,17 +265,3 @@ Do not overstate maturity from a broad first pass.
 - Do not expose secrets, credentials, tokens, or `.env` values.
 - Do not weaken security/approval controls blindly; revise them intentionally and explain the tradeoff.
 - For data-heavy YAML changes, avoid mass reformatting unless explicitly requested.
-
----
-
-## Efficiency guidance
-
-Unless the task requires it, avoid:
-
-- broad repository tours when the relevant files are already identified
-- full-repo test/lint/build loops before localizing the change
-- speculative architecture rewrites
-- unrelated cleanup mixed into a scoped task
-- turning a practical implementation request into process theater
-
-If investigation scope is uncertain, identify the minimum next file/path to inspect and continue from there.
