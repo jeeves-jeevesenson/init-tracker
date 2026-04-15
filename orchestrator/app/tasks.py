@@ -139,6 +139,10 @@ WORKER_AUTO_NARROW_KEYWORDS = (
 EXECUTION_MODE_STANDARD = "standard"
 EXECUTION_MODE_HIGH_AUTONOMY_PROGRAM = "high_autonomy_program"
 _NOISY_PR_ACTIONS = {"review_requested", "review_request_removed", "assigned", "edited"}
+SKIP_REASON_SUPPRESSED_NOISY_EVENT = "suppressed_noisy_event_without_material_change"
+SKIP_REASON_SUPPRESSED_UNCHANGED_STATE = "suppressed_unchanged_material_state"
+SKIP_REASON_HEAVY_REVIEW_GATED = "heavy_review_gated_no_meaningful_transition"
+DIFF_EVIDENCE_REASON = "diff_evidence_changed"
 
 
 def _utc_now() -> datetime:
@@ -1043,6 +1047,17 @@ def _material_state_hash(*, payload: dict[str, Any]) -> str:
     return hashlib.sha1(json.dumps(payload, sort_keys=True, ensure_ascii=False).encode("utf-8")).hexdigest()
 
 
+def _ordered_unique_reasons(reasons: list[str]) -> list[str]:
+    deduped: list[str] = []
+    seen: set[str] = set()
+    for reason in reasons:
+        if reason in seen:
+            continue
+        seen.add(reason)
+        deduped.append(reason)
+    return deduped
+
+
 def _material_transition_reasons(
     *,
     state: dict[str, Any],
@@ -1062,8 +1077,9 @@ def _material_transition_reasons(
         reasons.append("effective_checks_changed")
     if active_contract_hash != str(state.get("active_slice_contract_hash") or ""):
         reasons.append("slice_contract_changed")
+    diff_evidence_changed = False
     if changed_files_hash and changed_files_hash != str(state.get("final_audit_changed_files_hash") or ""):
-        reasons.append("diff_evidence_changed")
+        diff_evidence_changed = True
     prior_findings_hash = str(state.get("final_audit_unresolved_findings_hash") or "")
     if unresolved_findings_hash and unresolved_findings_hash != prior_findings_hash:
         reasons.append("review_evidence_changed")
@@ -1071,14 +1087,16 @@ def _material_transition_reasons(
         reasons.append("mergeability_changed")
     prior_file_details_count = int(state.get("final_audit_file_details_count") or 0)
     if int(file_details_count or 0) != prior_file_details_count:
-        reasons.append("diff_evidence_changed")
+        diff_evidence_changed = True
     if bool(state.get("final_audit_patch_fallback_used")) != bool(patch_fallback_used):
-        reasons.append("diff_evidence_changed")
+        diff_evidence_changed = True
     if bool(state.get("final_audit_evidence_missing")) and int(file_details_count or 0) > 0:
-        reasons.append("diff_evidence_changed")
+        diff_evidence_changed = True
+    if diff_evidence_changed:
+        reasons.append(DIFF_EVIDENCE_REASON)
     if int(state.get("blocked_state_repeat_count") or 0) > 0:
         reasons.append("blocked_state_repeat_active")
-    return reasons
+    return _ordered_unique_reasons(reasons)
 
 
 def _is_noisy_pr_event(event_key: str) -> bool:
@@ -1090,10 +1108,61 @@ def _is_noisy_pr_event(event_key: str) -> bool:
     return parts[3] in _NOISY_PR_ACTIONS
 
 
+def _high_autonomy_noisy_skip_candidate(
+    *,
+    execution_mode: str,
+    event_key: str,
+    material_unchanged: bool,
+    coarse_state_unchanged: bool,
+    has_prior_decision: bool,
+) -> bool:
+    return bool(
+        execution_mode == EXECUTION_MODE_HIGH_AUTONOMY_PROGRAM
+        and _is_noisy_pr_event(event_key)
+        and (material_unchanged or coarse_state_unchanged)
+        and has_prior_decision
+    )
+
+
+def _legacy_unchanged_material_skip_candidate(
+    *,
+    execution_mode: str,
+    event_key: str,
+    material_unchanged: bool,
+    has_prior_decision: bool,
+) -> bool:
+    return bool(
+        execution_mode == EXECUTION_MODE_HIGH_AUTONOMY_PROGRAM
+        and _is_noisy_pr_event(event_key)
+        and material_unchanged
+        and has_prior_decision
+    )
+
+
 def _revision_cycle_limit(*, settings: Settings, execution_mode: str) -> int:
     if execution_mode == EXECUTION_MODE_HIGH_AUTONOMY_PROGRAM:
         return max(1, int(getattr(settings, "governor_high_autonomy_max_revision_cycles", 1) or 1))
     return max(1, int(getattr(settings, "governor_max_revision_cycles", 2) or 2))
+
+
+def _heavy_budget_counters(
+    *,
+    state: dict[str, Any],
+    pr_head_sha: str | None = None,
+    slice_contract_hash: str | None = None,
+    include_repeat_counters: bool = False,
+) -> dict[str, int]:
+    head_key = pr_head_sha or "<none>"
+    slice_key = slice_contract_hash or "<none>"
+    counters = {
+        "heavy_model_calls_total": int(state.get("heavy_model_calls_total") or 0),
+        "heavy_model_calls_for_head_sha": int((state.get("heavy_model_calls_by_head_sha") or {}).get(head_key, 0)),
+        "heavy_model_calls_for_slice": int((state.get("heavy_model_calls_by_slice") or {}).get(slice_key, 0)),
+    }
+    if include_repeat_counters:
+        counters["blocked_state_repeat_count"] = int(state.get("blocked_state_repeat_count") or 0)
+        counters["budget_blocked_repeat_count"] = int(state.get("budget_blocked_repeat_count") or 0)
+    return counters
 
 
 def _heavy_budget_available(*, settings: Settings, state: dict[str, Any], pr_head_sha: str, slice_contract_hash: str) -> tuple[bool, str]:
@@ -2122,13 +2191,12 @@ def _run_governor_loop(
             "summary": [str(item).strip() for item in (state.get("last_governor_summary") or []) if str(item).strip()][:4],
             "reuse_reason": str(state.get("last_model_reuse_reason") or ""),
         },
-        "budget_counters": {
-            "heavy_calls_total": int(state.get("heavy_model_calls_total") or 0),
-            "heavy_calls_for_head": int((state.get("heavy_model_calls_by_head_sha") or {}).get(pr_head_sha or "<none>", 0)),
-            "heavy_calls_for_slice": int((state.get("heavy_model_calls_by_slice") or {}).get(active_contract["contract_hash"] or "<none>", 0)),
-            "blocked_state_repeat_count": int(state.get("blocked_state_repeat_count") or 0),
-            "budget_blocked_repeat_count": int(state.get("budget_blocked_repeat_count") or 0),
-        },
+        "budget_counters": _heavy_budget_counters(
+            state=state,
+            pr_head_sha=pr_head_sha,
+            slice_contract_hash=active_contract["contract_hash"],
+            include_repeat_counters=True,
+        ),
     }
     if include_full_program_acceptance:
         governor_context["program_acceptance_criteria"] = program_acceptance_criteria
@@ -2181,11 +2249,13 @@ def _run_governor_loop(
         and prior_material_head == (pr_head_sha or "")
         and str(state.get("active_slice_contract_hash") or "") == active_contract["contract_hash"]
     )
-    deterministic_noisy_skip = bool(
-        execution_mode == EXECUTION_MODE_HIGH_AUTONOMY_PROGRAM
-        and _is_noisy_pr_event(event_key)
-        and (material_unchanged or coarse_state_unchanged)
-        and bool(state.get("last_governor_decision"))
+    has_prior_decision = bool(state.get("last_governor_decision"))
+    deterministic_noisy_skip = _high_autonomy_noisy_skip_candidate(
+        execution_mode=execution_mode,
+        event_key=event_key,
+        material_unchanged=material_unchanged,
+        coarse_state_unchanged=coarse_state_unchanged,
+        has_prior_decision=has_prior_decision,
     )
     merge_candidate = bool(
         (not pr_draft)
@@ -2197,9 +2267,9 @@ def _run_governor_loop(
     if deterministic_noisy_skip:
         decision = str(state.get("last_governor_decision") or "wait")
         summary_bullets = [str(item).strip() for item in (state.get("last_governor_summary") or []) if str(item).strip()]
-        state["last_model_reuse_reason"] = "suppressed_noisy_event_without_material_change"
+        state["last_model_reuse_reason"] = SKIP_REASON_SUPPRESSED_NOISY_EVENT
         state["last_reused_governor_decision"] = decision
-        state["last_deterministic_skip_reason"] = "suppressed_noisy_event_without_material_change"
+        state["last_deterministic_skip_reason"] = SKIP_REASON_SUPPRESSED_NOISY_EVENT
         _record_openai_telemetry(
             session,
             task=task,
@@ -2211,7 +2281,7 @@ def _run_governor_loop(
             event_key=event_key,
             head_sha=pr_head_sha,
             slice_contract_hash=active_contract["contract_hash"],
-            skip_reason="suppressed_noisy_event_without_material_change",
+            skip_reason=SKIP_REASON_SUPPRESSED_NOISY_EVENT,
             extra={"reused_decision": decision, "material_hash": material_hash},
         )
     elif merge_eligible_for_audit:
@@ -2244,9 +2314,9 @@ def _run_governor_loop(
                     "escalation_reason": "",
                     "review_scope": ["material_transition_gate"],
                 },
-                "openai_meta": {"cache_hit": True, "reason": "heavy_review_gated_no_meaningful_transition"},
+                "openai_meta": {"cache_hit": True, "reason": SKIP_REASON_HEAVY_REVIEW_GATED},
             }
-            state["last_heavy_block_reason"] = "heavy_review_gated_no_meaningful_transition"
+            state["last_heavy_block_reason"] = SKIP_REASON_HEAVY_REVIEW_GATED
             _record_openai_telemetry(
                 session,
                 task=task,
@@ -2258,7 +2328,7 @@ def _run_governor_loop(
                 event_key=event_key,
                 head_sha=pr_head_sha,
                 slice_contract_hash=active_contract["contract_hash"],
-                skip_reason="heavy_review_gated_no_meaningful_transition",
+                skip_reason=SKIP_REASON_HEAVY_REVIEW_GATED,
             )
         else:
             state["last_heavy_block_reason"] = ""
@@ -2441,7 +2511,7 @@ def _run_governor_loop(
                 head_sha=pr_head_sha,
                 slice_contract_hash=active_contract["contract_hash"],
                 skip_reason="evidence_missing_no_state_change",
-                budget_counters={"heavy_calls_total": int(state.get("heavy_calls_total") or 0)},
+                budget_counters=_heavy_budget_counters(state=state),
             )
         elif prior_cache_key and prior_cache_key == merge_audit_cache_key and prior_final_audit_artifact and prior_final_audit_decision and not (prior_evidence_missing and not evidence_missing):
             decision_payload = {
@@ -2460,7 +2530,7 @@ def _run_governor_loop(
                 head_sha=pr_head_sha,
                 slice_contract_hash=active_contract["contract_hash"],
                 skip_reason="cached_result_reuse",
-                budget_counters={"heavy_calls_total": int(state.get("heavy_calls_total") or 0)},
+                budget_counters=_heavy_budget_counters(state=state),
             )
             _governor_logger.info(
                 "Reusing cached final merge audit for PR #%s head=%s cache_key=%s",
@@ -2503,11 +2573,11 @@ def _run_governor_loop(
                     head_sha=pr_head_sha,
                     slice_contract_hash=active_contract["contract_hash"],
                     skip_reason=budget_reason,
-                    budget_counters={
-                        "heavy_calls_total": int(state.get("heavy_calls_total") or 0),
-                        "heavy_calls_for_head": int((state.get("heavy_calls_by_head_sha") or {}).get(pr_head_sha or "", 0)),
-                        "heavy_calls_for_slice": int((state.get("heavy_calls_by_slice") or {}).get(active_contract["contract_hash"], 0)),
-                    },
+                    budget_counters=_heavy_budget_counters(
+                        state=state,
+                        pr_head_sha=pr_head_sha,
+                        slice_contract_hash=active_contract["contract_hash"],
+                    ),
                 )
                 state["last_heavy_block_reason"] = budget_reason
                 budget_blocked_state_hash = hashlib.sha1(
@@ -2565,7 +2635,7 @@ def _run_governor_loop(
                 prompt_fingerprint=openai_meta.get("prompt_fingerprint"),
                 usage=openai_meta.get("usage") if isinstance(openai_meta.get("usage"), dict) else {},
                 skip_reason=openai_meta.get("skip_reason"),
-                budget_counters={"heavy_calls_total": int(state.get("heavy_calls_total") or 0)},
+                budget_counters=_heavy_budget_counters(state=state),
                 extra={"response_id": openai_meta.get("response_id"), "model_tier": openai_meta.get("model_tier")},
             )
         response_id = openai_meta.get("response_id") if isinstance(openai_meta, dict) else None
@@ -2597,16 +2667,16 @@ def _run_governor_loop(
         state["final_audit_changed_files_hash"] = changed_files_hash
         state["final_audit_no_evidence_state_hash"] = no_evidence_state_hash if evidence_missing else ""
     else:
-        reuse_previous = bool(
-            _is_noisy_pr_event(event_key)
-            and (material_unchanged or coarse_state_unchanged)
-            and execution_mode == EXECUTION_MODE_HIGH_AUTONOMY_PROGRAM
-            and bool(state.get("last_governor_decision"))
+        reuse_previous = _legacy_unchanged_material_skip_candidate(
+            execution_mode=execution_mode,
+            event_key=event_key,
+            material_unchanged=material_unchanged,
+            has_prior_decision=has_prior_decision,
         )
         if reuse_previous:
             decision = str(state.get("last_governor_decision") or "wait")
             summary_bullets = [str(item) for item in (state.get("last_governor_summary") or []) if str(item).strip()]
-            state["last_model_reuse_reason"] = "suppressed_unchanged_material_state"
+            state["last_model_reuse_reason"] = SKIP_REASON_SUPPRESSED_UNCHANGED_STATE
             state["last_reused_governor_decision"] = decision
             _governor_logger.info(
                 "Suppressed governor model call for PR #%s due to unchanged material state (head=%s hash=%s).",
@@ -2625,7 +2695,7 @@ def _run_governor_loop(
                 event_key=event_key,
                 head_sha=pr_head_sha,
                 slice_contract_hash=active_contract["contract_hash"],
-                skip_reason="suppressed_unchanged_material_state",
+                skip_reason=SKIP_REASON_SUPPRESSED_UNCHANGED_STATE,
             )
         elif execution_mode == EXECUTION_MODE_HIGH_AUTONOMY_PROGRAM and not serious_review_pass_ready:
             decision = "wait"
@@ -2679,7 +2749,7 @@ def _run_governor_loop(
                 prompt_fingerprint=openai_meta.get("prompt_fingerprint"),
                 usage=openai_meta.get("usage") if isinstance(openai_meta.get("usage"), dict) else {},
                 skip_reason=openai_meta.get("skip_reason"),
-                budget_counters={"heavy_calls_total": int(state.get("heavy_calls_total") or 0)},
+                budget_counters=_heavy_budget_counters(state=state),
                 extra={"response_id": openai_meta.get("response_id"), "model_tier": openai_meta.get("model_tier")},
             )
             response_id = openai_meta.get("response_id") if isinstance(openai_meta, dict) else None
