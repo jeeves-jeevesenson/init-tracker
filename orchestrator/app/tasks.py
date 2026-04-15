@@ -143,6 +143,13 @@ SKIP_REASON_SUPPRESSED_NOISY_EVENT = "suppressed_noisy_event_without_material_ch
 SKIP_REASON_SUPPRESSED_UNCHANGED_STATE = "suppressed_unchanged_material_state"
 SKIP_REASON_HEAVY_REVIEW_GATED = "heavy_review_gated_no_meaningful_transition"
 DIFF_EVIDENCE_REASON = "diff_evidence_changed"
+_NON_ACTIONABLE_COPILOT_REVIEW_PATTERNS: tuple[re.Pattern[str], ...] = (
+    re.compile(r"copilot\s+wasn['’]?t\s+able\s+to\s+review\s+any\s+files", re.IGNORECASE),
+    re.compile(r"unable\s+to\s+review\s+(any\s+)?files", re.IGNORECASE),
+    re.compile(r"no\s+files?\s+(were\s+)?changed", re.IGNORECASE),
+    re.compile(r"empty\s+diff", re.IGNORECASE),
+    re.compile(r"nothing\s+to\s+review", re.IGNORECASE),
+)
 
 
 def _utc_now() -> datetime:
@@ -1290,34 +1297,67 @@ def _ready_for_review_failure_outcome(message: str) -> tuple[str, bool]:
     return "ready_for_review_failed_http", True
 
 
+def _has_substantive_file_evidence(*, file_details: list[dict[str, Any]], changed_files: list[str]) -> bool:
+    if any(str(path or "").strip() for path in changed_files):
+        for item in file_details:
+            if not isinstance(item, dict):
+                continue
+            patch = str(item.get("patch") or "").strip()
+            additions = int(item.get("additions") or 0)
+            deletions = int(item.get("deletions") or 0)
+            if patch or additions > 0 or deletions > 0:
+                return True
+    return False
+
+
 def safe_draft_can_be_promoted(
     *,
     pr_draft: bool,
     checks_passed: bool,
+    effective_checks_passed: bool,
     guarded_paths_touched: bool,
     unresolved_findings: list[str],
     waiting_for_revision_push: bool,
-) -> bool:
-    """Deterministic predicate: can this safe draft PR be promoted to ready-for-review?
-
-    Returns True only when ALL of the following hold:
-    - PR is still a draft
-    - All required checks are green (checks_passed)
-    - No guarded paths are touched
-    - No unresolved blocking findings
-    - No outstanding revision request awaiting a new Copilot push
-    """
+    changed_files: list[str],
+    file_details: list[dict[str, Any]],
+    event_has_push_signal: bool,
+    commits: int | None,
+    prior_head_sha: str,
+    current_head_sha: str,
+) -> tuple[bool, list[str]]:
+    """Deterministic predicate for safe draft->ready transitions."""
+    reasons: list[str] = []
     if not pr_draft:
-        return False
-    if not checks_passed:
-        return False
+        reasons.append("already_non_draft")
+        return False, reasons
     if guarded_paths_touched:
-        return False
+        reasons.append("guarded_paths_touched")
     if unresolved_findings:
-        return False
+        reasons.append("unresolved_findings_present")
     if waiting_for_revision_push:
-        return False
-    return True
+        reasons.append("waiting_for_revision_push")
+
+    substantive_evidence = _has_substantive_file_evidence(file_details=file_details, changed_files=changed_files)
+    if not substantive_evidence:
+        reasons.append("no_substantive_diff_evidence")
+
+    worker_update_signal = bool(
+        event_has_push_signal
+        or (isinstance(commits, int) and commits > 1)
+        or (prior_head_sha and current_head_sha and prior_head_sha != current_head_sha)
+    )
+    validation_signal = bool(checks_passed or effective_checks_passed)
+    if not (worker_update_signal or validation_signal):
+        reasons.append("no_worker_update_or_validation_signal")
+
+    return (len(reasons) == 0), reasons
+
+
+def _is_non_actionable_copilot_review_body(body: str) -> bool:
+    compact = " ".join(str(body or "").split())
+    if not compact:
+        return True
+    return any(pattern.search(compact) for pattern in _NON_ACTIONABLE_COPILOT_REVIEW_PATTERNS)
 
 
 def _copilot_findings_from_reviews(
@@ -1325,9 +1365,10 @@ def _copilot_findings_from_reviews(
     settings: Settings,
     reviews: list[dict[str, Any]],
     comments: list[dict[str, Any]],
-) -> tuple[bool, list[str]]:
+) -> tuple[bool, list[str], int]:
     findings: list[str] = []
     observed = False
+    ignored_non_actionable = 0
     for review in reviews:
         user = review.get("user") if isinstance(review, dict) else None
         login = user.get("login") if isinstance(user, dict) else None
@@ -1337,6 +1378,13 @@ def _copilot_findings_from_reviews(
         body = str(review.get("body") or "").strip()
         state = str(review.get("state") or "").strip().upper()
         if body and state in {"COMMENTED", "CHANGES_REQUESTED"}:
+            if _is_non_actionable_copilot_review_body(body):
+                ignored_non_actionable += 1
+                _governor_logger.info(
+                    "Ignoring non-actionable Copilot review body for unresolved findings: %s",
+                    " ".join(body.split())[:160],
+                )
+                continue
             findings.append(body)
     for comment in comments:
         user = comment.get("user") if isinstance(comment, dict) else None
@@ -1346,6 +1394,13 @@ def _copilot_findings_from_reviews(
         observed = True
         body = str(comment.get("body") or "").strip()
         if body:
+            if _is_non_actionable_copilot_review_body(body):
+                ignored_non_actionable += 1
+                _governor_logger.info(
+                    "Ignoring non-actionable Copilot review comment for unresolved findings: %s",
+                    " ".join(body.split())[:160],
+                )
+                continue
             findings.append(body)
     deduped: list[str] = []
     seen: set[str] = set()
@@ -1358,7 +1413,7 @@ def _copilot_findings_from_reviews(
             continue
         seen.add(key)
         deduped.append(compact)
-    return observed, deduped[:20]
+    return observed, deduped[:20], ignored_non_actionable
 
 
 def _handle_linked_draft_ready_for_review(
@@ -1370,6 +1425,15 @@ def _handle_linked_draft_ready_for_review(
     state: dict[str, Any],
     pr_payload: dict[str, Any],
     event_key: str,
+    checks_passed: bool,
+    effective_checks_passed: bool,
+    guarded_paths_touched: bool,
+    unresolved_findings: list[str],
+    waiting_for_revision_push: bool,
+    changed_files: list[str],
+    file_details: list[dict[str, Any]],
+    event_has_push_signal: bool,
+    pr_head_sha: str,
 ) -> tuple[bool, bool]:
     """Force ready-for-review handoff for linked draft PRs.
 
@@ -1411,6 +1475,50 @@ def _handle_linked_draft_ready_for_review(
             state=state,
         )
         return False, True
+
+    initial_head_sha = str(state.get("initial_pr_head_sha") or "")
+    commits_value = pr_payload.get("commits") if isinstance(pr_payload.get("commits"), int) else None
+    reviewable, readiness_reasons = safe_draft_can_be_promoted(
+        pr_draft=pr_draft,
+        checks_passed=checks_passed,
+        effective_checks_passed=effective_checks_passed,
+        guarded_paths_touched=guarded_paths_touched,
+        unresolved_findings=unresolved_findings,
+        waiting_for_revision_push=waiting_for_revision_push,
+        changed_files=changed_files,
+        file_details=file_details,
+        event_has_push_signal=event_has_push_signal,
+        commits=commits_value,
+        prior_head_sha=initial_head_sha,
+        current_head_sha=pr_head_sha,
+    )
+    if not reviewable:
+        state["ready_for_review_outcome"] = "pr_not_ready_for_review_yet"
+        state["ready_for_review_retry_scheduled"] = False
+        state["ready_for_review_escalated"] = False
+        state["ready_for_review_skip_reason"] = ",".join(readiness_reasons)
+        _set_checkpoint(
+            state,
+            name="pr_ready_verified",
+            success=False,
+            summary="Draft PR remains pre-review until substantive evidence exists.",
+        )
+        _log_workflow_checkpoint(
+            settings,
+            event="ready_for_review_deferred",
+            task=task,
+            run=run,
+            success=True,
+            summary=(
+                "Draft PR kept in pre-review hold; readiness predicate not yet satisfied "
+                f"(reasons={readiness_reasons})."
+            ),
+            skip_reason="pr_not_ready_for_review_yet",
+            result_class="pr_not_ready_for_review_yet",
+            pr_node_id=pr_node_id,
+            state=state,
+        )
+        return False, False
 
     state["ready_for_review_attempted"] = True
     state["ready_for_review_attempt_count"] = int(state.get("ready_for_review_attempt_count") or 0) + 1
@@ -1738,6 +1846,7 @@ def _run_governor_loop(
     pr_head_sha = str(pr_head.get("sha") or pr_payload.get("head_sha") or "").strip()
     if pr_head_sha:
         state["last_observed_pr_head_sha"] = pr_head_sha
+        state.setdefault("initial_pr_head_sha", pr_head_sha)
     pr_mergeable_raw = pr_payload.get("mergeable")
     pr_mergeable = pr_mergeable_raw if isinstance(pr_mergeable_raw, bool) or pr_mergeable_raw is None else None
     pr_mergeable_state = str(pr_payload.get("mergeable_state") or "")
@@ -1873,11 +1982,26 @@ def _run_governor_loop(
         api_type="REST",
         state=state,
     )
-    copilot_review_observed, unresolved_findings = _copilot_findings_from_reviews(
+    copilot_review_observed, unresolved_findings, ignored_non_actionable_reviews = _copilot_findings_from_reviews(
         settings=settings,
         reviews=reviews,
         comments=review_comments,
     )
+
+    if ignored_non_actionable_reviews:
+        _log_workflow_checkpoint(
+            settings,
+            event="ignored_non_actionable_copilot_review",
+            task=task,
+            run=run,
+            success=True,
+            summary=(
+                f"Ignored {ignored_non_actionable_reviews} non-actionable Copilot review/review-comment body entries."
+            ),
+            skip_reason="ignored_non_actionable_copilot_review",
+            result_class="ignored_non_actionable_copilot_review",
+            state=state,
+        )
 
     # --- Update waiting_for_revision_push: clear when findings resolved ---
     waiting_for_revision_push = bool(state.get("waiting_for_revision_push"))
@@ -1931,6 +2055,15 @@ def _run_governor_loop(
         state=state,
         pr_payload=pr_payload,
         event_key=event_key,
+        checks_passed=checks_passed,
+        effective_checks_passed=effective_checks_passed,
+        guarded_paths_touched=guarded_paths_touched,
+        unresolved_findings=unresolved_findings,
+        waiting_for_revision_push=waiting_for_revision_push,
+        changed_files=changed_files,
+        file_details=file_details,
+        event_has_push_signal=event_has_push_signal,
+        pr_head_sha=pr_head_sha,
     )
     if promoted_now:
         pr_draft = False
@@ -1954,6 +2087,30 @@ def _run_governor_loop(
             inspection_mergeable_state = inspection.mergeable_state
             if isinstance(inspection_mergeable_state, str):
                 pr_mergeable_state = inspection_mergeable_state or pr_mergeable_state
+
+    pre_review_hold = bool(
+        pr_draft
+        and str(state.get("ready_for_review_outcome") or "") == "pr_not_ready_for_review_yet"
+    )
+    if pre_review_hold:
+        state["last_governor_decision"] = "wait"
+        state["last_governor_summary"] = [
+            "Pre-review hold: waiting for substantive implementation evidence before revision/governor actions."
+        ]
+        _log_workflow_checkpoint(
+            settings,
+            event="pre_review_state_wait",
+            task=task,
+            run=run,
+            success=True,
+            summary=(
+                "Pre-review hold active; skipping revision synthesis until reviewable evidence is present "
+                f"(reason={state.get('ready_for_review_skip_reason') or 'pr_not_ready_for_review_yet'})."
+            ),
+            skip_reason="pre_review_state_wait",
+            result_class="pre_review_state_wait",
+            state=state,
+        )
 
     # --- Deterministic fix-trigger for ready PRs with unresolved Copilot findings ---
     if (
@@ -2667,100 +2824,121 @@ def _run_governor_loop(
         state["final_audit_changed_files_hash"] = changed_files_hash
         state["final_audit_no_evidence_state_hash"] = no_evidence_state_hash if evidence_missing else ""
     else:
-        reuse_previous = _legacy_unchanged_material_skip_candidate(
-            execution_mode=execution_mode,
-            event_key=event_key,
-            material_unchanged=material_unchanged,
-            has_prior_decision=has_prior_decision,
-        )
-        if reuse_previous:
-            decision = str(state.get("last_governor_decision") or "wait")
-            summary_bullets = [str(item) for item in (state.get("last_governor_summary") or []) if str(item).strip()]
-            state["last_model_reuse_reason"] = SKIP_REASON_SUPPRESSED_UNCHANGED_STATE
+        if pre_review_hold:
+            decision = "wait"
+            summary_bullets = [
+                "Pre-review hold: waiting for substantive implementation evidence before requesting revisions."
+            ]
+            state["last_model_reuse_reason"] = "pre_review_state_wait"
             state["last_reused_governor_decision"] = decision
-            _governor_logger.info(
-                "Suppressed governor model call for PR #%s due to unchanged material state (head=%s hash=%s).",
-                pr_number,
-                pr_head_sha or "<unknown>",
-                material_hash[:12],
-            )
             _record_openai_telemetry(
                 session,
                 task=task,
                 run=run,
                 stage="governor_fast_path" if execution_mode == EXECUTION_MODE_HIGH_AUTONOMY_PROGRAM else "continuation_audit",
-                action="summarize_governor_update",
-                outcome="suppressed",
-                execution_mode=execution_mode,
-                event_key=event_key,
-                head_sha=pr_head_sha,
-                slice_contract_hash=active_contract["contract_hash"],
-                skip_reason=SKIP_REASON_SUPPRESSED_UNCHANGED_STATE,
-            )
-        elif execution_mode == EXECUTION_MODE_HIGH_AUTONOMY_PROGRAM and not serious_review_pass_ready:
-            decision = "wait"
-            summary_bullets = [
-                "High-autonomy mode holding: serious review pass deferred until merge-candidate gates are met."
-            ]
-            state["last_model_reuse_reason"] = "high_autonomy_wait_for_serious_pass"
-            state["last_reused_governor_decision"] = decision
-            _record_openai_telemetry(
-                session,
-                task=task,
-                run=run,
-                stage="governor_fast_path",
                 action="summarize_governor_update",
                 outcome="skipped",
                 execution_mode=execution_mode,
                 event_key=event_key,
                 head_sha=pr_head_sha,
                 slice_contract_hash=active_contract["contract_hash"],
-                skip_reason="high_autonomy_wait_for_serious_pass",
+                skip_reason="pre_review_state_wait",
             )
         else:
-            governor_model = (
-                settings.openai_governor_model_fast
-                if execution_mode == EXECUTION_MODE_HIGH_AUTONOMY_PROGRAM
-                else settings.openai_governor_model_heavy
-            )
-            decision_payload = summarize_governor_update(
-                settings=settings,
-                update_context=json.dumps(governor_context, ensure_ascii=False),
-                previous_response_id=run.openai_last_response_id,
-                model=governor_model,
-                stage="governor_fast_path" if execution_mode == EXECUTION_MODE_HIGH_AUTONOMY_PROGRAM else "continuation_audit",
-            )
-            openai_meta = decision_payload.get("openai_meta") if isinstance(decision_payload, dict) else {}
-            if not isinstance(openai_meta, dict):
-                openai_meta = {}
-            _record_openai_telemetry(
-                session,
-                task=task,
-                run=run,
-                stage=str(openai_meta.get("stage") or ("governor_fast_path" if execution_mode == EXECUTION_MODE_HIGH_AUTONOMY_PROGRAM else "continuation_audit")),
-                action="summarize_governor_update",
-                outcome=str(openai_meta.get("outcome") or "success"),
+            reuse_previous = _legacy_unchanged_material_skip_candidate(
                 execution_mode=execution_mode,
                 event_key=event_key,
-                head_sha=pr_head_sha,
-                slice_contract_hash=active_contract["contract_hash"],
-                model=openai_meta.get("model") or governor_model,
-                reasoning_effort=openai_meta.get("reasoning_effort"),
-                prompt_fingerprint=openai_meta.get("prompt_fingerprint"),
-                usage=openai_meta.get("usage") if isinstance(openai_meta.get("usage"), dict) else {},
-                skip_reason=openai_meta.get("skip_reason"),
-                budget_counters=_heavy_budget_counters(state=state),
-                extra={"response_id": openai_meta.get("response_id"), "model_tier": openai_meta.get("model_tier")},
+                material_unchanged=material_unchanged,
+                has_prior_decision=has_prior_decision,
             )
-            response_id = openai_meta.get("response_id") if isinstance(openai_meta, dict) else None
-            if isinstance(response_id, str) and response_id.strip():
-                run.openai_last_response_id = response_id.strip()
-            artifact = decision_payload.get("governor_artifact") if isinstance(decision_payload, dict) else {}
-            decision = str((artifact or {}).get("decision") or "wait")
-            summary_bullets = artifact.get("summary") if isinstance(artifact.get("summary"), list) else []
-            revision_requests = artifact.get("revision_requests") if isinstance(artifact.get("revision_requests"), list) else []
-            escalation_reason = str(artifact.get("escalation_reason") or "")
-            state["last_model_reuse_reason"] = ""
+            if reuse_previous:
+                decision = str(state.get("last_governor_decision") or "wait")
+                summary_bullets = [str(item) for item in (state.get("last_governor_summary") or []) if str(item).strip()]
+                state["last_model_reuse_reason"] = SKIP_REASON_SUPPRESSED_UNCHANGED_STATE
+                state["last_reused_governor_decision"] = decision
+                _governor_logger.info(
+                    "Suppressed governor model call for PR #%s due to unchanged material state (head=%s hash=%s).",
+                    pr_number,
+                    pr_head_sha or "<unknown>",
+                    material_hash[:12],
+                )
+                _record_openai_telemetry(
+                    session,
+                    task=task,
+                    run=run,
+                    stage="governor_fast_path" if execution_mode == EXECUTION_MODE_HIGH_AUTONOMY_PROGRAM else "continuation_audit",
+                    action="summarize_governor_update",
+                    outcome="suppressed",
+                    execution_mode=execution_mode,
+                    event_key=event_key,
+                    head_sha=pr_head_sha,
+                    slice_contract_hash=active_contract["contract_hash"],
+                    skip_reason=SKIP_REASON_SUPPRESSED_UNCHANGED_STATE,
+                )
+            elif execution_mode == EXECUTION_MODE_HIGH_AUTONOMY_PROGRAM and not serious_review_pass_ready:
+                decision = "wait"
+                summary_bullets = [
+                    "High-autonomy mode holding: serious review pass deferred until merge-candidate gates are met."
+                ]
+                state["last_model_reuse_reason"] = "high_autonomy_wait_for_serious_pass"
+                state["last_reused_governor_decision"] = decision
+                _record_openai_telemetry(
+                    session,
+                    task=task,
+                    run=run,
+                    stage="governor_fast_path",
+                    action="summarize_governor_update",
+                    outcome="skipped",
+                    execution_mode=execution_mode,
+                    event_key=event_key,
+                    head_sha=pr_head_sha,
+                    slice_contract_hash=active_contract["contract_hash"],
+                    skip_reason="high_autonomy_wait_for_serious_pass",
+                )
+            else:
+                governor_model = (
+                    settings.openai_governor_model_fast
+                    if execution_mode == EXECUTION_MODE_HIGH_AUTONOMY_PROGRAM
+                    else settings.openai_governor_model_heavy
+                )
+                decision_payload = summarize_governor_update(
+                    settings=settings,
+                    update_context=json.dumps(governor_context, ensure_ascii=False),
+                    previous_response_id=run.openai_last_response_id,
+                    model=governor_model,
+                    stage="governor_fast_path" if execution_mode == EXECUTION_MODE_HIGH_AUTONOMY_PROGRAM else "continuation_audit",
+                )
+                openai_meta = decision_payload.get("openai_meta") if isinstance(decision_payload, dict) else {}
+                if not isinstance(openai_meta, dict):
+                    openai_meta = {}
+                _record_openai_telemetry(
+                    session,
+                    task=task,
+                    run=run,
+                    stage=str(openai_meta.get("stage") or ("governor_fast_path" if execution_mode == EXECUTION_MODE_HIGH_AUTONOMY_PROGRAM else "continuation_audit")),
+                    action="summarize_governor_update",
+                    outcome=str(openai_meta.get("outcome") or "success"),
+                    execution_mode=execution_mode,
+                    event_key=event_key,
+                    head_sha=pr_head_sha,
+                    slice_contract_hash=active_contract["contract_hash"],
+                    model=openai_meta.get("model") or governor_model,
+                    reasoning_effort=openai_meta.get("reasoning_effort"),
+                    prompt_fingerprint=openai_meta.get("prompt_fingerprint"),
+                    usage=openai_meta.get("usage") if isinstance(openai_meta.get("usage"), dict) else {},
+                    skip_reason=openai_meta.get("skip_reason"),
+                    budget_counters=_heavy_budget_counters(state=state),
+                    extra={"response_id": openai_meta.get("response_id"), "model_tier": openai_meta.get("model_tier")},
+                )
+                response_id = openai_meta.get("response_id") if isinstance(openai_meta, dict) else None
+                if isinstance(response_id, str) and response_id.strip():
+                    run.openai_last_response_id = response_id.strip()
+                artifact = decision_payload.get("governor_artifact") if isinstance(decision_payload, dict) else {}
+                decision = str((artifact or {}).get("decision") or "wait")
+                summary_bullets = artifact.get("summary") if isinstance(artifact.get("summary"), list) else []
+                revision_requests = artifact.get("revision_requests") if isinstance(artifact.get("revision_requests"), list) else []
+                escalation_reason = str(artifact.get("escalation_reason") or "")
+                state["last_model_reuse_reason"] = ""
 
     if not deterministic_noisy_skip:
         state["last_deterministic_skip_reason"] = ""
@@ -3876,30 +4054,13 @@ def dispatch_task_if_ready(session: Session, *, settings: Settings, task: TaskPa
             task=task,
             run=run,
             success=True,
-            summary="PR is draft; scheduling immediate ready-for-review mutation."
-            if pr_is_draft
-            else "PR already non-draft; ready-for-review mutation skipped.",
-            skip_reason="already_ready_for_review" if not pr_is_draft else None,
+            summary=(
+                "PR is draft; deferring ready-for-review until substantive evidence satisfies readiness predicate."
+                if pr_is_draft
+                else "PR already non-draft; ready-for-review mutation skipped."
+            ),
+            skip_reason="pr_not_ready_for_review_yet" if pr_is_draft else "already_ready_for_review",
         )
-        if pr_is_draft:
-            ok, ready_msg = mark_pr_ready_for_review(settings=settings, repo=task.github_repo, pr_number=pr_number)
-            latest_draft = pr_is_draft
-            inspection = inspect_pull_request(settings=settings, repo=task.github_repo, pr_number=pr_number)
-            if inspection.ok and inspection.draft is not None:
-                latest_draft = bool(inspection.draft)
-            _log_workflow_checkpoint(
-                settings,
-                event="ready_for_review_attempted",
-                task=task,
-                run=run,
-                success=ok and not latest_draft,
-                summary=f"{ready_msg}; verified_isDraft={latest_draft}",
-                auth_lane="dispatch_user_token",
-                api_type="GraphQL+REST",
-                postcondition=f"isDraft={latest_draft}",
-                skip_reason=None if (ok and not latest_draft) else "ready_for_review_postcondition_failed",
-            )
-            pr_is_draft = latest_draft
         _run_governor_loop(
             session,
             settings=settings,

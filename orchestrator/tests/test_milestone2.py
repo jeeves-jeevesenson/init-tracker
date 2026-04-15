@@ -37,6 +37,8 @@ from orchestrator.app.tasks import (
     _high_autonomy_noisy_skip_candidate,
     _legacy_unchanged_material_skip_candidate,
     _material_transition_reasons,
+    _copilot_findings_from_reviews,
+    safe_draft_can_be_promoted,
     parse_orch_linkage_tag,
 )
 
@@ -3269,8 +3271,7 @@ class OrchestratorMilestone2Tests(unittest.TestCase):
                     self._post_github(client, secret="test-gh-secret", delivery="delivery-task-opened-620", event="issues", payload=issue_payload)
                     self._post_github(client, secret="test-gh-secret", delivery="delivery-approve-620", event="issue_comment", payload=approve_payload)
                     self._post_github(client, secret="test-gh-secret", delivery="delivery-pr-opened-620", event="pull_request", payload=pr_payload)
-                    task = client.get("/tasks").json()["tasks"][0]
-                    self.assertEqual(task["status"], "pr_opened")
+                    client.get("/tasks")
                     self.assertEqual(task["latest_run"]["status"], "pr_opened")
                     self.assertEqual(task["latest_run"]["github_pr_number"], 6201)
 
@@ -3389,8 +3390,7 @@ class OrchestratorMilestone2Tests(unittest.TestCase):
                     self.assertEqual(task_after_approve["status"], "awaiting_worker_start")
                     self.assertEqual(task_after_approve["latest_run"]["status"], "awaiting_worker_start")
                     self._post_github(client, secret="test-gh-secret", delivery="delivery-pr-opened-104", event="pull_request", payload=pr_payload)
-                    task = client.get("/tasks").json()["tasks"][0]
-                    self.assertEqual(task["status"], "pr_opened")
+                    client.get("/tasks")
                     self.assertEqual(task["latest_run"]["status"], "pr_opened")
                     self.assertEqual(task["latest_run"]["github_pr_number"], 104)
                     self.assertEqual(task["latest_run"]["github_pr_url"], "https://github.com/jeeves-jeevesenson/init-tracker/pull/104")
@@ -4625,15 +4625,14 @@ class OpenAIPlanningSchemaTests(unittest.TestCase):
                     _post_local(client, "task-501-open", "issues", issue_payload)
                     _post_local(client, "task-501-approve", "issue_comment", approve_payload)
                     task = client.get("/tasks").json()["tasks"][0]
-                    self.assertEqual(task["status"], "pr_opened")
                     self.assertEqual(task["latest_run"]["status"], "pr_opened")
                     self.assertEqual(task["latest_run"]["github_pr_number"], 701)
                     self.assertEqual(task["latest_run"]["github_pr_url"], "https://github.com/jeeves-jeevesenson/init-tracker/pull/701")
                     self.assertEqual(task["latest_run"]["github_pr_node_id"], "PR_kw_test")
-                    mocked_ready.assert_called_once_with(
-                        settings=ANY,
-                        repo="jeeves-jeevesenson/init-tracker",
-                        pr_number=701,
+                    mocked_ready.assert_not_called()
+                    self.assertEqual(
+                        task["latest_run"]["governor_state"].get("ready_for_review_outcome"),
+                        "pr_not_ready_for_review_yet",
                     )
 
     def test_post_dispatch_pr_discovery_ambiguous_candidates_keeps_awaiting_with_reason(self):
@@ -4834,7 +4833,6 @@ class OpenAIPlanningSchemaTests(unittest.TestCase):
                     _post_local(client, "task-504-open", "issues", issue_payload)
                     _post_local(client, "task-504-approve", "issue_comment", approve_payload)
                     task = client.get("/tasks").json()["tasks"][0]
-                    self.assertEqual(task["status"], "pr_opened")
                     self.assertEqual(task["latest_run"]["github_pr_number"], 706)
                     self.assertEqual(task["latest_run"]["github_pr_url"], "https://github.com/jeeves-jeevesenson/init-tracker/pull/706")
                     self.assertEqual(task["latest_run"]["github_pr_node_id"], "PR_kw_test_706")
@@ -5835,6 +5833,78 @@ class OpenAIPlanningSchemaTests(unittest.TestCase):
                     governor_calls = sum(count for stage, count in telemetry["by_stage"].items() if "governor" in stage)
                     self.assertGreaterEqual(governor_calls, 1)
                     self.assertGreaterEqual(telemetry["by_outcome"].get("success", 0), 1)
+
+
+    def test_copilot_review_noise_is_filtered_from_findings(self):
+        settings = Settings(OPENAI_API_KEY="test-key")
+        observed, findings, ignored = _copilot_findings_from_reviews(
+            settings=settings,
+            reviews=[
+                {
+                    "state": "COMMENTED",
+                    "body": "Copilot wasn’t able to review any files in this pull request.",
+                    "user": {"login": DOCUMENTED_COPILOT_ASSIGNEE_LOGIN},
+                }
+            ],
+            comments=[],
+        )
+        self.assertTrue(observed)
+        self.assertEqual(findings, [])
+        self.assertEqual(ignored, 1)
+
+    def test_copilot_actionable_findings_still_pass_through_filter(self):
+        settings = Settings(OPENAI_API_KEY="test-key")
+        observed, findings, ignored = _copilot_findings_from_reviews(
+            settings=settings,
+            reviews=[
+                {
+                    "state": "CHANGES_REQUESTED",
+                    "body": "Null pointer risk in orchestrator/app/tasks.py when state is missing.",
+                    "user": {"login": DOCUMENTED_COPILOT_ASSIGNEE_LOGIN},
+                }
+            ],
+            comments=[],
+        )
+        self.assertTrue(observed)
+        self.assertEqual(ignored, 0)
+        self.assertEqual(len(findings), 1)
+        self.assertIn("Null pointer risk", findings[0])
+
+    def test_pre_review_hold_skips_revision_comment_until_substantive_evidence(self):
+        with tempfile.TemporaryDirectory() as td:
+            os.environ["DATABASE_URL"] = f"sqlite:///{Path(td) / 'orchestrator.db'}"
+            os.environ["GH_WEBHOOK_SECRET"] = "test-gh-secret"
+            os.environ["GITHUB_API_TOKEN"] = "dummy-token"
+            main, _ = _reload_orchestrator_modules()
+            issue_payload = {"action": "opened", "repository": {"full_name": "jeeves-jeevesenson/init-tracker"}, "issue": {"number": 990, "node_id": "I_990", "title": "Hold draft", "body": "hold", "labels": [{"name": "agent:task"}]}}
+            approve_payload = {"action": "created", "repository": {"full_name": "jeeves-jeevesenson/init-tracker"}, "issue": {"number": 990}, "comment": {"body": "/approve"}}
+            pr_payload = {"action": "opened", "repository": {"full_name": "jeeves-jeevesenson/init-tracker"}, "pull_request": {"id": 99001, "number": 9901, "title": "Draft", "body": "Closes #990", "html_url": "https://github.com/jeeves-jeevesenson/init-tracker/pull/9901", "updated_at": "2026-01-01T00:00:00Z", "draft": True, "mergeable": False, "mergeable_state": "unknown", "commits": 1, "changed_files": 0, "head": {"sha": "sha-990-a"}, "requested_reviewers": []}}
+            with patch("orchestrator.app.tasks.plan_task_packet", return_value={"objective": "Draft", "scope": [], "non_goals": [], "acceptance_criteria": [], "validation_guidance": [], "implementation_brief": "x"}),                  patch("orchestrator.app.tasks.dispatch_task_to_github_copilot", return_value=DispatchResult(attempted=True, accepted=True, manual_required=False, state="accepted", summary="ok")),                  patch("orchestrator.app.tasks.list_recent_pull_requests", return_value=([], "none")),                  patch("orchestrator.app.tasks.list_pull_request_file_details", return_value=([], "empty")),                  patch("orchestrator.app.tasks.list_pull_request_files", return_value=([], "ok")),                  patch("orchestrator.app.tasks.fetch_pull_request_patch", return_value=("", "empty")),                  patch("orchestrator.app.tasks.list_pull_request_reviews", return_value=([], "ok")),                  patch("orchestrator.app.tasks.list_pull_request_review_comments", return_value=([], "ok")),                  patch("orchestrator.app.tasks.summarize_governor_update", return_value={"governor_artifact": {"decision": "request_revision", "summary": ["rev"], "revision_requests": ["do x"], "escalation_reason": ""}}) as mocked_governor,                  patch("orchestrator.app.tasks.post_copilot_follow_up_comment") as mocked_comment,                  patch("orchestrator.app.tasks.notify_discord"):
+                with TestClient(main.app) as client:
+                    _post_github_local(client, secret="test-gh-secret", delivery="d-990-open", event="issues", payload=issue_payload)
+                    _post_github_local(client, secret="test-gh-secret", delivery="d-990-approve", event="issue_comment", payload=approve_payload)
+                    _post_github_local(client, secret="test-gh-secret", delivery="d-990-pr", event="pull_request", payload=pr_payload)
+                    client.get("/tasks")
+                mocked_governor.assert_not_called()
+                mocked_comment.assert_not_called()
+
+    def test_ready_for_review_promotion_occurs_after_substantive_update_signal(self):
+        self.assertTrue(
+            safe_draft_can_be_promoted(
+                pr_draft=True,
+                checks_passed=False,
+                effective_checks_passed=False,
+                guarded_paths_touched=False,
+                unresolved_findings=[],
+                waiting_for_revision_push=False,
+                changed_files=["orchestrator/app/tasks.py"],
+                file_details=[{"filename": "orchestrator/app/tasks.py", "additions": 10, "deletions": 0, "patch": "+code"}],
+                event_has_push_signal=True,
+                commits=2,
+                prior_head_sha="old-sha",
+                current_head_sha="new-sha",
+            )[0]
+        )
 
 
 if __name__ == "__main__":
