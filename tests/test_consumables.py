@@ -90,7 +90,9 @@ class ConsumableTests(unittest.TestCase):
         self.app.in_combat = True
         self.app._use_bonus_action = lambda combatant: setattr(combatant, "bonus_action_remaining", max(0, int(getattr(combatant, "bonus_action_remaining", 0)) - 1)) or True
 
-        combatant = SimpleNamespace(hp=5, max_hp=20, bonus_action_remaining=1)
+        combatant = SimpleNamespace(cid=1, hp=5, max_hp=20, bonus_action_remaining=1)
+        self.app.combatants = {1: combatant}
+        self.app._refresh_monster_phase_for_combatant = lambda *a, **kw: None
         self.app._roll_healing_formula = lambda _formula: 7
 
         ok, err, healed = self.app._use_inventory_consumable("cleric", "lesser_healing_potion", combatant)

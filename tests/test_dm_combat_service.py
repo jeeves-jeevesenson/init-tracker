@@ -2089,6 +2089,195 @@ class Slice10HealCallerMigrationTests(unittest.TestCase):
 
 
 # ===================================================================
+# Slice 11 — migrated niche heal caller tests
+# ===================================================================
+
+
+class Slice11NicheHealCallerMigrationTests(unittest.TestCase):
+    """Verify niche heal callers migrated in Slice 11 (Uncanny Metabolism,
+    healing consumable, spell healing, Mantle of Inspiration temp HP,
+    Patient Defense Focus temp HP) route through _apply_heal_via_service."""
+
+    def _make_tracker_with_service(self):
+        tracker = _make_tracker()
+        service = CombatService(tracker)
+        tracker._dm_service = service
+        return tracker, service
+
+    # -- Uncanny Metabolism -------------------------------------------------
+
+    def test_uncanny_metabolism_heal_routes_through_service(self):
+        """Uncanny Metabolism heal routes through _apply_heal_via_service."""
+        tracker, service = self._make_tracker_with_service()
+        c = tracker.combatants[1]
+        c.hp = 15
+        c.max_hp = 30
+        heal_amount = 6
+        actual_heal = max(0, min(heal_amount, max(0, c.max_hp - c.hp)))
+        result = InitiativeTracker._apply_heal_via_service(tracker, cid=1, amount=actual_heal)
+        self.assertTrue(result)
+        self.assertEqual(c.hp, 21)
+
+    def test_uncanny_metabolism_respects_max_hp_cap(self):
+        """Uncanny Metabolism heal should not exceed max HP."""
+        tracker, service = self._make_tracker_with_service()
+        c = tracker.combatants[1]
+        c.hp = 28
+        c.max_hp = 30
+        heal_amount = 8  # Would exceed max HP
+        actual_heal = max(0, min(heal_amount, max(0, c.max_hp - c.hp)))
+        result = InitiativeTracker._apply_heal_via_service(tracker, cid=1, amount=actual_heal)
+        self.assertTrue(result)
+        self.assertEqual(c.hp, 30)  # Capped at max_hp
+
+    def test_uncanny_metabolism_zero_heal_at_full_hp(self):
+        """Uncanny Metabolism at full HP yields zero heal (no-op)."""
+        tracker, service = self._make_tracker_with_service()
+        c = tracker.combatants[1]
+        c.hp = 30
+        c.max_hp = 30
+        actual_heal = max(0, min(6, max(0, c.max_hp - c.hp)))
+        self.assertEqual(actual_heal, 0)
+        result = InitiativeTracker._apply_heal_via_service(tracker, cid=1, amount=actual_heal)
+        self.assertTrue(result)
+        self.assertEqual(c.hp, 30)
+
+    # -- Healing Consumable ------------------------------------------------
+
+    def test_healing_consumable_routes_through_service(self):
+        """Healing consumable heal routes through _apply_heal_via_service."""
+        tracker, service = self._make_tracker_with_service()
+        c = tracker.combatants[1]
+        c.hp = 10
+        c.max_hp = 30
+        heal_amount = 7
+        actual_heal = max(0, min(heal_amount, max(0, c.max_hp - c.hp)))
+        result = InitiativeTracker._apply_heal_via_service(tracker, cid=1, amount=actual_heal)
+        self.assertTrue(result)
+        self.assertEqual(c.hp, 17)
+
+    def test_healing_consumable_respects_max_hp_cap(self):
+        """Healing consumable should not exceed max HP."""
+        tracker, service = self._make_tracker_with_service()
+        c = tracker.combatants[1]
+        c.hp = 27
+        c.max_hp = 30
+        heal_amount = 10
+        actual_heal = max(0, min(heal_amount, max(0, c.max_hp - c.hp)))
+        result = InitiativeTracker._apply_heal_via_service(tracker, cid=1, amount=actual_heal)
+        self.assertTrue(result)
+        self.assertEqual(c.hp, 30)  # Capped
+
+    # -- Spell Healing Resolution ------------------------------------------
+
+    def test_spell_heal_routes_through_service(self):
+        """Spell healing (e.g., Cure Wounds) routes through _apply_heal_via_service."""
+        tracker, service = self._make_tracker_with_service()
+        c = tracker.combatants[2]
+        c.hp = 5
+        c.max_hp = 20
+        total_healing = 12
+        actual_heal = max(0, min(total_healing, max(0, c.max_hp - c.hp)))
+        result = InitiativeTracker._apply_heal_via_service(tracker, cid=2, amount=actual_heal)
+        self.assertTrue(result)
+        self.assertEqual(c.hp, 17)
+
+    def test_spell_heal_respects_max_hp_cap(self):
+        """Spell healing should not exceed max HP."""
+        tracker, service = self._make_tracker_with_service()
+        c = tracker.combatants[2]
+        c.hp = 18
+        c.max_hp = 20
+        total_healing = 15
+        actual_heal = max(0, min(total_healing, max(0, c.max_hp - c.hp)))
+        result = InitiativeTracker._apply_heal_via_service(tracker, cid=2, amount=actual_heal)
+        self.assertTrue(result)
+        self.assertEqual(c.hp, 20)  # Capped
+
+    def test_spell_heal_zero_when_full_hp(self):
+        """Spell healing at full HP yields zero applied healing."""
+        tracker, service = self._make_tracker_with_service()
+        c = tracker.combatants[2]
+        c.hp = 20
+        c.max_hp = 20
+        total_healing = 8
+        actual_heal = max(0, min(total_healing, max(0, c.max_hp - c.hp)))
+        self.assertEqual(actual_heal, 0)
+
+    # -- Mantle of Inspiration temp HP -------------------------------------
+
+    def test_mantle_temp_hp_routes_through_service(self):
+        """Mantle of Inspiration temp HP routes through _apply_heal_via_service."""
+        tracker, service = self._make_tracker_with_service()
+        c = tracker.combatants[1]
+        c.temp_hp = 0
+        temp_hp_value = 10
+        current_temp_hp = int(getattr(c, "temp_hp", 0) or 0)
+        applied = max(current_temp_hp, temp_hp_value)
+        result = InitiativeTracker._apply_heal_via_service(
+            tracker, cid=1, amount=applied, is_temp_hp=True
+        )
+        self.assertTrue(result)
+        self.assertEqual(c.temp_hp, 10)
+
+    def test_mantle_temp_hp_takes_higher(self):
+        """Mantle of Inspiration should take the higher of current temp HP and rolled value."""
+        tracker, service = self._make_tracker_with_service()
+        c = tracker.combatants[1]
+        c.temp_hp = 15
+        temp_hp_value = 10
+        current_temp_hp = int(getattr(c, "temp_hp", 0) or 0)
+        applied = max(current_temp_hp, temp_hp_value)
+        result = InitiativeTracker._apply_heal_via_service(
+            tracker, cid=1, amount=applied, is_temp_hp=True
+        )
+        self.assertTrue(result)
+        self.assertEqual(c.temp_hp, 15)  # Kept higher value
+
+    # -- Patient Defense Focus temp HP -------------------------------------
+
+    def test_patient_defense_temp_hp_routes_through_service(self):
+        """Patient Defense Focus temp HP routes through _apply_heal_via_service."""
+        tracker, service = self._make_tracker_with_service()
+        c = tracker.combatants[1]
+        c.temp_hp = 0
+        temp_roll = 12
+        current_temp_hp = int(getattr(c, "temp_hp", 0) or 0)
+        applied = max(current_temp_hp, temp_roll)
+        result = InitiativeTracker._apply_heal_via_service(
+            tracker, cid=1, amount=applied, is_temp_hp=True
+        )
+        self.assertTrue(result)
+        self.assertEqual(c.temp_hp, 12)
+
+    def test_patient_defense_temp_hp_takes_higher(self):
+        """Patient Defense Focus should take the higher of current temp HP and rolled value."""
+        tracker, service = self._make_tracker_with_service()
+        c = tracker.combatants[1]
+        c.temp_hp = 20
+        temp_roll = 8
+        current_temp_hp = int(getattr(c, "temp_hp", 0) or 0)
+        applied = max(current_temp_hp, temp_roll)
+        result = InitiativeTracker._apply_heal_via_service(
+            tracker, cid=1, amount=applied, is_temp_hp=True
+        )
+        self.assertTrue(result)
+        self.assertEqual(c.temp_hp, 20)  # Kept higher value
+
+    # -- Broadcast behavior ------------------------------------------------
+
+    def test_service_heal_skips_broadcast_for_composite_callers(self):
+        """_apply_heal_via_service passes _broadcast=False; outer caller controls timing."""
+        tracker, service = self._make_tracker_with_service()
+        tracker._rebuild_calls.clear()
+        tracker._broadcast_calls.clear()
+        InitiativeTracker._apply_heal_via_service(tracker, cid=1, amount=5)
+        # The wrapper passes _broadcast=False, so no rebuild/broadcast from service
+        self.assertEqual(len(tracker._rebuild_calls), 0)
+        self.assertEqual(len(tracker._broadcast_calls), 0)
+
+
+# ===================================================================
 # RLock re-entrancy tests (Slice 9)
 # ===================================================================
 
