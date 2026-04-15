@@ -33,6 +33,10 @@ from orchestrator.app.tasks import (
     CUSTOM_AGENT_TRACKER_ENGINEER,
     _build_run_linkage_tag,
     _discover_post_dispatch_pr_candidate,
+    _heavy_budget_counters,
+    _high_autonomy_noisy_skip_candidate,
+    _legacy_unchanged_material_skip_candidate,
+    _material_transition_reasons,
     parse_orch_linkage_tag,
 )
 
@@ -5454,6 +5458,94 @@ class OpenAIPlanningSchemaTests(unittest.TestCase):
                         state.get("last_deterministic_skip_reason"),
                         "suppressed_noisy_event_without_material_change",
                     )
+
+    def test_material_transition_reasons_deduplicate_diff_evidence_changed(self):
+        reasons = _material_transition_reasons(
+            state={
+                "material_state_pr_head_sha": "sha-1",
+                "effective_checks_passed_at_final_audit": True,
+                "active_slice_contract_hash": "contract-1",
+                "final_audit_changed_files_hash": "old-diff-hash",
+                "final_audit_unresolved_findings_hash": "findings-1",
+                "pr_mergeable_state": "clean",
+                "final_audit_file_details_count": 3,
+                "final_audit_patch_fallback_used": False,
+                "final_audit_evidence_missing": True,
+            },
+            pr_head_sha="sha-1",
+            effective_checks_passed=True,
+            active_contract_hash="contract-1",
+            changed_files_hash="new-diff-hash",
+            unresolved_findings_hash="findings-1",
+            mergeable_state="clean",
+            file_details_count=4,
+            patch_fallback_used=True,
+        )
+        self.assertEqual(reasons.count("diff_evidence_changed"), 1)
+        self.assertEqual(reasons, ["diff_evidence_changed"])
+
+    def test_heavy_budget_counter_snapshot_uses_heavy_model_keys(self):
+        state = {
+            "heavy_model_calls_total": 7,
+            "heavy_model_calls_by_head_sha": {"sha-live": 3},
+            "heavy_model_calls_by_slice": {"slice-live": 5},
+            "blocked_state_repeat_count": 2,
+            "budget_blocked_repeat_count": 4,
+            # Legacy/dead keys should be ignored by canonical helper.
+            "heavy_calls_total": 999,
+            "heavy_calls_by_head_sha": {"sha-live": 999},
+            "heavy_calls_by_slice": {"slice-live": 999},
+        }
+        snapshot = _heavy_budget_counters(
+            state=state,
+            pr_head_sha="sha-live",
+            slice_contract_hash="slice-live",
+            include_repeat_counters=True,
+        )
+        self.assertEqual(
+            snapshot,
+            {
+                "heavy_model_calls_total": 7,
+                "heavy_model_calls_for_head_sha": 3,
+                "heavy_model_calls_for_slice": 5,
+                "blocked_state_repeat_count": 2,
+                "budget_blocked_repeat_count": 4,
+            },
+        )
+
+    def test_noisy_and_legacy_unchanged_suppression_paths_are_separated(self):
+        deterministic = _high_autonomy_noisy_skip_candidate(
+            execution_mode="high_autonomy_program",
+            event_key="governor:pull_request:123:review_requested",
+            material_unchanged=True,
+            coarse_state_unchanged=False,
+            has_prior_decision=True,
+        )
+        legacy = _legacy_unchanged_material_skip_candidate(
+            execution_mode="high_autonomy_program",
+            event_key="governor:pull_request:123:review_requested",
+            material_unchanged=True,
+            has_prior_decision=True,
+        )
+        self.assertTrue(deterministic)
+        self.assertTrue(legacy)
+        self.assertFalse((not deterministic) and legacy)
+
+        deterministic_non_noisy = _high_autonomy_noisy_skip_candidate(
+            execution_mode="high_autonomy_program",
+            event_key="governor:pull_request:123:synchronize",
+            material_unchanged=True,
+            coarse_state_unchanged=False,
+            has_prior_decision=True,
+        )
+        legacy_non_noisy = _legacy_unchanged_material_skip_candidate(
+            execution_mode="high_autonomy_program",
+            event_key="governor:pull_request:123:synchronize",
+            material_unchanged=True,
+            has_prior_decision=True,
+        )
+        self.assertFalse(deterministic_non_noisy)
+        self.assertFalse(legacy_non_noisy)
 
     def test_high_autonomy_head_sha_change_breaks_governor_suppression(self):
         with tempfile.TemporaryDirectory() as td:
