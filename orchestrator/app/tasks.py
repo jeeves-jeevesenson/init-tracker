@@ -20,6 +20,7 @@ from .github_dispatch import (
     inspect_pull_request,
     list_recent_pull_requests,
     list_issue_comments,
+    list_issue_timeline_events,
     list_pull_request_files,
     list_pull_request_review_comments,
     list_pull_request_reviews,
@@ -2434,7 +2435,100 @@ def dispatch_task_if_ready(session: Session, *, settings: Settings, task: TaskPa
     )
 
 
-def _task_for_pr_payload(session: Session, *, github_repo: str, pr_payload: dict[str, Any]) -> TaskPacket | None:
+def _timeline_event_matches_pr(
+    event: dict[str, Any],
+    *,
+    pr_number: int | None,
+    pr_head_sha: str | None,
+) -> bool:
+    if pr_number is None and not pr_head_sha:
+        return False
+    event_pr = event.get("pull_request") if isinstance(event.get("pull_request"), dict) else {}
+    event_pr_number = event_pr.get("number") if isinstance(event_pr.get("number"), int) else None
+    if pr_number is not None and event_pr_number == pr_number:
+        return True
+
+    source = event.get("source") if isinstance(event.get("source"), dict) else {}
+    source_issue = source.get("issue") if isinstance(source.get("issue"), dict) else {}
+    source_pr = source_issue.get("pull_request") if isinstance(source_issue.get("pull_request"), dict) else {}
+    source_pr_number = source_issue.get("number") if isinstance(source_issue.get("number"), int) else None
+    source_linked_pr_number = source_pr.get("number") if isinstance(source_pr.get("number"), int) else None
+    if pr_number is not None and pr_number in {source_pr_number, source_linked_pr_number}:
+        return True
+
+    if pr_head_sha:
+        commit_id = str(event.get("commit_id") or "").strip()
+        if commit_id and commit_id.lower() == pr_head_sha.lower():
+            return True
+    return False
+
+
+def _task_for_authoritative_pr_association(
+    session: Session,
+    *,
+    settings: Settings,
+    github_repo: str,
+    pr_payload: dict[str, Any],
+) -> TaskPacket | None:
+    pr_number = pr_payload.get("number") if isinstance(pr_payload.get("number"), int) else None
+    head = pr_payload.get("head") if isinstance(pr_payload.get("head"), dict) else {}
+    pr_head_sha = str(head.get("sha") or "").strip() or None
+
+    candidate_query = (
+        select(TaskPacket)
+        .where(TaskPacket.github_repo == github_repo)
+        .where(
+            TaskPacket.status.in_(
+                [
+                    TASK_STATUS_AWAITING_WORKER_START,
+                    TASK_STATUS_DISPATCH_REQUESTED,
+                    TASK_STATUS_MANUAL_DISPATCH_NEEDED,
+                    TASK_STATUS_WORKING,
+                ]
+            )
+        )
+        .order_by(TaskPacket.updated_at.desc())
+        .limit(8)
+    )
+    candidates = list(session.exec(candidate_query).all())
+    if not candidates:
+        return None
+
+    matched_tasks: list[TaskPacket] = []
+    for candidate in candidates:
+        issue_number = candidate.github_issue_number
+        if issue_number is None:
+            continue
+        events, _ = list_issue_timeline_events(
+            settings=settings,
+            repo=github_repo,
+            issue_number=issue_number,
+            limit=30,
+        )
+        if not events:
+            continue
+        if any(
+            _timeline_event_matches_pr(
+                event,
+                pr_number=pr_number,
+                pr_head_sha=pr_head_sha,
+            )
+            for event in events
+        ):
+            matched_tasks.append(candidate)
+
+    if len(matched_tasks) != 1:
+        return None
+    return matched_tasks[0]
+
+
+def _task_for_pr_payload(
+    session: Session,
+    *,
+    settings: Settings,
+    github_repo: str,
+    pr_payload: dict[str, Any],
+) -> TaskPacket | None:
     pr_number = pr_payload.get("number")
     if isinstance(pr_number, int):
         run_query = (
@@ -2457,7 +2551,12 @@ def _task_for_pr_payload(session: Session, *, github_repo: str, pr_payload: dict
         task = _get_task_by_repo_issue(session, github_repo=github_repo, github_issue_number=int(issue_ref))
         if task is not None:
             return task
-    return None
+    return _task_for_authoritative_pr_association(
+        session,
+        settings=settings,
+        github_repo=github_repo,
+        pr_payload=pr_payload,
+    )
 
 
 def _summarize_and_store(
@@ -2603,7 +2702,12 @@ def process_pull_request_event(
     if not github_repo or not isinstance(pr, dict):
         return True
 
-    task = _task_for_pr_payload(session, github_repo=github_repo, pr_payload=pr)
+    task = _task_for_pr_payload(
+        session,
+        settings=settings,
+        github_repo=github_repo,
+        pr_payload=pr,
+    )
     if task is None or task.id is None:
         pr_number = pr.get("number")
         if isinstance(pr_number, int):
