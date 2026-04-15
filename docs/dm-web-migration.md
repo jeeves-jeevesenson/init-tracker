@@ -138,7 +138,7 @@ same in-memory state through the same `_next_turn()` /
 `_apply_damage_to_target_with_temp_hp()` / `_apply_heal_to_combatant()` /
 `_ensure_condition_stack()` methods.
 
-### Desktop-routed through CombatService (Slice 9)
+### Desktop-routed through CombatService (Slices 9–12)
 
 The following desktop/LAN-originated mutations now route through
 `CombatService` when the service is running:
@@ -150,27 +150,26 @@ The following desktop/LAN-originated mutations now route through
 - **LAN player "end turn"** → `_next_turn_via_service()` → `CombatService.next_turn()`
 - **LAN player manual HP override** → `CombatService.adjust_hp()` /
   `CombatService.adjust_temp_hp()`
-- **Desktop `_adjust_hp_via_service()`** → `CombatService.adjust_hp()` (wrapper
-  available for progressive adoption by other desktop code paths)
-- **Desktop `_set_condition_via_service()`** → `CombatService.set_condition()`
-  (wrapper available for progressive adoption)
-- **Desktop `_set_temp_hp_via_service()`** → `CombatService.set_temp_hp()`
-  (wrapper available for progressive adoption)
+- **Desktop HP adjustment** → `_adjust_hp_via_service()` → `CombatService.adjust_hp()`
+- **Desktop condition toggle** → `_set_condition_via_service()` → `CombatService.set_condition()`
+- **Desktop temp-HP set** → `_set_temp_hp_via_service()` → `CombatService.set_temp_hp()`
 - **Deep combat damage** → `_apply_damage_via_service()` →
-  `CombatService.apply_damage()` — routes all identified core callers:
-  attack resolution, spell AoE damage, start-of-turn damage riders,
-  end-turn save-rider fail damage, end-of-turn damage riders, and the
-  `_apply_damage_to_combatant` alias (Slice 9); Heat Metal, Hellish Rebuke,
-  and weapon-mastery attack paths (Slice 10)
-- **Healing** → `_apply_heal_via_service()` → `CombatService.apply_heal()` —
-  wrapper available (Slice 9); heal dialog, Second Wind (LAN), and
-  Lay on Hands (LAN) now route through the wrapper (Slice 10);
-  Uncanny Metabolism, healing consumable use (potion etc.),
-  spell healing resolution (Cure Wounds / Healing Word), Mantle of
-  Inspiration temp HP, and Patient Defense Focus temp HP now route
-  through the wrapper (Slice 11)
-- **Long Rest batch HP restore** → `CombatService.batch_long_rest_heal()` →
-  `apply_heal(_broadcast=False)` per target with single outer
+  `CombatService.apply_damage()` — routes all identified damage callers
+  through the service:
+  - Attack resolution, spell AoE, start-of-turn riders, end-turn
+    save-rider fail, end-of-turn riders, and the
+    `_apply_damage_to_combatant` alias (Slice 9)
+  - Heat Metal, Hellish Rebuke, and weapon-mastery attack paths (Slice 10)
+- **Healing** → `_apply_heal_via_service()` →
+  `CombatService.apply_heal()` — routes all commonly used heal callers
+  through the service:
+  - Heal dialog, Second Wind (LAN), and Lay on Hands (LAN) (Slice 10)
+  - Uncanny Metabolism, healing consumable use (potion etc.),
+    spell healing resolution (Cure Wounds / Healing Word), Mantle of
+    Inspiration temp HP, and Patient Defense Focus temp HP (Slice 11)
+- **Long Rest batch HP restore** →
+  `CombatService.batch_long_rest_heal()` — routes per-target healing
+  through `apply_heal(_broadcast=False)` with a single outer
   rebuild/broadcast (Slice 12)
 
 All wrappers fall back to direct mutation + broadcast when the service is
@@ -199,16 +198,19 @@ concurrently.  The current safeguard model:
 - The desktop UI re-reads its state from the same `combatants` dict and
   `_rebuild_table()` call.
 
-**Remaining risk**: The `CombatService` lock now covers all mutations that
-go through the service, including web-originated, desktop-routed paths
-(Start/Reset, Prev Turn, Next Turn, Set Turn Here, manual HP override),
-all identified deep damage callers, all commonly used heal callers
-(heal dialog, Second Wind, Lay on Hands, Uncanny Metabolism, healing
-consumable use, spell healing resolution, Mantle of Inspiration temp HP,
-Patient Defense Focus temp HP), and Long Rest batch HP restoration
-(Slice 12).  The only remaining hybrid heal path is Wild Shape temp HP
-management.  This is an acceptable risk for the single-session LAN use
-case.
+**Milestone 1 damage/heal status**: All identified damage callers and
+nearly all heal callers now route through `CombatService`.  Wild Shape
+temp HP management remains the sole hybrid heal path — it is
+lifecycle-coupled to the Wild Shape enter/exit state machine and is not
+yet routed through the service.  Milestone 1 is not yet complete.
+
+**Remaining concurrency risk**: The `CombatService` lock covers all
+mutations that go through the service — web-originated paths,
+desktop-routed turn control (Start/Reset, Prev Turn, Next Turn, Set Turn
+Here), manual HP override, all identified damage callers, all commonly
+used heal callers, and Long Rest batch HP restoration.  Wild Shape temp
+HP remains the sole unguarded hybrid path.  This is an acceptable risk
+for the single-session LAN use case.
 
 ---
 
