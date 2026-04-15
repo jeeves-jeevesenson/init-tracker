@@ -290,6 +290,16 @@ def _load_worker_brief(task: TaskPacket, *, target_branch: str) -> dict[str, Any
         "non_goals": [],
         "target_branch": target_branch,
         "repo_grounded_hints": [],
+        "initial_slice_contract": {
+            "slice_title": task.title or "Initial slice",
+            "slice_goal": task.normalized_task_text or "Implement the first bounded slice.",
+            "in_scope": [],
+            "out_of_scope": [],
+            "must_preserve": ["Preserve existing behavior outside the active slice."],
+            "focused_validation": json.loads(task.validation_commands_json or "[]"),
+            "completion_conditions": json.loads(task.acceptance_criteria_json or "[]"),
+            "next_slice_hint": "",
+        },
     }
 
 
@@ -308,6 +318,7 @@ def _task_packet_comment(
     )
     packet = {
         "task_packet_id": task.id,
+        "initial_slice_contract": worker_brief.get("initial_slice_contract") or {},
         "objective": worker_brief.get("objective"),
         "concise_scope": worker_brief.get("concise_scope") or [],
         "implementation_brief": worker_brief.get("implementation_brief"),
@@ -316,6 +327,10 @@ def _task_packet_comment(
         "non_goals": worker_brief.get("non_goals") or [],
         "target_branch": worker_brief.get("target_branch") or target_branch,
         "repo_grounded_hints": worker_brief.get("repo_grounded_hints") or [],
+        "supporting_context": {
+            "umbrella_issue_body": (task.raw_body or "")[:4000],
+            "normalized_task_text": task.normalized_task_text or "",
+        },
         "execution_mode": execution_mode,
         "pr_linkage_tag": linkage_tag,
         "pr_linkage_instruction": linkage_instruction,

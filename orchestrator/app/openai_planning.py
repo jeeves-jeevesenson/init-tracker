@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 from typing import Any
 
 from openai import OpenAI
@@ -105,6 +106,31 @@ WORKER_BRIEF_SCHEMA: dict[str, Any] = {
         "non_goals": {"type": "array", "items": {"type": "string"}},
         "target_branch": {"type": "string", "minLength": 1},
         "repo_grounded_hints": {"type": "array", "items": {"type": "string"}},
+    },
+}
+
+INITIAL_SLICE_CONTRACT_SCHEMA: dict[str, Any] = {
+    "type": "object",
+    "additionalProperties": False,
+    "required": [
+        "slice_title",
+        "slice_goal",
+        "in_scope",
+        "out_of_scope",
+        "must_preserve",
+        "focused_validation",
+        "completion_conditions",
+        "next_slice_hint",
+    ],
+    "properties": {
+        "slice_title": {"type": "string", "minLength": 1},
+        "slice_goal": {"type": "string", "minLength": 1},
+        "in_scope": {"type": "array", "items": {"type": "string"}},
+        "out_of_scope": {"type": "array", "items": {"type": "string"}},
+        "must_preserve": {"type": "array", "items": {"type": "string"}},
+        "focused_validation": {"type": "array", "items": {"type": "string"}},
+        "completion_conditions": {"type": "array", "items": {"type": "string"}},
+        "next_slice_hint": {"type": "string"},
     },
 }
 
@@ -549,6 +575,105 @@ def _build_worker_brief_fallback(*, internal_plan: dict[str, Any], target_branch
     }
 
 
+def _normalize_lines(value: Any) -> list[str]:
+    if not isinstance(value, list):
+        return []
+    normalized: list[str] = []
+    for item in value:
+        if isinstance(item, str):
+            stripped = item.strip()
+            if stripped:
+                normalized.append(stripped)
+    return normalized
+
+
+def _extract_line_after(text: str, patterns: tuple[str, ...]) -> str:
+    for pattern in patterns:
+        match = re.search(pattern, text, flags=re.IGNORECASE)
+        if match:
+            return re.sub(r"\s+", " ", match.group(1)).strip(" .:-")
+    return ""
+
+
+def _derive_initial_slice_contract(
+    *,
+    issue_title: str,
+    issue_body: str,
+    internal_plan: dict[str, Any],
+    program_plan: dict[str, Any],
+) -> dict[str, Any]:
+    body = issue_body or ""
+    slices = program_plan.get("slices") if isinstance(program_plan.get("slices"), list) else []
+    first_slice = slices[0] if slices and isinstance(slices[0], dict) else {}
+
+    explicit_first_slice = _extract_line_after(
+        body,
+        (
+            r"first slice[^:\n]*:\s*(.+)",
+            r"first slice[^.\n]*should(?: likely)?(?: be)?\s+(.+?)(?:\n|$)",
+            r"initial slice[^:\n]*:\s*(.+)",
+        ),
+    )
+    explicit_next_slice = _extract_line_after(
+        body,
+        (
+            r"later slices[^:\n]*:\s*(.+)",
+            r"next slice[^:\n]*:\s*(.+)",
+            r"then move to\s+(.+?)(?:\n|$)",
+        ),
+    )
+
+    first_slice_title = (
+        explicit_first_slice
+        or str(first_slice.get("title") or "").strip()
+        or f"Initial slice for {issue_title.strip() or 'umbrella task'}"
+    )
+    first_slice_goal = (
+        str(first_slice.get("objective") or "").strip()
+        or explicit_first_slice
+        or str(internal_plan.get("objective") or "").strip()
+        or "Ship the smallest real ownership move for this umbrella."
+    )
+
+    in_scope = _normalize_lines(first_slice.get("acceptance_criteria"))
+    if not in_scope:
+        in_scope = _normalize_lines(internal_plan.get("scope"))
+    if explicit_first_slice:
+        in_scope = [explicit_first_slice, *in_scope]
+
+    out_of_scope = _normalize_lines(first_slice.get("non_goals"))
+    out_of_scope.extend(_normalize_lines(internal_plan.get("non_goals")))
+    if explicit_next_slice:
+        out_of_scope.append(f"Defer to later slices: {explicit_next_slice}")
+
+    focused_validation = _normalize_lines(internal_plan.get("validation_guidance"))
+    completion_conditions = _normalize_lines(first_slice.get("acceptance_criteria"))
+    if not completion_conditions:
+        completion_conditions = _normalize_lines(internal_plan.get("acceptance_criteria"))
+
+    must_preserve: list[str] = []
+    for pattern in (
+        r"acceptable hybrid states?[^:\n]*:\s*(.+)",
+        r"must preserve[^:\n]*:\s*(.+)",
+    ):
+        preserved = _extract_line_after(body, (pattern,))
+        if preserved:
+            must_preserve.append(preserved)
+    if not must_preserve:
+        must_preserve.append("Preserve behavior outside this slice while allowing explicit temporary hybrid ownership.")
+
+    return {
+        "slice_title": first_slice_title,
+        "slice_goal": first_slice_goal,
+        "in_scope": in_scope[:8],
+        "out_of_scope": list(dict.fromkeys(out_of_scope))[:8],
+        "must_preserve": must_preserve[:5],
+        "focused_validation": focused_validation[:8],
+        "completion_conditions": completion_conditions[:8],
+        "next_slice_hint": explicit_next_slice or str(first_slice.get("continuation_hint") or "").strip(),
+    }
+
+
 def _validate_program_plan(raw: dict[str, Any], *, fallback_plan: dict[str, Any]) -> dict[str, Any]:
     slices = raw.get("slices")
     if not isinstance(slices, list) or not slices:
@@ -614,6 +739,7 @@ def plan_task_packet(
     validate_strict_json_schema(schema_name="internal_task_plan", schema=INTERNAL_TASK_PLAN_SCHEMA)
     validate_strict_json_schema(schema_name="worker_execution_brief", schema=WORKER_BRIEF_SCHEMA)
     validate_strict_json_schema(schema_name="program_plan", schema=PROGRAM_PLAN_SCHEMA)
+    validate_strict_json_schema(schema_name="initial_slice_contract", schema=INITIAL_SLICE_CONTRACT_SCHEMA)
 
     chain_response_id = (previous_response_id or "").strip() or None
     internal_plan_raw, planner_meta = _invoke_structured_response(
@@ -739,6 +865,13 @@ def plan_task_packet(
         program_plan_meta["outcome"] = "api_error"
         program_plan_meta["skip_reason"] = str(exc)
     program_plan = _validate_program_plan(program_plan_raw, fallback_plan=internal_plan)
+    initial_slice_contract = _derive_initial_slice_contract(
+        issue_title=issue_title,
+        issue_body=issue_body,
+        internal_plan=internal_plan,
+        program_plan=program_plan,
+    )
+    worker_brief["initial_slice_contract"] = initial_slice_contract
 
     return {
         "internal_plan": internal_plan,

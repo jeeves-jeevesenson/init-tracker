@@ -1553,6 +1553,16 @@ def _default_worker_brief(task: TaskPacket, internal_plan: dict[str, Any]) -> di
         "non_goals": internal_plan.get("non_goals") or [],
         "target_branch": "main",
         "repo_grounded_hints": internal_plan.get("repo_areas") or [],
+        "initial_slice_contract": {
+            "slice_title": task.title or "Initial slice",
+            "slice_goal": internal_plan.get("objective") or task.title or "",
+            "in_scope": internal_plan.get("scope") or [],
+            "out_of_scope": internal_plan.get("non_goals") or [],
+            "must_preserve": ["Preserve behavior outside the active slice boundary."],
+            "focused_validation": internal_plan.get("validation_guidance") or [],
+            "completion_conditions": internal_plan.get("acceptance_criteria") or [],
+            "next_slice_hint": "",
+        },
     }
 
 

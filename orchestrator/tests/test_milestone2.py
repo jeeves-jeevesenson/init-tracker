@@ -2132,6 +2132,11 @@ class OrchestratorMilestone2Tests(unittest.TestCase):
             github_repo="jeeves-jeevesenson/init-tracker",
             github_issue_number=302,
             title="Dispatch packet should be worker-only",
+            raw_body=(
+                "Umbrella migration task.\n"
+                "- first slice should likely be Wild Shape temp HP/lifecycle ownership first\n"
+                "- later slices should then move to encounter population and initiative setup\n"
+            ),
             selected_custom_agent=CUSTOM_AGENT_INITIATIVE_SMITH,
             recommended_worker="initiative-smith",
             recommended_scope_class="broad",
@@ -2145,6 +2150,16 @@ class OrchestratorMilestone2Tests(unittest.TestCase):
                     "non_goals": ["Do not expose internal routing"],
                     "target_branch": "main",
                     "repo_grounded_hints": ["orchestrator/app/github_dispatch.py"],
+                    "initial_slice_contract": {
+                        "slice_title": "Wild Shape temp HP/lifecycle ownership",
+                        "slice_goal": "Move Wild Shape temp HP lifecycle ownership into CombatService.",
+                        "in_scope": ["Wild Shape temp HP ownership/lifecycle"],
+                        "out_of_scope": ["encounter population", "initiative setup", "session save/load"],
+                        "must_preserve": ["Hybrid state is acceptable for deferred subsystems."],
+                        "focused_validation": ["python -m compileall orchestrator"],
+                        "completion_conditions": ["Wild Shape ownership move is complete and tested."],
+                        "next_slice_hint": "Move next to encounter population and initiative setup.",
+                    },
                 }
             ),
         )
@@ -2185,6 +2200,10 @@ class OrchestratorMilestone2Tests(unittest.TestCase):
             self.assertNotIn("selected_custom_agent", body)
             self.assertNotIn("Initiative Smith", body)
             self.assertIn('"execution_mode": "plain_copilot_fallback"', body)
+            self.assertIn('"initial_slice_contract"', body)
+            self.assertLess(body.index('"initial_slice_contract"'), body.index('"objective"'))
+            self.assertIn("Wild Shape temp HP/lifecycle ownership", body)
+            self.assertIn('"supporting_context"', body)
             self.assertIn(linkage_tag, body)
             self.assertIn("include this exact line in the PR body", body)
 
@@ -4329,6 +4348,93 @@ class OpenAIPlanningSchemaTests(unittest.TestCase):
         self.assertEqual(packet["internal_plan"]["recommended_scope_class"], None)
         self.assertGreaterEqual(mocked_client.responses.create.call_count, 2)
         self.assertIn("program_plan", packet)
+        self.assertIn("initial_slice_contract", packet["worker_brief"])
+
+    def test_plan_task_packet_derives_first_slice_contract_from_umbrella_sequencing(self):
+        planning_response = Mock(
+            output_parsed={
+                "objective": "Migrate CombatService ownership incrementally.",
+                "scope": ["CombatService migration slices"],
+                "non_goals": ["No one-PR rewrite"],
+                "acceptance_criteria": ["Migration proceeds in bounded slices"],
+                "validation_guidance": ["python -m compileall orchestrator"],
+                "implementation_brief": "Start with the smallest ownership move first.",
+                "task_type": "migration",
+                "difficulty": "large",
+                "repo_areas": ["orchestrator/app/openai_planning.py"],
+                "execution_risks": ["Scope ballooning"],
+                "reviewer_focus": ["slice boundaries"],
+                "recommended_scope_class": "broad",
+                "recommended_worker": "initiative-smith",
+                "internal_routing_metadata": None,
+            }
+        )
+        worker_brief_response = Mock(
+            output_parsed={
+                "objective": "Run first migration slice",
+                "concise_scope": ["Implement first slice only"],
+                "implementation_brief": "Keep this bounded",
+                "acceptance_criteria": ["first slice lands"],
+                "validation_commands": ["python -m compileall orchestrator"],
+                "non_goals": ["no umbrella rewrite"],
+                "target_branch": "main",
+                "repo_grounded_hints": ["orchestrator/app/openai_planning.py"],
+            }
+        )
+        program_response = Mock(
+            output_parsed={
+                "normalized_program_objective": "CombatService migration program",
+                "definition_of_done": ["all milestones shipped"],
+                "non_goals": ["one-PR rewrite"],
+                "milestones": [
+                    {"key": "M1", "title": "Wild Shape lifecycle", "goal": "Move Wild Shape ownership first"},
+                    {"key": "M2", "title": "Encounter + initiative", "goal": "Move encounter + initiative"},
+                ],
+                "slices": [
+                    {
+                        "slice_number": 1,
+                        "milestone_key": "M1",
+                        "title": "Wild Shape temp HP/lifecycle ownership",
+                        "objective": "Move Wild Shape temp HP/lifecycle ownership first.",
+                        "acceptance_criteria": ["Wild Shape ownership is moved"],
+                        "non_goals": ["No encounter population move", "No initiative setup move"],
+                        "expected_file_zones": ["services/combat"],
+                        "continuation_hint": "Then handle encounter population and initiative setup.",
+                        "slice_type": "implementation",
+                    }
+                ],
+                "current_slice_brief": "Implement Wild Shape ownership first.",
+                "acceptance_criteria": ["slice 1 done"],
+                "risk_profile": ["coordination"],
+                "recommended_worker": "initiative-smith",
+                "recommended_scope_class": "broad",
+                "continuation_hints": ["Move to encounter population then initiative setup."],
+            }
+        )
+
+        settings = Settings(OPENAI_API_KEY="test-key")
+        umbrella_body = (
+            "This is an umbrella migration program, not a one-PR rewrite.\n"
+            "The first slice should likely be Wild Shape temp HP/lifecycle ownership first.\n"
+            "Later slices should then move to encounter population, initiative setup, and session snapshot/save/load.\n"
+            "Validation should stay focused.\n"
+        )
+        with patch("orchestrator.app.openai_planning.OpenAI") as mocked_openai:
+            mocked_client = mocked_openai.return_value
+            mocked_client.responses.create.side_effect = [planning_response, worker_brief_response, program_response]
+            packet = openai_planning.plan_task_packet(
+                settings=settings,
+                repo="jeeves-jeevesenson/init-tracker",
+                issue_number=401,
+                issue_title="CombatService umbrella migration",
+                issue_body=umbrella_body,
+            )
+
+        contract = packet["worker_brief"]["initial_slice_contract"]
+        self.assertIn("Wild Shape temp HP/lifecycle ownership", contract["slice_title"])
+        self.assertIn("Wild Shape temp HP/lifecycle ownership", contract["slice_goal"])
+        self.assertIn("encounter population", " ".join(contract["out_of_scope"]).lower())
+        self.assertIn("python -m compileall orchestrator", contract["focused_validation"])
 
     def test_prompt_cache_key_generation_is_stable(self):
         first = openai_control_plane.build_prompt_cache_key(stage="planner", repo="Jeeves-Jeevesenson/init-tracker")
