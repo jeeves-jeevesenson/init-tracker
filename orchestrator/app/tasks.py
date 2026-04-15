@@ -32,6 +32,7 @@ from .github_dispatch import (
     request_reviewers,
     submit_approving_review,
 )
+from .github_auth import has_dispatch_auth
 from .models import (
     APPROVAL_APPROVED,
     APPROVAL_PENDING,
@@ -2479,7 +2480,7 @@ def _task_for_authoritative_pr_association(
     settings: Settings,
     github_repo: str,
     pr_payload: dict[str, Any],
-) -> TaskPacket | None:
+) -> tuple[TaskPacket | None, str]:
     pr_number = pr_payload.get("number") if isinstance(pr_payload.get("number"), int) else None
     head = pr_payload.get("head") if isinstance(pr_payload.get("head"), dict) else {}
     pr_head_sha = str(head.get("sha") or "").strip() or None
@@ -2502,28 +2503,62 @@ def _task_for_authoritative_pr_association(
     )
     candidates = list(session.exec(candidate_query).all())
     if not candidates:
-        return None
+        return None, "candidate_pool_empty"
 
     candidate_by_issue_number = {
         candidate.github_issue_number: candidate
         for candidate in candidates
         if isinstance(candidate.github_issue_number, int)
     }
+    candidate_issue_numbers = sorted(candidate_by_issue_number.keys())
+    graphql_reason: str | None = None
+    _log_workflow_checkpoint(
+        settings,
+        event="pr_authoritative_candidates",
+        task=candidates[0] if candidates else None,
+        success=bool(candidate_issue_numbers),
+        auth_lane="dispatch_user_token" if has_dispatch_auth(settings) else "missing",
+        api_type="graphql",
+        skip_reason=None if candidate_issue_numbers else "candidate_pool_empty",
+        summary=f"authoritative candidate issue numbers={candidate_issue_numbers or []}",
+    )
     if pr_number is not None and candidate_by_issue_number:
-        linked_issue_numbers, _ = lookup_pr_linked_issue_numbers(
+        linked_issue_numbers, lookup_summary = lookup_pr_linked_issue_numbers(
             settings=settings,
             repo=github_repo,
             pr_number=pr_number,
         )
+        if not linked_issue_numbers:
+            if lookup_summary.startswith("Dispatch auth failure:"):
+                return None, "dispatch_auth_missing"
+            if lookup_summary.startswith("PR association failure:"):
+                graphql_reason = "graphql_link_lookup_error"
+            else:
+                graphql_reason = "graphql_link_lookup_empty"
         matched_by_graph = [
             candidate_by_issue_number[issue_number]
             for issue_number in sorted(linked_issue_numbers)
             if issue_number in candidate_by_issue_number
         ]
+        _log_workflow_checkpoint(
+            settings,
+            event="pr_authoritative_graphql_intersection",
+            task=matched_by_graph[0] if matched_by_graph else (candidates[0] if candidates else None),
+            success=bool(matched_by_graph),
+            auth_lane="dispatch_user_token",
+            api_type="graphql",
+            skip_reason=None if matched_by_graph else "candidate_intersection_empty",
+            summary=(
+                f"{lookup_summary}; candidates={candidate_issue_numbers}; "
+                f"intersection={[task.github_issue_number for task in matched_by_graph]}"
+            ),
+        )
         if len(matched_by_graph) == 1:
-            return matched_by_graph[0]
+            return matched_by_graph[0], "authoritative_match"
         if len(matched_by_graph) > 1:
-            return None
+            return None, "candidate_match_ambiguous"
+        if linked_issue_numbers:
+            graphql_reason = "candidate_intersection_empty"
 
     matched_tasks: list[TaskPacket] = []
     for candidate in candidates:
@@ -2550,8 +2585,10 @@ def _task_for_authoritative_pr_association(
             matched_tasks.append(candidate)
 
     if len(matched_tasks) != 1:
-        return None
-    return matched_tasks[0]
+        if graphql_reason:
+            return None, graphql_reason
+        return None, "timeline_match_missing_or_ambiguous"
+    return matched_tasks[0], "timeline_match"
 
 
 def _task_for_pr_payload(
@@ -2560,7 +2597,7 @@ def _task_for_pr_payload(
     settings: Settings,
     github_repo: str,
     pr_payload: dict[str, Any],
-) -> TaskPacket | None:
+) -> tuple[TaskPacket | None, str]:
     pr_number = pr_payload.get("number")
     if isinstance(pr_number, int):
         run_query = (
@@ -2574,7 +2611,7 @@ def _task_for_pr_payload(
         if existing_run is not None:
             linked_task = session.get(TaskPacket, existing_run.task_packet_id)
             if linked_task is not None:
-                return linked_task
+                return linked_task, "existing_run_match"
 
     body = str(pr_payload.get("body") or "")
     title = str(pr_payload.get("title") or "")
@@ -2582,13 +2619,18 @@ def _task_for_pr_payload(
     for issue_ref in refs:
         task = _get_task_by_repo_issue(session, github_repo=github_repo, github_issue_number=int(issue_ref))
         if task is not None:
-            return task
-    return _task_for_authoritative_pr_association(
+            return task, "explicit_ref_match"
+    task, authoritative_reason = _task_for_authoritative_pr_association(
         session,
         settings=settings,
         github_repo=github_repo,
         pr_payload=pr_payload,
     )
+    if task is not None:
+        return task, authoritative_reason
+    if refs:
+        return None, f"explicit_ref_miss;{authoritative_reason}"
+    return None, authoritative_reason
 
 
 def _summarize_and_store(
@@ -2734,7 +2776,7 @@ def process_pull_request_event(
     if not github_repo or not isinstance(pr, dict):
         return True
 
-    task = _task_for_pr_payload(
+    task, association_reason = _task_for_pr_payload(
         session,
         settings=settings,
         github_repo=github_repo,
@@ -2766,8 +2808,18 @@ def process_pull_request_event(
                     task=candidate,
                     summary=(
                         f"external PR activity seen but no internal linkage for PR #{pr_number} "
-                        f"(action={action or 'unknown'})"
+                        f"(action={action or 'unknown'}, reason={association_reason})"
                     ),
+                )
+                _log_workflow_checkpoint(
+                    settings,
+                    event="pr_webhook_reconciliation_incomplete",
+                    task=candidate,
+                    success=False,
+                    auth_lane="dispatch_user_token" if has_dispatch_auth(settings) else "missing",
+                    api_type="graphql+timeline",
+                    skip_reason=association_reason,
+                    summary=f"PR webhook could not link task for PR #{pr_number}",
                 )
         return False
 
