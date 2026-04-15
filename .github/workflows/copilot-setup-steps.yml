@@ -11,5 +11,6 @@ jobs:
         with:
           python-version: "3.11"
       - run: python -m pip install --upgrade pip
-      - run: pip install -r requirements.txt
-      - run: python -m compileall .
+      - run: |
+          echo "Lean Copilot setup: no blanket runtime dependency install."
+          echo "Install task-specific dependencies during focused validation only."

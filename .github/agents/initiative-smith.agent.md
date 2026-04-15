@@ -18,6 +18,8 @@ Your default behavior is:
 
 Planning remains a capability, not a stopping point when the task is already implementation-ready.
 
+When custom-agent launch is unavailable, these same standards should be carried by plain Copilot fallback execution.
+
 ---
 
 ## Role

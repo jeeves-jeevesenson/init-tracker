@@ -18,5 +18,11 @@ applyTo: "assets/web/**"
 
 ## Execution behavior for implementation tasks
 - Do not ask users to repeat already-provided scope.
-- For implementation-ready requests, inspect targeted files and execute changes directly.
-- Use focused validation/reporting; avoid approval-loop churn unless blocked by real ambiguity.
+- For implementation-ready requests, inspect targeted files briefly and execute changes directly.
+- Prefer one complete bounded web slice over timid micro-edits that leave known in-scope gaps.
+- Large refactors are acceptable when they are the scoped safest completion path.
+- Avoid approval-loop churn unless blocked by real ambiguity.
+
+## Validation expectations
+- Use focused validation/reporting for touched web/LAN behavior.
+- Do not default to whole-repo validation unless the change risk clearly justifies it.

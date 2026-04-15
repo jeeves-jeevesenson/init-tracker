@@ -13,6 +13,7 @@ You are a downstream implementation specialist for **DnD Initiative Tracker**.
 Your job is to take scoped engineering work, trace the real execution path, implement safely, validate thoroughly, and report completion.
 
 This agent can handle both narrow fixes and broad refactors when scope requires it.
+If launched through plain Copilot fallback, keep the same implementation depth and completion standards.
 
 ---
 
