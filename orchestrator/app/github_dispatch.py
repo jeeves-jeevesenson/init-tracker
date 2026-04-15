@@ -48,6 +48,50 @@ query($owner: String!, $name: String!, $number: Int!) {
 }
 """
 
+_PULL_REQUEST_LINKED_ISSUES_QUERY = """
+query($owner: String!, $name: String!, $number: Int!, $timelineLimit: Int!) {
+  repository(owner: $owner, name: $name) {
+    pullRequest(number: $number) {
+      closingIssuesReferences(first: 20) {
+        nodes {
+          number
+          repository {
+            nameWithOwner
+          }
+        }
+      }
+      timelineItems(first: $timelineLimit, itemTypes: [CONNECTED_EVENT, CROSS_REFERENCED_EVENT]) {
+        nodes {
+          __typename
+          ... on ConnectedEvent {
+            subject {
+              __typename
+              ... on Issue {
+                number
+                repository {
+                  nameWithOwner
+                }
+              }
+            }
+          }
+          ... on CrossReferencedEvent {
+            source {
+              __typename
+              ... on Issue {
+                number
+                repository {
+                  nameWithOwner
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+}
+"""
+
 _MARK_PR_READY_MUTATION = """
 mutation($pullRequestId: ID!) {
   markPullRequestReadyForReview(input: {pullRequestId: $pullRequestId}) {
@@ -1196,6 +1240,95 @@ def list_issue_timeline_events(
             return events, f"Fetched {len(events)} timeline events for issue #{issue_number}"
     except Exception as exc:
         return [], f"PR association failure: Failed to list timeline for issue #{issue_number}: {exc}"
+
+
+def lookup_pr_linked_issue_numbers(
+    *,
+    settings: Settings,
+    repo: str,
+    pr_number: int,
+    timeline_limit: int = 40,
+) -> tuple[set[int], str]:
+    if not has_dispatch_auth(settings):
+        return set(), "Dispatch auth failure: dispatch user-token auth not configured; cannot query PR graph links"
+    repo_parts = _extract_repo_owner_name(repo)
+    if repo_parts is None:
+        return set(), f"PR association failure: Invalid repository path: {repo!r}"
+    owner, name = repo_parts
+    api_base = settings.github_api_url.rstrip("/")
+    graphql_url = f"{api_base}/graphql"
+    bounded_timeline_limit = max(1, min(int(timeline_limit or 40), 100))
+    normalized_repo = repo.strip().lower()
+
+    try:
+        with httpx.Client(timeout=15.0) as client:
+            response = client.post(
+                graphql_url,
+                headers=_build_dispatch_headers(settings),
+                json={
+                    "query": _PULL_REQUEST_LINKED_ISSUES_QUERY,
+                    "variables": {
+                        "owner": owner,
+                        "name": name,
+                        "number": pr_number,
+                        "timelineLimit": bounded_timeline_limit,
+                    },
+                },
+            )
+            if response.status_code >= 400:
+                return set(), (
+                    "PR association failure: GitHub returned "
+                    f"{response.status_code} when querying GraphQL links for PR #{pr_number}: {response.text[:300]}"
+                )
+            if not response.headers.get("content-type", "").startswith("application/json"):
+                return set(), f"PR association failure: GitHub returned non-JSON GraphQL response for PR #{pr_number}"
+            payload = response.json()
+            if not isinstance(payload, dict):
+                return set(), f"PR association failure: GitHub returned invalid GraphQL payload for PR #{pr_number}"
+            errors = payload.get("errors")
+            if isinstance(errors, list) and errors:
+                return set(), f"PR association failure: GraphQL returned errors for PR #{pr_number}: {str(errors)[:300]}"
+            data = payload.get("data") if isinstance(payload.get("data"), dict) else {}
+            repository = data.get("repository") if isinstance(data.get("repository"), dict) else {}
+            pr = repository.get("pullRequest") if isinstance(repository.get("pullRequest"), dict) else {}
+            if not pr:
+                return set(), f"PR association failure: GraphQL returned no pullRequest node for PR #{pr_number}"
+
+            linked_issue_numbers: set[int] = set()
+            closing = pr.get("closingIssuesReferences") if isinstance(pr.get("closingIssuesReferences"), dict) else {}
+            for node in closing.get("nodes") or []:
+                if not isinstance(node, dict):
+                    continue
+                issue_number = node.get("number")
+                repo_obj = node.get("repository") if isinstance(node.get("repository"), dict) else {}
+                node_repo = str(repo_obj.get("nameWithOwner") or "").strip().lower()
+                if isinstance(issue_number, int) and (not node_repo or node_repo == normalized_repo):
+                    linked_issue_numbers.add(issue_number)
+
+            timeline = pr.get("timelineItems") if isinstance(pr.get("timelineItems"), dict) else {}
+            for node in timeline.get("nodes") or []:
+                if not isinstance(node, dict):
+                    continue
+                typename = str(node.get("__typename") or "")
+                issue_node: dict[str, Any] | None = None
+                if typename == "ConnectedEvent":
+                    subject = node.get("subject") if isinstance(node.get("subject"), dict) else {}
+                    if str(subject.get("__typename") or "") == "Issue":
+                        issue_node = subject
+                elif typename == "CrossReferencedEvent":
+                    source = node.get("source") if isinstance(node.get("source"), dict) else {}
+                    if str(source.get("__typename") or "") == "Issue":
+                        issue_node = source
+                if issue_node is None:
+                    continue
+                issue_number = issue_node.get("number")
+                repo_obj = issue_node.get("repository") if isinstance(issue_node.get("repository"), dict) else {}
+                issue_repo = str(repo_obj.get("nameWithOwner") or "").strip().lower()
+                if isinstance(issue_number, int) and (not issue_repo or issue_repo == normalized_repo):
+                    linked_issue_numbers.add(issue_number)
+            return linked_issue_numbers, f"GraphQL resolved {len(linked_issue_numbers)} linked issue(s) for PR #{pr_number}"
+    except Exception as exc:
+        return set(), f"PR association failure: Failed GraphQL linked-issue lookup for PR #{pr_number}: {exc}"
 
 
 def remove_requested_reviewers(

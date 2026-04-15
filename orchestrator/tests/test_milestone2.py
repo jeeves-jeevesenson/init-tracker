@@ -2974,7 +2974,7 @@ class OrchestratorMilestone2Tests(unittest.TestCase):
                     self.assertEqual(task["latest_run"]["status"], "pr_opened")
                     self.assertEqual(task["latest_run"]["github_pr_number"], 6201)
 
-    def test_pull_request_webhook_authoritative_timeline_sha_links_without_text_refs(self):
+    def test_pull_request_webhook_authoritative_connected_event_links_without_text_refs(self):
         with tempfile.TemporaryDirectory() as td:
             os.environ["DATABASE_URL"] = f"sqlite:///{Path(td) / 'orchestrator.db'}"
             os.environ["GH_WEBHOOK_SECRET"] = "test-gh-secret"
@@ -2988,7 +2988,7 @@ class OrchestratorMilestone2Tests(unittest.TestCase):
                     "number": 621,
                     "node_id": "I_621",
                     "title": "Authoritative webhook association",
-                    "body": "Link PRs through issue timeline evidence",
+                    "body": "Link PRs through issue graph evidence",
                     "labels": [{"name": "agent:task"}],
                 },
             }
@@ -3010,6 +3010,7 @@ class OrchestratorMilestone2Tests(unittest.TestCase):
                     "changed_files": 1,
                     "commits": 1,
                     "head": {"ref": "copilot/add-blank-file-test", "sha": "abc123def456"},
+                    "node_id": "PR_kw_6211",
                 },
             }
 
@@ -3036,8 +3037,8 @@ class OrchestratorMilestone2Tests(unittest.TestCase):
                 "orchestrator.app.tasks.list_recent_pull_requests",
                 return_value=([], "none"),
             ), patch(
-                "orchestrator.app.tasks.list_issue_timeline_events",
-                return_value=([{"event": "referenced", "commit_id": "abc123def456"}], "ok"),
+                "orchestrator.app.tasks.lookup_pr_linked_issue_numbers",
+                return_value=({621}, "ok"),
             ), patch(
                 "orchestrator.app.tasks.summarize_work_update",
                 return_value={
@@ -3057,6 +3058,8 @@ class OrchestratorMilestone2Tests(unittest.TestCase):
                     self.assertEqual(task["status"], "pr_opened")
                     self.assertEqual(task["latest_run"]["status"], "pr_opened")
                     self.assertEqual(task["latest_run"]["github_pr_number"], 6211)
+                    self.assertEqual(task["latest_run"]["github_pr_url"], "https://github.com/jeeves-jeevesenson/init-tracker/pull/6211")
+                    self.assertEqual(task["latest_run"]["github_pr_node_id"], "PR_kw_6211")
                     self.assertNotIn("reconciliation incomplete", task["latest_summary"].lower())
 
     def test_pull_request_webhook_ready_for_review_advances_existing_linked_draft_pr(self):
@@ -3217,6 +3220,9 @@ class OrchestratorMilestone2Tests(unittest.TestCase):
                     summary="Dispatch accepted",
                 ),
             ), patch(
+                "orchestrator.app.tasks.lookup_pr_linked_issue_numbers",
+                return_value=([], "none"),
+            ), patch(
                 "orchestrator.app.tasks.list_issue_timeline_events",
                 return_value=([], "none"),
             ):
@@ -3294,8 +3300,8 @@ class OrchestratorMilestone2Tests(unittest.TestCase):
                 "orchestrator.app.tasks.list_recent_pull_requests",
                 return_value=([], "none"),
             ), patch(
-                "orchestrator.app.tasks.list_issue_timeline_events",
-                return_value=([{"event": "referenced", "commit_id": "feedface01"}], "ok"),
+                "orchestrator.app.tasks.lookup_pr_linked_issue_numbers",
+                return_value=({622, 623}, "ok"),
             ):
                 with TestClient(main.app) as client:
                     self._post_github(client, secret="test-gh-secret", delivery="delivery-task-opened-622", event="issues", payload=issue_payload_1)

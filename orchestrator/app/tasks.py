@@ -19,6 +19,7 @@ from .github_dispatch import (
     dispatch_task_to_github_copilot,
     inspect_pull_request,
     list_recent_pull_requests,
+    lookup_pr_linked_issue_numbers,
     list_issue_comments,
     list_issue_timeline_events,
     list_pull_request_files,
@@ -2502,6 +2503,27 @@ def _task_for_authoritative_pr_association(
     candidates = list(session.exec(candidate_query).all())
     if not candidates:
         return None
+
+    candidate_by_issue_number = {
+        candidate.github_issue_number: candidate
+        for candidate in candidates
+        if isinstance(candidate.github_issue_number, int)
+    }
+    if pr_number is not None and candidate_by_issue_number:
+        linked_issue_numbers, _ = lookup_pr_linked_issue_numbers(
+            settings=settings,
+            repo=github_repo,
+            pr_number=pr_number,
+        )
+        matched_by_graph = [
+            candidate_by_issue_number[issue_number]
+            for issue_number in sorted(linked_issue_numbers)
+            if issue_number in candidate_by_issue_number
+        ]
+        if len(matched_by_graph) == 1:
+            return matched_by_graph[0]
+        if len(matched_by_graph) > 1:
+            return None
 
     matched_tasks: list[TaskPacket] = []
     for candidate in candidates:
