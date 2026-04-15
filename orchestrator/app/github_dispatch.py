@@ -190,6 +190,10 @@ class PullRequestInspection:
     state: str | None
     merged: bool | None
     summary: str
+    number: int | None = None
+    node_id: str | None = None
+    html_url: str | None = None
+    body: str | None = None
 
 
 def _build_dispatch_headers(settings: Settings) -> dict[str, str]:
@@ -1192,6 +1196,10 @@ def inspect_pull_request(*, settings: Settings, repo: str, pr_number: int) -> Pu
                 draft=bool(payload.get("draft")) if payload.get("draft") is not None else None,
                 state=str(payload.get("state") or "") or None,
                 merged=bool(payload.get("merged")) if payload.get("merged") is not None else None,
+                number=int(payload.get("number")) if isinstance(payload.get("number"), int) else pr_number,
+                node_id=str(payload.get("node_id") or "") or None,
+                html_url=str(payload.get("html_url") or "") or None,
+                body=str(payload.get("body") or ""),
                 summary=f"PR #{pr_number} inspected successfully",
             )
     except Exception as exc:

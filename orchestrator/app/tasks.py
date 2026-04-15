@@ -93,6 +93,9 @@ WORKER_START_FAILURE_RE = re.compile(
 WEAK_EVIDENCE_PREFIX = "Weak worker-start evidence:"
 RECONCILIATION_INCOMPLETE_PREFIX = "Reconciliation incomplete:"
 LINKAGE_TAG_PREFIX = "ORCH-LINK:"
+ORCH_LINKAGE_TAG_RE = re.compile(
+    r"(?m)^\s*ORCH-LINK:\s*task=(?P<task_id>\d+)\s+issue=(?P<issue_number>\d+)\s+run=(?P<run_id>\d+)\s*$"
+)
 
 CUSTOM_AGENT_INITIATIVE_SMITH = "Initiative Smith"
 CUSTOM_AGENT_TRACKER_ENGINEER = "Initiative Tracker Engineer"
@@ -563,6 +566,22 @@ def _build_run_linkage_tag(*, task: TaskPacket, run: AgentRun) -> str:
         f"{LINKAGE_TAG_PREFIX} "
         f"task={task_id} issue={task.github_issue_number} run={run_id}"
     )
+
+
+def parse_orch_linkage_tag(text: str | None) -> dict[str, int] | None:
+    if not isinstance(text, str) or not text.strip():
+        return None
+    match = ORCH_LINKAGE_TAG_RE.search(text)
+    if match is None:
+        return None
+    try:
+        return {
+            "task_id": int(match.group("task_id")),
+            "issue_number": int(match.group("issue_number")),
+            "run_id": int(match.group("run_id")),
+        }
+    except (TypeError, ValueError):
+        return None
 
 
 def _discover_post_dispatch_pr_candidate(
@@ -3274,38 +3293,108 @@ def process_workflow_run_event(
         .limit(1)
     )
     run = session.exec(query).first()
+    fallback_reason: str | None = None
+    inspected_pr_number: int | None = None
+    inspected_pr_url: str | None = None
+    inspected_pr_node_id: str | None = None
     if run is None:
-        candidate_query = (
-            select(TaskPacket)
-            .where(TaskPacket.github_repo == github_repo)
-            .where(
-                TaskPacket.status.in_(
-                    [
-                        TASK_STATUS_AWAITING_WORKER_START,
-                        TASK_STATUS_WORKING,
-                        TASK_STATUS_MANUAL_DISPATCH_NEEDED,
-                        TASK_STATUS_DISPATCH_REQUESTED,
-                    ]
+        for pr_number in pr_numbers:
+            inspection = inspect_pull_request(settings=settings, repo=github_repo, pr_number=pr_number)
+            if not inspection.ok:
+                fallback_reason = (
+                    f"workflow activity seen but no linked run for PR(s) {pr_numbers}; "
+                    f"PR #{pr_number} inspection failed: {inspection.summary}"
                 )
-            )
-            .order_by(TaskPacket.updated_at.desc())
-            .limit(1)
+                continue
+            parsed_tag = parse_orch_linkage_tag(inspection.body)
+            if parsed_tag is None:
+                fallback_reason = (
+                    f"workflow activity seen but no linked run for PR(s) {pr_numbers}; "
+                    f"PR #{pr_number} missing or invalid ORCH-LINK stamp"
+                )
+                continue
+            recovered_run = session.get(AgentRun, parsed_tag["run_id"])
+            recovered_task = session.get(TaskPacket, parsed_tag["task_id"])
+            if recovered_run is None or recovered_task is None:
+                fallback_reason = (
+                    f"workflow activity seen but no linked run for PR(s) {pr_numbers}; "
+                    f"PR #{pr_number} ORCH-LINK points to missing run/task (run={parsed_tag['run_id']}, task={parsed_tag['task_id']})"
+                )
+                continue
+            validation_errors: list[str] = []
+            if recovered_run.id != parsed_tag["run_id"]:
+                validation_errors.append("run_id_mismatch")
+            if recovered_task.id != parsed_tag["task_id"]:
+                validation_errors.append("task_id_mismatch")
+            if recovered_run.task_packet_id != recovered_task.id:
+                validation_errors.append("run_task_relation_mismatch")
+            if recovered_task.github_issue_number != parsed_tag["issue_number"]:
+                validation_errors.append("issue_number_mismatch")
+            if recovered_run.github_repo != github_repo or recovered_task.github_repo != github_repo:
+                validation_errors.append("repo_mismatch")
+            if validation_errors:
+                fallback_reason = (
+                    f"workflow activity seen but no linked run for PR(s) {pr_numbers}; "
+                    f"PR #{pr_number} ORCH-LINK rejected ({', '.join(validation_errors)})"
+                )
+                continue
+            run = recovered_run
+            inspected_pr_number = pr_number
+            inspected_pr_url = inspection.html_url
+            inspected_pr_node_id = inspection.node_id
+            break
+
+    if run is None:
+        candidate_runs = list(
+            session.exec(
+                select(AgentRun)
+                .where(AgentRun.github_repo == github_repo)
+                .where(
+                    AgentRun.status.in_(
+                        [
+                            RUN_STATUS_AWAITING_WORKER_START,
+                            RUN_STATUS_DISPATCH_REQUESTED,
+                            RUN_STATUS_DISPATCHED,
+                            RUN_STATUS_MANUAL_DISPATCH_NEEDED,
+                            RUN_STATUS_QUEUED,
+                            RUN_STATUS_WORKING,
+                            RUN_STATUS_PR_OPENED,
+                            RUN_STATUS_AWAITING_REVIEW,
+                        ]
+                    )
+                )
+                .order_by(AgentRun.updated_at.desc())
+                .limit(5)
+            ).all()
         )
-        candidate = session.exec(candidate_query).first()
-        if candidate is not None:
-            mark_reconciliation_incomplete(
-                session,
-                task=candidate,
-                summary=(
-                    "workflow activity seen but no linked internal run for PR(s) "
-                    f"{pr_numbers}"
-                ),
-            )
+        summary = fallback_reason or f"workflow activity seen but no linked run for PR(s) {pr_numbers}"
+        for candidate_run in candidate_runs:
+            candidate_task = session.get(TaskPacket, candidate_run.task_packet_id)
+            if candidate_task is None:
+                continue
+            mark_pr_association_pending(session, task=candidate_task, summary=summary)
         return False
 
     task = session.get(TaskPacket, run.task_packet_id)
     if task is None:
         return False
+    if run.github_repo != github_repo or task.github_repo != github_repo:
+        mark_reconciliation_incomplete(
+            session,
+            task=task,
+            summary=(
+                f"workflow repo mismatch for run/task recovery: event_repo={github_repo}, "
+                f"run_repo={run.github_repo}, task_repo={task.github_repo}"
+            ),
+        )
+        return False
+
+    if not run.github_pr_number and inspected_pr_number is not None:
+        run.github_pr_number = inspected_pr_number
+    if not run.github_pr_url and inspected_pr_url:
+        run.github_pr_url = inspected_pr_url
+    if not run.github_pr_node_id and inspected_pr_node_id:
+        run.github_pr_node_id = inspected_pr_node_id
 
     conclusion = str(workflow_run.get("conclusion") or "")
     status = str(workflow_run.get("status") or "")
