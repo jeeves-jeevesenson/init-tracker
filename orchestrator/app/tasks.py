@@ -709,6 +709,14 @@ def _load_governor_state(run: AgentRun) -> dict[str, Any]:
     state.setdefault("fix_trigger_fingerprint", "")
     state.setdefault("review_harvest_summary", "")
     state.setdefault("review_batch_artifact", {})
+    state.setdefault("ready_for_review_attempted", False)
+    state.setdefault("ready_for_review_attempt_count", 0)
+    state.setdefault("ready_for_review_retry_count", 0)
+    state.setdefault("ready_for_review_max_retries", 2)
+    state.setdefault("ready_for_review_outcome", "")
+    state.setdefault("ready_for_review_last_error", "")
+    state.setdefault("ready_for_review_retry_scheduled", False)
+    state.setdefault("ready_for_review_escalated", False)
     state.setdefault("checkpoints", {})
     return state
 
@@ -749,19 +757,25 @@ def _log_workflow_checkpoint(
     postcondition: str | None = None,
     skip_reason: str | None = None,
     state: dict[str, Any] | None = None,
+    pr_node_id: str | None = None,
+    retry_count: int | None = None,
+    result_class: str | None = None,
 ) -> None:
     if not _workflow_debug_enabled(settings):
         return
     _governor_logger.info(
-        "workflow_event=%s task_id=%s issue_number=%s pr_number=%s repo=%s auth_lane=%s api_type=%s success=%s checkpoint=%s governor_fingerprint=%s skip_reason=%s postcondition=%s summary=%s",
+        "workflow_event=%s task_id=%s issue_number=%s pr_number=%s pr_node_id=%s repo=%s auth_lane=%s api_type=%s success=%s result_class=%s retry_count=%s checkpoint=%s governor_fingerprint=%s skip_reason=%s postcondition=%s summary=%s",
         event,
         (task.id if task and task.id is not None else (run.task_packet_id if run else "n/a")),
         (task.github_issue_number if task else (run.github_issue_number if run else "n/a")),
         (run.github_pr_number if run else "n/a"),
+        pr_node_id or "n/a",
         (task.github_repo if task else (run.github_repo if run else "n/a")),
         auth_lane,
         api_type,
         success,
+        result_class or "n/a",
+        retry_count if retry_count is not None else "n/a",
         event,
         _governor_fingerprint(state),
         skip_reason or "n/a",
@@ -783,6 +797,17 @@ def _set_checkpoint(
         "summary": str(summary or ""),
         "updated_at": _utc_now().isoformat(),
     }
+
+
+def _ready_for_review_failure_outcome(message: str) -> tuple[str, bool]:
+    text = str(message or "").lower()
+    if "dispatch user-token auth not configured" in text or "auth failure" in text:
+        return "ready_for_review_failed_auth", False
+    if "postcondition failed" in text:
+        return "ready_for_review_failed_postcondition", True
+    if " 403 " in f" {text} " or "forbidden" in text or "permission" in text:
+        return "ready_for_review_failed_http", False
+    return "ready_for_review_failed_http", True
 
 
 def safe_draft_can_be_promoted(
@@ -856,6 +881,227 @@ def _copilot_findings_from_reviews(
     return observed, deduped[:20]
 
 
+def _handle_linked_draft_ready_for_review(
+    session: Session,
+    *,
+    settings: Settings,
+    task: TaskPacket,
+    run: AgentRun,
+    state: dict[str, Any],
+    pr_payload: dict[str, Any],
+    event_key: str,
+) -> tuple[bool, bool]:
+    """Force ready-for-review handoff for linked draft PRs.
+
+    Returns (handled_terminal, promoted_to_non_draft).
+    """
+    pr_number = run.github_pr_number
+    if not isinstance(pr_number, int):
+        state["ready_for_review_outcome"] = "ready_for_review_skipped_missing_pr_linkage"
+        state["ready_for_review_retry_scheduled"] = False
+        state["ready_for_review_escalated"] = False
+        _log_workflow_checkpoint(
+            settings,
+            event="ready_for_review_skipped_missing_pr_linkage",
+            task=task,
+            run=run,
+            success=False,
+            summary="Linked draft handoff skipped because PR linkage is missing.",
+            result_class="skipped_missing_pr_linkage",
+            state=state,
+        )
+        return True, False
+
+    pr_draft = bool(pr_payload.get("draft"))
+    pr_node_id = pr_payload.get("node_id") if isinstance(pr_payload.get("node_id"), str) else None
+    if not pr_draft:
+        state["ready_for_review_outcome"] = "ready_for_review_skipped_non_draft"
+        state["ready_for_review_retry_scheduled"] = False
+        state["ready_for_review_escalated"] = False
+        _log_workflow_checkpoint(
+            settings,
+            event="ready_for_review_skipped_non_draft",
+            task=task,
+            run=run,
+            success=True,
+            summary="Ready-for-review handoff skipped because PR is already non-draft.",
+            postcondition="isDraft=False",
+            result_class="skipped_non_draft",
+            pr_node_id=pr_node_id,
+            state=state,
+        )
+        return False, True
+
+    state["ready_for_review_attempted"] = True
+    state["ready_for_review_attempt_count"] = int(state.get("ready_for_review_attempt_count") or 0) + 1
+    _log_workflow_checkpoint(
+        settings,
+        event="linked_draft_pr_detected",
+        task=task,
+        run=run,
+        success=True,
+        summary="Linked draft PR detected; forcing ready-for-review handoff.",
+        auth_lane="dispatch_user_token",
+        api_type="GraphQL",
+        postcondition="isDraft=True",
+        result_class="linked_draft",
+        pr_node_id=pr_node_id,
+        retry_count=int(state.get("ready_for_review_retry_count") or 0),
+        state=state,
+    )
+    _log_workflow_checkpoint(
+        settings,
+        event="ready_for_review_attempted",
+        task=task,
+        run=run,
+        success=True,
+        summary="Attempting ready-for-review mutation for linked draft PR.",
+        auth_lane="dispatch_user_token",
+        api_type="GraphQL",
+        pr_node_id=pr_node_id,
+        retry_count=int(state.get("ready_for_review_retry_count") or 0),
+        state=state,
+    )
+    success, msg = mark_pr_ready_for_review(settings=settings, repo=task.github_repo, pr_number=pr_number)
+    state["last_event_key"] = event_key
+    state["ready_for_review_last_error"] = "" if success else str(msg)
+
+    if success:
+        state["ready_for_review_outcome"] = "ready_for_review_succeeded"
+        state["ready_for_review_retry_scheduled"] = False
+        state["ready_for_review_escalated"] = False
+        _set_checkpoint(
+            state,
+            name="pr_ready_verified",
+            success=True,
+            summary="Draft->ready transition completed and verified (isDraft=False).",
+        )
+        _log_workflow_checkpoint(
+            settings,
+            event="ready_for_review_postcondition_observed",
+            task=task,
+            run=run,
+            success=True,
+            summary="Ready-for-review postcondition observed after mutation.",
+            postcondition="isDraft=False",
+            auth_lane="dispatch_user_token",
+            api_type="GraphQL",
+            pr_node_id=pr_node_id,
+            result_class="postcondition_verified",
+            state=state,
+        )
+        _log_workflow_checkpoint(
+            settings,
+            event="ready_for_review_verified",
+            task=task,
+            run=run,
+            success=True,
+            summary=msg,
+            auth_lane="dispatch_user_token",
+            api_type="GraphQL",
+            postcondition="isDraft=False",
+            pr_node_id=pr_node_id,
+            result_class="ready_for_review_succeeded",
+            state=state,
+        )
+        return False, True
+
+    outcome, transient = _ready_for_review_failure_outcome(msg)
+    state["ready_for_review_outcome"] = outcome
+    _set_checkpoint(
+        state,
+        name="pr_ready_verified",
+        success=False,
+        summary=str(msg),
+    )
+    _log_workflow_checkpoint(
+        settings,
+        event="ready_for_review_attempt_failed",
+        task=task,
+        run=run,
+        success=False,
+        summary=str(msg),
+        auth_lane="dispatch_user_token",
+        api_type="GraphQL",
+        pr_node_id=pr_node_id,
+        result_class=outcome,
+        retry_count=int(state.get("ready_for_review_retry_count") or 0),
+        state=state,
+    )
+
+    max_retries = max(1, int(state.get("ready_for_review_max_retries") or 2))
+    retry_count = int(state.get("ready_for_review_retry_count") or 0)
+    if transient and retry_count < max_retries:
+        retry_count += 1
+        state["ready_for_review_retry_count"] = retry_count
+        state["ready_for_review_retry_scheduled"] = True
+        state["ready_for_review_escalated"] = False
+        state["ready_for_review_outcome"] = "ready_for_review_retry_scheduled"
+        _log_workflow_checkpoint(
+            settings,
+            event="ready_for_review_retry",
+            task=task,
+            run=run,
+            success=False,
+            summary=f"Ready-for-review failed; scheduled bounded retry {retry_count}/{max_retries}: {msg}",
+            auth_lane="dispatch_user_token",
+            api_type="GraphQL",
+            pr_node_id=pr_node_id,
+            result_class=outcome,
+            retry_count=retry_count,
+            state=state,
+        )
+        return True, False
+
+    state["ready_for_review_retry_scheduled"] = False
+    state["ready_for_review_escalated"] = True
+    state["ready_for_review_outcome"] = "ready_for_review_escalated"
+    _log_workflow_checkpoint(
+        settings,
+        event="ready_for_review_escalated",
+        task=task,
+        run=run,
+        success=False,
+        summary=f"Ready-for-review escalation after bounded retries exhausted or non-transient failure: {msg}",
+        auth_lane="dispatch_user_token",
+        api_type="GraphQL",
+        pr_node_id=pr_node_id,
+        result_class=outcome,
+        retry_count=int(state.get("ready_for_review_retry_count") or 0),
+        state=state,
+    )
+    if task.program_id:
+        program = session.get(Program, task.program_id)
+        if program is not None:
+            permission_failure = "403" in str(msg) or "forbidden" in str(msg).lower() or "permission" in str(msg).lower()
+            program.status = "blocked"
+            program.blocker_state_json = json.dumps(
+                {
+                    "reason": BLOCKER_WAITING_FOR_PERMISSIONS if permission_failure else BLOCKER_WAITING_FOR_PR_READY,
+                    "slice_id": task.program_slice_id,
+                    "run_id": run.id,
+                    "pr_number": pr_number,
+                    "detail": msg,
+                    "ready_for_review_outcome": state.get("ready_for_review_outcome"),
+                    "retry_count": int(state.get("ready_for_review_retry_count") or 0),
+                },
+                ensure_ascii=False,
+            )
+            program.latest_summary = (
+                "Ready-for-review escalation for linked draft PR "
+                f"#{pr_number}: {msg}"
+            )
+            program.updated_at = _utc_now()
+            _save(session, program)
+    run.last_summary = (
+        f"{run.last_summary or ''}\nGovernor: ready_for_review_escalated ({msg})"
+    ).strip()
+    run.updated_at = _utc_now()
+    _save_governor_state(run, state)
+    _save(session, run)
+    return True, False
+
+
 def _batched_revision_comment_body(*, governor_requests: list[str], copilot_findings: list[str]) -> str:
     lines = ["@copilot Please apply the following revisions in this PR branch:"]
     request_lines = governor_requests or copilot_findings
@@ -911,14 +1157,26 @@ def _run_governor_loop(
 ) -> None:
     pr_number = run.github_pr_number
     if not isinstance(pr_number, int):
+        state = _load_governor_state(run)
+        state["ready_for_review_outcome"] = "ready_for_review_skipped_missing_pr_linkage"
+        _set_checkpoint(
+            state,
+            name="pr_ready_verified",
+            success=False,
+            summary="Ready-for-review skipped: missing authoritative PR linkage.",
+        )
+        _save_governor_state(run, state)
+        _save(session, run)
         _log_workflow_checkpoint(
             settings,
-            event="pr_discovered",
+            event="ready_for_review_skipped_missing_pr_linkage",
             task=task,
             run=run,
             success=False,
             summary="Governor loop skipped because no PR number is linked to run.",
             skip_reason="no_pr_discovered",
+            result_class="ready_for_review_skipped_missing_pr_linkage",
+            state=state,
         )
         return
     state = _load_governor_state(run)
@@ -949,6 +1207,7 @@ def _run_governor_loop(
     event_has_review_signal = ("pull_request_review:" in event_key) or ("pull_request_review_comment:" in event_key)
 
     pr_draft = bool(pr_payload.get("draft"))
+    pr_node_id = pr_payload.get("node_id") if isinstance(pr_payload.get("node_id"), str) else None
     pr_state = str(pr_payload.get("state") or "open")
     _set_checkpoint(
         state,
@@ -964,6 +1223,7 @@ def _run_governor_loop(
         success=True,
         summary=f"Observed PR state={pr_state}, draft={pr_draft}.",
         postcondition=f"isDraft={pr_draft}",
+        pr_node_id=pr_node_id,
         state=state,
     )
     requested_reviewers = []
@@ -1091,6 +1351,25 @@ def _run_governor_loop(
             success=True,
             summary="No actionable unresolved review findings; no continuation comment needed.",
         )
+
+    ready_handled, promoted_now = _handle_linked_draft_ready_for_review(
+        session,
+        settings=settings,
+        task=task,
+        run=run,
+        state=state,
+        pr_payload=pr_payload,
+        event_key=event_key,
+    )
+    if promoted_now:
+        pr_draft = False
+        state["pr_draft"] = False
+        state["safe_draft_promoted"] = True
+        state["safe_draft_promotion_failed"] = False
+    if ready_handled:
+        _save_governor_state(run, state)
+        _save(session, run)
+        return
 
     # --- Deterministic fix-trigger for ready PRs with unresolved Copilot findings ---
     if (
@@ -1278,119 +1557,6 @@ def _run_governor_loop(
         _save(session, run)
         return
 
-    # --- Deterministic safe-draft promotion (before OpenAI) ---
-    if safe_draft_can_be_promoted(
-        pr_draft=pr_draft,
-        checks_passed=checks_passed,
-        guarded_paths_touched=guarded_paths_touched,
-        unresolved_findings=unresolved_findings,
-        waiting_for_revision_push=waiting_for_revision_push,
-    ):
-        _governor_logger.info(
-            "Governor deterministic promotion: PR #%s is safe draft with green checks, "
-            "no guarded paths, no unresolved findings, no pending revision push — marking ready for review.",
-            pr_number,
-        )
-        _log_workflow_checkpoint(
-            settings,
-            event="ready_for_review_attempted",
-            task=task,
-            run=run,
-            success=True,
-            summary="Deterministic safe-draft promotion path invoked.",
-            auth_lane="dispatch_user_token",
-            api_type="GraphQL",
-            state=state,
-        )
-        success, msg = mark_pr_ready_for_review(settings=settings, repo=task.github_repo, pr_number=pr_number)
-        state["pr_draft"] = pr_draft
-        state["pr_state"] = pr_state
-        state["requested_reviewers"] = requested_reviewers
-        state["changed_files"] = changed_files
-        state["copilot_review_observed"] = copilot_review_observed
-        state["unresolved_copilot_findings"] = unresolved_findings
-        state["guarded_paths_touched"] = guarded_paths_touched
-        state["guarded_files"] = guarded_files
-        state["last_event_key"] = event_key
-        if success:
-            _set_checkpoint(
-                state,
-                name="pr_ready_verified",
-                success=True,
-                summary="Draft->ready transition completed and verified (draft=False).",
-            )
-            _log_workflow_checkpoint(
-                settings,
-                event="ready_for_review_verified",
-                task=task,
-                run=run,
-                success=True,
-                summary=msg,
-                postcondition="draft=False",
-                auth_lane="dispatch_user_token",
-                api_type="GraphQL",
-                state=state,
-            )
-            state["safe_draft_promoted"] = True
-            state["safe_draft_promotion_failed"] = False
-            state["last_governor_decision"] = "safe_draft_promoted"
-            state["last_governor_summary"] = ["Deterministic safe-draft promotion: PR marked ready for review."]
-            run.last_summary = f"{run.last_summary or ''}\nGovernor: safe_draft_promoted (deterministic policy)".strip()
-            run.updated_at = _utc_now()
-            _save_governor_state(run, state)
-            _save(session, run)
-            notify_discord(
-                f"Governor auto-promoted draft PR #{pr_number} to ready for review: {task.github_repo}#{task.github_issue_number}"
-            )
-            _governor_logger.info("Governor: PR #%s successfully promoted to ready for review.", pr_number)
-            return
-        else:
-            _set_checkpoint(
-                state,
-                name="pr_ready_verified",
-                success=False,
-                summary=f"Draft->ready transition failed: {msg}",
-            )
-            _log_workflow_checkpoint(
-                settings,
-                event="ready_for_review_failed",
-                task=task,
-                run=run,
-                success=False,
-                summary=msg,
-                postcondition="draft remains true/unknown",
-                auth_lane="dispatch_user_token",
-                api_type="GraphQL",
-                state=state,
-            )
-            state["safe_draft_promoted"] = False
-            state["safe_draft_promotion_failed"] = True
-            state["last_governor_decision"] = "safe_draft_promotion_failed"
-            state["last_governor_summary"] = [f"Deterministic safe-draft promotion failed: {msg}"]
-            _governor_logger.warning("Governor: failed to promote PR #%s: %s", pr_number, msg)
-            if task.program_id:
-                program = session.get(Program, task.program_id)
-                if program is not None:
-                    program.status = "blocked"
-                    program.blocker_state_json = json.dumps(
-                        {
-                            "reason": BLOCKER_WAITING_FOR_PR_READY,
-                            "slice_id": task.program_slice_id,
-                            "run_id": run.id,
-                            "pr_number": pr_number,
-                            "detail": msg,
-                        },
-                        ensure_ascii=False,
-                    )
-                    program.latest_summary = f"Draft PR #{pr_number} promotion failed: {msg}"
-                    program.updated_at = _utc_now()
-                    _save(session, program)
-            run.last_summary = f"{run.last_summary or ''}\nGovernor: safe_draft_promotion_failed ({msg})".strip()
-            run.updated_at = _utc_now()
-            _save_governor_state(run, state)
-            _save(session, run)
-            return
-
     review_artifact = _parse_json_object(run.review_artifact_json) or {}
     governor_context = {
         "event_key": event_key,
@@ -1541,48 +1707,16 @@ def _run_governor_loop(
     if decision == "ready_for_review" and pr_draft:
         _log_workflow_checkpoint(
             settings,
-            event="ready_for_review_attempted",
+            event="ready_for_review_skipped_non_draft",
             task=task,
             run=run,
             success=True,
-            summary="OpenAI governor decision requested ready-for-review mutation.",
+            summary="OpenAI requested ready_for_review but draft handoff already executed in this cycle.",
             auth_lane="dispatch_user_token",
             api_type="GraphQL",
+            skip_reason="already_handled_earlier",
             state=state,
         )
-        success, msg = mark_pr_ready_for_review(settings=settings, repo=task.github_repo, pr_number=pr_number)
-        _set_checkpoint(
-            state,
-            name="pr_ready_verified",
-            success=bool(success),
-            summary=msg,
-        )
-        if not success:
-            _governor_logger.warning("Governor: OpenAI-directed ready_for_review failed for PR #%s: %s", pr_number, msg)
-            _log_workflow_checkpoint(
-                settings,
-                event="ready_for_review_failed",
-                task=task,
-                run=run,
-                success=False,
-                summary=msg,
-                auth_lane="dispatch_user_token",
-                api_type="GraphQL",
-                state=state,
-            )
-        else:
-            _log_workflow_checkpoint(
-                settings,
-                event="ready_for_review_verified",
-                task=task,
-                run=run,
-                success=True,
-                summary=msg,
-                postcondition="draft=False",
-                auth_lane="dispatch_user_token",
-                api_type="GraphQL",
-                state=state,
-            )
     if decision == "approve_and_merge":
         ready_gate = bool((state.get("checkpoints") or {}).get("pr_ready_verified", {}).get("success"))
         harvest_gate = bool((state.get("checkpoints") or {}).get("review_harvested", {}).get("success"))
