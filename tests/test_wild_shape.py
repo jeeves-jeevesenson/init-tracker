@@ -420,7 +420,75 @@ class WildShapeTests(unittest.TestCase):
         ok2, err2 = self.app._revert_wild_shape(1)
         self.assertTrue(ok2, err2)
         self.assertEqual(c.temp_hp, 5)
-        self.assertEqual(service_calls[-1], (1, 5, True))
+        self.assertEqual(service_calls, [(1, 8, True), (1, 8, True), (1, 5, True)])
+
+    def test_wild_shape_apply_revert_do_not_directly_mutate_temp_hp_outside_service(self):
+        class GuardedCombatant:
+            def __init__(self):
+                self.cid = 1
+                self.name = "Alice"
+                self.speed = 30
+                self.swim_speed = 0
+                self.fly_speed = 0
+                self.climb_speed = 0
+                self.burrow_speed = 0
+                self.movement_mode = "Normal"
+                self.dex = 14
+                self.con = 12
+                self.str = 10
+                self.actions = [{"name": "Magic", "type": "action"}]
+                self.bonus_actions = []
+                self.is_spellcaster = True
+                self._temp_hp = 5
+
+            @property
+            def temp_hp(self):
+                return int(getattr(self, "_temp_hp", 0))
+
+            @temp_hp.setter
+            def temp_hp(self, _value):
+                raise AssertionError("direct temp_hp mutation is not allowed in this lifecycle path")
+
+        c = GuardedCombatant()
+        self.app.combatants = {1: c}
+        self.app._pc_name_for = lambda _cid: "Alice"
+        self.app._load_player_yaml_cache = lambda force_refresh=False: None
+        self.app._player_yaml_data_by_name = {"Alice": self._profile(8)}
+        self.app._set_wild_shape_pool_current = lambda _name, value: (True, "", value)
+        self.app._wild_shape_beast_cache = [
+            {
+                "id": "brown-bear",
+                "name": "Brown Bear",
+                "challenge_rating": 1.0,
+                "size": "Large",
+                "ac": 11,
+                "speed": {"walk": 40, "swim": 0, "fly": 0, "climb": 30},
+                "abilities": {"str": 17, "dex": 12, "con": 15, "int": 2, "wis": 13, "cha": 7},
+                "actions": [],
+            }
+        ]
+        service_calls = []
+
+        def _apply_heal_via_service(cid, amount, *, is_temp_hp=False):
+            service_calls.append((int(cid), int(amount), bool(is_temp_hp)))
+            target = self.app.combatants.get(int(cid))
+            if target is None:
+                return False
+            if bool(is_temp_hp):
+                object.__setattr__(target, "_temp_hp", max(0, int(amount)))
+                return True
+            return False
+
+        self.app._apply_heal_via_service = _apply_heal_via_service
+
+        ok, err = self.app._apply_wild_shape(1, "brown-bear")
+        self.assertTrue(ok, err)
+        self.assertEqual(getattr(c, "_temp_hp", 0), 8)
+
+        ok2, err2 = self.app._revert_wild_shape(1)
+        self.assertTrue(ok2, err2)
+        self.assertEqual(getattr(c, "_temp_hp", 0), 5)
+        self.assertEqual(service_calls, [(1, 8, True), (1, 5, True)])
 
     def test_wild_shape_lifecycle_revert_after_damage_without_recovery_keeps_current_temp_hp(self):
         c = type("C", (), {
