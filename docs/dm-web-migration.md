@@ -157,20 +157,20 @@ The following desktop/LAN-originated mutations now route through
 - **Desktop `_set_temp_hp_via_service()`** → `CombatService.set_temp_hp()`
   (wrapper available for progressive adoption)
 - **Deep combat damage** → `_apply_damage_via_service()` →
-  `CombatService.apply_damage()` — routes all identified core callers:
-  attack resolution, spell AoE damage, start-of-turn damage riders,
-  end-turn save-rider fail damage, end-of-turn damage riders, and the
-  `_apply_damage_to_combatant` alias (Slice 9); Heat Metal, Hellish Rebuke,
-  and weapon-mastery attack paths (Slice 10)
-- **Healing** → `_apply_heal_via_service()` → `CombatService.apply_heal()` —
-  wrapper available (Slice 9); heal dialog, Second Wind (LAN), and
-  Lay on Hands (LAN) now route through the wrapper (Slice 10);
-  Uncanny Metabolism, healing consumable use (potion etc.),
-  spell healing resolution (Cure Wounds / Healing Word), Mantle of
-  Inspiration temp HP, and Patient Defense Focus temp HP now route
-  through the wrapper (Slice 11)
+  `CombatService.apply_damage()` — all identified damage callers now route
+  through the service: attack resolution, spell AoE damage, start-of-turn
+  damage riders, end-turn save-rider fail damage, end-of-turn damage riders,
+  and the `_apply_damage_to_combatant` alias (Slice 9); Heat Metal, Hellish
+  Rebuke, and weapon-mastery attack paths (Slice 10)
+- **Healing** → `_apply_heal_via_service()` →
+  `CombatService.apply_heal()` — all commonly used heal callers now route
+  through the service: heal dialog, Second Wind (LAN), and Lay on Hands
+  (LAN) (Slice 10); Uncanny Metabolism, healing consumable use (potion
+  etc.), spell healing resolution (Cure Wounds / Healing Word), Mantle of
+  Inspiration temp HP, and Patient Defense Focus temp HP (Slice 11)
 - **Long Rest batch HP restore** → `CombatService.batch_long_rest_heal()` →
-  `apply_heal(_broadcast=False)` per target with single outer
+  `apply_heal(_broadcast=False)` — Long Rest HP restoration now routes
+  through the service with per-target heal calls and a single outer
   rebuild/broadcast (Slice 12)
 
 All wrappers fall back to direct mutation + broadcast when the service is
@@ -200,15 +200,14 @@ concurrently.  The current safeguard model:
   `_rebuild_table()` call.
 
 **Remaining risk**: The `CombatService` lock now covers all mutations that
-go through the service, including web-originated, desktop-routed paths
+go through the service, including web-originated and desktop-routed paths
 (Start/Reset, Prev Turn, Next Turn, Set Turn Here, manual HP override),
-all identified deep damage callers, all commonly used heal callers
-(heal dialog, Second Wind, Lay on Hands, Uncanny Metabolism, healing
-consumable use, spell healing resolution, Mantle of Inspiration temp HP,
-Patient Defense Focus temp HP), and Long Rest batch HP restoration
-(Slice 12).  The only remaining hybrid heal path is Wild Shape temp HP
-management.  This is an acceptable risk for the single-session LAN use
-case.
+all identified deep damage callers (Slices 9–10), all commonly used heal
+callers (Slices 10–11), and Long Rest batch HP restoration (Slice 12).
+Milestone 1 is not yet complete: the only remaining hybrid heal path is
+Wild Shape temp HP management, which sets temp_hp directly and is
+lifecycle-coupled to the Wild Shape enter/exit state machine.  This is an
+acceptable risk for the single-session LAN use case.
 
 ---
 
