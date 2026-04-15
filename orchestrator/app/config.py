@@ -67,6 +67,8 @@ class Settings(BaseSettings):
 
     openai_planning_model: str = Field(default="gpt-5.4", alias="OPENAI_PLANNING_MODEL")
     openai_review_model: str = Field(default="gpt-5.4", alias="OPENAI_REVIEW_MODEL")
+    openai_governor_model_fast: str = Field(default="gpt-5.4-mini", alias="OPENAI_GOVERNOR_MODEL_FAST")
+    openai_governor_model_heavy: str = Field(default="gpt-5.4", alias="OPENAI_GOVERNOR_MODEL_HEAVY")
     openai_planning_reasoning_effort: str = Field(
         default="medium",
         alias="OPENAI_PLANNING_REASONING_EFFORT",
@@ -101,6 +103,26 @@ class Settings(BaseSettings):
     program_max_revision_attempts: int = Field(default=2, alias="PROGRAM_MAX_REVISION_ATTEMPTS")
     worker_weak_evidence_stale_minutes: int = Field(default=90, alias="WORKER_WEAK_EVIDENCE_STALE_MINUTES")
     governor_max_revision_cycles: int = Field(default=2, alias="GOVERNOR_MAX_REVISION_CYCLES")
+    governor_high_autonomy_max_revision_cycles: int = Field(
+        default=1,
+        alias="GOVERNOR_HIGH_AUTONOMY_MAX_REVISION_CYCLES",
+    )
+    governor_heavy_max_calls_per_pr_total: int = Field(
+        default=6,
+        alias="GOVERNOR_HEAVY_MAX_CALLS_PER_PR_TOTAL",
+    )
+    governor_heavy_max_calls_per_head_sha: int = Field(
+        default=2,
+        alias="GOVERNOR_HEAVY_MAX_CALLS_PER_HEAD_SHA",
+    )
+    governor_heavy_max_calls_per_slice: int = Field(
+        default=4,
+        alias="GOVERNOR_HEAVY_MAX_CALLS_PER_SLICE",
+    )
+    governor_max_repeated_blocked_reviews: int = Field(
+        default=2,
+        alias="GOVERNOR_MAX_REPEATED_BLOCKED_REVIEWS",
+    )
     governor_remove_reviewer_login: str = Field(default="jeeves-jeevesenson", alias="GOVERNOR_REMOVE_REVIEWER_LOGIN")
     governor_fallback_reviewer: str | None = Field(default=None, alias="GOVERNOR_FALLBACK_REVIEWER")
     governor_guarded_paths: str = Field(

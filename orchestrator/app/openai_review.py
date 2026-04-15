@@ -514,6 +514,9 @@ def summarize_governor_update(
     settings: Settings,
     update_context: str,
     previous_response_id: str | None = None,
+    model: str | None = None,
+    reasoning_effort: str | None = None,
+    stage: str = "continuation_audit",
 ) -> dict[str, Any]:
     validate_strict_json_schema(schema_name="pr_governor_artifact", schema=GOVERNOR_ARTIFACT_SCHEMA)
     if not settings.openai_api_key:
@@ -523,7 +526,7 @@ def summarize_governor_update(
             "summary_bullets": artifact["summary"],
             "next_action": artifact["decision"],
             "openai_meta": {
-                "stage": "continuation_audit",
+                "stage": stage,
                 "model_tier": "fallback",
                 "model": None,
                 "response_id": None,
@@ -532,19 +535,27 @@ def summarize_governor_update(
             },
         }
 
-    governor_model, model_tier = select_model_for_stage(
-        settings=settings,
-        stage="continuation_audit",
-        fallback_model=settings.openai_review_model,
-    )
+    normalized_stage = (stage or "continuation_audit").strip() or "continuation_audit"
+    if isinstance(model, str) and model.strip():
+        governor_model = model.strip()
+        model_tier = "explicit"
+    else:
+        governor_model, model_tier = select_model_for_stage(
+            settings=settings,
+            stage=normalized_stage,
+            fallback_model=settings.openai_review_model,
+        )
     repo = _extract_repo_from_context(update_context)
     client = OpenAI(api_key=settings.openai_api_key)
+    selected_reasoning_effort = (
+        reasoning_effort.strip() if isinstance(reasoning_effort, str) and reasoning_effort.strip() else settings.openai_review_reasoning_effort
+    )
     payload = _governor_response_payload(
         model=governor_model,
         update_context=update_context,
         settings=settings,
-        reasoning_effort=settings.openai_review_reasoning_effort,
-        stage="continuation_audit",
+        reasoning_effort=selected_reasoning_effort,
+        stage=normalized_stage,
         repo=repo,
         previous_response_id=previous_response_id,
         model_tier=model_tier,
@@ -562,7 +573,8 @@ def summarize_governor_update(
     artifact = _validate_governor_artifact(parsed)
     response_id = getattr(response, "id", None)
     _logger.info(
-        "openai_call stage=continuation_audit model=%s response_id=%s model_tier=%s",
+        "openai_call stage=%s model=%s response_id=%s model_tier=%s",
+        normalized_stage,
         governor_model,
         response_id or "",
         model_tier,
@@ -573,7 +585,7 @@ def summarize_governor_update(
         "next_action": artifact["decision"],
         "openai_meta": {
             **request_controls,
-            "stage": "continuation_audit",
+            "stage": normalized_stage,
             "model_tier": model_tier,
             "model": governor_model,
             "response_id": response_id,
