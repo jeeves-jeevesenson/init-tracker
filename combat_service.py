@@ -58,7 +58,8 @@ Still hybrid / desktop-primary:
   - Character editor, shop, spell/resource management
   - YAML-backed save/load (unchanged; mutations here persist via existing path)
   - Full monster-spec / player-profile based combatant creation (desktop only)
-  - Long rest batch HP restore (desktop + LAN) still sets HP directly
+  - Long rest batch HP restore now routes through
+    CombatService.batch_long_rest_heal() → apply_heal() (Slice 12)
   - Wild Shape temp HP management still sets temp_hp directly
 
 Next recommended migration targets:
@@ -786,6 +787,82 @@ class CombatService:
                 "hp_after": hp_after,
                 "temp_hp_before": temp_hp_before,
                 "temp_hp_after": temp_hp_after,
+            }
+
+    # ------------------------------------------------------------------
+    # Long Rest batch HP restoration (Slice 12)
+    # ------------------------------------------------------------------
+
+    def batch_long_rest_heal(
+        self, targets: Dict[int, int]
+    ) -> Dict[str, Any]:
+        """Restore HP for multiple combatants as part of a Long Rest.
+
+        Uses the canonical ``apply_heal`` path (with ``_broadcast=False``) for
+        each target, then performs a single rebuild + broadcast at the end to
+        keep the batch efficient.
+
+        Args:
+            targets: Mapping of ``{cid: max_hp_value}`` where each
+                     combatant's HP should be restored to ``max_hp_value``.
+                     The method computes the heal amount (``max_hp - current_hp``)
+                     internally and skips already-full targets truthfully.
+
+        Returns:
+            ``{ok, results: [{cid, hp_before, hp_after, skipped}], healed, skipped}``
+        """
+        with self._lock:
+            t = self._tracker
+            combatants = getattr(t, "combatants", {}) or {}
+            results = []
+            healed_count = 0
+            skipped_count = 0
+
+            for cid, target_max_hp in targets.items():
+                cid = int(cid)
+                c = combatants.get(cid)
+                if c is None:
+                    continue
+                target_max_hp = int(target_max_hp)
+                current_hp = int(getattr(c, "hp", 0) or 0)
+                heal_needed = max(0, target_max_hp - current_hp)
+
+                if heal_needed == 0:
+                    results.append({
+                        "cid": cid,
+                        "hp_before": current_hp,
+                        "hp_after": current_hp,
+                        "skipped": True,
+                    })
+                    skipped_count += 1
+                    continue
+
+                res = self.apply_heal(cid=cid, amount=heal_needed, _broadcast=False)
+                hp_after = int(getattr(c, "hp", 0) or 0)
+                results.append({
+                    "cid": cid,
+                    "hp_before": current_hp,
+                    "hp_after": hp_after,
+                    "skipped": False,
+                })
+                if res.get("ok"):
+                    healed_count += 1
+
+            # Single outer rebuild + broadcast for the entire batch
+            try:
+                t._rebuild_table(scroll_to_current=True)
+            except Exception:
+                pass
+            try:
+                t._lan_force_state_broadcast()
+            except Exception:
+                pass
+
+            return {
+                "ok": True,
+                "results": results,
+                "healed": healed_count,
+                "skipped": skipped_count,
             }
 
     def start_combat(self) -> Dict[str, Any]:

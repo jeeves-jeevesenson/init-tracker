@@ -969,25 +969,44 @@ class InitiativeTracker(tk.Tk):
             messagebox.showerror("Long Rest", f"Failed to reset player resources.\n\n{exc}", parent=self)
             return
         if updated:
+            # Build {cid: max_hp} mapping for PC combatants matched by name
+            batch_targets: dict = {}
             for c in self.combatants.values():
                 role = self._name_role_memory.get(str(c.name), "enemy")
                 if not getattr(c, "is_pc", False) and role != "pc":
                     continue
                 key = str(c.name or "").strip().lower()
                 if key in updated:
+                    batch_targets[int(c.cid)] = int(updated[key])
+
+            dm_svc = self.__dict__.get("_dm_service")
+            routed = False
+            if dm_svc is not None and batch_targets:
+                # Route through canonical service batch heal path (Slice 12)
+                try:
+                    dm_svc.batch_long_rest_heal(batch_targets)
+                    routed = True
+                except Exception:
+                    pass
+
+            if not routed and batch_targets:
+                # Fallback: direct mutation + manual broadcast
+                for cid, max_hp_val in batch_targets.items():
+                    c = self.combatants.get(cid)
+                    if c is not None:
+                        try:
+                            c.hp = int(max_hp_val)
+                        except Exception:
+                            pass
+                try:
+                    self._rebuild_table(scroll_to_current=True)
+                except Exception:
+                    pass
+                if hasattr(self, "_lan_force_state_broadcast"):
                     try:
-                        c.hp = int(updated[key])
+                        self._lan_force_state_broadcast()
                     except Exception:
                         pass
-        try:
-            self._rebuild_table(scroll_to_current=True)
-        except Exception:
-            pass
-        if hasattr(self, "_lan_force_state_broadcast"):
-            try:
-                self._lan_force_state_broadcast()
-            except Exception:
-                pass
         try:
             self._log("Long rest applied to player characters.")
         except Exception:
