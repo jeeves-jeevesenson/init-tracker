@@ -164,7 +164,11 @@ The following desktop/LAN-originated mutations now route through
   and weapon-mastery attack paths (Slice 10)
 - **Healing** → `_apply_heal_via_service()` → `CombatService.apply_heal()` —
   wrapper available (Slice 9); heal dialog, Second Wind (LAN), and
-  Lay on Hands (LAN) now route through the wrapper (Slice 10)
+  Lay on Hands (LAN) now route through the wrapper (Slice 10);
+  Uncanny Metabolism, healing consumable use (potion etc.),
+  spell healing resolution (Cure Wounds / Healing Word), Mantle of
+  Inspiration temp HP, and Patient Defense Focus temp HP now route
+  through the wrapper (Slice 11)
 
 All wrappers fall back to direct mutation + broadcast when the service is
 not running (e.g. LAN server not started).
@@ -195,13 +199,13 @@ concurrently.  The current safeguard model:
 **Remaining risk**: The `CombatService` lock now covers all mutations that
 go through the service, including web-originated, desktop-routed paths
 (Start/Reset, Prev Turn, Next Turn, Set Turn Here, manual HP override),
-and all identified deep damage callers (attack resolution, spell AoE,
-start/end-of-turn damage riders, Heat Metal, Hellish Rebuke, weapon-mastery
-attack paths).  Heal callers that now route through `_apply_heal_via_service`
-(heal dialog, Second Wind, Lay on Hands) are also covered.  Some niche
-desktop-originated heal paths may still bypass the service wrapper; the
-wrapper adoption can continue incrementally.  This is an acceptable risk
-for the single-session LAN use case.
+all identified deep damage callers, and all commonly used heal callers
+(heal dialog, Second Wind, Lay on Hands, Uncanny Metabolism, healing
+consumable use, spell healing resolution, Mantle of Inspiration temp HP,
+Patient Defense Focus temp HP).  Remaining hybrid heal paths are limited
+to batch operations (Long Rest HP restore) and niche state management
+(Wild Shape temp HP).  This is an acceptable risk for the single-session
+LAN use case.
 
 ---
 
@@ -217,9 +221,9 @@ via the web.
 
 ## Recommended next migration targets
 
-1. **Remaining niche heal call-site adoption**: Some niche heal paths may
-   still bypass `_apply_heal_via_service()`.  Further slices can migrate
-   additional callers as identified.
+1. **Remaining hybrid heal paths**: Long Rest batch HP restore (desktop +
+   LAN) and Wild Shape temp HP management still set HP/temp HP directly.
+   These are lower-priority batch or niche state operations.
 
 2. **Initiative-roll support**: Expose full initiative-roll support through
    the backend service so the DM web console can trigger initiative rolls

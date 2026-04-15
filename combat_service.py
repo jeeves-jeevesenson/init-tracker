@@ -46,7 +46,10 @@ Desktop-routed through this service (Slice 9):
   - Healing (_apply_heal_to_combatant) routes through
     CombatService.apply_heal via _apply_heal_via_service() — wrapper
     available (Slice 9); heal dialog, Second Wind, and Lay on Hands now
-    route through the wrapper (Slice 10)
+    route through the wrapper (Slice 10); Uncanny Metabolism, healing
+    consumable use, spell healing resolution (Cure Wounds / Healing Word),
+    Mantle of Inspiration temp HP, and Patient Defense Focus temp HP now
+    route through the wrapper (Slice 11)
 
 Still hybrid / desktop-primary:
   - Full Tkinter canvas UI rendering
@@ -55,8 +58,8 @@ Still hybrid / desktop-primary:
   - Character editor, shop, spell/resource management
   - YAML-backed save/load (unchanged; mutations here persist via existing path)
   - Full monster-spec / player-profile based combatant creation (desktop only)
-  - Some niche heal callers may still bypass _apply_heal_via_service;
-    further slices can migrate additional callers as needed
+  - Long rest batch HP restore (desktop + LAN) still sets HP directly
+  - Wild Shape temp HP management still sets temp_hp directly
 
 Next recommended migration targets:
   - Expose full initiative-roll support so DM web can trigger rolls
