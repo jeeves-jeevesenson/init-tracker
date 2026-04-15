@@ -3006,6 +3006,7 @@ class OrchestratorMilestone2Tests(unittest.TestCase):
                     "title": "Add blank file test",
                     "body": "Implements coverage improvements.",
                     "html_url": "https://github.com/jeeves-jeevesenson/init-tracker/pull/6211",
+                    "draft": True,
                     "changed_files": 1,
                     "commits": 1,
                     "head": {"ref": "copilot/add-blank-file-test", "sha": "abc123def456"},
@@ -3057,6 +3058,177 @@ class OrchestratorMilestone2Tests(unittest.TestCase):
                     self.assertEqual(task["latest_run"]["status"], "pr_opened")
                     self.assertEqual(task["latest_run"]["github_pr_number"], 6211)
                     self.assertNotIn("reconciliation incomplete", task["latest_summary"].lower())
+
+    def test_pull_request_webhook_ready_for_review_advances_existing_linked_draft_pr(self):
+        with tempfile.TemporaryDirectory() as td:
+            os.environ["DATABASE_URL"] = f"sqlite:///{Path(td) / 'orchestrator.db'}"
+            os.environ["GH_WEBHOOK_SECRET"] = "test-gh-secret"
+            os.environ["GITHUB_API_TOKEN"] = "dummy-token"
+            main, _ = _reload_orchestrator_modules()
+
+            issue_payload = {
+                "action": "opened",
+                "repository": {"full_name": "jeeves-jeevesenson/init-tracker"},
+                "issue": {
+                    "number": 624,
+                    "node_id": "I_624",
+                    "title": "Draft to ready PR transition",
+                    "body": "Ensure linked draft transitions cleanly",
+                    "labels": [{"name": "agent:task"}],
+                },
+            }
+            approve_payload = {
+                "action": "created",
+                "repository": {"full_name": "jeeves-jeevesenson/init-tracker"},
+                "issue": {"number": 624},
+                "comment": {"body": "/approve"},
+            }
+            opened_payload = {
+                "action": "opened",
+                "repository": {"full_name": "jeeves-jeevesenson/init-tracker"},
+                "pull_request": {
+                    "number": 6241,
+                    "title": "Copilot change without issue ref",
+                    "body": "No textual issue refs in this draft",
+                    "html_url": "https://github.com/jeeves-jeevesenson/init-tracker/pull/6241",
+                    "draft": True,
+                    "changed_files": 2,
+                    "commits": 1,
+                    "head": {"ref": "copilot/fix-624", "sha": "beadfeed624"},
+                },
+            }
+            ready_payload = {
+                "action": "ready_for_review",
+                "repository": {"full_name": "jeeves-jeevesenson/init-tracker"},
+                "pull_request": {
+                    "number": 6241,
+                    "title": "Copilot change without issue ref",
+                    "body": "No textual issue refs in this draft",
+                    "html_url": "https://github.com/jeeves-jeevesenson/init-tracker/pull/6241",
+                    "draft": False,
+                    "changed_files": 2,
+                    "commits": 2,
+                    "head": {"ref": "copilot/fix-624", "sha": "beadfeed624"},
+                    "updated_at": "2026-04-15T00:00:00Z",
+                },
+            }
+
+            with patch(
+                "orchestrator.app.tasks.plan_task_packet",
+                return_value={
+                    "objective": "Dispatch task",
+                    "scope": ["dispatch"],
+                    "non_goals": [],
+                    "acceptance_criteria": ["authoritative linkage works"],
+                    "validation_guidance": ["unit tests"],
+                    "implementation_brief": "dispatch this",
+                },
+            ), patch(
+                "orchestrator.app.tasks.dispatch_task_to_github_copilot",
+                return_value=DispatchResult(
+                    attempted=True,
+                    accepted=True,
+                    manual_required=False,
+                    state="accepted",
+                    summary="Dispatch accepted",
+                ),
+            ), patch(
+                "orchestrator.app.tasks.list_recent_pull_requests",
+                return_value=([], "none"),
+            ), patch(
+                "orchestrator.app.tasks.list_issue_timeline_events",
+                return_value=([{"event": "referenced", "commit_id": "beadfeed624"}], "ok"),
+            ), patch(
+                "orchestrator.app.tasks.summarize_work_update",
+                return_value={
+                    "review_artifact": {"decision": "wait", "summary": ["PR event observed"], "revision_instructions": []},
+                    "summary_bullets": ["PR event observed"],
+                    "next_action": "wait",
+                },
+            ):
+                with TestClient(main.app) as client:
+                    self._post_github(client, secret="test-gh-secret", delivery="delivery-task-opened-624", event="issues", payload=issue_payload)
+                    self._post_github(client, secret="test-gh-secret", delivery="delivery-approve-624", event="issue_comment", payload=approve_payload)
+                    self._post_github(client, secret="test-gh-secret", delivery="delivery-pr-opened-624", event="pull_request", payload=opened_payload)
+                    task_after_open = client.get("/tasks").json()["tasks"][0]
+                    self.assertEqual(task_after_open["latest_run"]["github_pr_number"], 6241)
+                    self.assertEqual(task_after_open["status"], "pr_opened")
+                    self._post_github(client, secret="test-gh-secret", delivery="delivery-pr-ready-624", event="pull_request", payload=ready_payload)
+                    task_after_ready = client.get("/tasks").json()["tasks"][0]
+                    self.assertEqual(task_after_ready["status"], "pr_opened")
+                    self.assertEqual(task_after_ready["latest_run"]["status"], "pr_opened")
+                    self.assertEqual(task_after_ready["latest_run"]["github_pr_number"], 6241)
+                    self.assertNotIn("reconciliation incomplete", task_after_ready["latest_summary"].lower())
+
+    def test_pull_request_webhook_unmatched_copilot_draft_without_authoritative_evidence_does_not_link(self):
+        with tempfile.TemporaryDirectory() as td:
+            os.environ["DATABASE_URL"] = f"sqlite:///{Path(td) / 'orchestrator.db'}"
+            os.environ["GH_WEBHOOK_SECRET"] = "test-gh-secret"
+            os.environ["GITHUB_API_TOKEN"] = "dummy-token"
+            main, _ = _reload_orchestrator_modules()
+
+            issue_payload = {
+                "action": "opened",
+                "repository": {"full_name": "jeeves-jeevesenson/init-tracker"},
+                "issue": {
+                    "number": 625,
+                    "node_id": "I_625",
+                    "title": "No false copilot draft linking",
+                    "body": "Draft PR should not link without authoritative evidence",
+                    "labels": [{"name": "agent:task"}],
+                },
+            }
+            approve_payload = {
+                "action": "created",
+                "repository": {"full_name": "jeeves-jeevesenson/init-tracker"},
+                "issue": {"number": 625},
+                "comment": {"body": "/approve"},
+            }
+            pr_payload = {
+                "action": "opened",
+                "repository": {"full_name": "jeeves-jeevesenson/init-tracker"},
+                "pull_request": {
+                    "number": 6251,
+                    "title": "Copilot draft branch",
+                    "body": "No explicit issue refs.",
+                    "html_url": "https://github.com/jeeves-jeevesenson/init-tracker/pull/6251",
+                    "draft": True,
+                    "head": {"ref": "copilot/some-random-change", "sha": "cafebabe625"},
+                },
+            }
+
+            with patch(
+                "orchestrator.app.tasks.plan_task_packet",
+                return_value={
+                    "objective": "Dispatch task",
+                    "scope": ["dispatch"],
+                    "non_goals": [],
+                    "acceptance_criteria": ["linkage stays truthful"],
+                    "validation_guidance": ["unit tests"],
+                    "implementation_brief": "dispatch this",
+                },
+            ), patch(
+                "orchestrator.app.tasks.dispatch_task_to_github_copilot",
+                return_value=DispatchResult(
+                    attempted=True,
+                    accepted=True,
+                    manual_required=False,
+                    state="accepted",
+                    summary="Dispatch accepted",
+                ),
+            ), patch(
+                "orchestrator.app.tasks.list_issue_timeline_events",
+                return_value=([], "none"),
+            ):
+                with TestClient(main.app) as client:
+                    self._post_github(client, secret="test-gh-secret", delivery="delivery-task-opened-625", event="issues", payload=issue_payload)
+                    self._post_github(client, secret="test-gh-secret", delivery="delivery-approve-625", event="issue_comment", payload=approve_payload)
+                    response = self._post_github(client, secret="test-gh-secret", delivery="delivery-pr-opened-625", event="pull_request", payload=pr_payload)
+                    self.assertEqual(response.status_code, 202)
+                    task = client.get("/tasks").json()["tasks"][0]
+                    self.assertEqual(task["status"], "blocked")
+                    self.assertIsNone(task["latest_run"]["github_pr_number"])
+                    self.assertIn("reconciliation incomplete", task["latest_summary"].lower())
 
     def test_pull_request_webhook_authoritative_association_ambiguous_does_not_link(self):
         with tempfile.TemporaryDirectory() as td:

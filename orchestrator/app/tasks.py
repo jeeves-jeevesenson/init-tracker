@@ -2438,14 +2438,19 @@ def dispatch_task_if_ready(session: Session, *, settings: Settings, task: TaskPa
 def _timeline_event_matches_pr(
     event: dict[str, Any],
     *,
+    github_repo: str,
     pr_number: int | None,
     pr_head_sha: str | None,
 ) -> bool:
     if pr_number is None and not pr_head_sha:
         return False
+    normalized_repo = github_repo.strip().lower()
     event_pr = event.get("pull_request") if isinstance(event.get("pull_request"), dict) else {}
     event_pr_number = event_pr.get("number") if isinstance(event_pr.get("number"), int) else None
-    if pr_number is not None and event_pr_number == pr_number:
+    event_pr_base = event_pr.get("base") if isinstance(event_pr.get("base"), dict) else {}
+    event_pr_repo_obj = event_pr_base.get("repo") if isinstance(event_pr_base.get("repo"), dict) else {}
+    event_pr_repo = str(event_pr_repo_obj.get("full_name") or "").strip().lower()
+    if pr_number is not None and event_pr_number == pr_number and (not event_pr_repo or event_pr_repo == normalized_repo):
         return True
 
     source = event.get("source") if isinstance(event.get("source"), dict) else {}
@@ -2453,7 +2458,11 @@ def _timeline_event_matches_pr(
     source_pr = source_issue.get("pull_request") if isinstance(source_issue.get("pull_request"), dict) else {}
     source_pr_number = source_issue.get("number") if isinstance(source_issue.get("number"), int) else None
     source_linked_pr_number = source_pr.get("number") if isinstance(source_pr.get("number"), int) else None
-    if pr_number is not None and pr_number in {source_pr_number, source_linked_pr_number}:
+    source_repo = str(source_issue.get("repository_url") or "").strip().lower()
+    if source_repo and source_repo.endswith(f"/repos/{normalized_repo}"):
+        source_repo = normalized_repo
+    source_repo_matches = not source_repo or source_repo == normalized_repo
+    if pr_number is not None and pr_number in {source_pr_number, source_linked_pr_number} and source_repo_matches:
         return True
 
     if pr_head_sha:
@@ -2510,6 +2519,7 @@ def _task_for_authoritative_pr_association(
         if any(
             _timeline_event_matches_pr(
                 event,
+                github_repo=github_repo,
                 pr_number=pr_number,
                 pr_head_sha=pr_head_sha,
             )
