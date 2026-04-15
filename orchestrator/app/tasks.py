@@ -568,6 +568,56 @@ def _save_governor_state(run: AgentRun, state: dict[str, Any]) -> None:
 _governor_logger = logging.getLogger("orchestrator.governor")
 
 
+def _workflow_debug_enabled(settings: Settings) -> bool:
+    return bool(getattr(settings, "orchestrator_debug_workflow", False))
+
+
+def _governor_fingerprint(state: dict[str, Any] | None) -> str:
+    payload = state or {}
+    compact = {
+        "revision_cycle_count": payload.get("revision_cycle_count"),
+        "waiting_for_revision_push": payload.get("waiting_for_revision_push"),
+        "guarded_paths_touched": payload.get("guarded_paths_touched"),
+        "last_event_key": payload.get("last_event_key"),
+        "checkpoints": payload.get("checkpoints"),
+    }
+    return hashlib.sha1(json.dumps(compact, sort_keys=True, ensure_ascii=False).encode("utf-8")).hexdigest()[:12]
+
+
+def _log_workflow_checkpoint(
+    settings: Settings,
+    *,
+    event: str,
+    task: TaskPacket | None,
+    run: AgentRun | None = None,
+    success: bool,
+    summary: str,
+    auth_lane: str = "n/a",
+    api_type: str = "n/a",
+    postcondition: str | None = None,
+    skip_reason: str | None = None,
+    state: dict[str, Any] | None = None,
+) -> None:
+    if not _workflow_debug_enabled(settings):
+        return
+    _governor_logger.info(
+        "workflow_event=%s task_id=%s issue_number=%s pr_number=%s repo=%s auth_lane=%s api_type=%s success=%s checkpoint=%s governor_fingerprint=%s skip_reason=%s postcondition=%s summary=%s",
+        event,
+        (task.id if task and task.id is not None else (run.task_packet_id if run else "n/a")),
+        (task.github_issue_number if task else (run.github_issue_number if run else "n/a")),
+        (run.github_pr_number if run else "n/a"),
+        (task.github_repo if task else (run.github_repo if run else "n/a")),
+        auth_lane,
+        api_type,
+        success,
+        event,
+        _governor_fingerprint(state),
+        skip_reason or "n/a",
+        postcondition or "n/a",
+        summary,
+    )
+
+
 def _set_checkpoint(
     state: dict[str, Any],
     *,
@@ -709,6 +759,15 @@ def _run_governor_loop(
 ) -> None:
     pr_number = run.github_pr_number
     if not isinstance(pr_number, int):
+        _log_workflow_checkpoint(
+            settings,
+            event="pr_discovered",
+            task=task,
+            run=run,
+            success=False,
+            summary="Governor loop skipped because no PR number is linked to run.",
+            skip_reason="no_pr_discovered",
+        )
         return
     state = _load_governor_state(run)
     if state.get("last_event_key") == event_key:
@@ -725,6 +784,15 @@ def _run_governor_loop(
         success=True,
         summary=f"PR linkage discovered: #{pr_number}.",
     )
+    _log_workflow_checkpoint(
+        settings,
+        event="pr_discovered",
+        task=task,
+        run=run,
+        success=True,
+        summary=f"PR linkage discovered: #{pr_number}.",
+        state=state,
+    )
     event_has_push_signal = ":synchronize:" in event_key
     event_has_review_signal = ("pull_request_review:" in event_key) or ("pull_request_review_comment:" in event_key)
 
@@ -735,6 +803,16 @@ def _run_governor_loop(
         name="pr_ready_verified",
         success=not pr_draft,
         summary="PR is non-draft (ready for review)." if not pr_draft else "PR remains draft.",
+    )
+    _log_workflow_checkpoint(
+        settings,
+        event="pr_state_observed",
+        task=task,
+        run=run,
+        success=True,
+        summary=f"Observed PR state={pr_state}, draft={pr_draft}.",
+        postcondition=f"isDraft={pr_draft}",
+        state=state,
     )
     requested_reviewers = []
     for item in pr_payload.get("requested_reviewers") or []:
@@ -770,6 +848,17 @@ def _run_governor_loop(
     else:
         state["reviewer_cleanup_result"] = "skipped:no_login_configured"
 
+    _log_workflow_checkpoint(
+        settings,
+        event="review_harvest_attempted",
+        task=task,
+        run=run,
+        success=True,
+        summary="Attempting to harvest PR reviews and review comments.",
+        auth_lane="governor",
+        api_type="REST",
+        state=state,
+    )
     reviews, reviews_msg = list_pull_request_reviews(settings=settings, repo=task.github_repo, pr_number=pr_number)
     review_comments, review_comments_msg = list_pull_request_review_comments(settings=settings, repo=task.github_repo, pr_number=pr_number)
     lower_reviews_msg = str(reviews_msg or "").lower()
@@ -786,6 +875,20 @@ def _run_governor_loop(
         name="review_harvested",
         success=review_harvested,
         summary=state["review_harvest_summary"],
+    )
+    _log_workflow_checkpoint(
+        settings,
+        event="review_harvest_result",
+        task=task,
+        run=run,
+        success=review_harvested,
+        summary=(
+            f"{state['review_harvest_summary']}; reviews_count={len(reviews)}; "
+            f"review_comments_count={len(review_comments)}"
+        ),
+        auth_lane="governor",
+        api_type="REST",
+        state=state,
     )
     copilot_review_observed, unresolved_findings = _copilot_findings_from_reviews(
         settings=settings,
@@ -804,12 +907,30 @@ def _run_governor_loop(
             success=True,
             summary="Revision findings cleared after waiting for Copilot revision push.",
         )
+        _log_workflow_checkpoint(
+            settings,
+            event="copilot_push_detected",
+            task=task,
+            run=run,
+            success=True,
+            summary="Revision findings cleared after Copilot push/re-review.",
+            state=state,
+        )
     elif waiting_for_revision_push and (event_has_push_signal or event_has_review_signal):
         _set_checkpoint(
             state,
             name="copilot_push_rereview_observed",
             success=True,
             summary="Copilot push/re-review signal observed while waiting for revision.",
+        )
+        _log_workflow_checkpoint(
+            settings,
+            event="copilot_push_detected",
+            task=task,
+            run=run,
+            success=True,
+            summary="Copilot push/re-review signal observed while waiting for revision.",
+            state=state,
         )
     if not unresolved_findings:
         _set_checkpoint(
@@ -907,6 +1028,20 @@ def _run_governor_loop(
                 success=True,
                 summary="Batched top-level @copilot continuation comment posted (or already present remotely).",
             )
+            _log_workflow_checkpoint(
+                settings,
+                event="continuation_comment_posted",
+                task=task,
+                run=run,
+                success=True,
+                summary=(
+                    "Top-level @copilot continuation comment posted; "
+                    f"comment_fingerprint={trigger_fp[:12]}; dedupe_remote={exists_remote}"
+                ),
+                auth_lane="dispatch_user_token",
+                api_type="REST",
+                state=state,
+            )
             state["fix_trigger_fingerprint"] = trigger_fp
             state["revision_cycle_count"] = int(state.get("revision_cycle_count") or 0) + 1
             state["waiting_for_revision_push"] = True
@@ -918,12 +1053,34 @@ def _run_governor_loop(
                 success=True,
                 summary="Batched top-level @copilot continuation comment already posted for current fingerprint.",
             )
+            _log_workflow_checkpoint(
+                settings,
+                event="continuation_comment_skipped",
+                task=task,
+                run=run,
+                success=True,
+                summary=f"Continuation comment deduplicated by fingerprint={trigger_fp[:12]}.",
+                skip_reason="no_actionable_review_findings",
+                state=state,
+            )
         else:
             _set_checkpoint(
                 state,
                 name="continuation_comment_posted",
                 success=True,
                 summary="No actionable/deduplicated continuation comment required this cycle.",
+            )
+            _log_workflow_checkpoint(
+                settings,
+                event="continuation_comment_skipped",
+                task=task,
+                run=run,
+                success=True,
+                summary=(
+                    f"should_trigger_copilot={should_trigger_copilot}; unresolved_findings={len(unresolved_findings)}"
+                ),
+                skip_reason="no_actionable_review_findings",
+                state=state,
             )
         # Persist and short-circuit — no OpenAI call needed.
         state["pr_draft"] = pr_draft
@@ -982,6 +1139,17 @@ def _run_governor_loop(
             "no guarded paths, no unresolved findings, no pending revision push — marking ready for review.",
             pr_number,
         )
+        _log_workflow_checkpoint(
+            settings,
+            event="ready_for_review_attempted",
+            task=task,
+            run=run,
+            success=True,
+            summary="Deterministic safe-draft promotion path invoked.",
+            auth_lane="dispatch_user_token",
+            api_type="GraphQL",
+            state=state,
+        )
         success, msg = mark_pr_ready_for_review(settings=settings, repo=task.github_repo, pr_number=pr_number)
         state["pr_draft"] = pr_draft
         state["pr_state"] = pr_state
@@ -998,6 +1166,18 @@ def _run_governor_loop(
                 name="pr_ready_verified",
                 success=True,
                 summary="Draft->ready transition completed and verified (draft=False).",
+            )
+            _log_workflow_checkpoint(
+                settings,
+                event="ready_for_review_verified",
+                task=task,
+                run=run,
+                success=True,
+                summary=msg,
+                postcondition="draft=False",
+                auth_lane="dispatch_user_token",
+                api_type="GraphQL",
+                state=state,
             )
             state["safe_draft_promoted"] = True
             state["safe_draft_promotion_failed"] = False
@@ -1018,6 +1198,18 @@ def _run_governor_loop(
                 name="pr_ready_verified",
                 success=False,
                 summary=f"Draft->ready transition failed: {msg}",
+            )
+            _log_workflow_checkpoint(
+                settings,
+                event="ready_for_review_failed",
+                task=task,
+                run=run,
+                success=False,
+                summary=msg,
+                postcondition="draft remains true/unknown",
+                auth_lane="dispatch_user_token",
+                api_type="GraphQL",
+                state=state,
             )
             state["safe_draft_promoted"] = False
             state["safe_draft_promotion_failed"] = True
@@ -1123,6 +1315,18 @@ def _run_governor_loop(
             copilot_findings=rendered_findings,
         )
         fingerprint = hashlib.sha1(comment_body.encode("utf-8")).hexdigest()
+        _log_workflow_checkpoint(
+            settings,
+            event="continuation_comment_synthesized",
+            task=task,
+            run=run,
+            success=True,
+            summary=(
+                f"Synthesized continuation comment; unresolved_findings={len(rendered_findings)}; "
+                f"governor_requests={len(rendered_requests)}; fingerprint={fingerprint[:12]}"
+            ),
+            state=state,
+        )
         already_posted = state.get("last_revision_comment_fingerprint") == fingerprint
         if not already_posted:
             existing_comments, _ = list_issue_comments(settings=settings, repo=task.github_repo, issue_number=pr_number)
@@ -1183,6 +1387,17 @@ def _run_governor_loop(
             escalation_reason = "Max governor revision cycles exceeded."
 
     if decision == "ready_for_review" and pr_draft:
+        _log_workflow_checkpoint(
+            settings,
+            event="ready_for_review_attempted",
+            task=task,
+            run=run,
+            success=True,
+            summary="OpenAI governor decision requested ready-for-review mutation.",
+            auth_lane="dispatch_user_token",
+            api_type="GraphQL",
+            state=state,
+        )
         success, msg = mark_pr_ready_for_review(settings=settings, repo=task.github_repo, pr_number=pr_number)
         _set_checkpoint(
             state,
@@ -1192,6 +1407,30 @@ def _run_governor_loop(
         )
         if not success:
             _governor_logger.warning("Governor: OpenAI-directed ready_for_review failed for PR #%s: %s", pr_number, msg)
+            _log_workflow_checkpoint(
+                settings,
+                event="ready_for_review_failed",
+                task=task,
+                run=run,
+                success=False,
+                summary=msg,
+                auth_lane="dispatch_user_token",
+                api_type="GraphQL",
+                state=state,
+            )
+        else:
+            _log_workflow_checkpoint(
+                settings,
+                event="ready_for_review_verified",
+                task=task,
+                run=run,
+                success=True,
+                summary=msg,
+                postcondition="draft=False",
+                auth_lane="dispatch_user_token",
+                api_type="GraphQL",
+                state=state,
+            )
     if decision == "approve_and_merge":
         ready_gate = bool((state.get("checkpoints") or {}).get("pr_ready_verified", {}).get("success"))
         harvest_gate = bool((state.get("checkpoints") or {}).get("review_harvested", {}).get("success"))
@@ -1208,12 +1447,50 @@ def _run_governor_loop(
             or not pr_gate
             or not dispatch_gate
         ):
+            _log_workflow_checkpoint(
+                settings,
+                event="merge_failed",
+                task=task,
+                run=run,
+                success=False,
+                summary=(
+                    "Merge path skipped due to unmet prerequisites: "
+                    f"ready_gate={ready_gate}, harvest_gate={harvest_gate}, pr_gate={pr_gate}, dispatch_gate={dispatch_gate}, "
+                    f"guarded_paths_touched={guarded_paths_touched}, unresolved_findings={len(unresolved_findings)}, "
+                    f"pr_draft={pr_draft}, checks_passed={checks_passed}, waiting_for_revision_push={waiting_for_revision_push}"
+                ),
+                skip_reason="missing_checkpoint_prerequisite",
+                state=state,
+            )
             decision = "wait"
         else:
             if not bool(state.get("approval_submitted")):
                 submit_approving_review(settings=settings, repo=task.github_repo, pr_number=pr_number)
                 state["approval_submitted"] = True
+            _log_workflow_checkpoint(
+                settings,
+                event="merge_attempted",
+                task=task,
+                run=run,
+                success=True,
+                summary="Attempting merge with latest head SHA.",
+                auth_lane="dispatch_user_token",
+                api_type="REST",
+                state=state,
+            )
             merged, merge_msg = merge_pr(settings=settings, repo=task.github_repo, pr_number=pr_number)
+            if "retry_used=True" in str(merge_msg):
+                _log_workflow_checkpoint(
+                    settings,
+                    event="merge_retry_409",
+                    task=task,
+                    run=run,
+                    success=True,
+                    summary=merge_msg,
+                    auth_lane="dispatch_user_token",
+                    api_type="REST",
+                    state=state,
+                )
             _set_checkpoint(
                 state,
                 name="merge_attempted_latest_sha",
@@ -1228,12 +1505,36 @@ def _run_governor_loop(
                     success=True,
                     summary="Merge completed and verified with merged=true postcondition.",
                 )
+                _log_workflow_checkpoint(
+                    settings,
+                    event="merge_verified",
+                    task=task,
+                    run=run,
+                    success=True,
+                    summary=merge_msg,
+                    postcondition="merged=true",
+                    auth_lane="dispatch_user_token",
+                    api_type="REST",
+                    state=state,
+                )
             else:
                 _set_checkpoint(
                     state,
                     name="merge_verified",
                     success=False,
                     summary=merge_msg,
+                )
+                _log_workflow_checkpoint(
+                    settings,
+                    event="merge_failed",
+                    task=task,
+                    run=run,
+                    success=False,
+                    summary=merge_msg,
+                    postcondition="merged!=true",
+                    auth_lane="dispatch_user_token",
+                    api_type="REST",
+                    state=state,
                 )
     if decision == "escalate_human" and task.program_id and not guarded_paths_touched:
         program = session.get(Program, task.program_id)
@@ -1462,6 +1763,13 @@ def _run_planning(
             notify_discord(
                 f"Task planned / awaiting approval: {task.github_repo}#{task.github_issue_number} -> {_worker_display_name(task)}"
             )
+        _log_workflow_checkpoint(
+            settings,
+            event="task_planned",
+            task=task,
+            success=True,
+            summary=task.latest_summary or "Task planned and awaiting approval.",
+        )
     except Exception as exc:
         if had_successful_plan and previous_status in {
             TASK_STATUS_AWAITING_APPROVAL,
@@ -1494,6 +1802,13 @@ def _run_planning(
             return
         notify_discord(
             f"Task failed during planning: {task.github_repo}#{task.github_issue_number} ({exc})"
+        )
+        _log_workflow_checkpoint(
+            settings,
+            event="task_planned",
+            task=task,
+            success=False,
+            summary=f"Planning failed: {exc}",
         )
 
 
@@ -1537,6 +1852,13 @@ def process_issue_event(session: Session, *, settings: Settings, payload: dict[s
     task, created = _create_or_update_task_from_issue(session, github_repo=github_repo, issue=issue)
     if created:
         notify_discord(f"Task packet created: {task.github_repo}#{task.github_issue_number}")
+        _log_workflow_checkpoint(
+            settings,
+            event="task_packet_created",
+            task=task,
+            success=True,
+            summary="Task packet created from task-labeled issue.",
+        )
 
     label_name = ((payload.get("label") or {}).get("name") if isinstance(payload.get("label"), dict) else None)
     should_replan = action in {"opened", "edited", "reopened"} or (
@@ -1614,6 +1936,14 @@ def process_approval(
             notify_discord(
                 f"Task approval blocked by worker selection: {task.github_repo}#{task.github_issue_number}"
             )
+            _log_workflow_checkpoint(
+                settings,
+                event="task_approved",
+                task=task,
+                success=False,
+                summary=task.latest_summary or "Task approval blocked by worker selection.",
+                skip_reason="guarded_path_block",
+            )
             return
         task.approval_state = APPROVAL_APPROVED
         task.status = TASK_STATUS_APPROVED
@@ -1622,6 +1952,13 @@ def process_approval(
         _save(session, task)
         mark_slice_approved(session, task=task)
         notify_discord(f"Task approved: {task.github_repo}#{task.github_issue_number} -> {_worker_display_name(task)}")
+        _log_workflow_checkpoint(
+            settings,
+            event="task_approved",
+            task=task,
+            success=True,
+            summary=task.latest_summary or "Task approved.",
+        )
         dispatch_task_if_ready(session, settings=settings, task=task)
         return
 
@@ -1631,6 +1968,14 @@ def process_approval(
     task.updated_at = _utc_now()
     _save(session, task)
     notify_discord(f"Task rejected: {task.github_repo}#{task.github_issue_number}")
+    _log_workflow_checkpoint(
+        settings,
+        event="task_approved",
+        task=task,
+        success=False,
+        summary=task.latest_summary or "Task rejected.",
+        skip_reason="task_not_approved",
+    )
 
 
 def process_issue_comment_event(session: Session, *, settings: Settings, payload: dict[str, Any], action: str | None) -> None:
@@ -1687,6 +2032,14 @@ def dispatch_task_if_ready(session: Session, *, settings: Settings, task: TaskPa
     if task.id is None:
         return
     if task.approval_state != APPROVAL_APPROVED:
+        _log_workflow_checkpoint(
+            settings,
+            event="issue_dispatch_attempted",
+            task=task,
+            success=False,
+            summary="Dispatch skipped because task is not approved.",
+            skip_reason="task_not_approved",
+        )
         return
     latest_run = _latest_run_for_task(session, task.id)
     if not force and latest_run and latest_run.status in {
@@ -1734,6 +2087,16 @@ def dispatch_task_if_ready(session: Session, *, settings: Settings, task: TaskPa
     _save(session, run, task)
 
     result = dispatch_task_to_github_copilot(settings=settings, task=task)
+    _log_workflow_checkpoint(
+        settings,
+        event="issue_dispatch_attempted",
+        task=task,
+        run=run,
+        success=True,
+        summary="Dispatch requested via GitHub Copilot assignment APIs.",
+        auth_lane="dispatch_user_token",
+        api_type="GraphQL+REST",
+    )
     result_summary = (
         f"{result.summary} "
         f"(dispatch_state={result.state}, api_status={result.api_status_code if result.api_status_code is not None else 'n/a'})"
@@ -1755,6 +2118,16 @@ def dispatch_task_if_ready(session: Session, *, settings: Settings, task: TaskPa
             f"{task.github_repo}#{task.github_issue_number} -> {_worker_display_name(task)} "
             f"({dispatch_mode_summary})"
         )
+        _log_workflow_checkpoint(
+            settings,
+            event="issue_dispatch_succeeded",
+            task=task,
+            run=run,
+            success=True,
+            summary=result_summary,
+            auth_lane="dispatch_user_token",
+            api_type="GraphQL+REST",
+        )
         return
 
     if result.manual_required:
@@ -1774,6 +2147,17 @@ def dispatch_task_if_ready(session: Session, *, settings: Settings, task: TaskPa
             f"{task.github_repo}#{task.github_issue_number} -> {_worker_display_name(task)} "
             f"({dispatch_mode_summary})"
         )
+        _log_workflow_checkpoint(
+            settings,
+            event="issue_dispatch_failed",
+            task=task,
+            run=run,
+            success=False,
+            summary=result_summary,
+            skip_reason="auth_lane_unavailable",
+            auth_lane="dispatch_user_token",
+            api_type="GraphQL+REST",
+        )
         return
 
     run.status = RUN_STATUS_FAILED
@@ -1784,6 +2168,16 @@ def dispatch_task_if_ready(session: Session, *, settings: Settings, task: TaskPa
     task.latest_summary = result_summary
     task.updated_at = _utc_now()
     _save(session, run, task)
+    _log_workflow_checkpoint(
+        settings,
+        event="issue_dispatch_failed",
+        task=task,
+        run=run,
+        success=False,
+        summary=result_summary,
+        auth_lane="dispatch_user_token",
+        api_type="GraphQL+REST",
+    )
     link_run_to_slice(session, run=run, task=task)
     notify_discord(
         "Task failed to dispatch: "

@@ -107,6 +107,8 @@ class Settings(BaseSettings):
         default=".github/workflows/**,orchestrator/app/config.py,orchestrator/app/github_dispatch.py,orchestrator/app/github_webhooks.py",
         alias="GOVERNOR_GUARDED_PATHS",
     )
+    orchestrator_debug_workflow: bool = Field(default=False, alias="ORCHESTRATOR_DEBUG_WORKFLOW")
+    orchestrator_debug_github: bool = Field(default=False, alias="ORCHESTRATOR_DEBUG_GITHUB")
 
     # Trusted kickoff: issues with this label (in addition to task_label) are
     # auto-confirmed after planning without requiring a second human approval.

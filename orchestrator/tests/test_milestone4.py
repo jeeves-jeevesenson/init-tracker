@@ -79,7 +79,9 @@ from orchestrator.app.models import (
 )
 from orchestrator.app.tasks import (
     _copilot_fix_trigger_body,
+    _run_governor_loop,
     safe_draft_can_be_promoted,
+    dispatch_task_if_ready,
 )
 
 
@@ -132,6 +134,8 @@ ENV_KEYS = {
     "GOVERNOR_REMOVE_REVIEWER_LOGIN",
     "GOVERNOR_FALLBACK_REVIEWER",
     "GOVERNOR_GUARDED_PATHS",
+    "ORCHESTRATOR_DEBUG_WORKFLOW",
+    "ORCHESTRATOR_DEBUG_GITHUB",
 }
 
 
@@ -1125,6 +1129,9 @@ class PreflightAppModeTests(unittest.TestCase):
             self.assertTrue(pf["capabilities"]["unattended_draft_to_review_readiness"])
             self.assertTrue(pf["capabilities"]["unattended_review_to_fix_comment_readiness"])
             self.assertFalse(pf["capabilities"]["unattended_approve_merge_readiness"])
+            self.assertIn("debug", pf)
+            self.assertFalse(pf["debug"]["workflow_debug_enabled"])
+            self.assertFalse(pf["debug"]["github_debug_enabled"])
 
     def test_preflight_reports_app_mode_with_incomplete_config(self):
         with tempfile.TemporaryDirectory() as td:
@@ -1260,6 +1267,16 @@ class LegacyTokenFallbackTests(unittest.TestCase):
         self.assertTrue(result["github_api_token"])
         self.assertIn("github_auth_mode", result)
 
+    def test_preflight_includes_enabled_debug_flags(self):
+        settings = _make_settings(
+            GITHUB_API_TOKEN="some-pat",
+            ORCHESTRATOR_DEBUG_WORKFLOW="true",
+            ORCHESTRATOR_DEBUG_GITHUB="true",
+        )
+        result = run_preflight_checks(settings=settings)
+        self.assertTrue(result["debug"]["workflow_debug_enabled"])
+        self.assertTrue(result["debug"]["github_debug_enabled"])
+
 
 class AuthLaneFailureReportingTests(unittest.TestCase):
     def test_dispatch_auth_failure_message_is_explicit(self):
@@ -1356,6 +1373,135 @@ class AuthLaneLoggingTests(unittest.TestCase):
         self.assertIn("github_action=post_copilot_follow_up_comment", joined)
         self.assertIn("auth_lane=dispatch_user_token", joined)
         self.assertIn("api_type=REST", joined)
+
+    def test_ready_for_review_debug_events_and_no_secret_leakage(self):
+        settings = _make_settings(
+            GITHUB_API_TOKEN=None,
+            GITHUB_DISPATCH_USER_TOKEN="super-secret-dispatch-token",
+            ORCHESTRATOR_DEBUG_GITHUB="true",
+        )
+        query_response = MagicMock()
+        query_response.status_code = 200
+        query_response.json.return_value = {
+            "data": {"repository": {"pullRequest": {"id": "PR_node_id_789", "isDraft": True}}}
+        }
+        mutation_response = MagicMock()
+        mutation_response.status_code = 200
+        mutation_response.json.return_value = {
+            "data": {"markPullRequestReadyForReview": {"pullRequest": {"number": 42, "isDraft": False}}}
+        }
+        verify_response = MagicMock()
+        verify_response.status_code = 200
+        verify_response.json.return_value = {
+            "data": {"repository": {"pullRequest": {"id": "PR_node_id_789", "isDraft": False}}}
+        }
+        with patch("orchestrator.app.github_dispatch.httpx.Client") as mock_client_cls:
+            mock_client = MagicMock()
+            mock_client.__enter__ = lambda s: mock_client
+            mock_client.__exit__ = MagicMock(return_value=False)
+            mock_client.post.side_effect = [query_response, mutation_response, verify_response]
+            mock_client_cls.return_value = mock_client
+            with self.assertLogs("orchestrator.app.github_dispatch", level="INFO") as logs:
+                ok, _ = mark_pr_ready_for_review(settings=settings, repo="owner/repo", pr_number=42)
+        self.assertTrue(ok)
+        joined = "\n".join(logs.output)
+        self.assertIn("github_debug event=ready_for_review_attempted", joined)
+        self.assertIn("github_debug event=ready_for_review_node_lookup", joined)
+        self.assertIn("github_debug event=ready_for_review_mutation_attempted", joined)
+        self.assertIn("github_debug event=ready_for_review_verified", joined)
+        self.assertNotIn("super-secret-dispatch-token", joined)
+
+    def test_merge_retry_emits_debug_event(self):
+        settings = _make_settings(
+            GITHUB_DISPATCH_USER_TOKEN="dispatch-token",
+            ORCHESTRATOR_DEBUG_GITHUB="true",
+        )
+        fetch_one = Mock(status_code=200, headers={"content-type": "application/json"})
+        fetch_one.json.return_value = {"head": {"sha": "sha-1"}, "merged": False}
+        merge_409 = Mock(status_code=409, text="sha out of date")
+        fetch_two = Mock(status_code=200, headers={"content-type": "application/json"})
+        fetch_two.json.return_value = {"head": {"sha": "sha-2"}, "merged": False}
+        merge_ok = Mock(status_code=200, text="ok")
+        fetch_verify = Mock(status_code=200, headers={"content-type": "application/json"})
+        fetch_verify.json.return_value = {"head": {"sha": "sha-2"}, "merged": True}
+        with patch("orchestrator.app.github_dispatch.httpx.Client") as MockClient:
+            client = MockClient.return_value
+            client.__enter__ = Mock(return_value=client)
+            client.__exit__ = Mock(return_value=False)
+            client.get.side_effect = [fetch_one, fetch_two, fetch_verify]
+            client.put.side_effect = [merge_409, merge_ok]
+            with self.assertLogs("orchestrator.app.github_dispatch", level="INFO") as logs:
+                ok, _ = merge_pr(settings=settings, repo="owner/repo", pr_number=44)
+        self.assertTrue(ok)
+        self.assertIn("github_debug event=merge_retry_409", "\n".join(logs.output))
+
+
+class WorkflowDebugLoggingTests(unittest.TestCase):
+    def test_debug_workflow_disabled_emits_no_workflow_logs(self):
+        settings = _make_settings(ORCHESTRATOR_DEBUG_WORKFLOW="false")
+        task = TaskPacket(
+            id=1,
+            github_repo="owner/repo",
+            github_issue_number=7,
+            approval_state="pending",
+        )
+        logger_name = "orchestrator.governor"
+        with self.assertRaises(AssertionError):
+            with self.assertLogs(logger_name, level="INFO"):
+                with patch("orchestrator.app.tasks._workflow_debug_enabled", return_value=False):
+                    dispatch_task_if_ready(session=MagicMock(), settings=settings, task=task)
+
+    def test_debug_workflow_skip_reason_logged(self):
+        settings = _make_settings(ORCHESTRATOR_DEBUG_WORKFLOW="true")
+        task = TaskPacket(
+            id=1,
+            github_repo="owner/repo",
+            github_issue_number=7,
+            approval_state="pending",
+        )
+        with self.assertLogs("orchestrator.governor", level="INFO") as logs:
+            dispatch_task_if_ready(session=MagicMock(), settings=settings, task=task)
+        joined = "\n".join(logs.output)
+        self.assertIn("workflow_event=issue_dispatch_attempted", joined)
+        self.assertIn("skip_reason=task_not_approved", joined)
+
+    def test_continuation_comment_debug_events_present(self):
+        settings = _make_settings(ORCHESTRATOR_DEBUG_WORKFLOW="true")
+        task = TaskPacket(
+            id=10,
+            github_repo="owner/repo",
+            github_issue_number=9,
+            approval_state="approved",
+            status="working",
+        )
+        run = AgentRun(
+            id=20,
+            task_packet_id=10,
+            github_repo="owner/repo",
+            github_issue_number=9,
+            github_pr_number=42,
+            status="working",
+        )
+        pr_payload = {"draft": True, "state": "open", "requested_reviewers": []}
+        with patch("orchestrator.app.tasks.list_pull_request_files", return_value=(["src/a.py"], "ok")), \
+             patch("orchestrator.app.tasks.list_pull_request_reviews", return_value=([], "ok")), \
+             patch("orchestrator.app.tasks.list_pull_request_review_comments", return_value=([], "ok")), \
+             patch("orchestrator.app.tasks.summarize_governor_update", return_value={"governor_artifact": {"decision": "request_revision", "summary": ["needs fixes"], "revision_requests": ["fix failing test"], "escalation_reason": ""}}), \
+             patch("orchestrator.app.tasks.list_issue_comments", return_value=([], "ok")), \
+             patch("orchestrator.app.tasks.post_copilot_follow_up_comment", return_value=(True, "posted")), \
+             patch("orchestrator.app.tasks._save", return_value=None):
+            with self.assertLogs("orchestrator.governor", level="INFO") as logs:
+                _run_governor_loop(
+                    session=MagicMock(),
+                    settings=settings,
+                    task=task,
+                    run=run,
+                    pr_payload=pr_payload,
+                    event_key="pull_request:opened:42",
+                    checks_passed=False,
+                )
+        joined = "\n".join(logs.output)
+        self.assertIn("workflow_event=continuation_comment_synthesized", joined)
 
 
 class TryMintAppTokenTests(unittest.TestCase):
