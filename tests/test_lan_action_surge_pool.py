@@ -139,13 +139,15 @@ class LanActionSurgePoolTests(unittest.TestCase):
         app._log = lambda message, cid=None: logs.append((cid, message))
         app._rebuild_table = lambda scroll_to_current=True: None
         app._use_action = lambda c: True
+        app._use_bonus_action = lambda c: True
+        app._refresh_monster_phase_for_combatant = lambda *a, **kw: None
         app.in_combat = True
         app.current_cid = 1
         app.round_num = 1
         app.turn_num = 1
         app.start_cid = None
         app.combatants = {
-            1: type("C", (), {"cid": 1, "name": "Dorian", "action_remaining": 1, "hp": 40, "max_hp": 102})(),
+            1: type("C", (), {"cid": 1, "name": "Dorian", "action_remaining": 1, "bonus_action_remaining": 1, "hp": 40, "max_hp": 102})(),
             2: type("T", (), {"cid": 2, "name": "Ally", "hp": 10, "max_hp": 60})(),
         }
         app._lan = type(
@@ -200,6 +202,7 @@ class LanActionSurgePoolTests(unittest.TestCase):
         app._log = lambda message, cid=None: logs.append((cid, message))
         app._rebuild_table = lambda scroll_to_current=True: None
         app._use_bonus_action = lambda c: True
+        app._refresh_monster_phase_for_combatant = lambda *a, **kw: None
         app.in_combat = True
         app.current_cid = 1
         app.round_num = 1

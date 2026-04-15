@@ -23504,9 +23504,10 @@ class InitiativeTracker(base.InitiativeTracker):
 
         old_hp = int(getattr(combatant, "hp", 0) or 0)
         max_hp = int(getattr(combatant, "max_hp", old_hp) or old_hp)
-        new_hp = max(0, min(max_hp, old_hp + heal_amount))
-        setattr(combatant, "hp", int(new_hp))
-        return True, "", int(new_hp - old_hp)
+        actual_heal = max(0, min(heal_amount, max(0, max_hp - old_hp)))
+        consume_cid = int(getattr(combatant, "cid", 0) or 0)
+        self._apply_heal_via_service(consume_cid, actual_heal)
+        return True, "", actual_heal
 
     def _set_player_resource_pool_current(self, caster_name: str, pool_id: Any, new_current: Any) -> Tuple[bool, str]:
         player_name = str(caster_name or "").strip()
@@ -31619,7 +31620,7 @@ class InitiativeTracker(base.InitiativeTracker):
             for target in targets:
                 current_temp_hp = int(getattr(target, "temp_hp", 0) or 0)
                 applied = max(current_temp_hp, temp_hp_value)
-                setattr(target, "temp_hp", int(applied))
+                self._apply_heal_via_service(int(target.cid), int(applied), is_temp_hp=True)
                 self._log(f"{target.name} temp HP set to {int(applied)}.", cid=int(target.cid))
                 self._log(
                     f"{target.name} may use Reaction to move up to Speed without OA this round.",
@@ -33511,9 +33512,8 @@ class InitiativeTracker(base.InitiativeTracker):
                     max_hp = _parse_int(getattr(target, "max_hp", None), before_hp) or before_hp
                     if max_hp < 0:
                         max_hp = 0
-                    after_hp = max(0, min(int(max_hp), int(before_hp) + int(total_healing)))
-                    applied_healing = max(0, int(after_hp) - int(before_hp))
-                    setattr(target, "hp", int(after_hp))
+                    applied_healing = max(0, min(total_healing, max(0, int(max_hp) - int(before_hp))))
+                    self._apply_heal_via_service(int(target_cid), applied_healing)
                 result_payload["hit"] = True
                 result_payload["critical"] = False
                 result_payload["healing_entries"] = list(healing_entries)
@@ -36115,7 +36115,8 @@ class InitiativeTracker(base.InitiativeTracker):
                     ma_die = 8 if monk_level >= 5 else 6
                     temp_roll = random.randint(1, ma_die) + random.randint(1, ma_die)
                     current_temp_hp = int(getattr(c, "temp_hp", 0) or 0)
-                    setattr(c, "temp_hp", max(current_temp_hp, temp_roll))
+                    applied_temp = max(current_temp_hp, temp_roll)
+                    self._apply_heal_via_service(cid, applied_temp, is_temp_hp=True)
                     self._log(
                         f"{c.name} gained Monk Focus temp HP: {temp_roll} (2d{ma_die}; current temp HP {getattr(c, 'temp_hp', 0)}).",
                         cid=cid,
@@ -36352,7 +36353,8 @@ class InitiativeTracker(base.InitiativeTracker):
             heal_amount = int(random.randint(1, int(martial_die)))
             hp_now = int(getattr(c, "hp", 0) or 0)
             hp_max = int(getattr(c, "max_hp", hp_now) or hp_now)
-            setattr(c, "hp", max(0, min(hp_max, hp_now + int(heal_amount))))
+            actual_heal = max(0, min(heal_amount, max(0, hp_max - hp_now)))
+            self._apply_heal_via_service(cid, actual_heal)
             self._log(
                 f"{c.name} used Uncanny Metabolism: restored Focus and healed {int(heal_amount)} HP.",
                 cid=cid,
