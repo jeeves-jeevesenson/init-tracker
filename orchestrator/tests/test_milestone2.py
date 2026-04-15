@@ -5019,6 +5019,93 @@ class OpenAIPlanningSchemaTests(unittest.TestCase):
                     task = client.get("/tasks").json()["tasks"][0]
                     self.assertEqual(task["latest_run"]["governor_state"]["last_governor_decision"], "escalate_human")
 
+    def test_workflow_run_persists_pr_linked_head_sha_when_workflow_head_differs(self):
+        with tempfile.TemporaryDirectory() as td:
+            os.environ["DATABASE_URL"] = f"sqlite:///{Path(td) / 'orchestrator.db'}"
+            os.environ["GH_WEBHOOK_SECRET"] = "test-gh-secret"
+            os.environ["GITHUB_API_TOKEN"] = "dummy-token"
+            os.environ["GITHUB_DISPATCH_USER_TOKEN"] = "dispatch-token"
+            main, _ = _reload_orchestrator_modules()
+            issue_payload = {"action": "opened", "repository": {"full_name": "jeeves-jeevesenson/init-tracker"}, "issue": {"number": 930, "node_id": "I_930", "title": "workflow sha", "body": "docs", "labels": [{"name": "agent:task"}]}}
+            approve_payload = {"action": "created", "repository": {"full_name": "jeeves-jeevesenson/init-tracker"}, "issue": {"number": 930}, "comment": {"body": "/approve"}}
+            pr_payload = {"action": "opened", "repository": {"full_name": "jeeves-jeevesenson/init-tracker"}, "pull_request": {"id": 93001, "number": 9301, "title": "Docs", "body": "Closes #930", "html_url": "https://github.com/jeeves-jeevesenson/init-tracker/pull/9301", "updated_at": "2026-01-01T00:00:00Z", "draft": False, "mergeable": True, "mergeable_state": "clean", "head": {"sha": "abc123"}}}
+            workflow_payload = {"action": "completed", "repository": {"full_name": "jeeves-jeevesenson/init-tracker"}, "workflow_run": {"id": 93002, "name": "CI", "status": "completed", "conclusion": "success", "head_sha": "wrong-sha", "html_url": "https://github.com/jeeves-jeevesenson/init-tracker/actions/runs/93002", "pull_requests": [{"number": 9301, "head": {"sha": "abc123"}}]}}
+            with patch("orchestrator.app.tasks.plan_task_packet", return_value={"objective": "Docs", "scope": ["docs"], "non_goals": [], "acceptance_criteria": ["docs"], "validation_guidance": [], "implementation_brief": "docs"}), \
+                 patch("orchestrator.app.tasks.dispatch_task_to_github_copilot", return_value=DispatchResult(attempted=True, accepted=True, manual_required=False, state="accepted", summary="ok")), \
+                 patch("orchestrator.app.tasks.inspect_pull_request", return_value=PullRequestInspection(ok=True, changed_files=1, commits=1, draft=False, state="open", merged=False, mergeable=True, mergeable_state="clean", summary="ok")), \
+                 patch("orchestrator.app.tasks.list_pull_request_file_details", return_value=([{"filename": "docs/guide.md", "status": "modified", "additions": 1, "deletions": 0, "patch": "+docs"}], "ok")), \
+                 patch("orchestrator.app.tasks.list_pull_request_reviews", return_value=([], "ok")), \
+                 patch("orchestrator.app.tasks.list_pull_request_review_comments", return_value=([], "ok")), \
+                 patch("orchestrator.app.tasks.summarize_merge_audit", return_value={"merge_audit_artifact": {"decision": "wait", "confidence": 0.6, "doc_only": True, "safe_to_merge": False, "requires_followup": True, "summary": ["pending"], "findings": [], "merge_rationale": "", "escalation_reason": "", "review_scope": ["patch"]}}):
+                with TestClient(main.app) as client:
+                    _post_github_local(client, secret="test-gh-secret", delivery="d-930-open", event="issues", payload=issue_payload)
+                    _post_github_local(client, secret="test-gh-secret", delivery="d-930-approve", event="issue_comment", payload=approve_payload)
+                    _post_github_local(client, secret="test-gh-secret", delivery="d-930-pr", event="pull_request", payload=pr_payload)
+                    _post_github_local(client, secret="test-gh-secret", delivery="d-930-wf", event="workflow_run", payload=workflow_payload)
+                    state = client.get("/tasks").json()["tasks"][0]["latest_run"]["governor_state"]
+                    self.assertEqual(state.get("last_successful_checks_head_sha"), "abc123")
+
+    def test_effective_checks_passed_uses_persisted_sha_and_new_head_invalidates(self):
+        with tempfile.TemporaryDirectory() as td:
+            os.environ["DATABASE_URL"] = f"sqlite:///{Path(td) / 'orchestrator.db'}"
+            os.environ["GH_WEBHOOK_SECRET"] = "test-gh-secret"
+            os.environ["GITHUB_API_TOKEN"] = "dummy-token"
+            os.environ["GITHUB_DISPATCH_USER_TOKEN"] = "dispatch-token"
+            main, _ = _reload_orchestrator_modules()
+            issue_payload = {"action": "opened", "repository": {"full_name": "jeeves-jeevesenson/init-tracker"}, "issue": {"number": 931, "node_id": "I_931", "title": "sticky invalidation", "body": "docs", "labels": [{"name": "agent:task"}]}}
+            approve_payload = {"action": "created", "repository": {"full_name": "jeeves-jeevesenson/init-tracker"}, "issue": {"number": 931}, "comment": {"body": "/approve"}}
+            pr_open_payload = {"action": "opened", "repository": {"full_name": "jeeves-jeevesenson/init-tracker"}, "pull_request": {"id": 93101, "number": 9311, "title": "Docs", "body": "Closes #931", "html_url": "https://github.com/jeeves-jeevesenson/init-tracker/pull/9311", "updated_at": "2026-01-01T00:00:00Z", "draft": False, "mergeable": True, "mergeable_state": "clean", "head": {"sha": "abc123"}}}
+            pr_edited_same = {"action": "edited", "repository": {"full_name": "jeeves-jeevesenson/init-tracker"}, "pull_request": {"id": 93101, "number": 9311, "title": "Docs", "body": "Closes #931", "html_url": "https://github.com/jeeves-jeevesenson/init-tracker/pull/9311", "updated_at": "2026-01-01T00:05:00Z", "draft": False, "mergeable": True, "mergeable_state": "clean", "head": {"sha": "abc123"}}}
+            pr_edited_new = {"action": "edited", "repository": {"full_name": "jeeves-jeevesenson/init-tracker"}, "pull_request": {"id": 93101, "number": 9311, "title": "Docs", "body": "Closes #931", "html_url": "https://github.com/jeeves-jeevesenson/init-tracker/pull/9311", "updated_at": "2026-01-01T00:10:00Z", "draft": False, "mergeable": True, "mergeable_state": "clean", "head": {"sha": "newsha"}}}
+            workflow_payload = {"action": "completed", "repository": {"full_name": "jeeves-jeevesenson/init-tracker"}, "workflow_run": {"id": 93102, "name": "CI", "status": "completed", "conclusion": "success", "html_url": "https://github.com/jeeves-jeevesenson/init-tracker/actions/runs/93102", "pull_requests": [{"number": 9311, "head": {"sha": "abc123"}}]}}
+            with patch("orchestrator.app.tasks.plan_task_packet", return_value={"objective": "Docs", "scope": ["docs"], "non_goals": [], "acceptance_criteria": ["docs"], "validation_guidance": [], "implementation_brief": "docs"}), \
+                 patch("orchestrator.app.tasks.dispatch_task_to_github_copilot", return_value=DispatchResult(attempted=True, accepted=True, manual_required=False, state="accepted", summary="ok")), \
+                 patch("orchestrator.app.tasks.inspect_pull_request", return_value=PullRequestInspection(ok=True, changed_files=1, commits=1, draft=False, state="open", merged=False, mergeable=True, mergeable_state="clean", summary="ok")), \
+                 patch("orchestrator.app.tasks.list_pull_request_file_details", return_value=([{"filename": "docs/guide.md", "status": "modified", "additions": 1, "deletions": 0, "patch": "+docs"}], "ok")), \
+                 patch("orchestrator.app.tasks.list_pull_request_reviews", return_value=([], "ok")), \
+                 patch("orchestrator.app.tasks.list_pull_request_review_comments", return_value=([], "ok")), \
+                 patch("orchestrator.app.tasks.summarize_merge_audit", return_value={"merge_audit_artifact": {"decision": "wait", "confidence": 0.5, "doc_only": True, "safe_to_merge": False, "requires_followup": True, "summary": ["hold"], "findings": [], "merge_rationale": "", "escalation_reason": "", "review_scope": ["patch"]}}):
+                with TestClient(main.app) as client:
+                    _post_github_local(client, secret="test-gh-secret", delivery="d-931-open", event="issues", payload=issue_payload)
+                    _post_github_local(client, secret="test-gh-secret", delivery="d-931-approve", event="issue_comment", payload=approve_payload)
+                    _post_github_local(client, secret="test-gh-secret", delivery="d-931-pr-open", event="pull_request", payload=pr_open_payload)
+                    _post_github_local(client, secret="test-gh-secret", delivery="d-931-wf", event="workflow_run", payload=workflow_payload)
+                    _post_github_local(client, secret="test-gh-secret", delivery="d-931-pr-same", event="pull_request", payload=pr_edited_same)
+                    state = client.get("/tasks").json()["tasks"][0]["latest_run"]["governor_state"]
+                    self.assertTrue(state.get("effective_checks_passed"))
+                    _post_github_local(client, secret="test-gh-secret", delivery="d-931-pr-new", event="pull_request", payload=pr_edited_new)
+                    state_after_new = client.get("/tasks").json()["tasks"][0]["latest_run"]["governor_state"]
+                    self.assertFalse(state_after_new.get("effective_checks_passed"))
+
+    def test_merge_audit_idempotence_reuses_prior_for_identical_state(self):
+        with tempfile.TemporaryDirectory() as td:
+            os.environ["DATABASE_URL"] = f"sqlite:///{Path(td) / 'orchestrator.db'}"
+            os.environ["GH_WEBHOOK_SECRET"] = "test-gh-secret"
+            os.environ["GITHUB_API_TOKEN"] = "dummy-token"
+            os.environ["GITHUB_DISPATCH_USER_TOKEN"] = "dispatch-token"
+            main, _ = _reload_orchestrator_modules()
+            issue_payload = {"action": "opened", "repository": {"full_name": "jeeves-jeevesenson/init-tracker"}, "issue": {"number": 932, "node_id": "I_932", "title": "idempotence", "body": "docs", "labels": [{"name": "agent:task"}]}}
+            approve_payload = {"action": "created", "repository": {"full_name": "jeeves-jeevesenson/init-tracker"}, "issue": {"number": 932}, "comment": {"body": "/approve"}}
+            pr_open_payload = {"action": "opened", "repository": {"full_name": "jeeves-jeevesenson/init-tracker"}, "pull_request": {"id": 93201, "number": 9321, "title": "Docs", "body": "Closes #932", "html_url": "https://github.com/jeeves-jeevesenson/init-tracker/pull/9321", "updated_at": "2026-01-01T00:00:00Z", "draft": False, "mergeable": True, "mergeable_state": "clean", "head": {"sha": "sha-idem"}}}
+            pr_edited_payload = {"action": "edited", "repository": {"full_name": "jeeves-jeevesenson/init-tracker"}, "pull_request": {"id": 93201, "number": 9321, "title": "Docs", "body": "Closes #932", "html_url": "https://github.com/jeeves-jeevesenson/init-tracker/pull/9321", "updated_at": "2026-01-01T00:10:00Z", "draft": False, "mergeable": True, "mergeable_state": "clean", "head": {"sha": "sha-idem"}}}
+            workflow_payload = {"action": "completed", "repository": {"full_name": "jeeves-jeevesenson/init-tracker"}, "workflow_run": {"id": 93202, "name": "CI", "status": "completed", "conclusion": "success", "html_url": "https://github.com/jeeves-jeevesenson/init-tracker/actions/runs/93202", "pull_requests": [{"number": 9321, "head": {"sha": "sha-idem"}}]}}
+            with patch("orchestrator.app.tasks.plan_task_packet", return_value={"objective": "Docs", "scope": ["docs"], "non_goals": [], "acceptance_criteria": ["docs"], "validation_guidance": [], "implementation_brief": "docs"}), \
+                 patch("orchestrator.app.tasks.dispatch_task_to_github_copilot", return_value=DispatchResult(attempted=True, accepted=True, manual_required=False, state="accepted", summary="ok")), \
+                 patch("orchestrator.app.tasks.inspect_pull_request", return_value=PullRequestInspection(ok=True, changed_files=1, commits=1, draft=False, state="open", merged=False, mergeable=True, mergeable_state="clean", summary="ok")), \
+                 patch("orchestrator.app.tasks.list_pull_request_file_details", return_value=([{"filename": "docs/guide.md", "status": "modified", "additions": 1, "deletions": 0, "patch": "+docs"}], "ok")), \
+                 patch("orchestrator.app.tasks.list_pull_request_reviews", return_value=([], "ok")), \
+                 patch("orchestrator.app.tasks.list_pull_request_review_comments", return_value=([], "ok")), \
+                 patch("orchestrator.app.tasks.summarize_merge_audit", return_value={"merge_audit_artifact": {"decision": "wait", "confidence": 0.6, "doc_only": True, "safe_to_merge": False, "requires_followup": True, "summary": ["pending"], "findings": [], "merge_rationale": "", "escalation_reason": "", "review_scope": ["patch"]}}) as mocked_merge_audit:
+                with TestClient(main.app) as client:
+                    _post_github_local(client, secret="test-gh-secret", delivery="d-932-open", event="issues", payload=issue_payload)
+                    _post_github_local(client, secret="test-gh-secret", delivery="d-932-approve", event="issue_comment", payload=approve_payload)
+                    _post_github_local(client, secret="test-gh-secret", delivery="d-932-pr-open", event="pull_request", payload=pr_open_payload)
+                    _post_github_local(client, secret="test-gh-secret", delivery="d-932-wf", event="workflow_run", payload=workflow_payload)
+                    calls_after_first_eligible = mocked_merge_audit.call_count
+                    _post_github_local(client, secret="test-gh-secret", delivery="d-932-pr-edit-1", event="pull_request", payload=pr_edited_payload)
+                    _post_github_local(client, secret="test-gh-secret", delivery="d-932-pr-edit-2", event="pull_request", payload=pr_edited_payload)
+                    self.assertEqual(mocked_merge_audit.call_count, calls_after_first_eligible)
+
 
 if __name__ == "__main__":
     unittest.main()

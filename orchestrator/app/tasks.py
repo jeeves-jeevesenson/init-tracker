@@ -740,6 +740,33 @@ def _truncate_patch(patch: str, *, max_chars: int = 2000) -> tuple[str, bool]:
     return patch[:max_chars], True
 
 
+def _workflow_run_linked_head_sha(
+    workflow_run: dict[str, Any],
+    *,
+    preferred_pr_number: int | None = None,
+) -> str:
+    pr_entries = workflow_run.get("pull_requests") or []
+    if isinstance(pr_entries, list):
+        if preferred_pr_number is not None:
+            for pr_entry in pr_entries:
+                if not isinstance(pr_entry, dict):
+                    continue
+                if pr_entry.get("number") != preferred_pr_number:
+                    continue
+                head = pr_entry.get("head") if isinstance(pr_entry.get("head"), dict) else {}
+                head_sha = str(head.get("sha") or "").strip()
+                if head_sha:
+                    return head_sha
+        for pr_entry in pr_entries:
+            if not isinstance(pr_entry, dict):
+                continue
+            head = pr_entry.get("head") if isinstance(pr_entry.get("head"), dict) else {}
+            head_sha = str(head.get("sha") or "").strip()
+            if head_sha:
+                return head_sha
+    return str(workflow_run.get("head_sha") or "").strip()
+
+
 def _load_governor_state(run: AgentRun) -> dict[str, Any]:
     state = _parse_json_object(run.governor_state_json)
     if state is None:
@@ -773,10 +800,12 @@ def _load_governor_state(run: AgentRun) -> dict[str, Any]:
     state.setdefault("last_checks_passed", False)
     state.setdefault("last_check_conclusion", "")
     state.setdefault("last_successful_checks_head_sha", "")
+    state.setdefault("last_successful_checks_at", "")
     state.setdefault("last_observed_pr_head_sha", "")
     state.setdefault("effective_checks_passed", False)
     state.setdefault("final_audit_head_sha", "")
     state.setdefault("effective_checks_passed_at_final_audit", False)
+    state.setdefault("final_audit_cache_key", "")
     state.setdefault("ready_for_review_attempted", False)
     state.setdefault("ready_for_review_attempt_count", 0)
     state.setdefault("ready_for_review_retry_count", 0)
@@ -1315,6 +1344,7 @@ def _run_governor_loop(
         if pr_head_sha:
             state["last_successful_checks_head_sha"] = pr_head_sha
             last_successful_checks_head_sha = pr_head_sha
+            state["last_successful_checks_at"] = _utc_now().isoformat()
     elif pr_head_sha and last_successful_checks_head_sha and pr_head_sha != last_successful_checks_head_sha:
         state["last_checks_passed"] = False
         state["last_check_conclusion"] = "head_sha_mismatch"
@@ -1792,11 +1822,45 @@ def _run_governor_loop(
             "reviews_summary": state.get("review_harvest_summary"),
             "requested_reviewers": requested_reviewers,
         }
-        decision_payload = summarize_merge_audit(
-            settings=settings,
-            update_context=json.dumps(audit_context, ensure_ascii=False),
-            previous_response_id=run.openai_last_response_id,
-        )
+        merge_audit_cache_payload = {
+            "pr_number": pr_number,
+            "pr_head_sha": pr_head_sha,
+            "effective_checks_passed": effective_checks_passed,
+            "pr_draft": pr_draft,
+            "changed_files_hash": hashlib.sha1(
+                json.dumps(sorted(changed_files), ensure_ascii=False).encode("utf-8")
+            ).hexdigest(),
+            "unresolved_findings_hash": hashlib.sha1(
+                json.dumps(unresolved_findings, sort_keys=True, ensure_ascii=False).encode("utf-8")
+            ).hexdigest(),
+            "guarded_paths_touched": guarded_paths_touched,
+            "guarded_files_hash": hashlib.sha1(
+                json.dumps(sorted(guarded_files), ensure_ascii=False).encode("utf-8")
+            ).hexdigest(),
+            "mergeable_for_audit": mergeable_for_audit,
+            "docs_only": docs_only,
+        }
+        merge_audit_cache_key = hashlib.sha1(
+            json.dumps(merge_audit_cache_payload, sort_keys=True, ensure_ascii=False).encode("utf-8")
+        ).hexdigest()
+        prior_cache_key = str(state.get("final_audit_cache_key") or "").strip()
+        if prior_cache_key and prior_cache_key == merge_audit_cache_key and prior_final_audit_artifact and prior_final_audit_decision:
+            decision_payload = {
+                "merge_audit_artifact": prior_final_audit_artifact,
+                "openai_meta": {"cache_hit": True},
+            }
+            _governor_logger.info(
+                "Reusing cached final merge audit for PR #%s head=%s cache_key=%s",
+                pr_number,
+                pr_head_sha or "<unknown>",
+                merge_audit_cache_key[:12],
+            )
+        else:
+            decision_payload = summarize_merge_audit(
+                settings=settings,
+                update_context=json.dumps(audit_context, ensure_ascii=False),
+                previous_response_id=run.openai_last_response_id,
+            )
         openai_meta = decision_payload.get("openai_meta") if isinstance(decision_payload, dict) else {}
         response_id = openai_meta.get("response_id") if isinstance(openai_meta, dict) else None
         if isinstance(response_id, str) and response_id.strip():
@@ -1813,6 +1877,7 @@ def _run_governor_loop(
         state["final_audit_last_error"] = str((openai_meta or {}).get("validation_error") or "")
         state["final_audit_head_sha"] = pr_head_sha
         state["effective_checks_passed_at_final_audit"] = effective_checks_passed
+        state["final_audit_cache_key"] = merge_audit_cache_key
     else:
         decision_payload = summarize_governor_update(
             settings=settings,
@@ -3688,8 +3753,18 @@ def process_workflow_run_event(
         },
         ensure_ascii=False,
     )
+    linked_pr_number = run.github_pr_number if isinstance(run.github_pr_number, int) else (pr_numbers[0] if pr_numbers else None)
+    successful_head_sha = _workflow_run_linked_head_sha(workflow_run, preferred_pr_number=linked_pr_number)
 
     if status == "completed" and conclusion == "success":
+        previous_state = _load_governor_state(run)
+        if successful_head_sha:
+            previous_state["last_observed_pr_head_sha"] = successful_head_sha
+            previous_state["last_successful_checks_head_sha"] = successful_head_sha
+            previous_state["last_successful_checks_at"] = _utc_now().isoformat()
+            previous_state["last_checks_passed"] = True
+            previous_state["last_check_conclusion"] = "success"
+            _save_governor_state(run, previous_state)
         _summarize_and_store(
             session,
             settings=settings,
@@ -3708,7 +3783,6 @@ def process_workflow_run_event(
             f"Checks complete and ready for review: {github_repo} PR #{run.github_pr_number} -> {_worker_display_name(task)}"
             f"{_review_summary_suffix(run)}"
         )
-        previous_state = _load_governor_state(run)
         _run_governor_loop(
             session,
             settings=settings,
@@ -3719,7 +3793,7 @@ def process_workflow_run_event(
                 "draft": bool(previous_state.get("pr_draft")),
                 "state": "open",
                 "requested_reviewers": [{"login": item} for item in previous_state.get("requested_reviewers", [])],
-                "head_sha": str(workflow_run.get("head_sha") or ""),
+                "head_sha": successful_head_sha,
             },
             event_key=f"governor:workflow_run:{workflow_run.get('id')}:{status}:{conclusion}",
             checks_passed=True,
