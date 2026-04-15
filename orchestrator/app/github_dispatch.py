@@ -1161,6 +1161,43 @@ def list_recent_pull_requests(*, settings: Settings, repo: str, limit: int = 30)
         return [], f"PR discovery failure: Failed to list recent PRs: {exc}"
 
 
+def list_issue_timeline_events(
+    *,
+    settings: Settings,
+    repo: str,
+    issue_number: int,
+    limit: int = 30,
+) -> tuple[list[dict[str, Any]], str]:
+    if not has_dispatch_auth(settings):
+        return [], "Dispatch auth failure: dispatch user-token auth not configured; cannot list issue timeline events"
+    bounded_limit = max(1, min(int(limit or 30), 100))
+    api_base = settings.github_api_url.rstrip("/")
+    url = f"{api_base}/repos/{repo}/issues/{issue_number}/timeline?per_page={bounded_limit}"
+    headers = _build_dispatch_headers(settings)
+    accept = headers.get("Accept")
+    if accept:
+        headers["Accept"] = f"{accept}, application/vnd.github+json"
+    else:
+        headers["Accept"] = "application/vnd.github+json"
+    try:
+        with httpx.Client(timeout=15.0) as client:
+            response = client.get(url, headers=headers)
+            if response.status_code >= 400:
+                return [], (
+                    "PR association failure: GitHub returned "
+                    f"{response.status_code} when listing timeline for issue #{issue_number}: {response.text[:300]}"
+                )
+            if not response.headers.get("content-type", "").startswith("application/json"):
+                return [], f"PR association failure: GitHub returned non-JSON timeline for issue #{issue_number}"
+            payload = response.json()
+            if not isinstance(payload, list):
+                return [], f"PR association failure: GitHub returned invalid timeline for issue #{issue_number}"
+            events = [item for item in payload if isinstance(item, dict)]
+            return events, f"Fetched {len(events)} timeline events for issue #{issue_number}"
+    except Exception as exc:
+        return [], f"PR association failure: Failed to list timeline for issue #{issue_number}: {exc}"
+
+
 def remove_requested_reviewers(
     *,
     settings: Settings,
