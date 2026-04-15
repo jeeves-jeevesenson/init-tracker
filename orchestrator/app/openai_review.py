@@ -7,7 +7,12 @@ from typing import Any
 from openai import OpenAI
 
 from .config import Settings
-from .openai_control_plane import apply_openai_request_controls, select_model_for_stage
+from .openai_control_plane import (
+    apply_openai_request_controls,
+    extract_usage_metrics,
+    fingerprint_text,
+    select_model_for_stage,
+)
 from .schema_validation import validate_strict_json_schema
 
 _ALLOWED_SCOPE_STATUS = {"met", "partial", "drifted", "blocked"}
@@ -360,6 +365,8 @@ def summarize_work_update(
                 "response_id": None,
                 "prompt_cache_attempted": False,
                 "previous_response_id_attempted": False,
+                "outcome": "skipped",
+                "skip_reason": "missing_openai_api_key",
             },
         }
 
@@ -410,6 +417,10 @@ def summarize_work_update(
             "model_tier": model_tier,
             "model": review_model,
             "response_id": response_id,
+            "reasoning_effort": settings.openai_review_reasoning_effort,
+            "prompt_fingerprint": fingerprint_text(update_context),
+            "usage": extract_usage_metrics(response),
+            "outcome": "success",
         },
     }
 
@@ -532,6 +543,8 @@ def summarize_governor_update(
                 "response_id": None,
                 "prompt_cache_attempted": False,
                 "previous_response_id_attempted": False,
+                "outcome": "skipped",
+                "skip_reason": "missing_openai_api_key",
             },
         }
 
@@ -589,6 +602,10 @@ def summarize_governor_update(
             "model_tier": model_tier,
             "model": governor_model,
             "response_id": response_id,
+            "reasoning_effort": selected_reasoning_effort,
+            "prompt_fingerprint": fingerprint_text(update_context),
+            "usage": extract_usage_metrics(response),
+            "outcome": "success",
         },
     }
 
@@ -832,6 +849,8 @@ def summarize_merge_audit(
                 "response_id": None,
                 "prompt_cache_attempted": False,
                 "previous_response_id_attempted": False,
+                "outcome": "skipped",
+                "skip_reason": "missing_openai_api_key",
             },
         }
     audit_model, model_tier = select_model_for_stage(
@@ -865,6 +884,7 @@ def summarize_merge_audit(
     except RuntimeError as exc:
         artifact = _fallback_merge_audit_artifact(update_context, error=str(exc))
         request_controls["validation_error"] = str(exc)
+        request_controls["outcome"] = "schema_error"
     response_id = getattr(response, "id", None)
     _logger.info(
         "openai_call stage=final_merge_audit model=%s response_id=%s model_tier=%s",
@@ -882,6 +902,10 @@ def summarize_merge_audit(
             "model_tier": model_tier,
             "model": audit_model,
             "response_id": response_id,
+            "reasoning_effort": settings.openai_review_reasoning_effort,
+            "prompt_fingerprint": fingerprint_text(update_context),
+            "usage": extract_usage_metrics(response),
+            "outcome": request_controls.get("outcome") or "success",
         },
     }
 
@@ -907,6 +931,8 @@ def summarize_copilot_review_batch(
                 "response_id": None,
                 "prompt_cache_attempted": False,
                 "previous_response_id_attempted": False,
+                "outcome": "skipped",
+                "skip_reason": "missing_openai_api_key",
             },
         }
 
@@ -957,5 +983,9 @@ def summarize_copilot_review_batch(
             "model_tier": model_tier,
             "model": model,
             "response_id": response_id,
+            "reasoning_effort": settings.openai_review_reasoning_effort,
+            "prompt_fingerprint": fingerprint_text(update_context),
+            "usage": extract_usage_metrics(response),
+            "outcome": "success",
         },
     }

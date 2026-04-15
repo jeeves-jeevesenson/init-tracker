@@ -71,6 +71,7 @@ from .models import (
     TASK_STATUS_WORKING,
     AgentRun,
     Program,
+    RunEvent,
     TaskPacket,
 )
 from .openai_planning import plan_task_packet
@@ -78,6 +79,7 @@ from .openai_review import summarize_work_update
 from .openai_review import summarize_governor_update
 from .openai_review import summarize_copilot_review_batch
 from .openai_review import summarize_merge_audit
+from .runs import record_run_event
 from .programs import (
     advance_program_on_pr_merge,
     apply_reviewer_decision,
@@ -189,6 +191,117 @@ def _save(session: Session, *objects: Any) -> None:
     session.commit()
     for obj in objects:
         session.refresh(obj)
+
+
+def _record_openai_telemetry(
+    session: Session,
+    *,
+    task: TaskPacket | None,
+    run: AgentRun | None,
+    stage: str,
+    action: str,
+    outcome: str,
+    execution_mode: str | None = None,
+    model: str | None = None,
+    reasoning_effort: str | None = None,
+    event_key: str | None = None,
+    head_sha: str | None = None,
+    slice_contract_hash: str | None = None,
+    prompt_fingerprint: str | None = None,
+    usage: dict[str, Any] | None = None,
+    skip_reason: str | None = None,
+    budget_counters: dict[str, Any] | None = None,
+    extra: dict[str, Any] | None = None,
+) -> None:
+    payload: dict[str, Any] = {
+        "stage": stage,
+        "action": action,
+        "outcome": outcome,
+        "model": model,
+        "reasoning_effort": reasoning_effort,
+        "task_id": task.id if task else None,
+        "run_id": run.id if run else None,
+        "issue_number": task.github_issue_number if task else (run.github_issue_number if run else None),
+        "pr_number": run.github_pr_number if run else None,
+        "execution_mode": execution_mode,
+        "event_key": event_key,
+        "head_sha": head_sha,
+        "slice_contract_hash": slice_contract_hash,
+        "prompt_fingerprint": prompt_fingerprint,
+        "usage": usage or {},
+        "skip_reason": skip_reason,
+        "budget_counters": budget_counters or {},
+    }
+    if extra:
+        payload.update(extra)
+    record_run_event(
+        session,
+        source="openai_control_plane",
+        external_id=None,
+        event_type="openai_decision",
+        action=action,
+        status=outcome,
+        summary=f"OpenAI {stage} {outcome}",
+        payload_json=json.dumps(payload, ensure_ascii=False, sort_keys=True),
+    )
+
+
+def summarize_openai_telemetry(
+    session: Session,
+    *,
+    task_id: int | None = None,
+    run_id: int | None = None,
+    limit: int = 500,
+) -> dict[str, Any]:
+    query = (
+        select(RunEvent)
+        .where(RunEvent.source == "openai_control_plane")
+        .order_by(RunEvent.created_at.desc())
+        .limit(limit)
+    )
+    events = list(session.exec(query).all())
+    filtered: list[dict[str, Any]] = []
+    for event in events:
+        payload = _parse_json_object(event.payload_json) or {}
+        if task_id is not None and int(payload.get("task_id") or 0) != task_id:
+            continue
+        if run_id is not None and int(payload.get("run_id") or 0) != run_id:
+            continue
+        filtered.append(payload)
+
+    by_stage: dict[str, int] = {}
+    by_outcome: dict[str, int] = {}
+    by_model: dict[str, int] = {}
+    top_token_consumers: list[dict[str, Any]] = []
+    for payload in filtered:
+        stage = str(payload.get("stage") or "unknown")
+        outcome = str(payload.get("outcome") or "unknown")
+        model = str(payload.get("model") or "unknown")
+        by_stage[stage] = by_stage.get(stage, 0) + 1
+        by_outcome[outcome] = by_outcome.get(outcome, 0) + 1
+        by_model[model] = by_model.get(model, 0) + 1
+        usage = payload.get("usage") if isinstance(payload.get("usage"), dict) else {}
+        top_token_consumers.append(
+            {
+                "stage": stage,
+                "model": model,
+                "task_id": payload.get("task_id"),
+                "run_id": payload.get("run_id"),
+                "total_tokens": int(usage.get("total_tokens") or 0),
+                "input_tokens": int(usage.get("input_tokens") or 0),
+                "output_tokens": int(usage.get("output_tokens") or 0),
+            }
+        )
+    top_token_consumers.sort(key=lambda item: item["total_tokens"], reverse=True)
+    return {
+        "count": len(filtered),
+        "by_stage": by_stage,
+        "by_outcome": by_outcome,
+        "by_model": by_model,
+        "suppressed_count": by_outcome.get("suppressed", 0),
+        "budget_blocked_count": by_outcome.get("budget_blocked", 0),
+        "dominant_token_consumers": top_token_consumers[:10],
+    }
 
 
 def _is_copilot_actor(*, settings: Settings, login: str | None, display_name: str | None) -> bool:
@@ -2162,11 +2275,39 @@ def _run_governor_loop(
                 "merge_audit_artifact": artifact,
                 "openai_meta": {"cache_hit": True, "reason": "evidence_missing_no_state_change"},
             }
+            _record_openai_telemetry(
+                session,
+                task=task,
+                run=run,
+                stage="merge_audit",
+                action="summarize_merge_audit",
+                outcome="suppressed",
+                execution_mode=execution_mode,
+                event_key=event_key,
+                head_sha=pr_head_sha,
+                slice_contract_hash=active_contract["contract_hash"],
+                skip_reason="evidence_missing_no_state_change",
+                budget_counters={"heavy_calls_total": int(state.get("heavy_calls_total") or 0)},
+            )
         elif prior_cache_key and prior_cache_key == merge_audit_cache_key and prior_final_audit_artifact and prior_final_audit_decision and not (prior_evidence_missing and not evidence_missing):
             decision_payload = {
                 "merge_audit_artifact": prior_final_audit_artifact,
                 "openai_meta": {"cache_hit": True},
             }
+            _record_openai_telemetry(
+                session,
+                task=task,
+                run=run,
+                stage="merge_audit",
+                action="summarize_merge_audit",
+                outcome="suppressed",
+                execution_mode=execution_mode,
+                event_key=event_key,
+                head_sha=pr_head_sha,
+                slice_contract_hash=active_contract["contract_hash"],
+                skip_reason="cached_result_reuse",
+                budget_counters={"heavy_calls_total": int(state.get("heavy_calls_total") or 0)},
+            )
             _governor_logger.info(
                 "Reusing cached final merge audit for PR #%s head=%s cache_key=%s",
                 pr_number,
@@ -2196,6 +2337,24 @@ def _run_governor_loop(
                     },
                     "openai_meta": {"cache_hit": True, "reason": budget_reason},
                 }
+                _record_openai_telemetry(
+                    session,
+                    task=task,
+                    run=run,
+                    stage="merge_audit",
+                    action="summarize_merge_audit",
+                    outcome="budget_blocked",
+                    execution_mode=execution_mode,
+                    event_key=event_key,
+                    head_sha=pr_head_sha,
+                    slice_contract_hash=active_contract["contract_hash"],
+                    skip_reason=budget_reason,
+                    budget_counters={
+                        "heavy_calls_total": int(state.get("heavy_calls_total") or 0),
+                        "heavy_calls_for_head": int((state.get("heavy_calls_by_head_sha") or {}).get(pr_head_sha or "", 0)),
+                        "heavy_calls_for_slice": int((state.get("heavy_calls_by_slice") or {}).get(active_contract["contract_hash"], 0)),
+                    },
+                )
             else:
                 decision_payload = summarize_merge_audit(
                     settings=settings,
@@ -2208,6 +2367,26 @@ def _run_governor_loop(
                     slice_contract_hash=active_contract["contract_hash"],
                 )
         openai_meta = decision_payload.get("openai_meta") if isinstance(decision_payload, dict) else {}
+        if (openai_meta or {}).get("response_id"):
+            _record_openai_telemetry(
+                session,
+                task=task,
+                run=run,
+                stage=str(openai_meta.get("stage") or "final_merge_audit"),
+                action="summarize_merge_audit",
+                outcome=str(openai_meta.get("outcome") or "success"),
+                execution_mode=execution_mode,
+                event_key=event_key,
+                head_sha=pr_head_sha,
+                slice_contract_hash=active_contract["contract_hash"],
+                model=openai_meta.get("model"),
+                reasoning_effort=openai_meta.get("reasoning_effort"),
+                prompt_fingerprint=openai_meta.get("prompt_fingerprint"),
+                usage=openai_meta.get("usage") if isinstance(openai_meta.get("usage"), dict) else {},
+                skip_reason=openai_meta.get("skip_reason"),
+                budget_counters={"heavy_calls_total": int(state.get("heavy_calls_total") or 0)},
+                extra={"response_id": openai_meta.get("response_id"), "model_tier": openai_meta.get("model_tier")},
+            )
         response_id = openai_meta.get("response_id") if isinstance(openai_meta, dict) else None
         if isinstance(response_id, str) and response_id.strip():
             run.openai_last_response_id = response_id.strip()
@@ -2254,6 +2433,19 @@ def _run_governor_loop(
                 pr_head_sha or "<unknown>",
                 material_hash[:12],
             )
+            _record_openai_telemetry(
+                session,
+                task=task,
+                run=run,
+                stage="governor_fast_path" if execution_mode == EXECUTION_MODE_HIGH_AUTONOMY_PROGRAM else "continuation_audit",
+                action="summarize_governor_update",
+                outcome="suppressed",
+                execution_mode=execution_mode,
+                event_key=event_key,
+                head_sha=pr_head_sha,
+                slice_contract_hash=active_contract["contract_hash"],
+                skip_reason="suppressed_unchanged_material_state",
+            )
         elif execution_mode == EXECUTION_MODE_HIGH_AUTONOMY_PROGRAM and not serious_review_pass_ready:
             decision = "wait"
             summary_bullets = [
@@ -2261,6 +2453,19 @@ def _run_governor_loop(
             ]
             state["last_model_reuse_reason"] = "high_autonomy_wait_for_serious_pass"
             state["last_reused_governor_decision"] = decision
+            _record_openai_telemetry(
+                session,
+                task=task,
+                run=run,
+                stage="governor_fast_path",
+                action="summarize_governor_update",
+                outcome="skipped",
+                execution_mode=execution_mode,
+                event_key=event_key,
+                head_sha=pr_head_sha,
+                slice_contract_hash=active_contract["contract_hash"],
+                skip_reason="high_autonomy_wait_for_serious_pass",
+            )
         else:
             governor_model = (
                 settings.openai_governor_model_fast
@@ -2275,6 +2480,25 @@ def _run_governor_loop(
                 stage="governor_fast_path" if execution_mode == EXECUTION_MODE_HIGH_AUTONOMY_PROGRAM else "continuation_audit",
             )
             openai_meta = decision_payload.get("openai_meta") if isinstance(decision_payload, dict) else {}
+            _record_openai_telemetry(
+                session,
+                task=task,
+                run=run,
+                stage=str(openai_meta.get("stage") or ("governor_fast_path" if execution_mode == EXECUTION_MODE_HIGH_AUTONOMY_PROGRAM else "continuation_audit")),
+                action="summarize_governor_update",
+                outcome=str(openai_meta.get("outcome") or "success"),
+                execution_mode=execution_mode,
+                event_key=event_key,
+                head_sha=pr_head_sha,
+                slice_contract_hash=active_contract["contract_hash"],
+                model=openai_meta.get("model") or governor_model,
+                reasoning_effort=openai_meta.get("reasoning_effort"),
+                prompt_fingerprint=openai_meta.get("prompt_fingerprint"),
+                usage=openai_meta.get("usage") if isinstance(openai_meta.get("usage"), dict) else {},
+                skip_reason=openai_meta.get("skip_reason"),
+                budget_counters={"heavy_calls_total": int(state.get("heavy_calls_total") or 0)},
+                extra={"response_id": openai_meta.get("response_id"), "model_tier": openai_meta.get("model_tier")},
+            )
             response_id = openai_meta.get("response_id") if isinstance(openai_meta, dict) else None
             if isinstance(response_id, str) and response_id.strip():
                 run.openai_last_response_id = response_id.strip()
@@ -2804,6 +3028,29 @@ def _run_planning(
         task.recommended_scope_class = _normalize_scope_class(internal_plan.get("recommended_scope_class"))
         _apply_worker_selection(task=task, settings=settings, issue_labels=issue_labels)
         planning_meta = plan_payload.get("planning_meta") if isinstance(plan_payload, dict) else {}
+        call_metas = planning_meta.get("calls") if isinstance(planning_meta, dict) else []
+        if isinstance(call_metas, list):
+            for call_meta in call_metas:
+                if not isinstance(call_meta, dict):
+                    continue
+                _record_openai_telemetry(
+                    session,
+                    task=task,
+                    run=None,
+                    stage=str(call_meta.get("stage") or "planner"),
+                    action="plan_task_packet",
+                    outcome=str(call_meta.get("outcome") or "success"),
+                    execution_mode=EXECUTION_MODE_STANDARD,
+                    model=call_meta.get("model"),
+                    reasoning_effort=call_meta.get("reasoning_effort"),
+                    prompt_fingerprint=call_meta.get("prompt_fingerprint"),
+                    usage=call_meta.get("usage") if isinstance(call_meta.get("usage"), dict) else {},
+                    skip_reason=call_meta.get("skip_reason"),
+                    extra={
+                        "model_tier": call_meta.get("model_tier"),
+                        "response_id": call_meta.get("response_id"),
+                    },
+                )
         plan_response_id = planning_meta.get("openai_last_response_id") if isinstance(planning_meta, dict) else None
         if isinstance(plan_response_id, str) and plan_response_id.strip():
             task.openai_last_response_id = plan_response_id.strip()
@@ -3681,6 +3928,22 @@ def _summarize_and_store(
             previous_response_id=run.openai_last_response_id,
         )
         openai_meta = summary.get("openai_meta") if isinstance(summary, dict) else {}
+        _record_openai_telemetry(
+            session,
+            task=task,
+            run=run,
+            stage=str(openai_meta.get("stage") or "reviewer"),
+            action="summarize_work_update",
+            outcome=str(openai_meta.get("outcome") or "success"),
+            execution_mode=EXECUTION_MODE_STANDARD,
+            model=openai_meta.get("model"),
+            reasoning_effort=openai_meta.get("reasoning_effort"),
+            event_key=event_key,
+            prompt_fingerprint=openai_meta.get("prompt_fingerprint"),
+            usage=openai_meta.get("usage") if isinstance(openai_meta.get("usage"), dict) else {},
+            skip_reason=openai_meta.get("skip_reason"),
+            extra={"model_tier": openai_meta.get("model_tier"), "response_id": openai_meta.get("response_id")},
+        )
         response_id = openai_meta.get("response_id") if isinstance(openai_meta, dict) else None
         if isinstance(response_id, str) and response_id.strip():
             run.openai_last_response_id = response_id.strip()

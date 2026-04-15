@@ -7,7 +7,7 @@ from .config import get_settings
 from .db import get_session
 from .github_dispatch import run_preflight_checks
 from .programs import get_program_with_slices, list_programs, program_to_dict
-from .tasks import get_task_with_latest_run, list_tasks, task_to_dict
+from .tasks import get_task_with_latest_run, list_tasks, summarize_openai_telemetry, task_to_dict
 
 router = APIRouter(tags=["tasks"])
 
@@ -77,3 +77,14 @@ def get_preflight():
     settings = get_settings()
     report = run_preflight_checks(settings=settings)
     return {"ok": True, "preflight": report}
+
+
+@router.get("/openai/telemetry")
+def get_openai_telemetry(
+    task_id: int | None = Query(default=None, ge=1),
+    run_id: int | None = Query(default=None, ge=1),
+    limit: int = Query(default=500, ge=10, le=2000),
+    session: Session = Depends(get_session),
+):
+    summary = summarize_openai_telemetry(session, task_id=task_id, run_id=run_id, limit=limit)
+    return {"ok": True, "summary": summary}
