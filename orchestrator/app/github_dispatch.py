@@ -190,6 +190,8 @@ class PullRequestInspection:
     state: str | None
     merged: bool | None
     summary: str
+    mergeable: bool | None = None
+    mergeable_state: str | None = None
     number: int | None = None
     node_id: str | None = None
     html_url: str | None = None
@@ -1169,6 +1171,8 @@ def inspect_pull_request(*, settings: Settings, repo: str, pr_number: int) -> Pu
             draft=None,
             state=None,
             merged=None,
+            mergeable=None,
+            mergeable_state=None,
             summary="Governor auth failure: auth not configured; cannot inspect PR",
         )
     api_base = settings.github_api_url.rstrip("/")
@@ -1184,6 +1188,8 @@ def inspect_pull_request(*, settings: Settings, repo: str, pr_number: int) -> Pu
                     draft=None,
                     state=None,
                     merged=None,
+                    mergeable=None,
+                    mergeable_state=None,
                     summary=f"PR lifecycle automation failure: GitHub returned {response.status_code} when inspecting PR #{pr_number}: {response.text[:300]}",
                 )
             payload = response.json() if response.headers.get("content-type", "").startswith("application/json") else {}
@@ -1196,6 +1202,8 @@ def inspect_pull_request(*, settings: Settings, repo: str, pr_number: int) -> Pu
                 draft=bool(payload.get("draft")) if payload.get("draft") is not None else None,
                 state=str(payload.get("state") or "") or None,
                 merged=bool(payload.get("merged")) if payload.get("merged") is not None else None,
+                mergeable=bool(payload.get("mergeable")) if payload.get("mergeable") is not None else None,
+                mergeable_state=str(payload.get("mergeable_state") or "") or None,
                 number=int(payload.get("number")) if isinstance(payload.get("number"), int) else pr_number,
                 node_id=str(payload.get("node_id") or "") or None,
                 html_url=str(payload.get("html_url") or "") or None,
@@ -1210,6 +1218,8 @@ def inspect_pull_request(*, settings: Settings, repo: str, pr_number: int) -> Pu
             draft=None,
             state=None,
             merged=None,
+            mergeable=None,
+            mergeable_state=None,
             summary=f"PR lifecycle automation failure: Failed to inspect PR #{pr_number}: {exc}",
         )
 
@@ -1634,30 +1644,48 @@ def list_pull_request_review_comments(*, settings: Settings, repo: str, pr_numbe
 
 
 def list_pull_request_files(*, settings: Settings, repo: str, pr_number: int) -> tuple[list[str], str]:
+    details, message = list_pull_request_file_details(settings=settings, repo=repo, pr_number=pr_number)
+    return [str(item.get("filename") or "") for item in details if str(item.get("filename") or "").strip()], message
+
+
+def list_pull_request_file_details(*, settings: Settings, repo: str, pr_number: int) -> tuple[list[dict[str, Any]], str]:
     if not has_governor_auth(settings):
-        return [], "Governor auth failure: auth not configured; cannot list PR files"
+        return [], "Governor auth failure: auth not configured; cannot list PR file details"
     api_base = settings.github_api_url.rstrip("/")
     url = f"{api_base}/repos/{repo}/pulls/{pr_number}/files?per_page=100"
     try:
         with httpx.Client(timeout=15.0) as client:
             response = client.get(url, headers=_build_governor_headers(settings))
             if response.status_code >= 400:
-                return [], f"PR lifecycle automation failure: GitHub returned {response.status_code} when listing files for PR #{pr_number}: {response.text[:300]}"
+                return [], f"PR lifecycle automation failure: GitHub returned {response.status_code} when listing file details for PR #{pr_number}: {response.text[:300]}"
             if not response.headers.get("content-type", "").startswith("application/json"):
-                return [], f"GitHub returned non-JSON file list for PR #{pr_number}"
+                return [], f"GitHub returned non-JSON file detail list for PR #{pr_number}"
             payload = response.json()
             if not isinstance(payload, list):
-                return [], f"GitHub returned invalid file list for PR #{pr_number}"
-            files = []
+                return [], f"GitHub returned invalid file detail list for PR #{pr_number}"
+            files: list[dict[str, Any]] = []
             for item in payload:
                 if not isinstance(item, dict):
                     continue
                 filename = item.get("filename")
-                if isinstance(filename, str) and filename:
-                    files.append(filename)
-            return files, f"Fetched {len(files)} files for PR #{pr_number}"
+                if not isinstance(filename, str) or not filename.strip():
+                    continue
+                status = str(item.get("status") or "modified")
+                additions_raw = item.get("additions")
+                deletions_raw = item.get("deletions")
+                patch_raw = item.get("patch")
+                files.append(
+                    {
+                        "filename": filename,
+                        "status": status,
+                        "additions": int(additions_raw) if isinstance(additions_raw, int) else 0,
+                        "deletions": int(deletions_raw) if isinstance(deletions_raw, int) else 0,
+                        "patch": str(patch_raw) if isinstance(patch_raw, str) else "",
+                    }
+                )
+            return files, f"Fetched {len(files)} file details for PR #{pr_number}"
     except Exception as exc:
-        return [], f"PR lifecycle automation failure: Failed to list files for PR #{pr_number}: {exc}"
+        return [], f"PR lifecycle automation failure: Failed to list file details for PR #{pr_number}: {exc}"
 
 
 def list_issue_comments(*, settings: Settings, repo: str, issue_number: int) -> tuple[list[dict[str, Any]], str]:
