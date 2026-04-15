@@ -112,6 +112,7 @@ Behavior:
 - governor removes `jeeves-jeevesenson` from requested reviewers when it takes PR control
 - governor batches revision requests into one deduped top-level `@copilot` comment
 - for non-guarded PRs with green checks and resolved findings, governor can un-draft, approve, and merge automatically
+- the final merge audit evaluates merge readiness using PR diff evidence (file-details from the GitHub API, with fallback to patch-derived evidence when file details are unavailable)
 
 ## OpenAI usage
 
