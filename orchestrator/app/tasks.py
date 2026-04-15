@@ -92,6 +92,7 @@ WORKER_START_FAILURE_RE = re.compile(
 )
 WEAK_EVIDENCE_PREFIX = "Weak worker-start evidence:"
 RECONCILIATION_INCOMPLETE_PREFIX = "Reconciliation incomplete:"
+LINKAGE_TAG_PREFIX = "ORCH-LINK:"
 
 CUSTOM_AGENT_INITIATIVE_SMITH = "Initiative Smith"
 CUSTOM_AGENT_TRACKER_ENGINEER = "Initiative Tracker Engineer"
@@ -555,6 +556,15 @@ def _parse_json_list(raw_json: str | None) -> list[Any]:
     return parsed if isinstance(parsed, list) else []
 
 
+def _build_run_linkage_tag(*, task: TaskPacket, run: AgentRun) -> str:
+    task_id = task.id if task.id is not None else 0
+    run_id = run.id if run.id is not None else 0
+    return (
+        f"{LINKAGE_TAG_PREFIX} "
+        f"task={task_id} issue={task.github_issue_number} run={run_id}"
+    )
+
+
 def _discover_post_dispatch_pr_candidate(
     *,
     settings: Settings,
@@ -565,6 +575,7 @@ def _discover_post_dispatch_pr_candidate(
     candidates, msg = list_recent_pull_requests(settings=settings, repo=task.github_repo, limit=40)
     if not candidates:
         return None, "no_recent_pr_candidates", []
+    linkage_tag = str(run.linkage_tag or "").strip()
     issue_pattern = re.compile(rf"(?<!\d)#?{task.github_issue_number}(?!\d)")
     branch_issue_pattern = re.compile(rf"(?<!\d){task.github_issue_number}(?!\d)")
     scored: list[dict[str, Any]] = []
@@ -584,6 +595,7 @@ def _discover_post_dispatch_pr_candidate(
             head_ref = str(head.get("ref") or "")
         score = 0
         reasons: list[str] = []
+        exact_linkage_tag_present = bool(linkage_tag and linkage_tag in combined)
         issue_link_present = bool(issue_pattern.search(combined))
         branch_issue_link_present = bool(head_ref and branch_issue_pattern.search(head_ref))
         copilot_actor = _is_copilot_actor(
@@ -594,9 +606,14 @@ def _discover_post_dispatch_pr_candidate(
         created_after_dispatch = bool(
             created_at is not None and created_at >= dispatch_observed_at - timedelta(minutes=1)
         )
-        authoritative = copilot_actor and created_after_dispatch and (
+        heuristic_authoritative = copilot_actor and created_after_dispatch and (
             issue_link_present or branch_issue_link_present
         )
+        authoritative = exact_linkage_tag_present or heuristic_authoritative
+
+        if exact_linkage_tag_present:
+            score += 100
+            reasons.append("exact_linkage_tag_match")
 
         if issue_link_present:
             score += 6
@@ -620,10 +637,18 @@ def _discover_post_dispatch_pr_candidate(
                 "reasons": reasons,
                 "created_at": created_at.isoformat() if created_at else None,
                 "authoritative": authoritative,
+                "heuristic_authoritative": heuristic_authoritative,
+                "exact_linkage_tag_present": exact_linkage_tag_present,
             }
         )
     if not scored:
         return None, "no_recent_pr_candidates", []
+    if linkage_tag:
+        exact_tag_candidates = [entry for entry in scored if bool(entry.get("exact_linkage_tag_present"))]
+        if len(exact_tag_candidates) == 1:
+            return exact_tag_candidates[0], "linked_exact_linkage_tag", scored[:8]
+        if len(exact_tag_candidates) > 1:
+            return None, "candidate_prs_ambiguous_exact_linkage_tag", scored[:8]
     scored.sort(
         key=lambda entry: (
             int(entry["score"]),
@@ -631,14 +656,16 @@ def _discover_post_dispatch_pr_candidate(
         ),
         reverse=True,
     )
-    authoritative_candidates = [entry for entry in scored if bool(entry.get("authoritative"))]
+    authoritative_candidates = [entry for entry in scored if bool(entry.get("heuristic_authoritative"))]
     if not authoritative_candidates:
+        if linkage_tag:
+            return None, "linkage_tag_missing_in_candidate_prs", scored[:8]
         return None, "authoritative_linkage_not_found", scored[:8]
     top_score = int(authoritative_candidates[0]["score"])
     top = [entry for entry in authoritative_candidates if int(entry["score"]) == top_score]
     if len(top) > 1:
         return None, "candidate_prs_ambiguous", scored[:8]
-    return top[0], "linked", scored[:8]
+    return top[0], "linked_heuristic", scored[:8]
 
 
 def _governor_guarded_patterns(settings: Settings) -> list[str]:
@@ -1771,6 +1798,7 @@ def task_to_dict(task: TaskPacket, latest_run: AgentRun | None = None) -> dict[s
                 "github_pr_url": latest_run.github_pr_url,
                 "github_pr_node_id": latest_run.github_pr_node_id,
                 "github_dispatch_url": latest_run.github_dispatch_url,
+                "linkage_tag": latest_run.linkage_tag,
             }
             if latest_run
             else None
@@ -1803,6 +1831,7 @@ def run_to_dict(run: AgentRun | None) -> dict[str, Any] | None:
         "github_pr_number": run.github_pr_number,
         "github_pr_url": run.github_pr_url,
         "github_pr_node_id": run.github_pr_node_id,
+        "linkage_tag": run.linkage_tag,
         "github_dispatch_id": run.github_dispatch_id,
         "github_dispatch_url": run.github_dispatch_url,
         "selected_custom_agent": run.selected_custom_agent,
@@ -2202,6 +2231,34 @@ def dispatch_task_if_ready(session: Session, *, settings: Settings, task: TaskPa
     )
     _save(session, run)
     link_run_to_slice(session, run=run, task=task)
+    run.linkage_tag = _build_run_linkage_tag(task=task, run=run)
+    run.dispatch_payload_json = json.dumps(
+        build_dispatch_payload_summary(settings, task, linkage_tag=run.linkage_tag),
+        ensure_ascii=False,
+    )
+    run.updated_at = _utc_now()
+    _save(session, run)
+    _log_workflow_checkpoint(
+        settings,
+        event="pr_linkage_tag_generated",
+        task=task,
+        run=run,
+        success=True,
+        summary=f"Generated deterministic PR linkage tag: {run.linkage_tag}",
+    )
+    _log_workflow_checkpoint(
+        settings,
+        event="pr_linkage_tag_injected_dispatch_payload",
+        task=task,
+        run=run,
+        success=True,
+        summary=(
+            f"Injected linkage tag into Copilot dispatch payload: {run.linkage_tag}"
+            if run.linkage_tag
+            else "Linkage tag missing; dispatch payload injection skipped."
+        ),
+        skip_reason=None if run.linkage_tag else "missing_linkage_tag",
+    )
 
     run.status = RUN_STATUS_DISPATCH_REQUESTED
     run.last_summary = (
@@ -2218,7 +2275,7 @@ def dispatch_task_if_ready(session: Session, *, settings: Settings, task: TaskPa
     task.updated_at = _utc_now()
     _save(session, run, task)
 
-    result = dispatch_task_to_github_copilot(settings=settings, task=task)
+    result = dispatch_task_to_github_copilot(settings=settings, task=task, linkage_tag=run.linkage_tag)
     _log_workflow_checkpoint(
         settings,
         event="issue_dispatch_attempted",
@@ -2267,7 +2324,9 @@ def dispatch_task_if_ready(session: Session, *, settings: Settings, task: TaskPa
             task=task,
             run=run,
             success=True,
-            summary="Attempting bounded post-dispatch PR discovery.",
+            summary=(
+                f"Attempting post-dispatch PR discovery with primary exact linkage tag check: {run.linkage_tag}"
+            ),
             auth_lane="dispatch_user_token",
             api_type="REST",
         )
@@ -2293,6 +2352,8 @@ def dispatch_task_if_ready(session: Session, *, settings: Settings, task: TaskPa
                             "reasons": entry["reasons"],
                             "created_at": entry["created_at"],
                             "authoritative": bool(entry.get("authoritative")),
+                            "heuristic_authoritative": bool(entry.get("heuristic_authoritative")),
+                            "exact_linkage_tag_present": bool(entry.get("exact_linkage_tag_present")),
                         }
                         for entry in scored_candidates
                     ],
@@ -2301,14 +2362,53 @@ def dispatch_task_if_ready(session: Session, *, settings: Settings, task: TaskPa
             ),
             skip_reason=None if scored_candidates else reason,
         )
+        if run.linkage_tag and reason == "linked_heuristic":
+            _log_workflow_checkpoint(
+                settings,
+                event="pr_discovery_fallback_to_heuristic",
+                task=task,
+                run=run,
+                success=True,
+                summary=(
+                    f"No exact linkage-tag match found for {run.linkage_tag}; "
+                    "falling back to heuristic PR discovery."
+                ),
+                skip_reason="linkage_tag_missing_in_candidate_prs",
+            )
+        if reason == "linked_exact_linkage_tag":
+            _log_workflow_checkpoint(
+                settings,
+                event="pr_discovery_exact_linkage_tag_matched",
+                task=task,
+                run=run,
+                success=True,
+                summary=f"Exact linkage-tag match found for {run.linkage_tag}.",
+            )
         if selected is None:
+            if run.linkage_tag and reason in {
+                "linkage_tag_missing_in_candidate_prs",
+                "candidate_prs_ambiguous",
+                "authoritative_linkage_not_found",
+            }:
+                _log_workflow_checkpoint(
+                    settings,
+                    event="pr_discovery_fallback_to_heuristic",
+                    task=task,
+                    run=run,
+                    success=False,
+                    summary=(
+                        f"Exact linkage tag {run.linkage_tag} not matched; "
+                        "heuristic PR discovery did not find a safe single candidate."
+                    ),
+                    skip_reason=reason,
+                )
             _log_workflow_checkpoint(
                 settings,
                 event="pr_discovery_linkage_skipped",
                 task=task,
                 run=run,
                 success=False,
-                summary=f"Post-dispatch PR discovery did not produce authoritative linkage: {reason}.",
+                summary=f"Post-dispatch PR discovery did not produce PR linkage: {reason}.",
                 skip_reason=reason,
             )
             return
@@ -2330,8 +2430,9 @@ def dispatch_task_if_ready(session: Session, *, settings: Settings, task: TaskPa
         run.github_pr_url = str(selected_pr.get("html_url") or "") or None
         run.github_pr_node_id = str(selected_pr.get("node_id") or "") or None
         run.status = RUN_STATUS_PR_OPENED
+        discovery_path = "exact_linkage_tag" if reason == "linked_exact_linkage_tag" else "heuristic"
         run.last_summary = (
-            f"Authoritative worker-start evidence linked from post-dispatch PR discovery: "
+            f"Worker-start evidence linked from post-dispatch PR discovery via {discovery_path}: "
             f"PR #{pr_number} ({', '.join(selected['reasons']) or 'scored'})"
         )
         run.updated_at = _utc_now()
@@ -2346,7 +2447,10 @@ def dispatch_task_if_ready(session: Session, *, settings: Settings, task: TaskPa
             task=task,
             run=run,
             success=True,
-            summary=f"Linked post-dispatch PR #{pr_number} using reasons={selected['reasons']}.",
+            summary=(
+                f"Linked post-dispatch PR #{pr_number} using path={discovery_path} "
+                f"reasons={selected['reasons']}."
+            ),
         )
         _log_workflow_checkpoint(
             settings,

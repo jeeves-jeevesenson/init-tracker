@@ -9,7 +9,7 @@ import tempfile
 import unittest
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from unittest.mock import AsyncMock, Mock, patch
+from unittest.mock import ANY, AsyncMock, Mock, patch
 
 from fastapi.testclient import TestClient
 from sqlmodel import Session, select
@@ -22,7 +22,12 @@ from orchestrator.app.models import AgentRun, TaskPacket
 from orchestrator.app import openai_planning
 from orchestrator.app import openai_review
 from orchestrator.app import openai_control_plane
-from orchestrator.app.tasks import CUSTOM_AGENT_INITIATIVE_SMITH, CUSTOM_AGENT_TRACKER_ENGINEER
+from orchestrator.app.tasks import (
+    CUSTOM_AGENT_INITIATIVE_SMITH,
+    CUSTOM_AGENT_TRACKER_ENGINEER,
+    _build_run_linkage_tag,
+    _discover_post_dispatch_pr_candidate,
+)
 
 
 def _reload_orchestrator_modules():
@@ -2142,7 +2147,8 @@ class OrchestratorMilestone2Tests(unittest.TestCase):
             comment_response = Mock(status_code=201, headers={"content-type": "application/json"}, text="")
             mocked_client.post.side_effect = [preflight_response, assign_response, comment_response]
 
-            result = dispatch_task_to_github_copilot(settings=settings, task=task)
+            linkage_tag = "ORCH-LINK: task=302 issue=302 run=77"
+            result = dispatch_task_to_github_copilot(settings=settings, task=task, linkage_tag=linkage_tag)
             self.assertTrue(result.accepted)
             comment_payload = mocked_client.post.call_args_list[2].kwargs["json"]
             body = comment_payload["body"]
@@ -2150,6 +2156,177 @@ class OrchestratorMilestone2Tests(unittest.TestCase):
             self.assertNotIn("selected_custom_agent", body)
             self.assertNotIn("Initiative Smith", body)
             self.assertIn('"execution_mode": "plain_copilot_fallback"', body)
+            self.assertIn(linkage_tag, body)
+            self.assertIn("include this exact line in the PR body", body)
+
+    def test_build_run_linkage_tag_format_is_deterministic(self):
+        task = TaskPacket(
+            id=47,
+            github_repo="jeeves-jeevesenson/init-tracker",
+            github_issue_number=115,
+        )
+        run = AgentRun(
+            id=426,
+            task_packet_id=47,
+            github_repo="jeeves-jeevesenson/init-tracker",
+            github_issue_number=115,
+        )
+        self.assertEqual(
+            _build_run_linkage_tag(task=task, run=run),
+            "ORCH-LINK: task=47 issue=115 run=426",
+        )
+
+    def test_post_dispatch_discovery_prefers_exact_linkage_tag_over_heuristic_candidate(self):
+        settings = Settings()
+        task = TaskPacket(
+            id=47,
+            github_repo="jeeves-jeevesenson/init-tracker",
+            github_issue_number=115,
+        )
+        run = AgentRun(
+            id=99,
+            task_packet_id=47,
+            github_repo="jeeves-jeevesenson/init-tracker",
+            github_issue_number=115,
+            linkage_tag="ORCH-LINK: task=47 issue=115 run=99",
+        )
+        candidates = [
+            {
+                "number": 8801,
+                "title": "Fixes #115",
+                "body": "heuristic candidate",
+                "created_at": datetime.now(timezone.utc).isoformat(),
+                "user": {"login": "copilot-swe-agent"},
+                "head": {"ref": "copilot/fix-115"},
+            },
+            {
+                "number": 8802,
+                "title": "Background cleanup",
+                "body": "Contains ORCH-LINK: task=47 issue=115 run=99",
+                "created_at": datetime.now(timezone.utc).isoformat(),
+                "user": {"login": "octocat"},
+                "head": {"ref": "cleanup/no-issue-token"},
+            },
+        ]
+        with patch("orchestrator.app.tasks.list_recent_pull_requests", return_value=(candidates, "ok")):
+            selected, reason, _ = _discover_post_dispatch_pr_candidate(
+                settings=settings,
+                task=task,
+                run=run,
+                dispatch_observed_at=datetime.now(timezone.utc),
+            )
+        self.assertIsNotNone(selected)
+        self.assertEqual(reason, "linked_exact_linkage_tag")
+        self.assertEqual(selected["pr"]["number"], 8802)
+        self.assertIn("exact_linkage_tag_match", selected["reasons"])
+
+    def test_post_dispatch_discovery_falls_back_to_heuristics_when_linkage_tag_missing(self):
+        settings = Settings()
+        task = TaskPacket(
+            id=48,
+            github_repo="jeeves-jeevesenson/init-tracker",
+            github_issue_number=116,
+        )
+        run = AgentRun(
+            id=100,
+            task_packet_id=48,
+            github_repo="jeeves-jeevesenson/init-tracker",
+            github_issue_number=116,
+            linkage_tag="ORCH-LINK: task=48 issue=116 run=100",
+        )
+        candidates = [
+            {
+                "number": 8810,
+                "title": "Fixes #116",
+                "body": "missing linkage tag but still relevant",
+                "created_at": datetime.now(timezone.utc).isoformat(),
+                "user": {"login": "copilot-swe-agent"},
+                "head": {"ref": "copilot/fix-116"},
+            }
+        ]
+        with patch("orchestrator.app.tasks.list_recent_pull_requests", return_value=(candidates, "ok")):
+            selected, reason, _ = _discover_post_dispatch_pr_candidate(
+                settings=settings,
+                task=task,
+                run=run,
+                dispatch_observed_at=datetime.now(timezone.utc),
+            )
+        self.assertIsNotNone(selected)
+        self.assertEqual(reason, "linked_heuristic")
+        self.assertEqual(selected["pr"]["number"], 8810)
+
+    def test_post_dispatch_discovery_does_not_false_link_when_tag_missing_and_no_heuristics(self):
+        settings = Settings()
+        task = TaskPacket(
+            id=49,
+            github_repo="jeeves-jeevesenson/init-tracker",
+            github_issue_number=117,
+        )
+        run = AgentRun(
+            id=101,
+            task_packet_id=49,
+            github_repo="jeeves-jeevesenson/init-tracker",
+            github_issue_number=117,
+            linkage_tag="ORCH-LINK: task=49 issue=117 run=101",
+        )
+        candidates = [
+            {
+                "number": 8820,
+                "title": "Refactor lint config",
+                "body": "No issue token and no linkage tag",
+                "created_at": datetime.now(timezone.utc).isoformat(),
+                "user": {"login": "copilot-swe-agent"},
+                "head": {"ref": "copilot/refactor-lint"},
+            }
+        ]
+        with patch("orchestrator.app.tasks.list_recent_pull_requests", return_value=(candidates, "ok")):
+            selected, reason, _ = _discover_post_dispatch_pr_candidate(
+                settings=settings,
+                task=task,
+                run=run,
+                dispatch_observed_at=datetime.now(timezone.utc),
+            )
+        self.assertIsNone(selected)
+        self.assertEqual(reason, "linkage_tag_missing_in_candidate_prs")
+
+    def test_dispatch_persists_linkage_tag_and_dispatch_payload_summary(self):
+        with tempfile.TemporaryDirectory() as td:
+            os.environ["DATABASE_URL"] = f"sqlite:///{Path(td) / 'orchestrator.db'}"
+            os.environ["GH_WEBHOOK_SECRET"] = "test-gh-secret"
+            os.environ["GITHUB_API_TOKEN"] = "dummy-token"
+            main, _ = _reload_orchestrator_modules()
+            issue_payload = {
+                "action": "opened",
+                "repository": {"full_name": "jeeves-jeevesenson/init-tracker"},
+                "issue": {
+                    "number": 920,
+                    "node_id": "I_920",
+                    "title": "Persist linkage tag",
+                    "body": "Ensure linkage persistence",
+                    "labels": [{"name": "agent:task"}],
+                },
+            }
+            approve_payload = {
+                "action": "created",
+                "repository": {"full_name": "jeeves-jeevesenson/init-tracker"},
+                "issue": {"number": 920},
+                "comment": {"body": "/approve"},
+            }
+            with patch("orchestrator.app.tasks.plan_task_packet", return_value={"objective": "x", "scope": [], "non_goals": [], "acceptance_criteria": [], "validation_guidance": [], "implementation_brief": "x"}), \
+                 patch("orchestrator.app.tasks.dispatch_task_to_github_copilot", return_value=DispatchResult(attempted=True, accepted=True, manual_required=False, state="accepted", summary="ok")), \
+                 patch("orchestrator.app.tasks.list_recent_pull_requests", return_value=([], "none")), \
+                 patch("orchestrator.app.tasks.notify_discord"):
+                with TestClient(main.app) as client:
+                    self._post_github(client, secret="test-gh-secret", delivery="delivery-task-opened-920", event="issues", payload=issue_payload)
+                    self._post_github(client, secret="test-gh-secret", delivery="delivery-task-approve-920", event="issue_comment", payload=approve_payload)
+                    task = client.get("/tasks").json()["tasks"][0]
+                    run = task["latest_run"]
+                    self.assertTrue(str(run["linkage_tag"]).startswith("ORCH-LINK: task="))
+                    self.assertIn("issue=920", str(run["linkage_tag"]))
+                    self.assertEqual(
+                        run["dispatch_payload_summary"]["linkage_tag"],
+                        run["linkage_tag"],
+                    )
 
     def test_review_artifact_generation_and_storage(self):
         with tempfile.TemporaryDirectory() as td:
@@ -4012,7 +4189,7 @@ class OpenAIPlanningSchemaTests(unittest.TestCase):
             with patch("orchestrator.app.tasks.plan_task_packet", return_value={"objective": "x", "scope": [], "non_goals": [], "acceptance_criteria": [], "validation_guidance": [], "implementation_brief": "x"}), \
                  patch("orchestrator.app.tasks.dispatch_task_to_github_copilot", return_value=DispatchResult(attempted=True, accepted=True, manual_required=False, state="accepted", summary="ok")), \
                  patch("orchestrator.app.tasks.list_recent_pull_requests", return_value=([{"number": 701, "title": "Fixes #501", "body": "done", "html_url": "https://github.com/jeeves-jeevesenson/init-tracker/pull/701", "node_id": "PR_kw_test", "draft": True, "state": "open", "created_at": datetime.now(timezone.utc).isoformat(), "user": {"login": "copilot-swe-agent"}, "head": {"ref": "copilot/fix-501"}}], "ok")), \
-                 patch("orchestrator.app.tasks.mark_pr_ready_for_review", return_value=(True, "ok")), \
+                 patch("orchestrator.app.tasks.mark_pr_ready_for_review", return_value=(True, "ok")) as mocked_ready, \
                  patch("orchestrator.app.tasks.inspect_pull_request", return_value=Mock(ok=True, draft=False)), \
                  patch("orchestrator.app.tasks.notify_discord"), \
                  patch("orchestrator.app.tasks.list_pull_request_files", return_value=([], "ok")), \
@@ -4028,6 +4205,11 @@ class OpenAIPlanningSchemaTests(unittest.TestCase):
                     self.assertEqual(task["latest_run"]["github_pr_number"], 701)
                     self.assertEqual(task["latest_run"]["github_pr_url"], "https://github.com/jeeves-jeevesenson/init-tracker/pull/701")
                     self.assertEqual(task["latest_run"]["github_pr_node_id"], "PR_kw_test")
+                    mocked_ready.assert_called_once_with(
+                        settings=ANY,
+                        repo="jeeves-jeevesenson/init-tracker",
+                        pr_number=701,
+                    )
 
     def test_post_dispatch_pr_discovery_ambiguous_candidates_keeps_awaiting_with_reason(self):
         with tempfile.TemporaryDirectory() as td:
@@ -4169,7 +4351,7 @@ class OpenAIPlanningSchemaTests(unittest.TestCase):
                 self.assertTrue(
                     any(
                         call.kwargs.get("event") == "pr_discovery_linkage_skipped"
-                        and call.kwargs.get("skip_reason") == "authoritative_linkage_not_found"
+                        and call.kwargs.get("skip_reason") == "linkage_tag_missing_in_candidate_prs"
                         for call in mocked_log.call_args_list
                     )
                 )

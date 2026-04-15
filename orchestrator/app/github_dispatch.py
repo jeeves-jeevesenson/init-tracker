@@ -241,8 +241,15 @@ def build_dispatch_request_payload(settings: Settings, task: TaskPacket) -> dict
     }
 
 
-def build_dispatch_payload_summary(settings: Settings, task: TaskPacket) -> dict[str, Any]:
+def build_dispatch_payload_summary(
+    settings: Settings,
+    task: TaskPacket,
+    *,
+    linkage_tag: str | None = None,
+) -> dict[str, Any]:
     payload = build_dispatch_request_payload(settings, task)
+    if linkage_tag:
+        payload["linkage_tag"] = linkage_tag
     dispatch_mode, _ = _dispatch_mode(settings, task)
     payload["dispatch_mode_summary"] = describe_dispatch_mode(settings, task)
     payload["github_execution_mode"] = dispatch_mode
@@ -278,8 +285,19 @@ def _load_worker_brief(task: TaskPacket, *, target_branch: str) -> dict[str, Any
     }
 
 
-def _task_packet_comment(task: TaskPacket, *, target_branch: str, execution_mode: str) -> str:
+def _task_packet_comment(
+    task: TaskPacket,
+    *,
+    target_branch: str,
+    execution_mode: str,
+    linkage_tag: str | None = None,
+) -> str:
     worker_brief = _load_worker_brief(task, target_branch=target_branch)
+    linkage_instruction = (
+        f"When you open the PR, include this exact line in the PR body: `{linkage_tag}`"
+        if linkage_tag
+        else None
+    )
     packet = {
         "task_packet_id": task.id,
         "objective": worker_brief.get("objective"),
@@ -291,6 +309,8 @@ def _task_packet_comment(task: TaskPacket, *, target_branch: str, execution_mode
         "target_branch": worker_brief.get("target_branch") or target_branch,
         "repo_grounded_hints": worker_brief.get("repo_grounded_hints") or [],
         "execution_mode": execution_mode,
+        "pr_linkage_tag": linkage_tag,
+        "pr_linkage_instruction": linkage_instruction,
     }
     return (
         "Orchestrator dispatch packet for GitHub Copilot coding agent.\n\n"
@@ -323,7 +343,12 @@ def _suggested_actors_summary(actor_logins: list[str]) -> str:
     return f"suggestedActors={actor_logins or ['(none)']}"
 
 
-def dispatch_task_to_github_copilot(*, settings: Settings, task: TaskPacket) -> DispatchResult:
+def dispatch_task_to_github_copilot(
+    *,
+    settings: Settings,
+    task: TaskPacket,
+    linkage_tag: str | None = None,
+) -> DispatchResult:
     dispatch_mode, _ = _dispatch_mode(settings, task)
     dispatch_mode_summary = describe_dispatch_mode(settings, task)
     if not has_dispatch_auth(settings):
@@ -547,6 +572,7 @@ def dispatch_task_to_github_copilot(*, settings: Settings, task: TaskPacket) -> 
                         task,
                         target_branch=settings.copilot_target_branch,
                         execution_mode=dispatch_mode,
+                        linkage_tag=linkage_tag,
                     )
                 },
             )

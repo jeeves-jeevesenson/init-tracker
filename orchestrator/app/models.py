@@ -178,6 +178,7 @@ class AgentRun(SQLModel, table=True):
     github_pr_number: int | None = Field(default=None, index=True)
     github_pr_url: str | None = Field(default=None)
     github_pr_node_id: str | None = Field(default=None, index=True)
+    linkage_tag: str | None = Field(default=None, index=True)
     github_dispatch_id: str | None = Field(default=None, index=True)
     github_dispatch_url: str | None = Field(default=None)
     selected_custom_agent: str | None = Field(default=None, index=True)
