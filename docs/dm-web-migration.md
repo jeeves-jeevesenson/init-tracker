@@ -206,10 +206,10 @@ all identified deep damage callers, all commonly used heal callers
 (heal dialog, Second Wind, Lay on Hands, Uncanny Metabolism, healing
 consumable use, spell healing resolution, Mantle of Inspiration temp HP,
 Patient Defense Focus temp HP, Wild Shape temp HP apply/revert), and Long
-Rest batch HP restoration (Slice 12).  Remaining hybrid risk is now
-primarily outside this mutation seam (e.g., encounter population and
-initiative preparation still have desktop-primary paths).  This is an
-acceptable risk for the single-session LAN use case.
+Rest batch HP restoration (Slice 12).  Program-level acceptance milestones
+for encounter population authority and initiative preparation remain tracked
+separately in the umbrella migration plan; this slice does not change those
+ownership boundaries.
 
 ---
 

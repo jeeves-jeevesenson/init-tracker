@@ -357,6 +357,116 @@ class WildShapeTests(unittest.TestCase):
         self.assertEqual(c.temp_hp, 5)
         self.assertFalse(c.is_wild_shaped)
 
+    def test_wild_shape_lifecycle_enter_damage_recovery_revert_restores_prior_temp_hp(self):
+        self.app.combatants = {
+            1: type("C", (), {
+                "cid": 1,
+                "name": "Alice",
+                "speed": 30,
+                "swim_speed": 0,
+                "fly_speed": 0,
+                "climb_speed": 0,
+                "burrow_speed": 0,
+                "movement_mode": "Normal",
+                "dex": 14,
+                "con": 12,
+                "str": 10,
+                "temp_hp": 5,
+                "actions": [{"name": "Magic", "type": "action"}],
+                "bonus_actions": [],
+                "is_spellcaster": True,
+            })()
+        }
+        self.app._pc_name_for = lambda _cid: "Alice"
+        self.app._load_player_yaml_cache = lambda force_refresh=False: None
+        self.app._player_yaml_data_by_name = {"Alice": self._profile(8)}
+        self.app._set_wild_shape_pool_current = lambda _name, value: (True, "", value)
+        self.app._wild_shape_beast_cache = [
+            {
+                "id": "brown-bear",
+                "name": "Brown Bear",
+                "challenge_rating": 1.0,
+                "size": "Large",
+                "ac": 11,
+                "speed": {"walk": 40, "swim": 0, "fly": 0, "climb": 30},
+                "abilities": {"str": 17, "dex": 12, "con": 15, "int": 2, "wis": 13, "cha": 7},
+                "actions": [],
+            }
+        ]
+        service_calls = []
+
+        def _apply_heal_via_service(cid, amount, *, is_temp_hp=False):
+            service_calls.append((int(cid), int(amount), bool(is_temp_hp)))
+            target = self.app.combatants.get(int(cid))
+            if target is None:
+                return False
+            if bool(is_temp_hp):
+                target.temp_hp = max(0, int(amount))
+                return True
+            return False
+
+        self.app._apply_heal_via_service = _apply_heal_via_service
+
+        ok, err = self.app._apply_wild_shape(1, "brown-bear")
+        self.assertTrue(ok, err)
+        c = self.app.combatants[1]
+        self.assertEqual(c.temp_hp, 8)
+
+        # Damage while Wild Shaped, then recover temp HP back to the applied cap.
+        c.temp_hp = 3
+        self.assertTrue(self.app._apply_heal_via_service(1, 8, is_temp_hp=True))
+        self.assertEqual(c.temp_hp, 8)
+
+        ok2, err2 = self.app._revert_wild_shape(1)
+        self.assertTrue(ok2, err2)
+        self.assertEqual(c.temp_hp, 5)
+        self.assertEqual(service_calls[-1], (1, 5, True))
+
+    def test_wild_shape_lifecycle_revert_after_damage_without_recovery_keeps_current_temp_hp(self):
+        c = type("C", (), {
+            "cid": 1,
+            "name": "Alice (Brown Bear)",
+            "temp_hp": 3,  # Damage consumed part of Wild Shape temp HP.
+            "is_wild_shaped": True,
+            "wild_shape_applied_temp_hp": 8,
+            "wild_shape_prev_temp_hp": 5,
+            "wild_shape_form_id": "brown-bear",
+            "wild_shape_form_name": "Brown Bear",
+            "wild_shape_base": {
+                "name": "Alice",
+                "speed": 30,
+                "swim_speed": 0,
+                "fly_speed": 0,
+                "climb_speed": 0,
+                "burrow_speed": 0,
+                "movement_mode": "Normal",
+                "dex": 14,
+                "con": 12,
+                "str": 10,
+                "is_spellcaster": True,
+                "actions": [],
+                "bonus_actions": [],
+            },
+        })()
+        self.app.combatants = {1: c}
+        service_calls = []
+
+        def _apply_heal_via_service(cid, amount, *, is_temp_hp=False):
+            service_calls.append((int(cid), int(amount), bool(is_temp_hp)))
+            target = self.app.combatants.get(int(cid))
+            if target is None:
+                return False
+            target.temp_hp = max(0, int(amount))
+            return True
+
+        self.app._apply_heal_via_service = _apply_heal_via_service
+
+        ok, err = self.app._revert_wild_shape(1)
+        self.assertTrue(ok, err)
+        # No restore call should occur because temp_hp != wild_shape_applied_temp_hp.
+        self.assertEqual(service_calls, [])
+        self.assertEqual(c.temp_hp, 3)
+
     def test_apply_wild_shape_blocks_nested_forms(self):
         self.app.combatants = {
             1: type("C", (), {
@@ -1001,6 +1111,24 @@ class WildShapeTests(unittest.TestCase):
 
         self.assertEqual(app.combatants[1].temp_hp, 0)
         self.assertEqual(calls, [(1, 0, True)])
+
+    def test_wild_shape_revert_handler_does_not_directly_mutate_temp_hp_on_service_failure(self):
+        app = object.__new__(tracker_mod.InitiativeTracker)
+        app._oplog = lambda *args, **kwargs: None
+        app.in_combat = False
+        app.combatants = {1: type("C", (), {"cid": 1, "temp_hp": 11})()}
+        app._is_admin_token_valid = lambda _token: True
+        app._summon_can_be_controlled_by = lambda claimed, cid: False
+        app._revert_wild_shape = lambda _cid: (True, "")
+        app._apply_heal_via_service = lambda cid, amount, *, is_temp_hp=False: False
+        app._rebuild_table = lambda scroll_to_current=False: None
+        toasts = []
+        app._lan = type("Lan", (), {"toast": lambda self, ws_id, text: toasts.append(text), "_append_lan_log": lambda self, msg, level='warning': None})()
+
+        app._lan_apply_action({"type": "wild_shape_revert", "cid": 1, "_ws_id": 10, "admin_token": "ok"})
+
+        self.assertEqual(app.combatants[1].temp_hp, 11)
+        self.assertTrue(any("Could not clear Wild Shape temp HP" in msg for msg in toasts))
 
     def test_wild_shape_pool_set_current_handler_clamps_and_persists(self):
         app = object.__new__(tracker_mod.InitiativeTracker)
