@@ -3395,6 +3395,120 @@ class OpenAIPlanningSchemaTests(unittest.TestCase):
                     )
                 )
 
+    def test_post_dispatch_pr_discovery_skips_copilot_branch_without_issue_evidence(self):
+        with tempfile.TemporaryDirectory() as td:
+            os.environ["DATABASE_URL"] = f"sqlite:///{Path(td) / 'orchestrator.db'}"
+            os.environ["GH_WEBHOOK_SECRET"] = "test-gh-secret"
+            os.environ["GITHUB_API_TOKEN"] = "dummy-token"
+            main, _ = _reload_orchestrator_modules()
+
+            def _post_local(client: TestClient, delivery: str, event: str, payload: dict):
+                body = json.dumps(payload).encode("utf-8")
+                signature = "sha256=" + hmac.new(b"test-gh-secret", body, hashlib.sha256).hexdigest()
+                return client.post(
+                    "/github/webhook",
+                    headers={
+                        "Content-Type": "application/json",
+                        "X-Hub-Signature-256": signature,
+                        "X-GitHub-Event": event,
+                        "X-GitHub-Delivery": delivery,
+                    },
+                    content=body,
+                )
+
+            issue_payload = {
+                "action": "opened",
+                "repository": {"full_name": "jeeves-jeevesenson/init-tracker"},
+                "issue": {"number": 503, "node_id": "I_503", "title": "Deadlock fix", "body": "Fix deadlock", "labels": [{"name": "agent:task"}]},
+            }
+            approve_payload = {"action": "created", "repository": {"full_name": "jeeves-jeevesenson/init-tracker"}, "issue": {"number": 503}, "comment": {"body": "/approve"}}
+            candidates = [
+                {
+                    "number": 705,
+                    "title": "Cleanup CI workflow",
+                    "body": "does not reference task",
+                    "created_at": datetime.now(timezone.utc).isoformat(),
+                    "user": {"login": "copilot-swe-agent"},
+                    "head": {"ref": "copilot/fix-deadlock"},
+                }
+            ]
+            with patch("orchestrator.app.tasks.plan_task_packet", return_value={"objective": "x", "scope": [], "non_goals": [], "acceptance_criteria": [], "validation_guidance": [], "implementation_brief": "x"}), \
+                 patch("orchestrator.app.tasks.dispatch_task_to_github_copilot", return_value=DispatchResult(attempted=True, accepted=True, manual_required=False, state="accepted", summary="ok")), \
+                 patch("orchestrator.app.tasks.list_recent_pull_requests", return_value=(candidates, "ok")), \
+                 patch("orchestrator.app.tasks._log_workflow_checkpoint") as mocked_log, \
+                 patch("orchestrator.app.tasks.notify_discord"):
+                with TestClient(main.app) as client:
+                    _post_local(client, "task-503b-open", "issues", issue_payload)
+                    _post_local(client, "task-503b-approve", "issue_comment", approve_payload)
+                    task = client.get("/tasks").json()["tasks"][0]
+                    self.assertEqual(task["status"], "awaiting_worker_start")
+                    self.assertIsNone(task["latest_run"]["github_pr_number"])
+                self.assertTrue(
+                    any(
+                        call.kwargs.get("event") == "pr_discovery_linkage_skipped"
+                        and call.kwargs.get("skip_reason") == "authoritative_linkage_not_found"
+                        for call in mocked_log.call_args_list
+                    )
+                )
+
+    def test_post_dispatch_pr_discovery_links_from_branch_issue_token(self):
+        with tempfile.TemporaryDirectory() as td:
+            os.environ["DATABASE_URL"] = f"sqlite:///{Path(td) / 'orchestrator.db'}"
+            os.environ["GH_WEBHOOK_SECRET"] = "test-gh-secret"
+            os.environ["GITHUB_API_TOKEN"] = "dummy-token"
+            main, _ = _reload_orchestrator_modules()
+
+            def _post_local(client: TestClient, delivery: str, event: str, payload: dict):
+                body = json.dumps(payload).encode("utf-8")
+                signature = "sha256=" + hmac.new(b"test-gh-secret", body, hashlib.sha256).hexdigest()
+                return client.post(
+                    "/github/webhook",
+                    headers={
+                        "Content-Type": "application/json",
+                        "X-Hub-Signature-256": signature,
+                        "X-GitHub-Event": event,
+                        "X-GitHub-Delivery": delivery,
+                    },
+                    content=body,
+                )
+
+            issue_payload = {
+                "action": "opened",
+                "repository": {"full_name": "jeeves-jeevesenson/init-tracker"},
+                "issue": {"number": 504, "node_id": "I_504", "title": "Deadlock fix", "body": "Fix deadlock", "labels": [{"name": "agent:task"}]},
+            }
+            approve_payload = {"action": "created", "repository": {"full_name": "jeeves-jeevesenson/init-tracker"}, "issue": {"number": 504}, "comment": {"body": "/approve"}}
+            candidates = [
+                {
+                    "number": 706,
+                    "title": "Threading cleanup",
+                    "body": "done",
+                    "html_url": "https://github.com/jeeves-jeevesenson/init-tracker/pull/706",
+                    "node_id": "PR_kw_test_706",
+                    "created_at": datetime.now(timezone.utc).isoformat(),
+                    "user": {"login": "copilot-swe-agent"},
+                    "head": {"ref": "copilot/fix-504"},
+                }
+            ]
+            with patch("orchestrator.app.tasks.plan_task_packet", return_value={"objective": "x", "scope": [], "non_goals": [], "acceptance_criteria": [], "validation_guidance": [], "implementation_brief": "x"}), \
+                 patch("orchestrator.app.tasks.dispatch_task_to_github_copilot", return_value=DispatchResult(attempted=True, accepted=True, manual_required=False, state="accepted", summary="ok")), \
+                 patch("orchestrator.app.tasks.list_recent_pull_requests", return_value=(candidates, "ok")), \
+                 patch("orchestrator.app.tasks.mark_pr_ready_for_review", return_value=(True, "ok")), \
+                 patch("orchestrator.app.tasks.inspect_pull_request", return_value=Mock(ok=True, draft=False)), \
+                 patch("orchestrator.app.tasks.notify_discord"), \
+                 patch("orchestrator.app.tasks.list_pull_request_files", return_value=([], "ok")), \
+                 patch("orchestrator.app.tasks.list_pull_request_reviews", return_value=([], "ok")), \
+                 patch("orchestrator.app.tasks.list_pull_request_review_comments", return_value=([], "ok")), \
+                 patch("orchestrator.app.tasks.summarize_governor_update", return_value={"governor_artifact": {"decision": "wait", "summary": ["ok"], "revision_requests": [], "escalation_reason": ""}}):
+                with TestClient(main.app) as client:
+                    _post_local(client, "task-504-open", "issues", issue_payload)
+                    _post_local(client, "task-504-approve", "issue_comment", approve_payload)
+                    task = client.get("/tasks").json()["tasks"][0]
+                    self.assertEqual(task["status"], "pr_opened")
+                    self.assertEqual(task["latest_run"]["github_pr_number"], 706)
+                    self.assertEqual(task["latest_run"]["github_pr_url"], "https://github.com/jeeves-jeevesenson/init-tracker/pull/706")
+                    self.assertEqual(task["latest_run"]["github_pr_node_id"], "PR_kw_test_706")
+
 
 if __name__ == "__main__":
     unittest.main()
