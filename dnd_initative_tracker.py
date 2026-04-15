@@ -33901,7 +33901,7 @@ class InitiativeTracker(base.InitiativeTracker):
 
             if hit and total_damage > 0:
                 before_hp = _parse_int(getattr(target, "hp", None), None)
-                damage_state = self._apply_damage_to_target_with_temp_hp(target, int(total_damage))
+                damage_state = self._apply_damage_via_service(target, int(total_damage))
                 if before_hp is not None:
                     after_hp = int(damage_state.get("hp_after", before_hp))
                     if int(before_hp) > 0 and int(after_hp) <= 0:
@@ -34082,7 +34082,7 @@ class InitiativeTracker(base.InitiativeTracker):
             total_damage = int(math.floor(rolled / 2.0)) if save_passed else int(rolled)
             before_hp = int(getattr(target, "hp", 0) or 0)
             if total_damage > 0:
-                damage_state = self._apply_damage_to_target_with_temp_hp(target, int(total_damage))
+                damage_state = self._apply_damage_via_service(target, int(total_damage))
                 after_hp = int(damage_state.get("hp_after", before_hp))
             else:
                 after_hp = before_hp
@@ -35228,7 +35228,7 @@ class InitiativeTracker(base.InitiativeTracker):
                 setattr(target, "_rage_took_damage_this_turn", True)
                 before_hp = _parse_int(getattr(target, "hp", None), None)
                 if before_hp is not None:
-                    damage_state = self._apply_damage_to_target_with_temp_hp(target, int(total_damage))
+                    damage_state = self._apply_damage_via_service(target, int(total_damage))
                     after_hp = int(damage_state.get("hp_after", before_hp))
                     if int(before_hp) > 0 and int(after_hp) <= 0:
                         pre_order: List[int] = []
@@ -35930,7 +35930,8 @@ class InitiativeTracker(base.InitiativeTracker):
                 hp_gain = int(max(1, healing_roll) + fighter_level)
             cur_hp = int(getattr(c, "hp", 0) or 0)
             max_hp = int(getattr(c, "max_hp", cur_hp) or cur_hp)
-            setattr(c, "hp", max(0, min(max_hp, cur_hp + hp_gain)))
+            actual_heal = max(0, min(hp_gain, max(0, max_hp - cur_hp)))
+            self._apply_heal_via_service(cid, actual_heal)
             if bool(getattr(self, "in_combat", False)) and int(getattr(c, "bonus_action_remaining", 0)) > 0:
                 self._use_bonus_action(c)
             self._log(f"{getattr(c, 'name', 'Player')} uses Second Wind and regains {hp_gain} HP.", cid=cid)
@@ -36025,8 +36026,8 @@ class InitiativeTracker(base.InitiativeTracker):
             else:
                 cur_hp = int(getattr(target, "hp", 0) or 0)
                 max_hp = int(getattr(target, "max_hp", cur_hp) or cur_hp)
-                actual_heal = max(0, min(heal_amount, max_hp - cur_hp))
-                setattr(target, "hp", max(0, min(max_hp, cur_hp + heal_amount)))
+                actual_heal = max(0, min(heal_amount, max(0, max_hp - cur_hp)))
+                self._apply_heal_via_service(int(target.cid), actual_heal)
                 self._log(
                     f"{getattr(c, 'name', 'Player')} uses Lay on Hands on {getattr(target, 'name', 'Target')} "
                     f"for {actual_heal} HP ({heal_amount} points spent).",

@@ -39,11 +39,14 @@ Desktop-routed through this service (Slice 9):
   - Desktop HP adjust, condition set, and temp HP set have _*_via_service()
     wrappers available for progressive adoption
   - Deep combat damage (_apply_damage_to_target_with_temp_hp) routes through
-    CombatService.apply_damage via _apply_damage_via_service() for a bounded
-    subset of core callers (attack resolution, spell AoE, start/end-of-turn
-    damage riders) — Slice 9
+    CombatService.apply_damage via _apply_damage_via_service() for all
+    identified core callers: attack resolution, spell AoE, start/end-of-turn
+    damage riders (Slice 9), Heat Metal, Hellish Rebuke, weapon-mastery
+    attack paths (Slice 10)
   - Healing (_apply_heal_to_combatant) routes through
-    CombatService.apply_heal via _apply_heal_via_service() — Slice 9
+    CombatService.apply_heal via _apply_heal_via_service() — wrapper
+    available (Slice 9); heal dialog, Second Wind, and Lay on Hands now
+    route through the wrapper (Slice 10)
 
 Still hybrid / desktop-primary:
   - Full Tkinter canvas UI rendering
@@ -52,12 +55,10 @@ Still hybrid / desktop-primary:
   - Character editor, shop, spell/resource management
   - YAML-backed save/load (unchanged; mutations here persist via existing path)
   - Full monster-spec / player-profile based combatant creation (desktop only)
-  - Remaining deep combat damage callers (Heat Metal, Hellish Rebuke,
-    weapon-mastery attack paths) still call _apply_damage_to_target_with_temp_hp
-    directly; these are candidates for future slices
+  - Some niche heal callers may still bypass _apply_heal_via_service;
+    further slices can migrate additional callers as needed
 
 Next recommended migration targets:
-  - Route remaining spell-specific damage callers through apply_damage
   - Expose full initiative-roll support so DM web can trigger rolls
   - Player-facing LAN client state sync improvements
 

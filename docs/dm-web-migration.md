@@ -157,12 +157,14 @@ The following desktop/LAN-originated mutations now route through
 - **Desktop `_set_temp_hp_via_service()`** → `CombatService.set_temp_hp()`
   (wrapper available for progressive adoption)
 - **Deep combat damage** → `_apply_damage_via_service()` →
-  `CombatService.apply_damage()` — routes 6 core callers: attack resolution,
-  spell AoE damage, start-of-turn damage riders, end-turn save-rider fail
-  damage, end-of-turn damage riders, and the `_apply_damage_to_combatant`
-  alias (Slice 9)
+  `CombatService.apply_damage()` — routes all identified core callers:
+  attack resolution, spell AoE damage, start-of-turn damage riders,
+  end-turn save-rider fail damage, end-of-turn damage riders, and the
+  `_apply_damage_to_combatant` alias (Slice 9); Heat Metal, Hellish Rebuke,
+  and weapon-mastery attack paths (Slice 10)
 - **Healing** → `_apply_heal_via_service()` → `CombatService.apply_heal()` —
-  wrapper available for progressive adoption by heal call sites (Slice 9)
+  wrapper available (Slice 9); heal dialog, Second Wind (LAN), and
+  Lay on Hands (LAN) now route through the wrapper (Slice 10)
 
 All wrappers fall back to direct mutation + broadcast when the service is
 not running (e.g. LAN server not started).
@@ -193,13 +195,13 @@ concurrently.  The current safeguard model:
 **Remaining risk**: The `CombatService` lock now covers all mutations that
 go through the service, including web-originated, desktop-routed paths
 (Start/Reset, Prev Turn, Next Turn, Set Turn Here, manual HP override),
-and the newly-routed deep damage callers (attack resolution, spell AoE,
-start/end-of-turn damage riders).  Remaining desktop-originated mutations
-that do **not** yet use the `_*_via_service()` wrappers (e.g. Heat Metal,
-Hellish Rebuke, weapon-mastery attack damage) do not acquire this lock,
-so a simultaneous desktop engine mutation from those paths + web mutation
-could still race.  This is an acceptable risk for the single-session LAN
-use case, and the wrapper adoption can continue incrementally.
+and all identified deep damage callers (attack resolution, spell AoE,
+start/end-of-turn damage riders, Heat Metal, Hellish Rebuke, weapon-mastery
+attack paths).  Heal callers that now route through `_apply_heal_via_service`
+(heal dialog, Second Wind, Lay on Hands) are also covered.  Some niche
+desktop-originated heal paths may still bypass the service wrapper; the
+wrapper adoption can continue incrementally.  This is an acceptable risk
+for the single-session LAN use case.
 
 ---
 
@@ -215,28 +217,22 @@ via the web.
 
 ## Recommended next migration targets
 
-1. **Remaining spell-specific damage routing**: Route the remaining
-   direct `_apply_damage_to_target_with_temp_hp` callers (Heat Metal,
-   Hellish Rebuke, weapon-mastery attack paths) through
-   `_apply_damage_via_service()` so all damage mutations are covered
-   by the service lock.
+1. **Remaining niche heal call-site adoption**: Some niche heal paths may
+   still bypass `_apply_heal_via_service()`.  Further slices can migrate
+   additional callers as identified.
 
-2. **Heal call-site adoption**: Route remaining `_apply_heal_to_combatant`
-   callers through `_apply_heal_via_service()` for consistent heal
-   mutation coverage.
-
-3. **Initiative-roll support**: Expose full initiative-roll support through
+2. **Initiative-roll support**: Expose full initiative-roll support through
    the backend service so the DM web console can trigger initiative rolls
    without Tkinter fallback.
 
-4. **Token refresh**: The DM console does not yet auto-renew the admin token
+3. **Token refresh**: The DM console does not yet auto-renew the admin token
    before expiry.  Add a background refresh 2 minutes before the 15-minute
    expiry window.
 
-5. **Snapshot enhancements**: Additional fields (e.g. per-combatant AC tooltip,
+4. **Snapshot enhancements**: Additional fields (e.g. per-combatant AC tooltip,
    resource pools) can be added as the DM console grows.
 
-6. **Player-facing LAN client state sync**: Improve broadcast reliability
+5. **Player-facing LAN client state sync**: Improve broadcast reliability
    and reconnect behavior for the player-facing LAN WebSocket client.
 
 ---
