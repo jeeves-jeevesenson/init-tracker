@@ -138,6 +138,7 @@ def _ensure_agent_run_columns() -> None:
             "program_slice_id": "INTEGER",
             "continuation_decision": "TEXT",
             "openai_last_response_id": "TEXT",
+            "linkage_tag": "TEXT",
         },
     )
 
