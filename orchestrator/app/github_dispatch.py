@@ -1136,6 +1136,31 @@ def inspect_pull_request(*, settings: Settings, repo: str, pr_number: int) -> Pu
         )
 
 
+def list_recent_pull_requests(*, settings: Settings, repo: str, limit: int = 30) -> tuple[list[dict[str, Any]], str]:
+    if not has_dispatch_auth(settings):
+        return [], "Dispatch auth failure: dispatch user-token auth not configured; cannot list recent PRs"
+    bounded_limit = max(1, min(int(limit or 30), 100))
+    api_base = settings.github_api_url.rstrip("/")
+    url = f"{api_base}/repos/{repo}/pulls?state=open&sort=created&direction=desc&per_page={bounded_limit}"
+    try:
+        with httpx.Client(timeout=15.0) as client:
+            response = client.get(url, headers=_build_dispatch_headers(settings))
+            if response.status_code >= 400:
+                return [], (
+                    f"PR discovery failure: GitHub returned {response.status_code} when listing recent PRs: "
+                    f"{response.text[:300]}"
+                )
+            if not response.headers.get("content-type", "").startswith("application/json"):
+                return [], "PR discovery failure: GitHub returned non-JSON recent PR list"
+            payload = response.json()
+            if not isinstance(payload, list):
+                return [], "PR discovery failure: GitHub returned invalid recent PR list"
+            prs = [item for item in payload if isinstance(item, dict)]
+            return prs, f"Fetched {len(prs)} recent PR candidates"
+    except Exception as exc:
+        return [], f"PR discovery failure: Failed to list recent PRs: {exc}"
+
+
 def remove_requested_reviewers(
     *,
     settings: Settings,

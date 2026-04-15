@@ -18,6 +18,7 @@ from .github_dispatch import (
     describe_dispatch_mode,
     dispatch_task_to_github_copilot,
     inspect_pull_request,
+    list_recent_pull_requests,
     list_issue_comments,
     list_pull_request_files,
     list_pull_request_review_comments,
@@ -506,6 +507,19 @@ def _as_utc(dt: datetime | None) -> datetime:
     return dt.astimezone(timezone.utc)
 
 
+def _parse_github_datetime(raw: Any) -> datetime | None:
+    if not isinstance(raw, str) or not raw.strip():
+        return None
+    candidate = raw.strip()
+    if candidate.endswith("Z"):
+        candidate = candidate[:-1] + "+00:00"
+    try:
+        parsed = datetime.fromisoformat(candidate)
+    except ValueError:
+        return None
+    return _as_utc(parsed)
+
+
 def _parse_json_list(raw_json: str | None) -> list[Any]:
     if not raw_json:
         return []
@@ -514,6 +528,72 @@ def _parse_json_list(raw_json: str | None) -> list[Any]:
     except json.JSONDecodeError:
         return []
     return parsed if isinstance(parsed, list) else []
+
+
+def _discover_post_dispatch_pr_candidate(
+    *,
+    settings: Settings,
+    task: TaskPacket,
+    run: AgentRun,
+    dispatch_observed_at: datetime,
+) -> tuple[dict[str, Any] | None, str, list[dict[str, Any]]]:
+    candidates, msg = list_recent_pull_requests(settings=settings, repo=task.github_repo, limit=40)
+    if not candidates:
+        return None, "no_recent_pr_candidates", []
+    issue_pattern = re.compile(rf"(?:^|\\W)#?{task.github_issue_number}(?:\\W|$)")
+    scored: list[dict[str, Any]] = []
+    for pr in candidates:
+        number = pr.get("number")
+        if not isinstance(number, int):
+            continue
+        title = str(pr.get("title") or "")
+        body = str(pr.get("body") or "")
+        combined = f"{title}\n{body}"
+        user = pr.get("user") if isinstance(pr.get("user"), dict) else {}
+        login = user.get("login") if isinstance(user, dict) else None
+        created_at = _parse_github_datetime(pr.get("created_at"))
+        head_ref = ""
+        head = pr.get("head")
+        if isinstance(head, dict):
+            head_ref = str(head.get("ref") or "")
+        score = 0
+        reasons: list[str] = []
+        if issue_pattern.search(combined):
+            score += 6
+            reasons.append("issue_link_present")
+        if _is_copilot_actor(settings=settings, login=login if isinstance(login, str) else None, display_name=None):
+            score += 3
+            reasons.append("copilot_actor")
+        if created_at is not None and created_at >= dispatch_observed_at - timedelta(minutes=1):
+            score += 2
+            reasons.append("created_after_dispatch")
+        if head_ref and ("copilot" in head_ref.lower() or str(task.github_issue_number) in head_ref):
+            score += 1
+            reasons.append("branch_pattern_matched")
+        scored.append(
+            {
+                "pr": pr,
+                "score": score,
+                "reasons": reasons,
+                "created_at": created_at.isoformat() if created_at else None,
+            }
+        )
+    if not scored:
+        return None, "no_recent_pr_candidates", []
+    scored.sort(
+        key=lambda entry: (
+            int(entry["score"]),
+            int(entry["pr"].get("number") or 0),
+        ),
+        reverse=True,
+    )
+    top_score = int(scored[0]["score"])
+    if top_score <= 0:
+        return None, "issue_link_not_present", scored[:8]
+    top = [entry for entry in scored if int(entry["score"]) == top_score]
+    if len(top) > 1:
+        return None, "candidate_prs_ambiguous", scored[:8]
+    return top[0], "linked", scored[:8]
 
 
 def _governor_guarded_patterns(settings: Settings) -> list[str]:
@@ -1641,7 +1721,12 @@ def task_to_dict(task: TaskPacket, latest_run: AgentRun | None = None) -> dict[s
         "worker_state": latest_run.status if latest_run else None,
         "dispatch_payload_summary": dispatch_payload_summary,
         "pr_linkage": (
-            {"github_pr_number": latest_run.github_pr_number, "github_dispatch_url": latest_run.github_dispatch_url}
+            {
+                "github_pr_number": latest_run.github_pr_number,
+                "github_pr_url": latest_run.github_pr_url,
+                "github_pr_node_id": latest_run.github_pr_node_id,
+                "github_dispatch_url": latest_run.github_dispatch_url,
+            }
             if latest_run
             else None
         ),
@@ -1671,6 +1756,8 @@ def run_to_dict(run: AgentRun | None) -> dict[str, Any] | None:
         "github_repo": run.github_repo,
         "github_issue_number": run.github_issue_number,
         "github_pr_number": run.github_pr_number,
+        "github_pr_url": run.github_pr_url,
+        "github_pr_node_id": run.github_pr_node_id,
         "github_dispatch_id": run.github_dispatch_id,
         "github_dispatch_url": run.github_dispatch_url,
         "selected_custom_agent": run.selected_custom_agent,
@@ -2102,15 +2189,16 @@ def dispatch_task_if_ready(session: Session, *, settings: Settings, task: TaskPa
         f"(dispatch_state={result.state}, api_status={result.api_status_code if result.api_status_code is not None else 'n/a'})"
     )
     if result.accepted:
+        dispatch_observed_at = _utc_now()
         run.status = RUN_STATUS_AWAITING_WORKER_START
         run.last_summary = result_summary
         run.github_dispatch_id = result.dispatch_id
         run.github_dispatch_url = result.dispatch_url
-        run.updated_at = _utc_now()
+        run.updated_at = dispatch_observed_at
 
         task.status = TASK_STATUS_AWAITING_WORKER_START
         task.latest_summary = f"{result_summary} Awaiting worker-start signal."
-        task.updated_at = _utc_now()
+        task.updated_at = dispatch_observed_at
         _save(session, run, task)
         link_run_to_slice(session, run=run, task=task)
         notify_discord(
@@ -2127,6 +2215,145 @@ def dispatch_task_if_ready(session: Session, *, settings: Settings, task: TaskPa
             summary=result_summary,
             auth_lane="dispatch_user_token",
             api_type="GraphQL+REST",
+        )
+        _log_workflow_checkpoint(
+            settings,
+            event="pr_discovery_search_attempted",
+            task=task,
+            run=run,
+            success=True,
+            summary="Attempting bounded post-dispatch PR discovery.",
+            auth_lane="dispatch_user_token",
+            api_type="REST",
+        )
+        selected, reason, scored_candidates = _discover_post_dispatch_pr_candidate(
+            settings=settings,
+            task=task,
+            run=run,
+            dispatch_observed_at=dispatch_observed_at,
+        )
+        _log_workflow_checkpoint(
+            settings,
+            event="pr_discovery_candidates_observed",
+            task=task,
+            run=run,
+            success=bool(scored_candidates),
+            summary=(
+                "PR discovery candidates: "
+                + json.dumps(
+                    [
+                        {
+                            "pr_number": entry["pr"].get("number"),
+                            "score": entry["score"],
+                            "reasons": entry["reasons"],
+                            "created_at": entry["created_at"],
+                        }
+                        for entry in scored_candidates
+                    ],
+                    ensure_ascii=False,
+                )
+            ),
+            skip_reason=None if scored_candidates else reason,
+        )
+        if selected is None:
+            _log_workflow_checkpoint(
+                settings,
+                event="pr_discovery_linkage_skipped",
+                task=task,
+                run=run,
+                success=False,
+                summary=f"Post-dispatch PR discovery did not produce authoritative linkage: {reason}.",
+                skip_reason=reason,
+            )
+            return
+
+        selected_pr = selected["pr"]
+        pr_number = selected_pr.get("number")
+        if not isinstance(pr_number, int):
+            _log_workflow_checkpoint(
+                settings,
+                event="pr_discovery_linkage_skipped",
+                task=task,
+                run=run,
+                success=False,
+                summary="Selected PR candidate lacked integer PR number.",
+                skip_reason="candidate_missing_pr_number",
+            )
+            return
+        run.github_pr_number = pr_number
+        run.github_pr_url = str(selected_pr.get("html_url") or "") or None
+        run.github_pr_node_id = str(selected_pr.get("node_id") or "") or None
+        run.status = RUN_STATUS_PR_OPENED
+        run.last_summary = (
+            f"Authoritative worker-start evidence linked from post-dispatch PR discovery: "
+            f"PR #{pr_number} ({', '.join(selected['reasons']) or 'scored'})"
+        )
+        run.updated_at = _utc_now()
+        task.status = TASK_STATUS_PR_OPENED
+        task.latest_summary = run.last_summary
+        task.updated_at = _utc_now()
+        _save(session, run, task)
+        link_run_to_slice(session, run=run, task=task)
+        _log_workflow_checkpoint(
+            settings,
+            event="pr_discovery_linked",
+            task=task,
+            run=run,
+            success=True,
+            summary=f"Linked post-dispatch PR #{pr_number} using reasons={selected['reasons']}.",
+        )
+        _log_workflow_checkpoint(
+            settings,
+            event="worker_start_evidence_upgraded",
+            task=task,
+            run=run,
+            success=True,
+            summary="Worker-start evidence upgraded from weak/awaiting to authoritative PR linkage.",
+        )
+        pr_is_draft = bool(selected_pr.get("draft"))
+        _log_workflow_checkpoint(
+            settings,
+            event="ready_for_review_scheduling_decision",
+            task=task,
+            run=run,
+            success=True,
+            summary="PR is draft; scheduling immediate ready-for-review mutation."
+            if pr_is_draft
+            else "PR already non-draft; ready-for-review mutation skipped.",
+            skip_reason="already_ready_for_review" if not pr_is_draft else None,
+        )
+        if pr_is_draft:
+            ok, ready_msg = mark_pr_ready_for_review(settings=settings, repo=task.github_repo, pr_number=pr_number)
+            latest_draft = pr_is_draft
+            inspection = inspect_pull_request(settings=settings, repo=task.github_repo, pr_number=pr_number)
+            if inspection.ok and inspection.draft is not None:
+                latest_draft = bool(inspection.draft)
+            _log_workflow_checkpoint(
+                settings,
+                event="ready_for_review_attempted",
+                task=task,
+                run=run,
+                success=ok and not latest_draft,
+                summary=f"{ready_msg}; verified_isDraft={latest_draft}",
+                auth_lane="dispatch_user_token",
+                api_type="GraphQL+REST",
+                postcondition=f"isDraft={latest_draft}",
+                skip_reason=None if (ok and not latest_draft) else "ready_for_review_postcondition_failed",
+            )
+            pr_is_draft = latest_draft
+        _run_governor_loop(
+            session,
+            settings=settings,
+            task=task,
+            run=run,
+            pr_payload={
+                "number": pr_number,
+                "draft": pr_is_draft,
+                "state": str(selected_pr.get("state") or "open"),
+                "requested_reviewers": selected_pr.get("requested_reviewers") or [],
+            },
+            event_key=f"governor:dispatch_pr_discovery:{run.id}:{pr_number}:{_utc_now().isoformat()}",
+            checks_passed=False,
         )
         return
 
@@ -2353,7 +2580,7 @@ def process_pull_request_event(
     github_repo = _repo_name(payload)
     pr = payload.get("pull_request") or {}
     if not github_repo or not isinstance(pr, dict):
-        return False
+        return True
 
     task = _task_for_pr_payload(session, github_repo=github_repo, pr_payload=pr)
     if task is None or task.id is None:
@@ -2403,6 +2630,8 @@ def process_pull_request_event(
     pr_number = pr.get("number")
     if isinstance(pr_number, int):
         run.github_pr_number = pr_number
+    run.github_pr_url = str(pr.get("html_url") or "") or None
+    run.github_pr_node_id = str(pr.get("node_id") or "") or None
 
     html_url = str(pr.get("html_url") or "")
     pr_is_draft = bool(pr.get("draft"))
