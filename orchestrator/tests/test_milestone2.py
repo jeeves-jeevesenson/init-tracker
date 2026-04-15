@@ -17,7 +17,12 @@ from starlette.requests import ClientDisconnect
 
 from orchestrator.app.config import Settings
 from orchestrator.app.copilot_identity import DOCUMENTED_COPILOT_ASSIGNEE_LOGIN
-from orchestrator.app.github_dispatch import DispatchResult, dispatch_task_to_github_copilot, lookup_pr_linked_issue_numbers
+from orchestrator.app.github_dispatch import (
+    DispatchResult,
+    PullRequestInspection,
+    dispatch_task_to_github_copilot,
+    lookup_pr_linked_issue_numbers,
+)
 from orchestrator.app.models import AgentRun, TaskPacket
 from orchestrator.app import openai_planning
 from orchestrator.app import openai_review
@@ -27,6 +32,7 @@ from orchestrator.app.tasks import (
     CUSTOM_AGENT_TRACKER_ENGINEER,
     _build_run_linkage_tag,
     _discover_post_dispatch_pr_candidate,
+    parse_orch_linkage_tag,
 )
 
 
@@ -2176,6 +2182,20 @@ class OrchestratorMilestone2Tests(unittest.TestCase):
             "ORCH-LINK: task=47 issue=115 run=426",
         )
 
+    def test_parse_orch_linkage_tag_extracts_expected_fields_and_rejects_malformed(self):
+        body = """
+        ## Summary
+        Some normal PR text.
+
+        ORCH-LINK: task=49 issue=121 run=47
+        """
+        parsed = parse_orch_linkage_tag(body)
+        self.assertIsNotNone(parsed)
+        self.assertEqual(parsed["task_id"], 49)
+        self.assertEqual(parsed["issue_number"], 121)
+        self.assertEqual(parsed["run_id"], 47)
+        self.assertIsNone(parse_orch_linkage_tag("ORCH-LINK: task=49 issue=abc run=47"))
+
     def test_post_dispatch_discovery_prefers_exact_linkage_tag_over_heuristic_candidate(self):
         settings = Settings()
         task = TaskPacket(
@@ -3878,6 +3898,278 @@ class OrchestratorMilestone2Tests(unittest.TestCase):
                     self.assertEqual(task["status"], "blocked")
                     self.assertIn("empty pr", task["latest_summary"].lower())
                     mocked_summarize.assert_not_called()
+
+    def test_workflow_run_recovers_unlinked_run_from_orch_link_tag(self):
+        with tempfile.TemporaryDirectory() as td:
+            os.environ["DATABASE_URL"] = f"sqlite:///{Path(td) / 'orchestrator.db'}"
+            os.environ["GH_WEBHOOK_SECRET"] = "test-gh-secret"
+            os.environ["GITHUB_API_TOKEN"] = "dummy-token"
+            main, db = _reload_orchestrator_modules()
+
+            workflow_payload = {
+                "action": "in_progress",
+                "repository": {"full_name": "jeeves-jeevesenson/init-tracker"},
+                "workflow_run": {
+                    "id": 77001,
+                    "name": "CI",
+                    "status": "in_progress",
+                    "conclusion": None,
+                    "html_url": "https://github.com/jeeves-jeevesenson/init-tracker/actions/runs/77001",
+                    "pull_requests": [{"number": 122}],
+                },
+            }
+            with patch(
+                "orchestrator.app.tasks.inspect_pull_request",
+                return_value=PullRequestInspection(
+                    ok=True,
+                    changed_files=3,
+                    commits=1,
+                    draft=False,
+                    state="open",
+                    merged=False,
+                    summary="ok",
+                    number=122,
+                    node_id="PR_kw_122",
+                    html_url="https://github.com/jeeves-jeevesenson/init-tracker/pull/122",
+                    body="context\nORCH-LINK: task=49 issue=121 run=47\n",
+                ),
+            ):
+                with TestClient(main.app) as client:
+                    with Session(db.get_engine()) as session:
+                        task = TaskPacket(
+                            id=49,
+                            github_repo="jeeves-jeevesenson/init-tracker",
+                            github_issue_number=121,
+                            title="Recover workflow linkage from ORCH-LINK",
+                            raw_body="body",
+                            status="working",
+                            approval_state="approved",
+                            latest_summary="worker running",
+                        )
+                        session.add(task)
+                        session.commit()
+                        run = AgentRun(
+                            id=47,
+                            task_packet_id=task.id,
+                            provider="github_copilot",
+                            github_repo=task.github_repo,
+                            github_issue_number=task.github_issue_number,
+                            status="working",
+                            last_summary="worker running",
+                        )
+                        session.add(run)
+                        session.commit()
+                    response = self._post_github(
+                        client,
+                        secret="test-gh-secret",
+                        delivery="delivery-workflow-recover-122",
+                        event="workflow_run",
+                        payload=workflow_payload,
+                    )
+                    self.assertEqual(response.status_code, 200)
+                    task_after = client.get("/tasks").json()["tasks"][0]
+                    self.assertEqual(task_after["status"], "working")
+                    self.assertEqual(task_after["latest_run"]["github_pr_number"], 122)
+                    self.assertNotIn("reconciliation incomplete", (task_after["latest_summary"] or "").lower())
+
+    def test_workflow_run_invalid_orch_link_does_not_false_link_and_is_retryable(self):
+        with tempfile.TemporaryDirectory() as td:
+            os.environ["DATABASE_URL"] = f"sqlite:///{Path(td) / 'orchestrator.db'}"
+            os.environ["GH_WEBHOOK_SECRET"] = "test-gh-secret"
+            os.environ["GITHUB_API_TOKEN"] = "dummy-token"
+            main, db = _reload_orchestrator_modules()
+
+            workflow_payload = {
+                "action": "in_progress",
+                "repository": {"full_name": "jeeves-jeevesenson/init-tracker"},
+                "workflow_run": {
+                    "id": 77101,
+                    "name": "CI",
+                    "status": "in_progress",
+                    "conclusion": None,
+                    "html_url": "https://github.com/jeeves-jeevesenson/init-tracker/actions/runs/77101",
+                    "pull_requests": [{"number": 122}],
+                },
+            }
+            with patch(
+                "orchestrator.app.tasks.inspect_pull_request",
+                return_value=PullRequestInspection(
+                    ok=True,
+                    changed_files=1,
+                    commits=1,
+                    draft=False,
+                    state="open",
+                    merged=False,
+                    summary="ok",
+                    number=122,
+                    node_id="PR_kw_122",
+                    html_url="https://github.com/jeeves-jeevesenson/init-tracker/pull/122",
+                    body="ORCH-LINK: task=149 issue=999 run=147",
+                ),
+            ):
+                with TestClient(main.app) as client:
+                    with Session(db.get_engine()) as session:
+                        task = TaskPacket(
+                            id=149,
+                            github_repo="jeeves-jeevesenson/init-tracker",
+                            github_issue_number=221,
+                            title="Invalid ORCH-LINK should not recover",
+                            raw_body="body",
+                            status="working",
+                            approval_state="approved",
+                            latest_summary="worker running",
+                        )
+                        session.add(task)
+                        session.commit()
+                        run = AgentRun(
+                            id=147,
+                            task_packet_id=task.id,
+                            provider="github_copilot",
+                            github_repo=task.github_repo,
+                            github_issue_number=task.github_issue_number,
+                            status="working",
+                            last_summary="worker running",
+                        )
+                        session.add(run)
+                        session.commit()
+                    response = self._post_github(
+                        client,
+                        secret="test-gh-secret",
+                        delivery="delivery-workflow-invalid-link-122",
+                        event="workflow_run",
+                        payload=workflow_payload,
+                    )
+                    self.assertEqual(response.status_code, 202)
+                    task_after = client.get("/tasks").json()["tasks"][0]
+                    self.assertEqual(task_after["status"], "working")
+                    self.assertIsNone(task_after["latest_run"]["github_pr_number"])
+                    self.assertIn("pr association pending (retryable)", (task_after["latest_summary"] or "").lower())
+
+    def test_workflow_run_first_miss_without_orch_link_is_retryable(self):
+        with tempfile.TemporaryDirectory() as td:
+            os.environ["DATABASE_URL"] = f"sqlite:///{Path(td) / 'orchestrator.db'}"
+            os.environ["GH_WEBHOOK_SECRET"] = "test-gh-secret"
+            os.environ["GITHUB_API_TOKEN"] = "dummy-token"
+            main, db = _reload_orchestrator_modules()
+
+            workflow_payload = {
+                "action": "queued",
+                "repository": {"full_name": "jeeves-jeevesenson/init-tracker"},
+                "workflow_run": {
+                    "id": 77201,
+                    "name": "CI",
+                    "status": "queued",
+                    "conclusion": None,
+                    "html_url": "https://github.com/jeeves-jeevesenson/init-tracker/actions/runs/77201",
+                    "pull_requests": [{"number": 7000}],
+                },
+            }
+            with patch(
+                "orchestrator.app.tasks.inspect_pull_request",
+                return_value=PullRequestInspection(
+                    ok=True,
+                    changed_files=1,
+                    commits=1,
+                    draft=False,
+                    state="open",
+                    merged=False,
+                    summary="ok",
+                    number=7000,
+                    node_id="PR_kw_7000",
+                    html_url="https://github.com/jeeves-jeevesenson/init-tracker/pull/7000",
+                    body="No linkage in this PR body",
+                ),
+            ):
+                with TestClient(main.app) as client:
+                    with Session(db.get_engine()) as session:
+                        task = TaskPacket(
+                            github_repo="jeeves-jeevesenson/init-tracker",
+                            github_issue_number=321,
+                            title="Workflow first miss retryable",
+                            raw_body="body",
+                            status="working",
+                            approval_state="approved",
+                            latest_summary="worker running",
+                        )
+                        session.add(task)
+                        session.commit()
+                        session.refresh(task)
+                        run = AgentRun(
+                            task_packet_id=task.id,
+                            provider="github_copilot",
+                            github_repo=task.github_repo,
+                            github_issue_number=task.github_issue_number,
+                            status="working",
+                            last_summary="worker running",
+                        )
+                        session.add(run)
+                        session.commit()
+                    response = self._post_github(
+                        client,
+                        secret="test-gh-secret",
+                        delivery="delivery-workflow-no-link-7000",
+                        event="workflow_run",
+                        payload=workflow_payload,
+                    )
+                    self.assertEqual(response.status_code, 202)
+                    task_after = client.get("/tasks").json()["tasks"][0]
+                    self.assertEqual(task_after["status"], "working")
+                    self.assertIn("pr association pending (retryable)", (task_after["latest_summary"] or "").lower())
+                    self.assertNotIn("reconciliation incomplete", (task_after["latest_summary"] or "").lower())
+
+    def test_workflow_run_existing_pr_link_still_processes_normally(self):
+        with tempfile.TemporaryDirectory() as td:
+            os.environ["DATABASE_URL"] = f"sqlite:///{Path(td) / 'orchestrator.db'}"
+            os.environ["GH_WEBHOOK_SECRET"] = "test-gh-secret"
+            main, db = _reload_orchestrator_modules()
+
+            workflow_payload = {
+                "action": "in_progress",
+                "repository": {"full_name": "jeeves-jeevesenson/init-tracker"},
+                "workflow_run": {
+                    "id": 77301,
+                    "name": "Copilot run",
+                    "status": "in_progress",
+                    "conclusion": None,
+                    "html_url": "https://github.com/jeeves-jeevesenson/init-tracker/actions/runs/77301",
+                    "pull_requests": [{"number": 6191}],
+                },
+            }
+            with TestClient(main.app) as client:
+                with Session(db.get_engine()) as session:
+                    task = TaskPacket(
+                        github_repo="jeeves-jeevesenson/init-tracker",
+                        github_issue_number=619,
+                        title="Existing linked run path",
+                        raw_body="body",
+                        status="working",
+                        approval_state="approved",
+                    )
+                    session.add(task)
+                    session.commit()
+                    session.refresh(task)
+                    run = AgentRun(
+                        task_packet_id=task.id,
+                        provider="github_copilot",
+                        github_repo=task.github_repo,
+                        github_issue_number=task.github_issue_number,
+                        github_pr_number=6191,
+                        status="working",
+                        last_summary="worker running",
+                    )
+                    session.add(run)
+                    session.commit()
+                response = self._post_github(
+                    client,
+                    secret="test-gh-secret",
+                    delivery="delivery-workflow-linked-619",
+                    event="workflow_run",
+                    payload=workflow_payload,
+                )
+                self.assertEqual(response.status_code, 200)
+                task_data = client.get("/tasks").json()["tasks"][0]
+                self.assertEqual(task_data["status"], "working")
+                self.assertEqual(task_data["latest_run"]["github_pr_number"], 6191)
 
     def test_canceled_worker_session_is_not_successful_progress(self):
         with tempfile.TemporaryDirectory() as td:
