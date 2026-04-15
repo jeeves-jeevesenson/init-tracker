@@ -17,6 +17,7 @@ from .github_dispatch import (
     build_dispatch_payload_summary,
     describe_dispatch_mode,
     dispatch_task_to_github_copilot,
+    fetch_pull_request_patch,
     inspect_pull_request,
     list_recent_pull_requests,
     lookup_pr_linked_issue_numbers,
@@ -740,6 +741,48 @@ def _truncate_patch(patch: str, *, max_chars: int = 2000) -> tuple[str, bool]:
     return patch[:max_chars], True
 
 
+def _derive_file_details_from_patch(patch_text: str, *, max_files: int = 80) -> list[dict[str, Any]]:
+    details: list[dict[str, Any]] = []
+    current: dict[str, Any] | None = None
+    for raw_line in patch_text.splitlines():
+        if raw_line.startswith("diff --git "):
+            if current and str(current.get("filename") or "").strip():
+                details.append(current)
+                if len(details) >= max_files:
+                    break
+            current = {
+                "filename": "",
+                "status": "modified",
+                "additions": 0,
+                "deletions": 0,
+                "patch": "",
+            }
+            continue
+        if current is None:
+            continue
+        if raw_line.startswith("new file mode "):
+            current["status"] = "added"
+            continue
+        if raw_line.startswith("deleted file mode "):
+            current["status"] = "removed"
+            continue
+        if raw_line.startswith("rename from "):
+            current["status"] = "renamed"
+            continue
+        if raw_line.startswith("+++ b/"):
+            current["filename"] = raw_line[6:].strip()
+            continue
+        if raw_line.startswith("@@") or raw_line.startswith("+") or raw_line.startswith("-") or raw_line.startswith(" "):
+            current["patch"] = f"{current['patch']}{raw_line}\n"
+            if raw_line.startswith("+") and not raw_line.startswith("+++"):
+                current["additions"] = int(current.get("additions") or 0) + 1
+            elif raw_line.startswith("-") and not raw_line.startswith("---"):
+                current["deletions"] = int(current.get("deletions") or 0) + 1
+    if current and str(current.get("filename") or "").strip() and len(details) < max_files:
+        details.append(current)
+    return details
+
+
 def _workflow_run_linked_head_sha(
     workflow_run: dict[str, Any],
     *,
@@ -1334,7 +1377,8 @@ def _run_governor_loop(
     pr_head_sha = str(pr_head.get("sha") or pr_payload.get("head_sha") or "").strip()
     if pr_head_sha:
         state["last_observed_pr_head_sha"] = pr_head_sha
-    pr_mergeable = pr_payload.get("mergeable")
+    pr_mergeable_raw = pr_payload.get("mergeable")
+    pr_mergeable = pr_mergeable_raw if isinstance(pr_mergeable_raw, bool) or pr_mergeable_raw is None else None
     pr_mergeable_state = str(pr_payload.get("mergeable_state") or "")
 
     last_successful_checks_head_sha = str(state.get("last_successful_checks_head_sha") or "").strip()
@@ -1369,12 +1413,37 @@ def _run_governor_loop(
 
     changed_files = [path for path in _parse_json_list(json.dumps(state.get("changed_files", []))) if isinstance(path, str)]
     file_details, file_details_msg = list_pull_request_file_details(settings=settings, repo=task.github_repo, pr_number=pr_number)
+    patch_fallback_used = False
+    patch_fallback_msg = ""
+    patch_fallback_text = ""
+    patch_fallback_truncated = False
+    patch_fetch_error = ""
     if file_details:
         changed_files = [str(item.get("filename") or "") for item in file_details if str(item.get("filename") or "").strip()]
     elif not changed_files:
         files, _ = list_pull_request_files(settings=settings, repo=task.github_repo, pr_number=pr_number)
         if files:
             changed_files = files
+    if not file_details:
+        patch_fallback_text, patch_fallback_msg = fetch_pull_request_patch(
+            settings=settings,
+            repo=task.github_repo,
+            pr_number=pr_number,
+        )
+        patch_fetch_error = patch_fallback_msg if not patch_fallback_text else ""
+        if patch_fallback_text:
+            derived_file_details = _derive_file_details_from_patch(patch_fallback_text, max_files=80)
+            if derived_file_details:
+                file_details = derived_file_details
+                patch_fallback_used = True
+                changed_files = [
+                    str(item.get("filename") or "")
+                    for item in file_details
+                    if str(item.get("filename") or "").strip()
+                ]
+            if len(patch_fallback_text) > 12000:
+                patch_fallback_text = patch_fallback_text[:12000]
+                patch_fallback_truncated = True
     guarded_patterns = _governor_guarded_patterns(settings)
     guarded_files = [path for path in changed_files if _matches_guarded_path(path, guarded_patterns)]
     guarded_paths_touched = bool(guarded_files)
@@ -1515,8 +1584,15 @@ def _run_governor_loop(
     if pr_mergeable is None and isinstance(pr_number, int):
         inspection = inspect_pull_request(settings=settings, repo=task.github_repo, pr_number=pr_number)
         if inspection.ok:
-            pr_mergeable = inspection.mergeable
-            pr_mergeable_state = inspection.mergeable_state or pr_mergeable_state
+            inspection_mergeable = inspection.mergeable
+            pr_mergeable = (
+                inspection_mergeable
+                if isinstance(inspection_mergeable, bool) or inspection_mergeable is None
+                else pr_mergeable
+            )
+            inspection_mergeable_state = inspection.mergeable_state
+            if isinstance(inspection_mergeable_state, str):
+                pr_mergeable_state = inspection_mergeable_state or pr_mergeable_state
 
     # --- Deterministic fix-trigger for ready PRs with unresolved Copilot findings ---
     if (
@@ -1772,6 +1848,40 @@ def _run_governor_loop(
                     "patch_truncated": was_truncated,
                 }
             )
+        patch_fallback_text_bounded = ""
+        patch_fallback_text_truncated = False
+        if patch_fallback_text:
+            patch_fallback_text_bounded, patch_fallback_text_truncated = _truncate_patch(
+                patch_fallback_text,
+                max_chars=4000,
+            )
+            if patch_fallback_truncated and not patch_fallback_text_truncated:
+                patch_fallback_text_truncated = True
+        evidence_missing = not bounded_files and not patch_fallback_text_bounded.strip()
+        changed_files_hash = hashlib.sha1(
+            json.dumps(sorted(changed_files), ensure_ascii=False).encode("utf-8")
+        ).hexdigest()
+        no_evidence_state_hash = hashlib.sha1(
+            json.dumps(
+                {
+                    "pr_number": pr_number,
+                    "pr_head_sha": pr_head_sha,
+                    "effective_checks_passed": effective_checks_passed,
+                    "mergeable_for_audit": mergeable_for_audit,
+                    "docs_only": docs_only,
+                    "changed_files_hash": changed_files_hash,
+                    "file_details_count": len(file_details),
+                    "patch_fallback_used": patch_fallback_used,
+                    "patch_fetch_error": patch_fetch_error,
+                },
+                sort_keys=True,
+                ensure_ascii=False,
+            ).encode("utf-8")
+        ).hexdigest()
+        prior_no_evidence_hash = str(state.get("final_audit_no_evidence_state_hash") or "")
+        reuse_no_evidence_wait = bool(
+            evidence_missing and prior_no_evidence_hash and prior_no_evidence_hash == no_evidence_state_hash
+        )
         audit_context = {
             "event_key": event_key,
             "repo": task.github_repo,
@@ -1809,7 +1919,13 @@ def _run_governor_loop(
                 "file_details_message": file_details_msg,
                 "truncated_patch_count": truncated_patch_count,
                 "all_patches_present": all(bool(str(item.get("patch") or "").strip()) for item in bounded_files) if bounded_files else False,
+                "patch_fallback_used": patch_fallback_used,
+                "patch_fallback_message": patch_fallback_msg,
+                "patch_fallback_truncated": patch_fallback_text_truncated,
+                "fetch_error": patch_fetch_error or file_details_msg if not file_details else "",
+                "evidence_missing": evidence_missing,
             },
+            "patch_fallback_evidence": patch_fallback_text_bounded,
             "guarded_paths_touched": guarded_paths_touched,
             "guarded_files": guarded_files,
             "doc_only": docs_only,
@@ -1827,9 +1943,7 @@ def _run_governor_loop(
             "pr_head_sha": pr_head_sha,
             "effective_checks_passed": effective_checks_passed,
             "pr_draft": pr_draft,
-            "changed_files_hash": hashlib.sha1(
-                json.dumps(sorted(changed_files), ensure_ascii=False).encode("utf-8")
-            ).hexdigest(),
+            "changed_files_hash": changed_files_hash,
             "unresolved_findings_hash": hashlib.sha1(
                 json.dumps(unresolved_findings, sort_keys=True, ensure_ascii=False).encode("utf-8")
             ).hexdigest(),
@@ -1839,12 +1953,38 @@ def _run_governor_loop(
             ).hexdigest(),
             "mergeable_for_audit": mergeable_for_audit,
             "docs_only": docs_only,
+            "file_details_count": len(file_details),
+            "patch_fallback_used": patch_fallback_used,
+            "evidence_missing": evidence_missing,
         }
         merge_audit_cache_key = hashlib.sha1(
             json.dumps(merge_audit_cache_payload, sort_keys=True, ensure_ascii=False).encode("utf-8")
         ).hexdigest()
         prior_cache_key = str(state.get("final_audit_cache_key") or "").strip()
-        if prior_cache_key and prior_cache_key == merge_audit_cache_key and prior_final_audit_artifact and prior_final_audit_decision:
+        prior_evidence_missing = bool(prior_final_audit_artifact.get("evidence_missing"))
+        if reuse_no_evidence_wait:
+            artifact = prior_final_audit_artifact if prior_final_audit_artifact else {}
+            if not artifact:
+                artifact = {
+                    "decision": "wait",
+                    "confidence": 0.0,
+                    "doc_only": docs_only,
+                    "safe_to_merge": False,
+                    "requires_followup": True,
+                    "summary": [
+                        "Final merge audit deferred: PR evidence is still unavailable.",
+                        "Waiting for file details or patch evidence before calling merge audit model again.",
+                    ],
+                    "findings": [],
+                    "merge_rationale": "",
+                    "escalation_reason": "merge_audit_evidence_missing",
+                    "review_scope": ["evidence_missing"],
+                }
+            decision_payload = {
+                "merge_audit_artifact": artifact,
+                "openai_meta": {"cache_hit": True, "reason": "evidence_missing_no_state_change"},
+            }
+        elif prior_cache_key and prior_cache_key == merge_audit_cache_key and prior_final_audit_artifact and prior_final_audit_decision and not (prior_evidence_missing and not evidence_missing):
             decision_payload = {
                 "merge_audit_artifact": prior_final_audit_artifact,
                 "openai_meta": {"cache_hit": True},
@@ -1866,6 +2006,12 @@ def _run_governor_loop(
         if isinstance(response_id, str) and response_id.strip():
             run.openai_last_response_id = response_id.strip()
         artifact = decision_payload.get("merge_audit_artifact") if isinstance(decision_payload, dict) else {}
+        if isinstance(artifact, dict):
+            artifact.setdefault("evidence_missing", evidence_missing)
+            artifact.setdefault("file_details_count", len(file_details))
+            artifact.setdefault("patch_fallback_used", patch_fallback_used)
+            artifact.setdefault("fetch_error", patch_fetch_error or file_details_msg if evidence_missing else "")
+            artifact.setdefault("changed_files_hash", changed_files_hash)
         decision = str((artifact or {}).get("decision") or "wait")
         summary_bullets = artifact.get("summary") if isinstance(artifact.get("summary"), list) else []
         revision_requests = [str(item.get("summary") or "").strip() for item in artifact.get("findings") or [] if isinstance(item, dict)]
@@ -1878,6 +2024,12 @@ def _run_governor_loop(
         state["final_audit_head_sha"] = pr_head_sha
         state["effective_checks_passed_at_final_audit"] = effective_checks_passed
         state["final_audit_cache_key"] = merge_audit_cache_key
+        state["final_audit_file_details_count"] = len(file_details)
+        state["final_audit_patch_fallback_used"] = patch_fallback_used
+        state["final_audit_evidence_missing"] = evidence_missing
+        state["final_audit_fetch_error"] = patch_fetch_error or file_details_msg if evidence_missing else ""
+        state["final_audit_changed_files_hash"] = changed_files_hash
+        state["final_audit_no_evidence_state_hash"] = no_evidence_state_hash if evidence_missing else ""
     else:
         decision_payload = summarize_governor_update(
             settings=settings,

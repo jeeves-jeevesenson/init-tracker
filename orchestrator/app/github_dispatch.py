@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 from dataclasses import dataclass
 from typing import Any
 
@@ -104,6 +105,7 @@ mutation($pullRequestId: ID!) {
 """
 
 logger = logging.getLogger(__name__)
+_LINK_NEXT_RE = re.compile(r'<([^>]+)>;\s*rel="next"')
 
 
 def _github_debug_enabled(settings: Settings) -> bool:
@@ -1652,40 +1654,103 @@ def list_pull_request_file_details(*, settings: Settings, repo: str, pr_number: 
     if not has_governor_auth(settings):
         return [], "Governor auth failure: auth not configured; cannot list PR file details"
     api_base = settings.github_api_url.rstrip("/")
-    url = f"{api_base}/repos/{repo}/pulls/{pr_number}/files?per_page=100"
+    url = f"{api_base}/repos/{repo}/pulls/{pr_number}/files?per_page=100&page=1"
+    page_number = 1
+    files: list[dict[str, Any]] = []
+    seen_urls: set[str] = set()
     try:
         with httpx.Client(timeout=15.0) as client:
-            response = client.get(url, headers=_build_governor_headers(settings))
-            if response.status_code >= 400:
-                return [], f"PR lifecycle automation failure: GitHub returned {response.status_code} when listing file details for PR #{pr_number}: {response.text[:300]}"
-            if not response.headers.get("content-type", "").startswith("application/json"):
-                return [], f"GitHub returned non-JSON file detail list for PR #{pr_number}"
-            payload = response.json()
-            if not isinstance(payload, list):
-                return [], f"GitHub returned invalid file detail list for PR #{pr_number}"
-            files: list[dict[str, Any]] = []
-            for item in payload:
-                if not isinstance(item, dict):
-                    continue
-                filename = item.get("filename")
-                if not isinstance(filename, str) or not filename.strip():
-                    continue
-                status = str(item.get("status") or "modified")
-                additions_raw = item.get("additions")
-                deletions_raw = item.get("deletions")
-                patch_raw = item.get("patch")
-                files.append(
-                    {
-                        "filename": filename,
-                        "status": status,
-                        "additions": int(additions_raw) if isinstance(additions_raw, int) else 0,
-                        "deletions": int(deletions_raw) if isinstance(deletions_raw, int) else 0,
-                        "patch": str(patch_raw) if isinstance(patch_raw, str) else "",
-                    }
-                )
-            return files, f"Fetched {len(files)} file details for PR #{pr_number}"
+            while url:
+                if url in seen_urls:
+                    return files, (
+                        f"Fetched {len(files)} file details for PR #{pr_number}; "
+                        f"pagination loop detected at page={page_number}"
+                    )
+                seen_urls.add(url)
+                response = client.get(url, headers=_build_governor_headers(settings))
+                if response.status_code >= 400:
+                    return files, (
+                        f"PR lifecycle automation failure: GitHub returned {response.status_code} when listing file details "
+                        f"for PR #{pr_number} page={page_number}: {response.text[:300]}"
+                    )
+                content_type = response.headers.get("content-type", "")
+                if not content_type.startswith("application/json"):
+                    return files, (
+                        f"GitHub returned non-JSON file detail list for PR #{pr_number} page={page_number} "
+                        f"(content-type={content_type or 'missing'})"
+                    )
+                try:
+                    payload = response.json()
+                except Exception as exc:
+                    return files, (
+                        f"Failed to parse file detail list JSON for PR #{pr_number} page={page_number}: {exc}"
+                    )
+                if not isinstance(payload, list):
+                    return files, (
+                        f"GitHub returned invalid file detail list for PR #{pr_number} page={page_number} "
+                        f"(type={type(payload).__name__})"
+                    )
+                for item in payload:
+                    if not isinstance(item, dict):
+                        continue
+                    filename = item.get("filename")
+                    if not isinstance(filename, str) or not filename.strip():
+                        continue
+                    status = str(item.get("status") or "modified")
+                    additions_raw = item.get("additions")
+                    deletions_raw = item.get("deletions")
+                    patch_raw = item.get("patch")
+                    files.append(
+                        {
+                            "filename": filename,
+                            "status": status,
+                            "additions": int(additions_raw) if isinstance(additions_raw, int) else 0,
+                            "deletions": int(deletions_raw) if isinstance(deletions_raw, int) else 0,
+                            "patch": str(patch_raw) if isinstance(patch_raw, str) else "",
+                        }
+                    )
+                next_url = None
+                link_header = response.headers.get("link", "")
+                if link_header:
+                    match = _LINK_NEXT_RE.search(link_header)
+                    if match:
+                        next_url = match.group(1).strip()
+                if next_url:
+                    url = next_url
+                    page_number += 1
+                else:
+                    url = ""
+            if files:
+                return files, f"Fetched {len(files)} file details for PR #{pr_number} across {page_number} page(s)"
+            return [], (
+                f"No file details returned for PR #{pr_number}; pages={page_number}; "
+                "GitHub file-details endpoint returned an empty array."
+            )
     except Exception as exc:
         return [], f"PR lifecycle automation failure: Failed to list file details for PR #{pr_number}: {exc}"
+
+
+def fetch_pull_request_patch(*, settings: Settings, repo: str, pr_number: int) -> tuple[str, str]:
+    if not has_governor_auth(settings):
+        return "", "Governor auth failure: auth not configured; cannot fetch PR patch"
+    api_base = settings.github_api_url.rstrip("/")
+    url = f"{api_base}/repos/{repo}/pulls/{pr_number}"
+    headers = _build_governor_headers(settings)
+    headers["Accept"] = "application/vnd.github.patch"
+    try:
+        with httpx.Client(timeout=20.0) as client:
+            response = client.get(url, headers=headers)
+            if response.status_code >= 400:
+                return "", (
+                    f"PR lifecycle automation failure: GitHub returned {response.status_code} when fetching patch "
+                    f"for PR #{pr_number}: {response.text[:300]}"
+                )
+            patch_text = response.text if isinstance(response.text, str) else ""
+            if not patch_text.strip():
+                return "", f"PR patch fetch returned empty body for PR #{pr_number}"
+            return patch_text, f"Fetched PR patch for PR #{pr_number} ({len(patch_text)} chars)"
+    except Exception as exc:
+        return "", f"PR lifecycle automation failure: Failed to fetch patch for PR #{pr_number}: {exc}"
 
 
 def list_issue_comments(*, settings: Settings, repo: str, issue_number: int) -> tuple[list[dict[str, Any]], str]:
