@@ -7,7 +7,12 @@ from typing import Any
 from openai import OpenAI
 
 from .config import Settings
-from .openai_control_plane import apply_openai_request_controls, select_model_for_stage
+from .openai_control_plane import (
+    apply_openai_request_controls,
+    extract_usage_metrics,
+    fingerprint_text,
+    select_model_for_stage,
+)
 from .schema_validation import validate_strict_json_schema
 
 _ALLOWED_WORKERS = {"initiative-smith", "tracker-engineer"}
@@ -383,6 +388,7 @@ def _invoke_structured_response(
     previous_response_id: str | None = None,
     model_tier: str = "default",
 ) -> tuple[dict[str, Any], dict[str, Any]]:
+    prompt_fingerprint = fingerprint_text(user_prompt)
     payload = _response_payload(
         model=model,
         system_prompt=system_prompt,
@@ -418,6 +424,10 @@ def _invoke_structured_response(
         "model": model,
         "response_id": response_id,
         "stage": stage,
+        "reasoning_effort": reasoning_effort if reasoning_effort in _ALLOWED_REASONING_EFFORT else None,
+        "prompt_fingerprint": prompt_fingerprint,
+        "usage": extract_usage_metrics(response),
+        "outcome": "success",
     }
 
 
@@ -658,11 +668,13 @@ def plan_task_packet(
         )
         worker_brief_meta["model_tier"] = worker_brief_tier
         chain_response_id = worker_brief_meta.get("response_id") or chain_response_id
-    except Exception:
+    except Exception as exc:
         worker_brief_raw = _build_worker_brief_fallback(
             internal_plan=internal_plan,
             target_branch=settings.copilot_target_branch,
         )
+        worker_brief_meta["outcome"] = "api_error"
+        worker_brief_meta["skip_reason"] = str(exc)
 
     worker_brief = _validate_worker_brief(worker_brief_raw)
 
@@ -698,7 +710,7 @@ def plan_task_packet(
         )
         program_plan_meta["model_tier"] = planner_tier
         chain_response_id = program_plan_meta.get("response_id") or chain_response_id
-    except Exception:
+    except Exception as exc:
         program_plan_raw = {
             "normalized_program_objective": internal_plan.get("objective", ""),
             "definition_of_done": internal_plan.get("acceptance_criteria", []),
@@ -724,6 +736,8 @@ def plan_task_packet(
             "recommended_scope_class": internal_plan.get("recommended_scope_class"),
             "continuation_hints": [],
         }
+        program_plan_meta["outcome"] = "api_error"
+        program_plan_meta["skip_reason"] = str(exc)
     program_plan = _validate_program_plan(program_plan_raw, fallback_plan=internal_plan)
 
     return {

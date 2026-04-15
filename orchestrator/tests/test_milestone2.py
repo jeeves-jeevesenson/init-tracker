@@ -5463,6 +5463,110 @@ class OpenAIPlanningSchemaTests(unittest.TestCase):
                     state = client.get("/tasks").json()["tasks"][0]["latest_run"]["governor_state"]
                     self.assertEqual(state.get("last_governor_decision"), "escalate_human")
 
+    def test_replay_payload_preflight_falls_back_or_blocks_malformed_items(self):
+        payload_with_fallback = {
+            "model": "gpt-5.4",
+            "input": [
+                {"type": "message", "role": "assistant", "content": [{"type": "output_text", "text": "partial"}]},
+                {"role": "system", "content": [{"type": "input_text", "text": "fresh system"}]},
+                {"role": "user", "content": [{"type": "input_text", "text": "fresh user"}]},
+            ],
+        }
+        validation = openai_control_plane.preflight_validate_replay_payload(payload_with_fallback)
+        self.assertFalse(validation["ok"])
+        self.assertEqual(validation["mode"], "fallback_fresh_prompt")
+        self.assertEqual(len(payload_with_fallback["input"]), 2)
+
+        settings = Settings()
+        blocked_payload = {
+            "model": "gpt-5.4",
+            "input": [
+                {"type": "message", "role": "assistant", "content": [{"type": "output_text", "text": "bad"}]},
+            ],
+        }
+        with self.assertRaises(RuntimeError):
+            openai_control_plane.apply_openai_request_controls(
+                payload=blocked_payload,
+                settings=settings,
+                stage="planner",
+                repo="jeeves-jeevesenson/init-tracker",
+                previous_response_id="resp_prev",
+            )
+
+    def test_openai_telemetry_summary_endpoint_captures_planner_and_governor(self):
+        with tempfile.TemporaryDirectory() as td:
+            os.environ["DATABASE_URL"] = f"sqlite:///{Path(td) / 'orchestrator.db'}"
+            os.environ["GH_WEBHOOK_SECRET"] = "test-gh-secret"
+            main, _ = _reload_orchestrator_modules()
+            issue_payload = {
+                "action": "opened",
+                "repository": {"full_name": "jeeves-jeevesenson/init-tracker"},
+                "issue": {
+                    "number": 975,
+                    "node_id": "I_975",
+                    "title": "Architecture migration program",
+                    "body": "broad",
+                    "labels": [{"name": "agent:task"}],
+                },
+            }
+            approve_payload = {
+                "action": "created",
+                "repository": {"full_name": "jeeves-jeevesenson/init-tracker"},
+                "issue": {"number": 975},
+                "comment": {"body": "/approve"},
+            }
+            plan_payload = {
+                "objective": "broad",
+                "scope": [],
+                "non_goals": [],
+                "acceptance_criteria": ["slice"],
+                "validation_guidance": [],
+                "implementation_brief": "broad",
+                "recommended_scope_class": "broad",
+                "planning_meta": {
+                    "calls": [
+                        {
+                            "stage": "planner",
+                            "model": "gpt-5.4",
+                            "response_id": "resp-plan-975",
+                            "outcome": "success",
+                            "prompt_fingerprint": "fp-plan",
+                            "usage": {"input_tokens": 100, "output_tokens": 40, "total_tokens": 140},
+                        }
+                    ],
+                    "openai_last_response_id": "resp-plan-975",
+                },
+            }
+            governor_payload = {
+                "governor_artifact": {"decision": "wait", "summary": ["ok"], "revision_requests": [], "escalation_reason": ""},
+                "openai_meta": {
+                    "stage": "governor_fast_path",
+                    "model": "gpt-5.4-mini",
+                    "response_id": "resp-gov-975",
+                    "outcome": "success",
+                    "prompt_fingerprint": "fp-gov",
+                    "usage": {"input_tokens": 90, "output_tokens": 20, "total_tokens": 110},
+                },
+            }
+            with patch("orchestrator.app.tasks.plan_task_packet", return_value=plan_payload), \
+                 patch("orchestrator.app.tasks.dispatch_task_to_github_copilot", return_value=DispatchResult(attempted=True, accepted=True, manual_required=False, state="accepted", summary="ok")), \
+                 patch("orchestrator.app.tasks.inspect_pull_request", return_value=PullRequestInspection(ok=True, changed_files=1, commits=1, draft=False, state="open", merged=False, mergeable=False, mergeable_state="blocked", summary="ok")), \
+                 patch("orchestrator.app.tasks.list_pull_request_file_details", return_value=([{"filename": "docs/slice.md", "status": "modified", "additions": 1, "deletions": 0, "patch": "+slice"}], "ok")), \
+                 patch("orchestrator.app.tasks.list_pull_request_reviews", return_value=([], "ok")), \
+                 patch("orchestrator.app.tasks.list_pull_request_review_comments", return_value=([], "ok")), \
+                 patch("orchestrator.app.tasks.summarize_governor_update", return_value=governor_payload), \
+                 patch("orchestrator.app.tasks.notify_discord"):
+                with TestClient(main.app) as client:
+                    _post_github_local(client, secret="test-gh-secret", delivery="d-975-open", event="issues", payload=issue_payload)
+                    _post_github_local(client, secret="test-gh-secret", delivery="d-975-approve", event="issue_comment", payload=approve_payload)
+                    pr = {"action": "opened", "repository": {"full_name": "jeeves-jeevesenson/init-tracker"}, "pull_request": {"id": 97501, "number": 9751, "title": "Slice", "body": "Closes #975", "html_url": "https://github.com/jeeves-jeevesenson/init-tracker/pull/9751", "updated_at": "2026-01-01T00:00:00Z", "draft": False, "mergeable": False, "mergeable_state": "blocked", "head": {"sha": "sha-975"}, "requested_reviewers": []}}
+                    _post_github_local(client, secret="test-gh-secret", delivery="d-975-pr-open", event="pull_request", payload=pr)
+                    telemetry = client.get("/openai/telemetry").json()["summary"]
+                    self.assertGreaterEqual(telemetry["by_stage"].get("planner", 0), 1)
+                    governor_calls = sum(count for stage, count in telemetry["by_stage"].items() if "governor" in stage)
+                    self.assertGreaterEqual(governor_calls, 1)
+                    self.assertGreaterEqual(telemetry["by_outcome"].get("success", 0), 1)
+
 
 if __name__ == "__main__":
     unittest.main()
