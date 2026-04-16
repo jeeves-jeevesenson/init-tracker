@@ -39,6 +39,8 @@ from orchestrator.app.models import (
     Program,
     ProgramSlice,
     TaskPacket,
+    SLICE_STATUS_AUDIT_REQUESTED,
+    SLICE_STATUS_PLANNED,
     SLICE_STATUS_COMPLETED,
     SLICE_STATUS_WAITING_FOR_MERGE,
     PROGRAM_STATUS_COMPLETED,
@@ -529,6 +531,89 @@ class MergeAndContinueTests(unittest.TestCase):
 
             return task.id, run.id, program.id, slice1.id
 
+    def _setup_task_for_audit_decision(
+        self,
+        db,
+        *,
+        repo: str,
+        issue_number: int,
+        pr_number: int,
+    ) -> tuple[int, int, int, int]:
+        with Session(db.get_engine()) as session:
+            task = TaskPacket(
+                github_repo=repo,
+                github_issue_number=issue_number,
+                title="Audit idempotency task",
+                raw_body="body",
+                status="working",
+                approval_state="approved",
+                acceptance_criteria_json='["done"]',
+                task_kind="program_slice",
+            )
+            session.add(task)
+            session.commit()
+            session.refresh(task)
+
+            program = Program(
+                github_repo=repo,
+                root_issue_number=issue_number,
+                title="Audit idempotency program",
+                normalized_goal="goal",
+                status=PROGRAM_STATUS_ACTIVE,
+                current_slice_number=1,
+                auto_continue=True,
+                auto_dispatch=True,
+                auto_merge=False,
+            )
+            session.add(program)
+            session.commit()
+            session.refresh(program)
+
+            slice1 = ProgramSlice(
+                program_id=program.id,
+                slice_number=1,
+                milestone_key="M1",
+                title="Slice One",
+                objective="Implement",
+                acceptance_criteria_json='["done"]',
+                status="in_progress",
+                task_packet_id=task.id,
+            )
+            session.add(slice1)
+            session.commit()
+            session.refresh(slice1)
+
+            task.program_id = program.id
+            task.program_slice_id = slice1.id
+            session.add(task)
+
+            artifact = {
+                "decision": "audit",
+                "summary": "Need an audit pass",
+                "audit_recommendation": "Perform audit checks",
+                "acceptance_assessment": ["no regressions"],
+                "scope_alignment": ["orchestrator/app/programs.py"],
+                "next_slice_hint": "Validate audit evidence",
+            }
+            run = AgentRun(
+                task_packet_id=task.id,
+                program_id=program.id,
+                program_slice_id=slice1.id,
+                provider="github_copilot",
+                github_repo=repo,
+                github_issue_number=issue_number,
+                github_pr_number=pr_number,
+                status="awaiting_review",
+                review_artifact_json=json.dumps(artifact),
+            )
+            session.add(run)
+            session.commit()
+            session.refresh(run)
+            session.refresh(task)
+            session.refresh(program)
+            session.refresh(slice1)
+            return task.id, run.id, program.id, slice1.id
+
     def test_merge_advances_program_from_waiting_for_merge(self):
         """After a PR is merged, a slice that was WAITING_FOR_MERGE must be advanced
         and the program must move to the next slice."""
@@ -637,6 +722,152 @@ class MergeAndContinueTests(unittest.TestCase):
 
                 # Dispatch should have been called at most once per slice
                 self.assertLessEqual(mocked_dispatch.call_count, 2)
+
+    def test_repeated_audit_decision_is_idempotent(self):
+        with tempfile.TemporaryDirectory() as td:
+            os.environ["DATABASE_URL"] = f"sqlite:///{Path(td) / 'orchestrator.db'}"
+            _, db = _reload_orchestrator_modules()
+            db.init_db()
+            from orchestrator.app.config import Settings
+            from orchestrator.app.programs import apply_reviewer_decision
+
+            task_id, run_id, program_id, slice_id = self._setup_task_for_audit_decision(
+                db,
+                repo="jeeves-jeevesenson/init-tracker",
+                issue_number=1401,
+                pr_number=401,
+            )
+
+            with Session(db.get_engine()) as session:
+                task = session.get(TaskPacket, task_id)
+                run = session.get(AgentRun, run_id)
+                first = apply_reviewer_decision(
+                    session,
+                    settings=Settings(),
+                    task=task,
+                    run=run,
+                    event_key="audit-event-1",
+                    checks_passed=True,
+                )
+                self.assertEqual(first, "audit")
+                slices = session.exec(
+                    select(ProgramSlice)
+                    .where(ProgramSlice.program_id == program_id)
+                    .order_by(ProgramSlice.slice_number.asc())
+                ).all()
+                self.assertEqual(len(slices), 2)
+                audit_slice = next(item for item in slices if item.slice_number == 2)
+                self.assertEqual(audit_slice.slice_type, "audit")
+                self.assertEqual(audit_slice.status, SLICE_STATUS_PLANNED)
+
+                run = session.get(AgentRun, run_id)
+                second = apply_reviewer_decision(
+                    session,
+                    settings=Settings(),
+                    task=task,
+                    run=run,
+                    event_key="audit-event-2",
+                    checks_passed=True,
+                )
+                self.assertEqual(second, "audit")
+                slices_after = session.exec(
+                    select(ProgramSlice)
+                    .where(ProgramSlice.program_id == program_id)
+                    .order_by(ProgramSlice.slice_number.asc())
+                ).all()
+                self.assertEqual(len(slices_after), 2)
+                audit_slice_after = next(item for item in slices_after if item.slice_number == 2)
+                self.assertEqual(audit_slice_after.id, audit_slice.id)
+                self.assertEqual(audit_slice_after.slice_type, "audit")
+
+                refreshed_run = session.get(AgentRun, run_id)
+                refreshed_slice = session.get(ProgramSlice, slice_id)
+                refreshed_program = session.get(Program, program_id)
+                self.assertEqual(refreshed_run.continuation_decision, "audit")
+                self.assertEqual(refreshed_slice.status, SLICE_STATUS_AUDIT_REQUESTED)
+                self.assertEqual(refreshed_program.latest_decision, "audit")
+                self.assertEqual(refreshed_program.latest_summary, "Audit slice created from reviewer decision")
+                audit_state = json.loads(refreshed_program.audit_state_json or "{}")
+                self.assertEqual(audit_state.get("last_audit_slice_id"), audit_slice.id)
+
+    def test_replayed_audit_event_key_does_not_duplicate_slice(self):
+        with tempfile.TemporaryDirectory() as td:
+            os.environ["DATABASE_URL"] = f"sqlite:///{Path(td) / 'orchestrator.db'}"
+            _, db = _reload_orchestrator_modules()
+            db.init_db()
+            from orchestrator.app.config import Settings
+            from orchestrator.app.programs import apply_reviewer_decision
+
+            task_id, run_id, program_id, _ = self._setup_task_for_audit_decision(
+                db,
+                repo="jeeves-jeevesenson/init-tracker",
+                issue_number=1402,
+                pr_number=402,
+            )
+
+            with Session(db.get_engine()) as session:
+                task = session.get(TaskPacket, task_id)
+                run = session.get(AgentRun, run_id)
+                apply_reviewer_decision(
+                    session,
+                    settings=Settings(),
+                    task=task,
+                    run=run,
+                    event_key="audit-event-replay",
+                    checks_passed=True,
+                )
+                replayed = apply_reviewer_decision(
+                    session,
+                    settings=Settings(),
+                    task=task,
+                    run=run,
+                    event_key="audit-event-replay",
+                    checks_passed=True,
+                )
+                self.assertEqual(replayed, "audit")
+                audit_slices = session.exec(
+                    select(ProgramSlice)
+                    .where(ProgramSlice.program_id == program_id)
+                    .where(ProgramSlice.slice_number == 2)
+                ).all()
+                self.assertEqual(len(audit_slices), 1)
+
+    def test_first_audit_decision_creates_expected_audit_slice_metadata(self):
+        with tempfile.TemporaryDirectory() as td:
+            os.environ["DATABASE_URL"] = f"sqlite:///{Path(td) / 'orchestrator.db'}"
+            _, db = _reload_orchestrator_modules()
+            db.init_db()
+            from orchestrator.app.config import Settings
+            from orchestrator.app.programs import apply_reviewer_decision
+
+            task_id, run_id, program_id, _ = self._setup_task_for_audit_decision(
+                db,
+                repo="jeeves-jeevesenson/init-tracker",
+                issue_number=1403,
+                pr_number=403,
+            )
+
+            with Session(db.get_engine()) as session:
+                task = session.get(TaskPacket, task_id)
+                run = session.get(AgentRun, run_id)
+                decision = apply_reviewer_decision(
+                    session,
+                    settings=Settings(),
+                    task=task,
+                    run=run,
+                    event_key="audit-event-first",
+                    checks_passed=True,
+                )
+                self.assertEqual(decision, "audit")
+                audit_slice = session.exec(
+                    select(ProgramSlice)
+                    .where(ProgramSlice.program_id == program_id)
+                    .where(ProgramSlice.slice_number == 2)
+                ).first()
+                self.assertIsNotNone(audit_slice)
+                self.assertEqual(audit_slice.slice_type, "audit")
+                self.assertEqual(audit_slice.title, "Audit: Slice One")
+                self.assertEqual(audit_slice.objective, "Perform audit checks")
 
     def test_merge_of_single_slice_program_marks_program_complete(self):
         """When there is no next slice after a merge, the program should be marked complete."""
