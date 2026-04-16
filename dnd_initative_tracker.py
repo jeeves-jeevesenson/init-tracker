@@ -2062,7 +2062,7 @@ class LanController:
             return None
         if len(text) > 128:
             return None
-        return ""
+        return text
 
     def _lan_log_lines(self, limit: int = 200) -> List[str]:
         with self._lan_log_lock:
