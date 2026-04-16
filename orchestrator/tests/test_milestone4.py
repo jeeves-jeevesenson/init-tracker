@@ -1060,12 +1060,12 @@ class GuardedPathPreservationTests(unittest.TestCase):
         """The safe_draft_can_be_promoted predicate should reject PRs touching guarded paths."""
         result = safe_draft_can_be_promoted(
             pr_draft=True,
-            checks_passed=True,
             guarded_paths_touched=True,
             unresolved_findings=[],
             waiting_for_revision_push=False,
+            handoff_observed=True,
         )
-        self.assertFalse(result)
+        self.assertFalse(result[0])
 
     def test_guarded_paths_block_approval_regardless_of_auth_mode(self):
         """Guarded-path escalation should work the same in both auth modes."""
@@ -1073,22 +1073,22 @@ class GuardedPathPreservationTests(unittest.TestCase):
             with self.subTest(mode=mode):
                 result = safe_draft_can_be_promoted(
                     pr_draft=True,
-                    checks_passed=True,
                     guarded_paths_touched=True,
                     unresolved_findings=[],
                     waiting_for_revision_push=False,
+                    handoff_observed=True,
                 )
-                self.assertFalse(result)
+                self.assertFalse(result[0])
 
     def test_safe_draft_promotes_when_no_guarded_paths(self):
         result = safe_draft_can_be_promoted(
             pr_draft=True,
-            checks_passed=True,
             guarded_paths_touched=False,
             unresolved_findings=[],
             waiting_for_revision_push=False,
+            handoff_observed=True,
         )
-        self.assertTrue(result)
+        self.assertTrue(result[0])
 
 
 class PreflightAppModeTests(unittest.TestCase):
@@ -1501,8 +1501,105 @@ class WorkflowDebugLoggingTests(unittest.TestCase):
                     checks_passed=False,
                 )
         joined = "\n".join(logs.output)
-        self.assertIn("workflow_event=linked_draft_pr_detected", joined)
-        self.assertIn("workflow_event=ready_for_review_attempted", joined)
+        self.assertIn("workflow_event=ready_for_review_deferred", joined)
+
+
+class LinkedDraftPromotionPolicyTests(unittest.TestCase):
+    def _base_context(self):
+        settings = _make_settings()
+        task = TaskPacket(
+            id=10,
+            github_repo="owner/repo",
+            github_issue_number=9,
+            approval_state="approved",
+            status="working",
+        )
+        run = AgentRun(
+            id=20,
+            task_packet_id=10,
+            github_repo="owner/repo",
+            github_issue_number=9,
+            github_pr_number=42,
+            status="working",
+        )
+        return settings, task, run
+
+    def test_intermediate_push_signal_does_not_promote_linked_draft(self):
+        settings, task, run = self._base_context()
+        pr_payload = {
+            "draft": True,
+            "state": "open",
+            "requested_reviewers": [],
+            "commits": 3,
+            "head": {"sha": "new-head"},
+        }
+        with patch("orchestrator.app.tasks.list_pull_request_file_details", return_value=([{"filename": "src/a.py", "additions": 10, "deletions": 2, "patch": "+x"}], "ok")), \
+             patch("orchestrator.app.tasks.list_pull_request_reviews", return_value=([], "ok")), \
+             patch("orchestrator.app.tasks.list_pull_request_review_comments", return_value=([], "ok")), \
+             patch("orchestrator.app.tasks.list_issue_comments", return_value=([], "ok")), \
+             patch("orchestrator.app.tasks.mark_pr_ready_for_review", return_value=(True, "ok")) as mocked_ready, \
+             patch("orchestrator.app.tasks.summarize_governor_update") as mocked_governor:
+            _run_governor_loop(
+                session=MagicMock(),
+                settings=settings,
+                task=task,
+                run=run,
+                pr_payload=pr_payload,
+                event_key="governor:pull_request:1:synchronize:2026-04-16T00:00:00Z",
+                checks_passed=True,
+            )
+        state = json.loads(run.governor_state_json or "{}")
+        mocked_ready.assert_not_called()
+        mocked_governor.assert_not_called()
+        self.assertEqual(state.get("ready_for_review_outcome"), "pr_not_ready_for_review_yet")
+        self.assertEqual(state.get("ready_for_review_promotion_state"), "held_initial_copilot_execution")
+
+    def test_human_review_handoff_promotes_linked_draft(self):
+        settings, task, run = self._base_context()
+        pr_payload = {"draft": True, "state": "open", "requested_reviewers": [{"login": "repo-owner"}], "head": {"sha": "new-head"}}
+        with patch("orchestrator.app.tasks.list_pull_request_file_details", return_value=([], "ok")), \
+             patch("orchestrator.app.tasks.list_pull_request_reviews", return_value=([], "ok")), \
+             patch("orchestrator.app.tasks.list_pull_request_review_comments", return_value=([], "ok")), \
+             patch("orchestrator.app.tasks.list_issue_comments", return_value=([], "ok")), \
+             patch("orchestrator.app.tasks.mark_pr_ready_for_review", return_value=(True, "ready")) as mocked_ready, \
+             patch("orchestrator.app.tasks.summarize_governor_update", return_value={"governor_artifact": {"decision": "wait", "summary": ["ok"], "revision_requests": [], "escalation_reason": ""}}):
+            _run_governor_loop(
+                session=MagicMock(),
+                settings=settings,
+                task=task,
+                run=run,
+                pr_payload=pr_payload,
+                event_key="governor:pull_request:1:synchronize:2026-04-16T00:00:00Z",
+                checks_passed=False,
+            )
+        state = json.loads(run.governor_state_json or "{}")
+        mocked_ready.assert_called_once()
+        self.assertEqual(state.get("ready_for_review_outcome"), "ready_for_review_succeeded")
+        self.assertEqual(state.get("ready_for_review_promotion_state"), "promoted_now")
+        self.assertEqual(state.get("ready_for_review_handoff_source"), "requested_reviewer_non_copilot_present")
+
+    def test_already_non_draft_not_reported_as_promoted_now(self):
+        settings, task, run = self._base_context()
+        pr_payload = {"draft": False, "state": "open", "requested_reviewers": [{"login": "repo-owner"}], "head": {"sha": "same-head"}}
+        with patch("orchestrator.app.tasks.list_pull_request_file_details", return_value=([], "ok")), \
+             patch("orchestrator.app.tasks.list_pull_request_reviews", return_value=([], "ok")), \
+             patch("orchestrator.app.tasks.list_pull_request_review_comments", return_value=([], "ok")), \
+             patch("orchestrator.app.tasks.list_issue_comments", return_value=([], "ok")), \
+             patch("orchestrator.app.tasks.mark_pr_ready_for_review", return_value=(True, "ready")) as mocked_ready, \
+             patch("orchestrator.app.tasks.summarize_governor_update", return_value={"governor_artifact": {"decision": "wait", "summary": ["ok"], "revision_requests": [], "escalation_reason": ""}}):
+            _run_governor_loop(
+                session=MagicMock(),
+                settings=settings,
+                task=task,
+                run=run,
+                pr_payload=pr_payload,
+                event_key="governor:pull_request:1:synchronize:2026-04-16T00:00:00Z",
+                checks_passed=True,
+            )
+        state = json.loads(run.governor_state_json or "{}")
+        mocked_ready.assert_not_called()
+        self.assertEqual(state.get("ready_for_review_outcome"), "ready_for_review_already_non_draft_observed")
+        self.assertEqual(state.get("ready_for_review_promotion_state"), "already_non_draft_observed")
 
 
 class TryMintAppTokenTests(unittest.TestCase):

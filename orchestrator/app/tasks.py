@@ -1015,6 +1015,9 @@ def _load_governor_state(run: AgentRun) -> dict[str, Any]:
     state.setdefault("ready_for_review_last_error", "")
     state.setdefault("ready_for_review_retry_scheduled", False)
     state.setdefault("ready_for_review_escalated", False)
+    state.setdefault("ready_for_review_handoff_observed", False)
+    state.setdefault("ready_for_review_handoff_source", "")
+    state.setdefault("ready_for_review_promotion_state", "")
     state.setdefault("checkpoints", {})
     return state
 
@@ -1371,17 +1374,10 @@ def _has_substantive_file_evidence(*, file_details: list[dict[str, Any]], change
 def safe_draft_can_be_promoted(
     *,
     pr_draft: bool,
-    checks_passed: bool,
-    effective_checks_passed: bool,
     guarded_paths_touched: bool,
     unresolved_findings: list[str],
     waiting_for_revision_push: bool,
-    changed_files: list[str],
-    file_details: list[dict[str, Any]],
-    event_has_push_signal: bool,
-    commits: int | None,
-    prior_head_sha: str,
-    current_head_sha: str,
+    handoff_observed: bool,
 ) -> tuple[bool, list[str]]:
     """Deterministic predicate for safe draft->ready transitions."""
     reasons: list[str] = []
@@ -1394,21 +1390,47 @@ def safe_draft_can_be_promoted(
         reasons.append("unresolved_findings_present")
     if waiting_for_revision_push:
         reasons.append("waiting_for_revision_push")
-
-    substantive_evidence = _has_substantive_file_evidence(file_details=file_details, changed_files=changed_files)
-    if not substantive_evidence:
-        reasons.append("no_substantive_diff_evidence")
-
-    worker_update_signal = bool(
-        event_has_push_signal
-        or (isinstance(commits, int) and commits > 1)
-        or (prior_head_sha and current_head_sha and prior_head_sha != current_head_sha)
-    )
-    validation_signal = bool(checks_passed or effective_checks_passed)
-    if not (worker_update_signal or validation_signal):
-        reasons.append("no_worker_update_or_validation_signal")
+    if not handoff_observed:
+        reasons.append("awaiting_authoritative_human_review_handoff")
 
     return (len(reasons) == 0), reasons
+
+
+def _has_authoritative_human_review_handoff(
+    *,
+    settings: Settings,
+    event_key: str,
+    requested_reviewers: list[str],
+    previous_requested_reviewers: list[str],
+) -> tuple[bool, str]:
+    normalized_requested = {str(item).strip().lower() for item in requested_reviewers if str(item).strip()}
+    normalized_previous = {str(item).strip().lower() for item in previous_requested_reviewers if str(item).strip()}
+    requested_non_copilot = {
+        login
+        for login in normalized_requested
+        if not _is_copilot_actor(settings=settings, login=login, display_name=None)
+    }
+
+    if requested_non_copilot:
+        return True, "requested_reviewer_non_copilot_present"
+
+    event_text = str(event_key or "").lower()
+    if ":ready_for_review:" in event_text:
+        return True, "pull_request_ready_for_review_event"
+
+    if ":review_requested:" in event_text:
+        return True, "pull_request_review_requested_event"
+
+    previously_requested_copilot = any(
+        _is_copilot_actor(settings=settings, login=login, display_name=None) for login in normalized_previous
+    )
+    currently_requested_copilot = any(
+        _is_copilot_actor(settings=settings, login=login, display_name=None) for login in normalized_requested
+    )
+    if previously_requested_copilot and not currently_requested_copilot:
+        return True, "copilot_review_request_removed"
+
+    return False, "authoritative_handoff_not_observed"
 
 
 def _is_non_actionable_copilot_review_body(body: str) -> bool:
@@ -1562,9 +1584,7 @@ def _handle_linked_draft_ready_for_review(
     guarded_paths_touched: bool,
     unresolved_findings: list[str],
     waiting_for_revision_push: bool,
-    changed_files: list[str],
-    file_details: list[dict[str, Any]],
-    event_has_push_signal: bool,
+    requested_reviewers: list[str],
     pr_head_sha: str,
 ) -> tuple[bool, bool]:
     """Force ready-for-review handoff for linked draft PRs.
@@ -1590,8 +1610,19 @@ def _handle_linked_draft_ready_for_review(
 
     pr_draft = bool(pr_payload.get("draft"))
     pr_node_id = pr_payload.get("node_id") if isinstance(pr_payload.get("node_id"), str) else None
+    prior_requested_reviewers = state.get("requested_reviewers") if isinstance(state.get("requested_reviewers"), list) else []
+    handoff_observed, handoff_source = _has_authoritative_human_review_handoff(
+        settings=settings,
+        event_key=event_key,
+        requested_reviewers=requested_reviewers,
+        previous_requested_reviewers=prior_requested_reviewers,
+    )
+    state["ready_for_review_handoff_observed"] = handoff_observed
+    state["ready_for_review_handoff_source"] = handoff_source
+
     if not pr_draft:
-        state["ready_for_review_outcome"] = "ready_for_review_skipped_non_draft"
+        state["ready_for_review_outcome"] = "ready_for_review_already_non_draft_observed"
+        state["ready_for_review_promotion_state"] = "already_non_draft_observed"
         state["ready_for_review_retry_scheduled"] = False
         state["ready_for_review_escalated"] = False
         _log_workflow_checkpoint(
@@ -1606,26 +1637,18 @@ def _handle_linked_draft_ready_for_review(
             pr_node_id=pr_node_id,
             state=state,
         )
-        return False, True
+        return False, False
 
-    initial_head_sha = str(state.get("initial_pr_head_sha") or "")
-    commits_value = pr_payload.get("commits") if isinstance(pr_payload.get("commits"), int) else None
     reviewable, readiness_reasons = safe_draft_can_be_promoted(
         pr_draft=pr_draft,
-        checks_passed=checks_passed,
-        effective_checks_passed=effective_checks_passed,
         guarded_paths_touched=guarded_paths_touched,
         unresolved_findings=unresolved_findings,
         waiting_for_revision_push=waiting_for_revision_push,
-        changed_files=changed_files,
-        file_details=file_details,
-        event_has_push_signal=event_has_push_signal,
-        commits=commits_value,
-        prior_head_sha=initial_head_sha,
-        current_head_sha=pr_head_sha,
+        handoff_observed=handoff_observed,
     )
     if not reviewable:
         state["ready_for_review_outcome"] = "pr_not_ready_for_review_yet"
+        state["ready_for_review_promotion_state"] = "held_initial_copilot_execution"
         state["ready_for_review_retry_scheduled"] = False
         state["ready_for_review_escalated"] = False
         state["ready_for_review_skip_reason"] = ",".join(readiness_reasons)
@@ -1642,8 +1665,8 @@ def _handle_linked_draft_ready_for_review(
             run=run,
             success=True,
             summary=(
-                "Draft PR kept in pre-review hold; readiness predicate not yet satisfied "
-                f"(reasons={readiness_reasons})."
+                "Draft PR kept in pre-review hold; initial Copilot execution is still active "
+                f"(reasons={readiness_reasons}; handoff_source={handoff_source})."
             ),
             skip_reason="pr_not_ready_for_review_yet",
             result_class="pr_not_ready_for_review_yet",
@@ -1688,6 +1711,7 @@ def _handle_linked_draft_ready_for_review(
 
     if success:
         state["ready_for_review_outcome"] = "ready_for_review_succeeded"
+        state["ready_for_review_promotion_state"] = "promoted_now"
         state["ready_for_review_retry_scheduled"] = False
         state["ready_for_review_escalated"] = False
         _set_checkpoint(
@@ -1702,7 +1726,7 @@ def _handle_linked_draft_ready_for_review(
             task=task,
             run=run,
             success=True,
-            summary="Ready-for-review postcondition observed after mutation.",
+            summary=f"Ready-for-review postcondition observed after mutation (handoff_source={handoff_source}).",
             postcondition="isDraft=False",
             auth_lane="dispatch_user_token",
             api_type="GraphQL",
@@ -1728,6 +1752,7 @@ def _handle_linked_draft_ready_for_review(
 
     outcome, transient = _ready_for_review_failure_outcome(msg)
     state["ready_for_review_outcome"] = outcome
+    state["ready_for_review_promotion_state"] = "promotion_failed"
     _set_checkpoint(
         state,
         name="pr_ready_verified",
@@ -2330,9 +2355,7 @@ def _run_governor_loop(
         guarded_paths_touched=guarded_paths_touched,
         unresolved_findings=unresolved_findings,
         waiting_for_revision_push=waiting_for_revision_push,
-        changed_files=changed_files,
-        file_details=file_details,
-        event_has_push_signal=event_has_push_signal,
+        requested_reviewers=requested_reviewers,
         pr_head_sha=pr_head_sha,
     )
     if promoted_now:
