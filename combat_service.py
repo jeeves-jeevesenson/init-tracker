@@ -60,7 +60,7 @@ Still hybrid / desktop-primary:
   - Full monster-spec / player-profile based combatant creation (desktop only)
   - Long rest batch HP restore now routes through
     CombatService.batch_long_rest_heal() → apply_heal() (Slice 12)
-  - Wild Shape temp HP management still sets temp_hp directly
+  - Wild Shape temp HP lifecycle now routes through service-owned temp HP setters
 
 Next recommended migration targets:
   - Expose full initiative-roll support so DM web can trigger rolls

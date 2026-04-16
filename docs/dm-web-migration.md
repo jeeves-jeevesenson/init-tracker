@@ -205,10 +205,9 @@ go through the service, including web-originated, desktop-routed paths
 all identified deep damage callers, all commonly used heal callers
 (heal dialog, Second Wind, Lay on Hands, Uncanny Metabolism, healing
 consumable use, spell healing resolution, Mantle of Inspiration temp HP,
-Patient Defense Focus temp HP), and Long Rest batch HP restoration
-(Slice 12).  The only remaining hybrid heal path is Wild Shape temp HP
-management.  This is an acceptable risk for the single-session LAN use
-case.
+Patient Defense Focus temp HP), Long Rest batch HP restoration
+(Slice 12), and Wild Shape temp-HP apply/revert lifecycle routing.
+This remains an acceptable risk for the single-session LAN use case.
 
 ---
 
@@ -224,22 +223,18 @@ via the web.
 
 ## Recommended next migration targets
 
-1. **Remaining hybrid heal path**: Wild Shape temp HP management still sets
-   temp_hp directly.  This is the only remaining non-service heal path and
-   is lifecycle-coupled to the Wild Shape enter/exit state machine.
-
-2. **Initiative-roll support**: Expose full initiative-roll support through
+1. **Initiative-roll support**: Expose full initiative-roll support through
    the backend service so the DM web console can trigger initiative rolls
    without Tkinter fallback.
 
-3. **Token refresh**: The DM console does not yet auto-renew the admin token
+2. **Token refresh**: The DM console does not yet auto-renew the admin token
    before expiry.  Add a background refresh 2 minutes before the 15-minute
    expiry window.
 
-4. **Snapshot enhancements**: Additional fields (e.g. per-combatant AC tooltip,
+3. **Snapshot enhancements**: Additional fields (e.g. per-combatant AC tooltip,
    resource pools) can be added as the DM console grows.
 
-5. **Player-facing LAN client state sync**: Improve broadcast reliability
+4. **Player-facing LAN client state sync**: Improve broadcast reliability
    and reconnect behavior for the player-facing LAN WebSocket client.
 
 ---
