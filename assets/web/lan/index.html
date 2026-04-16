@@ -5113,6 +5113,17 @@ __DAMAGE_TYPE_OPTIONS__
   let claimStatus = "unclaimed";
   let claimRev = 0;
   let stateUpdateCounter = 0;
+  let reconnectRecoveryPending = false;
+  let reconnectRecoveryStateSeen = false;
+  let reconnectRecoveryClaimSeen = false;
+  let reconnectRecoveryGridSeen = false;
+  let reconnectFallbackRequested = false;
+  let reconnectEscalated = false;
+  let reconnectCycle = 0;
+  let reconnectFallbackTimer = null;
+  let reconnectEscalationTimer = null;
+  const reconnectFallbackDelayMs = 1800;
+  const reconnectEscalationDelayMs = 2200;
   let lastActiveCid = null;
   let lastTurnRound = null;
   let turnAlertPrimed = false;
@@ -5439,6 +5450,77 @@ __DAMAGE_TYPE_OPTIONS__
       reconnectTimer = null;
       connect();
     }, delayMs);
+  }
+
+  function clearReconnectRecoveryTimers(){
+    if (reconnectFallbackTimer){
+      clearTimeout(reconnectFallbackTimer);
+      reconnectFallbackTimer = null;
+    }
+    if (reconnectEscalationTimer){
+      clearTimeout(reconnectEscalationTimer);
+      reconnectEscalationTimer = null;
+    }
+  }
+
+  function updateClaimDataReady(){
+    claimDataReady = claimStateSeen && Array.isArray(lastPcList);
+  }
+
+  function reconnectRecoveryReady(){
+    return reconnectRecoveryStateSeen
+      && reconnectRecoveryClaimSeen
+      && reconnectRecoveryGridSeen
+      && claimDataReady
+      && gridReady();
+  }
+
+  function maybeFinishReconnectRecovery(){
+    if (!reconnectRecoveryPending) return;
+    if (!reconnectRecoveryReady()) return;
+    reconnectRecoveryPending = false;
+    clearReconnectRecoveryTimers();
+    setConn(true, "Connected");
+    updateWaitingOverlay();
+  }
+
+  function beginReconnectRecoveryCycle(){
+    reconnectCycle += 1;
+    reconnectRecoveryPending = true;
+    reconnectRecoveryStateSeen = false;
+    reconnectRecoveryClaimSeen = false;
+    reconnectRecoveryGridSeen = false;
+    reconnectFallbackRequested = false;
+    reconnectEscalated = false;
+    claimStateSeen = false;
+    updateClaimDataReady();
+    updateWaitingOverlay();
+    clearReconnectRecoveryTimers();
+    const cycle = reconnectCycle;
+    reconnectFallbackTimer = setTimeout(() => {
+      reconnectFallbackTimer = null;
+      if (!reconnectRecoveryPending || cycle !== reconnectCycle) return;
+      if (reconnectFallbackRequested) return;
+      reconnectFallbackRequested = true;
+      if (ws && ws.readyState === WebSocket.OPEN){
+        send({type:"state_request"});
+        send({type:"grid_request"});
+        send({type:"terrain_request"});
+      }
+      reconnectEscalationTimer = setTimeout(() => {
+        reconnectEscalationTimer = null;
+        if (!reconnectRecoveryPending || cycle !== reconnectCycle) return;
+        if (reconnectEscalated) return;
+        reconnectEscalated = true;
+        softReconnect();
+      }, reconnectEscalationDelayMs);
+    }, reconnectFallbackDelayMs);
+  }
+
+  function isReconnectClaimSyncToast(text){
+    const normalized = String(text || "").trim().toLowerCase();
+    return normalized.startsWith("restored claim")
+      || normalized.startsWith("synced claim");
   }
 
   function softReconnect(){
@@ -9892,7 +9974,7 @@ __DAMAGE_TYPE_OPTIONS__
     } else if (type === "state"){
       claimStateSeen = true;
     }
-    claimDataReady = claimStaticDataSeen && claimStateSeen;
+    updateClaimDataReady();
   }
 
   function clearClaimRenderRetry(){
@@ -11254,7 +11336,7 @@ __DAMAGE_TYPE_OPTIONS__
 
   function updateWaitingOverlay(){
     if (!waitingOverlay) return;
-    waitingOverlay.classList.toggle("show", !gridReady());
+    waitingOverlay.classList.toggle("show", reconnectRecoveryPending || !gridReady());
   }
 
   function formatFeet(feet){
@@ -16329,7 +16411,8 @@ __DAMAGE_TYPE_OPTIONS__
     }
     ws.addEventListener("open", () => {
       reconnecting = false;
-      setConn(true, "Connected");
+      beginReconnectRecoveryCycle();
+      setConn(false, "Recovering…");
       if (!isMapView){
         send({type:"client_hello", client_id: clientId});
       }
@@ -16340,6 +16423,9 @@ __DAMAGE_TYPE_OPTIONS__
     });
     ws.addEventListener("close", (ev) => {
       battleLogSubscribed = false;
+      reconnectRecoveryPending = false;
+      clearReconnectRecoveryTimers();
+      updateWaitingOverlay();
       const wasReconnect = reconnecting;
       reconnecting = false;
       const serverError = ev && ev.code === 1011;
@@ -16489,6 +16575,7 @@ __DAMAGE_TYPE_OPTIONS__
           lastPcList = msg.pcs || msg.claimable || [];
         }
         markClaimMessageSeen("state");
+        reconnectRecoveryStateSeen = true;
         logClaimMessage("state", lastPcList);
         maybeAutoClaimFromState(msg, lastPcList);
         updateWaitingOverlay();
@@ -16497,6 +16584,7 @@ __DAMAGE_TYPE_OPTIONS__
         // Use server-authoritative claim state from "you" field
         if (msg.you && "claimed_cid" in msg.you){
           applyServerClaim(msg.you.claimed_cid, msg.you.claimed_name, msg.you.claim_rev);
+          reconnectRecoveryClaimSeen = true;
           sendReactionPrefsUpdate();
         } else {
           // Fallback to old logic if "you" field not present (backwards compatibility)
@@ -16522,6 +16610,7 @@ __DAMAGE_TYPE_OPTIONS__
               setMeLabel(null, false);
             }
           }
+          reconnectRecoveryClaimSeen = true;
         }
         
         if (!claimedCid){
@@ -16532,6 +16621,7 @@ __DAMAGE_TYPE_OPTIONS__
           planningSnapshotLocked = true;
         }
         handleAutoClaimStateUpdate();
+        maybeFinishReconnectRecovery();
       } else if (msg.type === "turn_update"){
         if (!state){ state = {}; }
         if ("active_cid" in msg){
@@ -16561,6 +16651,7 @@ __DAMAGE_TYPE_OPTIONS__
           msg.you?.claimed_name,
           msg.you?.claim_rev ?? msg.claim_rev,
         );
+        reconnectRecoveryClaimSeen = true;
         if (applied && claimedCid !== null && claimedCid !== undefined){
           autoCenterOnJoin();
           if (spellbookOverlay?.classList.contains("show")){
@@ -16569,12 +16660,16 @@ __DAMAGE_TYPE_OPTIONS__
           }
         }
         updateHud();
-        localToast(msg.text || "Assigned by the DM.");
+        if (!(reconnectRecoveryPending && isReconnectClaimSyncToast(msg.text))){
+          localToast(msg.text || "Assigned by the DM.");
+        }
         refreshTurnAlertStatus();
         checkAutoClaimResolved();
+        maybeFinishReconnectRecovery();
       } else if (msg.type === "force_unclaim"){
         if (isMapView) return;
         applyServerClaim(null, null, msg.claim_rev);
+        reconnectRecoveryClaimSeen = true;
         shownNoOwnedToast = false;
         showNoOwnedPcToast(msg.pcs || lastPcList || []);
         if (spellbookOverlay?.classList.contains("show")){
@@ -16583,6 +16678,7 @@ __DAMAGE_TYPE_OPTIONS__
         refreshTurnAlertStatus();
         updateHud();
         handleAutoClaimFailure();
+        maybeFinishReconnectRecovery();
       } else if (msg.type === "claim_ack"){
         if (isMapView) return;
         if (msg.ok === false){
@@ -16594,16 +16690,20 @@ __DAMAGE_TYPE_OPTIONS__
         } else {
           applyServerClaim(msg.claimed_cid, null, msg.claim_rev);
         }
+        reconnectRecoveryClaimSeen = true;
         if (claimedCid !== null && claimedCid !== undefined){
           autoCenterOnJoin();
         }
         refreshTurnAlertStatus();
         updateHud();
+        maybeFinishReconnectRecovery();
       } else if (msg.type === "unclaim_ack"){
         if (isMapView) return;
         applyServerClaim(null, null, msg.claim_rev);
+        reconnectRecoveryClaimSeen = true;
         refreshTurnAlertStatus();
         updateHud();
+        maybeFinishReconnectRecovery();
       } else if (msg.type === "command_result"){
         const results = Array.isArray(msg.results) ? msg.results : [];
         const applied = results.filter((entry) => entry && entry.applied).map((entry) => String(entry.target_name || `#${entry.target_cid}`));
@@ -16989,11 +17089,13 @@ __DAMAGE_TYPE_OPTIONS__
             fittedToGrid = false;
             lastGrid = {cols, rows};
           }
+          reconnectRecoveryGridSeen = true;
         }
         updateWaitingOverlay();
         lastGridVersion = msg.version ?? lastGridVersion;
         send({type:"grid_ack", version: msg.version});
         scheduleUiFlush({draw:true});
+        maybeFinishReconnectRecovery();
       } else if (msg.type === "terrain_update"){
         applyTerrainPayload(msg.terrain);
         updateWaitingOverlay();
