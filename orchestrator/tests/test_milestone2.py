@@ -6163,6 +6163,7 @@ class OpenAIPlanningSchemaTests(unittest.TestCase):
                     self.assertEqual(state.get("outstanding_followup_status"), "pending_current_head_verification")
                     self.assertFalse(bool(state.get("waiting_for_revision_push")))
                     self.assertEqual(state.get("current_head_review_state"), "awaiting_current_head_reverify")
+                    self.assertNotEqual(state.get("current_head_review_state"), "current_head_findings_cleared")
 
     def test_pre_review_hold_skips_revision_comment_until_substantive_evidence(self):
         with tempfile.TemporaryDirectory() as td:
