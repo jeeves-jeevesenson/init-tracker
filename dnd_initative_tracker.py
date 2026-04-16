@@ -2588,6 +2588,12 @@ class LanController:
             token = self._issue_admin_token()
             return {"token": token, "expires_in": self._admin_token_ttl_seconds}
 
+        @self._fastapi_app.post("/api/admin/refresh")
+        async def admin_refresh(request: Request):
+            self._require_admin(request)
+            token = self._issue_admin_token()
+            return {"token": token, "expires_in": self._admin_token_ttl_seconds}
+
         @self._fastapi_app.get("/api/admin/sessions")
         async def admin_sessions(request: Request):
             self._require_admin(request)
