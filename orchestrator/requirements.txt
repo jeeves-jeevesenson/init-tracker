@@ -1,8 +1,0 @@
-fastapi
-uvicorn[standard]
-sqlmodel
-openai
-httpx
-python-dotenv
-pydantic-settings
-PyJWT[crypto]
