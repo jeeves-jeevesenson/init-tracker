@@ -111,7 +111,9 @@ server:
   to anyone on the LAN.  This matches the existing LAN trust model.
 - **Admin password configured**: The DM console shows a password prompt.
   Entering the correct password issues a token (valid 15 minutes, same as
-  other admin-protected routes).
+  other admin-protected routes). While authenticated, the `/dm` client now
+  schedules a bounded background refresh before expiry and replaces its
+  in-memory token when refresh succeeds.
 
 To configure an admin password, use the existing admin password configuration
 in the desktop app settings.
@@ -231,9 +233,8 @@ via the web.
    the backend service so the DM web console can trigger initiative rolls
    without Tkinter fallback.
 
-2. **Token refresh**: The DM console does not yet auto-renew the admin token
-   before expiry.  Add a background refresh 2 minutes before the 15-minute
-   expiry window.
+2. **Token refresh hardening**: Proactive DM token renewal is now in place.
+   Follow-up work can improve diagnostics/telemetry around refresh failures.
 
 3. **Snapshot enhancements**: Additional fields (e.g. per-combatant AC tooltip,
    resource pools) can be added as the DM console grows.
