@@ -142,6 +142,11 @@ same in-memory state through the same `_next_turn()` /
 `_apply_damage_to_target_with_temp_hp()` / `_apply_heal_to_combatant()` /
 `_ensure_condition_stack()` methods.
 
+The player-facing LAN client reconnect path now keeps the connection UI in a
+recovering state until fresh reconnect claim/snapshot/grid signals arrive, and
+uses bounded `/ws` recovery requests (`state_request`, `grid_request`,
+`terrain_request`) before escalating to another reconnect attempt.
+
 ### Desktop-routed through CombatService (Slice 9)
 
 The following desktop/LAN-originated mutations now route through
@@ -239,8 +244,9 @@ via the web.
 3. **Snapshot enhancements**: Additional fields (e.g. per-combatant AC tooltip,
    resource pools) can be added as the DM console grows.
 
-4. **Player-facing LAN client state sync**: Improve broadcast reliability
-   and reconnect behavior for the player-facing LAN WebSocket client.
+4. **Player-facing LAN client state sync**: Continue hardening reconnect
+   recovery and broadcast reliability for the player-facing LAN WebSocket
+   client.
 
 ---
 
