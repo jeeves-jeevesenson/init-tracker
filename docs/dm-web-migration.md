@@ -113,7 +113,10 @@ server:
   Entering the correct password issues a token (valid 15 minutes, same as
   other admin-protected routes). While authenticated, the `/dm` client now
   schedules a bounded background refresh before expiry and replaces its
-  in-memory token when refresh succeeds.
+  in-memory token when refresh succeeds. If refresh fails because of token
+  expiry/backend rejection, or repeated refresh-request transport failures
+  exhaust retries, the console clears stale auth state and returns to the
+  login overlay.
 
 To configure an admin password, use the existing admin password configuration
 in the desktop app settings.

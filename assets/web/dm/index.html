@@ -459,6 +459,16 @@ const WS_RECONNECT_MS = 5000;
 const ADMIN_REFRESH_MAX_LEAD_MS = 120000;
 const ADMIN_REFRESH_MIN_LEAD_MS = 15000;
 const ADMIN_REFRESH_MIN_DELAY_MS = 5000;
+const ADMIN_REFRESH_MAX_RETRY_ATTEMPTS = 2;
+const ADMIN_REFRESH_RETRY_BACKOFF_MS = 5000;
+const ADMIN_REFRESH_RETRY_MAX_DELAY_MS = 15000;
+const ADMIN_REAUTH_REQUIRED_MESSAGE = 'Session expired. Please log in again.';
+const ADMIN_REFRESH_REASON_TOKEN_EXPIRED = 'token_expired';
+const ADMIN_REFRESH_REASON_REQUEST_FAILED = 'request_failed';
+const ADMIN_REFRESH_REASON_BACKEND_REJECTED = 'backend_rejected';
+const ADMIN_REFRESH_REASON_RETRY_EXHAUSTED = 'retry_exhausted';
+let adminRefreshRetryAttempts = 0;
+let adminRefreshLastOutcome = 'idle';
 
 // ── Auth ─────────────────────────────────────────────────────────────
 function authHeaders() {
@@ -473,9 +483,31 @@ function clearAdminTokenRefreshTimer() {
   adminTokenRefreshTimer = null;
 }
 
+function logAdminRefreshDiagnostic(event, details = {}) {
+  const payload = {
+    event,
+    outcome: adminRefreshLastOutcome,
+    retry_attempts: adminRefreshRetryAttempts,
+    ...details,
+  };
+  if (event === 'refresh_failed' || event === 'refresh_retry_exhausted') {
+    console.warn('DM admin token refresh diagnostic', payload);
+  } else {
+    console.info('DM admin token refresh diagnostic', payload);
+  }
+}
+
+function scheduleAdminTokenRefresh(delayMs) {
+  clearAdminTokenRefreshTimer();
+  if (!(delayMs > 0)) return;
+  adminTokenRefreshTimer = setTimeout(refreshAdminToken, delayMs);
+}
+
 function setAdminToken(token, expiresInSeconds) {
   adminToken = token || null;
   clearAdminTokenRefreshTimer();
+  adminRefreshRetryAttempts = 0;
+  adminRefreshLastOutcome = adminToken ? 'active' : 'cleared';
   if (!adminToken) return;
   const ttlMs = Number(expiresInSeconds) * 1000;
   if (!(ttlMs > 0)) return;
@@ -493,11 +525,13 @@ function setAdminToken(token, expiresInSeconds) {
     Math.min(preferredDelayMs, latestSafeDelayMs),
     minBoundedDelayMs,
   );
-  adminTokenRefreshTimer = setTimeout(refreshAdminToken, refreshDelayMs);
+  logAdminRefreshDiagnostic('refresh_scheduled', { refresh_delay_ms: refreshDelayMs, token_ttl_ms: ttlMs });
+  scheduleAdminTokenRefresh(refreshDelayMs);
 }
 
 function clearAdminAuthState(message = '') {
   adminToken = null;
+  adminRefreshRetryAttempts = 0;
   clearAdminTokenRefreshTimer();
   if (autoRefreshTimer) { clearInterval(autoRefreshTimer); autoRefreshTimer = null; }
   if (wsReconnectTimer) { clearTimeout(wsReconnectTimer); wsReconnectTimer = null; }
@@ -517,18 +551,52 @@ function clearAdminAuthState(message = '') {
 
 async function refreshAdminToken() {
   if (!adminToken) return;
+  logAdminRefreshDiagnostic('refresh_attempt');
   try {
     const r = await fetch(`${BASE}/api/admin/refresh`, {
       method: 'POST',
       headers: authHeaders(),
     });
-    if (!r.ok) throw new Error(`Token refresh failed with status ${r.status}`);
+    if (!r.ok) {
+      const reason = r.status === 401
+        ? ADMIN_REFRESH_REASON_TOKEN_EXPIRED
+        : ADMIN_REFRESH_REASON_BACKEND_REJECTED;
+      adminRefreshLastOutcome = reason;
+      logAdminRefreshDiagnostic('refresh_failed', { reason, status: r.status });
+      clearAdminAuthState(ADMIN_REAUTH_REQUIRED_MESSAGE);
+      return;
+    }
     const data = await r.json();
-    if (!data || !data.token) throw new Error('Invalid refresh response: missing token field');
+    if (!data || !data.token) {
+      adminRefreshLastOutcome = ADMIN_REFRESH_REASON_BACKEND_REJECTED;
+      logAdminRefreshDiagnostic('refresh_failed', { reason: ADMIN_REFRESH_REASON_BACKEND_REJECTED, status: r.status, invalid_payload: true });
+      clearAdminAuthState(ADMIN_REAUTH_REQUIRED_MESSAGE);
+      return;
+    }
+    adminRefreshLastOutcome = 'refresh_succeeded';
+    logAdminRefreshDiagnostic('refresh_succeeded');
     setAdminToken(data.token, data.expires_in);
   } catch (err) {
-    console.warn('DM admin token refresh failed; requiring re-authentication.', err);
-    clearAdminAuthState('Session expired. Please log in again.');
+    adminRefreshLastOutcome = ADMIN_REFRESH_REASON_REQUEST_FAILED;
+    if (adminRefreshRetryAttempts < ADMIN_REFRESH_MAX_RETRY_ATTEMPTS) {
+      adminRefreshRetryAttempts += 1;
+      const retryDelayMs = Math.min(
+        ADMIN_REFRESH_RETRY_MAX_DELAY_MS,
+        ADMIN_REFRESH_RETRY_BACKOFF_MS * adminRefreshRetryAttempts,
+      );
+      logAdminRefreshDiagnostic('refresh_retry_scheduled', {
+        reason: ADMIN_REFRESH_REASON_REQUEST_FAILED,
+        retry_delay_ms: retryDelayMs,
+      });
+      scheduleAdminTokenRefresh(retryDelayMs);
+      return;
+    }
+    adminRefreshLastOutcome = ADMIN_REFRESH_REASON_RETRY_EXHAUSTED;
+    logAdminRefreshDiagnostic('refresh_retry_exhausted', {
+      reason: ADMIN_REFRESH_REASON_RETRY_EXHAUSTED,
+      error: (err && err.name) ? err.name : 'unknown_error',
+    });
+    clearAdminAuthState(ADMIN_REAUTH_REQUIRED_MESSAGE);
   }
 }
 

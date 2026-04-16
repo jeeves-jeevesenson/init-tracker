@@ -58,6 +58,12 @@ class DmAdminTokenRefreshTests(unittest.TestCase):
             lan.start(quiet=True)
         return TestClient(lan._fastapi_app)
 
+    def _build_client_with_lan(self):
+        lan = self._build_lan_controller()
+        with mock.patch("threading.Thread.start", return_value=None):
+            lan.start(quiet=True)
+        return TestClient(lan._fastapi_app), lan
+
     def test_admin_token_refresh_requires_active_admin_token(self):
         client = self._build_client()
         response = client.post("/api/admin/refresh")
@@ -75,14 +81,29 @@ class DmAdminTokenRefreshTests(unittest.TestCase):
         self.assertEqual(900, refreshed_payload["expires_in"])
         self.assertNotEqual(old_token, refreshed_payload["token"])
 
+    def test_admin_token_refresh_rejects_expired_token(self):
+        client, lan = self._build_client_with_lan()
+        login = client.post("/api/admin/login", json={"password": "pw"})
+        self.assertEqual(200, login.status_code)
+        token = login.json()["token"]
+        lan._admin_tokens[token] = 0
+
+        refreshed = client.post("/api/admin/refresh", headers={"Authorization": f"Bearer {token}"})
+        self.assertEqual(401, refreshed.status_code)
+
     def test_dm_console_html_contains_proactive_token_refresh_wiring(self):
         client = self._build_client()
         response = client.get("/dm")
         self.assertEqual(200, response.status_code)
         self.assertIn("/api/admin/refresh", response.text)
         self.assertIn("function setAdminToken(token, expiresInSeconds)", response.text)
-        self.assertIn("adminTokenRefreshTimer = setTimeout(refreshAdminToken, refreshDelayMs);", response.text)
-        self.assertIn("clearAdminAuthState('Session expired. Please log in again.')", response.text)
+        self.assertIn("const ADMIN_REFRESH_MAX_RETRY_ATTEMPTS = 2;", response.text)
+        self.assertIn("const ADMIN_REFRESH_REASON_TOKEN_EXPIRED = 'token_expired';", response.text)
+        self.assertIn("const ADMIN_REFRESH_REASON_REQUEST_FAILED = 'request_failed';", response.text)
+        self.assertIn("const ADMIN_REFRESH_REASON_BACKEND_REJECTED = 'backend_rejected';", response.text)
+        self.assertIn("const ADMIN_REFRESH_REASON_RETRY_EXHAUSTED = 'retry_exhausted';", response.text)
+        self.assertIn("scheduleAdminTokenRefresh(refreshDelayMs);", response.text)
+        self.assertIn("clearAdminAuthState(ADMIN_REAUTH_REQUIRED_MESSAGE);", response.text)
 
 
 if __name__ == "__main__":
