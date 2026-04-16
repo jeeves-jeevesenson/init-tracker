@@ -150,6 +150,8 @@ _NON_ACTIONABLE_COPILOT_REVIEW_PATTERNS: tuple[re.Pattern[str], ...] = (
     re.compile(r"empty\s+diff", re.IGNORECASE),
     re.compile(r"nothing\s+to\s+review", re.IGNORECASE),
 )
+_COPILOT_FIXED_IN_COMMIT_RE = re.compile(r"fixed\s+in\s+commit\s+([0-9a-f]{7,40})", re.IGNORECASE)
+_FOLLOWUP_PACKET_MARKER_PREFIX = "ORCH-FOLLOWUP-PACKET:"
 
 
 def _utc_now() -> datetime:
@@ -962,6 +964,11 @@ def _load_governor_state(run: AgentRun) -> dict[str, Any]:
     state.setdefault("safe_draft_promoted", False)
     state.setdefault("safe_draft_promotion_failed", False)
     state.setdefault("fix_trigger_fingerprint", "")
+    state.setdefault("outstanding_followup_packet_fingerprint", "")
+    state.setdefault("outstanding_followup_head_sha", "")
+    state.setdefault("outstanding_followup_findings_hash", "")
+    state.setdefault("outstanding_followup_comment_id", None)
+    state.setdefault("outstanding_followup_status", "")
     state.setdefault("review_harvest_summary", "")
     state.setdefault("review_batch_artifact", {})
     state.setdefault("final_audit_artifact", {})
@@ -1360,15 +1367,81 @@ def _is_non_actionable_copilot_review_body(body: str) -> bool:
     return any(pattern.search(compact) for pattern in _NON_ACTIONABLE_COPILOT_REVIEW_PATTERNS)
 
 
+def _normalized_followup_items(items: list[str]) -> list[str]:
+    normalized: list[str] = []
+    seen: set[str] = set()
+    for item in items:
+        compact = " ".join(str(item or "").split())
+        if not compact:
+            continue
+        lowered = compact.lower()
+        if lowered in seen:
+            continue
+        seen.add(lowered)
+        normalized.append(lowered)
+    return sorted(normalized)
+
+
+def _followup_findings_hash(*, findings: list[str]) -> str:
+    normalized = _normalized_followup_items(findings)
+    return hashlib.sha1(json.dumps(normalized, ensure_ascii=False).encode("utf-8")).hexdigest()
+
+
+def _followup_packet_fingerprint(
+    *,
+    pr_number: int,
+    head_sha: str,
+    findings: list[str],
+    governor_requests: list[str],
+) -> tuple[str, str]:
+    normalized_findings = _normalized_followup_items(findings)
+    normalized_governor_requests = _normalized_followup_items(governor_requests)
+    packet = {
+        "pr_number": int(pr_number),
+        "head_sha": str(head_sha or ""),
+        "finding_items": normalized_findings,
+        "governor_request_items": normalized_governor_requests,
+    }
+    packet_fingerprint = hashlib.sha1(
+        json.dumps(packet, sort_keys=True, ensure_ascii=False).encode("utf-8")
+    ).hexdigest()
+    findings_hash = hashlib.sha1(
+        json.dumps(normalized_findings, ensure_ascii=False).encode("utf-8")
+    ).hexdigest()
+    return packet_fingerprint, findings_hash
+
+
+def _followup_packet_marker(packet_fingerprint: str) -> str:
+    return f"<!-- {_FOLLOWUP_PACKET_MARKER_PREFIX}{packet_fingerprint} -->"
+
+
+def _extract_copilot_fixed_commit_signals(*, settings: Settings, issue_comments: list[dict[str, Any]]) -> set[str]:
+    fixed_commits: set[str] = set()
+    for comment in issue_comments:
+        if not isinstance(comment, dict):
+            continue
+        user = comment.get("user") if isinstance(comment.get("user"), dict) else {}
+        login = user.get("login")
+        if not _is_copilot_actor(settings=settings, login=login, display_name=None):
+            continue
+        body = str(comment.get("body") or "")
+        for match in _COPILOT_FIXED_IN_COMMIT_RE.finditer(body):
+            fixed_commits.add(match.group(1).lower())
+    return fixed_commits
+
+
 def _copilot_findings_from_reviews(
     *,
     settings: Settings,
     reviews: list[dict[str, Any]],
     comments: list[dict[str, Any]],
-) -> tuple[bool, list[str], int]:
+    current_head_sha: str = "",
+) -> tuple[bool, list[str], int, int]:
     findings: list[str] = []
     observed = False
     ignored_non_actionable = 0
+    superseded_old_head = 0
+    head_sha = str(current_head_sha or "").strip().lower()
     for review in reviews:
         user = review.get("user") if isinstance(review, dict) else None
         login = user.get("login") if isinstance(user, dict) else None
@@ -1392,6 +1465,14 @@ def _copilot_findings_from_reviews(
         if not _is_copilot_actor(settings=settings, login=login, display_name=None):
             continue
         observed = True
+        commit_candidates = {
+            str(comment.get("commit_id") or "").strip().lower(),
+            str(comment.get("original_commit_id") or "").strip().lower(),
+        }
+        commit_candidates = {value for value in commit_candidates if value}
+        if head_sha and commit_candidates and head_sha not in commit_candidates:
+            superseded_old_head += 1
+            continue
         body = str(comment.get("body") or "").strip()
         if body:
             if _is_non_actionable_copilot_review_body(body):
@@ -1413,7 +1494,7 @@ def _copilot_findings_from_reviews(
             continue
         seen.add(key)
         deduped.append(compact)
-    return observed, deduped[:20], ignored_non_actionable
+    return observed, deduped[:20], ignored_non_actionable, superseded_old_head
 
 
 def _handle_linked_draft_ready_for_review(
@@ -1982,11 +2063,32 @@ def _run_governor_loop(
         api_type="REST",
         state=state,
     )
-    copilot_review_observed, unresolved_findings, ignored_non_actionable_reviews = _copilot_findings_from_reviews(
+    issue_comments, issue_comments_msg = list_issue_comments(
+        settings=settings,
+        repo=task.github_repo,
+        issue_number=pr_number,
+    )
+    state["copilot_issue_comments_harvest_summary"] = str(issue_comments_msg or "")
+    fixed_commit_signals = _extract_copilot_fixed_commit_signals(settings=settings, issue_comments=issue_comments)
+    copilot_review_observed, unresolved_findings, ignored_non_actionable_reviews, superseded_old_head_count = _copilot_findings_from_reviews(
         settings=settings,
         reviews=reviews,
         comments=review_comments,
+        current_head_sha=pr_head_sha,
     )
+    if superseded_old_head_count:
+        _log_workflow_checkpoint(
+            settings,
+            event="copilot_old_head_findings_superseded",
+            task=task,
+            run=run,
+            success=True,
+            summary=(
+                f"Superseded {superseded_old_head_count} Copilot review-comment findings from older head commits."
+            ),
+            skip_reason="superseded_old_head_findings",
+            state=state,
+        )
 
     if ignored_non_actionable_reviews:
         _log_workflow_checkpoint(
@@ -2005,9 +2107,22 @@ def _run_governor_loop(
 
     # --- Update waiting_for_revision_push: clear when findings resolved ---
     waiting_for_revision_push = bool(state.get("waiting_for_revision_push"))
+    outstanding_packet_head = str(state.get("outstanding_followup_head_sha") or "")
+    if waiting_for_revision_push and pr_head_sha and outstanding_packet_head and pr_head_sha != outstanding_packet_head:
+        waiting_for_revision_push = False
+        state["waiting_for_revision_push"] = False
+        state["outstanding_followup_status"] = "pending_current_head_verification"
+        _set_checkpoint(
+            state,
+            name="copilot_push_rereview_observed",
+            success=True,
+            summary="Outstanding follow-up packet superseded by newer PR head; pending current-head verification.",
+        )
     if waiting_for_revision_push and not unresolved_findings:
         waiting_for_revision_push = False
         state["waiting_for_revision_push"] = False
+        if str(state.get("outstanding_followup_status") or "") == "open":
+            state["outstanding_followup_status"] = "resolved"
         _set_checkpoint(
             state,
             name="copilot_push_rereview_observed",
@@ -2039,7 +2154,28 @@ def _run_governor_loop(
             summary="Copilot push/re-review signal observed while waiting for revision.",
             state=state,
         )
+    if (
+        pr_head_sha
+        and fixed_commit_signals
+        and any(pr_head_sha.lower().startswith(sha) or sha.startswith(pr_head_sha.lower()) for sha in fixed_commit_signals)
+        and str(state.get("outstanding_followup_head_sha") or "")
+        and pr_head_sha != str(state.get("outstanding_followup_head_sha") or "")
+    ):
+        state["outstanding_followup_status"] = "pending_current_head_verification"
+        state["waiting_for_revision_push"] = False
+        waiting_for_revision_push = False
+        _log_workflow_checkpoint(
+            settings,
+            event="copilot_fixed_commit_signal_observed",
+            task=task,
+            run=run,
+            success=True,
+            summary="Copilot fixed-in-commit signal observed for newer head; transitioning to current-head verification.",
+            state=state,
+        )
     if not unresolved_findings:
+        if str(state.get("outstanding_followup_status") or "") == "open":
+            state["outstanding_followup_status"] = "resolved"
         _set_checkpoint(
             state,
             name="continuation_comment_posted",
@@ -2163,19 +2299,33 @@ def _run_governor_loop(
         )
         if not trigger_body.startswith("@copilot"):
             trigger_body = f"@copilot {trigger_body}"
-        trigger_fp = hashlib.sha1(trigger_body.encode("utf-8")).hexdigest()
-        already_triggered = state.get("fix_trigger_fingerprint") == trigger_fp
-        if should_trigger_copilot and not already_triggered:
-            existing_comments, _ = list_issue_comments(
-                settings=settings, repo=task.github_repo, issue_number=pr_number,
-            )
-            exists_remote = any(
-                isinstance(c, dict) and str(c.get("body") or "").strip() == trigger_body.strip()
-                for c in existing_comments
-            )
+        packet_fingerprint, findings_hash = _followup_packet_fingerprint(
+            pr_number=pr_number,
+            head_sha=pr_head_sha,
+            findings=unresolved_findings,
+            governor_requests=[],
+        )
+        packet_marker = _followup_packet_marker(packet_fingerprint)
+        trigger_body_with_marker = f"{trigger_body}\n\n{packet_marker}"
+        same_outstanding_packet = bool(
+            str(state.get("outstanding_followup_packet_fingerprint") or "") == packet_fingerprint
+            and str(state.get("outstanding_followup_head_sha") or "") == (pr_head_sha or "")
+            and str(state.get("outstanding_followup_status") or "") in {"open", "pending_current_head_verification"}
+        )
+        emitted_new_packet = False
+        if should_trigger_copilot and not same_outstanding_packet:
+            existing_marker_comment: dict[str, Any] | None = None
+            for c in issue_comments:
+                if not isinstance(c, dict):
+                    continue
+                body = str(c.get("body") or "")
+                if packet_marker in body:
+                    existing_marker_comment = c
+                    break
+            exists_remote = existing_marker_comment is not None
             if not exists_remote:
                 comment_ok, comment_msg = post_copilot_follow_up_comment(
-                    settings=settings, repo=task.github_repo, issue_number=pr_number, body=trigger_body,
+                    settings=settings, repo=task.github_repo, issue_number=pr_number, body=trigger_body_with_marker,
                 )
                 if not comment_ok:
                     _set_checkpoint(
@@ -2194,6 +2344,11 @@ def _run_governor_loop(
                     _save_governor_state(run, state)
                     _save(session, run)
                     return
+            emitted_new_packet = True
+            comment_id = None
+            if isinstance(existing_marker_comment, dict):
+                raw_id = existing_marker_comment.get("id")
+                comment_id = raw_id if isinstance(raw_id, int) else None
             _set_checkpoint(
                 state,
                 name="continuation_comment_posted",
@@ -2208,22 +2363,28 @@ def _run_governor_loop(
                 success=True,
                 summary=(
                     "Top-level @copilot continuation comment posted; "
-                    f"comment_fingerprint={trigger_fp[:12]}; dedupe_remote={exists_remote}"
+                    f"packet_fingerprint={packet_fingerprint[:12]}; dedupe_remote={exists_remote}"
                 ),
                 auth_lane="dispatch_user_token",
                 api_type="REST",
                 state=state,
             )
-            state["fix_trigger_fingerprint"] = trigger_fp
-            state["revision_cycle_count"] = int(state.get("revision_cycle_count") or 0) + 1
+            state["fix_trigger_fingerprint"] = packet_fingerprint
+            state["outstanding_followup_packet_fingerprint"] = packet_fingerprint
+            state["outstanding_followup_head_sha"] = pr_head_sha or ""
+            state["outstanding_followup_findings_hash"] = findings_hash
+            state["outstanding_followup_comment_id"] = comment_id
+            state["outstanding_followup_status"] = "open"
+            if emitted_new_packet:
+                state["revision_cycle_count"] = int(state.get("revision_cycle_count") or 0) + 1
             state["waiting_for_revision_push"] = True
             waiting_for_revision_push = True
-        elif should_trigger_copilot and already_triggered:
+        elif should_trigger_copilot and same_outstanding_packet:
             _set_checkpoint(
                 state,
                 name="continuation_comment_posted",
                 success=True,
-                summary="Batched top-level @copilot continuation comment already posted for current fingerprint.",
+                summary="Batched top-level @copilot continuation comment already posted for current finding packet.",
             )
             _log_workflow_checkpoint(
                 settings,
@@ -2231,7 +2392,7 @@ def _run_governor_loop(
                 task=task,
                 run=run,
                 success=True,
-                summary=f"Continuation comment deduplicated by fingerprint={trigger_fp[:12]}.",
+                summary=f"Continuation comment deduplicated by finding-packet fingerprint={packet_fingerprint[:12]}.",
                 skip_reason="no_actionable_review_findings",
                 state=state,
             )
@@ -2264,10 +2425,10 @@ def _run_governor_loop(
         state["guarded_paths_touched"] = guarded_paths_touched
         state["guarded_files"] = guarded_files
         state["last_event_key"] = event_key
-        state["last_governor_decision"] = "fix_trigger_posted" if not already_triggered else "fix_trigger_waiting"
+        state["last_governor_decision"] = "fix_trigger_posted" if emitted_new_packet else "fix_trigger_waiting"
         state["last_governor_summary"] = [
             "Deterministic fix-trigger: posted @copilot fix request for unresolved review findings."
-        ] if not already_triggered else [
+        ] if emitted_new_packet else [
             "Deterministic fix-trigger: waiting for Copilot push (trigger already posted)."
         ]
         max_cycles = _revision_cycle_limit(settings=settings, execution_mode=execution_mode)
