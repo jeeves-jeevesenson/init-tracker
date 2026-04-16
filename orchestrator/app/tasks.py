@@ -2298,11 +2298,16 @@ def _run_governor_loop(
             summary="Copilot fixed-in-commit signal observed for newer head; transitioning to current-head verification.",
             state=state,
         )
+    outstanding_followup_status = str(state.get("outstanding_followup_status") or "")
+    preserve_reverify_state = outstanding_followup_status == "pending_current_head_verification"
+
     if not unresolved_findings:
         state["final_audit_stale_due_to_current_head_findings"] = False
-        if str(state.get("outstanding_followup_status") or "") == "open":
+        if outstanding_followup_status == "open":
             state["outstanding_followup_status"] = "resolved"
-        state["current_head_review_state"] = "current_head_findings_cleared"
+        # A superseding head still requires authoritative re-verification.
+        if not preserve_reverify_state:
+            state["current_head_review_state"] = "current_head_findings_cleared"
         _set_checkpoint(
             state,
             name="continuation_comment_posted",
