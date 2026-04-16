@@ -969,7 +969,9 @@ def _load_governor_state(run: AgentRun) -> dict[str, Any]:
     state.setdefault("outstanding_followup_findings_hash", "")
     state.setdefault("outstanding_followup_comment_id", None)
     state.setdefault("outstanding_followup_status", "")
+    state.setdefault("review_batch_followup_state", "")
     state.setdefault("review_harvest_summary", "")
+    state.setdefault("current_head_review_state", "")
     state.setdefault("review_batch_artifact", {})
     state.setdefault("final_audit_artifact", {})
     state.setdefault("final_audit_decision", "")
@@ -2112,6 +2114,7 @@ def _run_governor_loop(
         waiting_for_revision_push = False
         state["waiting_for_revision_push"] = False
         state["outstanding_followup_status"] = "pending_current_head_verification"
+        state["current_head_review_state"] = "awaiting_current_head_reverify"
         _set_checkpoint(
             state,
             name="copilot_push_rereview_observed",
@@ -2123,6 +2126,7 @@ def _run_governor_loop(
         state["waiting_for_revision_push"] = False
         if str(state.get("outstanding_followup_status") or "") == "open":
             state["outstanding_followup_status"] = "resolved"
+        state["current_head_review_state"] = "current_head_findings_cleared"
         _set_checkpoint(
             state,
             name="copilot_push_rereview_observed",
@@ -2163,6 +2167,7 @@ def _run_governor_loop(
     ):
         state["outstanding_followup_status"] = "pending_current_head_verification"
         state["waiting_for_revision_push"] = False
+        state["current_head_review_state"] = "awaiting_current_head_reverify"
         waiting_for_revision_push = False
         _log_workflow_checkpoint(
             settings,
@@ -2176,6 +2181,7 @@ def _run_governor_loop(
     if not unresolved_findings:
         if str(state.get("outstanding_followup_status") or "") == "open":
             state["outstanding_followup_status"] = "resolved"
+        state["current_head_review_state"] = "current_head_findings_cleared"
         _set_checkpoint(
             state,
             name="continuation_comment_posted",
@@ -2292,9 +2298,33 @@ def _run_governor_loop(
             if isinstance(batch_payload.get("review_batch_artifact"), dict)
             else {}
         )
-        state["review_batch_artifact"] = batch_artifact
+        raw_batched_items = batch_artifact.get("batched_items")
+        batched_items = (
+            [str(item).strip() for item in raw_batched_items if str(item).strip()]
+            if isinstance(raw_batched_items, list)
+            else []
+        )
+        raw_comment_body = str(batch_artifact.get("comment_body") or "").strip()
         should_trigger_copilot = bool(batch_artifact.get("should_trigger_copilot"))
-        trigger_body = str(batch_artifact.get("comment_body") or "").strip() or _copilot_fix_trigger_body(
+        review_batch_invalid_artifact = False
+        review_batch_invalid_reason = ""
+        has_actionable_batch_payload = bool(batched_items and raw_comment_body)
+        if has_actionable_batch_payload and not should_trigger_copilot:
+            should_trigger_copilot = True
+            review_batch_invalid_artifact = True
+            review_batch_invalid_reason = "normalized_contradictory_should_trigger_false"
+        if bool(batched_items) and not raw_comment_body:
+            review_batch_invalid_artifact = True
+            review_batch_invalid_reason = review_batch_invalid_reason or "missing_comment_body_for_actionable_batch"
+            should_trigger_copilot = True
+        normalized_batch_artifact = dict(batch_artifact)
+        normalized_batch_artifact["batched_items"] = batched_items
+        normalized_batch_artifact["comment_body"] = raw_comment_body
+        normalized_batch_artifact["should_trigger_copilot"] = should_trigger_copilot
+        if review_batch_invalid_artifact and review_batch_invalid_reason:
+            normalized_batch_artifact["normalization_reason"] = review_batch_invalid_reason
+        state["review_batch_artifact"] = normalized_batch_artifact
+        trigger_body = raw_comment_body or _copilot_fix_trigger_body(
             findings=unresolved_findings
         )
         if not trigger_body.startswith("@copilot"):
@@ -2313,6 +2343,8 @@ def _run_governor_loop(
             and str(state.get("outstanding_followup_status") or "") in {"open", "pending_current_head_verification"}
         )
         emitted_new_packet = False
+        review_batch_followup_state = "review_batch_no_trigger"
+        review_batch_summary = "Review batching produced no actionable Copilot follow-up trigger."
         if should_trigger_copilot and not same_outstanding_packet:
             existing_marker_comment: dict[str, Any] | None = None
             for c in issue_comments:
@@ -2378,7 +2410,12 @@ def _run_governor_loop(
             if emitted_new_packet:
                 state["revision_cycle_count"] = int(state.get("revision_cycle_count") or 0) + 1
             state["waiting_for_revision_push"] = True
+            state["current_head_review_state"] = "awaiting_current_head_reverify"
             waiting_for_revision_push = True
+            review_batch_followup_state = "review_batch_trigger_posted"
+            review_batch_summary = (
+                "Batched review follow-up is posted (or confirmed remotely); waiting for Copilot push/reverify."
+            )
         elif should_trigger_copilot and same_outstanding_packet:
             _set_checkpoint(
                 state,
@@ -2396,6 +2433,9 @@ def _run_governor_loop(
                 skip_reason="no_actionable_review_findings",
                 state=state,
             )
+            review_batch_followup_state = "review_batch_trigger_waiting"
+            review_batch_summary = "Continuation follow-up already posted for this finding packet; waiting for reverify."
+            state["current_head_review_state"] = "awaiting_current_head_reverify"
         else:
             _set_checkpoint(
                 state,
@@ -2415,6 +2455,17 @@ def _run_governor_loop(
                 skip_reason="no_actionable_review_findings",
                 state=state,
             )
+            state["current_head_review_state"] = "awaiting_current_head_followup"
+        if review_batch_invalid_artifact:
+            if review_batch_followup_state == "review_batch_no_trigger":
+                review_batch_followup_state = "review_batch_invalid_artifact"
+                review_batch_summary = "Review batch artifact was contradictory/invalid and no follow-up was posted."
+            else:
+                review_batch_summary = f"{review_batch_summary} Artifact normalization applied."
+            state["review_batch_invalid_reason"] = review_batch_invalid_reason
+        else:
+            state["review_batch_invalid_reason"] = ""
+        state["review_batch_followup_state"] = review_batch_followup_state
         # Persist and short-circuit — no OpenAI call needed.
         state["pr_draft"] = pr_draft
         state["pr_state"] = pr_state
@@ -2425,12 +2476,8 @@ def _run_governor_loop(
         state["guarded_paths_touched"] = guarded_paths_touched
         state["guarded_files"] = guarded_files
         state["last_event_key"] = event_key
-        state["last_governor_decision"] = "fix_trigger_posted" if emitted_new_packet else "fix_trigger_waiting"
-        state["last_governor_summary"] = [
-            "Deterministic fix-trigger: posted @copilot fix request for unresolved review findings."
-        ] if emitted_new_packet else [
-            "Deterministic fix-trigger: waiting for Copilot push (trigger already posted)."
-        ]
+        state["last_governor_decision"] = review_batch_followup_state
+        state["last_governor_summary"] = [review_batch_summary]
         max_cycles = _revision_cycle_limit(settings=settings, execution_mode=execution_mode)
         if int(state.get("revision_cycle_count") or 0) > max_cycles:
             state["last_governor_decision"] = "escalate_human"
