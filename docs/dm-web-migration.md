@@ -27,6 +27,7 @@ The following slice of combat/session state is now authoritatively owned by
 | Adjust temporary HP (delta) | `POST /api/dm/combat/combatants/{cid}/temp-hp-adjust` |
 | Add combatant | `POST /api/dm/combat/combatants` |
 | Set initiative | `POST /api/dm/combat/combatants/{cid}/initiative` |
+| Roll initiative (service-owned d20 path) | `POST /api/dm/combat/combatants/{cid}/initiative/roll` |
 | Remove combatant | `DELETE /api/dm/combat/combatants/{cid}` |
 | Real-time DM state push | `WS /ws/dm[?token=…]` |
 
@@ -128,6 +129,7 @@ The following areas remain desktop-primary (hybrid) after this pass:
 - Shop, item and spell management
 - YAML-backed save / load (files are still owned by the desktop flow)
 - Full monster-spec / player-profile based combatant creation (desktop only)
+- LAN claimed-player initiative prompt UX and response workflow
 - Remaining spell-specific deep damage callers (Heat Metal, Hellish Rebuke,
   weapon-mastery attack paths) still call `_apply_damage_to_target_with_temp_hp`
   directly — these are candidates for future slices
@@ -150,6 +152,8 @@ The following desktop/LAN-originated mutations now route through
 - **LAN player "end turn"** → `_next_turn_via_service()` → `CombatService.next_turn()`
 - **LAN player manual HP override** → `CombatService.adjust_hp()` /
   `CombatService.adjust_temp_hp()`
+- **LAN initiative prompt response (`initiative_roll`)** →
+  `_set_initiative_via_service()` → `CombatService.set_initiative()`
 - **Desktop `_adjust_hp_via_service()`** → `CombatService.adjust_hp()` (wrapper
   available for progressive adoption by other desktop code paths)
 - **Desktop `_set_condition_via_service()`** → `CombatService.set_condition()`

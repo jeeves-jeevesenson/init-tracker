@@ -6,6 +6,7 @@ without requiring the Tkinter UI to be running.
 """
 import types
 import unittest
+from unittest.mock import patch
 
 from helper_script import ConditionStack
 
@@ -761,6 +762,49 @@ class CombatServiceSetInitiativeTests(unittest.TestCase):
         self.assertTrue(any("initiative" in m.lower() for m in logged_msgs))
 
 
+class CombatServiceRollInitiativeTests(unittest.TestCase):
+    """Tests for CombatService.roll_initiative()."""
+
+    def setUp(self):
+        self.tracker = _make_tracker_with_encounter_setup()
+        self.service = CombatService(self.tracker)
+        self.tracker.combatants[1].dex = 2
+
+    def test_roll_initiative_rolls_and_applies_total(self):
+        with patch("combat_service.random.randint", return_value=17):
+            result = self.service.roll_initiative(cid=1)
+        self.assertTrue(result["ok"])
+        self.assertEqual(result["roll"], 17)
+        self.assertEqual(result["initiative_modifier"], 2)
+        self.assertEqual(result["initiative_after"], 19)
+        self.assertEqual(self.tracker.combatants[1].initiative, 19)
+
+    def test_roll_initiative_uses_modifier_override(self):
+        with patch("combat_service.random.randint", return_value=11):
+            result = self.service.roll_initiative(cid=1, modifier=5)
+        self.assertTrue(result["ok"])
+        self.assertEqual(result["initiative_modifier"], 5)
+        self.assertEqual(result["initiative_after"], 16)
+
+    def test_roll_initiative_sets_nat20_and_roll_fields(self):
+        with patch("combat_service.random.randint", return_value=20):
+            self.service.roll_initiative(cid=1, modifier=0)
+        c = self.tracker.combatants[1]
+        self.assertEqual(getattr(c, "roll", None), 20)
+        self.assertTrue(getattr(c, "nat20", False))
+
+    def test_roll_initiative_triggers_broadcast_via_canonical_path(self):
+        before = len(self.tracker._broadcast_calls)
+        with patch("combat_service.random.randint", return_value=12):
+            self.service.roll_initiative(cid=1)
+        self.assertGreater(len(self.tracker._broadcast_calls), before)
+
+    def test_roll_initiative_unknown_cid_returns_error(self):
+        result = self.service.roll_initiative(cid=999)
+        self.assertFalse(result["ok"])
+        self.assertIn("error", result)
+
+
 class CombatServiceRemoveCombatantTests(unittest.TestCase):
     """Tests for CombatService.remove_combatant()."""
 
@@ -1509,6 +1553,45 @@ class SetTurnHereViaServiceTests(unittest.TestCase):
         old_cid = tracker.current_cid
         InitiativeTracker._set_turn_here_via_service(tracker)
         self.assertEqual(tracker.current_cid, old_cid)
+
+
+class SetInitiativeViaServiceTests(unittest.TestCase):
+    """Tests for InitiativeTracker._set_initiative_via_service()."""
+
+    def _make_tracker_with_service(self):
+        tracker = _make_tracker(num_combatants=3)
+        service = CombatService(tracker)
+        tracker._dm_service = service
+        return tracker, service
+
+    def test_set_initiative_via_service_routes_through_service(self):
+        tracker, _ = self._make_tracker_with_service()
+        ok = InitiativeTracker._set_initiative_via_service(tracker, 1, 18)
+        self.assertTrue(ok)
+        self.assertEqual(tracker.combatants[1].initiative, 18)
+
+    def test_set_initiative_via_service_fallback_without_service(self):
+        tracker, _ = self._make_tracker_with_service()
+        tracker._dm_service = None
+        ok = InitiativeTracker._set_initiative_via_service(tracker, 1, 14)
+        self.assertTrue(ok)
+        self.assertEqual(tracker.combatants[1].initiative, 14)
+
+    def test_set_initiative_via_service_logs_when_service_fails(self):
+        tracker, _ = self._make_tracker_with_service()
+        broken = CombatService(tracker)
+        broken.set_initiative = lambda cid, initiative: {"ok": False, "error": "test failure"}
+        tracker._dm_service = broken
+        ok = InitiativeTracker._set_initiative_via_service(tracker, 1, 9)
+        self.assertTrue(ok)
+        warnings = [(m, l) for m, l in tracker._oplog_calls if l == "warning"]
+        self.assertTrue(any("set_initiative" in m for m, _ in warnings))
+
+    def test_set_initiative_via_service_returns_false_for_unknown_cid(self):
+        tracker, _ = self._make_tracker_with_service()
+        tracker._dm_service = None
+        ok = InitiativeTracker._set_initiative_via_service(tracker, 999, 12)
+        self.assertFalse(ok)
 
 
 # ===================================================================

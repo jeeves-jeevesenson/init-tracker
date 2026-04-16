@@ -3962,6 +3962,47 @@ class LanController:
             except Exception:
                 raise HTTPException(status_code=500, detail="Failed to set initiative.")
 
+        @self._fastapi_app.post("/api/dm/combat/combatants/{cid}/initiative/roll")
+        async def dm_roll_initiative(
+            cid: int,
+            request: Request,
+            payload: Optional[Dict[str, Any]] = Body(None),
+        ):
+            """Roll and apply initiative for an existing combatant.
+
+            Body: {modifier?: int}
+            Returns: {ok, cid, roll, initiative_modifier, initiative_before,
+                      initiative_after, snapshot}
+            """
+            _check_dm_auth(request)
+            if _dm_service is None:
+                raise HTTPException(status_code=503, detail="DM combat service unavailable.")
+            if payload is not None and not isinstance(payload, dict):
+                raise HTTPException(status_code=400, detail="Invalid payload.")
+            modifier: Optional[int] = None
+            if isinstance(payload, dict) and "modifier" in payload and payload.get("modifier") is not None:
+                try:
+                    modifier = int(payload.get("modifier"))
+                except Exception:
+                    raise HTTPException(status_code=400, detail="modifier must be an integer.")
+            try:
+                result = _dm_service.roll_initiative(cid=int(cid), modifier=modifier)
+                if not result.get("ok"):
+                    raise HTTPException(status_code=400, detail=result.get("error", "Combatant not found."))
+                return {
+                    "ok": True,
+                    "cid": result.get("cid"),
+                    "roll": result.get("roll"),
+                    "initiative_modifier": result.get("initiative_modifier"),
+                    "initiative_before": result.get("initiative_before"),
+                    "initiative_after": result.get("initiative_after"),
+                    "snapshot": result.get("snapshot") or _dm_service.combat_snapshot(),
+                }
+            except HTTPException:
+                raise
+            except Exception:
+                raise HTTPException(status_code=500, detail="Failed to roll initiative.")
+
         @self._fastapi_app.delete("/api/dm/combat/combatants/{cid}")
         async def dm_remove_combatant(cid: int, request: Request):
             """Remove a combatant from the encounter.
@@ -9100,6 +9141,37 @@ class InitiativeTracker(base.InitiativeTracker):
             self._lan_force_state_broadcast()
         except Exception:
             pass
+
+    def _set_initiative_via_service(self, cid: int, initiative: int) -> bool:
+        """Set initiative, routing through CombatService when available."""
+        dm_svc = self.__dict__.get("_dm_service")
+        if dm_svc is not None:
+            try:
+                result = dm_svc.set_initiative(cid=int(cid), initiative=int(initiative))
+                if result.get("ok"):
+                    return True
+                self._oplog(
+                    f"CombatService.set_initiative failed: {result.get('error', 'unknown error')}",
+                    level="warning",
+                )
+            except Exception as exc:
+                self._oplog(
+                    f"CombatService.set_initiative exception: {exc}",
+                    level="warning",
+                )
+        c = self.combatants.get(int(cid))
+        if c is None:
+            return False
+        setattr(c, "initiative", int(initiative))
+        try:
+            self._rebuild_table(scroll_to_current=True)
+        except Exception:
+            pass
+        try:
+            self._lan_force_state_broadcast()
+        except Exception:
+            pass
+        return True
 
     def _adjust_hp_via_service(self, cid: int, delta: int) -> bool:
         """Adjust HP for combatant ``cid``, routing through CombatService when available.
@@ -32577,9 +32649,9 @@ class InitiativeTracker(base.InitiativeTracker):
             if target is None:
                 self._lan.toast(ws_id, "That scallywag ain’t in combat no more.")
                 return
-            self._set_initiative(int(cid), int(roll_total))
-            self._rebuild_table(scroll_to_current=True)
-            self._lan_force_state_broadcast()
+            if not self._set_initiative_via_service(int(cid), int(roll_total)):
+                self._lan.toast(ws_id, "Could not set initiative.")
+                return
             self._lan.toast(ws_id, f"Initiative set to {int(roll_total)}.")
             return
 
