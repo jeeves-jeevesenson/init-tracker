@@ -21,6 +21,8 @@ class LanReconnectRecoveryTests(unittest.TestCase):
 
     def test_reconnect_claim_sync_toast_is_suppressed(self):
         self.assertIn("function isReconnectClaimSyncToast(text){", self.html)
+        self.assertIn("normalized.startsWith(\"restored claim\")", self.html)
+        self.assertIn("normalized.startsWith(\"synced claim\")", self.html)
         self.assertIn("if (!(reconnectRecoveryPending && isReconnectClaimSyncToast(msg.text))){", self.html)
 
     def test_stale_claim_revision_guard_remains_monotonic(self):

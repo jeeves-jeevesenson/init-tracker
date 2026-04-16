@@ -5463,7 +5463,7 @@ __DAMAGE_TYPE_OPTIONS__
     }
   }
 
-  function recomputeClaimDataReady(){
+  function updateClaimDataReady(){
     claimDataReady = claimStateSeen && Array.isArray(lastPcList);
   }
 
@@ -5493,7 +5493,7 @@ __DAMAGE_TYPE_OPTIONS__
     reconnectFallbackRequested = false;
     reconnectEscalated = false;
     claimStateSeen = false;
-    recomputeClaimDataReady();
+    updateClaimDataReady();
     updateWaitingOverlay();
     clearReconnectRecoveryTimers();
     const cycle = reconnectCycle;
@@ -5519,10 +5519,8 @@ __DAMAGE_TYPE_OPTIONS__
 
   function isReconnectClaimSyncToast(text){
     const normalized = String(text || "").trim().toLowerCase();
-    return normalized === "restored claim."
-      || normalized === "restored claim"
-      || normalized === "synced claim."
-      || normalized === "synced claim";
+    return normalized.startsWith("restored claim")
+      || normalized.startsWith("synced claim");
   }
 
   function softReconnect(){
@@ -9976,7 +9974,7 @@ __DAMAGE_TYPE_OPTIONS__
     } else if (type === "state"){
       claimStateSeen = true;
     }
-    recomputeClaimDataReady();
+    updateClaimDataReady();
   }
 
   function clearClaimRenderRetry(){
