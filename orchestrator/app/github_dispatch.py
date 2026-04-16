@@ -112,6 +112,16 @@ def _github_debug_enabled(settings: Settings) -> bool:
     return bool(getattr(settings, "orchestrator_debug_github", False))
 
 
+def _extract_next_link(link_header: str | None) -> str | None:
+    if not link_header:
+        return None
+    match = _LINK_NEXT_RE.search(str(link_header))
+    if not match:
+        return None
+    next_url = match.group(1).strip()
+    return next_url or None
+
+
 def _log_github_debug(
     settings: Settings,
     *,
@@ -1619,18 +1629,36 @@ def list_pull_request_reviews(*, settings: Settings, repo: str, pr_number: int) 
     if not has_governor_auth(settings):
         return [], "Governor auth failure: auth not configured; cannot list PR reviews"
     api_base = settings.github_api_url.rstrip("/")
-    url = f"{api_base}/repos/{repo}/pulls/{pr_number}/reviews?per_page=100"
+    url = f"{api_base}/repos/{repo}/pulls/{pr_number}/reviews?per_page=100&page=1"
+    page_number = 1
+    reviews: list[dict[str, Any]] = []
+    seen_urls: set[str] = set()
     try:
         with httpx.Client(timeout=15.0) as client:
-            response = client.get(url, headers=_build_governor_headers(settings))
-            if response.status_code >= 400:
-                return [], f"PR lifecycle automation failure: GitHub returned {response.status_code} when listing reviews for PR #{pr_number}: {response.text[:300]}"
-            if not response.headers.get("content-type", "").startswith("application/json"):
-                return [], f"GitHub returned non-JSON review list for PR #{pr_number}"
-            payload = response.json()
-            if not isinstance(payload, list):
-                return [], f"GitHub returned invalid review list for PR #{pr_number}"
-            reviews = [item for item in payload if isinstance(item, dict)]
+            while url:
+                if url in seen_urls:
+                    return reviews, (
+                        f"Fetched {len(reviews)} reviews for PR #{pr_number}; "
+                        f"pagination loop detected at page={page_number}"
+                    )
+                seen_urls.add(url)
+                response = client.get(url, headers=_build_governor_headers(settings))
+                if response.status_code >= 400:
+                    return reviews, (
+                        f"PR lifecycle automation failure: GitHub returned {response.status_code} when listing reviews "
+                        f"for PR #{pr_number} page={page_number}: {response.text[:300]}"
+                    )
+                if not response.headers.get("content-type", "").startswith("application/json"):
+                    return reviews, f"GitHub returned non-JSON review list for PR #{pr_number} page={page_number}"
+                payload = response.json()
+                if not isinstance(payload, list):
+                    return reviews, f"GitHub returned invalid review list for PR #{pr_number} page={page_number}"
+                reviews.extend(item for item in payload if isinstance(item, dict))
+                next_link = _extract_next_link(response.headers.get("link"))
+                if not next_link:
+                    break
+                url = next_link
+                page_number += 1
             return reviews, f"Fetched {len(reviews)} reviews for PR #{pr_number}"
     except Exception as exc:
         return [], f"PR lifecycle automation failure: Failed to list reviews for PR #{pr_number}: {exc}"
@@ -1640,21 +1668,36 @@ def list_pull_request_review_comments(*, settings: Settings, repo: str, pr_numbe
     if not has_governor_auth(settings):
         return [], "Governor auth failure: auth not configured; cannot list PR review comments"
     api_base = settings.github_api_url.rstrip("/")
-    url = f"{api_base}/repos/{repo}/pulls/{pr_number}/comments?per_page=100"
+    url = f"{api_base}/repos/{repo}/pulls/{pr_number}/comments?per_page=100&page=1"
+    page_number = 1
+    comments: list[dict[str, Any]] = []
+    seen_urls: set[str] = set()
     try:
         with httpx.Client(timeout=15.0) as client:
-            response = client.get(url, headers=_build_governor_headers(settings))
-            if response.status_code >= 400:
-                return [], (
-                    f"PR lifecycle automation failure: GitHub returned {response.status_code} when listing review comments for PR #{pr_number}: "
-                    f"{response.text[:300]}"
-                )
-            if not response.headers.get("content-type", "").startswith("application/json"):
-                return [], f"GitHub returned non-JSON review comment list for PR #{pr_number}"
-            payload = response.json()
-            if not isinstance(payload, list):
-                return [], f"GitHub returned invalid review comment list for PR #{pr_number}"
-            comments = [item for item in payload if isinstance(item, dict)]
+            while url:
+                if url in seen_urls:
+                    return comments, (
+                        f"Fetched {len(comments)} review comments for PR #{pr_number}; "
+                        f"pagination loop detected at page={page_number}"
+                    )
+                seen_urls.add(url)
+                response = client.get(url, headers=_build_governor_headers(settings))
+                if response.status_code >= 400:
+                    return comments, (
+                        f"PR lifecycle automation failure: GitHub returned {response.status_code} when listing review comments "
+                        f"for PR #{pr_number} page={page_number}: {response.text[:300]}"
+                    )
+                if not response.headers.get("content-type", "").startswith("application/json"):
+                    return comments, f"GitHub returned non-JSON review comment list for PR #{pr_number} page={page_number}"
+                payload = response.json()
+                if not isinstance(payload, list):
+                    return comments, f"GitHub returned invalid review comment list for PR #{pr_number} page={page_number}"
+                comments.extend(item for item in payload if isinstance(item, dict))
+                next_link = _extract_next_link(response.headers.get("link"))
+                if not next_link:
+                    break
+                url = next_link
+                page_number += 1
             return comments, f"Fetched {len(comments)} review comments for PR #{pr_number}"
     except Exception as exc:
         return [], f"PR lifecycle automation failure: Failed to list review comments for PR #{pr_number}: {exc}"

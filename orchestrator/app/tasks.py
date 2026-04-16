@@ -1124,6 +1124,55 @@ def _is_noisy_pr_event(event_key: str) -> bool:
     return parts[3] in _NOISY_PR_ACTIONS
 
 
+def _is_review_recovery_event(event_key: str) -> bool:
+    key = str(event_key or "")
+    return (
+        "governor:pull_request:" in key
+        or "governor:workflow_run:" in key
+        or "governor:status:" in key
+        or "governor:check_run:" in key
+        or "governor:check_suite:" in key
+    )
+
+
+def _should_attempt_review_state_rehydration(
+    *,
+    event_key: str,
+    pr_head_sha: str,
+    checks_passed: bool,
+    effective_checks_passed: bool,
+    state: dict[str, Any],
+    reviews: list[dict[str, Any]],
+    review_comments: list[dict[str, Any]],
+) -> tuple[bool, list[str]]:
+    """Decide whether to force a second authoritative review-state fetch.
+
+    This defends against missed review/review_comment webhooks and transiently empty
+    review harvests that could otherwise become sticky state.
+    """
+    reasons: list[str] = []
+    prior_head_sha = str(state.get("last_review_rehydrated_head_sha") or "")
+    if pr_head_sha and prior_head_sha and pr_head_sha != prior_head_sha:
+        reasons.append("head_sha_changed")
+    if checks_passed or effective_checks_passed or "governor:workflow_run:" in str(event_key or ""):
+        reasons.append("checks_or_workflow_signal")
+    current_head_review_state = str(state.get("current_head_review_state") or "")
+    if current_head_review_state in {
+        "",
+        "current_head_findings_cleared",
+        "awaiting_current_head_reverify",
+        "awaiting_current_head_followup",
+    }:
+        reasons.append("current_head_review_state_empty_or_stale")
+    if str(state.get("outstanding_followup_status") or "") != "open":
+        reasons.append("no_open_outstanding_followup_packet")
+    if _is_review_recovery_event(event_key):
+        reasons.append("recovery_capable_event")
+    if not reviews and not review_comments:
+        reasons.append("empty_harvest")
+    return (bool(reasons) and not (reviews or review_comments) and _is_review_recovery_event(event_key)), _ordered_unique_reasons(reasons)
+
+
 def _high_autonomy_noisy_skip_candidate(
     *,
     execution_mode: str,
@@ -2036,6 +2085,77 @@ def _run_governor_loop(
     )
     reviews, reviews_msg = list_pull_request_reviews(settings=settings, repo=task.github_repo, pr_number=pr_number)
     review_comments, review_comments_msg = list_pull_request_review_comments(settings=settings, repo=task.github_repo, pr_number=pr_number)
+    should_rehydrate_reviews, rehydration_reasons = _should_attempt_review_state_rehydration(
+        event_key=event_key,
+        pr_head_sha=pr_head_sha,
+        checks_passed=checks_passed,
+        effective_checks_passed=effective_checks_passed,
+        state=state,
+        reviews=reviews,
+        review_comments=review_comments,
+    )
+    if should_rehydrate_reviews:
+        _log_workflow_checkpoint(
+            settings,
+            event="review_state_rehydration_attempted",
+            task=task,
+            run=run,
+            success=True,
+            summary=(
+                "Primary review harvest was empty; forcing authoritative re-hydration fetch "
+                f"(reasons={rehydration_reasons})."
+            ),
+            auth_lane="governor",
+            api_type="REST",
+            state=state,
+        )
+        rehydrated_reviews, rehydrated_reviews_msg = list_pull_request_reviews(
+            settings=settings,
+            repo=task.github_repo,
+            pr_number=pr_number,
+        )
+        rehydrated_comments, rehydrated_comments_msg = list_pull_request_review_comments(
+            settings=settings,
+            repo=task.github_repo,
+            pr_number=pr_number,
+        )
+        if rehydrated_reviews or rehydrated_comments:
+            reviews = rehydrated_reviews
+            review_comments = rehydrated_comments
+            reviews_msg = f"{reviews_msg}; rehydrated={rehydrated_reviews_msg}"
+            review_comments_msg = f"{review_comments_msg}; rehydrated={rehydrated_comments_msg}"
+            _set_checkpoint(
+                state,
+                name="review_state_rehydrated",
+                success=True,
+                summary=(
+                    f"Recovered authoritative review state via re-hydration: reviews={len(rehydrated_reviews)}; "
+                    f"review_comments={len(rehydrated_comments)}."
+                ),
+            )
+        else:
+            _set_checkpoint(
+                state,
+                name="review_state_rehydrated",
+                success=False,
+                summary="Authoritative re-hydration confirmed empty review state.",
+            )
+        _log_workflow_checkpoint(
+            settings,
+            event="review_state_rehydration_result",
+            task=task,
+            run=run,
+            success=bool(rehydrated_reviews or rehydrated_comments),
+            summary=(
+                f"Re-hydration result: reviews={len(rehydrated_reviews)} ({rehydrated_reviews_msg}); "
+                f"review_comments={len(rehydrated_comments)} ({rehydrated_comments_msg})"
+            ),
+            auth_lane="governor",
+            api_type="REST",
+            state=state,
+        )
+    state["last_review_rehydrated_head_sha"] = pr_head_sha or str(state.get("last_review_rehydrated_head_sha") or "")
+    state["last_review_rehydration_reasons"] = rehydration_reasons if should_rehydrate_reviews else []
     lower_reviews_msg = str(reviews_msg or "").lower()
     lower_review_comments_msg = str(review_comments_msg or "").lower()
     review_harvested = (
@@ -2179,6 +2299,7 @@ def _run_governor_loop(
             state=state,
         )
     if not unresolved_findings:
+        state["final_audit_stale_due_to_current_head_findings"] = False
         if str(state.get("outstanding_followup_status") or "") == "open":
             state["outstanding_followup_status"] = "resolved"
         state["current_head_review_state"] = "current_head_findings_cleared"
@@ -2188,6 +2309,8 @@ def _run_governor_loop(
             success=True,
             summary="No actionable unresolved review findings; no continuation comment needed.",
         )
+    else:
+        state["final_audit_stale_due_to_current_head_findings"] = True
 
     ready_handled, promoted_now = _handle_linked_draft_ready_for_review(
         session,
