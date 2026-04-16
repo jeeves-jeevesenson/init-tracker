@@ -26543,9 +26543,6 @@ class InitiativeTracker(base.InitiativeTracker):
         mode_speed = int(self._mode_speed(c) or 0)
         setattr(c, "move_total", mode_speed)
         setattr(c, "move_remaining", mode_speed)
-        applied_temp_hp = int(getattr(c, "wild_shape_applied_temp_hp", 0) or 0)
-        if not self._set_temp_hp_via_service(int(cid), int(applied_temp_hp)):
-            return False, "Could not apply Wild Shape temp HP, matey."
         setattr(c, "is_spellcaster", False)
         setattr(c, "is_wild_shaped", True)
         setattr(c, "name", f"{base_snapshot['name']} ({str(form.get('name') or '').strip()})")
@@ -26643,6 +26640,9 @@ class InitiativeTracker(base.InitiativeTracker):
             }
         )
         setattr(c, "bonus_actions", retained_bonus_actions)
+        applied_temp_hp = int(getattr(c, "wild_shape_applied_temp_hp", 0) or 0)
+        if not self._set_temp_hp_via_service(int(cid), int(applied_temp_hp)):
+            return False, "Could not apply Wild Shape temp HP, matey."
         return True, ""
 
     def _revert_wild_shape(self, cid: int) -> Tuple[bool, str]:
@@ -26659,17 +26659,19 @@ class InitiativeTracker(base.InitiativeTracker):
                 setattr(c, key, base_snapshot[key])
         setattr(c, "actions", copy.deepcopy(base_snapshot.get("actions") if isinstance(base_snapshot.get("actions"), list) else []))
         setattr(c, "bonus_actions", copy.deepcopy(base_snapshot.get("bonus_actions") if isinstance(base_snapshot.get("bonus_actions"), list) else []))
-        if int(getattr(c, "temp_hp", 0) or 0) == int(getattr(c, "wild_shape_applied_temp_hp", 0) or 0):
-            self._set_temp_hp_via_service(
-                int(cid),
-                int(getattr(c, "wild_shape_prev_temp_hp", 0) or 0),
-            )
+        should_restore_temp_hp = int(getattr(c, "temp_hp", 0) or 0) == int(getattr(c, "wild_shape_applied_temp_hp", 0) or 0)
+        restore_temp_hp_value = int(getattr(c, "wild_shape_prev_temp_hp", 0) or 0)
         setattr(c, "is_wild_shaped", False)
         setattr(c, "wild_shape_form_id", None)
         setattr(c, "wild_shape_form_name", None)
         setattr(c, "wild_shape_base", None)
         setattr(c, "wild_shape_applied_temp_hp", 0)
         setattr(c, "wild_shape_prev_temp_hp", 0)
+        if should_restore_temp_hp:
+            self._set_temp_hp_via_service(
+                int(cid),
+                int(restore_temp_hp_value),
+            )
         return True, ""
 
     def _sorted_combatants(self) -> List[base.Combatant]:

@@ -258,6 +258,95 @@ class WildShapeTests(unittest.TestCase):
         self.assertTrue(c.is_spellcaster)
         self.assertEqual(c.temp_hp, 5)
 
+    def test_apply_wild_shape_sets_temp_hp_after_wild_shape_fields(self):
+        self.app.combatants = {
+            1: type("C", (), {
+                "cid": 1,
+                "name": "Alice",
+                "speed": 30,
+                "swim_speed": 0,
+                "fly_speed": 0,
+                "climb_speed": 0,
+                "burrow_speed": 0,
+                "movement_mode": "Normal",
+                "dex": 14,
+                "con": 12,
+                "str": 10,
+                "temp_hp": 5,
+                "actions": [{"name": "Magic", "type": "action"}],
+                "bonus_actions": [],
+                "is_spellcaster": True,
+            })()
+        }
+        self.app._pc_name_for = lambda _cid: "Alice"
+        self.app._load_player_yaml_cache = lambda force_refresh=False: None
+        self.app._player_yaml_data_by_name = {"Alice": self._profile(8)}
+        self.app._set_wild_shape_pool_current = lambda _name, value: (True, "", value)
+
+        observed = {}
+
+        def set_temp_hp(cid, amount):
+            c = self.app.combatants[int(cid)]
+            observed["is_wild_shaped"] = bool(getattr(c, "is_wild_shaped", False))
+            observed["name"] = str(getattr(c, "name", ""))
+            observed["amount"] = int(amount)
+            c.temp_hp = int(amount)
+            return True
+
+        self.app._set_temp_hp_via_service = set_temp_hp
+
+        ok, err = self.app._apply_wild_shape(1, "brown-bear")
+        self.assertTrue(ok, err)
+        self.assertTrue(observed.get("is_wild_shaped"))
+        self.assertIn("Brown Bear", observed.get("name", ""))
+        self.assertEqual(observed.get("amount"), 8)
+
+    def test_revert_wild_shape_sets_temp_hp_after_flags_cleared(self):
+        self.app.combatants = {
+            1: type("C", (), {
+                "cid": 1,
+                "name": "Alice",
+                "speed": 30,
+                "swim_speed": 0,
+                "fly_speed": 0,
+                "climb_speed": 0,
+                "burrow_speed": 0,
+                "movement_mode": "Normal",
+                "dex": 14,
+                "con": 12,
+                "str": 10,
+                "temp_hp": 5,
+                "actions": [{"name": "Magic", "type": "action"}],
+                "bonus_actions": [],
+                "is_spellcaster": True,
+            })()
+        }
+        self.app._pc_name_for = lambda _cid: "Alice"
+        self.app._load_player_yaml_cache = lambda force_refresh=False: None
+        self.app._player_yaml_data_by_name = {"Alice": self._profile(8)}
+        self.app._set_wild_shape_pool_current = lambda _name, value: (True, "", value)
+
+        ok, err = self.app._apply_wild_shape(1, "brown-bear")
+        self.assertTrue(ok, err)
+
+        observed = {}
+
+        def set_temp_hp(cid, amount):
+            c = self.app.combatants[int(cid)]
+            observed["is_wild_shaped"] = bool(getattr(c, "is_wild_shaped", False))
+            observed["wild_shape_base"] = getattr(c, "wild_shape_base", None)
+            observed["amount"] = int(amount)
+            c.temp_hp = int(amount)
+            return True
+
+        self.app._set_temp_hp_via_service = set_temp_hp
+
+        ok2, err2 = self.app._revert_wild_shape(1)
+        self.assertTrue(ok2, err2)
+        self.assertFalse(observed.get("is_wild_shaped", True))
+        self.assertIsNone(observed.get("wild_shape_base"))
+        self.assertEqual(observed.get("amount"), 5)
+
     def test_revert_wild_shape_restores_previous_temp_hp_when_pool_intact(self):
         self.app.combatants = {
             1: type("C", (), {
