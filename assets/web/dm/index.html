@@ -513,9 +513,9 @@ async function refreshAdminToken() {
       method: 'POST',
       headers: authHeaders(),
     });
-    if (!r.ok) throw new Error('refresh failed');
+    if (!r.ok) throw new Error(`Token refresh failed with status ${r.status}`);
     const data = await r.json();
-    if (!data || !data.token) throw new Error('missing token');
+    if (!data || !data.token) throw new Error('Invalid refresh response: missing token field');
     setAdminToken(data.token, data.expires_in);
   } catch (_) {
     clearAdminAuthState('Session expired. Please log in again.');
