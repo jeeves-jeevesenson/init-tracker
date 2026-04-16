@@ -1,6 +1,7 @@
 import asyncio
 import threading
 import unittest
+from pathlib import Path
 from types import SimpleNamespace
 
 import dnd_initative_tracker as tracker_mod
@@ -115,13 +116,13 @@ class LanClientHelloReconnectTests(unittest.TestCase):
 
 class LanReconnectUiContractTests(unittest.TestCase):
     def test_lan_client_marks_claim_state_as_resyncing_until_authoritative_update(self):
-        with open("/home/runner/work/init-tracker/init-tracker/assets/web/lan/index.html", "r", encoding="utf-8") as handle:
-            text = handle.read()
+        lan_index = Path(__file__).resolve().parent.parent / "assets" / "web" / "lan" / "index.html"
+        text = lan_index.read_text(encoding="utf-8")
 
         self.assertIn("let claimResyncPending = false;", text)
         self.assertIn("beginReconnectClaimResync();", text)
         self.assertIn("const shouldDeferNullClaimSync = claimResyncPending", text)
-        self.assertIn('claimStatus === "resyncing" ? "(resyncing…)" : "(unclaimed)"', text)
+        self.assertIn('claimStatus === "resyncing" ? "(resyncing...)" : "(unclaimed)"', text)
 
 
 if __name__ == "__main__":

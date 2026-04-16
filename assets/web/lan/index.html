@@ -5444,12 +5444,12 @@ __DAMAGE_TYPE_OPTIONS__
 
   function softReconnect(){
     reconnecting = true;
-    beginReconnectClaimResync();
     setConn(false, "Reconnecting…");
     closeConnPopover();
     if (ws && ws.readyState === 1){
       ws.close(4001, "reconnect");
     } else {
+      beginReconnectClaimResync();
       scheduleReconnect(200);
     }
   }
@@ -14846,7 +14846,7 @@ __DAMAGE_TYPE_OPTIONS__
   function setMeLabel(unit, controlling = false){
     if (!meEl) return;
     if (!unit){
-      meEl.textContent = claimStatus === "resyncing" ? "(resyncing…)" : "(unclaimed)";
+      meEl.textContent = claimStatus === "resyncing" ? "(resyncing...)" : "(unclaimed)";
       return;
     }
     const name = String(unit?.name || `#${unit?.cid || "?"}`);
