@@ -2300,9 +2300,11 @@ def _run_governor_loop(
         )
     if not unresolved_findings:
         state["final_audit_stale_due_to_current_head_findings"] = False
-        if str(state.get("outstanding_followup_status") or "") == "open":
+        outstanding_followup_status = str(state.get("outstanding_followup_status") or "")
+        if outstanding_followup_status == "open":
             state["outstanding_followup_status"] = "resolved"
-        state["current_head_review_state"] = "current_head_findings_cleared"
+        if outstanding_followup_status != "pending_current_head_verification":
+            state["current_head_review_state"] = "current_head_findings_cleared"
         _set_checkpoint(
             state,
             name="continuation_comment_posted",
