@@ -321,14 +321,17 @@ class WildShapeTests(unittest.TestCase):
         self.assertTrue(ok, err)
 
         c = self.app.combatants[1]
-        c.temp_hp = max(0, int(c.wild_shape_applied_temp_hp) - 3)
+        reduced_temp_hp = max(0, int(c.wild_shape_applied_temp_hp) - 3)
+        self.assertEqual(reduced_temp_hp, 5)
+        self.assertTrue(self.app._set_temp_hp_via_service(1, reduced_temp_hp))
         ok2, err2 = self.app._revert_wild_shape(1)
         self.assertTrue(ok2, err2)
         self.assertEqual(c.temp_hp, 5)
 
         ok3, err3 = self.app._apply_wild_shape(1, "brown-bear")
         self.assertTrue(ok3, err3)
-        c.temp_hp = 0
+        self.assertEqual(c.temp_hp, c.wild_shape_applied_temp_hp)
+        self.assertTrue(self.app._set_temp_hp_via_service(1, 0))
         ok4, err4 = self.app._revert_wild_shape(1)
         self.assertTrue(ok4, err4)
         self.assertEqual(c.temp_hp, 0)
