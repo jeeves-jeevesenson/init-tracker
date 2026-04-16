@@ -18,6 +18,7 @@ Backend-owned (this service + API routes):
   - recent event/battle-log lines
   - combatant creation / encounter population (quick-add via backend API)
   - initiative set / update for existing combatants
+  - initiative roll for existing combatants
   - combatant removal
   - prev-turn (go back one step in initiative order)
   - deep combat damage with temp HP absorption (apply_damage) — Slice 9
@@ -63,7 +64,6 @@ Still hybrid / desktop-primary:
   - Wild Shape temp HP lifecycle now routes through service-owned temp HP setters
 
 Next recommended migration targets:
-  - Expose full initiative-roll support so DM web can trigger rolls
   - Player-facing LAN client state sync improvements
 
 Usage (from LanController routes):
@@ -81,6 +81,7 @@ Usage (from LanController routes):
 """
 from __future__ import annotations
 
+import random
 import threading
 from typing import TYPE_CHECKING, Any, Dict, List, Optional
 
@@ -1079,6 +1080,51 @@ class CombatService:
                 "initiative_before": old_init,
                 "initiative_after": initiative,
                 "snapshot": self.combat_snapshot(),
+            }
+
+    def roll_initiative(self, cid: int, modifier: Optional[int] = None) -> Dict[str, Any]:
+        """Roll and apply initiative for an existing combatant.
+
+        The rolled total is applied through ``set_initiative()`` so initiative
+        ordering, table rebuild, and broadcast behavior stay canonical.
+        """
+        try:
+            cid = int(cid)
+        except Exception:
+            return {"ok": False, "error": "cid must be an integer."}
+
+        with self._lock:
+            t = self._tracker
+            combatants = getattr(t, "combatants", {}) or {}
+            c = combatants.get(cid)
+            if c is None:
+                return {"ok": False, "error": f"Combatant {cid} not found."}
+
+            if modifier is None:
+                init_mod = int(getattr(c, "dex", 0) or 0)
+            else:
+                try:
+                    init_mod = int(modifier)
+                except Exception:
+                    return {"ok": False, "error": "modifier must be an integer."}
+
+            roll = random.randint(1, 20)
+            total = roll + init_mod
+            setattr(c, "roll", roll)
+            setattr(c, "nat20", bool(roll == 20))
+
+            result = self.set_initiative(cid=cid, initiative=total)
+            if not result.get("ok"):
+                return result
+
+            return {
+                "ok": True,
+                "cid": int(cid),
+                "roll": roll,
+                "initiative_modifier": init_mod,
+                "initiative_before": result.get("initiative_before"),
+                "initiative_after": result.get("initiative_after"),
+                "snapshot": result.get("snapshot"),
             }
 
     def remove_combatant(self, cid: int) -> Dict[str, Any]:
