@@ -483,7 +483,16 @@ function setAdminToken(token, expiresInSeconds) {
     ADMIN_REFRESH_MAX_LEAD_MS,
     Math.max(ADMIN_REFRESH_MIN_LEAD_MS, Math.floor(ttlMs * 0.2)),
   );
-  const refreshDelayMs = Math.max(ADMIN_REFRESH_MIN_DELAY_MS, ttlMs - boundedLeadMs);
+  const latestSafeDelayMs = ttlMs - 1000;
+  if (latestSafeDelayMs <= 0) return;
+  const preferredDelayMs = ttlMs - boundedLeadMs;
+  const minBoundedDelayMs = Math.min(ADMIN_REFRESH_MIN_DELAY_MS, latestSafeDelayMs);
+  // Keep refresh before expiry, avoid immediate-loop retries on short TTLs,
+  // and prefer the normal pre-expiry lead time when it fits those bounds.
+  const refreshDelayMs = Math.max(
+    Math.min(preferredDelayMs, latestSafeDelayMs),
+    minBoundedDelayMs,
+  );
   adminTokenRefreshTimer = setTimeout(refreshAdminToken, refreshDelayMs);
 }
 
@@ -517,7 +526,8 @@ async function refreshAdminToken() {
     const data = await r.json();
     if (!data || !data.token) throw new Error('Invalid refresh response: missing token field');
     setAdminToken(data.token, data.expires_in);
-  } catch (_) {
+  } catch (err) {
+    console.warn('DM admin token refresh failed; requiring re-authentication.', err);
     clearAdminAuthState('Session expired. Please log in again.');
   }
 }
