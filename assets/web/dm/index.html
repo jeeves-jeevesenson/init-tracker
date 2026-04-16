@@ -467,8 +467,12 @@ const ADMIN_REFRESH_REASON_TOKEN_EXPIRED = 'token_expired';
 const ADMIN_REFRESH_REASON_REQUEST_FAILED = 'request_failed';
 const ADMIN_REFRESH_REASON_BACKEND_REJECTED = 'backend_rejected';
 const ADMIN_REFRESH_REASON_RETRY_EXHAUSTED = 'retry_exhausted';
+const ADMIN_REFRESH_OUTCOME_IDLE = 'idle';
+const ADMIN_REFRESH_OUTCOME_ACTIVE = 'active';
+const ADMIN_REFRESH_OUTCOME_CLEARED = 'cleared';
+const ADMIN_REFRESH_OUTCOME_SUCCEEDED = 'refresh_succeeded';
 let adminRefreshRetryAttempts = 0;
-let adminRefreshLastOutcome = 'idle';
+let adminRefreshLastOutcome = ADMIN_REFRESH_OUTCOME_IDLE;
 
 // ── Auth ─────────────────────────────────────────────────────────────
 function authHeaders() {
@@ -487,7 +491,7 @@ function logAdminRefreshDiagnostic(event, details = {}) {
   const payload = {
     event,
     outcome: adminRefreshLastOutcome,
-    retry_attempts: adminRefreshRetryAttempts,
+    retryAttempts: adminRefreshRetryAttempts,
     ...details,
   };
   if (event === 'refresh_failed' || event === 'refresh_retry_exhausted') {
@@ -507,7 +511,7 @@ function setAdminToken(token, expiresInSeconds) {
   adminToken = token || null;
   clearAdminTokenRefreshTimer();
   adminRefreshRetryAttempts = 0;
-  adminRefreshLastOutcome = adminToken ? 'active' : 'cleared';
+  adminRefreshLastOutcome = adminToken ? ADMIN_REFRESH_OUTCOME_ACTIVE : ADMIN_REFRESH_OUTCOME_CLEARED;
   if (!adminToken) return;
   const ttlMs = Number(expiresInSeconds) * 1000;
   if (!(ttlMs > 0)) return;
@@ -525,7 +529,7 @@ function setAdminToken(token, expiresInSeconds) {
     Math.min(preferredDelayMs, latestSafeDelayMs),
     minBoundedDelayMs,
   );
-  logAdminRefreshDiagnostic('refresh_scheduled', { refresh_delay_ms: refreshDelayMs, token_ttl_ms: ttlMs });
+  logAdminRefreshDiagnostic('refresh_scheduled', { refreshDelayMs, tokenTtlMs: ttlMs });
   scheduleAdminTokenRefresh(refreshDelayMs);
 }
 
@@ -569,11 +573,11 @@ async function refreshAdminToken() {
     const data = await r.json();
     if (!data || !data.token) {
       adminRefreshLastOutcome = ADMIN_REFRESH_REASON_BACKEND_REJECTED;
-      logAdminRefreshDiagnostic('refresh_failed', { reason: ADMIN_REFRESH_REASON_BACKEND_REJECTED, status: r.status, invalid_payload: true });
+      logAdminRefreshDiagnostic('refresh_failed', { reason: ADMIN_REFRESH_REASON_BACKEND_REJECTED, status: r.status, invalidPayload: true });
       clearAdminAuthState(ADMIN_REAUTH_REQUIRED_MESSAGE);
       return;
     }
-    adminRefreshLastOutcome = 'refresh_succeeded';
+    adminRefreshLastOutcome = ADMIN_REFRESH_OUTCOME_SUCCEEDED;
     logAdminRefreshDiagnostic('refresh_succeeded');
     setAdminToken(data.token, data.expires_in);
   } catch (err) {
