@@ -344,6 +344,17 @@ def _next_slice(session: Session, *, program_id: int, current_slice_number: int)
     return session.exec(query).first()
 
 
+def _get_slice_by_number(session: Session, *, program_id: int, slice_number: int) -> ProgramSlice | None:
+    query = (
+        select(ProgramSlice)
+        .where(ProgramSlice.program_id == program_id)
+        .where(ProgramSlice.slice_number == slice_number)
+        .order_by(ProgramSlice.created_at.asc())
+        .limit(1)
+    )
+    return session.exec(query).first()
+
+
 def _merge_policy_allows_auto_merge(artifact: dict[str, Any], *, checks_passed: bool) -> bool:
     if artifact.get("merge_recommendation") != "merge_ready":
         return False
@@ -555,20 +566,43 @@ def apply_reviewer_decision(
 
     if decision == "audit":
         slice_record.status = SLICE_STATUS_AUDIT_REQUESTED
-        audit_slice = ProgramSlice(
+        next_slice_number = slice_record.slice_number + 1
+        audit_slice = _get_slice_by_number(
+            session,
             program_id=program.id or 0,
-            slice_number=slice_record.slice_number + 1,
-            milestone_key=slice_record.milestone_key,
-            slice_type="audit",
-            title=f"Audit: {slice_record.title}",
-            objective=str(artifact.get("audit_recommendation") or "Run targeted audit and stabilization checks."),
-            acceptance_criteria_json=json.dumps(_json_list(artifact.get("acceptance_assessment")), ensure_ascii=False),
-            non_goals_json=json.dumps([], ensure_ascii=False),
-            expected_file_zones_json=json.dumps(_json_list(artifact.get("scope_alignment")), ensure_ascii=False),
-            continuation_hint=str(artifact.get("next_slice_hint") or ""),
-            status=SLICE_STATUS_PLANNED,
+            slice_number=next_slice_number,
         )
-        _save(session, run, slice_record, audit_slice)
+        if audit_slice is None:
+            audit_slice = ProgramSlice(
+                program_id=program.id or 0,
+                slice_number=next_slice_number,
+                milestone_key=slice_record.milestone_key,
+                slice_type="audit",
+                title=f"Audit: {slice_record.title}",
+                objective=str(artifact.get("audit_recommendation") or "Run targeted audit and stabilization checks."),
+                acceptance_criteria_json=json.dumps(_json_list(artifact.get("acceptance_assessment")), ensure_ascii=False),
+                non_goals_json=json.dumps([], ensure_ascii=False),
+                expected_file_zones_json=json.dumps(_json_list(artifact.get("scope_alignment")), ensure_ascii=False),
+                continuation_hint=str(artifact.get("next_slice_hint") or ""),
+                status=SLICE_STATUS_PLANNED,
+            )
+            _save(session, run, slice_record, audit_slice)
+        else:
+            if audit_slice.slice_type == "audit":
+                audit_slice.milestone_key = slice_record.milestone_key
+                audit_slice.title = f"Audit: {slice_record.title}"
+                audit_slice.objective = str(artifact.get("audit_recommendation") or "Run targeted audit and stabilization checks.")
+                audit_slice.acceptance_criteria_json = json.dumps(
+                    _json_list(artifact.get("acceptance_assessment")),
+                    ensure_ascii=False,
+                )
+                audit_slice.expected_file_zones_json = json.dumps(
+                    _json_list(artifact.get("scope_alignment")),
+                    ensure_ascii=False,
+                )
+                audit_slice.continuation_hint = str(artifact.get("next_slice_hint") or "")
+                audit_slice.updated_at = _utc_now()
+            _save(session, run, slice_record, audit_slice)
         program.audit_state_json = json.dumps({"last_audit_slice_id": audit_slice.id}, ensure_ascii=False)
         program.latest_summary = "Audit slice created from reviewer decision"
         _save(session, program)
