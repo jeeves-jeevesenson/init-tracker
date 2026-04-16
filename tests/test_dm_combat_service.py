@@ -6,7 +6,7 @@ without requiring the Tkinter UI to be running.
 """
 import types
 import unittest
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 from helper_script import ConditionStack
 
@@ -1580,7 +1580,7 @@ class SetInitiativeViaServiceTests(unittest.TestCase):
     def test_set_initiative_via_service_logs_when_service_fails(self):
         tracker, _ = self._make_tracker_with_service()
         broken = CombatService(tracker)
-        broken.set_initiative = lambda cid, initiative: {"ok": False, "error": "test failure"}
+        broken.set_initiative = Mock(return_value={"ok": False, "error": "test failure"})
         tracker._dm_service = broken
         ok = InitiativeTracker._set_initiative_via_service(tracker, 1, 9)
         self.assertTrue(ok)
