@@ -1108,8 +1108,8 @@ class CombatService:
                 except Exception:
                     return {"ok": False, "error": "modifier must be an integer."}
 
-            roll = int(random.randint(1, 20))
-            total = int(roll + init_mod)
+            roll = random.randint(1, 20)
+            total = roll + init_mod
             setattr(c, "roll", roll)
             setattr(c, "nat20", bool(roll == 20))
 
