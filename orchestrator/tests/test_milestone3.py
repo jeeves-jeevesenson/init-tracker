@@ -3454,51 +3454,51 @@ class GovernorHardeningTests(unittest.TestCase):
         # Happy path: all conditions met
         self.assertTrue(safe_draft_can_be_promoted(
             pr_draft=True,
-            checks_passed=True,
             guarded_paths_touched=False,
             unresolved_findings=[],
             waiting_for_revision_push=False,
-        ))
+            handoff_observed=True,
+        )[0])
         # Not a draft → no promotion needed
         self.assertFalse(safe_draft_can_be_promoted(
             pr_draft=False,
-            checks_passed=True,
             guarded_paths_touched=False,
             unresolved_findings=[],
             waiting_for_revision_push=False,
-        ))
-        # Checks not passed
+            handoff_observed=True,
+        )[0])
+        # Authoritative handoff missing
         self.assertFalse(safe_draft_can_be_promoted(
             pr_draft=True,
-            checks_passed=False,
             guarded_paths_touched=False,
             unresolved_findings=[],
             waiting_for_revision_push=False,
-        ))
+            handoff_observed=False,
+        )[0])
         # Guarded paths
         self.assertFalse(safe_draft_can_be_promoted(
             pr_draft=True,
-            checks_passed=True,
             guarded_paths_touched=True,
             unresolved_findings=[],
             waiting_for_revision_push=False,
-        ))
+            handoff_observed=True,
+        )[0])
         # Unresolved findings
         self.assertFalse(safe_draft_can_be_promoted(
             pr_draft=True,
-            checks_passed=True,
             guarded_paths_touched=False,
             unresolved_findings=["Fix null check"],
             waiting_for_revision_push=False,
-        ))
+            handoff_observed=True,
+        )[0])
         # Waiting for revision push
         self.assertFalse(safe_draft_can_be_promoted(
             pr_draft=True,
-            checks_passed=True,
             guarded_paths_touched=False,
             unresolved_findings=[],
             waiting_for_revision_push=True,
-        ))
+            handoff_observed=True,
+        )[0])
 
 
 class CopilotFixTriggerTests(unittest.TestCase):

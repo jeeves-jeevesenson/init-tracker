@@ -6183,21 +6183,23 @@ class OpenAIPlanningSchemaTests(unittest.TestCase):
                 mocked_governor.assert_not_called()
                 mocked_comment.assert_not_called()
 
-    def test_ready_for_review_promotion_occurs_after_substantive_update_signal(self):
-        self.assertTrue(
+    def test_ready_for_review_promotion_requires_authoritative_handoff_signal(self):
+        self.assertFalse(
             safe_draft_can_be_promoted(
                 pr_draft=True,
-                checks_passed=False,
-                effective_checks_passed=False,
                 guarded_paths_touched=False,
                 unresolved_findings=[],
                 waiting_for_revision_push=False,
-                changed_files=["orchestrator/app/tasks.py"],
-                file_details=[{"filename": "orchestrator/app/tasks.py", "additions": 10, "deletions": 0, "patch": "+code"}],
-                event_has_push_signal=True,
-                commits=2,
-                prior_head_sha="old-sha",
-                current_head_sha="new-sha",
+                handoff_observed=False,
+            )[0]
+        )
+        self.assertTrue(
+            safe_draft_can_be_promoted(
+                pr_draft=True,
+                guarded_paths_touched=False,
+                unresolved_findings=[],
+                waiting_for_revision_push=False,
+                handoff_observed=True,
             )[0]
         )
 
