@@ -2062,7 +2062,7 @@ class LanController:
             return None
         if len(text) > 128:
             return None
-        return ""
+        return text
 
     def _lan_log_lines(self, limit: int = 200) -> List[str]:
         with self._lan_log_lock:
@@ -3233,69 +3233,7 @@ class LanController:
                         continue
                     typ = str(msg.get("type") or "")
                     if typ == "client_hello":
-                        client_id = self._normalize_client_id(msg.get("client_id"))
-                        if not client_id:
-                            self._spell_debug_log(
-                                {
-                                    "event": "client_hello",
-                                    "ws_id": ws_id,
-                                    "host": host,
-                                    "reason": "missing_client_id",
-                                }
-                            )
-                            continue
-                        self._register_client_id(ws_id, client_id)
-                        with self._clients_lock:
-                            self._ws_claim_revs[ws_id] = int(self._client_claim_revs.get(client_id, 0))
-                        cached_claim = self._client_claim_for_id(client_id)
-                        with self._clients_lock:
-                            current_claim = self._claims.get(ws_id)
-                        if cached_claim is None:
-                            self._spell_debug_log(
-                                {
-                                    "event": "client_hello",
-                                    "ws_id": ws_id,
-                                    "host": host,
-                                    "client_id": client_id,
-                                    "reason": "no_saved_claim",
-                                }
-                            )
-                            continue
-                        if current_claim is not None:
-                            self._spell_debug_log(
-                                {
-                                    "event": "client_hello",
-                                    "ws_id": ws_id,
-                                    "host": host,
-                                    "client_id": client_id,
-                                    "cid": current_claim,
-                                    "reason": "already_claimed",
-                                }
-                            )
-                            continue
-                        self._spell_debug_log(
-                            {
-                                "event": "client_hello",
-                                "ws_id": ws_id,
-                                "host": host,
-                                "client_id": client_id,
-                                "cid": cached_claim,
-                                "reason": "restoring_claim",
-                            }
-                        )
-                        await self._claim_ws_async(ws_id, int(cached_claim), note="Restored claim.")
-                        claim_rev = int(self._client_claim_revs.get(client_id, 0))
-                        await self._send_async(
-                            ws_id,
-                            {
-                                "type": "claim_ack",
-                                "ok": True,
-                                "claimed_cid": int(cached_claim),
-                                "claim_rev": claim_rev,
-                                "you": self._build_you_payload(ws_id),
-                                "reason": "restored_claim",
-                            },
-                        )
+                        await self._handle_client_hello_async(ws_id, host, msg)
                     elif typ == "save_preset":
                         preset = msg.get("preset")
                         if preset is not None and not isinstance(preset, dict):
@@ -5527,6 +5465,85 @@ class LanController:
     def _ws_ids_for_client_id(self, client_id: str) -> set[int]:
         with self._clients_lock:
             return set(self._client_id_to_ws.get(client_id, set()))
+
+    async def _handle_client_hello_async(self, ws_id: int, host: str, msg: Dict[str, Any]) -> None:
+        client_id = self._normalize_client_id(msg.get("client_id"))
+        if not client_id:
+            self._spell_debug_log(
+                {
+                    "event": "client_hello",
+                    "ws_id": ws_id,
+                    "host": host,
+                    "reason": "missing_client_id",
+                }
+            )
+            return
+
+        self._register_client_id(ws_id, client_id)
+        with self._clients_lock:
+            self._ws_claim_revs[ws_id] = int(self._client_claim_revs.get(client_id, 0))
+            current_claim = self._claims.get(ws_id)
+        cached_claim = self._client_claim_for_id(client_id)
+
+        reason = "no_saved_claim"
+        ok = True
+        if cached_claim is not None:
+            cached_cid = int(cached_claim)
+            if current_claim is None or int(current_claim) != cached_cid:
+                self._spell_debug_log(
+                    {
+                        "event": "client_hello",
+                        "ws_id": ws_id,
+                        "host": host,
+                        "client_id": client_id,
+                        "cid": cached_cid,
+                        "reason": "restoring_claim",
+                    }
+                )
+                claim_ok = await self._claim_ws_async(ws_id, cached_cid, note="Restored claim.")
+                if claim_ok:
+                    reason = "restored_claim"
+                else:
+                    reason = "restored_claim_rejected"
+                    ok = False
+                    claim_rev = self._clear_client_claim(client_id)
+                    with self._clients_lock:
+                        self._ws_claim_revs[ws_id] = int(claim_rev)
+            else:
+                reason = "already_synced"
+                self._spell_debug_log(
+                    {
+                        "event": "client_hello",
+                        "ws_id": ws_id,
+                        "host": host,
+                        "client_id": client_id,
+                        "cid": int(current_claim),
+                        "reason": reason,
+                    }
+                )
+        else:
+            self._spell_debug_log(
+                {
+                    "event": "client_hello",
+                    "ws_id": ws_id,
+                    "host": host,
+                    "client_id": client_id,
+                    "reason": reason,
+                }
+            )
+
+        effective_cid, effective_rev, _ = self._claim_identity_for_ws(ws_id)
+        await self._send_async(
+            ws_id,
+            {
+                "type": "claim_ack",
+                "ok": bool(ok),
+                "claimed_cid": int(effective_cid) if effective_cid is not None else None,
+                "claim_rev": int(effective_rev),
+                "you": self._build_you_payload(ws_id),
+                "reason": reason,
+            },
+        )
 
     def _claim_identity_for_ws(self, ws_id: int) -> Tuple[Optional[int], int, Optional[str]]:
         with self._clients_lock:

@@ -239,8 +239,9 @@ via the web.
 3. **Snapshot enhancements**: Additional fields (e.g. per-combatant AC tooltip,
    resource pools) can be added as the DM console grows.
 
-4. **Player-facing LAN client state sync**: Improve broadcast reliability
-   and reconnect behavior for the player-facing LAN WebSocket client.
+4. **Player-facing LAN client state sync**: Reconnect claim restoration now
+   rebinds by `client_id` and returns authoritative claim/revision state after
+   `client_hello`; further work can still improve broader broadcast reliability.
 
 ---
 

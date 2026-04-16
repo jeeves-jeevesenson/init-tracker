@@ -5111,6 +5111,7 @@ __DAMAGE_TYPE_OPTIONS__
   let claimInFlightTimeoutId = null;
   const claimInFlightTimeoutMs = 8000;
   let claimStatus = "unclaimed";
+  let claimResyncPending = false;
   let claimRev = 0;
   let stateUpdateCounter = 0;
   let lastActiveCid = null;
@@ -5443,6 +5444,7 @@ __DAMAGE_TYPE_OPTIONS__
 
   function softReconnect(){
     reconnecting = true;
+    beginReconnectClaimResync();
     setConn(false, "Reconnecting…");
     closeConnPopover();
     if (ws && ws.readyState === 1){
@@ -9586,6 +9588,7 @@ __DAMAGE_TYPE_OPTIONS__
     if (Number.isFinite(revValue) && revValue < claimRev){
       return false;
     }
+    claimResyncPending = false;
     claimRev = Number.isFinite(revValue) ? revValue : claimRev;
     claimedCid = normalizeCid(claimedCidValue, "claim.server.claimedCid");
     const claimChanged = !cidMatches(previousClaimedCid, claimedCid, "claim.apply.changed");
@@ -9780,6 +9783,17 @@ __DAMAGE_TYPE_OPTIONS__
       claimStatus = (claimedCid !== null && claimedCid !== undefined) ? "claimed" : "unclaimed";
     }
     updateClaimSelection();
+  }
+
+  function beginReconnectClaimResync(){
+    if (isMapView || isPlanning) return;
+    claimResyncPending = true;
+    clearClaimInFlight();
+    claimedCid = null;
+    claimStatus = "resyncing";
+    updateClaimOverlay();
+    refreshTurnAlertStatus();
+    updateHud();
   }
 
   function handleAutoClaimFailure(){
@@ -14832,7 +14846,7 @@ __DAMAGE_TYPE_OPTIONS__
   function setMeLabel(unit, controlling = false){
     if (!meEl) return;
     if (!unit){
-      meEl.textContent = "(unclaimed)";
+      meEl.textContent = claimStatus === "resyncing" ? "(resyncing…)" : "(unclaimed)";
       return;
     }
     const name = String(unit?.name || `#${unit?.cid || "?"}`);
@@ -16342,6 +16356,7 @@ __DAMAGE_TYPE_OPTIONS__
       battleLogSubscribed = false;
       const wasReconnect = reconnecting;
       reconnecting = false;
+      beginReconnectClaimResync();
       const serverError = ev && ev.code === 1011;
       if (serverError){
         setConn(false, "Server error while preparing state.");
@@ -16496,8 +16511,12 @@ __DAMAGE_TYPE_OPTIONS__
         
         // Use server-authoritative claim state from "you" field
         if (msg.you && "claimed_cid" in msg.you){
-          applyServerClaim(msg.you.claimed_cid, msg.you.claimed_name, msg.you.claim_rev);
-          sendReactionPrefsUpdate();
+          const shouldDeferNullClaimSync = claimResyncPending
+            && (msg.you.claimed_cid === null || msg.you.claimed_cid === undefined);
+          if (!shouldDeferNullClaimSync){
+            applyServerClaim(msg.you.claimed_cid, msg.you.claimed_name, msg.you.claim_rev);
+            sendReactionPrefsUpdate();
+          }
         } else {
           // Fallback to old logic if "you" field not present (backwards compatibility)
           const claimsMap = (state && typeof state.claims === "object" && state.claims) ? state.claims : {};
@@ -16515,7 +16534,8 @@ __DAMAGE_TYPE_OPTIONS__
             if (meEl){
               setMeLabel({name: claimedName}, false);
             }
-          } else if (!claimInFlight){
+            claimResyncPending = false;
+          } else if (!claimInFlight && !claimResyncPending){
             claimedCid = null;
             claimStatus = "unclaimed";
             if (meEl){
