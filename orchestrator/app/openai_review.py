@@ -703,6 +703,11 @@ def _validate_review_batch_artifact(raw: dict[str, Any]) -> dict[str, Any]:
     batched_items = _coerce_string_list(raw.get("batched_items"), "batched_items")[:12]
     should_trigger = bool(raw.get("should_trigger_copilot"))
     comment_body = str(raw.get("comment_body") or "").strip()
+    has_actionable_batch = bool(batched_items and comment_body)
+    if has_actionable_batch and not should_trigger:
+        # Deterministic normalization: actionable batched findings with a concrete
+        # follow-up body must trigger exactly one Copilot continuation task.
+        should_trigger = True
     if should_trigger and not comment_body:
         raise RuntimeError("OpenAI review batch response field 'comment_body' must be non-empty when triggering")
     if not comment_body:

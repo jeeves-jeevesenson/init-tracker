@@ -5915,6 +5915,47 @@ class OpenAIPlanningSchemaTests(unittest.TestCase):
         self.assertEqual(findings, [])
         self.assertEqual(superseded, 1)
 
+    def test_review_batch_artifact_normalizes_contradictory_should_trigger_flag(self):
+        artifact = openai_review._validate_review_batch_artifact(
+            {
+                "summary": ["batch"],
+                "batched_items": ["Fix null-check handling."],
+                "comment_body": "@copilot Please apply the fix.",
+                "should_trigger_copilot": False,
+            }
+        )
+        self.assertTrue(artifact["should_trigger_copilot"])
+        self.assertEqual(artifact["batched_items"], ["Fix null-check handling."])
+
+    def test_review_batch_no_trigger_state_is_truthful_when_followup_not_posted(self):
+        with tempfile.TemporaryDirectory() as td:
+            os.environ["DATABASE_URL"] = f"sqlite:///{Path(td) / 'orchestrator.db'}"
+            os.environ["GH_WEBHOOK_SECRET"] = "test-gh-secret"
+            main, _ = _reload_orchestrator_modules()
+            issue_payload = {"action": "opened", "repository": {"full_name": "jeeves-jeevesenson/init-tracker"}, "issue": {"number": 998, "node_id": "I_998", "title": "No trigger", "body": "test", "labels": [{"name": "agent:task"}]}}
+            approve_payload = {"action": "created", "repository": {"full_name": "jeeves-jeevesenson/init-tracker"}, "issue": {"number": 998}, "comment": {"body": "/approve"}}
+            reviews_payload = [{"state": "COMMENTED", "body": "Please follow up.", "user": {"login": DOCUMENTED_COPILOT_ASSIGNEE_LOGIN}}]
+            review_comments_payload = [{"body": "Address ordering bug.", "user": {"login": DOCUMENTED_COPILOT_ASSIGNEE_LOGIN}, "commit_id": "sha-998-a", "original_commit_id": "sha-998-a"}]
+            with patch("orchestrator.app.tasks.plan_task_packet", return_value={"objective": "No trigger", "scope": [], "non_goals": [], "acceptance_criteria": [], "validation_guidance": [], "implementation_brief": "x"}), \
+                 patch("orchestrator.app.tasks.dispatch_task_to_github_copilot", return_value=DispatchResult(attempted=True, accepted=True, manual_required=False, state="accepted", summary="ok")), \
+                 patch("orchestrator.app.tasks.inspect_pull_request", return_value=PullRequestInspection(ok=True, changed_files=1, commits=1, draft=False, state="open", merged=False, mergeable=False, mergeable_state="blocked", summary="ok")), \
+                 patch("orchestrator.app.tasks.list_pull_request_file_details", return_value=([{"filename": "orchestrator/app/tasks.py", "status": "modified", "additions": 1, "deletions": 0, "patch": "+x"}], "ok")), \
+                 patch("orchestrator.app.tasks.list_pull_request_reviews", return_value=(reviews_payload, "ok")), \
+                 patch("orchestrator.app.tasks.list_pull_request_review_comments", return_value=(review_comments_payload, "ok")), \
+                 patch("orchestrator.app.tasks.list_issue_comments", return_value=([], "ok")), \
+                 patch("orchestrator.app.tasks.summarize_copilot_review_batch", return_value={"review_batch_artifact": {"summary": ["skip"], "batched_items": [], "comment_body": "", "should_trigger_copilot": False}}), \
+                 patch("orchestrator.app.tasks.post_copilot_follow_up_comment", return_value=(True, "ok")) as mocked_comment, \
+                 patch("orchestrator.app.tasks.notify_discord"):
+                with TestClient(main.app) as client:
+                    _post_github_local(client, secret="test-gh-secret", delivery="d-998-open", event="issues", payload=issue_payload)
+                    _post_github_local(client, secret="test-gh-secret", delivery="d-998-approve", event="issue_comment", payload=approve_payload)
+                    opened = {"action": "opened", "repository": {"full_name": "jeeves-jeevesenson/init-tracker"}, "pull_request": {"id": 99801, "number": 9981, "title": "Slice", "body": "Closes #998", "html_url": "https://github.com/jeeves-jeevesenson/init-tracker/pull/9981", "updated_at": "2026-01-01T00:00:00Z", "draft": False, "mergeable": False, "mergeable_state": "blocked", "head": {"sha": "sha-998-a"}, "requested_reviewers": []}}
+                    _post_github_local(client, secret="test-gh-secret", delivery="d-998-pr-open", event="pull_request", payload=opened)
+                    state = client.get("/tasks").json()["tasks"][0]["latest_run"]["governor_state"]
+                    self.assertEqual(mocked_comment.call_count, 0)
+                    self.assertEqual(state.get("last_governor_decision"), "review_batch_no_trigger")
+                    self.assertFalse(bool(state.get("waiting_for_revision_push")))
+
     def test_review_batch_followup_dedupes_by_packet_and_preserves_revision_count(self):
         with tempfile.TemporaryDirectory() as td:
             os.environ["DATABASE_URL"] = f"sqlite:///{Path(td) / 'orchestrator.db'}"
@@ -5960,6 +6001,39 @@ class OpenAIPlanningSchemaTests(unittest.TestCase):
                     self.assertEqual(mocked_comment.call_count, 1)
                     self.assertEqual(int(state.get("revision_cycle_count") or 0), 1)
                     self.assertEqual(state.get("outstanding_followup_status"), "open")
+                    self.assertEqual(state.get("last_governor_decision"), "review_batch_trigger_waiting")
+
+    def test_current_head_findings_block_merge_until_followup_reverify_state(self):
+        with tempfile.TemporaryDirectory() as td:
+            os.environ["DATABASE_URL"] = f"sqlite:///{Path(td) / 'orchestrator.db'}"
+            os.environ["GH_WEBHOOK_SECRET"] = "test-gh-secret"
+            main, _ = _reload_orchestrator_modules()
+            issue_payload = {"action": "opened", "repository": {"full_name": "jeeves-jeevesenson/init-tracker"}, "issue": {"number": 999, "node_id": "I_999", "title": "Block merge", "body": "test", "labels": [{"name": "agent:task"}]}}
+            approve_payload = {"action": "created", "repository": {"full_name": "jeeves-jeevesenson/init-tracker"}, "issue": {"number": 999}, "comment": {"body": "/approve"}}
+            reviews_payload = [{"state": "COMMENTED", "body": "Please follow up.", "user": {"login": DOCUMENTED_COPILOT_ASSIGNEE_LOGIN}}]
+            review_comments_payload = [{"body": "Address ordering bug.", "user": {"login": DOCUMENTED_COPILOT_ASSIGNEE_LOGIN}, "commit_id": "sha-999-a", "original_commit_id": "sha-999-a"}]
+            with patch("orchestrator.app.tasks.plan_task_packet", return_value={"objective": "Block merge", "scope": [], "non_goals": [], "acceptance_criteria": [], "validation_guidance": [], "implementation_brief": "x"}), \
+                 patch("orchestrator.app.tasks.dispatch_task_to_github_copilot", return_value=DispatchResult(attempted=True, accepted=True, manual_required=False, state="accepted", summary="ok")), \
+                 patch("orchestrator.app.tasks.inspect_pull_request", return_value=PullRequestInspection(ok=True, changed_files=1, commits=1, draft=False, state="open", merged=False, mergeable=True, mergeable_state="clean", summary="ok")), \
+                 patch("orchestrator.app.tasks.list_pull_request_file_details", return_value=([{"filename": "orchestrator/app/tasks.py", "status": "modified", "additions": 1, "deletions": 0, "patch": "+x"}], "ok")), \
+                 patch("orchestrator.app.tasks.list_pull_request_reviews", return_value=(reviews_payload, "ok")), \
+                 patch("orchestrator.app.tasks.list_pull_request_review_comments", return_value=(review_comments_payload, "ok")), \
+                 patch("orchestrator.app.tasks.list_issue_comments", return_value=([], "ok")), \
+                 patch("orchestrator.app.tasks.summarize_copilot_review_batch", return_value={"review_batch_artifact": {"summary": ["one"], "batched_items": ["fix"], "comment_body": "@copilot please fix finding", "should_trigger_copilot": True}}), \
+                 patch("orchestrator.app.tasks.post_copilot_follow_up_comment", return_value=(True, "ok")) as mocked_comment, \
+                 patch("orchestrator.app.tasks.merge_pr") as mocked_merge, \
+                 patch("orchestrator.app.tasks.notify_discord"):
+                with TestClient(main.app) as client:
+                    _post_github_local(client, secret="test-gh-secret", delivery="d-999-open", event="issues", payload=issue_payload)
+                    _post_github_local(client, secret="test-gh-secret", delivery="d-999-approve", event="issue_comment", payload=approve_payload)
+                    opened = {"action": "opened", "repository": {"full_name": "jeeves-jeevesenson/init-tracker"}, "pull_request": {"id": 99901, "number": 9991, "title": "Slice", "body": "Closes #999", "html_url": "https://github.com/jeeves-jeevesenson/init-tracker/pull/9991", "updated_at": "2026-01-01T00:00:00Z", "draft": False, "mergeable": True, "mergeable_state": "clean", "head": {"sha": "sha-999-a"}, "requested_reviewers": []}}
+                    _post_github_local(client, secret="test-gh-secret", delivery="d-999-pr-open", event="pull_request", payload=opened)
+                    state = client.get("/tasks").json()["tasks"][0]["latest_run"]["governor_state"]
+                    self.assertEqual(mocked_comment.call_count, 1)
+                    mocked_merge.assert_not_called()
+                    self.assertEqual(state.get("last_governor_decision"), "review_batch_trigger_posted")
+                    self.assertEqual(state.get("current_head_review_state"), "awaiting_current_head_reverify")
+                    self.assertTrue(bool(state.get("waiting_for_revision_push")))
 
     def test_old_head_packet_transitions_to_pending_current_head_verification(self):
         with tempfile.TemporaryDirectory() as td:
