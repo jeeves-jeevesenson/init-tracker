@@ -484,9 +484,12 @@ class PromptState:
         ws_ids: list[int],
         extra_payload: Optional[Dict[str, Any]] = None,
         expires_in_seconds: float = 12.0,
+        prompt_id: Optional[str] = None,
+        resolution: Optional[Dict[str, Any]] = None,
+        resume_dispatch: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
         now = float(time.time())
-        prompt_id = uuid.uuid4().hex
+        prompt_id = str(prompt_id).strip() if prompt_id else uuid.uuid4().hex
         metadata = dict(extra_payload) if isinstance(extra_payload, dict) else {}
         prompt = build_prompt_record(
             prompt_id=prompt_id,
@@ -500,6 +503,8 @@ class PromptState:
             ws_ids=list(ws_ids or []),
             prompt_text=str(metadata.get("prompt") or ""),
             metadata=metadata,
+            resolution=dict(resolution) if isinstance(resolution, dict) else None,
+            resume_dispatch=dict(resume_dispatch) if isinstance(resume_dispatch, dict) else None,
             created_at=now,
             expires_at=now + max(0.0, float(expires_in_seconds)),
             lifecycle_state="offered",

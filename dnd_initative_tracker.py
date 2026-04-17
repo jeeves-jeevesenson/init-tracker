@@ -28123,6 +28123,9 @@ class InitiativeTracker(base.InitiativeTracker):
         allowed_choices: List[Dict[str, Any]],
         ws_ids: List[int],
         extra_payload: Optional[Dict[str, Any]] = None,
+        resolution: Optional[Dict[str, Any]] = None,
+        resume_dispatch: Optional[Dict[str, Any]] = None,
+        prompt_id: Optional[str] = None,
     ) -> Optional[str]:
         resolved_ws_ids: List[int] = []
         for ws_id in ws_ids or []:
@@ -28150,6 +28153,9 @@ class InitiativeTracker(base.InitiativeTracker):
             allowed_choices=list(allowed_choices or []),
             ws_ids=resolved_ws_ids,
             extra_payload=dict(extra_payload) if isinstance(extra_payload, dict) else None,
+            resolution=dict(resolution) if isinstance(resolution, dict) else None,
+            resume_dispatch=dict(resume_dispatch) if isinstance(resume_dispatch, dict) else None,
+            prompt_id=str(prompt_id).strip() if prompt_id else None,
         )
         payload = build_reaction_offer_event(prompt)
         loop = getattr(self._lan, "_loop", None)
@@ -28602,7 +28608,36 @@ class InitiativeTracker(base.InitiativeTracker):
                 {"kind": "absorb_elements_never", "label": "No (don't ask again)", "mode": "ask"},
             ]
         )
-        req_id = self._create_reaction_offer(
+        resume_dispatch = None
+        if isinstance(pending_msg, dict):
+            pending_type = str(pending_msg.get("type") or "").strip().lower()
+            if pending_type == "attack_request":
+                resume_dispatch = build_resume_dispatch(
+                    "attack_request",
+                    actor_cid=int(attacker_cid),
+                    ws_id=pending_msg.get("_ws_id"),
+                    is_admin=bool(str(pending_msg.get("admin_token") or "").strip()),
+                    payload=build_attack_request_contract(
+                        pending_msg,
+                        cid=int(attacker_cid),
+                        ws_id=pending_msg.get("_ws_id"),
+                        is_admin=bool(str(pending_msg.get("admin_token") or "").strip()),
+                    )["payload"],
+                )
+            elif pending_type == "spell_target_request":
+                resume_dispatch = build_resume_dispatch(
+                    "spell_target_request",
+                    actor_cid=int(attacker_cid),
+                    ws_id=pending_msg.get("_ws_id"),
+                    is_admin=bool(str(pending_msg.get("admin_token") or "").strip()),
+                    payload=build_spell_target_request_contract(
+                        pending_msg,
+                        cid=int(attacker_cid),
+                        ws_id=pending_msg.get("_ws_id"),
+                        is_admin=bool(str(pending_msg.get("admin_token") or "").strip()),
+                    )["payload"],
+                )
+        return self._create_reaction_offer(
             int(victim_cid),
             "absorb_elements",
             int(attacker_cid),
@@ -28612,47 +28647,13 @@ class InitiativeTracker(base.InitiativeTracker):
             extra_payload={
                 "prompt": f"You took {', '.join(dtype.title() for dtype in trigger_types)} damage from {getattr(attacker, 'name', 'an attacker')}. Cast Absorb Elements?",
             },
+            resolution={
+                "victim_cid": int(victim_cid),
+                "attacker_cid": int(attacker_cid),
+                "trigger_types": list(trigger_types),
+            },
+            resume_dispatch=resume_dispatch,
         )
-        if req_id:
-            resume_dispatch = None
-            if isinstance(pending_msg, dict):
-                pending_type = str(pending_msg.get("type") or "").strip().lower()
-                if pending_type == "attack_request":
-                    resume_dispatch = build_resume_dispatch(
-                        "attack_request",
-                        actor_cid=int(attacker_cid),
-                        ws_id=pending_msg.get("_ws_id"),
-                        is_admin=bool(str(pending_msg.get("admin_token") or "").strip()),
-                        payload=build_attack_request_contract(
-                            pending_msg,
-                            cid=int(attacker_cid),
-                            ws_id=pending_msg.get("_ws_id"),
-                            is_admin=bool(str(pending_msg.get("admin_token") or "").strip()),
-                        )["payload"],
-                    )
-                elif pending_type == "spell_target_request":
-                    resume_dispatch = build_resume_dispatch(
-                        "spell_target_request",
-                        actor_cid=int(attacker_cid),
-                        ws_id=pending_msg.get("_ws_id"),
-                        is_admin=bool(str(pending_msg.get("admin_token") or "").strip()),
-                        payload=build_spell_target_request_contract(
-                            pending_msg,
-                            cid=int(attacker_cid),
-                            ws_id=pending_msg.get("_ws_id"),
-                            is_admin=bool(str(pending_msg.get("admin_token") or "").strip()),
-                        )["payload"],
-                    )
-            self._ensure_player_commands().prompts.attach_resolution(
-                str(req_id),
-                resolution={
-                    "victim_cid": int(victim_cid),
-                    "attacker_cid": int(attacker_cid),
-                    "trigger_types": list(trigger_types),
-                },
-                resume_dispatch=resume_dispatch,
-            )
-        return req_id
 
     def _maybe_offer_hellish_rebuke(self, victim_cid: int, attacker_cid: Optional[int], damage_total: int) -> Optional[str]:
         if int(damage_total or 0) <= 0:
@@ -28686,6 +28687,7 @@ class InitiativeTracker(base.InitiativeTracker):
             {"kind": "decline", "label": "No", "mode": "ask"},
             {"kind": "never", "label": "No (don't ask again)", "mode": "ask"},
         ]
+        pre_id = uuid.uuid4().hex
         req_id = self._create_reaction_offer(
             int(victim_cid),
             "hellish_rebuke",
@@ -28696,23 +28698,21 @@ class InitiativeTracker(base.InitiativeTracker):
             extra_payload={
                 "prompt": f"You took damage from {getattr(attacker, 'name', 'an attacker')}. React with Hellish Rebuke?",
             },
+            prompt_id=pre_id,
+            resolution={
+                "victim_cid": int(victim_cid),
+                "attacker_cid": int(attacker_cid),
+                "spell_id": "hellish-rebuke",
+                "max_range_ft": 60,
+                "player_visible": build_hellish_rebuke_resolve_start_payload(
+                    request_id=pre_id,
+                    caster_cid=int(victim_cid),
+                    attacker_cid=int(attacker_cid),
+                    target_cid=int(attacker_cid),
+                ),
+            },
         )
         if req_id:
-            self._ensure_player_commands().prompts.attach_resolution(
-                str(req_id),
-                resolution={
-                    "victim_cid": int(victim_cid),
-                    "attacker_cid": int(attacker_cid),
-                    "spell_id": "hellish-rebuke",
-                    "max_range_ft": 60,
-                    "player_visible": build_hellish_rebuke_resolve_start_payload(
-                        request_id=str(req_id),
-                        caster_cid=int(victim_cid),
-                        attacker_cid=int(attacker_cid),
-                        target_cid=int(attacker_cid),
-                    ),
-                },
-            )
             self._oplog(f"reaction_offer:hellish_rebuke pending request_id={req_id} victim={int(victim_cid)} attacker={int(attacker_cid)} dist_ft={dist_ft:.1f}", level="info")
         return req_id
 
@@ -28830,7 +28830,21 @@ class InitiativeTracker(base.InitiativeTracker):
             {"kind": "interception_no", "label": "No", "mode": "ask"},
             {"kind": "interception_never", "label": "No (don't ask again)", "mode": "ask"},
         ]
-        req_id = self._create_reaction_offer(
+        resume_dispatch = None
+        if isinstance(pending_msg, dict):
+            resume_dispatch = build_resume_dispatch(
+                "attack_request",
+                actor_cid=int(attacker_cid),
+                ws_id=pending_msg.get("_ws_id"),
+                is_admin=bool(str(pending_msg.get("admin_token") or "").strip()),
+                payload=build_attack_request_contract(
+                    pending_msg,
+                    cid=int(attacker_cid),
+                    ws_id=pending_msg.get("_ws_id"),
+                    is_admin=bool(str(pending_msg.get("admin_token") or "").strip()),
+                )["payload"],
+            )
+        return self._create_reaction_offer(
             int(getattr(best_reactor, "cid", 0) or 0),
             "interception",
             int(attacker_cid),
@@ -28840,32 +28854,13 @@ class InitiativeTracker(base.InitiativeTracker):
             extra_payload={
                 "prompt": f"{getattr(victim, 'name', 'Ally')} was hit by {getattr(attacker, 'name', 'an attacker')}. Use Interception?",
             },
+            resolution={
+                "reactor_cid": int(getattr(best_reactor, "cid", 0) or 0),
+                "victim_cid": int(victim_cid),
+                "attacker_cid": int(attacker_cid),
+            },
+            resume_dispatch=resume_dispatch,
         )
-        if req_id:
-            resume_dispatch = None
-            if isinstance(pending_msg, dict):
-                resume_dispatch = build_resume_dispatch(
-                    "attack_request",
-                    actor_cid=int(attacker_cid),
-                    ws_id=pending_msg.get("_ws_id"),
-                    is_admin=bool(str(pending_msg.get("admin_token") or "").strip()),
-                    payload=build_attack_request_contract(
-                        pending_msg,
-                        cid=int(attacker_cid),
-                        ws_id=pending_msg.get("_ws_id"),
-                        is_admin=bool(str(pending_msg.get("admin_token") or "").strip()),
-                    )["payload"],
-                )
-            self._ensure_player_commands().prompts.attach_resolution(
-                str(req_id),
-                resolution={
-                    "reactor_cid": int(getattr(best_reactor, "cid", 0) or 0),
-                    "victim_cid": int(victim_cid),
-                    "attacker_cid": int(attacker_cid),
-                },
-                resume_dispatch=resume_dispatch,
-            )
-        return req_id
 
     def _consume_shield_cast(self, target: Any) -> Tuple[bool, str]:
         if target is None:
@@ -30604,23 +30599,20 @@ class InitiativeTracker(base.InitiativeTracker):
                     choices,
                     ws_targets,
                     extra_payload={"prompt_attack": str(spell_name or "Magic Missile")},
-                )
-                if req_id:
-                    self._ensure_player_commands().prompts.attach_resolution(
-                        str(req_id),
-                        resume_dispatch=build_resume_dispatch(
-                            "spell_target_request",
-                            actor_cid=int(cid),
+                    resume_dispatch=build_resume_dispatch(
+                        "spell_target_request",
+                        actor_cid=int(cid),
+                        ws_id=ws_id,
+                        is_admin=bool(is_admin),
+                        payload=build_spell_target_request_contract(
+                            msg,
+                            cid=int(cid),
                             ws_id=ws_id,
                             is_admin=bool(is_admin),
-                            payload=build_spell_target_request_contract(
-                                msg,
-                                cid=int(cid),
-                                ws_id=ws_id,
-                                is_admin=bool(is_admin),
-                            )["payload"],
-                        ),
-                    )
+                        )["payload"],
+                    ),
+                )
+                if req_id:
                     self._oplog(
                         f"reaction_offer:shield pending request_id={req_id} magic_missile caster={int(cid)} target={int(target_cid)}",
                         level="info",
@@ -32168,23 +32160,20 @@ class InitiativeTracker(base.InitiativeTracker):
                     choices,
                     ws_targets,
                     extra_payload={"prompt_attack": str(selected_weapon.get("name") or "Attack")},
-                )
-                if req_id:
-                    self._ensure_player_commands().prompts.attach_resolution(
-                        str(req_id),
-                        resume_dispatch=build_resume_dispatch(
-                            "attack_request",
-                            actor_cid=int(cid),
+                    resume_dispatch=build_resume_dispatch(
+                        "attack_request",
+                        actor_cid=int(cid),
+                        ws_id=ws_id,
+                        is_admin=bool(is_admin),
+                        payload=build_attack_request_contract(
+                            msg,
+                            cid=int(cid),
                             ws_id=ws_id,
                             is_admin=bool(is_admin),
-                            payload=build_attack_request_contract(
-                                msg,
-                                cid=int(cid),
-                                ws_id=ws_id,
-                                is_admin=bool(is_admin),
-                            )["payload"],
-                        ),
-                    )
+                        )["payload"],
+                    ),
+                )
+                if req_id:
                     self._oplog(
                         f"reaction_offer:shield pending request_id={req_id} attacker={int(cid)} target={int(target_cid)}",
                         level="info",
