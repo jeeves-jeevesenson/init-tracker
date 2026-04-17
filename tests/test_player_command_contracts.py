@@ -6,8 +6,13 @@ from pathlib import Path
 
 import dnd_initative_tracker as tracker_mod
 from player_command_contracts import (
+    MOVEMENT_ACTION_COMMAND_TYPES,
+    TURN_LOCAL_COMMAND_TYPES,
     build_action_surge_use_contract,
     build_attack_request_contract,
+    build_cycle_movement_mode_contract,
+    build_dash_contract,
+    build_dismount_contract,
     build_inventory_adjust_consumable_contract,
     build_lay_on_hands_use_contract,
     build_monk_elemental_attunement_contract,
@@ -15,12 +20,20 @@ from player_command_contracts import (
     build_monk_patient_defense_contract,
     build_monk_step_of_wind_contract,
     build_monk_uncanny_metabolism_contract,
+    build_move_contract,
     build_manual_override_resource_pool_contract,
     build_manual_override_spell_slot_contract,
+    build_mount_request_contract,
+    build_mount_response_contract,
+    build_perform_action_contract,
     build_reaction_prefs_update_contract,
+    build_reset_turn_contract,
     build_resume_dispatch,
     build_second_wind_use_contract,
     build_star_advantage_use_contract,
+    build_stand_up_contract,
+    build_use_action_contract,
+    build_use_bonus_action_contract,
     build_use_consumable_contract,
 )
 from player_command_service import PromptState
@@ -77,6 +90,86 @@ class PromptContractStateTests(unittest.TestCase):
         self.assertEqual(visible[0]["prompt_id"], prompt_id)
         self.assertEqual(visible[0]["trigger"], "shield")
         self.assertEqual((visible[0].get("contract") or {}).get("schema"), "player_command.prompt_snapshot")
+
+
+class TurnLocalCommandContractTests(unittest.TestCase):
+    def test_turn_local_command_contract_builders_cover_the_family(self):
+        builders = {
+            "mount_request": (
+                build_mount_request_contract,
+                {"type": "mount_request", "rider_cid": 1, "mount_cid": 2},
+            ),
+            "mount_response": (
+                build_mount_response_contract,
+                {"type": "mount_response", "request_id": "mount:1:2", "accept": True},
+            ),
+            "dismount": (
+                build_dismount_contract,
+                {"type": "dismount"},
+            ),
+            "dash": (
+                build_dash_contract,
+                {"type": "dash", "spend": "action"},
+            ),
+            "use_action": (
+                build_use_action_contract,
+                {"type": "use_action"},
+            ),
+            "use_bonus_action": (
+                build_use_bonus_action_contract,
+                {"type": "use_bonus_action"},
+            ),
+            "stand_up": (
+                build_stand_up_contract,
+                {"type": "stand_up"},
+            ),
+            "reset_turn": (
+                build_reset_turn_contract,
+                {"type": "reset_turn"},
+            ),
+        }
+
+        self.assertEqual(set(builders.keys()), set(TURN_LOCAL_COMMAND_TYPES))
+
+        for command_type, (builder, msg) in builders.items():
+            contract = builder(dict(msg), cid=7, ws_id=8, is_admin=False)
+            self.assertEqual(contract.get("command_type"), command_type)
+            self.assertEqual(
+                (contract.get("contract") or {}).get("schema"),
+                f"player_command.{command_type}.request",
+            )
+            self.assertEqual((contract.get("actor") or {}).get("cid"), 7)
+            self.assertEqual((contract.get("payload") or {}).get("type"), command_type)
+
+
+class MovementActionCommandContractTests(unittest.TestCase):
+    def test_movement_action_contract_builders_cover_the_family(self):
+        builders = {
+            "move": (
+                build_move_contract,
+                {"type": "move", "to": {"col": 4, "row": 5}},
+            ),
+            "cycle_movement_mode": (
+                build_cycle_movement_mode_contract,
+                {"type": "cycle_movement_mode"},
+            ),
+            "perform_action": (
+                build_perform_action_contract,
+                {"type": "perform_action", "spend": "action", "action": "Disengage"},
+            ),
+        }
+
+        self.assertEqual(set(builders.keys()), set(MOVEMENT_ACTION_COMMAND_TYPES))
+
+        for command_type, (builder, msg) in builders.items():
+            contract = builder(dict(msg), cid=11, ws_id=12, is_admin=False)
+            self.assertEqual(contract.get("command_type"), command_type)
+            self.assertEqual(
+                (contract.get("contract") or {}).get("schema"),
+                f"player_command.{command_type}.request",
+            )
+            self.assertEqual((contract.get("actor") or {}).get("cid"), 11)
+            self.assertEqual((contract.get("payload") or {}).get("type"), command_type)
 
 
 class ReactionResumeDispatchTests(unittest.TestCase):

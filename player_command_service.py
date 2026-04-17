@@ -10,6 +10,11 @@ Ownership model after this migration pass
 -----------------------------------------
 Service-owned (this module):
   - player "end turn" gate (turn ownership, summon turn logic)
+  - player movement / perform-action family:
+    ``move``, ``cycle_movement_mode``, and ``perform_action``
+  - player turn-local / mobility-lite commands:
+    ``mount_request``, ``mount_response``, ``dismount``, ``dash``,
+    ``use_action``, ``use_bonus_action``, ``stand_up``, and ``reset_turn``
   - player "manual override HP" (HP/temp-HP deltas; prefers
     ``CombatService.manual_override`` when available, falls back to direct
     mutation for legacy/desktop-only runtime)
@@ -58,20 +63,27 @@ Usage::
 """
 from __future__ import annotations
 
+import random
+import asyncio
+import sys
 import threading
 import time
 import uuid
-import random
 from typing import TYPE_CHECKING, Any, Dict, Optional
 
 from player_command_contracts import (
     ACTIVE_PROMPT_STATES,
     FIGHTER_MONK_RESOURCE_ACTION_TYPES,
+    MOVEMENT_ACTION_COMMAND_TYPES,
     SPECIAL_REACTION_TRIGGERS,
+    TURN_LOCAL_COMMAND_TYPES,
     apply_resume_dispatch,
     build_attack_request_contract,
     build_action_surge_use_contract,
+    build_cycle_movement_mode_contract,
+    build_dash_contract,
     build_dispatch_result,
+    build_dismount_contract,
     build_end_turn_contract,
     build_inventory_adjust_consumable_contract,
     build_lay_on_hands_use_contract,
@@ -83,15 +95,23 @@ from player_command_contracts import (
     build_manual_override_contract,
     build_manual_override_resource_pool_contract,
     build_manual_override_spell_slot_contract,
+    build_mount_request_contract,
+    build_mount_response_contract,
+    build_move_contract,
+    build_perform_action_contract,
     build_prompt_record,
     build_prompt_snapshot,
     build_reaction_offer_event,
     build_reaction_prefs_update_contract,
     build_reaction_response_contract,
+    build_reset_turn_contract,
     build_resume_dispatch,
     build_second_wind_use_contract,
     build_spell_target_request_contract,
+    build_stand_up_contract,
     build_star_advantage_use_contract,
+    build_use_action_contract,
+    build_use_bonus_action_contract,
     build_use_consumable_contract,
     prompt_resume_legacy_message,
     update_prompt_record,
@@ -680,6 +700,12 @@ class PlayerCommandService:
     _FIGHTER_MONK_RESOURCE_ACTION_HANDLERS = {
         command_type: command_type for command_type in FIGHTER_MONK_RESOURCE_ACTION_TYPES
     }
+    _MOVEMENT_ACTION_COMMAND_HANDLERS = {
+        command_type: command_type for command_type in MOVEMENT_ACTION_COMMAND_TYPES
+    }
+    _TURN_LOCAL_COMMAND_HANDLERS = {
+        command_type: command_type for command_type in TURN_LOCAL_COMMAND_TYPES
+    }
 
     def __init__(self, tracker: "InitiativeTracker") -> None:
         if tracker is None:
@@ -718,6 +744,72 @@ class PlayerCommandService:
             except Exception:
                 pass
 
+    def _tracker_module(self):
+        module_candidates = [
+            str(getattr(type(self._tracker), "__module__", "") or "").strip(),
+            str(getattr(getattr(self._tracker, "_lan_apply_action", None), "__module__", "") or "").strip(),
+            "dnd_initative_tracker",
+        ]
+        for module_name in module_candidates:
+            if not module_name:
+                continue
+            module = sys.modules.get(module_name)
+            if module is not None:
+                return module
+        return None
+
+    def _ask_yes_no(self, title: str, prompt: str) -> bool:
+        modules = [
+            self._tracker_module(),
+            sys.modules.get("dnd_initative_tracker"),
+        ]
+        for module in modules:
+            messagebox = getattr(module, "messagebox", None) if module is not None else None
+            askyesno = getattr(messagebox, "askyesno", None)
+            if not callable(askyesno):
+                continue
+            try:
+                return bool(askyesno(title, prompt))
+            except Exception:
+                continue
+        return False
+
+    def _coerce_optional_int(self, value: Any) -> Optional[int]:
+        try:
+            return int(value)
+        except Exception:
+            return None
+
+    def _parse_int(self, value: Any, fallback: Optional[int] = None) -> Optional[int]:
+        try:
+            return int(value)
+        except Exception:
+            return fallback
+
+    def _resolve_pc_name(self, cid: Optional[int]) -> str:
+        if cid is None:
+            return ""
+        resolver = getattr(self._tracker, "_pc_name_for", None)
+        if callable(resolver):
+            try:
+                return str(resolver(int(cid)) or "")
+            except Exception:
+                pass
+        combatants = getattr(self._tracker, "combatants", {}) or {}
+        combatant = combatants.get(int(cid))
+        return str(getattr(combatant, "name", "") or "")
+
+    def _move_log(self, ws_id: Any, event: str, **fields: Any) -> None:
+        lan = getattr(self._tracker, "_lan", None)
+        log_fn = getattr(lan, "_move_debug_log", None) if lan is not None else None
+        if not callable(log_fn):
+            return
+        payload = {"event": str(event), "type": "move", "ws_id": ws_id, **fields}
+        try:
+            log_fn(payload, level="info")
+        except Exception:
+            pass
+
     def _dispatch_resume(self, resume_dispatch: Optional[Dict[str, Any]]) -> Dict[str, Any]:
         if not isinstance(resume_dispatch, dict):
             return build_dispatch_result("resume_dispatch", False, reason="missing_resume_dispatch")
@@ -743,6 +835,1310 @@ class PlayerCommandService:
             reason="unsupported_resume_command",
             resume_dispatch=resume_dispatch,
         )
+
+    # ------------------------------------------------------------------
+    # movement / perform-action commands
+    # ------------------------------------------------------------------
+
+    def dispatch_movement_action_command(
+        self,
+        msg: Dict[str, Any],
+        *,
+        cid: Optional[int],
+        ws_id: Any,
+        is_admin: bool,
+    ) -> Dict[str, Any]:
+        command_type = str(msg.get("type") if isinstance(msg, dict) else "").strip().lower()
+        handler_name = self._MOVEMENT_ACTION_COMMAND_HANDLERS.get(command_type)
+        if not handler_name:
+            return build_dispatch_result(
+                "movement_action_command",
+                False,
+                reason="unsupported_command",
+                received_type=command_type,
+            )
+        handler = getattr(self, handler_name, None)
+        if not callable(handler):
+            return build_dispatch_result(
+                command_type,
+                False,
+                reason="handler_missing",
+            )
+        return handler(
+            msg if isinstance(msg, dict) else {},
+            cid=cid,
+            ws_id=ws_id,
+            is_admin=is_admin,
+        )
+
+    def move(
+        self,
+        msg: Dict[str, Any],
+        *,
+        cid: Optional[int],
+        ws_id: Any,
+        is_admin: bool,
+    ) -> Dict[str, Any]:
+        t = self._tracker
+        request_contract = build_move_contract(
+            msg,
+            cid=cid,
+            ws_id=ws_id,
+            is_admin=is_admin,
+        )
+        if cid is None:
+            msg["_move_applied"] = False
+            msg["_move_reject_reason"] = "missing_cid"
+            return build_dispatch_result("move", False, reason="missing_cid", request=request_contract)
+        try:
+            cid_int = int(cid)
+        except Exception:
+            msg["_move_applied"] = False
+            msg["_move_reject_reason"] = "invalid_cid"
+            return build_dispatch_result("move", False, reason="invalid_cid", request=request_contract)
+        combatants = getattr(t, "combatants", {}) or {}
+        mover = combatants.get(cid_int)
+        if mover is None:
+            msg["_move_applied"] = False
+            msg["_move_reject_reason"] = "combatant_missing"
+            self._toast(ws_id, "That scallywag ain’t in combat no more.")
+            return build_dispatch_result("move", False, reason="combatant_missing", request=request_contract)
+
+        to = msg.get("to") if isinstance(msg.get("to"), dict) else {}
+        try:
+            col = int(to.get("col"))
+            row = int(to.get("row"))
+        except Exception:
+            msg["_move_applied"] = False
+            msg["_move_reject_reason"] = "invalid_target"
+            self._move_log(ws_id, "lan_move_reject", reason="invalid_target", to=to)
+            self._toast(ws_id, "Pick a valid square, matey.")
+            return build_dispatch_result(
+                "move",
+                False,
+                reason="invalid_target",
+                request=request_contract,
+            )
+
+        if self._coerce_optional_int(getattr(mover, "rider_cid", None)) is not None:
+            self._toast(ws_id, "Rider movement uses the mount, matey.")
+            return build_dispatch_result("move", False, reason="rider_direct_move", request=request_contract)
+
+        _cols, _rows, _obstacles, _rough_terrain, positions = t._lan_live_map_data()
+        before_pos = positions.get(cid_int)
+        mw = getattr(t, "_map_window", None)
+        map_ready = False
+        try:
+            map_ready = bool(mw is not None and mw.winfo_exists())
+        except Exception:
+            map_ready = False
+        map_token_pos = None
+        if map_ready:
+            try:
+                tok = (getattr(mw, "unit_tokens", {}) or {}).get(cid_int)
+                if isinstance(tok, dict):
+                    map_token_pos = {"col": tok.get("col"), "row": tok.get("row")}
+            except Exception:
+                map_token_pos = None
+        self._move_log(
+            ws_id,
+            "lan_move_attempt",
+            cid=cid_int,
+            to={"col": col, "row": row},
+            before_pos=before_pos,
+            map_ready=map_ready,
+            map_token_pos=map_token_pos,
+            move_remaining=getattr(mover, "move_remaining", None),
+        )
+
+        current_cid = self._coerce_optional_int(getattr(t, "current_cid", None))
+        owner_cid, echo_cid, breaks_echo_tether = t._johns_echo_tether_move_details(cid_int, int(col), int(row))
+        is_owner_turn = bool(owner_cid is not None and current_cid is not None and int(owner_cid) == int(current_cid))
+        should_prompt_echo_warning = bool(
+            not is_admin
+            and breaks_echo_tether
+            and ws_id is not None
+            and owner_cid is not None
+            and echo_cid is not None
+            and int(cid_int) in (int(owner_cid), int(echo_cid))
+            and is_owner_turn
+        )
+        if should_prompt_echo_warning:
+            request_id = f"echo_tether:{int(time.time()*1000)}:{int(cid_int)}:{int(col)}:{int(row)}"
+            pending_confirms = getattr(t, "_pending_echo_tether_confirms", None)
+            if not isinstance(pending_confirms, dict):
+                pending_confirms = {}
+                setattr(t, "_pending_echo_tether_confirms", pending_confirms)
+            pending_confirms[request_id] = {
+                "cid": int(cid_int),
+                "col": int(col),
+                "row": int(row),
+                "ws_id": int(ws_id),
+            }
+            lan = getattr(t, "_lan", None)
+            send_prompt = getattr(lan, "send_echo_tether_prompt", None) if lan is not None else None
+            try:
+                if callable(send_prompt):
+                    send_prompt(int(ws_id), request_id)
+                else:
+                    raise RuntimeError("missing send_echo_tether_prompt")
+            except Exception:
+                loop = getattr(lan, "_loop", None) if lan is not None else None
+                send_async = getattr(lan, "_send_async", None) if lan is not None else None
+                if loop and callable(send_async):
+                    try:
+                        asyncio.run_coroutine_threadsafe(
+                            send_async(
+                                int(ws_id),
+                                {
+                                    "type": "echo_tether_prompt",
+                                    "request_id": request_id,
+                                    "text": "Warning. Moving here will destroy your echo. Proceed?",
+                                },
+                            ),
+                            loop,
+                        )
+                    except Exception:
+                        pass
+            return build_dispatch_result(
+                "move",
+                True,
+                request=request_contract,
+                pending_confirmation=True,
+                request_id=request_id,
+                to={"col": int(col), "row": int(row)},
+            )
+
+        ok, reason, cost = t._lan_try_move(cid_int, int(col), int(row))
+        if not ok:
+            msg["_move_applied"] = False
+            msg["_move_reject_reason"] = str(reason or "move_rejected")
+            cols_after, rows_after, _obs_after, _rough_after, positions_after = t._lan_live_map_data()
+            after_pos = positions_after.get(cid_int)
+            self._move_log(
+                ws_id,
+                "lan_move_result",
+                ok=False,
+                reason=reason,
+                cost=cost,
+                before_pos=before_pos,
+                after_pos=after_pos,
+                grid={"cols": cols_after, "rows": rows_after},
+            )
+            self._toast(ws_id, reason or "Can’t move there.")
+            return build_dispatch_result(
+                "move",
+                False,
+                reason=str(reason or "move_rejected"),
+                request=request_contract,
+                cost=int(cost or 0),
+                to={"col": int(col), "row": int(row)},
+                before_pos=before_pos,
+                after_pos=after_pos,
+            )
+
+        msg["_move_applied"] = True
+        msg["_move_reject_reason"] = None
+        cols_after, rows_after, _obs_after, _rough_after, positions_after = t._lan_live_map_data()
+        after_pos = positions_after.get(cid_int)
+        map_token_pos_after = None
+        if map_ready:
+            try:
+                tok = (getattr(mw, "unit_tokens", {}) or {}).get(cid_int)
+                if isinstance(tok, dict):
+                    map_token_pos_after = {"col": tok.get("col"), "row": tok.get("row")}
+            except Exception:
+                map_token_pos_after = None
+        self._move_log(
+            ws_id,
+            "lan_move_result",
+            ok=True,
+            reason=None,
+            cost=cost,
+            before_pos=before_pos,
+            after_pos=after_pos,
+            map_token_pos_before=map_token_pos,
+            map_token_pos_after=map_token_pos_after,
+            grid={"cols": cols_after, "rows": rows_after},
+        )
+
+        if breaks_echo_tether:
+            try:
+                t._enforce_johns_echo_tether(int(cid_int))
+            except Exception:
+                pass
+        expire_offers = getattr(t, "_expire_reaction_offers", None)
+        if callable(expire_offers):
+            try:
+                expire_offers()
+            except Exception:
+                pass
+
+        mover = combatants.get(cid_int)
+        lan_is_friendly_unit = getattr(t, "_lan_is_friendly_unit", None)
+        feet_per_square = getattr(t, "_lan_feet_per_square", None)
+        build_oa_choices = getattr(t, "_build_oa_reaction_choices", None)
+        find_ws_for_cid = getattr(t, "_find_ws_for_cid", None)
+        create_reaction_offer = getattr(t, "_create_reaction_offer", None)
+        if (
+            mover is not None
+            and isinstance(before_pos, tuple)
+            and isinstance(after_pos, tuple)
+            and callable(lan_is_friendly_unit)
+            and callable(feet_per_square)
+            and callable(build_oa_choices)
+            and callable(find_ws_for_cid)
+            and callable(create_reaction_offer)
+        ):
+            fps = feet_per_square()
+            mover_friendly = bool(lan_is_friendly_unit(int(cid_int)))
+            for other_cid, other in list(combatants.items()):
+                try:
+                    ocid = int(other_cid)
+                except Exception:
+                    continue
+                if ocid == int(cid_int):
+                    continue
+                if bool(lan_is_friendly_unit(int(ocid))) == mover_friendly:
+                    continue
+                if int(getattr(other, "reaction_remaining", 0) or 0) <= 0:
+                    continue
+                reactor_pos = positions_after.get(int(ocid))
+                if not (isinstance(reactor_pos, tuple) and len(reactor_pos) == 2):
+                    continue
+                start_dist = max(
+                    abs(int(before_pos[0]) - int(reactor_pos[0])),
+                    abs(int(before_pos[1]) - int(reactor_pos[1])),
+                )
+                end_dist = max(
+                    abs(int(after_pos[0]) - int(reactor_pos[0])),
+                    abs(int(after_pos[1]) - int(reactor_pos[1])),
+                )
+                start_ft = float(start_dist) * fps
+                end_ft = float(end_dist) * fps
+                if not (start_ft <= fps + 1e-6 and end_ft > fps + 1e-6):
+                    continue
+                if bool(getattr(mover, "disengage_active", False)):
+                    continue
+                choices = build_oa_choices(other, include_war_caster=True)
+                if not choices:
+                    continue
+                ws_targets = find_ws_for_cid(int(ocid))
+                create_reaction_offer(int(ocid), "leave_reach", int(cid_int), int(cid_int), choices, ws_targets)
+
+        self._toast(ws_id, f"Moved ({cost} ft).")
+        return build_dispatch_result(
+            "move",
+            True,
+            request=request_contract,
+            cost=int(cost or 0),
+            to={"col": int(col), "row": int(row)},
+            before_pos=before_pos,
+            after_pos=after_pos,
+        )
+
+    def cycle_movement_mode(
+        self,
+        msg: Dict[str, Any],
+        *,
+        cid: Optional[int],
+        ws_id: Any,
+        is_admin: bool,
+    ) -> Dict[str, Any]:
+        t = self._tracker
+        request_contract = build_cycle_movement_mode_contract(
+            msg,
+            cid=cid,
+            ws_id=ws_id,
+            is_admin=is_admin,
+        )
+        if cid is None:
+            return build_dispatch_result("cycle_movement_mode", False, reason="missing_cid", request=request_contract)
+        try:
+            cid_int = int(cid)
+        except Exception:
+            return build_dispatch_result("cycle_movement_mode", False, reason="invalid_cid", request=request_contract)
+        combatants = getattr(t, "combatants", {}) or {}
+        c = combatants.get(cid_int)
+        if c is None:
+            return build_dispatch_result("cycle_movement_mode", False, reason="combatant_missing", request=request_contract)
+
+        modes = ["normal"]
+        if int(getattr(c, "swim_speed", 0) or 0) > 0:
+            modes.append("swim")
+        if int(getattr(c, "fly_speed", 0) or 0) > 0:
+            modes.append("fly")
+        if int(getattr(c, "burrow_speed", 0) or 0) > 0:
+            modes.append("burrow")
+        current_mode = t._normalize_movement_mode(getattr(c, "movement_mode", "normal"))
+        try:
+            idx = modes.index(current_mode)
+        except ValueError:
+            idx = 0
+        next_mode = modes[(idx + 1) % len(modes)]
+        t._set_movement_mode(int(cid_int), next_mode)
+        rebuild = getattr(t, "_rebuild_table", None)
+        if callable(rebuild):
+            try:
+                rebuild(scroll_to_current=True)
+            except Exception:
+                pass
+        label = next_mode.title()
+        movement_mode_label = getattr(t, "_movement_mode_label", None)
+        if callable(movement_mode_label):
+            try:
+                label = str(movement_mode_label(next_mode) or label)
+            except Exception:
+                label = next_mode.title()
+        self._toast(ws_id, f"Movement mode: {label}.")
+        return build_dispatch_result(
+            "cycle_movement_mode",
+            True,
+            request=request_contract,
+            movement_mode=next_mode,
+        )
+
+    def perform_action(
+        self,
+        msg: Dict[str, Any],
+        *,
+        cid: Optional[int],
+        ws_id: Any,
+        is_admin: bool,
+    ) -> Dict[str, Any]:
+        t = self._tracker
+        request_contract = build_perform_action_contract(
+            msg,
+            cid=cid,
+            ws_id=ws_id,
+            is_admin=is_admin,
+        )
+        if cid is None:
+            return build_dispatch_result("perform_action", False, reason="missing_cid", request=request_contract)
+        try:
+            cid_int = int(cid)
+        except Exception:
+            return build_dispatch_result("perform_action", False, reason="invalid_cid", request=request_contract)
+        combatants = getattr(t, "combatants", {}) or {}
+        c = combatants.get(cid_int)
+        if c is None:
+            return build_dispatch_result("perform_action", False, reason="combatant_missing", request=request_contract)
+
+        spend_raw = str(msg.get("spend") or "action").lower()
+        if spend_raw in ("bonus", "bonus_action"):
+            spend = "bonus"
+        elif spend_raw == "reaction":
+            spend = "reaction"
+        else:
+            spend = "action"
+        action_name = str(msg.get("action") or msg.get("name") or "").strip()
+        action_entry = t._find_action_entry(c, spend, action_name)
+        if not action_entry:
+            self._toast(ws_id, "That action ain't in yer sheet, matey.")
+            return build_dispatch_result(
+                "perform_action",
+                False,
+                reason="action_missing",
+                request=request_contract,
+                action_name=action_name,
+                spend=spend,
+            )
+        if t._is_create_undead_uncommanded_this_turn(c) and t._action_name_key(action_name) != "dodge":
+            self._toast(ws_id, "Uncommanded created undead can only Dodge, matey.")
+            return build_dispatch_result(
+                "perform_action",
+                False,
+                reason="created_undead_uncommanded",
+                request=request_contract,
+                action_name=action_name,
+                spend=spend,
+            )
+        if t._mount_action_is_restricted(c, action_name):
+            self._toast(ws_id, "Mounted steed can only Dash, Disengage, or Dodge while rider is active.")
+            return build_dispatch_result(
+                "perform_action",
+                False,
+                reason="mount_restricted",
+                request=request_contract,
+                action_name=action_name,
+                spend=spend,
+            )
+
+        action_key = t._action_name_key(action_name)
+        if action_key in {"collect yourself (otto's dance)", "collect yourself"} and not t._target_has_otto_dance_active(c):
+            self._toast(ws_id, "Ye ain't under Otto's dance right now.")
+            return build_dispatch_result(
+                "perform_action",
+                False,
+                reason="otto_not_active",
+                request=request_contract,
+                action_name=action_name,
+                spend=spend,
+            )
+
+        action_uses = action_entry.get("uses") if isinstance(action_entry.get("uses"), dict) else {}
+        action_pool_id = str(action_uses.get("pool") or action_uses.get("id") or "").strip()
+        try:
+            action_pool_cost = int(action_uses.get("cost", 1))
+        except Exception:
+            action_pool_cost = 1
+        action_pool_cost = max(1, action_pool_cost)
+        player_name = self._resolve_pc_name(cid_int)
+        if action_pool_id:
+            ok_pool, pool_err = t._consume_resource_pool_for_cast(
+                caster_name=player_name,
+                pool_id=action_pool_id,
+                cost=action_pool_cost,
+            )
+            if not ok_pool:
+                self._toast(ws_id, pool_err)
+                return build_dispatch_result(
+                    "perform_action",
+                    False,
+                    reason="action_pool_unavailable",
+                    request=request_contract,
+                    action_name=action_name,
+                    pool_id=action_pool_id,
+                    pool_cost=action_pool_cost,
+                )
+
+        consume_one_of = action_entry.get("consume_one_of") if isinstance(action_entry.get("consume_one_of"), list) else []
+        if consume_one_of:
+            one_of_ok = False
+            one_of_errors = []
+            for choice in consume_one_of:
+                if not isinstance(choice, dict):
+                    continue
+                choice_type = str(choice.get("type") or "").strip().lower()
+                if choice_type == "spell_slot":
+                    min_level = self._parse_int(choice.get("min_level"), 1) or 1
+                    ok_slot, slot_err, _spent_slot = t._consume_spell_slot_for_cast(player_name, min_level, min_level)
+                    if ok_slot:
+                        one_of_ok = True
+                        break
+                    one_of_errors.append(slot_err)
+                elif choice_type == "pool":
+                    choice_pool = str(choice.get("pool") or "").strip()
+                    choice_cost = self._parse_int(choice.get("cost"), 1) or 1
+                    ok_pool, pool_err = t._consume_resource_pool_for_cast(player_name, choice_pool, choice_cost)
+                    if ok_pool:
+                        one_of_ok = True
+                        break
+                    one_of_errors.append(pool_err)
+            if not one_of_ok:
+                self._toast(
+                    ws_id,
+                    next((entry for entry in one_of_errors if entry), "No valid resource option available, matey."),
+                )
+                return build_dispatch_result(
+                    "perform_action",
+                    False,
+                    reason="resource_choice_unavailable",
+                    request=request_contract,
+                    action_name=action_name,
+                    spend=spend,
+                )
+
+        grant_extra_action = action_key == "action surge"
+        if grant_extra_action:
+            c.action_remaining = int(getattr(c, "action_remaining", 0) or 0) + 1
+            c.action_total = int(getattr(c, "action_total", 1) or 1) + 1
+            spend_label = "free action"
+        elif spend == "bonus":
+            if not t._use_bonus_action(c):
+                self._toast(ws_id, "No bonus actions left, matey.")
+                return build_dispatch_result(
+                    "perform_action",
+                    False,
+                    reason="no_bonus_action",
+                    request=request_contract,
+                    action_name=action_name,
+                    spend=spend,
+                )
+            spend_label = "bonus action"
+        elif spend == "reaction":
+            if not t._use_reaction(c):
+                self._toast(ws_id, "No reactions left, matey.")
+                return build_dispatch_result(
+                    "perform_action",
+                    False,
+                    reason="no_reaction",
+                    request=request_contract,
+                    action_name=action_name,
+                    spend=spend,
+                )
+            spend_label = "reaction"
+        else:
+            if not t._use_action(c):
+                self._toast(ws_id, "No actions left, matey.")
+                return build_dispatch_result(
+                    "perform_action",
+                    False,
+                    reason="no_action",
+                    request=request_contract,
+                    action_name=action_name,
+                    spend=spend,
+                )
+            spend_label = "action"
+
+        if action_key == "dash":
+            try:
+                base_speed = int(t._mode_speed(c))
+            except Exception:
+                base_speed = int(getattr(c, "speed", 30) or 30)
+            try:
+                total_before = int(getattr(c, "move_total", 0) or 0)
+                remaining_before = int(getattr(c, "move_remaining", 0) or 0)
+                setattr(c, "move_total", total_before + base_speed)
+                setattr(c, "move_remaining", remaining_before + base_speed)
+                t._log(
+                    f"{c.name} dashed (move {remaining_before}/{total_before} -> {c.move_remaining}/{c.move_total})",
+                    cid=cid_int,
+                )
+                self._toast(ws_id, f"Dashed ({spend_label}).")
+                t._rebuild_table(scroll_to_current=True)
+            except Exception as exc:
+                return build_dispatch_result(
+                    "perform_action",
+                    False,
+                    reason="dash_effect_failed",
+                    error=str(exc),
+                    request=request_contract,
+                    action_name=action_name,
+                    spend=spend,
+                )
+        elif grant_extra_action:
+            t._log(
+                f"{c.name} used {action_name} ({spend_label}) and gained 1 extra action",
+                cid=cid_int,
+            )
+            self._toast(ws_id, "Action Surge used: +1 action.")
+            t._rebuild_table(scroll_to_current=True)
+        else:
+            if action_key == "rage":
+                setattr(c, "rage_active", True)
+                stacks = getattr(c, "condition_stacks", None)
+                if not isinstance(stacks, list):
+                    stacks = []
+                    setattr(c, "condition_stacks", stacks)
+                if not t._has_condition(c, "rage"):
+                    next_sid = int(t.__dict__.get("_next_stack_id", 1) or 1)
+                    setattr(t, "_next_stack_id", int(next_sid) + 1)
+                    tracker_module = self._tracker_module()
+                    condition_stack_cls = getattr(getattr(tracker_module, "base", None), "ConditionStack", None)
+                    if callable(condition_stack_cls):
+                        stacks.append(condition_stack_cls(sid=int(next_sid), ctype="rage", remaining_turns=None))
+                if not any(
+                    isinstance(hook, dict)
+                    and str(hook.get("type") or "").strip().lower() == "rage_upkeep"
+                    for hook in list(getattr(c, "_feature_turn_hooks", []) or [])
+                ):
+                    t._register_combatant_turn_hook(
+                        c,
+                        {"type": "rage_upkeep", "when": "end_turn", "source": "rage"},
+                    )
+            action_effect = str(action_entry.get("effect") or "").strip().lower()
+            if action_key in {"collect yourself (otto's dance)", "collect yourself"}:
+                passed, summary = t._attempt_otto_collect_self_action(c)
+                t._log(summary, cid=cid_int)
+                self._toast(ws_id, summary)
+                t._rebuild_table(scroll_to_current=True)
+                return build_dispatch_result(
+                    "perform_action",
+                    True,
+                    request=request_contract,
+                    action_name=action_name,
+                    spend=spend,
+                    action_key=action_key,
+                    passed=bool(passed),
+                )
+            if action_key == "command created undead":
+                commanded_count = int(t._command_created_undead_for_caster(int(cid_int)))
+                t._log(
+                    f"{c.name} commands created undead ({commanded_count} unit{'s' if commanded_count != 1 else ''}).",
+                    cid=cid_int,
+                )
+                self._toast(ws_id, f"Commanded {commanded_count} created undead.")
+                t._rebuild_table(scroll_to_current=True)
+                return build_dispatch_result(
+                    "perform_action",
+                    True,
+                    request=request_contract,
+                    action_name=action_name,
+                    spend=spend,
+                    action_key=action_key,
+                    commanded_count=commanded_count,
+                )
+            if action_key == "disengage":
+                setattr(c, "disengage_active", True)
+                feet_per_square = getattr(t, "_lan_feet_per_square", None)
+                unit_has_sentinel_feat = getattr(t, "_unit_has_sentinel_feat", None)
+                build_oa_choices = getattr(t, "_build_oa_reaction_choices", None)
+                find_ws_for_cid = getattr(t, "_find_ws_for_cid", None)
+                create_reaction_offer = getattr(t, "_create_reaction_offer", None)
+                lan_is_friendly_unit = getattr(t, "_lan_is_friendly_unit", None)
+                if (
+                    callable(feet_per_square)
+                    and callable(unit_has_sentinel_feat)
+                    and callable(build_oa_choices)
+                    and callable(find_ws_for_cid)
+                    and callable(create_reaction_offer)
+                    and callable(lan_is_friendly_unit)
+                ):
+                    fps = feet_per_square()
+                    mover_pos = dict(t.__dict__.get("_lan_positions", {}) or {}).get(int(cid_int))
+                    if isinstance(mover_pos, tuple) and len(mover_pos) == 2:
+                        for other_cid, other in list(combatants.items()):
+                            try:
+                                ocid = int(other_cid)
+                            except Exception:
+                                continue
+                            if ocid == int(cid_int):
+                                continue
+                            if bool(lan_is_friendly_unit(ocid)) == bool(lan_is_friendly_unit(int(cid_int))):
+                                continue
+                            if not unit_has_sentinel_feat(other):
+                                continue
+                            if int(getattr(other, "reaction_remaining", 0) or 0) <= 0:
+                                continue
+                            opos = dict(t.__dict__.get("_lan_positions", {}) or {}).get(ocid)
+                            if not (isinstance(opos, tuple) and len(opos) == 2):
+                                continue
+                            dist_ft = max(
+                                abs(int(mover_pos[0]) - int(opos[0])),
+                                abs(int(mover_pos[1]) - int(opos[1])),
+                            ) * fps
+                            if dist_ft - 8.0 > 1e-6:
+                                continue
+                            choices = build_oa_choices(other, include_war_caster=False)
+                            if not choices:
+                                continue
+                            ws_targets = find_ws_for_cid(ocid)
+                            create_reaction_offer(ocid, "sentinel_disengage", int(cid_int), int(cid_int), choices, ws_targets)
+            if action_effect in ("recover_spell_slots", "recover_spell_slot") or action_key in (
+                "arcane recovery",
+                "natural recovery (recover spell slots)",
+            ):
+                recover_cfg: Dict[str, Any] = {}
+                if action_effect in ("recover_spell_slots", "recover_spell_slot"):
+                    recover_cfg = dict(action_entry)
+                if not recover_cfg:
+                    profile = t._profile_for_player_name(player_name)
+                    feature_name_key = t._action_name_key(action_name)
+                    if isinstance(profile, dict):
+                        for feature in profile.get("features") if isinstance(profile.get("features"), list) else []:
+                            if not isinstance(feature, dict):
+                                continue
+                            if t._action_name_key(feature.get("name")) != feature_name_key:
+                                continue
+                            automation = feature.get("automation") if isinstance(feature.get("automation"), dict) else {}
+                            if isinstance(automation.get("recover_spell_slots"), dict):
+                                recover_cfg = dict(automation.get("recover_spell_slots") or {})
+                                break
+                if recover_cfg:
+                    profile = t._profile_for_player_name(player_name)
+                    if isinstance(profile, dict):
+                        ok_recover, recover_err, recovered_levels = t._recover_spell_slots(player_name, profile, recover_cfg)
+                        if ok_recover:
+                            recovered_text = ", ".join(f"L{lvl}" for lvl in recovered_levels)
+                            t._log(f"{c.name} recovers spell slots ({recovered_text}).", cid=cid_int)
+                            self._toast(ws_id, f"Recovered spell slots: {recovered_text}.")
+                        else:
+                            self._toast(ws_id, recover_err or "Could not recover spell slots, matey.")
+            t._log(f"{c.name} used {action_name} ({spend_label})", cid=cid_int)
+            self._toast(ws_id, f"Used {action_name}.")
+            t._rebuild_table(scroll_to_current=True)
+
+        return build_dispatch_result(
+            "perform_action",
+            True,
+            request=request_contract,
+            action_name=action_name,
+            action_key=action_key,
+            spend=spend,
+        )
+
+    # ------------------------------------------------------------------
+    # turn-local / mobility-lite commands
+    # ------------------------------------------------------------------
+
+    def dispatch_turn_local_command(
+        self,
+        msg: Dict[str, Any],
+        *,
+        cid: Optional[int],
+        ws_id: Any,
+        is_admin: bool,
+    ) -> Dict[str, Any]:
+        command_type = str(msg.get("type") if isinstance(msg, dict) else "").strip().lower()
+        handler_name = self._TURN_LOCAL_COMMAND_HANDLERS.get(command_type)
+        if not handler_name:
+            return build_dispatch_result(
+                "turn_local_command",
+                False,
+                reason="unsupported_command",
+                received_type=command_type,
+            )
+        handler = getattr(self, handler_name, None)
+        if not callable(handler):
+            return build_dispatch_result(
+                command_type,
+                False,
+                reason="handler_missing",
+            )
+        return handler(
+            msg if isinstance(msg, dict) else {},
+            cid=cid,
+            ws_id=ws_id,
+            is_admin=is_admin,
+        )
+
+    def mount_request(
+        self,
+        msg: Dict[str, Any],
+        *,
+        cid: Optional[int],
+        ws_id: Any,
+        is_admin: bool,
+    ) -> Dict[str, Any]:
+        t = self._tracker
+        request_contract = build_mount_request_contract(
+            msg,
+            cid=cid,
+            ws_id=ws_id,
+            is_admin=is_admin,
+        )
+        combatants = getattr(t, "combatants", {}) or {}
+        rider_cid = self._coerce_optional_int(msg.get("rider_cid"))
+        mount_cid = self._coerce_optional_int(msg.get("mount_cid"))
+        if mount_cid is None:
+            self._toast(ws_id, "Pick rider and mount first, matey.")
+            return build_dispatch_result("mount_request", False, reason="missing_mount_cid", request=request_contract)
+        if not is_admin:
+            if cid is None:
+                self._toast(ws_id, "Claim a character first, matey.")
+                return build_dispatch_result("mount_request", False, reason="missing_cid", request=request_contract)
+            if rider_cid is not None and int(rider_cid) != int(cid):
+                self._toast(ws_id, "Ye can only mount with yer own token.")
+                return build_dispatch_result("mount_request", False, reason="rider_claim_mismatch", request=request_contract)
+            rider_cid = int(cid)
+        if rider_cid is None:
+            self._toast(ws_id, "Pick rider and mount first, matey.")
+            return build_dispatch_result("mount_request", False, reason="missing_rider_cid", request=request_contract)
+
+        rider = combatants.get(int(rider_cid))
+        mount = combatants.get(int(mount_cid))
+        if rider is None or mount is None:
+            self._toast(ws_id, "Invalid mount target.")
+            return build_dispatch_result("mount_request", False, reason="invalid_mount_target", request=request_contract)
+        if int(rider_cid) == int(mount_cid):
+            self._toast(ws_id, "Ye cannot mount yerself.")
+            return build_dispatch_result("mount_request", False, reason="self_mount", request=request_contract)
+        if bool(getattr(rider, "rider_cid", None)) or bool(getattr(rider, "mounted_by_cid", None)):
+            self._toast(ws_id, "Ye be already mounted.")
+            return build_dispatch_result("mount_request", False, reason="rider_already_mounted", request=request_contract)
+        if bool(getattr(mount, "mounted_by_cid", None)) or bool(getattr(mount, "rider_cid", None)):
+            self._toast(ws_id, "That creature be already tied up in a mount.")
+            return build_dispatch_result("mount_request", False, reason="mount_occupied", request=request_contract)
+
+        _cols, _rows, _obs, _rough, positions = t._lan_live_map_data()
+        rider_pos = positions.get(int(rider_cid))
+        mount_pos = positions.get(int(mount_cid))
+        if rider_pos is None or mount_pos is None or tuple(rider_pos) != tuple(mount_pos):
+            self._toast(ws_id, "Rider and mount must share a square.")
+            return build_dispatch_result("mount_request", False, reason="different_square", request=request_contract)
+
+        pending_mount_requests = t.__dict__.get("_pending_mount_requests")
+        if not isinstance(pending_mount_requests, dict):
+            pending_mount_requests = {}
+            t.__dict__["_pending_mount_requests"] = pending_mount_requests
+
+        summoned_by_cid = self._coerce_optional_int(getattr(mount, "summoned_by_cid", None))
+        auto_accept = summoned_by_cid is not None and int(summoned_by_cid) == int(rider_cid)
+        request_id = f"mount:{int(time.time() * 1000)}:{int(rider_cid)}:{int(mount_cid)}"
+        pending_mount_requests[request_id] = {
+            "rider_cid": int(rider_cid),
+            "mount_cid": int(mount_cid),
+            "requester_ws": ws_id,
+        }
+        if auto_accept:
+            t._accept_mount(int(rider_cid), int(mount_cid), ws_id, auto=True)
+            pending_mount_requests.pop(request_id, None)
+            return build_dispatch_result(
+                "mount_request",
+                True,
+                request=request_contract,
+                request_id=request_id,
+                auto_accept=True,
+            )
+
+        if not bool(getattr(mount, "is_pc", False)):
+            pending_mount_requests.pop(request_id, None)
+            approved = self._ask_yes_no(
+                "Mount Request",
+                f"{getattr(rider, 'name', 'A rider')} is trying to mount {getattr(mount, 'name', 'a creature')}. Allow?",
+            )
+            if approved:
+                t._accept_mount(int(rider_cid), int(mount_cid), ws_id, auto=False)
+                return build_dispatch_result(
+                    "mount_request",
+                    True,
+                    request=request_contract,
+                    request_id=request_id,
+                    dm_approved=True,
+                )
+            passed = self._ask_yes_no(
+                "Mount Request",
+                f"{getattr(rider, 'name', 'Rider')} vs {getattr(mount, 'name', 'Creature')}: Pass or Fail?\n\n"
+                "Yes = Pass (allow mount)\nNo = Fail (deny mount)",
+            )
+            if passed:
+                t._accept_mount(int(rider_cid), int(mount_cid), ws_id, auto=False)
+                return build_dispatch_result(
+                    "mount_request",
+                    True,
+                    request=request_contract,
+                    request_id=request_id,
+                    dm_approved=True,
+                )
+            self._toast(ws_id, "Mount request declined.")
+            return build_dispatch_result(
+                "mount_request",
+                False,
+                reason="declined",
+                request=request_contract,
+                request_id=request_id,
+            )
+
+        target_ws_ids = t._find_ws_for_cid(int(mount_cid)) if bool(getattr(mount, "is_pc", False)) else []
+        payload = {
+            "type": "mount_prompt",
+            "request_id": request_id,
+            "rider_cid": int(rider_cid),
+            "mount_cid": int(mount_cid),
+            "rider_name": str(getattr(rider, "name", "Rider")),
+        }
+        lan = t.__dict__.get("_lan")
+        loop = getattr(lan, "_loop", None) if lan is not None else None
+        send_async = getattr(lan, "_send_async", None) if lan is not None else None
+        broadcast_payload = getattr(lan, "_broadcast_payload", None) if lan is not None else None
+        if target_ws_ids and loop and callable(send_async):
+            for target_ws_id in target_ws_ids:
+                try:
+                    asyncio.run_coroutine_threadsafe(send_async(int(target_ws_id), payload), loop)
+                except Exception:
+                    pass
+        elif callable(broadcast_payload):
+            try:
+                broadcast_payload({**payload, "to_admin": True})
+            except Exception:
+                pass
+        self._toast(ws_id, "Mount request sent.")
+        return build_dispatch_result(
+            "mount_request",
+            True,
+            request=request_contract,
+            request_id=request_id,
+            prompt_sent=True,
+        )
+
+    def mount_response(
+        self,
+        msg: Dict[str, Any],
+        *,
+        cid: Optional[int],
+        ws_id: Any,
+        is_admin: bool,
+    ) -> Dict[str, Any]:
+        t = self._tracker
+        request_contract = build_mount_response_contract(
+            msg,
+            cid=cid,
+            ws_id=ws_id,
+            is_admin=is_admin,
+        )
+        request_id = str(msg.get("request_id") or "").strip()
+        pending_mount_requests = t.__dict__.get("_pending_mount_requests")
+        pending = (
+            pending_mount_requests.pop(request_id, None)
+            if isinstance(pending_mount_requests, dict)
+            else None
+        )
+        if not pending:
+            self._toast(ws_id, "Mount request expired.")
+            return build_dispatch_result("mount_response", False, reason="request_expired", request=request_contract)
+        if bool(msg.get("accept")):
+            t._accept_mount(
+                int(pending.get("rider_cid")),
+                int(pending.get("mount_cid")),
+                pending.get("requester_ws"),
+                auto=False,
+            )
+            return build_dispatch_result(
+                "mount_response",
+                True,
+                request=request_contract,
+                request_id=request_id,
+                accepted=True,
+            )
+        requester_ws = pending.get("requester_ws")
+        if requester_ws is not None:
+            self._toast(int(requester_ws), "Mount request declined.")
+        return build_dispatch_result(
+            "mount_response",
+            True,
+            request=request_contract,
+            request_id=request_id,
+            accepted=False,
+        )
+
+    def dismount(
+        self,
+        msg: Dict[str, Any],
+        *,
+        cid: Optional[int],
+        ws_id: Any,
+        is_admin: bool,
+    ) -> Dict[str, Any]:
+        del msg, is_admin
+        t = self._tracker
+        request_contract = build_dismount_contract(
+            {"type": "dismount"},
+            cid=cid,
+            ws_id=ws_id,
+            is_admin=False,
+        )
+        combatants = getattr(t, "combatants", {}) or {}
+        if cid is None:
+            return build_dispatch_result("dismount", False, reason="missing_cid", request=request_contract)
+        try:
+            cid_int = int(cid)
+        except Exception:
+            return build_dispatch_result("dismount", False, reason="invalid_cid", request=request_contract)
+        rider = combatants.get(cid_int)
+        if rider is None:
+            return build_dispatch_result("dismount", False, reason="combatant_missing", request=request_contract)
+        mount_cid = self._coerce_optional_int(getattr(rider, "rider_cid", None))
+        if mount_cid is None:
+            self._toast(ws_id, "Ye are not mounted.")
+            return build_dispatch_result("dismount", False, reason="not_mounted", request=request_contract)
+        mount = combatants.get(int(mount_cid))
+        if mount is None:
+            setattr(rider, "rider_cid", None)
+            return build_dispatch_result(
+                "dismount",
+                True,
+                request=request_contract,
+                mount_missing_cleanup=True,
+            )
+        cost = int(t._mount_cost(rider))
+        if int(getattr(rider, "move_remaining", 0) or 0) < cost:
+            self._toast(ws_id, f"Not enough movement to dismount (need {cost} ft).")
+            return build_dispatch_result(
+                "dismount",
+                False,
+                reason="insufficient_movement",
+                request=request_contract,
+                cost=cost,
+            )
+        rider.move_remaining = max(0, int(getattr(rider, "move_remaining", 0) or 0) - cost)
+        setattr(rider, "rider_cid", None)
+        setattr(mount, "mounted_by_cid", None)
+        setattr(mount, "mount_shared_turn", False)
+        setattr(mount, "mount_controller_mode", "independent")
+        t._restore_mount_initiative(int(rider.cid), int(mount.cid))
+        log = getattr(t, "_log", None)
+        if callable(log):
+            try:
+                log(f"{rider.name} dismounts from {mount.name}.", cid=rider.cid)
+            except Exception:
+                pass
+        broadcast = getattr(t, "_lan_force_state_broadcast", None)
+        if callable(broadcast):
+            try:
+                broadcast()
+            except Exception:
+                pass
+        return build_dispatch_result(
+            "dismount",
+            True,
+            request=request_contract,
+            mount_cid=int(mount.cid),
+            cost=cost,
+            move_remaining=int(getattr(rider, "move_remaining", 0) or 0),
+        )
+
+    def dash(
+        self,
+        msg: Dict[str, Any],
+        *,
+        cid: Optional[int],
+        ws_id: Any,
+        is_admin: bool,
+    ) -> Dict[str, Any]:
+        t = self._tracker
+        request_contract = build_dash_contract(
+            msg,
+            cid=cid,
+            ws_id=ws_id,
+            is_admin=is_admin,
+        )
+        combatants = getattr(t, "combatants", {}) or {}
+        if cid is None:
+            return build_dispatch_result("dash", False, reason="missing_cid", request=request_contract)
+        try:
+            cid_int = int(cid)
+        except Exception:
+            return build_dispatch_result("dash", False, reason="invalid_cid", request=request_contract)
+        c = combatants.get(cid_int)
+        if c is None:
+            return build_dispatch_result("dash", False, reason="combatant_missing", request=request_contract)
+        spend = str(msg.get("spend") or "").strip().lower()
+        if spend not in ("action", "bonus"):
+            self._toast(ws_id, "Choose action or bonus action, matey.")
+            return build_dispatch_result("dash", False, reason="invalid_spend", request=request_contract)
+        if spend == "action":
+            if not t._use_action(c):
+                self._toast(ws_id, "No actions left, matey.")
+                return build_dispatch_result("dash", False, reason="no_action", request=request_contract)
+            spend_label = "action"
+        else:
+            if not t._use_bonus_action(c):
+                self._toast(ws_id, "No bonus actions left, matey.")
+                return build_dispatch_result("dash", False, reason="no_bonus_action", request=request_contract)
+            spend_label = "bonus action"
+        try:
+            base_speed = int(t._mode_speed(c))
+        except Exception:
+            base_speed = int(getattr(c, "speed", 30) or 30)
+        if bool(getattr(c, "speed_zero_until_turn_end", False)):
+            self._toast(ws_id, "Yer speed is 0 until turn end.")
+            return build_dispatch_result("dash", False, reason="speed_zero", request=request_contract)
+        try:
+            total_before = int(getattr(c, "move_total", 0) or 0)
+            remaining_before = int(getattr(c, "move_remaining", 0) or 0)
+            setattr(c, "move_total", total_before + base_speed)
+            setattr(c, "move_remaining", remaining_before + base_speed)
+            log = getattr(t, "_log", None)
+            if callable(log):
+                try:
+                    log(
+                        f"{c.name} dashed (move {remaining_before}/{total_before} -> {c.move_remaining}/{c.move_total})",
+                        cid=cid_int,
+                    )
+                except Exception:
+                    pass
+            self._toast(ws_id, f"Dashed ({spend_label}).")
+            rebuild = getattr(t, "_rebuild_table", None)
+            if callable(rebuild):
+                try:
+                    rebuild(scroll_to_current=True)
+                except Exception:
+                    pass
+        except Exception as exc:
+            return build_dispatch_result(
+                "dash",
+                False,
+                reason="dash_failed",
+                error=str(exc),
+                request=request_contract,
+            )
+        return build_dispatch_result(
+            "dash",
+            True,
+            request=request_contract,
+            spend=spend,
+            move_total=int(getattr(c, "move_total", 0) or 0),
+            move_remaining=int(getattr(c, "move_remaining", 0) or 0),
+        )
+
+    def use_action(
+        self,
+        msg: Dict[str, Any],
+        *,
+        cid: Optional[int],
+        ws_id: Any,
+        is_admin: bool,
+    ) -> Dict[str, Any]:
+        t = self._tracker
+        request_contract = build_use_action_contract(
+            msg,
+            cid=cid,
+            ws_id=ws_id,
+            is_admin=is_admin,
+        )
+        combatants = getattr(t, "combatants", {}) or {}
+        if cid is None:
+            return build_dispatch_result("use_action", False, reason="missing_cid", request=request_contract)
+        try:
+            cid_int = int(cid)
+        except Exception:
+            return build_dispatch_result("use_action", False, reason="invalid_cid", request=request_contract)
+        c = combatants.get(cid_int)
+        if c is None:
+            return build_dispatch_result("use_action", False, reason="combatant_missing", request=request_contract)
+        if not t._use_action(c):
+            self._toast(ws_id, "No actions left, matey.")
+            return build_dispatch_result("use_action", False, reason="no_action", request=request_contract)
+        self._toast(ws_id, "Action used.")
+        rebuild = getattr(t, "_rebuild_table", None)
+        if callable(rebuild):
+            try:
+                rebuild(scroll_to_current=True)
+            except Exception:
+                pass
+        return build_dispatch_result(
+            "use_action",
+            True,
+            request=request_contract,
+            action_remaining=int(getattr(c, "action_remaining", 0) or 0),
+        )
+
+    def use_bonus_action(
+        self,
+        msg: Dict[str, Any],
+        *,
+        cid: Optional[int],
+        ws_id: Any,
+        is_admin: bool,
+    ) -> Dict[str, Any]:
+        t = self._tracker
+        request_contract = build_use_bonus_action_contract(
+            msg,
+            cid=cid,
+            ws_id=ws_id,
+            is_admin=is_admin,
+        )
+        combatants = getattr(t, "combatants", {}) or {}
+        if cid is None:
+            return build_dispatch_result("use_bonus_action", False, reason="missing_cid", request=request_contract)
+        try:
+            cid_int = int(cid)
+        except Exception:
+            return build_dispatch_result("use_bonus_action", False, reason="invalid_cid", request=request_contract)
+        c = combatants.get(cid_int)
+        if c is None:
+            return build_dispatch_result("use_bonus_action", False, reason="combatant_missing", request=request_contract)
+        if not t._use_bonus_action(c):
+            self._toast(ws_id, "No bonus actions left, matey.")
+            return build_dispatch_result("use_bonus_action", False, reason="no_bonus_action", request=request_contract)
+        self._toast(ws_id, "Bonus action used.")
+        rebuild = getattr(t, "_rebuild_table", None)
+        if callable(rebuild):
+            try:
+                rebuild(scroll_to_current=True)
+            except Exception:
+                pass
+        return build_dispatch_result(
+            "use_bonus_action",
+            True,
+            request=request_contract,
+            bonus_action_remaining=int(getattr(c, "bonus_action_remaining", 0) or 0),
+        )
+
+    def stand_up(
+        self,
+        msg: Dict[str, Any],
+        *,
+        cid: Optional[int],
+        ws_id: Any,
+        is_admin: bool,
+    ) -> Dict[str, Any]:
+        t = self._tracker
+        request_contract = build_stand_up_contract(
+            msg,
+            cid=cid,
+            ws_id=ws_id,
+            is_admin=is_admin,
+        )
+        combatants = getattr(t, "combatants", {}) or {}
+        if cid is None:
+            return build_dispatch_result("stand_up", False, reason="missing_cid", request=request_contract)
+        try:
+            cid_int = int(cid)
+        except Exception:
+            return build_dispatch_result("stand_up", False, reason="invalid_cid", request=request_contract)
+        c = combatants.get(cid_int)
+        if c is None:
+            return build_dispatch_result("stand_up", False, reason="combatant_missing", request=request_contract)
+        if not t._has_condition(c, "prone"):
+            return build_dispatch_result("stand_up", False, reason="not_prone", request=request_contract)
+        eff = int(t._effective_speed(c))
+        if eff <= 0:
+            self._toast(ws_id, "Can't stand up right now (speed is 0).")
+            return build_dispatch_result("stand_up", False, reason="speed_zero", request=request_contract)
+        cost = max(0, eff // 2)
+        if int(getattr(c, "move_remaining", 0) or 0) < cost:
+            self._toast(ws_id, f"Not enough movement to stand (need {cost} ft).")
+            return build_dispatch_result(
+                "stand_up",
+                False,
+                reason="insufficient_movement",
+                request=request_contract,
+                cost=cost,
+            )
+        c.move_remaining = int(getattr(c, "move_remaining", 0) or 0) - cost
+        t._remove_condition_type(c, "prone")
+        log = getattr(t, "_log", None)
+        if callable(log):
+            try:
+                log(f"stood up (spent {cost} ft, prone removed)", cid=c.cid)
+            except Exception:
+                pass
+        self._toast(ws_id, "Stood up.")
+        rebuild = getattr(t, "_rebuild_table", None)
+        if callable(rebuild):
+            try:
+                rebuild(scroll_to_current=True)
+            except Exception:
+                pass
+        return build_dispatch_result(
+            "stand_up",
+            True,
+            request=request_contract,
+            cost=cost,
+            move_remaining=int(getattr(c, "move_remaining", 0) or 0),
+        )
+
+    def reset_turn(
+        self,
+        msg: Dict[str, Any],
+        *,
+        cid: Optional[int],
+        ws_id: Any,
+        is_admin: bool,
+    ) -> Dict[str, Any]:
+        t = self._tracker
+        request_contract = build_reset_turn_contract(
+            msg,
+            cid=cid,
+            ws_id=ws_id,
+            is_admin=is_admin,
+        )
+        if cid is None:
+            return build_dispatch_result("reset_turn", False, reason="missing_cid", request=request_contract)
+        try:
+            cid_int = int(cid)
+        except Exception:
+            return build_dispatch_result("reset_turn", False, reason="invalid_cid", request=request_contract)
+        if not t._lan_restore_turn_snapshot(cid_int):
+            self._toast(ws_id, "No turn snapshot yet, matey.")
+            return build_dispatch_result("reset_turn", False, reason="snapshot_missing", request=request_contract)
+        c = (getattr(t, "combatants", {}) or {}).get(cid_int)
+        log = getattr(t, "_log", None)
+        if c is not None and callable(log):
+            try:
+                log(f"{c.name} reset their turn snapshot.", cid=cid_int)
+            except Exception:
+                pass
+        self._toast(ws_id, "Turn reset.")
+        rebuild = getattr(t, "_rebuild_table", None)
+        if callable(rebuild):
+            try:
+                rebuild(scroll_to_current=True)
+            except Exception:
+                pass
+        return build_dispatch_result("reset_turn", True, request=request_contract)
 
     # ------------------------------------------------------------------
     # end_turn

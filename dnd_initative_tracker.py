@@ -92,6 +92,8 @@ from map_state import (
 from ship_blueprints import load_repo_runtime_ship_blueprints
 from player_command_contracts import (
     FIGHTER_MONK_RESOURCE_ACTION_TYPES,
+    MOVEMENT_ACTION_COMMAND_TYPES,
+    TURN_LOCAL_COMMAND_TYPES,
     build_attack_request_contract,
     build_hellish_rebuke_resolve_start_payload,
     build_reaction_offer_event,
@@ -1704,6 +1706,7 @@ class LanController:
     """Runs a FastAPI+WebSocket server in a background thread and bridges actions into the Tk thread."""
     _ACTION_MESSAGE_TYPES = (
         "move",
+        "cycle_movement_mode",
         "set_facing",
         "dash",
         "perform_action",
@@ -30209,6 +30212,9 @@ class InitiativeTracker(base.InitiativeTracker):
         ``PlayerCommandService`` is the explicit authority seam for migrated
         player commands (attack_request, spell_target_request,
         reaction_response, end_turn, manual_override_hp,
+        move, cycle_movement_mode, perform_action,
+        mount_request, mount_response, dismount, dash, use_action,
+        use_bonus_action, stand_up, reset_turn,
         manual_override_spell_slot, manual_override_resource_pool,
         reaction_prefs_update, lay_on_hands_use, inventory_adjust_consumable,
         use_consumable, second_wind_use, action_surge_use,
@@ -33178,12 +33184,11 @@ class InitiativeTracker(base.InitiativeTracker):
 
         # Basic sanity: claimed cid must match the action cid (if provided)
         cid = _normalize_cid_value(msg.get("cid"), "lan_action.cid", log_fn=log_warning)
-        current_cid = None
+        current_cid = _normalize_cid_value(
+            getattr(self, "current_cid", None), "lan_action.current_cid", log_fn=log_warning
+        )
         in_combat = bool(getattr(self, "in_combat", False))
         if is_move:
-            current_cid = _normalize_cid_value(
-                getattr(self, "current_cid", None), "lan_action.current_cid", log_fn=log_warning
-            )
             _move_log(
                 "lan_move_apply_start",
                 cid=cid,
@@ -35642,90 +35647,13 @@ class InitiativeTracker(base.InitiativeTracker):
             self._clear_map_spell_effect(int(aid), end_concentration_if_bound=True)
             return
 
-        if typ == "mount_request":
-            rider_cid = _normalize_cid_value(msg.get("rider_cid"), "mount_request.rider")
-            mount_cid = _normalize_cid_value(msg.get("mount_cid"), "mount_request.mount")
-            if mount_cid is None:
-                self._lan.toast(ws_id, "Pick rider and mount first, matey.")
-                return
-            if not is_admin:
-                if cid is None:
-                    self._lan.toast(ws_id, "Claim a character first, matey.")
-                    return
-                if rider_cid is not None and int(rider_cid) != int(cid):
-                    self._lan.toast(ws_id, "Ye can only mount with yer own token.")
-                    return
-                rider_cid = int(cid)
-            if rider_cid is None:
-                self._lan.toast(ws_id, "Pick rider and mount first, matey.")
-                return
-            rider = self.combatants.get(int(rider_cid))
-            mount = self.combatants.get(int(mount_cid))
-            if rider is None or mount is None:
-                self._lan.toast(ws_id, "Invalid mount target.")
-                return
-            if int(rider_cid) == int(mount_cid):
-                self._lan.toast(ws_id, "Ye cannot mount yerself.")
-                return
-            if bool(getattr(rider, "rider_cid", None)) or bool(getattr(rider, "mounted_by_cid", None)):
-                self._lan.toast(ws_id, "Ye be already mounted.")
-                return
-            if bool(getattr(mount, "mounted_by_cid", None)) or bool(getattr(mount, "rider_cid", None)):
-                self._lan.toast(ws_id, "That creature be already tied up in a mount.")
-                return
-            _, _, _, _, positions = self._lan_live_map_data()
-            rider_pos = positions.get(int(rider_cid))
-            mount_pos = positions.get(int(mount_cid))
-            if rider_pos is None or mount_pos is None or tuple(rider_pos) != tuple(mount_pos):
-                self._lan.toast(ws_id, "Rider and mount must share a square.")
-                return
-            auto_accept = _normalize_cid_value(getattr(mount, "summoned_by_cid", None), "mount_request.summoned_by") == int(rider_cid)
-            req_id = f"mount:{int(time.time()*1000)}:{rider_cid}:{mount_cid}"
-            self._pending_mount_requests[req_id] = {"rider_cid": int(rider_cid), "mount_cid": int(mount_cid), "requester_ws": ws_id}
-            if auto_accept:
-                self._accept_mount(int(rider_cid), int(mount_cid), ws_id, auto=True)
-                self._pending_mount_requests.pop(req_id, None)
-                return
-            if not bool(getattr(mount, "is_pc", False)):
-                self._pending_mount_requests.pop(req_id, None)
-                approved = messagebox.askyesno(
-                    "Mount Request",
-                    f"{getattr(rider, 'name', 'A rider')} is trying to mount {getattr(mount, 'name', 'a creature')}. Allow?",
-                )
-                if approved:
-                    self._accept_mount(int(rider_cid), int(mount_cid), ws_id, auto=False)
-                    return
-                passed = messagebox.askyesno(
-                    "Mount Request",
-                    f"{getattr(rider, 'name', 'Rider')} vs {getattr(mount, 'name', 'Creature')}: Pass or Fail?\n\nYes = Pass (allow mount)\nNo = Fail (deny mount)",
-                )
-                if passed:
-                    self._accept_mount(int(rider_cid), int(mount_cid), ws_id, auto=False)
-                elif ws_id is not None:
-                    self._lan.toast(int(ws_id), "Mount request declined.")
-                return
-            target_ws_ids = self._find_ws_for_cid(int(mount_cid)) if bool(getattr(mount, "is_pc", False)) else []
-            payload = {"type": "mount_prompt", "request_id": req_id, "rider_cid": int(rider_cid), "mount_cid": int(mount_cid), "rider_name": str(getattr(rider, "name", "Rider"))}
-            if target_ws_ids and self._lan._loop:
-                for tws in target_ws_ids:
-                    asyncio.run_coroutine_threadsafe(self._lan._send_async(tws, payload), self._lan._loop)
-            else:
-                self._lan._broadcast_payload({**payload, "to_admin": True})
-            self._lan.toast(ws_id, "Mount request sent.")
-            return
-
-        if typ == "mount_response":
-            request_id = str(msg.get("request_id") or "").strip()
-            pending = self._pending_mount_requests.pop(request_id, None)
-            if not pending:
-                self._lan.toast(ws_id, "Mount request expired.")
-                return
-            if bool(msg.get("accept")):
-                self._accept_mount(int(pending.get("rider_cid")), int(pending.get("mount_cid")), pending.get("requester_ws"), auto=False)
-            else:
-                requester_ws = pending.get("requester_ws")
-                if requester_ws is not None:
-                    self._lan.toast(int(requester_ws), "Mount request declined.")
+        if typ in TURN_LOCAL_COMMAND_TYPES:
+            self._ensure_player_commands().dispatch_turn_local_command(
+                msg,
+                cid=cid,
+                ws_id=ws_id,
+                is_admin=is_admin,
+            )
             return
 
         if typ == "echo_tether_response":
@@ -35764,32 +35692,6 @@ class InitiativeTracker(base.InitiativeTracker):
             self._ensure_player_commands().reaction_response(msg, cid=cid, ws_id=ws_id)
             return
 
-        if typ == "dismount":
-            rider = self.combatants.get(cid)
-            if rider is None:
-                return
-            mount_cid = _normalize_cid_value(getattr(rider, "rider_cid", None), "dismount.rider_cid")
-            if mount_cid is None:
-                self._lan.toast(ws_id, "Ye are not mounted.")
-                return
-            mount = self.combatants.get(int(mount_cid))
-            if mount is None:
-                setattr(rider, "rider_cid", None)
-                return
-            cost = self._mount_cost(rider)
-            if int(getattr(rider, "move_remaining", 0) or 0) < cost:
-                self._lan.toast(ws_id, f"Not enough movement to dismount (need {cost} ft).")
-                return
-            rider.move_remaining = max(0, int(getattr(rider, "move_remaining", 0) or 0) - cost)
-            setattr(rider, "rider_cid", None)
-            setattr(mount, "mounted_by_cid", None)
-            setattr(mount, "mount_shared_turn", False)
-            setattr(mount, "mount_controller_mode", "independent")
-            self._restore_mount_initiative(int(rider.cid), int(mount.cid))
-            self._log(f"{rider.name} dismounts from {mount.name}.", cid=rider.cid)
-            self._lan_force_state_broadcast()
-            return
-
         if typ == "initiative_roll":
             roll_value = msg.get("initiative")
             try:
@@ -35810,424 +35712,14 @@ class InitiativeTracker(base.InitiativeTracker):
             self._lan.toast(ws_id, f"Initiative set to {int(roll_total)}.")
             return
 
-        if typ == "move":
-            to = msg.get("to") or {}
-            try:
-                col = int(to.get("col"))
-                row = int(to.get("row"))
-            except Exception:
-                if is_move:
-                    msg["_move_applied"] = False
-                    msg["_move_reject_reason"] = "invalid_target"
-                    _move_log("lan_move_reject", reason="invalid_target", to=to)
-                self._lan.toast(ws_id, "Pick a valid square, matey.")
-                return
-
-            mover = self.combatants.get(cid)
-            if mover is not None and _normalize_cid_value(getattr(mover, "rider_cid", None), "move.rider_cid") is not None:
-                self._lan.toast(ws_id, "Rider movement uses the mount, matey.")
-                return
-            cols, rows, obstacles, rough_terrain, positions = self._lan_live_map_data()
-            before_pos = positions.get(cid)
-            mw = getattr(self, "_map_window", None)
-            map_ready = mw is not None and mw.winfo_exists()
-            map_token_pos = None
-            if map_ready:
-                try:
-                    tok = (getattr(mw, "unit_tokens", {}) or {}).get(int(cid))
-                    if isinstance(tok, dict):
-                        map_token_pos = {"col": tok.get("col"), "row": tok.get("row")}
-                except Exception:
-                    map_token_pos = None
-            _move_log(
-                "lan_move_attempt",
+        if typ in MOVEMENT_ACTION_COMMAND_TYPES:
+            self._ensure_player_commands().dispatch_movement_action_command(
+                msg,
                 cid=cid,
-                to={"col": col, "row": row},
-                before_pos=before_pos,
-                map_ready=map_ready,
-                map_token_pos=map_token_pos,
-                move_remaining=getattr(self.combatants.get(cid), "move_remaining", None) if cid else None,
+                ws_id=ws_id,
+                is_admin=is_admin,
             )
-
-            owner_cid, echo_cid, breaks_echo_tether = self._johns_echo_tether_move_details(cid, int(col), int(row))
-            is_owner_turn = bool(owner_cid is not None and current_cid is not None and int(owner_cid) == int(current_cid))
-            should_prompt_echo_warning = bool(
-                not is_admin
-                and breaks_echo_tether
-                and ws_id is not None
-                and owner_cid is not None
-                and echo_cid is not None
-                and int(cid) in (int(owner_cid), int(echo_cid))
-                and is_owner_turn
-            )
-            if should_prompt_echo_warning:
-                request_id = f"echo_tether:{int(time.time()*1000)}:{int(cid)}:{int(col)}:{int(row)}"
-                self._pending_echo_tether_confirms[request_id] = {
-                    "cid": int(cid),
-                    "col": int(col),
-                    "row": int(row),
-                    "ws_id": int(ws_id),
-                }
-                try:
-                    self._lan.send_echo_tether_prompt(int(ws_id), request_id)
-                except Exception:
-                    if getattr(self._lan, "_loop", None):
-                        asyncio.run_coroutine_threadsafe(
-                            self._lan._send_async(int(ws_id), {
-                                "type": "echo_tether_prompt",
-                                "request_id": request_id,
-                                "text": "Warning. Moving here will destroy your echo. Proceed?",
-                            }),
-                            self._lan._loop,
-                        )
-                return
-
-            ok, reason, cost = self._lan_try_move(cid, col, row)
-            if not ok:
-                if is_move:
-                    msg["_move_applied"] = False
-                    msg["_move_reject_reason"] = str(reason or "move_rejected")
-                    cols_after, rows_after, _, _, positions_after = self._lan_live_map_data()
-                    after_pos = positions_after.get(cid)
-                    _move_log(
-                        "lan_move_result",
-                        ok=False,
-                        reason=reason,
-                        cost=cost,
-                        before_pos=before_pos,
-                        after_pos=after_pos,
-                        grid={"cols": cols_after, "rows": rows_after},
-                    )
-                self._lan.toast(ws_id, reason or "Can’t move there.")
-            else:
-                msg["_move_applied"] = True
-                msg["_move_reject_reason"] = None
-                cols_after, rows_after, _, _, positions_after = self._lan_live_map_data()
-                after_pos = positions_after.get(cid)
-                map_token_pos_after = None
-                if map_ready:
-                    try:
-                        tok = (getattr(mw, "unit_tokens", {}) or {}).get(int(cid))
-                        if isinstance(tok, dict):
-                            map_token_pos_after = {"col": tok.get("col"), "row": tok.get("row")}
-                    except Exception:
-                        map_token_pos_after = None
-                _move_log(
-                    "lan_move_result",
-                    ok=True,
-                    reason=None,
-                    cost=cost,
-                    before_pos=before_pos,
-                    after_pos=after_pos,
-                    map_token_pos_before=map_token_pos,
-                    map_token_pos_after=map_token_pos_after,
-                    grid={"cols": cols_after, "rows": rows_after},
-                )
-                if breaks_echo_tether:
-                    self._enforce_johns_echo_tether(int(cid))
-                self._expire_reaction_offers()
-                mover = self.combatants.get(int(cid))
-                if mover is not None and isinstance(before_pos, tuple) and isinstance(after_pos, tuple):
-                    fps = self._lan_feet_per_square()
-                    mover_friendly = self._lan_is_friendly_unit(int(cid))
-                    for other_cid, other in list(self.combatants.items()):
-                        try:
-                            ocid = int(other_cid)
-                        except Exception:
-                            continue
-                        if ocid == int(cid):
-                            continue
-                        if self._lan_is_friendly_unit(int(ocid)) == mover_friendly:
-                            continue
-                        if int(getattr(other, "reaction_remaining", 0) or 0) <= 0:
-                            continue
-                        reactor_pos = positions_after.get(int(ocid))
-                        if not (isinstance(reactor_pos, tuple) and len(reactor_pos) == 2):
-                            continue
-                        start_dist = max(abs(int(before_pos[0]) - int(reactor_pos[0])), abs(int(before_pos[1]) - int(reactor_pos[1])))
-                        end_dist = max(abs(int(after_pos[0]) - int(reactor_pos[0])), abs(int(after_pos[1]) - int(reactor_pos[1])))
-                        start_ft = float(start_dist) * fps
-                        end_ft = float(end_dist) * fps
-                        if not (start_ft <= fps + 1e-6 and end_ft > fps + 1e-6):
-                            continue
-                        if bool(getattr(mover, "disengage_active", False)):
-                            continue
-                        choices = self._build_oa_reaction_choices(other, include_war_caster=True)
-                        if not choices:
-                            continue
-                        ws_targets = self._find_ws_for_cid(int(ocid))
-                        self._create_reaction_offer(int(ocid), "leave_reach", int(cid), int(cid), choices, ws_targets)
-                self._lan.toast(ws_id, f"Moved ({cost} ft).")
-        elif typ == "cycle_movement_mode":
-            c = self.combatants.get(cid)
-            if not c:
-                return
-            modes: List[str] = ["normal"]
-            if int(getattr(c, "swim_speed", 0) or 0) > 0:
-                modes.append("swim")
-            if int(getattr(c, "fly_speed", 0) or 0) > 0:
-                modes.append("fly")
-            if int(getattr(c, "burrow_speed", 0) or 0) > 0:
-                modes.append("burrow")
-            current_mode = self._normalize_movement_mode(getattr(c, "movement_mode", "normal"))
-            try:
-                idx = modes.index(current_mode)
-            except ValueError:
-                idx = 0
-            next_mode = modes[(idx + 1) % len(modes)]
-            self._set_movement_mode(int(cid), next_mode)
-            self._rebuild_table(scroll_to_current=True)
-            self._lan.toast(ws_id, f"Movement mode: {self._movement_mode_label(next_mode)}.")
-        elif typ == "dash":
-            c = self.combatants.get(cid)
-            if not c:
-                return
-            spend = str(msg.get("spend") or "").lower()
-            if spend not in ("action", "bonus"):
-                self._lan.toast(ws_id, "Choose action or bonus action, matey.")
-                return
-            if spend == "action":
-                if not self._use_action(c):
-                    self._lan.toast(ws_id, "No actions left, matey.")
-                    return
-                spend_label = "action"
-            else:
-                if not self._use_bonus_action(c):
-                    self._lan.toast(ws_id, "No bonus actions left, matey.")
-                    return
-                spend_label = "bonus action"
-            try:
-                base_speed = int(self._mode_speed(c))
-            except Exception:
-                base_speed = int(getattr(c, "speed", 30) or 30)
-            if bool(getattr(c, "speed_zero_until_turn_end", False)):
-                self._lan.toast(ws_id, "Yer speed is 0 until turn end.")
-                return
-            try:
-                # Match map dash logic: add 30 to both numerator/denominator
-                total = int(getattr(c, "move_total", 0) or 0)
-                rem = int(getattr(c, "move_remaining", 0) or 0)
-                setattr(c, "move_total", total + base_speed)
-                setattr(c, "move_remaining", rem + base_speed)
-                self._log(f"{c.name} dashed (move {rem}/{total} -> {c.move_remaining}/{c.move_total})", cid=cid)
-                self._lan.toast(ws_id, f"Dashed ({spend_label}).")
-                self._rebuild_table(scroll_to_current=True)
-            except Exception:
-                pass
-        elif typ == "perform_action":
-            c = self.combatants.get(cid)
-            if not c:
-                return
-            spend_raw = str(msg.get("spend") or "action").lower()
-            if spend_raw in ("bonus", "bonus_action"):
-                spend = "bonus"
-            elif spend_raw == "reaction":
-                spend = "reaction"
-            else:
-                spend = "action"
-            action_name = str(msg.get("action") or msg.get("name") or "").strip()
-            action_entry = self._find_action_entry(c, spend, action_name)
-            if not action_entry:
-                self._lan.toast(ws_id, "That action ain't in yer sheet, matey.")
-                return
-            if self._is_create_undead_uncommanded_this_turn(c) and self._action_name_key(action_name) != "dodge":
-                self._lan.toast(ws_id, "Uncommanded created undead can only Dodge, matey.")
-                return
-            if self._mount_action_is_restricted(c, action_name):
-                self._lan.toast(ws_id, "Mounted steed can only Dash, Disengage, or Dodge while rider is active.")
-                return
-
-            action_key = self._action_name_key(action_name)
-            if action_key in {"collect yourself (otto's dance)", "collect yourself"} and not self._target_has_otto_dance_active(c):
-                self._lan.toast(ws_id, "Ye ain't under Otto's dance right now.")
-                return
-            action_uses = action_entry.get("uses") if isinstance(action_entry.get("uses"), dict) else {}
-            action_pool_id = str(action_uses.get("pool") or action_uses.get("id") or "").strip()
-            try:
-                action_pool_cost = int(action_uses.get("cost", 1))
-            except Exception:
-                action_pool_cost = 1
-            action_pool_cost = max(1, action_pool_cost)
-            player_name = _resolve_pc_name(cid)
-            if action_pool_id:
-                ok_pool, pool_err = self._consume_resource_pool_for_cast(
-                    caster_name=player_name,
-                    pool_id=action_pool_id,
-                    cost=action_pool_cost,
-                )
-                if not ok_pool:
-                    self._lan.toast(ws_id, pool_err)
-                    return
-            consume_one_of = action_entry.get("consume_one_of") if isinstance(action_entry.get("consume_one_of"), list) else []
-            if consume_one_of:
-                one_of_ok = False
-                one_of_errors: List[str] = []
-                for choice in consume_one_of:
-                    if not isinstance(choice, dict):
-                        continue
-                    choice_type = str(choice.get("type") or "").strip().lower()
-                    if choice_type == "spell_slot":
-                        min_level = _parse_int(choice.get("min_level"), 1) or 1
-                        ok_slot, slot_err, _spent_slot = self._consume_spell_slot_for_cast(player_name, min_level, min_level)
-                        if ok_slot:
-                            one_of_ok = True
-                            break
-                        one_of_errors.append(slot_err)
-                    elif choice_type == "pool":
-                        choice_pool = str(choice.get("pool") or "").strip()
-                        choice_cost = _parse_int(choice.get("cost"), 1) or 1
-                        ok_pool, pool_err = self._consume_resource_pool_for_cast(player_name, choice_pool, choice_cost)
-                        if ok_pool:
-                            one_of_ok = True
-                            break
-                        one_of_errors.append(pool_err)
-                if not one_of_ok:
-                    self._lan.toast(ws_id, next((msg for msg in one_of_errors if msg), "No valid resource option available, matey."))
-                    return
-
-            grant_extra_action = action_key == "action surge"
-            if grant_extra_action:
-                c.action_remaining = int(getattr(c, "action_remaining", 0) or 0) + 1
-                c.action_total = int(getattr(c, "action_total", 1) or 1) + 1
-                spend_label = "free action"
-            elif spend == "bonus":
-                if not self._use_bonus_action(c):
-                    self._lan.toast(ws_id, "No bonus actions left, matey.")
-                    return
-                spend_label = "bonus action"
-            elif spend == "reaction":
-                if not self._use_reaction(c):
-                    self._lan.toast(ws_id, "No reactions left, matey.")
-                    return
-                spend_label = "reaction"
-            else:
-                if not self._use_action(c):
-                    self._lan.toast(ws_id, "No actions left, matey.")
-                    return
-                spend_label = "action"
-
-            if action_key == "dash":
-                try:
-                    base_speed = int(self._mode_speed(c))
-                except Exception:
-                    base_speed = int(getattr(c, "speed", 30) or 30)
-                try:
-                    total = int(getattr(c, "move_total", 0) or 0)
-                    rem = int(getattr(c, "move_remaining", 0) or 0)
-                    setattr(c, "move_total", total + base_speed)
-                    setattr(c, "move_remaining", rem + base_speed)
-                    self._log(
-                        f"{c.name} dashed (move {rem}/{total} -> {c.move_remaining}/{c.move_total})",
-                        cid=cid,
-                    )
-                    self._lan.toast(ws_id, f"Dashed ({spend_label}).")
-                    self._rebuild_table(scroll_to_current=True)
-                except Exception:
-                    pass
-            elif grant_extra_action:
-                self._log(
-                    f"{c.name} used {action_name} ({spend_label}) and gained 1 extra action",
-                    cid=cid,
-                )
-                self._lan.toast(ws_id, "Action Surge used: +1 action.")
-                self._rebuild_table(scroll_to_current=True)
-            else:
-                if action_key == "rage":
-                    setattr(c, "rage_active", True)
-                    stacks = getattr(c, "condition_stacks", None)
-                    if not isinstance(stacks, list):
-                        stacks = []
-                        setattr(c, "condition_stacks", stacks)
-                    if not self._has_condition(c, "rage"):
-                        next_sid = int(self.__dict__.get("_next_stack_id", 1) or 1)
-                        setattr(self, "_next_stack_id", int(next_sid) + 1)
-                        stacks.append(base.ConditionStack(sid=int(next_sid), ctype="rage", remaining_turns=None))
-                    if not any(
-                        isinstance(hook, dict)
-                        and str(hook.get("type") or "").strip().lower() == "rage_upkeep"
-                        for hook in list(getattr(c, "_feature_turn_hooks", []) or [])
-                    ):
-                        self._register_combatant_turn_hook(
-                            c,
-                            {"type": "rage_upkeep", "when": "end_turn", "source": "rage"},
-                        )
-                action_effect = str(action_entry.get("effect") or "").strip().lower()
-                if action_key in {"collect yourself (otto's dance)", "collect yourself"}:
-                    passed, summary = self._attempt_otto_collect_self_action(c)
-                    self._log(summary, cid=cid)
-                    self._lan.toast(ws_id, summary)
-                    self._rebuild_table(scroll_to_current=True)
-                    if passed:
-                        return
-                    return
-                if action_key == "command created undead":
-                    commanded_count = int(self._command_created_undead_for_caster(int(cid)))
-                    self._log(
-                        f"{c.name} commands created undead ({commanded_count} unit{'s' if commanded_count != 1 else ''}).",
-                        cid=cid,
-                    )
-                    self._lan.toast(ws_id, f"Commanded {commanded_count} created undead.")
-                    self._rebuild_table(scroll_to_current=True)
-                    return
-                if action_key == "disengage":
-                    setattr(c, "disengage_active", True)
-                    fps = self._lan_feet_per_square()
-                    mover_pos = dict(self.__dict__.get("_lan_positions", {}) or {}).get(int(cid))
-                    if isinstance(mover_pos, tuple) and len(mover_pos) == 2:
-                        for other_cid, other in list(self.combatants.items()):
-                            try:
-                                ocid = int(other_cid)
-                            except Exception:
-                                continue
-                            if ocid == int(cid):
-                                continue
-                            if self._lan_is_friendly_unit(ocid) == self._lan_is_friendly_unit(int(cid)):
-                                continue
-                            if not self._unit_has_sentinel_feat(other):
-                                continue
-                            if int(getattr(other, "reaction_remaining", 0) or 0) <= 0:
-                                continue
-                            opos = dict(self.__dict__.get("_lan_positions", {}) or {}).get(ocid)
-                            if not (isinstance(opos, tuple) and len(opos) == 2):
-                                continue
-                            dist_ft = max(abs(int(mover_pos[0]) - int(opos[0])), abs(int(mover_pos[1]) - int(opos[1]))) * fps
-                            if dist_ft - 8.0 > 1e-6:
-                                continue
-                            choices = self._build_oa_reaction_choices(other, include_war_caster=False)
-                            if not choices:
-                                continue
-                            ws_targets = self._find_ws_for_cid(ocid)
-                            self._create_reaction_offer(ocid, "sentinel_disengage", int(cid), int(cid), choices, ws_targets)
-                if action_effect in ("recover_spell_slots", "recover_spell_slot") or action_key in ("arcane recovery", "natural recovery (recover spell slots)"):
-                    recover_cfg: Dict[str, Any] = {}
-                    if action_effect in ("recover_spell_slots", "recover_spell_slot"):
-                        recover_cfg = dict(action_entry)
-                    if not recover_cfg:
-                        profile = self._profile_for_player_name(player_name)
-                        feature_name_key = self._action_name_key(action_name)
-                        if isinstance(profile, dict):
-                            for feature in profile.get("features") if isinstance(profile.get("features"), list) else []:
-                                if not isinstance(feature, dict):
-                                    continue
-                                if self._action_name_key(feature.get("name")) != feature_name_key:
-                                    continue
-                                automation = feature.get("automation") if isinstance(feature.get("automation"), dict) else {}
-                                if isinstance(automation.get("recover_spell_slots"), dict):
-                                    recover_cfg = dict(automation.get("recover_spell_slots") or {})
-                                    break
-                    if recover_cfg:
-                        profile = self._profile_for_player_name(player_name)
-                        if isinstance(profile, dict):
-                            ok_recover, recover_err, recovered_levels = self._recover_spell_slots(player_name, profile, recover_cfg)
-                            if ok_recover:
-                                recovered_text = ", ".join(f"L{lvl}" for lvl in recovered_levels)
-                                self._log(f"{c.name} recovers spell slots ({recovered_text}).", cid=cid)
-                                self._lan.toast(ws_id, f"Recovered spell slots: {recovered_text}.")
-                            else:
-                                self._lan.toast(ws_id, recover_err or "Could not recover spell slots, matey.")
-                self._log(f"{c.name} used {action_name} ({spend_label})", cid=cid)
-                self._lan.toast(ws_id, f"Used {action_name}.")
-                self._rebuild_table(scroll_to_current=True)
+            return
         elif typ == "spell_target_request":
             self._ensure_player_commands().spell_target_request(msg, cid=cid, ws_id=ws_id, is_admin=is_admin)
             return
@@ -36551,52 +36043,6 @@ class InitiativeTracker(base.InitiativeTracker):
                 ws_id=ws_id,
                 is_admin=is_admin,
             )
-        elif typ == "use_action":
-            c = self.combatants.get(cid)
-            if not c:
-                return
-            if not self._use_action(c):
-                self._lan.toast(ws_id, "No actions left, matey.")
-                return
-            self._lan.toast(ws_id, "Action used.")
-            self._rebuild_table(scroll_to_current=True)
-        elif typ == "use_bonus_action":
-            c = self.combatants.get(cid)
-            if not c:
-                return
-            if not self._use_bonus_action(c):
-                self._lan.toast(ws_id, "No bonus actions left, matey.")
-                return
-            self._lan.toast(ws_id, "Bonus action used.")
-            self._rebuild_table(scroll_to_current=True)
-        elif typ == "stand_up":
-            c = self.combatants.get(cid)
-            if not c:
-                return
-            if not self._has_condition(c, "prone"):
-                return
-            eff = self._effective_speed(c)
-            if eff <= 0:
-                self._lan.toast(ws_id, "Can't stand up right now (speed is 0).")
-                return
-            cost = max(0, eff // 2)
-            if c.move_remaining < cost:
-                self._lan.toast(ws_id, f"Not enough movement to stand (need {cost} ft).")
-                return
-            c.move_remaining -= cost
-            self._remove_condition_type(c, "prone")
-            self._log(f"stood up (spent {cost} ft, prone removed)", cid=c.cid)
-            self._lan.toast(ws_id, "Stood up.")
-            self._rebuild_table(scroll_to_current=True)
-        elif typ == "reset_turn":
-            if self._lan_restore_turn_snapshot(cid):
-                c = self.combatants.get(cid)
-                if c:
-                    self._log(f"{c.name} reset their turn snapshot.", cid=cid)
-                self._lan.toast(ws_id, "Turn reset.")
-                self._rebuild_table(scroll_to_current=True)
-            else:
-                self._lan.toast(ws_id, "No turn snapshot yet, matey.")
         elif typ == "end_turn":
             active_cid = _normalize_cid_value(
                 getattr(self, "current_cid", None), "lan_action.end_turn.current_cid", log_fn=log_warning
