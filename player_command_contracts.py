@@ -110,6 +110,17 @@ REACTION_RESPONSE_FIELDS: Sequence[str] = (
 )
 
 END_TURN_FIELDS: Sequence[str] = ("type",)
+MOUNT_REQUEST_FIELDS: Sequence[str] = ("type", "rider_cid", "mount_cid")
+MOUNT_RESPONSE_FIELDS: Sequence[str] = ("type", "request_id", "accept")
+DASH_FIELDS: Sequence[str] = ("type", "spend")
+USE_ACTION_FIELDS: Sequence[str] = ("type",)
+USE_BONUS_ACTION_FIELDS: Sequence[str] = ("type",)
+STAND_UP_FIELDS: Sequence[str] = ("type",)
+RESET_TURN_FIELDS: Sequence[str] = ("type",)
+DISMOUNT_FIELDS: Sequence[str] = ("type",)
+MOVE_FIELDS: Sequence[str] = ("type", "to")
+CYCLE_MOVEMENT_MODE_FIELDS: Sequence[str] = ("type",)
+PERFORM_ACTION_FIELDS: Sequence[str] = ("type", "spend", "action", "name")
 MANUAL_OVERRIDE_FIELDS: Sequence[str] = ("type", "hp_delta", "temp_hp_delta")
 REACTION_PREFS_UPDATE_FIELDS: Sequence[str] = ("type", "prefs")
 MANUAL_OVERRIDE_SPELL_SLOT_FIELDS: Sequence[str] = ("type", "slot_level", "delta")
@@ -136,6 +147,27 @@ FIGHTER_MONK_RESOURCE_ACTION_TYPES = frozenset(
         "monk_elemental_attunement",
         "monk_elemental_burst",
         "monk_uncanny_metabolism",
+    }
+)
+
+TURN_LOCAL_COMMAND_TYPES = frozenset(
+    {
+        "mount_request",
+        "mount_response",
+        "dismount",
+        "dash",
+        "use_action",
+        "use_bonus_action",
+        "stand_up",
+        "reset_turn",
+    }
+)
+
+MOVEMENT_ACTION_COMMAND_TYPES = frozenset(
+    {
+        "move",
+        "cycle_movement_mode",
+        "perform_action",
     }
 )
 
@@ -284,6 +316,182 @@ def build_end_turn_contract(
     return build_command_request_contract(
         "end_turn",
         {"type": "end_turn"},
+        cid=cid,
+        ws_id=ws_id,
+        is_admin=is_admin,
+    )
+
+
+def build_mount_request_contract(
+    msg: Dict[str, Any],
+    *,
+    cid: Optional[int],
+    ws_id: Any,
+    is_admin: bool,
+) -> Dict[str, Any]:
+    return build_command_request_contract(
+        "mount_request",
+        _project_payload(msg, MOUNT_REQUEST_FIELDS, "mount_request"),
+        cid=cid,
+        ws_id=ws_id,
+        is_admin=is_admin,
+    )
+
+
+def build_mount_response_contract(
+    msg: Dict[str, Any],
+    *,
+    cid: Optional[int],
+    ws_id: Any,
+    is_admin: bool,
+) -> Dict[str, Any]:
+    return build_command_request_contract(
+        "mount_response",
+        _project_payload(msg, MOUNT_RESPONSE_FIELDS, "mount_response"),
+        cid=cid,
+        ws_id=ws_id,
+        is_admin=is_admin,
+    )
+
+
+def build_dash_contract(
+    msg: Dict[str, Any],
+    *,
+    cid: Optional[int],
+    ws_id: Any,
+    is_admin: bool,
+) -> Dict[str, Any]:
+    return build_command_request_contract(
+        "dash",
+        _project_payload(msg, DASH_FIELDS, "dash"),
+        cid=cid,
+        ws_id=ws_id,
+        is_admin=is_admin,
+    )
+
+
+def build_use_action_contract(
+    msg: Dict[str, Any],
+    *,
+    cid: Optional[int],
+    ws_id: Any,
+    is_admin: bool,
+) -> Dict[str, Any]:
+    return build_command_request_contract(
+        "use_action",
+        _project_payload(msg, USE_ACTION_FIELDS, "use_action"),
+        cid=cid,
+        ws_id=ws_id,
+        is_admin=is_admin,
+    )
+
+
+def build_use_bonus_action_contract(
+    msg: Dict[str, Any],
+    *,
+    cid: Optional[int],
+    ws_id: Any,
+    is_admin: bool,
+) -> Dict[str, Any]:
+    return build_command_request_contract(
+        "use_bonus_action",
+        _project_payload(msg, USE_BONUS_ACTION_FIELDS, "use_bonus_action"),
+        cid=cid,
+        ws_id=ws_id,
+        is_admin=is_admin,
+    )
+
+
+def build_stand_up_contract(
+    msg: Dict[str, Any],
+    *,
+    cid: Optional[int],
+    ws_id: Any,
+    is_admin: bool,
+) -> Dict[str, Any]:
+    return build_command_request_contract(
+        "stand_up",
+        _project_payload(msg, STAND_UP_FIELDS, "stand_up"),
+        cid=cid,
+        ws_id=ws_id,
+        is_admin=is_admin,
+    )
+
+
+def build_reset_turn_contract(
+    msg: Dict[str, Any],
+    *,
+    cid: Optional[int],
+    ws_id: Any,
+    is_admin: bool,
+) -> Dict[str, Any]:
+    return build_command_request_contract(
+        "reset_turn",
+        _project_payload(msg, RESET_TURN_FIELDS, "reset_turn"),
+        cid=cid,
+        ws_id=ws_id,
+        is_admin=is_admin,
+    )
+
+
+def build_dismount_contract(
+    msg: Dict[str, Any],
+    *,
+    cid: Optional[int],
+    ws_id: Any,
+    is_admin: bool,
+) -> Dict[str, Any]:
+    return build_command_request_contract(
+        "dismount",
+        _project_payload(msg, DISMOUNT_FIELDS, "dismount"),
+        cid=cid,
+        ws_id=ws_id,
+        is_admin=is_admin,
+    )
+
+
+def build_move_contract(
+    msg: Dict[str, Any],
+    *,
+    cid: Optional[int],
+    ws_id: Any,
+    is_admin: bool,
+) -> Dict[str, Any]:
+    return build_command_request_contract(
+        "move",
+        _project_payload(msg, MOVE_FIELDS, "move"),
+        cid=cid,
+        ws_id=ws_id,
+        is_admin=is_admin,
+    )
+
+
+def build_cycle_movement_mode_contract(
+    msg: Dict[str, Any],
+    *,
+    cid: Optional[int],
+    ws_id: Any,
+    is_admin: bool,
+) -> Dict[str, Any]:
+    return build_command_request_contract(
+        "cycle_movement_mode",
+        _project_payload(msg, CYCLE_MOVEMENT_MODE_FIELDS, "cycle_movement_mode"),
+        cid=cid,
+        ws_id=ws_id,
+        is_admin=is_admin,
+    )
+
+
+def build_perform_action_contract(
+    msg: Dict[str, Any],
+    *,
+    cid: Optional[int],
+    ws_id: Any,
+    is_admin: bool,
+) -> Dict[str, Any]:
+    return build_command_request_contract(
+        "perform_action",
+        _project_payload(msg, PERFORM_ACTION_FIELDS, "perform_action"),
         cid=cid,
         ws_id=ws_id,
         is_admin=is_admin,

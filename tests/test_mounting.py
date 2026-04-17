@@ -12,6 +12,7 @@ class MountHarness:
     _mount_uses_rider_movement = tracker_mod.InitiativeTracker._mount_uses_rider_movement
     _lan_try_move = tracker_mod.InitiativeTracker._lan_try_move
     _lan_live_map_data = tracker_mod.InitiativeTracker._lan_live_map_data
+    _ensure_player_commands = tracker_mod.InitiativeTracker._ensure_player_commands
     _lan_apply_action = tracker_mod.InitiativeTracker._lan_apply_action
 
     def __init__(self):
@@ -26,6 +27,14 @@ class MountHarness:
         self._pending_mount_requests = {}
         self._lan_toasts = []
         self._lan_payloads = []
+        self._capture_canonical_map_state = lambda prefer_window=True: tracker_mod.MapState.from_legacy(
+            cols=self._lan_grid_cols,
+            rows=self._lan_grid_rows,
+            positions=dict(self._lan_positions),
+            obstacles=set(self._lan_obstacles),
+            rough_terrain=dict(self._lan_rough_terrain),
+        )
+        self._apply_canonical_map_state = lambda state, hydrate_window=False: None
         self._lan = type(
             "LanStub",
             (),
@@ -40,6 +49,7 @@ class MountHarness:
         self._lan_force_state_broadcast = lambda: None
         self._lan_sync_fixed_to_caster_aoes = lambda *_args, **_kwargs: None
         self._lan_handle_aoe_enter_triggers_for_moved_unit = lambda *_args, **_kwargs: None
+        self._lan_handle_environment_triggers_for_moved_unit = lambda *_args, **_kwargs: None
         self._mode_speed = lambda c: int(getattr(c, "speed", 0) or 0)
         self._lan_shortest_cost = lambda *args, **kwargs: 5
         self._find_ws_for_cid = lambda *_args, **_kwargs: []
@@ -202,6 +212,48 @@ class MountingTests(unittest.TestCase):
         self.assertEqual(app._lan_payloads, [])
         self.assertEqual(app._pending_mount_requests, {})
         self.assertIn((12, "Mount request declined."), app._lan_toasts)
+
+    def test_mount_response_accepts_pending_request(self):
+        app = MountHarness()
+        rider = _make_combatant(1, "Rider", speed=30, initiative=14)
+        mount = _make_combatant(2, "Steed", speed=60, initiative=10, can_be_mounted=True)
+        app.combatants = {1: rider, 2: mount}
+        app._pending_mount_requests["mount:1:2"] = {"rider_cid": 1, "mount_cid": 2, "requester_ws": 33}
+
+        app._lan_apply_action(
+            {
+                "type": "mount_response",
+                "_ws_id": 22,
+                "_claimed_cid": 2,
+                "cid": 2,
+                "request_id": "mount:1:2",
+                "accept": True,
+            }
+        )
+
+        self.assertEqual(rider.rider_cid, 2)
+        self.assertEqual(mount.mounted_by_cid, 1)
+        self.assertEqual(app._pending_mount_requests, {})
+
+    def test_dismount_spends_movement_and_clears_mount_state(self):
+        app = MountHarness()
+        rider = _make_combatant(1, "Rider", speed=30, initiative=14)
+        mount = _make_combatant(2, "Steed", speed=60, initiative=10, can_be_mounted=True)
+        rider.move_remaining = 25
+        rider.rider_cid = 2
+        mount.mounted_by_cid = 1
+        mount.mount_shared_turn = True
+        mount.mount_controller_mode = "rider"
+        mount.initiative = rider.initiative
+        app.combatants = {1: rider, 2: mount}
+
+        app._lan_apply_action({"type": "dismount", "_ws_id": 18, "_claimed_cid": 1, "cid": 1})
+
+        self.assertIsNone(rider.rider_cid)
+        self.assertIsNone(mount.mounted_by_cid)
+        self.assertFalse(mount.mount_shared_turn)
+        self.assertEqual(mount.mount_controller_mode, "independent")
+        self.assertEqual(rider.move_remaining, 10)
 
 
 if __name__ == "__main__":
