@@ -12,6 +12,8 @@ Service-owned (this module):
   - player "end turn" gate (turn ownership, summon turn logic)
   - player movement / perform-action family:
     ``move``, ``cycle_movement_mode``, and ``perform_action``
+  - player AoE manipulation family:
+    ``aoe_move`` and ``aoe_remove``
   - player wild-shape family:
     ``wild_shape_apply``, ``wild_shape_pool_set_current``,
     ``wild_shape_revert``, ``wild_shape_regain_use``,
@@ -78,6 +80,7 @@ from typing import TYPE_CHECKING, Any, Dict, Optional
 
 from player_command_contracts import (
     ACTIVE_PROMPT_STATES,
+    AOE_MANIPULATION_COMMAND_TYPES,
     FIGHTER_MONK_RESOURCE_ACTION_TYPES,
     MOVEMENT_ACTION_COMMAND_TYPES,
     SPECIAL_REACTION_TRIGGERS,
@@ -85,6 +88,8 @@ from player_command_contracts import (
     TURN_LOCAL_COMMAND_TYPES,
     WILD_SHAPE_COMMAND_TYPES,
     apply_resume_dispatch,
+    build_aoe_move_contract,
+    build_aoe_remove_contract,
     build_attack_request_contract,
     build_action_surge_use_contract,
     build_cast_aoe_contract,
@@ -717,6 +722,9 @@ class PlayerCommandService:
     }
     _MOVEMENT_ACTION_COMMAND_HANDLERS = {
         command_type: command_type for command_type in MOVEMENT_ACTION_COMMAND_TYPES
+    }
+    _AOE_MANIPULATION_COMMAND_HANDLERS = {
+        command_type: command_type for command_type in AOE_MANIPULATION_COMMAND_TYPES
     }
     _TURN_LOCAL_COMMAND_HANDLERS = {
         command_type: command_type for command_type in TURN_LOCAL_COMMAND_TYPES
@@ -2145,6 +2153,137 @@ class PlayerCommandService:
             request=request_contract,
             known=list(deduped),
             known_limit=int(known_limit),
+        )
+
+    # ------------------------------------------------------------------
+    # AoE manipulation commands (aoe_move / aoe_remove)
+    # ------------------------------------------------------------------
+
+    def dispatch_aoe_manipulation_command(
+        self,
+        msg: Dict[str, Any],
+        *,
+        cid: Optional[int],
+        ws_id: Any,
+        is_admin: bool,
+        claimed: Optional[int] = None,
+    ) -> Dict[str, Any]:
+        command_type = str(msg.get("type") if isinstance(msg, dict) else "").strip().lower()
+        handler_name = self._AOE_MANIPULATION_COMMAND_HANDLERS.get(command_type)
+        if not handler_name:
+            return build_dispatch_result(
+                "aoe_manipulation_command",
+                False,
+                reason="unsupported_command",
+                received_type=command_type,
+            )
+        handler = getattr(self, handler_name, None)
+        if not callable(handler):
+            return build_dispatch_result(
+                command_type,
+                False,
+                reason="handler_missing",
+            )
+        return handler(
+            msg if isinstance(msg, dict) else {},
+            cid=cid,
+            ws_id=ws_id,
+            is_admin=is_admin,
+            claimed=claimed,
+        )
+
+    def aoe_move(
+        self,
+        msg: Dict[str, Any],
+        *,
+        cid: Optional[int],
+        ws_id: Any,
+        is_admin: bool,
+        claimed: Optional[int] = None,
+    ) -> Dict[str, Any]:
+        t = self._tracker
+        request_contract = build_aoe_move_contract(
+            msg,
+            cid=cid,
+            ws_id=ws_id,
+            is_admin=is_admin,
+        )
+        handler = getattr(t, "_handle_aoe_move_request", None)
+        if not callable(handler):
+            return build_dispatch_result(
+                "aoe_move",
+                False,
+                reason="handler_missing",
+                request=request_contract,
+            )
+        try:
+            handler(
+                msg if isinstance(msg, dict) else {},
+                cid=cid,
+                ws_id=ws_id,
+                is_admin=is_admin,
+                claimed=claimed,
+            )
+        except Exception as exc:
+            self._oplog(f"aoe_move handler raised: {exc}", level="warning")
+            return build_dispatch_result(
+                "aoe_move",
+                False,
+                reason="exception",
+                error=str(exc),
+                request=request_contract,
+            )
+        return build_dispatch_result(
+            "aoe_move",
+            True,
+            request=request_contract,
+        )
+
+    def aoe_remove(
+        self,
+        msg: Dict[str, Any],
+        *,
+        cid: Optional[int],
+        ws_id: Any,
+        is_admin: bool,
+        claimed: Optional[int] = None,
+    ) -> Dict[str, Any]:
+        t = self._tracker
+        request_contract = build_aoe_remove_contract(
+            msg,
+            cid=cid,
+            ws_id=ws_id,
+            is_admin=is_admin,
+        )
+        handler = getattr(t, "_handle_aoe_remove_request", None)
+        if not callable(handler):
+            return build_dispatch_result(
+                "aoe_remove",
+                False,
+                reason="handler_missing",
+                request=request_contract,
+            )
+        try:
+            handler(
+                msg if isinstance(msg, dict) else {},
+                cid=cid,
+                ws_id=ws_id,
+                is_admin=is_admin,
+                claimed=claimed,
+            )
+        except Exception as exc:
+            self._oplog(f"aoe_remove handler raised: {exc}", level="warning")
+            return build_dispatch_result(
+                "aoe_remove",
+                False,
+                reason="exception",
+                error=str(exc),
+                request=request_contract,
+            )
+        return build_dispatch_result(
+            "aoe_remove",
+            True,
+            request=request_contract,
         )
 
     # ------------------------------------------------------------------

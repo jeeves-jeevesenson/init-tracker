@@ -91,6 +91,7 @@ from map_state import (
 )
 from ship_blueprints import load_repo_runtime_ship_blueprints
 from player_command_contracts import (
+    AOE_MANIPULATION_COMMAND_TYPES,
     FIGHTER_MONK_RESOURCE_ACTION_TYPES,
     MOVEMENT_ACTION_COMMAND_TYPES,
     SPELL_LAUNCH_COMMAND_TYPES,
@@ -30214,7 +30215,7 @@ class InitiativeTracker(base.InitiativeTracker):
         ``PlayerCommandService`` is the explicit authority seam for migrated
         player commands (attack_request, spell_target_request,
         reaction_response, end_turn, manual_override_hp,
-        move, cycle_movement_mode, perform_action,
+        move, cycle_movement_mode, perform_action, aoe_move, aoe_remove,
         wild_shape_apply, wild_shape_pool_set_current, wild_shape_revert,
         wild_shape_regain_use, wild_shape_regain_spell, wild_shape_set_known,
         mount_request, mount_response, dismount, dash, use_action,
@@ -33812,6 +33813,377 @@ class InitiativeTracker(base.InitiativeTracker):
             self._lan.toast(ws_id, f"Casted {aoe['name']}.")
         return
 
+    def _handle_aoe_move_request(
+        self,
+        msg: Dict[str, Any],
+        *,
+        cid: Optional[int],
+        ws_id: Any,
+        is_admin: bool,
+        claimed: Optional[int],
+    ) -> None:
+        try:
+            log_warning = lambda message: self._lan._append_lan_log(message, level="warning")
+        except Exception:
+            log_warning = None
+
+        aid = msg.get("aid")
+        to = msg.get("to") or {}
+
+        def _typed(value: Any) -> Dict[str, Any]:
+            return {"value": value, "type": type(value).__name__}
+
+        def _send_aoe_move_ack(
+            ok: bool,
+            reason_code: Optional[str] = None,
+            extra: Optional[Dict[str, Any]] = None,
+        ) -> None:
+            if ws_id is None:
+                return
+            lan = getattr(self, "_lan", None)
+            loop = getattr(lan, "_loop", None) if lan else None
+            if not lan or not loop:
+                return
+            payload: Dict[str, Any] = {"type": "aoe_move_ack", "ok": ok}
+            if reason_code:
+                payload["reason_code"] = reason_code
+            if extra:
+                payload.update(extra)
+            coro = lan._send_async(ws_id, payload)
+            try:
+                asyncio.run_coroutine_threadsafe(coro, loop)
+            except Exception:
+                pass
+
+        def _log_aoe_move(decision: str, extra: Optional[Dict[str, Any]] = None) -> None:
+            payload: Dict[str, Any] = {
+                "event": "aoe_move_permission",
+                "decision": decision,
+                "claimedCid": _typed(claimed),
+                "active_cid": _typed(getattr(self, "current_cid", None)),
+                "in_combat": _typed(getattr(self, "in_combat", None)),
+                "turn_enforced": not is_admin,
+                "cid": _typed(cid),
+                "aid": _typed(aid),
+            }
+            if extra:
+                payload.update(extra)
+            try:
+                self._append_lan_log(self._json_dumps(payload), level="info")
+            except Exception:
+                pass
+
+        if not isinstance(aid, int):
+            decision = "reject_invalid_aid"
+            _log_aoe_move(decision)
+            _send_aoe_move_ack(False, reason_code=decision)
+            self._lan.toast(ws_id, "Pick a spell first, matey.")
+            return
+        try:
+            cx = float(to.get("cx"))
+            cy = float(to.get("cy"))
+        except Exception:
+            decision = "reject_invalid_destination"
+            _log_aoe_move(decision)
+            _send_aoe_move_ack(False, reason_code=decision)
+            return
+
+        def _to_float(value: Any) -> Optional[float]:
+            try:
+                return float(value)
+            except Exception:
+                return None
+
+        angle_deg = _to_float(to.get("angle_deg"))
+        ax = _to_float(to.get("ax"))
+        ay = _to_float(to.get("ay"))
+        spread_deg = _to_float(to.get("spread_deg"))
+        mw = getattr(self, "_map_window", None)
+        map_ready = mw is not None and mw.winfo_exists()
+        aoe_store = getattr(mw, "aoes", {}) if map_ready else (self.__dict__.get("_lan_aoes", {}) or {})
+        d = (aoe_store or {}).get(aid)
+        if not d and map_ready:
+            d = (self.__dict__.get("_lan_aoes", {}) or {}).get(aid)
+            if d:
+                mw_aoes = getattr(mw, "aoes", None)
+                if mw_aoes is None:
+                    mw_aoes = {}
+                    setattr(mw, "aoes", mw_aoes)
+                mw_aoes[aid] = dict(d)
+                aoe_store = mw_aoes
+        if not d:
+            decision = "reject_missing_aoe"
+            _log_aoe_move(decision)
+            _send_aoe_move_ack(False, reason_code=decision)
+            return
+        if bool(d.get("fixed_to_caster")):
+            decision = "reject_fixed_to_caster"
+            _log_aoe_move(decision)
+            _send_aoe_move_ack(False, reason_code=decision)
+            self._lan.toast(ws_id, "That self-range spell is fixed to its caster.")
+            return
+        if bool(d.get("pinned")) and not is_admin:
+            decision = "reject_pinned"
+            _log_aoe_move(
+                decision,
+                extra={
+                    "owner_cid": _typed(d.get("owner_cid")),
+                    "anchor_cid": _typed(d.get("anchor_cid")),
+                },
+            )
+            _send_aoe_move_ack(False, reason_code=decision)
+            self._lan.toast(ws_id, "That spell be pinned.")
+            return
+        owner_cid_raw = d.get("owner_cid")
+        anchor_cid_raw = d.get("anchor_cid")
+        owner_cid = _normalize_cid_value(
+            owner_cid_raw, "aoe_move.owner_cid", log_fn=log_warning
+        )
+        anchor_cid = _normalize_cid_value(
+            anchor_cid_raw, "aoe_move.anchor_cid", log_fn=log_warning
+        )
+        if owner_cid_raw is not None and owner_cid_raw != owner_cid:
+            d["owner_cid"] = owner_cid
+        if anchor_cid_raw is not None and anchor_cid_raw != anchor_cid:
+            d["anchor_cid"] = anchor_cid
+        if not is_admin:
+            if owner_cid is None:
+                decision = "reject_missing_owner"
+                _log_aoe_move(
+                    decision,
+                    extra={
+                        "owner_cid": _typed(owner_cid),
+                        "anchor_cid": _typed(anchor_cid),
+                    },
+                )
+                _send_aoe_move_ack(False, reason_code=decision)
+                self._lan.toast(ws_id, "That spell be not yers.")
+                return
+            if cid is None or owner_cid != cid:
+                decision = "reject_owner_mismatch"
+                _log_aoe_move(
+                    decision,
+                    extra={
+                        "owner_cid": _typed(owner_cid),
+                        "anchor_cid": _typed(anchor_cid),
+                    },
+                )
+                _send_aoe_move_ack(False, reason_code=decision)
+                self._lan.toast(ws_id, "That spell be not yers.")
+                return
+        move_per_turn_ft = d.get("move_per_turn_ft")
+        move_remaining_ft = d.get("move_remaining_ft")
+        move_action_type = str(d.get("move_action_type") or "").strip().lower()
+        if not is_admin:
+            current_cid = _normalize_cid_value(
+                getattr(self, "current_cid", None), "aoe_move.current_cid", log_fn=log_warning
+            )
+            on_turn = current_cid is not None and cid is not None and current_cid == cid
+            owner_override = owner_cid is not None and claimed is not None and owner_cid == claimed
+            if not on_turn and not owner_override:
+                decision = "reject_not_turn"
+                _log_aoe_move(
+                    decision,
+                    extra={
+                        "owner_cid": _typed(owner_cid),
+                        "anchor_cid": _typed(anchor_cid),
+                    },
+                )
+                _send_aoe_move_ack(False, reason_code=decision)
+                self._lan.toast(ws_id, "Not yer turn yet, matey.")
+                return
+            owner_combatant = self.combatants.get(int(owner_cid)) if owner_cid in self.combatants else None
+            if move_action_type == "none":
+                decision = "reject_move_action_none"
+                _log_aoe_move(decision)
+                _send_aoe_move_ack(False, reason_code=decision)
+                self._lan.toast(ws_id, "That spell cannot be moved.")
+                return
+            if move_action_type in ("bonus_action", "action", "magic_action"):
+                if owner_combatant is None:
+                    decision = "reject_missing_owner_combatant"
+                    _log_aoe_move(decision)
+                    _send_aoe_move_ack(False, reason_code=decision)
+                    return
+                if move_action_type == "bonus_action":
+                    if int(getattr(owner_combatant, "bonus_action_remaining", 0) or 0) <= 0:
+                        decision = "reject_no_bonus_action"
+                        _log_aoe_move(decision)
+                        _send_aoe_move_ack(False, reason_code=decision)
+                        self._lan.toast(ws_id, "No bonus action left to move that spell.")
+                        return
+                    owner_combatant.bonus_action_remaining = 0
+                else:
+                    if int(getattr(owner_combatant, "action_remaining", 0) or 0) <= 0:
+                        decision = "reject_no_action"
+                        _log_aoe_move(decision)
+                        _send_aoe_move_ack(False, reason_code=decision)
+                        self._lan.toast(ws_id, "No action left to move that spell.")
+                        return
+                    owner_combatant.action_remaining = 0
+            move_limit = None
+            if move_per_turn_ft not in (None, ""):
+                try:
+                    move_limit = float(move_per_turn_ft)
+                except Exception:
+                    move_limit = None
+                if move_limit is not None and move_limit <= 0:
+                    move_limit = None
+            if move_limit is not None:
+                if not on_turn:
+                    decision = "reject_move_not_turn"
+                    _log_aoe_move(
+                        decision,
+                        extra={
+                            "owner_cid": _typed(owner_cid),
+                            "anchor_cid": _typed(anchor_cid),
+                            "move_per_turn_ft": move_per_turn_ft,
+                        },
+                    )
+                    _send_aoe_move_ack(False, reason_code=decision)
+                    self._lan.toast(ws_id, "That spell moves only on yer turn.")
+                    return
+                try:
+                    remaining = float(move_remaining_ft)
+                except Exception:
+                    remaining = move_limit
+                try:
+                    feet_per_square = float(getattr(mw, "feet_per_square", 5.0) or 5.0)
+                except Exception:
+                    feet_per_square = 5.0
+                if feet_per_square <= 0:
+                    feet_per_square = 5.0
+                dx = float(cx) - float(d.get("cx") or 0.0)
+                dy = float(cy) - float(d.get("cy") or 0.0)
+                dist_ft = (dx * dx + dy * dy) ** 0.5 * feet_per_square
+                if dist_ft > remaining + 0.01:
+                    decision = "reject_move_distance"
+                    _log_aoe_move(
+                        decision,
+                        extra={
+                            "owner_cid": _typed(owner_cid),
+                            "anchor_cid": _typed(anchor_cid),
+                            "move_remaining_ft": remaining,
+                            "move_distance_ft": dist_ft,
+                        },
+                    )
+                    _send_aoe_move_ack(False, reason_code=decision)
+                    self._lan.toast(ws_id, f"That spell can only move {remaining:.1f} ft this turn.")
+                    return
+                d["move_remaining_ft"] = max(0.0, float(remaining) - dist_ft)
+        _log_aoe_move(
+            "allow",
+            extra={
+                "owner_cid": _typed(owner_cid),
+                "anchor_cid": _typed(anchor_cid),
+            },
+        )
+        try:
+            if map_ready:
+                cols = int(getattr(mw, "cols", 0))
+                rows = int(getattr(mw, "rows", 0))
+            else:
+                cols = int(getattr(self, "_lan_grid_cols", 0))
+                rows = int(getattr(self, "_lan_grid_rows", 0))
+        except Exception:
+            cols = 0
+            rows = 0
+        before_included = self._lan_compute_included_units_for_aoe(d)
+        d["cx"] = float(cx)
+        d["cy"] = float(cy)
+        kind = str(d.get("kind") or "")
+        if kind in ("line", "cone", "cube", "wall", "square"):
+            if angle_deg is not None:
+                d["angle_deg"] = float(angle_deg)
+            if ax is not None:
+                d["ax"] = float(ax)
+            if ay is not None:
+                d["ay"] = float(ay)
+            if kind == "cone" and spread_deg is not None:
+                d["spread_deg"] = float(spread_deg)
+        facing_synced = False
+        if angle_deg is not None:
+            facing_synced = self._sync_owner_facing_from_rotatable_aoe(d, angle_deg)
+        try:
+            if map_ready and hasattr(mw, "_layout_aoe"):
+                mw._layout_aoe(aid)
+        except Exception:
+            pass
+        try:
+            if map_ready:
+                self._lan_aoes = dict(getattr(mw, "aoes", {}) or {})
+            else:
+                store = getattr(self, "_lan_aoes", {}) or {}
+                store[aid] = dict(d)
+                self._lan_aoes = store
+        except Exception:
+            pass
+        self._lan_handle_aoe_enter_triggers_for_aoe_move(int(aid), d, before_included)
+        self._rebuild_table(scroll_to_current=True)
+        if facing_synced:
+            try:
+                self._lan_force_state_broadcast()
+            except Exception:
+                pass
+        _send_aoe_move_ack(
+            True,
+            extra={
+                "aid": aid,
+                "cx": d.get("cx"),
+                "cy": d.get("cy"),
+                "ax": d.get("ax"),
+                "ay": d.get("ay"),
+                "angle_deg": d.get("angle_deg"),
+                "spread_deg": d.get("spread_deg"),
+            },
+        )
+        return
+
+    def _handle_aoe_remove_request(
+        self,
+        msg: Dict[str, Any],
+        *,
+        cid: Optional[int],
+        ws_id: Any,
+        is_admin: bool,
+        claimed: Optional[int],
+    ) -> None:
+        try:
+            log_warning = lambda message: self._lan._append_lan_log(message, level="warning")
+        except Exception:
+            log_warning = None
+
+        aid = msg.get("aid")
+        if not isinstance(aid, int):
+            self._lan.toast(ws_id, "Pick a spell first, matey.")
+            return
+        mw = getattr(self, "_map_window", None)
+        map_ready = mw is not None and mw.winfo_exists()
+        aoe_store = getattr(mw, "aoes", {}) if map_ready else (self.__dict__.get("_lan_aoes", {}) or {})
+        d = (aoe_store or {}).get(aid)
+        if not d and map_ready:
+            d = (self.__dict__.get("_lan_aoes", {}) or {}).get(aid)
+        if not d:
+            return
+        if bool(d.get("pinned")) and not is_admin:
+            self._lan.toast(ws_id, "That spell be pinned.")
+            return
+        owner_cid_raw = d.get("owner_cid")
+        owner_cid = _normalize_cid_value(
+            owner_cid_raw, "aoe_remove.owner_cid", log_fn=log_warning
+        )
+        if owner_cid_raw is not None and owner_cid_raw != owner_cid:
+            d["owner_cid"] = owner_cid
+        if not is_admin:
+            if owner_cid is None:
+                self._lan.toast(ws_id, "That spell be not yers.")
+                return
+            if cid is None or owner_cid != cid:
+                self._lan.toast(ws_id, "That spell be not yers.")
+                return
+        self._clear_map_spell_effect(int(aid), end_concentration_if_bound=True)
+        return
+
     def _handle_cast_spell_request(
         self,
         msg: Dict[str, Any],
@@ -34718,6 +35090,16 @@ class InitiativeTracker(base.InitiativeTracker):
             )
             return
 
+        if typ in AOE_MANIPULATION_COMMAND_TYPES:
+            self._ensure_player_commands().dispatch_aoe_manipulation_command(
+                msg,
+                cid=cid,
+                ws_id=ws_id,
+                is_admin=is_admin,
+                claimed=claimed,
+            )
+            return
+
         elif typ == "command_resolve":
             caster = self.combatants.get(cid) if cid is not None else None
             if caster is None:
@@ -35339,344 +35721,6 @@ class InitiativeTracker(base.InitiativeTracker):
             }
             self._lan.toast(ws_id, "Pre-summon assigned.")
             return
-        elif typ == "aoe_move":
-            aid = msg.get("aid")
-            to = msg.get("to") or {}
-            def _typed(value: Any) -> Dict[str, Any]:
-                return {"value": value, "type": type(value).__name__}
-
-            def _send_aoe_move_ack(ok: bool, reason_code: Optional[str] = None, extra: Optional[Dict[str, Any]] = None) -> None:
-                if ws_id is None:
-                    return
-                lan = getattr(self, "_lan", None)
-                loop = getattr(lan, "_loop", None) if lan else None
-                if not lan or not loop:
-                    return
-                payload: Dict[str, Any] = {"type": "aoe_move_ack", "ok": ok}
-                if reason_code:
-                    payload["reason_code"] = reason_code
-                if extra:
-                    payload.update(extra)
-                coro = lan._send_async(ws_id, payload)
-                try:
-                    asyncio.run_coroutine_threadsafe(coro, loop)
-                except Exception:
-                    pass
-
-            def _log_aoe_move(decision: str, extra: Optional[Dict[str, Any]] = None) -> None:
-                payload: Dict[str, Any] = {
-                    "event": "aoe_move_permission",
-                    "decision": decision,
-                    "claimedCid": _typed(claimed),
-                    "active_cid": _typed(getattr(self, "current_cid", None)),
-                    "in_combat": _typed(getattr(self, "in_combat", None)),
-                    "turn_enforced": not is_admin,
-                    "cid": _typed(cid),
-                    "aid": _typed(aid),
-                }
-                if extra:
-                    payload.update(extra)
-                try:
-                    self._append_lan_log(self._json_dumps(payload), level="info")
-                except Exception:
-                    pass
-
-            if not isinstance(aid, int):
-                decision = "reject_invalid_aid"
-                _log_aoe_move(decision)
-                _send_aoe_move_ack(False, reason_code=decision)
-                self._lan.toast(ws_id, "Pick a spell first, matey.")
-                return
-            try:
-                cx = float(to.get("cx"))
-                cy = float(to.get("cy"))
-            except Exception:
-                decision = "reject_invalid_destination"
-                _log_aoe_move(decision)
-                _send_aoe_move_ack(False, reason_code=decision)
-                return
-            def _to_float(value: Any) -> Optional[float]:
-                try:
-                    return float(value)
-                except Exception:
-                    return None
-            angle_deg = _to_float(to.get("angle_deg"))
-            ax = _to_float(to.get("ax"))
-            ay = _to_float(to.get("ay"))
-            spread_deg = _to_float(to.get("spread_deg"))
-            mw = getattr(self, "_map_window", None)
-            map_ready = mw is not None and mw.winfo_exists()
-            aoe_store = getattr(mw, "aoes", {}) if map_ready else (self.__dict__.get("_lan_aoes", {}) or {})
-            d = (aoe_store or {}).get(aid)
-            if not d and map_ready:
-                d = (self.__dict__.get("_lan_aoes", {}) or {}).get(aid)
-                if d:
-                    mw_aoes = getattr(mw, "aoes", None)
-                    if mw_aoes is None:
-                        mw_aoes = {}
-                        setattr(mw, "aoes", mw_aoes)
-                    mw_aoes[aid] = dict(d)
-                    aoe_store = mw_aoes
-            if not d:
-                decision = "reject_missing_aoe"
-                _log_aoe_move(decision)
-                _send_aoe_move_ack(False, reason_code=decision)
-                return
-            if bool(d.get("fixed_to_caster")):
-                decision = "reject_fixed_to_caster"
-                _log_aoe_move(decision)
-                _send_aoe_move_ack(False, reason_code=decision)
-                self._lan.toast(ws_id, "That self-range spell is fixed to its caster.")
-                return
-            if bool(d.get("pinned")) and not is_admin:
-                decision = "reject_pinned"
-                _log_aoe_move(
-                    decision,
-                    extra={
-                        "owner_cid": _typed(d.get("owner_cid")),
-                        "anchor_cid": _typed(d.get("anchor_cid")),
-                    },
-                )
-                _send_aoe_move_ack(False, reason_code=decision)
-                self._lan.toast(ws_id, "That spell be pinned.")
-                return
-            owner_cid_raw = d.get("owner_cid")
-            anchor_cid_raw = d.get("anchor_cid")
-            owner_cid = _normalize_cid_value(
-                owner_cid_raw, "aoe_move.owner_cid", log_fn=log_warning
-            )
-            anchor_cid = _normalize_cid_value(
-                anchor_cid_raw, "aoe_move.anchor_cid", log_fn=log_warning
-            )
-            if owner_cid_raw is not None and owner_cid_raw != owner_cid:
-                d["owner_cid"] = owner_cid
-            if anchor_cid_raw is not None and anchor_cid_raw != anchor_cid:
-                d["anchor_cid"] = anchor_cid
-            if not is_admin:
-                if owner_cid is None:
-                    decision = "reject_missing_owner"
-                    _log_aoe_move(
-                        decision,
-                        extra={
-                            "owner_cid": _typed(owner_cid),
-                            "anchor_cid": _typed(anchor_cid),
-                        },
-                    )
-                    _send_aoe_move_ack(False, reason_code=decision)
-                    self._lan.toast(ws_id, "That spell be not yers.")
-                    return
-                if cid is None or owner_cid != cid:
-                    decision = "reject_owner_mismatch"
-                    _log_aoe_move(
-                        decision,
-                        extra={
-                            "owner_cid": _typed(owner_cid),
-                            "anchor_cid": _typed(anchor_cid),
-                        },
-                    )
-                    _send_aoe_move_ack(False, reason_code=decision)
-                    self._lan.toast(ws_id, "That spell be not yers.")
-                    return
-            move_per_turn_ft = d.get("move_per_turn_ft")
-            move_remaining_ft = d.get("move_remaining_ft")
-            move_action_type = str(d.get("move_action_type") or "").strip().lower()
-            if not is_admin:
-                current_cid = _normalize_cid_value(
-                    getattr(self, "current_cid", None), "aoe_move.current_cid", log_fn=log_warning
-                )
-                on_turn = current_cid is not None and cid is not None and current_cid == cid
-                owner_override = owner_cid is not None and claimed is not None and owner_cid == claimed
-                if not on_turn and not owner_override:
-                    decision = "reject_not_turn"
-                    _log_aoe_move(
-                        decision,
-                        extra={
-                            "owner_cid": _typed(owner_cid),
-                            "anchor_cid": _typed(anchor_cid),
-                        },
-                    )
-                    _send_aoe_move_ack(False, reason_code=decision)
-                    self._lan.toast(ws_id, "Not yer turn yet, matey.")
-                    return
-                owner_combatant = self.combatants.get(int(owner_cid)) if owner_cid in self.combatants else None
-                if move_action_type == "none":
-                    decision = "reject_move_action_none"
-                    _log_aoe_move(decision)
-                    _send_aoe_move_ack(False, reason_code=decision)
-                    self._lan.toast(ws_id, "That spell cannot be moved.")
-                    return
-                if move_action_type in ("bonus_action", "action", "magic_action"):
-                    if owner_combatant is None:
-                        decision = "reject_missing_owner_combatant"
-                        _log_aoe_move(decision)
-                        _send_aoe_move_ack(False, reason_code=decision)
-                        return
-                    if move_action_type == "bonus_action":
-                        if int(getattr(owner_combatant, "bonus_action_remaining", 0) or 0) <= 0:
-                            decision = "reject_no_bonus_action"
-                            _log_aoe_move(decision)
-                            _send_aoe_move_ack(False, reason_code=decision)
-                            self._lan.toast(ws_id, "No bonus action left to move that spell.")
-                            return
-                        owner_combatant.bonus_action_remaining = 0
-                    else:
-                        # magic_action maps to consuming the standard action resource.
-                        if int(getattr(owner_combatant, "action_remaining", 0) or 0) <= 0:
-                            decision = "reject_no_action"
-                            _log_aoe_move(decision)
-                            _send_aoe_move_ack(False, reason_code=decision)
-                            self._lan.toast(ws_id, "No action left to move that spell.")
-                            return
-                        owner_combatant.action_remaining = 0
-                move_limit = None
-                if move_per_turn_ft not in (None, ""):
-                    try:
-                        move_limit = float(move_per_turn_ft)
-                    except Exception:
-                        move_limit = None
-                    if move_limit is not None and move_limit <= 0:
-                        move_limit = None
-                if move_limit is not None:
-                    if not on_turn:
-                        decision = "reject_move_not_turn"
-                        _log_aoe_move(
-                            decision,
-                            extra={
-                                "owner_cid": _typed(owner_cid),
-                                "anchor_cid": _typed(anchor_cid),
-                                "move_per_turn_ft": move_per_turn_ft,
-                            },
-                        )
-                        _send_aoe_move_ack(False, reason_code=decision)
-                        self._lan.toast(ws_id, "That spell moves only on yer turn.")
-                        return
-                    try:
-                        remaining = float(move_remaining_ft)
-                    except Exception:
-                        remaining = move_limit
-                    try:
-                        feet_per_square = float(getattr(mw, "feet_per_square", 5.0) or 5.0)
-                    except Exception:
-                        feet_per_square = 5.0
-                    if feet_per_square <= 0:
-                        feet_per_square = 5.0
-                    dx = float(cx) - float(d.get("cx") or 0.0)
-                    dy = float(cy) - float(d.get("cy") or 0.0)
-                    dist_ft = (dx * dx + dy * dy) ** 0.5 * feet_per_square
-                    if dist_ft > remaining + 0.01:
-                        decision = "reject_move_distance"
-                        _log_aoe_move(
-                            decision,
-                            extra={
-                                "owner_cid": _typed(owner_cid),
-                                "anchor_cid": _typed(anchor_cid),
-                                "move_remaining_ft": remaining,
-                                "move_distance_ft": dist_ft,
-                            },
-                        )
-                        _send_aoe_move_ack(False, reason_code=decision)
-                        self._lan.toast(ws_id, f"That spell can only move {remaining:.1f} ft this turn.")
-                        return
-                    d["move_remaining_ft"] = max(0.0, float(remaining) - dist_ft)
-            _log_aoe_move(
-                "allow",
-                extra={
-                    "owner_cid": _typed(owner_cid),
-                    "anchor_cid": _typed(anchor_cid),
-                },
-            )
-            try:
-                if map_ready:
-                    cols = int(getattr(mw, "cols", 0))
-                    rows = int(getattr(mw, "rows", 0))
-                else:
-                    cols = int(getattr(self, "_lan_grid_cols", 0))
-                    rows = int(getattr(self, "_lan_grid_rows", 0))
-            except Exception:
-                cols = 0
-                rows = 0
-            before_included = self._lan_compute_included_units_for_aoe(d)
-            d["cx"] = float(cx)
-            d["cy"] = float(cy)
-            kind = str(d.get("kind") or "")
-            if kind in ("line", "cone", "cube", "wall", "square"):
-                if angle_deg is not None:
-                    d["angle_deg"] = float(angle_deg)
-                if ax is not None:
-                    d["ax"] = float(ax)
-                if ay is not None:
-                    d["ay"] = float(ay)
-                if kind == "cone" and spread_deg is not None:
-                    d["spread_deg"] = float(spread_deg)
-            facing_synced = False
-            if angle_deg is not None:
-                facing_synced = self._sync_owner_facing_from_rotatable_aoe(d, angle_deg)
-            try:
-                if map_ready and hasattr(mw, "_layout_aoe"):
-                    mw._layout_aoe(aid)
-            except Exception:
-                pass
-            try:
-                if map_ready:
-                    self._lan_aoes = dict(getattr(mw, "aoes", {}) or {})
-                else:
-                    store = getattr(self, "_lan_aoes", {}) or {}
-                    store[aid] = dict(d)
-                    self._lan_aoes = store
-            except Exception:
-                pass
-            self._lan_handle_aoe_enter_triggers_for_aoe_move(int(aid), d, before_included)
-            self._rebuild_table(scroll_to_current=True)
-            if facing_synced:
-                try:
-                    self._lan_force_state_broadcast()
-                except Exception:
-                    pass
-            _send_aoe_move_ack(
-                True,
-                extra={
-                    "aid": aid,
-                    "cx": d.get("cx"),
-                    "cy": d.get("cy"),
-                    "ax": d.get("ax"),
-                    "ay": d.get("ay"),
-                    "angle_deg": d.get("angle_deg"),
-                    "spread_deg": d.get("spread_deg"),
-                },
-            )
-            return
-        elif typ == "aoe_remove":
-            aid = msg.get("aid")
-            if not isinstance(aid, int):
-                self._lan.toast(ws_id, "Pick a spell first, matey.")
-                return
-            mw = getattr(self, "_map_window", None)
-            map_ready = mw is not None and mw.winfo_exists()
-            aoe_store = getattr(mw, "aoes", {}) if map_ready else (self.__dict__.get("_lan_aoes", {}) or {})
-            d = (aoe_store or {}).get(aid)
-            if not d and map_ready:
-                d = (self.__dict__.get("_lan_aoes", {}) or {}).get(aid)
-            if not d:
-                return
-            if bool(d.get("pinned")) and not is_admin:
-                self._lan.toast(ws_id, "That spell be pinned.")
-                return
-            owner_cid_raw = d.get("owner_cid")
-            owner_cid = _normalize_cid_value(
-                owner_cid_raw, "aoe_remove.owner_cid", log_fn=log_warning
-            )
-            if owner_cid_raw is not None and owner_cid_raw != owner_cid:
-                d["owner_cid"] = owner_cid
-            if not is_admin:
-                if owner_cid is None:
-                    self._lan.toast(ws_id, "That spell be not yers.")
-                    return
-                if cid is None or owner_cid != cid:
-                    self._lan.toast(ws_id, "That spell be not yers.")
-                    return
-            self._clear_map_spell_effect(int(aid), end_concentration_if_bound=True)
-            return
-
         if typ in TURN_LOCAL_COMMAND_TYPES:
             self._ensure_player_commands().dispatch_turn_local_command(
                 msg,

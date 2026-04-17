@@ -142,6 +142,8 @@ MONK_STEP_OF_WIND_FIELDS: Sequence[str] = ("type", "mode")
 MONK_ELEMENTAL_ATTUNEMENT_FIELDS: Sequence[str] = ("type", "mode")
 MONK_ELEMENTAL_BURST_FIELDS: Sequence[str] = ("type", "damage_type", "movement_mode", "payload")
 MONK_UNCANNY_METABOLISM_FIELDS: Sequence[str] = ("type",)
+AOE_MOVE_FIELDS: Sequence[str] = ("type", "aid", "to")
+AOE_REMOVE_FIELDS: Sequence[str] = ("type", "aid")
 CAST_SPELL_FIELDS: Sequence[str] = (
     "type",
     "spell_slug",
@@ -216,6 +218,13 @@ SPELL_LAUNCH_COMMAND_TYPES = frozenset(
     {
         "cast_spell",
         "cast_aoe",
+    }
+)
+
+AOE_MANIPULATION_COMMAND_TYPES = frozenset(
+    {
+        "aoe_move",
+        "aoe_remove",
     }
 )
 
@@ -881,6 +890,38 @@ def build_monk_uncanny_metabolism_contract(
     return build_command_request_contract(
         "monk_uncanny_metabolism",
         _project_payload(msg, MONK_UNCANNY_METABOLISM_FIELDS, "monk_uncanny_metabolism"),
+        cid=cid,
+        ws_id=ws_id,
+        is_admin=is_admin,
+    )
+
+
+def build_aoe_move_contract(
+    msg: Dict[str, Any],
+    *,
+    cid: Optional[int],
+    ws_id: Any,
+    is_admin: bool,
+) -> Dict[str, Any]:
+    return build_command_request_contract(
+        "aoe_move",
+        _project_payload(msg, AOE_MOVE_FIELDS, "aoe_move"),
+        cid=cid,
+        ws_id=ws_id,
+        is_admin=is_admin,
+    )
+
+
+def build_aoe_remove_contract(
+    msg: Dict[str, Any],
+    *,
+    cid: Optional[int],
+    ws_id: Any,
+    is_admin: bool,
+) -> Dict[str, Any]:
+    return build_command_request_contract(
+        "aoe_remove",
+        _project_payload(msg, AOE_REMOVE_FIELDS, "aoe_remove"),
         cid=cid,
         ws_id=ws_id,
         is_admin=is_admin,
