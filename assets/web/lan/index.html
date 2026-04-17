@@ -5135,6 +5135,7 @@ __DAMAGE_TYPE_OPTIONS__
     ship_deck_wood: "/assets/ships/art/wood.avif",
   };
   const shipDeckTextureCache = new Map();
+  const tokenPortraitCache = new Map();
   let pendingMountRequestId = null;
   let pendingEchoTetherRequestId = null;
   let pendingInitiativeCid = null;
@@ -13051,6 +13052,61 @@ __DAMAGE_TYPE_OPTIONS__
     return entry;
   }
 
+  function normalizeTokenImageUrl(raw){
+    const value = String(raw || "").trim();
+    if (!value) return "";
+    return value;
+  }
+
+  function ensureTokenPortrait(url){
+    const key = normalizeTokenImageUrl(url);
+    if (!key) return null;
+    const cached = tokenPortraitCache.get(key);
+    if (cached){
+      return cached;
+    }
+    const image = new Image();
+    const entry = {status: "loading", image};
+    tokenPortraitCache.set(key, entry);
+    image.decoding = "async";
+    image.onload = () => {
+      entry.status = "ready";
+      scheduleUiFlush({draw:true});
+    };
+    image.onerror = () => {
+      entry.status = "error";
+      scheduleUiFlush({draw:true});
+    };
+    image.src = key;
+    return entry;
+  }
+
+  function tokenPortraitEntry(unit){
+    return ensureTokenPortrait(unit?.token_image_url || unit?.tokenImageUrl || "");
+  }
+
+  function drawTokenPortrait(unit, x, y, radius){
+    const entry = tokenPortraitEntry(unit);
+    if (!entry || entry.status !== "ready" || !entry.image) return false;
+    const image = entry.image;
+    const sourceWidth = Number(image.naturalWidth || image.width || 0);
+    const sourceHeight = Number(image.naturalHeight || image.height || 0);
+    if (!Number.isFinite(sourceWidth) || !Number.isFinite(sourceHeight) || sourceWidth <= 0 || sourceHeight <= 0){
+      return false;
+    }
+    const diameter = Math.max(2, radius * 2);
+    const scale = Math.max(diameter / sourceWidth, diameter / sourceHeight);
+    const drawWidth = sourceWidth * scale;
+    const drawHeight = sourceHeight * scale;
+    ctx.save();
+    ctx.beginPath();
+    ctx.arc(x, y, Math.max(1, radius - 1), 0, Math.PI * 2);
+    ctx.clip();
+    ctx.drawImage(image, x - (drawWidth / 2), y - (drawHeight / 2), drawWidth, drawHeight);
+    ctx.restore();
+    return true;
+  }
+
   function resolveShipDeckPattern(structure){
     const metadata = structureShipRenderMetadata(structure);
     const textureCandidates = deckTextureUrlCandidatesFromRender(metadata.render);
@@ -13973,13 +14029,18 @@ __DAMAGE_TYPE_OPTIONS__
       const facingRad = (tokenFacingDeg(u) * Math.PI) / 180;
       const active = (state.active_cid !== null && cidMatches(state.active_cid, u.cid, "token.activeCid"));
       const mine = (claimedCid != null && cidMatches(claimedCid, u.cid, "token.claimedCid"));
+      const portraitReady = drawTokenPortrait(u, x, y, r);
       ctx.beginPath();
       ctx.arc(x,y,r,0,Math.PI*2);
 
       // color
-      const customFill = u.token_color ? rgbaFromHex(u.token_color, 0.28) : null;
+      const customFill = u.token_color ? rgbaFromHex(u.token_color, portraitReady ? 0.14 : 0.28) : null;
       if (customFill){
         ctx.fillStyle = customFill;
+      } else if (portraitReady && u.role === "enemy") {
+        ctx.fillStyle = "rgba(255,91,91,0.10)";
+      } else if (portraitReady) {
+        ctx.fillStyle = "rgba(106,255,176,0.08)";
       } else if (u.role === "enemy") {
         ctx.fillStyle = "rgba(255,91,91,0.28)";
       } else {

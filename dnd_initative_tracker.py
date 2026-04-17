@@ -4723,6 +4723,7 @@ class LanController:
             "name",
             "role",
             "token_color",
+            "token_image_url",
             "hp",
             "move_remaining",
             "move_total",
@@ -15843,6 +15844,37 @@ class InitiativeTracker(base.InitiativeTracker):
     def _token_border_color_payload(self, c: Any) -> Optional[str]:
         return self._normalize_token_color(getattr(c, "token_border_color", None))
 
+    def _player_profile_token_image_url(self, player_name: Any) -> Optional[str]:
+        try:
+            profile_path = self._find_player_profile_path(player_name)
+        except Exception:
+            return None
+        if not isinstance(profile_path, Path):
+            return None
+        stem = str(profile_path.stem).strip()
+        if not stem:
+            return None
+        cached_path = _profile_picture_cache_dir() / f"{stem}.png"
+        try:
+            if not cached_path.is_file():
+                return None
+        except Exception:
+            return None
+        return f"/assets/profile_pictures/{urllib.parse.quote(stem)}.png"
+
+    def _combatant_token_image_url(self, c: Any) -> Optional[str]:
+        if c is None:
+            return None
+        profile_image_url = self._player_profile_token_image_url(getattr(c, "name", None))
+        if profile_image_url:
+            return profile_image_url
+        monster_slug = self._normalize_monster_slug_value(getattr(c, "monster_slug", None))
+        if not monster_slug:
+            monster_slug = self._normalize_monster_slug_value(getattr(c, "summon_base_monster_slug", None))
+        if not monster_slug:
+            return None
+        return self._local_monster_image_url(monster_slug)
+
     def _lan_sync_aoes_to_map(self, mw: Any) -> None:
         store = getattr(self, "_lan_aoes", {}) or {}
         if not store:
@@ -16963,6 +16995,7 @@ class InitiativeTracker(base.InitiativeTracker):
                     "ally": bool(role in ("pc", "ally")),
                     "token_color": self._token_color_payload(c),
                     "token_border_color": self._token_border_color_payload(c),
+                    "token_image_url": self._combatant_token_image_url(c),
                     "hp": int(getattr(c, "hp", 0) or 0),
                     "max_hp": int(getattr(c, "max_hp", getattr(c, "hp", 0)) or 0),
                     "speed": int(getattr(c, "speed", 0) or 0),
