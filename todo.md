@@ -40,8 +40,7 @@ If you complete an item, move its ID into **Section 5 (Completed archive)** and 
 
 > Prioritized for depth/complexity and dependency risk.
 
-1. **F11** — Custom condition icons
-2. **V01** — Broad Wild Shape quality pass (clarify-first bucket)
+1. **V01** — Broad Wild Shape quality pass (clarify-first bucket)
 
 ---
 
@@ -129,22 +128,6 @@ If you complete an item, move its ID into **Section 5 (Completed archive)** and 
   - `python -m compileall .`
   - targeted LAN/auth tests relevant to touched paths
 
-### F11 — Custom condition icons
-- **Status:** Not started
-- **Impact / Complexity:** Medium / Medium-Hard
-- **Dependencies:** may share infra with F10
-- **Primary files likely touched:**
-  - `/home/runner/work/dnd-initiative-tracker/dnd-initiative-tracker/assets/web/lan/index.html`
-  - `/home/runner/work/dnd-initiative-tracker/dnd-initiative-tracker/helper_script.py`
-  - condition rendering/state paths server+client
-- **Scope:**
-  - Optional icon mapping for conditions,
-  - deterministic fallback to current text/emoji output.
-- **Plan:**
-  1. Introduce icon key/lookup model.
-  2. Render icon when available; fallback otherwise.
-  3. Add focused rendering regression checks.
-
 ### V01 — Broad Wild Shape quality pass (clarify-first)
 - **Status:** Blocked (needs concrete repro list)
 - **Impact / Complexity:** Unknown
@@ -178,6 +161,7 @@ Completed as of 2026-02-15:
 - **2026-04-17:** F08 completed. Canonical map hazards now share the `enter`/`leave`/`start`/`end` trigger vocabulary, stock hazard presets carry damage/save/condition defaults, and non-AoE hazards now flow through the existing environment and movement-damage hooks with focused regression coverage.
 - **2026-04-17:** F09 completed. DM map controls can now auto-suggest hostile-monster movement toward reachable targets, stage a non-destructive preview path with explicit approve/reject controls, and suppress repeated re-suggestions until the turn changes; focused helper regression coverage was added around dash use, approval, and rejection behavior.
 - **2026-04-17:** F10 completed. LAN unit snapshots now expose additive `token_image_url` values derived from existing player profile-picture cache files or local monster images, and the LAN map renderer now caches, circularly crops, and overlays those portraits while preserving the existing color-ring fallback behavior.
+- **2026-04-17:** F11 completed. Condition state now flows through additive `condition_icons` payload entries with icon keys, badge text, and fallback glyphs; the LAN client renders those icons as token badges and merges them into the claimed-unit effects tray while preserving the older `marks` string as a deterministic fallback.
 - **Bug fixes:** B01, B02, B03, B04, B05, B06, B07, B08, B09, B10, B11, B12, B13, B14.
 - **UX:** U01, U02, U03, U04, U05, U06, U07, U08, U09.
 

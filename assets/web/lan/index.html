@@ -5134,6 +5134,28 @@ __DAMAGE_TYPE_OPTIONS__
   const shipDeckTextureKeyFallbacks = {
     ship_deck_wood: "/assets/ships/art/wood.avif",
   };
+  const conditionIconGlyphs = Object.freeze({
+    blinded: "🙈",
+    charmed: "💖",
+    inspired: "🎵",
+    deafened: "🔇",
+    exhaustion: "🥱",
+    frightened: "😱",
+    grappled: "🤼",
+    incapacitated: "⛔",
+    invisible: "🫥",
+    paralyzed: "🧊",
+    petrified: "🪨",
+    poisoned: "🤢",
+    prone: "🛌",
+    restrained: "⛓",
+    stunned: "💫",
+    unconscious: "😴",
+    star_advantage: "⭐",
+    dot_burn: "🔥",
+    dot_poison: "☠",
+    dot_necrotic: "💀",
+  });
   const shipDeckTextureCache = new Map();
   const tokenPortraitCache = new Map();
   let pendingMountRequestId = null;
@@ -12537,10 +12559,47 @@ __DAMAGE_TYPE_OPTIONS__
     auraToggleBtn.setAttribute("title", enabled ? "Click to disable always-on auras." : "Click to enable always-on auras.");
   }
 
+  function resolveConditionIconGlyph(entry){
+    const key = normalizeLowerValue(entry?.key || entry?.id);
+    if (key && conditionIconGlyphs[key]){
+      return conditionIconGlyphs[key];
+    }
+    return String(entry?.icon || "•").trim() || "•";
+  }
+
+  function normalizeConditionIconEntries(unit){
+    const entries = Array.isArray(unit?.condition_icons) ? unit.condition_icons : [];
+    return entries.map((entry) => {
+      if (!entry || typeof entry !== "object") return null;
+      const key = normalizeLowerValue(entry.key || entry.id);
+      const label = String(entry.label || key || "Condition").trim() || "Condition";
+      const badgeText = String(entry.badge_text || entry.badgeText || "").trim();
+      const title = String(entry.title || (badgeText ? `${label} ${badgeText}` : label)).trim() || label;
+      return {
+        key,
+        icon: resolveConditionIconGlyph(entry),
+        label,
+        badgeText,
+        title,
+      };
+    }).filter(Boolean);
+  }
+
+  function effectOverlayEntriesForUnit(unit){
+    const conditionEntries = normalizeConditionIconEntries(unit).map((entry) => ({
+      id: `condition:${entry.key || entry.label}`,
+      icon: entry.icon,
+      name: entry.label,
+      description: entry.title,
+    }));
+    const effectEntries = Array.isArray(unit?.effects) ? unit.effects : [];
+    return [...conditionEntries, ...effectEntries];
+  }
+
   function renderEffectsOverlay(){
     if (!effectsOverlay || !effectsList) return;
     const claimed = getClaimedUnit();
-    const effects = Array.isArray(claimed?.effects) ? claimed.effects : [];
+    const effects = effectOverlayEntriesForUnit(claimed);
     if (!claimed || !effects.length){
       effectsOverlay.classList.add("hidden");
       effectsList.innerHTML = "";
@@ -13104,6 +13163,46 @@ __DAMAGE_TYPE_OPTIONS__
     ctx.clip();
     ctx.drawImage(image, x - (drawWidth / 2), y - (drawHeight / 2), drawWidth, drawHeight);
     ctx.restore();
+    return true;
+  }
+
+  function drawConditionIconBadges(unit, x, y, radius){
+    const icons = normalizeConditionIconEntries(unit).slice(0, 4);
+    if (!icons.length) return false;
+    const badgeSize = Math.max(11, Math.floor(radius * 0.86));
+    const badgeRadius = badgeSize / 2;
+    const gap = Math.max(2, Math.floor(badgeSize * 0.18));
+    const totalWidth = (icons.length * badgeSize) + ((icons.length - 1) * gap);
+    const startX = x - (totalWidth / 2) + badgeRadius;
+    const baseY = y + radius + Math.max(5, badgeRadius * 0.55);
+    icons.forEach((entry, index) => {
+      const cx = startX + (index * (badgeSize + gap));
+      const cy = baseY;
+      ctx.save();
+      ctx.beginPath();
+      ctx.arc(cx, cy, badgeRadius, 0, Math.PI * 2);
+      ctx.fillStyle = "rgba(12,16,24,0.94)";
+      ctx.fill();
+      ctx.lineWidth = 1;
+      ctx.strokeStyle = "rgba(255,255,255,0.36)";
+      ctx.stroke();
+      ctx.font = `${Math.max(8, Math.floor(badgeSize * 0.62))}px system-ui`;
+      ctx.textAlign = "center";
+      ctx.textBaseline = "middle";
+      ctx.fillStyle = "rgba(255,255,255,0.96)";
+      ctx.fillText(entry.icon, cx, cy);
+      if (entry.badgeText){
+        const miniRadius = Math.max(4, Math.floor(badgeSize * 0.24));
+        ctx.beginPath();
+        ctx.arc(cx + (badgeRadius * 0.62), cy + (badgeRadius * 0.62), miniRadius, 0, Math.PI * 2);
+        ctx.fillStyle = "rgba(241,201,95,0.98)";
+        ctx.fill();
+        ctx.font = `700 ${Math.max(6, Math.floor(miniRadius * 1.35))}px system-ui`;
+        ctx.fillStyle = "rgba(19,24,33,0.96)";
+        ctx.fillText(entry.badgeText.slice(0, 2), cx + (badgeRadius * 0.62), cy + (badgeRadius * 0.62) + 0.2);
+      }
+      ctx.restore();
+    });
     return true;
   }
 
@@ -14073,9 +14172,11 @@ __DAMAGE_TYPE_OPTIONS__
         ctx.restore();
       }
 
+      const renderedConditionBadges = drawConditionIconBadges(u, x, y, r);
+
       // condition markers inside
       const marks = (u.marks || "").trim();
-      if (marks){
+      if (!renderedConditionBadges && marks){
         ctx.font = `${Math.max(10, Math.floor(zoom*0.33))}px system-ui`;
         ctx.textAlign = "center";
         ctx.textBaseline = "middle";

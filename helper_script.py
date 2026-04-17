@@ -3453,39 +3453,85 @@ class InitiativeTracker(tk.Tk):
         )
 
     # -------------------------- Effects formatting --------------------------
+    def _effect_icon_entries(self, c: Combatant) -> List[Dict[str, Any]]:
+        entries: List[Dict[str, Any]] = []
+        condition_stacks = list(getattr(c, "condition_stacks", []) or [])
+        if any(getattr(st, "ctype", "") == "star_advantage" for st in condition_stacks):
+            meta = CONDITIONS_META.get("star_advantage", {})
+            entries.append(
+                {
+                    "key": "star_advantage",
+                    "icon": str(meta.get("icon", "⭐")),
+                    "label": str(meta.get("label", "Star Advantage")),
+                    "badge_text": "",
+                    "title": str(meta.get("label", "Star Advantage")),
+                }
+            )
+
+        dot_counts: Dict[str, int] = {}
+        for st in condition_stacks:
+            if getattr(st, "ctype", "") != "dot":
+                continue
+            dtype = str(getattr(st, "dot_type", "") or "dot").strip().lower() or "dot"
+            dot_counts[dtype] = dot_counts.get(dtype, 0) + 1
+        for dtype in ["burn", "poison", "necrotic"]:
+            count = int(dot_counts.get(dtype, 0) or 0)
+            if count <= 0:
+                continue
+            meta = DOT_META.get(dtype, {})
+            label = str(meta.get("label", dtype.title()))
+            entries.append(
+                {
+                    "key": f"dot_{dtype}",
+                    "icon": str(meta.get("icon", "•")),
+                    "label": label,
+                    "count": int(count),
+                    "badge_text": str(count) if count > 1 else "",
+                    "title": f"{label} x{count}" if count > 1 else label,
+                }
+            )
+
+        for st in sorted(condition_stacks, key=lambda item: str(getattr(item, "ctype", "") or "")):
+            ctype = str(getattr(st, "ctype", "") or "").strip()
+            if not ctype or ctype in {"dot", "star_advantage"}:
+                continue
+            meta = CONDITIONS_META.get(ctype, {})
+            label = str(meta.get("label", ctype))
+            remaining_turns = getattr(st, "remaining_turns", None)
+            entries.append(
+                {
+                    "key": ctype,
+                    "icon": str(meta.get("icon", "•")),
+                    "label": label,
+                    "remaining_turns": remaining_turns,
+                    "badge_text": str(int(remaining_turns)) if isinstance(remaining_turns, int) and remaining_turns > 0 else "",
+                    "title": f"{label} ({int(remaining_turns)} turns)" if isinstance(remaining_turns, int) and remaining_turns > 0 else label,
+                }
+            )
+
+        exhaustion_level = int(getattr(c, "exhaustion_level", 0) or 0)
+        if exhaustion_level > 0:
+            meta = CONDITIONS_META.get("exhaustion", {})
+            label = str(meta.get("label", "Exhaustion"))
+            entries.append(
+                {
+                    "key": "exhaustion",
+                    "icon": str(meta.get("icon", "🥱")),
+                    "label": label,
+                    "count": int(exhaustion_level),
+                    "badge_text": str(int(exhaustion_level)),
+                    "title": f"{label} {int(exhaustion_level)}",
+                }
+            )
+
+        return entries
+
     def _format_effects(self, c: Combatant) -> str:
         parts: List[str] = []
-        if any(st.ctype == "star_advantage" for st in c.condition_stacks):
-            parts.append(str(CONDITIONS_META.get("star_advantage", {}).get("icon", "⭐")))
-
-        # DoT: count per type
-        counts: Dict[str, int] = {}
-        for st in c.condition_stacks:
-            if st.ctype != "dot":
-                continue
-            dtype = st.dot_type or "dot"
-            counts[dtype] = counts.get(dtype, 0) + 1
-        for dtype in ["burn", "poison", "necrotic"]:
-            n = counts.get(dtype, 0)
-            if n <= 0:
-                continue
-            icon = DOT_META.get(dtype, {}).get("icon", "•")
-            parts.append(f"{icon}x{n}" if n > 1 else str(icon))
-
-        # Conditions (non-stacking; Exhaustion handled separately)
-        if c.condition_stacks:
-            for st in sorted(c.condition_stacks, key=lambda x: x.ctype):
-                if st.ctype in {"dot", "star_advantage"}:
-                    continue
-                icon = str(CONDITIONS_META.get(st.ctype, {}).get("icon", "•"))
-                if st.remaining_turns is None:
-                    parts.append(icon)
-                else:
-                    parts.append(f"{icon}({st.remaining_turns})")
-
-        if c.exhaustion_level > 0:
-            parts.append(f"{CONDITIONS_META['exhaustion']['icon']}{c.exhaustion_level}")
-
+        for entry in self._effect_icon_entries(c):
+            icon = str(entry.get("icon", "•") or "•")
+            badge_text = str(entry.get("badge_text", "") or "").strip()
+            parts.append(f"{icon}{badge_text}" if badge_text else icon)
         return " ".join(parts)
 
     # -------------------------- Table maintenance --------------------------
