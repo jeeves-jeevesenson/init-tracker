@@ -16,3 +16,6 @@ DNDInitiativeTracker.exe
 manifest.jsonl
 failed_slugs.txt
 monster-list.xml
+
+.claude/
+.codex
