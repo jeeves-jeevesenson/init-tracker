@@ -6,8 +6,22 @@ from pathlib import Path
 
 import dnd_initative_tracker as tracker_mod
 from player_command_contracts import (
+    build_action_surge_use_contract,
     build_attack_request_contract,
+    build_inventory_adjust_consumable_contract,
+    build_lay_on_hands_use_contract,
+    build_monk_elemental_attunement_contract,
+    build_monk_elemental_burst_contract,
+    build_monk_patient_defense_contract,
+    build_monk_step_of_wind_contract,
+    build_monk_uncanny_metabolism_contract,
+    build_manual_override_resource_pool_contract,
+    build_manual_override_spell_slot_contract,
+    build_reaction_prefs_update_contract,
     build_resume_dispatch,
+    build_second_wind_use_contract,
+    build_star_advantage_use_contract,
+    build_use_consumable_contract,
 )
 from player_command_service import PromptState
 
@@ -291,3 +305,130 @@ class PromptSnapshotPersistenceTests(unittest.TestCase):
             self.assertIn(prompt["prompt_id"], restored._pending_reaction_offers)
             self.assertIn(prompt["prompt_id"], restored._pending_shield_resolutions)
 
+
+class PlayerResourceCommandContractTests(unittest.TestCase):
+    def test_resource_command_contract_builders_shape_payloads(self):
+        spell_slot = build_manual_override_spell_slot_contract(
+            {"type": "manual_override_spell_slot", "slot_level": 2, "delta": -1, "ignored": "x"},
+            cid=1,
+            ws_id=10,
+            is_admin=False,
+        )
+        self.assertEqual(spell_slot["command_type"], "manual_override_spell_slot")
+        self.assertEqual(spell_slot["payload"], {"type": "manual_override_spell_slot", "slot_level": 2, "delta": -1})
+
+        pool = build_manual_override_resource_pool_contract(
+            {"type": "manual_override_resource_pool", "pool_id": "focus_points", "delta": 1},
+            cid=1,
+            ws_id=10,
+            is_admin=True,
+        )
+        self.assertEqual(pool["payload"]["pool_id"], "focus_points")
+        self.assertEqual(pool["actor"]["is_admin"], True)
+
+        prefs = build_reaction_prefs_update_contract(
+            {"type": "reaction_prefs_update", "prefs": {"shield": "auto"}},
+            cid=1,
+            ws_id=10,
+            is_admin=False,
+        )
+        self.assertEqual((prefs["contract"] or {}).get("schema"), "player_command.reaction_prefs_update.request")
+        self.assertEqual(prefs["payload"]["prefs"], {"shield": "auto"})
+
+        lay_on_hands = build_lay_on_hands_use_contract(
+            {"type": "lay_on_hands_use", "target_cid": 2, "amount": 5, "cure_poisoned": False},
+            cid=1,
+            ws_id=10,
+            is_admin=False,
+        )
+        self.assertEqual(lay_on_hands["payload"]["target_cid"], 2)
+        self.assertEqual(lay_on_hands["payload"]["amount"], 5)
+
+        adjust = build_inventory_adjust_consumable_contract(
+            {"type": "inventory_adjust_consumable", "consumable_id": "lesser_healing_potion", "delta": 1},
+            cid=1,
+            ws_id=10,
+            is_admin=False,
+        )
+        self.assertEqual(adjust["payload"]["consumable_id"], "lesser_healing_potion")
+        self.assertEqual(adjust["payload"]["delta"], 1)
+
+        use = build_use_consumable_contract(
+            {"type": "use_consumable", "id": "lesser_healing_potion"},
+            cid=1,
+            ws_id=10,
+            is_admin=False,
+        )
+        self.assertEqual(use["payload"]["id"], "lesser_healing_potion")
+
+        second_wind = build_second_wind_use_contract(
+            {"type": "second_wind_use", "healing_roll": 7, "ignored": "x"},
+            cid=1,
+            ws_id=10,
+            is_admin=False,
+        )
+        self.assertEqual(second_wind["payload"], {"type": "second_wind_use", "healing_roll": 7})
+
+        action_surge = build_action_surge_use_contract(
+            {"type": "action_surge_use", "ignored": "x"},
+            cid=1,
+            ws_id=10,
+            is_admin=False,
+        )
+        self.assertEqual(action_surge["payload"], {"type": "action_surge_use"})
+
+        star_advantage = build_star_advantage_use_contract(
+            {"type": "star_advantage_use", "ignored": "x"},
+            cid=1,
+            ws_id=10,
+            is_admin=False,
+        )
+        self.assertEqual(star_advantage["payload"], {"type": "star_advantage_use"})
+
+        patient_defense = build_monk_patient_defense_contract(
+            {"type": "monk_patient_defense", "mode": "focus", "ignored": "x"},
+            cid=1,
+            ws_id=10,
+            is_admin=False,
+        )
+        self.assertEqual(patient_defense["payload"], {"type": "monk_patient_defense", "mode": "focus"})
+
+        step_of_wind = build_monk_step_of_wind_contract(
+            {"type": "monk_step_of_wind", "mode": "free", "ignored": "x"},
+            cid=1,
+            ws_id=10,
+            is_admin=False,
+        )
+        self.assertEqual(step_of_wind["payload"], {"type": "monk_step_of_wind", "mode": "free"})
+
+        attunement = build_monk_elemental_attunement_contract(
+            {"type": "monk_elemental_attunement", "mode": "activate", "ignored": "x"},
+            cid=1,
+            ws_id=10,
+            is_admin=False,
+        )
+        self.assertEqual(attunement["payload"], {"type": "monk_elemental_attunement", "mode": "activate"})
+
+        burst = build_monk_elemental_burst_contract(
+            {
+                "type": "monk_elemental_burst",
+                "damage_type": "fire",
+                "movement_mode": "push",
+                "payload": {"cx": 4, "cy": 5},
+                "ignored": "x",
+            },
+            cid=1,
+            ws_id=10,
+            is_admin=False,
+        )
+        self.assertEqual(burst["payload"]["damage_type"], "fire")
+        self.assertEqual(burst["payload"]["movement_mode"], "push")
+        self.assertEqual(burst["payload"]["payload"], {"cx": 4, "cy": 5})
+
+        uncanny = build_monk_uncanny_metabolism_contract(
+            {"type": "monk_uncanny_metabolism", "ignored": "x"},
+            cid=1,
+            ws_id=10,
+            is_admin=False,
+        )
+        self.assertEqual(uncanny["payload"], {"type": "monk_uncanny_metabolism"})

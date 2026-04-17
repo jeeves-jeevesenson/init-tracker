@@ -111,6 +111,20 @@ REACTION_RESPONSE_FIELDS: Sequence[str] = (
 
 END_TURN_FIELDS: Sequence[str] = ("type",)
 MANUAL_OVERRIDE_FIELDS: Sequence[str] = ("type", "hp_delta", "temp_hp_delta")
+REACTION_PREFS_UPDATE_FIELDS: Sequence[str] = ("type", "prefs")
+MANUAL_OVERRIDE_SPELL_SLOT_FIELDS: Sequence[str] = ("type", "slot_level", "delta")
+MANUAL_OVERRIDE_RESOURCE_POOL_FIELDS: Sequence[str] = ("type", "pool_id", "delta")
+LAY_ON_HANDS_USE_FIELDS: Sequence[str] = ("type", "target_cid", "amount", "cure_poisoned")
+INVENTORY_ADJUST_CONSUMABLE_FIELDS: Sequence[str] = ("type", "consumable_id", "id", "delta")
+USE_CONSUMABLE_FIELDS: Sequence[str] = ("type", "consumable_id", "id")
+SECOND_WIND_USE_FIELDS: Sequence[str] = ("type", "healing_roll", "roll", "rolled")
+ACTION_SURGE_USE_FIELDS: Sequence[str] = ("type",)
+STAR_ADVANTAGE_USE_FIELDS: Sequence[str] = ("type",)
+MONK_PATIENT_DEFENSE_FIELDS: Sequence[str] = ("type", "mode")
+MONK_STEP_OF_WIND_FIELDS: Sequence[str] = ("type", "mode")
+MONK_ELEMENTAL_ATTUNEMENT_FIELDS: Sequence[str] = ("type", "mode")
+MONK_ELEMENTAL_BURST_FIELDS: Sequence[str] = ("type", "damage_type", "movement_mode", "payload")
+MONK_UNCANNY_METABOLISM_FIELDS: Sequence[str] = ("type",)
 
 
 def _copy(value: Any) -> Any:
@@ -278,6 +292,230 @@ def build_manual_override_contract(
             "hp_delta": hp_delta,
             "temp_hp_delta": temp_hp_delta,
         },
+        cid=cid,
+        ws_id=ws_id,
+        is_admin=is_admin,
+    )
+
+
+def build_manual_override_spell_slot_contract(
+    msg: Dict[str, Any],
+    *,
+    cid: Optional[int],
+    ws_id: Any,
+    is_admin: bool,
+) -> Dict[str, Any]:
+    return build_command_request_contract(
+        "manual_override_spell_slot",
+        _project_payload(msg, MANUAL_OVERRIDE_SPELL_SLOT_FIELDS, "manual_override_spell_slot"),
+        cid=cid,
+        ws_id=ws_id,
+        is_admin=is_admin,
+    )
+
+
+def build_manual_override_resource_pool_contract(
+    msg: Dict[str, Any],
+    *,
+    cid: Optional[int],
+    ws_id: Any,
+    is_admin: bool,
+) -> Dict[str, Any]:
+    return build_command_request_contract(
+        "manual_override_resource_pool",
+        _project_payload(msg, MANUAL_OVERRIDE_RESOURCE_POOL_FIELDS, "manual_override_resource_pool"),
+        cid=cid,
+        ws_id=ws_id,
+        is_admin=is_admin,
+    )
+
+
+def build_reaction_prefs_update_contract(
+    msg: Dict[str, Any],
+    *,
+    cid: Optional[int],
+    ws_id: Any,
+    is_admin: bool,
+) -> Dict[str, Any]:
+    return build_command_request_contract(
+        "reaction_prefs_update",
+        _project_payload(msg, REACTION_PREFS_UPDATE_FIELDS, "reaction_prefs_update"),
+        cid=cid,
+        ws_id=ws_id,
+        is_admin=is_admin,
+    )
+
+
+def build_lay_on_hands_use_contract(
+    msg: Dict[str, Any],
+    *,
+    cid: Optional[int],
+    ws_id: Any,
+    is_admin: bool,
+) -> Dict[str, Any]:
+    return build_command_request_contract(
+        "lay_on_hands_use",
+        _project_payload(msg, LAY_ON_HANDS_USE_FIELDS, "lay_on_hands_use"),
+        cid=cid,
+        ws_id=ws_id,
+        is_admin=is_admin,
+    )
+
+
+def build_inventory_adjust_consumable_contract(
+    msg: Dict[str, Any],
+    *,
+    cid: Optional[int],
+    ws_id: Any,
+    is_admin: bool,
+) -> Dict[str, Any]:
+    return build_command_request_contract(
+        "inventory_adjust_consumable",
+        _project_payload(msg, INVENTORY_ADJUST_CONSUMABLE_FIELDS, "inventory_adjust_consumable"),
+        cid=cid,
+        ws_id=ws_id,
+        is_admin=is_admin,
+    )
+
+
+def build_use_consumable_contract(
+    msg: Dict[str, Any],
+    *,
+    cid: Optional[int],
+    ws_id: Any,
+    is_admin: bool,
+) -> Dict[str, Any]:
+    return build_command_request_contract(
+        "use_consumable",
+        _project_payload(msg, USE_CONSUMABLE_FIELDS, "use_consumable"),
+        cid=cid,
+        ws_id=ws_id,
+        is_admin=is_admin,
+    )
+
+
+def build_second_wind_use_contract(
+    msg: Dict[str, Any],
+    *,
+    cid: Optional[int],
+    ws_id: Any,
+    is_admin: bool,
+) -> Dict[str, Any]:
+    return build_command_request_contract(
+        "second_wind_use",
+        _project_payload(msg, SECOND_WIND_USE_FIELDS, "second_wind_use"),
+        cid=cid,
+        ws_id=ws_id,
+        is_admin=is_admin,
+    )
+
+
+def build_action_surge_use_contract(
+    msg: Dict[str, Any],
+    *,
+    cid: Optional[int],
+    ws_id: Any,
+    is_admin: bool,
+) -> Dict[str, Any]:
+    return build_command_request_contract(
+        "action_surge_use",
+        _project_payload(msg, ACTION_SURGE_USE_FIELDS, "action_surge_use"),
+        cid=cid,
+        ws_id=ws_id,
+        is_admin=is_admin,
+    )
+
+
+def build_star_advantage_use_contract(
+    msg: Dict[str, Any],
+    *,
+    cid: Optional[int],
+    ws_id: Any,
+    is_admin: bool,
+) -> Dict[str, Any]:
+    return build_command_request_contract(
+        "star_advantage_use",
+        _project_payload(msg, STAR_ADVANTAGE_USE_FIELDS, "star_advantage_use"),
+        cid=cid,
+        ws_id=ws_id,
+        is_admin=is_admin,
+    )
+
+
+def build_monk_patient_defense_contract(
+    msg: Dict[str, Any],
+    *,
+    cid: Optional[int],
+    ws_id: Any,
+    is_admin: bool,
+) -> Dict[str, Any]:
+    return build_command_request_contract(
+        "monk_patient_defense",
+        _project_payload(msg, MONK_PATIENT_DEFENSE_FIELDS, "monk_patient_defense"),
+        cid=cid,
+        ws_id=ws_id,
+        is_admin=is_admin,
+    )
+
+
+def build_monk_step_of_wind_contract(
+    msg: Dict[str, Any],
+    *,
+    cid: Optional[int],
+    ws_id: Any,
+    is_admin: bool,
+) -> Dict[str, Any]:
+    return build_command_request_contract(
+        "monk_step_of_wind",
+        _project_payload(msg, MONK_STEP_OF_WIND_FIELDS, "monk_step_of_wind"),
+        cid=cid,
+        ws_id=ws_id,
+        is_admin=is_admin,
+    )
+
+
+def build_monk_elemental_attunement_contract(
+    msg: Dict[str, Any],
+    *,
+    cid: Optional[int],
+    ws_id: Any,
+    is_admin: bool,
+) -> Dict[str, Any]:
+    return build_command_request_contract(
+        "monk_elemental_attunement",
+        _project_payload(msg, MONK_ELEMENTAL_ATTUNEMENT_FIELDS, "monk_elemental_attunement"),
+        cid=cid,
+        ws_id=ws_id,
+        is_admin=is_admin,
+    )
+
+
+def build_monk_elemental_burst_contract(
+    msg: Dict[str, Any],
+    *,
+    cid: Optional[int],
+    ws_id: Any,
+    is_admin: bool,
+) -> Dict[str, Any]:
+    return build_command_request_contract(
+        "monk_elemental_burst",
+        _project_payload(msg, MONK_ELEMENTAL_BURST_FIELDS, "monk_elemental_burst"),
+        cid=cid,
+        ws_id=ws_id,
+        is_admin=is_admin,
+    )
+
+
+def build_monk_uncanny_metabolism_contract(
+    msg: Dict[str, Any],
+    *,
+    cid: Optional[int],
+    ws_id: Any,
+    is_admin: bool,
+) -> Dict[str, Any]:
+    return build_command_request_contract(
+        "monk_uncanny_metabolism",
+        _project_payload(msg, MONK_UNCANNY_METABOLISM_FIELDS, "monk_uncanny_metabolism"),
         cid=cid,
         ws_id=ws_id,
         is_admin=is_admin,
@@ -585,4 +823,3 @@ def build_hellish_rebuke_resolve_start_payload(
 def prompt_resume_legacy_message(prompt: Dict[str, Any]) -> Dict[str, Any]:
     resume_dispatch = prompt.get("resume") if isinstance(prompt.get("resume"), dict) else None
     return apply_resume_dispatch(resume_dispatch) or {}
-

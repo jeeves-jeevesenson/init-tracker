@@ -9,6 +9,7 @@ class LanManualOverrideTests(unittest.TestCase):
         app._oplog = lambda *args, **kwargs: None
         app._is_admin_token_valid = lambda token: False
         app._summon_can_be_controlled_by = lambda claimed, target: False
+        app._is_valid_summon_turn_for_controller = lambda controlling, target, current: True
         app._pc_name_for = lambda cid: "Alyra"
         app._log_messages = []
         app._log = lambda message, cid=None: app._log_messages.append((cid, message))
@@ -96,6 +97,86 @@ class LanManualOverrideTests(unittest.TestCase):
         self.assertEqual(app._broadcast_calls, 1)
         self.assertTrue(any("Focus Points 2->1 (-1)" in message for _cid, message in app._log_messages))
         self.assertIn((17, "Focus Points updated."), app._lan_toasts)
+
+    def test_reaction_prefs_update_sets_allowed_preferences(self):
+        app = self._build_app()
+        app._reaction_prefs_by_cid = {}
+        app.combatants = {
+            1: type("C", (), {"cid": 1, "name": "Alyra"})(),
+        }
+
+        app._lan_apply_action(
+            {
+                "type": "reaction_prefs_update",
+                "cid": 1,
+                "_claimed_cid": 1,
+                "_ws_id": 18,
+                "prefs": {"shield": "auto", "interception": "off", "unknown": "ask"},
+            }
+        )
+
+        self.assertEqual(app._reaction_prefs_by_cid.get(1), {"shield": "auto", "interception": "off"})
+
+    def test_inventory_adjust_consumable_updates_quantity_and_logs(self):
+        app = self._build_app()
+        app.combatants = {
+            1: type("C", (), {"cid": 1, "name": "Alyra"})(),
+        }
+        app._consumables_registry_payload = lambda: {"lesser_healing_potion": {"name": "Lesser Healing Potion"}}
+        adjust_calls = []
+        app._adjust_inventory_consumable_quantity = (
+            lambda player_name, consumable_id, delta: (
+                adjust_calls.append((player_name, consumable_id, delta)) or True,
+                "",
+                3,
+            )
+        )
+
+        app._lan_apply_action(
+            {
+                "type": "inventory_adjust_consumable",
+                "cid": 1,
+                "_claimed_cid": 1,
+                "_ws_id": 19,
+                "consumable_id": "lesser_healing_potion",
+                "delta": 1,
+            }
+        )
+
+        self.assertEqual(adjust_calls, [("Alyra", "lesser_healing_potion", 1)])
+        self.assertEqual(app._rebuild_calls, 1)
+        self.assertIn((19, "Lesser Healing Potion: 3 in inventory."), app._lan_toasts)
+        self.assertTrue(any("adjusted inventory" in message for _cid, message in app._log_messages))
+
+    def test_use_consumable_uses_inventory_helper_and_reports_heal(self):
+        app = self._build_app()
+        app.combatants = {
+            1: type("C", (), {"cid": 1, "name": "Alyra", "hp": 10, "max_hp": 20})(),
+        }
+        app._consumables_registry_payload = lambda: {"lesser_healing_potion": {"name": "Lesser Healing Potion"}}
+        use_calls = []
+        app._use_inventory_consumable = (
+            lambda player_name, consumable_id, combatant: (
+                use_calls.append((player_name, consumable_id, int(combatant.cid))) or True,
+                "",
+                6,
+            )
+        )
+
+        app._lan_apply_action(
+            {
+                "type": "use_consumable",
+                "cid": 1,
+                "_claimed_cid": 1,
+                "_ws_id": 20,
+                "consumable_id": "lesser_healing_potion",
+            }
+        )
+
+        self.assertEqual(use_calls, [("Alyra", "lesser_healing_potion", 1)])
+        self.assertEqual(app._rebuild_calls, 1)
+        self.assertIn((20, "Lesser Healing Potion: healed 6 HP."), app._lan_toasts)
+        self.assertTrue(any("uses Lesser Healing Potion and heals 6 HP" in message for _cid, message in app._log_messages))
 
 
 if __name__ == "__main__":

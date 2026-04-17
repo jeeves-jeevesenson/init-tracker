@@ -1,267 +1,54 @@
-# Copilot Instructions — dnd-initiative-tracker
-
-## Repository summary
-
-This repository contains two important product tracks that now coexist:
-
-1. **D&D Initiative Tracker product code**
-   - Python desktop app for the DM using Tkinter
-   - Optional LAN/mobile web client served through FastAPI + WebSockets
-   - Structured YAML game data for spells, monsters, players, presets, and related content
-
-2. **Orchestration / automation code**
-   - OpenAI-backed planning and review
-   - GitHub issue/task intake
-   - Plain GitHub Copilot execution dispatch
-   - Task/program state management
-   - Inspection and notification flows
-
-Treat the repository as the source of truth. Inspect the actual code before making implementation decisions.
-
----
-
-## Important repo facts
-
-- The historical main script filename is `dnd_initative_tracker.py` (misspelled). **Do not rename it** unless the user explicitly asks.
-- Preserve YAML compatibility unless the task explicitly includes a migration plan.
-- Preserve existing LAN/client compatibility unless the task explicitly changes message contracts.
-- Do not assume the repo is cleanly separated; verify architecture from the code.
-
----
-
-## Execution model
-
-For automation/orchestrator work, assume this production model:
-
-- **OpenAI** = planner / reviewer / continuation brain
-- **orchestrator** = dispatcher / state machine / persistence / policy layer
-- **plain GitHub Copilot fallback** = execution worker and production default
-- **human** = reviewer / approver / escalation point
-
-Treat plain Copilot fallback as first-class production execution, not a degraded emergency mode.
-Do **not** depend on GitHub custom-agent launch as the required execution path.
-Internal worker labels such as Initiative Smith or Tracker Engineer are orchestration metadata only unless the task explicitly says otherwise.
-
----
-
-## Primary repo areas
-
-Likely important areas include, but are not limited to:
-
-- `dnd_initative_tracker.py` — application entry point, main app class, combat flow, LAN controller/config
-- `helper_script.py` — core UI and combat helpers
-- `assets/web/` — LAN/mobile and DM web UI
-- `scripts/` — install/update/uninstall tooling
-- `Spells/`, `Monsters/`, player/preset YAML — structured data
-- `orchestrator/` — task/program automation, OpenAI integration, dispatch, persistence, inspection
-
-Do not assume these are the only relevant files. Inspect before editing.
-
----
-
-## Default working style
-
-When implementation is requested, default to:
-
-**inspect relevant files briefly → implement scoped changes → run focused validation → report exact results**
-
-Do this in one coherent pass unless there is a real blocker.
-
-If issue/comment/dispatch context already provides scoped implementation instructions, begin implementation after minimal repo inspection.
-Do not convert implementation-ready requests into planning-only responses.
-
----
-
-## Discovery guidance
-
-Prefer deterministic repo inspection over guesswork.
-
-Use standard Unix tools such as:
-
-- `find`
-- `grep -R`
-- targeted file inspection
-- existing tests
-- existing docs and config
-
-Do not invent file paths, classes, routes, schemas, or architecture.
-Discover them from the repository first.
-
----
-
-## Scope discipline
-
-- Stay scoped to the user request.
-- Prefer repo evidence over generic theory.
-- Reuse existing patterns, models, routes, utilities, and tests where practical.
-- Avoid speculative refactors not tied to the requested outcome.
-- The goal is the **smallest complete correct scoped solution**, not the smallest diff.
-- Large multi-file or thousand-line diffs are acceptable when they are the smallest complete safe solution.
-- For umbrella issues, prefer one concrete bounded slice with real ownership movement over timid partial nibbling.
-- Do not under-deliver by stopping after one tiny path if sibling paths are clearly in-scope and required for a truthful slice.
-- Treat milestone sequencing, concise scope notes, implementation briefs, validation guidance, non-goals, and acceptable hybrid states in issue/comment/dispatch packets as authoritative task-shaping input.
-- Preserve compatibility constraints, but do not use them as excuses to avoid substantive implementation.
-- Do not create repeated approval loops unless blocked by true ambiguity, missing prerequisites, or explicit scope risk.
-
----
-
-## Anti-waste rules
-
-- Do **not** ask the user to restate requirements already present in-thread.
-- Do **not** paraphrase prompt text back unless clarifying a real ambiguity.
-- Do **not** spend time on broad repo tours once the relevant paths are known.
-- Do **not** default to “just planning” when implementation was requested.
-- Do **not** assume a missing capability without first checking the repo or attempting the relevant operation.
-- Do **not** split one coherent implementation into many tiny passes unless the task truly requires that.
-
----
-
-## Tracker product engineering guardrails
-
-When touching the D&D tracker application:
-
-- Keep Tkinter responsive; do not block the UI thread.
-- Keep server/network work off the UI thread.
-- Preserve thread-safe queue/message-passing behavior where it already exists.
-- Treat combat/session state as shared product truth across desktop and web flows.
-- Be careful about:
-  - desktop/web state drift
-  - reconnect behavior
-  - serialization and cleanup
-  - LAN/mobile client compatibility
-  - persistence/save/load consistency
-- Preserve YAML schemas and saved-state compatibility unless a migration is intentionally included.
-- Preserve LAN trust boundaries; do not broaden internet exposure unless explicitly requested.
-- Do not casually break:
-  - desktop DM workflows
-  - LAN/mobile client flows
-  - save/load behavior
-  - existing web surfaces
-
----
-
-## Migration guidance for the tracker product
-
-The long-term product direction is toward:
-
-- backend/service-owned state
-- web-driven DM interface
-- reduced Tkinter/canvas centrality
-- preserved transition compatibility during migration
-
-When working on migration slices:
-
-- prefer moving authority into backend/service seams
-- prefer shared canonical state over duplicated desktop/web ownership
-- preserve hybrid operation where practical during transition
-- do not attempt blind full rewrites unless explicitly requested
-- document what becomes backend-owned versus what remains hybrid
-
----
-
-## Orchestrator engineering guardrails
-
-When touching the orchestrator:
-
-- Preserve the plain Copilot execution path as the production default.
-- Keep custom-agent concepts as metadata unless the task explicitly changes that.
-- Favor deterministic, idempotent workflow transitions.
-- Persist enough state to explain why the system is running, waiting, blocked, revising, or escalating.
-- Avoid silent stalls.
-- Surface blockers explicitly.
-- Be careful about:
-  - duplicate event handling
-  - repeated webhook delivery
-  - duplicate slice/task creation
-  - stale PR/task/run linkage
-  - race conditions around merge/continue logic
-  - schema drift in structured OpenAI outputs
-  - unsafe auto-merge or unsafe auto-confirm behavior
-
-When using structured OpenAI response schemas:
-- validate schema shape locally before making the API call
-- ensure required fields and nullable fields are modeled correctly
-- prefer explicit, predictable JSON artifacts over loosely formatted text
-
----
-
-## Program-runner guidance
-
-If the task touches autonomous execution/program flow:
-
-- Think in terms of **program → slice → task → run → PR → review decision**
-- One broad objective may span multiple bounded PR slices
-- OpenAI review should evaluate actual evidence, not only PR summaries
-- Continuation decisions should be explicit, such as:
-  - continue
-  - revise
-  - audit
-  - escalate
-  - complete
-- Preserve manual override capability
-- Prefer conservative defaults for merge/approval policies unless the task explicitly loosens them
-
----
-
-## Validation expectations
-
-Use the smallest validation loop that proves the requested outcome.
-Validation should be focused and proportional to touched code, not reflexively maximal.
-
-Default order:
-1. targeted reproduction or inspection
-2. focused tests for touched behavior
-3. adjacent checks for likely sibling paths
-4. broader validation only when justified
-
-Minimum syntax check after Python edits:
-- `python -m compileall .`
-
-`compileall` is not sufficient for non-trivial changes by itself.
-Pair it with behavior-focused validation.
-
-For orchestrator changes, prefer validating:
-- task/program creation
-- linkage persistence
-- review artifact generation
-- continuation decisions
-- idempotency under repeated events
-- inspection routes
-- existing single-task flow compatibility
-
-For tracker changes, prefer validating:
-- touched API/UI behavior
-- combat/session mutations
-- save/load compatibility where relevant
-- existing targeted tests for the touched subsystem
-
-Distinguish clearly between:
-- pre-existing failures
-- regressions introduced by your changes
-
----
-
-## Reporting expectations
-
-When finished, report:
-
-- exact files changed
-- what was implemented
-- what remains incomplete, hybrid, manual, or intentionally conservative
-- validations run and results
-- known risks
-- best next follow-up pass
-
-Be honest about limitations.
-Do not overstate maturity from a broad first pass.
-
----
-
-## Repo-specific do-not-break rules
-
-- Do not rename `dnd_initative_tracker.py`.
-- Do not break YAML schemas without an explicit migration path.
-- Do not break LAN message compatibility without an intentional compatibility plan.
-- Do not expose secrets, credentials, tokens, or `.env` values.
-- Do not weaken security/approval controls blindly; revise them intentionally and explain the tradeoff.
-- For data-heavy YAML changes, avoid mass reformatting unless explicitly requested.
+# Copilot instructions for this repository
+
+## Mission
+This repository is in a large-scale migration away from a Tkinter/canvas-heavy desktop host toward a production-ready web-first architecture with backend-owned combat/session authority. Treat this as migration and extraction work, not feature churn.
+
+## Source of truth
+- Inspect the current repository before making strong claims.
+- Use the current repo contents and `majorTODO.md` as source of truth.
+- Do not invent file paths, architecture, or completed work.
+- When docs drift from code/tests, trust code/tests first and update `majorTODO.md` honestly.
+
+## Working style
+- Prefer broad, coherent migration passes over tiny cleanup-only slices when dependencies allow.
+- Keep changes tightly scoped to the requested pass.
+- Preserve behavior only when necessary to land the migration safely.
+- Do not preserve legacy/Tk/desktop behavior as an end-state goal.
+- The final target is production-ready and web-first, not a perpetual compatibility shell.
+
+## Architecture direction
+- Move authority out of desktop/UI-owned flows and into backend-owned services and explicit contracts.
+- Keep rendering client-side and authority server-side.
+- Prefer explicit command/result/event contracts over implicit shared-state mutation.
+- Avoid long-lived dual ownership between desktop and web paths.
+- Remove or quarantine old fallback paths once a migrated slice is validated.
+
+## Priority areas
+- Combat/session authority
+- Player and DM command contracts
+- Prompt/reaction lifecycle
+- Persistence boundaries
+- Player/LAN command extraction from monolithic handlers
+- Testability in headless/minimal environments
+
+## Current migration posture
+- `majorTODO.md` is the master migration tracker.
+- Update `majorTODO.md` after substantial migration passes.
+- Use it to keep current state, risks, decisions, backlog, and next-pass recommendations aligned with the code.
+
+## Validation
+- Run focused validations during the work and a broader regression sweep at the end.
+- Prefer the narrowest useful tests first, then a wider pass.
+- Report exactly what changed, what remains rough, and follow-up risks.
+- Be explicit about environment-caused failures versus code regressions.
+
+## Guardrails
+- Do not introduce new desktop-first features.
+- Do not rewrite the map layer first unless the task explicitly requires it.
+- Do not do speculative framework rewrites disconnected from the current repo.
+- Do not claim a phase is complete unless code and tests support that claim.
+- Keep hidden-information, auth/claims, reconnect behavior, and persistence safe.
+
+## Operational notes
+- This repo uses multiple agent tools. For major implementation passes, optimize for stable autonomous execution and clear end-of-pass reporting.
+- When asked to work autonomously, inspect first, plan briefly, implement, validate, then update `majorTODO.md`.

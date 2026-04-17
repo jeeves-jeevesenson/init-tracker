@@ -13,6 +13,13 @@ Service-owned (this module):
   - player "manual override HP" (HP/temp-HP deltas; prefers
     ``CombatService.manual_override`` when available, falls back to direct
     mutation for legacy/desktop-only runtime)
+  - player resource/inventory/self-state commands:
+    ``manual_override_spell_slot``, ``manual_override_resource_pool``,
+    ``reaction_prefs_update``, ``inventory_adjust_consumable``,
+    ``use_consumable``, ``lay_on_hands_use``, ``second_wind_use``,
+    ``action_surge_use``, ``star_advantage_use``, ``monk_patient_defense``,
+    ``monk_step_of_wind``, ``monk_elemental_attunement``,
+    ``monk_elemental_burst``, and ``monk_uncanny_metabolism``
   - player "attack request" envelope: stale-reaction-offer expiry, pending
     reaction-gate check, delegation to ``InitiativeTracker._adjudicate_attack_request``
   - player "spell target request" envelope: delegation to
@@ -54,6 +61,7 @@ from __future__ import annotations
 import threading
 import time
 import uuid
+import random
 from typing import TYPE_CHECKING, Any, Dict, Optional
 
 from player_command_contracts import (
@@ -61,15 +69,29 @@ from player_command_contracts import (
     SPECIAL_REACTION_TRIGGERS,
     apply_resume_dispatch,
     build_attack_request_contract,
+    build_action_surge_use_contract,
     build_dispatch_result,
     build_end_turn_contract,
+    build_inventory_adjust_consumable_contract,
+    build_lay_on_hands_use_contract,
+    build_monk_elemental_attunement_contract,
+    build_monk_elemental_burst_contract,
+    build_monk_patient_defense_contract,
+    build_monk_step_of_wind_contract,
+    build_monk_uncanny_metabolism_contract,
     build_manual_override_contract,
+    build_manual_override_resource_pool_contract,
+    build_manual_override_spell_slot_contract,
     build_prompt_record,
     build_prompt_snapshot,
     build_reaction_offer_event,
+    build_reaction_prefs_update_contract,
     build_reaction_response_contract,
     build_resume_dispatch,
+    build_second_wind_use_contract,
     build_spell_target_request_contract,
+    build_star_advantage_use_contract,
+    build_use_consumable_contract,
     prompt_resume_legacy_message,
     update_prompt_record,
 )
@@ -896,6 +918,1241 @@ class PlayerCommandService:
             temp_hp_before=old_temp_hp,
             temp_hp_after=new_temp_hp,
             request=request_contract,
+        )
+
+    # ------------------------------------------------------------------
+    # resource / consumable / self-state commands
+    # ------------------------------------------------------------------
+
+    def manual_override_spell_slot(
+        self,
+        msg: Dict[str, Any],
+        *,
+        cid: Optional[int],
+        ws_id: Any,
+        is_admin: bool,
+    ) -> Dict[str, Any]:
+        t = self._tracker
+        request_contract = build_manual_override_spell_slot_contract(
+            msg,
+            cid=cid,
+            ws_id=ws_id,
+            is_admin=is_admin,
+        )
+        if cid is None:
+            return build_dispatch_result("manual_override_spell_slot", False, reason="missing_cid", request=request_contract)
+        try:
+            cid_int = int(cid)
+        except Exception:
+            return build_dispatch_result("manual_override_spell_slot", False, reason="invalid_cid", request=request_contract)
+        try:
+            slot_level = int(msg.get("slot_level"))
+            slot_delta = int(msg.get("delta"))
+        except Exception:
+            self._toast(ws_id, "Pick a valid slot level and amount, matey.")
+            return build_dispatch_result("manual_override_spell_slot", False, reason="invalid_slot_args", request=request_contract)
+        if slot_level < 1 or slot_level > 9 or slot_delta == 0:
+            self._toast(ws_id, "Pick a valid slot level and amount, matey.")
+            return build_dispatch_result("manual_override_spell_slot", False, reason="invalid_slot_args", request=request_contract)
+        try:
+            player_name = t._pc_name_for(cid_int)
+            _resolved_name, slots = t._resolve_spell_slot_profile(player_name)
+        except Exception as exc:
+            self._toast(ws_id, str(exc) or "No spell slots set up for that caster, matey.")
+            return build_dispatch_result(
+                "manual_override_spell_slot",
+                False,
+                reason="resolve_spell_slots_failed",
+                error=str(exc),
+                request=request_contract,
+            )
+        entry = slots.get(str(slot_level))
+        if not isinstance(entry, dict):
+            self._toast(ws_id, "No spell slots at that level, matey.")
+            return build_dispatch_result("manual_override_spell_slot", False, reason="slot_level_missing", request=request_contract)
+        old_current = int(entry.get("current", 0) or 0)
+        max_current = int(entry.get("max", 0) or 0)
+        if max_current <= 0:
+            self._toast(ws_id, "No spell slots at that level, matey.")
+            return build_dispatch_result("manual_override_spell_slot", False, reason="slot_level_missing", request=request_contract)
+        new_current = max(0, min(max_current, old_current + slot_delta))
+        entry["current"] = int(new_current)
+        slots[str(slot_level)] = entry
+        try:
+            t._save_player_spell_slots(player_name, slots)
+        except Exception as exc:
+            self._toast(ws_id, "Could not update spell slots, matey.")
+            return build_dispatch_result(
+                "manual_override_spell_slot",
+                False,
+                reason="save_spell_slots_failed",
+                error=str(exc),
+                request=request_contract,
+            )
+        c = (getattr(t, "combatants", {}) or {}).get(cid_int)
+        actor_name = getattr(c, "name", player_name or "Player")
+        log = getattr(t, "_log", None)
+        if callable(log):
+            try:
+                log(
+                    f"{actor_name} manual override: level {slot_level} spell slots {old_current}->{new_current} ({slot_delta:+d}).",
+                    cid=cid_int,
+                )
+            except Exception:
+                pass
+        self._toast(ws_id, f"Level {slot_level} spell slots updated.")
+        rebuild = getattr(t, "_rebuild_table", None)
+        if callable(rebuild):
+            try:
+                rebuild(scroll_to_current=True)
+            except Exception:
+                pass
+        broadcast = getattr(t, "_lan_force_state_broadcast", None)
+        if callable(broadcast):
+            try:
+                broadcast()
+            except Exception:
+                pass
+        return build_dispatch_result(
+            "manual_override_spell_slot",
+            True,
+            request=request_contract,
+            slot_level=slot_level,
+            slot_delta=slot_delta,
+            before=old_current,
+            after=new_current,
+        )
+
+    def manual_override_resource_pool(
+        self,
+        msg: Dict[str, Any],
+        *,
+        cid: Optional[int],
+        ws_id: Any,
+        is_admin: bool,
+    ) -> Dict[str, Any]:
+        t = self._tracker
+        request_contract = build_manual_override_resource_pool_contract(
+            msg,
+            cid=cid,
+            ws_id=ws_id,
+            is_admin=is_admin,
+        )
+        if cid is None:
+            return build_dispatch_result("manual_override_resource_pool", False, reason="missing_cid", request=request_contract)
+        try:
+            cid_int = int(cid)
+        except Exception:
+            return build_dispatch_result("manual_override_resource_pool", False, reason="invalid_cid", request=request_contract)
+        player_name = t._pc_name_for(cid_int)
+        pool_id = str(msg.get("pool_id") or "").strip()
+        try:
+            pool_delta = int(msg.get("delta"))
+        except Exception:
+            pool_delta = 0
+        if not pool_id or pool_delta == 0:
+            self._toast(ws_id, "Pick a valid pool and amount, matey.")
+            return build_dispatch_result("manual_override_resource_pool", False, reason="invalid_pool_args", request=request_contract)
+        profile = t._profile_for_player_name(player_name)
+        pools = t._normalize_player_resource_pools(profile if isinstance(profile, dict) else {})
+        pool = next((entry for entry in pools if str(entry.get("id") or "").strip().lower() == pool_id.lower()), None)
+        if not isinstance(pool, dict):
+            self._toast(ws_id, "That resource pool could not be found, matey.")
+            return build_dispatch_result("manual_override_resource_pool", False, reason="pool_missing", request=request_contract)
+        if bool(pool.get("derived_from_inventory")) or str(pool_id).strip().lower().startswith("consumable:"):
+            self._toast(ws_id, "Consumable counts come from inventory. Adjust inventory instead, matey.")
+            return build_dispatch_result(
+                "manual_override_resource_pool",
+                False,
+                reason="pool_derived_from_inventory",
+                request=request_contract,
+            )
+        old_current = int(pool.get("current", 0) or 0)
+        max_current = int(pool.get("max", 0) or 0)
+        new_current = max(0, old_current + pool_delta)
+        if max_current > 0:
+            new_current = min(new_current, max_current)
+        ok_pool, pool_err = t._set_player_resource_pool_current(player_name, pool_id, int(new_current))
+        if not ok_pool:
+            self._toast(ws_id, pool_err or "Could not update resource pools, matey.")
+            return build_dispatch_result(
+                "manual_override_resource_pool",
+                False,
+                reason="pool_update_failed",
+                error=str(pool_err or ""),
+                request=request_contract,
+            )
+        c = (getattr(t, "combatants", {}) or {}).get(cid_int)
+        actor_name = getattr(c, "name", player_name or "Player")
+        pool_label = str(pool.get("label") or pool_id)
+        log = getattr(t, "_log", None)
+        if callable(log):
+            try:
+                log(
+                    f"{actor_name} manual override: {pool_label} {old_current}->{new_current} ({pool_delta:+d}).",
+                    cid=cid_int,
+                )
+            except Exception:
+                pass
+        self._toast(ws_id, f"{pool_label} updated.")
+        rebuild = getattr(t, "_rebuild_table", None)
+        if callable(rebuild):
+            try:
+                rebuild(scroll_to_current=True)
+            except Exception:
+                pass
+        broadcast = getattr(t, "_lan_force_state_broadcast", None)
+        if callable(broadcast):
+            try:
+                broadcast()
+            except Exception:
+                pass
+        return build_dispatch_result(
+            "manual_override_resource_pool",
+            True,
+            request=request_contract,
+            pool_id=pool_id,
+            pool_label=pool_label,
+            pool_delta=pool_delta,
+            before=old_current,
+            after=new_current,
+        )
+
+    def reaction_prefs_update(
+        self,
+        msg: Dict[str, Any],
+        *,
+        cid: Optional[int],
+        ws_id: Any,
+        is_admin: bool,
+    ) -> Dict[str, Any]:
+        t = self._tracker
+        request_contract = build_reaction_prefs_update_contract(
+            msg,
+            cid=cid,
+            ws_id=ws_id,
+            is_admin=is_admin,
+        )
+        if cid is None:
+            return build_dispatch_result("reaction_prefs_update", False, reason="missing_cid", request=request_contract)
+        try:
+            cid_int = int(cid)
+        except Exception:
+            return build_dispatch_result("reaction_prefs_update", False, reason="invalid_cid", request=request_contract)
+        prefs = msg.get("prefs") if isinstance(msg.get("prefs"), dict) else {}
+        t._set_reaction_prefs(cid_int, prefs)
+        return build_dispatch_result(
+            "reaction_prefs_update",
+            True,
+            request=request_contract,
+            updated_keys=sorted([str(key) for key in prefs.keys()]),
+        )
+
+    def lay_on_hands_use(
+        self,
+        msg: Dict[str, Any],
+        *,
+        cid: Optional[int],
+        ws_id: Any,
+        is_admin: bool,
+    ) -> Dict[str, Any]:
+        t = self._tracker
+        request_contract = build_lay_on_hands_use_contract(
+            msg,
+            cid=cid,
+            ws_id=ws_id,
+            is_admin=is_admin,
+        )
+        combatants = getattr(t, "combatants", {}) or {}
+        if cid is None:
+            return build_dispatch_result("lay_on_hands_use", False, reason="missing_cid", request=request_contract)
+        try:
+            cid_int = int(cid)
+        except Exception:
+            return build_dispatch_result("lay_on_hands_use", False, reason="invalid_cid", request=request_contract)
+        c = combatants.get(cid_int)
+        if c is None:
+            return build_dispatch_result("lay_on_hands_use", False, reason="combatant_missing", request=request_contract)
+        player_name = t._pc_name_for(cid_int)
+        profile = t._profile_for_player_name(player_name)
+        if not isinstance(profile, dict):
+            self._toast(ws_id, "No player profile found, matey.")
+            return build_dispatch_result("lay_on_hands_use", False, reason="missing_profile", request=request_contract)
+        paladin_level = t._class_level_from_profile(profile, "paladin")
+        if paladin_level < 1:
+            self._toast(ws_id, "Only paladins can use Lay on Hands, matey.")
+            return build_dispatch_result("lay_on_hands_use", False, reason="not_paladin", request=request_contract)
+        try:
+            target_cid = int(msg.get("target_cid"))
+        except Exception:
+            target_cid = None
+        target = combatants.get(int(target_cid)) if target_cid is not None else None
+        if target is None:
+            self._toast(ws_id, "Pick a valid target, matey.")
+            return build_dispatch_result("lay_on_hands_use", False, reason="invalid_target", request=request_contract)
+        cure_poisoned = bool(msg.get("cure_poisoned") is True)
+        try:
+            heal_amount = int(msg.get("amount", 0))
+        except Exception:
+            heal_amount = 0
+        if cure_poisoned:
+            heal_amount = 5
+        if heal_amount <= 0:
+            self._toast(ws_id, "Healing amount must be at least 1, matey.")
+            return build_dispatch_result("lay_on_hands_use", False, reason="invalid_amount", request=request_contract)
+        in_combat = bool(getattr(t, "in_combat", False))
+        if in_combat and int(getattr(c, "bonus_action_remaining", 0) or 0) <= 0:
+            self._toast(ws_id, "No bonus actions left, matey.")
+            return build_dispatch_result("lay_on_hands_use", False, reason="no_bonus_action", request=request_contract)
+        ok_pool, pool_err = t._consume_resource_pool_for_cast(player_name, "lay_on_hands", heal_amount)
+        if not ok_pool:
+            self._toast(ws_id, pool_err or "No Lay on Hands points remain, matey.")
+            return build_dispatch_result(
+                "lay_on_hands_use",
+                False,
+                reason="pool_exhausted",
+                error=str(pool_err or ""),
+                request=request_contract,
+            )
+        if in_combat:
+            t._use_bonus_action(c)
+        actual_heal = 0
+        if cure_poisoned:
+            t._remove_condition_type(target, "poisoned")
+            log = getattr(t, "_log", None)
+            if callable(log):
+                try:
+                    log(
+                        f"{getattr(c, 'name', 'Player')} uses Lay on Hands on {getattr(target, 'name', 'Target')} "
+                        f"to remove Poisoned (5 points spent).",
+                        cid=int(target.cid),
+                    )
+                except Exception:
+                    pass
+            self._toast(ws_id, "Lay on Hands: removed Poisoned.")
+        else:
+            cur_hp = int(getattr(target, "hp", 0) or 0)
+            max_hp = int(getattr(target, "max_hp", cur_hp) or cur_hp)
+            actual_heal = max(0, min(heal_amount, max(0, max_hp - cur_hp)))
+            t._apply_heal_via_service(int(target.cid), actual_heal)
+            log = getattr(t, "_log", None)
+            if callable(log):
+                try:
+                    log(
+                        f"{getattr(c, 'name', 'Player')} uses Lay on Hands on {getattr(target, 'name', 'Target')} "
+                        f"for {actual_heal} HP ({heal_amount} points spent).",
+                        cid=int(target.cid),
+                    )
+                except Exception:
+                    pass
+            self._toast(ws_id, f"Lay on Hands: healed {actual_heal} HP.")
+        rebuild = getattr(t, "_rebuild_table", None)
+        if callable(rebuild):
+            try:
+                rebuild(scroll_to_current=True)
+            except Exception:
+                pass
+        return build_dispatch_result(
+            "lay_on_hands_use",
+            True,
+            request=request_contract,
+            target_cid=int(target.cid),
+            points_spent=int(heal_amount),
+            healed=int(actual_heal),
+            cured_poisoned=bool(cure_poisoned),
+        )
+
+    def inventory_adjust_consumable(
+        self,
+        msg: Dict[str, Any],
+        *,
+        cid: Optional[int],
+        ws_id: Any,
+        is_admin: bool,
+    ) -> Dict[str, Any]:
+        t = self._tracker
+        request_contract = build_inventory_adjust_consumable_contract(
+            msg,
+            cid=cid,
+            ws_id=ws_id,
+            is_admin=is_admin,
+        )
+        combatants = getattr(t, "combatants", {}) or {}
+        if cid is None:
+            return build_dispatch_result("inventory_adjust_consumable", False, reason="missing_cid", request=request_contract)
+        try:
+            cid_int = int(cid)
+        except Exception:
+            return build_dispatch_result("inventory_adjust_consumable", False, reason="invalid_cid", request=request_contract)
+        c = combatants.get(cid_int)
+        if c is None:
+            return build_dispatch_result("inventory_adjust_consumable", False, reason="combatant_missing", request=request_contract)
+        player_name = t._pc_name_for(cid_int)
+        consumable_id = str(msg.get("consumable_id") or msg.get("id") or "").strip().lower()
+        try:
+            delta = int(msg.get("delta"))
+        except Exception:
+            delta = 0
+        if not consumable_id or delta == 0:
+            self._toast(ws_id, "Pick a consumable and amount, matey.")
+            return build_dispatch_result("inventory_adjust_consumable", False, reason="invalid_args", request=request_contract)
+        ok_inv, inv_err, quantity = t._adjust_inventory_consumable_quantity(player_name, consumable_id, delta)
+        if not ok_inv:
+            self._toast(ws_id, inv_err or "Could not update inventory, matey.")
+            return build_dispatch_result(
+                "inventory_adjust_consumable",
+                False,
+                reason="inventory_update_failed",
+                error=str(inv_err or ""),
+                request=request_contract,
+            )
+        registry_item = t._consumables_registry_payload().get(consumable_id, {})
+        item_name = str((registry_item or {}).get("name") or consumable_id).strip() or consumable_id
+        actor_name = getattr(c, "name", player_name or "Player")
+        log = getattr(t, "_log", None)
+        if callable(log):
+            try:
+                log(
+                    f"{actor_name} adjusted inventory: {item_name} ({delta:+d}), now {int(quantity)}.",
+                    cid=cid_int,
+                )
+            except Exception:
+                pass
+        self._toast(ws_id, f"{item_name}: {int(quantity)} in inventory.")
+        rebuild = getattr(t, "_rebuild_table", None)
+        if callable(rebuild):
+            try:
+                rebuild(scroll_to_current=True)
+            except Exception:
+                pass
+        return build_dispatch_result(
+            "inventory_adjust_consumable",
+            True,
+            request=request_contract,
+            consumable_id=consumable_id,
+            delta=delta,
+            quantity=int(quantity),
+        )
+
+    def use_consumable(
+        self,
+        msg: Dict[str, Any],
+        *,
+        cid: Optional[int],
+        ws_id: Any,
+        is_admin: bool,
+    ) -> Dict[str, Any]:
+        t = self._tracker
+        request_contract = build_use_consumable_contract(
+            msg,
+            cid=cid,
+            ws_id=ws_id,
+            is_admin=is_admin,
+        )
+        combatants = getattr(t, "combatants", {}) or {}
+        if cid is None:
+            return build_dispatch_result("use_consumable", False, reason="missing_cid", request=request_contract)
+        try:
+            cid_int = int(cid)
+        except Exception:
+            return build_dispatch_result("use_consumable", False, reason="invalid_cid", request=request_contract)
+        c = combatants.get(cid_int)
+        if c is None:
+            return build_dispatch_result("use_consumable", False, reason="combatant_missing", request=request_contract)
+        player_name = t._pc_name_for(cid_int)
+        consumable_id = str(msg.get("consumable_id") or msg.get("id") or "").strip().lower()
+        if not consumable_id:
+            self._toast(ws_id, "Pick a consumable first, matey.")
+            return build_dispatch_result("use_consumable", False, reason="missing_consumable_id", request=request_contract)
+        ok_use, use_err, actual_heal = t._use_inventory_consumable(player_name, consumable_id, c)
+        if not ok_use:
+            self._toast(ws_id, use_err or "Could not use consumable, matey.")
+            return build_dispatch_result(
+                "use_consumable",
+                False,
+                reason="consumable_use_failed",
+                error=str(use_err or ""),
+                request=request_contract,
+            )
+        registry_item = t._consumables_registry_payload().get(consumable_id, {})
+        item_name = str((registry_item or {}).get("name") or consumable_id).strip() or consumable_id
+        log = getattr(t, "_log", None)
+        if callable(log):
+            try:
+                log(
+                    f"{getattr(c, 'name', 'Player')} uses {item_name} and heals {int(actual_heal)} HP.",
+                    cid=cid_int,
+                )
+            except Exception:
+                pass
+        self._toast(ws_id, f"{item_name}: healed {int(actual_heal)} HP.")
+        rebuild = getattr(t, "_rebuild_table", None)
+        if callable(rebuild):
+            try:
+                rebuild(scroll_to_current=True)
+            except Exception:
+                pass
+        return build_dispatch_result(
+            "use_consumable",
+            True,
+            request=request_contract,
+            consumable_id=consumable_id,
+            healed=int(actual_heal),
+        )
+
+    def second_wind_use(
+        self,
+        msg: Dict[str, Any],
+        *,
+        cid: Optional[int],
+        ws_id: Any,
+        is_admin: bool,
+    ) -> Dict[str, Any]:
+        t = self._tracker
+        request_contract = build_second_wind_use_contract(
+            msg,
+            cid=cid,
+            ws_id=ws_id,
+            is_admin=is_admin,
+        )
+        combatants = getattr(t, "combatants", {}) or {}
+        if cid is None:
+            return build_dispatch_result("second_wind_use", False, reason="missing_cid", request=request_contract)
+        try:
+            cid_int = int(cid)
+        except Exception:
+            return build_dispatch_result("second_wind_use", False, reason="invalid_cid", request=request_contract)
+        c = combatants.get(cid_int)
+        if c is None:
+            return build_dispatch_result("second_wind_use", False, reason="combatant_missing", request=request_contract)
+        player_name = t._pc_name_for(cid_int)
+        profile = t._profile_for_player_name(player_name)
+        if not isinstance(profile, dict):
+            self._toast(ws_id, "No player profile found, matey.")
+            return build_dispatch_result("second_wind_use", False, reason="missing_profile", request=request_contract)
+        fighter_level = int(t._fighter_level_from_profile(profile) or 0)
+        if fighter_level < 1:
+            self._toast(ws_id, "Only fighters can use Second Wind, matey.")
+            return build_dispatch_result("second_wind_use", False, reason="not_fighter", request=request_contract)
+        ok_pool, pool_err = t._consume_resource_pool_for_cast(player_name, "second_wind", 1)
+        if not ok_pool:
+            self._toast(ws_id, pool_err or "No Second Wind uses remain, matey.")
+            return build_dispatch_result(
+                "second_wind_use",
+                False,
+                reason="pool_exhausted",
+                error=str(pool_err or ""),
+                request=request_contract,
+            )
+        healing_roll = None
+        for key in ("healing_roll", "roll", "rolled"):
+            value = msg.get(key)
+            if value in (None, ""):
+                continue
+            try:
+                healing_roll = int(value)
+            except Exception:
+                healing_roll = None
+            break
+        if healing_roll is None:
+            hp_gain = int(sum(random.randint(1, 10) for _ in range(1)) + fighter_level)
+        else:
+            hp_gain = int(max(1, healing_roll) + fighter_level)
+        cur_hp = int(getattr(c, "hp", 0) or 0)
+        max_hp = int(getattr(c, "max_hp", cur_hp) or cur_hp)
+        actual_heal = max(0, min(hp_gain, max(0, max_hp - cur_hp)))
+        t._apply_heal_via_service(cid_int, actual_heal)
+        if bool(getattr(t, "in_combat", False)) and int(getattr(c, "bonus_action_remaining", 0) or 0) > 0:
+            t._use_bonus_action(c)
+        log = getattr(t, "_log", None)
+        if callable(log):
+            try:
+                log(
+                    f"{getattr(c, 'name', 'Player')} uses Second Wind and regains {hp_gain} HP.",
+                    cid=cid_int,
+                )
+            except Exception:
+                pass
+        self._toast(ws_id, f"Second Wind: regained {hp_gain} HP.")
+        rebuild = getattr(t, "_rebuild_table", None)
+        if callable(rebuild):
+            try:
+                rebuild(scroll_to_current=True)
+            except Exception:
+                pass
+        return build_dispatch_result(
+            "second_wind_use",
+            True,
+            request=request_contract,
+            healed=int(actual_heal),
+            rolled_heal=int(hp_gain),
+            fighter_level=int(fighter_level),
+        )
+
+    def action_surge_use(
+        self,
+        msg: Dict[str, Any],
+        *,
+        cid: Optional[int],
+        ws_id: Any,
+        is_admin: bool,
+    ) -> Dict[str, Any]:
+        t = self._tracker
+        request_contract = build_action_surge_use_contract(
+            msg,
+            cid=cid,
+            ws_id=ws_id,
+            is_admin=is_admin,
+        )
+        combatants = getattr(t, "combatants", {}) or {}
+        if cid is None:
+            return build_dispatch_result("action_surge_use", False, reason="missing_cid", request=request_contract)
+        try:
+            cid_int = int(cid)
+        except Exception:
+            return build_dispatch_result("action_surge_use", False, reason="invalid_cid", request=request_contract)
+        c = combatants.get(cid_int)
+        if c is None:
+            return build_dispatch_result("action_surge_use", False, reason="combatant_missing", request=request_contract)
+        player_name = t._pc_name_for(cid_int)
+        profile = t._profile_for_player_name(player_name)
+        if not isinstance(profile, dict):
+            self._toast(ws_id, "No player profile found, matey.")
+            return build_dispatch_result("action_surge_use", False, reason="missing_profile", request=request_contract)
+        fighter_level = int(t._fighter_level_from_profile(profile) or 0)
+        if fighter_level < 2:
+            self._toast(ws_id, "Only fighters level 2+ can use Action Surge, matey.")
+            return build_dispatch_result("action_surge_use", False, reason="fighter_level_too_low", request=request_contract)
+        ok_pool, pool_err = t._consume_resource_pool_for_cast(player_name, "action_surge", 1)
+        if not ok_pool:
+            self._toast(ws_id, pool_err or "No Action Surge uses remain, matey.")
+            return build_dispatch_result(
+                "action_surge_use",
+                False,
+                reason="pool_exhausted",
+                error=str(pool_err or ""),
+                request=request_contract,
+            )
+        c.action_remaining = int(getattr(c, "action_remaining", 0) or 0) + 1
+        c.action_total = int(getattr(c, "action_total", 1) or 1) + 1
+        log = getattr(t, "_log", None)
+        if callable(log):
+            try:
+                log(
+                    f"{getattr(c, 'name', 'Player')} uses Action Surge and gains 1 action.",
+                    cid=cid_int,
+                )
+            except Exception:
+                pass
+        self._toast(ws_id, "Action Surge used: +1 action.")
+        rebuild = getattr(t, "_rebuild_table", None)
+        if callable(rebuild):
+            try:
+                rebuild(scroll_to_current=True)
+            except Exception:
+                pass
+        return build_dispatch_result(
+            "action_surge_use",
+            True,
+            request=request_contract,
+            action_remaining=int(getattr(c, "action_remaining", 0) or 0),
+            action_total=int(getattr(c, "action_total", 0) or 0),
+        )
+
+    def star_advantage_use(
+        self,
+        msg: Dict[str, Any],
+        *,
+        cid: Optional[int],
+        ws_id: Any,
+        is_admin: bool,
+    ) -> Dict[str, Any]:
+        t = self._tracker
+        request_contract = build_star_advantage_use_contract(
+            msg,
+            cid=cid,
+            ws_id=ws_id,
+            is_admin=is_admin,
+        )
+        combatants = getattr(t, "combatants", {}) or {}
+        if cid is None:
+            return build_dispatch_result("star_advantage_use", False, reason="missing_cid", request=request_contract)
+        try:
+            cid_int = int(cid)
+        except Exception:
+            return build_dispatch_result("star_advantage_use", False, reason="invalid_cid", request=request_contract)
+        c = combatants.get(cid_int)
+        if c is None:
+            return build_dispatch_result("star_advantage_use", False, reason="combatant_missing", request=request_contract)
+        player_name = t._pc_name_for(cid_int)
+        ok_pool, pool_err = t._consume_resource_pool_for_cast(player_name, "star_advantage", 1)
+        if not ok_pool:
+            self._toast(ws_id, pool_err or "No Star Advantage charges remain, matey.")
+            return build_dispatch_result(
+                "star_advantage_use",
+                False,
+                reason="pool_exhausted",
+                error=str(pool_err or ""),
+                request=request_contract,
+            )
+        setattr(
+            c,
+            "pending_star_advantage_charge",
+            {
+                "name": "Star Advantage",
+                "source": "Melvin's Magic Hat",
+            },
+        )
+        log = getattr(t, "_log", None)
+        if callable(log):
+            try:
+                log(
+                    f"{getattr(c, 'name', 'Player')} readies Star Advantage.",
+                    cid=cid_int,
+                )
+            except Exception:
+                pass
+        self._toast(ws_id, "Star Advantage readied.")
+        return build_dispatch_result("star_advantage_use", True, request=request_contract)
+
+    def monk_patient_defense(
+        self,
+        msg: Dict[str, Any],
+        *,
+        cid: Optional[int],
+        ws_id: Any,
+        is_admin: bool,
+    ) -> Dict[str, Any]:
+        t = self._tracker
+        request_contract = build_monk_patient_defense_contract(
+            msg,
+            cid=cid,
+            ws_id=ws_id,
+            is_admin=is_admin,
+        )
+        combatants = getattr(t, "combatants", {}) or {}
+        if cid is None:
+            return build_dispatch_result("monk_patient_defense", False, reason="missing_cid", request=request_contract)
+        try:
+            cid_int = int(cid)
+        except Exception:
+            return build_dispatch_result("monk_patient_defense", False, reason="invalid_cid", request=request_contract)
+        c = combatants.get(cid_int)
+        if c is None:
+            return build_dispatch_result("monk_patient_defense", False, reason="combatant_missing", request=request_contract)
+        if not bool(getattr(c, "is_pc", False)):
+            self._toast(ws_id, "Only player characters can use Monk Focus actions, matey.")
+            return build_dispatch_result("monk_patient_defense", False, reason="not_player_character", request=request_contract)
+        try:
+            player_name = t._pc_name_for(cid_int)
+        except Exception:
+            player_name = ""
+        profile = t._profile_for_player_name(player_name)
+        if not isinstance(profile, dict):
+            self._toast(ws_id, "No player profile found, matey.")
+            return build_dispatch_result("monk_patient_defense", False, reason="missing_profile", request=request_contract)
+        monk_level = int(t._class_level_from_profile(profile, "monk") or 0)
+        if monk_level < 2:
+            self._toast(ws_id, "Only monks level 2+ can use Patient Defense, matey.")
+            return build_dispatch_result("monk_patient_defense", False, reason="monk_level_too_low", request=request_contract)
+        mode = str(msg.get("mode") or "free").strip().lower()
+        if mode not in ("free", "focus"):
+            mode = "free"
+        if not t._use_bonus_action(c):
+            self._toast(ws_id, "No bonus actions left, matey.")
+            return build_dispatch_result("monk_patient_defense", False, reason="no_bonus_action", request=request_contract)
+        if mode == "focus":
+            ok_pool, pool_err = t._consume_resource_pool_for_cast(player_name, "focus_points", 1)
+            if not ok_pool:
+                self._toast(ws_id, pool_err or "No Focus Points remain, matey.")
+                return build_dispatch_result(
+                    "monk_patient_defense",
+                    False,
+                    reason="pool_exhausted",
+                    error=str(pool_err or ""),
+                    request=request_contract,
+                )
+            setattr(c, "disengage_active", True)
+            log = getattr(t, "_log", None)
+            if callable(log):
+                try:
+                    log(
+                        f"{c.name} used Patient Defense (Disengage + Dodge) (bonus action, 1 Focus)",
+                        cid=cid_int,
+                    )
+                except Exception:
+                    pass
+            if monk_level >= 10:
+                ma_die = 8 if monk_level >= 5 else 6
+                temp_roll = random.randint(1, ma_die) + random.randint(1, ma_die)
+                current_temp_hp = int(getattr(c, "temp_hp", 0) or 0)
+                applied_temp = max(current_temp_hp, temp_roll)
+                t._apply_heal_via_service(cid_int, applied_temp, is_temp_hp=True)
+                if callable(log):
+                    try:
+                        log(
+                            f"{c.name} gained Monk Focus temp HP: {temp_roll} (2d{ma_die}; current temp HP {getattr(c, 'temp_hp', 0)}).",
+                            cid=cid_int,
+                        )
+                    except Exception:
+                        pass
+            self._toast(ws_id, "Patient Defense used (1 Focus).")
+        else:
+            setattr(c, "disengage_active", True)
+            log = getattr(t, "_log", None)
+            if callable(log):
+                try:
+                    log(f"{c.name} used Patient Defense (Disengage) (bonus action)", cid=cid_int)
+                except Exception:
+                    pass
+            self._toast(ws_id, "Patient Defense used.")
+        rebuild = getattr(t, "_rebuild_table", None)
+        if callable(rebuild):
+            try:
+                rebuild(scroll_to_current=True)
+            except Exception:
+                pass
+        return build_dispatch_result(
+            "monk_patient_defense",
+            True,
+            request=request_contract,
+            mode=mode,
+        )
+
+    def monk_step_of_wind(
+        self,
+        msg: Dict[str, Any],
+        *,
+        cid: Optional[int],
+        ws_id: Any,
+        is_admin: bool,
+    ) -> Dict[str, Any]:
+        t = self._tracker
+        request_contract = build_monk_step_of_wind_contract(
+            msg,
+            cid=cid,
+            ws_id=ws_id,
+            is_admin=is_admin,
+        )
+        combatants = getattr(t, "combatants", {}) or {}
+        if cid is None:
+            return build_dispatch_result("monk_step_of_wind", False, reason="missing_cid", request=request_contract)
+        try:
+            cid_int = int(cid)
+        except Exception:
+            return build_dispatch_result("monk_step_of_wind", False, reason="invalid_cid", request=request_contract)
+        c = combatants.get(cid_int)
+        if c is None:
+            return build_dispatch_result("monk_step_of_wind", False, reason="combatant_missing", request=request_contract)
+        if not bool(getattr(c, "is_pc", False)):
+            self._toast(ws_id, "Only player characters can use Monk Focus actions, matey.")
+            return build_dispatch_result("monk_step_of_wind", False, reason="not_player_character", request=request_contract)
+        try:
+            player_name = t._pc_name_for(cid_int)
+        except Exception:
+            player_name = ""
+        profile = t._profile_for_player_name(player_name)
+        if not isinstance(profile, dict):
+            self._toast(ws_id, "No player profile found, matey.")
+            return build_dispatch_result("monk_step_of_wind", False, reason="missing_profile", request=request_contract)
+        monk_level = int(t._class_level_from_profile(profile, "monk") or 0)
+        if monk_level < 2:
+            self._toast(ws_id, "Only monks level 2+ can use Step of the Wind, matey.")
+            return build_dispatch_result("monk_step_of_wind", False, reason="monk_level_too_low", request=request_contract)
+        mode = str(msg.get("mode") or "free").strip().lower()
+        if mode not in ("free", "focus"):
+            mode = "free"
+        if not t._use_bonus_action(c):
+            self._toast(ws_id, "No bonus actions left, matey.")
+            return build_dispatch_result("monk_step_of_wind", False, reason="no_bonus_action", request=request_contract)
+        if mode == "focus":
+            ok_pool, pool_err = t._consume_resource_pool_for_cast(player_name, "focus_points", 1)
+            if not ok_pool:
+                self._toast(ws_id, pool_err or "No Focus Points remain, matey.")
+                return build_dispatch_result(
+                    "monk_step_of_wind",
+                    False,
+                    reason="pool_exhausted",
+                    error=str(pool_err or ""),
+                    request=request_contract,
+                )
+        try:
+            base_speed = int(t._mode_speed(c))
+        except Exception:
+            base_speed = int(getattr(c, "speed", 30) or 30)
+        total = int(getattr(c, "move_total", 0) or 0)
+        rem = int(getattr(c, "move_remaining", 0) or 0)
+        setattr(c, "move_total", total + base_speed)
+        setattr(c, "move_remaining", rem + base_speed)
+        log = getattr(t, "_log", None)
+        if callable(log):
+            try:
+                if mode == "focus":
+                    log(f"{c.name} used Step of the Wind (Dash + Disengage) (bonus action, 1 Focus)", cid=cid_int)
+                else:
+                    log(f"{c.name} used Step of the Wind (Dash) (bonus action)", cid=cid_int)
+                log(f"{c.name} jump distance doubled (not automated).", cid=cid_int)
+            except Exception:
+                pass
+        self._toast(ws_id, "Step of the Wind used.")
+        rebuild = getattr(t, "_rebuild_table", None)
+        if callable(rebuild):
+            try:
+                rebuild(scroll_to_current=True)
+            except Exception:
+                pass
+        return build_dispatch_result(
+            "monk_step_of_wind",
+            True,
+            request=request_contract,
+            mode=mode,
+            move_total=int(getattr(c, "move_total", 0) or 0),
+            move_remaining=int(getattr(c, "move_remaining", 0) or 0),
+        )
+
+    def monk_elemental_attunement(
+        self,
+        msg: Dict[str, Any],
+        *,
+        cid: Optional[int],
+        ws_id: Any,
+        is_admin: bool,
+    ) -> Dict[str, Any]:
+        t = self._tracker
+        request_contract = build_monk_elemental_attunement_contract(
+            msg,
+            cid=cid,
+            ws_id=ws_id,
+            is_admin=is_admin,
+        )
+        combatants = getattr(t, "combatants", {}) or {}
+        if cid is None:
+            return build_dispatch_result("monk_elemental_attunement", False, reason="missing_cid", request=request_contract)
+        try:
+            cid_int = int(cid)
+        except Exception:
+            return build_dispatch_result("monk_elemental_attunement", False, reason="invalid_cid", request=request_contract)
+        c = combatants.get(cid_int)
+        if c is None:
+            return build_dispatch_result("monk_elemental_attunement", False, reason="combatant_missing", request=request_contract)
+        if not bool(getattr(c, "is_pc", False)):
+            self._toast(ws_id, "Only player characters can use Monk Focus actions, matey.")
+            return build_dispatch_result("monk_elemental_attunement", False, reason="not_player_character", request=request_contract)
+        try:
+            player_name = t._pc_name_for(cid_int)
+        except Exception:
+            player_name = ""
+        profile = t._profile_for_player_name(player_name)
+        if not isinstance(profile, dict):
+            self._toast(ws_id, "No player profile found, matey.")
+            return build_dispatch_result("monk_elemental_attunement", False, reason="missing_profile", request=request_contract)
+        monk_level = int(t._class_level_from_profile(profile, "monk") or 0)
+        if monk_level < 3:
+            self._toast(ws_id, "Only monks with Warrior of the Elements can use Elemental Attunement, matey.")
+            return build_dispatch_result("monk_elemental_attunement", False, reason="monk_level_too_low", request=request_contract)
+        mode = str(msg.get("mode") or "activate").strip().lower()
+        currently_active = bool(t._elemental_attunement_active(c))
+        if mode == "deactivate":
+            if currently_active:
+                setattr(c, "elemental_attunement_active", False)
+                log = getattr(t, "_log", None)
+                if callable(log):
+                    try:
+                        log(f"{c.name} ended Elemental Attunement.", cid=cid_int)
+                    except Exception:
+                        pass
+                self._toast(ws_id, "Elemental Attunement ended.")
+                rebuild = getattr(t, "_rebuild_table", None)
+                if callable(rebuild):
+                    try:
+                        rebuild(scroll_to_current=True)
+                    except Exception:
+                        pass
+                return build_dispatch_result("monk_elemental_attunement", True, request=request_contract, mode="deactivate")
+            self._toast(ws_id, "Elemental Attunement is not active.")
+            return build_dispatch_result(
+                "monk_elemental_attunement",
+                False,
+                reason="not_active",
+                request=request_contract,
+            )
+        if currently_active:
+            self._toast(ws_id, "Elemental Attunement is already active.")
+            return build_dispatch_result("monk_elemental_attunement", False, reason="already_active", request=request_contract)
+        ok_pool, pool_err = t._consume_resource_pool_for_cast(player_name, "focus_points", 1)
+        if not ok_pool:
+            self._toast(ws_id, pool_err or "No Focus Points remain, matey.")
+            return build_dispatch_result(
+                "monk_elemental_attunement",
+                False,
+                reason="pool_exhausted",
+                error=str(pool_err or ""),
+                request=request_contract,
+            )
+        setattr(c, "elemental_attunement_active", True)
+        log = getattr(t, "_log", None)
+        if callable(log):
+            try:
+                log(f"{c.name} activated Elemental Attunement (1 Focus).", cid=cid_int)
+            except Exception:
+                pass
+        self._toast(ws_id, "Elemental Attunement activated.")
+        rebuild = getattr(t, "_rebuild_table", None)
+        if callable(rebuild):
+            try:
+                rebuild(scroll_to_current=True)
+            except Exception:
+                pass
+        return build_dispatch_result("monk_elemental_attunement", True, request=request_contract, mode="activate")
+
+    def monk_elemental_burst(
+        self,
+        msg: Dict[str, Any],
+        *,
+        cid: Optional[int],
+        ws_id: Any,
+        is_admin: bool,
+    ) -> Dict[str, Any]:
+        t = self._tracker
+        request_contract = build_monk_elemental_burst_contract(
+            msg,
+            cid=cid,
+            ws_id=ws_id,
+            is_admin=is_admin,
+        )
+        combatants = getattr(t, "combatants", {}) or {}
+        if cid is None:
+            return build_dispatch_result("monk_elemental_burst", False, reason="missing_cid", request=request_contract)
+        try:
+            cid_int = int(cid)
+        except Exception:
+            return build_dispatch_result("monk_elemental_burst", False, reason="invalid_cid", request=request_contract)
+        c = combatants.get(cid_int)
+        if c is None:
+            return build_dispatch_result("monk_elemental_burst", False, reason="combatant_missing", request=request_contract)
+        if not bool(getattr(c, "is_pc", False)):
+            self._toast(ws_id, "Only player characters can use Monk Focus actions, matey.")
+            return build_dispatch_result("monk_elemental_burst", False, reason="not_player_character", request=request_contract)
+        try:
+            player_name = t._pc_name_for(cid_int)
+        except Exception:
+            player_name = ""
+        profile = t._profile_for_player_name(player_name)
+        if not isinstance(profile, dict):
+            self._toast(ws_id, "No player profile found, matey.")
+            return build_dispatch_result("monk_elemental_burst", False, reason="missing_profile", request=request_contract)
+        monk_level = int(t._class_level_from_profile(profile, "monk") or 0)
+        if monk_level < 3:
+            self._toast(ws_id, "Only monks with Warrior of the Elements can use Elemental Burst, matey.")
+            return build_dispatch_result("monk_elemental_burst", False, reason="monk_level_too_low", request=request_contract)
+        payload = msg.get("payload") if isinstance(msg.get("payload"), dict) else {}
+        damage_type = str(msg.get("damage_type") or payload.get("damage_type") or "").strip().lower()
+        if damage_type not in {"acid", "cold", "fire", "lightning", "thunder"}:
+            self._toast(ws_id, "Pick a valid Elemental Burst damage type, matey.")
+            return build_dispatch_result("monk_elemental_burst", False, reason="invalid_damage_type", request=request_contract)
+        if int(getattr(c, "action_remaining", 0) or 0) <= 0:
+            self._toast(ws_id, "No actions left, matey.")
+            return build_dispatch_result("monk_elemental_burst", False, reason="no_actions_remaining", request=request_contract)
+        ok_pool, pool_err = t._consume_resource_pool_for_cast(player_name, "focus_points", 2)
+        if not ok_pool:
+            self._toast(ws_id, pool_err or "Need 2 Focus Points for Elemental Burst, matey.")
+            return build_dispatch_result(
+                "monk_elemental_burst",
+                False,
+                reason="pool_exhausted",
+                error=str(pool_err or ""),
+                request=request_contract,
+            )
+        if not t._use_action(c):
+            self._toast(ws_id, "No actions left, matey.")
+            return build_dispatch_result("monk_elemental_burst", False, reason="cannot_spend_action", request=request_contract)
+        movement_mode = str(msg.get("movement_mode") or payload.get("movement_mode") or "").strip().lower()
+        if movement_mode not in ("push", "pull"):
+            movement_mode = ""
+        martial_die = int(t._monk_martial_arts_die(monk_level))
+        save_dc = int(t._monk_save_dc_for_profile(profile))
+        cols, rows, _obstacles, _rough, positions = t._lan_live_map_data()
+        try:
+            cx = float(payload.get("cx"))
+            cy = float(payload.get("cy"))
+        except Exception:
+            origin = positions.get(cid_int)
+            if isinstance(origin, tuple) and len(origin) == 2:
+                cx, cy = float(origin[0]), float(origin[1])
+            else:
+                cx = max(0.0, (int(cols) - 1) / 2.0) if int(cols) > 0 else 0.0
+                cy = max(0.0, (int(rows) - 1) / 2.0) if int(rows) > 0 else 0.0
+        try:
+            feet_per_square = 5.0
+            mw = getattr(t, "_map_window", None)
+            if mw is not None and hasattr(mw, "winfo_exists") and mw.winfo_exists():
+                feet_per_square = float(getattr(mw, "feet_per_square", feet_per_square) or feet_per_square)
+        except Exception:
+            feet_per_square = 5.0
+        feet_per_square = max(1.0, float(feet_per_square))
+        aoe = {
+            "kind": "sphere",
+            "name": "Elemental Burst",
+            "cx": float(cx),
+            "cy": float(cy),
+            "radius_ft": 20.0,
+            "radius_sq": max(0.5, float(20.0 / feet_per_square)),
+            "dc": int(save_dc),
+            "save_type": "dex",
+            "damage_type": str(damage_type),
+            "half_on_pass": True,
+        }
+        fail_effects: list[Dict[str, Any]] = [{"effect": "damage", "damage_type": str(damage_type), "dice": f"3d{int(martial_die)}"}]
+        if movement_mode:
+            fail_effects.append({"effect": "forced_movement", "mode": str(movement_mode), "distance_ft": 10, "origin": "aoe_center"})
+        preset = {
+            "name": "Elemental Burst",
+            "automation": "full",
+            "tags": ["aoe", "automation_full"],
+            "mechanics": {
+                "automation": "full",
+                "sequence": [
+                    {
+                        "check": {"kind": "saving_throw", "ability": "dex", "dc": int(save_dc)},
+                        "outcomes": {
+                            "fail": fail_effects,
+                            "success": [{"effect": "damage", "damage_type": str(damage_type), "dice": f"3d{int(martial_die)}", "multiplier": 0.5}],
+                        },
+                    }
+                ],
+            },
+        }
+        resolved = t._lan_auto_resolve_cast_aoe(
+            0,
+            aoe,
+            caster=c,
+            spell_slug="monk-elemental-burst",
+            spell_id="monk-elemental-burst",
+            slot_level=None,
+            preset=preset,
+        )
+        if resolved:
+            rider_text = f", {movement_mode} 10 ft on failed save" if movement_mode else ""
+            log = getattr(t, "_log", None)
+            if callable(log):
+                try:
+                    log(
+                        f"{c.name} used Elemental Burst ({damage_type.title()}, 3d{int(martial_die)}, DC {int(save_dc)}{rider_text}) "
+                        f"(Magic Action, 2 Focus).",
+                        cid=cid_int,
+                    )
+                except Exception:
+                    pass
+            self._toast(ws_id, "Elemental Burst cast.")
+        else:
+            self._toast(ws_id, "Elemental Burst failed to resolve, matey.")
+        rebuild = getattr(t, "_rebuild_table", None)
+        if callable(rebuild):
+            try:
+                rebuild(scroll_to_current=True)
+            except Exception:
+                pass
+        return build_dispatch_result(
+            "monk_elemental_burst",
+            bool(resolved),
+            request=request_contract,
+            damage_type=damage_type,
+            movement_mode=movement_mode,
+            save_dc=save_dc,
+            martial_die=martial_die,
+        )
+
+    def monk_uncanny_metabolism(
+        self,
+        msg: Dict[str, Any],
+        *,
+        cid: Optional[int],
+        ws_id: Any,
+        is_admin: bool,
+    ) -> Dict[str, Any]:
+        t = self._tracker
+        request_contract = build_monk_uncanny_metabolism_contract(
+            msg,
+            cid=cid,
+            ws_id=ws_id,
+            is_admin=is_admin,
+        )
+        combatants = getattr(t, "combatants", {}) or {}
+        if cid is None:
+            return build_dispatch_result("monk_uncanny_metabolism", False, reason="missing_cid", request=request_contract)
+        try:
+            cid_int = int(cid)
+        except Exception:
+            return build_dispatch_result("monk_uncanny_metabolism", False, reason="invalid_cid", request=request_contract)
+        c = combatants.get(cid_int)
+        if c is None:
+            return build_dispatch_result("monk_uncanny_metabolism", False, reason="combatant_missing", request=request_contract)
+        if not bool(getattr(c, "is_pc", False)):
+            self._toast(ws_id, "Only player characters can use Monk Focus actions, matey.")
+            return build_dispatch_result("monk_uncanny_metabolism", False, reason="not_player_character", request=request_contract)
+        try:
+            player_name = t._pc_name_for(cid_int)
+        except Exception:
+            player_name = ""
+        profile = t._profile_for_player_name(player_name)
+        if not isinstance(profile, dict):
+            self._toast(ws_id, "No player profile found, matey.")
+            return build_dispatch_result("monk_uncanny_metabolism", False, reason="missing_profile", request=request_contract)
+        monk_level = int(t._class_level_from_profile(profile, "monk") or 0)
+        if monk_level < 2:
+            self._toast(ws_id, "Only monks can use Uncanny Metabolism, matey.")
+            return build_dispatch_result("monk_uncanny_metabolism", False, reason="monk_level_too_low", request=request_contract)
+        if not t._use_bonus_action(c):
+            self._toast(ws_id, "No bonus actions left, matey.")
+            return build_dispatch_result("monk_uncanny_metabolism", False, reason="no_bonus_action", request=request_contract)
+        ok_pool, pool_err = t._consume_resource_pool_for_cast(player_name, "uncanny_metabolism", 1)
+        if not ok_pool:
+            self._toast(ws_id, pool_err or "Uncanny Metabolism is spent, matey.")
+            return build_dispatch_result(
+                "monk_uncanny_metabolism",
+                False,
+                reason="pool_exhausted",
+                error=str(pool_err or ""),
+                request=request_contract,
+            )
+        pools = t._normalize_player_resource_pools(profile)
+        focus_pool = next((entry for entry in pools if str(entry.get("id") or "").strip().lower() == "focus_points"), None)
+        focus_max = 0
+        try:
+            focus_max = max(0, int((focus_pool or {}).get("max", 0) or 0))
+        except Exception:
+            focus_max = 0
+        if focus_max > 0:
+            t._set_player_resource_pool_current(player_name, "focus_points", focus_max)
+        martial_die = int(t._monk_martial_arts_die(monk_level))
+        heal_amount = int(random.randint(1, int(martial_die)))
+        hp_now = int(getattr(c, "hp", 0) or 0)
+        hp_max = int(getattr(c, "max_hp", hp_now) or hp_now)
+        actual_heal = max(0, min(heal_amount, max(0, hp_max - hp_now)))
+        t._apply_heal_via_service(cid_int, actual_heal)
+        log = getattr(t, "_log", None)
+        if callable(log):
+            try:
+                log(
+                    f"{c.name} used Uncanny Metabolism: restored Focus and healed {int(heal_amount)} HP.",
+                    cid=cid_int,
+                )
+            except Exception:
+                pass
+        self._toast(ws_id, "Uncanny Metabolism used.")
+        rebuild = getattr(t, "_rebuild_table", None)
+        if callable(rebuild):
+            try:
+                rebuild(scroll_to_current=True)
+            except Exception:
+                pass
+        return build_dispatch_result(
+            "monk_uncanny_metabolism",
+            True,
+            request=request_contract,
+            healed=int(actual_heal),
+            rolled_heal=int(heal_amount),
+            focus_refilled_to=int(focus_max),
         )
 
     # ------------------------------------------------------------------

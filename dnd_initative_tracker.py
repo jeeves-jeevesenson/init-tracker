@@ -30210,11 +30210,17 @@ class InitiativeTracker(base.InitiativeTracker):
     def _ensure_player_commands(self) -> PlayerCommandService:
         """Return the backend player-command service, constructing on first use.
 
-        ``PlayerCommandService`` is the explicit authority seam for player-
-        originated combat commands (attack_request, spell_target_request,
-        reaction_response, end_turn, manual_override_hp).  It is built lazily
-        so test harnesses that skip ``__init__`` still get a working service
-        when they invoke ``_lan_apply_action`` directly.
+        ``PlayerCommandService`` is the explicit authority seam for migrated
+        player commands (attack_request, spell_target_request,
+        reaction_response, end_turn, manual_override_hp,
+        manual_override_spell_slot, manual_override_resource_pool,
+        reaction_prefs_update, lay_on_hands_use, inventory_adjust_consumable,
+        use_consumable, second_wind_use, action_surge_use,
+        star_advantage_use, monk_patient_defense, monk_step_of_wind,
+        monk_elemental_attunement, monk_elemental_burst, and
+        monk_uncanny_metabolism).  It is built lazily so test harnesses that
+        skip ``__init__`` still get a working service when they invoke
+        ``_lan_apply_action`` directly.
 
         ``__dict__`` is used rather than ``getattr`` because this class
         inherits from ``tk.Tk``; a plain ``getattr`` on an instance built via
@@ -33416,87 +33422,21 @@ class InitiativeTracker(base.InitiativeTracker):
             return
 
         if typ == "manual_override_spell_slot":
-            player_name = self._pc_name_for(int(cid))
-            try:
-                slot_level = int(msg.get("slot_level"))
-                slot_delta = int(msg.get("delta"))
-            except Exception:
-                self._lan.toast(ws_id, "Pick a valid slot level and amount, matey.")
-                return
-            if slot_level < 1 or slot_level > 9 or slot_delta == 0:
-                self._lan.toast(ws_id, "Pick a valid slot level and amount, matey.")
-                return
-            try:
-                _resolved_name, slots = self._resolve_spell_slot_profile(player_name)
-            except Exception as exc:
-                self._lan.toast(ws_id, str(exc) or "No spell slots set up for that caster, matey.")
-                return
-            entry = slots.get(str(slot_level))
-            if not isinstance(entry, dict):
-                self._lan.toast(ws_id, "No spell slots at that level, matey.")
-                return
-            old_current = int(entry.get("current", 0) or 0)
-            max_current = int(entry.get("max", 0) or 0)
-            if max_current <= 0:
-                self._lan.toast(ws_id, "No spell slots at that level, matey.")
-                return
-            new_current = max(0, min(max_current, old_current + slot_delta))
-            entry["current"] = int(new_current)
-            slots[str(slot_level)] = entry
-            try:
-                self._save_player_spell_slots(player_name, slots)
-            except Exception:
-                self._lan.toast(ws_id, "Could not update spell slots, matey.")
-                return
-            c = self.combatants.get(cid)
-            actor_name = getattr(c, "name", player_name or "Player")
-            self._log(
-                f"{actor_name} manual override: level {slot_level} spell slots {old_current}->{new_current} ({slot_delta:+d}).",
+            self._ensure_player_commands().manual_override_spell_slot(
+                msg,
                 cid=cid,
+                ws_id=ws_id,
+                is_admin=is_admin,
             )
-            self._lan.toast(ws_id, f"Level {slot_level} spell slots updated.")
-            self._rebuild_table(scroll_to_current=True)
-            self._lan_force_state_broadcast()
             return
 
         if typ == "manual_override_resource_pool":
-            player_name = self._pc_name_for(int(cid))
-            pool_id = str(msg.get("pool_id") or "").strip()
-            try:
-                pool_delta = int(msg.get("delta"))
-            except Exception:
-                pool_delta = 0
-            if not pool_id or pool_delta == 0:
-                self._lan.toast(ws_id, "Pick a valid pool and amount, matey.")
-                return
-            profile = self._profile_for_player_name(player_name)
-            pools = self._normalize_player_resource_pools(profile if isinstance(profile, dict) else {})
-            pool = next((entry for entry in pools if str(entry.get("id") or "").strip().lower() == pool_id.lower()), None)
-            if not isinstance(pool, dict):
-                self._lan.toast(ws_id, "That resource pool could not be found, matey.")
-                return
-            if bool(pool.get("derived_from_inventory")) or str(pool_id).strip().lower().startswith("consumable:"):
-                self._lan.toast(ws_id, "Consumable counts come from inventory. Adjust inventory instead, matey.")
-                return
-            old_current = int(pool.get("current", 0) or 0)
-            max_current = int(pool.get("max", 0) or 0)
-            new_current = max(0, old_current + pool_delta)
-            if max_current > 0:
-                new_current = min(new_current, max_current)
-            ok_pool, pool_err = self._set_player_resource_pool_current(player_name, pool_id, int(new_current))
-            if not ok_pool:
-                self._lan.toast(ws_id, pool_err or "Could not update resource pools, matey.")
-                return
-            c = self.combatants.get(cid)
-            actor_name = getattr(c, "name", player_name or "Player")
-            pool_label = str(pool.get("label") or pool_id)
-            self._log(
-                f"{actor_name} manual override: {pool_label} {old_current}->{new_current} ({pool_delta:+d}).",
+            self._ensure_player_commands().manual_override_resource_pool(
+                msg,
                 cid=cid,
+                ws_id=ws_id,
+                is_admin=is_admin,
             )
-            self._lan.toast(ws_id, f"{pool_label} updated.")
-            self._rebuild_table(scroll_to_current=True)
-            self._lan_force_state_broadcast()
             return
 
         # Only allow controlling on your turn (POC)
@@ -35822,10 +35762,12 @@ class InitiativeTracker(base.InitiativeTracker):
             return
 
         if typ == "reaction_prefs_update":
-            if cid is None:
-                return
-            prefs = msg.get("prefs") if isinstance(msg.get("prefs"), dict) else {}
-            self._set_reaction_prefs(int(cid), prefs)
+            self._ensure_player_commands().reaction_prefs_update(
+                msg,
+                cid=cid,
+                ws_id=ws_id,
+                is_admin=is_admin,
+            )
             return
 
         if typ == "reaction_response":
@@ -36592,469 +36534,82 @@ class InitiativeTracker(base.InitiativeTracker):
             self._lan.toast(ws_id, "Wild Shape forms updated.")
             self._rebuild_table(scroll_to_current=True)
         elif typ == "second_wind_use":
-            c = self.combatants.get(cid)
-            if not c:
-                return
-            player_name = self._pc_name_for(int(cid))
-            profile = self._profile_for_player_name(player_name)
-            if not isinstance(profile, dict):
-                self._lan.toast(ws_id, "No player profile found, matey.")
-                return
-            fighter_level = self._fighter_level_from_profile(profile)
-            if fighter_level < 1:
-                self._lan.toast(ws_id, "Only fighters can use Second Wind, matey.")
-                return
-            ok_pool, pool_err = self._consume_resource_pool_for_cast(player_name, "second_wind", 1)
-            if not ok_pool:
-                self._lan.toast(ws_id, pool_err or "No Second Wind uses remain, matey.")
-                return
-            healing_roll = None
-            for key in ("healing_roll", "roll", "rolled"):
-                value = msg.get(key)
-                if value in (None, ""):
-                    continue
-                try:
-                    healing_roll = int(value)
-                except Exception:
-                    healing_roll = None
-                break
-            if healing_roll is None:
-                hp_gain = int(sum(random.randint(1, 10) for _ in range(1)) + fighter_level)
-            else:
-                hp_gain = int(max(1, healing_roll) + fighter_level)
-            cur_hp = int(getattr(c, "hp", 0) or 0)
-            max_hp = int(getattr(c, "max_hp", cur_hp) or cur_hp)
-            actual_heal = max(0, min(hp_gain, max(0, max_hp - cur_hp)))
-            self._apply_heal_via_service(cid, actual_heal)
-            if bool(getattr(self, "in_combat", False)) and int(getattr(c, "bonus_action_remaining", 0)) > 0:
-                self._use_bonus_action(c)
-            self._log(f"{getattr(c, 'name', 'Player')} uses Second Wind and regains {hp_gain} HP.", cid=cid)
-            self._lan.toast(ws_id, f"Second Wind: regained {hp_gain} HP.")
-            self._rebuild_table(scroll_to_current=True)
+            self._ensure_player_commands().second_wind_use(
+                msg,
+                cid=cid,
+                ws_id=ws_id,
+                is_admin=is_admin,
+            )
         elif typ == "action_surge_use":
-            c = self.combatants.get(cid)
-            if not c:
-                return
-            player_name = self._pc_name_for(int(cid))
-            profile = self._profile_for_player_name(player_name)
-            if not isinstance(profile, dict):
-                self._lan.toast(ws_id, "No player profile found, matey.")
-                return
-            fighter_level = self._fighter_level_from_profile(profile)
-            if fighter_level < 2:
-                self._lan.toast(ws_id, "Only fighters level 2+ can use Action Surge, matey.")
-                return
-            ok_pool, pool_err = self._consume_resource_pool_for_cast(player_name, "action_surge", 1)
-            if not ok_pool:
-                self._lan.toast(ws_id, pool_err or "No Action Surge uses remain, matey.")
-                return
-            c.action_remaining = int(getattr(c, "action_remaining", 0) or 0) + 1
-            c.action_total = int(getattr(c, "action_total", 1) or 1) + 1
-            self._log(f"{getattr(c, 'name', 'Player')} uses Action Surge and gains 1 action.", cid=cid)
-            self._lan.toast(ws_id, "Action Surge used: +1 action.")
-            self._rebuild_table(scroll_to_current=True)
+            self._ensure_player_commands().action_surge_use(
+                msg,
+                cid=cid,
+                ws_id=ws_id,
+                is_admin=is_admin,
+            )
         elif typ == "star_advantage_use":
-            c = self.combatants.get(cid)
-            if not c:
-                return
-            player_name = self._pc_name_for(int(cid))
-            ok_pool, pool_err = self._consume_resource_pool_for_cast(player_name, "star_advantage", 1)
-            if not ok_pool:
-                self._lan.toast(ws_id, pool_err or "No Star Advantage charges remain, matey.")
-                return
-            setattr(
-                c,
-                "pending_star_advantage_charge",
-                {
-                    "name": "Star Advantage",
-                    "source": "Melvin's Magic Hat",
-                },
+            self._ensure_player_commands().star_advantage_use(
+                msg,
+                cid=cid,
+                ws_id=ws_id,
+                is_admin=is_admin,
             )
-            self._log(f"{getattr(c, 'name', 'Player')} readies Star Advantage.", cid=cid)
-            self._lan.toast(ws_id, "Star Advantage readied.")
         elif typ == "lay_on_hands_use":
-            c = self.combatants.get(cid)
-            if not c:
-                return
-            player_name = self._pc_name_for(int(cid))
-            profile = self._profile_for_player_name(player_name)
-            if not isinstance(profile, dict):
-                self._lan.toast(ws_id, "No player profile found, matey.")
-                return
-            paladin_level = self._class_level_from_profile(profile, "paladin")
-            if paladin_level < 1:
-                self._lan.toast(ws_id, "Only paladins can use Lay on Hands, matey.")
-                return
-            target_cid = _normalize_cid_value(msg.get("target_cid"), "lay_on_hands_use.target_cid", log_fn=log_warning)
-            target = self.combatants.get(int(target_cid)) if target_cid is not None else None
-            if target is None:
-                self._lan.toast(ws_id, "Pick a valid target, matey.")
-                return
-            cure_poisoned = bool(msg.get("cure_poisoned") is True)
-            try:
-                heal_amount = int(msg.get("amount", 0))
-            except Exception:
-                heal_amount = 0
-            if cure_poisoned:
-                heal_amount = 5
-            if heal_amount <= 0:
-                self._lan.toast(ws_id, "Healing amount must be at least 1, matey.")
-                return
-            if bool(getattr(self, "in_combat", False)) and int(getattr(c, "bonus_action_remaining", 0) or 0) <= 0:
-                self._lan.toast(ws_id, "No bonus actions left, matey.")
-                return
-            ok_pool, pool_err = self._consume_resource_pool_for_cast(player_name, "lay_on_hands", heal_amount)
-            if not ok_pool:
-                self._lan.toast(ws_id, pool_err or "No Lay on Hands points remain, matey.")
-                return
-            if bool(getattr(self, "in_combat", False)):
-                self._use_bonus_action(c)
-            if cure_poisoned:
-                self._remove_condition_type(target, "poisoned")
-                self._log(
-                    f"{getattr(c, 'name', 'Player')} uses Lay on Hands on {getattr(target, 'name', 'Target')} "
-                    f"to remove Poisoned (5 points spent).",
-                    cid=int(target.cid),
-                )
-                self._lan.toast(ws_id, "Lay on Hands: removed Poisoned.")
-            else:
-                cur_hp = int(getattr(target, "hp", 0) or 0)
-                max_hp = int(getattr(target, "max_hp", cur_hp) or cur_hp)
-                actual_heal = max(0, min(heal_amount, max(0, max_hp - cur_hp)))
-                self._apply_heal_via_service(int(target.cid), actual_heal)
-                self._log(
-                    f"{getattr(c, 'name', 'Player')} uses Lay on Hands on {getattr(target, 'name', 'Target')} "
-                    f"for {actual_heal} HP ({heal_amount} points spent).",
-                    cid=int(target.cid),
-                )
-            self._lan.toast(ws_id, f"Lay on Hands: healed {actual_heal} HP.")
-            self._rebuild_table(scroll_to_current=True)
+            self._ensure_player_commands().lay_on_hands_use(
+                msg,
+                cid=cid,
+                ws_id=ws_id,
+                is_admin=is_admin,
+            )
         elif typ == "inventory_adjust_consumable":
-            c = self.combatants.get(cid)
-            if not c:
-                return
-            player_name = self._pc_name_for(int(cid))
-            consumable_id = str(msg.get("consumable_id") or msg.get("id") or "").strip().lower()
-            try:
-                delta = int(msg.get("delta"))
-            except Exception:
-                delta = 0
-            if not consumable_id or delta == 0:
-                self._lan.toast(ws_id, "Pick a consumable and amount, matey.")
-                return
-            ok_inv, inv_err, quantity = self._adjust_inventory_consumable_quantity(player_name, consumable_id, delta)
-            if not ok_inv:
-                self._lan.toast(ws_id, inv_err or "Could not update inventory, matey.")
-                return
-            registry_item = self._consumables_registry_payload().get(consumable_id, {})
-            item_name = str((registry_item or {}).get("name") or consumable_id).strip() or consumable_id
-            actor_name = getattr(c, "name", player_name or "Player")
-            self._log(
-                f"{actor_name} adjusted inventory: {item_name} ({delta:+d}), now {int(quantity)}.",
+            self._ensure_player_commands().inventory_adjust_consumable(
+                msg,
                 cid=cid,
+                ws_id=ws_id,
+                is_admin=is_admin,
             )
-            self._lan.toast(ws_id, f"{item_name}: {int(quantity)} in inventory.")
-            self._rebuild_table(scroll_to_current=True)
         elif typ == "use_consumable":
-            c = self.combatants.get(cid)
-            if not c:
-                return
-            player_name = self._pc_name_for(int(cid))
-            consumable_id = str(msg.get("consumable_id") or msg.get("id") or "").strip().lower()
-            if not consumable_id:
-                self._lan.toast(ws_id, "Pick a consumable first, matey.")
-                return
-            ok_use, use_err, actual_heal = self._use_inventory_consumable(player_name, consumable_id, c)
-            if not ok_use:
-                self._lan.toast(ws_id, use_err or "Could not use consumable, matey.")
-                return
-            registry_item = self._consumables_registry_payload().get(consumable_id, {})
-            item_name = str((registry_item or {}).get("name") or consumable_id).strip() or consumable_id
-            self._log(f"{getattr(c, 'name', 'Player')} uses {item_name} and heals {int(actual_heal)} HP.", cid=cid)
-            self._lan.toast(ws_id, f"{item_name}: healed {int(actual_heal)} HP.")
-            self._rebuild_table(scroll_to_current=True)
-        elif typ == "monk_patient_defense":
-            c = self.combatants.get(cid)
-            if not c:
-                return
-            if not bool(getattr(c, "is_pc", False)):
-                self._lan.toast(ws_id, "Only player characters can use Monk Focus actions, matey.")
-                return
-            player_name = _resolve_pc_name(cid)
-            profile = self._profile_for_player_name(player_name)
-            if not isinstance(profile, dict):
-                self._lan.toast(ws_id, "No player profile found, matey.")
-                return
-            monk_level = self._class_level_from_profile(profile, "monk")
-            if monk_level < 2:
-                self._lan.toast(ws_id, "Only monks level 2+ can use Patient Defense, matey.")
-                return
-            mode = str(msg.get("mode") or "free").strip().lower()
-            if mode not in ("free", "focus"):
-                mode = "free"
-            if not self._use_bonus_action(c):
-                self._lan.toast(ws_id, "No bonus actions left, matey.")
-                return
-            if mode == "focus":
-                ok_pool, pool_err = self._consume_resource_pool_for_cast(player_name, "focus_points", 1)
-                if not ok_pool:
-                    self._lan.toast(ws_id, pool_err or "No Focus Points remain, matey.")
-                    return
-                setattr(c, "disengage_active", True)
-                self._log(
-                    f"{c.name} used Patient Defense (Disengage + Dodge) (bonus action, 1 Focus)",
-                    cid=cid,
-                )
-                if monk_level >= 10:
-                    ma_die = 8 if monk_level >= 5 else 6
-                    temp_roll = random.randint(1, ma_die) + random.randint(1, ma_die)
-                    current_temp_hp = int(getattr(c, "temp_hp", 0) or 0)
-                    applied_temp = max(current_temp_hp, temp_roll)
-                    self._apply_heal_via_service(cid, applied_temp, is_temp_hp=True)
-                    self._log(
-                        f"{c.name} gained Monk Focus temp HP: {temp_roll} (2d{ma_die}; current temp HP {getattr(c, 'temp_hp', 0)}).",
-                        cid=cid,
-                    )
-                self._lan.toast(ws_id, "Patient Defense used (1 Focus).")
-            else:
-                setattr(c, "disengage_active", True)
-                self._log(f"{c.name} used Patient Defense (Disengage) (bonus action)", cid=cid)
-                self._lan.toast(ws_id, "Patient Defense used.")
-            self._rebuild_table(scroll_to_current=True)
-        elif typ == "monk_step_of_wind":
-            c = self.combatants.get(cid)
-            if not c:
-                return
-            if not bool(getattr(c, "is_pc", False)):
-                self._lan.toast(ws_id, "Only player characters can use Monk Focus actions, matey.")
-                return
-            player_name = _resolve_pc_name(cid)
-            profile = self._profile_for_player_name(player_name)
-            if not isinstance(profile, dict):
-                self._lan.toast(ws_id, "No player profile found, matey.")
-                return
-            monk_level = self._class_level_from_profile(profile, "monk")
-            if monk_level < 2:
-                self._lan.toast(ws_id, "Only monks level 2+ can use Step of the Wind, matey.")
-                return
-            mode = str(msg.get("mode") or "free").strip().lower()
-            if mode not in ("free", "focus"):
-                mode = "free"
-            if not self._use_bonus_action(c):
-                self._lan.toast(ws_id, "No bonus actions left, matey.")
-                return
-            if mode == "focus":
-                ok_pool, pool_err = self._consume_resource_pool_for_cast(player_name, "focus_points", 1)
-                if not ok_pool:
-                    self._lan.toast(ws_id, pool_err or "No Focus Points remain, matey.")
-                    return
-            try:
-                base_speed = int(self._mode_speed(c))
-            except Exception:
-                base_speed = int(getattr(c, "speed", 30) or 30)
-            total = int(getattr(c, "move_total", 0) or 0)
-            rem = int(getattr(c, "move_remaining", 0) or 0)
-            setattr(c, "move_total", total + base_speed)
-            setattr(c, "move_remaining", rem + base_speed)
-            if mode == "focus":
-                self._log(
-                    f"{c.name} used Step of the Wind (Dash + Disengage) (bonus action, 1 Focus)",
-                    cid=cid,
-                )
-            else:
-                self._log(f"{c.name} used Step of the Wind (Dash) (bonus action)", cid=cid)
-            self._log(f"{c.name} jump distance doubled (not automated).", cid=cid)
-            self._lan.toast(ws_id, "Step of the Wind used.")
-            self._rebuild_table(scroll_to_current=True)
-        elif typ == "monk_elemental_attunement":
-            c = self.combatants.get(cid)
-            if not c:
-                return
-            if not bool(getattr(c, "is_pc", False)):
-                self._lan.toast(ws_id, "Only player characters can use Monk Focus actions, matey.")
-                return
-            player_name = _resolve_pc_name(cid)
-            profile = self._profile_for_player_name(player_name)
-            if not isinstance(profile, dict):
-                self._lan.toast(ws_id, "No player profile found, matey.")
-                return
-            monk_level = self._class_level_from_profile(profile, "monk")
-            if monk_level < 3:
-                self._lan.toast(ws_id, "Only monks with Warrior of the Elements can use Elemental Attunement, matey.")
-                return
-            mode = str(msg.get("mode") or "activate").strip().lower()
-            currently_active = self._elemental_attunement_active(c)
-            if mode == "deactivate":
-                if currently_active:
-                    setattr(c, "elemental_attunement_active", False)
-                    self._log(f"{c.name} ended Elemental Attunement.", cid=cid)
-                    self._lan.toast(ws_id, "Elemental Attunement ended.")
-                    self._rebuild_table(scroll_to_current=True)
-                else:
-                    self._lan.toast(ws_id, "Elemental Attunement is not active.")
-                return
-            if currently_active:
-                self._lan.toast(ws_id, "Elemental Attunement is already active.")
-                return
-            ok_pool, pool_err = self._consume_resource_pool_for_cast(player_name, "focus_points", 1)
-            if not ok_pool:
-                self._lan.toast(ws_id, pool_err or "No Focus Points remain, matey.")
-                return
-            setattr(c, "elemental_attunement_active", True)
-            self._log(f"{c.name} activated Elemental Attunement (1 Focus).", cid=cid)
-            self._lan.toast(ws_id, "Elemental Attunement activated.")
-            self._rebuild_table(scroll_to_current=True)
-        elif typ == "monk_elemental_burst":
-            c = self.combatants.get(cid)
-            if not c:
-                return
-            if not bool(getattr(c, "is_pc", False)):
-                self._lan.toast(ws_id, "Only player characters can use Monk Focus actions, matey.")
-                return
-            player_name = _resolve_pc_name(cid)
-            profile = self._profile_for_player_name(player_name)
-            if not isinstance(profile, dict):
-                self._lan.toast(ws_id, "No player profile found, matey.")
-                return
-            monk_level = self._class_level_from_profile(profile, "monk")
-            if monk_level < 3:
-                self._lan.toast(ws_id, "Only monks with Warrior of the Elements can use Elemental Burst, matey.")
-                return
-            payload = msg.get("payload") if isinstance(msg.get("payload"), dict) else {}
-            damage_type = str(msg.get("damage_type") or payload.get("damage_type") or "").strip().lower()
-            if damage_type not in {"acid", "cold", "fire", "lightning", "thunder"}:
-                self._lan.toast(ws_id, "Pick a valid Elemental Burst damage type, matey.")
-                return
-            if int(getattr(c, "action_remaining", 0) or 0) <= 0:
-                self._lan.toast(ws_id, "No actions left, matey.")
-                return
-            ok_pool, pool_err = self._consume_resource_pool_for_cast(player_name, "focus_points", 2)
-            if not ok_pool:
-                self._lan.toast(ws_id, pool_err or "Need 2 Focus Points for Elemental Burst, matey.")
-                return
-            if not self._use_action(c):
-                self._lan.toast(ws_id, "No actions left, matey.")
-                return
-            movement_mode = str(msg.get("movement_mode") or payload.get("movement_mode") or "").strip().lower()
-            if movement_mode not in ("push", "pull"):
-                movement_mode = ""
-            martial_die = self._monk_martial_arts_die(monk_level)
-            save_dc = self._monk_save_dc_for_profile(profile)
-            cols, rows, _obstacles, _rough, positions = self._lan_live_map_data()
-            try:
-                cx = float(payload.get("cx"))
-                cy = float(payload.get("cy"))
-            except Exception:
-                origin = positions.get(int(cid))
-                if isinstance(origin, tuple) and len(origin) == 2:
-                    cx, cy = float(origin[0]), float(origin[1])
-                else:
-                    cx = max(0.0, (int(cols) - 1) / 2.0) if int(cols) > 0 else 0.0
-                    cy = max(0.0, (int(rows) - 1) / 2.0) if int(rows) > 0 else 0.0
-            try:
-                feet_per_square = 5.0
-                mw = getattr(self, "_map_window", None)
-                if mw is not None and hasattr(mw, "winfo_exists") and mw.winfo_exists():
-                    feet_per_square = float(getattr(mw, "feet_per_square", feet_per_square) or feet_per_square)
-            except Exception:
-                feet_per_square = 5.0
-            feet_per_square = max(1.0, float(feet_per_square))
-            aoe = {
-                "kind": "sphere",
-                "name": "Elemental Burst",
-                "cx": float(cx),
-                "cy": float(cy),
-                "radius_ft": 20.0,
-                "radius_sq": max(0.5, float(20.0 / feet_per_square)),
-                "dc": int(save_dc),
-                "save_type": "dex",
-                "damage_type": str(damage_type),
-                "half_on_pass": True,
-            }
-            fail_effects: List[Dict[str, Any]] = [{"effect": "damage", "damage_type": str(damage_type), "dice": f"3d{int(martial_die)}"}]
-            if movement_mode:
-                fail_effects.append({"effect": "forced_movement", "mode": str(movement_mode), "distance_ft": 10, "origin": "aoe_center"})
-            preset = {
-                "name": "Elemental Burst",
-                "automation": "full",
-                "tags": ["aoe", "automation_full"],
-                "mechanics": {
-                    "automation": "full",
-                    "sequence": [
-                        {
-                            "check": {"kind": "saving_throw", "ability": "dex", "dc": int(save_dc)},
-                            "outcomes": {
-                                "fail": fail_effects,
-                                "success": [{"effect": "damage", "damage_type": str(damage_type), "dice": f"3d{int(martial_die)}", "multiplier": 0.5}],
-                            },
-                        }
-                    ],
-                },
-            }
-            resolved = self._lan_auto_resolve_cast_aoe(
-                0,
-                aoe,
-                caster=c,
-                spell_slug="monk-elemental-burst",
-                spell_id="monk-elemental-burst",
-                slot_level=None,
-                preset=preset,
-            )
-            if resolved:
-                rider_text = f", {movement_mode} 10 ft on failed save" if movement_mode else ""
-                self._log(
-                    f"{c.name} used Elemental Burst ({damage_type.title()}, 3d{int(martial_die)}, DC {int(save_dc)}{rider_text}) "
-                    f"(Magic Action, 2 Focus).",
-                    cid=cid,
-                )
-                self._lan.toast(ws_id, "Elemental Burst cast.")
-            else:
-                self._lan.toast(ws_id, "Elemental Burst failed to resolve, matey.")
-            self._rebuild_table(scroll_to_current=True)
-        elif typ == "monk_uncanny_metabolism":
-            c = self.combatants.get(cid)
-            if not c:
-                return
-            if not bool(getattr(c, "is_pc", False)):
-                self._lan.toast(ws_id, "Only player characters can use Monk Focus actions, matey.")
-                return
-            player_name = _resolve_pc_name(cid)
-            profile = self._profile_for_player_name(player_name)
-            if not isinstance(profile, dict):
-                self._lan.toast(ws_id, "No player profile found, matey.")
-                return
-            monk_level = self._class_level_from_profile(profile, "monk")
-            if monk_level < 2:
-                self._lan.toast(ws_id, "Only monks can use Uncanny Metabolism, matey.")
-                return
-            if not self._use_bonus_action(c):
-                self._lan.toast(ws_id, "No bonus actions left, matey.")
-                return
-            ok_pool, pool_err = self._consume_resource_pool_for_cast(player_name, "uncanny_metabolism", 1)
-            if not ok_pool:
-                self._lan.toast(ws_id, pool_err or "Uncanny Metabolism is spent, matey.")
-                return
-            pools = self._normalize_player_resource_pools(profile)
-            focus_pool = next((entry for entry in pools if str(entry.get("id") or "").strip().lower() == "focus_points"), None)
-            focus_max = 0
-            try:
-                focus_max = max(0, int((focus_pool or {}).get("max", 0) or 0))
-            except Exception:
-                focus_max = 0
-            if focus_max > 0:
-                self._set_player_resource_pool_current(player_name, "focus_points", focus_max)
-            martial_die = self._monk_martial_arts_die(monk_level)
-            heal_amount = int(random.randint(1, int(martial_die)))
-            hp_now = int(getattr(c, "hp", 0) or 0)
-            hp_max = int(getattr(c, "max_hp", hp_now) or hp_now)
-            actual_heal = max(0, min(heal_amount, max(0, hp_max - hp_now)))
-            self._apply_heal_via_service(cid, actual_heal)
-            self._log(
-                f"{c.name} used Uncanny Metabolism: restored Focus and healed {int(heal_amount)} HP.",
+            self._ensure_player_commands().use_consumable(
+                msg,
                 cid=cid,
+                ws_id=ws_id,
+                is_admin=is_admin,
             )
-            self._lan.toast(ws_id, "Uncanny Metabolism used.")
-            self._rebuild_table(scroll_to_current=True)
+        elif typ == "monk_patient_defense":
+            self._ensure_player_commands().monk_patient_defense(
+                msg,
+                cid=cid,
+                ws_id=ws_id,
+                is_admin=is_admin,
+            )
+        elif typ == "monk_step_of_wind":
+            self._ensure_player_commands().monk_step_of_wind(
+                msg,
+                cid=cid,
+                ws_id=ws_id,
+                is_admin=is_admin,
+            )
+        elif typ == "monk_elemental_attunement":
+            self._ensure_player_commands().monk_elemental_attunement(
+                msg,
+                cid=cid,
+                ws_id=ws_id,
+                is_admin=is_admin,
+            )
+        elif typ == "monk_elemental_burst":
+            self._ensure_player_commands().monk_elemental_burst(
+                msg,
+                cid=cid,
+                ws_id=ws_id,
+                is_admin=is_admin,
+            )
+        elif typ == "monk_uncanny_metabolism":
+            self._ensure_player_commands().monk_uncanny_metabolism(
+                msg,
+                cid=cid,
+                ws_id=ws_id,
+                is_admin=is_admin,
+            )
         elif typ == "use_action":
             c = self.combatants.get(cid)
             if not c:
