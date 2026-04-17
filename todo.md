@@ -135,7 +135,17 @@ If you complete an item, move its ID into **Section 5 (Completed archive)** and 
   - targeted LAN/auth tests relevant to touched paths
 
 ### F08 — Terrain hazard preset system (DoT + triggers + saves + conditions)
-- **Status:** Not started
+- **Status:** In progress
+- **Last update:** 2026-04-16 (codex)
+- **What changed:**
+  - Added LAN AoE trigger support for `leave`/`exit` hazard timing so over-time effects can fire when a unit exits or when the hazard moves off a unit.
+  - Added focused regression coverage in `tests/test_lan_aoe_over_time.py` for both leave-via-unit-move and leave-via-template-move flows.
+- **What remains:**
+  - Broaden hazard timing beyond current LAN AoE coverage if separate non-AoE map hazards need the same trigger vocabulary.
+  - Reconcile the broader F08 card against existing environment/move-damage hooks before declaring the milestone complete.
+- **Handoff notes:**
+  - Focused validation: `python -m unittest tests.test_lan_aoe_over_time`.
+  - Next slice should decide whether to extend `leave` timing into any remaining map-environment paths or close the card if current hazard behavior is sufficient.
 - **Impact / Complexity:** High / Hard
 - **Dependencies:** none
 - **Primary files likely touched:**

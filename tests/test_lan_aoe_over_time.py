@@ -161,6 +161,27 @@ class LanAoeOverTimeTests(unittest.TestCase):
             self.app._lan_handle_aoe_enter_triggers_for_aoe_move(1, aoe, before)
         self.assertLess(self.app.combatants[2].hp, 30)
 
+    def test_move_out_of_leave_trigger_applies_once(self):
+        aoe = self._base_aoe()
+        aoe["trigger_on_start_or_enter"] = "leave"
+        self.app._lan_aoes[1] = aoe
+        self.app._lan_positions[2] = (0, 0)
+        with mock.patch("dnd_initative_tracker.random.randint", side_effect=[1] * 20):
+            ok, _, _ = self.app._lan_try_move(2, 0, 3)
+        self.assertTrue(ok)
+        self.assertLess(self.app.combatants[2].hp, 30)
+
+    def test_aoe_move_off_target_triggers_leave(self):
+        aoe = self._base_aoe()
+        aoe["trigger_on_start_or_enter"] = "leave"
+        self.app._lan_aoes[1] = aoe
+        self.app._lan_positions[2] = (0, 0)
+        before = self.app._lan_compute_included_units_for_aoe(aoe)
+        aoe["cx"], aoe["cy"] = (6.0, 6.0)
+        with mock.patch("dnd_initative_tracker.random.randint", side_effect=[1] * 20):
+            self.app._lan_handle_aoe_enter_triggers_for_aoe_move(1, aoe, before)
+        self.assertLess(self.app.combatants[2].hp, 30)
+
     def test_line_aoe_excludes_adjacent_lane_tokens(self):
         self.app._lan_positions = {1: (0, 0), 2: (1, 0), 3: (1, 1)}
         aoe = {"kind": "line", "cx": 5.0, "cy": 0.0, "length_sq": 12.0, "width_sq": 1.0, "angle_deg": 0.0}

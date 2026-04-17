@@ -18472,7 +18472,7 @@ class InitiativeTracker(base.InitiativeTracker):
             if not isinstance(aoe, dict) or not bool(aoe.get("over_time")):
                 continue
             trigger = str(aoe.get("trigger_on_start_or_enter") or "").strip().lower()
-            if trigger not in ("enter", "start_or_enter", "enter_or_end"):
+            if trigger not in ("enter", "leave", "start_or_enter", "enter_or_end"):
                 continue
             original_positions = dict(getattr(self, "_lan_positions", {}) or {})
             was_inside = False
@@ -18484,20 +18484,25 @@ class InitiativeTracker(base.InitiativeTracker):
                 is_inside = int(cid) in self._map_spell_effect_targets(aoe)
             finally:
                 self._lan_positions = original_positions
-            if (not was_inside) and is_inside:
+            if trigger in ("enter", "start_or_enter", "enter_or_end") and (not was_inside) and is_inside:
+                self._apply_map_spell_trigger(int(aid), aoe, target_cids=[int(cid)], turn_key=turn_key)
+            elif trigger == "leave" and was_inside and (not is_inside):
                 self._apply_map_spell_trigger(int(aid), aoe, target_cids=[int(cid)], turn_key=turn_key)
 
     def _lan_handle_aoe_enter_triggers_for_aoe_move(self, aid: int, aoe: Dict[str, Any], before_included: List[int]) -> None:
         if not isinstance(aoe, dict) or not bool(aoe.get("over_time")):
             return
         trigger = str(aoe.get("trigger_on_start_or_enter") or "").strip().lower()
-        if trigger not in ("enter", "start_or_enter", "enter_or_end"):
+        if trigger not in ("enter", "leave", "start_or_enter", "enter_or_end"):
             return
         after_included = set(self._map_spell_effect_targets(aoe))
         before_set = {int(cid) for cid in before_included}
-        entered = sorted(int(cid) for cid in after_included if int(cid) not in before_set)
-        if entered:
-            self._apply_map_spell_trigger(int(aid), aoe, target_cids=entered)
+        if trigger in ("enter", "start_or_enter", "enter_or_end"):
+            affected = sorted(int(cid) for cid in after_included if int(cid) not in before_set)
+        else:
+            affected = sorted(int(cid) for cid in before_set if int(cid) not in after_included)
+        if affected:
+            self._apply_map_spell_trigger(int(aid), aoe, target_cids=affected)
 
     def _lan_sync_fixed_to_caster_aoes(self, moved_cid: int) -> None:
         current_pos = dict(getattr(self, "_lan_positions", {}) or {}).get(int(moved_cid))
@@ -30480,6 +30485,8 @@ class InitiativeTracker(base.InitiativeTracker):
                 aliases = {
                     "start": "start",
                     "enter": "enter",
+                    "leave": "leave",
+                    "exit": "leave",
                     "end": "end",
                     "start_or_enter": "start_or_enter",
                     "enter_or_end": "enter_or_end",
