@@ -94,6 +94,7 @@ from player_command_contracts import (
     FIGHTER_MONK_RESOURCE_ACTION_TYPES,
     MOVEMENT_ACTION_COMMAND_TYPES,
     TURN_LOCAL_COMMAND_TYPES,
+    WILD_SHAPE_COMMAND_TYPES,
     build_attack_request_contract,
     build_hellish_rebuke_resolve_start_payload,
     build_reaction_offer_event,
@@ -30213,6 +30214,8 @@ class InitiativeTracker(base.InitiativeTracker):
         player commands (attack_request, spell_target_request,
         reaction_response, end_turn, manual_override_hp,
         move, cycle_movement_mode, perform_action,
+        wild_shape_apply, wild_shape_pool_set_current, wild_shape_revert,
+        wild_shape_regain_use, wild_shape_regain_spell, wild_shape_set_known,
         mount_request, mount_response, dismount, dash, use_action,
         use_bonus_action, stand_up, reset_turn,
         manual_override_spell_slot, manual_override_resource_pool,
@@ -35846,175 +35849,14 @@ class InitiativeTracker(base.InitiativeTracker):
         elif typ == "attack_request":
             self._ensure_player_commands().attack_request(msg, cid=cid, ws_id=ws_id, is_admin=is_admin)
             return
-        elif typ == "wild_shape_apply":
-            beast_id = str(msg.get("beast_id") or "").strip()
-            if not beast_id:
-                self._lan.toast(ws_id, "Pick a beast form first, matey.")
-                return
-            c = self.combatants.get(cid)
-            if not c:
-                return
-            require_bonus_action = bool(getattr(self, "in_combat", False))
-            if require_bonus_action and int(getattr(c, "bonus_action_remaining", 0)) <= 0:
-                self._lan.toast(ws_id, "No bonus actions left, matey.")
-                return
-            ok, err = self._apply_wild_shape(int(cid), beast_id)
-            if not ok:
-                self._lan.toast(ws_id, err or "Could not Wild Shape, matey.")
-                return
-            if require_bonus_action and not self._use_bonus_action(c):
-                self._lan.toast(ws_id, "Could not spend bonus action for Wild Shape, matey.")
-                return
-            if require_bonus_action:
-                setattr(c, "bonus_action_remaining", 0)
-            self._lan.toast(ws_id, "Wild Shape activated.")
-            self._rebuild_table(scroll_to_current=True)
-        elif typ == "wild_shape_pool_set_current":
-            player_name = self._pc_name_for(int(cid))
-            try:
-                desired_current = int(msg.get("current"))
-            except Exception:
-                self._lan.toast(ws_id, "Pick a valid Wild Shape uses value, matey.")
-                return
-            ok_pool, pool_err, new_cur = self._set_wild_shape_pool_current(player_name, desired_current)
-            if not ok_pool:
-                self._lan.toast(ws_id, pool_err or "Could not update Wild Shape uses, matey.")
-                return
-            c = self.combatants.get(cid)
-            if c:
-                setattr(c, "wild_shape_pool_current", int(new_cur if new_cur is not None else 0))
-            self._lan.toast(ws_id, "Wild Shape uses updated.")
-            self._rebuild_table(scroll_to_current=True)
-        elif typ == "wild_shape_revert":
-            c = self.combatants.get(cid)
-            if not c:
-                return
-            require_bonus_action = bool(getattr(self, "in_combat", False))
-            if require_bonus_action and int(getattr(c, "bonus_action_remaining", 0)) <= 0:
-                self._lan.toast(ws_id, "No bonus actions left, matey.")
-                return
-            ok, err = self._revert_wild_shape(int(cid))
-            if not ok:
-                self._lan.toast(ws_id, err or "Could not revert Wild Shape, matey.")
-                return
-            if require_bonus_action:
-                setattr(c, "bonus_action_remaining", max(0, int(getattr(c, "bonus_action_remaining", 0)) - 1))
-                self._log(f"{getattr(c, 'name', 'Player')} used a bonus action to revert Wild Shape.", cid=cid)
-            self._lan.toast(ws_id, "Reverted Wild Shape.")
-            self._rebuild_table(scroll_to_current=True)
-        elif typ == "wild_shape_regain_use":
-            c = self.combatants.get(cid)
-            if not c:
-                return
-            if bool(getattr(c, "wild_resurgence_turn_used", False)):
-                self._lan.toast(ws_id, "Wild Resurgence already used this turn, matey.")
-                return
-            player_name = self._pc_name_for(int(cid))
-            ok_slot, err_slot, spent_level = self._consume_spell_slot_for_wild_shape_regain(player_name)
-            if not ok_slot:
-                self._lan.toast(ws_id, err_slot)
-                return
-            profile = self._profile_for_player_name(player_name)
-            pools = self._normalize_player_resource_pools(profile if isinstance(profile, dict) else {})
-            wild = next((p for p in pools if str(p.get("id") or "").lower() == "wild_shape"), None)
-            if not isinstance(wild, dict):
-                self._lan.toast(ws_id, "No Wild Shape pool found, matey.")
-                return
-            ok_pool, pool_err, _ = self._set_wild_shape_pool_current(player_name, int(wild.get("current", 0) or 0) + 1)
-            if not ok_pool:
-                self._lan.toast(ws_id, pool_err)
-                return
-            setattr(c, "wild_resurgence_turn_used", True)
-            self._log(f"{getattr(c, 'name', 'Player')} recovered one Wild Shape use via Wild Resurgence.", cid=cid)
-            self._lan.toast(ws_id, f"Recovered one Wild Shape use (spent level {int(spent_level or 1)} slot).")
-            self._rebuild_table(scroll_to_current=True)
-        elif typ == "wild_shape_regain_spell":
-            c = self.combatants.get(cid)
-            if not c:
-                return
-            if bool(getattr(c, "wild_resurgence_slot_used", False)):
-                self._lan.toast(ws_id, "Wild Shape spell-slot exchange already used this long rest, matey.")
-                return
-            player_name = self._pc_name_for(int(cid))
-            profile = self._profile_for_player_name(player_name)
-            pools = self._normalize_player_resource_pools(profile if isinstance(profile, dict) else {})
-            wild = next((p for p in pools if str(p.get("id") or "").lower() == "wild_shape"), None)
-            if not isinstance(wild, dict) or int(wild.get("current", 0) or 0) <= 0:
-                self._lan.toast(ws_id, "No Wild Shape uses to spend, matey.")
-                return
-            ok_spell, err_spell = self._regain_first_level_spell_slot(player_name)
-            if not ok_spell:
-                self._lan.toast(ws_id, err_spell)
-                return
-            ok_pool, pool_err, _ = self._set_wild_shape_pool_current(player_name, int(wild.get("current", 0) or 0) - 1)
-            if not ok_pool:
-                self._lan.toast(ws_id, pool_err)
-                return
-            setattr(c, "wild_resurgence_slot_used", True)
-            self._log(f"{getattr(c, 'name', 'Player')} recovered one level 1 spell slot via Wild Resurgence.", cid=cid)
-            self._lan.toast(ws_id, "Recovered one level 1 spell slot.")
-            self._rebuild_table(scroll_to_current=True)
-        elif typ == "wild_shape_set_known":
-            player_name = self._pc_name_for(int(cid))
-            profile = self._profile_for_player_name(player_name)
-            if not isinstance(profile, dict):
-                self._lan.toast(ws_id, "No player profile found, matey.")
-                return
-            druid_level = self._druid_level_from_profile(profile)
-            if druid_level < 2:
-                self._lan.toast(ws_id, "Only druids can manage Wild Shapes, matey.")
-                return
-            known_limit = self._wild_shape_known_limit(druid_level)
-            requested = msg.get("known")
-            if not isinstance(requested, list):
-                requested = []
-            available_forms = [
-                entry
-                for entry in self._wild_shape_available_forms(profile, known_only=False, include_locked=True)
-                if isinstance(entry, dict)
-            ]
-            allowed_ids = {
-                self._wild_shape_identifier_key(entry.get("id"))
-                for entry in available_forms
-            }
-            allowed_ids.discard("")
-            alias_map = self._wild_shape_alias_lookup(available_forms)
-            deduped: List[str] = []
-            for raw in requested:
-                beast_id = alias_map.get(self._wild_shape_identifier_key(raw))
-                if not beast_id or beast_id in deduped:
-                    continue
-                if beast_id not in allowed_ids:
-                    continue
-                deduped.append(beast_id)
-                if len(deduped) >= known_limit:
-                    break
-            known_map = self.__dict__.get("_wild_shape_known_by_player")
-            if not isinstance(known_map, dict):
-                known_map = {}
-                self._wild_shape_known_by_player = known_map
-            known_map[player_name.strip().lower()] = deduped
-
-            player_path = self._find_player_profile_path(player_name)
-            if not isinstance(player_path, Path):
-                c = self.combatants.get(cid)
-                if c is not None:
-                    player_path = self._find_player_profile_path(getattr(c, "name", ""))
-            if not isinstance(player_path, Path):
-                self._load_player_yaml_cache(force_refresh=True)
-                player_path = self._find_player_profile_path(player_name)
-            raw_payload = self._player_yaml_cache_by_path.get(player_path) if isinstance(player_path, Path) else None
-            if not (isinstance(player_path, Path) and isinstance(raw_payload, dict)):
-                self._lan.toast(ws_id, "Could not locate yer player file for Wild Shape save, matey.")
-                return
-            updated_payload = dict(raw_payload)
-            updated_payload["learned_wild_shapes"] = list(deduped)
-            updated_payload["prepared_wild_shapes"] = list(deduped)
-            self._store_character_yaml(player_path, updated_payload)
-            self._load_player_yaml_cache(force_refresh=True)
-
-            self._lan.toast(ws_id, "Wild Shape forms updated.")
-            self._rebuild_table(scroll_to_current=True)
+        elif typ in WILD_SHAPE_COMMAND_TYPES:
+            self._ensure_player_commands().dispatch_wild_shape_command(
+                msg,
+                cid=cid,
+                ws_id=ws_id,
+                is_admin=is_admin,
+            )
+            return
         elif typ in FIGHTER_MONK_RESOURCE_ACTION_TYPES:
             self._ensure_player_commands().dispatch_fighter_monk_resource_action(
                 msg,

@@ -8,6 +8,7 @@ import dnd_initative_tracker as tracker_mod
 from player_command_contracts import (
     MOVEMENT_ACTION_COMMAND_TYPES,
     TURN_LOCAL_COMMAND_TYPES,
+    WILD_SHAPE_COMMAND_TYPES,
     build_action_surge_use_contract,
     build_attack_request_contract,
     build_cycle_movement_mode_contract,
@@ -35,6 +36,12 @@ from player_command_contracts import (
     build_use_action_contract,
     build_use_bonus_action_contract,
     build_use_consumable_contract,
+    build_wild_shape_apply_contract,
+    build_wild_shape_pool_set_current_contract,
+    build_wild_shape_regain_spell_contract,
+    build_wild_shape_regain_use_contract,
+    build_wild_shape_revert_contract,
+    build_wild_shape_set_known_contract,
 )
 from player_command_service import PromptState
 
@@ -169,6 +176,48 @@ class MovementActionCommandContractTests(unittest.TestCase):
                 f"player_command.{command_type}.request",
             )
             self.assertEqual((contract.get("actor") or {}).get("cid"), 11)
+            self.assertEqual((contract.get("payload") or {}).get("type"), command_type)
+
+
+class WildShapeCommandContractTests(unittest.TestCase):
+    def test_wild_shape_command_contract_builders_cover_the_family(self):
+        builders = {
+            "wild_shape_apply": (
+                build_wild_shape_apply_contract,
+                {"type": "wild_shape_apply", "beast_id": "wolf"},
+            ),
+            "wild_shape_pool_set_current": (
+                build_wild_shape_pool_set_current_contract,
+                {"type": "wild_shape_pool_set_current", "current": 2},
+            ),
+            "wild_shape_revert": (
+                build_wild_shape_revert_contract,
+                {"type": "wild_shape_revert"},
+            ),
+            "wild_shape_regain_use": (
+                build_wild_shape_regain_use_contract,
+                {"type": "wild_shape_regain_use"},
+            ),
+            "wild_shape_regain_spell": (
+                build_wild_shape_regain_spell_contract,
+                {"type": "wild_shape_regain_spell"},
+            ),
+            "wild_shape_set_known": (
+                build_wild_shape_set_known_contract,
+                {"type": "wild_shape_set_known", "known": ["reef-shark", "wolf"]},
+            ),
+        }
+
+        self.assertEqual(set(builders.keys()), set(WILD_SHAPE_COMMAND_TYPES))
+
+        for command_type, (builder, msg) in builders.items():
+            contract = builder(dict(msg), cid=13, ws_id=14, is_admin=False)
+            self.assertEqual(contract.get("command_type"), command_type)
+            self.assertEqual(
+                (contract.get("contract") or {}).get("schema"),
+                f"player_command.{command_type}.request",
+            )
+            self.assertEqual((contract.get("actor") or {}).get("cid"), 13)
             self.assertEqual((contract.get("payload") or {}).get("type"), command_type)
 
 

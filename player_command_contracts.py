@@ -121,6 +121,12 @@ DISMOUNT_FIELDS: Sequence[str] = ("type",)
 MOVE_FIELDS: Sequence[str] = ("type", "to")
 CYCLE_MOVEMENT_MODE_FIELDS: Sequence[str] = ("type",)
 PERFORM_ACTION_FIELDS: Sequence[str] = ("type", "spend", "action", "name")
+WILD_SHAPE_APPLY_FIELDS: Sequence[str] = ("type", "beast_id")
+WILD_SHAPE_POOL_SET_CURRENT_FIELDS: Sequence[str] = ("type", "current")
+WILD_SHAPE_REVERT_FIELDS: Sequence[str] = ("type",)
+WILD_SHAPE_REGAIN_USE_FIELDS: Sequence[str] = ("type",)
+WILD_SHAPE_REGAIN_SPELL_FIELDS: Sequence[str] = ("type",)
+WILD_SHAPE_SET_KNOWN_FIELDS: Sequence[str] = ("type", "known")
 MANUAL_OVERRIDE_FIELDS: Sequence[str] = ("type", "hp_delta", "temp_hp_delta")
 REACTION_PREFS_UPDATE_FIELDS: Sequence[str] = ("type", "prefs")
 MANUAL_OVERRIDE_SPELL_SLOT_FIELDS: Sequence[str] = ("type", "slot_level", "delta")
@@ -168,6 +174,17 @@ MOVEMENT_ACTION_COMMAND_TYPES = frozenset(
         "move",
         "cycle_movement_mode",
         "perform_action",
+    }
+)
+
+WILD_SHAPE_COMMAND_TYPES = frozenset(
+    {
+        "wild_shape_apply",
+        "wild_shape_pool_set_current",
+        "wild_shape_revert",
+        "wild_shape_regain_use",
+        "wild_shape_regain_spell",
+        "wild_shape_set_known",
     }
 )
 
@@ -492,6 +509,102 @@ def build_perform_action_contract(
     return build_command_request_contract(
         "perform_action",
         _project_payload(msg, PERFORM_ACTION_FIELDS, "perform_action"),
+        cid=cid,
+        ws_id=ws_id,
+        is_admin=is_admin,
+    )
+
+
+def build_wild_shape_apply_contract(
+    msg: Dict[str, Any],
+    *,
+    cid: Optional[int],
+    ws_id: Any,
+    is_admin: bool,
+) -> Dict[str, Any]:
+    return build_command_request_contract(
+        "wild_shape_apply",
+        _project_payload(msg, WILD_SHAPE_APPLY_FIELDS, "wild_shape_apply"),
+        cid=cid,
+        ws_id=ws_id,
+        is_admin=is_admin,
+    )
+
+
+def build_wild_shape_pool_set_current_contract(
+    msg: Dict[str, Any],
+    *,
+    cid: Optional[int],
+    ws_id: Any,
+    is_admin: bool,
+) -> Dict[str, Any]:
+    return build_command_request_contract(
+        "wild_shape_pool_set_current",
+        _project_payload(msg, WILD_SHAPE_POOL_SET_CURRENT_FIELDS, "wild_shape_pool_set_current"),
+        cid=cid,
+        ws_id=ws_id,
+        is_admin=is_admin,
+    )
+
+
+def build_wild_shape_revert_contract(
+    msg: Dict[str, Any],
+    *,
+    cid: Optional[int],
+    ws_id: Any,
+    is_admin: bool,
+) -> Dict[str, Any]:
+    return build_command_request_contract(
+        "wild_shape_revert",
+        _project_payload(msg, WILD_SHAPE_REVERT_FIELDS, "wild_shape_revert"),
+        cid=cid,
+        ws_id=ws_id,
+        is_admin=is_admin,
+    )
+
+
+def build_wild_shape_regain_use_contract(
+    msg: Dict[str, Any],
+    *,
+    cid: Optional[int],
+    ws_id: Any,
+    is_admin: bool,
+) -> Dict[str, Any]:
+    return build_command_request_contract(
+        "wild_shape_regain_use",
+        _project_payload(msg, WILD_SHAPE_REGAIN_USE_FIELDS, "wild_shape_regain_use"),
+        cid=cid,
+        ws_id=ws_id,
+        is_admin=is_admin,
+    )
+
+
+def build_wild_shape_regain_spell_contract(
+    msg: Dict[str, Any],
+    *,
+    cid: Optional[int],
+    ws_id: Any,
+    is_admin: bool,
+) -> Dict[str, Any]:
+    return build_command_request_contract(
+        "wild_shape_regain_spell",
+        _project_payload(msg, WILD_SHAPE_REGAIN_SPELL_FIELDS, "wild_shape_regain_spell"),
+        cid=cid,
+        ws_id=ws_id,
+        is_admin=is_admin,
+    )
+
+
+def build_wild_shape_set_known_contract(
+    msg: Dict[str, Any],
+    *,
+    cid: Optional[int],
+    ws_id: Any,
+    is_admin: bool,
+) -> Dict[str, Any]:
+    return build_command_request_contract(
+        "wild_shape_set_known",
+        _project_payload(msg, WILD_SHAPE_SET_KNOWN_FIELDS, "wild_shape_set_known"),
         cid=cid,
         ws_id=ws_id,
         is_admin=is_admin,

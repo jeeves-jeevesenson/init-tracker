@@ -12,6 +12,10 @@ Service-owned (this module):
   - player "end turn" gate (turn ownership, summon turn logic)
   - player movement / perform-action family:
     ``move``, ``cycle_movement_mode``, and ``perform_action``
+  - player wild-shape family:
+    ``wild_shape_apply``, ``wild_shape_pool_set_current``,
+    ``wild_shape_revert``, ``wild_shape_regain_use``,
+    ``wild_shape_regain_spell``, and ``wild_shape_set_known``
   - player turn-local / mobility-lite commands:
     ``mount_request``, ``mount_response``, ``dismount``, ``dash``,
     ``use_action``, ``use_bonus_action``, ``stand_up``, and ``reset_turn``
@@ -69,6 +73,7 @@ import sys
 import threading
 import time
 import uuid
+from pathlib import Path
 from typing import TYPE_CHECKING, Any, Dict, Optional
 
 from player_command_contracts import (
@@ -77,6 +82,7 @@ from player_command_contracts import (
     MOVEMENT_ACTION_COMMAND_TYPES,
     SPECIAL_REACTION_TRIGGERS,
     TURN_LOCAL_COMMAND_TYPES,
+    WILD_SHAPE_COMMAND_TYPES,
     apply_resume_dispatch,
     build_attack_request_contract,
     build_action_surge_use_contract,
@@ -113,6 +119,12 @@ from player_command_contracts import (
     build_use_action_contract,
     build_use_bonus_action_contract,
     build_use_consumable_contract,
+    build_wild_shape_apply_contract,
+    build_wild_shape_pool_set_current_contract,
+    build_wild_shape_regain_spell_contract,
+    build_wild_shape_regain_use_contract,
+    build_wild_shape_revert_contract,
+    build_wild_shape_set_known_contract,
     prompt_resume_legacy_message,
     update_prompt_record,
 )
@@ -705,6 +717,9 @@ class PlayerCommandService:
     }
     _TURN_LOCAL_COMMAND_HANDLERS = {
         command_type: command_type for command_type in TURN_LOCAL_COMMAND_TYPES
+    }
+    _WILD_SHAPE_COMMAND_HANDLERS = {
+        command_type: command_type for command_type in WILD_SHAPE_COMMAND_TYPES
     }
 
     def __init__(self, tracker: "InitiativeTracker") -> None:
@@ -1556,6 +1571,574 @@ class PlayerCommandService:
             action_name=action_name,
             action_key=action_key,
             spend=spend,
+        )
+
+    # ------------------------------------------------------------------
+    # wild-shape commands
+    # ------------------------------------------------------------------
+
+    def dispatch_wild_shape_command(
+        self,
+        msg: Dict[str, Any],
+        *,
+        cid: Optional[int],
+        ws_id: Any,
+        is_admin: bool,
+    ) -> Dict[str, Any]:
+        command_type = str(msg.get("type") if isinstance(msg, dict) else "").strip().lower()
+        handler_name = self._WILD_SHAPE_COMMAND_HANDLERS.get(command_type)
+        if not handler_name:
+            return build_dispatch_result(
+                "wild_shape_command",
+                False,
+                reason="unsupported_command",
+                received_type=command_type,
+            )
+        handler = getattr(self, handler_name, None)
+        if not callable(handler):
+            return build_dispatch_result(
+                command_type,
+                False,
+                reason="handler_missing",
+            )
+        return handler(
+            msg if isinstance(msg, dict) else {},
+            cid=cid,
+            ws_id=ws_id,
+            is_admin=is_admin,
+        )
+
+    def wild_shape_apply(
+        self,
+        msg: Dict[str, Any],
+        *,
+        cid: Optional[int],
+        ws_id: Any,
+        is_admin: bool,
+    ) -> Dict[str, Any]:
+        t = self._tracker
+        request_contract = build_wild_shape_apply_contract(
+            msg,
+            cid=cid,
+            ws_id=ws_id,
+            is_admin=is_admin,
+        )
+        if cid is None:
+            return build_dispatch_result("wild_shape_apply", False, reason="missing_cid", request=request_contract)
+        try:
+            cid_int = int(cid)
+        except Exception:
+            return build_dispatch_result("wild_shape_apply", False, reason="invalid_cid", request=request_contract)
+        beast_id = str(msg.get("beast_id") or "").strip()
+        if not beast_id:
+            self._toast(ws_id, "Pick a beast form first, matey.")
+            return build_dispatch_result("wild_shape_apply", False, reason="missing_beast_id", request=request_contract)
+        combatants = getattr(t, "combatants", {}) or {}
+        c = combatants.get(cid_int)
+        if c is None:
+            return build_dispatch_result("wild_shape_apply", False, reason="combatant_missing", request=request_contract)
+        require_bonus_action = bool(getattr(t, "in_combat", False))
+        if require_bonus_action and int(getattr(c, "bonus_action_remaining", 0) or 0) <= 0:
+            self._toast(ws_id, "No bonus actions left, matey.")
+            return build_dispatch_result(
+                "wild_shape_apply",
+                False,
+                reason="no_bonus_action",
+                request=request_contract,
+                beast_id=beast_id,
+            )
+        ok, err = t._apply_wild_shape(int(cid_int), beast_id)
+        if not ok:
+            self._toast(ws_id, err or "Could not Wild Shape, matey.")
+            return build_dispatch_result(
+                "wild_shape_apply",
+                False,
+                reason="apply_failed",
+                error=str(err or ""),
+                request=request_contract,
+                beast_id=beast_id,
+            )
+        if require_bonus_action and not t._use_bonus_action(c):
+            self._toast(ws_id, "Could not spend bonus action for Wild Shape, matey.")
+            return build_dispatch_result(
+                "wild_shape_apply",
+                False,
+                reason="bonus_action_spend_failed",
+                request=request_contract,
+                beast_id=beast_id,
+            )
+        if require_bonus_action:
+            setattr(c, "bonus_action_remaining", 0)
+        self._toast(ws_id, "Wild Shape activated.")
+        rebuild = getattr(t, "_rebuild_table", None)
+        if callable(rebuild):
+            try:
+                rebuild(scroll_to_current=True)
+            except Exception:
+                pass
+        broadcast = getattr(t, "_lan_force_state_broadcast", None)
+        if callable(broadcast):
+            try:
+                broadcast()
+            except Exception:
+                pass
+        return build_dispatch_result(
+            "wild_shape_apply",
+            True,
+            request=request_contract,
+            beast_id=beast_id,
+            require_bonus_action=require_bonus_action,
+        )
+
+    def wild_shape_pool_set_current(
+        self,
+        msg: Dict[str, Any],
+        *,
+        cid: Optional[int],
+        ws_id: Any,
+        is_admin: bool,
+    ) -> Dict[str, Any]:
+        t = self._tracker
+        request_contract = build_wild_shape_pool_set_current_contract(
+            msg,
+            cid=cid,
+            ws_id=ws_id,
+            is_admin=is_admin,
+        )
+        if cid is None:
+            return build_dispatch_result(
+                "wild_shape_pool_set_current",
+                False,
+                reason="missing_cid",
+                request=request_contract,
+            )
+        try:
+            cid_int = int(cid)
+        except Exception:
+            return build_dispatch_result(
+                "wild_shape_pool_set_current",
+                False,
+                reason="invalid_cid",
+                request=request_contract,
+            )
+        try:
+            desired_current = int(msg.get("current"))
+        except Exception:
+            self._toast(ws_id, "Pick a valid Wild Shape uses value, matey.")
+            return build_dispatch_result(
+                "wild_shape_pool_set_current",
+                False,
+                reason="invalid_current",
+                request=request_contract,
+            )
+        player_name = t._pc_name_for(int(cid_int))
+        ok_pool, pool_err, new_cur = t._set_wild_shape_pool_current(player_name, desired_current)
+        if not ok_pool:
+            self._toast(ws_id, pool_err or "Could not update Wild Shape uses, matey.")
+            return build_dispatch_result(
+                "wild_shape_pool_set_current",
+                False,
+                reason="pool_update_failed",
+                error=str(pool_err or ""),
+                request=request_contract,
+                requested_current=desired_current,
+            )
+        c = (getattr(t, "combatants", {}) or {}).get(cid_int)
+        if c is not None:
+            setattr(c, "wild_shape_pool_current", int(new_cur if new_cur is not None else 0))
+        self._toast(ws_id, "Wild Shape uses updated.")
+        rebuild = getattr(t, "_rebuild_table", None)
+        if callable(rebuild):
+            try:
+                rebuild(scroll_to_current=True)
+            except Exception:
+                pass
+        broadcast = getattr(t, "_lan_force_state_broadcast", None)
+        if callable(broadcast):
+            try:
+                broadcast()
+            except Exception:
+                pass
+        return build_dispatch_result(
+            "wild_shape_pool_set_current",
+            True,
+            request=request_contract,
+            requested_current=desired_current,
+            current=int(new_cur if new_cur is not None else 0),
+        )
+
+    def wild_shape_revert(
+        self,
+        msg: Dict[str, Any],
+        *,
+        cid: Optional[int],
+        ws_id: Any,
+        is_admin: bool,
+    ) -> Dict[str, Any]:
+        t = self._tracker
+        request_contract = build_wild_shape_revert_contract(
+            msg,
+            cid=cid,
+            ws_id=ws_id,
+            is_admin=is_admin,
+        )
+        if cid is None:
+            return build_dispatch_result("wild_shape_revert", False, reason="missing_cid", request=request_contract)
+        try:
+            cid_int = int(cid)
+        except Exception:
+            return build_dispatch_result("wild_shape_revert", False, reason="invalid_cid", request=request_contract)
+        combatants = getattr(t, "combatants", {}) or {}
+        c = combatants.get(cid_int)
+        if c is None:
+            return build_dispatch_result("wild_shape_revert", False, reason="combatant_missing", request=request_contract)
+        require_bonus_action = bool(getattr(t, "in_combat", False))
+        if require_bonus_action and int(getattr(c, "bonus_action_remaining", 0) or 0) <= 0:
+            self._toast(ws_id, "No bonus actions left, matey.")
+            return build_dispatch_result(
+                "wild_shape_revert",
+                False,
+                reason="no_bonus_action",
+                request=request_contract,
+            )
+        ok, err = t._revert_wild_shape(int(cid_int))
+        if not ok:
+            self._toast(ws_id, err or "Could not revert Wild Shape, matey.")
+            return build_dispatch_result(
+                "wild_shape_revert",
+                False,
+                reason="revert_failed",
+                error=str(err or ""),
+                request=request_contract,
+            )
+        if require_bonus_action:
+            setattr(c, "bonus_action_remaining", max(0, int(getattr(c, "bonus_action_remaining", 0) or 0) - 1))
+            log = getattr(t, "_log", None)
+            if callable(log):
+                try:
+                    log(f"{getattr(c, 'name', 'Player')} used a bonus action to revert Wild Shape.", cid=cid_int)
+                except Exception:
+                    pass
+        self._toast(ws_id, "Reverted Wild Shape.")
+        rebuild = getattr(t, "_rebuild_table", None)
+        if callable(rebuild):
+            try:
+                rebuild(scroll_to_current=True)
+            except Exception:
+                pass
+        broadcast = getattr(t, "_lan_force_state_broadcast", None)
+        if callable(broadcast):
+            try:
+                broadcast()
+            except Exception:
+                pass
+        return build_dispatch_result(
+            "wild_shape_revert",
+            True,
+            request=request_contract,
+            require_bonus_action=require_bonus_action,
+        )
+
+    def wild_shape_regain_use(
+        self,
+        msg: Dict[str, Any],
+        *,
+        cid: Optional[int],
+        ws_id: Any,
+        is_admin: bool,
+    ) -> Dict[str, Any]:
+        t = self._tracker
+        request_contract = build_wild_shape_regain_use_contract(
+            msg,
+            cid=cid,
+            ws_id=ws_id,
+            is_admin=is_admin,
+        )
+        if cid is None:
+            return build_dispatch_result("wild_shape_regain_use", False, reason="missing_cid", request=request_contract)
+        try:
+            cid_int = int(cid)
+        except Exception:
+            return build_dispatch_result("wild_shape_regain_use", False, reason="invalid_cid", request=request_contract)
+        combatants = getattr(t, "combatants", {}) or {}
+        c = combatants.get(cid_int)
+        if c is None:
+            return build_dispatch_result("wild_shape_regain_use", False, reason="combatant_missing", request=request_contract)
+        if bool(getattr(c, "wild_resurgence_turn_used", False)):
+            self._toast(ws_id, "Wild Resurgence already used this turn, matey.")
+            return build_dispatch_result(
+                "wild_shape_regain_use",
+                False,
+                reason="wild_resurgence_already_used",
+                request=request_contract,
+            )
+        player_name = t._pc_name_for(int(cid_int))
+        ok_slot, err_slot, spent_level = t._consume_spell_slot_for_wild_shape_regain(player_name)
+        if not ok_slot:
+            self._toast(ws_id, err_slot)
+            return build_dispatch_result(
+                "wild_shape_regain_use",
+                False,
+                reason="spell_slot_unavailable",
+                error=str(err_slot or ""),
+                request=request_contract,
+            )
+        profile = t._profile_for_player_name(player_name)
+        pools = t._normalize_player_resource_pools(profile if isinstance(profile, dict) else {})
+        wild = next((p for p in pools if str(p.get("id") or "").lower() == "wild_shape"), None)
+        if not isinstance(wild, dict):
+            self._toast(ws_id, "No Wild Shape pool found, matey.")
+            return build_dispatch_result(
+                "wild_shape_regain_use",
+                False,
+                reason="wild_shape_pool_missing",
+                request=request_contract,
+            )
+        ok_pool, pool_err, new_cur = t._set_wild_shape_pool_current(player_name, int(wild.get("current", 0) or 0) + 1)
+        if not ok_pool:
+            self._toast(ws_id, pool_err)
+            return build_dispatch_result(
+                "wild_shape_regain_use",
+                False,
+                reason="pool_update_failed",
+                error=str(pool_err or ""),
+                request=request_contract,
+            )
+        setattr(c, "wild_resurgence_turn_used", True)
+        setattr(c, "wild_shape_pool_current", int(new_cur if new_cur is not None else getattr(c, "wild_shape_pool_current", 0) or 0))
+        log = getattr(t, "_log", None)
+        if callable(log):
+            try:
+                log(f"{getattr(c, 'name', 'Player')} recovered one Wild Shape use via Wild Resurgence.", cid=cid_int)
+            except Exception:
+                pass
+        self._toast(ws_id, f"Recovered one Wild Shape use (spent level {int(spent_level or 1)} slot).")
+        rebuild = getattr(t, "_rebuild_table", None)
+        if callable(rebuild):
+            try:
+                rebuild(scroll_to_current=True)
+            except Exception:
+                pass
+        broadcast = getattr(t, "_lan_force_state_broadcast", None)
+        if callable(broadcast):
+            try:
+                broadcast()
+            except Exception:
+                pass
+        return build_dispatch_result(
+            "wild_shape_regain_use",
+            True,
+            request=request_contract,
+            spent_level=int(spent_level or 1),
+            current=int(new_cur if new_cur is not None else 0),
+        )
+
+    def wild_shape_regain_spell(
+        self,
+        msg: Dict[str, Any],
+        *,
+        cid: Optional[int],
+        ws_id: Any,
+        is_admin: bool,
+    ) -> Dict[str, Any]:
+        t = self._tracker
+        request_contract = build_wild_shape_regain_spell_contract(
+            msg,
+            cid=cid,
+            ws_id=ws_id,
+            is_admin=is_admin,
+        )
+        if cid is None:
+            return build_dispatch_result("wild_shape_regain_spell", False, reason="missing_cid", request=request_contract)
+        try:
+            cid_int = int(cid)
+        except Exception:
+            return build_dispatch_result("wild_shape_regain_spell", False, reason="invalid_cid", request=request_contract)
+        combatants = getattr(t, "combatants", {}) or {}
+        c = combatants.get(cid_int)
+        if c is None:
+            return build_dispatch_result("wild_shape_regain_spell", False, reason="combatant_missing", request=request_contract)
+        if bool(getattr(c, "wild_resurgence_slot_used", False)):
+            self._toast(ws_id, "Wild Shape spell-slot exchange already used this long rest, matey.")
+            return build_dispatch_result(
+                "wild_shape_regain_spell",
+                False,
+                reason="wild_resurgence_slot_already_used",
+                request=request_contract,
+            )
+        player_name = t._pc_name_for(int(cid_int))
+        profile = t._profile_for_player_name(player_name)
+        pools = t._normalize_player_resource_pools(profile if isinstance(profile, dict) else {})
+        wild = next((p for p in pools if str(p.get("id") or "").lower() == "wild_shape"), None)
+        if not isinstance(wild, dict) or int(wild.get("current", 0) or 0) <= 0:
+            self._toast(ws_id, "No Wild Shape uses to spend, matey.")
+            return build_dispatch_result(
+                "wild_shape_regain_spell",
+                False,
+                reason="no_wild_shape_uses",
+                request=request_contract,
+            )
+        ok_spell, err_spell = t._regain_first_level_spell_slot(player_name)
+        if not ok_spell:
+            self._toast(ws_id, err_spell)
+            return build_dispatch_result(
+                "wild_shape_regain_spell",
+                False,
+                reason="spell_regain_failed",
+                error=str(err_spell or ""),
+                request=request_contract,
+            )
+        ok_pool, pool_err, new_cur = t._set_wild_shape_pool_current(player_name, int(wild.get("current", 0) or 0) - 1)
+        if not ok_pool:
+            self._toast(ws_id, pool_err)
+            return build_dispatch_result(
+                "wild_shape_regain_spell",
+                False,
+                reason="pool_update_failed",
+                error=str(pool_err or ""),
+                request=request_contract,
+            )
+        setattr(c, "wild_resurgence_slot_used", True)
+        setattr(c, "wild_shape_pool_current", int(new_cur if new_cur is not None else getattr(c, "wild_shape_pool_current", 0) or 0))
+        log = getattr(t, "_log", None)
+        if callable(log):
+            try:
+                log(f"{getattr(c, 'name', 'Player')} recovered one level 1 spell slot via Wild Resurgence.", cid=cid_int)
+            except Exception:
+                pass
+        self._toast(ws_id, "Recovered one level 1 spell slot.")
+        rebuild = getattr(t, "_rebuild_table", None)
+        if callable(rebuild):
+            try:
+                rebuild(scroll_to_current=True)
+            except Exception:
+                pass
+        broadcast = getattr(t, "_lan_force_state_broadcast", None)
+        if callable(broadcast):
+            try:
+                broadcast()
+            except Exception:
+                pass
+        return build_dispatch_result(
+            "wild_shape_regain_spell",
+            True,
+            request=request_contract,
+            current=int(new_cur if new_cur is not None else 0),
+        )
+
+    def wild_shape_set_known(
+        self,
+        msg: Dict[str, Any],
+        *,
+        cid: Optional[int],
+        ws_id: Any,
+        is_admin: bool,
+    ) -> Dict[str, Any]:
+        t = self._tracker
+        request_contract = build_wild_shape_set_known_contract(
+            msg,
+            cid=cid,
+            ws_id=ws_id,
+            is_admin=is_admin,
+        )
+        if cid is None:
+            return build_dispatch_result("wild_shape_set_known", False, reason="missing_cid", request=request_contract)
+        try:
+            cid_int = int(cid)
+        except Exception:
+            return build_dispatch_result("wild_shape_set_known", False, reason="invalid_cid", request=request_contract)
+        player_name = t._pc_name_for(int(cid_int))
+        profile = t._profile_for_player_name(player_name)
+        if not isinstance(profile, dict):
+            self._toast(ws_id, "No player profile found, matey.")
+            return build_dispatch_result(
+                "wild_shape_set_known",
+                False,
+                reason="profile_missing",
+                request=request_contract,
+            )
+        druid_level = t._druid_level_from_profile(profile)
+        if druid_level < 2:
+            self._toast(ws_id, "Only druids can manage Wild Shapes, matey.")
+            return build_dispatch_result(
+                "wild_shape_set_known",
+                False,
+                reason="not_a_druid",
+                request=request_contract,
+            )
+        known_limit = t._wild_shape_known_limit(druid_level)
+        requested = msg.get("known")
+        if not isinstance(requested, list):
+            requested = []
+        available_forms = [
+            entry
+            for entry in t._wild_shape_available_forms(profile, known_only=False, include_locked=True)
+            if isinstance(entry, dict)
+        ]
+        allowed_ids = {
+            t._wild_shape_identifier_key(entry.get("id"))
+            for entry in available_forms
+        }
+        allowed_ids.discard("")
+        alias_map = t._wild_shape_alias_lookup(available_forms)
+        deduped: list[str] = []
+        for raw in requested:
+            beast_id = alias_map.get(t._wild_shape_identifier_key(raw))
+            if not beast_id or beast_id in deduped:
+                continue
+            if beast_id not in allowed_ids:
+                continue
+            deduped.append(beast_id)
+            if len(deduped) >= known_limit:
+                break
+        known_map = t.__dict__.get("_wild_shape_known_by_player")
+        if not isinstance(known_map, dict):
+            known_map = {}
+            t._wild_shape_known_by_player = known_map
+        known_map[player_name.strip().lower()] = deduped
+
+        player_path = t._find_player_profile_path(player_name)
+        if not isinstance(player_path, Path):
+            c = (getattr(t, "combatants", {}) or {}).get(cid_int)
+            if c is not None:
+                player_path = t._find_player_profile_path(getattr(c, "name", ""))
+        if not isinstance(player_path, Path):
+            t._load_player_yaml_cache(force_refresh=True)
+            player_path = t._find_player_profile_path(player_name)
+        raw_payload = t._player_yaml_cache_by_path.get(player_path) if isinstance(player_path, Path) else None
+        if not (isinstance(player_path, Path) and isinstance(raw_payload, dict)):
+            self._toast(ws_id, "Could not locate yer player file for Wild Shape save, matey.")
+            return build_dispatch_result(
+                "wild_shape_set_known",
+                False,
+                reason="player_yaml_missing",
+                request=request_contract,
+            )
+        updated_payload = dict(raw_payload)
+        updated_payload["learned_wild_shapes"] = list(deduped)
+        updated_payload["prepared_wild_shapes"] = list(deduped)
+        t._store_character_yaml(player_path, updated_payload)
+        t._load_player_yaml_cache(force_refresh=True)
+
+        self._toast(ws_id, "Wild Shape forms updated.")
+        rebuild = getattr(t, "_rebuild_table", None)
+        if callable(rebuild):
+            try:
+                rebuild(scroll_to_current=True)
+            except Exception:
+                pass
+        broadcast = getattr(t, "_lan_force_state_broadcast", None)
+        if callable(broadcast):
+            try:
+                broadcast()
+            except Exception:
+                pass
+        return build_dispatch_result(
+            "wild_shape_set_known",
+            True,
+            request=request_contract,
+            known=list(deduped),
+            known_limit=int(known_limit),
         )
 
     # ------------------------------------------------------------------

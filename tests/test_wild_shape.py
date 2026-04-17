@@ -2,9 +2,9 @@ import tempfile
 import unittest
 from pathlib import Path
 
-import yaml
-
 import dnd_initative_tracker as tracker_mod
+from player_command_contracts import WILD_SHAPE_COMMAND_TYPES
+from player_command_service import PlayerCommandService
 
 
 class WildShapeTests(unittest.TestCase):
@@ -1088,6 +1088,178 @@ class WildShapeTests(unittest.TestCase):
             "wild_shape_set_known",
         }
         self.assertTrue(required_types.issubset(set(tracker_mod.LanController._ACTION_MESSAGE_TYPES)))
+
+
+class WildShapeCommandDispatchTests(unittest.TestCase):
+    def test_service_dispatcher_routes_every_wild_shape_command(self):
+        service = PlayerCommandService(type("TrackerStub", (), {})())
+        calls = []
+        ordered_types = sorted(WILD_SHAPE_COMMAND_TYPES)
+
+        def _make_handler(expected_type):
+            def _handler(msg, *, cid, ws_id, is_admin):
+                calls.append((expected_type, dict(msg), cid, ws_id, is_admin))
+                return {"ok": True, "command_type": expected_type}
+
+            return _handler
+
+        for command_type in ordered_types:
+            setattr(service, command_type, _make_handler(command_type))
+
+        for index, command_type in enumerate(ordered_types):
+            result = service.dispatch_wild_shape_command(
+                {"type": command_type},
+                cid=1,
+                ws_id=index,
+                is_admin=False,
+            )
+            self.assertTrue(result.get("ok"))
+            self.assertEqual(result.get("command_type"), command_type)
+
+        self.assertEqual([entry[0] for entry in calls], ordered_types)
+
+    def test_service_dispatcher_rejects_unknown_command(self):
+        service = PlayerCommandService(type("TrackerStub", (), {})())
+        result = service.dispatch_wild_shape_command(
+            {"type": "initiative_roll"},
+            cid=1,
+            ws_id=17,
+            is_admin=False,
+        )
+        self.assertFalse(result.get("ok"))
+        self.assertEqual(result.get("reason"), "unsupported_command")
+        self.assertEqual(result.get("received_type"), "initiative_roll")
+
+    def test_lan_apply_action_routes_wild_shape_family_through_dispatcher(self):
+        app = object.__new__(tracker_mod.InitiativeTracker)
+        app._oplog = lambda *args, **kwargs: None
+        app._is_admin_token_valid = lambda token: False
+        app._summon_can_be_controlled_by = lambda claimed, target: False
+        app._is_valid_summon_turn_for_controller = lambda controlling, target, current: True
+        app.in_combat = False
+        app.combatants = {1: type("C", (), {"cid": 1})()}
+        app._lan = type(
+            "LanStub",
+            (),
+            {
+                "toast": lambda *_args, **_kwargs: None,
+                "_append_lan_log": lambda *args, **kwargs: None,
+                "_loop": None,
+            },
+        )()
+
+        class ServiceStub:
+            def __init__(self):
+                self.calls = []
+
+            def dispatch_wild_shape_command(self, msg, *, cid, ws_id, is_admin):
+                self.calls.append((str(msg.get("type")), cid, ws_id, is_admin))
+                return {"ok": True}
+
+        service_stub = ServiceStub()
+        app._ensure_player_commands = lambda: service_stub
+
+        sample_messages = {
+            "wild_shape_apply": {"beast_id": "wolf"},
+            "wild_shape_pool_set_current": {"current": 2},
+            "wild_shape_set_known": {"known": ["reef-shark", "wolf"]},
+        }
+        ordered_types = sorted(WILD_SHAPE_COMMAND_TYPES)
+        for command_type in ordered_types:
+            payload = {
+                "type": command_type,
+                "cid": 1,
+                "_claimed_cid": 1,
+                "_ws_id": 81,
+            }
+            payload.update(sample_messages.get(command_type, {}))
+            app._lan_apply_action(payload)
+
+        self.assertEqual([entry[0] for entry in service_stub.calls], ordered_types)
+
+
+class WildShapeServiceBehaviorTests(unittest.TestCase):
+    def _make_tracker(self, *, wild_shape_current: int = 1):
+        tracker = type("TrackerStub", (), {})()
+        tracker._lan_toasts = []
+        tracker._logs = []
+        tracker._rebuild_calls = []
+        tracker._broadcast_calls = []
+        tracker._lan = type(
+            "LanStub",
+            (),
+            {
+                "toast": lambda _self, ws_id, text: tracker._lan_toasts.append((ws_id, text)),
+            },
+        )()
+        tracker._log = lambda message, **kwargs: tracker._logs.append((message, kwargs))
+        tracker._rebuild_table = lambda **kwargs: tracker._rebuild_calls.append(kwargs)
+        tracker._lan_force_state_broadcast = lambda: tracker._broadcast_calls.append(True)
+        tracker._pc_name_for = lambda _cid: "Leaf"
+        tracker._profile_for_player_name = lambda _name: {
+            "resources": {
+                "pools": [
+                    {"id": "wild_shape", "current": int(wild_shape_current), "max": 2},
+                ]
+            }
+        }
+        tracker._normalize_player_resource_pools = (
+            lambda profile: list(((profile.get("resources") or {}).get("pools") or []))
+        )
+        tracker.combatants = {
+            1: type(
+                "C",
+                (),
+                {
+                    "cid": 1,
+                    "name": "Leaf",
+                    "wild_resurgence_turn_used": False,
+                    "wild_resurgence_slot_used": False,
+                    "wild_shape_pool_current": int(wild_shape_current),
+                },
+            )()
+        }
+        return tracker
+
+    def test_wild_shape_regain_use_handler_marks_turn_usage_and_updates_pool(self):
+        tracker = self._make_tracker(wild_shape_current=1)
+        tracker._consume_spell_slot_for_wild_shape_regain = lambda _name: (True, "", 2)
+        tracker._set_wild_shape_pool_current = lambda _name, value: (True, "", max(0, min(2, int(value))))
+
+        result = PlayerCommandService(tracker).wild_shape_regain_use(
+            {"type": "wild_shape_regain_use"},
+            cid=1,
+            ws_id=7,
+            is_admin=False,
+        )
+
+        self.assertTrue(result.get("ok"))
+        self.assertTrue(tracker.combatants[1].wild_resurgence_turn_used)
+        self.assertEqual(tracker.combatants[1].wild_shape_pool_current, 2)
+        self.assertIn((7, "Recovered one Wild Shape use (spent level 2 slot)."), tracker._lan_toasts)
+        self.assertEqual(len(tracker._rebuild_calls), 1)
+        self.assertEqual(len(tracker._broadcast_calls), 1)
+        self.assertTrue(any("recovered one Wild Shape use via Wild Resurgence" in message for message, _kwargs in tracker._logs))
+
+    def test_wild_shape_regain_spell_handler_marks_long_rest_usage_and_spends_pool(self):
+        tracker = self._make_tracker(wild_shape_current=1)
+        tracker._regain_first_level_spell_slot = lambda _name: (True, "")
+        tracker._set_wild_shape_pool_current = lambda _name, value: (True, "", max(0, min(2, int(value))))
+
+        result = PlayerCommandService(tracker).wild_shape_regain_spell(
+            {"type": "wild_shape_regain_spell"},
+            cid=1,
+            ws_id=9,
+            is_admin=False,
+        )
+
+        self.assertTrue(result.get("ok"))
+        self.assertTrue(tracker.combatants[1].wild_resurgence_slot_used)
+        self.assertEqual(tracker.combatants[1].wild_shape_pool_current, 0)
+        self.assertIn((9, "Recovered one level 1 spell slot."), tracker._lan_toasts)
+        self.assertEqual(len(tracker._rebuild_calls), 1)
+        self.assertEqual(len(tracker._broadcast_calls), 1)
+        self.assertTrue(any("recovered one level 1 spell slot via Wild Resurgence" in message for message, _kwargs in tracker._logs))
 
 
 if __name__ == "__main__":
