@@ -8,6 +8,7 @@ import types
 import unittest
 from unittest.mock import Mock, patch
 
+import helper_script as base_tracker_mod
 from helper_script import ConditionStack
 
 from combat_service import CombatService
@@ -642,6 +643,94 @@ def _make_tracker_with_encounter_setup(num_combatants: int = 2):
     return app
 
 
+def _make_tracker_with_player_profile_population():
+    app = _make_tracker_with_encounter_setup(num_combatants=0)
+    app._yaml_players_refresh_calls = []
+    app._create_pc_from_profile_calls = []
+    app._player_yaml_data_by_name = {
+        "Aelar": {"name": "Aelar"},
+        "Mira": {"name": "Mira"},
+    }
+
+    def _yaml_players_refresh_cache(rebuild=True):
+        app._yaml_players_refresh_calls.append(bool(rebuild))
+
+    def _create_pc_from_profile(name, profile):
+        cid = app._next_id
+        app._next_id += 1
+        c = types.SimpleNamespace(
+            cid=cid,
+            name=str(name),
+            hp=24,
+            max_hp=24,
+            temp_hp=0,
+            ac=15,
+            initiative=10,
+            is_pc=True,
+            condition_stacks=[],
+        )
+        app.combatants[cid] = c
+        app._create_pc_from_profile_calls.append({"name": name, "profile": profile})
+        return cid
+
+    app._yaml_players_refresh_cache = _yaml_players_refresh_cache
+    app._create_pc_from_profile = _create_pc_from_profile
+    return app
+
+
+def _make_tracker_with_monster_spec_population():
+    app = _make_tracker_with_encounter_setup(num_combatants=0)
+    app._create_monster_spec_combatant_calls = []
+    goblin_spec = types.SimpleNamespace(
+        name="Goblin",
+        filename="goblin.yaml",
+        hp=7,
+        speed=30,
+        swim_speed=0,
+        fly_speed=0,
+        burrow_speed=0,
+        climb_speed=0,
+        dex=14,
+        init_mod=2,
+        saving_throws={},
+        ability_mods={"dex": 2},
+    )
+
+    def _find_monster_spec_by_slug(slug):
+        return goblin_spec if str(slug).strip().lower() == "goblin" else None
+
+    def _create_monster_spec_combatant(**kwargs):
+        cid = app._next_id
+        app._next_id += 1
+        c = types.SimpleNamespace(
+            cid=cid,
+            name=str(kwargs.get("name") or f"Monster {cid}"),
+            hp=int(kwargs.get("hp") or 7),
+            max_hp=int(kwargs.get("hp") or 7),
+            temp_hp=0,
+            ac=13,
+            initiative=int(kwargs.get("initiative") or 0),
+            is_pc=False,
+            condition_stacks=[],
+        )
+        if kwargs.get("roll") is not None:
+            c.roll = int(kwargs.get("roll"))
+        if kwargs.get("nat20") is not None:
+            c.nat20 = bool(kwargs.get("nat20"))
+        app.combatants[cid] = c
+        app._create_monster_spec_combatant_calls.append(dict(kwargs))
+        return cid
+
+    app._find_monster_spec_by_slug = _find_monster_spec_by_slug
+    app._create_monster_spec_combatant = _create_monster_spec_combatant
+    app._add_monster_spec_combatants_direct = (
+        base_tracker_mod.InitiativeTracker._add_monster_spec_combatants_direct.__get__(
+            app, base_tracker_mod.InitiativeTracker
+        )
+    )
+    return app
+
+
 class CombatServiceAddCombatantTests(unittest.TestCase):
     """Tests for CombatService.add_combatant()."""
 
@@ -719,6 +808,120 @@ class CombatServiceAddCombatantTests(unittest.TestCase):
         self.service.add_combatant("Troll", hp=84, initiative=5)
         logged_msgs = [m for m, _ in self.tracker._log_calls]
         self.assertTrue(any("Troll" in m for m in logged_msgs))
+
+
+class CombatServicePlayerProfilePopulationTests(unittest.TestCase):
+    """Tests for CombatService.add_player_profile_combatants()."""
+
+    def setUp(self):
+        self.tracker = _make_tracker_with_player_profile_population()
+        self.service = CombatService(self.tracker)
+
+    def test_add_player_profile_combatants_adds_requested_players(self):
+        result = self.service.add_player_profile_combatants(["Aelar", "Mira"])
+        self.assertTrue(result["ok"])
+        self.assertEqual(["Aelar", "Mira"], result["added"])
+        self.assertEqual(2, len(result["created"]))
+
+    def test_add_player_profile_combatants_refreshes_cache_before_create(self):
+        self.service.add_player_profile_combatants(["Aelar"])
+        self.assertEqual([True], self.tracker._yaml_players_refresh_calls)
+
+    def test_add_player_profile_combatants_skip_existing_respects_current_encounter(self):
+        existing = types.SimpleNamespace(
+            cid=99,
+            name="Aelar",
+            hp=20,
+            max_hp=20,
+            temp_hp=0,
+            ac=15,
+            initiative=10,
+            is_pc=True,
+            condition_stacks=[],
+        )
+        self.tracker.combatants[99] = existing
+        result = self.service.add_player_profile_combatants(["Aelar"], skip_existing=True)
+        self.assertEqual([], result["added"])
+        self.assertEqual(["Aelar"], result["skipped"])
+        self.assertEqual([], self.tracker._create_pc_from_profile_calls)
+
+    def test_add_player_profile_combatants_allows_duplicate_when_not_skipping_existing(self):
+        existing = types.SimpleNamespace(
+            cid=77,
+            name="Aelar",
+            hp=18,
+            max_hp=18,
+            temp_hp=0,
+            ac=14,
+            initiative=9,
+            is_pc=True,
+            condition_stacks=[],
+        )
+        self.tracker.combatants[77] = existing
+        result = self.service.add_player_profile_combatants(["Aelar"], skip_existing=False)
+        self.assertEqual(["Aelar"], result["added"])
+        self.assertEqual(1, len(self.tracker._create_pc_from_profile_calls))
+
+    def test_add_player_profile_combatants_triggers_single_rebuild_and_broadcast(self):
+        self.service.add_player_profile_combatants(["Aelar", "Mira"])
+        self.assertEqual(1, len(self.tracker._rebuild_calls))
+        self.assertEqual(1, len(self.tracker._broadcast_calls))
+
+
+class CombatServiceMonsterSpecPopulationTests(unittest.TestCase):
+    """Tests for CombatService.add_monster_spec_combatants()."""
+
+    def setUp(self):
+        self.tracker = _make_tracker_with_monster_spec_population()
+        self.service = CombatService(self.tracker)
+
+    def test_add_monster_spec_combatants_adds_valid_entries(self):
+        result = self.service.add_monster_spec_combatants(
+            [{"name": "Goblin 1", "monster_slug": "goblin", "initiative": 12}]
+        )
+        self.assertTrue(result["ok"])
+        self.assertEqual("Goblin 1", result["added"][0]["name"])
+        self.assertEqual("goblin", result["added"][0]["monster_slug"])
+
+    def test_add_monster_spec_combatants_forwards_roll_flags(self):
+        self.service.add_monster_spec_combatants(
+            [
+                {
+                    "name": "Goblin 1",
+                    "monster_slug": "goblin",
+                    "initiative": 21,
+                    "roll": 19,
+                    "nat20": False,
+                }
+            ]
+        )
+        call = self.tracker._create_monster_spec_combatant_calls[0]
+        self.assertEqual(19, call["roll"])
+        self.assertFalse(call["nat20"])
+
+    def test_add_monster_spec_combatants_skips_missing_monsters(self):
+        result = self.service.add_monster_spec_combatants(
+            [{"name": "Unknown", "monster_slug": "missing", "initiative": 10}]
+        )
+        self.assertEqual([], result["added"])
+        self.assertEqual("monster_not_found", result["skipped"][0]["reason"])
+
+    def test_add_monster_spec_combatants_rejects_invalid_initiative(self):
+        result = self.service.add_monster_spec_combatants(
+            [{"name": "Goblin 1", "monster_slug": "goblin", "initiative": "bad"}]
+        )
+        self.assertEqual([], result["added"])
+        self.assertEqual("invalid_initiative", result["skipped"][0]["reason"])
+
+    def test_add_monster_spec_combatants_triggers_single_rebuild_and_broadcast(self):
+        self.service.add_monster_spec_combatants(
+            [
+                {"name": "Goblin 1", "monster_slug": "goblin", "initiative": 12},
+                {"name": "Goblin 2", "monster_slug": "goblin", "initiative": 11},
+            ]
+        )
+        self.assertEqual(1, len(self.tracker._rebuild_calls))
+        self.assertEqual(1, len(self.tracker._broadcast_calls))
 
 
 class CombatServiceSetInitiativeTests(unittest.TestCase):
@@ -1592,6 +1795,116 @@ class SetInitiativeViaServiceTests(unittest.TestCase):
         tracker._dm_service = None
         ok = InitiativeTracker._set_initiative_via_service(tracker, 999, 12)
         self.assertFalse(ok)
+
+
+class AddPlayerProfileCombatantsViaServiceWrapperTests(unittest.TestCase):
+    """Tests for InitiativeTracker._add_player_profile_combatants_via_service()."""
+
+    def test_routes_through_service(self):
+        tracker = _make_tracker_with_player_profile_population()
+        service = types.SimpleNamespace()
+        service.add_player_profile_combatants = Mock(
+            return_value={"ok": True, "added": ["Aelar"], "skipped": []}
+        )
+        tracker._dm_service = service
+
+        result = InitiativeTracker._add_player_profile_combatants_via_service(
+            tracker,
+            ["Aelar"],
+            skip_existing=True,
+        )
+
+        self.assertEqual(["Aelar"], result["added"])
+        service.add_player_profile_combatants.assert_called_once_with(
+            ["Aelar"],
+            skip_existing=True,
+        )
+
+    def test_fallback_without_service_uses_direct_player_creation(self):
+        tracker = _make_tracker_with_player_profile_population()
+        tracker._dm_service = None
+
+        result = InitiativeTracker._add_player_profile_combatants_via_service(
+            tracker,
+            ["Aelar"],
+            skip_existing=False,
+        )
+
+        self.assertEqual(["Aelar"], result["added"])
+        self.assertEqual(1, len(tracker._create_pc_from_profile_calls))
+        self.assertEqual(1, len(tracker._rebuild_calls))
+        self.assertEqual(1, len(tracker._broadcast_calls))
+
+    def test_logs_when_service_player_population_fails(self):
+        tracker = _make_tracker_with_player_profile_population()
+        tracker._dm_service = types.SimpleNamespace(
+            add_player_profile_combatants=Mock(return_value={"ok": False, "error": "boom"})
+        )
+
+        result = InitiativeTracker._add_player_profile_combatants_via_service(
+            tracker,
+            ["Aelar"],
+            skip_existing=False,
+        )
+
+        self.assertEqual(["Aelar"], result["added"])
+        warnings = [(m, l) for m, l in tracker._oplog_calls if l == "warning"]
+        self.assertTrue(any("add_player_profile_combatants" in m for m, _ in warnings))
+
+
+class AddMonsterSpecCombatantsViaServiceWrapperTests(unittest.TestCase):
+    """Tests for InitiativeTracker._add_monster_spec_combatants_via_service()."""
+
+    def test_routes_through_service(self):
+        tracker = _make_tracker_with_monster_spec_population()
+        service = types.SimpleNamespace()
+        service.add_monster_spec_combatants = Mock(
+            return_value={
+                "ok": True,
+                "added": [{"cid": 3, "name": "Goblin 1", "monster_slug": "goblin"}],
+                "skipped": [],
+            }
+        )
+        tracker._dm_service = service
+
+        result = InitiativeTracker._add_monster_spec_combatants_via_service(
+            tracker,
+            [{"name": "Goblin 1", "monster_slug": "goblin", "initiative": 12}],
+        )
+
+        self.assertEqual("Goblin 1", result["added"][0]["name"])
+        service.add_monster_spec_combatants.assert_called_once_with(
+            [{"name": "Goblin 1", "monster_slug": "goblin", "initiative": 12}]
+        )
+
+    def test_fallback_without_service_uses_direct_monster_creation(self):
+        tracker = _make_tracker_with_monster_spec_population()
+        tracker._dm_service = None
+
+        result = InitiativeTracker._add_monster_spec_combatants_via_service(
+            tracker,
+            [{"name": "Goblin 1", "monster_slug": "goblin", "initiative": 12}],
+        )
+
+        self.assertEqual("Goblin 1", result["added"][0]["name"])
+        self.assertEqual(1, len(tracker._create_monster_spec_combatant_calls))
+        self.assertEqual(1, len(tracker._rebuild_calls))
+        self.assertEqual(1, len(tracker._broadcast_calls))
+
+    def test_logs_when_service_monster_population_fails(self):
+        tracker = _make_tracker_with_monster_spec_population()
+        tracker._dm_service = types.SimpleNamespace(
+            add_monster_spec_combatants=Mock(return_value={"ok": False, "error": "boom"})
+        )
+
+        result = InitiativeTracker._add_monster_spec_combatants_via_service(
+            tracker,
+            [{"name": "Goblin 1", "monster_slug": "goblin", "initiative": 12}],
+        )
+
+        self.assertEqual("Goblin 1", result["added"][0]["name"])
+        warnings = [(m, l) for m, l in tracker._oplog_calls if l == "warning"]
+        self.assertTrue(any("add_monster_spec_combatants" in m for m, _ in warnings))
 
 
 # ===================================================================

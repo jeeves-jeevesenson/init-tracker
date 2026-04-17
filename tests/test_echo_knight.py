@@ -49,12 +49,16 @@ class EchoKnightLanTests(unittest.TestCase):
         john.spell_cast_remaining = 1
         self.app.combatants = {1: john}
         self.app.current_cid = 1
+        self.app.round_num = 1
+        self.app.turn_num = 1
         self.app.in_combat = True
         self.app._lan_positions = {1: (5, 5)}
         self.app._lan_aoes = {}
         self.app._summon_groups = {}
         self.app._summon_group_meta = {}
         self.app._pending_echo_tether_confirms = {}
+        self.app._pending_reaction_offers = {}
+        self.app._name_role_memory = {}
         self.app._map_window = None
         self.app._turn_snapshots = {}
         self.app._oplog = lambda *args, **kwargs: None
@@ -66,6 +70,7 @@ class EchoKnightLanTests(unittest.TestCase):
         self.app._unique_name = lambda name: str(name)
         self.app._lan_current_position = lambda cid: self.app._lan_positions.get(int(cid))
         self.app._lan_live_map_data = lambda: (20, 20, set(), {}, dict(self.app._lan_positions))
+        self.app._lan_is_friendly_unit = lambda cid: bool(getattr(self.app.combatants.get(int(cid)), "ally", False))
         self.app._rebuild_table = lambda scroll_to_current=False: self._mark_rebuild()
         self.app._lan_force_state_broadcast = lambda: self._mark_broadcast()
         self.app._lan = type(
@@ -108,7 +113,9 @@ class EchoKnightLanTests(unittest.TestCase):
         is_spellcaster=None,
         saving_throws=None,
         ability_mods=None,
+        actions=None,
         monster_spec=None,
+        **_ignored,
     ):
         cid = self.next_cid
         self.next_cid += 1
@@ -130,6 +137,7 @@ class EchoKnightLanTests(unittest.TestCase):
             is_spellcaster=bool(is_spellcaster),
             saving_throws=dict(saving_throws or {}),
             ability_mods=dict(ability_mods or {}),
+            actions=list(actions or []),
             monster_spec=monster_spec,
         )
         unit.bonus_action_remaining = 0

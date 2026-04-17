@@ -90,6 +90,7 @@ from map_state import (
     map_delta_has_changes,
 )
 from ship_blueprints import load_repo_runtime_ship_blueprints
+from player_command_service import PlayerCommandService
 
 
 FAIL_OUTCOME_LABELS = {"fail", "failed", "failure", "failed_save", "fail_save"}
@@ -2911,38 +2912,10 @@ class LanController:
             if not isinstance(names, list):
                 raise HTTPException(status_code=400, detail="Payload must include a names list.")
 
-            added: List[str] = []
-            skipped: List[str] = []
-            self.app._yaml_players_refresh_cache(rebuild=True)
-            existing = {
-                str(getattr(c, "name", "")).strip().lower()
-                for c in self.app.combatants.values()
-                if str(getattr(c, "name", "")).strip()
-            }
-            for raw_name in names:
-                name = str(raw_name or "").strip()
-                if not name:
-                    continue
-                profile = self.app._player_yaml_data_by_name.get(name)
-                if not isinstance(profile, dict):
-                    skipped.append(name)
-                    continue
-                if name.lower() in existing:
-                    skipped.append(name)
-                    continue
-                cid = self.app._create_pc_from_profile(name, profile)
-                if isinstance(cid, int):
-                    added.append(name)
-                    existing.add(name.lower())
-                else:
-                    skipped.append(name)
-            if added:
-                try:
-                    self.app._rebuild_table(scroll_to_current=True)
-                except Exception:
-                    pass
-            self.app._lan_force_state_broadcast()
-            return {"ok": True, "added": added, "skipped": skipped}
+            result = self.app._add_player_profile_combatants_via_service(names, skip_existing=True)
+            if not result.get("ok"):
+                raise HTTPException(status_code=500, detail=result.get("error", "Failed to add players."))
+            return {"ok": True, "added": result.get("added", []), "skipped": result.get("skipped", [])}
 
 
         @self._fastapi_app.post("/api/characters/export")
@@ -14487,17 +14460,7 @@ class InitiativeTracker(base.InitiativeTracker):
             selected = [avail_list.get(i) for i in avail_list.curselection()]
             if not selected:
                 return
-            self._load_player_yaml_cache()
-            added = False
-            for name in selected:
-                profile = self._player_yaml_data_by_name.get(name)
-                if not isinstance(profile, dict):
-                    continue
-                if self._create_pc_from_profile(name, profile) is not None:
-                    added = True
-            if added:
-                self._rebuild_table(scroll_to_current=True)
-                self._lan_force_state_broadcast()
+            self._add_player_profile_combatants_via_service(selected, skip_existing=False)
             refresh_lists()
 
         def remove_selected() -> None:
@@ -15601,6 +15564,92 @@ class InitiativeTracker(base.InitiativeTracker):
                     level="warning",
                 )
         return cid
+
+    def _add_player_profile_combatants_via_service(
+        self,
+        names: List[Any],
+        *,
+        skip_existing: bool = False,
+    ) -> Dict[str, Any]:
+        """Route player-profile encounter population through CombatService when available."""
+        dm_svc = getattr(self, "_dm_service", None)
+        if dm_svc is not None:
+            try:
+                result = dm_svc.add_player_profile_combatants(
+                    list(names) if isinstance(names, list) else [],
+                    skip_existing=skip_existing,
+                )
+                if result.get("ok"):
+                    return result
+                self._oplog(
+                    f"CombatService.add_player_profile_combatants failed: {result.get('error', 'unknown error')}",
+                    level="warning",
+                )
+            except Exception as exc:
+                self._oplog(
+                    f"CombatService.add_player_profile_combatants exception: {exc}",
+                    level="warning",
+                )
+
+        added: List[str] = []
+        skipped: List[str] = []
+        self._yaml_players_refresh_cache(rebuild=True)
+        existing = set()
+        if skip_existing:
+            existing = {
+                str(getattr(c, "name", "")).strip().lower()
+                for c in self.combatants.values()
+                if str(getattr(c, "name", "")).strip()
+            }
+        for raw_name in names if isinstance(names, list) else []:
+            name = str(raw_name or "").strip()
+            if not name:
+                continue
+            profile = self._player_yaml_data_by_name.get(name)
+            if not isinstance(profile, dict):
+                skipped.append(name)
+                continue
+            if skip_existing and name.lower() in existing:
+                skipped.append(name)
+                continue
+            cid = self._create_pc_from_profile(name, profile)
+            if isinstance(cid, int):
+                added.append(name)
+                if skip_existing:
+                    existing.add(name.lower())
+            else:
+                skipped.append(name)
+        if added:
+            try:
+                self._rebuild_table(scroll_to_current=True)
+            except Exception:
+                pass
+            try:
+                self._lan_force_state_broadcast()
+            except Exception:
+                pass
+        return {"ok": True, "added": added, "skipped": skipped}
+
+    def _add_monster_spec_combatants_via_service(self, entries: List[Dict[str, Any]]) -> Dict[str, Any]:
+        """Route core monster-spec encounter population through CombatService when available."""
+        dm_svc = getattr(self, "_dm_service", None)
+        if dm_svc is not None:
+            try:
+                result = dm_svc.add_monster_spec_combatants(
+                    list(entries) if isinstance(entries, list) else [],
+                )
+                if result.get("ok"):
+                    return result
+                self._oplog(
+                    f"CombatService.add_monster_spec_combatants failed: {result.get('error', 'unknown error')}",
+                    level="warning",
+                )
+            except Exception as exc:
+                self._oplog(
+                    f"CombatService.add_monster_spec_combatants exception: {exc}",
+                    level="warning",
+                )
+        return self._add_monster_spec_combatants_direct(entries)
 
     def _remove_combatants_with_lan_cleanup(self, cids: Iterable[int]) -> None:
         removed = {int(cid) for cid in cids}
@@ -30106,6 +30155,2902 @@ class InitiativeTracker(base.InitiativeTracker):
             removed = 1
         return bool(removed)
 
+    def _ensure_player_commands(self) -> PlayerCommandService:
+        """Return the backend player-command service, constructing on first use.
+
+        ``PlayerCommandService`` is the explicit authority seam for player-
+        originated combat commands (attack_request, spell_target_request,
+        reaction_response, end_turn, manual_override_hp).  It is built lazily
+        so test harnesses that skip ``__init__`` still get a working service
+        when they invoke ``_lan_apply_action`` directly.
+
+        ``__dict__`` is used rather than ``getattr`` because this class
+        inherits from ``tk.Tk``; a plain ``getattr`` on an instance built via
+        ``object.__new__(InitiativeTracker)`` (the test-harness pattern)
+        would recurse into Tk's ``__getattr__`` forwarder before we can
+        install the attribute.
+        """
+        svc = self.__dict__.get("_player_commands")
+        if svc is None:
+            svc = PlayerCommandService(self)
+            self.__dict__["_player_commands"] = svc
+        return svc
+
+    def _adjudicate_reaction_response(
+        self,
+        msg: Dict[str, Any],
+        *,
+        cid: int,
+        ws_id: Any,
+        offer: Dict[str, Any],
+        request_id: str,
+    ) -> None:
+        """Resolve a player reaction_response command against a pending offer.
+
+        This is the backend-owned adjudicator for shield, hellish rebuke,
+        absorb elements, interception, and generic accept/decline reaction
+        flows.  It was extracted from the monolithic ``_lan_apply_action``
+        branch so that ownership of prompt lifecycle (pop, toast, resume) is
+        expressed on the tracker rather than inside transport glue.
+        Dispatched by ``PlayerCommandService.reaction_response``.
+        """
+        choice = str(msg.get("choice") or "").strip().lower()
+        if str(offer.get("trigger") or "").strip().lower() == "shield":
+            pending = (getattr(self, "_pending_shield_resolutions", {}) or {}).pop(request_id, None)
+            self._pending_reaction_offers.pop(request_id, None)
+            if not isinstance(pending, dict):
+                self._lan.toast(ws_id, "That Shield offer expired, matey.")
+                return
+            reactor_cid = _normalize_cid_value(offer.get("reactor_cid"), "reaction_response.shield.reactor")
+            reactor = self.combatants.get(int(reactor_cid)) if reactor_cid is not None else None
+            if reactor is None:
+                return
+            if choice in ("shield_never", "never"):
+                self._set_reaction_prefs(int(reactor_cid), {"shield": "off"})
+            if choice in ("shield_yes", "shield_cast", "shield"):
+                if not self._use_reaction(reactor):
+                    self._lan.toast(ws_id, "No reactions left for Shield, matey.")
+                    choice = "shield_no"
+                else:
+                    ok_cast, err_cast = self._consume_shield_cast(reactor)
+                    if not ok_cast:
+                        self._lan.toast(ws_id, err_cast or "Could not cast Shield, matey.")
+                        choice = "shield_no"
+                    else:
+                        self._shield_effect_start(reactor)
+                        self._log(f"{getattr(reactor, 'name', 'Target')} casts Shield.", cid=int(getattr(reactor, 'cid', 0) or 0))
+            resume_msg = dict(pending.get("msg") or {})
+            if isinstance(resume_msg, dict):
+                resume_msg["_shield_resolution_done"] = True
+                self._oplog(
+                    f"reaction_offer:shield resolved request_id={request_id} choice={choice}",
+                    level="info",
+                )
+                self._lan_apply_action(resume_msg)
+            return
+        if str(offer.get("trigger") or "").strip().lower() == "hellish_rebuke":
+            pending = (getattr(self, "_pending_hellish_rebuke_resolutions", {}) or {}).get(request_id)
+            self._pending_reaction_offers.pop(request_id, None)
+            if not isinstance(pending, dict):
+                self._lan.toast(ws_id, "That Hellish Rebuke offer expired, matey.")
+                return
+            reactor_cid = _normalize_cid_value(offer.get("reactor_cid"), "reaction_response.hellish_rebuke.reactor")
+            reactor = self.combatants.get(int(reactor_cid)) if reactor_cid is not None else None
+            if reactor is None:
+                return
+            if choice in ("never", "hellish_rebuke_never"):
+                self._pending_hellish_rebuke_resolutions.pop(request_id, None)
+                self._set_reaction_prefs(int(reactor_cid), {"hellish_rebuke": "off"})
+                return
+            if choice in ("", "decline", "ignore", "hellish_rebuke_no"):
+                self._pending_hellish_rebuke_resolutions.pop(request_id, None)
+                return
+            if choice not in ("cast_hellish_rebuke", "hellish_rebuke", "hellish_rebuke_yes"):
+                return
+            if not self._use_reaction(reactor):
+                self._lan.toast(ws_id, "No reactions left for Hellish Rebuke, matey.")
+                return
+            attacker_cid = _normalize_cid_value(pending.get("attacker_cid"), "reaction_response.hellish_rebuke.attacker")
+            if attacker_cid is None or int(attacker_cid) not in self.combatants:
+                self._lan.toast(ws_id, "The attacker is gone; Hellish Rebuke fizzles.")
+                return
+            pending["status"] = "accepted"
+            pending["reaction_spent"] = True
+            self._oplog(f"reaction_offer:hellish_rebuke accepted request_id={request_id} reactor={int(reactor_cid)} attacker={int(attacker_cid)}", level="info")
+            loop = getattr(self._lan, "_loop", None)
+            if ws_id is not None and loop:
+                try:
+                    asyncio.run_coroutine_threadsafe(self._lan._send_async(int(ws_id), {
+                        "type": "hellish_rebuke_resolve_start",
+                        "request_id": str(request_id),
+                        "caster_cid": int(reactor_cid),
+                        "attacker_cid": int(attacker_cid),
+                        "target_cid": int(attacker_cid),
+                        "spell_id": "hellish-rebuke",
+                        "spell_slug": "hellish-rebuke",
+                        "action_type": "reaction",
+                        "max_range_ft": 60,
+                    }), loop)
+                except Exception:
+                    pass
+            return
+        if str(offer.get("trigger") or "").strip().lower() == "absorb_elements":
+            pending = (getattr(self, "_pending_absorb_elements_resolutions", {}) or {}).pop(request_id, None)
+            self._pending_reaction_offers.pop(request_id, None)
+            if not isinstance(pending, dict):
+                self._lan.toast(ws_id, "That Absorb Elements offer expired, matey.")
+                return
+            reactor_cid = _normalize_cid_value(offer.get("reactor_cid"), "reaction_response.absorb_elements.reactor")
+            reactor = self.combatants.get(int(reactor_cid)) if reactor_cid is not None else None
+            if reactor is None:
+                return
+            resume_msg = dict(pending.get("msg") or {})
+            if choice in ("absorb_elements_never", "never"):
+                self._set_reaction_prefs(int(reactor_cid), {"absorb_elements": "off"})
+            if choice in ("absorb_elements_never", "never", "", "decline", "ignore", "absorb_elements_decline"):
+                if isinstance(resume_msg, dict):
+                    resume_msg["_absorb_elements_resolution_done"] = True
+                    self._lan_apply_action(resume_msg)
+                return
+            if not choice.startswith("cast_absorb_elements_"):
+                if isinstance(resume_msg, dict):
+                    resume_msg["_absorb_elements_resolution_done"] = True
+                    self._lan_apply_action(resume_msg)
+                return
+            chosen_type = self._canonical_damage_type(choice.replace("cast_absorb_elements_", "", 1))
+            allowed_types = {
+                self._canonical_damage_type(item)
+                for item in (pending.get("trigger_types") if isinstance(pending.get("trigger_types"), list) else [])
+            }
+            allowed_types = {item for item in allowed_types if item}
+            if chosen_type not in allowed_types:
+                self._lan.toast(ws_id, "That damage type is invalid for Absorb Elements.")
+                if isinstance(resume_msg, dict):
+                    resume_msg["_absorb_elements_resolution_done"] = True
+                    self._lan_apply_action(resume_msg)
+                return
+            if not self._use_reaction(reactor):
+                self._lan.toast(ws_id, "No reactions left for Absorb Elements, matey.")
+                if isinstance(resume_msg, dict):
+                    resume_msg["_absorb_elements_resolution_done"] = True
+                    self._lan_apply_action(resume_msg)
+                return
+            try:
+                slot_level = int(msg.get("slot_level")) if msg.get("slot_level") is not None else 1
+            except Exception:
+                slot_level = 1
+            slot_level = max(1, min(9, int(slot_level)))
+            player_name = self._pc_name_for(int(reactor.cid))
+            ok_slot, slot_err, spent_level = self._consume_spell_slot_for_cast(player_name, slot_level, 1)
+            if not ok_slot:
+                self._lan.toast(ws_id, slot_err or "Could not cast Absorb Elements, matey.")
+                if isinstance(resume_msg, dict):
+                    resume_msg["_absorb_elements_resolution_done"] = True
+                    self._lan_apply_action(resume_msg)
+                return
+            spend_level = int(spent_level) if spent_level is not None else int(slot_level)
+            self._activate_absorb_elements(reactor, chosen_type, max(1, int(spend_level)))
+            self._log(
+                f"{getattr(reactor, 'name', 'Target')} casts Absorb Elements ({chosen_type.title()}).",
+                cid=int(getattr(reactor, "cid", 0) or 0),
+            )
+            if isinstance(resume_msg, dict):
+                resume_msg["_absorb_elements_resolution_done"] = True
+                self._lan_apply_action(resume_msg)
+            return
+        if str(offer.get("trigger") or "").strip().lower() == "interception":
+            pending = (self.__dict__.get("_pending_interception_resolutions", {}) or {}).pop(request_id, None)
+            self._pending_reaction_offers.pop(request_id, None)
+            if not isinstance(pending, dict):
+                self._lan.toast(ws_id, "That Interception offer expired, matey.")
+                return
+            reactor_cid = _normalize_cid_value(offer.get("reactor_cid"), "reaction_response.interception.reactor")
+            reactor = self.combatants.get(int(reactor_cid)) if reactor_cid is not None else None
+            if reactor is None:
+                return
+            resume_msg = dict(pending.get("msg") or {})
+            if choice in ("interception_never", "never"):
+                self._set_reaction_prefs(int(reactor_cid), {"interception": "off"})
+            if choice in ("interception_never", "never", "", "decline", "ignore", "interception_no"):
+                if isinstance(resume_msg, dict):
+                    resume_msg["_interception_resolution_done"] = True
+                    self._lan_apply_action(resume_msg)
+                return
+            if choice not in ("interception_yes", "interception"):
+                if isinstance(resume_msg, dict):
+                    resume_msg["_interception_resolution_done"] = True
+                    self._lan_apply_action(resume_msg)
+                return
+            pending["status"] = "accepted"
+            if not self._use_reaction(reactor):
+                self._lan.toast(ws_id, "No reactions left for Interception, matey.")
+                if isinstance(resume_msg, dict):
+                    resume_msg["_interception_resolution_done"] = True
+                    self._lan_apply_action(resume_msg)
+                return
+            reduction_roll = int(random.randint(1, 10))
+            reduction = int(reduction_roll) + int(self._interception_reduction_bonus(reactor))
+            if isinstance(resume_msg, dict):
+                resume_msg["_interception_resolution_done"] = True
+                resume_msg["_interception_reduction"] = max(0, int(reduction))
+                resume_msg["_interception_reactor_cid"] = int(reactor_cid)
+                self._lan_apply_action(resume_msg)
+            return
+        if choice in ("", "decline", "ignore"):
+            self._pending_reaction_offers.pop(request_id, None)
+            return
+        offer["status"] = "accepted"
+        offer["accepted_choice"] = choice
+        try:
+            stored = self._pending_reaction_offers.get(request_id)
+            if isinstance(stored, dict):
+                stored["status"] = "accepted"
+                stored["accepted_choice"] = choice
+        except Exception:
+            pass
+        return
+
+    def _adjudicate_spell_target_request(
+        self,
+        msg: Dict[str, Any],
+        *,
+        cid: int,
+        ws_id: Any,
+        is_admin: bool,
+    ) -> None:
+        """Backend adjudication for a player spell_target_request command.
+
+        Extracted from the former inline ``spell_target_request`` branch of
+        ``_lan_apply_action``.  Dispatched by
+        ``PlayerCommandService.spell_target_request``.  Owns save rolls,
+        damage/healing entries, mark/curse state, relocation follow-ups,
+        reaction offers (shield, absorb elements, interception), and
+        ``_spell_target_result`` payloads.
+        """
+        try:
+            log_warning = lambda message: self._lan._append_lan_log(message, level="warning")
+        except Exception:
+            log_warning = None
+        c = self.combatants.get(cid)
+        if not c:
+            return
+
+        def _parse_int(value: Any, fallback: Optional[int] = None) -> Optional[int]:
+            try:
+                return int(value)
+            except Exception:
+                return fallback
+
+        def _parse_non_negative_manual_damage(value: Any) -> Optional[int]:
+            if isinstance(value, bool):
+                return None
+            if isinstance(value, int):
+                return value if value >= 0 else None
+            if isinstance(value, float):
+                if not value.is_integer():
+                    return None
+                return int(value) if value >= 0 else None
+            if isinstance(value, str):
+                text = value.strip()
+                if not text or not re.fullmatch(r"\+?\d+", text):
+                    return None
+                try:
+                    parsed = int(text)
+                except Exception:
+                    return None
+                return parsed if parsed >= 0 else None
+            return None
+
+        def _parse_bool(value: Any, fallback: bool = False) -> bool:
+            if isinstance(value, bool):
+                return value
+            if isinstance(value, str):
+                lowered = value.strip().lower()
+                if lowered in ("1", "true", "yes", "y", "hit"):
+                    return True
+                if lowered in ("0", "false", "no", "n", "miss"):
+                    return False
+            return bool(fallback)
+
+        def _save_mod_for_target(target_obj: Any, ability_key: str) -> int:
+            key = str(ability_key or "").strip().lower()
+            if not key:
+                return 0
+            aura_bonus = int((self._lan_aura_effects_for_target(target_obj) or {}).get("save_bonus") or 0)
+            saves = getattr(target_obj, "saving_throws", None)
+            if isinstance(saves, dict):
+                val = saves.get(key)
+                try:
+                    return int(val) + aura_bonus
+                except Exception:
+                    pass
+            mods = getattr(target_obj, "ability_mods", None)
+            if isinstance(mods, dict):
+                val = mods.get(key)
+                try:
+                    return int(val) + aura_bonus
+                except Exception:
+                    pass
+            return aura_bonus
+
+        target_cid = _normalize_cid_value(msg.get("target_cid"), "spell_target_request.target_cid", log_fn=log_warning)
+        if target_cid is None:
+            target_cid = int(cid)
+        target = self.combatants.get(int(target_cid)) if target_cid is not None else None
+        if target is None:
+            self._lan.toast(ws_id, "Pick a valid target, matey.")
+            return
+
+        spell_name = str(msg.get("spell_name") or msg.get("name") or "Spell").strip() or "Spell"
+        preset = self._find_spell_preset(msg.get("spell_slug"), msg.get("spell_id"))
+        mechanics = preset.get("mechanics") if isinstance(preset, dict) and isinstance(preset.get("mechanics"), dict) else {}
+        sequence = mechanics.get("sequence") if isinstance(mechanics.get("sequence"), list) else []
+        preset_slug = str((preset or {}).get("slug") or "").strip().lower()
+        preset_id = str((preset or {}).get("id") or "").strip().lower()
+
+        def _reject_invalid_spell_target(reason: str) -> None:
+            msg["_spell_target_result"] = {
+                "type": "spell_target_result",
+                "ok": False,
+                "attacker_cid": int(cid),
+                "target_cid": int(target_cid),
+                "spell_name": spell_name,
+                "spell_slug": preset_slug or None,
+                "spell_id": preset_id or None,
+                "reason": reason,
+            }
+            self._lan.toast(ws_id, reason)
+            log_warning(f"spell_target_request rejected: {reason}")
+
+        summon_cfg = preset.get("summon") if isinstance(preset, dict) and isinstance(preset.get("summon"), dict) else None
+        has_destination = msg.get("destination_col") is not None or msg.get("destination_row") is not None
+        requested_spell_mode = str(msg.get("spell_mode") or msg.get("mode") or "attack").strip().lower()
+        if isinstance(summon_cfg, dict):
+            _reject_invalid_spell_target("That summon spell must be cast via summon placement, matey.")
+            return
+        if has_destination and not self._spell_supports_relocation_followup(preset):
+            _reject_invalid_spell_target("That spell can't accept a relocation destination.")
+            return
+        if requested_spell_mode == "effect" and has_destination and not self._spell_supports_relocation_followup(preset):
+            _reject_invalid_spell_target("Relocation follow-up is invalid for that spell.")
+            return
+
+        is_magic_missile = preset_slug in ("magic-missile", "magic_missile") or preset_id in ("magic-missile", "magic_missile")
+        if is_magic_missile and not bool(msg.get("_shield_resolution_done")):
+            shield_mode = self._reaction_mode_for(int(target_cid), "shield", default="ask")
+            can_shield, _shield_reason = self._can_offer_shield_reaction(target)
+            if shield_mode != "off" and can_shield:
+                choices = [{"kind": "shield_yes", "label": "Yes", "mode": shield_mode}]
+                ws_targets = self._find_ws_for_cid(int(target_cid))
+                req_id = self._create_reaction_offer(
+                    int(target_cid),
+                    "shield",
+                    int(cid),
+                    int(target_cid),
+                    choices,
+                    ws_targets,
+                    extra_payload={"prompt_attack": str(spell_name or "Magic Missile")},
+                )
+                if req_id:
+                    self._pending_shield_resolutions[str(req_id)] = {"msg": dict(msg)}
+                    self._oplog(
+                        f"reaction_offer:shield pending request_id={req_id} magic_missile caster={int(cid)} target={int(target_cid)}",
+                        level="info",
+                    )
+                    caster_ws_targets = self._find_ws_for_cid(int(cid))
+                    for caster_ws in caster_ws_targets:
+                        self._lan.toast(int(caster_ws), "Waiting for Shield response…")
+                    return
+        is_polymorph = preset_slug == "polymorph" or preset_id == "polymorph"
+        is_phantasmal_killer = preset_slug == "phantasmal-killer" or preset_id == "phantasmal-killer"
+        is_heat_metal = preset_slug in ("heat-metal", "heat_metal") or preset_id in ("heat-metal", "heat_metal")
+        is_hex = preset_slug == "hex" or preset_id == "hex"
+        is_hunters_mark = preset_slug == "hunter-s-mark" or preset_id == "hunter-s-mark"
+        is_bestow_curse = preset_slug == "bestow-curse" or preset_id == "bestow-curse"
+        if c is not None and (is_hex or is_hunters_mark):
+            existing_marks = self._collect_marks_for_attacker(int(c.cid), spell_key="hex" if is_hex else "hunter-s-mark")
+            if existing_marks and int(existing_marks[0].get("target_cid") or 0) != int(target_cid):
+                old_target = self.combatants.get(int(existing_marks[0].get("target_cid") or 0))
+                old_target_down = old_target is None or int(getattr(old_target, "hp", 0) or 0) <= 0
+                if not old_target_down:
+                    _reject_invalid_spell_target("You can move that mark only after the prior target drops, matey.")
+                    return
+            spell_key_for_mark = "hex" if is_hex else "hunter-s-mark"
+            damage_type = "necrotic" if is_hex else "force"
+            self._register_target_mark(
+                int(c.cid),
+                int(target_cid),
+                spell_key_for_mark,
+                spell_level=int(msg.get("slot_level") or (preset or {}).get("level") or 1),
+                concentration_bound=True,
+                clear_group=f"{spell_key_for_mark}_{int(c.cid)}_{int(target_cid)}",
+                reassign={"allow_reassign": True, "requires_prior_target_down": True},
+                attack_augments={"extra_damage_dice": [{"dice": "1d6", "damage_type": damage_type}]},
+                target_penalties={},
+                effect_tags=["curse" if is_hex else "mark", "attack_augment"],
+            )
+            current_targets = list(getattr(c, "concentration_target", []) or [])
+            if int(target_cid) not in current_targets:
+                current_targets.append(int(target_cid))
+            self._start_concentration(
+                c,
+                "hex" if is_hex else "hunter-s-mark",
+                spell_level=int(msg.get("slot_level") or (preset or {}).get("level") or 1),
+                targets=current_targets,
+            )
+            result_payload = {
+                "type": "spell_target_result",
+                "ok": True,
+                "attacker_cid": int(cid),
+                "target_cid": int(target_cid),
+                "target_name": str(getattr(target, "name", "Target") or "Target"),
+                "spell_name": spell_name,
+                "spell_mode": "effect",
+                "hit": True,
+                "critical": False,
+                "damage_entries": [],
+                "damage_total": 0,
+                "effect_result": "applied",
+            }
+            msg["_spell_target_result"] = dict(result_payload)
+            detail = self._format_single_target_spell_outcome(result_payload)
+            self._log(str(detail.get("log") or f"{spell_name} applied to {result_payload['target_name']}."), cid=int(target_cid))
+            try:
+                self._rebuild_table(scroll_to_current=True)
+            except Exception:
+                pass
+            self._lan.toast(ws_id, str(detail.get("toast") or f"{spell_name} applied to {result_payload['target_name']}."))
+            return
+        if c is not None and is_bestow_curse:
+            curse_mode = str(msg.get("curse_mode") or msg.get("bestow_curse_mode") or "").strip().lower()
+            if curse_mode in {"extra-damage", "extra_damage", "damage"}:
+                save_dc = int(msg.get("save_dc") or self._compute_spell_save_dc(self._profile_for_player_name(self._pc_name_for(int(c.cid)))) or 0)
+                save_roll = int(random.randint(1, 20))
+                save_mod = _save_mod_for_target(target, "wis")
+                save_total = int(save_roll) + int(save_mod)
+                save_passed = bool(save_roll != 1 and save_total >= int(save_dc)) if save_dc > 0 else False
+                result_payload = {
+                    "type": "spell_target_result",
+                    "ok": True,
+                    "attacker_cid": int(cid),
+                    "target_cid": int(target_cid),
+                    "target_name": str(getattr(target, "name", "Target") or "Target"),
+                    "spell_name": spell_name,
+                    "spell_mode": "save",
+                    "hit": bool(not save_passed),
+                    "critical": False,
+                    "damage_entries": [],
+                    "damage_total": 0,
+                    "save_result": {"ability": "wis", "dc": int(save_dc), "roll": int(save_roll), "modifier": int(save_mod), "total": int(save_total), "passed": bool(save_passed)},
+                }
+                if not save_passed:
+                    self._register_target_mark(
+                        int(c.cid),
+                        int(target_cid),
+                        "bestow-curse",
+                        spell_level=int(msg.get("slot_level") or (preset or {}).get("level") or 3),
+                        concentration_bound=True,
+                        clear_group=f"bestow_curse_{int(c.cid)}_{int(target_cid)}",
+                        reassign={"allow_reassign": False},
+                        attack_augments={"extra_damage_dice": [{"dice": "1d8", "damage_type": "necrotic"}]},
+                        target_penalties={"target_attack_disadvantage_against_source": True},
+                        effect_tags=["curse", "attack_augment"],
+                    )
+                    current_targets = list(getattr(c, "concentration_target", []) or [])
+                    if int(target_cid) not in current_targets:
+                        current_targets.append(int(target_cid))
+                    self._start_concentration(
+                        c,
+                        "bestow-curse",
+                        spell_level=int(msg.get("slot_level") or (preset or {}).get("level") or 3),
+                        targets=current_targets,
+                        )
+                    result_payload["effect_result"] = "applied"
+                msg["_spell_target_result"] = dict(result_payload)
+                detail = self._format_single_target_spell_outcome(result_payload)
+                self._log(str(detail.get("log") or f"{spell_name} resolved on {result_payload['target_name']}."), cid=int(target_cid))
+                try:
+                    self._rebuild_table(scroll_to_current=True)
+                except Exception:
+                    pass
+                self._lan.toast(ws_id, str(detail.get("toast") or f"{spell_name} resolved on {result_payload['target_name']}."))
+                return
+        if c is not None and self._is_produce_flame_spell_key(preset_slug, preset_id, msg.get("spell_slug"), msg.get("spell_id")):
+            hurl_started = bool(msg.get("_produce_flame_hurl_started"))
+            if not hurl_started:
+                produce_state = self._active_produce_flame_state(c)
+                if not isinstance(produce_state, dict):
+                    _reject_invalid_spell_target("Produce Flame is not active to hurl, matey.")
+                    return
+                live_map_data = self._lan_live_map_data() if callable(getattr(self, "_lan_live_map_data", None)) else None
+                positions = dict((live_map_data or (0, 0, set(), {}, {}))[4] or {})
+                caster_pos = positions.get(int(c.cid)) or self._lan_current_position(int(c.cid))
+                target_pos = positions.get(int(target.cid)) or self._lan_current_position(int(target.cid))
+                max_range_ft = float(produce_state.get("hurl_range_ft") or 60)
+                if caster_pos is None or target_pos is None:
+                    _reject_invalid_spell_target("Could not resolve Produce Flame range, matey.")
+                    return
+                dist_ft = math.hypot(float(caster_pos[0]) - float(target_pos[0]), float(caster_pos[1]) - float(target_pos[1])) * self._lan_feet_per_square()
+                if dist_ft - max_range_ft > 1e-6:
+                    _reject_invalid_spell_target("That target be out of Produce Flame range.")
+                    return
+                if not is_admin and not self._use_action(c, log_message=f"{c.name} hurls Produce Flame."):
+                    _reject_invalid_spell_target("No actions left to hurl Produce Flame, matey.")
+                    return
+                msg["_produce_flame_hurl_started"] = True
+                msg["spell_mode"] = "attack"
+                msg["range_ft"] = int(max_range_ft)
+            handled_produce_flame = self._resolve_single_target_spell(
+                msg=msg,
+                caster=c,
+                target=target,
+                preset=preset,
+                spell_name=spell_name,
+                ws_id=ws_id,
+                attacker_cid=int(cid),
+                target_cid=int(target_cid),
+            )
+            if handled_produce_flame:
+                if not bool(msg.get("_produce_flame_hurl_consumed")):
+                    self._clear_produce_flame_state(c)
+                    msg["_produce_flame_hurl_consumed"] = True
+                    self._lan_force_state_broadcast()
+                return
+        handled_generic_single_target = self._resolve_single_target_spell(
+            msg=msg,
+            caster=c,
+            target=target,
+            preset=preset,
+            spell_name=spell_name,
+            ws_id=ws_id,
+            attacker_cid=int(cid),
+            target_cid=int(target_cid),
+            skip_spells={
+                "magic-missile",
+                "polymorph",
+                "heat-metal",
+                "phantasmal-killer",
+                "lesser-restoration",
+                "remove-curse",
+                "dispel-magic",
+            },
+        )
+        if handled_generic_single_target:
+            return
+        handled_cleanup_spell = self._resolve_utility_cleanup_spell(
+            msg=msg,
+            caster=c,
+            target=target,
+            preset=preset,
+            spell_name=spell_name,
+            ws_id=ws_id,
+            attacker_cid=int(cid),
+            target_cid=int(target_cid),
+        )
+        if handled_cleanup_spell:
+            return
+        requested_spell_mode = str(msg.get("spell_mode") or msg.get("mode") or "attack").strip().lower()
+        spell_mode = requested_spell_mode
+        if spell_mode not in ("attack", "auto_hit", "save", "effect"):
+            spell_mode = "attack"
+        inferred_spell_mode = self._infer_spell_targeting_mode(preset)
+        if spell_mode == "attack" and inferred_spell_mode in ("save", "auto_hit", "effect"):
+            spell_mode = inferred_spell_mode
+        hit = _parse_bool(msg.get("hit"), fallback=spell_mode == "auto_hit")
+        critical = _parse_bool(msg.get("critical"), fallback=False)
+        save_type = str(msg.get("save_type") or "").strip().lower()
+        if spell_mode == "save" and not save_type:
+            save_type = self._infer_spell_save_ability(preset)
+        save_dc = max(0, _parse_int(msg.get("save_dc"), 0) or 0)
+        slot_level = _parse_int(msg.get("slot_level"), None)
+        if slot_level is None and isinstance(preset, dict):
+            slot_level = _parse_int(preset.get("level"), None)
+        if spell_mode == "save" and save_dc <= 0:
+            try:
+                player_name = self._pc_name_for(int(cid))
+            except Exception:
+                player_name = ""
+            profile = self._profile_for_player_name(player_name)
+            if isinstance(profile, dict):
+                computed_dc = self._compute_spell_save_dc(profile)
+                if computed_dc is not None and int(computed_dc) > 0:
+                    save_dc = int(computed_dc)
+        raw_roll_save = msg.get("roll_save")
+        roll_save = _parse_bool(raw_roll_save, fallback=spell_mode == "save")
+        if spell_mode == "save" and requested_spell_mode == "attack" and raw_roll_save is None:
+            roll_save = True
+        healing_entries: List[Dict[str, Any]] = []
+        raw_healing_entries = msg.get("healing_entries")
+        if isinstance(raw_healing_entries, list):
+            for entry in raw_healing_entries:
+                if not isinstance(entry, dict):
+                    continue
+                amount = _parse_non_negative_manual_damage(entry.get("amount"))
+                if amount is None:
+                    continue
+                amount = int(amount)
+                if amount <= 0:
+                    continue
+                healing_entries.append({"amount": amount, "type": "healing"})
+        healing_dice_text = str(msg.get("healing_dice") or "").strip().lower()
+        healing_bonus = 0
+        if not healing_dice_text and isinstance(preset, dict):
+            for step in sequence:
+                if not isinstance(step, dict):
+                    continue
+                outcomes = step.get("outcomes") if isinstance(step.get("outcomes"), dict) else {}
+                found = False
+                for bucket in outcomes.values():
+                    if not isinstance(bucket, list):
+                        continue
+                    for effect in bucket:
+                        if not isinstance(effect, dict):
+                            continue
+                        if str(effect.get("effect") or "").strip().lower() != "healing":
+                            continue
+                        healing_dice_text = str(effect.get("dice") or "").strip().lower()
+                        bonus_kind = str(effect.get("bonus") or "").strip().lower()
+                        if bonus_kind in {"spellcasting_ability_modifier", "spellcasting_modifier", "spell_mod"}:
+                            healing_bonus = int(self._spellcasting_modifier_from_profile(profile))
+                        found = bool(healing_dice_text)
+                        if found:
+                            break
+                    if found:
+                        break
+                if found:
+                    break
+        auto_spell_healing = bool(not healing_entries and healing_dice_text and not bool(msg.get("prompt_for_healing")))
+        if auto_spell_healing:
+            if int(healing_bonus) != 0:
+                healing_dice_text = f"{healing_dice_text}+{int(healing_bonus)}"
+            dice_match = re.fullmatch(r"\s*(\d+)d(\d+)\s*([+\-]\s*\d+)?\s*", healing_dice_text)
+            if dice_match:
+                dice_count = max(0, int(dice_match.group(1)))
+                dice_sides = max(0, int(dice_match.group(2)))
+                mod_text = str(dice_match.group(3) or "").replace(" ", "")
+                flat_mod = _parse_int(mod_text, 0) or 0
+                amount = 0
+                if dice_count > 0 and dice_sides > 0:
+                    amount = sum(random.randint(1, int(dice_sides)) for _ in range(int(dice_count))) + int(flat_mod)
+                else:
+                    amount = int(flat_mod)
+                if amount > 0:
+                    healing_entries.append({"amount": int(amount), "type": "healing"})
+        damage_entries: List[Dict[str, Any]] = []
+        raw_damage_entries = msg.get("damage_entries")
+        if isinstance(raw_damage_entries, list):
+            for entry in raw_damage_entries:
+                if not isinstance(entry, dict):
+                    continue
+                amount = _parse_non_negative_manual_damage(entry.get("amount"))
+                if amount is None:
+                    continue
+                amount = int(amount)
+                if amount <= 0:
+                    continue
+                dtype = str(entry.get("type") or "").strip().lower()
+                damage_entries.append({"amount": amount, "type": dtype})
+
+        spell_range_ft = self._parse_int_value(msg.get("range_ft"), None)
+        if spell_range_ft is None and isinstance(preset, dict):
+            spell_range_ft = self._parse_int_value((preset.get("mechanics") or {}).get("targeting", {}).get("range", {}).get("distance_ft"), None)
+            if spell_range_ft is None:
+                range_match = re.search(r"(\d+(?:\.\d+)?)\s*(?:ft|feet)", str(preset.get("range") or "").lower())
+                if range_match:
+                    try:
+                        spell_range_ft = int(float(range_match.group(1)))
+                    except Exception:
+                        spell_range_ft = None
+
+        damage_dice_text = str(msg.get("damage_dice") or "").strip().lower()
+        if not damage_dice_text and isinstance(preset, dict):
+            damage_dice_text = str(preset.get("dice") or "").strip().lower()
+        if damage_dice_text and isinstance(preset, dict):
+            try:
+                player_name = self._pc_name_for(int(cid))
+            except Exception:
+                player_name = ""
+            profile = self._profile_for_player_name(player_name)
+            leveling = profile.get("leveling") if isinstance(profile, dict) and isinstance(profile.get("leveling"), dict) else {}
+            character_level = self._coerce_level_value(leveling)
+            scaling = preset.get("scaling") if isinstance(preset.get("scaling"), dict) else None
+            damage_dice_text = self._scale_damage_dice_for_character_level(
+                damage_dice_text,
+                scaling,
+                character_level,
+            )
+        damage_type_hint = str(msg.get("damage_type") or "").strip().lower()
+        if not damage_type_hint and isinstance(preset, dict):
+            preset_damage_types = preset.get("damage_types") if isinstance(preset.get("damage_types"), list) else []
+            if preset_damage_types:
+                damage_type_hint = str(preset_damage_types[0] or "").strip().lower()
+        damage_type_hint = damage_type_hint or "damage"
+        auto_spell_damage = bool(hit and not damage_entries and damage_dice_text)
+        if auto_spell_damage:
+            dice_match = re.fullmatch(r"\s*(\d+)d(\d+)\s*([+\-]\s*\d+)?\s*", damage_dice_text)
+            if dice_match:
+                dice_count = max(0, int(dice_match.group(1)))
+                dice_sides = max(0, int(dice_match.group(2)))
+                mod_text = str(dice_match.group(3) or "").replace(" ", "")
+                flat_mod = _parse_int(mod_text, 0) or 0
+                amount = 0
+                if dice_count > 0 and dice_sides > 0:
+                    if critical and spell_mode in ("attack", "auto_hit"):
+                        amount = int(dice_count) * int(dice_sides) + int(flat_mod)
+                    else:
+                        amount = sum(random.randint(1, int(dice_sides)) for _ in range(int(dice_count))) + int(flat_mod)
+                else:
+                    amount = int(flat_mod)
+                if amount > 0:
+                    damage_entries.append({"amount": int(amount), "type": damage_type_hint})
+        shot_index = self._parse_int_value(msg.get("shot_index"), None)
+        shot_total = self._parse_int_value(msg.get("shot_total"), None)
+        result_payload: Dict[str, Any] = {
+            "type": "spell_target_result",
+            "ok": True,
+            "attacker_cid": int(cid),
+            "target_cid": int(target_cid),
+            "target_name": str(getattr(target, "name", "Target") or "Target"),
+            "spell_name": spell_name,
+            "spell_mode": spell_mode,
+        }
+        if shot_index is not None and shot_total is not None and shot_total > 1 and 1 <= shot_index <= shot_total:
+            result_payload["shot_index"] = int(shot_index)
+            result_payload["shot_total"] = int(shot_total)
+
+        has_healing_effect = any(
+            isinstance(effect, dict)
+            and str(effect.get("effect") or "").strip().lower() == "healing"
+            for step in sequence
+            if isinstance(step, dict)
+            for bucket in [(step.get("outcomes") if isinstance(step.get("outcomes"), dict) else {}).values()]
+            for effects in bucket
+            if isinstance(effects, list)
+            for effect in effects
+        )
+        if has_healing_effect:
+            healing_intent = bool(healing_entries) or bool(healing_dice_text) or bool(msg.get("prompt_for_healing"))
+            if not healing_entries and healing_intent:
+                result_payload["needs_healing_prompt"] = True
+                msg["_spell_target_result"] = dict(result_payload)
+                loop = getattr(self._lan, "_loop", None)
+                if ws_id is not None and loop:
+                    try:
+                        asyncio.run_coroutine_threadsafe(self._lan._send_async(ws_id, result_payload), loop)
+                    except Exception:
+                        pass
+                self._lan.toast(ws_id, "Enter healing to resolve the spell.")
+                return
+            total_healing = int(sum(int(entry.get("amount", 0) or 0) for entry in healing_entries))
+            applied_healing = 0
+            if total_healing > 0:
+                before_hp = _parse_int(getattr(target, "hp", None), 0) or 0
+                max_hp = _parse_int(getattr(target, "max_hp", None), before_hp) or before_hp
+                if max_hp < 0:
+                    max_hp = 0
+                applied_healing = max(0, min(total_healing, max(0, int(max_hp) - int(before_hp))))
+                self._apply_heal_via_service(int(target_cid), applied_healing)
+            result_payload["hit"] = True
+            result_payload["critical"] = False
+            result_payload["healing_entries"] = list(healing_entries)
+            result_payload["healing_total"] = int(total_healing)
+            result_payload["healing_applied"] = int(applied_healing)
+            self._log(
+                f"{c.name} heals {result_payload['target_name']} for {int(applied_healing)} HP with {spell_name}.",
+                cid=int(target_cid),
+            )
+            try:
+                self._rebuild_table(scroll_to_current=True)
+            except Exception:
+                pass
+            msg["_spell_target_result"] = dict(result_payload)
+            loop = getattr(self._lan, "_loop", None)
+            if ws_id is not None and loop:
+                try:
+                    asyncio.run_coroutine_threadsafe(self._lan._send_async(ws_id, result_payload), loop)
+                except Exception:
+                    pass
+            self._lan.toast(ws_id, "Healing resolved.")
+            return
+
+        if spell_mode == "effect":
+            if bool((preset or {}).get("concentration")) and c is not None:
+                current_targets = list(getattr(c, "concentration_target", []) or [])
+                if int(target.cid) not in current_targets:
+                    current_targets.append(int(target.cid))
+                self._start_concentration(
+                    c,
+                    self._canonical_concentration_spell_key(preset, fallback=spell_name),
+                    spell_level=int((preset or {}).get("level") or 0) or None,
+                    targets=current_targets,
+                )
+            self._log(f"{c.name} targets {result_payload['target_name']} with {spell_name}.", cid=int(target_cid))
+            try:
+                self._rebuild_table(scroll_to_current=True)
+            except Exception:
+                pass
+            msg["_spell_target_result"] = dict(result_payload)
+            loop = getattr(self._lan, "_loop", None)
+            if ws_id is not None and loop:
+                try:
+                    asyncio.run_coroutine_threadsafe(self._lan._send_async(ws_id, result_payload), loop)
+                except Exception:
+                    pass
+            return
+        resolved_bucket: List[Dict[str, Any]] = []
+        def _bucket_for_outcome(outcomes: Dict[str, Any], passed: bool, key_hint: str) -> List[Dict[str, Any]]:
+            keys = [key_hint] if key_hint else []
+            if passed:
+                keys.extend(["success", "pass", "saved", "save"])
+            else:
+                keys.extend(list(FAIL_OUTCOME_LABELS))
+            for key in keys:
+                bucket = outcomes.get(key)
+                if isinstance(bucket, list):
+                    return [entry for entry in bucket if isinstance(entry, dict)]
+            return []
+
+        def _roll_scaled_effect_damage(effect: Dict[str, Any]) -> int:
+            if not isinstance(effect, dict):
+                return 0
+            dice_text = str(effect.get("dice") or "").strip().lower()
+            match = re.fullmatch(r"\s*(\d+)d(\d+)\s*([+\-]\s*\d+)?\s*", dice_text)
+            if not match:
+                return 0
+            dice_count = max(0, int(match.group(1)))
+            dice_sides = max(0, int(match.group(2)))
+            mod_text = str(match.group(3) or "").replace(" ", "")
+            flat_mod = _parse_int(mod_text, 0) or 0
+            total = 0
+            if dice_count > 0 and dice_sides > 0:
+                total = sum(random.randint(1, int(dice_sides)) for _ in range(int(dice_count))) + int(flat_mod)
+            else:
+                total = int(flat_mod)
+            scaling = effect.get("scaling") if isinstance(effect.get("scaling"), dict) else mechanics.get("scaling") if isinstance(mechanics.get("scaling"), dict) else None
+            if isinstance(scaling, dict) and scaling.get("kind") == "slot_level" and slot_level is not None:
+                base_slot = _parse_int(scaling.get("base_slot"), None)
+                add_expr = str(scaling.get("add_per_slot_above") or "").strip().lower()
+                add_match = re.fullmatch(r"\s*(\d+)d(\d+)\s*", add_expr)
+                if base_slot is not None and add_match and int(slot_level) > int(base_slot):
+                    add_count = int(add_match.group(1))
+                    add_sides = int(add_match.group(2))
+                    for _ in range(int(slot_level) - int(base_slot)):
+                        total += sum(random.randint(1, int(add_sides)) for _ in range(int(add_count)))
+            try:
+                mult = effect.get("multiplier")
+                if mult is not None:
+                    total = int(math.floor(float(total) * float(mult)))
+            except Exception:
+                pass
+            return max(0, int(total))
+
+        if spell_mode == "save" and save_type and save_dc > 0 and roll_save:
+            save_mode = self._combatant_save_roll_mode(target, save_type)
+            save_roll, _save_alt_roll = self._roll_save_with_mode(
+                target,
+                save_type,
+                disadvantage=save_mode == "disadvantage",
+                advantage=save_mode == "advantage",
+            )
+            save_mod = _save_mod_for_target(target, save_type)
+            save_total = int(save_roll) + int(save_mod)
+            save_passed = bool(save_roll != 1 and save_total >= int(save_dc))
+            result_payload["save_result"] = {
+                "ability": save_type,
+                "dc": int(save_dc),
+                "roll": int(save_roll),
+                "modifier": int(save_mod),
+                "total": int(save_total),
+                "passed": bool(save_passed),
+            }
+            seq_step = next((step for step in sequence if isinstance(step, dict)), None)
+            if isinstance(seq_step, dict):
+                outcomes = seq_step.get("outcomes") if isinstance(seq_step.get("outcomes"), dict) else {}
+                resolved_bucket = _bucket_for_outcome(outcomes, bool(save_passed), "")
+            if is_heat_metal and not any(
+                str(effect.get("effect") or "").strip().lower() == "damage"
+                for effect in resolved_bucket
+                if isinstance(effect, dict)
+            ):
+                heat_metal_damage: Dict[str, Any] = {"effect": "damage", "damage_type": "fire", "dice": "2d8"}
+                scaling_cfg = mechanics.get("scaling") if isinstance(mechanics.get("scaling"), dict) else None
+                if isinstance(scaling_cfg, dict):
+                    heat_metal_damage["scaling"] = dict(scaling_cfg)
+                resolved_bucket = [heat_metal_damage]
+            has_automated_save_damage = any(
+                str(effect.get("effect") or "").strip().lower() == "damage"
+                for effect in resolved_bucket
+                if isinstance(effect, dict)
+            )
+            if save_passed and not has_automated_save_damage and not is_heat_metal:
+                result_payload["hit"] = False
+                result_payload["damage_total"] = 0
+                msg["_spell_target_result"] = dict(result_payload)
+                loop = getattr(self._lan, "_loop", None)
+                if ws_id is not None and loop:
+                    try:
+                        asyncio.run_coroutine_threadsafe(self._lan._send_async(ws_id, result_payload), loop)
+                    except Exception:
+                        pass
+                detail = self._format_single_target_spell_outcome(result_payload)
+                self._log(str(detail.get("log") or f"{spell_name} resolves on {result_payload['target_name']}."), cid=int(target_cid))
+                self._lan.toast(ws_id, str(detail.get("toast") or "Target passed the save."))
+                return
+            if is_polymorph:
+                selected_form_id = str(msg.get("polymorph_form_id") or "").strip().lower()
+                available_forms = self._load_beast_forms()
+                alias_lookup = self._wild_shape_alias_lookup(available_forms)
+                resolved_form_id = alias_lookup.get(self._wild_shape_identifier_key(selected_form_id))
+                if not resolved_form_id:
+                    result_payload["needs_polymorph_form"] = True
+                    result_payload["beast_forms"] = list(available_forms)
+                    msg["_spell_target_result"] = dict(result_payload)
+                    loop = getattr(self._lan, "_loop", None)
+                    if ws_id is not None and loop:
+                        try:
+                            asyncio.run_coroutine_threadsafe(self._lan._send_async(ws_id, result_payload), loop)
+                        except Exception:
+                            pass
+                    self._lan.toast(ws_id, "Pick a beast form for Polymorph, matey.")
+                    return
+                form_by_id = {
+                    self._wild_shape_identifier_key(entry.get("id")): entry
+                    for entry in available_forms
+                    if isinstance(entry, dict)
+                }
+                form = form_by_id.get(resolved_form_id)
+                if not isinstance(form, dict):
+                    self._lan.toast(ws_id, "That beast form be unavailable, matey.")
+                    return
+                self._apply_polymorph_form(target, form)
+                duration_turns = self._spell_duration_to_turns(preset)
+                setattr(target, "polymorph_source_cid", int(c.cid))
+                setattr(target, "polymorph_remaining_turns", int(duration_turns) if duration_turns is not None else None)
+                setattr(target, "polymorph_duration_turns", int(duration_turns) if duration_turns is not None else None)
+                current_targets = list(getattr(c, "concentration_target", []) or [])
+                if int(target.cid) not in current_targets:
+                    current_targets.append(int(target.cid))
+                self._start_concentration(
+                    c,
+                    "polymorph",
+                    spell_level=int((preset or {}).get("level") or 0) or None,
+                    targets=current_targets,
+                )
+                result_payload["polymorph_form"] = {
+                    "id": str(form.get("id") or ""),
+                    "name": str(form.get("name") or "") or "Beast",
+                    "temp_hp": int(form.get("hp") or 0),
+                }
+                if duration_turns is not None:
+                    result_payload["polymorph_duration_turns"] = int(duration_turns)
+                result_payload["hit"] = True
+                result_payload["damage_total"] = 0
+                self._log(
+                    f"{c.name} polymorphs {result_payload['target_name']} into {result_payload['polymorph_form']['name']} "
+                    f"({int(form.get('hp') or 0)} temp HP).",
+                    cid=int(target_cid),
+                )
+                msg["_spell_target_result"] = dict(result_payload)
+                loop = getattr(self._lan, "_loop", None)
+                if ws_id is not None and loop:
+                    try:
+                        asyncio.run_coroutine_threadsafe(self._lan._send_async(ws_id, result_payload), loop)
+                    except Exception:
+                        pass
+                self._lan.toast(ws_id, "Polymorph applied.")
+                try:
+                    self._rebuild_table(scroll_to_current=True)
+                except Exception:
+                    pass
+                return
+            damage_intent = bool(damage_entries) or bool(damage_dice_text) or bool(msg.get("prompt_for_damage"))
+            if not damage_entries and damage_intent:
+                result_payload["needs_damage_prompt"] = True
+                msg["_spell_target_result"] = dict(result_payload)
+                loop = getattr(self._lan, "_loop", None)
+                if ws_id is not None and loop:
+                    try:
+                        asyncio.run_coroutine_threadsafe(self._lan._send_async(ws_id, result_payload), loop)
+                    except Exception:
+                        pass
+                save_result = result_payload.get("save_result") if isinstance(result_payload.get("save_result"), dict) else {}
+                ability = str(save_result.get("ability") or "save").strip().upper() or "SAVE"
+                total = int(save_result.get("total") or 0)
+                dc = int(save_result.get("dc") or 0)
+                self._lan.toast(ws_id, f"{self._spell_shot_label(result_payload)}{spell_name}: {result_payload['target_name']} failed {ability} save ({total} vs DC {dc}). Enter damage.")
+                return
+            if not damage_intent:
+                hit = True
+
+        resolved_bucket = locals().get("resolved_bucket", [])
+        sequence = locals().get("sequence", [])
+        spell_mode = locals().get("spell_mode", "")
+        result_payload = locals().get("result_payload", {}) if isinstance(locals().get("result_payload", {}), dict) else {}
+        resolved_bucket = locals().get("resolved_bucket", [])
+        sequence = locals().get("sequence", [])
+        spell_mode = locals().get("spell_mode", "")
+        result_payload = locals().get("result_payload", {}) if isinstance(locals().get("result_payload", {}), dict) else {}
+        if not resolved_bucket and sequence:
+            seq_step = next((step for step in sequence if isinstance(step, dict)), None)
+            if isinstance(seq_step, dict):
+                outcomes = seq_step.get("outcomes") if isinstance(seq_step.get("outcomes"), dict) else {}
+                if spell_mode == "save":
+                    passed = bool((result_payload.get("save_result") or {}).get("passed"))
+                    resolved_bucket = _bucket_for_outcome(outcomes, passed, "")
+                else:
+                    resolved_bucket = _bucket_for_outcome(outcomes, False, "hit" if hit else "miss")
+
+        for effect in resolved_bucket:
+            if not isinstance(effect, dict):
+                continue
+            if str(effect.get("effect") or "").strip().lower() == "condition" and hit:
+                condition_key = str(effect.get("condition") or "").strip().lower()
+                if condition_key and not self._condition_is_immune_for_target(target, condition_key):
+                    stacks = list(getattr(target, "condition_stacks", []) or [])
+                    refreshed = False
+                    for st in stacks:
+                        if str(getattr(st, "ctype", "") or "").strip().lower() == condition_key:
+                            refreshed = True
+                            break
+                    if not refreshed:
+                        next_sid = int(getattr(self, "_next_stack_id", 1) or 1)
+                        setattr(self, "_next_stack_id", int(next_sid) + 1)
+                        stacks.append(base.ConditionStack(sid=int(next_sid), ctype=condition_key, remaining_turns=None))
+                        setattr(target, "condition_stacks", stacks)
+            if str(effect.get("effect") or "").strip().lower() != "damage":
+                continue
+            amount = _roll_scaled_effect_damage(effect)
+            if amount <= 0:
+                continue
+            dtype = str(effect.get("damage_type") or effect.get("type") or damage_type_hint or "damage").strip().lower() or "damage"
+            damage_entries.append({"amount": int(amount), "type": dtype})
+
+        if hit and spell_mode == "attack":
+            intercepted = self._mirror_image_try_intercept_hit(
+                target,
+                attacker_name=str(getattr(c, "name", "Attacker") or "Attacker"),
+                attack_name=str(spell_name or "Spell Attack"),
+            )
+            if intercepted:
+                hit = False
+                damage_entries = []
+        if hit and not bool(msg.get("_absorb_elements_resolution_done")):
+            req_id = self._maybe_offer_absorb_elements(
+                int(target_cid),
+                int(cid),
+                pending_msg=msg,
+                damage_entries=damage_entries,
+            )
+            if req_id:
+                attacker_ws_targets = self._find_ws_for_cid(int(cid))
+                for attacker_ws in attacker_ws_targets:
+                    self._lan.toast(int(attacker_ws), "Waiting for Absorb Elements response…")
+                return
+
+        if is_magic_missile and self._shield_is_active(target):
+            damage_entries = []
+            self._log(f"Shield negates Magic Missile damage on {getattr(target, 'name', 'Target')}.", cid=int(target_cid))
+        adjustment = self._adjust_damage_entries_for_target(target, damage_entries)
+        damage_entries = list(adjustment.get("entries") or [])
+        adjustment_notes = list(adjustment.get("notes") or [])
+        total_damage = int(sum(int(entry.get("amount", 0) or 0) for entry in damage_entries))
+        if spell_mode == "auto_hit":
+            hit = True
+        pending_star_advantage = getattr(c, "pending_star_advantage_charge", None)
+        star_advantage_attempted = bool(spell_mode == "attack" and isinstance(pending_star_advantage, dict))
+        if star_advantage_attempted:
+            setattr(c, "pending_star_advantage_charge", None)
+        result_payload["hit"] = bool(hit)
+        result_payload["critical"] = bool(hit and critical)
+        result_payload["damage_entries"] = list(damage_entries if hit else [])
+        result_payload["damage_total"] = int(total_damage if hit else 0)
+        if hit and is_phantasmal_killer and c is not None:
+            current_targets = list(getattr(c, "concentration_target", []) or [])
+            if int(target.cid) not in current_targets:
+                current_targets.append(int(target.cid))
+            self._start_concentration(
+                c,
+                "phantasmal-killer",
+                spell_level=int((preset or {}).get("level") or 0) or None,
+                targets=current_targets,
+            )
+            pk_group = f"phantasmal_killer_{int(c.cid)}_{int(target.cid)}"
+            pk_slot_level = int(slot_level or 4)
+            pk_dice_count = max(1, 4 + max(0, int(pk_slot_level) - 4))
+            pk_rider_dice = f"{int(pk_dice_count)}d10"
+            if not self._condition_is_immune_for_target(target, "frightened"):
+                stacks = list(getattr(target, "condition_stacks", []) or [])
+                if not any(str(getattr(st, "ctype", "") or "").strip().lower() == "frightened" for st in stacks):
+                    next_sid = int(getattr(self, "_next_stack_id", 1) or 1)
+                    setattr(self, "_next_stack_id", int(next_sid) + 1)
+                    stacks.append(base.ConditionStack(sid=int(next_sid), ctype="frightened", remaining_turns=None))
+                    setattr(target, "condition_stacks", stacks)
+            end_turn_save_riders = [
+                rider for rider in list(getattr(target, "end_turn_save_riders", []) or [])
+                if str((rider or {}).get("clear_group") or "").strip().lower() != pk_group
+            ]
+            end_turn_save_riders.append(
+                {
+                    "clear_group": pk_group,
+                    "save_ability": "wis",
+                    "save_dc": int(save_dc),
+                    "condition": "frightened",
+                    "on_fail_damage_dice": pk_rider_dice,
+                    "on_fail_damage_type": "psychic",
+                    "source": spell_name,
+                }
+            )
+            setattr(target, "end_turn_save_riders", end_turn_save_riders)
+
+        if hit and is_heat_metal and c is not None and total_damage > 0:
+            current_targets = list(getattr(c, "concentration_target", []) or [])
+            if int(target.cid) not in current_targets:
+                current_targets.append(int(target.cid))
+            self._start_concentration(
+                c,
+                "heat-metal",
+                spell_level=int(slot_level) if slot_level is not None else int((preset or {}).get("level") or 0) or None,
+                targets=current_targets,
+            )
+            heat_metal_group = f"heat_metal_{int(c.cid)}_{int(target.cid)}"
+            heat_metal_dice = self._smite_damage_dice(
+                {"base_dice": "2d8", "base_slot": 2, "upcast_die": "1d8"},
+                slot_level,
+            ) or "2d8"
+            start_turn_damage_riders = [
+                rider
+                for rider in list(getattr(target, "start_turn_damage_riders", []) or [])
+                if str((rider or {}).get("clear_group") or "").strip().lower() != heat_metal_group
+            ]
+            start_turn_damage_riders.append(
+                {
+                    "dice": str(heat_metal_dice),
+                    "type": "fire",
+                    "source": f"Heat Metal ({c.name})",
+                    "save_ability": "con",
+                    "save_dc": int(save_dc) if save_dc > 0 else 0,
+                    "clear_group": heat_metal_group,
+                    "end_caster_concentration_on_save": int(c.cid),
+                }
+            )
+            setattr(target, "start_turn_damage_riders", start_turn_damage_riders)
+
+        if hit and total_damage > 0:
+            before_hp = _parse_int(getattr(target, "hp", None), None)
+            damage_state = self._apply_damage_via_service(target, int(total_damage))
+            if before_hp is not None:
+                after_hp = int(damage_state.get("hp_after", before_hp))
+                if int(before_hp) > 0 and int(after_hp) <= 0:
+                    pre_order: List[int] = []
+                    try:
+                        pre_order = [x.cid for x in self._display_order()]
+                    except Exception:
+                        pre_order = []
+                    removed_target = False
+                    try:
+                        self._remove_combatants_with_lan_cleanup([int(target_cid)])
+                        removed_target = int(target_cid) not in self.combatants
+                    except Exception:
+                        removed_target = self.combatants.pop(int(target_cid), None) is not None
+                    if removed_target:
+                        if getattr(self, "start_cid", None) == int(target_cid):
+                            self.start_cid = None
+                        try:
+                            self._retarget_current_after_removal([int(target_cid)], pre_order=pre_order)
+                        except Exception:
+                            pass
+                        self._log(f"{target.name} dropped to 0 -> removed", cid=int(target_cid))
+                    try:
+                        self._lan.play_ko(int(cid))
+                    except Exception:
+                        pass
+            damage_desc = ", ".join(
+                f"{int(entry.get('amount', 0) or 0)} {str(entry.get('type') or '').strip() or 'damage'}"
+                for entry in damage_entries
+            )
+            self._log(
+                f"{c.name} deals {int(total_damage)} damage to {result_payload['target_name']} with {spell_name}"
+                f"{f' ({damage_desc})' if damage_desc else ''}"
+                f"{' (CRIT)' if result_payload.get('critical') else ''}.",
+                cid=int(target_cid),
+            )
+            try:
+                self._maybe_offer_hellish_rebuke(int(target_cid), int(cid), int(total_damage))
+            except Exception as exc:
+                self._oplog(f"hellish_rebuke offer failed attacker={int(cid)} victim={int(target_cid)} ({exc})", level="warning")
+            if star_advantage_attempted and int(target_cid) in self.combatants and int(getattr(target, "hp", 0) or 0) > 0:
+                if self._condition_is_immune_for_target(target, "star_advantage"):
+                    self._log(f"{c.name}'s Star Advantage can't affect {target.name} (immune).", cid=int(target_cid))
+                elif not self._lan_is_friendly_unit(int(target_cid)) or self._lan_is_friendly_unit(int(target_cid)) != self._lan_is_friendly_unit(int(cid)):
+                    stacks = list(getattr(target, "condition_stacks", []) or [])
+                    if not any(str(getattr(st, "ctype", "") or "").strip().lower() == "star_advantage" for st in stacks):
+                        next_sid = int(getattr(self, "_next_stack_id", 1) or 1)
+                        setattr(self, "_next_stack_id", int(next_sid) + 1)
+                        stacks.append(base.ConditionStack(sid=int(next_sid), ctype="star_advantage", remaining_turns=None))
+                        setattr(target, "condition_stacks", stacks)
+                        self._log(f"{c.name} expends Star Advantage and marks {target.name}.", cid=int(target_cid))
+                    else:
+                        self._log(f"{c.name} expends Star Advantage and refreshes {target.name}.", cid=int(target_cid))
+        elif hit:
+            if star_advantage_attempted and int(target_cid) in self.combatants and int(getattr(target, "hp", 0) or 0) > 0:
+                if self._condition_is_immune_for_target(target, "star_advantage"):
+                    self._log(f"{c.name}'s Star Advantage can't affect {target.name} (immune).", cid=int(target_cid))
+                elif not self._lan_is_friendly_unit(int(target_cid)) or self._lan_is_friendly_unit(int(target_cid)) != self._lan_is_friendly_unit(int(cid)):
+                    stacks = list(getattr(target, "condition_stacks", []) or [])
+                    if not any(str(getattr(st, "ctype", "") or "").strip().lower() == "star_advantage" for st in stacks):
+                        next_sid = int(getattr(self, "_next_stack_id", 1) or 1)
+                        setattr(self, "_next_stack_id", int(next_sid) + 1)
+                        stacks.append(base.ConditionStack(sid=int(next_sid), ctype="star_advantage", remaining_turns=None))
+                        setattr(target, "condition_stacks", stacks)
+                        self._log(f"{c.name} expends Star Advantage and marks {target.name}.", cid=int(target_cid))
+                    else:
+                        self._log(f"{c.name} expends Star Advantage and refreshes {target.name}.", cid=int(target_cid))
+        else:
+            if star_advantage_attempted:
+                self._log(f"{c.name} expends Star Advantage on a miss.", cid=cid)
+
+        forced_moves_applied: List[str] = []
+        if isinstance(resolved_bucket, list):
+            for effect in resolved_bucket:
+                effect_name = str(effect.get("effect") or "").strip().lower()
+                if effect_name not in ("movement", "forced_movement"):
+                    continue
+                mode = str(effect.get("kind") or effect.get("mode") or effect.get("direction") or "").strip().lower()
+                if mode not in ("push", "pull"):
+                    continue
+                try:
+                    distance_ft = float(effect.get("distance_ft") or 0)
+                except Exception:
+                    distance_ft = 0.0
+                if distance_ft <= 0:
+                    continue
+                origin = str(effect.get("origin") or "caster").strip().lower()
+                source_cid = int(cid)
+                source_cell = None
+                direction_step = None
+                if origin == "aoe_direction":
+                    direction_step = self._lan_direction_step_from_angle(effect.get("angle_deg", getattr(c, "facing_deg", 0)))
+                    source_cid = None
+                moved = self._lan_apply_forced_movement(
+                    source_cid,
+                    int(target_cid),
+                    mode,
+                    float(distance_ft),
+                    source_cell=source_cell,
+                    direction_step=direction_step,
+                )
+                if moved:
+                    forced_moves_applied.append(f"{mode} {int(distance_ft)}ft")
+        if forced_moves_applied:
+            self._log(f"{spell_name} moves {result_payload['target_name']}: {', '.join(forced_moves_applied)}.", cid=int(target_cid))
+
+        try:
+            self._rebuild_table(scroll_to_current=True)
+        except Exception:
+            pass
+        msg["_spell_target_result"] = dict(result_payload)
+        loop = getattr(self._lan, "_loop", None)
+        if ws_id is not None and loop:
+            try:
+                asyncio.run_coroutine_threadsafe(self._lan._send_async(ws_id, result_payload), loop)
+            except Exception:
+                pass
+        detail = self._format_single_target_spell_outcome(result_payload)
+        self._log(str(detail.get("log") or f"{spell_name} resolves on {result_payload['target_name']}."), cid=int(target_cid))
+        self._lan.toast(ws_id, str(detail.get("toast") or "Spell resolved."))
+
+    def _adjudicate_attack_request(
+        self,
+        msg: Dict[str, Any],
+        *,
+        cid: int,
+        ws_id: Any,
+        is_admin: bool,
+    ) -> None:
+        """Backend adjudication for a player attack_request command.
+
+        Extracted from the former inline ``attack_request`` branch of
+        ``_lan_apply_action``.  Dispatched by
+        ``PlayerCommandService.attack_request`` after it has run the
+        pending-reaction attacker gate.  Owns weapon/mastery selection,
+        advantage/disadvantage resolution, spell-rider consumption,
+        damage application, on-hit effects, reaction offers (shield,
+        sentinel, hellish rebuke, absorb elements, interception), and
+        ``_attack_result`` payloads.
+        """
+        try:
+            log_warning = lambda message: self._lan._append_lan_log(message, level="warning")
+        except Exception:
+            log_warning = None
+        c = self.combatants.get(cid)
+        if not c:
+            return
+        self._expire_reaction_offers()
+        for pending_req in list((self.__dict__.get("_pending_hellish_rebuke_resolutions", {}) or {}).values()):
+            if not isinstance(pending_req, dict):
+                continue
+            pending_status = str(pending_req.get("status") or "").strip().lower()
+            if pending_status not in ("offered", "accepted"):
+                continue
+            pending_attacker = _normalize_cid_value(
+                pending_req.get("attacker_cid"),
+                "attack_request.pending_hellish_rebuke.attacker",
+            )
+            if pending_attacker is None or int(pending_attacker) != int(cid):
+                continue
+            self._lan.toast(ws_id, "Hold fast — waiting on a reaction to resolve.")
+            return
+        for pending_req in list((self.__dict__.get("_pending_absorb_elements_resolutions", {}) or {}).values()):
+            if not isinstance(pending_req, dict):
+                continue
+            pending_status = str(pending_req.get("status") or "").strip().lower()
+            if pending_status not in ("offered", "accepted"):
+                continue
+            pending_attacker = _normalize_cid_value(
+                pending_req.get("attacker_cid"),
+                "attack_request.pending_absorb_elements.attacker",
+            )
+            if pending_attacker is None or int(pending_attacker) != int(cid):
+                continue
+            self._lan.toast(ws_id, "Hold fast — waiting on a reaction to resolve.")
+            return
+        for pending_req in list((self.__dict__.get("_pending_interception_resolutions", {}) or {}).values()):
+            if not isinstance(pending_req, dict):
+                continue
+            pending_status = str(pending_req.get("status") or "").strip().lower()
+            if pending_status not in ("offered", "accepted"):
+                continue
+            pending_attacker = _normalize_cid_value(
+                pending_req.get("attacker_cid"),
+                "attack_request.pending_interception.attacker",
+            )
+            if pending_attacker is None or int(pending_attacker) != int(cid):
+                continue
+            self._lan.toast(ws_id, "Hold fast — waiting on a reaction to resolve.")
+            return
+        self._clear_hide_state(int(cid), reason=f"{c.name} attacks and reveals themself.")
+        resource_c = c
+        try:
+            summoned_by_cid = int(getattr(c, "summoned_by_cid", 0) or 0)
+        except Exception:
+            summoned_by_cid = 0
+        if (
+            summoned_by_cid > 0
+            and str(getattr(c, "summon_source_spell", "") or "").strip().lower() == "echo_knight"
+        ):
+            owner = self.combatants.get(int(summoned_by_cid))
+            if owner is not None:
+                resource_c = owner
+        if self._is_create_undead_uncommanded_this_turn(c):
+            self._lan.toast(ws_id, "Uncommanded created undead can’t attack this turn, matey.")
+            return
+        max_damage_dice_count = 100
+        max_damage_die_sides = 1000
+        min_damage_type_length = 3
+        def _parse_int(value: Any, fallback: Optional[int] = None) -> Optional[int]:
+            try:
+                return int(value)
+            except Exception:
+                return fallback
+
+        def _parse_non_negative_manual_damage(value: Any) -> Optional[int]:
+            if isinstance(value, bool):
+                return None
+            if isinstance(value, int):
+                return value if value >= 0 else None
+            if isinstance(value, float):
+                if not value.is_integer():
+                    return None
+                return int(value) if value >= 0 else None
+            if isinstance(value, str):
+                text = value.strip()
+                if not text or not re.fullmatch(r"\+?\d+", text):
+                    return None
+                try:
+                    parsed = int(text)
+                except Exception:
+                    return None
+                return parsed if parsed >= 0 else None
+            return None
+        def _parse_bool(value: Any) -> Optional[bool]:
+            if isinstance(value, bool):
+                return value
+            if isinstance(value, str):
+                text = value.strip().lower()
+                if text in ("true", "1", "yes", "y", "hit"):
+                    return True
+                if text in ("false", "0", "no", "n", "miss"):
+                    return False
+            return None
+        def _weapon_has_property(entry: Any, prop_id: str) -> bool:
+            if not isinstance(entry, dict):
+                return False
+            target = str(prop_id or "").strip().lower()
+            if not target:
+                return False
+            properties = entry.get("properties")
+            if isinstance(properties, list):
+                for token in properties:
+                    normalized = str(token or "").strip().lower()
+                    if normalized == target:
+                        return True
+            mastery = str(entry.get("mastery") or "").strip().lower()
+            return bool(mastery and mastery == target)
+        def _weapon_mastery_damage_ability_mod(entry: Any, profile_data: Any, variables: Dict[str, int]) -> int:
+            if not isinstance(entry, dict):
+                return int(variables.get("str_mod", 0) or 0)
+            formula = ""
+            mode_block = entry.get("one_handed") if isinstance(entry.get("one_handed"), dict) else {}
+            if isinstance(mode_block, dict):
+                formula = str(mode_block.get("damage_formula") or "").strip().lower()
+            if not formula and isinstance(entry.get("two_handed"), dict):
+                formula = str((entry.get("two_handed") or {}).get("damage_formula") or "").strip().lower()
+            str_mod = int(variables.get("str_mod", 0) or 0)
+            dex_mod = int(variables.get("dex_mod", 0) or 0)
+            if "dex_mod" in formula and "str_mod" not in formula:
+                return dex_mod
+            if "str_mod" in formula and "dex_mod" not in formula:
+                return str_mod
+            if _weapon_has_property(entry, "finesse"):
+                return max(str_mod, dex_mod)
+            return str_mod
+        def _mastery_save_dc(entry: Any, profile_data: Any, variables: Dict[str, int]) -> int:
+            if isinstance(entry, dict):
+                explicit_dc = _parse_int(entry.get("mastery_save_dc"), None)
+                if explicit_dc is not None and explicit_dc > 0:
+                    return int(explicit_dc)
+            prof_bonus = 2
+            if isinstance(profile_data, dict):
+                prof_block = profile_data.get("proficiency") if isinstance(profile_data.get("proficiency"), dict) else {}
+                prof_bonus = max(2, _parse_int(prof_block.get("bonus"), 2) or 2)
+            return int(8 + int(prof_bonus) + int(_weapon_mastery_damage_ability_mod(entry, profile_data, variables)))
+        def _damage_formula_variables(profile_data: Any) -> Dict[str, int]:
+            if not isinstance(profile_data, dict):
+                profile_data = {}
+            abilities = profile_data.get("abilities") if isinstance(profile_data.get("abilities"), dict) else {}
+            return {
+                "str_mod": self._ability_score_modifier(abilities, "str"),
+                "dex_mod": self._ability_score_modifier(abilities, "dex"),
+                "con_mod": self._ability_score_modifier(abilities, "con"),
+                "int_mod": self._ability_score_modifier(abilities, "int"),
+                "wis_mod": self._ability_score_modifier(abilities, "wis"),
+                "cha_mod": self._ability_score_modifier(abilities, "cha"),
+            }
+        def _roll_damage_formula(formula: Any, variables: Dict[str, int], dice_multiplier: int = 1) -> Optional[int]:
+            if not isinstance(formula, str):
+                return None
+            raw = formula.strip().lower()
+            if not raw:
+                return None
+            if not re.fullmatch(r"[0-9d+\-*/(). _a-zA-Z]+", raw):
+                return None
+            identifiers = {token.lower() for token in re.findall(r"\b[a-zA-Z_][a-zA-Z0-9_]*\b", raw)}
+            if not identifiers.issubset({str(key).lower() for key in variables.keys()}):
+                return None
+            try:
+                def _replace_die(match: re.Match[str]) -> str:
+                    count = int(match.group(1) or 1)
+                    sides = int(match.group(2))
+                    multiplier = max(1, int(dice_multiplier or 1))
+                    effective_count = int(count) * int(multiplier)
+                    if effective_count <= 0 or effective_count > max_damage_dice_count or sides <= 0 or sides > max_damage_die_sides:
+                        raise ValueError("invalid dice notation")
+                    return str(sum(random.randint(1, sides) for _ in range(effective_count)))
+                expr = re.sub(
+                    r"(\d*)d(\d+)",
+                    _replace_die,
+                    raw,
+                )
+            except Exception:
+                return None
+            evaluated = self._evaluate_spell_formula(expr, variables)
+            if evaluated is None:
+                return None
+            return max(0, int(math.floor(evaluated)))
+        def _ensure_condition(target_obj: Any, ctype: str, remaining_turns: Optional[int] = None) -> bool:
+            ctype_key = str(ctype or "").strip().lower()
+            if not ctype_key:
+                return False
+            if self._condition_is_immune_for_target(target_obj, ctype_key):
+                return False
+            stacks = getattr(target_obj, "condition_stacks", None)
+            if not isinstance(stacks, list):
+                stacks = []
+                setattr(target_obj, "condition_stacks", stacks)
+            for st in stacks:
+                if getattr(st, "ctype", None) == ctype_key:
+                    if remaining_turns is not None:
+                        setattr(st, "remaining_turns", int(remaining_turns))
+                    return False
+            next_sid = int(getattr(self, "_next_stack_id", 1) or 1)
+            setattr(self, "_next_stack_id", int(next_sid) + 1)
+            stacks.append(base.ConditionStack(sid=int(next_sid), ctype=ctype_key, remaining_turns=remaining_turns))
+            return True
+        def _parse_effect_damage_entries(effect_text: Any, variables: Dict[str, int], dice_multiplier: int = 1) -> List[Dict[str, Any]]:
+            if not isinstance(effect_text, str):
+                return []
+            entries: List[Dict[str, Any]] = []
+            for match in re.finditer(r"(\d*d\d+(?:\s*[+\-]\s*\d+)?)\s+([a-zA-Z]+)\s+damage", effect_text.lower()):
+                dtype = str(match.group(2) or "").strip().lower()
+                if len(dtype) < min_damage_type_length:
+                    continue
+                amount = _roll_damage_formula(match.group(1), variables, dice_multiplier=dice_multiplier)
+                if amount is None or amount <= 0:
+                    continue
+                entries.append({"amount": int(amount), "type": dtype})
+            return entries
+        def _save_mod_for_target(target_obj: Any, ability_key: str) -> int:
+            key = str(ability_key or "").strip().lower()
+            if not key:
+                return 0
+            aura_bonus = int((self._lan_aura_effects_for_target(target_obj) or {}).get("save_bonus") or 0)
+            saves = getattr(target_obj, "saving_throws", None)
+            if isinstance(saves, dict):
+                val = saves.get(key)
+                try:
+                    return int(val) + aura_bonus
+                except Exception:
+                    pass
+            mods = getattr(target_obj, "ability_mods", None)
+            if isinstance(mods, dict):
+                val = mods.get(key)
+                try:
+                    return int(val) + aura_bonus
+                except Exception:
+                    pass
+            return aura_bonus
+        def _set_prone_if_needed(target_obj: Any) -> bool:
+            if self._condition_is_immune_for_target(target_obj, "prone"):
+                return False
+            stacks = getattr(target_obj, "condition_stacks", None)
+            if not isinstance(stacks, list):
+                stacks = []
+                setattr(target_obj, "condition_stacks", stacks)
+            for st in stacks:
+                if getattr(st, "ctype", None) == "prone":
+                    return False
+            next_sid = int(getattr(self, "_next_stack_id", 1) or 1)
+            setattr(self, "_next_stack_id", int(next_sid) + 1)
+            stacks.append(base.ConditionStack(sid=int(next_sid), ctype="prone", remaining_turns=None))
+            return True
+        def _is_enemy_of_attacker(attacker_obj: Any, target_obj: Any) -> bool:
+            attacker_role = str(self.__dict__.get("_name_role_memory", {}).get(str(getattr(attacker_obj, "name", "")), "enemy") or "enemy")
+            target_role = str(self.__dict__.get("_name_role_memory", {}).get(str(getattr(target_obj, "name", "")), "enemy") or "enemy")
+            return bool(attacker_role in ("pc", "ally") and target_role not in ("pc", "ally"))
+        target_cid = _normalize_cid_value(msg.get("target_cid"), "attack_request.target_cid", log_fn=log_warning)
+        target = self.combatants.get(int(target_cid)) if target_cid is not None else None
+        if target is None:
+            self._lan.toast(ws_id, "Pick a valid target, matey.")
+            return
+        requested_hit = _parse_bool(msg.get("hit"))
+        requested_critical = _parse_bool(msg.get("critical"))
+        attack_roll_raw = msg.get("attack_roll")
+        if attack_roll_raw is None:
+            attack_roll_raw = msg.get("roll")
+        attack_roll = _parse_int(attack_roll_raw, None)
+        if requested_hit is None and (attack_roll is None or attack_roll < 1 or attack_roll > 20):
+            self._lan.toast(ws_id, "Enter a valid d20 roll, matey.")
+            return
+        weapon_id = str(msg.get("weapon_id") or "").strip()
+        weapon_name = str(msg.get("weapon_name") or "").strip()
+        profile_cid = int(getattr(resource_c, "cid", cid) or cid)
+        player_name = self._pc_name_for(int(profile_cid))
+        profile = self._profile_for_player_name(player_name)
+        configured_attack_count = 1
+        leveling = profile.get("leveling") if isinstance(profile, dict) else {}
+        classes = leveling.get("classes") if isinstance(leveling, dict) else []
+        if isinstance(classes, list):
+            for entry in classes:
+                if not isinstance(entry, dict):
+                    continue
+                class_attack_count = _parse_int(entry.get("attacks_per_action"), None)
+                if class_attack_count is None:
+                    continue
+                configured_attack_count = max(1, min(10, max(configured_attack_count, class_attack_count)))
+        attacks = profile.get("attacks") if isinstance(profile, dict) else {}
+        weapons = attacks.get("weapons") if isinstance(attacks, dict) else []
+        selected_weapon: Dict[str, Any] = {}
+        inline_weapon = msg.get("weapon") if isinstance(msg.get("weapon"), dict) else {}
+        def _weapon_equipped_flag(entry: Dict[str, Any]) -> bool:
+            for key in ("equipped", "main_hand", "off_hand"):
+                raw = entry.get(key)
+                if isinstance(raw, bool):
+                    if raw:
+                        return True
+                    continue
+                if isinstance(raw, (int, float)):
+                    if bool(raw):
+                        return True
+                    continue
+                if isinstance(raw, str) and raw.strip().lower() in ("1", "true", "yes", "on"):
+                    return True
+            return False
+        def _weapon_identity(entry: Dict[str, Any]) -> Tuple[str, str]:
+            return (
+                str(entry.get("id") or "").strip().lower(),
+                str(entry.get("name") or "").strip().lower(),
+            )
+        def _inline_weapon_matches_request(entry: Dict[str, Any], req_id: str, req_name: str) -> bool:
+            if not isinstance(entry, dict):
+                return False
+            entry_id, entry_name = _weapon_identity(entry)
+            if (req_id or req_name) and not (entry_id or entry_name):
+                return False
+            if req_id and entry_id and entry_id != req_id:
+                return False
+            if req_name and entry_name and entry_name != req_name:
+                return False
+            if req_id and req_name:
+                return bool((not entry_id or entry_id == req_id) and (not entry_name or entry_name == req_name))
+            if req_id:
+                return bool(entry_id == req_id or (not entry_id and entry_name))
+            if req_name:
+                return bool(entry_name == req_name or (not entry_name and entry_id))
+            return bool(entry_id or entry_name)
+        def _merge_safe_inline_weapon_fields(base: Dict[str, Any], inline: Dict[str, Any]) -> Dict[str, Any]:
+            merged = copy.deepcopy(base) if isinstance(base, dict) else {}
+            if not isinstance(inline, dict):
+                return merged
+            inline_mode = str(inline.get("selected_mode") or "").strip().lower()
+            if inline_mode in ("one", "two"):
+                merged["selected_mode"] = inline_mode
+            return merged
+        if isinstance(weapons, list):
+            target_weapon_id = weapon_id.lower()
+            target_weapon_name = weapon_name.lower()
+            for entry in weapons:
+                if not isinstance(entry, dict):
+                    continue
+                entry_id = str(entry.get("id") or "").strip().lower()
+                entry_name = str(entry.get("name") or "").strip().lower()
+                if target_weapon_id and entry_id == target_weapon_id:
+                    selected_weapon = entry
+                    break
+                if target_weapon_name and entry_name and entry_name == target_weapon_name:
+                    selected_weapon = entry
+            if not selected_weapon and not target_weapon_id and not target_weapon_name:
+                for entry in weapons:
+                    if isinstance(entry, dict) and _weapon_equipped_flag(entry):
+                        selected_weapon = entry
+                        break
+                if not selected_weapon:
+                    for entry in weapons:
+                        if isinstance(entry, dict):
+                            selected_weapon = entry
+                            break
+        target_weapon_id = weapon_id.lower()
+        target_weapon_name = weapon_name.lower()
+        if _inline_weapon_matches_request(inline_weapon, target_weapon_id, target_weapon_name):
+            if selected_weapon:
+                selected_weapon = _merge_safe_inline_weapon_fields(selected_weapon, inline_weapon)
+            else:
+                selected_weapon = copy.deepcopy(inline_weapon)
+        elif not selected_weapon and bool(getattr(c, "is_wild_shaped", False)) and isinstance(inline_weapon, dict):
+            inline_name = str(inline_weapon.get("name") or "").strip()
+            if inline_name:
+                selected_weapon = copy.deepcopy(inline_weapon)
+        if not selected_weapon:
+            self._lan.toast(ws_id, "Pick one of yer configured weapons first, matey.")
+            return
+        selected_weapon = self._resolve_weapon_from_items(dict(selected_weapon))
+        selected_mode = str(selected_weapon.get("selected_mode") or "").strip().lower()
+        inline_selected_mode = str(inline_weapon.get("selected_mode") or "").strip().lower()
+        if inline_selected_mode in ("one", "two"):
+            selected_mode = inline_selected_mode
+        selected_mode = "two" if selected_mode == "two" else "one"
+        def _selected_weapon_mode_block(entry: Any) -> Dict[str, Any]:
+            one_handed = entry.get("one_handed") if isinstance(entry.get("one_handed"), dict) else {}
+            two_handed = entry.get("two_handed") if isinstance(entry.get("two_handed"), dict) else {}
+            if selected_mode == "two" and str(two_handed.get("damage_formula") or "").strip():
+                return two_handed
+            if str(one_handed.get("damage_formula") or "").strip():
+                return one_handed
+            if str(two_handed.get("damage_formula") or "").strip():
+                return two_handed
+            return one_handed or two_handed
+        is_unarmed_strike = self._is_unarmed_strike_weapon(selected_weapon)
+        attunement_active = self._elemental_attunement_active(c)
+        monk_level = self._class_level_from_profile(profile, "monk") if isinstance(profile, dict) else 0
+        empowered_strikes_active = bool(is_unarmed_strike and int(monk_level) >= 6)
+        allowed_elemental_overrides = {"acid", "cold", "fire", "lightning", "thunder"}
+        damage_type_override = str(msg.get("damage_type_override") or "").strip().lower()
+        override_honored = bool(
+            damage_type_override in allowed_elemental_overrides
+            and attunement_active
+            and is_unarmed_strike
+        )
+        setattr(c, "_rage_attack_made_this_turn", True)
+        turn_marker = (
+            int(getattr(self, "round_num", 0) or 0),
+            int(getattr(self, "turn_num", 0) or 0),
+            int(cid),
+        )
+        weapon_mastery_enabled = _parse_bool(attacks.get("weapon_mastery_enabled") if isinstance(attacks, dict) else None)
+        if weapon_mastery_enabled is None:
+            weapon_mastery_enabled = _parse_bool(attacks.get("weapon_mastery") if isinstance(attacks, dict) else None)
+        if weapon_mastery_enabled is None:
+            weapon_mastery_enabled = False
+        tactical_master_property = str(msg.get("tactical_master_property") or "").strip().lower()
+        tactical_master_choices = {"push", "sap", "slow"}
+        fighter_level = self._class_level_from_profile(profile, "fighter") if isinstance(profile, dict) else 0
+        tactical_master_enabled = bool(
+            tactical_master_property in tactical_master_choices
+            and str(player_name or "").strip().lower() == "john twilight"
+            and int(fighter_level) >= 9
+        )
+        effective_masteries = {
+            mastery
+            for mastery in ("cleave", "push", "sap", "slow", "topple", "vex", "graze", "nick")
+            if _weapon_has_property(selected_weapon, mastery)
+        }
+        if tactical_master_enabled:
+            effective_masteries = {entry for entry in effective_masteries if entry not in {"push", "sap", "slow", "topple", "vex", "cleave", "graze"}}
+            effective_masteries.add(tactical_master_property)
+        nick_turn_marker = tuple(getattr(resource_c, "_nick_mastery_turn_marker", ()) or ())
+        nick_already_used_this_turn = bool(
+            len(nick_turn_marker) == len(turn_marker) and nick_turn_marker == turn_marker
+        )
+        nick_extra_attack_available = False
+        if weapon_mastery_enabled and not nick_already_used_this_turn and _weapon_has_property(selected_weapon, "light"):
+            other_light_weapon = False
+            has_nick_mastery = _weapon_has_property(selected_weapon, "nick")
+            if isinstance(weapons, list):
+                selected_key = (
+                    str(selected_weapon.get("id") or "").strip().lower(),
+                    str(selected_weapon.get("name") or "").strip().lower(),
+                )
+                for entry in weapons:
+                    if not isinstance(entry, dict):
+                        continue
+                    entry_key = (
+                        str(entry.get("id") or "").strip().lower(),
+                        str(entry.get("name") or "").strip().lower(),
+                    )
+                    if entry_key == selected_key and entry is selected_weapon:
+                        continue
+                    if not _weapon_has_property(entry, "light"):
+                        continue
+                    other_light_weapon = True
+                    if _weapon_has_property(entry, "nick"):
+                        has_nick_mastery = True
+                    if has_nick_mastery:
+                        break
+            nick_extra_attack_available = bool(other_light_weapon and has_nick_mastery)
+        mastery_free_attack = str(msg.get("mastery_free_attack") or "").strip().lower()
+        is_cleave_followup = mastery_free_attack == "cleave"
+        opportunity_attack = str(msg.get("opportunity_attack") or "").strip().lower() in (
+            "1",
+            "true",
+            "yes",
+            "on",
+        )
+        reaction_request_id = str(msg.get("reaction_request_id") or "").strip()
+        if reaction_request_id:
+            self._expire_reaction_offers()
+            offer = self._pending_reaction_offers.get(reaction_request_id)
+            if not isinstance(offer, dict):
+                self._lan.toast(ws_id, "That reaction request expired, matey.")
+                return
+            if int(offer.get("reactor_cid") or -1) != int(cid):
+                self._lan.toast(ws_id, "That reaction request be for someone else.")
+                return
+            if int(offer.get("target_cid") or -1) != int(target_cid):
+                self._lan.toast(ws_id, "Reaction target mismatch.")
+                return
+        attack_spend = str(msg.get("attack_spend") or msg.get("spend") or "").strip().lower()
+        if nick_extra_attack_available:
+            configured_attack_count = min(10, int(configured_attack_count) + 1)
+        attack_count = max(
+            1,
+            min(10, _parse_int(msg.get("attack_count"), configured_attack_count) or configured_attack_count),
+        )
+        if bool(getattr(c, "is_wild_shaped", False)) and attack_count > configured_attack_count:
+            configured_attack_count = int(attack_count)
+        if is_cleave_followup:
+            attack_count = 1
+        consumes_pool_raw = msg.get("consumes_pool") if isinstance(msg.get("consumes_pool"), dict) else {}
+        consumes_pool_id = str(
+            msg.get("consumes_pool_id")
+            or consumes_pool_raw.get("id")
+            or consumes_pool_raw.get("pool")
+            or ""
+        ).strip()
+        try:
+            consumes_pool_cost = int(msg.get("consumes_pool_cost") if msg.get("consumes_pool_cost") is not None else consumes_pool_raw.get("cost", 1))
+        except Exception:
+            consumes_pool_cost = 1
+        consumes_pool_cost = max(1, consumes_pool_cost)
+        consumes_pool_key = consumes_pool_id.strip().lower()
+        is_unleash_incarnation_attack = consumes_pool_key == "unleash_incarnation"
+        if is_unleash_incarnation_attack:
+            echo_cid, _echo = self._find_echo_for_caster(int(profile_cid))
+            if echo_cid is None:
+                self._lan.toast(ws_id, "Arr... I dont be seeing no echo, matey")
+                return
+        attack_origin_cid = int(cid)
+        requested_origin_cid = _normalize_cid_value(msg.get("attack_origin_cid"), "attack_request.attack_origin_cid", log_fn=log_warning)
+        if requested_origin_cid is not None and int(requested_origin_cid) == int(cid):
+            attack_origin_cid = int(requested_origin_cid)
+        elif is_unleash_incarnation_attack and echo_cid is not None:
+            attack_origin_cid = int(echo_cid)
+        attacker_pos = dict(self.__dict__.get("_lan_positions", {}) or {}).get(int(attack_origin_cid))
+        target_pos = dict(self.__dict__.get("_lan_positions", {}) or {}).get(int(target_cid))
+        if isinstance(attacker_pos, tuple) and len(attacker_pos) == 2 and isinstance(target_pos, tuple) and len(target_pos) == 2:
+            feet_per_square = 5.0
+            try:
+                mw = getattr(self, "_map_window", None)
+                if mw is not None and hasattr(mw, "winfo_exists") and mw.winfo_exists():
+                    feet_per_square = float(getattr(mw, "feet_per_square", feet_per_square) or feet_per_square)
+            except Exception:
+                feet_per_square = 5.0
+            if feet_per_square <= 0:
+                feet_per_square = 5.0
+            weapon_range = str(selected_weapon.get("range") or selected_weapon.get("normal_range") or selected_weapon.get("reach") or "").strip().lower()
+            range_match = re.search(r"(\d+(?:\.\d+)?)", weapon_range.split("/")[0])
+            range_ft = float(range_match.group(1)) if range_match else 5.0
+            weapon_category = str(selected_weapon.get("category") or selected_weapon.get("weapon_group") or "").strip().lower()
+            is_melee_weapon = "melee" in weapon_category
+            if not is_melee_weapon:
+                if "/" in weapon_range:
+                    is_melee_weapon = False
+                elif weapon_range:
+                    is_melee_weapon = range_ft <= 10.0
+                else:
+                    is_melee_weapon = True
+            if is_melee_weapon:
+                range_ft += 3.0
+            if attunement_active and is_unarmed_strike:
+                range_ft += 10.0
+            # Grid movement/range in this tracker treats diagonal adjacency as 5 ft,
+            # so use Chebyshev distance (max axis delta) instead of Euclidean.
+            dx = abs(int(target_pos[0]) - int(attacker_pos[0]))
+            dy = abs(int(target_pos[1]) - int(attacker_pos[1]))
+            distance_ft = max(dx, dy) * float(feet_per_square)
+            if float(distance_ft) - float(range_ft) > 1e-6:
+                self._lan.toast(ws_id, "Target be out of attack range.")
+                return
+        attack_resources = max(0, _parse_int(getattr(resource_c, "attack_resource_remaining", 0), 0) or 0)
+        is_bonus_spend_attack = bool(attack_spend == "bonus" and not opportunity_attack and not is_cleave_followup)
+        attack_limit = self._combatant_attack_limit(resource_c)
+        if (
+            attack_limit is not None
+            and not opportunity_attack
+            and not is_bonus_spend_attack
+            and not is_cleave_followup
+            and not is_unleash_incarnation_attack
+        ):
+            turn_attack_count = int(getattr(resource_c, "_turn_attack_count", 0) or 0)
+            if turn_attack_count >= int(attack_limit):
+                self._lan.toast(ws_id, "This effect limits ye to one attack this turn, matey.")
+                return
+        if is_bonus_spend_attack:
+            bonus_seq_id = str(msg.get("bonus_sequence_id") or "").strip().lower() or "bonus_attack"
+            try:
+                bonus_sequence_total = int(msg.get("bonus_sequence_total") if msg.get("bonus_sequence_total") is not None else 1)
+            except Exception:
+                bonus_sequence_total = 1
+            bonus_sequence_total = max(1, min(10, int(bonus_sequence_total)))
+            bonus_sequence_start = bool(msg.get("bonus_sequence_start") is True)
+            active_seq_marker = tuple(getattr(resource_c, "_bonus_attack_seq_turn_marker", ()) or ())
+            active_seq_id = str(getattr(resource_c, "_bonus_attack_seq_id", "") or "").strip().lower()
+            try:
+                active_seq_remaining = int(getattr(resource_c, "_bonus_attack_seq_remaining", 0) or 0)
+            except Exception:
+                active_seq_remaining = 0
+            matching_seq = len(active_seq_marker) == len(turn_marker) and active_seq_marker == turn_marker and active_seq_id == bonus_seq_id
+            should_start_sequence = bool(bonus_sequence_start or not matching_seq)
+            if should_start_sequence:
+                if not self._use_bonus_action(resource_c):
+                    self._lan.toast(ws_id, "No bonus actions left, matey.")
+                    return
+                setattr(resource_c, "_bonus_attack_seq_turn_marker", turn_marker)
+                setattr(resource_c, "_bonus_attack_seq_id", bonus_seq_id)
+                setattr(resource_c, "_bonus_attack_seq_remaining", max(0, int(bonus_sequence_total) - 1))
+            else:
+                if active_seq_remaining <= 0:
+                    self._lan.toast(ws_id, "No bonus actions left, matey.")
+                    return
+                next_remaining = max(0, int(active_seq_remaining) - 1)
+                setattr(resource_c, "_bonus_attack_seq_remaining", int(next_remaining))
+                if next_remaining <= 0:
+                    setattr(resource_c, "_bonus_attack_seq_turn_marker", ())
+                    setattr(resource_c, "_bonus_attack_seq_id", "")
+                    setattr(resource_c, "_bonus_attack_seq_remaining", 0)
+        elif not is_cleave_followup:
+            if opportunity_attack:
+                if not self._use_reaction(resource_c):
+                    self._lan.toast(ws_id, "No reactions left, matey.")
+                    return
+                if reaction_request_id:
+                    self._pending_reaction_offers.pop(reaction_request_id, None)
+            elif not is_unleash_incarnation_attack:
+                if attack_resources <= 0:
+                    if not self._use_action(resource_c):
+                        self._lan.toast(ws_id, "No attacks left, matey.")
+                        return
+                    attack_resources = int(configured_attack_count)
+                    if nick_extra_attack_available:
+                        setattr(resource_c, "_nick_mastery_turn_marker", turn_marker)
+                attack_resources = max(0, int(attack_resources) - 1)
+                setattr(resource_c, "attack_resource_remaining", int(attack_resources))
+                if attack_limit is not None:
+                    setattr(resource_c, "_turn_attack_count", int(getattr(resource_c, "_turn_attack_count", 0) or 0) + 1)
+        weapon_category = str(selected_weapon.get("category") or "").strip().lower()
+        weapon_range_text = str(selected_weapon.get("range") or "").strip().lower()
+        is_melee_attack = not ("ranged" in weapon_category or "/" in weapon_range_text or "ranged" in weapon_range_text)
+        attack_augments_ctx = {
+            "weapon_id": str(selected_weapon.get("id") or "").strip().lower(),
+            "weapon_name": str(selected_weapon.get("name") or "").strip().lower(),
+            "weapon_category": weapon_category,
+            "is_weapon_attack": True,
+            "is_unarmed_attack": bool(is_unarmed_strike),
+            "is_melee_attack": bool(is_melee_attack),
+            "is_ranged_attack": not bool(is_melee_attack),
+        }
+        attack_augments = self._collect_attack_augments(c, target, attack_ctx=attack_augments_ctx)
+        to_hit = _parse_int(selected_weapon.get("to_hit"), _parse_int(attacks.get("weapon_to_hit"), 0) or 0) or 0
+        magic_bonus = _parse_int(selected_weapon.get("magic_bonus"), _parse_int(selected_weapon.get("item_bonus"), 0) or 0) or 0
+        to_hit += int(magic_bonus)
+        to_hit += int(self._attack_roll_bonus_from_augments(attack_augments))
+        roll_total = int(attack_roll) if attack_roll is not None else 0
+        muddled_attack_penalty = int(self._muddled_thoughts_penalty_roll(c))
+        total_to_hit = int(roll_total) + int(to_hit) - int(muddled_attack_penalty)
+        target_ac = _parse_int(getattr(target, "ac", None), 10) or 10
+        target_ac += int(self._shield_ac_bonus_for_target(target))
+        target_ac += int(self._combatant_ac_modifier(target))
+        slow_spell_ac_penalty = int(self._slow_spell_ac_penalty(target))
+        if slow_spell_ac_penalty > 0:
+            target_ac = max(0, int(target_ac) - int(slow_spell_ac_penalty))
+        hit = bool(requested_hit) if requested_hit is not None else bool(total_to_hit >= int(target_ac))
+        if hit and not bool(msg.get("_shield_resolution_done")):
+            shield_mode = self._reaction_mode_for(int(target_cid), "shield", default="ask")
+            can_shield, _shield_reason = self._can_offer_shield_reaction(target)
+            shield_can_change_result = int(total_to_hit) < int(target_ac) + 5
+            if shield_mode != "off" and can_shield and shield_can_change_result:
+                if attack_roll is None:
+                    self._lan.toast(ws_id, "Shield automation requires the attack roll value, matey.")
+                    return
+                choices = [{"kind": "shield_yes", "label": "Yes", "mode": shield_mode}]
+                ws_targets = self._find_ws_for_cid(int(target_cid))
+                req_id = self._create_reaction_offer(
+                    int(target_cid),
+                    "shield",
+                    int(cid),
+                    int(target_cid),
+                    choices,
+                    ws_targets,
+                    extra_payload={"prompt_attack": str(selected_weapon.get("name") or "Attack")},
+                )
+                if req_id:
+                    self._pending_shield_resolutions[str(req_id)] = {"msg": dict(msg)}
+                    self._oplog(
+                        f"reaction_offer:shield pending request_id={req_id} attacker={int(cid)} target={int(target_cid)}",
+                        level="info",
+                    )
+                    attacker_ws_targets = self._find_ws_for_cid(int(cid))
+                    for attacker_ws in attacker_ws_targets:
+                        self._lan.toast(int(attacker_ws), "Waiting for Shield response…")
+                    return
+        if hit:
+            intercepted = self._mirror_image_try_intercept_hit(
+                target,
+                attacker_name=str(getattr(c, "name", "Attacker") or "Attacker"),
+                attack_name=str(selected_weapon.get("name") or "Attack"),
+            )
+            if intercepted:
+                hit = False
+        pending_star_advantage = getattr(c, "pending_star_advantage_charge", None)
+        star_advantage_attempted = isinstance(pending_star_advantage, dict)
+        if star_advantage_attempted:
+            setattr(c, "pending_star_advantage_charge", None)
+        damage_entries: List[Dict[str, Any]] = []
+        raw_damage_entries = msg.get("damage_entries")
+        if isinstance(raw_damage_entries, list):
+            for entry in raw_damage_entries:
+                if not isinstance(entry, dict):
+                    continue
+                amount = _parse_non_negative_manual_damage(entry.get("amount"))
+                if amount is None:
+                    continue
+                amount = int(amount)
+                if amount <= 0:
+                    continue
+                dtype = str(entry.get("type") or "").strip().lower()
+                damage_entries.append({"amount": amount, "type": dtype})
+        auto_roll = bool(hit and not damage_entries)
+        auto_crit = bool(auto_roll and requested_critical is True)
+
+        def _weapon_formula_already_includes_magic_bonus(weapon_entry: Any, damage_formula: Any, bonus: int) -> bool:
+            if not isinstance(weapon_entry, dict):
+                return False
+            if not isinstance(damage_formula, str):
+                return False
+            bonus_val = int(bonus or 0)
+            if bonus_val == 0:
+                return False
+            formula_text = str(damage_formula or "").strip().lower()
+            if not formula_text:
+                return False
+            if re.search(r"\b(?:magic_bonus|item_bonus)\b", formula_text):
+                return True
+            bonus_abs = abs(int(bonus_val))
+            has_plus_marker = False
+            weapon_name = str(weapon_entry.get("name") or "").strip().lower()
+            weapon_id = str(weapon_entry.get("id") or "").strip().lower()
+            if bonus_val > 0:
+                has_plus_marker = bool(
+                    re.search(rf"\(\+\s*{bonus_abs}\)", weapon_name)
+                    or re.search(rf"\+\s*{bonus_abs}\b", weapon_name)
+                    or f"plus_{bonus_abs}" in weapon_id
+                    or f"plus{bonus_abs}" in weapon_id
+                )
+            if bonus_val < 0:
+                has_plus_marker = bool(
+                    re.search(rf"\(-\s*{bonus_abs}\)", weapon_name)
+                    or re.search(rf"-\s*{bonus_abs}\b", weapon_name)
+                    or f"minus_{bonus_abs}" in weapon_id
+                    or f"minus{bonus_abs}" in weapon_id
+                )
+            if not has_plus_marker:
+                return False
+            numeric_terms = [
+                int(token)
+                for token in re.findall(r"(?<![a-z0-9_])[+\-]?\d+(?![a-z0-9_])", formula_text)
+            ]
+            if bonus_val > 0:
+                return int(bonus_abs) in numeric_terms
+            return -int(bonus_abs) in numeric_terms
+        effect_block = selected_weapon.get("effect") if isinstance(selected_weapon.get("effect"), dict) else {}
+        mastery_notes: List[str] = []
+        variables = _damage_formula_variables(profile)
+        graze_applied = False
+        if auto_roll:
+            mode_block = _selected_weapon_mode_block(selected_weapon)
+            mode_formula = mode_block.get("damage_formula") if isinstance(mode_block, dict) else ""
+            ability_override = str((attack_augments or {}).get("attack_ability_override") or "").strip().lower()
+            die_override = str((attack_augments or {}).get("weapon_damage_die_override") or "").strip().lower()
+            if isinstance(mode_formula, str) and mode_formula:
+                if ability_override in {"str", "dex", "con", "int", "wis", "cha"}:
+                    mode_formula = re.sub(r"(?:str|dex|con|int|wis|cha)_mod", f"{ability_override}_mod", mode_formula)
+                if die_override:
+                    mode_formula = re.sub(r"\d+d\d+", die_override, mode_formula, count=1)
+            mode_damage = _roll_damage_formula(mode_formula, variables, dice_multiplier=2 if auto_crit else 1)
+            mode_type = str((mode_block or {}).get("damage_type") or "").strip().lower() if isinstance(mode_block, dict) else ""
+            if override_honored:
+                mode_type = damage_type_override
+            if mode_damage is not None and mode_damage > 0:
+                entry_payload: Dict[str, Any] = {"amount": int(mode_damage), "type": mode_type}
+                if empowered_strikes_active and mode_type in ("bludgeoning", "piercing", "slashing"):
+                    entry_payload["magical"] = True
+                if bool((attack_augments or {}).get("weapon_counts_as_magical")) and mode_type in ("bludgeoning", "piercing", "slashing"):
+                    entry_payload["magical"] = True
+                damage_entries.append(entry_payload)
+            if (
+                mode_damage is not None
+                and mode_damage > 0
+                and int(magic_bonus) != 0
+                and not _weapon_formula_already_includes_magic_bonus(selected_weapon, mode_formula, magic_bonus)
+            ):
+                damage_entries.append({"amount": int(magic_bonus), "type": mode_type or "damage"})
+            augment_damage_bonus = int(self._damage_bonus_from_augments(attack_augments))
+            if mode_damage is not None and mode_damage > 0 and augment_damage_bonus != 0:
+                damage_entries.append({"amount": int(augment_damage_bonus), "type": mode_type or "damage"})
+            for extra in list((attack_augments or {}).get("extra_damage_dice") or []):
+                if not isinstance(extra, dict):
+                    continue
+                extra_amount = _roll_damage_formula(extra.get("dice"), variables, dice_multiplier=2 if auto_crit else 1)
+                if extra_amount is None or extra_amount <= 0:
+                    continue
+                damage_entries.append({"amount": int(extra_amount), "type": str(extra.get("type") or "damage").strip().lower() or "damage"})
+            damage_entries.extend(_parse_effect_damage_entries(effect_block.get("on_hit"), variables, dice_multiplier=2 if auto_crit else 1))
+        if weapon_mastery_enabled and ("graze" in effective_masteries) and not hit:
+            mode_block = _selected_weapon_mode_block(selected_weapon)
+            graze_damage = max(0, _weapon_mastery_damage_ability_mod(selected_weapon, profile, variables))
+            mode_type = str((mode_block or {}).get("damage_type") or "").strip().lower() if isinstance(mode_block, dict) else ""
+            if override_honored:
+                mode_type = damage_type_override
+            if graze_damage > 0:
+                entry_payload = {"amount": int(graze_damage), "type": mode_type}
+                if empowered_strikes_active and mode_type in ("bludgeoning", "piercing", "slashing"):
+                    entry_payload["magical"] = True
+                damage_entries.append(entry_payload)
+                graze_applied = True
+                mastery_notes.append(f"Graze deals {int(graze_damage)} damage on the miss.")
+        damage_riders = []
+        feature_effects = getattr(c, "feature_effects", None)
+        if not isinstance(feature_effects, dict) and isinstance(profile, dict):
+            feature_effects = profile.get("feature_effects")
+        if isinstance(feature_effects, dict):
+            damage_riders = feature_effects.get("damage_riders") if isinstance(feature_effects.get("damage_riders"), list) else []
+        if hit and isinstance(damage_riders, list):
+            trigger_tags: set[str] = {"weapon_attack_hit", "weapon_or_beast_attack_hit"}
+            if _weapon_has_property(selected_weapon, "finesse"):
+                trigger_tags.add("finesse_weapon_attack")
+            weapon_range_text = str(selected_weapon.get("range") or "").strip().lower()
+            if "/" in weapon_range_text or "ranged" in weapon_range_text:
+                trigger_tags.add("ranged_weapon_attack")
+            advantage_flag = bool(_parse_bool(msg.get("attack_has_advantage")))
+            disadvantage_flag = bool(_parse_bool(msg.get("attack_has_disadvantage")))
+            advantage_flag = bool(advantage_flag or self._attack_roll_mode_against_target(c, target) == "advantage")
+            disadvantage_flag = bool(disadvantage_flag or self._attack_roll_mode_against_target(c, target) == "disadvantage")
+            ally_near_flag = bool(_parse_bool(msg.get("ally_within_5ft")))
+            for rider in damage_riders:
+                if not isinstance(rider, dict):
+                    continue
+                rider_id = str(rider.get("id") or rider.get("source_feature_id") or "").strip().lower()
+                rider_trigger = rider.get("trigger")
+                rider_triggers = rider_trigger if isinstance(rider_trigger, list) else [rider_trigger]
+                normalized_triggers = {str(entry or "").strip().lower() for entry in rider_triggers if str(entry or "").strip()}
+                if normalized_triggers and normalized_triggers.isdisjoint(trigger_tags):
+                    continue
+                requires_any = rider.get("requires_any") if isinstance(rider.get("requires_any"), list) else []
+                if requires_any:
+                    require_flags: Dict[str, bool] = {
+                        "attack_has_advantage": advantage_flag,
+                        "ally_within_5ft_of_target_and_not_incapacitated": ally_near_flag,
+                    }
+                    if not any(require_flags.get(str(flag or "").strip().lower(), False) for flag in requires_any):
+                        continue
+                blocked_if = {str(flag or "").strip().lower() for flag in (rider.get("blocked_if") if isinstance(rider.get("blocked_if"), list) else [])}
+                if "attack_has_disadvantage" in blocked_if and disadvantage_flag:
+                    continue
+                if bool(rider.get("once_per_turn")) and not self._once_per_turn_limiter_allows(cid, rider_id):
+                    continue
+                rider_formula = str(rider.get("damage_formula") or "").strip()
+                dice_pool = str(rider.get("dice_pool") or "").strip().lower()
+                if not rider_formula and dice_pool and isinstance(profile, dict):
+                    pools = self._normalize_player_resource_pools(profile)
+                    for pool in pools:
+                        if str(pool.get("id") or "").strip().lower() == dice_pool:
+                            rider_formula = f"{max(1, int(pool.get('current', 0) or 0))}d6"
+                            break
+                rider_amount = _roll_damage_formula(rider_formula, variables, dice_multiplier=2 if auto_crit else 1) if rider_formula else None
+                if rider_amount is None or rider_amount <= 0:
+                    continue
+                rider_type = str(rider.get("damage_type") or "").strip().lower()
+                if rider_type in ("", "same_as_attack"):
+                    rider_type = str((damage_entries[0] if damage_entries else {}).get("type") or "").strip().lower()
+                damage_entries.append({"amount": int(rider_amount), "type": rider_type})
+                if bool(rider.get("once_per_turn")):
+                    self._once_per_turn_limiter_mark(profile_cid, rider_id)
+                mastery_notes.append(f"{str(rider.get('id') or 'rider').strip() or 'rider'} adds {int(rider_amount)} damage.")
+        rider_results: List[Dict[str, Any]] = []
+        if hit and is_melee_attack:
+            for rider in list((attack_augments or {}).get("pending_hit_riders") or []):
+                if not isinstance(rider, dict):
+                    continue
+                rider_spell = str(rider.get("spell_key") or "").strip().lower()
+                rider_name = rider_spell.replace("-", " ").title() if rider_spell else "Rider"
+                rider_result: Dict[str, Any] = {"slug": rider_spell, "name": rider_name}
+                for effect in list(rider.get("effects") or []):
+                    if not isinstance(effect, dict):
+                        continue
+                    effect_kind = str(effect.get("effect") or "").strip().lower()
+                    if effect_kind == "damage":
+                        rider_dice = self._smite_damage_dice(
+                            {
+                                "base_dice": effect.get("dice"),
+                                "base_slot": (_SMITE_SPELL_CONFIG.get(rider_spell) or {}).get("base_slot"),
+                                "upcast_die": (_SMITE_SPELL_CONFIG.get(rider_spell) or {}).get("upcast_die"),
+                            },
+                            rider.get("slot_level"),
+                        )
+                        rider_type = str(effect.get("damage_type") or effect.get("type") or "damage").strip().lower() or "damage"
+                        rider_amount = _roll_damage_formula(rider_dice, {}, dice_multiplier=2 if auto_crit else 1) if rider_dice else None
+                        if rider_amount is not None and rider_amount > 0:
+                            damage_entries.append({"amount": int(rider_amount), "type": rider_type})
+                        rider_result["damage"] = {"amount": int(max(0, rider_amount or 0)), "type": rider_type}
+                    elif effect_kind == "save_bundle":
+                        rider_result["save"] = dict(effect)
+                rider_results.append(rider_result)
+                if bool(rider.get("consume_on_next_hit")):
+                    self._consume_hit_rider(c, rider)
+        if hit and is_melee_attack and not rider_results:
+            pending_smite = getattr(c, "pending_smite_charge", None)
+            if isinstance(pending_smite, dict):
+                smite_slug = str(pending_smite.get("slug") or "").strip().lower()
+                smite_cfg = _SMITE_SPELL_CONFIG.get(smite_slug)
+                if isinstance(smite_cfg, dict):
+                    smite_dice = self._smite_damage_dice(smite_cfg, pending_smite.get("slot_level"))
+                    smite_type = str(smite_cfg.get("damage_type") or "").strip().lower() or "damage"
+                    smite_amount = _roll_damage_formula(smite_dice, {}, dice_multiplier=2 if auto_crit else 1) if smite_dice else None
+                    if smite_amount is not None and smite_amount > 0:
+                        damage_entries.append({"amount": int(smite_amount), "type": smite_type})
+                    rider_result = {
+                        "slug": smite_slug,
+                        "name": str(pending_smite.get("name") or smite_slug.replace("-", " ").title()),
+                        "damage": {"amount": int(max(0, smite_amount or 0)), "type": smite_type},
+                    }
+                    save_cfg = smite_cfg.get("save") if isinstance(smite_cfg.get("save"), dict) else {}
+                    save_dc = int(pending_smite.get("save_dc") or 0)
+                    if save_dc <= 0:
+                        profile = self._profile_for_player_name(str(getattr(c, "name", "") or "")) if c is not None else {}
+                        save_dc = int(self._compute_spell_save_dc(profile if isinstance(profile, dict) else {}) or 0)
+                    if save_cfg:
+                        rider_result["save"] = {
+                            "effect": "save_bundle",
+                            "save_ability": str(save_cfg.get("ability") or "").strip().lower(),
+                            "save_dc": int(save_dc),
+                            "apply_prone": bool(save_cfg.get("apply_prone")),
+                            "forced_movement": dict(save_cfg.get("forced_movement") or {}) if isinstance(save_cfg.get("forced_movement"), dict) else {},
+                            "condition": str(save_cfg.get("condition") or "").strip().lower(),
+                            "repeat_each_turn": bool(save_cfg.get("repeat_each_turn")),
+                            "repeat_timing": str(save_cfg.get("repeat_timing") or "start_turn").strip().lower(),
+                        }
+                    start_turn_cfg = smite_cfg.get("start_turn_rider") if isinstance(smite_cfg.get("start_turn_rider"), dict) else {}
+                    if start_turn_cfg:
+                        rider_result["start_turn_rider"] = {
+                            "dice": self._smite_damage_dice(
+                                {"base_dice": start_turn_cfg.get("dice"), "base_slot": smite_cfg.get("base_slot"), "upcast_die": smite_cfg.get("upcast_die")},
+                                pending_smite.get("slot_level"),
+                            ) or str(start_turn_cfg.get("dice") or "1d6"),
+                            "type": str(start_turn_cfg.get("type") or "damage").strip().lower() or "damage",
+                            "save_ability": str(start_turn_cfg.get("save_ability") or "").strip().lower(),
+                            "save_dc": int(save_dc),
+                        }
+                    rider_results.append(rider_result)
+                    setattr(c, "pending_smite_charge", None)
+        absorb_bonus_entry = self._consume_absorb_elements_melee_bonus(
+            c,
+            hit=bool(hit),
+            is_melee_attack=bool(is_melee_attack),
+            turn_marker=turn_marker,
+        )
+        if isinstance(absorb_bonus_entry, dict):
+            damage_entries.append(dict(absorb_bonus_entry))
+            self._log(
+                f"{c.name}'s Absorb Elements adds {int(absorb_bonus_entry.get('amount') or 0)} "
+                f"{str(absorb_bonus_entry.get('type') or 'damage')} damage.",
+                cid=cid,
+            )
+        if override_honored and isinstance(damage_entries, list):
+            for entry in damage_entries:
+                if not isinstance(entry, dict):
+                    continue
+                raw_type = str(entry.get("type") or "").strip().lower()
+                if raw_type in ("", "damage", "bludgeoning"):
+                    entry["type"] = damage_type_override
+        resolved_bucket = locals().get("resolved_bucket", [])
+        sequence = locals().get("sequence", [])
+        spell_mode = locals().get("spell_mode", "")
+        result_payload = locals().get("result_payload", {}) if isinstance(locals().get("result_payload", {}), dict) else {}
+        if not resolved_bucket and sequence:
+            seq_step = next((step for step in sequence if isinstance(step, dict)), None)
+            if isinstance(seq_step, dict):
+                outcomes = seq_step.get("outcomes") if isinstance(seq_step.get("outcomes"), dict) else {}
+                if spell_mode == "save":
+                    passed = bool((result_payload.get("save_result") or {}).get("passed"))
+                    resolved_bucket = _bucket_for_outcome(outcomes, passed, "")
+                else:
+                    resolved_bucket = _bucket_for_outcome(outcomes, False, "hit" if hit else "miss")
+
+        for effect in resolved_bucket:
+            if not isinstance(effect, dict):
+                continue
+            if str(effect.get("effect") or "").strip().lower() != "damage":
+                continue
+            amount = _roll_scaled_effect_damage(effect)
+            if amount <= 0:
+                continue
+            dtype = str(effect.get("damage_type") or effect.get("type") or damage_type_hint or "damage").strip().lower() or "damage"
+            damage_entries.append({"amount": int(amount), "type": dtype})
+
+        if hit and not bool(msg.get("_absorb_elements_resolution_done")):
+            req_id = self._maybe_offer_absorb_elements(
+                int(target_cid),
+                int(cid),
+                pending_msg=msg,
+                damage_entries=damage_entries,
+            )
+            if req_id:
+                attacker_ws_targets = self._find_ws_for_cid(int(cid))
+                for attacker_ws in attacker_ws_targets:
+                    self._lan.toast(int(attacker_ws), "Waiting for Absorb Elements response…")
+                return
+
+        adjustment = self._adjust_damage_entries_for_target(target, damage_entries)
+        damage_entries = list(adjustment.get("entries") or [])
+        adjustment_notes = list(adjustment.get("notes") or [])
+        total_damage = int(sum(int(entry.get("amount", 0) or 0) for entry in damage_entries))
+        damage_applied = bool(hit or graze_applied)
+        if damage_applied and total_damage > 0 and not bool(msg.get("_interception_resolution_done")):
+            interception_req_id = self._maybe_offer_interception(
+                int(target_cid),
+                int(cid),
+                pending_msg=msg,
+                damage_entries=damage_entries,
+            )
+            if interception_req_id:
+                attacker_ws_targets = self._find_ws_for_cid(int(cid))
+                for attacker_ws in attacker_ws_targets:
+                    self._lan.toast(int(attacker_ws), "Waiting for Interception response…")
+                return
+        interception_reduction = max(0, _parse_int(msg.get("_interception_reduction"), 0) or 0)
+        if damage_applied and total_damage > 0 and interception_reduction > 0:
+            remaining_reduce = int(interception_reduction)
+            reduced_entries: List[Dict[str, Any]] = []
+            for entry in damage_entries:
+                if not isinstance(entry, dict):
+                    continue
+                amount = max(0, int(entry.get("amount", 0) or 0))
+                if amount <= 0:
+                    continue
+                cut = min(int(amount), int(remaining_reduce))
+                new_amount = max(0, int(amount) - int(cut))
+                remaining_reduce = max(0, int(remaining_reduce) - int(cut))
+                if new_amount > 0:
+                    new_entry = dict(entry)
+                    new_entry["amount"] = int(new_amount)
+                    reduced_entries.append(new_entry)
+            damage_entries = reduced_entries
+            total_damage = int(sum(int(entry.get("amount", 0) or 0) for entry in damage_entries))
+        deflect_attacks_result: Optional[Dict[str, Any]] = None
+        if damage_applied and total_damage > 0:
+            target_monk_level = 0
+            target_profile = None
+            if bool(getattr(target, "is_pc", False)):
+                try:
+                    target_player_name = self._pc_name_for(int(getattr(target, "cid", 0) or 0))
+                    target_profile = self._profile_for_player_name(target_player_name)
+                    if isinstance(target_profile, dict):
+                        target_monk_level = self._class_level_from_profile(target_profile, "monk")
+                except Exception:
+                    target_monk_level = 0
+            if int(target_monk_level) >= 3 and int(getattr(target, "reaction_remaining", 0) or 0) > 0:
+                dex_mod = 0
+                mods = getattr(target, "ability_mods", None)
+                if isinstance(mods, dict):
+                    try:
+                        dex_mod = int(mods.get("dex") or 0)
+                    except Exception:
+                        dex_mod = 0
+                if dex_mod == 0 and isinstance(target_profile, dict):
+                    abilities = target_profile.get("abilities") if isinstance(target_profile.get("abilities"), dict) else {}
+                    try:
+                        dex_score = int(abilities.get("dex"))
+                        dex_mod = math.floor((int(dex_score) - 10) / 2)
+                    except Exception:
+                        dex_mod = 0
+                if self._use_reaction(target):
+                    reduction = int(random.randint(1, 10) + max(0, int(dex_mod)) + int(target_monk_level))
+                    prevented = min(int(total_damage), max(0, int(reduction)))
+                    if int(total_damage) > 0:
+                        remaining_reduce = int(prevented)
+                        reduced_entries: List[Dict[str, Any]] = []
+                        for entry in damage_entries:
+                            if not isinstance(entry, dict):
+                                continue
+                            amount = int(entry.get("amount", 0) or 0)
+                            if amount <= 0:
+                                continue
+                            cut = min(amount, max(0, int(remaining_reduce)))
+                            new_amount = max(0, amount - cut)
+                            remaining_reduce = max(0, int(remaining_reduce) - cut)
+                            if new_amount > 0:
+                                new_entry = dict(entry)
+                                new_entry["amount"] = int(new_amount)
+                                reduced_entries.append(new_entry)
+                        damage_entries = reduced_entries
+                        total_damage = int(sum(int(entry.get("amount", 0) or 0) for entry in damage_entries))
+                    deflect_attacks_result = {
+                        "reduction_roll_total": int(reduction),
+                        "prevented_damage": int(prevented),
+                        "remaining_damage": int(total_damage),
+                    }
+        mastery_cleave_candidates: List[Dict[str, Any]] = []
+        mastery_vex_advantage = bool(
+            hit
+            and weapon_mastery_enabled
+            and ("vex" in effective_masteries)
+            and _parse_int(getattr(target, "_vexed_by_cid", None), None) == int(profile_cid)
+        )
+        if mastery_vex_advantage:
+            mastery_notes.append("Vex: Advantage applies to this attack.")
+            setattr(target, "_vexed_by_cid", None)
+        if damage_applied and total_damage > 0:
+            setattr(target, "_rage_took_damage_this_turn", True)
+            before_hp = _parse_int(getattr(target, "hp", None), None)
+            if before_hp is not None:
+                damage_state = self._apply_damage_via_service(target, int(total_damage))
+                after_hp = int(damage_state.get("hp_after", before_hp))
+                if int(before_hp) > 0 and int(after_hp) <= 0:
+                    pre_order: List[int] = []
+                    try:
+                        pre_order = [x.cid for x in self._display_order()]
+                    except Exception as exc:
+                        self._oplog(f"attack_request: failed to snapshot turn order before KO cleanup ({exc})", level="warning")
+                        pre_order = []
+                    removed_target = False
+                    try:
+                        self._remove_combatants_with_lan_cleanup([int(target_cid)])
+                        removed_target = int(target_cid) not in self.combatants
+                    except Exception as exc:
+                        self._oplog(f"attack_request: LAN cleanup remove failed for cid={int(target_cid)} ({exc})", level="warning")
+                        # Fallback for partial test stubs or degraded LAN cleanup paths.
+                        removed_target = self.combatants.pop(int(target_cid), None) is not None
+                    if removed_target:
+                        if getattr(self, "start_cid", None) == int(target_cid):
+                            self.start_cid = None
+                        try:
+                            self._retarget_current_after_removal([int(target_cid)], pre_order=pre_order)
+                        except Exception as exc:
+                            self._oplog(
+                                f"attack_request: failed to retarget after removing cid={int(target_cid)} ({exc})",
+                                level="warning",
+                            )
+                        self._log(f"{target.name} dropped to 0 -> removed", cid=int(target_cid))
+                    try:
+                        self._lan.play_ko(int(cid))
+                    except Exception:
+                        pass
+        if star_advantage_attempted and hit and int(target_cid) in self.combatants and int(getattr(target, "hp", 0) or 0) > 0:
+            if self._condition_is_immune_for_target(target, "star_advantage"):
+                self._log(f"{c.name}'s Star Advantage can't affect {target.name} (immune).", cid=int(target_cid))
+            elif _ensure_condition(target, "star_advantage"):
+                self._log(f"{c.name} expends Star Advantage and marks {target.name}.", cid=int(target_cid))
+            else:
+                self._log(f"{c.name} expends Star Advantage and refreshes {target.name}.", cid=int(target_cid))
+        if hit and opportunity_attack and self._unit_has_sentinel_feat(resource_c):
+            setattr(target, "move_remaining", 0)
+            setattr(target, "speed_zero_until_turn_end", True)
+
+        if hit:
+            fps = self._lan_feet_per_square()
+            attacker_pos2 = dict(self.__dict__.get("_lan_positions", {}) or {}).get(int(cid))
+            if isinstance(attacker_pos2, tuple) and len(attacker_pos2) == 2:
+                for other_cid, other in list(self.combatants.items()):
+                    try:
+                        ocid = int(other_cid)
+                    except Exception:
+                        continue
+                    if ocid in (int(cid), int(target_cid)):
+                        continue
+                    if self._lan_is_friendly_unit(ocid) == self._lan_is_friendly_unit(int(cid)):
+                        continue
+                    if not self._unit_has_sentinel_feat(other):
+                        continue
+                    if int(getattr(other, "reaction_remaining", 0) or 0) <= 0:
+                        continue
+                    opos = dict(self.__dict__.get("_lan_positions", {}) or {}).get(ocid)
+                    if not (isinstance(opos, tuple) and len(opos) == 2):
+                        continue
+                    dist_ft = max(abs(int(attacker_pos2[0]) - int(opos[0])), abs(int(attacker_pos2[1]) - int(opos[1]))) * fps
+                    if dist_ft - 8.0 > 1e-6:
+                        continue
+                    choices = self._build_oa_reaction_choices(other, include_war_caster=False)
+                    if not choices:
+                        continue
+                    ws_targets = self._find_ws_for_cid(ocid)
+                    self._create_reaction_offer(ocid, "sentinel_hit_other", int(cid), int(cid), choices, ws_targets)
+
+        if hit and isinstance(selected_weapon.get("riders"), list):
+            for rider in selected_weapon.get("riders"):
+                if not isinstance(rider, dict):
+                    continue
+                if str(rider.get("trigger") or "").strip().lower() != "on_hit":
+                    continue
+                rider_effect = str(rider.get("effect") or "").strip().lower()
+                if rider_effect not in ("push", "pull"):
+                    continue
+                save_ability = str(rider.get("save_ability") or "").strip().lower()[:3]
+                raw_dc = rider.get("save_dc")
+                rider_dc = 0
+                if isinstance(raw_dc, str) and raw_dc.strip().lower() == "wielder_spell_save_dc":
+                    rider_dc = int(self._compute_spell_save_dc(profile)) if isinstance(profile, dict) else 0
+                else:
+                    try:
+                        rider_dc = int(raw_dc)
+                    except Exception:
+                        rider_dc = 0
+                try:
+                    distance_ft = float(rider.get("distance_feet") or rider.get("distance_ft") or 0)
+                except Exception:
+                    distance_ft = 0.0
+                if rider_dc <= 0 or save_ability not in ("str","dex","con","int","wis","cha") or distance_ft <= 0:
+                    continue
+                rider_roll = int(random.randint(1, 20))
+                rider_mod = int(_save_mod_for_target(target, save_ability))
+                rider_total = int(rider_roll + rider_mod)
+                rider_passed = bool(rider_roll != 1 and rider_total >= int(rider_dc))
+                moved = False
+                if not rider_passed:
+                    moved = bool(self._lan_apply_forced_movement(int(cid), int(target_cid), rider_effect, float(distance_ft)))
+                self._log(
+                    f"{result_payload['weapon_name']} rider {rider_effect}: {result_payload['target_name']} {save_ability.upper()} "
+                    f"{int(rider_roll)}+{int(rider_mod)}={int(rider_total)} vs DC {int(rider_dc)} "
+                    f"({'PASS' if rider_passed else 'FAIL'}){' moved' if moved else ''}.",
+                    cid=int(target_cid),
+                )
+
+        if weapon_mastery_enabled and hit:
+            if tactical_master_enabled:
+                mastery_notes.append(f"Tactical Master: replacing weapon mastery with {tactical_master_property.title()} for this attack.")
+            if "cleave" in effective_masteries:
+                mastery_notes.append("Cleave: ye can make a second attack against another nearby target.")
+            if "push" in effective_masteries:
+                mastery_notes.append("Push: move that Large-or-smaller target up to 10 ft away.")
+            if "sap" in effective_masteries:
+                mastery_notes.append("Sap: target has disadvantage on its next attack roll.")
+            if "slow" in effective_masteries:
+                mastery_notes.append("Slow: target speed is reduced by 10 ft until start of yer next turn.")
+            if "topple" in effective_masteries:
+                mastery_notes.append("Topple: have target make a Constitution save or fall prone.")
+            if "vex" in effective_masteries:
+                mastery_notes.append("Vex: gain advantage on yer next attack against this target.")
+            if "sap" in effective_masteries and _ensure_condition(target, "sapped"):
+                mastery_notes.append("Sap applied: target is Sapped.")
+            if "slow" in effective_masteries:
+                existing_slow_penalty = max(0, _parse_int(getattr(target, "_slow_next_turn_penalty", 0), 0) or 0)
+                setattr(target, "_slow_next_turn_penalty", max(existing_slow_penalty, 10))
+                mastery_notes.append("Slow applied: target speed reduced by 10 ft on its next turn.")
+            if "push" in effective_masteries:
+                origin = dict(self.__dict__.get("_lan_positions", {}) or {}).get(int(target_cid))
+                if isinstance(origin, tuple) and len(origin) == 2:
+                    moved = self._lan_apply_forced_movement(int(cid), int(target_cid), "push", 10.0)
+                    if moved:
+                        mastery_notes.append("Push applied: target moved up to 10 ft.")
+            if "topple" in effective_masteries:
+                topple_dc = _mastery_save_dc(selected_weapon, profile, variables)
+                topple_roll = random.randint(1, 20)
+                topple_mod = _save_mod_for_target(target, "con")
+                topple_total = int(topple_roll) + int(topple_mod)
+                topple_passed = bool(topple_roll != 1 and topple_total >= int(topple_dc))
+                if not topple_passed and _set_prone_if_needed(target):
+                    mastery_notes.append("Topple applied: target is Prone.")
+            if "vex" in effective_masteries:
+                _ensure_condition(target, "vexed")
+                setattr(target, "_vexed_by_cid", int(profile_cid))
+                mastery_notes.append("Vex applied: next attack by ye has advantage.")
+            if (
+                "cleave" in effective_masteries
+                and not is_cleave_followup
+                and total_damage > 0
+            ):
+                positions = dict(self.__dict__.get("_lan_positions", {}) or {})
+                attacker_pos = positions.get(int(cid))
+                if isinstance(attacker_pos, tuple) and len(attacker_pos) == 2:
+                    ac, ar = int(attacker_pos[0]), int(attacker_pos[1])
+                    for enemy_cid, enemy in self.combatants.items():
+                        try:
+                            ecid = int(enemy_cid)
+                        except Exception:
+                            continue
+                        if ecid in (int(cid), int(target_cid)):
+                            continue
+                        if not _is_enemy_of_attacker(c, enemy):
+                            continue
+                        epos = positions.get(ecid)
+                        if not (isinstance(epos, tuple) and len(epos) == 2):
+                            continue
+                        if abs(int(epos[0]) - ac) <= 1 and abs(int(epos[1]) - ar) <= 1:
+                            mastery_cleave_candidates.append({"cid": ecid, "name": str(getattr(enemy, "name", "Enemy") or "Enemy")})
+                if mastery_cleave_candidates:
+                    mastery_notes.append("Cleave ready: choose one nearby enemy for a free attack.")
+        if star_advantage_attempted and not hit:
+            self._log(f"{c.name} expends Star Advantage on a miss.", cid=cid)
+        stunning_strike_result: Optional[Dict[str, Any]] = None
+        wants_stunning_strike = bool(_parse_bool(msg.get("stunning_strike")))
+        if (
+            hit
+            and wants_stunning_strike
+            and int(monk_level) >= 5
+            and is_melee_attack
+            and not is_admin
+        ):
+            owner_name = self._pc_name_for(int(getattr(resource_c, "cid", cid) or cid))
+            ok_pool, pool_err = self._consume_resource_pool_for_cast(owner_name, "focus_points", 1)
+            if ok_pool:
+                stun_dc = self._monk_save_dc_for_profile(profile) if isinstance(profile, dict) else 8
+                save_roll = int(random.randint(1, 20))
+                save_mod = int(_save_mod_for_target(target, "con"))
+                save_total = int(save_roll + save_mod)
+                save_passed = bool(save_roll != 1 and save_total >= int(stun_dc))
+                applied = False
+                if not save_passed and not self._condition_is_immune_for_target(target, "stunned"):
+                    stacks = getattr(target, "condition_stacks", None)
+                    if not isinstance(stacks, list):
+                        stacks = []
+                        setattr(target, "condition_stacks", stacks)
+                    stacks = [st for st in stacks if getattr(st, "ctype", None) != "stunned"]
+                    setattr(target, "condition_stacks", stacks)
+                    next_sid = int(getattr(self, "_next_stack_id", 1) or 1)
+                    setattr(self, "_next_stack_id", int(next_sid) + 1)
+                    stacks.append(base.ConditionStack(sid=int(next_sid), ctype="stunned", remaining_turns=1))
+                    applied = True
+                stunning_strike_result = {
+                    "dc": int(stun_dc),
+                    "roll": int(save_roll),
+                    "modifier": int(save_mod),
+                    "total": int(save_total),
+                    "passed": bool(save_passed),
+                    "applied": bool(applied),
+                }
+                self._log(
+                    f"{c.name} uses Stunning Strike: {target.name} CON save DC {int(stun_dc)} "
+                    f"({int(save_roll)} + {int(save_mod)} = {int(save_total)}) "
+                    f"{'PASS' if save_passed else 'FAIL'}.",
+                    cid=int(target_cid),
+                )
+            else:
+                self._lan.toast(ws_id, pool_err or "No Focus Points remain, matey.")
+        is_critical = bool(hit and bool(requested_critical))
+        if consumes_pool_id and not is_admin:
+            consumes_pool_always = bool(msg.get("consumes_pool_always") is True)
+            should_consume_pool = bool(consumes_pool_always or (not hit) or (int(total_damage) > 0))
+            if should_consume_pool:
+                owner_name = self._pc_name_for(int(getattr(resource_c, "cid", cid) or cid))
+                ok_pool, pool_err = self._consume_resource_pool_for_cast(owner_name, consumes_pool_id, consumes_pool_cost)
+                if not ok_pool:
+                    self._lan.toast(ws_id, pool_err)
+                    return
+        result_payload: Dict[str, Any] = {
+            "type": "attack_result",
+            "ok": True,
+            "attacker_cid": int(cid),
+            "attack_origin_cid": int(attack_origin_cid),
+            "target_cid": int(target_cid),
+            "target_name": str(getattr(target, "name", "Target") or "Target"),
+            "weapon_id": str(selected_weapon.get("id") or "").strip(),
+            "weapon_name": str(selected_weapon.get("name") or "").strip() or "Weapon",
+            "attack_count": int(attack_count),
+            "attack_roll": int(roll_total),
+            "to_hit": int(to_hit),
+            "total_to_hit": int(total_to_hit),
+            "attack_penalty": int(muddled_attack_penalty),
+            "hit": hit,
+            "critical": is_critical,
+            "damage_total": int(total_damage if damage_applied else 0),
+            "damage_entries": list(damage_entries if damage_applied else []),
+            "action_remaining": int(getattr(resource_c, "action_remaining", 0) or 0),
+            "bonus_action_remaining": int(getattr(resource_c, "bonus_action_remaining", 0) or 0),
+            "attack_resource_remaining": int(getattr(resource_c, "attack_resource_remaining", 0) or 0),
+            "mastery_advantage": bool(mastery_vex_advantage),
+            "damage_type_override": damage_type_override if override_honored else None,
+        }
+        if mastery_cleave_candidates:
+            result_payload["cleave_candidates"] = list(mastery_cleave_candidates)
+        if mastery_notes:
+            result_payload["weapon_property_notes"] = list(mastery_notes)
+        if rider_results:
+            result_payload["riders"] = list(rider_results)
+            if len(rider_results) == 1:
+                result_payload["smite"] = dict(rider_results[0])
+        if isinstance(deflect_attacks_result, dict):
+            result_payload["deflect_attacks"] = dict(deflect_attacks_result)
+        interception_reactor_cid = _normalize_cid_value(msg.get("_interception_reactor_cid"), "attack_result.interception.reactor")
+        if interception_reduction > 0 and interception_reactor_cid is not None:
+            reactor = self.combatants.get(int(interception_reactor_cid))
+            result_payload["interception"] = {
+                "reactor_cid": int(interception_reactor_cid),
+                "reactor_name": str(getattr(reactor, "name", "Interceptor") or "Interceptor"),
+                "reduction": int(interception_reduction),
+            }
+        if isinstance(stunning_strike_result, dict):
+            result_payload["stunning_strike"] = dict(stunning_strike_result)
+        save_ability = str(effect_block.get("save_ability") or "").strip().lower()
+        save_dc = _parse_int(effect_block.get("save_dc"), 0) or 0
+        if hit and save_ability and save_dc > 0:
+            result_payload["on_hit_save"] = {"ability": save_ability, "dc": int(save_dc)}
+        consumed_attack_riders = self._consume_attack_roll_spell_riders(c, target)
+        if consumed_attack_riders.get("guiding_bolt"):
+            result_payload["guiding_bolt_consumed"] = True
+        if consumed_attack_riders.get("vicious_mockery"):
+            result_payload["vicious_mockery_consumed"] = True
+        msg["_attack_result"] = dict(result_payload)
+        if attack_roll is not None:
+            penalty_text = f" - {int(muddled_attack_penalty)} (muddled thoughts)" if muddled_attack_penalty > 0 else ""
+            self._log(
+                f"{c.name} attacks {result_payload['target_name']} with {result_payload['weapon_name']} "
+                f"(roll {attack_roll} + {to_hit}{penalty_text} = {total_to_hit}) and {'hits' if hit else 'misses'}"
+                f"{' (CRIT)' if is_critical else ''}.",
+                cid=cid,
+            )
+        else:
+            self._log(
+                f"{c.name} attacks {result_payload['target_name']} with {result_payload['weapon_name']} "
+                f"and {'hits' if hit else 'misses'}"
+                f"{' (CRIT)' if is_critical else ''}.",
+                cid=cid,
+            )
+        if interception_reduction > 0 and interception_reactor_cid is not None:
+            interceptor = self.combatants.get(int(interception_reactor_cid))
+            self._log(
+                f"{getattr(interceptor, 'name', 'Interceptor')} uses Interception and reduces damage by {int(interception_reduction)}.",
+                cid=int(target_cid),
+            )
+        if damage_applied and total_damage > 0:
+            def _adjustment_note_text(reasons: List[str]) -> str:
+                items = [str(reason or "").strip().lower() for reason in reasons if str(reason or "").strip()]
+                if not items:
+                    return ""
+                if "immune" in items:
+                    return " (immune!)"
+                if "vulnerable" in items:
+                    return " (vulnerable!)"
+                if "resistant" in items:
+                    return " (resist!)"
+                return ""
+
+            adjustment_lookup: Dict[Tuple[str, int], Dict[str, Any]] = {}
+            for note in adjustment_notes:
+                if not isinstance(note, dict):
+                    continue
+                key = (
+                    str(note.get("type") or "").strip().lower(),
+                    int(note.get("applied", 0) or 0),
+                )
+                if key not in adjustment_lookup:
+                    adjustment_lookup[key] = note
+            damage_desc = ", ".join(
+                (
+                    f"{int(entry.get('amount', 0) or 0)} {str(entry.get('type') or '').strip() or 'damage'}"
+                    f"{_adjustment_note_text(list((adjustment_lookup.get((str(entry.get('type') or '').strip().lower(), int(entry.get('amount', 0) or 0))) or {}).get('reasons') or []))}"
+                )
+                for entry in damage_entries
+            )
+            self._log(
+                f"{c.name} deals {int(total_damage)} total damage "
+                f"with {result_payload['weapon_name']}"
+                f" to {result_payload['target_name']}"
+                f"{f' ({damage_desc})' if damage_desc else ''}"
+                f"{' (CRIT)' if is_critical else ''}.",
+                cid=cid,
+            )
+            try:
+                self._maybe_offer_hellish_rebuke(int(target_cid), int(cid), int(total_damage))
+            except Exception as exc:
+                self._oplog(f"hellish_rebuke offer failed attacker={int(cid)} victim={int(target_cid)} ({exc})", level="warning")
+            if hit and save_ability and save_dc > 0:
+                save_roll = random.randint(1, 20)
+                save_mod = _save_mod_for_target(target, save_ability)
+                save_total = int(save_roll) + int(save_mod)
+                save_passed = bool(save_roll != 1 and save_total >= int(save_dc))
+                result_payload["on_hit_save_result"] = {
+                    "ability": save_ability,
+                    "dc": int(save_dc),
+                    "roll": int(save_roll),
+                    "modifier": int(save_mod),
+                    "total": int(save_total),
+                    "passed": bool(save_passed),
+                }
+                self._log(
+                    f"{c.name} forces {result_payload['target_name']} to make a {save_ability.upper()} save "
+                    f"(DC {int(save_dc)}): {int(save_roll)} + {int(save_mod)} = {int(save_total)} "
+                    f"({'PASS' if save_passed else 'FAIL'}).",
+                    cid=int(target_cid),
+                )
+                if not save_passed and _set_prone_if_needed(target):
+                    self._log(f"{c.name} knocks {result_payload['target_name']} prone.", cid=int(target_cid))
+            if hit and rider_results:
+                for rider_entry in rider_results:
+                    if not isinstance(rider_entry, dict):
+                        continue
+                    save_cfg = rider_entry.get("save") if isinstance(rider_entry.get("save"), dict) else {}
+                    save_ability_key = str(save_cfg.get("save_ability") or "").strip().lower()
+                    save_dc_val = int(save_cfg.get("save_dc") or 0)
+                    if save_ability_key and save_dc_val > 0:
+                        save_roll = random.randint(1, 20)
+                        save_mod = _save_mod_for_target(target, save_ability_key)
+                        save_total = int(save_roll) + int(save_mod)
+                        save_passed = bool(save_roll != 1 and save_total >= int(save_dc_val))
+                        result_payload["rider_save_result"] = {
+                            "ability": save_ability_key,
+                            "dc": int(save_dc_val),
+                            "roll": int(save_roll),
+                            "modifier": int(save_mod),
+                            "total": int(save_total),
+                            "passed": bool(save_passed),
+                        }
+                        if not save_passed:
+                            if bool(save_cfg.get("apply_prone")) and _set_prone_if_needed(target):
+                                self._log(f"{c.name} knocks {result_payload['target_name']} prone.", cid=int(target_cid))
+                            forced_movement_cfg = save_cfg.get("forced_movement")
+                            if isinstance(forced_movement_cfg, dict):
+                                self._apply_spell_forced_movement(
+                                    forced_movement_cfg,
+                                    caster=c,
+                                    target=target,
+                                    target_cid=int(target_cid),
+                                )
+                            rider_condition = str(save_cfg.get("condition") or "").strip().lower()
+                            if rider_condition:
+                                _ensure_condition(target, rider_condition, None)
+                                if bool(save_cfg.get("repeat_each_turn")):
+                                    rider_attr = "end_turn_save_riders" if str(save_cfg.get("repeat_timing") or "start_turn").strip().lower() == "end_turn" else "start_turn_save_riders"
+                                    riders = list(getattr(target, rider_attr, []) or [])
+                                    riders.append(
+                                        {
+                                            "clear_group": f"rider_{str(rider_entry.get('slug') or '')}_{int(cid)}",
+                                            "save_ability": save_ability_key,
+                                            "save_dc": int(save_dc_val),
+                                            "condition": rider_condition,
+                                        }
+                                    )
+                                    setattr(target, rider_attr, riders)
+                    start_turn_rider_cfg = rider_entry.get("start_turn_rider") if isinstance(rider_entry.get("start_turn_rider"), dict) else {}
+                    if start_turn_rider_cfg:
+                        riders = list(getattr(target, "start_turn_damage_riders", []) or [])
+                        riders.append(
+                            {
+                                "dice": str(start_turn_rider_cfg.get("dice") or "1d6"),
+                                "type": str(start_turn_rider_cfg.get("type") or "damage"),
+                                "source": str(rider_entry.get("name") or "Smite"),
+                                "save_ability": str(start_turn_rider_cfg.get("save_ability") or "").strip().lower(),
+                                "save_dc": int(start_turn_rider_cfg.get("save_dc") or 0),
+                                "clear_group": f"rider_{str(rider_entry.get('slug') or '')}_{int(cid)}",
+                            }
+                        )
+                        setattr(target, "start_turn_damage_riders", riders)
+            effect_text = str(effect_block.get("on_hit") or "")
+            if "hellfire stack" in effect_text.lower():
+                marker = (int(getattr(self, "round_num", 0) or 0), int(getattr(self, "turn_num", 0) or 0))
+                stack_map = getattr(target, "_hellfire_last_applied_by_attacker", None)
+                if not isinstance(stack_map, dict):
+                    stack_map = {}
+                attacker_key = str(int(cid))
+                if tuple(stack_map.get(attacker_key) or ()) != marker:
+                    stack_map[attacker_key] = marker
+                    setattr(target, "_hellfire_last_applied_by_attacker", stack_map)
+                    riders = list(getattr(target, "end_turn_damage_riders", []) or [])
+                    riders.append(
+                        {
+                            "dice": "1d6",
+                            "type": "hellfire",
+                            "remaining_turns": 1,
+                            "source": f"{result_payload['weapon_name']} ({c.name})",
+                        }
+                    )
+                    setattr(target, "end_turn_damage_riders", riders)
+                    self._log(
+                        f"{c.name} applies Hellfire to {result_payload['target_name']} "
+                        f"(1d6 at end of target turn).",
+                        cid=int(target_cid),
+                    )
+            weapon_id_key = str(selected_weapon.get("id") or "").strip().lower()
+            weapon_name_key = str(selected_weapon.get("name") or "").strip().lower()
+            if (
+                weapon_id_key == "sword_of_wounding"
+                or weapon_name_key == "sword of wounding"
+                or "start of each of the wounded creature's turns" in effect_text.lower()
+            ):
+                marker = (int(getattr(self, "round_num", 0) or 0), int(getattr(self, "turn_num", 0) or 0))
+                stack_map = getattr(target, "_wounding_last_applied_by_attacker", None)
+                if not isinstance(stack_map, dict):
+                    stack_map = {}
+                attacker_key = str(int(cid))
+                if tuple(stack_map.get(attacker_key) or ()) != marker:
+                    stack_map[attacker_key] = marker
+                    setattr(target, "_wounding_last_applied_by_attacker", stack_map)
+                    riders = list(getattr(target, "start_turn_damage_riders", []) or [])
+                    riders.append(
+                        {
+                            "dice": "1d4",
+                            "type": "necrotic",
+                            "source": f"{result_payload['weapon_name']} ({c.name})",
+                            "save_ability": "con",
+                            "save_dc": 15,
+                            "clear_group": "sword_of_wounding",
+                        }
+                    )
+                    setattr(target, "start_turn_damage_riders", riders)
+                    self._log(
+                        f"{c.name} wounds {result_payload['target_name']} "
+                        f"(1d4 necrotic at start of target turn; CON save DC 15 ends wounds).",
+                        cid=int(target_cid),
+                    )
+            try:
+                self._rebuild_table(scroll_to_current=True)
+            except Exception:
+                pass
+        msg["_attack_result"] = dict(result_payload)
+        loop = getattr(self._lan, "_loop", None)
+        if ws_id is not None and loop:
+            try:
+                asyncio.run_coroutine_threadsafe(self._lan._send_async(ws_id, result_payload), loop)
+            except Exception:
+                pass
+        self._lan.toast(ws_id, "Attack hits." if hit else "Attack misses.")
+
     def _lan_apply_action(self, msg: Dict[str, Any]) -> None:
         """Apply client actions on the Tk thread."""
         tracker: Optional["InitiativeTracker"]
@@ -30405,48 +33350,12 @@ class InitiativeTracker(base.InitiativeTracker):
             return
 
         if typ == "manual_override_hp":
-            c = self.combatants.get(cid)
-            if not c:
-                return
-            try:
-                hp_delta = int(msg.get("hp_delta") or 0)
-            except Exception:
-                hp_delta = 0
-            try:
-                temp_hp_delta = int(msg.get("temp_hp_delta") or 0)
-            except Exception:
-                temp_hp_delta = 0
-            if hp_delta == 0 and temp_hp_delta == 0:
-                self._lan.toast(ws_id, "Pick a non-zero override amount, matey.")
-                return
-            # Route through CombatService.manual_override when available so
-            # both HP and temp-HP deltas are applied atomically under one lock.
-            dm_svc = getattr(self, "_dm_service", None)
-            if dm_svc is not None:
-                dm_svc.manual_override(
-                    cid=int(cid), hp_delta=hp_delta, temp_hp_delta=temp_hp_delta,
-                )
-                self._lan.toast(ws_id, "Manual override applied.")
-                return
-            # Fallback: direct mutation when service is not running.
-            old_hp = int(getattr(c, "hp", 0) or 0)
-            max_hp = int(getattr(c, "max_hp", old_hp) or old_hp)
-            old_temp_hp = int(getattr(c, "temp_hp", 0) or 0)
-            new_hp = max(0, old_hp + hp_delta)
-            if max_hp > 0:
-                new_hp = min(new_hp, max_hp)
-            new_temp_hp = max(0, old_temp_hp + temp_hp_delta)
-            setattr(c, "hp", int(new_hp))
-            setattr(c, "temp_hp", int(new_temp_hp))
-            updates: List[str] = []
-            if hp_delta != 0:
-                updates.append(f"HP {old_hp}->{new_hp} ({hp_delta:+d})")
-            if temp_hp_delta != 0:
-                updates.append(f"Temp HP {old_temp_hp}->{new_temp_hp} ({temp_hp_delta:+d})")
-            self._log(f"{getattr(c, 'name', 'Player')} manual override: {', '.join(updates)}.", cid=cid)
-            self._lan.toast(ws_id, "Manual override applied.")
-            self._rebuild_table(scroll_to_current=True)
-            self._lan_force_state_broadcast()
+            self._ensure_player_commands().manual_override_hp(
+                cid=cid,
+                hp_delta=msg.get("hp_delta", 0),
+                temp_hp_delta=msg.get("temp_hp_delta", 0),
+                ws_id=ws_id,
+            )
             return
 
         if typ == "manual_override_spell_slot":
@@ -32863,201 +35772,7 @@ class InitiativeTracker(base.InitiativeTracker):
             return
 
         if typ == "reaction_response":
-            request_id = str(msg.get("request_id") or "").strip()
-            if not request_id:
-                return
-            offer = self._pending_reaction_offers.get(request_id)
-            if not isinstance(offer, dict):
-                return
-            if int(offer.get("reactor_cid") or -1) != int(cid or -1):
-                return
-            choice = str(msg.get("choice") or "").strip().lower()
-            if str(offer.get("trigger") or "").strip().lower() == "shield":
-                pending = (getattr(self, "_pending_shield_resolutions", {}) or {}).pop(request_id, None)
-                self._pending_reaction_offers.pop(request_id, None)
-                if not isinstance(pending, dict):
-                    self._lan.toast(ws_id, "That Shield offer expired, matey.")
-                    return
-                reactor_cid = _normalize_cid_value(offer.get("reactor_cid"), "reaction_response.shield.reactor")
-                reactor = self.combatants.get(int(reactor_cid)) if reactor_cid is not None else None
-                if reactor is None:
-                    return
-                if choice in ("shield_never", "never"):
-                    self._set_reaction_prefs(int(reactor_cid), {"shield": "off"})
-                if choice in ("shield_yes", "shield_cast", "shield"):
-                    if not self._use_reaction(reactor):
-                        self._lan.toast(ws_id, "No reactions left for Shield, matey.")
-                        choice = "shield_no"
-                    else:
-                        ok_cast, err_cast = self._consume_shield_cast(reactor)
-                        if not ok_cast:
-                            self._lan.toast(ws_id, err_cast or "Could not cast Shield, matey.")
-                            choice = "shield_no"
-                        else:
-                            self._shield_effect_start(reactor)
-                            self._log(f"{getattr(reactor, 'name', 'Target')} casts Shield.", cid=int(getattr(reactor, 'cid', 0) or 0))
-                resume_msg = dict(pending.get("msg") or {})
-                if isinstance(resume_msg, dict):
-                    resume_msg["_shield_resolution_done"] = True
-                    self._oplog(
-                        f"reaction_offer:shield resolved request_id={request_id} choice={choice}",
-                        level="info",
-                    )
-                    self._lan_apply_action(resume_msg)
-                return
-            if str(offer.get("trigger") or "").strip().lower() == "hellish_rebuke":
-                pending = (getattr(self, "_pending_hellish_rebuke_resolutions", {}) or {}).get(request_id)
-                self._pending_reaction_offers.pop(request_id, None)
-                if not isinstance(pending, dict):
-                    self._lan.toast(ws_id, "That Hellish Rebuke offer expired, matey.")
-                    return
-                reactor_cid = _normalize_cid_value(offer.get("reactor_cid"), "reaction_response.hellish_rebuke.reactor")
-                reactor = self.combatants.get(int(reactor_cid)) if reactor_cid is not None else None
-                if reactor is None:
-                    return
-                if choice in ("never", "hellish_rebuke_never"):
-                    self._pending_hellish_rebuke_resolutions.pop(request_id, None)
-                    self._set_reaction_prefs(int(reactor_cid), {"hellish_rebuke": "off"})
-                    return
-                if choice in ("", "decline", "ignore", "hellish_rebuke_no"):
-                    self._pending_hellish_rebuke_resolutions.pop(request_id, None)
-                    return
-                if choice not in ("cast_hellish_rebuke", "hellish_rebuke", "hellish_rebuke_yes"):
-                    return
-                if not self._use_reaction(reactor):
-                    self._lan.toast(ws_id, "No reactions left for Hellish Rebuke, matey.")
-                    return
-                attacker_cid = _normalize_cid_value(pending.get("attacker_cid"), "reaction_response.hellish_rebuke.attacker")
-                if attacker_cid is None or int(attacker_cid) not in self.combatants:
-                    self._lan.toast(ws_id, "The attacker is gone; Hellish Rebuke fizzles.")
-                    return
-                pending["status"] = "accepted"
-                pending["reaction_spent"] = True
-                self._oplog(f"reaction_offer:hellish_rebuke accepted request_id={request_id} reactor={int(reactor_cid)} attacker={int(attacker_cid)}", level="info")
-                loop = getattr(self._lan, "_loop", None)
-                if ws_id is not None and loop:
-                    try:
-                        asyncio.run_coroutine_threadsafe(self._lan._send_async(int(ws_id), {
-                            "type": "hellish_rebuke_resolve_start",
-                            "request_id": str(request_id),
-                            "caster_cid": int(reactor_cid),
-                            "attacker_cid": int(attacker_cid),
-                            "target_cid": int(attacker_cid),
-                            "spell_id": "hellish-rebuke",
-                            "spell_slug": "hellish-rebuke",
-                            "action_type": "reaction",
-                            "max_range_ft": 60,
-                        }), loop)
-                    except Exception:
-                        pass
-                return
-            if str(offer.get("trigger") or "").strip().lower() == "absorb_elements":
-                pending = (getattr(self, "_pending_absorb_elements_resolutions", {}) or {}).pop(request_id, None)
-                self._pending_reaction_offers.pop(request_id, None)
-                if not isinstance(pending, dict):
-                    self._lan.toast(ws_id, "That Absorb Elements offer expired, matey.")
-                    return
-                reactor_cid = _normalize_cid_value(offer.get("reactor_cid"), "reaction_response.absorb_elements.reactor")
-                reactor = self.combatants.get(int(reactor_cid)) if reactor_cid is not None else None
-                if reactor is None:
-                    return
-                resume_msg = dict(pending.get("msg") or {})
-                if choice in ("absorb_elements_never", "never"):
-                    self._set_reaction_prefs(int(reactor_cid), {"absorb_elements": "off"})
-                if choice in ("absorb_elements_never", "never", "", "decline", "ignore", "absorb_elements_decline"):
-                    if isinstance(resume_msg, dict):
-                        resume_msg["_absorb_elements_resolution_done"] = True
-                        self._lan_apply_action(resume_msg)
-                    return
-                if not choice.startswith("cast_absorb_elements_"):
-                    if isinstance(resume_msg, dict):
-                        resume_msg["_absorb_elements_resolution_done"] = True
-                        self._lan_apply_action(resume_msg)
-                    return
-                chosen_type = self._canonical_damage_type(choice.replace("cast_absorb_elements_", "", 1))
-                allowed_types = {
-                    self._canonical_damage_type(item)
-                    for item in (pending.get("trigger_types") if isinstance(pending.get("trigger_types"), list) else [])
-                }
-                allowed_types = {item for item in allowed_types if item}
-                if chosen_type not in allowed_types:
-                    self._lan.toast(ws_id, "That damage type is invalid for Absorb Elements.")
-                    if isinstance(resume_msg, dict):
-                        resume_msg["_absorb_elements_resolution_done"] = True
-                        self._lan_apply_action(resume_msg)
-                    return
-                if not self._use_reaction(reactor):
-                    self._lan.toast(ws_id, "No reactions left for Absorb Elements, matey.")
-                    if isinstance(resume_msg, dict):
-                        resume_msg["_absorb_elements_resolution_done"] = True
-                        self._lan_apply_action(resume_msg)
-                    return
-                try:
-                    slot_level = int(msg.get("slot_level")) if msg.get("slot_level") is not None else 1
-                except Exception:
-                    slot_level = 1
-                slot_level = max(1, min(9, int(slot_level)))
-                player_name = self._pc_name_for(int(reactor.cid))
-                ok_slot, slot_err, spent_level = self._consume_spell_slot_for_cast(player_name, slot_level, 1)
-                if not ok_slot:
-                    self._lan.toast(ws_id, slot_err or "Could not cast Absorb Elements, matey.")
-                    if isinstance(resume_msg, dict):
-                        resume_msg["_absorb_elements_resolution_done"] = True
-                        self._lan_apply_action(resume_msg)
-                    return
-                spend_level = int(spent_level) if spent_level is not None else int(slot_level)
-                self._activate_absorb_elements(reactor, chosen_type, max(1, int(spend_level)))
-                self._log(
-                    f"{getattr(reactor, 'name', 'Target')} casts Absorb Elements ({chosen_type.title()}).",
-                    cid=int(getattr(reactor, "cid", 0) or 0),
-                )
-                if isinstance(resume_msg, dict):
-                    resume_msg["_absorb_elements_resolution_done"] = True
-                    self._lan_apply_action(resume_msg)
-                return
-            if str(offer.get("trigger") or "").strip().lower() == "interception":
-                pending = (self.__dict__.get("_pending_interception_resolutions", {}) or {}).pop(request_id, None)
-                self._pending_reaction_offers.pop(request_id, None)
-                if not isinstance(pending, dict):
-                    self._lan.toast(ws_id, "That Interception offer expired, matey.")
-                    return
-                reactor_cid = _normalize_cid_value(offer.get("reactor_cid"), "reaction_response.interception.reactor")
-                reactor = self.combatants.get(int(reactor_cid)) if reactor_cid is not None else None
-                if reactor is None:
-                    return
-                resume_msg = dict(pending.get("msg") or {})
-                if choice in ("interception_never", "never"):
-                    self._set_reaction_prefs(int(reactor_cid), {"interception": "off"})
-                if choice in ("interception_never", "never", "", "decline", "ignore", "interception_no"):
-                    if isinstance(resume_msg, dict):
-                        resume_msg["_interception_resolution_done"] = True
-                        self._lan_apply_action(resume_msg)
-                    return
-                if choice not in ("interception_yes", "interception"):
-                    if isinstance(resume_msg, dict):
-                        resume_msg["_interception_resolution_done"] = True
-                        self._lan_apply_action(resume_msg)
-                    return
-                pending["status"] = "accepted"
-                if not self._use_reaction(reactor):
-                    self._lan.toast(ws_id, "No reactions left for Interception, matey.")
-                    if isinstance(resume_msg, dict):
-                        resume_msg["_interception_resolution_done"] = True
-                        self._lan_apply_action(resume_msg)
-                    return
-                reduction_roll = int(random.randint(1, 10))
-                reduction = int(reduction_roll) + int(self._interception_reduction_bonus(reactor))
-                if isinstance(resume_msg, dict):
-                    resume_msg["_interception_resolution_done"] = True
-                    resume_msg["_interception_reduction"] = max(0, int(reduction))
-                    resume_msg["_interception_reactor_cid"] = int(reactor_cid)
-                    self._lan_apply_action(resume_msg)
-                return
-            if choice in ("", "decline", "ignore"):
-                self._pending_reaction_offers.pop(request_id, None)
-                return
-            offer["status"] = "accepted"
-            offer["accepted_choice"] = choice
+            self._ensure_player_commands().reaction_response(msg, cid=cid, ws_id=ws_id)
             return
 
         if typ == "dismount":
@@ -33525,1033 +36240,8 @@ class InitiativeTracker(base.InitiativeTracker):
                 self._lan.toast(ws_id, f"Used {action_name}.")
                 self._rebuild_table(scroll_to_current=True)
         elif typ == "spell_target_request":
-            c = self.combatants.get(cid)
-            if not c:
-                return
-
-            def _parse_int(value: Any, fallback: Optional[int] = None) -> Optional[int]:
-                try:
-                    return int(value)
-                except Exception:
-                    return fallback
-
-            def _parse_non_negative_manual_damage(value: Any) -> Optional[int]:
-                if isinstance(value, bool):
-                    return None
-                if isinstance(value, int):
-                    return value if value >= 0 else None
-                if isinstance(value, float):
-                    if not value.is_integer():
-                        return None
-                    return int(value) if value >= 0 else None
-                if isinstance(value, str):
-                    text = value.strip()
-                    if not text or not re.fullmatch(r"\+?\d+", text):
-                        return None
-                    try:
-                        parsed = int(text)
-                    except Exception:
-                        return None
-                    return parsed if parsed >= 0 else None
-                return None
-
-            def _parse_bool(value: Any, fallback: bool = False) -> bool:
-                if isinstance(value, bool):
-                    return value
-                if isinstance(value, str):
-                    lowered = value.strip().lower()
-                    if lowered in ("1", "true", "yes", "y", "hit"):
-                        return True
-                    if lowered in ("0", "false", "no", "n", "miss"):
-                        return False
-                return bool(fallback)
-
-            def _save_mod_for_target(target_obj: Any, ability_key: str) -> int:
-                key = str(ability_key or "").strip().lower()
-                if not key:
-                    return 0
-                aura_bonus = int((self._lan_aura_effects_for_target(target_obj) or {}).get("save_bonus") or 0)
-                saves = getattr(target_obj, "saving_throws", None)
-                if isinstance(saves, dict):
-                    val = saves.get(key)
-                    try:
-                        return int(val) + aura_bonus
-                    except Exception:
-                        pass
-                mods = getattr(target_obj, "ability_mods", None)
-                if isinstance(mods, dict):
-                    val = mods.get(key)
-                    try:
-                        return int(val) + aura_bonus
-                    except Exception:
-                        pass
-                return aura_bonus
-
-            target_cid = _normalize_cid_value(msg.get("target_cid"), "spell_target_request.target_cid", log_fn=log_warning)
-            if target_cid is None:
-                target_cid = int(cid)
-            target = self.combatants.get(int(target_cid)) if target_cid is not None else None
-            if target is None:
-                self._lan.toast(ws_id, "Pick a valid target, matey.")
-                return
-
-            spell_name = str(msg.get("spell_name") or msg.get("name") or "Spell").strip() or "Spell"
-            preset = self._find_spell_preset(msg.get("spell_slug"), msg.get("spell_id"))
-            mechanics = preset.get("mechanics") if isinstance(preset, dict) and isinstance(preset.get("mechanics"), dict) else {}
-            sequence = mechanics.get("sequence") if isinstance(mechanics.get("sequence"), list) else []
-            preset_slug = str((preset or {}).get("slug") or "").strip().lower()
-            preset_id = str((preset or {}).get("id") or "").strip().lower()
-
-            def _reject_invalid_spell_target(reason: str) -> None:
-                msg["_spell_target_result"] = {
-                    "type": "spell_target_result",
-                    "ok": False,
-                    "attacker_cid": int(cid),
-                    "target_cid": int(target_cid),
-                    "spell_name": spell_name,
-                    "spell_slug": preset_slug or None,
-                    "spell_id": preset_id or None,
-                    "reason": reason,
-                }
-                self._lan.toast(ws_id, reason)
-                log_warning(f"spell_target_request rejected: {reason}")
-
-            summon_cfg = preset.get("summon") if isinstance(preset, dict) and isinstance(preset.get("summon"), dict) else None
-            has_destination = msg.get("destination_col") is not None or msg.get("destination_row") is not None
-            requested_spell_mode = str(msg.get("spell_mode") or msg.get("mode") or "attack").strip().lower()
-            if isinstance(summon_cfg, dict):
-                _reject_invalid_spell_target("That summon spell must be cast via summon placement, matey.")
-                return
-            if has_destination and not self._spell_supports_relocation_followup(preset):
-                _reject_invalid_spell_target("That spell can't accept a relocation destination.")
-                return
-            if requested_spell_mode == "effect" and has_destination and not self._spell_supports_relocation_followup(preset):
-                _reject_invalid_spell_target("Relocation follow-up is invalid for that spell.")
-                return
-
-            is_magic_missile = preset_slug in ("magic-missile", "magic_missile") or preset_id in ("magic-missile", "magic_missile")
-            if is_magic_missile and not bool(msg.get("_shield_resolution_done")):
-                shield_mode = self._reaction_mode_for(int(target_cid), "shield", default="ask")
-                can_shield, _shield_reason = self._can_offer_shield_reaction(target)
-                if shield_mode != "off" and can_shield:
-                    choices = [{"kind": "shield_yes", "label": "Yes", "mode": shield_mode}]
-                    ws_targets = self._find_ws_for_cid(int(target_cid))
-                    req_id = self._create_reaction_offer(
-                        int(target_cid),
-                        "shield",
-                        int(cid),
-                        int(target_cid),
-                        choices,
-                        ws_targets,
-                        extra_payload={"prompt_attack": str(spell_name or "Magic Missile")},
-                    )
-                    if req_id:
-                        self._pending_shield_resolutions[str(req_id)] = {"msg": dict(msg)}
-                        self._oplog(
-                            f"reaction_offer:shield pending request_id={req_id} magic_missile caster={int(cid)} target={int(target_cid)}",
-                            level="info",
-                        )
-                        caster_ws_targets = self._find_ws_for_cid(int(cid))
-                        for caster_ws in caster_ws_targets:
-                            self._lan.toast(int(caster_ws), "Waiting for Shield response…")
-                        return
-            is_polymorph = preset_slug == "polymorph" or preset_id == "polymorph"
-            is_phantasmal_killer = preset_slug == "phantasmal-killer" or preset_id == "phantasmal-killer"
-            is_heat_metal = preset_slug in ("heat-metal", "heat_metal") or preset_id in ("heat-metal", "heat_metal")
-            is_hex = preset_slug == "hex" or preset_id == "hex"
-            is_hunters_mark = preset_slug == "hunter-s-mark" or preset_id == "hunter-s-mark"
-            is_bestow_curse = preset_slug == "bestow-curse" or preset_id == "bestow-curse"
-            if c is not None and (is_hex or is_hunters_mark):
-                existing_marks = self._collect_marks_for_attacker(int(c.cid), spell_key="hex" if is_hex else "hunter-s-mark")
-                if existing_marks and int(existing_marks[0].get("target_cid") or 0) != int(target_cid):
-                    old_target = self.combatants.get(int(existing_marks[0].get("target_cid") or 0))
-                    old_target_down = old_target is None or int(getattr(old_target, "hp", 0) or 0) <= 0
-                    if not old_target_down:
-                        _reject_invalid_spell_target("You can move that mark only after the prior target drops, matey.")
-                        return
-                spell_key_for_mark = "hex" if is_hex else "hunter-s-mark"
-                damage_type = "necrotic" if is_hex else "force"
-                self._register_target_mark(
-                    int(c.cid),
-                    int(target_cid),
-                    spell_key_for_mark,
-                    spell_level=int(msg.get("slot_level") or (preset or {}).get("level") or 1),
-                    concentration_bound=True,
-                    clear_group=f"{spell_key_for_mark}_{int(c.cid)}_{int(target_cid)}",
-                    reassign={"allow_reassign": True, "requires_prior_target_down": True},
-                    attack_augments={"extra_damage_dice": [{"dice": "1d6", "damage_type": damage_type}]},
-                    target_penalties={},
-                    effect_tags=["curse" if is_hex else "mark", "attack_augment"],
-                )
-                current_targets = list(getattr(c, "concentration_target", []) or [])
-                if int(target_cid) not in current_targets:
-                    current_targets.append(int(target_cid))
-                self._start_concentration(
-                    c,
-                    "hex" if is_hex else "hunter-s-mark",
-                    spell_level=int(msg.get("slot_level") or (preset or {}).get("level") or 1),
-                    targets=current_targets,
-                )
-                result_payload = {
-                    "type": "spell_target_result",
-                    "ok": True,
-                    "attacker_cid": int(cid),
-                    "target_cid": int(target_cid),
-                    "target_name": str(getattr(target, "name", "Target") or "Target"),
-                    "spell_name": spell_name,
-                    "spell_mode": "effect",
-                    "hit": True,
-                    "critical": False,
-                    "damage_entries": [],
-                    "damage_total": 0,
-                    "effect_result": "applied",
-                }
-                msg["_spell_target_result"] = dict(result_payload)
-                detail = self._format_single_target_spell_outcome(result_payload)
-                self._log(str(detail.get("log") or f"{spell_name} applied to {result_payload['target_name']}."), cid=int(target_cid))
-                try:
-                    self._rebuild_table(scroll_to_current=True)
-                except Exception:
-                    pass
-                self._lan.toast(ws_id, str(detail.get("toast") or f"{spell_name} applied to {result_payload['target_name']}."))
-                return
-            if c is not None and is_bestow_curse:
-                curse_mode = str(msg.get("curse_mode") or msg.get("bestow_curse_mode") or "").strip().lower()
-                if curse_mode in {"extra-damage", "extra_damage", "damage"}:
-                    save_dc = int(msg.get("save_dc") or self._compute_spell_save_dc(self._profile_for_player_name(self._pc_name_for(int(c.cid)))) or 0)
-                    save_roll = int(random.randint(1, 20))
-                    save_mod = _save_mod_for_target(target, "wis")
-                    save_total = int(save_roll) + int(save_mod)
-                    save_passed = bool(save_roll != 1 and save_total >= int(save_dc)) if save_dc > 0 else False
-                    result_payload = {
-                        "type": "spell_target_result",
-                        "ok": True,
-                        "attacker_cid": int(cid),
-                        "target_cid": int(target_cid),
-                        "target_name": str(getattr(target, "name", "Target") or "Target"),
-                        "spell_name": spell_name,
-                        "spell_mode": "save",
-                        "hit": bool(not save_passed),
-                        "critical": False,
-                        "damage_entries": [],
-                        "damage_total": 0,
-                        "save_result": {"ability": "wis", "dc": int(save_dc), "roll": int(save_roll), "modifier": int(save_mod), "total": int(save_total), "passed": bool(save_passed)},
-                    }
-                    if not save_passed:
-                        self._register_target_mark(
-                            int(c.cid),
-                            int(target_cid),
-                            "bestow-curse",
-                            spell_level=int(msg.get("slot_level") or (preset or {}).get("level") or 3),
-                            concentration_bound=True,
-                            clear_group=f"bestow_curse_{int(c.cid)}_{int(target_cid)}",
-                            reassign={"allow_reassign": False},
-                            attack_augments={"extra_damage_dice": [{"dice": "1d8", "damage_type": "necrotic"}]},
-                            target_penalties={"target_attack_disadvantage_against_source": True},
-                            effect_tags=["curse", "attack_augment"],
-                        )
-                        current_targets = list(getattr(c, "concentration_target", []) or [])
-                        if int(target_cid) not in current_targets:
-                            current_targets.append(int(target_cid))
-                        self._start_concentration(
-                            c,
-                            "bestow-curse",
-                            spell_level=int(msg.get("slot_level") or (preset or {}).get("level") or 3),
-                            targets=current_targets,
-                            )
-                        result_payload["effect_result"] = "applied"
-                    msg["_spell_target_result"] = dict(result_payload)
-                    detail = self._format_single_target_spell_outcome(result_payload)
-                    self._log(str(detail.get("log") or f"{spell_name} resolved on {result_payload['target_name']}."), cid=int(target_cid))
-                    try:
-                        self._rebuild_table(scroll_to_current=True)
-                    except Exception:
-                        pass
-                    self._lan.toast(ws_id, str(detail.get("toast") or f"{spell_name} resolved on {result_payload['target_name']}."))
-                    return
-            if c is not None and self._is_produce_flame_spell_key(preset_slug, preset_id, msg.get("spell_slug"), msg.get("spell_id")):
-                hurl_started = bool(msg.get("_produce_flame_hurl_started"))
-                if not hurl_started:
-                    produce_state = self._active_produce_flame_state(c)
-                    if not isinstance(produce_state, dict):
-                        _reject_invalid_spell_target("Produce Flame is not active to hurl, matey.")
-                        return
-                    live_map_data = self._lan_live_map_data() if callable(getattr(self, "_lan_live_map_data", None)) else None
-                    positions = dict((live_map_data or (0, 0, set(), {}, {}))[4] or {})
-                    caster_pos = positions.get(int(c.cid)) or self._lan_current_position(int(c.cid))
-                    target_pos = positions.get(int(target.cid)) or self._lan_current_position(int(target.cid))
-                    max_range_ft = float(produce_state.get("hurl_range_ft") or 60)
-                    if caster_pos is None or target_pos is None:
-                        _reject_invalid_spell_target("Could not resolve Produce Flame range, matey.")
-                        return
-                    dist_ft = math.hypot(float(caster_pos[0]) - float(target_pos[0]), float(caster_pos[1]) - float(target_pos[1])) * self._lan_feet_per_square()
-                    if dist_ft - max_range_ft > 1e-6:
-                        _reject_invalid_spell_target("That target be out of Produce Flame range.")
-                        return
-                    if not is_admin and not self._use_action(c, log_message=f"{c.name} hurls Produce Flame."):
-                        _reject_invalid_spell_target("No actions left to hurl Produce Flame, matey.")
-                        return
-                    msg["_produce_flame_hurl_started"] = True
-                    msg["spell_mode"] = "attack"
-                    msg["range_ft"] = int(max_range_ft)
-                handled_produce_flame = self._resolve_single_target_spell(
-                    msg=msg,
-                    caster=c,
-                    target=target,
-                    preset=preset,
-                    spell_name=spell_name,
-                    ws_id=ws_id,
-                    attacker_cid=int(cid),
-                    target_cid=int(target_cid),
-                )
-                if handled_produce_flame:
-                    if not bool(msg.get("_produce_flame_hurl_consumed")):
-                        self._clear_produce_flame_state(c)
-                        msg["_produce_flame_hurl_consumed"] = True
-                        self._lan_force_state_broadcast()
-                    return
-            handled_generic_single_target = self._resolve_single_target_spell(
-                msg=msg,
-                caster=c,
-                target=target,
-                preset=preset,
-                spell_name=spell_name,
-                ws_id=ws_id,
-                attacker_cid=int(cid),
-                target_cid=int(target_cid),
-                skip_spells={
-                    "magic-missile",
-                    "polymorph",
-                    "heat-metal",
-                    "phantasmal-killer",
-                    "lesser-restoration",
-                    "remove-curse",
-                    "dispel-magic",
-                },
-            )
-            if handled_generic_single_target:
-                return
-            handled_cleanup_spell = self._resolve_utility_cleanup_spell(
-                msg=msg,
-                caster=c,
-                target=target,
-                preset=preset,
-                spell_name=spell_name,
-                ws_id=ws_id,
-                attacker_cid=int(cid),
-                target_cid=int(target_cid),
-            )
-            if handled_cleanup_spell:
-                return
-            requested_spell_mode = str(msg.get("spell_mode") or msg.get("mode") or "attack").strip().lower()
-            spell_mode = requested_spell_mode
-            if spell_mode not in ("attack", "auto_hit", "save", "effect"):
-                spell_mode = "attack"
-            inferred_spell_mode = self._infer_spell_targeting_mode(preset)
-            if spell_mode == "attack" and inferred_spell_mode in ("save", "auto_hit", "effect"):
-                spell_mode = inferred_spell_mode
-            hit = _parse_bool(msg.get("hit"), fallback=spell_mode == "auto_hit")
-            critical = _parse_bool(msg.get("critical"), fallback=False)
-            save_type = str(msg.get("save_type") or "").strip().lower()
-            if spell_mode == "save" and not save_type:
-                save_type = self._infer_spell_save_ability(preset)
-            save_dc = max(0, _parse_int(msg.get("save_dc"), 0) or 0)
-            slot_level = _parse_int(msg.get("slot_level"), None)
-            if slot_level is None and isinstance(preset, dict):
-                slot_level = _parse_int(preset.get("level"), None)
-            if spell_mode == "save" and save_dc <= 0:
-                try:
-                    player_name = self._pc_name_for(int(cid))
-                except Exception:
-                    player_name = ""
-                profile = self._profile_for_player_name(player_name)
-                if isinstance(profile, dict):
-                    computed_dc = self._compute_spell_save_dc(profile)
-                    if computed_dc is not None and int(computed_dc) > 0:
-                        save_dc = int(computed_dc)
-            raw_roll_save = msg.get("roll_save")
-            roll_save = _parse_bool(raw_roll_save, fallback=spell_mode == "save")
-            if spell_mode == "save" and requested_spell_mode == "attack" and raw_roll_save is None:
-                roll_save = True
-            healing_entries: List[Dict[str, Any]] = []
-            raw_healing_entries = msg.get("healing_entries")
-            if isinstance(raw_healing_entries, list):
-                for entry in raw_healing_entries:
-                    if not isinstance(entry, dict):
-                        continue
-                    amount = _parse_non_negative_manual_damage(entry.get("amount"))
-                    if amount is None:
-                        continue
-                    amount = int(amount)
-                    if amount <= 0:
-                        continue
-                    healing_entries.append({"amount": amount, "type": "healing"})
-            healing_dice_text = str(msg.get("healing_dice") or "").strip().lower()
-            healing_bonus = 0
-            if not healing_dice_text and isinstance(preset, dict):
-                for step in sequence:
-                    if not isinstance(step, dict):
-                        continue
-                    outcomes = step.get("outcomes") if isinstance(step.get("outcomes"), dict) else {}
-                    found = False
-                    for bucket in outcomes.values():
-                        if not isinstance(bucket, list):
-                            continue
-                        for effect in bucket:
-                            if not isinstance(effect, dict):
-                                continue
-                            if str(effect.get("effect") or "").strip().lower() != "healing":
-                                continue
-                            healing_dice_text = str(effect.get("dice") or "").strip().lower()
-                            bonus_kind = str(effect.get("bonus") or "").strip().lower()
-                            if bonus_kind in {"spellcasting_ability_modifier", "spellcasting_modifier", "spell_mod"}:
-                                healing_bonus = int(self._spellcasting_modifier_from_profile(profile))
-                            found = bool(healing_dice_text)
-                            if found:
-                                break
-                        if found:
-                            break
-                    if found:
-                        break
-            auto_spell_healing = bool(not healing_entries and healing_dice_text and not bool(msg.get("prompt_for_healing")))
-            if auto_spell_healing:
-                if int(healing_bonus) != 0:
-                    healing_dice_text = f"{healing_dice_text}+{int(healing_bonus)}"
-                dice_match = re.fullmatch(r"\s*(\d+)d(\d+)\s*([+\-]\s*\d+)?\s*", healing_dice_text)
-                if dice_match:
-                    dice_count = max(0, int(dice_match.group(1)))
-                    dice_sides = max(0, int(dice_match.group(2)))
-                    mod_text = str(dice_match.group(3) or "").replace(" ", "")
-                    flat_mod = _parse_int(mod_text, 0) or 0
-                    amount = 0
-                    if dice_count > 0 and dice_sides > 0:
-                        amount = sum(random.randint(1, int(dice_sides)) for _ in range(int(dice_count))) + int(flat_mod)
-                    else:
-                        amount = int(flat_mod)
-                    if amount > 0:
-                        healing_entries.append({"amount": int(amount), "type": "healing"})
-            damage_entries: List[Dict[str, Any]] = []
-            raw_damage_entries = msg.get("damage_entries")
-            if isinstance(raw_damage_entries, list):
-                for entry in raw_damage_entries:
-                    if not isinstance(entry, dict):
-                        continue
-                    amount = _parse_non_negative_manual_damage(entry.get("amount"))
-                    if amount is None:
-                        continue
-                    amount = int(amount)
-                    if amount <= 0:
-                        continue
-                    dtype = str(entry.get("type") or "").strip().lower()
-                    damage_entries.append({"amount": amount, "type": dtype})
-
-            spell_range_ft = self._parse_int_value(msg.get("range_ft"), None)
-            if spell_range_ft is None and isinstance(preset, dict):
-                spell_range_ft = self._parse_int_value((preset.get("mechanics") or {}).get("targeting", {}).get("range", {}).get("distance_ft"), None)
-                if spell_range_ft is None:
-                    range_match = re.search(r"(\d+(?:\.\d+)?)\s*(?:ft|feet)", str(preset.get("range") or "").lower())
-                    if range_match:
-                        try:
-                            spell_range_ft = int(float(range_match.group(1)))
-                        except Exception:
-                            spell_range_ft = None
-
-            damage_dice_text = str(msg.get("damage_dice") or "").strip().lower()
-            if not damage_dice_text and isinstance(preset, dict):
-                damage_dice_text = str(preset.get("dice") or "").strip().lower()
-            if damage_dice_text and isinstance(preset, dict):
-                try:
-                    player_name = self._pc_name_for(int(cid))
-                except Exception:
-                    player_name = ""
-                profile = self._profile_for_player_name(player_name)
-                leveling = profile.get("leveling") if isinstance(profile, dict) and isinstance(profile.get("leveling"), dict) else {}
-                character_level = self._coerce_level_value(leveling)
-                scaling = preset.get("scaling") if isinstance(preset.get("scaling"), dict) else None
-                damage_dice_text = self._scale_damage_dice_for_character_level(
-                    damage_dice_text,
-                    scaling,
-                    character_level,
-                )
-            damage_type_hint = str(msg.get("damage_type") or "").strip().lower()
-            if not damage_type_hint and isinstance(preset, dict):
-                preset_damage_types = preset.get("damage_types") if isinstance(preset.get("damage_types"), list) else []
-                if preset_damage_types:
-                    damage_type_hint = str(preset_damage_types[0] or "").strip().lower()
-            damage_type_hint = damage_type_hint or "damage"
-            auto_spell_damage = bool(hit and not damage_entries and damage_dice_text)
-            if auto_spell_damage:
-                dice_match = re.fullmatch(r"\s*(\d+)d(\d+)\s*([+\-]\s*\d+)?\s*", damage_dice_text)
-                if dice_match:
-                    dice_count = max(0, int(dice_match.group(1)))
-                    dice_sides = max(0, int(dice_match.group(2)))
-                    mod_text = str(dice_match.group(3) or "").replace(" ", "")
-                    flat_mod = _parse_int(mod_text, 0) or 0
-                    amount = 0
-                    if dice_count > 0 and dice_sides > 0:
-                        if critical and spell_mode in ("attack", "auto_hit"):
-                            amount = int(dice_count) * int(dice_sides) + int(flat_mod)
-                        else:
-                            amount = sum(random.randint(1, int(dice_sides)) for _ in range(int(dice_count))) + int(flat_mod)
-                    else:
-                        amount = int(flat_mod)
-                    if amount > 0:
-                        damage_entries.append({"amount": int(amount), "type": damage_type_hint})
-            shot_index = self._parse_int_value(msg.get("shot_index"), None)
-            shot_total = self._parse_int_value(msg.get("shot_total"), None)
-            result_payload: Dict[str, Any] = {
-                "type": "spell_target_result",
-                "ok": True,
-                "attacker_cid": int(cid),
-                "target_cid": int(target_cid),
-                "target_name": str(getattr(target, "name", "Target") or "Target"),
-                "spell_name": spell_name,
-                "spell_mode": spell_mode,
-            }
-            if shot_index is not None and shot_total is not None and shot_total > 1 and 1 <= shot_index <= shot_total:
-                result_payload["shot_index"] = int(shot_index)
-                result_payload["shot_total"] = int(shot_total)
-
-            has_healing_effect = any(
-                isinstance(effect, dict)
-                and str(effect.get("effect") or "").strip().lower() == "healing"
-                for step in sequence
-                if isinstance(step, dict)
-                for bucket in [(step.get("outcomes") if isinstance(step.get("outcomes"), dict) else {}).values()]
-                for effects in bucket
-                if isinstance(effects, list)
-                for effect in effects
-            )
-            if has_healing_effect:
-                healing_intent = bool(healing_entries) or bool(healing_dice_text) or bool(msg.get("prompt_for_healing"))
-                if not healing_entries and healing_intent:
-                    result_payload["needs_healing_prompt"] = True
-                    msg["_spell_target_result"] = dict(result_payload)
-                    loop = getattr(self._lan, "_loop", None)
-                    if ws_id is not None and loop:
-                        try:
-                            asyncio.run_coroutine_threadsafe(self._lan._send_async(ws_id, result_payload), loop)
-                        except Exception:
-                            pass
-                    self._lan.toast(ws_id, "Enter healing to resolve the spell.")
-                    return
-                total_healing = int(sum(int(entry.get("amount", 0) or 0) for entry in healing_entries))
-                applied_healing = 0
-                if total_healing > 0:
-                    before_hp = _parse_int(getattr(target, "hp", None), 0) or 0
-                    max_hp = _parse_int(getattr(target, "max_hp", None), before_hp) or before_hp
-                    if max_hp < 0:
-                        max_hp = 0
-                    applied_healing = max(0, min(total_healing, max(0, int(max_hp) - int(before_hp))))
-                    self._apply_heal_via_service(int(target_cid), applied_healing)
-                result_payload["hit"] = True
-                result_payload["critical"] = False
-                result_payload["healing_entries"] = list(healing_entries)
-                result_payload["healing_total"] = int(total_healing)
-                result_payload["healing_applied"] = int(applied_healing)
-                self._log(
-                    f"{c.name} heals {result_payload['target_name']} for {int(applied_healing)} HP with {spell_name}.",
-                    cid=int(target_cid),
-                )
-                try:
-                    self._rebuild_table(scroll_to_current=True)
-                except Exception:
-                    pass
-                msg["_spell_target_result"] = dict(result_payload)
-                loop = getattr(self._lan, "_loop", None)
-                if ws_id is not None and loop:
-                    try:
-                        asyncio.run_coroutine_threadsafe(self._lan._send_async(ws_id, result_payload), loop)
-                    except Exception:
-                        pass
-                self._lan.toast(ws_id, "Healing resolved.")
-                return
-
-            if spell_mode == "effect":
-                if bool((preset or {}).get("concentration")) and c is not None:
-                    current_targets = list(getattr(c, "concentration_target", []) or [])
-                    if int(target.cid) not in current_targets:
-                        current_targets.append(int(target.cid))
-                    self._start_concentration(
-                        c,
-                        self._canonical_concentration_spell_key(preset, fallback=spell_name),
-                        spell_level=int((preset or {}).get("level") or 0) or None,
-                        targets=current_targets,
-                    )
-                self._log(f"{c.name} targets {result_payload['target_name']} with {spell_name}.", cid=int(target_cid))
-                try:
-                    self._rebuild_table(scroll_to_current=True)
-                except Exception:
-                    pass
-                msg["_spell_target_result"] = dict(result_payload)
-                loop = getattr(self._lan, "_loop", None)
-                if ws_id is not None and loop:
-                    try:
-                        asyncio.run_coroutine_threadsafe(self._lan._send_async(ws_id, result_payload), loop)
-                    except Exception:
-                        pass
-                return
-            resolved_bucket: List[Dict[str, Any]] = []
-            def _bucket_for_outcome(outcomes: Dict[str, Any], passed: bool, key_hint: str) -> List[Dict[str, Any]]:
-                keys = [key_hint] if key_hint else []
-                if passed:
-                    keys.extend(["success", "pass", "saved", "save"])
-                else:
-                    keys.extend(list(FAIL_OUTCOME_LABELS))
-                for key in keys:
-                    bucket = outcomes.get(key)
-                    if isinstance(bucket, list):
-                        return [entry for entry in bucket if isinstance(entry, dict)]
-                return []
-
-            def _roll_scaled_effect_damage(effect: Dict[str, Any]) -> int:
-                if not isinstance(effect, dict):
-                    return 0
-                dice_text = str(effect.get("dice") or "").strip().lower()
-                match = re.fullmatch(r"\s*(\d+)d(\d+)\s*([+\-]\s*\d+)?\s*", dice_text)
-                if not match:
-                    return 0
-                dice_count = max(0, int(match.group(1)))
-                dice_sides = max(0, int(match.group(2)))
-                mod_text = str(match.group(3) or "").replace(" ", "")
-                flat_mod = _parse_int(mod_text, 0) or 0
-                total = 0
-                if dice_count > 0 and dice_sides > 0:
-                    total = sum(random.randint(1, int(dice_sides)) for _ in range(int(dice_count))) + int(flat_mod)
-                else:
-                    total = int(flat_mod)
-                scaling = effect.get("scaling") if isinstance(effect.get("scaling"), dict) else mechanics.get("scaling") if isinstance(mechanics.get("scaling"), dict) else None
-                if isinstance(scaling, dict) and scaling.get("kind") == "slot_level" and slot_level is not None:
-                    base_slot = _parse_int(scaling.get("base_slot"), None)
-                    add_expr = str(scaling.get("add_per_slot_above") or "").strip().lower()
-                    add_match = re.fullmatch(r"\s*(\d+)d(\d+)\s*", add_expr)
-                    if base_slot is not None and add_match and int(slot_level) > int(base_slot):
-                        add_count = int(add_match.group(1))
-                        add_sides = int(add_match.group(2))
-                        for _ in range(int(slot_level) - int(base_slot)):
-                            total += sum(random.randint(1, int(add_sides)) for _ in range(int(add_count)))
-                try:
-                    mult = effect.get("multiplier")
-                    if mult is not None:
-                        total = int(math.floor(float(total) * float(mult)))
-                except Exception:
-                    pass
-                return max(0, int(total))
-
-            if spell_mode == "save" and save_type and save_dc > 0 and roll_save:
-                save_mode = self._combatant_save_roll_mode(target, save_type)
-                save_roll, _save_alt_roll = self._roll_save_with_mode(
-                    target,
-                    save_type,
-                    disadvantage=save_mode == "disadvantage",
-                    advantage=save_mode == "advantage",
-                )
-                save_mod = _save_mod_for_target(target, save_type)
-                save_total = int(save_roll) + int(save_mod)
-                save_passed = bool(save_roll != 1 and save_total >= int(save_dc))
-                result_payload["save_result"] = {
-                    "ability": save_type,
-                    "dc": int(save_dc),
-                    "roll": int(save_roll),
-                    "modifier": int(save_mod),
-                    "total": int(save_total),
-                    "passed": bool(save_passed),
-                }
-                seq_step = next((step for step in sequence if isinstance(step, dict)), None)
-                if isinstance(seq_step, dict):
-                    outcomes = seq_step.get("outcomes") if isinstance(seq_step.get("outcomes"), dict) else {}
-                    resolved_bucket = _bucket_for_outcome(outcomes, bool(save_passed), "")
-                if is_heat_metal and not any(
-                    str(effect.get("effect") or "").strip().lower() == "damage"
-                    for effect in resolved_bucket
-                    if isinstance(effect, dict)
-                ):
-                    heat_metal_damage: Dict[str, Any] = {"effect": "damage", "damage_type": "fire", "dice": "2d8"}
-                    scaling_cfg = mechanics.get("scaling") if isinstance(mechanics.get("scaling"), dict) else None
-                    if isinstance(scaling_cfg, dict):
-                        heat_metal_damage["scaling"] = dict(scaling_cfg)
-                    resolved_bucket = [heat_metal_damage]
-                has_automated_save_damage = any(
-                    str(effect.get("effect") or "").strip().lower() == "damage"
-                    for effect in resolved_bucket
-                    if isinstance(effect, dict)
-                )
-                if save_passed and not has_automated_save_damage and not is_heat_metal:
-                    result_payload["hit"] = False
-                    result_payload["damage_total"] = 0
-                    msg["_spell_target_result"] = dict(result_payload)
-                    loop = getattr(self._lan, "_loop", None)
-                    if ws_id is not None and loop:
-                        try:
-                            asyncio.run_coroutine_threadsafe(self._lan._send_async(ws_id, result_payload), loop)
-                        except Exception:
-                            pass
-                    detail = self._format_single_target_spell_outcome(result_payload)
-                    self._log(str(detail.get("log") or f"{spell_name} resolves on {result_payload['target_name']}."), cid=int(target_cid))
-                    self._lan.toast(ws_id, str(detail.get("toast") or "Target passed the save."))
-                    return
-                if is_polymorph:
-                    selected_form_id = str(msg.get("polymorph_form_id") or "").strip().lower()
-                    available_forms = self._load_beast_forms()
-                    alias_lookup = self._wild_shape_alias_lookup(available_forms)
-                    resolved_form_id = alias_lookup.get(self._wild_shape_identifier_key(selected_form_id))
-                    if not resolved_form_id:
-                        result_payload["needs_polymorph_form"] = True
-                        result_payload["beast_forms"] = list(available_forms)
-                        msg["_spell_target_result"] = dict(result_payload)
-                        loop = getattr(self._lan, "_loop", None)
-                        if ws_id is not None and loop:
-                            try:
-                                asyncio.run_coroutine_threadsafe(self._lan._send_async(ws_id, result_payload), loop)
-                            except Exception:
-                                pass
-                        self._lan.toast(ws_id, "Pick a beast form for Polymorph, matey.")
-                        return
-                    form_by_id = {
-                        self._wild_shape_identifier_key(entry.get("id")): entry
-                        for entry in available_forms
-                        if isinstance(entry, dict)
-                    }
-                    form = form_by_id.get(resolved_form_id)
-                    if not isinstance(form, dict):
-                        self._lan.toast(ws_id, "That beast form be unavailable, matey.")
-                        return
-                    self._apply_polymorph_form(target, form)
-                    duration_turns = self._spell_duration_to_turns(preset)
-                    setattr(target, "polymorph_source_cid", int(c.cid))
-                    setattr(target, "polymorph_remaining_turns", int(duration_turns) if duration_turns is not None else None)
-                    setattr(target, "polymorph_duration_turns", int(duration_turns) if duration_turns is not None else None)
-                    current_targets = list(getattr(c, "concentration_target", []) or [])
-                    if int(target.cid) not in current_targets:
-                        current_targets.append(int(target.cid))
-                    self._start_concentration(
-                        c,
-                        "polymorph",
-                        spell_level=int((preset or {}).get("level") or 0) or None,
-                        targets=current_targets,
-                    )
-                    result_payload["polymorph_form"] = {
-                        "id": str(form.get("id") or ""),
-                        "name": str(form.get("name") or "") or "Beast",
-                        "temp_hp": int(form.get("hp") or 0),
-                    }
-                    if duration_turns is not None:
-                        result_payload["polymorph_duration_turns"] = int(duration_turns)
-                    result_payload["hit"] = True
-                    result_payload["damage_total"] = 0
-                    self._log(
-                        f"{c.name} polymorphs {result_payload['target_name']} into {result_payload['polymorph_form']['name']} "
-                        f"({int(form.get('hp') or 0)} temp HP).",
-                        cid=int(target_cid),
-                    )
-                    msg["_spell_target_result"] = dict(result_payload)
-                    loop = getattr(self._lan, "_loop", None)
-                    if ws_id is not None and loop:
-                        try:
-                            asyncio.run_coroutine_threadsafe(self._lan._send_async(ws_id, result_payload), loop)
-                        except Exception:
-                            pass
-                    self._lan.toast(ws_id, "Polymorph applied.")
-                    try:
-                        self._rebuild_table(scroll_to_current=True)
-                    except Exception:
-                        pass
-                    return
-                damage_intent = bool(damage_entries) or bool(damage_dice_text) or bool(msg.get("prompt_for_damage"))
-                if not damage_entries and damage_intent:
-                    result_payload["needs_damage_prompt"] = True
-                    msg["_spell_target_result"] = dict(result_payload)
-                    loop = getattr(self._lan, "_loop", None)
-                    if ws_id is not None and loop:
-                        try:
-                            asyncio.run_coroutine_threadsafe(self._lan._send_async(ws_id, result_payload), loop)
-                        except Exception:
-                            pass
-                    save_result = result_payload.get("save_result") if isinstance(result_payload.get("save_result"), dict) else {}
-                    ability = str(save_result.get("ability") or "save").strip().upper() or "SAVE"
-                    total = int(save_result.get("total") or 0)
-                    dc = int(save_result.get("dc") or 0)
-                    self._lan.toast(ws_id, f"{self._spell_shot_label(result_payload)}{spell_name}: {result_payload['target_name']} failed {ability} save ({total} vs DC {dc}). Enter damage.")
-                    return
-                if not damage_intent:
-                    hit = True
-
-            resolved_bucket = locals().get("resolved_bucket", [])
-            sequence = locals().get("sequence", [])
-            spell_mode = locals().get("spell_mode", "")
-            result_payload = locals().get("result_payload", {}) if isinstance(locals().get("result_payload", {}), dict) else {}
-            resolved_bucket = locals().get("resolved_bucket", [])
-            sequence = locals().get("sequence", [])
-            spell_mode = locals().get("spell_mode", "")
-            result_payload = locals().get("result_payload", {}) if isinstance(locals().get("result_payload", {}), dict) else {}
-            if not resolved_bucket and sequence:
-                seq_step = next((step for step in sequence if isinstance(step, dict)), None)
-                if isinstance(seq_step, dict):
-                    outcomes = seq_step.get("outcomes") if isinstance(seq_step.get("outcomes"), dict) else {}
-                    if spell_mode == "save":
-                        passed = bool((result_payload.get("save_result") or {}).get("passed"))
-                        resolved_bucket = _bucket_for_outcome(outcomes, passed, "")
-                    else:
-                        resolved_bucket = _bucket_for_outcome(outcomes, False, "hit" if hit else "miss")
-
-            for effect in resolved_bucket:
-                if not isinstance(effect, dict):
-                    continue
-                if str(effect.get("effect") or "").strip().lower() == "condition" and hit:
-                    condition_key = str(effect.get("condition") or "").strip().lower()
-                    if condition_key and not self._condition_is_immune_for_target(target, condition_key):
-                        stacks = list(getattr(target, "condition_stacks", []) or [])
-                        refreshed = False
-                        for st in stacks:
-                            if str(getattr(st, "ctype", "") or "").strip().lower() == condition_key:
-                                refreshed = True
-                                break
-                        if not refreshed:
-                            next_sid = int(getattr(self, "_next_stack_id", 1) or 1)
-                            setattr(self, "_next_stack_id", int(next_sid) + 1)
-                            stacks.append(base.ConditionStack(sid=int(next_sid), ctype=condition_key, remaining_turns=None))
-                            setattr(target, "condition_stacks", stacks)
-                if str(effect.get("effect") or "").strip().lower() != "damage":
-                    continue
-                amount = _roll_scaled_effect_damage(effect)
-                if amount <= 0:
-                    continue
-                dtype = str(effect.get("damage_type") or effect.get("type") or damage_type_hint or "damage").strip().lower() or "damage"
-                damage_entries.append({"amount": int(amount), "type": dtype})
-
-            if hit and spell_mode == "attack":
-                intercepted = self._mirror_image_try_intercept_hit(
-                    target,
-                    attacker_name=str(getattr(c, "name", "Attacker") or "Attacker"),
-                    attack_name=str(spell_name or "Spell Attack"),
-                )
-                if intercepted:
-                    hit = False
-                    damage_entries = []
-            if hit and not bool(msg.get("_absorb_elements_resolution_done")):
-                req_id = self._maybe_offer_absorb_elements(
-                    int(target_cid),
-                    int(cid),
-                    pending_msg=msg,
-                    damage_entries=damage_entries,
-                )
-                if req_id:
-                    attacker_ws_targets = self._find_ws_for_cid(int(cid))
-                    for attacker_ws in attacker_ws_targets:
-                        self._lan.toast(int(attacker_ws), "Waiting for Absorb Elements response…")
-                    return
-
-            if is_magic_missile and self._shield_is_active(target):
-                damage_entries = []
-                self._log(f"Shield negates Magic Missile damage on {getattr(target, 'name', 'Target')}.", cid=int(target_cid))
-            adjustment = self._adjust_damage_entries_for_target(target, damage_entries)
-            damage_entries = list(adjustment.get("entries") or [])
-            adjustment_notes = list(adjustment.get("notes") or [])
-            total_damage = int(sum(int(entry.get("amount", 0) or 0) for entry in damage_entries))
-            if spell_mode == "auto_hit":
-                hit = True
-            pending_star_advantage = getattr(c, "pending_star_advantage_charge", None)
-            star_advantage_attempted = bool(spell_mode == "attack" and isinstance(pending_star_advantage, dict))
-            if star_advantage_attempted:
-                setattr(c, "pending_star_advantage_charge", None)
-            result_payload["hit"] = bool(hit)
-            result_payload["critical"] = bool(hit and critical)
-            result_payload["damage_entries"] = list(damage_entries if hit else [])
-            result_payload["damage_total"] = int(total_damage if hit else 0)
-            if hit and is_phantasmal_killer and c is not None:
-                current_targets = list(getattr(c, "concentration_target", []) or [])
-                if int(target.cid) not in current_targets:
-                    current_targets.append(int(target.cid))
-                self._start_concentration(
-                    c,
-                    "phantasmal-killer",
-                    spell_level=int((preset or {}).get("level") or 0) or None,
-                    targets=current_targets,
-                )
-                pk_group = f"phantasmal_killer_{int(c.cid)}_{int(target.cid)}"
-                pk_slot_level = int(slot_level or 4)
-                pk_dice_count = max(1, 4 + max(0, int(pk_slot_level) - 4))
-                pk_rider_dice = f"{int(pk_dice_count)}d10"
-                if not self._condition_is_immune_for_target(target, "frightened"):
-                    stacks = list(getattr(target, "condition_stacks", []) or [])
-                    if not any(str(getattr(st, "ctype", "") or "").strip().lower() == "frightened" for st in stacks):
-                        next_sid = int(getattr(self, "_next_stack_id", 1) or 1)
-                        setattr(self, "_next_stack_id", int(next_sid) + 1)
-                        stacks.append(base.ConditionStack(sid=int(next_sid), ctype="frightened", remaining_turns=None))
-                        setattr(target, "condition_stacks", stacks)
-                end_turn_save_riders = [
-                    rider for rider in list(getattr(target, "end_turn_save_riders", []) or [])
-                    if str((rider or {}).get("clear_group") or "").strip().lower() != pk_group
-                ]
-                end_turn_save_riders.append(
-                    {
-                        "clear_group": pk_group,
-                        "save_ability": "wis",
-                        "save_dc": int(save_dc),
-                        "condition": "frightened",
-                        "on_fail_damage_dice": pk_rider_dice,
-                        "on_fail_damage_type": "psychic",
-                        "source": spell_name,
-                    }
-                )
-                setattr(target, "end_turn_save_riders", end_turn_save_riders)
-
-            if hit and is_heat_metal and c is not None and total_damage > 0:
-                current_targets = list(getattr(c, "concentration_target", []) or [])
-                if int(target.cid) not in current_targets:
-                    current_targets.append(int(target.cid))
-                self._start_concentration(
-                    c,
-                    "heat-metal",
-                    spell_level=int(slot_level) if slot_level is not None else int((preset or {}).get("level") or 0) or None,
-                    targets=current_targets,
-                )
-                heat_metal_group = f"heat_metal_{int(c.cid)}_{int(target.cid)}"
-                heat_metal_dice = self._smite_damage_dice(
-                    {"base_dice": "2d8", "base_slot": 2, "upcast_die": "1d8"},
-                    slot_level,
-                ) or "2d8"
-                start_turn_damage_riders = [
-                    rider
-                    for rider in list(getattr(target, "start_turn_damage_riders", []) or [])
-                    if str((rider or {}).get("clear_group") or "").strip().lower() != heat_metal_group
-                ]
-                start_turn_damage_riders.append(
-                    {
-                        "dice": str(heat_metal_dice),
-                        "type": "fire",
-                        "source": f"Heat Metal ({c.name})",
-                        "save_ability": "con",
-                        "save_dc": int(save_dc) if save_dc > 0 else 0,
-                        "clear_group": heat_metal_group,
-                        "end_caster_concentration_on_save": int(c.cid),
-                    }
-                )
-                setattr(target, "start_turn_damage_riders", start_turn_damage_riders)
-
-            if hit and total_damage > 0:
-                before_hp = _parse_int(getattr(target, "hp", None), None)
-                damage_state = self._apply_damage_via_service(target, int(total_damage))
-                if before_hp is not None:
-                    after_hp = int(damage_state.get("hp_after", before_hp))
-                    if int(before_hp) > 0 and int(after_hp) <= 0:
-                        pre_order: List[int] = []
-                        try:
-                            pre_order = [x.cid for x in self._display_order()]
-                        except Exception:
-                            pre_order = []
-                        removed_target = False
-                        try:
-                            self._remove_combatants_with_lan_cleanup([int(target_cid)])
-                            removed_target = int(target_cid) not in self.combatants
-                        except Exception:
-                            removed_target = self.combatants.pop(int(target_cid), None) is not None
-                        if removed_target:
-                            if getattr(self, "start_cid", None) == int(target_cid):
-                                self.start_cid = None
-                            try:
-                                self._retarget_current_after_removal([int(target_cid)], pre_order=pre_order)
-                            except Exception:
-                                pass
-                            self._log(f"{target.name} dropped to 0 -> removed", cid=int(target_cid))
-                        try:
-                            self._lan.play_ko(int(cid))
-                        except Exception:
-                            pass
-                damage_desc = ", ".join(
-                    f"{int(entry.get('amount', 0) or 0)} {str(entry.get('type') or '').strip() or 'damage'}"
-                    for entry in damage_entries
-                )
-                self._log(
-                    f"{c.name} deals {int(total_damage)} damage to {result_payload['target_name']} with {spell_name}"
-                    f"{f' ({damage_desc})' if damage_desc else ''}"
-                    f"{' (CRIT)' if result_payload.get('critical') else ''}.",
-                    cid=int(target_cid),
-                )
-                try:
-                    self._maybe_offer_hellish_rebuke(int(target_cid), int(cid), int(total_damage))
-                except Exception as exc:
-                    self._oplog(f"hellish_rebuke offer failed attacker={int(cid)} victim={int(target_cid)} ({exc})", level="warning")
-                if star_advantage_attempted and int(target_cid) in self.combatants and int(getattr(target, "hp", 0) or 0) > 0:
-                    if self._condition_is_immune_for_target(target, "star_advantage"):
-                        self._log(f"{c.name}'s Star Advantage can't affect {target.name} (immune).", cid=int(target_cid))
-                    elif not self._lan_is_friendly_unit(int(target_cid)) or self._lan_is_friendly_unit(int(target_cid)) != self._lan_is_friendly_unit(int(cid)):
-                        stacks = list(getattr(target, "condition_stacks", []) or [])
-                        if not any(str(getattr(st, "ctype", "") or "").strip().lower() == "star_advantage" for st in stacks):
-                            next_sid = int(getattr(self, "_next_stack_id", 1) or 1)
-                            setattr(self, "_next_stack_id", int(next_sid) + 1)
-                            stacks.append(base.ConditionStack(sid=int(next_sid), ctype="star_advantage", remaining_turns=None))
-                            setattr(target, "condition_stacks", stacks)
-                            self._log(f"{c.name} expends Star Advantage and marks {target.name}.", cid=int(target_cid))
-                        else:
-                            self._log(f"{c.name} expends Star Advantage and refreshes {target.name}.", cid=int(target_cid))
-            elif hit:
-                if star_advantage_attempted and int(target_cid) in self.combatants and int(getattr(target, "hp", 0) or 0) > 0:
-                    if self._condition_is_immune_for_target(target, "star_advantage"):
-                        self._log(f"{c.name}'s Star Advantage can't affect {target.name} (immune).", cid=int(target_cid))
-                    elif not self._lan_is_friendly_unit(int(target_cid)) or self._lan_is_friendly_unit(int(target_cid)) != self._lan_is_friendly_unit(int(cid)):
-                        stacks = list(getattr(target, "condition_stacks", []) or [])
-                        if not any(str(getattr(st, "ctype", "") or "").strip().lower() == "star_advantage" for st in stacks):
-                            next_sid = int(getattr(self, "_next_stack_id", 1) or 1)
-                            setattr(self, "_next_stack_id", int(next_sid) + 1)
-                            stacks.append(base.ConditionStack(sid=int(next_sid), ctype="star_advantage", remaining_turns=None))
-                            setattr(target, "condition_stacks", stacks)
-                            self._log(f"{c.name} expends Star Advantage and marks {target.name}.", cid=int(target_cid))
-                        else:
-                            self._log(f"{c.name} expends Star Advantage and refreshes {target.name}.", cid=int(target_cid))
-            else:
-                if star_advantage_attempted:
-                    self._log(f"{c.name} expends Star Advantage on a miss.", cid=cid)
-
-            forced_moves_applied: List[str] = []
-            if isinstance(resolved_bucket, list):
-                for effect in resolved_bucket:
-                    effect_name = str(effect.get("effect") or "").strip().lower()
-                    if effect_name not in ("movement", "forced_movement"):
-                        continue
-                    mode = str(effect.get("kind") or effect.get("mode") or effect.get("direction") or "").strip().lower()
-                    if mode not in ("push", "pull"):
-                        continue
-                    try:
-                        distance_ft = float(effect.get("distance_ft") or 0)
-                    except Exception:
-                        distance_ft = 0.0
-                    if distance_ft <= 0:
-                        continue
-                    origin = str(effect.get("origin") or "caster").strip().lower()
-                    source_cid = int(cid)
-                    source_cell = None
-                    direction_step = None
-                    if origin == "aoe_direction":
-                        direction_step = self._lan_direction_step_from_angle(effect.get("angle_deg", getattr(c, "facing_deg", 0)))
-                        source_cid = None
-                    moved = self._lan_apply_forced_movement(
-                        source_cid,
-                        int(target_cid),
-                        mode,
-                        float(distance_ft),
-                        source_cell=source_cell,
-                        direction_step=direction_step,
-                    )
-                    if moved:
-                        forced_moves_applied.append(f"{mode} {int(distance_ft)}ft")
-            if forced_moves_applied:
-                self._log(f"{spell_name} moves {result_payload['target_name']}: {', '.join(forced_moves_applied)}.", cid=int(target_cid))
-
-            try:
-                self._rebuild_table(scroll_to_current=True)
-            except Exception:
-                pass
-            msg["_spell_target_result"] = dict(result_payload)
-            loop = getattr(self._lan, "_loop", None)
-            if ws_id is not None and loop:
-                try:
-                    asyncio.run_coroutine_threadsafe(self._lan._send_async(ws_id, result_payload), loop)
-                except Exception:
-                    pass
-            detail = self._format_single_target_spell_outcome(result_payload)
-            self._log(str(detail.get("log") or f"{spell_name} resolves on {result_payload['target_name']}."), cid=int(target_cid))
-            self._lan.toast(ws_id, str(detail.get("toast") or "Spell resolved."))
+            self._ensure_player_commands().spell_target_request(msg, cid=cid, ws_id=ws_id, is_admin=is_admin)
+            return
         elif typ == "hellish_rebuke_resolve":
             request_id = str(msg.get("request_id") or "").strip()
             pending = (getattr(self, "_pending_hellish_rebuke_resolutions", {}) or {}).pop(request_id, None)
@@ -34669,1594 +36359,8 @@ class InitiativeTracker(base.InitiativeTracker):
             return
 
         elif typ == "attack_request":
-            c = self.combatants.get(cid)
-            if not c:
-                return
-            self._expire_reaction_offers()
-            for pending_req in list((self.__dict__.get("_pending_hellish_rebuke_resolutions", {}) or {}).values()):
-                if not isinstance(pending_req, dict):
-                    continue
-                pending_status = str(pending_req.get("status") or "").strip().lower()
-                if pending_status not in ("offered", "accepted"):
-                    continue
-                pending_attacker = _normalize_cid_value(
-                    pending_req.get("attacker_cid"),
-                    "attack_request.pending_hellish_rebuke.attacker",
-                )
-                if pending_attacker is None or int(pending_attacker) != int(cid):
-                    continue
-                self._lan.toast(ws_id, "Hold fast — waiting on a reaction to resolve.")
-                return
-            for pending_req in list((self.__dict__.get("_pending_absorb_elements_resolutions", {}) or {}).values()):
-                if not isinstance(pending_req, dict):
-                    continue
-                pending_status = str(pending_req.get("status") or "").strip().lower()
-                if pending_status not in ("offered", "accepted"):
-                    continue
-                pending_attacker = _normalize_cid_value(
-                    pending_req.get("attacker_cid"),
-                    "attack_request.pending_absorb_elements.attacker",
-                )
-                if pending_attacker is None or int(pending_attacker) != int(cid):
-                    continue
-                self._lan.toast(ws_id, "Hold fast — waiting on a reaction to resolve.")
-                return
-            for pending_req in list((self.__dict__.get("_pending_interception_resolutions", {}) or {}).values()):
-                if not isinstance(pending_req, dict):
-                    continue
-                pending_status = str(pending_req.get("status") or "").strip().lower()
-                if pending_status not in ("offered", "accepted"):
-                    continue
-                pending_attacker = _normalize_cid_value(
-                    pending_req.get("attacker_cid"),
-                    "attack_request.pending_interception.attacker",
-                )
-                if pending_attacker is None or int(pending_attacker) != int(cid):
-                    continue
-                self._lan.toast(ws_id, "Hold fast — waiting on a reaction to resolve.")
-                return
-            self._clear_hide_state(int(cid), reason=f"{c.name} attacks and reveals themself.")
-            resource_c = c
-            try:
-                summoned_by_cid = int(getattr(c, "summoned_by_cid", 0) or 0)
-            except Exception:
-                summoned_by_cid = 0
-            if (
-                summoned_by_cid > 0
-                and str(getattr(c, "summon_source_spell", "") or "").strip().lower() == "echo_knight"
-            ):
-                owner = self.combatants.get(int(summoned_by_cid))
-                if owner is not None:
-                    resource_c = owner
-            if self._is_create_undead_uncommanded_this_turn(c):
-                self._lan.toast(ws_id, "Uncommanded created undead can’t attack this turn, matey.")
-                return
-            max_damage_dice_count = 100
-            max_damage_die_sides = 1000
-            min_damage_type_length = 3
-            def _parse_int(value: Any, fallback: Optional[int] = None) -> Optional[int]:
-                try:
-                    return int(value)
-                except Exception:
-                    return fallback
-
-            def _parse_non_negative_manual_damage(value: Any) -> Optional[int]:
-                if isinstance(value, bool):
-                    return None
-                if isinstance(value, int):
-                    return value if value >= 0 else None
-                if isinstance(value, float):
-                    if not value.is_integer():
-                        return None
-                    return int(value) if value >= 0 else None
-                if isinstance(value, str):
-                    text = value.strip()
-                    if not text or not re.fullmatch(r"\+?\d+", text):
-                        return None
-                    try:
-                        parsed = int(text)
-                    except Exception:
-                        return None
-                    return parsed if parsed >= 0 else None
-                return None
-            def _parse_bool(value: Any) -> Optional[bool]:
-                if isinstance(value, bool):
-                    return value
-                if isinstance(value, str):
-                    text = value.strip().lower()
-                    if text in ("true", "1", "yes", "y", "hit"):
-                        return True
-                    if text in ("false", "0", "no", "n", "miss"):
-                        return False
-                return None
-            def _weapon_has_property(entry: Any, prop_id: str) -> bool:
-                if not isinstance(entry, dict):
-                    return False
-                target = str(prop_id or "").strip().lower()
-                if not target:
-                    return False
-                properties = entry.get("properties")
-                if isinstance(properties, list):
-                    for token in properties:
-                        normalized = str(token or "").strip().lower()
-                        if normalized == target:
-                            return True
-                mastery = str(entry.get("mastery") or "").strip().lower()
-                return bool(mastery and mastery == target)
-            def _weapon_mastery_damage_ability_mod(entry: Any, profile_data: Any, variables: Dict[str, int]) -> int:
-                if not isinstance(entry, dict):
-                    return int(variables.get("str_mod", 0) or 0)
-                formula = ""
-                mode_block = entry.get("one_handed") if isinstance(entry.get("one_handed"), dict) else {}
-                if isinstance(mode_block, dict):
-                    formula = str(mode_block.get("damage_formula") or "").strip().lower()
-                if not formula and isinstance(entry.get("two_handed"), dict):
-                    formula = str((entry.get("two_handed") or {}).get("damage_formula") or "").strip().lower()
-                str_mod = int(variables.get("str_mod", 0) or 0)
-                dex_mod = int(variables.get("dex_mod", 0) or 0)
-                if "dex_mod" in formula and "str_mod" not in formula:
-                    return dex_mod
-                if "str_mod" in formula and "dex_mod" not in formula:
-                    return str_mod
-                if _weapon_has_property(entry, "finesse"):
-                    return max(str_mod, dex_mod)
-                return str_mod
-            def _mastery_save_dc(entry: Any, profile_data: Any, variables: Dict[str, int]) -> int:
-                if isinstance(entry, dict):
-                    explicit_dc = _parse_int(entry.get("mastery_save_dc"), None)
-                    if explicit_dc is not None and explicit_dc > 0:
-                        return int(explicit_dc)
-                prof_bonus = 2
-                if isinstance(profile_data, dict):
-                    prof_block = profile_data.get("proficiency") if isinstance(profile_data.get("proficiency"), dict) else {}
-                    prof_bonus = max(2, _parse_int(prof_block.get("bonus"), 2) or 2)
-                return int(8 + int(prof_bonus) + int(_weapon_mastery_damage_ability_mod(entry, profile_data, variables)))
-            def _damage_formula_variables(profile_data: Any) -> Dict[str, int]:
-                if not isinstance(profile_data, dict):
-                    profile_data = {}
-                abilities = profile_data.get("abilities") if isinstance(profile_data.get("abilities"), dict) else {}
-                return {
-                    "str_mod": self._ability_score_modifier(abilities, "str"),
-                    "dex_mod": self._ability_score_modifier(abilities, "dex"),
-                    "con_mod": self._ability_score_modifier(abilities, "con"),
-                    "int_mod": self._ability_score_modifier(abilities, "int"),
-                    "wis_mod": self._ability_score_modifier(abilities, "wis"),
-                    "cha_mod": self._ability_score_modifier(abilities, "cha"),
-                }
-            def _roll_damage_formula(formula: Any, variables: Dict[str, int], dice_multiplier: int = 1) -> Optional[int]:
-                if not isinstance(formula, str):
-                    return None
-                raw = formula.strip().lower()
-                if not raw:
-                    return None
-                if not re.fullmatch(r"[0-9d+\-*/(). _a-zA-Z]+", raw):
-                    return None
-                identifiers = {token.lower() for token in re.findall(r"\b[a-zA-Z_][a-zA-Z0-9_]*\b", raw)}
-                if not identifiers.issubset({str(key).lower() for key in variables.keys()}):
-                    return None
-                try:
-                    def _replace_die(match: re.Match[str]) -> str:
-                        count = int(match.group(1) or 1)
-                        sides = int(match.group(2))
-                        multiplier = max(1, int(dice_multiplier or 1))
-                        effective_count = int(count) * int(multiplier)
-                        if effective_count <= 0 or effective_count > max_damage_dice_count or sides <= 0 or sides > max_damage_die_sides:
-                            raise ValueError("invalid dice notation")
-                        return str(sum(random.randint(1, sides) for _ in range(effective_count)))
-                    expr = re.sub(
-                        r"(\d*)d(\d+)",
-                        _replace_die,
-                        raw,
-                    )
-                except Exception:
-                    return None
-                evaluated = self._evaluate_spell_formula(expr, variables)
-                if evaluated is None:
-                    return None
-                return max(0, int(math.floor(evaluated)))
-            def _ensure_condition(target_obj: Any, ctype: str, remaining_turns: Optional[int] = None) -> bool:
-                ctype_key = str(ctype or "").strip().lower()
-                if not ctype_key:
-                    return False
-                if self._condition_is_immune_for_target(target_obj, ctype_key):
-                    return False
-                stacks = getattr(target_obj, "condition_stacks", None)
-                if not isinstance(stacks, list):
-                    stacks = []
-                    setattr(target_obj, "condition_stacks", stacks)
-                for st in stacks:
-                    if getattr(st, "ctype", None) == ctype_key:
-                        if remaining_turns is not None:
-                            setattr(st, "remaining_turns", int(remaining_turns))
-                        return False
-                next_sid = int(getattr(self, "_next_stack_id", 1) or 1)
-                setattr(self, "_next_stack_id", int(next_sid) + 1)
-                stacks.append(base.ConditionStack(sid=int(next_sid), ctype=ctype_key, remaining_turns=remaining_turns))
-                return True
-            def _parse_effect_damage_entries(effect_text: Any, variables: Dict[str, int], dice_multiplier: int = 1) -> List[Dict[str, Any]]:
-                if not isinstance(effect_text, str):
-                    return []
-                entries: List[Dict[str, Any]] = []
-                for match in re.finditer(r"(\d*d\d+(?:\s*[+\-]\s*\d+)?)\s+([a-zA-Z]+)\s+damage", effect_text.lower()):
-                    dtype = str(match.group(2) or "").strip().lower()
-                    if len(dtype) < min_damage_type_length:
-                        continue
-                    amount = _roll_damage_formula(match.group(1), variables, dice_multiplier=dice_multiplier)
-                    if amount is None or amount <= 0:
-                        continue
-                    entries.append({"amount": int(amount), "type": dtype})
-                return entries
-            def _save_mod_for_target(target_obj: Any, ability_key: str) -> int:
-                key = str(ability_key or "").strip().lower()
-                if not key:
-                    return 0
-                aura_bonus = int((self._lan_aura_effects_for_target(target_obj) or {}).get("save_bonus") or 0)
-                saves = getattr(target_obj, "saving_throws", None)
-                if isinstance(saves, dict):
-                    val = saves.get(key)
-                    try:
-                        return int(val) + aura_bonus
-                    except Exception:
-                        pass
-                mods = getattr(target_obj, "ability_mods", None)
-                if isinstance(mods, dict):
-                    val = mods.get(key)
-                    try:
-                        return int(val) + aura_bonus
-                    except Exception:
-                        pass
-                return aura_bonus
-            def _set_prone_if_needed(target_obj: Any) -> bool:
-                if self._condition_is_immune_for_target(target_obj, "prone"):
-                    return False
-                stacks = getattr(target_obj, "condition_stacks", None)
-                if not isinstance(stacks, list):
-                    stacks = []
-                    setattr(target_obj, "condition_stacks", stacks)
-                for st in stacks:
-                    if getattr(st, "ctype", None) == "prone":
-                        return False
-                next_sid = int(getattr(self, "_next_stack_id", 1) or 1)
-                setattr(self, "_next_stack_id", int(next_sid) + 1)
-                stacks.append(base.ConditionStack(sid=int(next_sid), ctype="prone", remaining_turns=None))
-                return True
-            def _is_enemy_of_attacker(attacker_obj: Any, target_obj: Any) -> bool:
-                attacker_role = str(self.__dict__.get("_name_role_memory", {}).get(str(getattr(attacker_obj, "name", "")), "enemy") or "enemy")
-                target_role = str(self.__dict__.get("_name_role_memory", {}).get(str(getattr(target_obj, "name", "")), "enemy") or "enemy")
-                return bool(attacker_role in ("pc", "ally") and target_role not in ("pc", "ally"))
-            target_cid = _normalize_cid_value(msg.get("target_cid"), "attack_request.target_cid", log_fn=log_warning)
-            target = self.combatants.get(int(target_cid)) if target_cid is not None else None
-            if target is None:
-                self._lan.toast(ws_id, "Pick a valid target, matey.")
-                return
-            requested_hit = _parse_bool(msg.get("hit"))
-            requested_critical = _parse_bool(msg.get("critical"))
-            attack_roll_raw = msg.get("attack_roll")
-            if attack_roll_raw is None:
-                attack_roll_raw = msg.get("roll")
-            attack_roll = _parse_int(attack_roll_raw, None)
-            if requested_hit is None and (attack_roll is None or attack_roll < 1 or attack_roll > 20):
-                self._lan.toast(ws_id, "Enter a valid d20 roll, matey.")
-                return
-            weapon_id = str(msg.get("weapon_id") or "").strip()
-            weapon_name = str(msg.get("weapon_name") or "").strip()
-            profile_cid = int(getattr(resource_c, "cid", cid) or cid)
-            player_name = self._pc_name_for(int(profile_cid))
-            profile = self._profile_for_player_name(player_name)
-            configured_attack_count = 1
-            leveling = profile.get("leveling") if isinstance(profile, dict) else {}
-            classes = leveling.get("classes") if isinstance(leveling, dict) else []
-            if isinstance(classes, list):
-                for entry in classes:
-                    if not isinstance(entry, dict):
-                        continue
-                    class_attack_count = _parse_int(entry.get("attacks_per_action"), None)
-                    if class_attack_count is None:
-                        continue
-                    configured_attack_count = max(1, min(10, max(configured_attack_count, class_attack_count)))
-            attacks = profile.get("attacks") if isinstance(profile, dict) else {}
-            weapons = attacks.get("weapons") if isinstance(attacks, dict) else []
-            selected_weapon: Dict[str, Any] = {}
-            inline_weapon = msg.get("weapon") if isinstance(msg.get("weapon"), dict) else {}
-            def _weapon_equipped_flag(entry: Dict[str, Any]) -> bool:
-                for key in ("equipped", "main_hand", "off_hand"):
-                    raw = entry.get(key)
-                    if isinstance(raw, bool):
-                        if raw:
-                            return True
-                        continue
-                    if isinstance(raw, (int, float)):
-                        if bool(raw):
-                            return True
-                        continue
-                    if isinstance(raw, str) and raw.strip().lower() in ("1", "true", "yes", "on"):
-                        return True
-                return False
-            def _weapon_identity(entry: Dict[str, Any]) -> Tuple[str, str]:
-                return (
-                    str(entry.get("id") or "").strip().lower(),
-                    str(entry.get("name") or "").strip().lower(),
-                )
-            def _inline_weapon_matches_request(entry: Dict[str, Any], req_id: str, req_name: str) -> bool:
-                if not isinstance(entry, dict):
-                    return False
-                entry_id, entry_name = _weapon_identity(entry)
-                if (req_id or req_name) and not (entry_id or entry_name):
-                    return False
-                if req_id and entry_id and entry_id != req_id:
-                    return False
-                if req_name and entry_name and entry_name != req_name:
-                    return False
-                if req_id and req_name:
-                    return bool((not entry_id or entry_id == req_id) and (not entry_name or entry_name == req_name))
-                if req_id:
-                    return bool(entry_id == req_id or (not entry_id and entry_name))
-                if req_name:
-                    return bool(entry_name == req_name or (not entry_name and entry_id))
-                return bool(entry_id or entry_name)
-            def _merge_safe_inline_weapon_fields(base: Dict[str, Any], inline: Dict[str, Any]) -> Dict[str, Any]:
-                merged = copy.deepcopy(base) if isinstance(base, dict) else {}
-                if not isinstance(inline, dict):
-                    return merged
-                inline_mode = str(inline.get("selected_mode") or "").strip().lower()
-                if inline_mode in ("one", "two"):
-                    merged["selected_mode"] = inline_mode
-                return merged
-            if isinstance(weapons, list):
-                target_weapon_id = weapon_id.lower()
-                target_weapon_name = weapon_name.lower()
-                for entry in weapons:
-                    if not isinstance(entry, dict):
-                        continue
-                    entry_id = str(entry.get("id") or "").strip().lower()
-                    entry_name = str(entry.get("name") or "").strip().lower()
-                    if target_weapon_id and entry_id == target_weapon_id:
-                        selected_weapon = entry
-                        break
-                    if target_weapon_name and entry_name and entry_name == target_weapon_name:
-                        selected_weapon = entry
-                if not selected_weapon and not target_weapon_id and not target_weapon_name:
-                    for entry in weapons:
-                        if isinstance(entry, dict) and _weapon_equipped_flag(entry):
-                            selected_weapon = entry
-                            break
-                    if not selected_weapon:
-                        for entry in weapons:
-                            if isinstance(entry, dict):
-                                selected_weapon = entry
-                                break
-            target_weapon_id = weapon_id.lower()
-            target_weapon_name = weapon_name.lower()
-            if _inline_weapon_matches_request(inline_weapon, target_weapon_id, target_weapon_name):
-                if selected_weapon:
-                    selected_weapon = _merge_safe_inline_weapon_fields(selected_weapon, inline_weapon)
-                else:
-                    selected_weapon = copy.deepcopy(inline_weapon)
-            elif not selected_weapon and bool(getattr(c, "is_wild_shaped", False)) and isinstance(inline_weapon, dict):
-                inline_name = str(inline_weapon.get("name") or "").strip()
-                if inline_name:
-                    selected_weapon = copy.deepcopy(inline_weapon)
-            if not selected_weapon:
-                self._lan.toast(ws_id, "Pick one of yer configured weapons first, matey.")
-                return
-            selected_weapon = self._resolve_weapon_from_items(dict(selected_weapon))
-            selected_mode = str(selected_weapon.get("selected_mode") or "").strip().lower()
-            inline_selected_mode = str(inline_weapon.get("selected_mode") or "").strip().lower()
-            if inline_selected_mode in ("one", "two"):
-                selected_mode = inline_selected_mode
-            selected_mode = "two" if selected_mode == "two" else "one"
-            def _selected_weapon_mode_block(entry: Any) -> Dict[str, Any]:
-                one_handed = entry.get("one_handed") if isinstance(entry.get("one_handed"), dict) else {}
-                two_handed = entry.get("two_handed") if isinstance(entry.get("two_handed"), dict) else {}
-                if selected_mode == "two" and str(two_handed.get("damage_formula") or "").strip():
-                    return two_handed
-                if str(one_handed.get("damage_formula") or "").strip():
-                    return one_handed
-                if str(two_handed.get("damage_formula") or "").strip():
-                    return two_handed
-                return one_handed or two_handed
-            is_unarmed_strike = self._is_unarmed_strike_weapon(selected_weapon)
-            attunement_active = self._elemental_attunement_active(c)
-            monk_level = self._class_level_from_profile(profile, "monk") if isinstance(profile, dict) else 0
-            empowered_strikes_active = bool(is_unarmed_strike and int(monk_level) >= 6)
-            allowed_elemental_overrides = {"acid", "cold", "fire", "lightning", "thunder"}
-            damage_type_override = str(msg.get("damage_type_override") or "").strip().lower()
-            override_honored = bool(
-                damage_type_override in allowed_elemental_overrides
-                and attunement_active
-                and is_unarmed_strike
-            )
-            setattr(c, "_rage_attack_made_this_turn", True)
-            turn_marker = (
-                int(getattr(self, "round_num", 0) or 0),
-                int(getattr(self, "turn_num", 0) or 0),
-                int(cid),
-            )
-            weapon_mastery_enabled = _parse_bool(attacks.get("weapon_mastery_enabled") if isinstance(attacks, dict) else None)
-            if weapon_mastery_enabled is None:
-                weapon_mastery_enabled = _parse_bool(attacks.get("weapon_mastery") if isinstance(attacks, dict) else None)
-            if weapon_mastery_enabled is None:
-                weapon_mastery_enabled = False
-            tactical_master_property = str(msg.get("tactical_master_property") or "").strip().lower()
-            tactical_master_choices = {"push", "sap", "slow"}
-            fighter_level = self._class_level_from_profile(profile, "fighter") if isinstance(profile, dict) else 0
-            tactical_master_enabled = bool(
-                tactical_master_property in tactical_master_choices
-                and str(player_name or "").strip().lower() == "john twilight"
-                and int(fighter_level) >= 9
-            )
-            effective_masteries = {
-                mastery
-                for mastery in ("cleave", "push", "sap", "slow", "topple", "vex", "graze", "nick")
-                if _weapon_has_property(selected_weapon, mastery)
-            }
-            if tactical_master_enabled:
-                effective_masteries = {entry for entry in effective_masteries if entry not in {"push", "sap", "slow", "topple", "vex", "cleave", "graze"}}
-                effective_masteries.add(tactical_master_property)
-            nick_turn_marker = tuple(getattr(resource_c, "_nick_mastery_turn_marker", ()) or ())
-            nick_already_used_this_turn = bool(
-                len(nick_turn_marker) == len(turn_marker) and nick_turn_marker == turn_marker
-            )
-            nick_extra_attack_available = False
-            if weapon_mastery_enabled and not nick_already_used_this_turn and _weapon_has_property(selected_weapon, "light"):
-                other_light_weapon = False
-                has_nick_mastery = _weapon_has_property(selected_weapon, "nick")
-                if isinstance(weapons, list):
-                    selected_key = (
-                        str(selected_weapon.get("id") or "").strip().lower(),
-                        str(selected_weapon.get("name") or "").strip().lower(),
-                    )
-                    for entry in weapons:
-                        if not isinstance(entry, dict):
-                            continue
-                        entry_key = (
-                            str(entry.get("id") or "").strip().lower(),
-                            str(entry.get("name") or "").strip().lower(),
-                        )
-                        if entry_key == selected_key and entry is selected_weapon:
-                            continue
-                        if not _weapon_has_property(entry, "light"):
-                            continue
-                        other_light_weapon = True
-                        if _weapon_has_property(entry, "nick"):
-                            has_nick_mastery = True
-                        if has_nick_mastery:
-                            break
-                nick_extra_attack_available = bool(other_light_weapon and has_nick_mastery)
-            mastery_free_attack = str(msg.get("mastery_free_attack") or "").strip().lower()
-            is_cleave_followup = mastery_free_attack == "cleave"
-            opportunity_attack = str(msg.get("opportunity_attack") or "").strip().lower() in (
-                "1",
-                "true",
-                "yes",
-                "on",
-            )
-            reaction_request_id = str(msg.get("reaction_request_id") or "").strip()
-            if reaction_request_id:
-                self._expire_reaction_offers()
-                offer = self._pending_reaction_offers.get(reaction_request_id)
-                if not isinstance(offer, dict):
-                    self._lan.toast(ws_id, "That reaction request expired, matey.")
-                    return
-                if int(offer.get("reactor_cid") or -1) != int(cid):
-                    self._lan.toast(ws_id, "That reaction request be for someone else.")
-                    return
-                if int(offer.get("target_cid") or -1) != int(target_cid):
-                    self._lan.toast(ws_id, "Reaction target mismatch.")
-                    return
-            attack_spend = str(msg.get("attack_spend") or msg.get("spend") or "").strip().lower()
-            if nick_extra_attack_available:
-                configured_attack_count = min(10, int(configured_attack_count) + 1)
-            attack_count = max(
-                1,
-                min(10, _parse_int(msg.get("attack_count"), configured_attack_count) or configured_attack_count),
-            )
-            if bool(getattr(c, "is_wild_shaped", False)) and attack_count > configured_attack_count:
-                configured_attack_count = int(attack_count)
-            if is_cleave_followup:
-                attack_count = 1
-            consumes_pool_raw = msg.get("consumes_pool") if isinstance(msg.get("consumes_pool"), dict) else {}
-            consumes_pool_id = str(
-                msg.get("consumes_pool_id")
-                or consumes_pool_raw.get("id")
-                or consumes_pool_raw.get("pool")
-                or ""
-            ).strip()
-            try:
-                consumes_pool_cost = int(msg.get("consumes_pool_cost") if msg.get("consumes_pool_cost") is not None else consumes_pool_raw.get("cost", 1))
-            except Exception:
-                consumes_pool_cost = 1
-            consumes_pool_cost = max(1, consumes_pool_cost)
-            consumes_pool_key = consumes_pool_id.strip().lower()
-            is_unleash_incarnation_attack = consumes_pool_key == "unleash_incarnation"
-            if is_unleash_incarnation_attack:
-                echo_cid, _echo = self._find_echo_for_caster(int(profile_cid))
-                if echo_cid is None:
-                    self._lan.toast(ws_id, "Arr... I dont be seeing no echo, matey")
-                    return
-            attack_origin_cid = int(cid)
-            requested_origin_cid = _normalize_cid_value(msg.get("attack_origin_cid"), "attack_request.attack_origin_cid", log_fn=log_warning)
-            if requested_origin_cid is not None and int(requested_origin_cid) == int(cid):
-                attack_origin_cid = int(requested_origin_cid)
-            elif is_unleash_incarnation_attack and echo_cid is not None:
-                attack_origin_cid = int(echo_cid)
-            attacker_pos = dict(self.__dict__.get("_lan_positions", {}) or {}).get(int(attack_origin_cid))
-            target_pos = dict(self.__dict__.get("_lan_positions", {}) or {}).get(int(target_cid))
-            if isinstance(attacker_pos, tuple) and len(attacker_pos) == 2 and isinstance(target_pos, tuple) and len(target_pos) == 2:
-                feet_per_square = 5.0
-                try:
-                    mw = getattr(self, "_map_window", None)
-                    if mw is not None and hasattr(mw, "winfo_exists") and mw.winfo_exists():
-                        feet_per_square = float(getattr(mw, "feet_per_square", feet_per_square) or feet_per_square)
-                except Exception:
-                    feet_per_square = 5.0
-                if feet_per_square <= 0:
-                    feet_per_square = 5.0
-                weapon_range = str(selected_weapon.get("range") or selected_weapon.get("normal_range") or selected_weapon.get("reach") or "").strip().lower()
-                range_match = re.search(r"(\d+(?:\.\d+)?)", weapon_range.split("/")[0])
-                range_ft = float(range_match.group(1)) if range_match else 5.0
-                weapon_category = str(selected_weapon.get("category") or selected_weapon.get("weapon_group") or "").strip().lower()
-                is_melee_weapon = "melee" in weapon_category
-                if not is_melee_weapon:
-                    if "/" in weapon_range:
-                        is_melee_weapon = False
-                    elif weapon_range:
-                        is_melee_weapon = range_ft <= 10.0
-                    else:
-                        is_melee_weapon = True
-                if is_melee_weapon:
-                    range_ft += 3.0
-                if attunement_active and is_unarmed_strike:
-                    range_ft += 10.0
-                # Grid movement/range in this tracker treats diagonal adjacency as 5 ft,
-                # so use Chebyshev distance (max axis delta) instead of Euclidean.
-                dx = abs(int(target_pos[0]) - int(attacker_pos[0]))
-                dy = abs(int(target_pos[1]) - int(attacker_pos[1]))
-                distance_ft = max(dx, dy) * float(feet_per_square)
-                if float(distance_ft) - float(range_ft) > 1e-6:
-                    self._lan.toast(ws_id, "Target be out of attack range.")
-                    return
-            attack_resources = max(0, _parse_int(getattr(resource_c, "attack_resource_remaining", 0), 0) or 0)
-            is_bonus_spend_attack = bool(attack_spend == "bonus" and not opportunity_attack and not is_cleave_followup)
-            attack_limit = self._combatant_attack_limit(resource_c)
-            if (
-                attack_limit is not None
-                and not opportunity_attack
-                and not is_bonus_spend_attack
-                and not is_cleave_followup
-                and not is_unleash_incarnation_attack
-            ):
-                turn_attack_count = int(getattr(resource_c, "_turn_attack_count", 0) or 0)
-                if turn_attack_count >= int(attack_limit):
-                    self._lan.toast(ws_id, "This effect limits ye to one attack this turn, matey.")
-                    return
-            if is_bonus_spend_attack:
-                bonus_seq_id = str(msg.get("bonus_sequence_id") or "").strip().lower() or "bonus_attack"
-                try:
-                    bonus_sequence_total = int(msg.get("bonus_sequence_total") if msg.get("bonus_sequence_total") is not None else 1)
-                except Exception:
-                    bonus_sequence_total = 1
-                bonus_sequence_total = max(1, min(10, int(bonus_sequence_total)))
-                bonus_sequence_start = bool(msg.get("bonus_sequence_start") is True)
-                active_seq_marker = tuple(getattr(resource_c, "_bonus_attack_seq_turn_marker", ()) or ())
-                active_seq_id = str(getattr(resource_c, "_bonus_attack_seq_id", "") or "").strip().lower()
-                try:
-                    active_seq_remaining = int(getattr(resource_c, "_bonus_attack_seq_remaining", 0) or 0)
-                except Exception:
-                    active_seq_remaining = 0
-                matching_seq = len(active_seq_marker) == len(turn_marker) and active_seq_marker == turn_marker and active_seq_id == bonus_seq_id
-                should_start_sequence = bool(bonus_sequence_start or not matching_seq)
-                if should_start_sequence:
-                    if not self._use_bonus_action(resource_c):
-                        self._lan.toast(ws_id, "No bonus actions left, matey.")
-                        return
-                    setattr(resource_c, "_bonus_attack_seq_turn_marker", turn_marker)
-                    setattr(resource_c, "_bonus_attack_seq_id", bonus_seq_id)
-                    setattr(resource_c, "_bonus_attack_seq_remaining", max(0, int(bonus_sequence_total) - 1))
-                else:
-                    if active_seq_remaining <= 0:
-                        self._lan.toast(ws_id, "No bonus actions left, matey.")
-                        return
-                    next_remaining = max(0, int(active_seq_remaining) - 1)
-                    setattr(resource_c, "_bonus_attack_seq_remaining", int(next_remaining))
-                    if next_remaining <= 0:
-                        setattr(resource_c, "_bonus_attack_seq_turn_marker", ())
-                        setattr(resource_c, "_bonus_attack_seq_id", "")
-                        setattr(resource_c, "_bonus_attack_seq_remaining", 0)
-            elif not is_cleave_followup:
-                if opportunity_attack:
-                    if not self._use_reaction(resource_c):
-                        self._lan.toast(ws_id, "No reactions left, matey.")
-                        return
-                    if reaction_request_id:
-                        self._pending_reaction_offers.pop(reaction_request_id, None)
-                elif not is_unleash_incarnation_attack:
-                    if attack_resources <= 0:
-                        if not self._use_action(resource_c):
-                            self._lan.toast(ws_id, "No attacks left, matey.")
-                            return
-                        attack_resources = int(configured_attack_count)
-                        if nick_extra_attack_available:
-                            setattr(resource_c, "_nick_mastery_turn_marker", turn_marker)
-                    attack_resources = max(0, int(attack_resources) - 1)
-                    setattr(resource_c, "attack_resource_remaining", int(attack_resources))
-                    if attack_limit is not None:
-                        setattr(resource_c, "_turn_attack_count", int(getattr(resource_c, "_turn_attack_count", 0) or 0) + 1)
-            weapon_category = str(selected_weapon.get("category") or "").strip().lower()
-            weapon_range_text = str(selected_weapon.get("range") or "").strip().lower()
-            is_melee_attack = not ("ranged" in weapon_category or "/" in weapon_range_text or "ranged" in weapon_range_text)
-            attack_augments_ctx = {
-                "weapon_id": str(selected_weapon.get("id") or "").strip().lower(),
-                "weapon_name": str(selected_weapon.get("name") or "").strip().lower(),
-                "weapon_category": weapon_category,
-                "is_weapon_attack": True,
-                "is_unarmed_attack": bool(is_unarmed_strike),
-                "is_melee_attack": bool(is_melee_attack),
-                "is_ranged_attack": not bool(is_melee_attack),
-            }
-            attack_augments = self._collect_attack_augments(c, target, attack_ctx=attack_augments_ctx)
-            to_hit = _parse_int(selected_weapon.get("to_hit"), _parse_int(attacks.get("weapon_to_hit"), 0) or 0) or 0
-            magic_bonus = _parse_int(selected_weapon.get("magic_bonus"), _parse_int(selected_weapon.get("item_bonus"), 0) or 0) or 0
-            to_hit += int(magic_bonus)
-            to_hit += int(self._attack_roll_bonus_from_augments(attack_augments))
-            roll_total = int(attack_roll) if attack_roll is not None else 0
-            muddled_attack_penalty = int(self._muddled_thoughts_penalty_roll(c))
-            total_to_hit = int(roll_total) + int(to_hit) - int(muddled_attack_penalty)
-            target_ac = _parse_int(getattr(target, "ac", None), 10) or 10
-            target_ac += int(self._shield_ac_bonus_for_target(target))
-            target_ac += int(self._combatant_ac_modifier(target))
-            slow_spell_ac_penalty = int(self._slow_spell_ac_penalty(target))
-            if slow_spell_ac_penalty > 0:
-                target_ac = max(0, int(target_ac) - int(slow_spell_ac_penalty))
-            hit = bool(requested_hit) if requested_hit is not None else bool(total_to_hit >= int(target_ac))
-            if hit and not bool(msg.get("_shield_resolution_done")):
-                shield_mode = self._reaction_mode_for(int(target_cid), "shield", default="ask")
-                can_shield, _shield_reason = self._can_offer_shield_reaction(target)
-                shield_can_change_result = int(total_to_hit) < int(target_ac) + 5
-                if shield_mode != "off" and can_shield and shield_can_change_result:
-                    if attack_roll is None:
-                        self._lan.toast(ws_id, "Shield automation requires the attack roll value, matey.")
-                        return
-                    choices = [{"kind": "shield_yes", "label": "Yes", "mode": shield_mode}]
-                    ws_targets = self._find_ws_for_cid(int(target_cid))
-                    req_id = self._create_reaction_offer(
-                        int(target_cid),
-                        "shield",
-                        int(cid),
-                        int(target_cid),
-                        choices,
-                        ws_targets,
-                        extra_payload={"prompt_attack": str(selected_weapon.get("name") or "Attack")},
-                    )
-                    if req_id:
-                        self._pending_shield_resolutions[str(req_id)] = {"msg": dict(msg)}
-                        self._oplog(
-                            f"reaction_offer:shield pending request_id={req_id} attacker={int(cid)} target={int(target_cid)}",
-                            level="info",
-                        )
-                        attacker_ws_targets = self._find_ws_for_cid(int(cid))
-                        for attacker_ws in attacker_ws_targets:
-                            self._lan.toast(int(attacker_ws), "Waiting for Shield response…")
-                        return
-            if hit:
-                intercepted = self._mirror_image_try_intercept_hit(
-                    target,
-                    attacker_name=str(getattr(c, "name", "Attacker") or "Attacker"),
-                    attack_name=str(selected_weapon.get("name") or "Attack"),
-                )
-                if intercepted:
-                    hit = False
-            pending_star_advantage = getattr(c, "pending_star_advantage_charge", None)
-            star_advantage_attempted = isinstance(pending_star_advantage, dict)
-            if star_advantage_attempted:
-                setattr(c, "pending_star_advantage_charge", None)
-            damage_entries: List[Dict[str, Any]] = []
-            raw_damage_entries = msg.get("damage_entries")
-            if isinstance(raw_damage_entries, list):
-                for entry in raw_damage_entries:
-                    if not isinstance(entry, dict):
-                        continue
-                    amount = _parse_non_negative_manual_damage(entry.get("amount"))
-                    if amount is None:
-                        continue
-                    amount = int(amount)
-                    if amount <= 0:
-                        continue
-                    dtype = str(entry.get("type") or "").strip().lower()
-                    damage_entries.append({"amount": amount, "type": dtype})
-            auto_roll = bool(hit and not damage_entries)
-            auto_crit = bool(auto_roll and requested_critical is True)
-
-            def _weapon_formula_already_includes_magic_bonus(weapon_entry: Any, damage_formula: Any, bonus: int) -> bool:
-                if not isinstance(weapon_entry, dict):
-                    return False
-                if not isinstance(damage_formula, str):
-                    return False
-                bonus_val = int(bonus or 0)
-                if bonus_val == 0:
-                    return False
-                formula_text = str(damage_formula or "").strip().lower()
-                if not formula_text:
-                    return False
-                if re.search(r"\b(?:magic_bonus|item_bonus)\b", formula_text):
-                    return True
-                bonus_abs = abs(int(bonus_val))
-                has_plus_marker = False
-                weapon_name = str(weapon_entry.get("name") or "").strip().lower()
-                weapon_id = str(weapon_entry.get("id") or "").strip().lower()
-                if bonus_val > 0:
-                    has_plus_marker = bool(
-                        re.search(rf"\(\+\s*{bonus_abs}\)", weapon_name)
-                        or re.search(rf"\+\s*{bonus_abs}\b", weapon_name)
-                        or f"plus_{bonus_abs}" in weapon_id
-                        or f"plus{bonus_abs}" in weapon_id
-                    )
-                if bonus_val < 0:
-                    has_plus_marker = bool(
-                        re.search(rf"\(-\s*{bonus_abs}\)", weapon_name)
-                        or re.search(rf"-\s*{bonus_abs}\b", weapon_name)
-                        or f"minus_{bonus_abs}" in weapon_id
-                        or f"minus{bonus_abs}" in weapon_id
-                    )
-                if not has_plus_marker:
-                    return False
-                numeric_terms = [
-                    int(token)
-                    for token in re.findall(r"(?<![a-z0-9_])[+\-]?\d+(?![a-z0-9_])", formula_text)
-                ]
-                if bonus_val > 0:
-                    return int(bonus_abs) in numeric_terms
-                return -int(bonus_abs) in numeric_terms
-            effect_block = selected_weapon.get("effect") if isinstance(selected_weapon.get("effect"), dict) else {}
-            mastery_notes: List[str] = []
-            variables = _damage_formula_variables(profile)
-            graze_applied = False
-            if auto_roll:
-                mode_block = _selected_weapon_mode_block(selected_weapon)
-                mode_formula = mode_block.get("damage_formula") if isinstance(mode_block, dict) else ""
-                ability_override = str((attack_augments or {}).get("attack_ability_override") or "").strip().lower()
-                die_override = str((attack_augments or {}).get("weapon_damage_die_override") or "").strip().lower()
-                if isinstance(mode_formula, str) and mode_formula:
-                    if ability_override in {"str", "dex", "con", "int", "wis", "cha"}:
-                        mode_formula = re.sub(r"(?:str|dex|con|int|wis|cha)_mod", f"{ability_override}_mod", mode_formula)
-                    if die_override:
-                        mode_formula = re.sub(r"\d+d\d+", die_override, mode_formula, count=1)
-                mode_damage = _roll_damage_formula(mode_formula, variables, dice_multiplier=2 if auto_crit else 1)
-                mode_type = str((mode_block or {}).get("damage_type") or "").strip().lower() if isinstance(mode_block, dict) else ""
-                if override_honored:
-                    mode_type = damage_type_override
-                if mode_damage is not None and mode_damage > 0:
-                    entry_payload: Dict[str, Any] = {"amount": int(mode_damage), "type": mode_type}
-                    if empowered_strikes_active and mode_type in ("bludgeoning", "piercing", "slashing"):
-                        entry_payload["magical"] = True
-                    if bool((attack_augments or {}).get("weapon_counts_as_magical")) and mode_type in ("bludgeoning", "piercing", "slashing"):
-                        entry_payload["magical"] = True
-                    damage_entries.append(entry_payload)
-                if (
-                    mode_damage is not None
-                    and mode_damage > 0
-                    and int(magic_bonus) != 0
-                    and not _weapon_formula_already_includes_magic_bonus(selected_weapon, mode_formula, magic_bonus)
-                ):
-                    damage_entries.append({"amount": int(magic_bonus), "type": mode_type or "damage"})
-                augment_damage_bonus = int(self._damage_bonus_from_augments(attack_augments))
-                if mode_damage is not None and mode_damage > 0 and augment_damage_bonus != 0:
-                    damage_entries.append({"amount": int(augment_damage_bonus), "type": mode_type or "damage"})
-                for extra in list((attack_augments or {}).get("extra_damage_dice") or []):
-                    if not isinstance(extra, dict):
-                        continue
-                    extra_amount = _roll_damage_formula(extra.get("dice"), variables, dice_multiplier=2 if auto_crit else 1)
-                    if extra_amount is None or extra_amount <= 0:
-                        continue
-                    damage_entries.append({"amount": int(extra_amount), "type": str(extra.get("type") or "damage").strip().lower() or "damage"})
-                damage_entries.extend(_parse_effect_damage_entries(effect_block.get("on_hit"), variables, dice_multiplier=2 if auto_crit else 1))
-            if weapon_mastery_enabled and ("graze" in effective_masteries) and not hit:
-                mode_block = _selected_weapon_mode_block(selected_weapon)
-                graze_damage = max(0, _weapon_mastery_damage_ability_mod(selected_weapon, profile, variables))
-                mode_type = str((mode_block or {}).get("damage_type") or "").strip().lower() if isinstance(mode_block, dict) else ""
-                if override_honored:
-                    mode_type = damage_type_override
-                if graze_damage > 0:
-                    entry_payload = {"amount": int(graze_damage), "type": mode_type}
-                    if empowered_strikes_active and mode_type in ("bludgeoning", "piercing", "slashing"):
-                        entry_payload["magical"] = True
-                    damage_entries.append(entry_payload)
-                    graze_applied = True
-                    mastery_notes.append(f"Graze deals {int(graze_damage)} damage on the miss.")
-            damage_riders = []
-            feature_effects = getattr(c, "feature_effects", None)
-            if not isinstance(feature_effects, dict) and isinstance(profile, dict):
-                feature_effects = profile.get("feature_effects")
-            if isinstance(feature_effects, dict):
-                damage_riders = feature_effects.get("damage_riders") if isinstance(feature_effects.get("damage_riders"), list) else []
-            if hit and isinstance(damage_riders, list):
-                trigger_tags: set[str] = {"weapon_attack_hit", "weapon_or_beast_attack_hit"}
-                if _weapon_has_property(selected_weapon, "finesse"):
-                    trigger_tags.add("finesse_weapon_attack")
-                weapon_range_text = str(selected_weapon.get("range") or "").strip().lower()
-                if "/" in weapon_range_text or "ranged" in weapon_range_text:
-                    trigger_tags.add("ranged_weapon_attack")
-                advantage_flag = bool(_parse_bool(msg.get("attack_has_advantage")))
-                disadvantage_flag = bool(_parse_bool(msg.get("attack_has_disadvantage")))
-                advantage_flag = bool(advantage_flag or self._attack_roll_mode_against_target(c, target) == "advantage")
-                disadvantage_flag = bool(disadvantage_flag or self._attack_roll_mode_against_target(c, target) == "disadvantage")
-                ally_near_flag = bool(_parse_bool(msg.get("ally_within_5ft")))
-                for rider in damage_riders:
-                    if not isinstance(rider, dict):
-                        continue
-                    rider_id = str(rider.get("id") or rider.get("source_feature_id") or "").strip().lower()
-                    rider_trigger = rider.get("trigger")
-                    rider_triggers = rider_trigger if isinstance(rider_trigger, list) else [rider_trigger]
-                    normalized_triggers = {str(entry or "").strip().lower() for entry in rider_triggers if str(entry or "").strip()}
-                    if normalized_triggers and normalized_triggers.isdisjoint(trigger_tags):
-                        continue
-                    requires_any = rider.get("requires_any") if isinstance(rider.get("requires_any"), list) else []
-                    if requires_any:
-                        require_flags: Dict[str, bool] = {
-                            "attack_has_advantage": advantage_flag,
-                            "ally_within_5ft_of_target_and_not_incapacitated": ally_near_flag,
-                        }
-                        if not any(require_flags.get(str(flag or "").strip().lower(), False) for flag in requires_any):
-                            continue
-                    blocked_if = {str(flag or "").strip().lower() for flag in (rider.get("blocked_if") if isinstance(rider.get("blocked_if"), list) else [])}
-                    if "attack_has_disadvantage" in blocked_if and disadvantage_flag:
-                        continue
-                    if bool(rider.get("once_per_turn")) and not self._once_per_turn_limiter_allows(cid, rider_id):
-                        continue
-                    rider_formula = str(rider.get("damage_formula") or "").strip()
-                    dice_pool = str(rider.get("dice_pool") or "").strip().lower()
-                    if not rider_formula and dice_pool and isinstance(profile, dict):
-                        pools = self._normalize_player_resource_pools(profile)
-                        for pool in pools:
-                            if str(pool.get("id") or "").strip().lower() == dice_pool:
-                                rider_formula = f"{max(1, int(pool.get('current', 0) or 0))}d6"
-                                break
-                    rider_amount = _roll_damage_formula(rider_formula, variables, dice_multiplier=2 if auto_crit else 1) if rider_formula else None
-                    if rider_amount is None or rider_amount <= 0:
-                        continue
-                    rider_type = str(rider.get("damage_type") or "").strip().lower()
-                    if rider_type in ("", "same_as_attack"):
-                        rider_type = str((damage_entries[0] if damage_entries else {}).get("type") or "").strip().lower()
-                    damage_entries.append({"amount": int(rider_amount), "type": rider_type})
-                    if bool(rider.get("once_per_turn")):
-                        self._once_per_turn_limiter_mark(profile_cid, rider_id)
-                    mastery_notes.append(f"{str(rider.get('id') or 'rider').strip() or 'rider'} adds {int(rider_amount)} damage.")
-            rider_results: List[Dict[str, Any]] = []
-            if hit and is_melee_attack:
-                for rider in list((attack_augments or {}).get("pending_hit_riders") or []):
-                    if not isinstance(rider, dict):
-                        continue
-                    rider_spell = str(rider.get("spell_key") or "").strip().lower()
-                    rider_name = rider_spell.replace("-", " ").title() if rider_spell else "Rider"
-                    rider_result: Dict[str, Any] = {"slug": rider_spell, "name": rider_name}
-                    for effect in list(rider.get("effects") or []):
-                        if not isinstance(effect, dict):
-                            continue
-                        effect_kind = str(effect.get("effect") or "").strip().lower()
-                        if effect_kind == "damage":
-                            rider_dice = self._smite_damage_dice(
-                                {
-                                    "base_dice": effect.get("dice"),
-                                    "base_slot": (_SMITE_SPELL_CONFIG.get(rider_spell) or {}).get("base_slot"),
-                                    "upcast_die": (_SMITE_SPELL_CONFIG.get(rider_spell) or {}).get("upcast_die"),
-                                },
-                                rider.get("slot_level"),
-                            )
-                            rider_type = str(effect.get("damage_type") or effect.get("type") or "damage").strip().lower() or "damage"
-                            rider_amount = _roll_damage_formula(rider_dice, {}, dice_multiplier=2 if auto_crit else 1) if rider_dice else None
-                            if rider_amount is not None and rider_amount > 0:
-                                damage_entries.append({"amount": int(rider_amount), "type": rider_type})
-                            rider_result["damage"] = {"amount": int(max(0, rider_amount or 0)), "type": rider_type}
-                        elif effect_kind == "save_bundle":
-                            rider_result["save"] = dict(effect)
-                    rider_results.append(rider_result)
-                    if bool(rider.get("consume_on_next_hit")):
-                        self._consume_hit_rider(c, rider)
-            if hit and is_melee_attack and not rider_results:
-                pending_smite = getattr(c, "pending_smite_charge", None)
-                if isinstance(pending_smite, dict):
-                    smite_slug = str(pending_smite.get("slug") or "").strip().lower()
-                    smite_cfg = _SMITE_SPELL_CONFIG.get(smite_slug)
-                    if isinstance(smite_cfg, dict):
-                        smite_dice = self._smite_damage_dice(smite_cfg, pending_smite.get("slot_level"))
-                        smite_type = str(smite_cfg.get("damage_type") or "").strip().lower() or "damage"
-                        smite_amount = _roll_damage_formula(smite_dice, {}, dice_multiplier=2 if auto_crit else 1) if smite_dice else None
-                        if smite_amount is not None and smite_amount > 0:
-                            damage_entries.append({"amount": int(smite_amount), "type": smite_type})
-                        rider_result = {
-                            "slug": smite_slug,
-                            "name": str(pending_smite.get("name") or smite_slug.replace("-", " ").title()),
-                            "damage": {"amount": int(max(0, smite_amount or 0)), "type": smite_type},
-                        }
-                        save_cfg = smite_cfg.get("save") if isinstance(smite_cfg.get("save"), dict) else {}
-                        save_dc = int(pending_smite.get("save_dc") or 0)
-                        if save_dc <= 0:
-                            profile = self._profile_for_player_name(str(getattr(c, "name", "") or "")) if c is not None else {}
-                            save_dc = int(self._compute_spell_save_dc(profile if isinstance(profile, dict) else {}) or 0)
-                        if save_cfg:
-                            rider_result["save"] = {
-                                "effect": "save_bundle",
-                                "save_ability": str(save_cfg.get("ability") or "").strip().lower(),
-                                "save_dc": int(save_dc),
-                                "apply_prone": bool(save_cfg.get("apply_prone")),
-                                "forced_movement": dict(save_cfg.get("forced_movement") or {}) if isinstance(save_cfg.get("forced_movement"), dict) else {},
-                                "condition": str(save_cfg.get("condition") or "").strip().lower(),
-                                "repeat_each_turn": bool(save_cfg.get("repeat_each_turn")),
-                                "repeat_timing": str(save_cfg.get("repeat_timing") or "start_turn").strip().lower(),
-                            }
-                        start_turn_cfg = smite_cfg.get("start_turn_rider") if isinstance(smite_cfg.get("start_turn_rider"), dict) else {}
-                        if start_turn_cfg:
-                            rider_result["start_turn_rider"] = {
-                                "dice": self._smite_damage_dice(
-                                    {"base_dice": start_turn_cfg.get("dice"), "base_slot": smite_cfg.get("base_slot"), "upcast_die": smite_cfg.get("upcast_die")},
-                                    pending_smite.get("slot_level"),
-                                ) or str(start_turn_cfg.get("dice") or "1d6"),
-                                "type": str(start_turn_cfg.get("type") or "damage").strip().lower() or "damage",
-                                "save_ability": str(start_turn_cfg.get("save_ability") or "").strip().lower(),
-                                "save_dc": int(save_dc),
-                            }
-                        rider_results.append(rider_result)
-                        setattr(c, "pending_smite_charge", None)
-            absorb_bonus_entry = self._consume_absorb_elements_melee_bonus(
-                c,
-                hit=bool(hit),
-                is_melee_attack=bool(is_melee_attack),
-                turn_marker=turn_marker,
-            )
-            if isinstance(absorb_bonus_entry, dict):
-                damage_entries.append(dict(absorb_bonus_entry))
-                self._log(
-                    f"{c.name}'s Absorb Elements adds {int(absorb_bonus_entry.get('amount') or 0)} "
-                    f"{str(absorb_bonus_entry.get('type') or 'damage')} damage.",
-                    cid=cid,
-                )
-            if override_honored and isinstance(damage_entries, list):
-                for entry in damage_entries:
-                    if not isinstance(entry, dict):
-                        continue
-                    raw_type = str(entry.get("type") or "").strip().lower()
-                    if raw_type in ("", "damage", "bludgeoning"):
-                        entry["type"] = damage_type_override
-            resolved_bucket = locals().get("resolved_bucket", [])
-            sequence = locals().get("sequence", [])
-            spell_mode = locals().get("spell_mode", "")
-            result_payload = locals().get("result_payload", {}) if isinstance(locals().get("result_payload", {}), dict) else {}
-            if not resolved_bucket and sequence:
-                seq_step = next((step for step in sequence if isinstance(step, dict)), None)
-                if isinstance(seq_step, dict):
-                    outcomes = seq_step.get("outcomes") if isinstance(seq_step.get("outcomes"), dict) else {}
-                    if spell_mode == "save":
-                        passed = bool((result_payload.get("save_result") or {}).get("passed"))
-                        resolved_bucket = _bucket_for_outcome(outcomes, passed, "")
-                    else:
-                        resolved_bucket = _bucket_for_outcome(outcomes, False, "hit" if hit else "miss")
-
-            for effect in resolved_bucket:
-                if not isinstance(effect, dict):
-                    continue
-                if str(effect.get("effect") or "").strip().lower() != "damage":
-                    continue
-                amount = _roll_scaled_effect_damage(effect)
-                if amount <= 0:
-                    continue
-                dtype = str(effect.get("damage_type") or effect.get("type") or damage_type_hint or "damage").strip().lower() or "damage"
-                damage_entries.append({"amount": int(amount), "type": dtype})
-
-            if hit and not bool(msg.get("_absorb_elements_resolution_done")):
-                req_id = self._maybe_offer_absorb_elements(
-                    int(target_cid),
-                    int(cid),
-                    pending_msg=msg,
-                    damage_entries=damage_entries,
-                )
-                if req_id:
-                    attacker_ws_targets = self._find_ws_for_cid(int(cid))
-                    for attacker_ws in attacker_ws_targets:
-                        self._lan.toast(int(attacker_ws), "Waiting for Absorb Elements response…")
-                    return
-
-            adjustment = self._adjust_damage_entries_for_target(target, damage_entries)
-            damage_entries = list(adjustment.get("entries") or [])
-            adjustment_notes = list(adjustment.get("notes") or [])
-            total_damage = int(sum(int(entry.get("amount", 0) or 0) for entry in damage_entries))
-            damage_applied = bool(hit or graze_applied)
-            if damage_applied and total_damage > 0 and not bool(msg.get("_interception_resolution_done")):
-                interception_req_id = self._maybe_offer_interception(
-                    int(target_cid),
-                    int(cid),
-                    pending_msg=msg,
-                    damage_entries=damage_entries,
-                )
-                if interception_req_id:
-                    attacker_ws_targets = self._find_ws_for_cid(int(cid))
-                    for attacker_ws in attacker_ws_targets:
-                        self._lan.toast(int(attacker_ws), "Waiting for Interception response…")
-                    return
-            interception_reduction = max(0, _parse_int(msg.get("_interception_reduction"), 0) or 0)
-            if damage_applied and total_damage > 0 and interception_reduction > 0:
-                remaining_reduce = int(interception_reduction)
-                reduced_entries: List[Dict[str, Any]] = []
-                for entry in damage_entries:
-                    if not isinstance(entry, dict):
-                        continue
-                    amount = max(0, int(entry.get("amount", 0) or 0))
-                    if amount <= 0:
-                        continue
-                    cut = min(int(amount), int(remaining_reduce))
-                    new_amount = max(0, int(amount) - int(cut))
-                    remaining_reduce = max(0, int(remaining_reduce) - int(cut))
-                    if new_amount > 0:
-                        new_entry = dict(entry)
-                        new_entry["amount"] = int(new_amount)
-                        reduced_entries.append(new_entry)
-                damage_entries = reduced_entries
-                total_damage = int(sum(int(entry.get("amount", 0) or 0) for entry in damage_entries))
-            deflect_attacks_result: Optional[Dict[str, Any]] = None
-            if damage_applied and total_damage > 0:
-                target_monk_level = 0
-                target_profile = None
-                if bool(getattr(target, "is_pc", False)):
-                    try:
-                        target_player_name = self._pc_name_for(int(getattr(target, "cid", 0) or 0))
-                        target_profile = self._profile_for_player_name(target_player_name)
-                        if isinstance(target_profile, dict):
-                            target_monk_level = self._class_level_from_profile(target_profile, "monk")
-                    except Exception:
-                        target_monk_level = 0
-                if int(target_monk_level) >= 3 and int(getattr(target, "reaction_remaining", 0) or 0) > 0:
-                    dex_mod = 0
-                    mods = getattr(target, "ability_mods", None)
-                    if isinstance(mods, dict):
-                        try:
-                            dex_mod = int(mods.get("dex") or 0)
-                        except Exception:
-                            dex_mod = 0
-                    if dex_mod == 0 and isinstance(target_profile, dict):
-                        abilities = target_profile.get("abilities") if isinstance(target_profile.get("abilities"), dict) else {}
-                        try:
-                            dex_score = int(abilities.get("dex"))
-                            dex_mod = math.floor((int(dex_score) - 10) / 2)
-                        except Exception:
-                            dex_mod = 0
-                    if self._use_reaction(target):
-                        reduction = int(random.randint(1, 10) + max(0, int(dex_mod)) + int(target_monk_level))
-                        prevented = min(int(total_damage), max(0, int(reduction)))
-                        if int(total_damage) > 0:
-                            remaining_reduce = int(prevented)
-                            reduced_entries: List[Dict[str, Any]] = []
-                            for entry in damage_entries:
-                                if not isinstance(entry, dict):
-                                    continue
-                                amount = int(entry.get("amount", 0) or 0)
-                                if amount <= 0:
-                                    continue
-                                cut = min(amount, max(0, int(remaining_reduce)))
-                                new_amount = max(0, amount - cut)
-                                remaining_reduce = max(0, int(remaining_reduce) - cut)
-                                if new_amount > 0:
-                                    new_entry = dict(entry)
-                                    new_entry["amount"] = int(new_amount)
-                                    reduced_entries.append(new_entry)
-                            damage_entries = reduced_entries
-                            total_damage = int(sum(int(entry.get("amount", 0) or 0) for entry in damage_entries))
-                        deflect_attacks_result = {
-                            "reduction_roll_total": int(reduction),
-                            "prevented_damage": int(prevented),
-                            "remaining_damage": int(total_damage),
-                        }
-            mastery_cleave_candidates: List[Dict[str, Any]] = []
-            mastery_vex_advantage = bool(
-                hit
-                and weapon_mastery_enabled
-                and ("vex" in effective_masteries)
-                and _parse_int(getattr(target, "_vexed_by_cid", None), None) == int(profile_cid)
-            )
-            if mastery_vex_advantage:
-                mastery_notes.append("Vex: Advantage applies to this attack.")
-                setattr(target, "_vexed_by_cid", None)
-            if damage_applied and total_damage > 0:
-                setattr(target, "_rage_took_damage_this_turn", True)
-                before_hp = _parse_int(getattr(target, "hp", None), None)
-                if before_hp is not None:
-                    damage_state = self._apply_damage_via_service(target, int(total_damage))
-                    after_hp = int(damage_state.get("hp_after", before_hp))
-                    if int(before_hp) > 0 and int(after_hp) <= 0:
-                        pre_order: List[int] = []
-                        try:
-                            pre_order = [x.cid for x in self._display_order()]
-                        except Exception as exc:
-                            self._oplog(f"attack_request: failed to snapshot turn order before KO cleanup ({exc})", level="warning")
-                            pre_order = []
-                        removed_target = False
-                        try:
-                            self._remove_combatants_with_lan_cleanup([int(target_cid)])
-                            removed_target = int(target_cid) not in self.combatants
-                        except Exception as exc:
-                            self._oplog(f"attack_request: LAN cleanup remove failed for cid={int(target_cid)} ({exc})", level="warning")
-                            # Fallback for partial test stubs or degraded LAN cleanup paths.
-                            removed_target = self.combatants.pop(int(target_cid), None) is not None
-                        if removed_target:
-                            if getattr(self, "start_cid", None) == int(target_cid):
-                                self.start_cid = None
-                            try:
-                                self._retarget_current_after_removal([int(target_cid)], pre_order=pre_order)
-                            except Exception as exc:
-                                self._oplog(
-                                    f"attack_request: failed to retarget after removing cid={int(target_cid)} ({exc})",
-                                    level="warning",
-                                )
-                            self._log(f"{target.name} dropped to 0 -> removed", cid=int(target_cid))
-                        try:
-                            self._lan.play_ko(int(cid))
-                        except Exception:
-                            pass
-            if star_advantage_attempted and hit and int(target_cid) in self.combatants and int(getattr(target, "hp", 0) or 0) > 0:
-                if self._condition_is_immune_for_target(target, "star_advantage"):
-                    self._log(f"{c.name}'s Star Advantage can't affect {target.name} (immune).", cid=int(target_cid))
-                elif _ensure_condition(target, "star_advantage"):
-                    self._log(f"{c.name} expends Star Advantage and marks {target.name}.", cid=int(target_cid))
-                else:
-                    self._log(f"{c.name} expends Star Advantage and refreshes {target.name}.", cid=int(target_cid))
-            if hit and opportunity_attack and self._unit_has_sentinel_feat(resource_c):
-                setattr(target, "move_remaining", 0)
-                setattr(target, "speed_zero_until_turn_end", True)
-
-            if hit:
-                fps = self._lan_feet_per_square()
-                attacker_pos2 = dict(self.__dict__.get("_lan_positions", {}) or {}).get(int(cid))
-                if isinstance(attacker_pos2, tuple) and len(attacker_pos2) == 2:
-                    for other_cid, other in list(self.combatants.items()):
-                        try:
-                            ocid = int(other_cid)
-                        except Exception:
-                            continue
-                        if ocid in (int(cid), int(target_cid)):
-                            continue
-                        if self._lan_is_friendly_unit(ocid) == self._lan_is_friendly_unit(int(cid)):
-                            continue
-                        if not self._unit_has_sentinel_feat(other):
-                            continue
-                        if int(getattr(other, "reaction_remaining", 0) or 0) <= 0:
-                            continue
-                        opos = dict(self.__dict__.get("_lan_positions", {}) or {}).get(ocid)
-                        if not (isinstance(opos, tuple) and len(opos) == 2):
-                            continue
-                        dist_ft = max(abs(int(attacker_pos2[0]) - int(opos[0])), abs(int(attacker_pos2[1]) - int(opos[1]))) * fps
-                        if dist_ft - 8.0 > 1e-6:
-                            continue
-                        choices = self._build_oa_reaction_choices(other, include_war_caster=False)
-                        if not choices:
-                            continue
-                        ws_targets = self._find_ws_for_cid(ocid)
-                        self._create_reaction_offer(ocid, "sentinel_hit_other", int(cid), int(cid), choices, ws_targets)
-
-            if hit and isinstance(selected_weapon.get("riders"), list):
-                for rider in selected_weapon.get("riders"):
-                    if not isinstance(rider, dict):
-                        continue
-                    if str(rider.get("trigger") or "").strip().lower() != "on_hit":
-                        continue
-                    rider_effect = str(rider.get("effect") or "").strip().lower()
-                    if rider_effect not in ("push", "pull"):
-                        continue
-                    save_ability = str(rider.get("save_ability") or "").strip().lower()[:3]
-                    raw_dc = rider.get("save_dc")
-                    rider_dc = 0
-                    if isinstance(raw_dc, str) and raw_dc.strip().lower() == "wielder_spell_save_dc":
-                        rider_dc = int(self._compute_spell_save_dc(profile)) if isinstance(profile, dict) else 0
-                    else:
-                        try:
-                            rider_dc = int(raw_dc)
-                        except Exception:
-                            rider_dc = 0
-                    try:
-                        distance_ft = float(rider.get("distance_feet") or rider.get("distance_ft") or 0)
-                    except Exception:
-                        distance_ft = 0.0
-                    if rider_dc <= 0 or save_ability not in ("str","dex","con","int","wis","cha") or distance_ft <= 0:
-                        continue
-                    rider_roll = int(random.randint(1, 20))
-                    rider_mod = int(_save_mod_for_target(target, save_ability))
-                    rider_total = int(rider_roll + rider_mod)
-                    rider_passed = bool(rider_roll != 1 and rider_total >= int(rider_dc))
-                    moved = False
-                    if not rider_passed:
-                        moved = bool(self._lan_apply_forced_movement(int(cid), int(target_cid), rider_effect, float(distance_ft)))
-                    self._log(
-                        f"{result_payload['weapon_name']} rider {rider_effect}: {result_payload['target_name']} {save_ability.upper()} "
-                        f"{int(rider_roll)}+{int(rider_mod)}={int(rider_total)} vs DC {int(rider_dc)} "
-                        f"({'PASS' if rider_passed else 'FAIL'}){' moved' if moved else ''}.",
-                        cid=int(target_cid),
-                    )
-
-            if weapon_mastery_enabled and hit:
-                if tactical_master_enabled:
-                    mastery_notes.append(f"Tactical Master: replacing weapon mastery with {tactical_master_property.title()} for this attack.")
-                if "cleave" in effective_masteries:
-                    mastery_notes.append("Cleave: ye can make a second attack against another nearby target.")
-                if "push" in effective_masteries:
-                    mastery_notes.append("Push: move that Large-or-smaller target up to 10 ft away.")
-                if "sap" in effective_masteries:
-                    mastery_notes.append("Sap: target has disadvantage on its next attack roll.")
-                if "slow" in effective_masteries:
-                    mastery_notes.append("Slow: target speed is reduced by 10 ft until start of yer next turn.")
-                if "topple" in effective_masteries:
-                    mastery_notes.append("Topple: have target make a Constitution save or fall prone.")
-                if "vex" in effective_masteries:
-                    mastery_notes.append("Vex: gain advantage on yer next attack against this target.")
-                if "sap" in effective_masteries and _ensure_condition(target, "sapped"):
-                    mastery_notes.append("Sap applied: target is Sapped.")
-                if "slow" in effective_masteries:
-                    existing_slow_penalty = max(0, _parse_int(getattr(target, "_slow_next_turn_penalty", 0), 0) or 0)
-                    setattr(target, "_slow_next_turn_penalty", max(existing_slow_penalty, 10))
-                    mastery_notes.append("Slow applied: target speed reduced by 10 ft on its next turn.")
-                if "push" in effective_masteries:
-                    origin = dict(self.__dict__.get("_lan_positions", {}) or {}).get(int(target_cid))
-                    if isinstance(origin, tuple) and len(origin) == 2:
-                        moved = self._lan_apply_forced_movement(int(cid), int(target_cid), "push", 10.0)
-                        if moved:
-                            mastery_notes.append("Push applied: target moved up to 10 ft.")
-                if "topple" in effective_masteries:
-                    topple_dc = _mastery_save_dc(selected_weapon, profile, variables)
-                    topple_roll = random.randint(1, 20)
-                    topple_mod = _save_mod_for_target(target, "con")
-                    topple_total = int(topple_roll) + int(topple_mod)
-                    topple_passed = bool(topple_roll != 1 and topple_total >= int(topple_dc))
-                    if not topple_passed and _set_prone_if_needed(target):
-                        mastery_notes.append("Topple applied: target is Prone.")
-                if "vex" in effective_masteries:
-                    _ensure_condition(target, "vexed")
-                    setattr(target, "_vexed_by_cid", int(profile_cid))
-                    mastery_notes.append("Vex applied: next attack by ye has advantage.")
-                if (
-                    "cleave" in effective_masteries
-                    and not is_cleave_followup
-                    and total_damage > 0
-                ):
-                    positions = dict(self.__dict__.get("_lan_positions", {}) or {})
-                    attacker_pos = positions.get(int(cid))
-                    if isinstance(attacker_pos, tuple) and len(attacker_pos) == 2:
-                        ac, ar = int(attacker_pos[0]), int(attacker_pos[1])
-                        for enemy_cid, enemy in self.combatants.items():
-                            try:
-                                ecid = int(enemy_cid)
-                            except Exception:
-                                continue
-                            if ecid in (int(cid), int(target_cid)):
-                                continue
-                            if not _is_enemy_of_attacker(c, enemy):
-                                continue
-                            epos = positions.get(ecid)
-                            if not (isinstance(epos, tuple) and len(epos) == 2):
-                                continue
-                            if abs(int(epos[0]) - ac) <= 1 and abs(int(epos[1]) - ar) <= 1:
-                                mastery_cleave_candidates.append({"cid": ecid, "name": str(getattr(enemy, "name", "Enemy") or "Enemy")})
-                    if mastery_cleave_candidates:
-                        mastery_notes.append("Cleave ready: choose one nearby enemy for a free attack.")
-            if star_advantage_attempted and not hit:
-                self._log(f"{c.name} expends Star Advantage on a miss.", cid=cid)
-            stunning_strike_result: Optional[Dict[str, Any]] = None
-            wants_stunning_strike = bool(_parse_bool(msg.get("stunning_strike")))
-            if (
-                hit
-                and wants_stunning_strike
-                and int(monk_level) >= 5
-                and is_melee_attack
-                and not is_admin
-            ):
-                owner_name = self._pc_name_for(int(getattr(resource_c, "cid", cid) or cid))
-                ok_pool, pool_err = self._consume_resource_pool_for_cast(owner_name, "focus_points", 1)
-                if ok_pool:
-                    stun_dc = self._monk_save_dc_for_profile(profile) if isinstance(profile, dict) else 8
-                    save_roll = int(random.randint(1, 20))
-                    save_mod = int(_save_mod_for_target(target, "con"))
-                    save_total = int(save_roll + save_mod)
-                    save_passed = bool(save_roll != 1 and save_total >= int(stun_dc))
-                    applied = False
-                    if not save_passed and not self._condition_is_immune_for_target(target, "stunned"):
-                        stacks = getattr(target, "condition_stacks", None)
-                        if not isinstance(stacks, list):
-                            stacks = []
-                            setattr(target, "condition_stacks", stacks)
-                        stacks = [st for st in stacks if getattr(st, "ctype", None) != "stunned"]
-                        setattr(target, "condition_stacks", stacks)
-                        next_sid = int(getattr(self, "_next_stack_id", 1) or 1)
-                        setattr(self, "_next_stack_id", int(next_sid) + 1)
-                        stacks.append(base.ConditionStack(sid=int(next_sid), ctype="stunned", remaining_turns=1))
-                        applied = True
-                    stunning_strike_result = {
-                        "dc": int(stun_dc),
-                        "roll": int(save_roll),
-                        "modifier": int(save_mod),
-                        "total": int(save_total),
-                        "passed": bool(save_passed),
-                        "applied": bool(applied),
-                    }
-                    self._log(
-                        f"{c.name} uses Stunning Strike: {target.name} CON save DC {int(stun_dc)} "
-                        f"({int(save_roll)} + {int(save_mod)} = {int(save_total)}) "
-                        f"{'PASS' if save_passed else 'FAIL'}.",
-                        cid=int(target_cid),
-                    )
-                else:
-                    self._lan.toast(ws_id, pool_err or "No Focus Points remain, matey.")
-            is_critical = bool(hit and bool(requested_critical))
-            if consumes_pool_id and not is_admin:
-                consumes_pool_always = bool(msg.get("consumes_pool_always") is True)
-                should_consume_pool = bool(consumes_pool_always or (not hit) or (int(total_damage) > 0))
-                if should_consume_pool:
-                    owner_name = self._pc_name_for(int(getattr(resource_c, "cid", cid) or cid))
-                    ok_pool, pool_err = self._consume_resource_pool_for_cast(owner_name, consumes_pool_id, consumes_pool_cost)
-                    if not ok_pool:
-                        self._lan.toast(ws_id, pool_err)
-                        return
-            result_payload: Dict[str, Any] = {
-                "type": "attack_result",
-                "ok": True,
-                "attacker_cid": int(cid),
-                "attack_origin_cid": int(attack_origin_cid),
-                "target_cid": int(target_cid),
-                "target_name": str(getattr(target, "name", "Target") or "Target"),
-                "weapon_id": str(selected_weapon.get("id") or "").strip(),
-                "weapon_name": str(selected_weapon.get("name") or "").strip() or "Weapon",
-                "attack_count": int(attack_count),
-                "attack_roll": int(roll_total),
-                "to_hit": int(to_hit),
-                "total_to_hit": int(total_to_hit),
-                "attack_penalty": int(muddled_attack_penalty),
-                "hit": hit,
-                "critical": is_critical,
-                "damage_total": int(total_damage if damage_applied else 0),
-                "damage_entries": list(damage_entries if damage_applied else []),
-                "action_remaining": int(getattr(resource_c, "action_remaining", 0) or 0),
-                "bonus_action_remaining": int(getattr(resource_c, "bonus_action_remaining", 0) or 0),
-                "attack_resource_remaining": int(getattr(resource_c, "attack_resource_remaining", 0) or 0),
-                "mastery_advantage": bool(mastery_vex_advantage),
-                "damage_type_override": damage_type_override if override_honored else None,
-            }
-            if mastery_cleave_candidates:
-                result_payload["cleave_candidates"] = list(mastery_cleave_candidates)
-            if mastery_notes:
-                result_payload["weapon_property_notes"] = list(mastery_notes)
-            if rider_results:
-                result_payload["riders"] = list(rider_results)
-                if len(rider_results) == 1:
-                    result_payload["smite"] = dict(rider_results[0])
-            if isinstance(deflect_attacks_result, dict):
-                result_payload["deflect_attacks"] = dict(deflect_attacks_result)
-            interception_reactor_cid = _normalize_cid_value(msg.get("_interception_reactor_cid"), "attack_result.interception.reactor")
-            if interception_reduction > 0 and interception_reactor_cid is not None:
-                reactor = self.combatants.get(int(interception_reactor_cid))
-                result_payload["interception"] = {
-                    "reactor_cid": int(interception_reactor_cid),
-                    "reactor_name": str(getattr(reactor, "name", "Interceptor") or "Interceptor"),
-                    "reduction": int(interception_reduction),
-                }
-            if isinstance(stunning_strike_result, dict):
-                result_payload["stunning_strike"] = dict(stunning_strike_result)
-            save_ability = str(effect_block.get("save_ability") or "").strip().lower()
-            save_dc = _parse_int(effect_block.get("save_dc"), 0) or 0
-            if hit and save_ability and save_dc > 0:
-                result_payload["on_hit_save"] = {"ability": save_ability, "dc": int(save_dc)}
-            consumed_attack_riders = self._consume_attack_roll_spell_riders(c, target)
-            if consumed_attack_riders.get("guiding_bolt"):
-                result_payload["guiding_bolt_consumed"] = True
-            if consumed_attack_riders.get("vicious_mockery"):
-                result_payload["vicious_mockery_consumed"] = True
-            msg["_attack_result"] = dict(result_payload)
-            if attack_roll is not None:
-                penalty_text = f" - {int(muddled_attack_penalty)} (muddled thoughts)" if muddled_attack_penalty > 0 else ""
-                self._log(
-                    f"{c.name} attacks {result_payload['target_name']} with {result_payload['weapon_name']} "
-                    f"(roll {attack_roll} + {to_hit}{penalty_text} = {total_to_hit}) and {'hits' if hit else 'misses'}"
-                    f"{' (CRIT)' if is_critical else ''}.",
-                    cid=cid,
-                )
-            else:
-                self._log(
-                    f"{c.name} attacks {result_payload['target_name']} with {result_payload['weapon_name']} "
-                    f"and {'hits' if hit else 'misses'}"
-                    f"{' (CRIT)' if is_critical else ''}.",
-                    cid=cid,
-                )
-            if interception_reduction > 0 and interception_reactor_cid is not None:
-                interceptor = self.combatants.get(int(interception_reactor_cid))
-                self._log(
-                    f"{getattr(interceptor, 'name', 'Interceptor')} uses Interception and reduces damage by {int(interception_reduction)}.",
-                    cid=int(target_cid),
-                )
-            if damage_applied and total_damage > 0:
-                def _adjustment_note_text(reasons: List[str]) -> str:
-                    items = [str(reason or "").strip().lower() for reason in reasons if str(reason or "").strip()]
-                    if not items:
-                        return ""
-                    if "immune" in items:
-                        return " (immune!)"
-                    if "vulnerable" in items:
-                        return " (vulnerable!)"
-                    if "resistant" in items:
-                        return " (resist!)"
-                    return ""
-
-                adjustment_lookup: Dict[Tuple[str, int], Dict[str, Any]] = {}
-                for note in adjustment_notes:
-                    if not isinstance(note, dict):
-                        continue
-                    key = (
-                        str(note.get("type") or "").strip().lower(),
-                        int(note.get("applied", 0) or 0),
-                    )
-                    if key not in adjustment_lookup:
-                        adjustment_lookup[key] = note
-                damage_desc = ", ".join(
-                    (
-                        f"{int(entry.get('amount', 0) or 0)} {str(entry.get('type') or '').strip() or 'damage'}"
-                        f"{_adjustment_note_text(list((adjustment_lookup.get((str(entry.get('type') or '').strip().lower(), int(entry.get('amount', 0) or 0))) or {}).get('reasons') or []))}"
-                    )
-                    for entry in damage_entries
-                )
-                self._log(
-                    f"{c.name} deals {int(total_damage)} total damage "
-                    f"with {result_payload['weapon_name']}"
-                    f" to {result_payload['target_name']}"
-                    f"{f' ({damage_desc})' if damage_desc else ''}"
-                    f"{' (CRIT)' if is_critical else ''}.",
-                    cid=cid,
-                )
-                try:
-                    self._maybe_offer_hellish_rebuke(int(target_cid), int(cid), int(total_damage))
-                except Exception as exc:
-                    self._oplog(f"hellish_rebuke offer failed attacker={int(cid)} victim={int(target_cid)} ({exc})", level="warning")
-                if hit and save_ability and save_dc > 0:
-                    save_roll = random.randint(1, 20)
-                    save_mod = _save_mod_for_target(target, save_ability)
-                    save_total = int(save_roll) + int(save_mod)
-                    save_passed = bool(save_roll != 1 and save_total >= int(save_dc))
-                    result_payload["on_hit_save_result"] = {
-                        "ability": save_ability,
-                        "dc": int(save_dc),
-                        "roll": int(save_roll),
-                        "modifier": int(save_mod),
-                        "total": int(save_total),
-                        "passed": bool(save_passed),
-                    }
-                    self._log(
-                        f"{c.name} forces {result_payload['target_name']} to make a {save_ability.upper()} save "
-                        f"(DC {int(save_dc)}): {int(save_roll)} + {int(save_mod)} = {int(save_total)} "
-                        f"({'PASS' if save_passed else 'FAIL'}).",
-                        cid=int(target_cid),
-                    )
-                    if not save_passed and _set_prone_if_needed(target):
-                        self._log(f"{c.name} knocks {result_payload['target_name']} prone.", cid=int(target_cid))
-                if hit and rider_results:
-                    for rider_entry in rider_results:
-                        if not isinstance(rider_entry, dict):
-                            continue
-                        save_cfg = rider_entry.get("save") if isinstance(rider_entry.get("save"), dict) else {}
-                        save_ability_key = str(save_cfg.get("save_ability") or "").strip().lower()
-                        save_dc_val = int(save_cfg.get("save_dc") or 0)
-                        if save_ability_key and save_dc_val > 0:
-                            save_roll = random.randint(1, 20)
-                            save_mod = _save_mod_for_target(target, save_ability_key)
-                            save_total = int(save_roll) + int(save_mod)
-                            save_passed = bool(save_roll != 1 and save_total >= int(save_dc_val))
-                            result_payload["rider_save_result"] = {
-                                "ability": save_ability_key,
-                                "dc": int(save_dc_val),
-                                "roll": int(save_roll),
-                                "modifier": int(save_mod),
-                                "total": int(save_total),
-                                "passed": bool(save_passed),
-                            }
-                            if not save_passed:
-                                if bool(save_cfg.get("apply_prone")) and _set_prone_if_needed(target):
-                                    self._log(f"{c.name} knocks {result_payload['target_name']} prone.", cid=int(target_cid))
-                                forced_movement_cfg = save_cfg.get("forced_movement")
-                                if isinstance(forced_movement_cfg, dict):
-                                    self._apply_spell_forced_movement(
-                                        forced_movement_cfg,
-                                        caster=c,
-                                        target=target,
-                                        target_cid=int(target_cid),
-                                    )
-                                rider_condition = str(save_cfg.get("condition") or "").strip().lower()
-                                if rider_condition:
-                                    _ensure_condition(target, rider_condition, None)
-                                    if bool(save_cfg.get("repeat_each_turn")):
-                                        rider_attr = "end_turn_save_riders" if str(save_cfg.get("repeat_timing") or "start_turn").strip().lower() == "end_turn" else "start_turn_save_riders"
-                                        riders = list(getattr(target, rider_attr, []) or [])
-                                        riders.append(
-                                            {
-                                                "clear_group": f"rider_{str(rider_entry.get('slug') or '')}_{int(cid)}",
-                                                "save_ability": save_ability_key,
-                                                "save_dc": int(save_dc_val),
-                                                "condition": rider_condition,
-                                            }
-                                        )
-                                        setattr(target, rider_attr, riders)
-                        start_turn_rider_cfg = rider_entry.get("start_turn_rider") if isinstance(rider_entry.get("start_turn_rider"), dict) else {}
-                        if start_turn_rider_cfg:
-                            riders = list(getattr(target, "start_turn_damage_riders", []) or [])
-                            riders.append(
-                                {
-                                    "dice": str(start_turn_rider_cfg.get("dice") or "1d6"),
-                                    "type": str(start_turn_rider_cfg.get("type") or "damage"),
-                                    "source": str(rider_entry.get("name") or "Smite"),
-                                    "save_ability": str(start_turn_rider_cfg.get("save_ability") or "").strip().lower(),
-                                    "save_dc": int(start_turn_rider_cfg.get("save_dc") or 0),
-                                    "clear_group": f"rider_{str(rider_entry.get('slug') or '')}_{int(cid)}",
-                                }
-                            )
-                            setattr(target, "start_turn_damage_riders", riders)
-                effect_text = str(effect_block.get("on_hit") or "")
-                if "hellfire stack" in effect_text.lower():
-                    marker = (int(getattr(self, "round_num", 0) or 0), int(getattr(self, "turn_num", 0) or 0))
-                    stack_map = getattr(target, "_hellfire_last_applied_by_attacker", None)
-                    if not isinstance(stack_map, dict):
-                        stack_map = {}
-                    attacker_key = str(int(cid))
-                    if tuple(stack_map.get(attacker_key) or ()) != marker:
-                        stack_map[attacker_key] = marker
-                        setattr(target, "_hellfire_last_applied_by_attacker", stack_map)
-                        riders = list(getattr(target, "end_turn_damage_riders", []) or [])
-                        riders.append(
-                            {
-                                "dice": "1d6",
-                                "type": "hellfire",
-                                "remaining_turns": 1,
-                                "source": f"{result_payload['weapon_name']} ({c.name})",
-                            }
-                        )
-                        setattr(target, "end_turn_damage_riders", riders)
-                        self._log(
-                            f"{c.name} applies Hellfire to {result_payload['target_name']} "
-                            f"(1d6 at end of target turn).",
-                            cid=int(target_cid),
-                        )
-                weapon_id_key = str(selected_weapon.get("id") or "").strip().lower()
-                weapon_name_key = str(selected_weapon.get("name") or "").strip().lower()
-                if (
-                    weapon_id_key == "sword_of_wounding"
-                    or weapon_name_key == "sword of wounding"
-                    or "start of each of the wounded creature's turns" in effect_text.lower()
-                ):
-                    marker = (int(getattr(self, "round_num", 0) or 0), int(getattr(self, "turn_num", 0) or 0))
-                    stack_map = getattr(target, "_wounding_last_applied_by_attacker", None)
-                    if not isinstance(stack_map, dict):
-                        stack_map = {}
-                    attacker_key = str(int(cid))
-                    if tuple(stack_map.get(attacker_key) or ()) != marker:
-                        stack_map[attacker_key] = marker
-                        setattr(target, "_wounding_last_applied_by_attacker", stack_map)
-                        riders = list(getattr(target, "start_turn_damage_riders", []) or [])
-                        riders.append(
-                            {
-                                "dice": "1d4",
-                                "type": "necrotic",
-                                "source": f"{result_payload['weapon_name']} ({c.name})",
-                                "save_ability": "con",
-                                "save_dc": 15,
-                                "clear_group": "sword_of_wounding",
-                            }
-                        )
-                        setattr(target, "start_turn_damage_riders", riders)
-                        self._log(
-                            f"{c.name} wounds {result_payload['target_name']} "
-                            f"(1d4 necrotic at start of target turn; CON save DC 15 ends wounds).",
-                            cid=int(target_cid),
-                        )
-                try:
-                    self._rebuild_table(scroll_to_current=True)
-                except Exception:
-                    pass
-            msg["_attack_result"] = dict(result_payload)
-            loop = getattr(self._lan, "_loop", None)
-            if ws_id is not None and loop:
-                try:
-                    asyncio.run_coroutine_threadsafe(self._lan._send_async(ws_id, result_payload), loop)
-                except Exception:
-                    pass
-            self._lan.toast(ws_id, "Attack hits." if hit else "Attack misses.")
+            self._ensure_player_commands().attack_request(msg, cid=cid, ws_id=ws_id, is_admin=is_admin)
+            return
         elif typ == "wild_shape_apply":
             beast_id = str(msg.get("beast_id") or "").strip()
             if not beast_id:
@@ -36937,22 +37041,17 @@ class InitiativeTracker(base.InitiativeTracker):
             else:
                 self._lan.toast(ws_id, "No turn snapshot yet, matey.")
         elif typ == "end_turn":
-            # Let player end their own turn.
             active_cid = _normalize_cid_value(
                 getattr(self, "current_cid", None), "lan_action.end_turn.current_cid", log_fn=log_warning
             )
-            can_end_shared_summon_turn = self._is_valid_summon_turn_for_controller(claimed, cid, active_cid)
-            if in_combat and (cid is None or (active_cid != int(cid) and not can_end_shared_summon_turn)):
-                self._lan.toast(ws_id, "Not yer turn yet, matey.")
-                return
-            try:
-                for combatant in self.combatants.values():
-                    setattr(combatant, "wild_resurgence_turn_used", False)
-                self._next_turn_via_service()
-                self._tick_polymorph_durations()
-                self._lan.toast(ws_id, "Turn ended.")
-            except Exception as exc:
-                self._oplog(f"LAN end turn failed: {exc}", level="warning")
+            self._ensure_player_commands().end_turn(
+                cid=cid,
+                claimed_cid=claimed,
+                current_cid=active_cid,
+                ws_id=ws_id,
+                is_admin=is_admin,
+            )
+            return
 
     def _parse_int_value(self, value: Any, fallback: Optional[int] = None) -> Optional[int]:
         try:

@@ -2363,6 +2363,183 @@ class InitiativeTracker(tk.Tk):
         self._remember_role(c)
         return cid
 
+    def _create_monster_spec_combatant(
+        self,
+        *,
+        name: str,
+        monster_spec: Optional[MonsterSpec],
+        initiative: int,
+        hp: Optional[int] = None,
+        speed: Optional[int] = None,
+        swim_speed: Optional[int] = None,
+        fly_speed: Optional[int] = None,
+        burrow_speed: Optional[int] = None,
+        climb_speed: Optional[int] = None,
+        movement_mode: Optional[str] = None,
+        dex: Optional[int] = None,
+        ally: bool = False,
+        saving_throws: Optional[Dict[str, int]] = None,
+        ability_mods: Optional[Dict[str, int]] = None,
+        actions: Optional[List[Dict[str, Any]]] = None,
+        bonus_actions: Optional[List[Dict[str, Any]]] = None,
+        reactions: Optional[List[Dict[str, Any]]] = None,
+        roll: Optional[int] = None,
+        nat20: Optional[bool] = None,
+    ) -> Optional[int]:
+        """Create one combatant from a monster spec with optional encounter overrides."""
+        if monster_spec is None:
+            return None
+
+        resolved_spec = monster_spec
+        load_details = getattr(self, "_load_monster_details", None)
+        if callable(load_details):
+            try:
+                resolved_spec = load_details(getattr(monster_spec, "name", None)) or monster_spec
+            except Exception:
+                resolved_spec = monster_spec
+
+        def _coerce_int(value: Any, fallback: int) -> int:
+            try:
+                return int(value)
+            except Exception:
+                return int(fallback)
+
+        hp_value = _coerce_int(hp, int(getattr(resolved_spec, "hp", 1) or 1))
+        speed_value = _coerce_int(speed, int(getattr(resolved_spec, "speed", 30) or 30))
+        swim_value = _coerce_int(swim_speed, int(getattr(resolved_spec, "swim_speed", 0) or 0))
+        fly_value = _coerce_int(fly_speed, int(getattr(resolved_spec, "fly_speed", 0) or 0))
+        burrow_value = _coerce_int(burrow_speed, int(getattr(resolved_spec, "burrow_speed", 0) or 0))
+        climb_value = _coerce_int(climb_speed, int(getattr(resolved_spec, "climb_speed", 0) or 0))
+        saving_data = dict(saving_throws) if isinstance(saving_throws, dict) else dict(getattr(resolved_spec, "saving_throws", {}) or {})
+        ability_data = dict(ability_mods) if isinstance(ability_mods, dict) else dict(getattr(resolved_spec, "ability_mods", {}) or {})
+
+        try:
+            cid = self._create_combatant(
+                name=str(name or getattr(resolved_spec, "name", "") or "Creature").strip() or "Creature",
+                hp=hp_value,
+                speed=speed_value,
+                swim_speed=swim_value,
+                fly_speed=fly_value,
+                burrow_speed=burrow_value,
+                climb_speed=climb_value,
+                movement_mode=movement_mode or MOVEMENT_MODE_LABELS["normal"],
+                initiative=int(initiative),
+                dex=dex,
+                ally=bool(ally),
+                is_pc=False,
+                is_spellcaster=None,
+                saving_throws=saving_data,
+                ability_mods=ability_data,
+                actions=actions,
+                bonus_actions=bonus_actions,
+                reactions=reactions,
+                monster_spec=resolved_spec,
+            )
+        except Exception:
+            return None
+
+        c = self.combatants.get(cid)
+        if c is not None:
+            if roll is not None:
+                try:
+                    c.roll = int(roll)
+                except Exception:
+                    pass
+            if nat20 is not None:
+                c.nat20 = bool(nat20)
+        return cid
+
+    def _add_monster_spec_combatants_direct(self, entries: List[Dict[str, Any]]) -> Dict[str, Any]:
+        """Fallback direct monster-spec encounter population when service is unavailable."""
+        added: List[Dict[str, Any]] = []
+        skipped: List[Dict[str, Any]] = []
+
+        find_spec = getattr(self, "_find_monster_spec_by_slug", None)
+        if not callable(find_spec):
+            return {"ok": False, "error": "Monster-spec lookup is unavailable.", "added": added, "skipped": skipped}
+
+        for entry in entries if isinstance(entries, list) else []:
+            if not isinstance(entry, dict):
+                skipped.append({"reason": "invalid_entry"})
+                continue
+            name = str(entry.get("name") or "").strip()
+            monster_slug = str(entry.get("monster_slug") or "").strip().lower()
+            if not name or not monster_slug:
+                skipped.append(
+                    {
+                        "name": name or None,
+                        "monster_slug": monster_slug or None,
+                        "reason": "missing_name_or_slug",
+                    }
+                )
+                continue
+            try:
+                initiative = int(entry.get("initiative"))
+            except Exception:
+                skipped.append(
+                    {
+                        "name": name,
+                        "monster_slug": monster_slug,
+                        "reason": "invalid_initiative",
+                    }
+                )
+                continue
+            spec = find_spec(monster_slug)
+            if spec is None:
+                skipped.append(
+                    {
+                        "name": name,
+                        "monster_slug": monster_slug,
+                        "reason": "monster_not_found",
+                    }
+                )
+                continue
+            cid = self._create_monster_spec_combatant(
+                name=name,
+                monster_spec=spec,
+                hp=entry.get("hp"),
+                speed=entry.get("speed"),
+                swim_speed=entry.get("swim_speed"),
+                fly_speed=entry.get("fly_speed"),
+                burrow_speed=entry.get("burrow_speed"),
+                climb_speed=entry.get("climb_speed"),
+                movement_mode=entry.get("movement_mode"),
+                initiative=initiative,
+                dex=entry.get("dex"),
+                ally=bool(entry.get("ally", False)),
+                saving_throws=entry.get("saving_throws"),
+                ability_mods=entry.get("ability_mods"),
+                actions=entry.get("actions"),
+                bonus_actions=entry.get("bonus_actions"),
+                reactions=entry.get("reactions"),
+                roll=entry.get("roll"),
+                nat20=entry.get("nat20"),
+            )
+            if isinstance(cid, int):
+                added.append({"cid": cid, "name": name, "monster_slug": monster_slug})
+            else:
+                skipped.append(
+                    {
+                        "name": name,
+                        "monster_slug": monster_slug,
+                        "reason": "create_failed",
+                    }
+                )
+
+        if added:
+            try:
+                self._rebuild_table(scroll_to_current=True)
+            except Exception:
+                pass
+            try:
+                lan_broadcast = getattr(self, "_lan_force_state_broadcast", None)
+                if callable(lan_broadcast):
+                    lan_broadcast()
+            except Exception:
+                pass
+
+        return {"ok": True, "added": added, "skipped": skipped}
+
     def _remove_selected(self) -> None:
         items = self.tree.selection()
         if not items:
@@ -4826,6 +5003,7 @@ class InitiativeTracker(tk.Tk):
 
             per_name_seen: Dict[str, int] = {}
             achieved_cr = 0.0
+            entries: List[Dict[str, Any]] = []
             for spec in picks:
                 detailed_spec = self._load_monster_details(spec.name) or spec
                 achieved_cr += self._monster_spec_cr_value(detailed_spec)
@@ -4841,24 +5019,42 @@ class InitiativeTracker(tk.Tk):
                 if dex_mod is None:
                     dex_mod = 0
                 roll = random.randint(1, 20)
-                cid = self._create_combatant(
-                    name=name,
-                    hp=int(detailed_spec.hp or 1),
-                    speed=int(detailed_spec.speed or 30),
-                    swim_speed=int(detailed_spec.swim_speed or 0),
-                    movement_mode=MOVEMENT_MODE_LABELS["normal"],
-                    initiative=int(roll + int(dex_mod)),
-                    dex=int(dex_mod),
-                    ally=False,
-                    saving_throws=dict(detailed_spec.saving_throws or {}),
-                    ability_mods=dict(detailed_spec.ability_mods or {}),
-                    monster_spec=detailed_spec,
+                monster_slug = str(getattr(detailed_spec, "filename", "") or "").strip()
+                if monster_slug:
+                    monster_slug = Path(monster_slug).stem.strip().lower()
+                if not monster_slug:
+                    monster_slug = re.sub(r"[^a-z0-9]+", "-", str(detailed_spec.name or "").strip().lower()).strip("-")
+                entries.append(
+                    {
+                        "name": name,
+                        "monster_slug": monster_slug,
+                        "hp": int(detailed_spec.hp or 1),
+                        "speed": int(detailed_spec.speed or 30),
+                        "swim_speed": int(detailed_spec.swim_speed or 0),
+                        "movement_mode": MOVEMENT_MODE_LABELS["normal"],
+                        "initiative": int(roll + int(dex_mod)),
+                        "dex": int(dex_mod),
+                        "ally": False,
+                        "saving_throws": dict(detailed_spec.saving_throws or {}),
+                        "ability_mods": dict(detailed_spec.ability_mods or {}),
+                        "roll": int(roll),
+                        "nat20": bool(roll == 20),
+                    }
                 )
-                c = self.combatants[cid]
-                c.roll = roll
-                c.nat20 = (roll == 20)
 
-            self._rebuild_table(scroll_to_current=True)
+            add_monsters = getattr(self, "_add_monster_spec_combatants_via_service", None)
+            if callable(add_monsters):
+                result = add_monsters(entries)
+            else:
+                result = self._add_monster_spec_combatants_direct(entries)
+            if not result.get("ok"):
+                messagebox.showerror(
+                    "Random Enemies",
+                    str(result.get("error") or "Failed to add random enemies."),
+                    parent=dlg,
+                )
+                return
+
             self._log(
                 f"Random enemies added: {len(picks)} creatures, total CR {achieved_cr:.2f} (target {float(total_cr):.2f}, max per creature {float(max_cr):.2f})."
             )
@@ -5161,6 +5357,8 @@ class InitiativeTracker(tk.Tk):
             if not group_rows:
                 messagebox.showerror("Input error", "Add at least one group.")
                 return
+            entries: List[Dict[str, Any]] = []
+            direct_added = False
             for row in group_rows:
                 base = row["name_var"].get().strip() or base_name
                 if not base:
@@ -5221,6 +5419,13 @@ class InitiativeTracker(tk.Tk):
                 spec = row.get("spec")
                 if spec is not None:
                     spec = self._load_monster_details(spec.name) or spec
+                monster_slug = ""
+                if spec is not None:
+                    monster_slug = str(getattr(spec, "filename", "") or "").strip()
+                    if monster_slug:
+                        monster_slug = Path(monster_slug).stem.strip().lower()
+                    if not monster_slug:
+                        monster_slug = re.sub(r"[^a-z0-9]+", "-", str(getattr(spec, "name", "") or "").strip().lower()).strip("-")
                 saving_throws = dict(spec.saving_throws) if spec and spec.saving_throws else None
                 ability_mods = dict(spec.ability_mods) if spec and spec.ability_mods else None
 
@@ -5228,24 +5433,64 @@ class InitiativeTracker(tk.Tk):
                     roll = random.randint(1, 20)
                     total = roll + dex
                     name = base if count == 1 else f"{base} {i}"
-                    cid = self._create_combatant(
-                        name=name,
-                        hp=hp,
-                        speed=speed,
-                        swim_speed=swim_speed,
-                        movement_mode=movement_mode,
-                        initiative=total,
-                        dex=dex_opt,
-                        ally=ally_flag,
-                        saving_throws=saving_throws,
-                        ability_mods=ability_mods,
-                        monster_spec=spec,
-                    )
-                    c = self.combatants[cid]
-                    c.roll = roll
-                    c.nat20 = (roll == 20)
+                    if not monster_slug:
+                        cid = self._create_combatant(
+                            name=name,
+                            hp=hp,
+                            speed=speed,
+                            swim_speed=swim_speed,
+                            movement_mode=movement_mode,
+                            initiative=total,
+                            dex=dex_opt,
+                            ally=ally_flag,
+                        )
+                        c = self.combatants[cid]
+                        c.roll = roll
+                        c.nat20 = (roll == 20)
+                        direct_added = True
+                        continue
+                    entry: Dict[str, Any] = {
+                        "name": name,
+                        "hp": hp,
+                        "speed": speed,
+                        "swim_speed": swim_speed,
+                        "movement_mode": movement_mode,
+                        "initiative": total,
+                        "dex": dex_opt,
+                        "ally": ally_flag,
+                        "roll": int(roll),
+                        "nat20": bool(roll == 20),
+                    }
+                    if monster_slug:
+                        entry["monster_slug"] = monster_slug
+                    if saving_throws is not None:
+                        entry["saving_throws"] = dict(saving_throws)
+                    if ability_mods is not None:
+                        entry["ability_mods"] = dict(ability_mods)
+                    entries.append(entry)
 
-            self._rebuild_table(scroll_to_current=True)
+            if entries:
+                add_monsters = getattr(self, "_add_monster_spec_combatants_via_service", None)
+                if callable(add_monsters):
+                    result = add_monsters(entries)
+                else:
+                    result = self._add_monster_spec_combatants_direct(entries)
+                if not result.get("ok"):
+                    messagebox.showerror(
+                        "Bulk Add",
+                        str(result.get("error") or "Failed to add combatants."),
+                        parent=dlg,
+                    )
+                    return
+            elif direct_added:
+                self._rebuild_table(scroll_to_current=True)
+                lan_broadcast = getattr(self, "_lan_force_state_broadcast", None)
+                if callable(lan_broadcast):
+                    try:
+                        lan_broadcast()
+                    except Exception:
+                        pass
+
             dlg.destroy()
 
         btns = ttk.Frame(frm)

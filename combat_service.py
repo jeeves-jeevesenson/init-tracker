@@ -4,7 +4,7 @@ This module is the authoritative source of truth for the migrated combat/session
 slice.  Both the desktop UI and the DM web console read from and write through
 this service rather than owning separate state.
 
-Ownership model after this migration pass (Slice 9)
+Ownership model after this migration pass
 -----------------------------------------------------
 Backend-owned (this service + API routes):
   - combat lifecycle: start (begin initiative turn order), end (reset turn state)
@@ -17,6 +17,8 @@ Backend-owned (this service + API routes):
   - temp HP set/clear and delta-adjust for any combatant
   - recent event/battle-log lines
   - combatant creation / encounter population (quick-add via backend API)
+  - combatant creation / encounter population from player profiles
+  - combatant creation / encounter population from monster specs
   - initiative set / update for existing combatants
   - initiative roll for existing combatants
   - combatant removal
@@ -58,7 +60,8 @@ Still hybrid / desktop-primary:
   - Player-facing LAN client (existing /ws WebSocket + /lan routes)
   - Character editor, shop, spell/resource management
   - YAML-backed save/load (unchanged; mutations here persist via existing path)
-  - Full monster-spec / player-profile based combatant creation (desktop only)
+  - Spell/summon-generated combatant creation outside the migrated encounter
+    population entry points
   - Long rest batch HP restore now routes through
     CombatService.batch_long_rest_heal() → apply_heal() (Slice 12)
   - Wild Shape temp HP lifecycle now routes through service-owned temp HP setters
@@ -74,6 +77,8 @@ Usage (from LanController routes):
   service.prev_turn()
   service.set_turn_here(cid=2)
   service.adjust_hp(cid=3, delta=-5)
+  service.add_player_profile_combatants(["Fighter"])
+  service.add_monster_spec_combatants([{"name": "Goblin 1", "monster_slug": "goblin", "initiative": 12}])
   service.apply_damage(cid=3, raw_damage=12)
   service.apply_heal(cid=3, amount=8)
   service.set_condition(cid=3, ctype="poisoned", action="add")
@@ -1029,6 +1034,231 @@ class CombatService:
             except Exception:
                 pass
             return {"ok": True, "cid": cid, "snapshot": self.combat_snapshot()}
+
+    def add_player_profile_combatants(
+        self,
+        names: List[Any],
+        *,
+        skip_existing: bool = False,
+    ) -> Dict[str, Any]:
+        """Add encounter combatants from YAML-backed player profiles.
+
+        This is the canonical service-owned encounter population path for
+        player-profile combatants. It reuses the tracker's existing
+        ``_create_pc_from_profile`` helper so all player normalization,
+        temp-HP/max-HP setup, feature state copying, and startup summons stay
+        truthful, while the service owns the outer lock/rebuild/broadcast
+        boundary.
+
+        Args:
+            names: Player profile names to add.
+            skip_existing: When True, skip profile names that are already
+                present in the encounter by display name (used by the existing
+                HTTP encounter-player route). When False, creation is delegated
+                to the tracker helper, preserving its current duplicate-name
+                behavior for desktop flows.
+
+        Returns:
+            ``{ok, added, skipped, created, snapshot}``
+        """
+        if not isinstance(names, list):
+            return {"ok": False, "error": "names must be a list."}
+
+        with self._lock:
+            t = self._tracker
+            refresh_cache = getattr(t, "_yaml_players_refresh_cache", None)
+            if callable(refresh_cache):
+                try:
+                    refresh_cache(rebuild=True)
+                except Exception:
+                    pass
+
+            create_pc = getattr(t, "_create_pc_from_profile", None)
+            if not callable(create_pc):
+                return {"ok": False, "error": "Player-profile creation is unavailable."}
+
+            profiles = getattr(t, "_player_yaml_data_by_name", {}) or {}
+            existing_names = set()
+            if skip_existing:
+                existing_names = {
+                    str(getattr(c, "name", "")).strip().lower()
+                    for c in (getattr(t, "combatants", {}) or {}).values()
+                    if str(getattr(c, "name", "")).strip()
+                }
+
+            added: List[str] = []
+            skipped: List[str] = []
+            created: List[Dict[str, Any]] = []
+
+            for raw_name in names:
+                name = str(raw_name or "").strip()
+                if not name:
+                    continue
+                profile = profiles.get(name)
+                if not isinstance(profile, dict):
+                    skipped.append(name)
+                    continue
+                if skip_existing and name.lower() in existing_names:
+                    skipped.append(name)
+                    continue
+                try:
+                    cid = create_pc(name, profile)
+                except Exception:
+                    cid = None
+                if isinstance(cid, int):
+                    added.append(name)
+                    created.append({"cid": cid, "name": name})
+                    if skip_existing:
+                        existing_names.add(name.lower())
+                else:
+                    skipped.append(name)
+
+            if created:
+                try:
+                    t._rebuild_table(scroll_to_current=True)
+                except Exception:
+                    pass
+                try:
+                    t._lan_force_state_broadcast()
+                except Exception:
+                    pass
+
+            return {
+                "ok": True,
+                "added": added,
+                "skipped": skipped,
+                "created": created,
+                "snapshot": self.combat_snapshot(),
+            }
+
+    def add_monster_spec_combatants(self, entries: List[Dict[str, Any]]) -> Dict[str, Any]:
+        """Add encounter combatants from monster specs.
+
+        This is the canonical service-owned encounter population path for the
+        core monster-spec encounter flows used by the desktop bulk/random add
+        tools. Callers provide fully resolved encounter entry fields (name,
+        initiative, overrides) and the service owns the lock/rebuild/broadcast
+        boundary.
+
+        Each entry should include:
+          ``name`` (display name), ``monster_slug`` (lookup key), and
+          ``initiative``. Optional override fields mirror
+          ``InitiativeTracker._create_monster_spec_combatant``.
+
+        Returns:
+            ``{ok, added, skipped, snapshot}``
+        """
+        if not isinstance(entries, list):
+            return {"ok": False, "error": "entries must be a list."}
+
+        with self._lock:
+            t = self._tracker
+            find_spec = getattr(t, "_find_monster_spec_by_slug", None)
+            create_monster = getattr(t, "_create_monster_spec_combatant", None)
+            if not callable(find_spec) or not callable(create_monster):
+                return {"ok": False, "error": "Monster-spec creation is unavailable."}
+
+            added: List[Dict[str, Any]] = []
+            skipped: List[Dict[str, Any]] = []
+
+            for entry in entries:
+                if not isinstance(entry, dict):
+                    skipped.append({"reason": "invalid_entry"})
+                    continue
+
+                name = str(entry.get("name") or "").strip()
+                monster_slug = str(entry.get("monster_slug") or "").strip().lower()
+                if not name or not monster_slug:
+                    skipped.append(
+                        {
+                            "name": name or None,
+                            "monster_slug": monster_slug or None,
+                            "reason": "missing_name_or_slug",
+                        }
+                    )
+                    continue
+
+                try:
+                    initiative = int(entry.get("initiative"))
+                except Exception:
+                    skipped.append(
+                        {
+                            "name": name,
+                            "monster_slug": monster_slug,
+                            "reason": "invalid_initiative",
+                        }
+                    )
+                    continue
+
+                spec = find_spec(monster_slug)
+                if spec is None:
+                    skipped.append(
+                        {
+                            "name": name,
+                            "monster_slug": monster_slug,
+                            "reason": "monster_not_found",
+                        }
+                    )
+                    continue
+
+                try:
+                    cid = create_monster(
+                        name=name,
+                        monster_spec=spec,
+                        hp=entry.get("hp"),
+                        speed=entry.get("speed"),
+                        swim_speed=entry.get("swim_speed"),
+                        fly_speed=entry.get("fly_speed"),
+                        burrow_speed=entry.get("burrow_speed"),
+                        climb_speed=entry.get("climb_speed"),
+                        movement_mode=entry.get("movement_mode"),
+                        initiative=initiative,
+                        dex=entry.get("dex"),
+                        ally=bool(entry.get("ally", False)),
+                        saving_throws=entry.get("saving_throws"),
+                        ability_mods=entry.get("ability_mods"),
+                        actions=entry.get("actions"),
+                        bonus_actions=entry.get("bonus_actions"),
+                        reactions=entry.get("reactions"),
+                        roll=entry.get("roll"),
+                        nat20=entry.get("nat20"),
+                    )
+                except Exception:
+                    cid = None
+
+                if isinstance(cid, int):
+                    added.append(
+                        {
+                            "cid": cid,
+                            "name": name,
+                            "monster_slug": monster_slug,
+                        }
+                    )
+                else:
+                    skipped.append(
+                        {
+                            "name": name,
+                            "monster_slug": monster_slug,
+                            "reason": "create_failed",
+                        }
+                    )
+
+            if added:
+                try:
+                    t._rebuild_table(scroll_to_current=True)
+                except Exception:
+                    pass
+                try:
+                    t._lan_force_state_broadcast()
+                except Exception:
+                    pass
+
+            return {
+                "ok": True,
+                "added": added,
+                "skipped": skipped,
+                "snapshot": self.combat_snapshot(),
+            }
 
     def set_initiative(self, cid: int, initiative: int) -> Dict[str, Any]:
         """Update the initiative value for an existing combatant.

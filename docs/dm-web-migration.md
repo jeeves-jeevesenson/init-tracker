@@ -65,6 +65,14 @@ The **snapshot shape** (from `GET /api/dm/combat`):
 `InitiativeTracker` engine (same code path the desktop uses), ensuring
 there is only one source of truth.
 
+In addition to the HTTP endpoints above, the canonical service seam now owns
+core encounter population for:
+
+- YAML-backed **player-profile combatants** via
+  `CombatService.add_player_profile_combatants()`
+- **Monster-spec combatants** via
+  `CombatService.add_monster_spec_combatants()`
+
 ---
 
 ## What the DM web UI can do
@@ -133,7 +141,8 @@ The following areas remain desktop-primary (hybrid) after this pass:
 - Character editor, sheet management (`/edit_character`, `/new_character`)
 - Shop, item and spell management
 - YAML-backed save / load (files are still owned by the desktop flow)
-- Full monster-spec / player-profile based combatant creation (desktop only)
+- Summon-driven, mount, and other generated combatant creation paths outside
+  the migrated encounter-population entry points
 - LAN claimed-player initiative prompt UX and response workflow
 - Remaining spell-specific deep damage callers (Heat Metal, Hellish Rebuke,
   weapon-mastery attack paths) still call `_apply_damage_to_target_with_temp_hp`
@@ -166,6 +175,14 @@ The following desktop/LAN-originated mutations now route through
   `_set_initiative_via_service()` → `CombatService.set_initiative()`
 - **Desktop `_adjust_hp_via_service()`** → `CombatService.adjust_hp()` (wrapper
   available for progressive adoption by other desktop code paths)
+- **Encounter player-profile population** →
+  `_add_player_profile_combatants_via_service()` →
+  `CombatService.add_player_profile_combatants()` — current core callers:
+  `/api/encounter/players/add` and desktop roster-manager “Add to Combat”
+- **Encounter monster-spec population** →
+  `_add_monster_spec_combatants_via_service()` →
+  `CombatService.add_monster_spec_combatants()` — current core callers:
+  desktop `Bulk Add…` monster-spec rows and `Random Enemies…`
 - **Desktop `_set_condition_via_service()`** → `CombatService.set_condition()`
   (wrapper available for progressive adoption)
 - **Desktop `_set_temp_hp_via_service()`** → `CombatService.set_temp_hp()`
@@ -202,8 +219,8 @@ concurrently.  The current safeguard model:
   (e.g., `/api/encounter/players/add`).
 - `CombatService` holds a `threading.RLock` (re-entrant) that serialises
   concurrent mutations (next-turn, prev-turn, set-turn-here, HP adjust,
-  condition, temp HP, deep damage, heal) from the web API and
-  desktop-routed paths.  The RLock is re-entrant so that end-of-turn
+  condition, temp HP, encounter population, deep damage, heal) from the web
+  API and desktop-routed paths. The RLock is re-entrant so that end-of-turn
   or start-of-turn effects that trigger damage (which acquires the lock
   via `apply_damage`) can safely nest inside `next_turn` (which already
   holds the lock).
@@ -216,6 +233,7 @@ concurrently.  The current safeguard model:
 **Remaining risk**: The `CombatService` lock now covers all mutations that
 go through the service, including web-originated, desktop-routed paths
 (Start/Reset, Prev Turn, Next Turn, Set Turn Here, manual HP override),
+player-profile encounter population, monster-spec encounter population,
 all identified deep damage callers, all commonly used heal callers
 (heal dialog, Second Wind, Lay on Hands, Uncanny Metabolism, healing
 consumable use, spell healing resolution, Mantle of Inspiration temp HP,
