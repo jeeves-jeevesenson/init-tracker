@@ -42,11 +42,10 @@ If you complete an item, move its ID into **Section 5 (Completed archive)** and 
 
 1. **F06** — LAN attack workflow using configured weapons + hidden AC validation
 2. **F07** — Spell range overlay + LAN damage prompt integration
-3. **F08** — Terrain hazard preset system (DoT + triggers + saves + conditions)
-4. **F09** — Monster auto-path suggestion toggle (DM approve/reject)
-5. **F10** — Token image overlays for players/monsters
-6. **F11** — Custom condition icons
-7. **V01** — Broad Wild Shape quality pass (clarify-first bucket)
+3. **F09** — Monster auto-path suggestion toggle (DM approve/reject)
+4. **F10** — Token image overlays for players/monsters
+5. **F11** — Custom condition icons
+6. **V01** — Broad Wild Shape quality pass (clarify-first bucket)
 
 ---
 
@@ -134,36 +133,6 @@ If you complete an item, move its ID into **Section 5 (Completed archive)** and 
   - `python -m compileall .`
   - targeted LAN/auth tests relevant to touched paths
 
-### F08 — Terrain hazard preset system (DoT + triggers + saves + conditions)
-- **Status:** In progress
-- **Last update:** 2026-04-16 (codex)
-- **What changed:**
-  - Added LAN AoE trigger support for `leave`/`exit` hazard timing so over-time effects can fire when a unit exits or when the hazard moves off a unit.
-  - Added focused regression coverage in `tests/test_lan_aoe_over_time.py` for both leave-via-unit-move and leave-via-template-move flows.
-- **What remains:**
-  - Broaden hazard timing beyond current LAN AoE coverage if separate non-AoE map hazards need the same trigger vocabulary.
-  - Reconcile the broader F08 card against existing environment/move-damage hooks before declaring the milestone complete.
-- **Handoff notes:**
-  - Focused validation: `python -m unittest tests.test_lan_aoe_over_time`.
-  - Next slice should decide whether to extend `leave` timing into any remaining map-environment paths or close the card if current hazard behavior is sufficient.
-- **Impact / Complexity:** High / Hard
-- **Dependencies:** none
-- **Primary files likely touched:**
-  - `/home/runner/work/dnd-initiative-tracker/dnd-initiative-tracker/presets/`
-  - `/home/runner/work/dnd-initiative-tracker/dnd-initiative-tracker/helper_script.py`
-  - `/home/runner/work/dnd-initiative-tracker/dnd-initiative-tracker/dnd_initative_tracker.py`
-  - `/home/runner/work/dnd-initiative-tracker/dnd-initiative-tracker/tests/test_temp_move_bonus.py`
-- **Scope:**
-  - Preset schema for hazard triggers (enter/leave/start/end),
-  - damage + save config,
-  - fail/pass effect application hooks.
-- **Plan:**
-  1. Define additive hazard schema (no global preset reformatting).
-  2. Implement trigger evaluation hooks at movement + turn boundaries.
-  3. Add deterministic logging and tests for trigger timing.
-- **Risk notes:**
-  - Trigger timing bugs can cause repeated damage applications; idempotence checks required.
-
 ### F09 — Monster auto-path suggestion toggle (DM confirm/reject)
 - **Status:** Not started
 - **Impact / Complexity:** High / Hard
@@ -245,6 +214,7 @@ If you complete an item, move its ID into **Section 5 (Completed archive)** and 
 Completed as of 2026-02-15:
 - **Feature foundations:** F05 (weapon preset schema/docs plus normalized `attacks.weapons[]` runtime payload and regression coverage), F06 (LAN attack overlay, configured-weapon targeting, and action-to-attack-resource gating).
 - **2026-04-16:** F07 completed. Spell targeting now renders LAN range overlays from pending targeting state, directional/radius AoE placement reuses the same range guide path, and `spell_target_result.needs_damage_prompt` reopens the shared resolve modal so players can enter damage after server-authoritative save/target resolution.
+- **2026-04-17:** F08 completed. Canonical map hazards now share the `enter`/`leave`/`start`/`end` trigger vocabulary, stock hazard presets carry damage/save/condition defaults, and non-AoE hazards now flow through the existing environment and movement-damage hooks with focused regression coverage.
 - **Bug fixes:** B01, B02, B03, B04, B05, B06, B07, B08, B09, B10, B11, B12, B13, B14.
 - **UX:** U01, U02, U03, U04, U05, U06, U07, U08, U09.
 

@@ -381,6 +381,10 @@ TACTICAL_PRESET_CATALOG: Dict[str, Dict[str, Any]] = {
             "remaining_turns": 3,
             "movement_multiplier": 2.0,
             "blocks_movement": False,
+            "over_time": True,
+            "trigger_on_start_or_enter": "enter_or_end",
+            "dice": "1d6",
+            "damage_type": "fire",
         },
     },
     "smoke": {
@@ -397,6 +401,7 @@ TACTICAL_PRESET_CATALOG: Dict[str, Dict[str, Any]] = {
             "movement_multiplier": 1.0,
             "blocks_movement": False,
             "cover": "half",
+            "obscured": True,
         },
     },
     "oil": {
@@ -413,6 +418,12 @@ TACTICAL_PRESET_CATALOG: Dict[str, Dict[str, Any]] = {
             "movement_multiplier": 2.0,
             "blocks_movement": False,
             "flammable": True,
+            "over_time": True,
+            "trigger_on_start_or_enter": "enter",
+            "save_type": "dex",
+            "dc": 12,
+            "condition_on_fail": "prone",
+            "condition_duration_turns": 1,
         },
     },
     "burning_debris": {
@@ -429,6 +440,10 @@ TACTICAL_PRESET_CATALOG: Dict[str, Dict[str, Any]] = {
             "movement_multiplier": 2.0,
             "blocks_movement": True,
             "cover": "half",
+            "over_time": True,
+            "trigger_on_start_or_enter": "enter_or_end",
+            "dice": "1d8",
+            "damage_type": "fire",
         },
     },
     "dock_platform": {

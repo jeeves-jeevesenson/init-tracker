@@ -8604,6 +8604,11 @@ class InitiativeTracker(base.InitiativeTracker):
                 setattr(c, "start_turn_save_riders", remaining_save_riders)
                 if rider_msgs:
                     msg = "; ".join(filter(None, [msg, ", ".join(rider_msgs)]))
+        if getattr(c, "cid", None) in self.combatants:
+            try:
+                self._apply_map_hazard_turn_triggers(c, timing="start")
+            except Exception:
+                pass
         try:
             setattr(c, "has_mounted_this_turn", False)
             mount_cid = _normalize_cid_value(getattr(c, "rider_cid", None), "turn.start.rider_mount")
@@ -9455,6 +9460,10 @@ class InitiativeTracker(base.InitiativeTracker):
         if cid is None or cid not in self.combatants:
             return
         c = self.combatants[cid]
+        try:
+            self._apply_map_hazard_turn_triggers(c, timing="end")
+        except Exception:
+            pass
         setattr(c, "disengage_active", False)
         setattr(c, "speed_zero_until_turn_end", False)
         self._run_combatant_turn_hooks(c, "end_turn")
@@ -10335,7 +10344,7 @@ class InitiativeTracker(base.InitiativeTracker):
             pass
         try:
             self._lan_sync_fixed_to_caster_aoes(int(target_cid))
-            self._lan_handle_aoe_enter_triggers_for_moved_unit(
+            self._lan_handle_environment_triggers_for_moved_unit(
                 int(target_cid),
                 (int(origin[0]), int(origin[1])),
                 (int(destination[0]), int(destination[1])),
@@ -16392,7 +16401,7 @@ class InitiativeTracker(base.InitiativeTracker):
         self._lan_set_token_position(int(target_cid), int(destination_col), int(destination_row))
         self._lan_sync_fixed_to_caster_aoes(int(target_cid))
         if isinstance(origin_cell, tuple) and len(origin_cell) == 2:
-            self._lan_handle_aoe_enter_triggers_for_moved_unit(
+            self._lan_handle_environment_triggers_for_moved_unit(
                 int(target_cid),
                 (int(origin_cell[0]), int(origin_cell[1])),
                 (int(destination_col), int(destination_row)),
@@ -16606,7 +16615,7 @@ class InitiativeTracker(base.InitiativeTracker):
         if moved:
             self._lan_set_token_position(int(target_cid), int(col), int(row))
             self._lan_sync_fixed_to_caster_aoes(int(target_cid))
-            self._lan_handle_aoe_enter_triggers_for_moved_unit(int(target_cid), origin_cell, (int(col), int(row)))
+            self._lan_handle_environment_triggers_for_moved_unit(int(target_cid), origin_cell, (int(col), int(row)))
             self._enforce_johns_echo_tether(int(target_cid))
         return moved
 
@@ -18078,6 +18087,60 @@ class InitiativeTracker(base.InitiativeTracker):
                 condition = self._canonical_condition_key(rule.get("condition"))
                 if condition:
                     result["derived_conditions"].add(condition)
+        state = self._capture_canonical_map_state(prefer_window=True)
+        query = MapQueryAPI(state)
+        hazard_coverage: Dict[str, Dict[str, Any]] = {}
+        for cell in cell_set:
+            for hazard in query.hazards_at(int(cell[0]), int(cell[1])):
+                payload = hazard.payload if isinstance(hazard.payload, dict) else {}
+                env = self._canonical_hazard_environment_metadata(payload)
+                if not env:
+                    continue
+                hid = str(hazard.hazard_id)
+                entry = hazard_coverage.setdefault(
+                    hid,
+                    {
+                        "hazard": hazard,
+                        "environment": env,
+                        "cells": set(),
+                    },
+                )
+                entry["cells"].add((int(cell[0]), int(cell[1])))
+        for hid, entry in hazard_coverage.items():
+            env = entry.get("environment") if isinstance(entry.get("environment"), dict) else {}
+            included = {
+                (int(col), int(row))
+                for col, row in set(entry.get("cells") or set())
+            }
+            any_inside = bool(included)
+            fully_inside = len(included) == len(cell_set)
+
+            def _rule_active(rule: Dict[str, Any]) -> bool:
+                requires = str(rule.get("requires") or "any").strip().lower()
+                return fully_inside if requires == "entirely_inside" else any_inside
+
+            for rule in list(env.get("cast_rules") or []):
+                if isinstance(rule, dict) and _rule_active(rule):
+                    result["cast_rules"].append({**rule, "hazard_id": str(hid), "hazard": entry.get("hazard")})
+            for rule in list(env.get("damage_rules") or []):
+                if not isinstance(rule, dict) or not _rule_active(rule):
+                    continue
+                dtype = self._canonical_damage_type(rule.get("damage_type"))
+                if not dtype:
+                    continue
+                mode = str(rule.get("mode") or "").strip().lower()
+                if mode == "immunity":
+                    result["damage_immunities"].add(dtype)
+                elif mode == "resistance":
+                    result["damage_resistances"].add(dtype)
+                elif mode == "vulnerability":
+                    result["damage_vulnerabilities"].add(dtype)
+            for rule in list(env.get("derived_conditions") or []):
+                if not isinstance(rule, dict) or not _rule_active(rule):
+                    continue
+                condition = self._canonical_condition_key(rule.get("condition"))
+                if condition:
+                    result["derived_conditions"].add(condition)
         return result
 
     def _map_effect_contains_cell(self, effect: Dict[str, Any], col: int, row: int) -> bool:
@@ -18159,6 +18222,25 @@ class InitiativeTracker(base.InitiativeTracker):
                 continue
             entry = {"aid": int(aid), "effect": aoe, "environment": env}
             effects.append(entry)
+        state = self._capture_canonical_map_state(prefer_window=True)
+        query = MapQueryAPI(state)
+        for hazard in query.hazards_at(int(col), int(row)):
+            payload = hazard.payload if isinstance(hazard.payload, dict) else {}
+            env = self._canonical_hazard_environment_metadata(payload)
+            if not env:
+                continue
+            effects.append(
+                {
+                    "effect_key": f"hazard:{str(hazard.hazard_id)}",
+                    "hazard_id": str(hazard.hazard_id),
+                    "effect": {
+                        "name": str(payload.get("name") or hazard.kind or "Hazard"),
+                        "kind": str(hazard.kind or "hazard"),
+                        "payload": dict(payload),
+                    },
+                    "environment": env,
+                }
+            )
         return effects
 
     def _cell_has_silence(self, col: int, row: int) -> bool:
@@ -18279,6 +18361,327 @@ class InitiativeTracker(base.InitiativeTracker):
 
     def _map_spell_effect_targets(self, effect: Dict[str, Any]) -> List[int]:
         return self._lan_compute_included_units_for_aoe(effect if isinstance(effect, dict) else {})
+
+    def _normalize_hazard_trigger_mode(self, value: Any) -> str:
+        raw = str(value or "").strip().lower().replace("-", "_").replace("/", "_")
+        while "__" in raw:
+            raw = raw.replace("__", "_")
+        aliases = {
+            "start": "start",
+            "enter": "enter",
+            "leave": "leave",
+            "exit": "leave",
+            "end": "end",
+            "start_or_enter": "start_or_enter",
+            "enter_or_end": "enter_or_end",
+        }
+        return aliases.get(raw, "")
+
+    def _normalize_hazard_condition_list(self, value: Any) -> List[str]:
+        items: List[Any]
+        if isinstance(value, str):
+            items = [value]
+        elif isinstance(value, (list, tuple, set)):
+            items = list(value)
+        else:
+            items = []
+        normalized: List[str] = []
+        seen: set[str] = set()
+        for raw in items:
+            key = self._canonical_condition_key(raw)
+            if not key or key in seen:
+                continue
+            normalized.append(key)
+            seen.add(key)
+        return normalized
+
+    def _normalize_map_hazard_trigger_payload(self, payload: Any) -> Dict[str, Any]:
+        data = payload if isinstance(payload, dict) else {}
+        timing = self._normalize_hazard_trigger_mode(
+            data.get("trigger_on_start_or_enter")
+            or data.get("trigger_mode")
+            or data.get("timing")
+        )
+        over_time_raw = data.get("over_time")
+        if isinstance(over_time_raw, str):
+            over_time = over_time_raw.strip().lower() in {"1", "true", "yes", "y", "on"}
+        elif over_time_raw is None:
+            over_time = bool(timing)
+        else:
+            over_time = bool(over_time_raw)
+        save_type = self._coerce_spell_ability_key(data.get("save_type") or data.get("save_ability"))
+        try:
+            dc = int(data.get("dc"))
+        except Exception:
+            dc = 0
+        damage_expr = str(data.get("dice") or data.get("default_damage") or "").strip().lower()
+        damage_type = self._canonical_damage_type(data.get("damage_type") or data.get("type"))
+        if not damage_type:
+            damage_type = str(data.get("damage_type") or data.get("type") or "").strip().lower()
+        half_on_pass_raw = data.get("half_on_pass")
+        if isinstance(half_on_pass_raw, str):
+            half_on_pass = half_on_pass_raw.strip().lower() in {"1", "true", "yes", "y", "on"}
+        else:
+            half_on_pass = bool(half_on_pass_raw)
+        fail_conditions = self._normalize_hazard_condition_list(data.get("conditions_on_fail"))
+        if not fail_conditions:
+            fail_conditions = self._normalize_hazard_condition_list(
+                data.get("condition_on_fail") or data.get("condition")
+            )
+        success_conditions = self._normalize_hazard_condition_list(data.get("conditions_on_success"))
+        if not success_conditions:
+            success_conditions = self._normalize_hazard_condition_list(data.get("condition_on_success"))
+        try:
+            condition_duration_turns = int(data.get("condition_duration_turns"))
+        except Exception:
+            condition_duration_turns = 0
+        if condition_duration_turns <= 0:
+            condition_duration = None
+        else:
+            condition_duration = int(condition_duration_turns)
+        return {
+            "over_time": bool(over_time),
+            "timing": timing,
+            "save_type": save_type,
+            "dc": int(dc) if int(dc) > 0 else None,
+            "damage_expr": damage_expr,
+            "damage_type": damage_type,
+            "half_on_pass": bool(half_on_pass),
+            "conditions_on_fail": list(fail_conditions),
+            "conditions_on_success": list(success_conditions),
+            "condition_duration_turns": condition_duration,
+        }
+
+    def _merge_map_environment_metadata(self, primary: Dict[str, Any], secondary: Dict[str, Any]) -> Dict[str, Any]:
+        merged = dict(primary or {})
+        for key, value in (secondary or {}).items():
+            if key in {"cast_rules", "damage_rules", "derived_conditions"}:
+                existing = list(merged.get(key) if isinstance(merged.get(key), list) else [])
+                additions = list(value if isinstance(value, list) else [])
+                merged[key] = existing + additions
+                continue
+            if key == "move_damage_trigger" and isinstance(value, dict):
+                merged[key] = dict(value)
+                continue
+            merged[key] = value
+        return merged
+
+    def _canonical_hazard_environment_metadata(self, payload: Any) -> Dict[str, Any]:
+        data = payload if isinstance(payload, dict) else {}
+        base_env = self._normalize_map_environment_metadata(data)
+        nested_env = self._normalize_map_environment_metadata(
+            data.get("environment") if isinstance(data.get("environment"), dict) else {}
+        )
+        return self._merge_map_environment_metadata(base_env, nested_env)
+
+    def _combatant_overlapping_canonical_hazards(
+        self,
+        combatant: Any,
+        *,
+        destination: Optional[Tuple[int, int]] = None,
+        state: Optional[MapState] = None,
+    ) -> Dict[str, MapHazard]:
+        occupied_cells = self._combatant_space_cells(combatant, destination=destination)
+        if not occupied_cells:
+            return {}
+        query = MapQueryAPI(state if isinstance(state, MapState) else self._capture_canonical_map_state(prefer_window=True))
+        hazards: Dict[str, MapHazard] = {}
+        for col, row in occupied_cells:
+            for hazard in query.hazards_at(int(col), int(row)):
+                hazards[str(hazard.hazard_id)] = hazard
+        return hazards
+
+    def _apply_map_hazard_trigger_to_combatant(
+        self,
+        hazard_id: str,
+        hazard: MapHazard,
+        combatant: Any,
+        *,
+        turn_key: Optional[Tuple[int, int, Optional[int]]] = None,
+    ) -> bool:
+        cid = _normalize_cid_value(getattr(combatant, "cid", None), "hazard.trigger.cid")
+        if cid is None or not isinstance(hazard, MapHazard):
+            return False
+        payload = hazard.payload if isinstance(hazard.payload, dict) else {}
+        trigger = self._normalize_map_hazard_trigger_payload(payload)
+        timing = str(trigger.get("timing") or "").strip().lower()
+        if not bool(trigger.get("over_time")) or not timing:
+            return False
+        has_effect = bool(
+            trigger.get("damage_expr")
+            or trigger.get("conditions_on_fail")
+            or trigger.get("conditions_on_success")
+            or (trigger.get("save_type") and trigger.get("dc"))
+        )
+        if not has_effect:
+            return False
+        dedupe_map = self.__dict__.get("_map_hazard_last_applied_turn")
+        if not isinstance(dedupe_map, dict):
+            dedupe_map = {}
+            self._map_hazard_last_applied_turn = dedupe_map
+        resolved_turn_key = turn_key if turn_key is not None else self._lan_current_turn_key()
+        dedupe_key = (str(hazard_id or ""), int(cid))
+        if dedupe_map.get(dedupe_key) == resolved_turn_key:
+            return False
+
+        save_type = str(trigger.get("save_type") or "").strip().lower()
+        dc = int(trigger.get("dc") or 0)
+        save_roll = None
+        save_mod = 0
+        save_total = None
+        save_passed: Optional[bool] = None
+        if save_type and dc > 0:
+            save_mode = self._combatant_save_roll_mode(combatant, save_type)
+            save_roll, _alt_roll = self._roll_save_with_mode(
+                combatant,
+                save_type,
+                disadvantage=save_mode == "disadvantage",
+                advantage=save_mode == "advantage",
+            )
+            saves = getattr(combatant, "saving_throws", None)
+            if isinstance(saves, dict):
+                try:
+                    save_mod = int(saves.get(save_type) or 0)
+                except Exception:
+                    save_mod = 0
+            if save_mod == 0:
+                mods = getattr(combatant, "ability_mods", None)
+                if isinstance(mods, dict):
+                    try:
+                        save_mod = int(mods.get(save_type) or 0)
+                    except Exception:
+                        save_mod = 0
+            save_total = int(save_roll) + int(save_mod)
+            save_passed = bool(int(save_roll) != 1 and int(save_total) >= int(dc))
+
+        damage_expr = str(trigger.get("damage_expr") or "").strip().lower()
+        rolled_damage = 0
+        if damage_expr:
+            rolled_damage = max(0, int(self._roll_dice_expression(damage_expr)))
+            if save_passed is True:
+                if bool(trigger.get("half_on_pass")):
+                    rolled_damage = int(rolled_damage // 2)
+                else:
+                    rolled_damage = 0
+        damage_applied = 0
+        damage_type = str(trigger.get("damage_type") or "").strip().lower()
+        if rolled_damage > 0:
+            adjusted = self._adjust_damage_entries_for_target(
+                combatant,
+                [{"amount": int(rolled_damage), "type": damage_type or "damage"}],
+            )
+            entries = list((adjusted or {}).get("entries") or [])
+            damage_applied = sum(max(0, int(entry.get("amount") or 0)) for entry in entries if isinstance(entry, dict))
+            if damage_applied > 0:
+                self._apply_damage_via_service(combatant, int(damage_applied))
+
+        applied_conditions: List[str] = []
+        target_conditions = (
+            list(trigger.get("conditions_on_success") or [])
+            if save_passed is True
+            else list(trigger.get("conditions_on_fail") or [])
+        )
+        for condition in target_conditions:
+            condition_key = self._canonical_condition_key(condition)
+            if not condition_key or self._condition_is_immune_for_target(combatant, condition_key):
+                continue
+            self._ensure_condition_stack(
+                combatant,
+                condition_key,
+                trigger.get("condition_duration_turns"),
+            )
+            applied_conditions.append(condition_key)
+
+        dedupe_map[dedupe_key] = resolved_turn_key
+        hazard_name = str(payload.get("name") or hazard.kind or "Hazard").strip() or "Hazard"
+        log_parts = [f"{hazard_name} triggers for {getattr(combatant, 'name', 'Target')}"]
+        if save_roll is not None and save_total is not None:
+            log_parts.append(
+                f"{save_type.upper()} save {int(save_roll)} + {int(save_mod)} = {int(save_total)} vs DC {int(dc)} "
+                f"({'PASS' if save_passed else 'FAIL'})"
+            )
+        if damage_expr:
+            if damage_applied > 0:
+                log_parts.append(f"takes {int(damage_applied)} {damage_type or 'damage'}")
+            elif rolled_damage > 0:
+                log_parts.append(f"ignores {int(rolled_damage)} {damage_type or 'damage'}")
+        if applied_conditions:
+            log_parts.append(f"gains {', '.join(applied_conditions)}")
+        self._log("; ".join(log_parts), cid=int(cid))
+        return True
+
+    def _apply_map_hazard_turn_triggers(self, combatant: Any, *, timing: str) -> bool:
+        normalized_timing = str(timing or "").strip().lower()
+        if normalized_timing not in {"start", "end"}:
+            return False
+        state = self._capture_canonical_map_state(prefer_window=True)
+        overlapping = self._combatant_overlapping_canonical_hazards(combatant, state=state)
+        if not overlapping:
+            return False
+        applied = False
+        for hazard_id, hazard in overlapping.items():
+            payload = hazard.payload if isinstance(hazard.payload, dict) else {}
+            trigger_mode = self._normalize_hazard_trigger_mode(
+                payload.get("trigger_on_start_or_enter")
+                or payload.get("trigger_mode")
+                or payload.get("timing")
+            )
+            if normalized_timing == "start" and trigger_mode not in {"start", "start_or_enter"}:
+                continue
+            if normalized_timing == "end" and trigger_mode not in {"end", "enter_or_end"}:
+                continue
+            applied = self._apply_map_hazard_trigger_to_combatant(str(hazard_id), hazard, combatant) or applied
+        return applied
+
+    def _lan_handle_map_hazard_triggers_for_moved_unit(
+        self,
+        cid: int,
+        origin_cell: Tuple[int, int],
+        new_cell: Tuple[int, int],
+    ) -> None:
+        if tuple(origin_cell) == tuple(new_cell):
+            return
+        combatant = self.combatants.get(int(cid))
+        if combatant is None:
+            return
+        state = self._capture_canonical_map_state(prefer_window=True)
+        before = self._combatant_overlapping_canonical_hazards(
+            combatant,
+            destination=(int(origin_cell[0]), int(origin_cell[1])),
+            state=state,
+        )
+        after = self._combatant_overlapping_canonical_hazards(
+            combatant,
+            destination=(int(new_cell[0]), int(new_cell[1])),
+            state=state,
+        )
+        all_hazard_ids = set(before.keys()) | set(after.keys())
+        if not all_hazard_ids:
+            return
+        turn_key = self._lan_current_turn_key()
+        for hazard_id in sorted(all_hazard_ids):
+            hazard = after.get(hazard_id) or before.get(hazard_id)
+            if not isinstance(hazard, MapHazard):
+                continue
+            payload = hazard.payload if isinstance(hazard.payload, dict) else {}
+            trigger_mode = self._normalize_hazard_trigger_mode(
+                payload.get("trigger_on_start_or_enter")
+                or payload.get("trigger_mode")
+                or payload.get("timing")
+            )
+            if trigger_mode in {"enter", "start_or_enter", "enter_or_end"} and hazard_id in after and hazard_id not in before:
+                self._apply_map_hazard_trigger_to_combatant(str(hazard_id), hazard, combatant, turn_key=turn_key)
+            elif trigger_mode == "leave" and hazard_id in before and hazard_id not in after:
+                self._apply_map_hazard_trigger_to_combatant(str(hazard_id), hazard, combatant, turn_key=turn_key)
+
+    def _lan_handle_environment_triggers_for_moved_unit(
+        self,
+        cid: int,
+        origin_cell: Tuple[int, int],
+        new_cell: Tuple[int, int],
+    ) -> None:
+        self._lan_handle_aoe_enter_triggers_for_moved_unit(int(cid), origin_cell, new_cell)
+        self._lan_handle_map_hazard_triggers_for_moved_unit(int(cid), origin_cell, new_cell)
 
     def _apply_map_spell_trigger(
         self,
@@ -39334,7 +39737,7 @@ class InitiativeTracker(base.InitiativeTracker):
         except Exception:
             pass
         self._lan_sync_fixed_to_caster_aoes(int(cid))
-        self._lan_handle_aoe_enter_triggers_for_moved_unit(int(cid), origin_cell, (int(col), int(row)))
+        self._lan_handle_environment_triggers_for_moved_unit(int(cid), origin_cell, (int(col), int(row)))
 
         # Update live map window token if open
         mw = getattr(self, "_map_window", None)
@@ -39495,12 +39898,19 @@ class InitiativeTracker(base.InitiativeTracker):
         effects.extend(self._collect_environmental_effects_for_cell(int(dest_cell[0]), int(dest_cell[1]), combatant=mover))
         if not effects:
             return
-        dedupe: Dict[int, Dict[str, Any]] = {}
-        for entry in effects:
-            aid = int(entry.get("aid") or 0)
-            if aid > 0:
-                dedupe[aid] = entry
-        for aid, entry in dedupe.items():
+        dedupe: Dict[str, Dict[str, Any]] = {}
+        for idx, entry in enumerate(effects):
+            if not isinstance(entry, dict):
+                continue
+            effect_key = str(entry.get("effect_key") or "").strip()
+            if not effect_key:
+                aid = entry.get("aid")
+                try:
+                    effect_key = f"aoe:{int(aid)}"
+                except Exception:
+                    effect_key = f"effect:{int(idx)}"
+            dedupe[effect_key] = entry
+        for _effect_key, entry in dedupe.items():
             env = entry.get("environment") if isinstance(entry.get("environment"), dict) else {}
             trigger = env.get("move_damage_trigger") if isinstance(env.get("move_damage_trigger"), dict) else {}
             try:
@@ -39524,8 +39934,7 @@ class InitiativeTracker(base.InitiativeTracker):
             applied = sum(max(0, int(item.get("amount") or 0)) for item in entries if isinstance(item, dict))
             if applied <= 0:
                 continue
-            before_hp = int(getattr(mover, "hp", 0) or 0)
-            setattr(mover, "hp", max(0, before_hp - int(applied)))
+            self._apply_damage_via_service(mover, int(applied))
             spell_name = str((entry.get("effect") or {}).get("name") or "Terrain")
             self._log(
                 f"{mover.name} takes {applied} {damage_type or 'damage'} from {spell_name} movement.",

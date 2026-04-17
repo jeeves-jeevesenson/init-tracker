@@ -30,6 +30,15 @@ class TacticalPresetCatalogTests(unittest.TestCase):
         self.assertIsInstance(payload.get("on_destroy_spawn_hazard"), dict)
         self.assertEqual(payload["on_destroy_spawn_hazard"]["kind"], "fire")
 
+    def test_oil_defaults_include_trigger_save_and_condition(self):
+        normalized = normalize_tactical_payload(category="hazard", kind="oil", payload={})
+        payload = normalized["payload"]
+        self.assertEqual(payload["tactical_preset_id"], "oil")
+        self.assertTrue(payload["over_time"])
+        self.assertEqual(payload["trigger_on_start_or_enter"], "enter")
+        self.assertEqual(payload["save_type"], "dex")
+        self.assertEqual(payload["condition_on_fail"], "prone")
+
     def test_traversal_presets_include_expected_tags(self):
         ladder = normalize_tactical_payload(category="feature", kind="ladder", payload={})
         gangplank = normalize_tactical_payload(category="feature", kind="gangplank", payload={})
