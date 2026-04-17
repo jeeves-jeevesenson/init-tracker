@@ -142,6 +142,30 @@ MONK_STEP_OF_WIND_FIELDS: Sequence[str] = ("type", "mode")
 MONK_ELEMENTAL_ATTUNEMENT_FIELDS: Sequence[str] = ("type", "mode")
 MONK_ELEMENTAL_BURST_FIELDS: Sequence[str] = ("type", "damage_type", "movement_mode", "payload")
 MONK_UNCANNY_METABOLISM_FIELDS: Sequence[str] = ("type",)
+CAST_SPELL_FIELDS: Sequence[str] = (
+    "type",
+    "spell_slug",
+    "spell_id",
+    "slot_level",
+    "summon_choice",
+    "summon_quantity",
+    "variant",
+    "damage_type",
+    "consumes_pool_id",
+    "consumes_pool_cost",
+    "payload",
+)
+CAST_AOE_FIELDS: Sequence[str] = (
+    "type",
+    "spell_slug",
+    "spell_id",
+    "slot_level",
+    "summon_choice",
+    "consumes_pool_id",
+    "consumes_pool_cost",
+    "damage_entries",
+    "payload",
+)
 
 FIGHTER_MONK_RESOURCE_ACTION_TYPES = frozenset(
     {
@@ -185,6 +209,13 @@ WILD_SHAPE_COMMAND_TYPES = frozenset(
         "wild_shape_regain_use",
         "wild_shape_regain_spell",
         "wild_shape_set_known",
+    }
+)
+
+SPELL_LAUNCH_COMMAND_TYPES = frozenset(
+    {
+        "cast_spell",
+        "cast_aoe",
     }
 )
 
@@ -850,6 +881,38 @@ def build_monk_uncanny_metabolism_contract(
     return build_command_request_contract(
         "monk_uncanny_metabolism",
         _project_payload(msg, MONK_UNCANNY_METABOLISM_FIELDS, "monk_uncanny_metabolism"),
+        cid=cid,
+        ws_id=ws_id,
+        is_admin=is_admin,
+    )
+
+
+def build_cast_spell_contract(
+    msg: Dict[str, Any],
+    *,
+    cid: Optional[int],
+    ws_id: Any,
+    is_admin: bool,
+) -> Dict[str, Any]:
+    return build_command_request_contract(
+        "cast_spell",
+        _project_payload(msg, CAST_SPELL_FIELDS, "cast_spell"),
+        cid=cid,
+        ws_id=ws_id,
+        is_admin=is_admin,
+    )
+
+
+def build_cast_aoe_contract(
+    msg: Dict[str, Any],
+    *,
+    cid: Optional[int],
+    ws_id: Any,
+    is_admin: bool,
+) -> Dict[str, Any]:
+    return build_command_request_contract(
+        "cast_aoe",
+        _project_payload(msg, CAST_AOE_FIELDS, "cast_aoe"),
         cid=cid,
         ws_id=ws_id,
         is_admin=is_admin,

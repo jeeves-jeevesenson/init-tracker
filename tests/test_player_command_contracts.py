@@ -7,10 +7,13 @@ from pathlib import Path
 import dnd_initative_tracker as tracker_mod
 from player_command_contracts import (
     MOVEMENT_ACTION_COMMAND_TYPES,
+    SPELL_LAUNCH_COMMAND_TYPES,
     TURN_LOCAL_COMMAND_TYPES,
     WILD_SHAPE_COMMAND_TYPES,
     build_action_surge_use_contract,
     build_attack_request_contract,
+    build_cast_aoe_contract,
+    build_cast_spell_contract,
     build_cycle_movement_mode_contract,
     build_dash_contract,
     build_dismount_contract,
@@ -218,6 +221,44 @@ class WildShapeCommandContractTests(unittest.TestCase):
                 f"player_command.{command_type}.request",
             )
             self.assertEqual((contract.get("actor") or {}).get("cid"), 13)
+            self.assertEqual((contract.get("payload") or {}).get("type"), command_type)
+
+
+class SpellLaunchCommandContractTests(unittest.TestCase):
+    def test_spell_launch_command_contract_builders_cover_the_family(self):
+        builders = {
+            "cast_spell": (
+                build_cast_spell_contract,
+                {
+                    "type": "cast_spell",
+                    "spell_slug": "fire-bolt",
+                    "spell_id": "fire-bolt",
+                    "slot_level": 1,
+                    "payload": {"spell_slug": "fire-bolt"},
+                },
+            ),
+            "cast_aoe": (
+                build_cast_aoe_contract,
+                {
+                    "type": "cast_aoe",
+                    "spell_slug": "fireball",
+                    "spell_id": "fireball",
+                    "slot_level": 3,
+                    "payload": {"shape": "sphere", "radius_ft": 20},
+                },
+            ),
+        }
+
+        self.assertEqual(set(builders.keys()), set(SPELL_LAUNCH_COMMAND_TYPES))
+
+        for command_type, (builder, msg) in builders.items():
+            contract = builder(dict(msg), cid=21, ws_id=42, is_admin=False)
+            self.assertEqual(contract.get("command_type"), command_type)
+            self.assertEqual(
+                (contract.get("contract") or {}).get("schema"),
+                f"player_command.{command_type}.request",
+            )
+            self.assertEqual((contract.get("actor") or {}).get("cid"), 21)
             self.assertEqual((contract.get("payload") or {}).get("type"), command_type)
 
 

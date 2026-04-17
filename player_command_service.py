@@ -81,11 +81,14 @@ from player_command_contracts import (
     FIGHTER_MONK_RESOURCE_ACTION_TYPES,
     MOVEMENT_ACTION_COMMAND_TYPES,
     SPECIAL_REACTION_TRIGGERS,
+    SPELL_LAUNCH_COMMAND_TYPES,
     TURN_LOCAL_COMMAND_TYPES,
     WILD_SHAPE_COMMAND_TYPES,
     apply_resume_dispatch,
     build_attack_request_contract,
     build_action_surge_use_contract,
+    build_cast_aoe_contract,
+    build_cast_spell_contract,
     build_cycle_movement_mode_contract,
     build_dash_contract,
     build_dispatch_result,
@@ -720,6 +723,9 @@ class PlayerCommandService:
     }
     _WILD_SHAPE_COMMAND_HANDLERS = {
         command_type: command_type for command_type in WILD_SHAPE_COMMAND_TYPES
+    }
+    _SPELL_LAUNCH_COMMAND_HANDLERS = {
+        command_type: command_type for command_type in SPELL_LAUNCH_COMMAND_TYPES
     }
 
     def __init__(self, tracker: "InitiativeTracker") -> None:
@@ -2139,6 +2145,137 @@ class PlayerCommandService:
             request=request_contract,
             known=list(deduped),
             known_limit=int(known_limit),
+        )
+
+    # ------------------------------------------------------------------
+    # spell-launch commands (cast_spell / cast_aoe)
+    # ------------------------------------------------------------------
+
+    def dispatch_spell_launch_command(
+        self,
+        msg: Dict[str, Any],
+        *,
+        cid: Optional[int],
+        ws_id: Any,
+        is_admin: bool,
+        claimed: Optional[int] = None,
+    ) -> Dict[str, Any]:
+        command_type = str(msg.get("type") if isinstance(msg, dict) else "").strip().lower()
+        handler_name = self._SPELL_LAUNCH_COMMAND_HANDLERS.get(command_type)
+        if not handler_name:
+            return build_dispatch_result(
+                "spell_launch_command",
+                False,
+                reason="unsupported_command",
+                received_type=command_type,
+            )
+        handler = getattr(self, handler_name, None)
+        if not callable(handler):
+            return build_dispatch_result(
+                command_type,
+                False,
+                reason="handler_missing",
+            )
+        return handler(
+            msg if isinstance(msg, dict) else {},
+            cid=cid,
+            ws_id=ws_id,
+            is_admin=is_admin,
+            claimed=claimed,
+        )
+
+    def cast_spell(
+        self,
+        msg: Dict[str, Any],
+        *,
+        cid: Optional[int],
+        ws_id: Any,
+        is_admin: bool,
+        claimed: Optional[int] = None,
+    ) -> Dict[str, Any]:
+        t = self._tracker
+        request_contract = build_cast_spell_contract(
+            msg,
+            cid=cid,
+            ws_id=ws_id,
+            is_admin=is_admin,
+        )
+        handler = getattr(t, "_handle_cast_spell_request", None)
+        if not callable(handler):
+            return build_dispatch_result(
+                "cast_spell",
+                False,
+                reason="handler_missing",
+                request=request_contract,
+            )
+        try:
+            handler(
+                msg if isinstance(msg, dict) else {},
+                cid=cid,
+                ws_id=ws_id,
+                is_admin=is_admin,
+                claimed=claimed,
+            )
+        except Exception as exc:
+            self._oplog(f"cast_spell handler raised: {exc}", level="warning")
+            return build_dispatch_result(
+                "cast_spell",
+                False,
+                reason="exception",
+                error=str(exc),
+                request=request_contract,
+            )
+        return build_dispatch_result(
+            "cast_spell",
+            True,
+            request=request_contract,
+        )
+
+    def cast_aoe(
+        self,
+        msg: Dict[str, Any],
+        *,
+        cid: Optional[int],
+        ws_id: Any,
+        is_admin: bool,
+        claimed: Optional[int] = None,
+    ) -> Dict[str, Any]:
+        t = self._tracker
+        request_contract = build_cast_aoe_contract(
+            msg,
+            cid=cid,
+            ws_id=ws_id,
+            is_admin=is_admin,
+        )
+        handler = getattr(t, "_handle_cast_aoe_request", None)
+        if not callable(handler):
+            return build_dispatch_result(
+                "cast_aoe",
+                False,
+                reason="handler_missing",
+                request=request_contract,
+            )
+        try:
+            handler(
+                msg if isinstance(msg, dict) else {},
+                cid=cid,
+                ws_id=ws_id,
+                is_admin=is_admin,
+                claimed=claimed,
+            )
+        except Exception as exc:
+            self._oplog(f"cast_aoe handler raised: {exc}", level="warning")
+            return build_dispatch_result(
+                "cast_aoe",
+                False,
+                reason="exception",
+                error=str(exc),
+                request=request_contract,
+            )
+        return build_dispatch_result(
+            "cast_aoe",
+            True,
+            request=request_contract,
         )
 
     # ------------------------------------------------------------------

@@ -93,6 +93,7 @@ from ship_blueprints import load_repo_runtime_ship_blueprints
 from player_command_contracts import (
     FIGHTER_MONK_RESOURCE_ACTION_TYPES,
     MOVEMENT_ACTION_COMMAND_TYPES,
+    SPELL_LAUNCH_COMMAND_TYPES,
     TURN_LOCAL_COMMAND_TYPES,
     WILD_SHAPE_COMMAND_TYPES,
     build_attack_request_contract,
@@ -33113,6 +33114,1104 @@ class InitiativeTracker(base.InitiativeTracker):
                 pass
         self._lan.toast(ws_id, "Attack hits." if hit else "Attack misses.")
 
+    def _handle_cast_aoe_request(
+        self,
+        msg: Dict[str, Any],
+        *,
+        cid: Optional[int],
+        ws_id: Any,
+        is_admin: bool,
+        claimed: Optional[int],
+    ) -> None:
+        payload = msg.get("payload") or {}
+        raw_sculpted_cids = payload.get("sculpted_cids")
+        shape = str(payload.get("shape") or payload.get("kind") or "").strip().lower()
+        if shape not in ("circle", "square", "line", "sphere", "cube", "cone", "cylinder", "wall", "summon"):
+            self._lan.toast(ws_id, "Pick a valid spell shape, matey.")
+            return
+        spend = self._resolve_spell_spend_type(preset=None, msg=msg, payload=payload)
+        slot_level = None
+        try:
+            slot_level = int(msg.get("slot_level"))
+        except Exception:
+            slot_level = None
+        if slot_level is not None and slot_level < 0:
+            slot_level = None
+        spell_slug = str(msg.get("spell_slug") or payload.get("spell_slug") or "").strip()
+        spell_id = str(msg.get("spell_id") or payload.get("spell_id") or "").strip()
+        summon_choice = msg.get("summon_choice") if msg.get("summon_choice") not in (None, "") else payload.get("summon_choice")
+        manual_damage_entries: List[Dict[str, Any]] = []
+        raw_damage_entries = msg.get("damage_entries")
+        if isinstance(raw_damage_entries, list):
+            for entry in raw_damage_entries:
+                if not isinstance(entry, dict):
+                    continue
+                amount_raw = entry.get("amount")
+                if isinstance(amount_raw, bool):
+                    continue
+                if isinstance(amount_raw, float) and not math.isfinite(amount_raw):
+                    continue
+                try:
+                    amount = int(amount_raw)
+                except Exception:
+                    continue
+                if amount <= 0:
+                    continue
+                dtype = str(entry.get("type") or "").strip().lower()
+                if not dtype:
+                    continue
+                manual_damage_entries.append({"amount": int(amount), "type": dtype})
+        c = self.combatants.get(cid) if cid is not None else None
+        if shape == "summon":
+            if cid is None:
+                self._lan.toast(ws_id, "Pick a valid caster first, matey.")
+                return
+            if c is None:
+                self._lan.toast(ws_id, "That scallywag ain’t in combat no more.")
+                return
+            if not is_admin:
+                if spend == "bonus":
+                    if not self._use_bonus_action(c):
+                        self._lan.toast(ws_id, "No bonus actions left, matey.")
+                        return
+                elif spend == "reaction":
+                    if not self._use_reaction(c):
+                        self._lan.toast(ws_id, "No reactions left, matey.")
+                        return
+                else:
+                    if not self._use_action(c):
+                        self._lan.toast(ws_id, "No actions left, matey.")
+                        return
+            ok_custom, err_custom, spawned_custom = self._spawn_custom_summons_from_payload(
+                caster_cid=int(cid),
+                payload=payload,
+            )
+            if not ok_custom:
+                self._lan.toast(ws_id, err_custom or "Custom summon failed, matey.")
+                return
+            self._rebuild_table(scroll_to_current=True)
+            self._lan_force_state_broadcast()
+            self._lan.toast(ws_id, f"Summoned {len(spawned_custom)} custom creature(s).")
+            return
+        preset = self._find_spell_preset(spell_slug=spell_slug, spell_id=spell_id)
+        preset_dict = preset if isinstance(preset, dict) else {}
+        spend = self._resolve_spell_spend_type(preset=preset_dict, msg=msg, payload=payload)
+        centered_shapes = {"circle", "sphere", "cylinder", "square", "cube"}
+        preset_mechanics = preset_dict.get("mechanics") if isinstance(preset_dict.get("mechanics"), dict) else {}
+        preset_aoe_behavior = (
+            preset_mechanics.get("aoe_behavior")
+            if isinstance(preset_mechanics.get("aoe_behavior"), dict)
+            else {}
+        )
+        preset_environment = self._normalize_map_environment_metadata(
+            preset_mechanics.get("map_environment")
+            if isinstance(preset_mechanics.get("map_environment"), dict)
+            else preset_aoe_behavior.get("environment")
+        )
+        preset_targeting = preset_mechanics.get("targeting") if isinstance(preset_mechanics.get("targeting"), dict) else {}
+        preset_range_data = preset_targeting.get("range") if isinstance(preset_targeting.get("range"), dict) else {}
+        range_text = str(preset_dict.get("range") or "").strip().lower()
+        range_kind = str((preset_range_data.get("kind") if isinstance(preset_range_data, dict) else "") or "").strip().lower()
+        targeting_origin = str(preset_targeting.get("origin") or "").strip().lower()
+        preset_self_range = range_text.startswith("self") or range_kind == "self" or targeting_origin == "self"
+        requested_fixed_to_caster = payload.get("fixed_to_caster") is True
+        force_fixed_to_caster = shape in centered_shapes and (preset_self_range or requested_fixed_to_caster)
+        if requested_fixed_to_caster and not (preset_self_range and shape in centered_shapes):
+            force_fixed_to_caster = False
+        summon_cfg = preset.get("summon") if isinstance(preset, dict) and isinstance(preset.get("summon"), dict) else None
+        if summon_cfg and not is_admin:
+            self._lan.toast(ws_id, "Summon spawning is DM-only for now, matey.")
+            return
+        if c is not None and not is_admin:
+            preset_level = None
+            try:
+                preset_level = int(preset.get("level")) if isinstance(preset, dict) else None
+            except Exception:
+                preset_level = None
+            if slot_level is None and preset_level is not None and preset_level > 0:
+                slot_level = preset_level
+            player_name = self._pc_name_for(int(cid)) if cid is not None else ""
+            consumes_pool = payload.get("consumes_pool") if isinstance(payload.get("consumes_pool"), dict) else {}
+            pool_id = str(
+                msg.get("consumes_pool_id")
+                or payload.get("consumes_pool_id")
+                or consumes_pool.get("id")
+                or consumes_pool.get("pool")
+                or ""
+            ).strip()
+            try:
+                pool_cost = int(
+                    msg.get("consumes_pool_cost")
+                    if msg.get("consumes_pool_cost") is not None
+                    else payload.get("consumes_pool_cost")
+                    if payload.get("consumes_pool_cost") is not None
+                    else consumes_pool.get("cost", 1)
+                )
+            except Exception:
+                pool_cost = 1
+            pool_cost = max(1, pool_cost)
+            if pool_id:
+                ok_pool, pool_err = self._consume_resource_pool_for_cast(
+                    caster_name=player_name,
+                    pool_id=pool_id,
+                    cost=pool_cost,
+                )
+                if not ok_pool:
+                    self._lan.toast(ws_id, pool_err)
+                    return
+                if str(pool_id or "").strip().lower() == "pact_magic_slots":
+                    beguiling_magic_slot_equivalent_used = True
+            elif slot_level is not None:
+                ok_slot, slot_err, _spent_level = self._consume_spell_slot_for_cast(
+                    caster_name=player_name,
+                    slot_level=slot_level,
+                    minimum_level=preset_level,
+                )
+                if not ok_slot:
+                    self._lan.toast(ws_id, slot_err)
+                    return
+                beguiling_magic_slot_equivalent_used = True
+            if spend != "reaction" and int(getattr(c, "spell_cast_remaining", 0) or 0) <= 0:
+                self._lan.toast(ws_id, "Already cast a spell this turn, matey.")
+                return
+            if not self._combatant_can_cast_spell(c, spend):
+                self._lan.toast(ws_id, "No spellcasting action available, matey.")
+                return
+            blocked, blocked_msg = self._spellcast_blocked_by_environment(c, preset_dict)
+            if blocked:
+                self._lan.toast(ws_id, blocked_msg or "The environment prevents that spell, matey.")
+                return
+            spell_name = self._spell_label_from_identifiers(
+                preset.get("name") if isinstance(preset, dict) else "",
+                preset.get("slug") if isinstance(preset, dict) else "",
+                spell_slug,
+                spell_id,
+            )
+            cast_log = self._spell_cast_log_message(c.name, spell_name, slot_level)
+            if spend == "bonus":
+                if not self._use_bonus_action(c, log_message=cast_log):
+                    self._lan.toast(ws_id, "No bonus actions left, matey.")
+                    return
+            elif spend == "reaction":
+                if not self._use_reaction(c, log_message=cast_log):
+                    self._lan.toast(ws_id, "No reactions left, matey.")
+                    return
+            else:
+                if not self._use_action(c, log_message=cast_log):
+                    self._lan.toast(ws_id, "No actions left, matey.")
+                    return
+            c.spell_cast_remaining = max(0, int(getattr(c, "spell_cast_remaining", 0) or 0) - 1)
+            self._rebuild_table(scroll_to_current=True)
+        def parse_positive_float(value: Any) -> Optional[float]:
+            try:
+                num = float(value)
+            except Exception:
+                return None
+            if num <= 0:
+                return None
+            return num
+
+        def parse_nonnegative_float(value: Any) -> Optional[float]:
+            try:
+                num = float(value)
+            except Exception:
+                return None
+            if num < 0:
+                return None
+            return num
+
+        def parse_bool(value: Any) -> Optional[bool]:
+            if isinstance(value, bool):
+                return value
+            if isinstance(value, str):
+                raw = value.strip().lower()
+                if raw in ("true", "yes", "y", "1"):
+                    return True
+                if raw in ("false", "no", "n", "0"):
+                    return False
+            return None
+
+        def parse_trigger(value: Any) -> Optional[str]:
+            if not isinstance(value, str):
+                return None
+            raw = value.strip().lower().replace("-", "_").replace("/", "_")
+            while "__" in raw:
+                raw = raw.replace("__", "_")
+            aliases = {
+                "start": "start",
+                "enter": "enter",
+                "leave": "leave",
+                "exit": "leave",
+                "end": "end",
+                "start_or_enter": "start_or_enter",
+                "enter_or_end": "enter_or_end",
+            }
+            return aliases.get(raw)
+
+        def parse_default_damage(value: Any) -> Optional[str]:
+            if value in (None, ""):
+                return None
+            if isinstance(value, (int, float)):
+                return str(int(value))
+            if isinstance(value, str):
+                raw = value.strip()
+                return raw or None
+            return None
+
+        def parse_dice(value: Any) -> Optional[str]:
+            if not isinstance(value, str):
+                return None
+            raw = value.strip().lower()
+            match = re.fullmatch(r"(\\d+)d(4|6|8|10|12)", raw)
+            if not match:
+                return None
+            count = int(match.group(1))
+            if count <= 0:
+                return None
+            return f"{count}d{match.group(2)}"
+
+        size = parse_positive_float(payload.get("size"))
+        radius_ft = parse_positive_float(payload.get("radius_ft"))
+        side_ft = parse_positive_float(payload.get("side_ft"))
+        length_ft = parse_positive_float(payload.get("length_ft"))
+        width_ft = parse_positive_float(payload.get("width_ft"))
+        thickness_ft = parse_positive_float(payload.get("thickness_ft"))
+        height_ft = parse_positive_float(payload.get("height_ft"))
+        angle_deg = parse_nonnegative_float(payload.get("angle_deg"))
+        spread_deg = parse_nonnegative_float(payload.get("spread_deg"))
+        caster_facing_deg = (
+            float(self._normalize_facing_degrees(getattr(c, "facing_deg", 0)))
+            if c is not None
+            else 0.0
+        )
+        duration_turns = payload.get("duration_turns")
+        over_time = parse_bool(payload.get("over_time"))
+        concentration_flag = parse_bool(payload.get("concentration"))
+        move_per_turn_ft = parse_nonnegative_float(payload.get("move_per_turn_ft"))
+        if move_per_turn_ft is not None and move_per_turn_ft <= 0:
+            move_per_turn_ft = None
+        trigger_on_start_or_enter = parse_trigger(payload.get("trigger_on_start_or_enter"))
+        move_action_type = str(payload.get("move_action_type") or "").strip().lower()
+        if move_action_type not in ("bonus_action", "magic_action", "action", "free", "none"):
+            move_action_type = ""
+        persistent = parse_bool(payload.get("persistent"))
+        pinned_default = parse_bool(payload.get("pinned_default"))
+
+        if "over_time" not in payload and over_time is None:
+            over_time = parse_bool(preset_aoe_behavior.get("over_time_default"))
+        if "persistent" not in payload and persistent is None:
+            persistent = parse_bool(preset_aoe_behavior.get("persistent_default"))
+        if "trigger_on_start_or_enter" not in payload and trigger_on_start_or_enter is None:
+            trigger_on_start_or_enter = parse_trigger(
+                preset_aoe_behavior.get("trigger_on_start_or_enter")
+                or preset_aoe_behavior.get("trigger_mode")
+            )
+        if "move_per_turn_ft" not in payload and move_per_turn_ft is None:
+            move_per_turn_ft = parse_nonnegative_float(preset_aoe_behavior.get("move_per_turn_ft"))
+            if move_per_turn_ft is not None and move_per_turn_ft <= 0:
+                move_per_turn_ft = None
+        if "pinned_default" not in payload and pinned_default is None:
+            pinned_default = parse_bool(preset_aoe_behavior.get("pinned_default"))
+        if "move_action_type" not in payload and not move_action_type:
+            move_action_type = str(preset_aoe_behavior.get("move_action_type") or "").strip().lower()
+            if move_action_type not in ("bonus_action", "magic_action", "action", "free", "none"):
+                move_action_type = ""
+        spell_level = None
+        try:
+            spell_level = int(payload.get("level"))
+        except Exception:
+            spell_level = None
+        if spell_level is not None and spell_level < 0:
+            spell_level = None
+        color = self._normalize_token_color(payload.get("color")) or ""
+        name = str(payload.get("name") or "").strip()
+        save_type = str(payload.get("save_type") or "").strip().lower()
+        damage_type = str(payload.get("damage_type") or "").strip()
+        raw_damage_types = payload.get("damage_types")
+        damage_types: List[str] = []
+        if isinstance(raw_damage_types, (list, tuple)):
+            for entry in raw_damage_types:
+                dtype = str(entry or "").strip()
+                if dtype:
+                    damage_types.append(dtype)
+        if damage_types and not damage_type:
+            damage_type = damage_types[0]
+        half_on_pass = payload.get("half_on_pass")
+        default_damage = parse_default_damage(payload.get("default_damage"))
+        dice = parse_dice(payload.get("dice"))
+        try:
+            dc_val = int(payload.get("dc"))
+        except Exception:
+            dc_val = None
+        over_time_flag = bool(over_time) if over_time is not None else False
+        persistent_flag = bool(persistent) if persistent is not None else over_time_flag
+        pinned_flag = bool(pinned_default) if pinned_default is not None else False
+        duration_turns_val: Optional[int]
+        if duration_turns in (None, ""):
+            duration_turns_val = None
+        else:
+            try:
+                duration_turns_val = int(duration_turns)
+            except Exception:
+                duration_turns_val = None
+            if duration_turns_val is not None and duration_turns_val < 0:
+                duration_turns_val = None
+        mw = getattr(self, "_map_window", None)
+        map_ready = mw is not None and mw.winfo_exists()
+        if map_ready:
+            try:
+                self._lan_sync_aoes_to_map(mw)
+            except Exception:
+                pass
+        try:
+            feet_per_square = float(getattr(mw, "feet_per_square", 5.0) or 5.0) if map_ready else 5.0
+        except Exception:
+            feet_per_square = 5.0
+        if feet_per_square <= 0:
+            feet_per_square = 5.0
+        try:
+            if map_ready:
+                cols = int(getattr(mw, "cols", 0))
+                rows = int(getattr(mw, "rows", 0))
+            else:
+                cols = int(self._lan_grid_cols)
+                rows = int(self._lan_grid_rows)
+        except Exception:
+            cols = 0
+            rows = 0
+        try:
+            cx = float(payload.get("cx"))
+            cy = float(payload.get("cy"))
+        except Exception:
+            cx = None
+            cy = None
+        anchor_cid = None
+        if cid is not None and claimed is not None:
+            anchor_cid = cid
+        anchor_ax = None
+        anchor_ay = None
+        _, _, _, _, positions = self._lan_live_map_data()
+        if cid in positions:
+            anchor_ax = float(positions[cid][0])
+            anchor_ay = float(positions[cid][1])
+        if cx is None or cy is None:
+            if cid in positions:
+                cx = float(positions[cid][0])
+                cy = float(positions[cid][1])
+            else:
+                cx = max(0.0, (cols - 1) / 2.0) if cols else 0.0
+                cy = max(0.0, (rows - 1) / 2.0) if rows else 0.0
+        if anchor_ax is None or anchor_ay is None:
+            anchor_ax = float(cx)
+            anchor_ay = float(cy)
+        if cid in positions:
+            caster_anchor_x = float(positions[cid][0])
+            caster_anchor_y = float(positions[cid][1])
+            payload_ax = parse_nonnegative_float(payload.get("ax"))
+            payload_ay = parse_nonnegative_float(payload.get("ay"))
+            if payload_ax is not None and payload_ay is not None and shape in ("line", "wall", "cone"):
+                dx_anchor = float(payload_ax) - caster_anchor_x
+                dy_anchor = float(payload_ay) - caster_anchor_y
+                dist_anchor = math.hypot(dx_anchor, dy_anchor)
+                max_anchor_offset = 0.6001
+                if dist_anchor > max_anchor_offset and dist_anchor > 1e-9:
+                    scale = max_anchor_offset / dist_anchor
+                    payload_ax = caster_anchor_x + dx_anchor * scale
+                    payload_ay = caster_anchor_y + dy_anchor * scale
+                anchor_ax = float(payload_ax)
+                anchor_ay = float(payload_ay)
+        if force_fixed_to_caster and cid is not None:
+            anchor_cid = cid
+            cx = float(anchor_ax)
+            cy = float(anchor_ay)
+        if map_ready:
+            aid = int(getattr(mw, "_next_aoe_id", 1))
+            setattr(mw, "_next_aoe_id", aid + 1)
+        else:
+            aid = int(getattr(self, "_lan_next_aoe_id", 1))
+            store = getattr(self, "_lan_aoes", {}) or {}
+            if store:
+                max_aid = max(int(a) for a in store.keys())
+                if aid <= max_aid:
+                    aid = max_aid + 1
+            self._lan_next_aoe_id = aid + 1
+        if cid is not None and cid in self.combatants:
+            owner = str(self.combatants[cid].name)
+            if not is_admin and claimed is not None:
+                owner_cid = claimed
+            else:
+                owner_cid = cid
+        else:
+            owner = "DM"
+            owner_cid = None
+        owner_ws_id = ws_id if isinstance(ws_id, int) else None
+        aoe: Dict[str, Any] = {
+            "kind": shape,
+            "cx": float(cx),
+            "cy": float(cy),
+            "pinned": pinned_flag,
+            "color": color
+            or (
+                mw._aoe_default_color(shape)
+                if map_ready and hasattr(mw, "_aoe_default_color")
+                else ""
+            ),
+            "name": name or f"AoE {aid}",
+            "shape": None,
+            "label": None,
+            "owner": owner,
+            "owner_cid": owner_cid,
+            "owner_ws_id": owner_ws_id,
+            "duration_turns": duration_turns_val,
+            "remaining_turns": duration_turns_val if (duration_turns_val or 0) > 0 else None,
+            "spell_slug": spell_slug,
+            "spell_id": spell_id,
+            "slot_level": slot_level,
+        }
+        aoe["map_effect"] = True
+        aoe["effect_id"] = int(aid)
+        aoe["aoe_id"] = int(aid)
+        aoe["anchor_mode"] = "fixed_to_caster" if force_fixed_to_caster else "fixed_to_map"
+        aoe["template"] = {
+            "shape": shape,
+            "geometry": {
+                "cx": float(cx),
+                "cy": float(cy),
+                "ax": float(anchor_ax),
+                "ay": float(anchor_ay),
+                "angle_deg": float(angle_deg) if angle_deg is not None else None,
+            },
+            "anchor": {
+                "mode": "fixed_to_caster" if force_fixed_to_caster else "fixed_to_map",
+                "caster_cid": int(anchor_cid) if anchor_cid is not None else None,
+            },
+            "triggers": {
+                "timing": trigger_on_start_or_enter or ("start" if over_time_flag else None),
+                "over_time": bool(over_time_flag),
+            },
+            "lifecycle": {
+                "concentration_bound": bool(concentration_flag),
+                "duration_turns": duration_turns_val,
+                "persistent": bool(persistent_flag),
+            },
+        }
+        if preset_environment:
+            aoe["environment"] = dict(preset_environment)
+            aoe["template"]["environment"] = dict(preset_environment)
+        if concentration_flag is True:
+            aoe["concentration_bound"] = True
+        if anchor_cid is not None:
+            aoe["anchor_cid"] = anchor_cid
+        if force_fixed_to_caster:
+            aoe["fixed_to_caster"] = True
+        if over_time_flag:
+            aoe["over_time"] = True
+        if persistent_flag:
+            aoe["persistent"] = True
+        if trigger_on_start_or_enter:
+            aoe["trigger_on_start_or_enter"] = trigger_on_start_or_enter
+        if move_per_turn_ft is not None:
+            aoe["move_per_turn_ft"] = move_per_turn_ft
+            aoe["move_remaining_ft"] = move_per_turn_ft
+        if move_action_type:
+            aoe["move_action_type"] = move_action_type
+        if dc_val is not None:
+            aoe["dc"] = int(dc_val)
+        if save_type:
+            aoe["save_type"] = save_type
+        if damage_types:
+            aoe["damage_types"] = list(damage_types)
+        if damage_type:
+            aoe["damage_type"] = damage_type
+        if half_on_pass is not None:
+            aoe["half_on_pass"] = bool(half_on_pass)
+        if dice:
+            aoe["dice"] = dice
+            if default_damage is None:
+                default_damage = dice
+        if default_damage is not None:
+            aoe["default_damage"] = default_damage
+        if shape == "circle":
+            if radius_ft is None and size is None:
+                self._lan.toast(ws_id, "Pick a valid spell radius, matey.")
+                return
+            if radius_ft is not None:
+                aoe["radius_sq"] = max(0.5, float(radius_ft) / feet_per_square)
+                aoe["radius_ft"] = float(radius_ft)
+            else:
+                aoe["radius_sq"] = float(size)
+        elif shape in ("sphere", "cylinder"):
+            if radius_ft is None and size is None:
+                self._lan.toast(ws_id, "Pick a valid spell radius, matey.")
+                return
+            if radius_ft is not None:
+                aoe["radius_sq"] = max(0.5, float(radius_ft) / feet_per_square)
+                aoe["radius_ft"] = float(radius_ft)
+            else:
+                aoe["radius_sq"] = float(size)
+            if height_ft is not None:
+                aoe["height_ft"] = float(height_ft)
+        elif shape == "square":
+            if side_ft is None and size is None:
+                self._lan.toast(ws_id, "Pick a valid spell side length, matey.")
+                return
+            if side_ft is not None:
+                aoe["side_sq"] = max(1.0, float(side_ft) / feet_per_square)
+                aoe["side_ft"] = float(side_ft)
+            else:
+                aoe["side_sq"] = float(size)
+            aoe["angle_deg"] = float(angle_deg) if angle_deg is not None else 0.0
+        elif shape == "cube":
+            if side_ft is None and size is None:
+                self._lan.toast(ws_id, "Pick a valid spell side length, matey.")
+                return
+            if side_ft is not None:
+                aoe["side_sq"] = max(1.0, float(side_ft) / feet_per_square)
+                aoe["side_ft"] = float(side_ft)
+            else:
+                aoe["side_sq"] = float(size)
+            aoe["angle_deg"] = float(angle_deg) if angle_deg is not None else 0.0
+        elif shape == "cone":
+            if length_ft is None and size is None:
+                self._lan.toast(ws_id, "Pick a valid spell length, matey.")
+                return
+            cone_spread = float(spread_deg) if spread_deg is not None else None
+            if cone_spread is None:
+                cone_spread = float(angle_deg) if angle_deg is not None else None
+            if cone_spread is None or cone_spread <= 0:
+                self._lan.toast(ws_id, "Pick a valid spell cone angle, matey.")
+                return
+            if length_ft is not None:
+                aoe["length_sq"] = max(1.0, float(length_ft) / feet_per_square)
+                aoe["length_ft"] = float(length_ft)
+            else:
+                aoe["length_sq"] = float(size)
+            if spread_deg is not None:
+                aoe["spread_deg"] = float(cone_spread)
+                aoe["angle_deg"] = float(angle_deg) if angle_deg is not None else float(caster_facing_deg)
+            else:
+                aoe["angle_deg"] = float(cone_spread)
+            aoe["orient"] = str(payload.get("orient") or "vertical")
+            aoe["ax"] = float(anchor_ax)
+            aoe["ay"] = float(anchor_ay)
+            aoe["cx"] = float(anchor_ax)
+            aoe["cy"] = float(anchor_ay)
+        elif shape == "wall":
+            if length_ft is None and size is None:
+                self._lan.toast(ws_id, "Pick a valid spell length, matey.")
+                return
+            if length_ft is not None:
+                aoe["length_sq"] = max(1.0, float(length_ft) / feet_per_square)
+                aoe["length_ft"] = float(length_ft)
+            else:
+                aoe["length_sq"] = float(size)
+            if width_ft is not None:
+                aoe["width_sq"] = max(1.0, float(width_ft) / feet_per_square)
+                aoe["width_ft"] = float(width_ft)
+                if height_ft is not None:
+                    aoe["height_ft"] = float(height_ft)
+            elif thickness_ft is not None and height_ft is not None:
+                aoe["width_sq"] = max(1.0, float(thickness_ft) / feet_per_square)
+                aoe["thickness_ft"] = float(thickness_ft)
+                aoe["height_ft"] = float(height_ft)
+            else:
+                self._lan.toast(ws_id, "Pick a valid wall thickness and height, matey.")
+                return
+            aoe["orient"] = str(payload.get("orient") or "vertical")
+            aoe["angle_deg"] = float(angle_deg) if angle_deg is not None else 0.0
+            aoe["ax"] = float(anchor_ax)
+            aoe["ay"] = float(anchor_ay)
+        else:
+            if length_ft is None and size is None:
+                self._lan.toast(ws_id, "Pick a valid spell length, matey.")
+                return
+            if length_ft is not None:
+                aoe["length_sq"] = max(1.0, float(length_ft) / feet_per_square)
+                aoe["length_ft"] = float(length_ft)
+            else:
+                aoe["length_sq"] = float(size)
+            if width_ft is not None:
+                aoe["width_sq"] = max(1.0, float(width_ft) / feet_per_square)
+                aoe["width_ft"] = float(width_ft)
+            else:
+                width = parse_positive_float(payload.get("width")) or 1.0
+                aoe["width_sq"] = max(1.0, float(width))
+            aoe["orient"] = str(payload.get("orient") or "vertical")
+            aoe["angle_deg"] = float(angle_deg) if angle_deg is not None else 0.0
+            aoe["ax"] = float(anchor_ax)
+            aoe["ay"] = float(anchor_ay)
+            try:
+                half_len = float(aoe.get("length_sq") or 0.0) / 2.0
+            except Exception:
+                half_len = 0.0
+            if half_len > 0:
+                rad = math.radians(float(aoe.get("angle_deg") or 0.0))
+                aoe["cx"] = float(anchor_ax + math.cos(rad) * half_len)
+                aoe["cy"] = float(anchor_ay + math.sin(rad) * half_len)
+        sculpt_enabled, sculpt_max_protected = self._lan_sculpt_spells_context(c, preset_dict, slot_level=slot_level)
+        if sculpt_enabled and c is not None:
+            caster_cid = int(getattr(c, "cid", 0) or 0)
+            caster_friendly = self._lan_is_friendly_unit(caster_cid)
+            included_targets = {int(target_cid) for target_cid in self._map_spell_effect_targets(aoe)}
+            selected: List[int] = []
+            seen_selected: set[int] = set()
+            if isinstance(raw_sculpted_cids, list):
+                for entry in raw_sculpted_cids:
+                    if isinstance(entry, bool):
+                        continue
+                    try:
+                        selected_cid = int(entry)
+                    except Exception:
+                        continue
+                    if selected_cid in seen_selected or selected_cid == caster_cid:
+                        continue
+                    if selected_cid not in included_targets:
+                        continue
+                    if self._lan_is_friendly_unit(selected_cid) != caster_friendly:
+                        continue
+                    seen_selected.add(selected_cid)
+                    selected.append(selected_cid)
+                    if len(selected) >= int(sculpt_max_protected):
+                        break
+            aoe["sculpted_cids"] = selected
+        self._register_map_spell_effect(int(aid), aoe)
+        self._lan_next_aoe_id = max(int(getattr(self, "_lan_next_aoe_id", 1) or 1), int(aid) + 1)
+        if concentration_flag is True and c is not None:
+            spell_key = self._canonical_concentration_spell_key(preset_dict, fallback=spell_slug or spell_id or name)
+            self._start_concentration(
+                c,
+                spell_key,
+                spell_level=spell_level,
+                aoe_ids=[int(aid)],
+            )
+        spawned_cids: List[int] = []
+        if summon_cfg and cid is not None:
+            spawned_cids = self._spawn_summons_from_cast(
+                caster_cid=cid,
+                spell_slug=spell_slug,
+                spell_id=spell_id,
+                slot_level=slot_level,
+                summon_choice=summon_choice,
+            )
+            if spawned_cids:
+                self._rebuild_table(scroll_to_current=True)
+                self._lan_force_state_broadcast()
+        resolved = self._lan_auto_resolve_cast_aoe(
+            aid,
+            aoe,
+            caster=c,
+            spell_slug=spell_slug,
+            spell_id=spell_id,
+            slot_level=slot_level,
+            preset=preset_dict,
+            manual_damage_entries=manual_damage_entries,
+        )
+        if resolved:
+            self._lan.toast(ws_id, f"Casted {aoe['name']} (auto-resolved).")
+        else:
+            self._lan.toast(ws_id, f"Casted {aoe['name']}.")
+        return
+
+    def _handle_cast_spell_request(
+        self,
+        msg: Dict[str, Any],
+        *,
+        cid: Optional[int],
+        ws_id: Any,
+        is_admin: bool,
+        claimed: Optional[int],
+    ) -> None:
+        payload = msg.get("payload") or {}
+        spell_slug = str(msg.get("spell_slug") or payload.get("spell_slug") or "").strip()
+        spell_id = str(msg.get("spell_id") or payload.get("spell_id") or "").strip()
+        summon_choice = msg.get("summon_choice") if msg.get("summon_choice") not in (None, "") else payload.get("summon_choice")
+        summon_quantity = msg.get("summon_quantity") if msg.get("summon_quantity") is not None else payload.get("summon_quantity")
+        summon_variant = msg.get("variant") if msg.get("variant") not in (None, "") else payload.get("variant")
+        if summon_variant is not None:
+            summon_variant = str(summon_variant).strip() or None
+        raw_positions = payload.get("summon_positions")
+        summon_positions: List[Dict[str, Any]] = []
+        if isinstance(raw_positions, list):
+            for entry in raw_positions:
+                if not isinstance(entry, dict):
+                    continue
+                try:
+                    col = int(entry.get("col"))
+                    row = int(entry.get("row"))
+                except Exception:
+                    continue
+                summon_positions.append({"col": col, "row": row})
+        preset = self._find_spell_preset(spell_slug=spell_slug, spell_id=spell_id)
+        preset_slug = str((preset or {}).get("slug") or "").strip().lower()
+        preset_id = str((preset or {}).get("id") or "").strip().lower()
+        if not isinstance(preset, dict):
+            self._lan.toast(ws_id, "That spell could not be found, matey.")
+            return
+        spend = self._resolve_spell_spend_type(preset=preset, msg=msg, payload=payload)
+        summon_cfg = preset.get("summon") if isinstance(preset.get("summon"), dict) else None
+        try:
+            slot_level = int(msg.get("slot_level") if msg.get("slot_level") is not None else payload.get("slot_level"))
+        except Exception:
+            slot_level = None
+        if slot_level is not None and slot_level < 0:
+            slot_level = None
+        preset_level = None
+        try:
+            preset_level = int(preset.get("level"))
+        except Exception:
+            preset_level = None
+        if preset_level is not None and preset_level > 0 and slot_level is None:
+            slot_level = preset_level
+        if slot_level is not None and preset_level is not None and slot_level < preset_level:
+            self._lan.toast(ws_id, "Ye can't downcast that spell, matey.")
+            return
+
+        c = self.combatants.get(cid) if cid is not None else None
+        if summon_cfg:
+            resolved_summon, summon_err = self._resolve_spell_summon_request(
+                preset=preset,
+                summon_cfg=summon_cfg,
+                caster=c,
+                summon_choice=summon_choice,
+                slot_level=slot_level,
+                summon_variant=summon_variant,
+                summon_quantity=summon_quantity,
+            )
+            if not isinstance(resolved_summon, dict):
+                self._lan.toast(ws_id, summon_err or "Summoning failed, matey.")
+                return
+            quantity_from_cfg = max(0, int(resolved_summon.get("quantity") or 0))
+            chosen_slug = str(resolved_summon.get("monster_slug") or "").strip().lower() or None
+            if not chosen_slug:
+                self._lan.toast(ws_id, "Pick a summon creature first, matey.")
+                return
+            if self._find_monster_spec_by_slug(chosen_slug) is None:
+                self._lan.toast(ws_id, "That summon creature does not exist, matey.")
+                return
+            summon_variant = resolved_summon.get("variant") if isinstance(resolved_summon.get("variant"), str) else None
+            if summon_positions and len(summon_positions) < quantity_from_cfg:
+                self._lan.toast(ws_id, "Pick a valid square for each summon, matey.")
+                return
+            if summon_positions:
+                cols, rows, obstacles, _rough, positions = self._lan_live_map_data()
+                caster_pos = positions.get(cid) if cid is not None else None
+                if caster_pos is None and cid is not None:
+                    caster_pos = self._lan_current_position(cid)
+                range_text = str(preset.get("range") or "")
+                range_match = re.search(r"(\d+(?:\.\d+)?)\s*(?:ft|feet)", range_text, flags=re.IGNORECASE)
+                max_range_ft = float(range_match.group(1)) if range_match else None
+                feet_per_square = 5.0
+                try:
+                    mw = getattr(self, "_map_window", None)
+                    if mw is not None and mw.winfo_exists():
+                        feet_per_square = float(getattr(mw, "feet_per_square", feet_per_square) or feet_per_square)
+                except Exception:
+                    pass
+                for pos in summon_positions[:quantity_from_cfg]:
+                    col = int(pos.get("col"))
+                    row = int(pos.get("row"))
+                    if col < 0 or row < 0 or col >= cols or row >= rows or (col, row) in obstacles:
+                        self._lan.toast(ws_id, "That summon square be invalid, matey.")
+                        return
+                    if caster_pos is not None and max_range_ft is not None:
+                        dist_ft = math.hypot(col - caster_pos[0], row - caster_pos[1]) * max(1.0, feet_per_square)
+                        if dist_ft - max_range_ft > 1e-6:
+                            self._lan.toast(ws_id, "That square be out of spell range, matey.")
+                            return
+        beguiling_magic_slot_equivalent_used = False
+        preset_school = str(preset.get("school") or "").strip().lower()
+        if c is not None and not is_admin:
+            player_name = self._pc_name_for(int(cid)) if cid is not None else ""
+            consumes_pool = payload.get("consumes_pool") if isinstance(payload.get("consumes_pool"), dict) else {}
+            pool_id = str(
+                msg.get("consumes_pool_id")
+                or payload.get("consumes_pool_id")
+                or consumes_pool.get("id")
+                or consumes_pool.get("pool")
+                or ""
+            ).strip()
+            try:
+                pool_cost = int(
+                    msg.get("consumes_pool_cost")
+                    if msg.get("consumes_pool_cost") is not None
+                    else payload.get("consumes_pool_cost")
+                    if payload.get("consumes_pool_cost") is not None
+                    else consumes_pool.get("cost", 1)
+                )
+            except Exception:
+                pool_cost = 1
+            pool_cost = max(1, pool_cost)
+            if pool_id:
+                ok_pool, pool_err = self._consume_resource_pool_for_cast(
+                    caster_name=player_name,
+                    pool_id=pool_id,
+                    cost=pool_cost,
+                )
+                if not ok_pool:
+                    self._lan.toast(ws_id, pool_err)
+                    return
+                if str(pool_id or "").strip().lower() == "pact_magic_slots":
+                    beguiling_magic_slot_equivalent_used = True
+            else:
+                ok_slot, slot_err, _spent_level = self._consume_spell_slot_for_cast(
+                    caster_name=player_name,
+                    slot_level=slot_level,
+                    minimum_level=preset_level,
+                )
+                if not ok_slot:
+                    self._lan.toast(ws_id, slot_err)
+                    return
+                beguiling_magic_slot_equivalent_used = True
+            if spend != "reaction" and int(getattr(c, "spell_cast_remaining", 0) or 0) <= 0:
+                self._lan.toast(ws_id, "Already cast a spell this turn, matey.")
+                return
+            if not self._combatant_can_cast_spell(c, spend):
+                self._lan.toast(ws_id, "No spellcasting action available, matey.")
+                return
+            blocked, blocked_msg = self._spellcast_blocked_by_environment(c, preset)
+            if blocked:
+                self._lan.toast(ws_id, blocked_msg or "The environment prevents that spell, matey.")
+                return
+            spell_name = self._spell_label_from_identifiers(
+                preset.get("name"),
+                preset.get("slug"),
+                spell_slug,
+                spell_id,
+            )
+            cast_log = self._spell_cast_log_message(c.name, spell_name, slot_level)
+            if spend == "bonus":
+                if not self._use_bonus_action(c, log_message=cast_log):
+                    self._lan.toast(ws_id, "No bonus actions left, matey.")
+                    return
+            elif spend == "reaction":
+                if not self._use_reaction(c, log_message=cast_log):
+                    self._lan.toast(ws_id, "No reactions left, matey.")
+                    return
+            else:
+                if not self._use_action(c, log_message=cast_log):
+                    self._lan.toast(ws_id, "No actions left, matey.")
+                    return
+            c.spell_cast_remaining = max(0, int(getattr(c, "spell_cast_remaining", 0) or 0) - 1)
+            smite_slug = self._smite_slug_from_preset(preset)
+            if smite_slug and smite_slug in _SMITE_SPELL_CONFIG:
+                setattr(
+                    c,
+                    "pending_smite_charge",
+                    {
+                        "slug": smite_slug,
+                        "name": str(preset.get("name") or smite_slug.replace("-", " ").title()),
+                        "slot_level": slot_level,
+                    },
+                )
+            if summon_cfg and cid is not None:
+                spawned_cids = self._spawn_summons_from_cast(
+                    caster_cid=cid,
+                    spell_slug=spell_slug,
+                    spell_id=spell_id,
+                    slot_level=slot_level,
+                    summon_choice=summon_choice,
+                    summon_quantity=summon_quantity,
+                    summon_positions=summon_positions,
+                    summon_variant=summon_variant,
+                )
+                if not spawned_cids:
+                    self._lan.toast(ws_id, "Summoning failed, matey.")
+                    return
+                if bool(preset.get("concentration")):
+                    self._start_concentration(
+                        c,
+                        self._canonical_concentration_spell_key(preset, fallback=spell_slug or spell_id),
+                        spell_level=slot_level,
+                        targets=[int(x) for x in spawned_cids],
+                    )
+            self._rebuild_table(scroll_to_current=True)
+        elif summon_cfg and cid is not None:
+            spawned_cids = self._spawn_summons_from_cast(
+                caster_cid=cid,
+                spell_slug=spell_slug,
+                spell_id=spell_id,
+                slot_level=slot_level,
+                summon_choice=summon_choice,
+                summon_quantity=summon_quantity,
+                summon_positions=summon_positions,
+                summon_variant=summon_variant,
+            )
+            if not spawned_cids:
+                self._lan.toast(ws_id, "Summoning failed, matey.")
+                return
+            if bool(preset.get("concentration")) and c is not None:
+                self._start_concentration(
+                    c,
+                    self._canonical_concentration_spell_key(preset, fallback=spell_slug or spell_id),
+                    spell_level=slot_level,
+                    targets=[int(x) for x in spawned_cids],
+                )
+        if c is not None:
+            if beguiling_magic_slot_equivalent_used and preset_school in {"enchantment", "illusion"}:
+                self._arm_beguiling_magic_window(c, duration_s=20.0)
+            spell_key_for_effect = str(preset.get("slug") or preset.get("id") or spell_slug or spell_id or "").strip().lower()
+            if c is not None and spell_key_for_effect in {
+                "divine-favor",
+                "magic-weapon",
+                "elemental-weapon",
+                "shillelagh",
+                "thunderous-smite",
+                "blinding-smite",
+                "wrathful-smite",
+            }:
+                ongoing_payload: Dict[str, Any] = {}
+                if spell_key_for_effect == "divine-favor":
+                    ongoing_payload = {
+                        "attack_augments": {
+                            "weapon_only": True,
+                            "extra_damage_dice": [{"dice": "1d4", "damage_type": "radiant"}],
+                        }
+                    }
+                elif spell_key_for_effect == "magic-weapon":
+                    bonus = 1
+                    try:
+                        lvl = int(slot_level or preset_level or 2)
+                    except Exception:
+                        lvl = 2
+                    if lvl >= 6:
+                        bonus = 3
+                    elif lvl >= 3:
+                        bonus = 2
+                    ongoing_payload = {
+                        "attack_augments": {
+                            "weapon_only": True,
+                            "exclude_unarmed": True,
+                            "attack_bonus": int(bonus),
+                            "damage_bonus": int(bonus),
+                            "weapon_counts_as_magical": True,
+                        }
+                    }
+                elif spell_key_for_effect == "elemental-weapon":
+                    bonus = 1
+                    extra_dice = "1d4"
+                    try:
+                        lvl = int(slot_level or preset_level or 3)
+                    except Exception:
+                        lvl = 3
+                    if lvl >= 7:
+                        bonus = 3
+                        extra_dice = "3d4"
+                    elif lvl >= 5:
+                        bonus = 2
+                        extra_dice = "2d4"
+                    chosen_type = str(msg.get("damage_type") or payload.get("damage_type") or "").strip().lower()
+                    if chosen_type not in {"acid", "cold", "fire", "lightning", "thunder"}:
+                        chosen_type = "thunder"
+                    ongoing_payload = {
+                        "attack_augments": {
+                            "weapon_only": True,
+                            "exclude_unarmed": True,
+                            "attack_bonus": int(bonus),
+                            "weapon_counts_as_magical": True,
+                            "extra_damage_dice": [{"dice": extra_dice, "damage_type": chosen_type}],
+                        }
+                    }
+                elif spell_key_for_effect == "shillelagh":
+                    cantrip_scale = "1d8"
+                    caster_level = 0
+                    try:
+                        profile_leveling = (self._profile_for_player_name(str(getattr(c, "name", "") or "")) or {}).get("leveling")
+                        caster_level = int((profile_leveling or {}).get("level") or 0)
+                    except Exception:
+                        caster_level = 0
+                    if caster_level >= 17:
+                        cantrip_scale = "2d6"
+                    elif caster_level >= 11:
+                        cantrip_scale = "1d12"
+                    elif caster_level >= 5:
+                        cantrip_scale = "1d10"
+                    ongoing_payload = {
+                        "attack_augments": {
+                            "weapon_only": True,
+                            "weapon_ids": ["club", "quarterstaff"],
+                            "attack_ability_override": "wis",
+                            "weapon_damage_die_override": cantrip_scale,
+                        }
+                    }
+                elif spell_key_for_effect in {"thunderous-smite", "blinding-smite", "wrathful-smite"}:
+                    smite_cfg = _SMITE_SPELL_CONFIG.get(spell_key_for_effect) or {}
+                    smite_dice = self._smite_damage_dice(smite_cfg, slot_level)
+                    save_cfg = smite_cfg.get("save") if isinstance(smite_cfg.get("save"), dict) else {}
+                    profile = self._profile_for_player_name(str(getattr(c, "name", "") or "")) if c is not None else {}
+                    save_dc = int(self._compute_spell_save_dc(profile if isinstance(profile, dict) else {}) or 0)
+                    on_hit_effects: List[Dict[str, Any]] = []
+                    if smite_dice:
+                        on_hit_effects.append({"effect": "damage", "dice": smite_dice, "damage_type": str(smite_cfg.get("damage_type") or "damage")})
+                    if save_cfg:
+                        save_payload: Dict[str, Any] = {
+                            "effect": "save_bundle",
+                            "save_ability": str(save_cfg.get("ability") or "").strip().lower(),
+                            "save_dc": int(save_dc),
+                        }
+                        if bool(save_cfg.get("apply_prone")):
+                            save_payload["apply_prone"] = True
+                        if isinstance(save_cfg.get("forced_movement"), dict):
+                            save_payload["forced_movement"] = dict(save_cfg.get("forced_movement") or {})
+                        condition = str(save_cfg.get("condition") or "").strip().lower()
+                        if condition:
+                            save_payload["condition"] = condition
+                            if bool(save_cfg.get("repeat_each_turn")):
+                                save_payload["repeat_each_turn"] = True
+                                save_payload["repeat_timing"] = str(save_cfg.get("repeat_timing") or "start_turn")
+                        on_hit_effects.append(save_payload)
+                    ongoing_payload = {
+                        "attack_augments": {
+                            "weapon_only": True,
+                            "melee_only": True,
+                            "consume_on_next_hit": True,
+                            "on_hit_effects": on_hit_effects,
+                            "save_dc": int(save_dc),
+                        }
+                    }
+                if ongoing_payload:
+                    self._register_target_spell_effect(
+                        int(c.cid),
+                        int(c.cid),
+                        spell_key_for_effect,
+                        spell_level=slot_level,
+                        concentration_bound=bool(preset.get("concentration")),
+                        clear_group=f"{spell_key_for_effect}_{int(c.cid)}_{int(c.cid)}",
+                        effect_tags=["attack_augment"],
+                        primitives=ongoing_payload,
+                    )
+                    if spell_key_for_effect.endswith("-smite"):
+                        self._lan.toast(ws_id, f"{str(getattr(c, 'name', 'Caster') or 'Caster')} readies {str(preset.get('name') or 'a smite')}.")
+        ensnaring_slug_keys = {"ensnaring-strike", "ensnaring_strike"}
+        if c is not None and (preset_slug in ensnaring_slug_keys or preset_id in ensnaring_slug_keys):
+            duration_turns = self._spell_duration_to_turns(preset)
+            if duration_turns is None or int(duration_turns) <= 0:
+                duration_turns = 10
+            self._start_concentration(
+                c,
+                self._canonical_concentration_spell_key(preset, fallback=spell_slug or spell_id or "ensnaring-strike"),
+                spell_level=slot_level if slot_level is not None else preset_level,
+                targets=[int(c.cid)],
+            )
+            self._ensure_condition_stack(c, "ensnaring_strike", int(duration_turns))
+        mirror_image_slug_keys = {"mirror-image", "mirror_image"}
+        if c is not None and (preset_slug in mirror_image_slug_keys or preset_id in mirror_image_slug_keys):
+            duration_turns = self._spell_duration_to_turns(preset)
+            if duration_turns is None or int(duration_turns) <= 0:
+                duration_turns = 10
+            self._ensure_condition_stack(c, "mirror_image", int(duration_turns))
+            setattr(c, "_mirror_image_duplicates", 3)
+            self._log(f"{c.name} conjures 3 Mirror Image duplicates for {int(duration_turns)} rounds.", cid=int(c.cid))
+        if c is not None and self._is_produce_flame_spell_key(preset_slug, preset_id, spell_slug, spell_id):
+            produce_state = self._arm_produce_flame_state(c, preset)
+            duration_turns = int((produce_state or {}).get("remaining_turns") or 100)
+            self._log(f"{c.name} kindles Produce Flame for up to {duration_turns} rounds.", cid=int(c.cid))
+        self._lan_force_state_broadcast()
+        if self._is_produce_flame_spell_key(preset_slug, preset_id, spell_slug, spell_id):
+            self._lan.toast(ws_id, "Produce Flame is lit and ready to hurl.")
+        else:
+            self._lan.toast(ws_id, f"Casted {preset.get('name') or 'spell'}.")
+        return
+
     def _lan_apply_action(self, msg: Dict[str, Any]) -> None:
         """Apply client actions on the Tk thread."""
         tracker: Optional["InitiativeTracker"]
@@ -33609,1086 +34708,14 @@ class InitiativeTracker(base.InitiativeTracker):
             self._lan.toast(ws_id, "Swapped with Johns Echo.")
             return
 
-        if typ == "cast_aoe":
-            payload = msg.get("payload") or {}
-            raw_sculpted_cids = payload.get("sculpted_cids")
-            shape = str(payload.get("shape") or payload.get("kind") or "").strip().lower()
-            if shape not in ("circle", "square", "line", "sphere", "cube", "cone", "cylinder", "wall", "summon"):
-                self._lan.toast(ws_id, "Pick a valid spell shape, matey.")
-                return
-            spend = self._resolve_spell_spend_type(preset=None, msg=msg, payload=payload)
-            slot_level = None
-            try:
-                slot_level = int(msg.get("slot_level"))
-            except Exception:
-                slot_level = None
-            if slot_level is not None and slot_level < 0:
-                slot_level = None
-            spell_slug = str(msg.get("spell_slug") or payload.get("spell_slug") or "").strip()
-            spell_id = str(msg.get("spell_id") or payload.get("spell_id") or "").strip()
-            summon_choice = msg.get("summon_choice") if msg.get("summon_choice") not in (None, "") else payload.get("summon_choice")
-            manual_damage_entries: List[Dict[str, Any]] = []
-            raw_damage_entries = msg.get("damage_entries")
-            if isinstance(raw_damage_entries, list):
-                for entry in raw_damage_entries:
-                    if not isinstance(entry, dict):
-                        continue
-                    amount_raw = entry.get("amount")
-                    if isinstance(amount_raw, bool):
-                        continue
-                    if isinstance(amount_raw, float) and not math.isfinite(amount_raw):
-                        continue
-                    try:
-                        amount = int(amount_raw)
-                    except Exception:
-                        continue
-                    if amount <= 0:
-                        continue
-                    dtype = str(entry.get("type") or "").strip().lower()
-                    if not dtype:
-                        continue
-                    manual_damage_entries.append({"amount": int(amount), "type": dtype})
-            c = self.combatants.get(cid) if cid is not None else None
-            if shape == "summon":
-                if cid is None:
-                    self._lan.toast(ws_id, "Pick a valid caster first, matey.")
-                    return
-                if c is None:
-                    self._lan.toast(ws_id, "That scallywag ain’t in combat no more.")
-                    return
-                if not is_admin:
-                    if spend == "bonus":
-                        if not self._use_bonus_action(c):
-                            self._lan.toast(ws_id, "No bonus actions left, matey.")
-                            return
-                    elif spend == "reaction":
-                        if not self._use_reaction(c):
-                            self._lan.toast(ws_id, "No reactions left, matey.")
-                            return
-                    else:
-                        if not self._use_action(c):
-                            self._lan.toast(ws_id, "No actions left, matey.")
-                            return
-                ok_custom, err_custom, spawned_custom = self._spawn_custom_summons_from_payload(
-                    caster_cid=int(cid),
-                    payload=payload,
-                )
-                if not ok_custom:
-                    self._lan.toast(ws_id, err_custom or "Custom summon failed, matey.")
-                    return
-                self._rebuild_table(scroll_to_current=True)
-                self._lan_force_state_broadcast()
-                self._lan.toast(ws_id, f"Summoned {len(spawned_custom)} custom creature(s).")
-                return
-            preset = self._find_spell_preset(spell_slug=spell_slug, spell_id=spell_id)
-            preset_dict = preset if isinstance(preset, dict) else {}
-            spend = self._resolve_spell_spend_type(preset=preset_dict, msg=msg, payload=payload)
-            centered_shapes = {"circle", "sphere", "cylinder", "square", "cube"}
-            preset_mechanics = preset_dict.get("mechanics") if isinstance(preset_dict.get("mechanics"), dict) else {}
-            preset_aoe_behavior = (
-                preset_mechanics.get("aoe_behavior")
-                if isinstance(preset_mechanics.get("aoe_behavior"), dict)
-                else {}
+        if typ in SPELL_LAUNCH_COMMAND_TYPES:
+            self._ensure_player_commands().dispatch_spell_launch_command(
+                msg,
+                cid=cid,
+                ws_id=ws_id,
+                is_admin=is_admin,
+                claimed=claimed,
             )
-            preset_environment = self._normalize_map_environment_metadata(
-                preset_mechanics.get("map_environment")
-                if isinstance(preset_mechanics.get("map_environment"), dict)
-                else preset_aoe_behavior.get("environment")
-            )
-            preset_targeting = preset_mechanics.get("targeting") if isinstance(preset_mechanics.get("targeting"), dict) else {}
-            preset_range_data = preset_targeting.get("range") if isinstance(preset_targeting.get("range"), dict) else {}
-            range_text = str(preset_dict.get("range") or "").strip().lower()
-            range_kind = str((preset_range_data.get("kind") if isinstance(preset_range_data, dict) else "") or "").strip().lower()
-            targeting_origin = str(preset_targeting.get("origin") or "").strip().lower()
-            preset_self_range = range_text.startswith("self") or range_kind == "self" or targeting_origin == "self"
-            requested_fixed_to_caster = payload.get("fixed_to_caster") is True
-            force_fixed_to_caster = shape in centered_shapes and (preset_self_range or requested_fixed_to_caster)
-            if requested_fixed_to_caster and not (preset_self_range and shape in centered_shapes):
-                force_fixed_to_caster = False
-            summon_cfg = preset.get("summon") if isinstance(preset, dict) and isinstance(preset.get("summon"), dict) else None
-            if summon_cfg and not is_admin:
-                self._lan.toast(ws_id, "Summon spawning is DM-only for now, matey.")
-                return
-            if c is not None and not is_admin:
-                preset_level = None
-                try:
-                    preset_level = int(preset.get("level")) if isinstance(preset, dict) else None
-                except Exception:
-                    preset_level = None
-                if slot_level is None and preset_level is not None and preset_level > 0:
-                    slot_level = preset_level
-                player_name = _resolve_pc_name(cid)
-                consumes_pool = payload.get("consumes_pool") if isinstance(payload.get("consumes_pool"), dict) else {}
-                pool_id = str(
-                    msg.get("consumes_pool_id")
-                    or payload.get("consumes_pool_id")
-                    or consumes_pool.get("id")
-                    or consumes_pool.get("pool")
-                    or ""
-                ).strip()
-                try:
-                    pool_cost = int(
-                        msg.get("consumes_pool_cost")
-                        if msg.get("consumes_pool_cost") is not None
-                        else payload.get("consumes_pool_cost")
-                        if payload.get("consumes_pool_cost") is not None
-                        else consumes_pool.get("cost", 1)
-                    )
-                except Exception:
-                    pool_cost = 1
-                pool_cost = max(1, pool_cost)
-                if pool_id:
-                    ok_pool, pool_err = self._consume_resource_pool_for_cast(
-                        caster_name=player_name,
-                        pool_id=pool_id,
-                        cost=pool_cost,
-                    )
-                    if not ok_pool:
-                        self._lan.toast(ws_id, pool_err)
-                        return
-                    if str(pool_id or "").strip().lower() == "pact_magic_slots":
-                        beguiling_magic_slot_equivalent_used = True
-                elif slot_level is not None:
-                    ok_slot, slot_err, _spent_level = self._consume_spell_slot_for_cast(
-                        caster_name=player_name,
-                        slot_level=slot_level,
-                        minimum_level=preset_level,
-                    )
-                    if not ok_slot:
-                        self._lan.toast(ws_id, slot_err)
-                        return
-                    beguiling_magic_slot_equivalent_used = True
-                if spend != "reaction" and int(getattr(c, "spell_cast_remaining", 0) or 0) <= 0:
-                    self._lan.toast(ws_id, "Already cast a spell this turn, matey.")
-                    return
-                if not self._combatant_can_cast_spell(c, spend):
-                    self._lan.toast(ws_id, "No spellcasting action available, matey.")
-                    return
-                blocked, blocked_msg = self._spellcast_blocked_by_environment(c, preset_dict)
-                if blocked:
-                    self._lan.toast(ws_id, blocked_msg or "The environment prevents that spell, matey.")
-                    return
-                spell_name = self._spell_label_from_identifiers(
-                    preset.get("name") if isinstance(preset, dict) else "",
-                    preset.get("slug") if isinstance(preset, dict) else "",
-                    spell_slug,
-                    spell_id,
-                )
-                cast_log = self._spell_cast_log_message(c.name, spell_name, slot_level)
-                if spend == "bonus":
-                    if not self._use_bonus_action(c, log_message=cast_log):
-                        self._lan.toast(ws_id, "No bonus actions left, matey.")
-                        return
-                elif spend == "reaction":
-                    if not self._use_reaction(c, log_message=cast_log):
-                        self._lan.toast(ws_id, "No reactions left, matey.")
-                        return
-                else:
-                    if not self._use_action(c, log_message=cast_log):
-                        self._lan.toast(ws_id, "No actions left, matey.")
-                        return
-                c.spell_cast_remaining = max(0, int(getattr(c, "spell_cast_remaining", 0) or 0) - 1)
-                self._rebuild_table(scroll_to_current=True)
-            def parse_positive_float(value: Any) -> Optional[float]:
-                try:
-                    num = float(value)
-                except Exception:
-                    return None
-                if num <= 0:
-                    return None
-                return num
-
-            def parse_nonnegative_float(value: Any) -> Optional[float]:
-                try:
-                    num = float(value)
-                except Exception:
-                    return None
-                if num < 0:
-                    return None
-                return num
-
-            def parse_bool(value: Any) -> Optional[bool]:
-                if isinstance(value, bool):
-                    return value
-                if isinstance(value, str):
-                    raw = value.strip().lower()
-                    if raw in ("true", "yes", "y", "1"):
-                        return True
-                    if raw in ("false", "no", "n", "0"):
-                        return False
-                return None
-
-            def parse_trigger(value: Any) -> Optional[str]:
-                if not isinstance(value, str):
-                    return None
-                raw = value.strip().lower().replace("-", "_").replace("/", "_")
-                while "__" in raw:
-                    raw = raw.replace("__", "_")
-                aliases = {
-                    "start": "start",
-                    "enter": "enter",
-                    "leave": "leave",
-                    "exit": "leave",
-                    "end": "end",
-                    "start_or_enter": "start_or_enter",
-                    "enter_or_end": "enter_or_end",
-                }
-                return aliases.get(raw)
-
-            def parse_default_damage(value: Any) -> Optional[str]:
-                if value in (None, ""):
-                    return None
-                if isinstance(value, (int, float)):
-                    return str(int(value))
-                if isinstance(value, str):
-                    raw = value.strip()
-                    return raw or None
-                return None
-
-            def parse_dice(value: Any) -> Optional[str]:
-                if not isinstance(value, str):
-                    return None
-                raw = value.strip().lower()
-                match = re.fullmatch(r"(\\d+)d(4|6|8|10|12)", raw)
-                if not match:
-                    return None
-                count = int(match.group(1))
-                if count <= 0:
-                    return None
-                return f"{count}d{match.group(2)}"
-
-            size = parse_positive_float(payload.get("size"))
-            radius_ft = parse_positive_float(payload.get("radius_ft"))
-            side_ft = parse_positive_float(payload.get("side_ft"))
-            length_ft = parse_positive_float(payload.get("length_ft"))
-            width_ft = parse_positive_float(payload.get("width_ft"))
-            thickness_ft = parse_positive_float(payload.get("thickness_ft"))
-            height_ft = parse_positive_float(payload.get("height_ft"))
-            angle_deg = parse_nonnegative_float(payload.get("angle_deg"))
-            spread_deg = parse_nonnegative_float(payload.get("spread_deg"))
-            caster_facing_deg = (
-                float(self._normalize_facing_degrees(getattr(c, "facing_deg", 0)))
-                if c is not None
-                else 0.0
-            )
-            duration_turns = payload.get("duration_turns")
-            over_time = parse_bool(payload.get("over_time"))
-            concentration_flag = parse_bool(payload.get("concentration"))
-            move_per_turn_ft = parse_nonnegative_float(payload.get("move_per_turn_ft"))
-            if move_per_turn_ft is not None and move_per_turn_ft <= 0:
-                move_per_turn_ft = None
-            trigger_on_start_or_enter = parse_trigger(payload.get("trigger_on_start_or_enter"))
-            move_action_type = str(payload.get("move_action_type") or "").strip().lower()
-            if move_action_type not in ("bonus_action", "magic_action", "action", "free", "none"):
-                move_action_type = ""
-            persistent = parse_bool(payload.get("persistent"))
-            pinned_default = parse_bool(payload.get("pinned_default"))
-
-            if "over_time" not in payload and over_time is None:
-                over_time = parse_bool(preset_aoe_behavior.get("over_time_default"))
-            if "persistent" not in payload and persistent is None:
-                persistent = parse_bool(preset_aoe_behavior.get("persistent_default"))
-            if "trigger_on_start_or_enter" not in payload and trigger_on_start_or_enter is None:
-                trigger_on_start_or_enter = parse_trigger(
-                    preset_aoe_behavior.get("trigger_on_start_or_enter")
-                    or preset_aoe_behavior.get("trigger_mode")
-                )
-            if "move_per_turn_ft" not in payload and move_per_turn_ft is None:
-                move_per_turn_ft = parse_nonnegative_float(preset_aoe_behavior.get("move_per_turn_ft"))
-                if move_per_turn_ft is not None and move_per_turn_ft <= 0:
-                    move_per_turn_ft = None
-            if "pinned_default" not in payload and pinned_default is None:
-                pinned_default = parse_bool(preset_aoe_behavior.get("pinned_default"))
-            if "move_action_type" not in payload and not move_action_type:
-                move_action_type = str(preset_aoe_behavior.get("move_action_type") or "").strip().lower()
-                if move_action_type not in ("bonus_action", "magic_action", "action", "free", "none"):
-                    move_action_type = ""
-            spell_level = None
-            try:
-                spell_level = int(payload.get("level"))
-            except Exception:
-                spell_level = None
-            if spell_level is not None and spell_level < 0:
-                spell_level = None
-            color = self._normalize_token_color(payload.get("color")) or ""
-            name = str(payload.get("name") or "").strip()
-            save_type = str(payload.get("save_type") or "").strip().lower()
-            damage_type = str(payload.get("damage_type") or "").strip()
-            raw_damage_types = payload.get("damage_types")
-            damage_types: List[str] = []
-            if isinstance(raw_damage_types, (list, tuple)):
-                for entry in raw_damage_types:
-                    dtype = str(entry or "").strip()
-                    if dtype:
-                        damage_types.append(dtype)
-            if damage_types and not damage_type:
-                damage_type = damage_types[0]
-            half_on_pass = payload.get("half_on_pass")
-            default_damage = parse_default_damage(payload.get("default_damage"))
-            dice = parse_dice(payload.get("dice"))
-            try:
-                dc_val = int(payload.get("dc"))
-            except Exception:
-                dc_val = None
-            over_time_flag = bool(over_time) if over_time is not None else False
-            persistent_flag = bool(persistent) if persistent is not None else over_time_flag
-            pinned_flag = bool(pinned_default) if pinned_default is not None else False
-            duration_turns_val: Optional[int]
-            if duration_turns in (None, ""):
-                duration_turns_val = None
-            else:
-                try:
-                    duration_turns_val = int(duration_turns)
-                except Exception:
-                    duration_turns_val = None
-                if duration_turns_val is not None and duration_turns_val < 0:
-                    duration_turns_val = None
-            mw = getattr(self, "_map_window", None)
-            map_ready = mw is not None and mw.winfo_exists()
-            if map_ready:
-                try:
-                    self._lan_sync_aoes_to_map(mw)
-                except Exception:
-                    pass
-            try:
-                feet_per_square = float(getattr(mw, "feet_per_square", 5.0) or 5.0) if map_ready else 5.0
-            except Exception:
-                feet_per_square = 5.0
-            if feet_per_square <= 0:
-                feet_per_square = 5.0
-            try:
-                if map_ready:
-                    cols = int(getattr(mw, "cols", 0))
-                    rows = int(getattr(mw, "rows", 0))
-                else:
-                    cols = int(self._lan_grid_cols)
-                    rows = int(self._lan_grid_rows)
-            except Exception:
-                cols = 0
-                rows = 0
-            try:
-                cx = float(payload.get("cx"))
-                cy = float(payload.get("cy"))
-            except Exception:
-                cx = None
-                cy = None
-            anchor_cid = None
-            if cid is not None and claimed is not None:
-                anchor_cid = cid
-            anchor_ax = None
-            anchor_ay = None
-            _, _, _, _, positions = self._lan_live_map_data()
-            if cid in positions:
-                anchor_ax = float(positions[cid][0])
-                anchor_ay = float(positions[cid][1])
-            if cx is None or cy is None:
-                if cid in positions:
-                    cx = float(positions[cid][0])
-                    cy = float(positions[cid][1])
-                else:
-                    cx = max(0.0, (cols - 1) / 2.0) if cols else 0.0
-                    cy = max(0.0, (rows - 1) / 2.0) if rows else 0.0
-            if anchor_ax is None or anchor_ay is None:
-                anchor_ax = float(cx)
-                anchor_ay = float(cy)
-            if cid in positions:
-                caster_anchor_x = float(positions[cid][0])
-                caster_anchor_y = float(positions[cid][1])
-                payload_ax = parse_nonnegative_float(payload.get("ax"))
-                payload_ay = parse_nonnegative_float(payload.get("ay"))
-                if payload_ax is not None and payload_ay is not None and shape in ("line", "wall", "cone"):
-                    dx_anchor = float(payload_ax) - caster_anchor_x
-                    dy_anchor = float(payload_ay) - caster_anchor_y
-                    dist_anchor = math.hypot(dx_anchor, dy_anchor)
-                    max_anchor_offset = 0.6001
-                    if dist_anchor > max_anchor_offset and dist_anchor > 1e-9:
-                        scale = max_anchor_offset / dist_anchor
-                        payload_ax = caster_anchor_x + dx_anchor * scale
-                        payload_ay = caster_anchor_y + dy_anchor * scale
-                    anchor_ax = float(payload_ax)
-                    anchor_ay = float(payload_ay)
-            if force_fixed_to_caster and cid is not None:
-                anchor_cid = cid
-                cx = float(anchor_ax)
-                cy = float(anchor_ay)
-            if map_ready:
-                aid = int(getattr(mw, "_next_aoe_id", 1))
-                setattr(mw, "_next_aoe_id", aid + 1)
-            else:
-                aid = int(getattr(self, "_lan_next_aoe_id", 1))
-                store = getattr(self, "_lan_aoes", {}) or {}
-                if store:
-                    max_aid = max(int(a) for a in store.keys())
-                    if aid <= max_aid:
-                        aid = max_aid + 1
-                self._lan_next_aoe_id = aid + 1
-            if cid is not None and cid in self.combatants:
-                owner = str(self.combatants[cid].name)
-                if not is_admin and claimed is not None:
-                    owner_cid = claimed
-                else:
-                    owner_cid = cid
-            else:
-                owner = "DM"
-                owner_cid = None
-            owner_ws_id = ws_id if isinstance(ws_id, int) else None
-            aoe: Dict[str, Any] = {
-                "kind": shape,
-                "cx": float(cx),
-                "cy": float(cy),
-                "pinned": pinned_flag,
-                "color": color
-                or (
-                    mw._aoe_default_color(shape)
-                    if map_ready and hasattr(mw, "_aoe_default_color")
-                    else ""
-                ),
-                "name": name or f"AoE {aid}",
-                "shape": None,
-                "label": None,
-                "owner": owner,
-                "owner_cid": owner_cid,
-                "owner_ws_id": owner_ws_id,
-                "duration_turns": duration_turns_val,
-                "remaining_turns": duration_turns_val if (duration_turns_val or 0) > 0 else None,
-                "spell_slug": spell_slug,
-                "spell_id": spell_id,
-                "slot_level": slot_level,
-            }
-            aoe["map_effect"] = True
-            aoe["effect_id"] = int(aid)
-            aoe["aoe_id"] = int(aid)
-            aoe["anchor_mode"] = "fixed_to_caster" if force_fixed_to_caster else "fixed_to_map"
-            aoe["template"] = {
-                "shape": shape,
-                "geometry": {
-                    "cx": float(cx),
-                    "cy": float(cy),
-                    "ax": float(anchor_ax),
-                    "ay": float(anchor_ay),
-                    "angle_deg": float(angle_deg) if angle_deg is not None else None,
-                },
-                "anchor": {
-                    "mode": "fixed_to_caster" if force_fixed_to_caster else "fixed_to_map",
-                    "caster_cid": int(anchor_cid) if anchor_cid is not None else None,
-                },
-                "triggers": {
-                    "timing": trigger_on_start_or_enter or ("start" if over_time_flag else None),
-                    "over_time": bool(over_time_flag),
-                },
-                "lifecycle": {
-                    "concentration_bound": bool(concentration_flag),
-                    "duration_turns": duration_turns_val,
-                    "persistent": bool(persistent_flag),
-                },
-            }
-            if preset_environment:
-                aoe["environment"] = dict(preset_environment)
-                aoe["template"]["environment"] = dict(preset_environment)
-            if concentration_flag is True:
-                aoe["concentration_bound"] = True
-            if anchor_cid is not None:
-                aoe["anchor_cid"] = anchor_cid
-            if force_fixed_to_caster:
-                aoe["fixed_to_caster"] = True
-            if over_time_flag:
-                aoe["over_time"] = True
-            if persistent_flag:
-                aoe["persistent"] = True
-            if trigger_on_start_or_enter:
-                aoe["trigger_on_start_or_enter"] = trigger_on_start_or_enter
-            if move_per_turn_ft is not None:
-                aoe["move_per_turn_ft"] = move_per_turn_ft
-                aoe["move_remaining_ft"] = move_per_turn_ft
-            if move_action_type:
-                aoe["move_action_type"] = move_action_type
-            if dc_val is not None:
-                aoe["dc"] = int(dc_val)
-            if save_type:
-                aoe["save_type"] = save_type
-            if damage_types:
-                aoe["damage_types"] = list(damage_types)
-            if damage_type:
-                aoe["damage_type"] = damage_type
-            if half_on_pass is not None:
-                aoe["half_on_pass"] = bool(half_on_pass)
-            if dice:
-                aoe["dice"] = dice
-                if default_damage is None:
-                    default_damage = dice
-            if default_damage is not None:
-                aoe["default_damage"] = default_damage
-            if shape == "circle":
-                if radius_ft is None and size is None:
-                    self._lan.toast(ws_id, "Pick a valid spell radius, matey.")
-                    return
-                if radius_ft is not None:
-                    aoe["radius_sq"] = max(0.5, float(radius_ft) / feet_per_square)
-                    aoe["radius_ft"] = float(radius_ft)
-                else:
-                    aoe["radius_sq"] = float(size)
-            elif shape in ("sphere", "cylinder"):
-                if radius_ft is None and size is None:
-                    self._lan.toast(ws_id, "Pick a valid spell radius, matey.")
-                    return
-                if radius_ft is not None:
-                    aoe["radius_sq"] = max(0.5, float(radius_ft) / feet_per_square)
-                    aoe["radius_ft"] = float(radius_ft)
-                else:
-                    aoe["radius_sq"] = float(size)
-                if height_ft is not None:
-                    aoe["height_ft"] = float(height_ft)
-            elif shape == "square":
-                if side_ft is None and size is None:
-                    self._lan.toast(ws_id, "Pick a valid spell side length, matey.")
-                    return
-                if side_ft is not None:
-                    aoe["side_sq"] = max(1.0, float(side_ft) / feet_per_square)
-                    aoe["side_ft"] = float(side_ft)
-                else:
-                    aoe["side_sq"] = float(size)
-                aoe["angle_deg"] = float(angle_deg) if angle_deg is not None else 0.0
-            elif shape == "cube":
-                if side_ft is None and size is None:
-                    self._lan.toast(ws_id, "Pick a valid spell side length, matey.")
-                    return
-                if side_ft is not None:
-                    aoe["side_sq"] = max(1.0, float(side_ft) / feet_per_square)
-                    aoe["side_ft"] = float(side_ft)
-                else:
-                    aoe["side_sq"] = float(size)
-                aoe["angle_deg"] = float(angle_deg) if angle_deg is not None else 0.0
-            elif shape == "cone":
-                if length_ft is None and size is None:
-                    self._lan.toast(ws_id, "Pick a valid spell length, matey.")
-                    return
-                cone_spread = float(spread_deg) if spread_deg is not None else None
-                if cone_spread is None:
-                    cone_spread = float(angle_deg) if angle_deg is not None else None
-                if cone_spread is None or cone_spread <= 0:
-                    self._lan.toast(ws_id, "Pick a valid spell cone angle, matey.")
-                    return
-                if length_ft is not None:
-                    aoe["length_sq"] = max(1.0, float(length_ft) / feet_per_square)
-                    aoe["length_ft"] = float(length_ft)
-                else:
-                    aoe["length_sq"] = float(size)
-                if spread_deg is not None:
-                    aoe["spread_deg"] = float(cone_spread)
-                    aoe["angle_deg"] = float(angle_deg) if angle_deg is not None else float(caster_facing_deg)
-                else:
-                    aoe["angle_deg"] = float(cone_spread)
-                aoe["orient"] = str(payload.get("orient") or "vertical")
-                aoe["ax"] = float(anchor_ax)
-                aoe["ay"] = float(anchor_ay)
-                aoe["cx"] = float(anchor_ax)
-                aoe["cy"] = float(anchor_ay)
-            elif shape == "wall":
-                if length_ft is None and size is None:
-                    self._lan.toast(ws_id, "Pick a valid spell length, matey.")
-                    return
-                if length_ft is not None:
-                    aoe["length_sq"] = max(1.0, float(length_ft) / feet_per_square)
-                    aoe["length_ft"] = float(length_ft)
-                else:
-                    aoe["length_sq"] = float(size)
-                if width_ft is not None:
-                    aoe["width_sq"] = max(1.0, float(width_ft) / feet_per_square)
-                    aoe["width_ft"] = float(width_ft)
-                    if height_ft is not None:
-                        aoe["height_ft"] = float(height_ft)
-                elif thickness_ft is not None and height_ft is not None:
-                    aoe["width_sq"] = max(1.0, float(thickness_ft) / feet_per_square)
-                    aoe["thickness_ft"] = float(thickness_ft)
-                    aoe["height_ft"] = float(height_ft)
-                else:
-                    self._lan.toast(ws_id, "Pick a valid wall thickness and height, matey.")
-                    return
-                aoe["orient"] = str(payload.get("orient") or "vertical")
-                aoe["angle_deg"] = float(angle_deg) if angle_deg is not None else 0.0
-                aoe["ax"] = float(anchor_ax)
-                aoe["ay"] = float(anchor_ay)
-            else:
-                if length_ft is None and size is None:
-                    self._lan.toast(ws_id, "Pick a valid spell length, matey.")
-                    return
-                if length_ft is not None:
-                    aoe["length_sq"] = max(1.0, float(length_ft) / feet_per_square)
-                    aoe["length_ft"] = float(length_ft)
-                else:
-                    aoe["length_sq"] = float(size)
-                if width_ft is not None:
-                    aoe["width_sq"] = max(1.0, float(width_ft) / feet_per_square)
-                    aoe["width_ft"] = float(width_ft)
-                else:
-                    width = parse_positive_float(payload.get("width")) or 1.0
-                    aoe["width_sq"] = max(1.0, float(width))
-                aoe["orient"] = str(payload.get("orient") or "vertical")
-                aoe["angle_deg"] = float(angle_deg) if angle_deg is not None else 0.0
-                aoe["ax"] = float(anchor_ax)
-                aoe["ay"] = float(anchor_ay)
-                try:
-                    half_len = float(aoe.get("length_sq") or 0.0) / 2.0
-                except Exception:
-                    half_len = 0.0
-                if half_len > 0:
-                    rad = math.radians(float(aoe.get("angle_deg") or 0.0))
-                    aoe["cx"] = float(anchor_ax + math.cos(rad) * half_len)
-                    aoe["cy"] = float(anchor_ay + math.sin(rad) * half_len)
-            sculpt_enabled, sculpt_max_protected = self._lan_sculpt_spells_context(c, preset_dict, slot_level=slot_level)
-            if sculpt_enabled and c is not None:
-                caster_cid = int(getattr(c, "cid", 0) or 0)
-                caster_friendly = self._lan_is_friendly_unit(caster_cid)
-                included_targets = {int(target_cid) for target_cid in self._map_spell_effect_targets(aoe)}
-                selected: List[int] = []
-                seen_selected: set[int] = set()
-                if isinstance(raw_sculpted_cids, list):
-                    for entry in raw_sculpted_cids:
-                        if isinstance(entry, bool):
-                            continue
-                        try:
-                            selected_cid = int(entry)
-                        except Exception:
-                            continue
-                        if selected_cid in seen_selected or selected_cid == caster_cid:
-                            continue
-                        if selected_cid not in included_targets:
-                            continue
-                        if self._lan_is_friendly_unit(selected_cid) != caster_friendly:
-                            continue
-                        seen_selected.add(selected_cid)
-                        selected.append(selected_cid)
-                        if len(selected) >= int(sculpt_max_protected):
-                            break
-                aoe["sculpted_cids"] = selected
-            self._register_map_spell_effect(int(aid), aoe)
-            self._lan_next_aoe_id = max(int(getattr(self, "_lan_next_aoe_id", 1) or 1), int(aid) + 1)
-            if concentration_flag is True and c is not None:
-                spell_key = self._canonical_concentration_spell_key(preset_dict, fallback=spell_slug or spell_id or name)
-                self._start_concentration(
-                    c,
-                    spell_key,
-                    spell_level=spell_level,
-                    aoe_ids=[int(aid)],
-                )
-            spawned_cids: List[int] = []
-            if summon_cfg and cid is not None:
-                spawned_cids = self._spawn_summons_from_cast(
-                    caster_cid=cid,
-                    spell_slug=spell_slug,
-                    spell_id=spell_id,
-                    slot_level=slot_level,
-                    summon_choice=summon_choice,
-                )
-                if spawned_cids:
-                    self._rebuild_table(scroll_to_current=True)
-                    self._lan_force_state_broadcast()
-            resolved = self._lan_auto_resolve_cast_aoe(
-                aid,
-                aoe,
-                caster=c,
-                spell_slug=spell_slug,
-                spell_id=spell_id,
-                slot_level=slot_level,
-                preset=preset_dict,
-                manual_damage_entries=manual_damage_entries,
-            )
-            if resolved:
-                self._lan.toast(ws_id, f"Casted {aoe['name']} (auto-resolved).")
-            else:
-                self._lan.toast(ws_id, f"Casted {aoe['name']}.")
-            return
-
-        if typ == "cast_spell":
-            payload = msg.get("payload") or {}
-            spell_slug = str(msg.get("spell_slug") or payload.get("spell_slug") or "").strip()
-            spell_id = str(msg.get("spell_id") or payload.get("spell_id") or "").strip()
-            summon_choice = msg.get("summon_choice") if msg.get("summon_choice") not in (None, "") else payload.get("summon_choice")
-            summon_quantity = msg.get("summon_quantity") if msg.get("summon_quantity") is not None else payload.get("summon_quantity")
-            summon_variant = msg.get("variant") if msg.get("variant") not in (None, "") else payload.get("variant")
-            if summon_variant is not None:
-                summon_variant = str(summon_variant).strip() or None
-            raw_positions = payload.get("summon_positions")
-            summon_positions: List[Dict[str, Any]] = []
-            if isinstance(raw_positions, list):
-                for entry in raw_positions:
-                    if not isinstance(entry, dict):
-                        continue
-                    try:
-                        col = int(entry.get("col"))
-                        row = int(entry.get("row"))
-                    except Exception:
-                        continue
-                    summon_positions.append({"col": col, "row": row})
-            preset = self._find_spell_preset(spell_slug=spell_slug, spell_id=spell_id)
-            preset_slug = str((preset or {}).get("slug") or "").strip().lower()
-            preset_id = str((preset or {}).get("id") or "").strip().lower()
-            if not isinstance(preset, dict):
-                self._lan.toast(ws_id, "That spell could not be found, matey.")
-                return
-            spend = self._resolve_spell_spend_type(preset=preset, msg=msg, payload=payload)
-            summon_cfg = preset.get("summon") if isinstance(preset.get("summon"), dict) else None
-            try:
-                slot_level = int(msg.get("slot_level") if msg.get("slot_level") is not None else payload.get("slot_level"))
-            except Exception:
-                slot_level = None
-            if slot_level is not None and slot_level < 0:
-                slot_level = None
-            preset_level = None
-            try:
-                preset_level = int(preset.get("level"))
-            except Exception:
-                preset_level = None
-            if preset_level is not None and preset_level > 0 and slot_level is None:
-                slot_level = preset_level
-            if slot_level is not None and preset_level is not None and slot_level < preset_level:
-                self._lan.toast(ws_id, "Ye can't downcast that spell, matey.")
-                return
-
-            c = self.combatants.get(cid) if cid is not None else None
-            if summon_cfg:
-                resolved_summon, summon_err = self._resolve_spell_summon_request(
-                    preset=preset,
-                    summon_cfg=summon_cfg,
-                    caster=c,
-                    summon_choice=summon_choice,
-                    slot_level=slot_level,
-                    summon_variant=summon_variant,
-                    summon_quantity=summon_quantity,
-                )
-                if not isinstance(resolved_summon, dict):
-                    self._lan.toast(ws_id, summon_err or "Summoning failed, matey.")
-                    return
-                quantity_from_cfg = max(0, int(resolved_summon.get("quantity") or 0))
-                chosen_slug = str(resolved_summon.get("monster_slug") or "").strip().lower() or None
-                if not chosen_slug:
-                    self._lan.toast(ws_id, "Pick a summon creature first, matey.")
-                    return
-                if self._find_monster_spec_by_slug(chosen_slug) is None:
-                    self._lan.toast(ws_id, "That summon creature does not exist, matey.")
-                    return
-                summon_variant = resolved_summon.get("variant") if isinstance(resolved_summon.get("variant"), str) else None
-                if summon_positions and len(summon_positions) < quantity_from_cfg:
-                    self._lan.toast(ws_id, "Pick a valid square for each summon, matey.")
-                    return
-                if summon_positions:
-                    cols, rows, obstacles, _rough, positions = self._lan_live_map_data()
-                    caster_pos = positions.get(cid) if cid is not None else None
-                    if caster_pos is None and cid is not None:
-                        caster_pos = self._lan_current_position(cid)
-                    range_text = str(preset.get("range") or "")
-                    range_match = re.search(r"(\d+(?:\.\d+)?)\s*(?:ft|feet)", range_text, flags=re.IGNORECASE)
-                    max_range_ft = float(range_match.group(1)) if range_match else None
-                    feet_per_square = 5.0
-                    try:
-                        mw = getattr(self, "_map_window", None)
-                        if mw is not None and mw.winfo_exists():
-                            feet_per_square = float(getattr(mw, "feet_per_square", feet_per_square) or feet_per_square)
-                    except Exception:
-                        pass
-                    for pos in summon_positions[:quantity_from_cfg]:
-                        col = int(pos.get("col"))
-                        row = int(pos.get("row"))
-                        if col < 0 or row < 0 or col >= cols or row >= rows or (col, row) in obstacles:
-                            self._lan.toast(ws_id, "That summon square be invalid, matey.")
-                            return
-                        if caster_pos is not None and max_range_ft is not None:
-                            dist_ft = math.hypot(col - caster_pos[0], row - caster_pos[1]) * max(1.0, feet_per_square)
-                            if dist_ft - max_range_ft > 1e-6:
-                                self._lan.toast(ws_id, "That square be out of spell range, matey.")
-                                return
-            beguiling_magic_slot_equivalent_used = False
-            preset_school = str(preset.get("school") or "").strip().lower()
-            if c is not None and not is_admin:
-                player_name = _resolve_pc_name(cid)
-                consumes_pool = payload.get("consumes_pool") if isinstance(payload.get("consumes_pool"), dict) else {}
-                pool_id = str(
-                    msg.get("consumes_pool_id")
-                    or payload.get("consumes_pool_id")
-                    or consumes_pool.get("id")
-                    or consumes_pool.get("pool")
-                    or ""
-                ).strip()
-                try:
-                    pool_cost = int(
-                        msg.get("consumes_pool_cost")
-                        if msg.get("consumes_pool_cost") is not None
-                        else payload.get("consumes_pool_cost")
-                        if payload.get("consumes_pool_cost") is not None
-                        else consumes_pool.get("cost", 1)
-                    )
-                except Exception:
-                    pool_cost = 1
-                pool_cost = max(1, pool_cost)
-                if pool_id:
-                    ok_pool, pool_err = self._consume_resource_pool_for_cast(
-                        caster_name=player_name,
-                        pool_id=pool_id,
-                        cost=pool_cost,
-                    )
-                    if not ok_pool:
-                        self._lan.toast(ws_id, pool_err)
-                        return
-                    if str(pool_id or "").strip().lower() == "pact_magic_slots":
-                        beguiling_magic_slot_equivalent_used = True
-                else:
-                    ok_slot, slot_err, _spent_level = self._consume_spell_slot_for_cast(
-                        caster_name=player_name,
-                        slot_level=slot_level,
-                        minimum_level=preset_level,
-                    )
-                    if not ok_slot:
-                        self._lan.toast(ws_id, slot_err)
-                        return
-                    beguiling_magic_slot_equivalent_used = True
-                if spend != "reaction" and int(getattr(c, "spell_cast_remaining", 0) or 0) <= 0:
-                    self._lan.toast(ws_id, "Already cast a spell this turn, matey.")
-                    return
-                if not self._combatant_can_cast_spell(c, spend):
-                    self._lan.toast(ws_id, "No spellcasting action available, matey.")
-                    return
-                blocked, blocked_msg = self._spellcast_blocked_by_environment(c, preset)
-                if blocked:
-                    self._lan.toast(ws_id, blocked_msg or "The environment prevents that spell, matey.")
-                    return
-                spell_name = self._spell_label_from_identifiers(
-                    preset.get("name"),
-                    preset.get("slug"),
-                    spell_slug,
-                    spell_id,
-                )
-                cast_log = self._spell_cast_log_message(c.name, spell_name, slot_level)
-                if spend == "bonus":
-                    if not self._use_bonus_action(c, log_message=cast_log):
-                        self._lan.toast(ws_id, "No bonus actions left, matey.")
-                        return
-                elif spend == "reaction":
-                    if not self._use_reaction(c, log_message=cast_log):
-                        self._lan.toast(ws_id, "No reactions left, matey.")
-                        return
-                else:
-                    if not self._use_action(c, log_message=cast_log):
-                        self._lan.toast(ws_id, "No actions left, matey.")
-                        return
-                c.spell_cast_remaining = max(0, int(getattr(c, "spell_cast_remaining", 0) or 0) - 1)
-                smite_slug = self._smite_slug_from_preset(preset)
-                if smite_slug and smite_slug in _SMITE_SPELL_CONFIG:
-                    setattr(
-                        c,
-                        "pending_smite_charge",
-                        {
-                            "slug": smite_slug,
-                            "name": str(preset.get("name") or smite_slug.replace("-", " ").title()),
-                            "slot_level": slot_level,
-                        },
-                    )
-                if summon_cfg and cid is not None:
-                    spawned_cids = self._spawn_summons_from_cast(
-                        caster_cid=cid,
-                        spell_slug=spell_slug,
-                        spell_id=spell_id,
-                        slot_level=slot_level,
-                        summon_choice=summon_choice,
-                        summon_quantity=summon_quantity,
-                        summon_positions=summon_positions,
-                        summon_variant=summon_variant,
-                    )
-                    if not spawned_cids:
-                        self._lan.toast(ws_id, "Summoning failed, matey.")
-                        return
-                    if bool(preset.get("concentration")):
-                        self._start_concentration(
-                            c,
-                            self._canonical_concentration_spell_key(preset, fallback=spell_slug or spell_id),
-                            spell_level=slot_level,
-                            targets=[int(x) for x in spawned_cids],
-                        )
-                self._rebuild_table(scroll_to_current=True)
-            elif summon_cfg and cid is not None:
-                spawned_cids = self._spawn_summons_from_cast(
-                    caster_cid=cid,
-                    spell_slug=spell_slug,
-                    spell_id=spell_id,
-                    slot_level=slot_level,
-                    summon_choice=summon_choice,
-                    summon_quantity=summon_quantity,
-                    summon_positions=summon_positions,
-                    summon_variant=summon_variant,
-                )
-                if not spawned_cids:
-                    self._lan.toast(ws_id, "Summoning failed, matey.")
-                    return
-                if bool(preset.get("concentration")) and c is not None:
-                    self._start_concentration(
-                        c,
-                        self._canonical_concentration_spell_key(preset, fallback=spell_slug or spell_id),
-                        spell_level=slot_level,
-                        targets=[int(x) for x in spawned_cids],
-                    )
-            if c is not None:
-                if beguiling_magic_slot_equivalent_used and preset_school in {"enchantment", "illusion"}:
-                    self._arm_beguiling_magic_window(c, duration_s=20.0)
-                spell_key_for_effect = str(preset.get("slug") or preset.get("id") or spell_slug or spell_id or "").strip().lower()
-                if c is not None and spell_key_for_effect in {
-                    "divine-favor",
-                    "magic-weapon",
-                    "elemental-weapon",
-                    "shillelagh",
-                    "thunderous-smite",
-                    "blinding-smite",
-                    "wrathful-smite",
-                }:
-                    ongoing_payload: Dict[str, Any] = {}
-                    if spell_key_for_effect == "divine-favor":
-                        ongoing_payload = {
-                            "attack_augments": {
-                                "weapon_only": True,
-                                "extra_damage_dice": [{"dice": "1d4", "damage_type": "radiant"}],
-                            }
-                        }
-                    elif spell_key_for_effect == "magic-weapon":
-                        bonus = 1
-                        try:
-                            lvl = int(slot_level or preset_level or 2)
-                        except Exception:
-                            lvl = 2
-                        if lvl >= 6:
-                            bonus = 3
-                        elif lvl >= 3:
-                            bonus = 2
-                        ongoing_payload = {
-                            "attack_augments": {
-                                "weapon_only": True,
-                                "exclude_unarmed": True,
-                                "attack_bonus": int(bonus),
-                                "damage_bonus": int(bonus),
-                                "weapon_counts_as_magical": True,
-                            }
-                        }
-                    elif spell_key_for_effect == "elemental-weapon":
-                        bonus = 1
-                        extra_dice = "1d4"
-                        try:
-                            lvl = int(slot_level or preset_level or 3)
-                        except Exception:
-                            lvl = 3
-                        if lvl >= 7:
-                            bonus = 3
-                            extra_dice = "3d4"
-                        elif lvl >= 5:
-                            bonus = 2
-                            extra_dice = "2d4"
-                        chosen_type = str(msg.get("damage_type") or payload.get("damage_type") or "").strip().lower()
-                        if chosen_type not in {"acid", "cold", "fire", "lightning", "thunder"}:
-                            chosen_type = "thunder"
-                        ongoing_payload = {
-                            "attack_augments": {
-                                "weapon_only": True,
-                                "exclude_unarmed": True,
-                                "attack_bonus": int(bonus),
-                                "weapon_counts_as_magical": True,
-                                "extra_damage_dice": [{"dice": extra_dice, "damage_type": chosen_type}],
-                            }
-                        }
-                    elif spell_key_for_effect == "shillelagh":
-                        cantrip_scale = "1d8"
-                        caster_level = 0
-                        try:
-                            profile_leveling = (self._profile_for_player_name(str(getattr(c, "name", "") or "")) or {}).get("leveling")
-                            caster_level = int((profile_leveling or {}).get("level") or 0)
-                        except Exception:
-                            caster_level = 0
-                        if caster_level >= 17:
-                            cantrip_scale = "2d6"
-                        elif caster_level >= 11:
-                            cantrip_scale = "1d12"
-                        elif caster_level >= 5:
-                            cantrip_scale = "1d10"
-                        ongoing_payload = {
-                            "attack_augments": {
-                                "weapon_only": True,
-                                "weapon_ids": ["club", "quarterstaff"],
-                                "attack_ability_override": "wis",
-                                "weapon_damage_die_override": cantrip_scale,
-                            }
-                        }
-                    elif spell_key_for_effect in {"thunderous-smite", "blinding-smite", "wrathful-smite"}:
-                        smite_cfg = _SMITE_SPELL_CONFIG.get(spell_key_for_effect) or {}
-                        smite_dice = self._smite_damage_dice(smite_cfg, slot_level)
-                        save_cfg = smite_cfg.get("save") if isinstance(smite_cfg.get("save"), dict) else {}
-                        profile = self._profile_for_player_name(str(getattr(c, "name", "") or "")) if c is not None else {}
-                        save_dc = int(self._compute_spell_save_dc(profile if isinstance(profile, dict) else {}) or 0)
-                        on_hit_effects: List[Dict[str, Any]] = []
-                        if smite_dice:
-                            on_hit_effects.append({"effect": "damage", "dice": smite_dice, "damage_type": str(smite_cfg.get("damage_type") or "damage")})
-                        if save_cfg:
-                            save_payload: Dict[str, Any] = {
-                                "effect": "save_bundle",
-                                "save_ability": str(save_cfg.get("ability") or "").strip().lower(),
-                                "save_dc": int(save_dc),
-                            }
-                            if bool(save_cfg.get("apply_prone")):
-                                save_payload["apply_prone"] = True
-                            if isinstance(save_cfg.get("forced_movement"), dict):
-                                save_payload["forced_movement"] = dict(save_cfg.get("forced_movement") or {})
-                            condition = str(save_cfg.get("condition") or "").strip().lower()
-                            if condition:
-                                save_payload["condition"] = condition
-                                if bool(save_cfg.get("repeat_each_turn")):
-                                    save_payload["repeat_each_turn"] = True
-                                    save_payload["repeat_timing"] = str(save_cfg.get("repeat_timing") or "start_turn")
-                            on_hit_effects.append(save_payload)
-                        ongoing_payload = {
-                            "attack_augments": {
-                                "weapon_only": True,
-                                "melee_only": True,
-                                "consume_on_next_hit": True,
-                                "on_hit_effects": on_hit_effects,
-                                "save_dc": int(save_dc),
-                            }
-                        }
-                    if ongoing_payload:
-                        self._register_target_spell_effect(
-                            int(c.cid),
-                            int(c.cid),
-                            spell_key_for_effect,
-                            spell_level=slot_level,
-                            concentration_bound=bool(preset.get("concentration")),
-                            clear_group=f"{spell_key_for_effect}_{int(c.cid)}_{int(c.cid)}",
-                            effect_tags=["attack_augment"],
-                            primitives=ongoing_payload,
-                        )
-                        if spell_key_for_effect.endswith("-smite"):
-                            self._lan.toast(ws_id, f"{str(getattr(c, 'name', 'Caster') or 'Caster')} readies {str(preset.get('name') or 'a smite')}.")
-            ensnaring_slug_keys = {"ensnaring-strike", "ensnaring_strike"}
-            if c is not None and (preset_slug in ensnaring_slug_keys or preset_id in ensnaring_slug_keys):
-                duration_turns = self._spell_duration_to_turns(preset)
-                if duration_turns is None or int(duration_turns) <= 0:
-                    duration_turns = 10
-                self._start_concentration(
-                    c,
-                    self._canonical_concentration_spell_key(preset, fallback=spell_slug or spell_id or "ensnaring-strike"),
-                    spell_level=slot_level if slot_level is not None else preset_level,
-                    targets=[int(c.cid)],
-                )
-                self._ensure_condition_stack(c, "ensnaring_strike", int(duration_turns))
-            mirror_image_slug_keys = {"mirror-image", "mirror_image"}
-            if c is not None and (preset_slug in mirror_image_slug_keys or preset_id in mirror_image_slug_keys):
-                duration_turns = self._spell_duration_to_turns(preset)
-                if duration_turns is None or int(duration_turns) <= 0:
-                    duration_turns = 10
-                self._ensure_condition_stack(c, "mirror_image", int(duration_turns))
-                setattr(c, "_mirror_image_duplicates", 3)
-                self._log(f"{c.name} conjures 3 Mirror Image duplicates for {int(duration_turns)} rounds.", cid=int(c.cid))
-            if c is not None and self._is_produce_flame_spell_key(preset_slug, preset_id, spell_slug, spell_id):
-                produce_state = self._arm_produce_flame_state(c, preset)
-                duration_turns = int((produce_state or {}).get("remaining_turns") or 100)
-                self._log(f"{c.name} kindles Produce Flame for up to {duration_turns} rounds.", cid=int(c.cid))
-            self._lan_force_state_broadcast()
-            if self._is_produce_flame_spell_key(preset_slug, preset_id, spell_slug, spell_id):
-                self._lan.toast(ws_id, "Produce Flame is lit and ready to hurl.")
-            else:
-                self._lan.toast(ws_id, f"Casted {preset.get('name') or 'spell'}.")
             return
 
         elif typ == "command_resolve":
