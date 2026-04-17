@@ -131,6 +131,20 @@ class LanCastModalRegressionTests(unittest.TestCase):
         self.assertIn('type: "spell_target_request",', self.html)
         self.assertIn('} else if (msg.type === "spell_target_result"){', self.html)
 
+    def test_spell_targeting_draws_range_overlay_from_pending_spell_state(self):
+        self.assertIn('const spellRangeFt = Number(pendingSpellTargeting?.rangeFt);', self.html)
+        self.assertIn('const rangeFt = Number.isFinite(layOnHandsRangeFt)', self.html)
+        self.assertIn('ctx.arc(center.x, center.y, Math.max(6, radiusCells * zoom), 0, Math.PI * 2);', self.html)
+        self.assertIn('pendingSpellTargeting?.overlayColor || ""', self.html)
+
+    def test_spell_target_result_damage_prompt_reuses_attack_resolve_modal(self):
+        self.assertIn('} else if (msg.needs_damage_prompt){', self.html)
+        self.assertIn('pendingAttackResolve = {', self.html)
+        self.assertIn('mode: "spell",', self.html)
+        self.assertIn('allowOutOfTurn: !!msg.aoe_manual_prompt,', self.html)
+        self.assertIn('attackResolveBody.textContent = `${shotLabel}${saveSummary} Enter damage for ${promptSpell.spellName}.`', self.html)
+        self.assertIn('setAttackResolveModalOpen(true);', self.html)
+
     def test_follow_up_only_spell_targeting_and_action_picker_support_are_present(self):
         self.assertIn('const followUpOnly = uiConfig?.follow_up_only === true;', self.html)
         self.assertIn('if (followUpOnly && options.allowFollowUpOnly !== true) return null;', self.html)

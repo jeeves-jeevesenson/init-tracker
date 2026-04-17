@@ -134,29 +134,6 @@ If you complete an item, move its ID into **Section 5 (Completed archive)** and 
   - `python -m compileall .`
   - targeted LAN/auth tests relevant to touched paths
 
-### F07 — Spell range overlay + LAN damage prompt integration
-- **Status:** Not started
-- **Impact / Complexity:** High / Hard
-- **Dependencies:** Partial overlap with F06 (reuse targeting/damage primitives)
-- **Primary files likely touched:**
-  - `/home/runner/work/dnd-initiative-tracker/dnd-initiative-tracker/assets/web/lan/index.html`
-  - `/home/runner/work/dnd-initiative-tracker/dnd-initiative-tracker/helper_script.py`
-  - `/home/runner/work/dnd-initiative-tracker/dnd-initiative-tracker/dnd_initative_tracker.py`
-  - `/home/runner/work/dnd-initiative-tracker/dnd-initiative-tracker/tests/test_spell_rotation_parity.py`
-- **Scope:**
-  - Show spell range/radius overlays during targeting.
-  - Connect range-confirm flow to a player-facing damage prompt path.
-- **Plan:**
-  1. Reuse existing AoE overlay math/render primitives.
-  2. Add spell-range metadata pass-through where missing.
-  3. Wire prompt lifecycle to a server-authoritative damage apply action.
-- **Risk notes:**
-  - Do not regress existing AoE placement/rotation behavior.
-  - Keep payload additive for older clients.
-- **Validation plan:**
-  - `python -m compileall .`
-  - targeted spell/aoe regression tests
-
 ### F08 — Terrain hazard preset system (DoT + triggers + saves + conditions)
 - **Status:** Not started
 - **Impact / Complexity:** High / Hard
@@ -257,6 +234,7 @@ If you complete an item, move its ID into **Section 5 (Completed archive)** and 
 
 Completed as of 2026-02-15:
 - **Feature foundations:** F05 (weapon preset schema/docs plus normalized `attacks.weapons[]` runtime payload and regression coverage), F06 (LAN attack overlay, configured-weapon targeting, and action-to-attack-resource gating).
+- **2026-04-16:** F07 completed. Spell targeting now renders LAN range overlays from pending targeting state, directional/radius AoE placement reuses the same range guide path, and `spell_target_result.needs_damage_prompt` reopens the shared resolve modal so players can enter damage after server-authoritative save/target resolution.
 - **Bug fixes:** B01, B02, B03, B04, B05, B06, B07, B08, B09, B10, B11, B12, B13, B14.
 - **UX:** U01, U02, U03, U04, U05, U06, U07, U08, U09.
 
