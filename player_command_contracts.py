@@ -126,6 +126,19 @@ MONK_ELEMENTAL_ATTUNEMENT_FIELDS: Sequence[str] = ("type", "mode")
 MONK_ELEMENTAL_BURST_FIELDS: Sequence[str] = ("type", "damage_type", "movement_mode", "payload")
 MONK_UNCANNY_METABOLISM_FIELDS: Sequence[str] = ("type",)
 
+FIGHTER_MONK_RESOURCE_ACTION_TYPES = frozenset(
+    {
+        "second_wind_use",
+        "action_surge_use",
+        "star_advantage_use",
+        "monk_patient_defense",
+        "monk_step_of_wind",
+        "monk_elemental_attunement",
+        "monk_elemental_burst",
+        "monk_uncanny_metabolism",
+    }
+)
+
 
 def _copy(value: Any) -> Any:
     try:

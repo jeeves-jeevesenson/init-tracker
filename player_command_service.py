@@ -66,6 +66,7 @@ from typing import TYPE_CHECKING, Any, Dict, Optional
 
 from player_command_contracts import (
     ACTIVE_PROMPT_STATES,
+    FIGHTER_MONK_RESOURCE_ACTION_TYPES,
     SPECIAL_REACTION_TRIGGERS,
     apply_resume_dispatch,
     build_attack_request_contract,
@@ -671,6 +672,10 @@ class PlayerCommandService:
     the transport/authority boundary again.
     """
 
+    _FIGHTER_MONK_RESOURCE_ACTION_HANDLERS = {
+        command_type: command_type for command_type in FIGHTER_MONK_RESOURCE_ACTION_TYPES
+    }
+
     def __init__(self, tracker: "InitiativeTracker") -> None:
         if tracker is None:
             raise ValueError("PlayerCommandService requires a tracker instance.")
@@ -923,6 +928,37 @@ class PlayerCommandService:
     # ------------------------------------------------------------------
     # resource / consumable / self-state commands
     # ------------------------------------------------------------------
+
+    def dispatch_fighter_monk_resource_action(
+        self,
+        msg: Dict[str, Any],
+        *,
+        cid: Optional[int],
+        ws_id: Any,
+        is_admin: bool,
+    ) -> Dict[str, Any]:
+        command_type = str(msg.get("type") if isinstance(msg, dict) else "").strip().lower()
+        handler_name = self._FIGHTER_MONK_RESOURCE_ACTION_HANDLERS.get(command_type)
+        if not handler_name:
+            return build_dispatch_result(
+                "fighter_monk_resource_action",
+                False,
+                reason="unsupported_command",
+                received_type=command_type,
+            )
+        handler = getattr(self, handler_name, None)
+        if not callable(handler):
+            return build_dispatch_result(
+                command_type,
+                False,
+                reason="handler_missing",
+            )
+        return handler(
+            msg if isinstance(msg, dict) else {},
+            cid=cid,
+            ws_id=ws_id,
+            is_admin=is_admin,
+        )
 
     def manual_override_spell_slot(
         self,

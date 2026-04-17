@@ -91,6 +91,7 @@ from map_state import (
 )
 from ship_blueprints import load_repo_runtime_ship_blueprints
 from player_command_contracts import (
+    FIGHTER_MONK_RESOURCE_ACTION_TYPES,
     build_attack_request_contract,
     build_hellish_rebuke_resolve_start_payload,
     build_reaction_offer_event,
@@ -36533,22 +36534,8 @@ class InitiativeTracker(base.InitiativeTracker):
 
             self._lan.toast(ws_id, "Wild Shape forms updated.")
             self._rebuild_table(scroll_to_current=True)
-        elif typ == "second_wind_use":
-            self._ensure_player_commands().second_wind_use(
-                msg,
-                cid=cid,
-                ws_id=ws_id,
-                is_admin=is_admin,
-            )
-        elif typ == "action_surge_use":
-            self._ensure_player_commands().action_surge_use(
-                msg,
-                cid=cid,
-                ws_id=ws_id,
-                is_admin=is_admin,
-            )
-        elif typ == "star_advantage_use":
-            self._ensure_player_commands().star_advantage_use(
+        elif typ in FIGHTER_MONK_RESOURCE_ACTION_TYPES:
+            self._ensure_player_commands().dispatch_fighter_monk_resource_action(
                 msg,
                 cid=cid,
                 ws_id=ws_id,
@@ -36570,41 +36557,6 @@ class InitiativeTracker(base.InitiativeTracker):
             )
         elif typ == "use_consumable":
             self._ensure_player_commands().use_consumable(
-                msg,
-                cid=cid,
-                ws_id=ws_id,
-                is_admin=is_admin,
-            )
-        elif typ == "monk_patient_defense":
-            self._ensure_player_commands().monk_patient_defense(
-                msg,
-                cid=cid,
-                ws_id=ws_id,
-                is_admin=is_admin,
-            )
-        elif typ == "monk_step_of_wind":
-            self._ensure_player_commands().monk_step_of_wind(
-                msg,
-                cid=cid,
-                ws_id=ws_id,
-                is_admin=is_admin,
-            )
-        elif typ == "monk_elemental_attunement":
-            self._ensure_player_commands().monk_elemental_attunement(
-                msg,
-                cid=cid,
-                ws_id=ws_id,
-                is_admin=is_admin,
-            )
-        elif typ == "monk_elemental_burst":
-            self._ensure_player_commands().monk_elemental_burst(
-                msg,
-                cid=cid,
-                ws_id=ws_id,
-                is_admin=is_admin,
-            )
-        elif typ == "monk_uncanny_metabolism":
-            self._ensure_player_commands().monk_uncanny_metabolism(
                 msg,
                 cid=cid,
                 ws_id=ws_id,
