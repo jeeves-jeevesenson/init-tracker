@@ -41,11 +41,11 @@ try:
     import yaml  # type: ignore
 except Exception:  # pragma: no cover
     yaml = None
-import tkinter as tk
-import tkinter.font as tkfont
 from dataclasses import dataclass, field
 from typing import Any, Callable, Dict, List, Optional, Tuple, Set, Union
-from tkinter import messagebox, ttk, simpledialog, filedialog
+from tk_compat import load_tk_modules
+
+tk, filedialog, messagebox, _scrolledtext, simpledialog, ttk, tkfont = load_tk_modules()
 from map_state import (
     ElevationCell,
     MapFeature,

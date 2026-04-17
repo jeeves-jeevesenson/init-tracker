@@ -10,6 +10,7 @@ except ImportError:  # pragma: no cover - optional dependency in lightweight env
     TestClient = None
 
 import dnd_initative_tracker as tracker_mod
+from player_command_contracts import build_prompt_record
 
 MAX_RECV_ATTEMPTS = 12
 RECV_TIMEOUT_SECONDS = 2.5
@@ -180,6 +181,62 @@ class LanReconnectRecoveryTests(unittest.TestCase):
                 int(state_payload.get("you", {}).get("claim_rev") or 0),
                 rev_after_unclaim,
             )
+
+    def test_state_request_includes_pending_prompt_snapshot_for_claimed_actor(self):
+        tracker = self._build_tracker()
+        tracker._pending_prompts = {
+            "prompt-1": build_prompt_record(
+                prompt_id="prompt-1",
+                prompt_kind="reaction",
+                trigger="shield",
+                reactor_cid=1,
+                eligible_actor_cids=[1],
+                source_cid=2,
+                target_cid=1,
+                allowed_choices=[{"kind": "shield_yes", "label": "Yes", "mode": "ask"}],
+                ws_ids=[101],
+                prompt_text="Enemy attacks you with Sword.",
+                metadata={"prompt_attack": "Sword"},
+            )
+        }
+        lan = tracker_mod.LanController(tracker)
+        lan._clients_lock = threading.RLock()
+        with mock.patch("threading.Thread.start", return_value=None):
+            lan.start(quiet=True)
+        lan._cached_snapshot = {
+            "grid": {"cols": 12, "rows": 8, "ready": True},
+            "units": [{"cid": 1, "name": "Alice"}],
+            "turn_order": [1],
+            "active_cid": 1,
+            "round_num": 2,
+            "obstacles": [],
+            "rough_terrain": [],
+            "map_state": {},
+        }
+        lan._cached_pcs = [{"cid": 1, "name": "Alice"}]
+        lan._terrain_payload = lambda: {}
+        lan._static_data_payload = lambda: {}
+        lan._pcs_payload = lambda: [{"cid": 1, "name": "Alice"}]
+        lan._dynamic_snapshot_payload = lambda: {
+            "grid": {"cols": 12, "rows": 8, "ready": True},
+            "units": [{"cid": 1, "name": "Alice"}],
+            "turn_order": [1],
+            "active_cid": 1,
+            "round_num": 2,
+            "claims": lan._claims_payload(),
+        }
+        client = TestClient(lan._fastapi_app)
+
+        with client.websocket_connect("/ws") as ws:
+            self._recv_until_type(ws, "state")
+            ws.send_json({"type": "claim", "cid": 1, "client_id": "client-E"})
+            self._recv_until_type(ws, "claim_ack")
+            ws.send_json({"type": "state_request"})
+            state_payload = self._recv_until_type(ws, "state")
+            pending_prompt = state_payload.get("you", {}).get("pending_prompt") or {}
+            self.assertEqual(pending_prompt.get("prompt_id"), "prompt-1")
+            self.assertEqual(pending_prompt.get("trigger"), "shield")
+            self.assertEqual((pending_prompt.get("contract") or {}).get("schema"), "player_command.prompt_snapshot")
 
 
 if __name__ == "__main__":

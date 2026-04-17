@@ -44,14 +44,14 @@ from collections import deque
 import sys
 import tempfile
 
-import tkinter as tk
-from tkinter import filedialog, messagebox, scrolledtext, simpledialog, ttk
-
 # Monster YAML loader (PyYAML)
 try:
     import yaml  # type: ignore
 except Exception:
     yaml = None  # type: ignore
+from tk_compat import load_tk_modules
+
+tk, filedialog, messagebox, scrolledtext, simpledialog, ttk, _tkfont = load_tk_modules()
 
 try:
     from pypdf import PdfReader  # type: ignore
@@ -90,6 +90,16 @@ from map_state import (
     map_delta_has_changes,
 )
 from ship_blueprints import load_repo_runtime_ship_blueprints
+from player_command_contracts import (
+    build_attack_request_contract,
+    build_hellish_rebuke_resolve_start_payload,
+    build_reaction_offer_event,
+    build_resume_dispatch,
+    build_spell_target_rejection_payload,
+    build_spell_target_request_contract,
+    finalize_attack_result_payload,
+    finalize_spell_target_result_payload,
+)
 from player_command_service import PlayerCommandService
 
 
@@ -6040,6 +6050,13 @@ class LanController:
             result["claimed_cid"] = None
             result["claimed_name"] = None
         result["claim_rev"] = int(claim_rev)
+        pending_prompts: List[Dict[str, Any]] = []
+        try:
+            pending_prompts = self._ensure_player_commands().prompts.player_visible_prompts_for_actor(claimed_cid)
+        except Exception:
+            pending_prompts = []
+        result["pending_prompts"] = list(pending_prompts)
+        result["pending_prompt"] = dict(pending_prompts[0]) if pending_prompts else None
         return result
 
 
@@ -6410,6 +6427,7 @@ class InitiativeTracker(base.InitiativeTracker):
         self._pending_mount_requests: Dict[str, Dict[str, Any]] = {}
         self._pending_echo_tether_confirms: Dict[str, Dict[str, Any]] = {}
         self._reaction_prefs_by_cid: Dict[int, Dict[str, str]] = {}
+        self._pending_prompts: Dict[str, Dict[str, Any]] = {}
         self._pending_reaction_offers: Dict[str, Dict[str, Any]] = {}
         self._pending_shield_resolutions: Dict[str, Dict[str, Any]] = {}
         self._pending_hellish_rebuke_resolutions: Dict[str, Dict[str, Any]] = {}
@@ -13921,8 +13939,10 @@ class InitiativeTracker(base.InitiativeTracker):
                 "pending_pre_summons": self._json_safe(self.__dict__.get("_pending_pre_summons", {})),
                 "pending_mount_requests": self._json_safe(self.__dict__.get("_pending_mount_requests", {})),
                 "reaction_prefs_by_cid": self._json_safe(self.__dict__.get("_reaction_prefs_by_cid", {})),
+                "pending_prompts": self._json_safe(self._ensure_player_commands().prompts.all_prompts()),
                 "pending_reaction_offers": self._json_safe(self.__dict__.get("_pending_reaction_offers", {})),
                 "pending_shield_resolutions": self._json_safe(self.__dict__.get("_pending_shield_resolutions", {})),
+                "pending_hellish_rebuke_resolutions": self._json_safe(self.__dict__.get("_pending_hellish_rebuke_resolutions", {})),
                 "pending_absorb_elements_resolutions": self._json_safe(self.__dict__.get("_pending_absorb_elements_resolutions", {})),
                 "pending_interception_resolutions": self._json_safe(self.__dict__.get("_pending_interception_resolutions", {})),
                 "concentration_save_state": self._json_safe(self.__dict__.get("_concentration_save_state", {})),
@@ -14115,8 +14135,14 @@ class InitiativeTracker(base.InitiativeTracker):
         self._pending_pre_summons = dict(combat.get("pending_pre_summons") if isinstance(combat.get("pending_pre_summons"), dict) else {})
         self._pending_mount_requests = dict(combat.get("pending_mount_requests") if isinstance(combat.get("pending_mount_requests"), dict) else {})
         self._reaction_prefs_by_cid = {int(k): dict(v) for k, v in (combat.get("reaction_prefs_by_cid") or {}).items() if isinstance(v, dict)} if isinstance(combat.get("reaction_prefs_by_cid"), dict) else {}
+        self._pending_prompts = dict(combat.get("pending_prompts") if isinstance(combat.get("pending_prompts"), dict) else {})
         self._pending_reaction_offers = dict(combat.get("pending_reaction_offers") if isinstance(combat.get("pending_reaction_offers"), dict) else {})
         self._pending_shield_resolutions = dict(combat.get("pending_shield_resolutions") if isinstance(combat.get("pending_shield_resolutions"), dict) else {})
+        self._pending_hellish_rebuke_resolutions = dict(
+            combat.get("pending_hellish_rebuke_resolutions")
+            if isinstance(combat.get("pending_hellish_rebuke_resolutions"), dict)
+            else {}
+        )
         self._pending_absorb_elements_resolutions = dict(
             combat.get("pending_absorb_elements_resolutions")
             if isinstance(combat.get("pending_absorb_elements_resolutions"), dict)
@@ -14128,6 +14154,10 @@ class InitiativeTracker(base.InitiativeTracker):
             else {}
         )
         self._concentration_save_state = dict(combat.get("concentration_save_state") if isinstance(combat.get("concentration_save_state"), dict) else {})
+        try:
+            self._ensure_player_commands().prompts.replace_prompts(self._pending_prompts)
+        except Exception:
+            pass
 
         cadence_scheduler = combat.get("cadence_scheduler") if isinstance(combat.get("cadence_scheduler"), dict) else {}
         self._current_turn_kind = str(cadence_scheduler.get("current_turn_kind") or "normal")
@@ -15057,8 +15087,10 @@ class InitiativeTracker(base.InitiativeTracker):
         self._pending_mount_requests = {}
         self._pending_echo_tether_confirms = {}
         self._reaction_prefs_by_cid = {}
+        self._pending_prompts = {}
         self._pending_reaction_offers = {}
         self._pending_shield_resolutions = {}
+        self._pending_hellish_rebuke_resolutions = {}
         self._pending_absorb_elements_resolutions = {}
         self._pending_interception_resolutions = {}
         self._concentration_save_state = {}
@@ -28109,32 +28141,16 @@ class InitiativeTracker(base.InitiativeTracker):
         if not resolved_ws_ids:
             self._oplog("reaction_offer:create skipped (no websocket targets)", level="warning")
             return None
-        ask_choices = [c for c in allowed_choices if str(c.get("mode") or "ask") == "ask"]
-        auto_choices = [c for c in allowed_choices if str(c.get("mode") or "ask") == "auto"]
-        payload: Dict[str, Any] = {
-            "type": "reaction_offer",
-            "request_id": uuid.uuid4().hex,
-            "reactor_cid": int(reactor_cid),
-            "trigger": str(trigger),
-            "source_cid": int(source_cid),
-            "target_cid": int(target_cid),
-            "choices": [{"kind": c.get("kind"), "label": c.get("label")} for c in allowed_choices],
-            "mode": "ask" if ask_choices else "auto",
-        }
-        if isinstance(extra_payload, dict):
-            payload.update({k: v for k, v in extra_payload.items() if k not in ("type", "request_id")})
-        if not ask_choices and len(auto_choices) == 1:
-            payload["auto_choice"] = auto_choices[0].get("kind")
-        expires_at = float(time.time() + 12.0)
-        self._pending_reaction_offers[str(payload["request_id"])] = {
-            "reactor_cid": int(reactor_cid),
-            "trigger": str(trigger),
-            "source_cid": int(source_cid),
-            "target_cid": int(target_cid),
-            "choices": [dict(c) for c in allowed_choices],
-            "status": "offered",
-            "expires_at": expires_at,
-        }
+        prompt = self._ensure_player_commands().prompts.create_reaction_offer(
+            reactor_cid=int(reactor_cid),
+            trigger=str(trigger),
+            source_cid=int(source_cid),
+            target_cid=int(target_cid),
+            allowed_choices=list(allowed_choices or []),
+            ws_ids=resolved_ws_ids,
+            extra_payload=dict(extra_payload) if isinstance(extra_payload, dict) else None,
+        )
+        payload = build_reaction_offer_event(prompt)
         loop = getattr(self._lan, "_loop", None)
         send_async = getattr(self._lan, "_send_async", None)
         if callable(send_async):
@@ -28151,26 +28167,10 @@ class InitiativeTracker(base.InitiativeTracker):
                         f"reaction_offer:send failed ws_id={int(ws_id)} trigger={str(trigger)} ({exc})",
                         level="warning",
                     )
-        return str(payload["request_id"])
+        return str(payload.get("request_id") or "")
 
     def _expire_reaction_offers(self) -> None:
-        now = time.time()
-        for req_id, offer in list((getattr(self, "_pending_reaction_offers", {}) or {}).items()):
-            try:
-                exp = float((offer or {}).get("expires_at") or 0.0)
-            except Exception:
-                exp = 0.0
-            if exp <= 0 or exp > now:
-                continue
-            self._pending_reaction_offers.pop(str(req_id), None)
-            if isinstance(getattr(self, "_pending_shield_resolutions", None), dict):
-                self._pending_shield_resolutions.pop(str(req_id), None)
-            if isinstance(getattr(self, "_pending_hellish_rebuke_resolutions", None), dict):
-                self._pending_hellish_rebuke_resolutions.pop(str(req_id), None)
-            if isinstance(getattr(self, "_pending_absorb_elements_resolutions", None), dict):
-                self._pending_absorb_elements_resolutions.pop(str(req_id), None)
-            if isinstance(getattr(self, "_pending_interception_resolutions", None), dict):
-                self._pending_interception_resolutions.pop(str(req_id), None)
+        self._ensure_player_commands().prompts.expire_offers()
 
     def _build_oa_reaction_choices(self, reactor: Any, include_war_caster: bool = True) -> List[Dict[str, Any]]:
         if reactor is None:
@@ -28613,13 +28613,44 @@ class InitiativeTracker(base.InitiativeTracker):
             },
         )
         if req_id:
-            self._pending_absorb_elements_resolutions[str(req_id)] = {
-                "victim_cid": int(victim_cid),
-                "attacker_cid": int(attacker_cid),
-                "trigger_types": list(trigger_types),
-                "msg": dict(pending_msg) if isinstance(pending_msg, dict) else {},
-                "status": "offered",
-            }
+            resume_dispatch = None
+            if isinstance(pending_msg, dict):
+                pending_type = str(pending_msg.get("type") or "").strip().lower()
+                if pending_type == "attack_request":
+                    resume_dispatch = build_resume_dispatch(
+                        "attack_request",
+                        actor_cid=int(attacker_cid),
+                        ws_id=pending_msg.get("_ws_id"),
+                        is_admin=bool(str(pending_msg.get("admin_token") or "").strip()),
+                        payload=build_attack_request_contract(
+                            pending_msg,
+                            cid=int(attacker_cid),
+                            ws_id=pending_msg.get("_ws_id"),
+                            is_admin=bool(str(pending_msg.get("admin_token") or "").strip()),
+                        )["payload"],
+                    )
+                elif pending_type == "spell_target_request":
+                    resume_dispatch = build_resume_dispatch(
+                        "spell_target_request",
+                        actor_cid=int(attacker_cid),
+                        ws_id=pending_msg.get("_ws_id"),
+                        is_admin=bool(str(pending_msg.get("admin_token") or "").strip()),
+                        payload=build_spell_target_request_contract(
+                            pending_msg,
+                            cid=int(attacker_cid),
+                            ws_id=pending_msg.get("_ws_id"),
+                            is_admin=bool(str(pending_msg.get("admin_token") or "").strip()),
+                        )["payload"],
+                    )
+            self._ensure_player_commands().prompts.attach_resolution(
+                str(req_id),
+                resolution={
+                    "victim_cid": int(victim_cid),
+                    "attacker_cid": int(attacker_cid),
+                    "trigger_types": list(trigger_types),
+                },
+                resume_dispatch=resume_dispatch,
+            )
         return req_id
 
     def _maybe_offer_hellish_rebuke(self, victim_cid: int, attacker_cid: Optional[int], damage_total: int) -> Optional[str]:
@@ -28666,13 +28697,21 @@ class InitiativeTracker(base.InitiativeTracker):
             },
         )
         if req_id:
-            self._pending_hellish_rebuke_resolutions[str(req_id)] = {
-                "victim_cid": int(victim_cid),
-                "attacker_cid": int(attacker_cid),
-                "spell_id": "hellish-rebuke",
-                "max_range_ft": 60,
-                "status": "offered",
-            }
+            self._ensure_player_commands().prompts.attach_resolution(
+                str(req_id),
+                resolution={
+                    "victim_cid": int(victim_cid),
+                    "attacker_cid": int(attacker_cid),
+                    "spell_id": "hellish-rebuke",
+                    "max_range_ft": 60,
+                    "player_visible": build_hellish_rebuke_resolve_start_payload(
+                        request_id=str(req_id),
+                        caster_cid=int(victim_cid),
+                        attacker_cid=int(attacker_cid),
+                        target_cid=int(attacker_cid),
+                    ),
+                },
+            )
             self._oplog(f"reaction_offer:hellish_rebuke pending request_id={req_id} victim={int(victim_cid)} attacker={int(attacker_cid)} dist_ft={dist_ft:.1f}", level="info")
         return req_id
 
@@ -28695,16 +28734,17 @@ class InitiativeTracker(base.InitiativeTracker):
 
     def _reactor_has_pending_reaction_offer(self, reactor_cid: int, *, exclude_trigger: str = "") -> bool:
         trigger_exclusion = str(exclude_trigger or "").strip().lower()
-        for offer in list((self.__dict__.get("_pending_reaction_offers", {}) or {}).values()):
-            if not isinstance(offer, dict):
+        for prompt in list(self._ensure_player_commands().prompts.all_prompts().values()):
+            if not isinstance(prompt, dict):
                 continue
-            offer_reactor = _normalize_cid_value(offer.get("reactor_cid"), "reaction_offer.pending.reactor")
+            offer_reactor = _normalize_cid_value(prompt.get("reactor_cid"), "reaction_offer.pending.reactor")
             if offer_reactor is None or int(offer_reactor) != int(reactor_cid):
                 continue
-            offer_trigger = str(offer.get("trigger") or "").strip().lower()
+            offer_trigger = str(prompt.get("trigger") or "").strip().lower()
             if trigger_exclusion and offer_trigger == trigger_exclusion:
                 continue
-            if str(offer.get("status") or "offered").strip().lower() not in {"offered", "accepted"}:
+            lifecycle = prompt.get("lifecycle") if isinstance(prompt.get("lifecycle"), dict) else {}
+            if str(lifecycle.get("state") or "offered").strip().lower() not in {"offered", "accepted"}:
                 continue
             return True
         return False
@@ -28801,17 +28841,29 @@ class InitiativeTracker(base.InitiativeTracker):
             },
         )
         if req_id:
-            pending_store = self.__dict__.get("_pending_interception_resolutions")
-            if not isinstance(pending_store, dict):
-                pending_store = {}
-                self._pending_interception_resolutions = pending_store
-            pending_store[str(req_id)] = {
-                "reactor_cid": int(getattr(best_reactor, "cid", 0) or 0),
-                "victim_cid": int(victim_cid),
-                "attacker_cid": int(attacker_cid),
-                "msg": dict(pending_msg) if isinstance(pending_msg, dict) else {},
-                "status": "offered",
-            }
+            resume_dispatch = None
+            if isinstance(pending_msg, dict):
+                resume_dispatch = build_resume_dispatch(
+                    "attack_request",
+                    actor_cid=int(attacker_cid),
+                    ws_id=pending_msg.get("_ws_id"),
+                    is_admin=bool(str(pending_msg.get("admin_token") or "").strip()),
+                    payload=build_attack_request_contract(
+                        pending_msg,
+                        cid=int(attacker_cid),
+                        ws_id=pending_msg.get("_ws_id"),
+                        is_admin=bool(str(pending_msg.get("admin_token") or "").strip()),
+                    )["payload"],
+                )
+            self._ensure_player_commands().prompts.attach_resolution(
+                str(req_id),
+                resolution={
+                    "reactor_cid": int(getattr(best_reactor, "cid", 0) or 0),
+                    "victim_cid": int(victim_cid),
+                    "attacker_cid": int(attacker_cid),
+                },
+                resume_dispatch=resume_dispatch,
+            )
         return req_id
 
     def _consume_shield_cast(self, target: Any) -> Tuple[bool, str]:
@@ -30184,7 +30236,7 @@ class InitiativeTracker(base.InitiativeTracker):
         ws_id: Any,
         offer: Dict[str, Any],
         request_id: str,
-    ) -> None:
+    ) -> Dict[str, Any]:
         """Resolve a player reaction_response command against a pending offer.
 
         This is the backend-owned adjudicator for shield, hellish rebuke,
@@ -30192,18 +30244,23 @@ class InitiativeTracker(base.InitiativeTracker):
         flows.  It was extracted from the monolithic ``_lan_apply_action``
         branch so that ownership of prompt lifecycle (pop, toast, resume) is
         expressed on the tracker rather than inside transport glue.
-        Dispatched by ``PlayerCommandService.reaction_response``.
+        Dispatched by ``PlayerCommandService.reaction_response``.  Returns an
+        optional ``resume_dispatch`` payload when the resolved reaction should
+        resume a previously gated migrated command through the backend service.
         """
         choice = str(msg.get("choice") or "").strip().lower()
-        if str(offer.get("trigger") or "").strip().lower() == "shield":
-            pending = (getattr(self, "_pending_shield_resolutions", {}) or {}).pop(request_id, None)
-            self._pending_reaction_offers.pop(request_id, None)
+        prompts = self._ensure_player_commands().prompts
+        trigger = str(offer.get("trigger") or "").strip().lower()
+        if trigger == "shield":
+            pending = prompts.get_resolution(request_id)
+            resume_dispatch = prompts.get_resume_dispatch(request_id)
             if not isinstance(pending, dict):
                 self._lan.toast(ws_id, "That Shield offer expired, matey.")
                 return
             reactor_cid = _normalize_cid_value(offer.get("reactor_cid"), "reaction_response.shield.reactor")
             reactor = self.combatants.get(int(reactor_cid)) if reactor_cid is not None else None
             if reactor is None:
+                prompts.pop_prompt(request_id)
                 return
             if choice in ("shield_never", "never"):
                 self._set_reaction_prefs(int(reactor_cid), {"shield": "off"})
@@ -30219,34 +30276,36 @@ class InitiativeTracker(base.InitiativeTracker):
                     else:
                         self._shield_effect_start(reactor)
                         self._log(f"{getattr(reactor, 'name', 'Target')} casts Shield.", cid=int(getattr(reactor, 'cid', 0) or 0))
-            resume_msg = dict(pending.get("msg") or {})
-            if isinstance(resume_msg, dict):
-                resume_msg["_shield_resolution_done"] = True
+            prompts.pop_prompt(request_id)
+            if isinstance(resume_dispatch, dict):
+                flags = dict(resume_dispatch.get("flags") if isinstance(resume_dispatch.get("flags"), dict) else {})
+                flags["_shield_resolution_done"] = True
+                resume_dispatch["flags"] = flags
                 self._oplog(
                     f"reaction_offer:shield resolved request_id={request_id} choice={choice}",
                     level="info",
                 )
-                self._lan_apply_action(resume_msg)
-            return
-        if str(offer.get("trigger") or "").strip().lower() == "hellish_rebuke":
-            pending = (getattr(self, "_pending_hellish_rebuke_resolutions", {}) or {}).get(request_id)
-            self._pending_reaction_offers.pop(request_id, None)
+                return {"resume_dispatch": resume_dispatch}
+            return {}
+        if trigger == "hellish_rebuke":
+            pending = prompts.get_resolution(request_id)
             if not isinstance(pending, dict):
                 self._lan.toast(ws_id, "That Hellish Rebuke offer expired, matey.")
                 return
             reactor_cid = _normalize_cid_value(offer.get("reactor_cid"), "reaction_response.hellish_rebuke.reactor")
             reactor = self.combatants.get(int(reactor_cid)) if reactor_cid is not None else None
             if reactor is None:
+                prompts.pop_prompt(request_id)
                 return
             if choice in ("never", "hellish_rebuke_never"):
-                self._pending_hellish_rebuke_resolutions.pop(request_id, None)
+                prompts.pop_prompt(request_id)
                 self._set_reaction_prefs(int(reactor_cid), {"hellish_rebuke": "off"})
-                return
+                return {}
             if choice in ("", "decline", "ignore", "hellish_rebuke_no"):
-                self._pending_hellish_rebuke_resolutions.pop(request_id, None)
-                return
+                prompts.pop_prompt(request_id)
+                return {}
             if choice not in ("cast_hellish_rebuke", "hellish_rebuke", "hellish_rebuke_yes"):
-                return
+                return {}
             if not self._use_reaction(reactor):
                 self._lan.toast(ws_id, "No reactions left for Hellish Rebuke, matey.")
                 return
@@ -30254,49 +30313,58 @@ class InitiativeTracker(base.InitiativeTracker):
             if attacker_cid is None or int(attacker_cid) not in self.combatants:
                 self._lan.toast(ws_id, "The attacker is gone; Hellish Rebuke fizzles.")
                 return
-            pending["status"] = "accepted"
-            pending["reaction_spent"] = True
+            prompts.set_lifecycle_state(
+                request_id,
+                "accepted",
+                accepted_choice=choice,
+                response_details={"reaction_spent": True},
+            )
             self._oplog(f"reaction_offer:hellish_rebuke accepted request_id={request_id} reactor={int(reactor_cid)} attacker={int(attacker_cid)}", level="info")
             loop = getattr(self._lan, "_loop", None)
             if ws_id is not None and loop:
                 try:
-                    asyncio.run_coroutine_threadsafe(self._lan._send_async(int(ws_id), {
-                        "type": "hellish_rebuke_resolve_start",
-                        "request_id": str(request_id),
-                        "caster_cid": int(reactor_cid),
-                        "attacker_cid": int(attacker_cid),
-                        "target_cid": int(attacker_cid),
-                        "spell_id": "hellish-rebuke",
-                        "spell_slug": "hellish-rebuke",
-                        "action_type": "reaction",
-                        "max_range_ft": 60,
-                    }), loop)
+                    asyncio.run_coroutine_threadsafe(
+                        self._lan._send_async(
+                            int(ws_id),
+                            build_hellish_rebuke_resolve_start_payload(
+                                request_id=str(request_id),
+                                caster_cid=int(reactor_cid),
+                                attacker_cid=int(attacker_cid),
+                                target_cid=int(attacker_cid),
+                            ),
+                        ),
+                        loop,
+                    )
                 except Exception:
                     pass
-            return
-        if str(offer.get("trigger") or "").strip().lower() == "absorb_elements":
-            pending = (getattr(self, "_pending_absorb_elements_resolutions", {}) or {}).pop(request_id, None)
-            self._pending_reaction_offers.pop(request_id, None)
+            return {}
+        if trigger == "absorb_elements":
+            pending = prompts.get_resolution(request_id)
+            resume_dispatch = prompts.get_resume_dispatch(request_id)
             if not isinstance(pending, dict):
                 self._lan.toast(ws_id, "That Absorb Elements offer expired, matey.")
                 return
             reactor_cid = _normalize_cid_value(offer.get("reactor_cid"), "reaction_response.absorb_elements.reactor")
             reactor = self.combatants.get(int(reactor_cid)) if reactor_cid is not None else None
             if reactor is None:
+                prompts.pop_prompt(request_id)
                 return
-            resume_msg = dict(pending.get("msg") or {})
             if choice in ("absorb_elements_never", "never"):
                 self._set_reaction_prefs(int(reactor_cid), {"absorb_elements": "off"})
+            flags = dict(resume_dispatch.get("flags") if isinstance(resume_dispatch, dict) and isinstance(resume_dispatch.get("flags"), dict) else {})
+            flags["_absorb_elements_resolution_done"] = True
             if choice in ("absorb_elements_never", "never", "", "decline", "ignore", "absorb_elements_decline"):
-                if isinstance(resume_msg, dict):
-                    resume_msg["_absorb_elements_resolution_done"] = True
-                    self._lan_apply_action(resume_msg)
-                return
+                prompts.pop_prompt(request_id)
+                if isinstance(resume_dispatch, dict):
+                    resume_dispatch["flags"] = flags
+                    return {"resume_dispatch": resume_dispatch}
+                return {}
             if not choice.startswith("cast_absorb_elements_"):
-                if isinstance(resume_msg, dict):
-                    resume_msg["_absorb_elements_resolution_done"] = True
-                    self._lan_apply_action(resume_msg)
-                return
+                prompts.pop_prompt(request_id)
+                if isinstance(resume_dispatch, dict):
+                    resume_dispatch["flags"] = flags
+                    return {"resume_dispatch": resume_dispatch}
+                return {}
             chosen_type = self._canonical_damage_type(choice.replace("cast_absorb_elements_", "", 1))
             allowed_types = {
                 self._canonical_damage_type(item)
@@ -30305,16 +30373,18 @@ class InitiativeTracker(base.InitiativeTracker):
             allowed_types = {item for item in allowed_types if item}
             if chosen_type not in allowed_types:
                 self._lan.toast(ws_id, "That damage type is invalid for Absorb Elements.")
-                if isinstance(resume_msg, dict):
-                    resume_msg["_absorb_elements_resolution_done"] = True
-                    self._lan_apply_action(resume_msg)
-                return
+                prompts.pop_prompt(request_id)
+                if isinstance(resume_dispatch, dict):
+                    resume_dispatch["flags"] = flags
+                    return {"resume_dispatch": resume_dispatch}
+                return {}
             if not self._use_reaction(reactor):
                 self._lan.toast(ws_id, "No reactions left for Absorb Elements, matey.")
-                if isinstance(resume_msg, dict):
-                    resume_msg["_absorb_elements_resolution_done"] = True
-                    self._lan_apply_action(resume_msg)
-                return
+                prompts.pop_prompt(request_id)
+                if isinstance(resume_dispatch, dict):
+                    resume_dispatch["flags"] = flags
+                    return {"resume_dispatch": resume_dispatch}
+                return {}
             try:
                 slot_level = int(msg.get("slot_level")) if msg.get("slot_level") is not None else 1
             except Exception:
@@ -30324,71 +30394,70 @@ class InitiativeTracker(base.InitiativeTracker):
             ok_slot, slot_err, spent_level = self._consume_spell_slot_for_cast(player_name, slot_level, 1)
             if not ok_slot:
                 self._lan.toast(ws_id, slot_err or "Could not cast Absorb Elements, matey.")
-                if isinstance(resume_msg, dict):
-                    resume_msg["_absorb_elements_resolution_done"] = True
-                    self._lan_apply_action(resume_msg)
-                return
+                prompts.pop_prompt(request_id)
+                if isinstance(resume_dispatch, dict):
+                    resume_dispatch["flags"] = flags
+                    return {"resume_dispatch": resume_dispatch}
+                return {}
             spend_level = int(spent_level) if spent_level is not None else int(slot_level)
             self._activate_absorb_elements(reactor, chosen_type, max(1, int(spend_level)))
             self._log(
                 f"{getattr(reactor, 'name', 'Target')} casts Absorb Elements ({chosen_type.title()}).",
                 cid=int(getattr(reactor, "cid", 0) or 0),
             )
-            if isinstance(resume_msg, dict):
-                resume_msg["_absorb_elements_resolution_done"] = True
-                self._lan_apply_action(resume_msg)
-            return
-        if str(offer.get("trigger") or "").strip().lower() == "interception":
-            pending = (self.__dict__.get("_pending_interception_resolutions", {}) or {}).pop(request_id, None)
-            self._pending_reaction_offers.pop(request_id, None)
+            prompts.pop_prompt(request_id)
+            if isinstance(resume_dispatch, dict):
+                resume_dispatch["flags"] = flags
+                return {"resume_dispatch": resume_dispatch}
+            return {}
+        if trigger == "interception":
+            pending = prompts.get_resolution(request_id)
+            resume_dispatch = prompts.get_resume_dispatch(request_id)
             if not isinstance(pending, dict):
                 self._lan.toast(ws_id, "That Interception offer expired, matey.")
                 return
             reactor_cid = _normalize_cid_value(offer.get("reactor_cid"), "reaction_response.interception.reactor")
             reactor = self.combatants.get(int(reactor_cid)) if reactor_cid is not None else None
             if reactor is None:
+                prompts.pop_prompt(request_id)
                 return
-            resume_msg = dict(pending.get("msg") or {})
             if choice in ("interception_never", "never"):
                 self._set_reaction_prefs(int(reactor_cid), {"interception": "off"})
+            flags = dict(resume_dispatch.get("flags") if isinstance(resume_dispatch, dict) and isinstance(resume_dispatch.get("flags"), dict) else {})
+            flags["_interception_resolution_done"] = True
             if choice in ("interception_never", "never", "", "decline", "ignore", "interception_no"):
-                if isinstance(resume_msg, dict):
-                    resume_msg["_interception_resolution_done"] = True
-                    self._lan_apply_action(resume_msg)
-                return
+                prompts.pop_prompt(request_id)
+                if isinstance(resume_dispatch, dict):
+                    resume_dispatch["flags"] = flags
+                    return {"resume_dispatch": resume_dispatch}
+                return {}
             if choice not in ("interception_yes", "interception"):
-                if isinstance(resume_msg, dict):
-                    resume_msg["_interception_resolution_done"] = True
-                    self._lan_apply_action(resume_msg)
-                return
-            pending["status"] = "accepted"
+                prompts.pop_prompt(request_id)
+                if isinstance(resume_dispatch, dict):
+                    resume_dispatch["flags"] = flags
+                    return {"resume_dispatch": resume_dispatch}
+                return {}
             if not self._use_reaction(reactor):
                 self._lan.toast(ws_id, "No reactions left for Interception, matey.")
-                if isinstance(resume_msg, dict):
-                    resume_msg["_interception_resolution_done"] = True
-                    self._lan_apply_action(resume_msg)
-                return
+                prompts.pop_prompt(request_id)
+                if isinstance(resume_dispatch, dict):
+                    resume_dispatch["flags"] = flags
+                    return {"resume_dispatch": resume_dispatch}
+                return {}
             reduction_roll = int(random.randint(1, 10))
             reduction = int(reduction_roll) + int(self._interception_reduction_bonus(reactor))
-            if isinstance(resume_msg, dict):
-                resume_msg["_interception_resolution_done"] = True
-                resume_msg["_interception_reduction"] = max(0, int(reduction))
-                resume_msg["_interception_reactor_cid"] = int(reactor_cid)
-                self._lan_apply_action(resume_msg)
-            return
+            prompts.pop_prompt(request_id)
+            if isinstance(resume_dispatch, dict):
+                flags["_interception_reduction"] = max(0, int(reduction))
+                flags["_interception_reactor_cid"] = int(reactor_cid)
+                resume_dispatch["flags"] = flags
+                return {"resume_dispatch": resume_dispatch}
+            return {}
         if choice in ("", "decline", "ignore"):
-            self._pending_reaction_offers.pop(request_id, None)
-            return
-        offer["status"] = "accepted"
-        offer["accepted_choice"] = choice
-        try:
-            stored = self._pending_reaction_offers.get(request_id)
-            if isinstance(stored, dict):
-                stored["status"] = "accepted"
-                stored["accepted_choice"] = choice
-        except Exception:
-            pass
-        return
+            prompts.pop_prompt(request_id)
+            return {}
+        prompts.set_lifecycle_state(request_id, "accepted", accepted_choice=choice)
+        return {}
 
     def _adjudicate_spell_target_request(
         self,
@@ -30489,16 +30558,14 @@ class InitiativeTracker(base.InitiativeTracker):
         preset_id = str((preset or {}).get("id") or "").strip().lower()
 
         def _reject_invalid_spell_target(reason: str) -> None:
-            msg["_spell_target_result"] = {
-                "type": "spell_target_result",
-                "ok": False,
-                "attacker_cid": int(cid),
-                "target_cid": int(target_cid),
-                "spell_name": spell_name,
-                "spell_slug": preset_slug or None,
-                "spell_id": preset_id or None,
-                "reason": reason,
-            }
+            msg["_spell_target_result"] = build_spell_target_rejection_payload(
+                attacker_cid=int(cid),
+                target_cid=int(target_cid),
+                spell_name=spell_name,
+                spell_slug=preset_slug or None,
+                spell_id=preset_id or None,
+                reason=reason,
+            )
             self._lan.toast(ws_id, reason)
             log_warning(f"spell_target_request rejected: {reason}")
 
@@ -30532,7 +30599,21 @@ class InitiativeTracker(base.InitiativeTracker):
                     extra_payload={"prompt_attack": str(spell_name or "Magic Missile")},
                 )
                 if req_id:
-                    self._pending_shield_resolutions[str(req_id)] = {"msg": dict(msg)}
+                    self._ensure_player_commands().prompts.attach_resolution(
+                        str(req_id),
+                        resume_dispatch=build_resume_dispatch(
+                            "spell_target_request",
+                            actor_cid=int(cid),
+                            ws_id=ws_id,
+                            is_admin=bool(is_admin),
+                            payload=build_spell_target_request_contract(
+                                msg,
+                                cid=int(cid),
+                                ws_id=ws_id,
+                                is_admin=bool(is_admin),
+                            )["payload"],
+                        ),
+                    )
                     self._oplog(
                         f"reaction_offer:shield pending request_id={req_id} magic_missile caster={int(cid)} target={int(target_cid)}",
                         level="info",
@@ -30885,15 +30966,17 @@ class InitiativeTracker(base.InitiativeTracker):
                     damage_entries.append({"amount": int(amount), "type": damage_type_hint})
         shot_index = self._parse_int_value(msg.get("shot_index"), None)
         shot_total = self._parse_int_value(msg.get("shot_total"), None)
-        result_payload: Dict[str, Any] = {
-            "type": "spell_target_result",
-            "ok": True,
-            "attacker_cid": int(cid),
-            "target_cid": int(target_cid),
-            "target_name": str(getattr(target, "name", "Target") or "Target"),
-            "spell_name": spell_name,
-            "spell_mode": spell_mode,
-        }
+        result_payload: Dict[str, Any] = finalize_spell_target_result_payload(
+            {
+                "type": "spell_target_result",
+                "ok": True,
+                "attacker_cid": int(cid),
+                "target_cid": int(target_cid),
+                "target_name": str(getattr(target, "name", "Target") or "Target"),
+                "spell_name": spell_name,
+                "spell_mode": spell_mode,
+            }
+        )
         if shot_index is not None and shot_total is not None and shot_total > 1 and 1 <= shot_index <= shot_total:
             result_payload["shot_index"] = int(shot_index)
             result_payload["shot_total"] = int(shot_total)
@@ -31466,48 +31549,6 @@ class InitiativeTracker(base.InitiativeTracker):
         if not c:
             return
         self._expire_reaction_offers()
-        for pending_req in list((self.__dict__.get("_pending_hellish_rebuke_resolutions", {}) or {}).values()):
-            if not isinstance(pending_req, dict):
-                continue
-            pending_status = str(pending_req.get("status") or "").strip().lower()
-            if pending_status not in ("offered", "accepted"):
-                continue
-            pending_attacker = _normalize_cid_value(
-                pending_req.get("attacker_cid"),
-                "attack_request.pending_hellish_rebuke.attacker",
-            )
-            if pending_attacker is None or int(pending_attacker) != int(cid):
-                continue
-            self._lan.toast(ws_id, "Hold fast — waiting on a reaction to resolve.")
-            return
-        for pending_req in list((self.__dict__.get("_pending_absorb_elements_resolutions", {}) or {}).values()):
-            if not isinstance(pending_req, dict):
-                continue
-            pending_status = str(pending_req.get("status") or "").strip().lower()
-            if pending_status not in ("offered", "accepted"):
-                continue
-            pending_attacker = _normalize_cid_value(
-                pending_req.get("attacker_cid"),
-                "attack_request.pending_absorb_elements.attacker",
-            )
-            if pending_attacker is None or int(pending_attacker) != int(cid):
-                continue
-            self._lan.toast(ws_id, "Hold fast — waiting on a reaction to resolve.")
-            return
-        for pending_req in list((self.__dict__.get("_pending_interception_resolutions", {}) or {}).values()):
-            if not isinstance(pending_req, dict):
-                continue
-            pending_status = str(pending_req.get("status") or "").strip().lower()
-            if pending_status not in ("offered", "accepted"):
-                continue
-            pending_attacker = _normalize_cid_value(
-                pending_req.get("attacker_cid"),
-                "attack_request.pending_interception.attacker",
-            )
-            if pending_attacker is None or int(pending_attacker) != int(cid):
-                continue
-            self._lan.toast(ws_id, "Hold fast — waiting on a reaction to resolve.")
-            return
         self._clear_hide_state(int(cid), reason=f"{c.name} attacks and reveals themself.")
         resource_c = c
         try:
@@ -31927,7 +31968,7 @@ class InitiativeTracker(base.InitiativeTracker):
         reaction_request_id = str(msg.get("reaction_request_id") or "").strip()
         if reaction_request_id:
             self._expire_reaction_offers()
-            offer = self._pending_reaction_offers.get(reaction_request_id)
+            offer = self._ensure_player_commands().prompts.get_offer(reaction_request_id)
             if not isinstance(offer, dict):
                 self._lan.toast(ws_id, "That reaction request expired, matey.")
                 return
@@ -32062,7 +32103,7 @@ class InitiativeTracker(base.InitiativeTracker):
                     self._lan.toast(ws_id, "No reactions left, matey.")
                     return
                 if reaction_request_id:
-                    self._pending_reaction_offers.pop(reaction_request_id, None)
+                    self._ensure_player_commands().prompts.pop_prompt(reaction_request_id)
             elif not is_unleash_incarnation_attack:
                 if attack_resources <= 0:
                     if not self._use_action(resource_c):
@@ -32122,7 +32163,21 @@ class InitiativeTracker(base.InitiativeTracker):
                     extra_payload={"prompt_attack": str(selected_weapon.get("name") or "Attack")},
                 )
                 if req_id:
-                    self._pending_shield_resolutions[str(req_id)] = {"msg": dict(msg)}
+                    self._ensure_player_commands().prompts.attach_resolution(
+                        str(req_id),
+                        resume_dispatch=build_resume_dispatch(
+                            "attack_request",
+                            actor_cid=int(cid),
+                            ws_id=ws_id,
+                            is_admin=bool(is_admin),
+                            payload=build_attack_request_contract(
+                                msg,
+                                cid=int(cid),
+                                ws_id=ws_id,
+                                is_admin=bool(is_admin),
+                            )["payload"],
+                        ),
+                    )
                     self._oplog(
                         f"reaction_offer:shield pending request_id={req_id} attacker={int(cid)} target={int(target_cid)}",
                         level="info",
@@ -32783,30 +32838,32 @@ class InitiativeTracker(base.InitiativeTracker):
                 if not ok_pool:
                     self._lan.toast(ws_id, pool_err)
                     return
-        result_payload: Dict[str, Any] = {
-            "type": "attack_result",
-            "ok": True,
-            "attacker_cid": int(cid),
-            "attack_origin_cid": int(attack_origin_cid),
-            "target_cid": int(target_cid),
-            "target_name": str(getattr(target, "name", "Target") or "Target"),
-            "weapon_id": str(selected_weapon.get("id") or "").strip(),
-            "weapon_name": str(selected_weapon.get("name") or "").strip() or "Weapon",
-            "attack_count": int(attack_count),
-            "attack_roll": int(roll_total),
-            "to_hit": int(to_hit),
-            "total_to_hit": int(total_to_hit),
-            "attack_penalty": int(muddled_attack_penalty),
-            "hit": hit,
-            "critical": is_critical,
-            "damage_total": int(total_damage if damage_applied else 0),
-            "damage_entries": list(damage_entries if damage_applied else []),
-            "action_remaining": int(getattr(resource_c, "action_remaining", 0) or 0),
-            "bonus_action_remaining": int(getattr(resource_c, "bonus_action_remaining", 0) or 0),
-            "attack_resource_remaining": int(getattr(resource_c, "attack_resource_remaining", 0) or 0),
-            "mastery_advantage": bool(mastery_vex_advantage),
-            "damage_type_override": damage_type_override if override_honored else None,
-        }
+        result_payload: Dict[str, Any] = finalize_attack_result_payload(
+            {
+                "type": "attack_result",
+                "ok": True,
+                "attacker_cid": int(cid),
+                "attack_origin_cid": int(attack_origin_cid),
+                "target_cid": int(target_cid),
+                "target_name": str(getattr(target, "name", "Target") or "Target"),
+                "weapon_id": str(selected_weapon.get("id") or "").strip(),
+                "weapon_name": str(selected_weapon.get("name") or "").strip() or "Weapon",
+                "attack_count": int(attack_count),
+                "attack_roll": int(roll_total),
+                "to_hit": int(to_hit),
+                "total_to_hit": int(total_to_hit),
+                "attack_penalty": int(muddled_attack_penalty),
+                "hit": hit,
+                "critical": is_critical,
+                "damage_total": int(total_damage if damage_applied else 0),
+                "damage_entries": list(damage_entries if damage_applied else []),
+                "action_remaining": int(getattr(resource_c, "action_remaining", 0) or 0),
+                "bonus_action_remaining": int(getattr(resource_c, "bonus_action_remaining", 0) or 0),
+                "attack_resource_remaining": int(getattr(resource_c, "attack_resource_remaining", 0) or 0),
+                "mastery_advantage": bool(mastery_vex_advantage),
+                "damage_type_override": damage_type_override if override_honored else None,
+            }
+        )
         if mastery_cleave_candidates:
             result_payload["cleave_candidates"] = list(mastery_cleave_candidates)
         if mastery_notes:
@@ -36244,8 +36301,8 @@ class InitiativeTracker(base.InitiativeTracker):
             return
         elif typ == "hellish_rebuke_resolve":
             request_id = str(msg.get("request_id") or "").strip()
-            pending = (getattr(self, "_pending_hellish_rebuke_resolutions", {}) or {}).pop(request_id, None)
-            self._pending_reaction_offers.pop(request_id, None)
+            prompts = self._ensure_player_commands().prompts
+            pending = prompts.get_resolution(request_id)
             if not isinstance(pending, dict):
                 self._lan.toast(ws_id, "That Hellish Rebuke resolve expired, matey.")
                 return
@@ -36254,6 +36311,7 @@ class InitiativeTracker(base.InitiativeTracker):
             caster = self.combatants.get(int(caster_cid)) if caster_cid is not None else None
             target = self.combatants.get(int(attacker_cid)) if attacker_cid is not None else None
             if caster is None or target is None:
+                prompts.pop_prompt(request_id)
                 self._lan.toast(ws_id, "Hellish Rebuke target is no longer valid.")
                 return
             try:
@@ -36270,10 +36328,12 @@ class InitiativeTracker(base.InitiativeTracker):
             caster_pos = positions.get(int(caster.cid)) or self._lan_current_position(int(caster.cid))
             target_pos = positions.get(int(target.cid)) or self._lan_current_position(int(target.cid))
             if caster_pos is None or target_pos is None:
+                prompts.pop_prompt(request_id)
                 self._lan.toast(ws_id, "Could not resolve positions for Hellish Rebuke.")
                 return
             dist_ft = math.hypot(float(caster_pos[0]) - float(target_pos[0]), float(caster_pos[1]) - float(target_pos[1])) * self._lan_feet_per_square()
             if dist_ft - 60.0 > 1e-6:
+                prompts.pop_prompt(request_id)
                 self._lan.toast(ws_id, "Target be out of Hellish Rebuke range.")
                 return
             profile = self._profile_for_player_name(player_name)
@@ -36355,6 +36415,7 @@ class InitiativeTracker(base.InitiativeTracker):
                     asyncio.run_coroutine_threadsafe(self._lan._send_async(int(ws_id), result_payload), loop)
                 except Exception:
                     pass
+            prompts.pop_prompt(request_id)
             self._lan_force_state_broadcast()
             return
 

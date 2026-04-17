@@ -28,6 +28,9 @@ When this file and older migration notes disagree, treat the code, tests, and th
 - A second backend seam now exists for player-originated combat commands:
   - `player_command_service.py` exposes `PlayerCommandService` (envelope: gates, validation, toasts, service-vs-fallback dispatch) and `PromptState` (accessor for pending reaction/prompt state).
   - `_lan_apply_action()` delegates `attack_request`, `spell_target_request`, `reaction_response`, `end_turn`, and `manual_override_hp` through the service; the former ~2600 lines of inline adjudication now live in named `InitiativeTracker._adjudicate_attack_request`, `_adjudicate_spell_target_request`, and `_adjudicate_reaction_response` methods.
+  - `player_command_contracts.py` now defines versioned request/result/event/prompt builders for the migrated player combat slice, including attack/spell request contracts, result payload finalizers, reaction-offer events, prompt snapshots, and structured resume dispatch objects.
+  - migrated prompt state is now canonically stored in tracker-owned `_pending_prompts` records with stable prompt ids, lifecycle metadata, response metadata, and resume metadata; legacy `_pending_*` prompt/reaction dicts remain as compatibility projections derived from that canonical store.
+  - reconnect and save/load now preserve migrated pending prompts explicitly (`you.pending_prompts` / `you.pending_prompt` on reconnect payloads and `combat.pending_prompts` in session snapshots).
 - Desktop and LAN code already route some mutations through service wrappers when the service is available:
   - `_next_turn_via_service()`
   - `_prev_turn_via_service()`
@@ -77,6 +80,7 @@ When this file and older migration notes disagree, treat the code, tests, and th
 - `MapState` is a real canonical model, but map editing/rendering authority is still not web-primary; the Tk map window and legacy LAN fields still participate in canonical capture/projection.
 - Character creation/editing and shop/admin flows are already browser-reachable and API-backed, but they still live inside the same Python host and write to the same local YAML/content model.
 - The LAN player client is already feature-rich, including attacks, spell targeting, reactions, inventory, condition icons, token portraits, reconnect recovery, and notifications. Authoritative action processing for the combat-adjudicating player commands (`attack_request`, `spell_target_request`, `reaction_response`, `end_turn`, `manual_override_hp`) now enters through `PlayerCommandService`; `_lan_apply_action()` for those commands is transport/validation glue, and the deep rules logic lives in `_adjudicate_*` tracker methods.  Other player commands (`move`, `cast_aoe`, `cast_spell`, `mount_request`, wild-shape flows, consumable use, etc.) still resolve inline in `_lan_apply_action()`.
+- Reaction resume for the migrated slice is no longer transport-recursive: shield, absorb elements, and interception now return structured resume dispatches that `PlayerCommandService` executes directly instead of recursively re-entering `_lan_apply_action(resume_msg)`.
 
 ### Confirmed desktop-owned or desktop-primary areas
 
@@ -95,7 +99,7 @@ When this file and older migration notes disagree, treat the code, tests, and th
 
 - There is no standalone backend process independent of the Tk host today.
 - There is no non-Python runtime today.
-- There is no versioned contract package or strongly typed shared schema layer across frontend/backend today.
+- There is no full shared typed schema layer across frontend/backend yet. The migrated player combat slice now has a versioned contract module (`player_command_contracts.py`), but the rest of the repo still uses mostly implicit payload shaping.
 - There is no modular frontend build pipeline yet.
 
 ## 3. Migration principles
@@ -197,13 +201,17 @@ Remaining coupling:
 
 Confirmed leverage:
 - `player_command_service.py` owns envelope logic for migrated player combat commands: turn/claim validation, pending-reaction attacker gate, reactor-cid match, `CombatService` manual-override dispatch, fallback mutation.
-- `PromptState` provides an explicit accessor over pending reaction/prompt dicts with lifecycle helpers (`offers`, `get_offer`, `expire_offers`, `has_pending_attacker_gate`).
+- `player_command_contracts.py` owns the explicit request/result/event/prompt builders for the migrated player combat slice.
+- `PromptState` now treats `_pending_prompts` as the canonical prompt store for the migrated slice and projects legacy `_pending_*` reaction dictionaries from that state for compatibility.
 - deep adjudication lives in named `InitiativeTracker._adjudicate_attack_request`, `_adjudicate_spell_target_request`, and `_adjudicate_reaction_response` methods.
+- migrated reconnect and session save/load now preserve pending prompt state explicitly via prompt snapshots and `combat.pending_prompts`.
+- service-dispatched resume replaced transport recursion for the migrated reaction resume path.
 
 Remaining coupling:
-- prompt/reaction state storage still lives on `InitiativeTracker` (tracker attributes are projected through `PromptState`); the schema is not yet canonical.
-- `_adjudicate_reaction_response` still calls `self._lan_apply_action(resume_msg)` for the "reaction resolved → resume the gated attack" flow. A future pass should replace this with a structured resume result the service dispatches.
-- the adjudicate methods remain on `InitiativeTracker`, so they still bind to other tracker concerns (Tk, map helpers, YAML caches). Extracting them fully belongs to a later pass once contracts and the prompt model are explicit.
+- prompt/reaction storage still lives on `InitiativeTracker`, and legacy `_pending_*` dictionaries still exist as compatibility projections for older save/load and helper code.
+- prompt creation still starts from tracker methods such as `_create_reaction_offer`, even though the canonical storage and event shaping now flow through `PromptState`.
+- hellish rebuke still uses a follow-up `hellish_rebuke_resolve` command path; it now reads canonical prompt resolution metadata, but the broader prompt family is not yet fully collapsed into one generic handler.
+- the adjudicate methods remain on `InitiativeTracker`, so they still bind to other tracker concerns (Tk, map helpers, YAML caches). Extracting them fully belongs to a later pass once the surrounding non-migrated command families move off `_lan_apply_action()`.
 
 ### Schema-backed browser content tools
 
@@ -296,9 +304,9 @@ Mitigation: keep adjudication and hidden information server-side; explicitly sep
 
 ### Reaction / interrupt complexity
 
-Why it matters: shield, absorb elements, hellish rebuke, sentinel, interception, opportunity attacks, and pending reaction offers already form a primitive interrupt system.  Lifecycle (offer → resolve → resume) is now partially explicit via `PromptState` and the `_adjudicate_reaction_response` method, but the schema of offers and resolutions still lives implicitly in tracker dicts, and gated-attack resume still re-enters `_lan_apply_action` recursively.
+Why it matters: shield, absorb elements, hellish rebuke, sentinel, interception, opportunity attacks, and pending reaction offers already form a primitive interrupt system. Lifecycle (offer → resolve → resume) is now explicit for the migrated reaction slice via canonical prompt records plus service-dispatched resume, but broader prompt-like flows still mix canonical prompt records with legacy projections and tracker-local helpers.
 
-Mitigation: move toward an explicit prompt/resolution model with request ids, eligibility, expiry, and outcomes; keep `PromptState` as the accessor until the schema is canonicalised; replace recursive resume with a structured resume result dispatched by the service.
+Mitigation: keep extending the canonical prompt/resolution model with request ids, eligibility, expiry, and outcomes; reduce the remaining legacy prompt projections; and converge the still-special-case follow-up prompt flows on the same service-owned lifecycle.
 
 ### Map/combat coupling
 
@@ -521,9 +529,9 @@ Main risks:
 
 Desired end state: one backend-owned combat/turn/effect authority surface shared by DM and player clients.
 
-Current state: `CombatService` exists and owns a meaningful slice, but many player-command and prompt flows still resolve in the tracker monolith.
+Current state: `CombatService` exists and owns a meaningful slice, and the migrated player combat command slice now has explicit contracts plus canonical prompt records. Many other player-command and prompt flows still resolve in the tracker monolith.
 
-Next likely major pass: migrate player combat-adjudication commands and prompt state onto explicit backend handlers.
+Next likely major pass: extend backend authority past the migrated combat slice, starting with the next `_lan_apply_action()` player-command families and the remaining tracker-owned prompt creation entry points.
 
 Blockers / dependencies: contract formalization, reaction-model cleanup, careful regression coverage.
 
@@ -541,7 +549,7 @@ Blockers / dependencies: source-content references, generated-entity schema deci
 
 Desired end state: versioned runtime encounter/session documents that are UI-agnostic and map-canonical.
 
-Current state: session snapshots already exist and preserve canonical map state, but save/load entrypoints remain desktop-centric and runtime state is still closely tied to the tracker class.
+Current state: session snapshots already exist and preserve canonical map state; the migrated player-command slice now also persists canonical pending prompt records through `combat.pending_prompts` while projecting legacy prompt dictionaries for compatibility. Save/load entrypoints remain desktop-centric and runtime state is still closely tied to the tracker class.
 
 Next likely major pass: expose session save/load through backend-owned APIs and shrink assumptions about Tk-owned state.
 
@@ -561,9 +569,9 @@ Blockers / dependencies: Phase 1 authority completeness, session save/load expos
 
 Desired end state: player interactions are web-first and backend-authoritative, with reconnect-safe prompts and minimal client-side adjudication.
 
-Current state: the LAN client is feature-rich and battle-tested in focused areas, but `_lan_apply_action()` still owns too much domain logic.
+Current state: the LAN client is feature-rich and battle-tested in focused areas. The combat-adjudicating player command slice now has explicit contracts, a canonical prompt model, reconnect-safe prompt snapshots, and service-dispatched resume handling, but `_lan_apply_action()` still owns many other player-command families.
 
-Next likely major pass: pull attack/spell/reaction/end-turn command handling behind backend command handlers and shrink browser/Tk coupling.
+Next likely major pass: migrate the next high-value player-command families out of `_lan_apply_action()` without reopening the newly stabilized combat command boundary.
 
 Blockers / dependencies: prompt model, contract fixtures, hidden-information safeguards.
 
@@ -581,9 +589,9 @@ Blockers / dependencies: authority cleanup, payload/perf work, map-editor UX dec
 
 Desired end state: versioned HTTP/WebSocket commands/events with clean separation between DM/admin and player capabilities.
 
-Current state: routes and WebSockets already exist, admin token refresh exists, claim recovery exists, but many contracts are implicit and embedded in large handlers or inline clients.
+Current state: routes and WebSockets already exist, admin token refresh exists, claim recovery exists, and the migrated player combat slice now has explicit contract builders and prompt snapshots. Many other contracts remain implicit and embedded in large handlers or inline clients.
 
-Next likely major pass: define and enforce explicit migrated command/result/event shapes for the combat authority slices.
+Next likely major pass: extend explicit command/result/event contracts beyond the migrated player combat slice and converge more reconnect/prompt payloads on the same schema.
 
 Blockers / dependencies: agreement on canonical encounter/prompt model, removal of duplicate legacy payload semantics.
 
@@ -609,77 +617,77 @@ Blockers / dependencies: parity proof, regression confidence, clear compatibilit
 
 ## 10. Ordered backlog
 
-Owner labels are heuristic:
-- `Initiative Smith`: broad vertical migration pass
-- `Tracker Engineer`: seam hardening, compatibility, contracts, validation, or deprecation-heavy pass
+Pass-shape labels are heuristic:
+- `Broad migration pass`: vertical multi-file migration across the active runtime path
+- `Seam hardening pass`: contracts, compatibility, validation, persistence, or deprecation-heavy work
 
 1. **Complete backend authority routing for remaining core combat/session mutations**
    - Priority: `P0`
    - Rationale: this is the prerequisite for every honest web-first claim.
-   - Likely scope owner: `Initiative Smith`
+   - Likely pass shape: `Broad migration pass`
    - Dependencies: existing `CombatService`, service wrappers, current DM combat tests
    - Exit criteria: migrated core combat/session mutations no longer depend on peer direct-mutation ownership during normal service-backed operation; targeted service tests pass.
 
-2. **Define explicit command/result/event contracts for migrated DM and player combat flows**
+2. **Extend explicit command/result/event contracts across the remaining DM and player combat flows**
    - Priority: `P0`
    - Rationale: contract drift is the main blocker for safe AI-assisted extraction and later language/runtime change.
-   - Likely scope owner: `Tracker Engineer`
+   - Likely pass shape: `Seam hardening pass`
    - Dependencies: item 1
-   - Exit criteria: migrated commands/events are documented and fixture-backed; contract-sensitive tests cover reconnect, hidden-info handling, and prompt payloads.
+   - Exit criteria: migrated commands/events are documented and fixture-backed beyond the already-migrated player combat slice; contract-sensitive tests cover reconnect, hidden-info handling, and prompt payloads.
 
 3. **Make the DM web console capable of running a standard encounter loop without Tk-first controls**
    - Priority: `P1`
    - Rationale: the DM surface is the clearest place to make web-first ownership real.
-   - Likely scope owner: `Initiative Smith`
+   - Likely pass shape: `Broad migration pass`
    - Dependencies: items 1-2
    - Exit criteria: standard encounter setup, turn control, initiative management, HP/condition changes, and session save/load work from the browser path for migrated slices.
 
-4. **Extract player combat adjudication out of `_lan_apply_action()` for attack, spell, end-turn, and manual override flows**
+4. **Extract the next player-command families out of `_lan_apply_action()` without reopening the migrated combat command boundary**
    - Priority: `P1`
    - Rationale: `_lan_apply_action()` is the largest remaining authority bottleneck in the player path.
-   - Likely scope owner: `Initiative Smith`
+   - Likely pass shape: `Broad migration pass`
    - Dependencies: items 1-2
-   - Exit criteria: migrated player combat commands are handled by explicit backend command handlers/services; `_lan_apply_action()` is reduced to transport/adaptation for those commands.
+   - Exit criteria: a new non-combat player-command slice (for example movement, mount, AoE/spell-launch, summons, or consumables) is handled by explicit backend command handlers/services; the already-migrated combat commands stay on the current contract boundary.
 
-5. **Introduce an explicit prompt / reaction / interrupt state model**
+5. **Extend the explicit prompt / reaction / interrupt state model beyond the migrated reaction slice**
    - Priority: `P1`
    - Rationale: reaction-heavy combat is already present and too subtle to leave embedded in ad hoc transport handlers.
-   - Likely scope owner: `Tracker Engineer`
+   - Likely pass shape: `Seam hardening pass`
    - Dependencies: items 2 and 4
-   - Exit criteria: reaction offers and similar prompts have authoritative ids, lifecycle state, expiry semantics, and test coverage independent of UI code.
+   - Exit criteria: the canonical prompt schema covers more than the current migrated reaction offers, legacy prompt dicts are further reduced, and prompt lifecycle tests remain independent of UI code.
 
 6. **Migrate summon/generated combatant creation onto the backend authority seam**
    - Priority: `P2`
    - Rationale: encounter population is only partially migrated today.
-   - Likely scope owner: `Tracker Engineer`
+   - Likely pass shape: `Seam hardening pass`
    - Dependencies: items 1-2
    - Exit criteria: generated/summoned combatants use the same encounter authority model and persistence semantics as player-profile and monster-spec additions.
 
 7. **Expose backend-owned session persistence APIs and shrink desktop-only save/load ownership**
    - Priority: `P2`
    - Rationale: web-primary DM operation is incomplete until persistence is also web-ownable.
-   - Likely scope owner: `Tracker Engineer`
+   - Likely pass shape: `Seam hardening pass`
    - Dependencies: items 1-3
    - Exit criteria: migrated encounter/session save-load flows can be invoked from backend/web paths without depending on Tk dialogs as the authoritative entrypoint.
 
 8. **Move tactical map authority and editing to canonical web-first flows**
    - Priority: `P2`
    - Rationale: the map is large and high-risk, but it cannot remain desktop-authoritative forever.
-   - Likely scope owner: `Initiative Smith`
+   - Likely pass shape: `Broad migration pass`
    - Dependencies: items 2, 4, 5, and 7
    - Exit criteria: at least one meaningful tactical slice is fully web-owned on `MapState`, with Tk no longer acting as the primary source for that slice.
 
 9. **Modularize LAN and DM web clients into maintainable source modules**
    - Priority: `P3`
    - Rationale: `assets/web/lan/index.html` and inline browser logic are too large for sustained migration velocity.
-   - Likely scope owner: `Tracker Engineer`
+   - Likely pass shape: `Seam hardening pass`
    - Dependencies: items 2-5
    - Exit criteria: migrated browser surfaces are split into smaller modules with shared client helpers; behavior remains regression-covered.
 
 10. **Demote the desktop app to compatibility shell and prepare the standalone backend/runtime transition**
     - Priority: `P3`
     - Rationale: only after authority and web ownership are real does a runtime/language transition become an engineering task instead of a rewrite.
-    - Likely scope owner: `Initiative Smith`
+    - Likely pass shape: `Broad migration pass`
     - Dependencies: items 1-9
     - Exit criteria: Tk is no longer authoritative for migrated slices; the backend can be extracted or ported behind stable contracts.
 
@@ -698,7 +706,7 @@ Owner labels are heuristic:
 
 ## 12. Progress tracking
 
-- Overall status: `Hybrid migration in progress. Web surfaces are real, but Tk desktop still hosts the runtime and remains the primary owner for map and many adjacent workflows. Player combat command adjudication is now behind an explicit backend service seam.`
+- Overall status: `Hybrid migration in progress. Web surfaces are real, but Tk desktop still hosts the runtime and remains the primary owner for map and many adjacent workflows. The migrated player combat command slice now has explicit backend contracts, canonical prompt records, and service-dispatched reaction resume.`
 - Completed major passes:
   - `CombatService` and `/api/dm/...` / `/ws/dm` exist for a meaningful combat/session slice.
   - desktop/LAN wrappers already route multiple core combat mutations through the service seam.
@@ -712,9 +720,15 @@ Owner labels are heuristic:
     - Pending reaction/prompt state (`_pending_reaction_offers`, `_pending_shield_resolutions`, `_pending_hellish_rebuke_resolutions`, `_pending_absorb_elements_resolutions`, `_pending_interception_resolutions`) has a `PromptState` accessor that owns lifecycle concerns (lookup, expiry sweep, attacker-gate check).
     - The `attack_request` pending-reaction attacker gate (the block that used to stall a new attack while a previous reaction was outstanding) now lives in `PromptState.has_pending_attacker_gate()`.
     - `manual_override_hp` continues to prefer the existing `CombatService.manual_override` entry point with the same direct-mutation fallback the inline branch had.
-- In-progress pass: `None. The player command authority pass has landed. Next pass not yet started.`
-- Next recommended pass: `Formalize versioned command/result/event contracts and an explicit prompt-lifecycle model (backlog items 2 and 5). With the service seam in place, the remaining gap is contract fixtures and an authoritative prompt schema so future passes can evolve tracker-side adjudication without moving the boundary again.`
+  - **Migrated player combat contracts and canonical prompt records now exist (2026-04-17):**
+    - `player_command_contracts.py` defines explicit request/result/event/prompt builders for the migrated player combat slice.
+    - `PromptState` now treats `_pending_prompts` as the canonical backend-owned prompt store and projects legacy `_pending_*` dictionaries from that state for compatibility.
+    - migrated reconnect payloads now expose `you.pending_prompts` / `you.pending_prompt`, and session snapshots persist `combat.pending_prompts`.
+    - shield / absorb elements / interception resume no longer recurse through `_lan_apply_action(resume_msg)`; `PlayerCommandService` dispatches a structured resume object instead.
+- In-progress pass: `None. The migrated player combat contract/prompt pass has landed.`
+- Next recommended pass: `Keep the new player combat boundary stable and migrate the next backend-owned player-command slice, while extending the canonical prompt schema to the remaining prompt-like flows that still live outside PromptState.`
 - Blocked items:
+  - `Broad YAML-backed validation still depends on `python3-yaml` in the test environment. Minimal Debian-style environments without that package leave item-backed and monster-backed combat suites partially unrunnable even though the migrated combat service/tests can now import without real Tk.`
   - `No hard architecture blocker is confirmed yet, but framework/runtime choice should remain deferred until contracts stabilize.`
 - Decisions made:
   - `majorTODO.md` is the master migration tracker for platform work.
@@ -723,13 +737,15 @@ Owner labels are heuristic:
   - YAML/session compatibility is preserved until replacement paths are validated.
   - older migration docs are historical context when they drift from code/tests.
   - **Player command service seam uses a thin envelope + delegate pattern (2026-04-17).** The service validates turn ownership, reaction-gating, and prompt lifecycle, then delegates deep rules logic to extracted tracker methods rather than duplicating the adjudication. This mirrors the `CombatService` pattern and keeps the behavior change from this pass zero while making ownership explicit.
-  - **Prompt state storage stays on the tracker instance (2026-04-17).** `PromptState` is an accessor that reads/writes existing tracker attributes so save/load, expiry sweeps, and reconnect flows keep working without rewiring.  Moving the underlying storage can happen in a later pass alongside an explicit prompt schema.
+  - **Canonical prompt records now live in tracker-owned `_pending_prompts` with compatibility projections (2026-04-17).** `PromptState` still uses the tracker instance for storage and compatibility, but the canonical shape for the migrated slice is now the prompt record rather than the legacy `_pending_*` dictionaries.
+  - **Migrated reaction resume now returns structured dispatch metadata instead of transport recursion (2026-04-17).** Resume for shield / absorb elements / interception is now backend/service owned, not a recursive `_lan_apply_action(resume_msg)` side effect.
 - Open questions:
   - `When should the backend leave the Tk process: after DM web-primary parity, or only after player command extraction too?`
   - `When is it worth introducing a typed frontend build pipeline for LAN/DM clients?`
   - `Which generated combatant paths should be migrated first after core encounter population: summons, mounts, echoes, ship-linked entities, or something else?`
   - `What is the minimum acceptable web map/editor parity before desktop map ownership can be demoted?`
-  - `Should the adjudicate_* tracker methods be moved fully onto PlayerCommandService or a domain engine, or remain on InitiativeTracker until the Tk coupling is addressed in its own pass?`
+  - `Should prompt creation move fully onto PlayerCommandService next, or should the next pass first migrate another `_lan_apply_action()` command family and leave prompt creation as tracker-adjacent glue for one more slice?`
+  - `Should the adjudicate_* tracker methods be moved fully onto PlayerCommandService or a domain engine, or remain on InitiativeTracker until the Tk/YAML coupling is addressed in its own pass?`
 
 ## 13. Update protocol for future agents
 
@@ -751,30 +767,34 @@ Owner labels are heuristic:
 
 ## 14. Recommended immediate next pass
 
-### Formalize migrated command/result/event contracts and promote the prompt model
+### Migrate the next player-command slice without reopening the combat seam
 
-The player combat command authority pass has landed (2026-04-17). The next pass should build on that seam by making the contracts explicit and promoting the prompt state model from the current accessor-over-tracker shape to an owned lifecycle object.
+The contract/prompt pass for the migrated player combat commands landed on 2026-04-17. The next pass should use that boundary as a stable base rather than reworking it again immediately.
 
 Why this is next:
-- the player command service seam is real, but the shapes of `attack_request` / `spell_target_request` / `reaction_response` / `_attack_result` / `_spell_target_result` payloads are still implicit (shaped by inline code, not fixture-backed).
-- pending reaction state still lives in ad-hoc tracker dicts (`_pending_*_resolutions`). `PromptState` wraps them for clarity but does not yet own their schema.
-- without explicit contracts and a typed prompt model, the next authority move (either the map rewrite or a backend/runtime transition) will have to re-litigate these shapes.
+- the highest-risk combat-adjudicating player commands already have explicit contracts, canonical prompt records, reconnect-safe prompt snapshots, and service-dispatched resume.
+- `_lan_apply_action()` still owns many other player-command families (`move`, `cast_aoe`, `cast_spell`, `mount_request`, wild-shape/monk/consumable paths, and similar flows), so backend ownership is still incomplete even though the combat seam is cleaner.
+- prompt creation and several prompt-like follow-up flows are still tracker-adjacent even after the canonical prompt model landed for the migrated reaction slice.
 
 Recommended scope:
-- land fixture-backed contract tests for the migrated player commands (request/response shapes, `_attack_result` / `_spell_target_result` keys, reaction offer payloads) so future extractions have a regression net.
-- define an explicit prompt model object (prompt id, trigger, eligibility, expiry, lifecycle state, resume metadata) that the service owns, and have the tracker's pending-reaction dicts project from it rather than own it.
-- remove `_lan_apply_action` recursion inside `_adjudicate_reaction_response` by returning a structured "resume" result that the service dispatches, instead of re-entering the transport handler. This is the main remaining hidden coupling from the current pass.
-- formalize the DM-service / player-service boundary around prompt creation (today `_create_reaction_offer` lives on the tracker; it should become a service method).
+- choose one coherent next player-command family and move it behind an explicit backend/service handler instead of adding more inline `_lan_apply_action()` ownership.
+- extend the canonical prompt schema only where that new slice truly needs it, rather than inventing a generic prompt system for every future case up front.
+- keep the migrated player combat contracts stable; only add compatibility adapters where needed for reconnect/save-load or hidden-information safety.
+- reduce tracker-owned prompt creation glue where practical, starting with the creation path that the chosen slice touches.
 
 Recommended validation:
-- `tests/test_lan_attack_request.py`
-- `tests/test_lan_spell_target_request.py` (needs PyYAML in test env to run)
-- `tests/test_lan_reaction_prompts.py`
-- `tests/test_lan_reaction_action.py`
-- `tests/test_shield_reaction.py`, `tests/test_hellish_rebuke_reaction.py`
-- `tests/test_lan_reconnect_recovery.py` (needs fastapi / httpx in test env)
-- `tests/test_dm_combat_service.py`
-- `tests/test_lan_action_message_types_allowlist.py`
-- new contract fixture tests added in the pass
+- existing migrated combat contract tests:
+  - `tests/test_player_command_contracts.py`
+  - `tests/test_lan_reaction_prompts.py`
+  - `tests/test_lan_reaction_action.py`
+  - `tests/test_shield_reaction.py`
+  - `tests/test_hellish_rebuke_reaction.py`
+  - `tests/test_lan_reconnect_recovery.py` (needs fastapi / httpx in test env)
+  - `tests/test_dm_combat_service.py`
+  - `tests/test_lan_action_message_types_allowlist.py`
+- new focused tests for the newly migrated command family
+- YAML-backed attack/spell regression suites remain important, but they require `python3-yaml` in the test environment:
+  - `tests/test_lan_attack_request.py`
+  - `tests/test_lan_spell_target_request.py`
 
-If this pass lands cleanly, the repo will have explicit, enforceable contracts for the migrated combat authority surface, making the next authority move (map or runtime) a boundary-preserving change rather than another archaeology pass.
+If this pass lands cleanly, the repo will keep one stable backend-owned combat contract boundary while shrinking `_lan_apply_action()` from the next side instead of churning the same slice twice.
