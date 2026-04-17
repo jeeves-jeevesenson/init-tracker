@@ -40,12 +40,9 @@ If you complete an item, move its ID into **Section 5 (Completed archive)** and 
 
 > Prioritized for depth/complexity and dependency risk.
 
-1. **F06** — LAN attack workflow using configured weapons + hidden AC validation
-2. **F07** — Spell range overlay + LAN damage prompt integration
-3. **F09** — Monster auto-path suggestion toggle (DM approve/reject)
-4. **F10** — Token image overlays for players/monsters
-5. **F11** — Custom condition icons
-6. **V01** — Broad Wild Shape quality pass (clarify-first bucket)
+1. **F10** — Token image overlays for players/monsters
+2. **F11** — Custom condition icons
+3. **V01** — Broad Wild Shape quality pass (clarify-first bucket)
 
 ---
 
@@ -133,23 +130,6 @@ If you complete an item, move its ID into **Section 5 (Completed archive)** and 
   - `python -m compileall .`
   - targeted LAN/auth tests relevant to touched paths
 
-### F09 — Monster auto-path suggestion toggle (DM confirm/reject)
-- **Status:** Not started
-- **Impact / Complexity:** High / Hard
-- **Dependencies:** none
-- **Primary files likely touched:**
-  - `/home/runner/work/dnd-initiative-tracker/dnd-initiative-tracker/dnd_initative_tracker.py`
-  - `/home/runner/work/dnd-initiative-tracker/dnd-initiative-tracker/helper_script.py`
-- **Scope:**
-  - Optional suggestion engine at monster turn start,
-  - non-destructive preview + DM approve/reject + revert.
-- **Plan:**
-  1. Calculate candidate endpoint from movement/dash budget.
-  2. Stage suggestion without mutating final combat position.
-  3. Apply or discard on DM decision.
-- **Risk notes:**
-  - Never auto-commit movement without explicit DM approval.
-
 ### F10 — Token image overlays for players/monsters
 - **Status:** Not started
 - **Impact / Complexity:** Medium-High / Hard
@@ -215,6 +195,7 @@ Completed as of 2026-02-15:
 - **Feature foundations:** F05 (weapon preset schema/docs plus normalized `attacks.weapons[]` runtime payload and regression coverage), F06 (LAN attack overlay, configured-weapon targeting, and action-to-attack-resource gating).
 - **2026-04-16:** F07 completed. Spell targeting now renders LAN range overlays from pending targeting state, directional/radius AoE placement reuses the same range guide path, and `spell_target_result.needs_damage_prompt` reopens the shared resolve modal so players can enter damage after server-authoritative save/target resolution.
 - **2026-04-17:** F08 completed. Canonical map hazards now share the `enter`/`leave`/`start`/`end` trigger vocabulary, stock hazard presets carry damage/save/condition defaults, and non-AoE hazards now flow through the existing environment and movement-damage hooks with focused regression coverage.
+- **2026-04-17:** F09 completed. DM map controls can now auto-suggest hostile-monster movement toward reachable targets, stage a non-destructive preview path with explicit approve/reject controls, and suppress repeated re-suggestions until the turn changes; focused helper regression coverage was added around dash use, approval, and rejection behavior.
 - **Bug fixes:** B01, B02, B03, B04, B05, B06, B07, B08, B09, B10, B11, B12, B13, B14.
 - **UX:** U01, U02, U03, U04, U05, U06, U07, U08, U09.
 

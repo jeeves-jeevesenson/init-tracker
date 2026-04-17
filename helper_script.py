@@ -6321,6 +6321,8 @@ class BattleMapWindow(tk.Toplevel):
         self.map_ship_weapon_var = tk.StringVar(value="")
         self.map_ship_target_component_var = tk.StringVar(value="")
         self.map_ship_debug_render_var = tk.BooleanVar(value=False)
+        self.monster_auto_path_var = tk.BooleanVar(value=False)
+        self.map_monster_path_status_var = tk.StringVar(value="Monster path: auto-suggest disabled.")
         self.map_boarding_target_var = tk.StringVar(value="")
         self.map_boarding_status_var = tk.StringVar(value="Boarding: select a ship to inspect/create/break boarding links.")
         self.map_boarding_traversal_status_var = tk.StringVar(value="Boarding traversal: select a creature on a boarded ship.")
@@ -6336,6 +6338,8 @@ class BattleMapWindow(tk.Toplevel):
         self._map_hover_cell: Optional[Tuple[int, int]] = None
         self._map_place_preview_active: bool = False
         self._ship_maneuver_preview: Optional[Dict[str, Any]] = None
+        self._monster_path_suggestion: Optional[Dict[str, Any]] = None
+        self._monster_path_rejected_turn_marker: Optional[Tuple[int, int, Optional[int]]] = None
         self._suspend_lan_sync: bool = False
         self._map_dirty: bool = False
         self._pan_key_to_dir: Dict[str, Tuple[int, int]] = {
@@ -6856,6 +6860,22 @@ class BattleMapWindow(tk.Toplevel):
         ttk.Label(mode_row, text="Movement:").pack(side=tk.LEFT)
         ttk.Button(mode_row, text="Walk", command=lambda: self._dm_set_mode_target("normal")).pack(side=tk.LEFT, padx=(6, 0))
         ttk.Button(mode_row, text="Fly", command=lambda: self._dm_set_mode_target("fly")).pack(side=tk.LEFT, padx=(6, 0))
+        monster_path_row = ttk.Frame(dm_ctrl)
+        monster_path_row.pack(fill=tk.X, pady=(6, 0))
+        ttk.Checkbutton(
+            monster_path_row,
+            text="Auto-suggest monster path",
+            variable=self.monster_auto_path_var,
+            command=self._on_monster_auto_path_toggle,
+        ).pack(side=tk.LEFT)
+        self._monster_path_suggest_button = ttk.Button(monster_path_row, text="Suggest", command=self._force_monster_path_suggestion)
+        self._monster_path_suggest_button.pack(side=tk.LEFT, padx=(6, 0))
+        self._monster_path_approve_button = ttk.Button(monster_path_row, text="Approve", command=self._approve_monster_path_suggestion)
+        self._monster_path_approve_button.pack(side=tk.LEFT, padx=(6, 0))
+        self._monster_path_reject_button = ttk.Button(monster_path_row, text="Reject", command=self._reject_monster_path_suggestion)
+        self._monster_path_reject_button.pack(side=tk.LEFT, padx=(6, 0))
+        ttk.Label(dm_ctrl, textvariable=self.map_monster_path_status_var, justify="left", wraplength=440).pack(anchor="w", pady=(4, 0))
+        self._refresh_monster_path_controls()
         ttk.Button(dm_ctrl, text="Library…", command=lambda: self.app._open_dm_reference_library(from_window=self)).pack(
             anchor="w", pady=(6, 0)
         )
@@ -7626,6 +7646,7 @@ class BattleMapWindow(tk.Toplevel):
         except Exception:
             pass
         self._update_move_highlight()
+        self._update_monster_path_suggestion(force=False, redraw=True)
 
     def _dm_action_target_cid(self) -> Optional[int]:
         cids = self._selected_unit_cids()
@@ -7668,6 +7689,7 @@ class BattleMapWindow(tk.Toplevel):
         except Exception:
             pass
         self._update_move_highlight()
+        self._update_monster_path_suggestion(force=False, redraw=True)
 
     def _dm_stand_up_target(self) -> None:
         cid = self._dm_action_target_cid()
@@ -7693,6 +7715,385 @@ class BattleMapWindow(tk.Toplevel):
         except Exception:
             pass
         self._update_move_highlight()
+        self._update_monster_path_suggestion(force=False, redraw=True)
+
+    def _monster_path_turn_marker(self) -> Tuple[int, int, Optional[int]]:
+        app = getattr(self, "app", None)
+        round_num = int(getattr(app, "round_num", 0) or 0)
+        turn_num = int(getattr(app, "turn_num", 0) or 0)
+        active_cid = int(self._active_cid) if self._active_cid is not None else None
+        return (round_num, turn_num, active_cid)
+
+    def _active_monster_auto_path_cid(self) -> Optional[int]:
+        cid = self._active_cid
+        if cid is None:
+            return None
+        app = getattr(self, "app", None)
+        combatants = getattr(app, "combatants", None)
+        if not isinstance(combatants, dict):
+            return None
+        combatant = combatants.get(int(cid))
+        if combatant is None:
+            return None
+        if bool(getattr(combatant, "is_pc", False)) or bool(getattr(combatant, "ally", False)):
+            return None
+        unit_tokens = getattr(self, "unit_tokens", None)
+        if not isinstance(unit_tokens, dict) or int(cid) not in unit_tokens:
+            return None
+        return int(cid)
+
+    def _monster_path_target_candidates(self, monster_cid: int) -> List[Tuple[int, Combatant, Tuple[int, int]]]:
+        app = getattr(self, "app", None)
+        combatants = getattr(app, "combatants", None)
+        unit_tokens = getattr(self, "unit_tokens", None)
+        if not isinstance(combatants, dict) or not isinstance(unit_tokens, dict):
+            return []
+        monster = combatants.get(int(monster_cid))
+        if monster is None:
+            return []
+        targets: List[Tuple[int, Combatant, Tuple[int, int]]] = []
+        for other_cid, other in list(combatants.items()):
+            try:
+                target_cid = int(other_cid)
+            except Exception:
+                continue
+            if target_cid == int(monster_cid):
+                continue
+            if not (bool(getattr(other, "is_pc", False)) or bool(getattr(other, "ally", False))):
+                continue
+            token = unit_tokens.get(int(target_cid))
+            if not isinstance(token, dict):
+                continue
+            try:
+                pos = (int(token.get("col")), int(token.get("row")))
+            except Exception:
+                continue
+            targets.append((int(target_cid), other, pos))
+        return targets
+
+    def _movement_path_from_cost_map(
+        self,
+        origin: Tuple[int, int],
+        dest: Tuple[int, int],
+        cost_map: Dict[Tuple[int, int], int],
+        creature: Optional[Combatant] = None,
+    ) -> List[Tuple[int, int]]:
+        if origin == dest:
+            return [origin]
+        if dest not in cost_map:
+            return []
+        path: List[Tuple[int, int]] = [dest]
+        current = dest
+        while current != origin:
+            current_cost = int(cost_map.get(current, 10**9))
+            candidates: List[Tuple[int, int, Tuple[int, int], int]] = []
+            for dc, dr in (
+                (-1, 0), (1, 0), (0, -1), (0, 1),
+                (-1, -1), (1, -1), (-1, 1), (1, 1),
+            ):
+                prev = (int(current[0]) + int(dc), int(current[1]) + int(dr))
+                prev_cost = cost_map.get(prev)
+                if prev_cost is None or int(prev_cost) >= current_cost:
+                    continue
+                step_cost = self._movement_cost_between(prev, current, current_cost, creature)
+                if step_cost is None:
+                    continue
+                if int(prev_cost) + int(step_cost) != current_cost:
+                    continue
+                candidates.append((int(prev_cost), abs(int(dc)) + abs(int(dr)), prev, int(step_cost)))
+            if not candidates:
+                return []
+            _prev_cost, _diag_bias, previous, _step_cost = min(candidates, key=lambda item: (item[0], item[1], item[2][1], item[2][0]))
+            current = previous
+            path.append(current)
+        path.reverse()
+        return path
+
+    def _best_monster_path_candidate(
+        self,
+        monster_cid: int,
+        *,
+        budget_ft: int,
+    ) -> Optional[Dict[str, Any]]:
+        if budget_ft <= 0:
+            return None
+        app = getattr(self, "app", None)
+        combatants = getattr(app, "combatants", None)
+        unit_tokens = getattr(self, "unit_tokens", None)
+        if not isinstance(combatants, dict) or not isinstance(unit_tokens, dict):
+            return None
+        monster = combatants.get(int(monster_cid))
+        token = unit_tokens.get(int(monster_cid))
+        if monster is None or not isinstance(token, dict):
+            return None
+        try:
+            origin = (int(token.get("col")), int(token.get("row")))
+        except Exception:
+            return None
+        cost_map = self._movement_cost_map(int(origin[0]), int(origin[1]), int(budget_ft), monster)
+        if not isinstance(cost_map, dict) or not cost_map:
+            return None
+        targets = self._monster_path_target_candidates(int(monster_cid))
+        if not targets:
+            return None
+        occupied: Dict[Tuple[int, int], List[int]] = {}
+        for other_cid, other_tok in list(unit_tokens.items()):
+            if not isinstance(other_tok, dict):
+                continue
+            try:
+                key = (int(other_tok.get("col")), int(other_tok.get("row")))
+            except Exception:
+                continue
+            occupied.setdefault(key, []).append(int(other_cid))
+        origin_gap = min(
+            max(0, max(abs(int(origin[0]) - int(pos[0])), abs(int(origin[1]) - int(pos[1]))) - 1)
+            for _target_cid, _target, pos in targets
+        )
+        best: Optional[Dict[str, Any]] = None
+        for dest, cost in cost_map.items():
+            if tuple(dest) == tuple(origin):
+                continue
+            for target_cid, target, target_pos in targets:
+                cheb = max(abs(int(dest[0]) - int(target_pos[0])), abs(int(dest[1]) - int(target_pos[1])))
+                gap = max(0, int(cheb) - 1)
+                overlap_penalty = 0 if int(cheb) == 1 else 1 if int(cheb) == 0 else 2
+                occupied_penalty = 1 if any(int(cid) not in {int(monster_cid), int(target_cid)} for cid in occupied.get(tuple(dest), [])) else 0
+                score = (int(gap), int(overlap_penalty), int(occupied_penalty), int(cost), int(cheb), str(getattr(target, "name", "") or ""))
+                if best is None or score < best["score"]:
+                    path = self._movement_path_from_cost_map(origin, tuple(dest), cost_map, monster)
+                    best = {
+                        "cid": int(monster_cid),
+                        "target_cid": int(target_cid),
+                        "target_name": str(getattr(target, "name", "") or f"#{int(target_cid)}"),
+                        "origin": tuple(origin),
+                        "destination": (int(dest[0]), int(dest[1])),
+                        "cost": int(cost),
+                        "gap": int(gap),
+                        "score": score,
+                        "path_cells": list(path),
+                    }
+        if best is None or int(best.get("gap", 10**9)) >= int(origin_gap):
+            return None
+        return best
+
+    def _build_monster_path_suggestion(self, monster_cid: int) -> Optional[Dict[str, Any]]:
+        app = getattr(self, "app", None)
+        combatants = getattr(app, "combatants", None)
+        unit_tokens = getattr(self, "unit_tokens", None)
+        if not isinstance(combatants, dict) or not isinstance(unit_tokens, dict):
+            return None
+        monster = combatants.get(int(monster_cid))
+        token = unit_tokens.get(int(monster_cid))
+        if monster is None or not isinstance(token, dict):
+            return None
+        move_remaining = max(0, int(getattr(monster, "move_remaining", 0) or 0))
+        base_speed = max(0, int(getattr(app, "_mode_speed", lambda c: getattr(c, "speed", 0))(monster) or 0))
+        normal = self._best_monster_path_candidate(int(monster_cid), budget_ft=int(move_remaining))
+        dash_budget = int(move_remaining)
+        can_dash = bool(int(getattr(monster, "action_remaining", 0) or 0) > 0 and int(base_speed) > 0)
+        dashed = None
+        if can_dash:
+            dash_budget = int(move_remaining) + int(base_speed)
+            dashed = self._best_monster_path_candidate(int(monster_cid), budget_ft=int(dash_budget))
+        chosen = normal
+        requires_dash = False
+        if dashed is not None and (
+            chosen is None
+            or tuple(dashed.get("score") or ()) < tuple(chosen.get("score") or ())
+        ):
+            chosen = dashed
+            requires_dash = bool(int(dashed.get("cost", 0) or 0) > int(move_remaining))
+        if chosen is None:
+            return None
+        destination = chosen.get("destination")
+        if not isinstance(destination, tuple):
+            return None
+        remaining_after = int(dash_budget if requires_dash else move_remaining) - int(chosen.get("cost", 0) or 0)
+        return {
+            **chosen,
+            "requires_dash": bool(requires_dash),
+            "remaining_after": max(0, int(remaining_after)),
+            "turn_marker": self._monster_path_turn_marker(),
+            "budget_ft": int(dash_budget if requires_dash else move_remaining),
+        }
+
+    def _clear_monster_path_suggestion(self, *, redraw: bool = True, preserve_rejection: bool = True) -> None:
+        self._monster_path_suggestion = None
+        if not preserve_rejection:
+            self._monster_path_rejected_turn_marker = None
+        self._refresh_monster_path_controls()
+        if redraw:
+            redraw_fn = getattr(self, "_redraw_tactical_layers", None)
+            if callable(redraw_fn):
+                try:
+                    redraw_fn()
+                except Exception:
+                    pass
+
+    def _refresh_monster_path_controls(self) -> None:
+        cid = self._active_monster_auto_path_cid()
+        suggestion = self._monster_path_suggestion if isinstance(getattr(self, "_monster_path_suggestion", None), dict) else {}
+        if cid is not None and suggestion:
+            unit_tokens = getattr(self, "unit_tokens", None)
+            current_token = unit_tokens.get(int(cid)) if isinstance(unit_tokens, dict) else None
+            origin = suggestion.get("origin") if isinstance(suggestion.get("origin"), tuple) else None
+            try:
+                current_origin = (int(current_token.get("col")), int(current_token.get("row"))) if isinstance(current_token, dict) else None
+            except Exception:
+                current_origin = None
+            if origin is not None and current_origin is not None and tuple(origin) != tuple(current_origin):
+                suggestion = {}
+                self._monster_path_suggestion = None
+        auto_var = getattr(self, "monster_auto_path_var", None)
+        auto_enabled = bool(auto_var.get()) if auto_var is not None and hasattr(auto_var, "get") else False
+        status_var = getattr(self, "map_monster_path_status_var", None)
+        if cid is None:
+            if status_var is not None and hasattr(status_var, "set"):
+                status_var.set("Monster path: select an active hostile monster to suggest movement.")
+        elif suggestion:
+            dash_text = " after a dash" if bool(suggestion.get("requires_dash")) else ""
+            target_name = str(suggestion.get("target_name") or "target")
+            destination = suggestion.get("destination") if isinstance(suggestion.get("destination"), tuple) else (0, 0)
+            cost = int(suggestion.get("cost", 0) or 0)
+            remaining_after = int(suggestion.get("remaining_after", 0) or 0)
+            if status_var is not None and hasattr(status_var, "set"):
+                status_var.set(
+                    f"Monster path: move to ({int(destination[0])},{int(destination[1])}) toward {target_name}"
+                    f"{dash_text} ({cost} ft, {remaining_after} ft left)."
+                )
+        elif auto_enabled and self._monster_path_rejected_turn_marker == self._monster_path_turn_marker():
+            if status_var is not None and hasattr(status_var, "set"):
+                status_var.set("Monster path: suggestion rejected for this turn. Use Suggest to restage it.")
+        elif auto_enabled:
+            if status_var is not None and hasattr(status_var, "set"):
+                status_var.set("Monster path: no useful suggestion for the current monster.")
+        else:
+            if status_var is not None and hasattr(status_var, "set"):
+                status_var.set("Monster path: auto-suggest disabled.")
+        try:
+            suggest_button = getattr(self, "_monster_path_suggest_button", None)
+            approve_button = getattr(self, "_monster_path_approve_button", None)
+            reject_button = getattr(self, "_monster_path_reject_button", None)
+            if suggest_button is not None:
+                suggest_button.configure(state=("normal" if cid is not None else "disabled"))
+            if approve_button is not None:
+                approve_button.configure(state=("normal" if bool(suggestion) else "disabled"))
+            if reject_button is not None:
+                reject_button.configure(state=("normal" if bool(suggestion) else "disabled"))
+        except Exception:
+            pass
+
+    def _update_monster_path_suggestion(self, *, force: bool = False, redraw: bool = True) -> None:
+        cid = self._active_monster_auto_path_cid()
+        if cid is None:
+            self._clear_monster_path_suggestion(redraw=redraw)
+            return
+        auto_var = getattr(self, "monster_auto_path_var", None)
+        auto_enabled = bool(auto_var.get()) if auto_var is not None and hasattr(auto_var, "get") else False
+        if not force and not auto_enabled:
+            self._clear_monster_path_suggestion(redraw=redraw)
+            return
+        if not force and self._monster_path_rejected_turn_marker == self._monster_path_turn_marker():
+            self._clear_monster_path_suggestion(redraw=redraw, preserve_rejection=True)
+            return
+        suggestion = self._build_monster_path_suggestion(int(cid))
+        self._monster_path_suggestion = suggestion
+        if suggestion is not None:
+            self._monster_path_rejected_turn_marker = None
+        self._refresh_monster_path_controls()
+        if redraw:
+            redraw_fn = getattr(self, "_redraw_tactical_layers", None)
+            if callable(redraw_fn):
+                try:
+                    redraw_fn()
+                except Exception:
+                    pass
+
+    def _on_monster_auto_path_toggle(self) -> None:
+        if bool(self.monster_auto_path_var.get()):
+            self._update_monster_path_suggestion(force=False, redraw=True)
+        else:
+            self._clear_monster_path_suggestion(redraw=True, preserve_rejection=False)
+
+    def _force_monster_path_suggestion(self) -> None:
+        self._update_monster_path_suggestion(force=True, redraw=True)
+
+    def _approve_monster_path_suggestion(self) -> None:
+        suggestion = self._monster_path_suggestion if isinstance(self._monster_path_suggestion, dict) else {}
+        cid = int(suggestion.get("cid") or 0)
+        destination = suggestion.get("destination") if isinstance(suggestion.get("destination"), tuple) else None
+        origin = suggestion.get("origin") if isinstance(suggestion.get("origin"), tuple) else None
+        if cid <= 0 or destination is None or origin is None or cid not in self.unit_tokens:
+            self._clear_monster_path_suggestion(redraw=True)
+            return
+        combatant = self.app.combatants.get(int(cid))
+        if combatant is None:
+            self._clear_monster_path_suggestion(redraw=True)
+            return
+        token = self.unit_tokens.get(int(cid))
+        try:
+            current_origin = (int(token.get("col")), int(token.get("row"))) if isinstance(token, dict) else None
+        except Exception:
+            current_origin = None
+        if current_origin is None or tuple(current_origin) != tuple(origin):
+            self._clear_monster_path_suggestion(redraw=True)
+            return
+        if bool(suggestion.get("requires_dash")):
+            try:
+                base = int(self.app._mode_speed(combatant))
+            except Exception:
+                base = int(getattr(combatant, "speed", 30) or 30)
+            total = int(getattr(combatant, "move_total", 0) or 0)
+            if total <= 0:
+                total = base
+            rem = int(getattr(combatant, "move_remaining", 0) or 0)
+            combatant.move_total = total + base
+            combatant.move_remaining = rem + base
+            try:
+                self.app._log(
+                    f"{combatant.name} dashed for the suggested path (move {rem}/{total} -> {combatant.move_remaining}/{combatant.move_total}).",
+                    cid=combatant.cid,
+                )
+            except Exception:
+                pass
+        cost = int(suggestion.get("cost", 0) or 0)
+        if cost > int(getattr(combatant, "move_remaining", 0) or 0):
+            self._clear_monster_path_suggestion(redraw=True)
+            return
+        self.unit_tokens[int(cid)]["col"] = int(destination[0])
+        self.unit_tokens[int(cid)]["row"] = int(destination[1])
+        self._sync_mount_pair_position(int(cid), int(destination[0]), int(destination[1]))
+        combatant.move_remaining = max(0, int(getattr(combatant, "move_remaining", 0) or 0) - int(cost))
+        try:
+            target_name = str(suggestion.get("target_name") or "target")
+            self.app._log(
+                f"{combatant.name} follows the suggested path toward {target_name} ({cost} ft).",
+                cid=combatant.cid,
+            )
+            self.app._rebuild_table(scroll_to_current=True)
+        except Exception:
+            pass
+        move_hook = getattr(self.app, "_sneak_handle_hidden_movement", None)
+        if callable(move_hook):
+            try:
+                move_hook(int(cid), tuple(origin), (int(destination[0]), int(destination[1])))
+            except Exception:
+                pass
+        broadcast_fn = getattr(self.app, "_lan_force_state_broadcast", None)
+        if callable(broadcast_fn):
+            try:
+                broadcast_fn()
+            except Exception:
+                pass
+        self.refresh_units()
+        self._update_groups()
+        self._update_move_highlight()
+        self._update_included_for_selected()
+        self._update_monster_path_suggestion(force=False, redraw=True)
+
+    def _reject_monster_path_suggestion(self) -> None:
+        self._monster_path_rejected_turn_marker = self._monster_path_turn_marker()
+        self._clear_monster_path_suggestion(redraw=True, preserve_rejection=True)
 
     def _dm_set_mode_target(self, mode: str) -> None:
         cid = self._dm_action_target_cid()
@@ -7701,6 +8102,7 @@ class BattleMapWindow(tk.Toplevel):
         self.app._set_movement_mode(cid, mode)
         self._sync_units_movement_mode()
         self._update_move_highlight()
+        self._update_monster_path_suggestion(force=False, redraw=True)
 
     def _dm_sneak_target(self) -> None:
         cid = self._dm_action_target_cid()
@@ -8847,6 +9249,51 @@ class BattleMapWindow(tk.Toplevel):
                     stipple="gray25",
                     outline="#3d77a8",
                     width=1,
+                    tags=("map_mode_overlay",),
+                )
+            except Exception:
+                pass
+        monster_path = self._monster_path_suggestion if isinstance(getattr(self, "_monster_path_suggestion", None), dict) else {}
+        path_cells = list(monster_path.get("path_cells") if isinstance(monster_path.get("path_cells"), list) else [])
+        for raw_col, raw_row in path_cells[1:]:
+            try:
+                col = int(raw_col)
+                row = int(raw_row)
+            except Exception:
+                continue
+            x1 = self.x0 + col * self.cell
+            y1 = self.y0 + row * self.cell
+            x2 = x1 + self.cell
+            y2 = y1 + self.cell
+            try:
+                self.canvas.create_rectangle(
+                    x1,
+                    y1,
+                    x2,
+                    y2,
+                    fill="#b7efc5",
+                    stipple="gray25",
+                    outline="#2b8a3e",
+                    width=1,
+                    tags=("map_mode_overlay",),
+                )
+            except Exception:
+                pass
+        origin = monster_path.get("origin") if isinstance(monster_path.get("origin"), tuple) else None
+        destination = monster_path.get("destination") if isinstance(monster_path.get("destination"), tuple) else None
+        if origin is not None and destination is not None:
+            try:
+                ox, oy = self._grid_to_pixel(int(origin[0]), int(origin[1]))
+                dx, dy = self._grid_to_pixel(int(destination[0]), int(destination[1]))
+                self.canvas.create_line(
+                    ox,
+                    oy,
+                    dx,
+                    dy,
+                    fill="#1f7a1f",
+                    width=max(2, int(self.cell * 0.08)),
+                    dash=(6, 4),
+                    arrow=tk.LAST,
                     tags=("map_mode_overlay",),
                 )
             except Exception:
@@ -12853,11 +13300,17 @@ class BattleMapWindow(tk.Toplevel):
         cid = self._active_cid
         if cid is None:
             return None
-        tok = self.unit_tokens.get(cid)
+        unit_tokens = getattr(self, "unit_tokens", None)
+        if not isinstance(unit_tokens, dict):
+            return None
+        tok = unit_tokens.get(cid)
         if not tok:
             return None
+        canvas = getattr(self, "canvas", None)
+        if canvas is None:
+            return None
         try:
-            x1, y1, x2, y2 = self.canvas.coords(int(tok["oval"]))
+            x1, y1, x2, y2 = canvas.coords(int(tok["oval"]))
         except Exception:
             return None
         return ((float(x1) + float(x2)) / 2.0, (float(y1) + float(y2)) / 2.0)
@@ -12872,15 +13325,19 @@ class BattleMapWindow(tk.Toplevel):
     def _draw_rotation_affordance(self) -> None:
         self._clear_rotation_affordance()
         cid = self._active_cid
-        if not self._shift_held or cid is None or cid not in self.unit_tokens:
+        unit_tokens = getattr(self, "unit_tokens", None)
+        if not bool(getattr(self, "_shift_held", False)) or cid is None or not isinstance(unit_tokens, dict) or cid not in unit_tokens:
             return
         center = self._active_token_center_px()
         if center is None:
             return
+        canvas = getattr(self, "canvas", None)
+        if canvas is None:
+            return
         cx, cy = center
         hx, hy, orbit_radius = self._rotation_handle_position(cid, cx, cy)
         handle_radius = max(5.0, self.cell * 0.12)
-        self.canvas.create_oval(
+        canvas.create_oval(
             cx - orbit_radius,
             cy - orbit_radius,
             cx + orbit_radius,
@@ -12890,7 +13347,7 @@ class BattleMapWindow(tk.Toplevel):
             dash=(4, 3),
             tags=("rot_orbit", f"rot_for:{cid}"),
         )
-        self.canvas.create_oval(
+        canvas.create_oval(
             hx - handle_radius,
             hy - handle_radius,
             hx + handle_radius,
@@ -12900,13 +13357,16 @@ class BattleMapWindow(tk.Toplevel):
             width=1,
             tags=("rot_handle", f"rot_for:{cid}"),
         )
-        self.canvas.tag_raise("rot_orbit")
-        self.canvas.tag_raise("rot_handle")
+        canvas.tag_raise("rot_orbit")
+        canvas.tag_raise("rot_handle")
 
     def _clear_rotation_affordance(self) -> None:
+        canvas = getattr(self, "canvas", None)
+        if canvas is None:
+            return
         try:
-            self.canvas.delete("rot_orbit")
-            self.canvas.delete("rot_handle")
+            canvas.delete("rot_orbit")
+            canvas.delete("rot_handle")
         except Exception:
             pass
 
@@ -13176,6 +13636,11 @@ class BattleMapWindow(tk.Toplevel):
                 pass
         try:
             self.app._open_damage_tool(attacker_cid=active_cid, target_cid=target_cid, dialog_parent=self)
+        except TypeError:
+            try:
+                self.app._open_damage_tool(attacker_cid=active_cid, target_cid=target_cid)
+            except Exception:
+                return
         except Exception:
             return
         if consume_mode:
@@ -13600,6 +14065,8 @@ class BattleMapWindow(tk.Toplevel):
             self._update_groups()
             self._update_move_highlight()
             self._update_included_for_selected()
+        if self._drag_kind == "unit":
+            self._update_monster_path_suggestion(force=False, redraw=True)
 
         # overlays keep float center
         self._drag_kind = None
@@ -14653,6 +15120,7 @@ class BattleMapWindow(tk.Toplevel):
         # Conditions / markers often change on turn transitions; refresh token markers + group labels.
         self._update_groups()
         self._update_selected_creature_boarding_status()
+        self._update_monster_path_suggestion(force=False, redraw=True)
         self._draw_rotation_affordance()
         if auto_center and cid is not None:
             self._center_on_cid(cid)
