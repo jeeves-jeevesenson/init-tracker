@@ -108,6 +108,13 @@ REACTION_RESPONSE_FIELDS: Sequence[str] = (
     "slot_level",
     "target_cid",
 )
+INITIATIVE_ROLL_FIELDS: Sequence[str] = ("type", "initiative")
+HELLISH_REBUKE_RESOLVE_FIELDS: Sequence[str] = (
+    "type",
+    "request_id",
+    "slot_level",
+    "target_cid",
+)
 
 END_TURN_FIELDS: Sequence[str] = ("type",)
 MOUNT_REQUEST_FIELDS: Sequence[str] = ("type", "rider_cid", "mount_cid")
@@ -280,6 +287,13 @@ SUMMON_ECHO_SPECIALTY_COMMAND_TYPES = frozenset(
     }
 )
 
+INITIATIVE_REACTION_SPECIALTY_COMMAND_TYPES = frozenset(
+    {
+        "initiative_roll",
+        "hellish_rebuke_resolve",
+    }
+)
+
 
 def _copy(value: Any) -> Any:
     try:
@@ -413,6 +427,38 @@ def build_reaction_response_contract(
         cid=cid,
         ws_id=ws_id,
         is_admin=False,
+    )
+
+
+def build_initiative_roll_contract(
+    msg: Dict[str, Any],
+    *,
+    cid: Optional[int],
+    ws_id: Any,
+    is_admin: bool,
+) -> Dict[str, Any]:
+    return build_command_request_contract(
+        "initiative_roll",
+        _project_payload(msg, INITIATIVE_ROLL_FIELDS, "initiative_roll"),
+        cid=cid,
+        ws_id=ws_id,
+        is_admin=is_admin,
+    )
+
+
+def build_hellish_rebuke_resolve_contract(
+    msg: Dict[str, Any],
+    *,
+    cid: Optional[int],
+    ws_id: Any,
+    is_admin: bool,
+) -> Dict[str, Any]:
+    return build_command_request_contract(
+        "hellish_rebuke_resolve",
+        _project_payload(msg, HELLISH_REBUKE_RESOLVE_FIELDS, "hellish_rebuke_resolve"),
+        cid=cid,
+        ws_id=ws_id,
+        is_admin=is_admin,
     )
 
 

@@ -94,6 +94,7 @@ from player_command_contracts import (
     AOE_MANIPULATION_COMMAND_TYPES,
     BARD_GLAMOUR_SPECIALTY_COMMAND_TYPES,
     FIGHTER_MONK_RESOURCE_ACTION_TYPES,
+    INITIATIVE_REACTION_SPECIALTY_COMMAND_TYPES,
     MOVEMENT_ACTION_COMMAND_TYPES,
     SPELL_LAUNCH_COMMAND_TYPES,
     SUMMON_ECHO_SPECIALTY_COMMAND_TYPES,
@@ -30226,8 +30227,9 @@ class InitiativeTracker(base.InitiativeTracker):
         reaction_prefs_update, lay_on_hands_use, inventory_adjust_consumable,
         use_consumable, second_wind_use, action_surge_use,
         star_advantage_use, monk_patient_defense, monk_step_of_wind,
-        monk_elemental_attunement, monk_elemental_burst, and
-        monk_uncanny_metabolism).  It is built lazily so test harnesses that
+        monk_elemental_attunement, monk_elemental_burst,
+        monk_uncanny_metabolism, initiative_roll, and
+        hellish_rebuke_resolve).  It is built lazily so test harnesses that
         skip ``__init__`` still get a working service when they invoke
         ``_lan_apply_action`` directly.
 
@@ -35494,6 +35496,173 @@ class InitiativeTracker(base.InitiativeTracker):
         self._lan.toast(ws_id, f"Moved ({cost} ft).")
         return
 
+    def _handle_initiative_roll_request(
+        self,
+        msg: Dict[str, Any],
+        *,
+        cid: Optional[int],
+        ws_id: Any,
+        is_admin: bool,
+    ) -> None:
+        roll_value = msg.get("initiative")
+        try:
+            roll_total = int(roll_value)
+        except Exception:
+            self._lan.toast(ws_id, "Enter a valid initiative number, matey.")
+            return
+        if roll_total < -99 or roll_total > 999:
+            self._lan.toast(ws_id, "Initiative total be out of range.")
+            return
+        target = self.combatants.get(int(cid)) if cid is not None else None
+        if target is None:
+            self._lan.toast(ws_id, "That scallywag ain’t in combat no more.")
+            return
+        if not self._set_initiative_via_service(int(cid), int(roll_total)):
+            self._lan.toast(ws_id, "Could not set initiative.")
+            return
+        self._lan.toast(ws_id, f"Initiative set to {int(roll_total)}.")
+        return
+
+    def _handle_hellish_rebuke_resolve_request(
+        self,
+        msg: Dict[str, Any],
+        *,
+        cid: Optional[int],
+        ws_id: Any,
+        is_admin: bool,
+    ) -> None:
+        request_id = str(msg.get("request_id") or "").strip()
+        prompts = self._ensure_player_commands().prompts
+        pending = prompts.get_resolution(request_id)
+        if not isinstance(pending, dict):
+            self._lan.toast(ws_id, "That Hellish Rebuke resolve expired, matey.")
+            return
+        caster_cid = _normalize_cid_value(pending.get("victim_cid"), "hellish_rebuke_resolve.caster")
+        attacker_cid = _normalize_cid_value(
+            msg.get("target_cid") if msg.get("target_cid") is not None else pending.get("attacker_cid"),
+            "hellish_rebuke_resolve.attacker",
+        )
+        caster = self.combatants.get(int(caster_cid)) if caster_cid is not None else None
+        target = self.combatants.get(int(attacker_cid)) if attacker_cid is not None else None
+        if caster is None or target is None:
+            prompts.pop_prompt(request_id)
+            self._lan.toast(ws_id, "Hellish Rebuke target is no longer valid.")
+            return
+        try:
+            slot_level = int(msg.get("slot_level")) if msg.get("slot_level") is not None else 1
+        except Exception:
+            slot_level = 1
+        slot_level = max(1, int(slot_level))
+        player_name = self._pc_name_for(int(caster.cid))
+        ok_slot, slot_err, _spent_level = self._consume_spell_slot_for_cast(player_name, slot_level, 1)
+        if not ok_slot:
+            self._lan.toast(ws_id, slot_err or "Could not spend spell slot for Hellish Rebuke.")
+            return
+        _cols, _rows, _obs, _rough, positions = self._lan_live_map_data()
+        caster_pos = positions.get(int(caster.cid)) or self._lan_current_position(int(caster.cid))
+        target_pos = positions.get(int(target.cid)) or self._lan_current_position(int(target.cid))
+        if caster_pos is None or target_pos is None:
+            prompts.pop_prompt(request_id)
+            self._lan.toast(ws_id, "Could not resolve positions for Hellish Rebuke.")
+            return
+        dist_ft = math.hypot(float(caster_pos[0]) - float(target_pos[0]), float(caster_pos[1]) - float(target_pos[1])) * self._lan_feet_per_square()
+        if dist_ft - 60.0 > 1e-6:
+            prompts.pop_prompt(request_id)
+            self._lan.toast(ws_id, "Target be out of Hellish Rebuke range.")
+            return
+        profile = self._profile_for_player_name(player_name)
+        dc = self._compute_spell_save_dc(profile if isinstance(profile, dict) else {})
+        if dc is None:
+            dc = 8
+        save_mod = 0
+        target_saves = getattr(target, "saving_throws", None)
+        if isinstance(target_saves, dict):
+            try:
+                save_mod = int(target_saves.get("dex", 0) or 0)
+            except Exception:
+                save_mod = 0
+        if save_mod == 0:
+            mods = getattr(target, "ability_mods", None)
+            if isinstance(mods, dict):
+                try:
+                    save_mod = int(mods.get("dex", 0) or 0)
+                except Exception:
+                    save_mod = 0
+        save_roll = int(random.randint(1, 20))
+        save_total = int(save_roll) + int(save_mod)
+        save_passed = bool(save_roll != 1 and save_total >= int(dc))
+        dice_count = max(0, 2 + max(0, int(slot_level) - 1))
+        rolled = sum(random.randint(1, 10) for _ in range(int(dice_count))) if dice_count > 0 else 0
+        total_damage = int(math.floor(rolled / 2.0)) if save_passed else int(rolled)
+        before_hp = int(getattr(target, "hp", 0) or 0)
+        if total_damage > 0:
+            damage_state = self._apply_damage_via_service(target, int(total_damage))
+            after_hp = int(damage_state.get("hp_after", before_hp))
+        else:
+            after_hp = before_hp
+        self._log(f"{caster.name} casts Hellish Rebuke on {target.name} (slot {int(slot_level)}).", cid=int(caster.cid))
+        self._log(
+            f"{target.name} makes a DEX save vs DC {int(dc)}: {int(save_roll)} + {int(save_mod)} = {int(save_total)} ({'PASS' if save_passed else 'FAIL'}).",
+            cid=int(target.cid),
+        )
+        self._log(f"Hellish Rebuke deals {int(total_damage)} fire damage to {target.name}.", cid=int(target.cid))
+        if int(before_hp) > 0 and int(after_hp) <= 0:
+            pre_order: List[int] = []
+            try:
+                pre_order = [x.cid for x in self._display_order()]
+            except Exception as exc:
+                self._oplog(f"hellish_rebuke_resolve: failed to snapshot turn order before KO cleanup ({exc})", level="warning")
+                pre_order = []
+            removed_target = False
+            try:
+                self._remove_combatants_with_lan_cleanup([int(target.cid)])
+                removed_target = int(target.cid) not in self.combatants
+            except Exception as exc:
+                self._oplog(f"hellish_rebuke_resolve: LAN cleanup remove failed for cid={int(target.cid)} ({exc})", level="warning")
+                removed_target = self.combatants.pop(int(target.cid), None) is not None
+            if removed_target:
+                if getattr(self, "start_cid", None) == int(target.cid):
+                    self.start_cid = None
+                try:
+                    self._retarget_current_after_removal([int(target.cid)], pre_order=pre_order)
+                except Exception as exc:
+                    self._oplog(
+                        f"hellish_rebuke_resolve: failed to retarget after removing cid={int(target.cid)} ({exc})",
+                        level="warning",
+                    )
+                self._log(f"{target.name} dropped to 0 -> removed", cid=int(target.cid))
+            try:
+                self._lan.play_ko(int(caster.cid))
+            except Exception:
+                pass
+        result_payload = {
+            "type": "hellish_rebuke_result",
+            "ok": True,
+            "request_id": str(request_id),
+            "caster_cid": int(caster.cid),
+            "target_cid": int(target.cid),
+            "slot_level": int(slot_level),
+            "save": {
+                "ability": "dex",
+                "dc": int(dc),
+                "roll": int(save_roll),
+                "modifier": int(save_mod),
+                "total": int(save_total),
+                "passed": bool(save_passed),
+            },
+            "damage_total": int(total_damage),
+            "damage_type": "fire",
+        }
+        loop = getattr(self._lan, "_loop", None)
+        if ws_id is not None and loop:
+            try:
+                asyncio.run_coroutine_threadsafe(self._lan._send_async(int(ws_id), result_payload), loop)
+            except Exception:
+                pass
+        prompts.pop_prompt(request_id)
+        self._lan_force_state_broadcast()
+        return
+
     def _lan_apply_action(self, msg: Dict[str, Any]) -> None:
         """Apply client actions on the Tk thread."""
         tracker: Optional["InitiativeTracker"]
@@ -35900,24 +36069,13 @@ class InitiativeTracker(base.InitiativeTracker):
             self._ensure_player_commands().reaction_response(msg, cid=cid, ws_id=ws_id)
             return
 
-        if typ == "initiative_roll":
-            roll_value = msg.get("initiative")
-            try:
-                roll_total = int(roll_value)
-            except Exception:
-                self._lan.toast(ws_id, "Enter a valid initiative number, matey.")
-                return
-            if roll_total < -99 or roll_total > 999:
-                self._lan.toast(ws_id, "Initiative total be out of range.")
-                return
-            target = self.combatants.get(int(cid)) if cid is not None else None
-            if target is None:
-                self._lan.toast(ws_id, "That scallywag ain’t in combat no more.")
-                return
-            if not self._set_initiative_via_service(int(cid), int(roll_total)):
-                self._lan.toast(ws_id, "Could not set initiative.")
-                return
-            self._lan.toast(ws_id, f"Initiative set to {int(roll_total)}.")
+        if typ in INITIATIVE_REACTION_SPECIALTY_COMMAND_TYPES:
+            self._ensure_player_commands().dispatch_initiative_reaction_specialty_command(
+                msg,
+                cid=cid,
+                ws_id=ws_id,
+                is_admin=is_admin,
+            )
             return
 
         if typ in MOVEMENT_ACTION_COMMAND_TYPES:
@@ -35931,126 +36089,6 @@ class InitiativeTracker(base.InitiativeTracker):
         elif typ == "spell_target_request":
             self._ensure_player_commands().spell_target_request(msg, cid=cid, ws_id=ws_id, is_admin=is_admin)
             return
-        elif typ == "hellish_rebuke_resolve":
-            request_id = str(msg.get("request_id") or "").strip()
-            prompts = self._ensure_player_commands().prompts
-            pending = prompts.get_resolution(request_id)
-            if not isinstance(pending, dict):
-                self._lan.toast(ws_id, "That Hellish Rebuke resolve expired, matey.")
-                return
-            caster_cid = _normalize_cid_value(pending.get("victim_cid"), "hellish_rebuke_resolve.caster")
-            attacker_cid = _normalize_cid_value(msg.get("target_cid") if msg.get("target_cid") is not None else pending.get("attacker_cid"), "hellish_rebuke_resolve.attacker")
-            caster = self.combatants.get(int(caster_cid)) if caster_cid is not None else None
-            target = self.combatants.get(int(attacker_cid)) if attacker_cid is not None else None
-            if caster is None or target is None:
-                prompts.pop_prompt(request_id)
-                self._lan.toast(ws_id, "Hellish Rebuke target is no longer valid.")
-                return
-            try:
-                slot_level = int(msg.get("slot_level")) if msg.get("slot_level") is not None else 1
-            except Exception:
-                slot_level = 1
-            slot_level = max(1, int(slot_level))
-            player_name = self._pc_name_for(int(caster.cid))
-            ok_slot, slot_err, _spent_level = self._consume_spell_slot_for_cast(player_name, slot_level, 1)
-            if not ok_slot:
-                self._lan.toast(ws_id, slot_err or "Could not spend spell slot for Hellish Rebuke.")
-                return
-            _cols, _rows, _obs, _rough, positions = self._lan_live_map_data()
-            caster_pos = positions.get(int(caster.cid)) or self._lan_current_position(int(caster.cid))
-            target_pos = positions.get(int(target.cid)) or self._lan_current_position(int(target.cid))
-            if caster_pos is None or target_pos is None:
-                prompts.pop_prompt(request_id)
-                self._lan.toast(ws_id, "Could not resolve positions for Hellish Rebuke.")
-                return
-            dist_ft = math.hypot(float(caster_pos[0]) - float(target_pos[0]), float(caster_pos[1]) - float(target_pos[1])) * self._lan_feet_per_square()
-            if dist_ft - 60.0 > 1e-6:
-                prompts.pop_prompt(request_id)
-                self._lan.toast(ws_id, "Target be out of Hellish Rebuke range.")
-                return
-            profile = self._profile_for_player_name(player_name)
-            dc = self._compute_spell_save_dc(profile if isinstance(profile, dict) else {})
-            if dc is None:
-                dc = 8
-            save_mod = 0
-            target_saves = getattr(target, "saving_throws", None)
-            if isinstance(target_saves, dict):
-                try:
-                    save_mod = int(target_saves.get("dex", 0) or 0)
-                except Exception:
-                    save_mod = 0
-            if save_mod == 0:
-                mods = getattr(target, "ability_mods", None)
-                if isinstance(mods, dict):
-                    try:
-                        save_mod = int(mods.get("dex", 0) or 0)
-                    except Exception:
-                        save_mod = 0
-            save_roll = int(random.randint(1, 20))
-            save_total = int(save_roll) + int(save_mod)
-            save_passed = bool(save_roll != 1 and save_total >= int(dc))
-            dice_count = max(0, 2 + max(0, int(slot_level) - 1))
-            rolled = sum(random.randint(1, 10) for _ in range(int(dice_count))) if dice_count > 0 else 0
-            total_damage = int(math.floor(rolled / 2.0)) if save_passed else int(rolled)
-            before_hp = int(getattr(target, "hp", 0) or 0)
-            if total_damage > 0:
-                damage_state = self._apply_damage_via_service(target, int(total_damage))
-                after_hp = int(damage_state.get("hp_after", before_hp))
-            else:
-                after_hp = before_hp
-            self._log(f"{caster.name} casts Hellish Rebuke on {target.name} (slot {int(slot_level)}).", cid=int(caster.cid))
-            self._log(f"{target.name} makes a DEX save vs DC {int(dc)}: {int(save_roll)} + {int(save_mod)} = {int(save_total)} ({'PASS' if save_passed else 'FAIL'}).", cid=int(target.cid))
-            self._log(f"Hellish Rebuke deals {int(total_damage)} fire damage to {target.name}.", cid=int(target.cid))
-            if int(before_hp) > 0 and int(after_hp) <= 0:
-                pre_order: List[int] = []
-                try:
-                    pre_order = [x.cid for x in self._display_order()]
-                except Exception as exc:
-                    self._oplog(f"hellish_rebuke_resolve: failed to snapshot turn order before KO cleanup ({exc})", level="warning")
-                    pre_order = []
-                removed_target = False
-                try:
-                    self._remove_combatants_with_lan_cleanup([int(target.cid)])
-                    removed_target = int(target.cid) not in self.combatants
-                except Exception as exc:
-                    self._oplog(f"hellish_rebuke_resolve: LAN cleanup remove failed for cid={int(target.cid)} ({exc})", level="warning")
-                    removed_target = self.combatants.pop(int(target.cid), None) is not None
-                if removed_target:
-                    if getattr(self, "start_cid", None) == int(target.cid):
-                        self.start_cid = None
-                    try:
-                        self._retarget_current_after_removal([int(target.cid)], pre_order=pre_order)
-                    except Exception as exc:
-                        self._oplog(
-                            f"hellish_rebuke_resolve: failed to retarget after removing cid={int(target.cid)} ({exc})",
-                            level="warning",
-                        )
-                    self._log(f"{target.name} dropped to 0 -> removed", cid=int(target.cid))
-                try:
-                    self._lan.play_ko(int(caster.cid))
-                except Exception:
-                    pass
-            result_payload = {
-                "type": "hellish_rebuke_result",
-                "ok": True,
-                "request_id": str(request_id),
-                "caster_cid": int(caster.cid),
-                "target_cid": int(target.cid),
-                "slot_level": int(slot_level),
-                "save": {"ability": "dex", "dc": int(dc), "roll": int(save_roll), "modifier": int(save_mod), "total": int(save_total), "passed": bool(save_passed)},
-                "damage_total": int(total_damage),
-                "damage_type": "fire",
-            }
-            loop = getattr(self._lan, "_loop", None)
-            if ws_id is not None and loop:
-                try:
-                    asyncio.run_coroutine_threadsafe(self._lan._send_async(int(ws_id), result_payload), loop)
-                except Exception:
-                    pass
-            prompts.pop_prompt(request_id)
-            self._lan_force_state_broadcast()
-            return
-
         elif typ == "attack_request":
             self._ensure_player_commands().attack_request(msg, cid=cid, ws_id=ws_id, is_admin=is_admin)
             return

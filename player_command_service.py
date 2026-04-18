@@ -22,6 +22,8 @@ Service-owned (this module):
     ``echo_summon``, ``echo_swap``, ``dismiss_summons``,
     ``dismiss_persistent_summon``, ``reappear_persistent_summon``,
     ``assign_pre_summon``, and ``echo_tether_response``
+  - player initiative/reaction specialty family:
+    ``initiative_roll`` and ``hellish_rebuke_resolve``
   - player wild-shape family:
     ``wild_shape_apply``, ``wild_shape_pool_set_current``,
     ``wild_shape_revert``, ``wild_shape_regain_use``,
@@ -91,6 +93,7 @@ from player_command_contracts import (
     AOE_MANIPULATION_COMMAND_TYPES,
     BARD_GLAMOUR_SPECIALTY_COMMAND_TYPES,
     FIGHTER_MONK_RESOURCE_ACTION_TYPES,
+    INITIATIVE_REACTION_SPECIALTY_COMMAND_TYPES,
     MOVEMENT_ACTION_COMMAND_TYPES,
     SPECIAL_REACTION_TRIGGERS,
     SPELL_LAUNCH_COMMAND_TYPES,
@@ -119,6 +122,8 @@ from player_command_contracts import (
     build_echo_swap_contract,
     build_echo_tether_response_contract,
     build_end_turn_contract,
+    build_hellish_rebuke_resolve_contract,
+    build_initiative_roll_contract,
     build_inventory_adjust_consumable_contract,
     build_lay_on_hands_use_contract,
     build_monk_elemental_attunement_contract,
@@ -754,6 +759,9 @@ class PlayerCommandService:
     }
     _SUMMON_ECHO_SPECIALTY_COMMAND_HANDLERS = {
         command_type: command_type for command_type in SUMMON_ECHO_SPECIALTY_COMMAND_TYPES
+    }
+    _INITIATIVE_REACTION_SPECIALTY_COMMAND_HANDLERS = {
+        command_type: command_type for command_type in INITIATIVE_REACTION_SPECIALTY_COMMAND_TYPES
     }
     _TURN_LOCAL_COMMAND_HANDLERS = {
         command_type: command_type for command_type in TURN_LOCAL_COMMAND_TYPES
@@ -3034,6 +3042,121 @@ class PlayerCommandService:
                 request=request_contract,
             )
         return build_dispatch_result("echo_tether_response", True, request=request_contract)
+
+    # ------------------------------------------------------------------
+    # initiative/reaction specialty commands
+    # ------------------------------------------------------------------
+
+    def dispatch_initiative_reaction_specialty_command(
+        self,
+        msg: Dict[str, Any],
+        *,
+        cid: Optional[int],
+        ws_id: Any,
+        is_admin: bool,
+    ) -> Dict[str, Any]:
+        command_type = str(msg.get("type") if isinstance(msg, dict) else "").strip().lower()
+        handler_name = self._INITIATIVE_REACTION_SPECIALTY_COMMAND_HANDLERS.get(command_type)
+        if not handler_name:
+            return build_dispatch_result(
+                "initiative_reaction_specialty_command",
+                False,
+                reason="unsupported_command",
+                received_type=command_type,
+            )
+        handler = getattr(self, handler_name, None)
+        if not callable(handler):
+            return build_dispatch_result(
+                command_type,
+                False,
+                reason="handler_missing",
+            )
+        return handler(
+            msg if isinstance(msg, dict) else {},
+            cid=cid,
+            ws_id=ws_id,
+            is_admin=is_admin,
+        )
+
+    def initiative_roll(
+        self,
+        msg: Dict[str, Any],
+        *,
+        cid: Optional[int],
+        ws_id: Any,
+        is_admin: bool,
+    ) -> Dict[str, Any]:
+        t = self._tracker
+        request_contract = build_initiative_roll_contract(
+            msg,
+            cid=cid,
+            ws_id=ws_id,
+            is_admin=is_admin,
+        )
+        handler = getattr(t, "_handle_initiative_roll_request", None)
+        if not callable(handler):
+            return build_dispatch_result(
+                "initiative_roll",
+                False,
+                reason="handler_missing",
+                request=request_contract,
+            )
+        try:
+            handler(msg if isinstance(msg, dict) else {}, cid=cid, ws_id=ws_id, is_admin=is_admin)
+        except Exception as exc:
+            self._oplog(f"initiative_roll handler raised: {exc}", level="warning")
+            return build_dispatch_result(
+                "initiative_roll",
+                False,
+                reason="exception",
+                error=str(exc),
+                request=request_contract,
+            )
+        return build_dispatch_result(
+            "initiative_roll",
+            True,
+            request=request_contract,
+        )
+
+    def hellish_rebuke_resolve(
+        self,
+        msg: Dict[str, Any],
+        *,
+        cid: Optional[int],
+        ws_id: Any,
+        is_admin: bool,
+    ) -> Dict[str, Any]:
+        t = self._tracker
+        request_contract = build_hellish_rebuke_resolve_contract(
+            msg,
+            cid=cid,
+            ws_id=ws_id,
+            is_admin=is_admin,
+        )
+        handler = getattr(t, "_handle_hellish_rebuke_resolve_request", None)
+        if not callable(handler):
+            return build_dispatch_result(
+                "hellish_rebuke_resolve",
+                False,
+                reason="handler_missing",
+                request=request_contract,
+            )
+        try:
+            handler(msg if isinstance(msg, dict) else {}, cid=cid, ws_id=ws_id, is_admin=is_admin)
+        except Exception as exc:
+            self._oplog(f"hellish_rebuke_resolve handler raised: {exc}", level="warning")
+            return build_dispatch_result(
+                "hellish_rebuke_resolve",
+                False,
+                reason="exception",
+                error=str(exc),
+                request=request_contract,
+            )
+        return build_dispatch_result(
+            "hellish_rebuke_resolve",
+            True,
+            request=request_contract,
+        )
 
     # ------------------------------------------------------------------
     # turn-local / mobility-lite commands

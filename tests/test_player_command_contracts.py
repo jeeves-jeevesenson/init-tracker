@@ -8,6 +8,7 @@ import dnd_initative_tracker as tracker_mod
 from player_command_contracts import (
     AOE_MANIPULATION_COMMAND_TYPES,
     BARD_GLAMOUR_SPECIALTY_COMMAND_TYPES,
+    INITIATIVE_REACTION_SPECIALTY_COMMAND_TYPES,
     MOVEMENT_ACTION_COMMAND_TYPES,
     SPELL_LAUNCH_COMMAND_TYPES,
     SUMMON_ECHO_SPECIALTY_COMMAND_TYPES,
@@ -32,6 +33,8 @@ from player_command_contracts import (
     build_echo_summon_contract,
     build_echo_swap_contract,
     build_echo_tether_response_contract,
+    build_hellish_rebuke_resolve_contract,
+    build_initiative_roll_contract,
     build_inventory_adjust_consumable_contract,
     build_lay_on_hands_use_contract,
     build_monk_elemental_attunement_contract,
@@ -434,6 +437,40 @@ class SummonEchoSpecialtyCommandContractTests(unittest.TestCase):
                 f"player_command.{command_type}.request",
             )
             self.assertEqual((contract.get("actor") or {}).get("cid"), 41)
+            self.assertEqual((contract.get("payload") or {}).get("type"), command_type)
+
+
+class InitiativeReactionSpecialtyCommandContractTests(unittest.TestCase):
+    def test_initiative_reaction_specialty_contract_builders_cover_the_family(self):
+        builders = {
+            "initiative_roll": (
+                build_initiative_roll_contract,
+                {
+                    "type": "initiative_roll",
+                    "initiative": 17,
+                },
+            ),
+            "hellish_rebuke_resolve": (
+                build_hellish_rebuke_resolve_contract,
+                {
+                    "type": "hellish_rebuke_resolve",
+                    "request_id": "req-9",
+                    "slot_level": 2,
+                    "target_cid": 77,
+                },
+            ),
+        }
+
+        self.assertEqual(set(builders.keys()), set(INITIATIVE_REACTION_SPECIALTY_COMMAND_TYPES))
+
+        for command_type, (builder, msg) in builders.items():
+            contract = builder(dict(msg), cid=51, ws_id=52, is_admin=False)
+            self.assertEqual(contract.get("command_type"), command_type)
+            self.assertEqual(
+                (contract.get("contract") or {}).get("schema"),
+                f"player_command.{command_type}.request",
+            )
+            self.assertEqual((contract.get("actor") or {}).get("cid"), 51)
             self.assertEqual((contract.get("payload") or {}).get("type"), command_type)
 
 
