@@ -6,7 +6,7 @@ This directory contains automated installation and launcher scripts for differen
 
 ### quick-install.sh (Linux/macOS)
 One-line installation script that handles everything automatically:
-- Clones the repository to `~/.local/share/dnd-initiative-tracker`
+- Clones the repository to `~/.local/share/dnd-initiative-tracker` (legacy install path retained for backward compatibility)
 - On Linux, runs `install-linux.sh` (including the KDE/desktop entry prompt)
 - Creates a Python virtual environment
 - Installs all dependencies

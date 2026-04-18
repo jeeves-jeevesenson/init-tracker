@@ -138,7 +138,7 @@ python dnd_initative_tracker.py
 
 ### Platform notes
 
-- **Linux quick install** places app files in `~/.local/share/dnd-initiative-tracker`
+- **Linux quick install** places app files in `~/.local/share/dnd-initiative-tracker` (legacy path retained for update/backward compatibility)
 - **Windows quick install** places app files in `%LOCALAPPDATA%\DnDInitiativeTracker`
 - Quick install scripts are idempotent and can update an existing install
 
