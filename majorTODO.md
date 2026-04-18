@@ -64,6 +64,7 @@ When this file and older migration notes disagree, treat the code, tests, and th
   - session saves are JSON snapshots with `SESSION_SNAPSHOT_SCHEMA_VERSION = 2`
   - session snapshots preserve a canonical map payload while maintaining legacy compatibility projections
   - DM-owned session save/load is now also web-operable via authenticated routes (`GET /api/dm/sessions`, `POST /api/dm/sessions/save`, `POST /api/dm/sessions/load`, `POST /api/dm/sessions/quick-save`, `POST /api/dm/sessions/quick-load`) that reuse `_save_session_to_path` / `_load_session_from_path` / `_session_quicksave_path`; Tk file-dialog flows remain as a compatibility entrypoint, not the only operational path.
+  - session restore now applies combat/map/prompt/log state through a backend-owned `_apply_session_snapshot_authoritative_state()` helper plus state-only `_remove_combatants_from_runtime_state()` cleanup; Tk map/log/table refresh is a best-effort compatibility adapter layered after canonical restore rather than the owner of restore semantics.
 - A canonical map-domain seam already exists:
   - `map_state.py` defines `MapState`, `MapQueryAPI`, delta helpers, canonical-only layers, and legacy conversion helpers
   - `_capture_canonical_map_state()` and `_apply_canonical_map_state()` already bridge canonical map data with legacy/Tk state
@@ -76,7 +77,7 @@ When this file and older migration notes disagree, treat the code, tests, and th
 
 ### Confirmed partial migrations / hybrid slices
 
-- DM combat state has a real browser console and service-owned API surface, but the desktop host process still owns the runtime and many adjacent workflows.
+- DM combat state has a real browser console and service-owned API surface, and `/dm` can now run the ordinary encounter loop plus routine map-backed tactical play for bug testing (load/resume or start blank session, populate from player profiles or monster specs, start/end combat, operate turns, manage initiative/HP/temp HP/conditions, save/restore, and place/move/facing-manage combatants on the tactical map) without dropping back to Tk-first controls. The desktop host process still owns the runtime and more advanced map/editor workflows.
 - Encounter population for player profiles and monster specs is already partially migrated through `CombatService`, but summon/generated combatant paths remain outside that seam.
 - `MapState` is a real canonical model, but map editing/rendering authority is still not web-primary; the Tk map window and legacy LAN fields still participate in canonical capture/projection.
 - Character creation/editing and shop/admin flows are already browser-reachable and API-backed, but they still live inside the same Python host and write to the same local YAML/content model.
@@ -447,6 +448,9 @@ Completion signals:
 - a standard encounter can be created, run, saved, and restored from the DM web surface without depending on Tk-first controls
 - desktop remains available only as compatibility host for still-unmigrated slices
 
+Current reality (2026-04-18):
+- the ordinary encounter loop now satisfies this for browser-first bug testing; remaining gaps are deeper DM/tactical tools rather than baseline encounter operation.
+
 Main risks:
 - parity gaps between Tk and web
 - stale hybrid ownership if desktop workflows continue evolving in parallel
@@ -552,19 +556,19 @@ Blockers / dependencies: source-content references, generated-entity schema deci
 
 Desired end state: versioned runtime encounter/session documents that are UI-agnostic and map-canonical.
 
-Current state: session snapshots already exist and preserve canonical map state; the migrated player-command slice now also persists canonical pending prompt records through `combat.pending_prompts` while projecting legacy prompt dictionaries for compatibility. Web-owned DM session save/load/quick-save/quick-load/list routes now reuse the same `_save_session_to_path` / `_load_session_from_path` / `_session_quicksave_path` helpers, so backend-initiated persistence is possible without invoking Tk file dialogs. Runtime state still lives on the tracker class, and Tk dialog flows remain as a compatibility entrypoint.
+Current state: session snapshots already exist and preserve canonical map state; the migrated player-command slice now also persists canonical pending prompt records through `combat.pending_prompts` while projecting legacy prompt dictionaries for compatibility. Web-owned DM session save/load/quick-save/quick-load/list routes now reuse the same `_save_session_to_path` / `_load_session_from_path` / `_session_quicksave_path` helpers, so backend-initiated persistence is possible without invoking Tk file dialogs. Restore semantics now run through `_apply_session_snapshot_authoritative_state()` and state-only cleanup in `_remove_combatants_from_runtime_state()`, while `_open_map_mode()` / `_load_history_into_log()` / `_rebuild_table()` remain optional Tk compatibility refreshes layered on top. Focused fixture-style tests now lock the schema-v2 snapshot projection and reconnect prompt payload shapes the web slice depends on.
 
-Next likely major pass: shrink the remaining Tk-owned assumptions inside `_load_session_from_path` / `_apply_session_snapshot` (map-window hydration, direct canvas touches) so session restore can run cleanly in a headless web-primary environment and reopen a canonical encounter+map schema conversation.
+Next likely major pass: no immediate persistence-seam follow-up is required for the ordinary DM encounter loop; revisit session-safety/UX improvements only if browser bug testing shows operator confusion around dirty-state, quick-save, or restore visibility.
 
-Blockers / dependencies: authoritative encounter schema, pending-prompt serialization decisions, Tk-free map hydration path.
+Blockers / dependencies: authoritative encounter schema, remaining DM web encounter-loop gaps, persistence UX decisions.
 
 ### Workstream: DM web console
 
 Desired end state: the DM can run standard encounters from the browser without relying on desktop widgets for ordinary operation.
 
-Current state: `/dm` already supports snapshot viewing, turn control, HP/temp HP, conditions, add/remove combatants, initiative, auth refresh handling, and — as of 2026-04-17 — session save/load, quick save, quick load, and snapshot listing via new `/api/dm/sessions/*` routes plus a Session Persistence card in `assets/web/dm/index.html`. After a web-triggered load, the tracker broadcasts canonical state back to LAN clients and pushes a refreshed DM snapshot to connected DM WebSocket clients.
+Current state: `/dm` now supports snapshot viewing, turn control, HP/temp HP, conditions, add/remove combatants, set/roll initiative, auth refresh handling, session save/load/quick-save/quick-load/list, browser-triggered new blank session, browser encounter population for the common player-profile and monster-spec paths via authenticated `/api/dm/encounter/*` routes, and a lightweight tactical map card driven by combined DM snapshots that include `tactical_map`. The DM can now place/reposition tokens, move them using the existing rules-aware path, and update facing through authenticated `/api/dm/map/combatants/{cid}/move|place|facing` routes that reuse tracker-owned map helpers and the existing LAN/DM broadcast path. After a web-triggered load, the tracker restores canonical combat/map/prompt/log state without depending on Tk widget mutation as the authoritative path, then broadcasts refreshed state to LAN clients and pushes a refreshed DM snapshot to connected DM WebSocket clients. Focused reconnect/session contract fixtures now guard the prompt/map/claim payloads this slice depends on.
 
-Next likely major pass: close remaining encounter-loop gaps (start/end combat parity, encounter template/population ergonomics, log/state recovery UX) and formalize operational contracts for the DM persistence routes so reconnect/resume behavior is fixture-backed.
+Next likely major pass: move from routine tactical operation to battlefield prep and advanced live map control in `/dm`: common obstacle/terrain/hazard/AoE manipulation, richer tactical overlays, and any remaining high-value map workflows that still force a fall back to desktop.
 
 Blockers / dependencies: Phase 1 authority completeness (done for migrated slices), unresolved desktop-only encounter authoring tools, pending encounter schema decisions.
 
@@ -582,9 +586,9 @@ Blockers / dependencies: prompt model, contract fixtures, hidden-information saf
 
 Desired end state: canonical map state is authoritative and web renderers/editors consume it directly.
 
-Current state: `MapState` is real, but Tk map tooling still participates in canonical capture/hydration and remains desktop-primary.
+Current state: `MapState` is real, and the first meaningful tactical DM browser slice is now landed: combined DM snapshots carry canonical tactical state to `/dm`, and ordinary token placement/movement/facing can run through backend-owned helpers without Tk controls. Tk map tooling still participates in canonical capture/hydration and remains desktop-primary for broader editor and tactical-effect workflows.
 
-Next likely major pass: migrate one meaningful tactical slice end-to-end on canonical state without relying on Tk render/export ownership.
+Next likely major pass: move battlefield preparation and live tactical effect control onto the same browser/backend seam so the DM can manage common terrain, hazards, and AoEs without Tk map tools.
 
 Blockers / dependencies: authority cleanup, payload/perf work, map-editor UX decisions.
 
@@ -644,6 +648,7 @@ Pass-shape labels are heuristic:
    - Likely pass shape: `Broad migration pass`
    - Dependencies: items 1-2
    - Exit criteria: standard encounter setup, turn control, initiative management, HP/condition changes, and session save/load work from the browser path for migrated slices.
+   - Status (2026-04-18): **Ordinary browser encounter-loop parity plus routine tactical token control landed.** `/dm` can now load/quick-load or start a blank session, populate encounters from YAML-backed player profiles and monster specs, start/end combat, operate turns, set/roll initiative, adjust HP/temp HP/conditions, save/restore sessions, and place/move/re-face combatants on the tactical map without depending on Tk-first controls for routine play. Remaining DM browser work is battlefield prep / advanced tactical parity, not the baseline encounter loop.
 
 4. **Extract the next player-command families out of `_lan_apply_action()` without reopening the migrated combat command boundary**
    - Priority: `P1`
@@ -672,7 +677,7 @@ Pass-shape labels are heuristic:
    - Likely pass shape: `Seam hardening pass`
    - Dependencies: items 1-3
    - Exit criteria: migrated encounter/session save-load flows can be invoked from backend/web paths without depending on Tk dialogs as the authoritative entrypoint.
-   - Status (2026-04-17): **Initial web vertical slice landed.** DM save/load/quick-save/quick-load/list are available as authenticated `/api/dm/sessions/*` routes; the DM console has UI controls for each. Remaining work is to make `_load_session_from_path` / `_apply_session_snapshot` fully Tk-optional and to formalize persistence payload contracts, not to add new entrypoints.
+   - Status (2026-04-18): **Backend-owned restore seam and contract fixtures landed.** DM save/load/quick-save/quick-load/list remain authenticated `/api/dm/sessions/*` routes, and restore now applies canonical session state through `_apply_session_snapshot_authoritative_state()` plus `_remove_combatants_from_runtime_state()` before any optional Tk refresh runs. Focused tests now lock `SESSION_SNAPSHOT_SCHEMA_VERSION = 2` snapshot projections and reconnect prompt payload shapes. Remaining work for the DM browser slice is encounter-loop parity and UX, not save/load ownership.
 
 8. **Move tactical map authority and editing to canonical web-first flows**
    - Priority: `P2`
@@ -680,6 +685,7 @@ Pass-shape labels are heuristic:
    - Likely pass shape: `Broad migration pass`
    - Dependencies: items 2, 4, 5, and 7
    - Exit criteria: at least one meaningful tactical slice is fully web-owned on `MapState`, with Tk no longer acting as the primary source for that slice.
+   - Status (2026-04-18): **First meaningful tactical DM slice landed.** `/dm` now receives `tactical_map` state in its combined DM snapshot and can handle routine token placement/reposition, rules-aware movement, and facing updates through authenticated browser routes backed by tracker-owned map helpers plus the existing LAN/DM snapshot broadcast path. Remaining work is broader battlefield prep/editor/effect parity.
 
 9. **Modularize LAN and DM web clients into maintainable source modules**
    - Priority: `P3`
@@ -807,8 +813,25 @@ Pass-shape labels are heuristic:
     - `assets/web/dm/index.html` gained a "Session Persistence" mut-card with Quick Save / Quick Load, named Save (filename input + label), and Load (dropdown of discovered snapshots + Refresh) controls; destructive loads prompt `confirm()` and `startAutoRefresh()` now populates the list on login.
     - focused coverage added in `tests/test_dm_session_persistence_routes.py` (16 fastapi/httpx-gated route tests covering list/save/load/quick flows, auth, and path-traversal rejection, plus a fastapi-free HTML-surface test).
     - Tk file-dialog save/load remains as a compatibility entrypoint; the DM browser console is now honestly able to drive the encounter-loop save/load cycle without Tk being the primary owner.
-- In-progress pass: `None. First web-owned DM session persistence vertical slice landed.`
-- Next recommended pass: `Shrink Tk coupling inside _load_session_from_path / _apply_session_snapshot so session restore works headlessly, and lock reconnect/resume contract fixtures for the prompt/map payloads the DM web console already touches.`
+  - **Session restore is now backend-owned first, Tk refresh second (2026-04-18):**
+    - `_load_session_from_path()` / `_apply_session_snapshot()` now route restore semantics through `_apply_session_snapshot_authoritative_state()`, which applies combat/map/prompt/log state without relying on Tk widget mutation.
+    - `_remove_combatants_from_runtime_state()` now handles state-only combatant cleanup so restore can clear existing encounter state without using map-window token/canvas mutation as the authoritative mechanism.
+    - `_refresh_session_snapshot_tk_compatibility()` is now the thin desktop adapter for `_open_map_mode()`, `_load_history_into_log()`, and `_rebuild_table()` when Tk widgets actually exist.
+    - focused coverage was extended in `tests/test_session_save_load.py` for a headless restore path plus a schema-v2 snapshot projection, and in `tests/test_lan_reconnect_recovery.py` for claim/turn/map/prompt reconnect payload shape.
+  - **DM browser core encounter-loop parity landed for ordinary operation (2026-04-18):**
+    - new authenticated DM routes: `GET /api/dm/encounter/options`, `POST /api/dm/encounter/players/add`, `POST /api/dm/encounter/monsters/add`, and `POST /api/dm/sessions/new`.
+    - the new encounter routes reuse the existing tracker/service encounter seams instead of inventing browser-only logic: player-profile population goes through `_add_player_profile_combatants_via_service(...)`, monster-spec population goes through `_add_monster_spec_combatants_via_service(...)`, and blank-session reset goes through `_new_session_apply_blank_state(confirm=False)`.
+    - `assets/web/dm/index.html` now exposes player-profile encounter assembly, monster-spec group assembly, initiative rolling, and a browser-owned "New Blank Session" action alongside the earlier persistence/start-end/turn controls.
+    - the DM console refreshes encounter setup options via `/api/dm/encounter/options` and re-syncs those choices when encounter membership changes, so post-load/add/remove/reset browser state stays aligned with backend authority.
+    - focused coverage landed in `tests/test_dm_encounter_loop_routes.py` (fastapi/httpx-gated route tests plus a fastapi-free HTML-surface test), while existing `CombatService*PopulationTests`, `CombatServiceStartCombatTests`, `CombatServiceEndCombatTests`, and `SessionSaveLoadTests.test_new_session_apply_blank_state_clears_combat_map_and_log` continue to cover the reused backend seams.
+  - **DM browser routine tactical map operation landed (2026-04-18):**
+    - combined DM snapshots now include a `tactical_map` payload sourced from `_lan_snapshot(include_static=False, hydrate_static=False)` via `_dm_tactical_snapshot()` and `LanController._dm_console_snapshot_payload()`, so the DM console receives map-linked combat state over the same polling/WebSocket surface it already uses.
+    - new authenticated routes on `LanController._fastapi_app`: `POST /api/dm/map/combatants/{cid}/move`, `POST /api/dm/map/combatants/{cid}/place`, and `POST /api/dm/map/combatants/{cid}/facing`.
+    - those routes reuse tracker-owned map semantics instead of browser-only logic: rules-aware movement routes through `_lan_try_move()`, placement/reposition routes through destination validation plus canonical position mutation helpers, and facing routes reuse the same facing/AoE synchronization semantics already used by LAN/admin control paths.
+    - `assets/web/dm/index.html` now includes a lightweight tactical map canvas plus controls for selecting a combatant, targeting a cell, placing/repositioning, spending movement, and updating facing during ordinary map-backed combat.
+    - focused coverage landed in `tests/test_dm_tactical_map_routes.py`, including fastapi/httpx-gated route tests, a fastapi-free HTML-surface test, direct tracker helper tests, and a combined DM snapshot contract test.
+- In-progress pass: `None. Routine DM browser encounter-loop and tactical token operation are landed for bug testing.`
+- Next recommended pass: `Let the DM prepare and adjust the battlefield from the browser: common terrain/hazard/AoE controls and richer tactical overlays, not another baseline encounter-loop cleanup pass.`
 - Blocked items:
   - `Broad YAML-backed validation still depends on python3-yaml in the test environment. Minimal Debian-style environments without that package leave item-backed and monster-backed combat suites partially unrunnable even though the migrated combat service/tests can now import without real Tk.`
   - `No hard architecture blocker is confirmed yet, but framework/runtime choice should remain deferred until contracts stabilize.`
@@ -859,32 +882,32 @@ Pass-shape labels are heuristic:
 
 ## 14. Recommended immediate next pass
 
-### First web-owned DM persistence slice landed; make session restore headless and lock reconnect/resume contracts
+### DM browser should own battlefield preparation and advanced tactical control after routine token play
 
-The DM console can now drive save/load/quick-save/quick-load through `/api/dm/sessions/...` without the Tk file dialog being the primary owner. That establishes an honest web vertical slice but exposes the next real bottleneck: the load path still runs through Tk-coupled helpers (`_remove_combatants_with_lan_cleanup`, `_rebuild_table`, and adjacent helpers used by `_load_session_from_path` / `_apply_session_snapshot`). Until session restore works headlessly, the web-operable save/load still depends on a Tk-hosted process to actually apply the snapshot.
+The ordinary encounter-loop milestone plus routine tactical token control are now in place: the DM console can load/quick-load or start a blank session, populate common encounters from player profiles or monster specs, start/end combat, operate turns, manage initiative/HP/conditions, save/restore, and place/move/re-face tokens without falling back to Tk-first controls. The next product-shaped milestone is to keep the DM in the browser for battlefield preparation and live tactical effect control that still lean on the desktop host.
 
 What is actually architecturally meaningful next:
-- `_load_session_from_path` and `_apply_session_snapshot` still reach into Tk widget mutation during restore; this blocks running the DM web console against a non-Tk host.
-- reconnect/resume payloads (`you.pending_prompts`, `combat.pending_prompts`, claim/turn snapshots) are already persisted, but there are no canonical contract fixtures locking their shape against drift.
-- the map payload has a canonical layer (`MapState` / `map_state.py`) but load-path rehydration is still mixed with Tk canvas state.
+- the baseline browser encounter loop and routine token manipulation now work for ordinary bug testing, so the highest-value remaining DM gaps are battlefield prep and tactical-effect operation rather than basic start/end/populate flows.
+- the backend restore/persistence contracts plus the new combined DM tactical snapshot are already strong enough to support more browser-owned map control without first doing another backend cleanup pass.
+- remaining friction is now about richer battlefield management and tactical visibility, not about whether the browser can own the basic encounter lifecycle at all.
 
-Why this matters before the DM web-primary pivot:
-- Phase 2 (DM web-primary operator surface, backlog item 3) needs a load path that runs without the Tk main loop; right now it does not.
-- contract fixtures for reconnect/resume payloads become load-bearing the moment a second consumer (the DM browser console) depends on them; fixture coverage prevents silent schema drift across the session-persistence boundary that just landed.
+Why this matters before wider frontend or runtime churn:
+- it extends browser-first DM testing into the next real product tier instead of spending another pass re-proving already-landed baseline parity.
+- it exposes the remaining battlefield/editor ownership seams that will matter before the desktop host can be demoted further.
 
 Recommended scope:
-- shrink Tk coupling inside `_load_session_from_path` / `_apply_session_snapshot`: extract the snapshot-application body into a tracker helper that accepts canonical state only, and keep the Tk widget refresh as a thin compatibility adapter around it.
-- add canonical contract fixtures for the session snapshot (`combat.pending_prompts`, claim/turn, map payload) and for reconnect payloads (`you.pending_prompts` / `you.pending_prompt`) so the new DM persistence routes and existing LAN reconnect flow share locked shapes.
-- keep `_lan_apply_action()` as transport/delegation glue; avoid reopening command-family extraction churn.
+- close the highest-value remaining `/dm` tactical gaps: common obstacle/terrain/hazard/AoE operations and the visibility controls a DM needs to manage a battlefield live from the browser.
+- keep using the existing backend-owned seams (`CombatService`, canonical map state, session restore helper, DM routes, combined DM tactical snapshot) rather than reopening `_lan_apply_action()` cleanup or broad Tk gardening.
+- preserve the existing session snapshot schema and reconnect safety while broadening browser-owned operation.
 
 Recommended validation:
-- focused coverage for a Tk-free snapshot application path (apply canonical snapshot → inspect combat/prompt/map state) independent of the Tk event loop.
-- contract-fixture regressions for `SESSION_SNAPSHOT_SCHEMA_VERSION = 2` payloads and reconnect payload shape.
-- re-run the persistence route suite in `tests/test_dm_session_persistence_routes.py` plus existing session save/load suites and the reaction/prompt suites already tracked in section 12.
+- focused DM API tests for the newly browser-owned tactical actions.
+- focused browser/client smoke coverage for the DM console flows that now combine load + encounter + tactical map operation.
+- regression coverage for session restore + reconnect payloads should continue to run alongside the new DM-console tests.
 
 Deferred (not this pass):
-- bundling the residual single-command dispatch branches in `_lan_apply_action()` into another "super-family" — low ownership gain; revisit only if it simplifies the shared gating after headless restore lands.
-- pivoting fully to the DM web-primary vertical slice (backlog item 3) — still gated on a Tk-free restore path and locked reconnect/resume contracts.
+- bundling the residual single-command dispatch branches in `_lan_apply_action()` into another "super-family" — low ownership gain; the current leverage point is DM browser operation, not more transport micro-shrinking.
+- broad map/editor migration or standalone-backend runtime work — still better deferred until more of the DM encounter loop is proven against the current backend-owned seams.
 - exposing player-facing session persistence routes — the first slice is deliberately DM-authority-scoped; opening it to non-admin surfaces is a separate policy decision.
 
-If this pass lands cleanly, `_lan_apply_action()` will continue trending toward transport/delegation glue and backend authority will advance toward web-first ownership.
+If the next pass lands cleanly, the DM browser will own more of real battlefield operation while backend authority continues trending toward web-first ownership.

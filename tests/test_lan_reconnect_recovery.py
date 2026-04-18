@@ -10,7 +10,7 @@ except ImportError:  # pragma: no cover - optional dependency in lightweight env
     TestClient = None
 
 import dnd_initative_tracker as tracker_mod
-from player_command_contracts import build_prompt_record
+from player_command_contracts import build_prompt_record, build_prompt_snapshot
 
 MAX_RECV_ATTEMPTS = 12
 RECV_TIMEOUT_SECONDS = 2.5
@@ -237,6 +237,146 @@ class LanReconnectRecoveryTests(unittest.TestCase):
             self.assertEqual(pending_prompt.get("prompt_id"), "prompt-1")
             self.assertEqual(pending_prompt.get("trigger"), "shield")
             self.assertEqual((pending_prompt.get("contract") or {}).get("schema"), "player_command.prompt_snapshot")
+
+    def test_state_request_contract_projection_locks_claim_turn_map_and_prompt_shape(self):
+        tracker = self._build_tracker()
+        prompt = build_prompt_record(
+            prompt_id="prompt-1",
+            prompt_kind="reaction",
+            trigger="shield",
+            reactor_cid=1,
+            eligible_actor_cids=[1],
+            source_cid=2,
+            target_cid=1,
+            allowed_choices=[{"kind": "shield_yes", "label": "Yes", "mode": "ask"}],
+            ws_ids=[101],
+            prompt_text="Enemy attacks you with Sword.",
+            metadata={"prompt_attack": "Sword"},
+            resolution={"player_visible": {"command": "attack_request", "label": "Resume attack"}},
+            created_at=100.0,
+            expires_at=112.0,
+        )
+        tracker._pending_prompts = {"prompt-1": prompt}
+        client, _lan = self._build_client_and_lan()
+
+        with client.websocket_connect("/ws") as ws:
+            self._recv_until_type(ws, "state")
+            ws.send_json({"type": "claim", "cid": 1, "client_id": "client-F"})
+            claim_ack = self._recv_until_type(ws, "claim_ack")
+            claim_rev = int(claim_ack.get("claim_rev") or 0)
+            ws.send_json({"type": "state_request"})
+            state_payload = self._recv_until_type(ws, "state")
+
+        expected_prompt = build_prompt_snapshot(prompt)
+        self.assertEqual(
+            {
+                "type": state_payload.get("type"),
+                "state": {
+                    "grid": state_payload.get("state", {}).get("grid"),
+                    "active_cid": state_payload.get("state", {}).get("active_cid"),
+                    "round_num": state_payload.get("state", {}).get("round_num"),
+                    "claims": state_payload.get("state", {}).get("claims"),
+                    "map_state": state_payload.get("state", {}).get("map_state"),
+                },
+                "you": {
+                    "claimed_cid": state_payload.get("you", {}).get("claimed_cid"),
+                    "claimed_name": state_payload.get("you", {}).get("claimed_name"),
+                    "claim_rev": state_payload.get("you", {}).get("claim_rev"),
+                    "pending_prompts": state_payload.get("you", {}).get("pending_prompts"),
+                    "pending_prompt": state_payload.get("you", {}).get("pending_prompt"),
+                },
+            },
+            {
+                "type": "state",
+                "state": {
+                    "grid": {"cols": 12, "rows": 8, "ready": True},
+                    "active_cid": 1,
+                    "round_num": 2,
+                    "claims": {"1": "client-F"},
+                    "map_state": {},
+                },
+                "you": {
+                    "claimed_cid": 1,
+                    "claimed_name": "Alice",
+                    "claim_rev": claim_rev,
+                    "pending_prompts": [expected_prompt],
+                    "pending_prompt": expected_prompt,
+                },
+            },
+        )
+
+
+class LanReconnectPayloadContractUnitTests(unittest.TestCase):
+    def test_payload_builders_lock_claim_turn_map_and_prompt_shape_without_http_stack(self):
+        tracker = object.__new__(tracker_mod.InitiativeTracker)
+        tracker._pending_prompts = {}
+        tracker._pc_name_for = lambda cid: "Alice" if int(cid) == 1 else f"cid:{cid}"
+        prompt = build_prompt_record(
+            prompt_id="prompt-1",
+            prompt_kind="reaction",
+            trigger="shield",
+            reactor_cid=1,
+            eligible_actor_cids=[1],
+            source_cid=2,
+            target_cid=1,
+            allowed_choices=[{"kind": "shield_yes", "label": "Yes", "mode": "ask"}],
+            ws_ids=[101],
+            prompt_text="Enemy attacks you with Sword.",
+            metadata={"prompt_attack": "Sword"},
+            resolution={"player_visible": {"command": "attack_request", "label": "Resume attack"}},
+            created_at=100.0,
+            expires_at=112.0,
+        )
+        tracker._ensure_player_commands().prompts.replace_prompts({"prompt-1": prompt})
+
+        lan = object.__new__(tracker_mod.LanController)
+        lan._tracker = tracker
+        lan._clients_lock = threading.RLock()
+        lan._claims = {101: 1}
+        lan._client_ids = {101: "client-F"}
+        lan._client_id_claims = {"client-F": 1}
+        lan._client_claim_revs = {"client-F": 3}
+        lan._ws_claim_revs = {}
+        lan._cached_pcs = [{"cid": 1, "name": "Alice"}]
+        lan._cached_snapshot = {
+            "grid": {"cols": 12, "rows": 8, "ready": True},
+            "obstacles": [],
+            "rough_terrain": [],
+            "map_state": {},
+        }
+        lan._dynamic_snapshot_payload = lambda: {
+            "grid": {"cols": 12, "rows": 8, "ready": True},
+            "active_cid": 1,
+            "round_num": 2,
+            "claims": {"1": "client-F"},
+        }
+        lan._ensure_player_commands = tracker._ensure_player_commands
+
+        expected_prompt = build_prompt_snapshot(prompt)
+        self.assertEqual(
+            {
+                "state": lan._view_only_state_payload(lan._dynamic_snapshot_payload()),
+                "you": lan._build_you_payload(101),
+            },
+            {
+                "state": {
+                    "grid": {"cols": 12, "rows": 8, "ready": True},
+                    "active_cid": 1,
+                    "round_num": 2,
+                    "claims": {"1": "client-F"},
+                    "rough_terrain": [],
+                    "obstacles": [],
+                    "map_state": {},
+                },
+                "you": {
+                    "claimed_cid": 1,
+                    "claimed_name": "Alice",
+                    "claim_rev": 3,
+                    "pending_prompts": [expected_prompt],
+                    "pending_prompt": expected_prompt,
+                },
+            },
+        )
 
 
 if __name__ == "__main__":

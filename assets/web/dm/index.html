@@ -198,6 +198,56 @@
     .btn-action.heal:hover { background: rgba(76,175,130,.25); }
     .mut-result { font-size: 11px; margin-top: 6px; min-height: 16px; color: var(--heal); }
     .mut-result.error { color: var(--danger); }
+    .choice-list {
+      display: flex; flex-direction: column; gap: 6px;
+      max-height: 180px; overflow-y: auto;
+    }
+    .choice-row {
+      display: grid; grid-template-columns: auto 1fr auto; gap: 8px; align-items: start;
+      background: var(--panel2); border: 1px solid var(--border);
+      border-radius: var(--radius); padding: 8px;
+    }
+    .choice-row.is-assigned { opacity: .68; }
+    .choice-row input[type="checkbox"] { margin-top: 2px; }
+    .choice-copy { min-width: 0; }
+    .choice-name { font-size: 13px; font-weight: 600; }
+    .choice-meta { font-size: 11px; color: var(--muted); margin-top: 2px; }
+    .choice-pill {
+      font-size: 10px; color: var(--heal);
+      border: 1px solid rgba(76,175,130,.35); border-radius: 999px;
+      padding: 2px 7px;
+    }
+
+    /* ── Tactical map ─────────────────────────────────────────────── */
+    .tactical-card { gap: 10px; }
+    .tactical-status {
+      font-size: 11px; color: var(--muted); line-height: 1.45;
+      margin-bottom: 8px;
+    }
+    .tactical-map-shell {
+      border: 1px solid var(--border); border-radius: var(--radius);
+      background: var(--bg); padding: 8px;
+    }
+    #tacticalMapCanvas {
+      width: 100%; height: 320px; display: block;
+      background: #0a0c12; border-radius: 6px; cursor: crosshair;
+    }
+    .tactical-meta {
+      display: flex; flex-wrap: wrap; justify-content: space-between;
+      gap: 8px; margin-top: 8px; font-size: 11px; color: var(--muted);
+    }
+    .tactical-inline {
+      display: grid; grid-template-columns: 1fr 1fr; gap: 8px;
+    }
+    .tactical-facing-grid {
+      display: grid; grid-template-columns: repeat(4, 1fr);
+      gap: 6px; margin-top: 8px;
+    }
+    @media (max-width: 768px) {
+      #tacticalMapCanvas { height: 260px; }
+      .tactical-inline { grid-template-columns: 1fr; }
+      .tactical-facing-grid { grid-template-columns: repeat(2, 1fr); }
+    }
 
     /* ── Battle log ─────────────────────────────────────────────── */
     .log-panel {
@@ -353,6 +403,49 @@
       <div class="mut-result" id="tempHpResult"></div>
     </div>
 
+    <!-- Encounter setup: add player profiles -->
+    <div class="mut-card">
+      <h3>Add Player Profiles</h3>
+      <div style="display:flex;gap:6px;margin-bottom:8px">
+        <button class="btn-sm" id="selectAllPlayersBtn" style="flex:1">Select Available</button>
+        <button class="btn-sm" id="clearPlayerSelectionBtn" style="flex:1">Clear</button>
+      </div>
+      <div id="encounterPlayerList" class="choice-list">
+        <div class="empty-state loading-pulse" style="padding:12px 8px">Loading player roster…</div>
+      </div>
+      <button class="btn-action" id="addPlayersBtn" style="margin-top:8px">+ Add Selected Players</button>
+      <div class="mut-result" id="addPlayersResult"></div>
+    </div>
+
+    <!-- Encounter setup: add monster specs -->
+    <div class="mut-card">
+      <h3>Add Monster Specs</h3>
+      <div class="form-group">
+        <label>Monster</label>
+        <select id="monsterSlugSelect"><option value="">— select monster —</option></select>
+      </div>
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px">
+        <div class="form-group">
+          <label>Count</label>
+          <input type="number" id="monsterCount" value="1" min="1" />
+        </div>
+        <div class="form-group">
+          <label>Initiative</label>
+          <input type="number" id="monsterInit" value="0" />
+        </div>
+        <div class="form-group">
+          <label>Name prefix (optional)</label>
+          <input type="text" id="monsterNamePrefix" placeholder="defaults to monster name" />
+        </div>
+        <div class="form-group" style="justify-content:flex-end;flex-direction:row;align-items:center;gap:8px;padding-top:18px">
+          <label style="font-size:11px;color:var(--muted)">Ally</label>
+          <input type="checkbox" id="monsterAlly" style="width:auto" />
+        </div>
+      </div>
+      <button class="btn-action" id="addMonsterBtn">+ Add Monster Group</button>
+      <div class="mut-result" id="addMonsterResult"></div>
+    </div>
+
     <!-- Encounter setup: add combatant -->
     <div class="mut-card">
       <h3>Add Combatant</h3>
@@ -401,7 +494,10 @@
         <label>New Initiative</label>
         <input type="number" id="initValue" placeholder="e.g. 18" />
       </div>
-      <button class="btn-action" id="setInitBtn">Set Initiative</button>
+      <div style="display:flex;gap:6px">
+        <button class="btn-action" id="setInitBtn" style="flex:1">Set Initiative</button>
+        <button class="btn-sm" id="rollInitBtn" style="flex:1">🎲 Roll</button>
+      </div>
       <div class="mut-result" id="initResult"></div>
     </div>
 
@@ -416,6 +512,60 @@
       <div class="mut-result" id="removeCombatantResult"></div>
     </div>
 
+    <!-- Tactical encounter management -->
+    <div class="mut-card tactical-card">
+      <h3>Tactical Map</h3>
+      <div class="tactical-status" id="tacticalStatus">
+        Click a token to select it, then click a destination cell for Move or Place.
+      </div>
+      <div class="tactical-map-shell">
+        <canvas id="tacticalMapCanvas"></canvas>
+        <div class="tactical-meta">
+          <span id="tacticalGridMeta">Grid unavailable.</span>
+          <span id="tacticalSelectedCell">Target cell: —</span>
+        </div>
+      </div>
+      <div class="form-group" style="margin-top:8px">
+        <label>Combatant</label>
+        <select id="mapCidSelect"><option value="">— select —</option></select>
+      </div>
+      <div class="tactical-inline">
+        <div class="form-group">
+          <label>Action</label>
+          <select id="mapActionModeSelect">
+            <option value="place">Place / Reposition</option>
+            <option value="move">Move (spends speed)</option>
+          </select>
+        </div>
+        <div class="form-group">
+          <label>Facing</label>
+          <input type="number" id="mapFacingInput" min="0" max="359" step="1" placeholder="0-359" />
+        </div>
+      </div>
+      <div class="tactical-inline">
+        <div class="form-group">
+          <label>Column</label>
+          <input type="number" id="mapColInput" min="0" step="1" placeholder="col" />
+        </div>
+        <div class="form-group">
+          <label>Row</label>
+          <input type="number" id="mapRowInput" min="0" step="1" placeholder="row" />
+        </div>
+      </div>
+      <div style="display:flex;gap:6px">
+        <button class="btn-action" id="applyMapActionBtn" style="flex:1">Apply Placement</button>
+        <button class="btn-sm" id="syncMapSelectionBtn" style="flex:0 0 auto">Use Token Cell</button>
+      </div>
+      <div class="tactical-facing-grid">
+        <button class="btn-sm" data-facing="0">North 0°</button>
+        <button class="btn-sm" data-facing="90">East 90°</button>
+        <button class="btn-sm" data-facing="180">South 180°</button>
+        <button class="btn-sm" data-facing="270">West 270°</button>
+      </div>
+      <button class="btn-action" id="setFacingBtn" style="margin-top:8px">Set Facing</button>
+      <div class="mut-result" id="tacticalResult"></div>
+    </div>
+
     <!-- Session persistence -->
     <div class="mut-card">
       <h3>Session Persistence</h3>
@@ -423,6 +573,7 @@
         <button class="btn-action heal" id="quickSaveBtn" style="flex:1">⚡ Quick Save</button>
         <button class="btn-action" id="quickLoadBtn" style="flex:1">⟲ Quick Load</button>
       </div>
+      <button class="btn-action remove" id="newBlankSessionBtn" style="margin-bottom:10px">🧹 New Blank Session</button>
       <div class="form-group">
         <label>Save filename (optional — defaults to timestamped)</label>
         <input type="text" id="sessionSaveName" placeholder="e.g. boss_fight.json" />
@@ -453,6 +604,12 @@
    DM Console — communicates with the backend DM API
    Endpoints used:
      GET    /api/dm/combat                                  → snapshot
+     GET    /api/dm/encounter/options                       → player/monster setup choices
+     POST   /api/dm/encounter/players/add                   → add player profiles
+     POST   /api/dm/encounter/monsters/add                  → add monster specs
+     POST   /api/dm/map/combatants/{cid}/move               → move on tactical map
+     POST   /api/dm/map/combatants/{cid}/place              → place/reposition on map
+     POST   /api/dm/map/combatants/{cid}/facing             → set tactical facing
      POST   /api/dm/combat/next-turn                        → advance turn
      POST   /api/dm/combat/prev-turn                        → go to previous turn
      POST   /api/dm/combat/set-turn                         → set active combatant
@@ -464,8 +621,10 @@
      POST   /api/dm/combat/combatants/{cid}/temp-hp         → set temp HP
      POST   /api/dm/combat/combatants/{cid}/temp-hp-adjust  → delta temp HP adjust
      POST   /api/dm/combat/combatants/{cid}/initiative      → set initiative
+     POST   /api/dm/combat/combatants/{cid}/initiative/roll → roll initiative
      DELETE /api/dm/combat/combatants/{cid}                 → remove combatant
      POST   /api/admin/login                                → optional admin login
+     POST   /api/dm/sessions/new                            → clear to blank session
      WS     /ws/dm[?token=…]                                → real-time DM state push
    ───────────────────────────────────────────────────────────────── */
 
@@ -473,10 +632,13 @@ const BASE = '';  // same origin
 
 let adminToken = null;      // null → no auth required (or not yet obtained)
 let currentSnapshot = null;
+let encounterOptions = { players: [], monsters: [] };
+let encounterMembershipSignature = '';
 let autoRefreshTimer = null;
 let adminTokenRefreshTimer = null;
 let dmWs = null;
 let wsReconnectTimer = null;
+let tacticalSelection = { col: null, row: null };
 const POLL_INTERVAL_MS = 2500;
 const WS_RECONNECT_MS = 5000;
 const ADMIN_REFRESH_MAX_LEAD_MS = 120000;
@@ -685,6 +847,7 @@ function startAutoRefresh() {
   }, POLL_INTERVAL_MS);
   connectDmWs();
   refreshSessionList();
+  refreshEncounterOptions();
 }
 
 // ── Real-time WebSocket push ──────────────────────────────────────────
@@ -714,7 +877,112 @@ function connectDmWs() {
 document.getElementById('autoRefreshCb').addEventListener('change', () => {
   if (document.getElementById('autoRefreshCb').checked) fetchSnapshot();
 });
-document.getElementById('refreshBtn').addEventListener('click', () => fetchSnapshot());
+document.getElementById('refreshBtn').addEventListener('click', () => {
+  fetchSnapshot();
+  refreshSessionList();
+  refreshEncounterOptions();
+});
+
+function currentEncounterMembershipKey(snap) {
+  const combatants = Array.isArray(snap && snap.combatants) ? snap.combatants.slice() : [];
+  combatants.sort((a, b) => Number(a.cid || 0) - Number(b.cid || 0));
+  return combatants.map(c => `${Number(c.cid || 0)}:${String(c.name || '').trim().toLowerCase()}`).join('|');
+}
+
+function selectedEncounterPlayerNames() {
+  return Array.from(document.querySelectorAll('#encounterPlayerList input[type="checkbox"]:checked'))
+    .map(input => String(input.value || '').trim())
+    .filter(Boolean);
+}
+
+function renderEncounterPlayers(players) {
+  const container = document.getElementById('encounterPlayerList');
+  const previouslySelected = new Set(selectedEncounterPlayerNames());
+  const entries = Array.isArray(players) ? players : [];
+  if (!entries.length) {
+    container.innerHTML = '<div class="empty-state" style="padding:12px 8px">No player profiles found.</div>';
+    return;
+  }
+  container.innerHTML = '';
+  for (const player of entries) {
+    const name = String(player.name || '').trim();
+    if (!name) continue;
+    const row = document.createElement('label');
+    row.className = 'choice-row' + (player.assigned ? ' is-assigned' : '');
+    const cb = document.createElement('input');
+    cb.type = 'checkbox';
+    cb.value = name;
+    cb.disabled = !!player.assigned;
+    cb.checked = !cb.disabled && previouslySelected.has(name);
+    row.appendChild(cb);
+
+    const copy = document.createElement('div');
+    copy.className = 'choice-copy';
+    const title = document.createElement('div');
+    title.className = 'choice-name';
+    title.textContent = name;
+    copy.appendChild(title);
+
+    const bits = [];
+    if (player.class_name) bits.push(String(player.class_name));
+    if (player.level != null) bits.push(`Lv ${player.level}`);
+    if (player.max_hp != null) bits.push(`HP ${player.max_hp}`);
+    const meta = document.createElement('div');
+    meta.className = 'choice-meta';
+    meta.textContent = bits.length ? bits.join(' · ') : 'Available player profile';
+    copy.appendChild(meta);
+    row.appendChild(copy);
+
+    const status = document.createElement('span');
+    status.className = 'choice-pill';
+    status.textContent = player.assigned ? 'In encounter' : 'Available';
+    row.appendChild(status);
+    container.appendChild(row);
+  }
+}
+
+function renderMonsterChoices(monsters) {
+  const sel = document.getElementById('monsterSlugSelect');
+  const previous = sel.value;
+  const entries = Array.isArray(monsters) ? monsters : [];
+  sel.innerHTML = '<option value="">— select monster —</option>';
+  for (const monster of entries) {
+    const slug = String(monster.slug || '').trim();
+    if (!slug) continue;
+    const opt = document.createElement('option');
+    opt.value = slug;
+    const bits = [];
+    if (monster.hp != null) bits.push(`HP ${monster.hp}`);
+    if (monster.ac != null) bits.push(`AC ${monster.ac}`);
+    if (monster.initiative_modifier != null) {
+      const mod = Number(monster.initiative_modifier || 0);
+      bits.push(`Init ${mod >= 0 ? '+' : ''}${mod}`);
+    }
+    opt.textContent = String(monster.name || slug) + (bits.length ? ` — ${bits.join(' · ')}` : '');
+    sel.appendChild(opt);
+  }
+  if (previous && Array.from(sel.options).some(opt => opt.value === previous)) {
+    sel.value = previous;
+  }
+}
+
+async function refreshEncounterOptions() {
+  try {
+    const r = await fetch(`${BASE}/api/dm/encounter/options`, { headers: authHeaders() });
+    if (r.status === 401 || r.status === 403) {
+      clearAdminAuthState('Session expired. Please log in again.');
+      return;
+    }
+    if (!r.ok) return;
+    const data = await r.json();
+    encounterOptions = {
+      players: Array.isArray(data.players) ? data.players : [],
+      monsters: Array.isArray(data.monsters) ? data.monsters : [],
+    };
+    renderEncounterPlayers(encounterOptions.players);
+    renderMonsterChoices(encounterOptions.monsters);
+  } catch (_) { /* ignore */ }
+}
 
 async function fetchSnapshot() {
   try {
@@ -729,9 +997,312 @@ async function fetchSnapshot() {
   } catch (_) { /* network error; ignore */ }
 }
 
+function currentTacticalMap() {
+  return currentSnapshot && currentSnapshot.tactical_map && typeof currentSnapshot.tactical_map === 'object'
+    ? currentSnapshot.tactical_map
+    : null;
+}
+
+function tacticalUnits(tactical) {
+  return Array.isArray(tactical && tactical.units) ? tactical.units : [];
+}
+
+function selectedMapCid() {
+  const raw = document.getElementById('mapCidSelect').value;
+  if (raw == null || String(raw).trim() === '') return null;
+  const cid = Number(raw);
+  return Number.isFinite(cid) ? cid : null;
+}
+
+function findTacticalUnit(cid, tactical = currentTacticalMap()) {
+  if (!Number.isFinite(Number(cid))) return null;
+  return tacticalUnits(tactical).find(unit => Number(unit.cid) === Number(cid)) || null;
+}
+
+function updateTacticalActionLabel() {
+  const mode = document.getElementById('mapActionModeSelect').value;
+  document.getElementById('applyMapActionBtn').textContent =
+    mode === 'move' ? 'Apply Move' : 'Apply Placement';
+}
+
+function setTacticalResult(text, isError = false) {
+  const el = document.getElementById('tacticalResult');
+  el.className = 'mut-result' + (isError ? ' error' : '');
+  el.textContent = text || '';
+}
+
+function updateTacticalTargetCell(col, row) {
+  tacticalSelection = {
+    col: Number.isFinite(Number(col)) ? Number(col) : null,
+    row: Number.isFinite(Number(row)) ? Number(row) : null,
+  };
+  const colInput = document.getElementById('mapColInput');
+  const rowInput = document.getElementById('mapRowInput');
+  if (tacticalSelection.col != null) colInput.value = String(tacticalSelection.col);
+  if (tacticalSelection.row != null) rowInput.value = String(tacticalSelection.row);
+  document.getElementById('tacticalSelectedCell').textContent =
+    tacticalSelection.col == null || tacticalSelection.row == null
+      ? 'Target cell: —'
+      : `Target cell: (${tacticalSelection.col}, ${tacticalSelection.row})`;
+}
+
+function syncTacticalFieldsFromSelection(options = {}) {
+  const keepTargetCell = !!options.keepTargetCell;
+  const tactical = currentTacticalMap();
+  const unit = findTacticalUnit(selectedMapCid(), tactical);
+  if (!unit) return;
+  if (!keepTargetCell || tacticalSelection.col == null || tacticalSelection.row == null) {
+    const pos = unit.pos || {};
+    updateTacticalTargetCell(Number(pos.col), Number(pos.row));
+  }
+  document.getElementById('mapFacingInput').value = String(Number(unit.facing_deg || 0));
+}
+
+function resizeCanvasToDisplaySize(canvas) {
+  const rect = canvas.getBoundingClientRect();
+  const width = Math.max(1, Math.floor(rect.width || canvas.clientWidth || 300));
+  const height = Math.max(1, Math.floor(rect.height || canvas.clientHeight || 320));
+  const dpr = window.devicePixelRatio || 1;
+  const targetWidth = Math.max(1, Math.floor(width * dpr));
+  const targetHeight = Math.max(1, Math.floor(height * dpr));
+  if (canvas.width !== targetWidth || canvas.height !== targetHeight) {
+    canvas.width = targetWidth;
+    canvas.height = targetHeight;
+  }
+  const ctx = canvas.getContext('2d');
+  ctx.setTransform(1, 0, 0, 1, 0, 0);
+  ctx.clearRect(0, 0, canvas.width, canvas.height);
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  return { ctx, width, height };
+}
+
+function tacticalGeometry(tactical, width, height) {
+  const grid = tactical && tactical.grid && typeof tactical.grid === 'object' ? tactical.grid : null;
+  const cols = Number(grid && grid.cols);
+  const rows = Number(grid && grid.rows);
+  if (!Number.isFinite(cols) || !Number.isFinite(rows) || cols <= 0 || rows <= 0) return null;
+  const pad = 12;
+  const cell = Math.max(4, Math.min((width - pad * 2) / cols, (height - pad * 2) / rows));
+  const originX = (width - (cols * cell)) / 2;
+  const originY = (height - (rows * cell)) / 2;
+  return { cols, rows, cell, originX, originY };
+}
+
+function tacticalCellCenter(geometry, col, row) {
+  return {
+    x: geometry.originX + (Number(col) + 0.5) * geometry.cell,
+    y: geometry.originY + (Number(row) + 0.5) * geometry.cell,
+  };
+}
+
+function extractEntityCells(entry) {
+  const cells = [];
+  const collect = (items) => {
+    for (const item of (Array.isArray(items) ? items : [])) {
+      const col = Number(item && item.col);
+      const row = Number(item && item.row);
+      if (Number.isFinite(col) && Number.isFinite(row)) {
+        cells.push({ col, row });
+      }
+    }
+  };
+  collect(entry && entry.occupied_cells);
+  collect(entry && entry.cells);
+  const payload = entry && typeof entry.payload === 'object' ? entry.payload : null;
+  collect(payload && payload.occupied_cells);
+  collect(payload && payload.cells);
+  if (!cells.length) {
+    const col = Number(entry && entry.col);
+    const row = Number(entry && entry.row);
+    if (Number.isFinite(col) && Number.isFinite(row)) cells.push({ col, row });
+  }
+  return cells;
+}
+
+function drawCellBlock(ctx, geometry, cells, fillStyle, strokeStyle = '') {
+  for (const cell of cells) {
+    const x = geometry.originX + Number(cell.col) * geometry.cell;
+    const y = geometry.originY + Number(cell.row) * geometry.cell;
+    ctx.fillStyle = fillStyle;
+    ctx.fillRect(x + 1, y + 1, Math.max(1, geometry.cell - 2), Math.max(1, geometry.cell - 2));
+    if (strokeStyle) {
+      ctx.strokeStyle = strokeStyle;
+      ctx.lineWidth = 1;
+      ctx.strokeRect(x + 0.75, y + 0.75, Math.max(1, geometry.cell - 1.5), Math.max(1, geometry.cell - 1.5));
+    }
+  }
+}
+
+function renderTacticalMap(tactical) {
+  const canvas = document.getElementById('tacticalMapCanvas');
+  const gridMeta = document.getElementById('tacticalGridMeta');
+  const statusEl = document.getElementById('tacticalStatus');
+  const { ctx, width, height } = resizeCanvasToDisplaySize(canvas);
+  ctx.fillStyle = '#0a0c12';
+  ctx.fillRect(0, 0, width, height);
+
+  const geometry = tacticalGeometry(tactical, width, height);
+  if (!geometry) {
+    gridMeta.textContent = 'Grid unavailable.';
+    statusEl.textContent = 'No tactical map is available in the current snapshot.';
+    ctx.fillStyle = 'rgba(255,255,255,0.65)';
+    ctx.font = '13px system-ui';
+    ctx.fillText('No tactical map loaded.', 14, 26);
+    return;
+  }
+
+  gridMeta.textContent = `${geometry.cols} × ${geometry.rows} grid`;
+  ctx.strokeStyle = 'rgba(255,255,255,0.08)';
+  ctx.lineWidth = 1;
+  for (let col = 0; col <= geometry.cols; col += 1) {
+    const x = geometry.originX + col * geometry.cell;
+    ctx.beginPath();
+    ctx.moveTo(x, geometry.originY);
+    ctx.lineTo(x, geometry.originY + geometry.rows * geometry.cell);
+    ctx.stroke();
+  }
+  for (let row = 0; row <= geometry.rows; row += 1) {
+    const y = geometry.originY + row * geometry.cell;
+    ctx.beginPath();
+    ctx.moveTo(geometry.originX, y);
+    ctx.lineTo(geometry.originX + geometry.cols * geometry.cell, y);
+    ctx.stroke();
+  }
+
+  const rough = Array.isArray(tactical.rough_terrain) ? tactical.rough_terrain : [];
+  rough.forEach(cell => {
+    const isWater = String(cell && cell.movement_type || '') === 'water';
+    drawCellBlock(
+      ctx,
+      geometry,
+      [cell],
+      isWater ? 'rgba(74,163,223,0.28)' : 'rgba(141,110,99,0.26)',
+    );
+  });
+
+  drawCellBlock(
+    ctx,
+    geometry,
+    Array.isArray(tactical.structures) ? tactical.structures.flatMap(extractEntityCells) : [],
+    'rgba(168,122,79,0.52)',
+    'rgba(88,58,27,0.92)',
+  );
+  drawCellBlock(
+    ctx,
+    geometry,
+    Array.isArray(tactical.hazards) ? tactical.hazards.flatMap(extractEntityCells) : [],
+    'rgba(255,96,96,0.24)',
+    'rgba(186,34,34,0.72)',
+  );
+  drawCellBlock(
+    ctx,
+    geometry,
+    Array.isArray(tactical.features) ? tactical.features.flatMap(extractEntityCells) : [],
+    'rgba(233,145,55,0.34)',
+    'rgba(99,54,12,0.9)',
+  );
+  drawCellBlock(
+    ctx,
+    geometry,
+    Array.isArray(tactical.obstacles) ? tactical.obstacles : [],
+    'rgba(255,255,255,0.12)',
+  );
+
+  if (tacticalSelection.col != null && tacticalSelection.row != null) {
+    const x = geometry.originX + tacticalSelection.col * geometry.cell;
+    const y = geometry.originY + tacticalSelection.row * geometry.cell;
+    ctx.strokeStyle = 'rgba(106,169,255,0.95)';
+    ctx.lineWidth = 2;
+    ctx.strokeRect(x + 1, y + 1, Math.max(1, geometry.cell - 2), Math.max(1, geometry.cell - 2));
+  }
+
+  const selectedCid = selectedMapCid();
+  const selectedUnit = findTacticalUnit(selectedCid, tactical);
+  const activeCid = Number(tactical.active_cid);
+  tacticalUnits(tactical).forEach(unit => {
+    const pos = unit && unit.pos && typeof unit.pos === 'object' ? unit.pos : {};
+    const col = Number(pos.col);
+    const row = Number(pos.row);
+    if (!Number.isFinite(col) || !Number.isFinite(row)) return;
+    const center = tacticalCellCenter(geometry, col, row);
+    const radius = Math.max(5, geometry.cell * 0.28);
+    const fill = unit.ally ? 'rgba(76,175,130,0.95)' : 'rgba(255,91,91,0.95)';
+    ctx.beginPath();
+    ctx.fillStyle = fill;
+    ctx.arc(center.x, center.y, radius, 0, Math.PI * 2);
+    ctx.fill();
+    if (Number(unit.cid) === activeCid) {
+      ctx.beginPath();
+      ctx.strokeStyle = 'rgba(214,186,126,0.95)';
+      ctx.lineWidth = 3;
+      ctx.arc(center.x, center.y, radius + 3, 0, Math.PI * 2);
+      ctx.stroke();
+    }
+    if (selectedUnit && Number(unit.cid) === Number(selectedUnit.cid)) {
+      ctx.beginPath();
+      ctx.strokeStyle = 'rgba(106,169,255,0.98)';
+      ctx.lineWidth = 2;
+      ctx.arc(center.x, center.y, radius + 7, 0, Math.PI * 2);
+      ctx.stroke();
+    }
+    const facing = Number(unit.facing_deg || 0);
+    const angle = ((facing - 90) * Math.PI) / 180;
+    const lineLen = Math.max(8, geometry.cell * 0.36);
+    ctx.beginPath();
+    ctx.strokeStyle = 'rgba(255,255,255,0.92)';
+    ctx.lineWidth = 2;
+    ctx.moveTo(center.x, center.y);
+    ctx.lineTo(center.x + Math.cos(angle) * lineLen, center.y + Math.sin(angle) * lineLen);
+    ctx.stroke();
+  });
+
+  const selectedName = selectedUnit ? String(selectedUnit.name || '') : '';
+  const activeUnit = findTacticalUnit(activeCid, tactical);
+  if (selectedName) {
+    statusEl.textContent = `Selected ${selectedName}. Click a destination cell, then ${document.getElementById('mapActionModeSelect').value === 'move' ? 'Move' : 'Place'} or update facing.`;
+  } else if (activeUnit) {
+    statusEl.textContent = `Active combatant: ${String(activeUnit.name || '—')}. Click a token to select it, then click a destination cell.`;
+  } else {
+    statusEl.textContent = 'Click a token to select it, then click a destination cell for Move or Place.';
+  }
+}
+
+function tacticalCellFromPointerEvent(evt) {
+  const tactical = currentTacticalMap();
+  if (!tactical || !tactical.grid) return null;
+  const canvas = document.getElementById('tacticalMapCanvas');
+  const rect = canvas.getBoundingClientRect();
+  const geometry = tacticalGeometry(tactical, rect.width, rect.height);
+  if (!geometry) return null;
+  const x = evt.clientX - rect.left;
+  const y = evt.clientY - rect.top;
+  const col = Math.floor((x - geometry.originX) / geometry.cell);
+  const row = Math.floor((y - geometry.originY) / geometry.cell);
+  if (col < 0 || row < 0 || col >= geometry.cols || row >= geometry.rows) return null;
+  return { col, row, tactical };
+}
+
+function handleTacticalCanvasClick(evt) {
+  const cell = tacticalCellFromPointerEvent(evt);
+  if (!cell) return;
+  updateTacticalTargetCell(cell.col, cell.row);
+  const unit = tacticalUnits(cell.tactical).find(entry => {
+    const pos = entry && entry.pos && typeof entry.pos === 'object' ? entry.pos : {};
+    return Number(pos.col) === Number(cell.col) && Number(pos.row) === Number(cell.row);
+  });
+  if (unit) {
+    document.getElementById('mapCidSelect').value = String(unit.cid);
+    syncTacticalFieldsFromSelection({ keepTargetCell: true });
+  }
+  renderTacticalMap(cell.tactical);
+}
+
 // ── Render snapshot ───────────────────────────────────────────────────
 function applySnapshot(snap) {
   currentSnapshot = snap;
+  const membershipKey = currentEncounterMembershipKey(snap);
+  const membershipChanged = membershipKey !== encounterMembershipSignature;
+  encounterMembershipSignature = membershipKey;
 
   // Badge
   const badge = document.getElementById('combatBadge');
@@ -789,12 +1360,21 @@ function applySnapshot(snap) {
   populateCidSelect('tempHpCidSelect', combatants);
   populateCidSelect('initCidSelect', combatants);
   populateCidSelect('removeCidSelect', combatants);
+  populateCidSelect('mapCidSelect', combatants);
 
   // Render list
   renderCombatants(snap);
 
   // Battle log
   renderLog(snap.battle_log || []);
+
+  if (!document.getElementById('mapCidSelect').value && Number.isFinite(Number(snap.active_cid))) {
+    document.getElementById('mapCidSelect').value = String(snap.active_cid);
+  }
+  syncTacticalFieldsFromSelection({ keepTargetCell: true });
+  renderTacticalMap(snap.tactical_map || null);
+
+  if (membershipChanged) refreshEncounterOptions();
 }
 
 function populateCidSelect(selectId, combatants) {
@@ -867,6 +1447,9 @@ function quickSelect(cid) {
   document.getElementById('tempHpCidSelect').value = cid;
   document.getElementById('initCidSelect').value = cid;
   document.getElementById('removeCidSelect').value = cid;
+  document.getElementById('mapCidSelect').value = cid;
+  syncTacticalFieldsFromSelection();
+  renderTacticalMap(currentTacticalMap());
 }
 
 async function setTurnHere(cid) {
@@ -883,6 +1466,87 @@ async function setTurnHere(cid) {
     /* ignore */
   }
 }
+
+async function submitMapAction() {
+  const cid = selectedMapCid();
+  const col = parseInt(document.getElementById('mapColInput').value, 10);
+  const row = parseInt(document.getElementById('mapRowInput').value, 10);
+  const mode = document.getElementById('mapActionModeSelect').value === 'move' ? 'move' : 'place';
+  if (!cid) { setTacticalResult('Select a combatant.', true); return; }
+  if (!Number.isFinite(col) || !Number.isFinite(row)) {
+    setTacticalResult('Select a valid destination cell.', true);
+    return;
+  }
+  try {
+    const r = await fetch(`${BASE}/api/dm/map/combatants/${cid}/${mode}`, {
+      method: 'POST',
+      headers: authHeaders(),
+      body: JSON.stringify({ col, row }),
+    });
+    const data = await r.json();
+    if (r.ok && data.ok) {
+      const suffix = mode === 'move' && Number.isFinite(Number(data.spent_ft))
+        ? ` (${Number(data.spent_ft)} ft)`
+        : '';
+      setTacticalResult(`${mode === 'move' ? 'Moved' : 'Placed'} to (${col}, ${row})${suffix}.`);
+      if (data.snapshot) applySnapshot(data.snapshot);
+    } else {
+      setTacticalResult(data.detail || data.error || 'Error.', true);
+    }
+  } catch (_) {
+    setTacticalResult('Request failed.', true);
+  }
+}
+
+async function submitFacingUpdate(explicitFacing = null) {
+  const cid = selectedMapCid();
+  const input = document.getElementById('mapFacingInput');
+  const facing = explicitFacing != null ? Number(explicitFacing) : parseInt(input.value, 10);
+  if (explicitFacing != null) input.value = String(Number(explicitFacing));
+  if (!cid) { setTacticalResult('Select a combatant.', true); return; }
+  if (!Number.isFinite(facing)) { setTacticalResult('Enter a valid facing.', true); return; }
+  try {
+    const r = await fetch(`${BASE}/api/dm/map/combatants/${cid}/facing`, {
+      method: 'POST',
+      headers: authHeaders(),
+      body: JSON.stringify({ facing_deg: facing }),
+    });
+    const data = await r.json();
+    if (r.ok && data.ok) {
+      setTacticalResult(`Facing set to ${Number(data.facing_deg)}°.`);
+      if (data.snapshot) applySnapshot(data.snapshot);
+    } else {
+      setTacticalResult(data.detail || data.error || 'Error.', true);
+    }
+  } catch (_) {
+    setTacticalResult('Request failed.', true);
+  }
+}
+
+document.getElementById('tacticalMapCanvas').addEventListener('click', handleTacticalCanvasClick);
+document.getElementById('mapActionModeSelect').addEventListener('change', () => {
+  updateTacticalActionLabel();
+  renderTacticalMap(currentTacticalMap());
+});
+document.getElementById('mapCidSelect').addEventListener('change', () => {
+  syncTacticalFieldsFromSelection();
+  renderTacticalMap(currentTacticalMap());
+});
+document.getElementById('syncMapSelectionBtn').addEventListener('click', () => {
+  syncTacticalFieldsFromSelection();
+  renderTacticalMap(currentTacticalMap());
+});
+document.getElementById('applyMapActionBtn').addEventListener('click', submitMapAction);
+document.getElementById('setFacingBtn').addEventListener('click', () => submitFacingUpdate());
+document.querySelectorAll('.tactical-facing-grid [data-facing]').forEach(btn => {
+  btn.addEventListener('click', () => {
+    const facing = Number(btn.getAttribute('data-facing'));
+    if (!Number.isFinite(facing)) return;
+    submitFacingUpdate(facing);
+  });
+});
+window.addEventListener('resize', () => renderTacticalMap(currentTacticalMap()));
+updateTacticalActionLabel();
 
 // ── Mutations ─────────────────────────────────────────────────────────
 document.getElementById('startCombatBtn').addEventListener('click', async () => {
@@ -1034,6 +1698,100 @@ document.getElementById('applyTempHpBtn').addEventListener('click', async () => 
   } catch (e) { res.textContent = 'Request failed.'; res.classList.add('error'); }
 });
 
+// ── Encounter setup: add player profiles ─────────────────────────────
+document.getElementById('selectAllPlayersBtn').addEventListener('click', () => {
+  document.querySelectorAll('#encounterPlayerList input[type="checkbox"]:not(:disabled)')
+    .forEach(input => { input.checked = true; });
+});
+
+document.getElementById('clearPlayerSelectionBtn').addEventListener('click', () => {
+  document.querySelectorAll('#encounterPlayerList input[type="checkbox"]')
+    .forEach(input => { input.checked = false; });
+});
+
+document.getElementById('addPlayersBtn').addEventListener('click', async () => {
+  const names = selectedEncounterPlayerNames();
+  const res = document.getElementById('addPlayersResult');
+  res.className = 'mut-result';
+  if (!names.length) {
+    res.textContent = 'Select at least one player profile.';
+    res.classList.add('error');
+    return;
+  }
+  try {
+    const r = await fetch(`${BASE}/api/dm/encounter/players/add`, {
+      method: 'POST',
+      headers: authHeaders(),
+      body: JSON.stringify({ names }),
+    });
+    const data = await r.json();
+    if (r.ok && data.ok) {
+      const added = Array.isArray(data.added) ? data.added.length : 0;
+      const skipped = Array.isArray(data.skipped) ? data.skipped.length : 0;
+      res.textContent = `Added ${added} player${added === 1 ? '' : 's'}${skipped ? `, skipped ${skipped}` : ''}.`;
+      if (data.snapshot) applySnapshot(data.snapshot);
+    } else {
+      res.textContent = data.detail || data.error || 'Error.';
+      res.classList.add('error');
+    }
+  } catch (e) {
+    res.textContent = 'Request failed.';
+    res.classList.add('error');
+  }
+});
+
+// ── Encounter setup: add monster specs ───────────────────────────────
+document.getElementById('addMonsterBtn').addEventListener('click', async () => {
+  const monsterSlug = document.getElementById('monsterSlugSelect').value;
+  const count = parseInt(document.getElementById('monsterCount').value, 10);
+  const initiative = parseInt(document.getElementById('monsterInit').value, 10);
+  const namePrefix = document.getElementById('monsterNamePrefix').value.trim();
+  const ally = document.getElementById('monsterAlly').checked;
+  const res = document.getElementById('addMonsterResult');
+  res.className = 'mut-result';
+  if (!monsterSlug) {
+    res.textContent = 'Select a monster.';
+    res.classList.add('error');
+    return;
+  }
+  if (isNaN(count) || count <= 0) {
+    res.textContent = 'Count must be at least 1.';
+    res.classList.add('error');
+    return;
+  }
+  if (isNaN(initiative)) {
+    res.textContent = 'Initiative must be a number.';
+    res.classList.add('error');
+    return;
+  }
+  const body = { monster_slug: monsterSlug, count, initiative, ally };
+  if (namePrefix) body.name_prefix = namePrefix;
+  try {
+    const r = await fetch(`${BASE}/api/dm/encounter/monsters/add`, {
+      method: 'POST',
+      headers: authHeaders(),
+      body: JSON.stringify(body),
+    });
+    const data = await r.json();
+    if (r.ok && data.ok) {
+      const added = Array.isArray(data.added) ? data.added.length : 0;
+      const skipped = Array.isArray(data.skipped) ? data.skipped.length : 0;
+      res.textContent = `Added ${added} monster${added === 1 ? '' : 's'}${skipped ? `, skipped ${skipped}` : ''}.`;
+      document.getElementById('monsterCount').value = '1';
+      document.getElementById('monsterInit').value = '0';
+      document.getElementById('monsterNamePrefix').value = '';
+      document.getElementById('monsterAlly').checked = false;
+      if (data.snapshot) applySnapshot(data.snapshot);
+    } else {
+      res.textContent = data.detail || data.error || 'Error.';
+      res.classList.add('error');
+    }
+  } catch (e) {
+    res.textContent = 'Request failed.';
+    res.classList.add('error');
+  }
+});
+
 // ── Encounter setup: add combatant ───────────────────────────────────
 document.getElementById('addCombatantBtn').addEventListener('click', async () => {
   const name = document.getElementById('newCombatantName').value.trim();
@@ -1096,6 +1854,36 @@ document.getElementById('setInitBtn').addEventListener('click', async () => {
       res.classList.add('error');
     }
   } catch (e) { res.textContent = 'Request failed.'; res.classList.add('error'); }
+});
+
+document.getElementById('rollInitBtn').addEventListener('click', async () => {
+  const cid = document.getElementById('initCidSelect').value;
+  const res = document.getElementById('initResult');
+  res.className = 'mut-result';
+  if (!cid) {
+    res.textContent = 'Select a combatant.';
+    res.classList.add('error');
+    return;
+  }
+  try {
+    const r = await fetch(`${BASE}/api/dm/combat/combatants/${cid}/initiative/roll`, {
+      method: 'POST',
+      headers: authHeaders(),
+      body: JSON.stringify({}),
+    });
+    const data = await r.json();
+    if (r.ok && data.ok) {
+      const modifier = Number(data.initiative_modifier || 0);
+      res.textContent = `Rolled ${data.roll}${modifier ? ` (${modifier >= 0 ? '+' : ''}${modifier})` : ''} → ${data.initiative_after}`;
+      if (data.snapshot) applySnapshot(data.snapshot);
+    } else {
+      res.textContent = data.detail || data.error || 'Error.';
+      res.classList.add('error');
+    }
+  } catch (e) {
+    res.textContent = 'Request failed.';
+    res.classList.add('error');
+  }
 });
 
 // ── Encounter setup: remove combatant ────────────────────────────────
@@ -1204,6 +1992,30 @@ document.getElementById('sessionLoadBtn').addEventListener('click', async () => 
 });
 
 document.getElementById('sessionRefreshBtn').addEventListener('click', () => refreshSessionList());
+
+document.getElementById('newBlankSessionBtn').addEventListener('click', async () => {
+  const res = document.getElementById('sessionResult');
+  res.className = 'mut-result';
+  if (!confirm('Start a new blank session? This clears combat, map state, and battle log. Quick Save first if you want to keep the current state.')) return;
+  try {
+    const r = await fetch(`${BASE}/api/dm/sessions/new`, {
+      method: 'POST',
+      headers: authHeaders(),
+      body: JSON.stringify({}),
+    });
+    const data = await r.json();
+    if (r.ok && data.ok) {
+      res.textContent = 'New blank session started.';
+      if (data.snapshot) applySnapshot(data.snapshot);
+    } else {
+      res.textContent = data.detail || data.error || 'Error.';
+      res.classList.add('error');
+    }
+  } catch (e) {
+    res.textContent = 'Request failed.';
+    res.classList.add('error');
+  }
+});
 
 document.getElementById('quickSaveBtn').addEventListener('click', async () => {
   const res = document.getElementById('sessionResult');

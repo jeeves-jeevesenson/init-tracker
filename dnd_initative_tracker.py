@@ -38,7 +38,7 @@ import urllib.request
 import urllib.error
 from datetime import datetime
 from dataclasses import asdict, dataclass, field, is_dataclass
-from typing import Any, Callable, Dict, Iterable, List, Optional, Tuple
+from typing import Any, Callable, Dict, Iterable, List, Optional, Set, Tuple
 import copy
 from collections import deque
 import sys
@@ -3565,6 +3565,9 @@ class LanController:
 
         dm_entrypoint = assets_dir / "web" / "dm" / "index.html"
 
+        def _dm_console_snapshot() -> Dict[str, Any]:
+            return self._dm_console_snapshot_payload()
+
         @self._fastapi_app.get("/dm")
         async def dm_console(request: Request):
             """Serve the DM web console."""
@@ -3585,7 +3588,7 @@ class LanController:
             if _dm_service is None:
                 raise HTTPException(status_code=503, detail="DM combat service unavailable.")
             try:
-                return _dm_service.combat_snapshot()
+                return _dm_console_snapshot()
             except Exception:
                 raise HTTPException(status_code=500, detail="Failed to read combat snapshot.")
 
@@ -3604,7 +3607,7 @@ class LanController:
                 result = _dm_service.next_turn()
                 if not result.get("ok"):
                     raise HTTPException(status_code=500, detail="Combat service failed to advance turn.")
-                return {"ok": True, "snapshot": result.get("snapshot") or _dm_service.combat_snapshot()}
+                return {"ok": True, "snapshot": _dm_console_snapshot()}
             except HTTPException:
                 raise
             except Exception:
@@ -3625,7 +3628,7 @@ class LanController:
                 result = _dm_service.prev_turn()
                 if not result.get("ok"):
                     raise HTTPException(status_code=500, detail="Combat service failed to go to previous turn.")
-                return {"ok": True, "snapshot": result.get("snapshot") or _dm_service.combat_snapshot()}
+                return {"ok": True, "snapshot": _dm_console_snapshot()}
             except HTTPException:
                 raise
             except Exception:
@@ -3658,7 +3661,7 @@ class LanController:
                     "ok": True,
                     "cid": result.get("cid"),
                     "previous_cid": result.get("previous_cid"),
-                    "snapshot": result.get("snapshot") or _dm_service.combat_snapshot(),
+                    "snapshot": _dm_console_snapshot(),
                 }
             except HTTPException:
                 raise
@@ -3693,7 +3696,7 @@ class LanController:
                     "hp_before": result.get("hp_before"),
                     "hp_after": result.get("hp_after"),
                     "delta": result.get("delta"),
-                    "snapshot": _dm_service.combat_snapshot(),
+                    "snapshot": _dm_console_snapshot(),
                 }
             except HTTPException:
                 raise
@@ -3736,7 +3739,7 @@ class LanController:
                     "cid": result.get("cid"),
                     "ctype": result.get("ctype"),
                     "action": result.get("action"),
-                    "snapshot": _dm_service.combat_snapshot(),
+                    "snapshot": _dm_console_snapshot(),
                 }
             except HTTPException:
                 raise
@@ -3770,7 +3773,7 @@ class LanController:
                     "cid": result.get("cid"),
                     "temp_hp_before": result.get("temp_hp_before"),
                     "temp_hp_after": result.get("temp_hp_after"),
-                    "snapshot": _dm_service.combat_snapshot(),
+                    "snapshot": _dm_console_snapshot(),
                 }
             except HTTPException:
                 raise
@@ -3805,7 +3808,7 @@ class LanController:
                     "temp_hp_before": result.get("temp_hp_before"),
                     "temp_hp_after": result.get("temp_hp_after"),
                     "delta": result.get("delta"),
-                    "snapshot": _dm_service.combat_snapshot(),
+                    "snapshot": _dm_console_snapshot(),
                 }
             except HTTPException:
                 raise
@@ -3828,7 +3831,7 @@ class LanController:
                 result = _dm_service.start_combat()
                 if not result.get("ok"):
                     raise HTTPException(status_code=400, detail=result.get("error", "Cannot start combat."))
-                return {"ok": True, "snapshot": result.get("snapshot") or _dm_service.combat_snapshot()}
+                return {"ok": True, "snapshot": _dm_console_snapshot()}
             except HTTPException:
                 raise
             except Exception:
@@ -3849,11 +3852,277 @@ class LanController:
                 result = _dm_service.end_combat()
                 if not result.get("ok"):
                     raise HTTPException(status_code=400, detail=result.get("error", "Cannot end combat."))
-                return {"ok": True, "snapshot": result.get("snapshot") or _dm_service.combat_snapshot()}
+                return {"ok": True, "snapshot": _dm_console_snapshot()}
             except HTTPException:
                 raise
             except Exception:
                 raise HTTPException(status_code=500, detail="Failed to end combat.")
+
+        @self._fastapi_app.get("/api/dm/encounter/options")
+        async def dm_encounter_options(request: Request):
+            """Return browser-facing encounter setup choices for the DM console.
+
+            Shape:
+              {
+                ok,
+                players: [{name, assigned, class_name, level, max_hp}],
+                monsters: [{name, slug, hp, ac, walk_speed, initiative_modifier}]
+              }
+            """
+            _check_dm_auth(request)
+            try:
+                profiles = self.app._player_profiles_payload()
+            except Exception:
+                raise HTTPException(status_code=500, detail="Failed to load player profiles.")
+
+            encounter_names = {
+                str(getattr(c, "name", "") or "").strip().lower()
+                for c in (getattr(self.app, "combatants", {}) or {}).values()
+                if str(getattr(c, "name", "") or "").strip()
+            }
+
+            players: List[Dict[str, Any]] = []
+            for name in sorted(profiles.keys(), key=lambda value: str(value).lower()):
+                profile = profiles.get(name)
+                if not isinstance(profile, dict):
+                    continue
+                leveling = profile.get("leveling") if isinstance(profile.get("leveling"), dict) else {}
+                stats = profile.get("stats") if isinstance(profile.get("stats"), dict) else {}
+                level_raw = leveling.get("level")
+                max_hp_raw = stats.get("max_hp", stats.get("hp"))
+                try:
+                    level = int(level_raw) if level_raw is not None else None
+                except Exception:
+                    level = None
+                try:
+                    max_hp = int(max_hp_raw) if max_hp_raw is not None else None
+                except Exception:
+                    max_hp = None
+                players.append(
+                    {
+                        "name": str(name),
+                        "assigned": str(name).strip().lower() in encounter_names,
+                        "class_name": str(leveling.get("class") or "").strip() or None,
+                        "level": level,
+                        "max_hp": max_hp,
+                    }
+                )
+
+            monsters: List[Dict[str, Any]] = []
+            try:
+                raw_monsters = self._monster_choices_payload()
+            except Exception:
+                raw_monsters = []
+            for entry in raw_monsters if isinstance(raw_monsters, list) else []:
+                if not isinstance(entry, dict):
+                    continue
+                template = entry.get("template") if isinstance(entry.get("template"), dict) else {}
+                abilities = template.get("abilities") if isinstance(template.get("abilities"), dict) else {}
+                speeds = template.get("speeds") if isinstance(template.get("speeds"), dict) else {}
+                try:
+                    dex_score = int(abilities.get("dex", 10) or 10)
+                except Exception:
+                    dex_score = 10
+                monsters.append(
+                    {
+                        "name": str(entry.get("name") or "").strip(),
+                        "slug": str(entry.get("slug") or "").strip().lower(),
+                        "hp": max(1, int(template.get("hp") or 1)),
+                        "ac": max(1, int(template.get("ac") or 10)),
+                        "walk_speed": max(0, int(speeds.get("walk") or 0)),
+                        "initiative_modifier": (dex_score - 10) // 2,
+                    }
+                )
+
+            monsters.sort(key=lambda item: str(item.get("name") or "").lower())
+            return {"ok": True, "players": players, "monsters": monsters}
+
+        @self._fastapi_app.post("/api/dm/encounter/players/add")
+        async def dm_add_encounter_players(request: Request, payload: Dict[str, Any] = Body(...)):
+            """Populate the current encounter from YAML-backed player profiles.
+
+            Body: {names: [str, ...]}
+            Returns: {ok, added, skipped, created, snapshot}
+            """
+            _check_dm_auth(request)
+            if not isinstance(payload, dict):
+                raise HTTPException(status_code=400, detail="Invalid payload.")
+            names = payload.get("names")
+            if not isinstance(names, list):
+                raise HTTPException(status_code=400, detail="Payload must include a names list.")
+            try:
+                result = self.app._add_player_profile_combatants_via_service(names, skip_existing=True)
+            except Exception as exc:
+                raise HTTPException(status_code=500, detail=f"Failed to add player profiles: {exc}")
+            if not result.get("ok"):
+                raise HTTPException(status_code=500, detail=result.get("error", "Failed to add player profiles."))
+            return {
+                "ok": True,
+                "added": result.get("added", []),
+                "skipped": result.get("skipped", []),
+                "created": result.get("created", []),
+                "snapshot": _dm_console_snapshot(),
+            }
+
+        @self._fastapi_app.post("/api/dm/encounter/monsters/add")
+        async def dm_add_encounter_monsters(request: Request, payload: Dict[str, Any] = Body(...)):
+            """Populate the encounter from monster specs.
+
+            Body:
+              {
+                monster_slug: str,
+                count?: int,
+                initiative?: int,
+                ally?: bool,
+                name_prefix?: str,
+              }
+            Returns: {ok, added, skipped, snapshot}
+            """
+            _check_dm_auth(request)
+            if not isinstance(payload, dict):
+                raise HTTPException(status_code=400, detail="Invalid payload.")
+
+            monster_slug = str(payload.get("monster_slug") or "").strip().lower()
+            if not monster_slug:
+                raise HTTPException(status_code=400, detail="monster_slug is required.")
+            try:
+                count = int(payload.get("count") or 1)
+            except Exception:
+                raise HTTPException(status_code=400, detail="count must be a positive integer.")
+            if count <= 0:
+                raise HTTPException(status_code=400, detail="count must be a positive integer.")
+            try:
+                initiative = int(payload.get("initiative") or 0)
+            except Exception:
+                raise HTTPException(status_code=400, detail="initiative must be an integer.")
+            ally_raw = payload.get("ally", False)
+            if not isinstance(ally_raw, bool):
+                raise HTTPException(status_code=400, detail="ally must be a boolean.")
+
+            monster_name = monster_slug.replace("_", " ").replace("-", " ").title()
+            find_spec = getattr(self.app, "_find_monster_spec_by_slug", None)
+            if callable(find_spec):
+                try:
+                    spec = find_spec(monster_slug)
+                except Exception:
+                    spec = None
+                if spec is None:
+                    raise HTTPException(status_code=404, detail="Monster spec not found.")
+                monster_name = str(getattr(spec, "name", "") or monster_name).strip() or monster_name
+
+            name_prefix = str(payload.get("name_prefix") or "").strip() or monster_name
+            entries: List[Dict[str, Any]] = []
+            for index in range(count):
+                name = name_prefix if count == 1 else f"{name_prefix} {index + 1}"
+                entries.append(
+                    {
+                        "name": name,
+                        "monster_slug": monster_slug,
+                        "initiative": initiative,
+                        "ally": bool(ally_raw),
+                    }
+                )
+
+            try:
+                result = self.app._add_monster_spec_combatants_via_service(entries)
+            except Exception as exc:
+                raise HTTPException(status_code=500, detail=f"Failed to add monsters: {exc}")
+            if not result.get("ok"):
+                raise HTTPException(status_code=500, detail=result.get("error", "Failed to add monsters."))
+            return {
+                "ok": True,
+                "added": result.get("added", []),
+                "skipped": result.get("skipped", []),
+                "snapshot": _dm_console_snapshot(),
+            }
+
+        @self._fastapi_app.post("/api/dm/map/combatants/{cid}/move")
+        async def dm_move_combatant_on_map(cid: int, request: Request, payload: Dict[str, Any] = Body(...)):
+            """Move a combatant using the existing rules-aware LAN path.
+
+            Body: {col: int, row: int}
+            Returns: {ok, cid, col, row, spent_ft, snapshot}
+            """
+            _check_dm_auth(request)
+            if not isinstance(payload, dict):
+                raise HTTPException(status_code=400, detail="Invalid payload.")
+            try:
+                col = int(payload.get("col"))
+                row = int(payload.get("row"))
+            except Exception:
+                raise HTTPException(status_code=400, detail="col and row must be integers.")
+            try:
+                result = self.app._dm_move_combatant_on_map(int(cid), int(col), int(row))
+            except Exception as exc:
+                raise HTTPException(status_code=500, detail=f"Failed to move combatant: {exc}")
+            if not result.get("ok"):
+                raise HTTPException(status_code=400, detail=result.get("error", "Cannot move combatant."))
+            return {
+                "ok": True,
+                "cid": result.get("cid"),
+                "col": result.get("col"),
+                "row": result.get("row"),
+                "spent_ft": result.get("spent_ft"),
+                "snapshot": _dm_console_snapshot(),
+            }
+
+        @self._fastapi_app.post("/api/dm/map/combatants/{cid}/place")
+        async def dm_place_combatant_on_map(cid: int, request: Request, payload: Dict[str, Any] = Body(...)):
+            """Place or reposition a combatant on the tactical map.
+
+            Body: {col: int, row: int}
+            Returns: {ok, cid, col, row, snapshot}
+            """
+            _check_dm_auth(request)
+            if not isinstance(payload, dict):
+                raise HTTPException(status_code=400, detail="Invalid payload.")
+            try:
+                col = int(payload.get("col"))
+                row = int(payload.get("row"))
+            except Exception:
+                raise HTTPException(status_code=400, detail="col and row must be integers.")
+            try:
+                result = self.app._dm_place_combatant_on_map(int(cid), int(col), int(row))
+            except Exception as exc:
+                raise HTTPException(status_code=500, detail=f"Failed to place combatant: {exc}")
+            if not result.get("ok"):
+                raise HTTPException(status_code=400, detail=result.get("error", "Cannot place combatant."))
+            return {
+                "ok": True,
+                "cid": result.get("cid"),
+                "col": result.get("col"),
+                "row": result.get("row"),
+                "snapshot": _dm_console_snapshot(),
+            }
+
+        @self._fastapi_app.post("/api/dm/map/combatants/{cid}/facing")
+        async def dm_set_combatant_facing(cid: int, request: Request, payload: Dict[str, Any] = Body(...)):
+            """Set a combatant's facing using the existing tracker semantics.
+
+            Body: {facing_deg: int}
+            Returns: {ok, cid, facing_deg, snapshot}
+            """
+            _check_dm_auth(request)
+            if not isinstance(payload, dict):
+                raise HTTPException(status_code=400, detail="Invalid payload.")
+            if payload.get("facing_deg") is None:
+                raise HTTPException(status_code=400, detail="facing_deg is required.")
+            try:
+                facing_deg = int(payload.get("facing_deg"))
+            except Exception:
+                raise HTTPException(status_code=400, detail="facing_deg must be an integer.")
+            try:
+                result = self.app._dm_set_combatant_facing(int(cid), int(facing_deg))
+            except Exception as exc:
+                raise HTTPException(status_code=500, detail=f"Failed to set facing: {exc}")
+            if not result.get("ok"):
+                raise HTTPException(status_code=400, detail=result.get("error", "Cannot set facing."))
+            return {
+                "ok": True,
+                "cid": result.get("cid"),
+                "facing_deg": result.get("facing_deg"),
+                "snapshot": _dm_console_snapshot(),
+            }
 
         @self._fastapi_app.post("/api/dm/combat/combatants")
         async def dm_add_combatant(request: Request, payload: Dict[str, Any] = Body(...)):
@@ -3921,7 +4190,7 @@ class LanController:
                 return {
                     "ok": True,
                     "cid": result.get("cid"),
-                    "snapshot": result.get("snapshot") or _dm_service.combat_snapshot(),
+                    "snapshot": _dm_console_snapshot(),
                 }
             except HTTPException:
                 raise
@@ -3953,7 +4222,7 @@ class LanController:
                     "cid": result.get("cid"),
                     "initiative_before": result.get("initiative_before"),
                     "initiative_after": result.get("initiative_after"),
-                    "snapshot": result.get("snapshot") or _dm_service.combat_snapshot(),
+                    "snapshot": _dm_console_snapshot(),
                 }
             except HTTPException:
                 raise
@@ -3994,7 +4263,7 @@ class LanController:
                     "initiative_modifier": result.get("initiative_modifier"),
                     "initiative_before": result.get("initiative_before"),
                     "initiative_after": result.get("initiative_after"),
-                    "snapshot": result.get("snapshot") or _dm_service.combat_snapshot(),
+                    "snapshot": _dm_console_snapshot(),
                 }
             except HTTPException:
                 raise
@@ -4017,7 +4286,7 @@ class LanController:
                 return {
                     "ok": True,
                     "cid": result.get("cid"),
-                    "snapshot": result.get("snapshot") or _dm_service.combat_snapshot(),
+                    "snapshot": _dm_console_snapshot(),
                 }
             except HTTPException:
                 raise
@@ -4069,12 +4338,27 @@ class LanController:
                 self.app._lan_force_state_broadcast()
             except Exception:
                 pass
-            if _dm_service is not None:
-                try:
-                    snap = _dm_service.combat_snapshot()
-                    self._push_dm_snapshot_to_ws_clients(snap)
-                except Exception:
-                    pass
+            try:
+                self._push_dm_snapshot_to_ws_clients(_dm_console_snapshot())
+            except Exception:
+                pass
+
+        @self._fastapi_app.post("/api/dm/sessions/new")
+        async def dm_new_blank_session(request: Request):
+            """Start a new blank session from the browser-owned DM flow.
+
+            Clears combat, map state, and battle log using the same helper as
+            the desktop "New Session" action, but without Tk confirmation UI.
+            Returns: {ok, snapshot}
+            """
+            _check_dm_auth(request)
+            try:
+                created = bool(self.app._new_session_apply_blank_state(confirm=False))
+            except Exception as exc:
+                raise HTTPException(status_code=500, detail=f"Failed to start a new blank session: {exc}")
+            if not created:
+                raise HTTPException(status_code=409, detail="New blank session was not applied.")
+            return {"ok": True, "snapshot": _dm_console_snapshot()}
 
         @self._fastapi_app.get("/api/dm/sessions")
         async def dm_list_sessions(request: Request):
@@ -4180,14 +4464,8 @@ class LanController:
                 self.app._load_session_from_path(target)
             except Exception as exc:
                 raise HTTPException(status_code=500, detail=f"Failed to load session: {exc}")
-            snapshot = None
-            if _dm_service is not None:
-                try:
-                    snapshot = _dm_service.combat_snapshot()
-                except Exception:
-                    snapshot = None
             _dm_broadcast_after_load()
-            return {"ok": True, "name": target.name, "snapshot": snapshot}
+            return {"ok": True, "name": target.name, "snapshot": _dm_console_snapshot()}
 
         @self._fastapi_app.post("/api/dm/sessions/quick-save")
         async def dm_quick_save_session(request: Request):
@@ -4230,14 +4508,8 @@ class LanController:
                 self.app._load_session_from_path(path)
             except Exception as exc:
                 raise HTTPException(status_code=500, detail=f"Failed to quick-load: {exc}")
-            snapshot = None
-            if _dm_service is not None:
-                try:
-                    snapshot = _dm_service.combat_snapshot()
-                except Exception:
-                    snapshot = None
             _dm_broadcast_after_load()
-            return {"ok": True, "name": path.name, "snapshot": snapshot}
+            return {"ok": True, "name": path.name, "snapshot": _dm_console_snapshot()}
 
         # ── End DM session persistence routes ────────────────────────────
 
@@ -4261,7 +4533,7 @@ class LanController:
             # Send initial snapshot immediately on connect
             try:
                 if _dm_service is not None:
-                    snap = _dm_service.combat_snapshot()
+                    snap = _dm_console_snapshot()
                     await ws.send_text(json.dumps({"type": "dm_state", "snapshot": snap}))
             except Exception:
                 pass
@@ -5382,6 +5654,28 @@ class LanController:
                     self._clients.pop(ws_id, None)
                     self._clients_meta.pop(ws_id, None)
                     self._client_hosts.pop(ws_id, None)
+
+    def _dm_console_snapshot_payload(self) -> Dict[str, Any]:
+        snapshot: Dict[str, Any] = {}
+        dm_service = getattr(self, "_dm_service", None)
+        if dm_service is not None:
+            try:
+                candidate = dm_service.combat_snapshot()
+                if isinstance(candidate, dict):
+                    snapshot = dict(candidate)
+            except Exception:
+                snapshot = {}
+        tactical_snapshot: Dict[str, Any] = {}
+        try:
+            tactical_builder = getattr(self.app, "_dm_tactical_snapshot", None)
+            if callable(tactical_builder):
+                candidate = tactical_builder()
+                if isinstance(candidate, dict):
+                    tactical_snapshot = candidate
+        except Exception:
+            tactical_snapshot = {}
+        snapshot["tactical_map"] = tactical_snapshot
+        return snapshot
 
     def _push_dm_snapshot_to_ws_clients(self, snapshot: Dict[str, Any]) -> None:
         """Push a DM-specific snapshot to all connected DM WebSocket clients."""
@@ -14215,69 +14509,24 @@ class InitiativeTracker(base.InitiativeTracker):
         migrated = self._migrate_session_snapshot_payload(payload)
         self._apply_session_snapshot(migrated, source_path=path)
 
-    def _restore_map_backgrounds(self, bg_entries: List[Dict[str, Any]]) -> None:
-        mw = getattr(self, "_map_window", None)
+    def _session_restore_supports_tk_refresh(self) -> bool:
+        """Return whether the desktop widget adapter should run after restore."""
+        if self.__dict__.get("tk") is None:
+            return False
         try:
-            if mw is None or not mw.winfo_exists():
-                return
+            return bool(self.winfo_exists())
         except Exception:
-            return
-        try:
-            for _, data in list((getattr(mw, "bg_images", {}) or {}).items()):
-                try:
-                    item_id = int(data.get("item") or 0)
-                    if item_id:
-                        mw.canvas.delete(item_id)
-                except Exception:
-                    pass
-            mw.bg_images = {}
-        except Exception:
-            return
+            return False
 
-        pil_image_mod = getattr(base, "Image", None)
-        loaded: Dict[int, Dict[str, object]] = {}
-        for entry in bg_entries:
-            try:
-                bid = int(entry.get("bid"))
-                image_path = str(entry.get("path") or "")
-                if not image_path or pil_image_mod is None:
-                    continue
-                if not Path(image_path).exists():
-                    self._log(f"Session load: background image missing, skipped: {image_path}")
-                    continue
-                pil = pil_image_mod.open(image_path).convert("RGBA")
-                loaded[bid] = {
-                    "path": image_path,
-                    "pil": pil,
-                    "tk": None,
-                    "item": None,
-                    "x": float(entry.get("x", 0.0) or 0.0),
-                    "y": float(entry.get("y", 0.0) or 0.0),
-                    "scale_pct": float(entry.get("scale_pct", 100.0) or 100.0),
-                    "trans_pct": float(entry.get("trans_pct", 0.0) or 0.0),
-                    "locked": bool(entry.get("locked", False)),
-                }
-            except Exception:
-                continue
-        mw.bg_images = loaded
-        for bid in sorted(loaded.keys()):
-            try:
-                mw._update_bg_canvas_item(int(bid), recreate=True)
-            except Exception:
-                pass
-        try:
-            mw._refresh_bg_list()
-        except Exception:
-            pass
-
-    def _apply_session_snapshot(self, payload: Dict[str, Any], source_path: Optional[Path] = None) -> None:
+    def _apply_session_snapshot_authoritative_state(self, payload: Dict[str, Any]) -> MapState:
+        """Apply canonical session state without relying on Tk widget mutation."""
         combat = payload.get("combat") if isinstance(payload.get("combat"), dict) else {}
         map_state = payload.get("map") if isinstance(payload.get("map"), dict) else {}
         log_state = payload.get("log") if isinstance(payload.get("log"), dict) else {}
 
         existing_cids = [int(cid) for cid in list(getattr(self, "combatants", {}).keys())]
         if existing_cids:
-            self._remove_combatants_with_lan_cleanup(existing_cids)
+            self._remove_combatants_from_runtime_state(existing_cids)
         self.combatants = {}
 
         combatants_payload = combat.get("combatants") if isinstance(combat.get("combatants"), list) else []
@@ -14394,9 +14643,8 @@ class InitiativeTracker(base.InitiativeTracker):
         self._turn_history = list(cadence_scheduler.get("turn_history") or [])
         self._init_cadence_scheduler_state(reset_history=False)
 
-        canonical = self._canonical_map_state_from_snapshot_map_payload(map_state)
+        canonical = self._canonical_map_state_from_snapshot_map_payload(map_state).normalized()
         self._apply_canonical_map_state(canonical, hydrate_window=False)
-        grid = canonical.grid.to_dict()
 
         # Let map mode open with the saved grid size without re-prompting.
         self._map_open_without_prompt_size = (int(self._lan_grid_cols), int(self._lan_grid_rows))
@@ -14406,38 +14654,94 @@ class InitiativeTracker(base.InitiativeTracker):
         history.parent.mkdir(parents=True, exist_ok=True)
         clean_lines = [str(line) for line in lines]
         history.write_text("\n".join(clean_lines) + ("\n" if clean_lines else ""), encoding="utf-8")
-        self._load_history_into_log()
 
-        # Always open map mode when loading a snapshot so saved grid + placements are immediately applied.
+        self._normalize_concentration_state()
+        return canonical
+
+    def _refresh_session_snapshot_tk_compatibility(self, restored_map_state: MapState) -> None:
+        """Best-effort desktop refresh layered on top of canonical restore."""
+        if not self._session_restore_supports_tk_refresh():
+            return
         try:
             self._open_map_mode()
         except Exception:
             pass
-
-        mw = getattr(self, "_map_window", None)
         try:
-            if mw is not None and mw.winfo_exists():
-                mw.cols = int(self._lan_grid_cols)
-                mw.rows = int(self._lan_grid_rows)
-                mw.feet_per_square = float(grid.get("feet_per_square", getattr(mw, "feet_per_square", 5.0)) or 5.0)
-                mw.obstacles = set(self._lan_obstacles)
-                mw.rough_terrain = dict(self._lan_rough_terrain)
-                mw.aoes = {int(k): dict(v) for k, v in self._lan_aoes.items()}
-                mw._next_aoe_id = int(self._lan_next_aoe_id)
-                mw._redraw_all()
-                mw.refresh_units()
-                self._apply_saved_positions_to_map_window(mw)
-                try:
-                    mw._refresh_aoe_list()
-                except Exception:
-                    pass
-                self._restore_map_backgrounds(self._session_bg_images)
+            self._apply_canonical_map_state(restored_map_state, hydrate_window=True)
+            self._restore_map_backgrounds(self._session_bg_images)
+        except Exception:
+            pass
+        try:
+            self._load_history_into_log()
+        except Exception:
+            pass
+        try:
+            self._update_turn_ui()
+        except Exception:
+            pass
+        try:
+            self._rebuild_table(scroll_to_current=True)
         except Exception:
             pass
 
-        self._normalize_concentration_state()
-        self._update_turn_ui()
-        self._rebuild_table(scroll_to_current=True)
+    def _restore_map_backgrounds(self, bg_entries: List[Dict[str, Any]]) -> None:
+        mw = getattr(self, "_map_window", None)
+        try:
+            if mw is None or not mw.winfo_exists():
+                return
+        except Exception:
+            return
+        try:
+            for _, data in list((getattr(mw, "bg_images", {}) or {}).items()):
+                try:
+                    item_id = int(data.get("item") or 0)
+                    if item_id:
+                        mw.canvas.delete(item_id)
+                except Exception:
+                    pass
+            mw.bg_images = {}
+        except Exception:
+            return
+
+        pil_image_mod = getattr(base, "Image", None)
+        loaded: Dict[int, Dict[str, object]] = {}
+        for entry in bg_entries:
+            try:
+                bid = int(entry.get("bid"))
+                image_path = str(entry.get("path") or "")
+                if not image_path or pil_image_mod is None:
+                    continue
+                if not Path(image_path).exists():
+                    self._log(f"Session load: background image missing, skipped: {image_path}")
+                    continue
+                pil = pil_image_mod.open(image_path).convert("RGBA")
+                loaded[bid] = {
+                    "path": image_path,
+                    "pil": pil,
+                    "tk": None,
+                    "item": None,
+                    "x": float(entry.get("x", 0.0) or 0.0),
+                    "y": float(entry.get("y", 0.0) or 0.0),
+                    "scale_pct": float(entry.get("scale_pct", 100.0) or 100.0),
+                    "trans_pct": float(entry.get("trans_pct", 0.0) or 0.0),
+                    "locked": bool(entry.get("locked", False)),
+                }
+            except Exception:
+                continue
+        mw.bg_images = loaded
+        for bid in sorted(loaded.keys()):
+            try:
+                mw._update_bg_canvas_item(int(bid), recreate=True)
+            except Exception:
+                pass
+        try:
+            mw._refresh_bg_list()
+        except Exception:
+            pass
+
+    def _apply_session_snapshot(self, payload: Dict[str, Any], source_path: Optional[Path] = None) -> None:
+        restored_map_state = self._apply_session_snapshot_authoritative_state(payload)
+        self._refresh_session_snapshot_tk_compatibility(restored_map_state)
         self._lan_force_state_broadcast()
         if source_path is not None:
             self._log(f"Session loaded: {source_path}")
@@ -15909,16 +16213,10 @@ class InitiativeTracker(base.InitiativeTracker):
                 )
         return self._add_monster_spec_combatants_direct(entries)
 
-    def _remove_combatants_with_lan_cleanup(self, cids: Iterable[int]) -> None:
+    def _remove_combatants_from_runtime_state(self, cids: Iterable[int]) -> Set[int]:
         removed = {int(cid) for cid in cids}
         if not removed:
-            return
-        mw = getattr(self, "_map_window", None)
-        try:
-            if mw is not None and not mw.winfo_exists():
-                mw = None
-        except Exception:
-            mw = None
+            return set()
 
         for cid in removed:
             gone = self.combatants.get(cid)
@@ -15954,15 +16252,31 @@ class InitiativeTracker(base.InitiativeTracker):
                 self._summon_group_meta.pop(group_id, None)
 
         aoe_ids = [aid for aid, aoe in (self._lan_aoes or {}).items() if aoe.get("owner_cid") in removed]
+        for aid in aoe_ids:
+            self._lan_aoes.pop(aid, None)
+        return removed
+
+    def _remove_combatants_with_lan_cleanup(self, cids: Iterable[int]) -> None:
+        removed = {int(cid) for cid in cids}
+        if not removed:
+            return
+        aoe_ids = [aid for aid, aoe in (self._lan_aoes or {}).items() if aoe.get("owner_cid") in removed]
+        removed = self._remove_combatants_from_runtime_state(removed)
+        if not removed:
+            return
+        mw = getattr(self, "_map_window", None)
+        try:
+            if mw is not None and not mw.winfo_exists():
+                mw = None
+        except Exception:
+            mw = None
+
         if mw is not None and hasattr(mw, "_remove_aoe_by_id"):
             for aid in aoe_ids:
                 try:
                     mw._remove_aoe_by_id(int(aid))
                 except Exception:
-                    self._lan_aoes.pop(aid, None)
-        else:
-            for aid in aoe_ids:
-                self._lan_aoes.pop(aid, None)
+                    pass
 
         if mw is not None:
             for cid in removed:
@@ -17667,7 +17981,7 @@ class InitiativeTracker(base.InitiativeTracker):
         try:
             dm_svc = getattr(self._lan, "_dm_service", None)
             if dm_svc is not None:
-                dm_snap = dm_svc.combat_snapshot()
+                dm_snap = self._lan._dm_console_snapshot_payload()
                 self._lan._push_dm_snapshot_to_ws_clients(dm_snap)
         except Exception:
             pass
@@ -38732,6 +39046,127 @@ class InitiativeTracker(base.InitiativeTracker):
         self._log(f"moved to ({col},{row}) (spent {cost} ft; {movement_owner.move_remaining}/{movement_owner.move_total} left)", cid=cid)
         self._rebuild_table(scroll_to_current=True)
         return (True, "", int(cost))
+
+    def _dm_tactical_snapshot(self) -> Dict[str, Any]:
+        raw = self._lan_snapshot(include_static=False, hydrate_static=False)
+        if not isinstance(raw, dict):
+            return {}
+        snapshot: Dict[str, Any] = {}
+        for key in (
+            "grid",
+            "obstacles",
+            "rough_terrain",
+            "aoes",
+            "map_state",
+            "features",
+            "hazards",
+            "structures",
+            "elevation_cells",
+            "units",
+            "active_cid",
+            "up_next_cid",
+            "round_num",
+            "turn_order",
+            "boarding_links",
+            "active_boarding_links",
+            "ships",
+        ):
+            snapshot[key] = raw.get(key)
+        return snapshot
+
+    def _dm_move_combatant_on_map(self, cid: int, col: int, row: int) -> Dict[str, Any]:
+        try:
+            ok, reason, cost = self._lan_try_move(int(cid), int(col), int(row))
+        except Exception as exc:
+            return {"ok": False, "error": f"Failed to move combatant: {exc}"}
+        if not ok:
+            return {"ok": False, "error": str(reason or "Cannot move combatant.")}
+        try:
+            self._lan_force_state_broadcast()
+        except Exception:
+            pass
+        return {
+            "ok": True,
+            "cid": int(cid),
+            "col": int(col),
+            "row": int(row),
+            "spent_ft": int(cost),
+        }
+
+    def _dm_place_combatant_on_map(self, cid: int, col: int, row: int) -> Dict[str, Any]:
+        combatant = self.combatants.get(int(cid))
+        if combatant is None:
+            return {"ok": False, "error": "Combatant not found."}
+        if _normalize_cid_value(getattr(combatant, "rider_cid", None), "dm.place.rider_cid") is not None:
+            return {"ok": False, "error": "Rider placement uses the mount, matey."}
+
+        _cols, _rows, _obstacles, _rough, positions = self._lan_live_map_data()
+        origin_cell = positions.get(int(cid)) if isinstance(positions, dict) else None
+        ok, reason = self._validate_relocation_destination(
+            destination_col=int(col),
+            destination_row=int(row),
+            target_cid=int(cid),
+            requires_unoccupied=True,
+        )
+        if not ok:
+            return {"ok": False, "error": str(reason or "Destination is invalid.")}
+
+        rider_cid = _normalize_cid_value(getattr(combatant, "mounted_by_cid", None), "dm.place.mount.rider")
+        try:
+            self._lan_set_token_position(int(cid), int(col), int(row))
+            if rider_cid is not None and rider_cid in self.combatants:
+                self._lan_set_token_position(int(rider_cid), int(col), int(row))
+            self._lan_sync_fixed_to_caster_aoes(int(cid))
+            if rider_cid is not None and rider_cid in self.combatants:
+                self._lan_sync_fixed_to_caster_aoes(int(rider_cid))
+            if isinstance(origin_cell, tuple) and len(origin_cell) == 2:
+                self._lan_handle_environment_triggers_for_moved_unit(
+                    int(cid),
+                    (int(origin_cell[0]), int(origin_cell[1])),
+                    (int(col), int(row)),
+                )
+            self._enforce_johns_echo_tether(int(cid))
+            self._log(f"placed on map at ({int(col)},{int(row)})", cid=int(cid))
+            self._rebuild_table(scroll_to_current=True)
+        except Exception as exc:
+            return {"ok": False, "error": f"Failed to place combatant: {exc}"}
+
+        try:
+            self._lan_force_state_broadcast()
+        except Exception:
+            pass
+        return {
+            "ok": True,
+            "cid": int(cid),
+            "col": int(col),
+            "row": int(row),
+        }
+
+    def _dm_set_combatant_facing(self, cid: int, facing_deg: Any) -> Dict[str, Any]:
+        combatant = self.combatants.get(int(cid))
+        if combatant is None:
+            return {"ok": False, "error": "Combatant not found."}
+        facing = int(self._normalize_facing_degrees(facing_deg))
+        try:
+            setattr(combatant, "facing_deg", facing)
+            self._sync_owned_rotatable_aoes_with_facing(int(cid), facing)
+            mw = getattr(self, "_map_window", None)
+            if mw is not None and hasattr(mw, "winfo_exists"):
+                try:
+                    if mw.winfo_exists() and hasattr(mw, "_token_facing"):
+                        mw._token_facing[int(cid)] = float(facing)
+                        if hasattr(mw, "_layout_unit"):
+                            mw._layout_unit(int(cid))
+                except Exception:
+                    pass
+        except Exception as exc:
+            return {"ok": False, "error": f"Failed to set facing: {exc}"}
+
+        try:
+            self._lan_force_state_broadcast()
+        except Exception:
+            pass
+        return {"ok": True, "cid": int(cid), "facing_deg": int(facing)}
 
     def _lan_live_map_data(
         self,

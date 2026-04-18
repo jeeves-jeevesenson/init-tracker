@@ -5,6 +5,7 @@ import unittest
 from pathlib import Path
 
 import dnd_initative_tracker as tracker_mod
+from player_command_contracts import build_prompt_record, build_resume_dispatch
 
 
 class SessionSaveLoadTests(unittest.TestCase):
@@ -243,6 +244,338 @@ class SessionSaveLoadTests(unittest.TestCase):
             log_text = history_path.read_text(encoding="utf-8")
             self.assertIn("First", log_text)
             self.assertIn("Second", log_text)
+
+    def test_load_session_from_path_restores_state_headlessly_without_tk_refresh(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            snap_path = Path(tmpdir) / "session.json"
+            source_history = Path(tmpdir) / "source.log"
+            app = self._make_app(source_history)
+            app._next_id = 2
+            app.combatants = {
+                1: types.SimpleNamespace(
+                    cid=1,
+                    name="Alice",
+                    hp=23,
+                    speed=30,
+                    swim_speed=0,
+                    fly_speed=0,
+                    burrow_speed=0,
+                    climb_speed=0,
+                    movement_mode="normal",
+                    move_remaining=20,
+                    move_total=30,
+                    initiative=15,
+                    dex=3,
+                    roll=12,
+                    nat20=False,
+                    ally=True,
+                    is_pc=True,
+                    is_spellcaster=True,
+                    saving_throws={"con": 5},
+                    ability_mods={"dex": 3},
+                    actions=[],
+                    bonus_actions=[],
+                    reactions=[],
+                    monster_spec=None,
+                    temp_hp=4,
+                )
+            }
+            app.current_cid = 1
+            app.start_cid = 1
+            app.round_num = 2
+            app.turn_num = 2
+            app.in_combat = True
+            app._reaction_prefs_by_cid = {1: {"shield": "ask"}}
+            app._lan_grid_cols = 14
+            app._lan_grid_rows = 9
+            app._lan_positions = {1: (4, 5)}
+            app._lan_obstacles = {(1, 1)}
+            app._lan_rough_terrain = {(3, 3): {"color": "#ff0000", "movement_type": "ground", "is_swim": False, "is_rough": True}}
+            app._lan_aoes = {10: {"kind": "circle", "owner_cid": 1, "cx": 4.0, "cy": 5.0, "radius_sq": 4.0}}
+            app._lan_next_aoe_id = 11
+            app._lan_battle_log_lines = lambda limit=0: ["[2026-01-01 00:00:00]\tHeadless restore line"]
+            prompt = build_prompt_record(
+                prompt_id="prompt-1",
+                prompt_kind="reaction",
+                trigger="shield",
+                reactor_cid=1,
+                eligible_actor_cids=[1],
+                source_cid=2,
+                target_cid=1,
+                allowed_choices=[{"kind": "shield_yes", "label": "Cast Shield", "mode": "ask"}],
+                ws_ids=[101],
+                prompt_text="Enemy attacks you with Sword.",
+                metadata={"prompt_attack": "Sword"},
+                resolution={
+                    "player_visible": {
+                        "command": "attack_request",
+                        "label": "Resume attack",
+                    }
+                },
+                resume_dispatch=build_resume_dispatch(
+                    "attack_request",
+                    actor_cid=2,
+                    ws_id=77,
+                    is_admin=False,
+                    payload={"type": "attack_request", "target_cid": 1, "weapon_id": "sword"},
+                ),
+                created_at=100.0,
+                expires_at=112.0,
+            )
+            app._ensure_player_commands().prompts.replace_prompts({"prompt-1": prompt})
+            app._save_session_to_path(snap_path, label="headless")
+
+            restored_history = Path(tmpdir) / "restored.log"
+            restored = self._make_app(restored_history)
+            restored._open_map_mode = lambda: (_ for _ in ()).throw(AssertionError("_open_map_mode should be skipped for headless restore"))
+            restored._load_history_into_log = lambda max_lines=2000: (_ for _ in ()).throw(AssertionError("_load_history_into_log should be skipped for headless restore"))
+            restored._update_turn_ui = lambda: (_ for _ in ()).throw(AssertionError("_update_turn_ui should be skipped for headless restore"))
+            restored._rebuild_table = lambda scroll_to_current=True: (_ for _ in ()).throw(AssertionError("_rebuild_table should be skipped for headless restore"))
+            broadcasts = []
+            restored._lan_force_state_broadcast = lambda: broadcasts.append(True)
+
+            restored._load_session_from_path(snap_path)
+
+            self.assertEqual(broadcasts, [True])
+            self.assertEqual(sorted(restored.combatants.keys()), [1])
+            self.assertEqual(restored.combatants[1].name, "Alice")
+            self.assertEqual(restored.current_cid, 1)
+            self.assertEqual(restored.round_num, 2)
+            self.assertEqual(restored.turn_num, 2)
+            self.assertEqual(restored._lan_positions, {1: (4, 5)})
+            self.assertEqual(restored._lan_grid_cols, 14)
+            self.assertEqual(restored._lan_grid_rows, 9)
+            self.assertIn(10, restored._lan_aoes)
+            pending = restored._ensure_player_commands().prompts.player_visible_prompts_for_actor(1)
+            self.assertEqual(
+                pending,
+                [
+                    {
+                        "contract": {"schema": "player_command.prompt_snapshot", "version": 1},
+                        "prompt_id": "prompt-1",
+                        "request_id": "prompt-1",
+                        "prompt_kind": "reaction",
+                        "trigger": "shield",
+                        "reactor_cid": 1,
+                        "eligible_actor_cids": [1],
+                        "source_cid": 2,
+                        "target_cid": 1,
+                        "choices": [{"kind": "shield_yes", "label": "Cast Shield", "mode": "ask"}],
+                        "mode": "ask",
+                        "prompt": "Enemy attacks you with Sword.",
+                        "created_at": 100.0,
+                        "expires_at": 112.0,
+                        "lifecycle": {
+                            "state": "offered",
+                            "accepted_choice": None,
+                            "response_details": {},
+                            "created_at": 100.0,
+                            "updated_at": 100.0,
+                        },
+                        "metadata": {"prompt_attack": "Sword"},
+                        "next_step": {
+                            "command": "attack_request",
+                            "label": "Resume attack",
+                        },
+                    }
+                ],
+            )
+            self.assertEqual(
+                restored_history.read_text(encoding="utf-8"),
+                "[2026-01-01 00:00:00]\tHeadless restore line\n",
+            )
+
+    def test_session_snapshot_contract_projection_locks_schema_v2_prompt_and_map_shape(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            app = self._make_app(Path(tmpdir) / "battle.log")
+            app._next_id = 2
+            app.combatants = {
+                1: types.SimpleNamespace(
+                    cid=1,
+                    name="Alice",
+                    hp=23,
+                    speed=30,
+                    swim_speed=0,
+                    fly_speed=0,
+                    burrow_speed=0,
+                    climb_speed=0,
+                    movement_mode="normal",
+                    move_remaining=20,
+                    move_total=30,
+                    initiative=15,
+                    dex=3,
+                    roll=12,
+                    nat20=False,
+                    ally=True,
+                    is_pc=True,
+                    is_spellcaster=True,
+                    saving_throws={"con": 5},
+                    ability_mods={"dex": 3},
+                    actions=[],
+                    bonus_actions=[],
+                    reactions=[],
+                    monster_spec=None,
+                    temp_hp=4,
+                )
+            }
+            app.current_cid = 1
+            app.start_cid = 1
+            app.round_num = 2
+            app.turn_num = 2
+            app.in_combat = True
+            app._reaction_prefs_by_cid = {1: {"shield": "ask"}}
+            app._lan_grid_cols = 14
+            app._lan_grid_rows = 9
+            app._lan_positions = {1: (4, 5)}
+            app._lan_obstacles = {(1, 1)}
+            app._lan_rough_terrain = {(3, 3): {"color": "#ff0000", "movement_type": "ground", "is_swim": False, "is_rough": True}}
+            app._lan_aoes = {10: {"kind": "circle", "owner_cid": 1, "cx": 4.0, "cy": 5.0, "radius_sq": 4.0}}
+            app._lan_next_aoe_id = 11
+            app._lan_battle_log_lines = lambda limit=0: ["[2026-01-01 00:00:00]\tContract line"]
+            prompt = build_prompt_record(
+                prompt_id="prompt-1",
+                prompt_kind="reaction",
+                trigger="shield",
+                reactor_cid=1,
+                eligible_actor_cids=[1],
+                source_cid=2,
+                target_cid=1,
+                allowed_choices=[{"kind": "shield_yes", "label": "Cast Shield", "mode": "ask"}],
+                ws_ids=[101],
+                prompt_text="Enemy attacks you with Sword.",
+                metadata={"prompt_attack": "Sword"},
+                resolution={
+                    "player_visible": {
+                        "command": "attack_request",
+                        "label": "Resume attack",
+                    }
+                },
+                resume_dispatch=build_resume_dispatch(
+                    "attack_request",
+                    actor_cid=2,
+                    ws_id=77,
+                    is_admin=False,
+                    payload={"type": "attack_request", "target_cid": 1, "weapon_id": "sword"},
+                ),
+                created_at=100.0,
+                expires_at=112.0,
+            )
+            app._ensure_player_commands().prompts.replace_prompts({"prompt-1": prompt})
+
+            payload = app._session_snapshot_payload(label="contract")
+            payload["metadata"]["saved_at"] = "<timestamp>"
+            projection = {
+                "schema_version": payload["schema_version"],
+                "metadata": payload["metadata"],
+                "combat": {
+                    "current_cid": payload["combat"]["current_cid"],
+                    "start_cid": payload["combat"]["start_cid"],
+                    "round_num": payload["combat"]["round_num"],
+                    "turn_num": payload["combat"]["turn_num"],
+                    "in_combat": payload["combat"]["in_combat"],
+                    "reaction_prefs_by_cid": payload["combat"]["reaction_prefs_by_cid"],
+                    "pending_prompts": payload["combat"]["pending_prompts"],
+                },
+                "map": {
+                    "grid": payload["map"]["grid"],
+                    "positions": payload["map"]["positions"],
+                    "obstacles": payload["map"]["obstacles"],
+                    "rough_terrain": payload["map"]["rough_terrain"],
+                    "aoes": payload["map"]["aoes"],
+                    "next_aoe_id": payload["map"]["next_aoe_id"],
+                    "auras_enabled": payload["map"]["auras_enabled"],
+                    "canonical": payload["map"]["canonical"],
+                },
+                "log": payload["log"],
+            }
+
+            self.assertEqual(
+                projection,
+                {
+                    "schema_version": 2,
+                    "metadata": {
+                        "saved_at": "<timestamp>",
+                        "app_version": tracker_mod.APP_VERSION,
+                        "label": "contract",
+                    },
+                    "combat": {
+                        "current_cid": 1,
+                        "start_cid": 1,
+                        "round_num": 2,
+                        "turn_num": 2,
+                        "in_combat": True,
+                        "reaction_prefs_by_cid": {"1": {"shield": "ask"}},
+                        "pending_prompts": {
+                            "prompt-1": {
+                                "schema": "player_command.prompt",
+                                "schema_version": 1,
+                                "contract": {"schema": "player_command.prompt", "version": 1},
+                                "prompt_id": "prompt-1",
+                                "request_id": "prompt-1",
+                                "prompt_kind": "reaction",
+                                "trigger": "shield",
+                                "reactor_cid": 1,
+                                "eligible_actor_cids": [1],
+                                "source_cid": 2,
+                                "target_cid": 1,
+                                "ws_ids": [101],
+                                "allowed_choices": [{"kind": "shield_yes", "label": "Cast Shield", "mode": "ask"}],
+                                "mode": "ask",
+                                "prompt": "Enemy attacks you with Sword.",
+                                "created_at": 100.0,
+                                "updated_at": 100.0,
+                                "expires_at": 112.0,
+                                "metadata": {"prompt_attack": "Sword"},
+                                "resolution": {
+                                    "player_visible": {
+                                        "command": "attack_request",
+                                        "label": "Resume attack",
+                                    }
+                                },
+                                "resume": {
+                                    "contract": {"schema": "player_command.resume_dispatch", "version": 1},
+                                    "command_type": "attack_request",
+                                    "actor_cid": 2,
+                                    "ws_id": 77,
+                                    "is_admin": False,
+                                    "payload": {"type": "attack_request", "target_cid": 1, "weapon_id": "sword"},
+                                    "flags": {},
+                                },
+                                "lifecycle": {
+                                    "state": "offered",
+                                    "accepted_choice": None,
+                                    "response_details": {},
+                                    "created_at": 100.0,
+                                    "updated_at": 100.0,
+                                },
+                            }
+                        },
+                    },
+                    "map": {
+                        "grid": {"cols": 14, "rows": 9, "feet_per_square": 5.0},
+                        "positions": [{"cid": 1, "col": 4, "row": 5}],
+                        "obstacles": [{"col": 1, "row": 1}],
+                        "rough_terrain": [{"col": 3, "row": 3, "color": "#ff0000", "movement_type": "ground", "is_swim": False, "is_rough": True, "label": ""}],
+                        "aoes": {"10": {"kind": "circle", "owner_cid": 1, "cx": 4.0, "cy": 5.0, "radius_sq": 4.0}},
+                        "next_aoe_id": 11,
+                        "auras_enabled": True,
+                        "canonical": {
+                            "schema_version": 1,
+                            "grid": {"cols": 14, "rows": 9, "feet_per_square": 5.0},
+                            "terrain_cells": [{"col": 3, "row": 3, "color": "#ff0000", "movement_type": "ground", "is_swim": False, "is_rough": True, "label": ""}],
+                            "obstacles": [{"col": 1, "row": 1}],
+                            "token_positions": [{"cid": 1, "col": 4, "row": 5}],
+                            "aoes": {"10": {"kind": "circle", "owner_cid": 1, "cx": 4.0, "cy": 5.0, "radius_sq": 4.0}},
+                            "presentation": {"auras_enabled": True, "bg_images": [], "next_bg_id": 1},
+                            "features": [],
+                            "hazards": [],
+                            "structures": [],
+                            "elevation_cells": [],
+                        },
+                    },
+                    "log": {"lines": ["[2026-01-01 00:00:00]\tContract line"]},
+                },
+            )
 
 
 

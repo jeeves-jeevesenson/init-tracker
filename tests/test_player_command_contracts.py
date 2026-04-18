@@ -783,6 +783,39 @@ class ReactionResumeDispatchTests(unittest.TestCase):
         self.assertFalse(bool(attack_results[-1].get("hit")))
         self.assertNotIn(req_id, app._ensure_player_commands().prompts.all_prompts())
 
+    def test_reaction_response_resolution_no_longer_uses_tracker_adjudicator(self):
+        app, sent, _toasts, _logs, _slot_spend_calls = self._make_shield_app()
+        app._lan_apply_action(
+            {
+                "type": "attack_request",
+                "cid": 2,
+                "_claimed_cid": 2,
+                "_ws_id": 77,
+                "target_cid": 1,
+                "weapon_id": "sword",
+                "attack_roll": 11,
+                "damage_entries": [{"amount": 7, "type": "slashing"}],
+            }
+        )
+        offers = [payload for _ws, payload in sent if isinstance(payload, dict) and payload.get("trigger") == "shield"]
+        self.assertTrue(offers)
+        req_id = str(offers[-1]["request_id"])
+
+        def _forbid_old_tracker_path(*_args, **_kwargs):
+            raise AssertionError("_adjudicate_reaction_response should not be called from service.reaction_response")
+
+        app._adjudicate_reaction_response = _forbid_old_tracker_path
+        result = app._ensure_player_commands().reaction_response(
+            {"type": "reaction_response", "request_id": req_id, "choice": "shield_yes"},
+            cid=1,
+            ws_id=101,
+        )
+
+        self.assertTrue(result.get("ok"))
+        self.assertEqual(result.get("trigger"), "shield")
+        self.assertEqual(result.get("prompt_state"), "resolved")
+        self.assertTrue(result.get("resume_dispatched"))
+
 
 class PromptSnapshotPersistenceTests(unittest.TestCase):
     def _make_app(self, history_path: Path):
