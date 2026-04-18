@@ -43,7 +43,7 @@ except Exception:  # pragma: no cover
     yaml = None
 from dataclasses import dataclass, field
 from typing import Any, Callable, Dict, List, Optional, Tuple, Set, Union
-from tk_compat import load_tk_modules
+from tk_compat import load_tk_modules, is_headless_env
 
 tk, filedialog, messagebox, _scrolledtext, simpledialog, ttk, tkfont = load_tk_modules()
 from map_state import (
@@ -675,16 +675,18 @@ def _load_rough_terrain_presets() -> List[TerrainPreset]:
 class InitiativeTracker(tk.Tk):
     def __init__(self) -> None:
         super().__init__()
-        self.title("DnD Initiative Tracker")
-        self.geometry("1120x720")
-        icon_path = Path(__file__).resolve().parent / "assets" / "graphic-512.png"
-        try:
-            if icon_path.exists():
-                photo = tk.PhotoImage(file=str(icon_path))
-                self.iconphoto(True, photo)
-                self._app_icon = photo
-        except Exception:
-            pass
+        self.host_mode = "headless" if is_headless_env() else "desktop"
+        if self.host_mode == "desktop":
+            self.title("DnD Initiative Tracker")
+            self.geometry("1120x720")
+            icon_path = Path(__file__).resolve().parent / "assets" / "graphic-512.png"
+            try:
+                if icon_path.exists():
+                    photo = tk.PhotoImage(file=str(icon_path))
+                    self.iconphoto(True, photo)
+                    self._app_icon = photo
+            except Exception:
+                pass
 
         self._next_id = 1
         self._next_stack_id = 1
@@ -717,12 +719,44 @@ class InitiativeTracker(tk.Tk):
         self.turn_num: int = 0
         self._concentration_save_state: Dict[Tuple[int, Tuple[int, int]], Dict[str, object]] = {}
 
-        self._build_ui()
+        if self.host_mode == "desktop":
+            self._build_ui()
+        else:
+            self._init_headless_state_stubs()
         self._load_indexes_async(self._refresh_monster_library)
         self._load_history_into_log()
         self._log("=== Session started ===")
-        self._open_starting_players_dialog()
-        self._rebuild_table()
+        if self.host_mode == "desktop":
+            self._open_starting_players_dialog()
+            self._rebuild_table()
+
+    def _init_headless_state_stubs(self) -> None:
+        """Create minimal state mirrors so runtime paths don't crash without a built UI.
+
+        In headless mode we never build the Tk widget tree. A handful of
+        runtime methods (turn tracker, movement mode, library filters)
+        push their current display value into a StringVar that the UI
+        would normally bind labels against. We keep the StringVars so
+        those setters stay side-effect-only, without dragging in any
+        real widgets.
+        """
+        self.turn_current_var = tk.StringVar(value="(not started)")
+        self.turn_round_var = tk.StringVar(value="1")
+        self.turn_count_var = tk.StringVar(value="0")
+        self.turn_move_var = tk.StringVar(value="—")
+        self.start_last_var = tk.StringVar(value="")
+        self.move_mode_var = tk.StringVar(value=MOVEMENT_MODE_LABELS["normal"])
+        self.monster_library_filter_var = tk.StringVar()
+        self.monster_library_sort_var = tk.StringVar(value="Name")
+
+    def _host_supports_desktop_widgets(self) -> bool:
+        """Return whether desktop widget mutation paths are allowed to run."""
+        mode = self.__dict__.get("host_mode", "desktop")
+        return str(mode).strip().lower() == "desktop"
+
+    def _allow_desktop_runtime_surface(self, _surface_name: str) -> bool:
+        """Host/runtime seam for desktop-only widget surfaces."""
+        return self._host_supports_desktop_widgets()
 
     # -------------------------- UI --------------------------
     def _build_ui(self) -> None:
@@ -958,6 +992,8 @@ class InitiativeTracker(tk.Tk):
         )
 
     def _confirm_long_rest(self) -> None:
+        if not self._allow_desktop_runtime_surface("long_rest_dialog"):
+            return
         if not messagebox.askyesno("Long Rest", "Are you sure?", parent=self):
             return
         if not hasattr(self, "_reset_player_character_resources"):
@@ -1248,6 +1284,8 @@ class InitiativeTracker(tk.Tk):
         return "\n".join(lines)
 
     def _open_monster_stat_block(self, spec: Optional[MonsterSpec] = None) -> None:
+        if not self._allow_desktop_runtime_surface("monster_stat_block_dialog"):
+            return
         if spec is None:
             nm = self._selected_library_name()
             spec = self._monsters_by_name.get(nm) if nm else None
@@ -1294,6 +1332,8 @@ class InitiativeTracker(tk.Tk):
         return ""
 
     def _open_selected_library_monster_info(self) -> None:
+        if not self._allow_desktop_runtime_surface("monster_library_info_dialog"):
+            return
         name = self._selected_library_name()
         if not name:
             messagebox.showinfo("Monster Info", "Select a creature from the library first.")
@@ -1342,6 +1382,8 @@ class InitiativeTracker(tk.Tk):
     # --------------------- Map Mode ---------------------
     def _open_map_mode(self) -> None:
         """Open the battle map window (Map Mode)."""
+        if not self._allow_desktop_runtime_surface("map_window"):
+            return
         try:
             if self._map_window is not None and self._map_window.winfo_exists():
                 try:
@@ -1499,7 +1541,7 @@ class InitiativeTracker(tk.Tk):
 
     def _apply_name_tags_in_range(self, start: str, end: str, content_text: Optional[str] = None) -> None:
         """Bold/italic/underline known names in a given text range."""
-        if not hasattr(self, "log_text"):
+        if getattr(self, "host_mode", "desktop") != "desktop" or not hasattr(self, "log_text"):
             return
         text = content_text if content_text is not None else self.log_text.get(start, end)
         if not text:
@@ -1522,19 +1564,18 @@ class InitiativeTracker(tk.Tk):
                 pass
 
     def _append_log_line(self, stamp: str, content: str, write_file: bool) -> None:
-        if not hasattr(self, "log_text"):
-            return
-        self.log_text.configure(state="normal")
-        # Timestamp column
-        self.log_text.insert(tk.END, stamp + "\t", ("ts",))
-        # Content column
-        content_start = self.log_text.index(tk.END)
-        self.log_text.insert(tk.END, content)
-        content_end = self.log_text.index(tk.END)
-        self.log_text.insert(tk.END, "\n")
-        self._apply_name_tags_in_range(content_start, content_end, content_text=content)
-        self.log_text.configure(state="disabled")
-        self.log_text.see(tk.END)
+        if getattr(self, "host_mode", "desktop") == "desktop" and hasattr(self, "log_text"):
+            self.log_text.configure(state="normal")
+            # Timestamp column
+            self.log_text.insert(tk.END, stamp + "\t", ("ts",))
+            # Content column
+            content_start = self.log_text.index(tk.END)
+            self.log_text.insert(tk.END, content)
+            content_end = self.log_text.index(tk.END)
+            self.log_text.insert(tk.END, "\n")
+            self._apply_name_tags_in_range(content_start, content_end, content_text=content)
+            self.log_text.configure(state="disabled")
+            self.log_text.see(tk.END)
 
         if write_file:
             try:
@@ -1545,7 +1586,7 @@ class InitiativeTracker(tk.Tk):
 
     def _load_history_into_log(self, max_lines: int = 2000) -> None:
         """Load existing history file into the Log box."""
-        if not hasattr(self, "log_text"):
+        if getattr(self, "host_mode", "desktop") != "desktop" or not hasattr(self, "log_text"):
             return
         p = self._history_file_path()
         if not p.exists():
@@ -1761,6 +1802,8 @@ class InitiativeTracker(tk.Tk):
         return f"{base} {i}"
 
     def _open_starting_players_dialog(self) -> None:
+        if not self._allow_desktop_runtime_surface("starting_players_dialog"):
+            return
         roster = self._load_starting_players_roster()
 
         win = tk.Toplevel(self)
@@ -3491,6 +3534,8 @@ class InitiativeTracker(tk.Tk):
 
 
     def _open_move_tool(self) -> None:
+        if not self._allow_desktop_runtime_surface("move_tool_dialog"):
+            return
         dlg = tk.Toplevel(self)
         dlg.title("Spend Movement")
         dlg.geometry("540x380")
@@ -3815,6 +3860,8 @@ class InitiativeTracker(tk.Tk):
             pass
 
     def _rebuild_table(self, scroll_to_top: bool = False, scroll_to_current: bool = False) -> None:
+        if getattr(self, "host_mode", "desktop") != "desktop":
+            return
         # preserve selection
         prev_sel = set(self.tree.selection())
         try:
@@ -3943,6 +3990,8 @@ class InitiativeTracker(tk.Tk):
 
     def _open_selected_combatant_info(self) -> None:
         """Open stat block for any combatant (monster, player, or ally)."""
+        if not self._allow_desktop_runtime_surface("combatant_info_dialog"):
+            return
         c = self._selected_combatant()
         if not c:
             return
@@ -3962,6 +4011,8 @@ class InitiativeTracker(tk.Tk):
     
     def _open_combatant_stat_block(self, c: Combatant) -> None:
         """Show a stat block for player or ally combatant."""
+        if not self._allow_desktop_runtime_surface("combatant_stat_block_dialog"):
+            return
         win = tk.Toplevel(self)
         title = f"{c.name} Stat Block"
         win.title(title)
@@ -4959,6 +5010,8 @@ class InitiativeTracker(tk.Tk):
         return picks
 
     def _open_random_enemy_dialog(self) -> None:
+        if not self._allow_desktop_runtime_surface("random_enemy_dialog"):
+            return
         dlg = tk.Toplevel(self)
         dlg.title("Random Enemies")
         dlg.transient(self)
@@ -5075,6 +5128,8 @@ class InitiativeTracker(tk.Tk):
 
     # -------------------------- Bulk add --------------------------
     def _open_bulk_dialog(self) -> None:
+        if not self._allow_desktop_runtime_surface("bulk_add_dialog"):
+            return
         dlg = tk.Toplevel(self)
         dlg.title("Bulk Add")
         dlg.geometry("1120x720")
@@ -5516,6 +5571,8 @@ class InitiativeTracker(tk.Tk):
         - Optional attacker (blank attacker = anonymous)
         - Optional attacker/target prefill for map-mode interactions
         """
+        if not self._allow_desktop_runtime_surface("damage_tool_dialog"):
+            return
         dlg = tk.Toplevel(self)
         dlg.title("Damage")
         dlg.geometry("1120x720")
@@ -5984,6 +6041,8 @@ class InitiativeTracker(tk.Tk):
     # -------------------------- Heal tool --------------------------
     def _open_heal_tool(self) -> None:
         """Open the Heal tool."""
+        if not self._allow_desktop_runtime_surface("heal_tool_dialog"):
+            return
         dlg = tk.Toplevel(self)
         dlg.title("Heal")
         dlg.geometry("920x620")
@@ -6230,6 +6289,8 @@ class InitiativeTracker(tk.Tk):
 
     # -------------------------- Conditions tool --------------------------
     def _open_condition_tool(self) -> None:
+        if not self._allow_desktop_runtime_surface("condition_tool_dialog"):
+            return
         dlg = tk.Toplevel(self)
         dlg.title("Conditions (2024)")
         dlg.geometry("1040x720")

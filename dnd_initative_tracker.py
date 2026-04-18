@@ -7839,21 +7839,24 @@ class InitiativeTracker(base.InitiativeTracker):
         _archive_startup_time_log()
         _archive_startup_logs()
         super().__init__()
-        self.title(f"DnD Initiative Tracker — v{APP_VERSION}")
+        if self.host_mode == "desktop":
+            self.title(f"DnD Initiative Tracker — v{APP_VERSION}")
 
         # Operations logger (terminal + ./logs/operations.log)
         self._ops_logger = _make_ops_logger()
 
         self._lan = LanController(self)
         self._load_lan_url_settings()
-        self._install_lan_menu()
+        if self.host_mode == "desktop":
+            self._install_lan_menu()
 
         # Monster library (YAML files in ./Monsters)
         self._monster_specs: List[MonsterSpec] = []
         self._monsters_by_name: Dict[str, MonsterSpec] = {}
         self._load_monsters_index()
         # Swap the Name entry for a monster dropdown + library button
-        self.after(0, self._install_monster_dropdown_widget)
+        if self.host_mode == "desktop":
+            self.after(0, self._install_monster_dropdown_widget)
 
         # Spell preset cache (YAML files in ./Spells)
         self._spell_presets_cache: Optional[List[Dict[str, Any]]] = None
@@ -10341,6 +10344,8 @@ class InitiativeTracker(base.InitiativeTracker):
         return bool(getattr(prev, "is_pc", False))
 
     def _show_dm_up_alert_dialog(self) -> None:
+        if not self._allow_desktop_runtime_surface("dm_up_alert_dialog"):
+            return
         parent = self
         map_parent = None
         try:
@@ -11169,6 +11174,8 @@ class InitiativeTracker(base.InitiativeTracker):
         return True
 
     def _install_lan_menu(self) -> None:
+        if not self._allow_desktop_runtime_surface("lan_menu"):
+            return
         try:
             menubar = tk.Menu(self)
             try:
@@ -11269,6 +11276,8 @@ class InitiativeTracker(base.InitiativeTracker):
         self._save_lan_url_settings()
 
     def _prompt_set_lan_https_public_url(self) -> None:
+        if not self._allow_desktop_runtime_surface("lan_https_public_url_dialog"):
+            return
         current = _normalize_public_url(getattr(getattr(self._lan, "url_settings", None), "public_https_url", None), required_scheme="https")
         raw = simpledialog.askstring(
             "Set HTTPS Public URL",
@@ -15478,6 +15487,8 @@ class InitiativeTracker(base.InitiativeTracker):
 
     def _session_restore_supports_tk_refresh(self) -> bool:
         """Return whether the desktop widget adapter should run after restore."""
+        if not self._allow_desktop_runtime_surface("session_restore_tk_refresh"):
+            return False
         if self.__dict__.get("tk") is None:
             return False
         try:
@@ -15714,6 +15725,8 @@ class InitiativeTracker(base.InitiativeTracker):
             self._log(f"Session loaded: {source_path}")
 
     def _save_session_dialog(self) -> None:
+        if not self._allow_desktop_runtime_surface("session_save_dialog"):
+            return
         default_path = self._session_saves_dir() / self._session_default_filename()
         chosen = filedialog.asksaveasfilename(
             parent=self,
@@ -15732,6 +15745,8 @@ class InitiativeTracker(base.InitiativeTracker):
             messagebox.showerror("Save Session", f"Failed to save session:\n{exc}", parent=self)
 
     def _load_session_dialog(self) -> None:
+        if not self._allow_desktop_runtime_surface("session_load_dialog"):
+            return
         chosen = filedialog.askopenfilename(
             parent=self,
             title="Load Session Snapshot",
@@ -15746,22 +15761,39 @@ class InitiativeTracker(base.InitiativeTracker):
             messagebox.showerror("Load Session", f"Failed to load session:\n{exc}", parent=self)
 
     def _quick_save_session(self) -> None:
+        desktop_feedback = self._allow_desktop_runtime_surface("quick_save_status_dialog")
         path = self._session_quicksave_path()
         try:
             self._save_session_to_path(path, label="quick_save")
             self._log(f"Quick save written: {path}")
         except Exception as exc:
-            messagebox.showerror("Quick Save", f"Failed to quick save session:\n{exc}", parent=self)
+            if desktop_feedback:
+                messagebox.showerror("Quick Save", f"Failed to quick save session:\n{exc}", parent=self)
+            else:
+                oplog = getattr(self, "_oplog", None)
+                if callable(oplog):
+                    oplog(f"Quick save failed ({path}): {exc}", level="warning")
 
     def _quick_load_session(self) -> None:
+        desktop_feedback = self._allow_desktop_runtime_surface("quick_load_status_dialog")
         path = self._session_quicksave_path()
         if not path.exists():
-            messagebox.showinfo("Quick Load", f"No quick save found at:\n{path}", parent=self)
+            if desktop_feedback:
+                messagebox.showinfo("Quick Load", f"No quick save found at:\n{path}", parent=self)
+            else:
+                oplog = getattr(self, "_oplog", None)
+                if callable(oplog):
+                    oplog(f"Quick load skipped; no snapshot found at {path}.", level="info")
             return
         try:
             self._load_session_from_path(path)
         except Exception as exc:
-            messagebox.showerror("Quick Load", f"Failed to quick load session:\n{exc}", parent=self)
+            if desktop_feedback:
+                messagebox.showerror("Quick Load", f"Failed to quick load session:\n{exc}", parent=self)
+            else:
+                oplog = getattr(self, "_oplog", None)
+                if callable(oplog):
+                    oplog(f"Quick load failed ({path}): {exc}", level="warning")
 
     def _auto_load_quick_save_on_startup(self) -> None:
         path = self._session_quicksave_path()
@@ -15827,6 +15859,8 @@ class InitiativeTracker(base.InitiativeTracker):
         self._log("Map reset.")
 
     def _open_map_mode(self) -> None:
+        if not self._allow_desktop_runtime_surface("map_window"):
+            return
         super()._open_map_mode()
         mw = getattr(self, "_map_window", None)
         try:
@@ -15924,6 +15958,8 @@ class InitiativeTracker(base.InitiativeTracker):
 
 
     def _open_roster_manager(self) -> None:
+        if not self._allow_desktop_runtime_surface("roster_manager_dialog"):
+            return
         win = tk.Toplevel(self)
         win.title("Combat Roster Manager")
         win.geometry("820x460")
@@ -16030,8 +16066,14 @@ class InitiativeTracker(base.InitiativeTracker):
         refresh_lists()
 
     def _roll_lan_initiative_for_claimed_pcs(self) -> None:
+        desktop_feedback = self._allow_desktop_runtime_surface("lan_initiative_dialog")
         if not getattr(self, "_lan", None) or not self._lan.is_running():
-            messagebox.showwarning("Roll LAN Initiative", "LAN server is not running.", parent=self)
+            if desktop_feedback:
+                messagebox.showwarning("Roll LAN Initiative", "LAN server is not running.", parent=self)
+            else:
+                oplog = getattr(self, "_oplog", None)
+                if callable(oplog):
+                    oplog("Roll LAN Initiative skipped: LAN server is not running.", level="warning")
             return
 
         prompted: List[str] = []
@@ -16056,19 +16098,32 @@ class InitiativeTracker(base.InitiativeTracker):
             prompted.append(str(c.name))
 
         if not prompted:
-            messagebox.showinfo(
-                "Roll LAN Initiative",
-                "No claimed player characters have an active LAN client connection.",
-                parent=self,
-            )
+            if desktop_feedback:
+                messagebox.showinfo(
+                    "Roll LAN Initiative",
+                    "No claimed player characters have an active LAN client connection.",
+                    parent=self,
+                )
+            else:
+                oplog = getattr(self, "_oplog", None)
+                if callable(oplog):
+                    oplog(
+                        "Roll LAN Initiative skipped: no claimed player characters have an active LAN client connection.",
+                        level="info",
+                    )
             return
 
         summary = f"Prompted {len(prompted)} player character(s): {', '.join(prompted)}"
         if skipped:
             summary += f"\n\nSkipped (no claimed LAN client): {', '.join(skipped)}"
-        messagebox.showinfo("Roll LAN Initiative", summary, parent=self)
+        if desktop_feedback:
+            messagebox.showinfo("Roll LAN Initiative", summary, parent=self)
+        else:
+            self._log(f"Roll LAN Initiative: {summary.replace(chr(10), ' ')}")
 
     def _show_lan_url(self) -> None:
+        if not self._allow_desktop_runtime_surface("lan_url_dialog"):
+            return
         if not self._lan.is_running():
             self._lan.start()
             if not self._lan.is_running():
@@ -16121,6 +16176,8 @@ class InitiativeTracker(base.InitiativeTracker):
         tk.Button(frm, text="Close", command=win.destroy).pack(anchor="e", pady=(12, 0))
 
     def _show_lan_qr(self) -> None:
+        if not self._allow_desktop_runtime_surface("lan_qr_dialog"):
+            return
         if not self._lan.is_running():
             self._lan.start()
             if not self._lan.is_running():
@@ -16228,6 +16285,8 @@ class InitiativeTracker(base.InitiativeTracker):
 
     def _open_lan_sessions(self) -> None:
         """DM utility: see connected LAN clients and (re)assign PCs."""
+        if not self._allow_desktop_runtime_surface("lan_sessions_dialog"):
+            return
         win = tk.Toplevel(self)
         win.title("LAN Sessions")
         win.geometry("720x420")
@@ -16326,6 +16385,8 @@ class InitiativeTracker(base.InitiativeTracker):
         refresh_sessions()
 
     def _open_yaml_player_manager(self) -> None:
+        if not self._allow_desktop_runtime_surface("yaml_player_manager_dialog"):
+            return
         win = tk.Toplevel(self)
         win.title("YAML Player Roster")
         win.geometry("760x420")
@@ -16414,6 +16475,8 @@ class InitiativeTracker(base.InitiativeTracker):
 
     def _open_lan_admin_assignments(self) -> None:
         """DM utility: review LAN sessions (mirrors web admin)."""
+        if not self._allow_desktop_runtime_surface("lan_admin_assignments_dialog"):
+            return
         win = tk.Toplevel(self)
         win.title("LAN Admin Assignments")
         win.geometry("860x460")
@@ -16474,6 +16537,11 @@ class InitiativeTracker(base.InitiativeTracker):
     
     def _check_for_updates(self) -> None:
         """Check for available updates from GitHub."""
+        if not self._allow_desktop_runtime_surface("update_check_dialog"):
+            oplog = getattr(self, "_oplog", None)
+            if callable(oplog):
+                oplog("Check for updates is desktop-only; skipping dialog in headless mode.", level="debug")
+            return
         try:
             # Run update check in a separate thread to avoid blocking UI
             def check_updates_thread():
@@ -16533,6 +16601,15 @@ class InitiativeTracker(base.InitiativeTracker):
             if not (has_update and update_info):
                 return
 
+            if not self._allow_desktop_runtime_surface("update_startup_offer_dialog"):
+                oplog = getattr(self, "_oplog", None)
+                if callable(oplog):
+                    oplog(
+                        f"Update available (headless mode); desktop prompt skipped: {message}",
+                        level="info",
+                    )
+                return
+
             self.after(0, lambda: self._offer_update_and_run_if_confirmed(message))
 
         thread = threading.Thread(target=check_updates_thread, daemon=True)
@@ -16546,7 +16623,15 @@ class InitiativeTracker(base.InitiativeTracker):
 
     def _new_session_apply_blank_state(self, confirm: bool = True) -> bool:
         meaningful_state = self._has_meaningful_session_state()
-        if confirm and meaningful_state:
+        allow_confirm_dialog = self._allow_desktop_runtime_surface("new_session_confirm_dialog")
+        if confirm and meaningful_state and not allow_confirm_dialog:
+            oplog = getattr(self, "_oplog", None)
+            if callable(oplog):
+                oplog(
+                    "New Session confirmation dialogs are desktop-only; applying new-session reset directly.",
+                    level="info",
+                )
+        if confirm and meaningful_state and allow_confirm_dialog:
             if not getattr(self, "_session_has_saved", False):
                 quick_save = messagebox.askyesnocancel(
                     "New Session",
@@ -16607,6 +16692,14 @@ class InitiativeTracker(base.InitiativeTracker):
         return True
 
     def _offer_update_and_run_if_confirmed(self, message: str) -> None:
+        if not self._allow_desktop_runtime_surface("update_offer_dialog"):
+            oplog = getattr(self, "_oplog", None)
+            if callable(oplog):
+                oplog(
+                    f"Update available but desktop confirmation dialog is unavailable in headless mode: {message}",
+                    level="info",
+                )
+            return
         result = messagebox.askyesno(
             "Update Available",
             f"{message}\n\nWould you like to update now?\n\n"
@@ -16624,6 +16717,14 @@ class InitiativeTracker(base.InitiativeTracker):
         self._launch_update_workflow(message)
 
     def _launch_update_workflow(self, message: str) -> None:
+        if not self._allow_desktop_runtime_surface("update_workflow_dialog"):
+            oplog = getattr(self, "_oplog", None)
+            if callable(oplog):
+                oplog(
+                    f"Update workflow launch skipped in headless mode: {message}",
+                    level="info",
+                )
+            return
         import subprocess
 
         update_cmd = update_checker.get_update_command()
@@ -16669,6 +16770,8 @@ class InitiativeTracker(base.InitiativeTracker):
     
     def _show_about(self) -> None:
         """Show about dialog with version information."""
+        if not self._allow_desktop_runtime_surface("about_dialog"):
+            return
         try:
             current_version = update_checker.get_current_version()
             local_commit = update_checker.get_local_git_commit()
@@ -16696,6 +16799,8 @@ class InitiativeTracker(base.InitiativeTracker):
 
     def _show_update_log(self) -> None:
         """Show the update log from the most recent update attempts."""
+        if not self._allow_desktop_runtime_surface("update_log_dialog"):
+            return
         log_path = _ensure_logs_dir() / "update.log"
         if not log_path.exists():
             messagebox.showinfo(
@@ -26008,6 +26113,8 @@ class InitiativeTracker(base.InitiativeTracker):
         return "\n".join(lines)
 
     def _open_monster_library(self) -> None:
+        if not self._allow_desktop_runtime_surface("monster_library_dialog"):
+            return
         self._load_monsters_index()
         self._load_player_yaml_cache()
 
@@ -28166,6 +28273,8 @@ class InitiativeTracker(base.InitiativeTracker):
         target_cid: Optional[int] = None,
         dialog_parent: Optional[tk.Misc] = None,
     ) -> bool:
+        if not self._allow_desktop_runtime_surface("map_attack_tool_dialog"):
+            return False
         if attacker_cid is None or target_cid is None:
             return False
         attacker = self.combatants.get(int(attacker_cid))
@@ -42544,6 +42653,8 @@ class InitiativeTracker(base.InitiativeTracker):
         return "\n".join(lines)
 
     def _open_monster_stat_block(self, spec: Optional[MonsterSpec] = None) -> None:
+        if not self._allow_desktop_runtime_surface("monster_stat_block_dialog"):
+            return
         if spec is None:
             nm = self.name_var.get().strip()
             spec = self._monsters_by_name.get(nm)

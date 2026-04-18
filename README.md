@@ -5,9 +5,9 @@
 ![LAN](https://img.shields.io/badge/LAN-fastapi%20%2B%20websocket-ffb000)
 ![License](https://img.shields.io/badge/license-MIT-green)
 
-A desktop-first D&D 5e combat tracker for Dungeon Masters, with an optional local-network web client for players.
+A desktop-first D&D 5e combat tracker for Dungeon Masters, with an optional local-network web client for players and a headless backend host mode.
 
-- **DM app:** Python + Tkinter desktop UI
+- **DM app:** Python runtime with desktop Tkinter host or headless host (`serve_headless.py`)
 - **Player app:** FastAPI + WebSocket mobile web client
 - **Data model:** YAML-driven monsters, spells, players, and map presets
 
@@ -179,11 +179,19 @@ If manually installed, remove the repository folder and its virtual environment.
 
 ## Running the tracker
 
-From a clone:
+From a clone, desktop host:
 
 ```bash
 python dnd_initative_tracker.py
 ```
+
+Headless host (no Tk window, web/LAN runtime only):
+
+```bash
+python serve_headless.py
+```
+
+In headless mode, desktop-only dialogs/popups/map windows are intentionally skipped at the host boundary; backend/session/combat authority stays in the same runtime.
 
 Typical DM flow:
 

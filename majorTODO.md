@@ -852,8 +852,25 @@ Pass-shape labels are heuristic:
     - desktop `main()` in `dnd_initative_tracker.py` is unchanged: when `INIT_TRACKER_HEADLESS` is unset and tkinter is importable, the existing Tk path is preserved as a compatibility entrypoint.
     - focused coverage landed in `tests/test_headless_host.py`: scheduler ordering + cancel + clean `quit()`, env-flag detection, and a subprocess-isolated end-to-end check that constructs a real `InitiativeTracker`, starts the LAN server on a loopback port, and confirms `GET /dm` returns 200 with no Tk window opened.
     - residual coupling intentionally remaining after this pass: `helper_script.InitiativeTracker(tk.Tk)` and the `dnd_initative_tracker.InitiativeTracker` subclass still inherit from `tk.Tk` (now `HeadlessRoot` under the headless flag), `_build_ui()` still constructs widget objects (now no-op `_DummyTkWidget` instances), and many tracker dialogs/menus still issue Tk method calls that are absorbed as no-ops. This is acceptable for the "make Tk optional as a host" milestone; full structural decoupling of widget construction from runtime authority is still pending.
-- In-progress pass: `None. Headless host extraction first pass is landed; the runtime can launch and serve `/dm` without a Tk root window.`
-- Next recommended pass: `Reduce residual Tk coupling inside `InitiativeTracker` startup so headless mode no longer needs the dummy widget set as a structural prop (e.g., move UI-only construction behind a host-mode guard, and route widget mutation through an explicit host adapter).`
+  - **Host-mode seam landed to gate startup Tk construction (2026-04-18):**
+    - `helper_script.InitiativeTracker.__init__` now sets `self.host_mode = "headless" if tk_compat.is_headless_env() else "desktop"` immediately after `super().__init__()`, and gates `self.title()/self.geometry()/self.iconphoto()`, `self._build_ui()`, `self._open_starting_players_dialog()`, and `self._rebuild_table()` on `host_mode == "desktop"`. In headless mode, the constructor calls a new `_init_headless_state_stubs()` helper that only creates the StringVar mirrors the runtime paths (turn tracker, movement mode, monster library filters) actually push values into. No widgets, no Treeview, no log Text, no menus, no monster dropdown construction.
+    - `dnd_initative_tracker.InitiativeTracker.__init__` similarly gates `self.title(...)`, `self._install_lan_menu()`, and `self.after(0, self._install_monster_dropdown_widget)` on `host_mode == "desktop"`. LAN construction, quick-save autoload, update checks, and `POC_AUTO_START_LAN` remain unconditional — the runtime authority still boots identically in both modes.
+    - `_append_log_line` was adjusted so file history is written in both host modes, while Text widget writes only happen in desktop mode (previously the whole method short-circuited when the log Text widget was absent, so headless mode silently dropped history writes). `_apply_name_tags_in_range`, `_load_history_into_log`, and `_rebuild_table` gate widget work on `host_mode == "desktop"` (the previous `hasattr(self, "log_text"/"tree")` guards were unreliable because `_DummyTkWidget.__getattr__` makes `hasattr()` always return True in headless mode).
+    - `tests/test_headless_host.py` was extended so the subprocess smoke test asserts `app.host_mode == "headless"`, that `tree`/`log_text`/`_lan_url_mode_var`/`_monster_combo` are absent from `app.__dict__`, and that `app._log(...)`, `app._rebuild_table()`, and `app._update_turn_ui()` don't crash under headless construction.
+  - **Bounded runtime desktop-surface seam pass landed (2026-04-18):**
+    - `helper_script.InitiativeTracker` now exposes an explicit runtime host boundary via `_host_supports_desktop_widgets()` and `_allow_desktop_runtime_surface(surface_name)`.
+    - map-window construction/use now routes through that boundary in both classes: `helper_script.InitiativeTracker._open_map_mode()` and `dnd_initative_tracker.InitiativeTracker._open_map_mode()` return immediately in headless mode, so headless no longer creates a dummy `_map_window` during runtime.
+    - high-value runtime desktop-only dialog/menu surfaces now explicitly gate on the host boundary: `_show_dm_up_alert_dialog`, `_install_lan_menu`, `_prompt_set_lan_https_public_url`, `_save_session_dialog`, `_load_session_dialog`, `_open_roster_manager`, `_show_lan_url`, `_show_lan_qr`, and `_session_restore_supports_tk_refresh`.
+    - focused seam coverage now includes `HeadlessRuntimeSurfaceGuardTests` plus additional subprocess assertions in `tests/test_headless_host.py` that guarded runtime calls execute safely in headless mode while keeping `_map_window` unopened.
+  - **Final bounded B host/runtime follow-up pass landed (2026-04-18):**
+    - the remaining high-value dialog/popup/helper entrypoints in both tracker layers now route through the explicit host boundary instead of relying on dummy-widget absorption in headless mode.
+    - `helper_script.py` now explicitly host-gates long-tail desktop dialogs/tools: long-rest confirm, starting-player roster, monster/library info dialogs, combatant-info/stat-block dialogs, random enemy + bulk add, and damage/heal/condition/move tools.
+    - `dnd_initative_tracker.py` now explicitly host-gates remaining desktop-only runtime dialogs/helpers: LAN sessions/admin assignment/YAML player manager windows, monster library/stat-block windows, map attack tool dialog, About/update-log/update-check UI helpers, and update-offer/update-workflow prompts.
+    - headless behavior for runtime helpers that previously surfaced `messagebox` popups is now explicit: quick-save/quick-load and LAN initiative prompting keep backend behavior but route status/error feedback to ops/log paths when desktop dialogs are unavailable.
+    - startup update-check now skips desktop update prompts in headless mode and logs availability instead of attempting dialog-driven workflow.
+    - focused seam coverage was expanded in `tests/test_headless_host.py` (unit + subprocess no-op calls for newly gated surfaces) and `tests/test_startup_update_behavior.py` (headless update-offer startup/confirm behavior).
+- In-progress pass: `None. Bounded host/runtime seam work for Tk-optional headless operation is now complete enough.`
+- Next recommended pass: `Pivot back to backend-authority extraction (player-command/encounter/runtime ownership cleanup) while leaving remaining Tk map-editor internals as isolated desktop-only legacy cleanup.`
 - Blocked items:
   - `Broad YAML-backed validation still depends on python3-yaml in the test environment. Minimal Debian-style environments without that package leave item-backed and monster-backed combat suites partially unrunnable even though the migrated combat service/tests can now import without real Tk.`
   - `No hard architecture blocker is confirmed yet, but framework/runtime choice should remain deferred until contracts stabilize.`
@@ -904,26 +921,20 @@ Pass-shape labels are heuristic:
 
 ## 14. Recommended immediate next pass
 
-### Reduce residual Tk coupling inside the tracker now that headless launch works
+### Pivot from host seam to authority extraction
 
-The first headless host extraction pass landed (2026-04-18): `tk_compat.HeadlessRoot` plus the `INIT_TRACKER_HEADLESS=1` flag and the new `serve_headless.py` entrypoint let the same `InitiativeTracker` runtime authority launch and serve `/dm` and `/` without constructing a Tk root window. Desktop/Tk launch remains as a compatibility entrypoint.
+The Tk host seam is now bounded enough for normal headless DM-browser operation: launch/startup, core runtime mutation paths, and the long-tail desktop dialog/popup helpers are explicitly routed through `_allow_desktop_runtime_surface(...)` rather than dummy-widget no-op behavior.
 
 What is architecturally meaningful next:
-- shrink the implicit Tk surface that the tracker still touches during construction so headless mode does not depend on the dummy widget set as a structural prop.
-- carve a clean host adapter so widget mutation calls (menu install, dialog open, table refresh, map window construction) only fire under a `host_mode == "desktop"` branch.
-- preserve current desktop behavior; this pass is about isolating, not removing, the Tk-coupled construction path.
-
-Recommended scope:
-- introduce a small host-mode flag (probably `app.host_mode` derived from `tk_compat.is_headless_env()`) and gate Tk-only construction blocks on it (LAN menu, monster dropdown swap, starting players dialog, map window setup).
-- move the few remaining `self.after(...)` patterns in `_lan_apply_action()` paths and LAN tick wiring to the `HeadlessRoot` scheduler API explicitly, so desktop code does not assume Tk-specific scheduling semantics.
-- keep `/dm` and `LanController`-served routes as the primary operator surface during the cleanup.
+- resume backend-authority extraction work (player-command and encounter/runtime ownership) instead of further Tk host-surface chasing.
+- keep `/dm` + existing API/service routes as the operator surface and avoid introducing new desktop-first ownership.
+- treat remaining Tk coupling as desktop-only legacy internals (mainly `BattleMapWindow`/map-editor dialog stacks) unless a concrete headless/runtime regression appears.
 
 Recommended validation:
-- extend `tests/test_headless_host.py` to cover a session save/load and a LAN attack/turn flow under headless mode.
-- focused DM route/contract regression to confirm `/dm` map/ship operations still produce identical snapshots in headless and desktop modes.
-- existing combat/session/reconnect suites continue to be the safety net.
+- `python3 -m py_compile` on touched Python files.
+- focused `python3 -m unittest` for host/runtime seams and the specific authority slice being migrated.
+- when optional FastAPI/HTTP deps are missing, prioritize equivalent non-HTTP seam tests so migration assertions remain enforceable.
 
-Deferred (not this pass):
-- removing Tk imports entirely or renaming `helper_script.InitiativeTracker(tk.Tk)`; that is a follow-up structural pass once the host adapter is in place.
-- player-web tactical/editor ownership changes.
-- speculative frontend framework rewrites.
+Deferred:
+- full Tk removal or class hierarchy rewrite.
+- player-web tactical/editor parity expansion outside scoped authority passes.

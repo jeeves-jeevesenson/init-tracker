@@ -22,6 +22,7 @@ import time
 import unittest
 from pathlib import Path
 
+import dnd_initative_tracker as tracker_mod
 import tk_compat
 
 
@@ -88,6 +89,45 @@ class HeadlessEnvDetectionTests(unittest.TestCase):
                 os.environ["INIT_TRACKER_HEADLESS"] = original
 
 
+class HeadlessRuntimeSurfaceGuardTests(unittest.TestCase):
+    """Desktop-only runtime widget surfaces should hard-gate on host mode."""
+
+    def test_headless_runtime_skips_desktop_only_widget_surfaces(self):
+        app = object.__new__(tracker_mod.InitiativeTracker)
+        app.host_mode = "headless"
+        app._map_window = None
+        app._oplog = lambda *_args, **_kwargs: None
+
+        self.assertFalse(app._allow_desktop_runtime_surface("map_window"))
+        self.assertFalse(app._session_restore_supports_tk_refresh())
+
+        app._show_dm_up_alert_dialog()
+        app._open_map_mode()
+        app._prompt_set_lan_https_public_url()
+        app._save_session_dialog()
+        app._load_session_dialog()
+        app._show_lan_url()
+        app._show_lan_qr()
+        app._open_lan_sessions()
+        app._open_yaml_player_manager()
+        app._open_lan_admin_assignments()
+        app._show_about()
+        app._show_update_log()
+        app._check_for_updates()
+        app._offer_update_and_run_if_confirmed("update available")
+        app._launch_update_workflow("update available")
+        app._open_monster_library()
+        app._open_random_enemy_dialog()
+        app._open_bulk_dialog()
+        app._open_damage_tool()
+        app._open_heal_tool()
+        app._open_condition_tool()
+        app._open_move_tool()
+        self.assertFalse(app._open_map_attack_tool())
+
+        self.assertIsNone(app.__dict__.get("_map_window"))
+
+
 class HeadlessLaunchSubprocessTest(unittest.TestCase):
     """Run a real headless launch in a subprocess to keep env isolated.
 
@@ -110,6 +150,40 @@ class HeadlessLaunchSubprocessTest(unittest.TestCase):
             "app = tracker_mod.InitiativeTracker()\n"
             "assert isinstance(app, tk_compat.HeadlessRoot)\n"
             "assert hasattr(app, '_lan'), 'LAN controller missing'\n"
+            "assert app.host_mode == 'headless', repr(app.host_mode)\n"
+            # __getattr__ on dummy widgets makes hasattr() lie, so assert via __dict__.
+            "for name in ('tree', 'log_text', '_lan_url_mode_var', '_monster_combo'):\n"
+            "    assert name not in app.__dict__, ('Tk widget leaked into headless app: ' + name)\n"
+            # Runtime mutations that normally touch UI must not crash in headless mode.
+            "assert app._allow_desktop_runtime_surface('map_window') is False\n"
+            "assert app._session_restore_supports_tk_refresh() is False\n"
+            "app._log('headless smoke test line')\n"
+            "app._rebuild_table()\n"
+            "app._update_turn_ui()\n"
+            "app._show_dm_up_alert_dialog()\n"
+            "app._open_map_mode()\n"
+            "assert app.__dict__.get('_map_window') is None, 'headless map window should stay unopened'\n"
+            "app._prompt_set_lan_https_public_url()\n"
+            "app._save_session_dialog()\n"
+            "app._load_session_dialog()\n"
+            "app._show_lan_url()\n"
+            "app._show_lan_qr()\n"
+            "app._open_lan_sessions()\n"
+            "app._open_yaml_player_manager()\n"
+            "app._open_lan_admin_assignments()\n"
+            "app._show_about()\n"
+            "app._show_update_log()\n"
+            "app._check_for_updates()\n"
+            "app._offer_update_and_run_if_confirmed('update available')\n"
+            "app._launch_update_workflow('update available')\n"
+            "app._open_monster_library()\n"
+            "app._open_random_enemy_dialog()\n"
+            "app._open_bulk_dialog()\n"
+            "app._open_damage_tool()\n"
+            "app._open_heal_tool()\n"
+            "app._open_condition_tool()\n"
+            "app._open_move_tool()\n"
+            "assert app._open_map_attack_tool() is False\n"
             "th = threading.Thread(target=app.mainloop, daemon=True)\n"
             "th.start()\n"
             "app._lan.cfg.host = '127.0.0.1'\n"

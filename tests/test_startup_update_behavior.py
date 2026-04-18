@@ -1,5 +1,5 @@
 import unittest
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 import dnd_initative_tracker as tracker_mod
 
@@ -48,6 +48,32 @@ class StartupUpdateBehaviorTests(unittest.TestCase):
         self.assertEqual(askyesno.call_args_list[1].args[1], "quick save? yes no")
         quick_save.assert_called_once()
         launch_update.assert_called_once_with("update found")
+
+    def test_startup_update_found_headless_logs_without_prompt(self):
+        app = self._make_app()
+        app.host_mode = "headless"
+        app._oplog = Mock()
+
+        with patch("dnd_initative_tracker.threading.Thread", side_effect=lambda target, daemon: _InlineThread(target=target, daemon=daemon)), \
+             patch("dnd_initative_tracker.update_checker.check_for_updates", return_value=(True, "update found", {"version": "9.9.9"})), \
+             patch.object(app, "_offer_update_and_run_if_confirmed") as offer_update:
+            app._check_for_updates_on_startup()
+
+        offer_update.assert_not_called()
+        self.assertTrue(app._oplog.called)
+
+    def test_offer_update_headless_skips_desktop_prompt(self):
+        app = self._make_app()
+        app.host_mode = "headless"
+        app._oplog = Mock()
+
+        with patch("dnd_initative_tracker.messagebox.askyesno") as askyesno, \
+             patch.object(app, "_launch_update_workflow") as launch_update:
+            app._offer_update_and_run_if_confirmed("update found")
+
+        askyesno.assert_not_called()
+        launch_update.assert_not_called()
+        self.assertTrue(app._oplog.called)
 
 
 if __name__ == "__main__":

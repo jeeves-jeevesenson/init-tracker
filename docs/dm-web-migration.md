@@ -326,27 +326,56 @@ What happens under the hood:
   `tk.Tk` swapped for `tk_compat.HeadlessRoot`, which provides a real
   `after()`/`mainloop()` scheduler running on the main thread.
 - The same `InitiativeTracker` runtime authority used in desktop mode is
-  constructed; widget calls become no-ops on dummy widgets, but the LAN
-  poll tick, the FastAPI/uvicorn server thread, the DM/LAN WebSockets,
-  and all backend-owned combat/session/map authority operate normally.
+  constructed, but startup now reads `self.host_mode`
+  (`"headless"` when `INIT_TRACKER_HEADLESS=1`, else `"desktop"`) and
+  skips the UI build for headless mode. The LAN poll tick, the
+  FastAPI/uvicorn server thread, the DM/LAN WebSockets, and all
+  backend-owned combat/session/map authority operate normally.
 - `Ctrl+C` (or `SIGTERM`) shuts the LAN server down and exits cleanly.
 
 The DM operator surface remains `http://<host>:<port>/dm` in both modes.
+
+The host-mode seam (`self.host_mode`) now gates the following startup
+blocks on `host_mode == "desktop"`:
+
+- `self.title()`, `self.geometry()`, and `self.iconphoto()`
+- `self._build_ui()` (the full Tk widget tree)
+- `self._open_starting_players_dialog()` and the initial `_rebuild_table()`
+- `self._install_lan_menu()` in `dnd_initative_tracker.InitiativeTracker`
+- `self.after(0, self._install_monster_dropdown_widget)` swap
+
+In headless mode, `_init_headless_state_stubs()` creates only the
+`StringVar` mirrors that runtime paths (turn tracker, movement mode,
+monster library filters) push values into, so those setters stay
+side-effect-only without any widgets behind them.
+
+The follow-on runtime seam pass adds an explicit desktop/headless
+boundary for key widget-mutation paths:
+
+- `helper_script.InitiativeTracker` now exposes
+  `_host_supports_desktop_widgets()` +
+  `_allow_desktop_runtime_surface(surface_name)` as the runtime host
+  boundary.
+- map-window construction now gates through that boundary in both
+  classes (`helper_script._open_map_mode` and
+  `dnd_initative_tracker._open_map_mode`), so headless runtime paths no
+  longer instantiate a dummy map window.
+- high-value desktop-only dialog/menu entrypoints now hard-gate on the
+  boundary (`_show_dm_up_alert_dialog`, `_prompt_set_lan_https_public_url`,
+  `_save_session_dialog`, `_load_session_dialog`, `_show_lan_url`,
+  `_show_lan_qr`, `_open_roster_manager`, plus
+  `_session_restore_supports_tk_refresh`).
 
 Residual coupling worth knowing about:
 
 - `helper_script.InitiativeTracker(tk.Tk)` and the
   `dnd_initative_tracker.InitiativeTracker` subclass still inherit from
-  `tk.Tk` (which becomes `HeadlessRoot` in headless mode).
-- `_build_ui()` still constructs widget objects under headless mode; they
-  are dummy no-ops, not real Tk windows, but the construction code path
-  still runs.
-- A small number of features that only ever lived behind Tk dialogs
-  (e.g. file-dialog save/load, the desktop map window) are not reachable
-  in headless mode. Use the corresponding `/api/dm/...` routes or the
-  `/dm` web surface instead.
-
-This is the first headless milestone, not the final Tk-removal pass; the
-next planned step is to gate the remaining widget-construction blocks on
-an explicit host-mode flag rather than relying on dummy widgets as a
-structural prop.
+  `tk.Tk` (which becomes `HeadlessRoot` in headless mode). Dropping the
+  inheritance is a future structural pass.
+- Many long-tail Tk dialogs/popup helpers (especially in
+  `helper_script.py`) still call Tk directly and remain desktop-only;
+  they now need the same explicit boundary treatment to remove the
+  remaining dummy-widget runtime reliance.
+- Features that only ever lived behind Tk dialogs (e.g. desktop map
+  window UX, file-dialog driven save/load prompts) remain unreachable in
+  headless mode by design; use `/api/dm/...` routes or `/dm`.
