@@ -99,6 +99,7 @@ from player_command_contracts import (
     SPELL_LAUNCH_COMMAND_TYPES,
     SUMMON_ECHO_SPECIALTY_COMMAND_TYPES,
     TURN_LOCAL_COMMAND_TYPES,
+    UTILITY_ADMIN_COMMAND_TYPES,
     WILD_SHAPE_COMMAND_TYPES,
     build_attack_request_contract,
     build_hellish_rebuke_resolve_start_payload,
@@ -35663,27 +35664,135 @@ class InitiativeTracker(base.InitiativeTracker):
         self._lan_force_state_broadcast()
         return
 
+    def _handle_set_color_request(
+        self,
+        msg: Dict[str, Any],
+        *,
+        cid: Optional[int],
+        ws_id: Any,
+        is_admin: bool,
+    ) -> None:
+        color = self._normalize_token_color(msg.get("color"))
+        if not color:
+            self._lan.toast(ws_id, "Pick a valid hex color, matey.")
+            return
+        border_color = self._normalize_token_color(msg.get("border_color")) or "#ffffff"
+        c = self.combatants.get(cid) if cid is not None else None
+        if not c:
+            return
+        if _normalize_cid_value(getattr(c, "rider_cid", None), "dash.rider_cid") is not None:
+            self._lan.toast(ws_id, "Rider movement uses the mount, matey.")
+            return
+        setattr(c, "token_color", color)
+        setattr(c, "token_border_color", border_color)
+        player_name = ""
+        if cid is not None:
+            try:
+                player_name = self._pc_name_for(int(cid))
+            except Exception:
+                player_name = ""
+        if player_name and not player_name.startswith("cid:"):
+            try:
+                self._save_player_token_color(player_name, color)
+                self._save_player_token_border_color(player_name, border_color)
+            except Exception as exc:
+                self._oplog(f"Could not save token color for {player_name}: {exc}", level="warning")
+        mw = getattr(self, "_map_window", None)
+        if mw is not None and hasattr(mw, "update_unit_token_colors"):
+            try:
+                if mw.winfo_exists():
+                    mw.update_unit_token_colors()
+            except Exception:
+                pass
+        return
+
+    def _handle_set_facing_request(
+        self,
+        msg: Dict[str, Any],
+        *,
+        cid: Optional[int],
+        ws_id: Any,
+        is_admin: bool,
+        claimed: Optional[int],
+    ) -> None:
+        if not is_admin and (
+            claimed is None
+            or (int(cid) != int(claimed) and not self._summon_can_be_controlled_by(claimed, cid))
+        ):
+            self._lan.toast(ws_id, "Arrr, that token ain’t yers.")
+            return
+        c = self.combatants.get(cid) if cid is not None else None
+        if not c:
+            return
+        facing = int(self._normalize_facing_degrees(msg.get("facing_deg")))
+        setattr(c, "facing_deg", facing)
+        self._sync_owned_rotatable_aoes_with_facing(int(cid), getattr(c, "facing_deg", 0))
+        mw = getattr(self, "_map_window", None)
+        if mw is not None and hasattr(mw, "winfo_exists"):
+            try:
+                if mw.winfo_exists() and hasattr(mw, "_token_facing"):
+                    mw._token_facing[int(cid)] = float(facing)
+                    if hasattr(mw, "_layout_unit"):
+                        mw._layout_unit(int(cid))
+            except Exception:
+                pass
+        self._lan_force_state_broadcast()
+        return
+
+    def _handle_set_auras_enabled_request(
+        self,
+        msg: Dict[str, Any],
+        *,
+        cid: Optional[int],
+        ws_id: Any,
+        is_admin: bool,
+    ) -> None:
+        enabled_raw = msg.get("enabled")
+        enabled = True
+        if isinstance(enabled_raw, str):
+            enabled = enabled_raw.strip().lower() in ("1", "true", "yes", "on")
+        elif isinstance(enabled_raw, (int, float)):
+            enabled = bool(enabled_raw)
+        else:
+            enabled = bool(enabled_raw)
+        self._lan_auras_enabled = bool(enabled)
+        self._lan_force_state_broadcast()
+        return
+
+    def _handle_reset_player_characters_request(
+        self,
+        msg: Dict[str, Any],
+        *,
+        cid: Optional[int],
+        ws_id: Any,
+        is_admin: bool,
+    ) -> None:
+        if not is_admin:
+            self._lan.toast(ws_id, "Admin access required, matey.")
+            return
+        updated = self._reset_player_character_resources()
+        if updated:
+            for c in self.combatants.values():
+                role = self._name_role_memory.get(str(c.name), "enemy")
+                if role != "pc":
+                    continue
+                key = str(c.name or "").strip().lower()
+                if key in updated:
+                    try:
+                        c.hp = int(updated[key])
+                    except Exception:
+                        pass
+        try:
+            self._rebuild_table(scroll_to_current=True)
+        except Exception:
+            pass
+        self._lan_force_state_broadcast()
+        self._lan.toast(ws_id, "Player characters reset.")
+        return
+
     def _lan_apply_action(self, msg: Dict[str, Any]) -> None:
         """Apply client actions on the Tk thread."""
-        tracker: Optional["InitiativeTracker"]
-        if isinstance(self, InitiativeTracker):
-            tracker = self
-        else:
-            tracker = getattr(self, "_tracker", None) or getattr(self, "app", None)
         log_warning = None
-        def _resolve_pc_name(cid_value: Optional[int]) -> str:
-            if cid_value is None:
-                return ""
-            if tracker is None or not hasattr(tracker, "_pc_name_for"):
-                if log_warning is not None:
-                    log_warning(f"LAN action missing pc name resolver for cid {cid_value}.")
-                return ""
-            try:
-                return tracker._pc_name_for(int(cid_value))
-            except Exception as exc:
-                if log_warning is not None:
-                    log_warning(f"LAN action failed to resolve pc name for cid {cid_value}: {exc}")
-                return ""
         if not isinstance(self, InitiativeTracker) or not hasattr(self, "_pc_name_for"):
             if os.getenv("LAN_BIND_DEBUG") == "1":
                 log_fn = getattr(self, "_oplog", None)
@@ -35827,131 +35936,14 @@ class InitiativeTracker(base.InitiativeTracker):
                 gate_turn=(not in_combat or is_admin or (cid is not None and current_cid == cid)),
             )
 
-        if typ == "set_color":
-            color = self._normalize_token_color(msg.get("color"))
-            if not color:
-                self._lan.toast(ws_id, "Pick a valid hex color, matey.")
-                return
-            border_color = self._normalize_token_color(msg.get("border_color")) or "#ffffff"
-            c = self.combatants.get(cid)
-            if not c:
-                return
-            if _normalize_cid_value(getattr(c, "rider_cid", None), "dash.rider_cid") is not None:
-                self._lan.toast(ws_id, "Rider movement uses the mount, matey.")
-                return
-            setattr(c, "token_color", color)
-            setattr(c, "token_border_color", border_color)
-            player_name = _resolve_pc_name(cid)
-            if player_name and not player_name.startswith("cid:"):
-                try:
-                    self._save_player_token_color(player_name, color)
-                    self._save_player_token_border_color(player_name, border_color)
-                except Exception as exc:
-                    self._oplog(f"Could not save token color for {player_name}: {exc}", level="warning")
-            mw = getattr(self, "_map_window", None)
-            if mw is not None and hasattr(mw, "update_unit_token_colors"):
-                try:
-                    if mw.winfo_exists():
-                        mw.update_unit_token_colors()
-                except Exception:
-                    pass
-            return
-
-        if typ == "set_facing":
-            if not is_admin and (
-                claimed is None
-                or (int(cid) != int(claimed) and not self._summon_can_be_controlled_by(claimed, cid))
-            ):
-                self._lan.toast(ws_id, "Arrr, that token ain’t yers.")
-                return
-            c = self.combatants.get(cid)
-            if not c:
-                return
-            facing = int(self._normalize_facing_degrees(msg.get("facing_deg")))
-            setattr(c, "facing_deg", facing)
-            self._sync_owned_rotatable_aoes_with_facing(int(cid), getattr(c, "facing_deg", 0))
-            mw = getattr(self, "_map_window", None)
-            if mw is not None and hasattr(mw, "winfo_exists"):
-                try:
-                    if mw.winfo_exists() and hasattr(mw, "_token_facing"):
-                        mw._token_facing[int(cid)] = float(facing)
-                        if hasattr(mw, "_layout_unit"):
-                            mw._layout_unit(int(cid))
-                except Exception:
-                    pass
-            self._lan_force_state_broadcast()
-            return
-
-        if typ == "set_auras_enabled":
-            enabled_raw = msg.get("enabled")
-            enabled = True
-            if isinstance(enabled_raw, str):
-                enabled = enabled_raw.strip().lower() in ("1", "true", "yes", "on")
-            elif isinstance(enabled_raw, (int, float)):
-                enabled = bool(enabled_raw)
-            else:
-                enabled = bool(enabled_raw)
-            self._lan_auras_enabled = bool(enabled)
-            self._lan_force_state_broadcast()
-            return
-
-        if typ == "reset_player_characters":
-            if not is_admin:
-                self._lan.toast(ws_id, "Admin access required, matey.")
-                return
-            updated = self._reset_player_character_resources()
-            if updated:
-                for c in self.combatants.values():
-                    role = self._name_role_memory.get(str(c.name), "enemy")
-                    if role != "pc":
-                        continue
-                    key = str(c.name or "").strip().lower()
-                    if key in updated:
-                        try:
-                            c.hp = int(updated[key])
-                        except Exception:
-                            pass
-            forced_moves_applied: List[str] = []
-            if isinstance(resolved_bucket, list):
-                for effect in resolved_bucket:
-                    effect_name = str(effect.get("effect") or "").strip().lower()
-                    if effect_name not in ("movement", "forced_movement"):
-                        continue
-                    mode = str(effect.get("kind") or effect.get("mode") or effect.get("direction") or "").strip().lower()
-                    if mode not in ("push", "pull"):
-                        continue
-                    try:
-                        distance_ft = float(effect.get("distance_ft") or 0)
-                    except Exception:
-                        distance_ft = 0.0
-                    if distance_ft <= 0:
-                        continue
-                    origin = str(effect.get("origin") or "caster").strip().lower()
-                    source_cid = int(cid)
-                    source_cell = None
-                    direction_step = None
-                    if origin == "aoe_direction":
-                        direction_step = self._lan_direction_step_from_angle(effect.get("angle_deg", getattr(c, "facing_deg", 0)))
-                        source_cid = None
-                    moved = self._lan_apply_forced_movement(
-                        source_cid,
-                        int(target_cid),
-                        mode,
-                        float(distance_ft),
-                        source_cell=source_cell,
-                        direction_step=direction_step,
-                    )
-                    if moved:
-                        forced_moves_applied.append(f"{mode} {int(distance_ft)}ft")
-            if forced_moves_applied:
-                self._log(f"{spell_name} moves {result_payload['target_name']}: {', '.join(forced_moves_applied)}.", cid=int(target_cid))
-
-            try:
-                self._rebuild_table(scroll_to_current=True)
-            except Exception:
-                pass
-            self._lan_force_state_broadcast()
-            self._lan.toast(ws_id, "Player characters reset.")
+        if typ in UTILITY_ADMIN_COMMAND_TYPES:
+            self._ensure_player_commands().dispatch_utility_admin_command(
+                msg,
+                cid=cid,
+                ws_id=ws_id,
+                is_admin=is_admin,
+                claimed=claimed,
+            )
             return
 
         if typ == "manual_override_hp":

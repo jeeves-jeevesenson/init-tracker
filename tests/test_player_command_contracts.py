@@ -13,6 +13,7 @@ from player_command_contracts import (
     SPELL_LAUNCH_COMMAND_TYPES,
     SUMMON_ECHO_SPECIALTY_COMMAND_TYPES,
     TURN_LOCAL_COMMAND_TYPES,
+    UTILITY_ADMIN_COMMAND_TYPES,
     WILD_SHAPE_COMMAND_TYPES,
     build_aoe_move_contract,
     build_aoe_remove_contract,
@@ -52,7 +53,11 @@ from player_command_contracts import (
     build_reaction_prefs_update_contract,
     build_reappear_persistent_summon_contract,
     build_reset_turn_contract,
+    build_reset_player_characters_contract,
     build_resume_dispatch,
+    build_set_auras_enabled_contract,
+    build_set_color_contract,
+    build_set_facing_contract,
     build_second_wind_use_contract,
     build_star_advantage_use_contract,
     build_stand_up_contract,
@@ -471,6 +476,40 @@ class InitiativeReactionSpecialtyCommandContractTests(unittest.TestCase):
                 f"player_command.{command_type}.request",
             )
             self.assertEqual((contract.get("actor") or {}).get("cid"), 51)
+            self.assertEqual((contract.get("payload") or {}).get("type"), command_type)
+
+
+class UtilityAdminCommandContractTests(unittest.TestCase):
+    def test_utility_admin_command_contract_builders_cover_the_family(self):
+        builders = {
+            "set_color": (
+                build_set_color_contract,
+                {"type": "set_color", "color": "#00ff00", "border_color": "#ffffff"},
+            ),
+            "set_facing": (
+                build_set_facing_contract,
+                {"type": "set_facing", "facing_deg": 270},
+            ),
+            "set_auras_enabled": (
+                build_set_auras_enabled_contract,
+                {"type": "set_auras_enabled", "enabled": False},
+            ),
+            "reset_player_characters": (
+                build_reset_player_characters_contract,
+                {"type": "reset_player_characters"},
+            ),
+        }
+
+        self.assertEqual(set(builders.keys()), set(UTILITY_ADMIN_COMMAND_TYPES))
+
+        for command_type, (builder, msg) in builders.items():
+            contract = builder(dict(msg), cid=61, ws_id=62, is_admin=True)
+            self.assertEqual(contract.get("command_type"), command_type)
+            self.assertEqual(
+                (contract.get("contract") or {}).get("schema"),
+                f"player_command.{command_type}.request",
+            )
+            self.assertEqual((contract.get("actor") or {}).get("cid"), 61)
             self.assertEqual((contract.get("payload") or {}).get("type"), command_type)
 
 

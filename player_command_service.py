@@ -31,6 +31,9 @@ Service-owned (this module):
   - player turn-local / mobility-lite commands:
     ``mount_request``, ``mount_response``, ``dismount``, ``dash``,
     ``use_action``, ``use_bonus_action``, ``stand_up``, and ``reset_turn``
+  - utility/admin player-path commands:
+    ``set_color``, ``set_facing``, ``set_auras_enabled``, and
+    ``reset_player_characters``
   - player "manual override HP" (HP/temp-HP deltas; prefers
     ``CombatService.manual_override`` when available, falls back to direct
     mutation for legacy/desktop-only runtime)
@@ -99,6 +102,7 @@ from player_command_contracts import (
     SPELL_LAUNCH_COMMAND_TYPES,
     SUMMON_ECHO_SPECIALTY_COMMAND_TYPES,
     TURN_LOCAL_COMMAND_TYPES,
+    UTILITY_ADMIN_COMMAND_TYPES,
     WILD_SHAPE_COMMAND_TYPES,
     apply_resume_dispatch,
     build_aoe_move_contract,
@@ -145,8 +149,12 @@ from player_command_contracts import (
     build_reaction_prefs_update_contract,
     build_reaction_response_contract,
     build_reappear_persistent_summon_contract,
+    build_reset_player_characters_contract,
     build_reset_turn_contract,
     build_resume_dispatch,
+    build_set_auras_enabled_contract,
+    build_set_color_contract,
+    build_set_facing_contract,
     build_second_wind_use_contract,
     build_spell_target_request_contract,
     build_stand_up_contract,
@@ -762,6 +770,9 @@ class PlayerCommandService:
     }
     _INITIATIVE_REACTION_SPECIALTY_COMMAND_HANDLERS = {
         command_type: command_type for command_type in INITIATIVE_REACTION_SPECIALTY_COMMAND_TYPES
+    }
+    _UTILITY_ADMIN_COMMAND_HANDLERS = {
+        command_type: command_type for command_type in UTILITY_ADMIN_COMMAND_TYPES
     }
     _TURN_LOCAL_COMMAND_HANDLERS = {
         command_type: command_type for command_type in TURN_LOCAL_COMMAND_TYPES
@@ -3154,6 +3165,213 @@ class PlayerCommandService:
             )
         return build_dispatch_result(
             "hellish_rebuke_resolve",
+            True,
+            request=request_contract,
+        )
+
+    # ------------------------------------------------------------------
+    # utility/admin commands
+    # ------------------------------------------------------------------
+
+    def dispatch_utility_admin_command(
+        self,
+        msg: Dict[str, Any],
+        *,
+        cid: Optional[int],
+        ws_id: Any,
+        is_admin: bool,
+        claimed: Optional[int] = None,
+    ) -> Dict[str, Any]:
+        command_type = str(msg.get("type") if isinstance(msg, dict) else "").strip().lower()
+        handler_name = self._UTILITY_ADMIN_COMMAND_HANDLERS.get(command_type)
+        if not handler_name:
+            return build_dispatch_result(
+                "utility_admin_command",
+                False,
+                reason="unsupported_command",
+                received_type=command_type,
+            )
+        handler = getattr(self, handler_name, None)
+        if not callable(handler):
+            return build_dispatch_result(
+                command_type,
+                False,
+                reason="handler_missing",
+            )
+        return handler(
+            msg if isinstance(msg, dict) else {},
+            cid=cid,
+            ws_id=ws_id,
+            is_admin=is_admin,
+            claimed=claimed,
+        )
+
+    def set_color(
+        self,
+        msg: Dict[str, Any],
+        *,
+        cid: Optional[int],
+        ws_id: Any,
+        is_admin: bool,
+        claimed: Optional[int] = None,
+    ) -> Dict[str, Any]:
+        t = self._tracker
+        request_contract = build_set_color_contract(
+            msg,
+            cid=cid,
+            ws_id=ws_id,
+            is_admin=is_admin,
+        )
+        handler = getattr(t, "_handle_set_color_request", None)
+        if not callable(handler):
+            return build_dispatch_result(
+                "set_color",
+                False,
+                reason="handler_missing",
+                request=request_contract,
+            )
+        try:
+            handler(msg if isinstance(msg, dict) else {}, cid=cid, ws_id=ws_id, is_admin=is_admin)
+        except Exception as exc:
+            self._oplog(f"set_color handler raised: {exc}", level="warning")
+            return build_dispatch_result(
+                "set_color",
+                False,
+                reason="exception",
+                error=str(exc),
+                request=request_contract,
+            )
+        return build_dispatch_result(
+            "set_color",
+            True,
+            request=request_contract,
+        )
+
+    def set_facing(
+        self,
+        msg: Dict[str, Any],
+        *,
+        cid: Optional[int],
+        ws_id: Any,
+        is_admin: bool,
+        claimed: Optional[int] = None,
+    ) -> Dict[str, Any]:
+        t = self._tracker
+        request_contract = build_set_facing_contract(
+            msg,
+            cid=cid,
+            ws_id=ws_id,
+            is_admin=is_admin,
+        )
+        handler = getattr(t, "_handle_set_facing_request", None)
+        if not callable(handler):
+            return build_dispatch_result(
+                "set_facing",
+                False,
+                reason="handler_missing",
+                request=request_contract,
+            )
+        try:
+            handler(
+                msg if isinstance(msg, dict) else {},
+                cid=cid,
+                ws_id=ws_id,
+                is_admin=is_admin,
+                claimed=claimed,
+            )
+        except Exception as exc:
+            self._oplog(f"set_facing handler raised: {exc}", level="warning")
+            return build_dispatch_result(
+                "set_facing",
+                False,
+                reason="exception",
+                error=str(exc),
+                request=request_contract,
+            )
+        return build_dispatch_result(
+            "set_facing",
+            True,
+            request=request_contract,
+        )
+
+    def set_auras_enabled(
+        self,
+        msg: Dict[str, Any],
+        *,
+        cid: Optional[int],
+        ws_id: Any,
+        is_admin: bool,
+        claimed: Optional[int] = None,
+    ) -> Dict[str, Any]:
+        t = self._tracker
+        request_contract = build_set_auras_enabled_contract(
+            msg,
+            cid=cid,
+            ws_id=ws_id,
+            is_admin=is_admin,
+        )
+        handler = getattr(t, "_handle_set_auras_enabled_request", None)
+        if not callable(handler):
+            return build_dispatch_result(
+                "set_auras_enabled",
+                False,
+                reason="handler_missing",
+                request=request_contract,
+            )
+        try:
+            handler(msg if isinstance(msg, dict) else {}, cid=cid, ws_id=ws_id, is_admin=is_admin)
+        except Exception as exc:
+            self._oplog(f"set_auras_enabled handler raised: {exc}", level="warning")
+            return build_dispatch_result(
+                "set_auras_enabled",
+                False,
+                reason="exception",
+                error=str(exc),
+                request=request_contract,
+            )
+        return build_dispatch_result(
+            "set_auras_enabled",
+            True,
+            request=request_contract,
+        )
+
+    def reset_player_characters(
+        self,
+        msg: Dict[str, Any],
+        *,
+        cid: Optional[int],
+        ws_id: Any,
+        is_admin: bool,
+        claimed: Optional[int] = None,
+    ) -> Dict[str, Any]:
+        t = self._tracker
+        request_contract = build_reset_player_characters_contract(
+            msg,
+            cid=cid,
+            ws_id=ws_id,
+            is_admin=is_admin,
+        )
+        handler = getattr(t, "_handle_reset_player_characters_request", None)
+        if not callable(handler):
+            return build_dispatch_result(
+                "reset_player_characters",
+                False,
+                reason="handler_missing",
+                request=request_contract,
+            )
+        try:
+            handler(msg if isinstance(msg, dict) else {}, cid=cid, ws_id=ws_id, is_admin=is_admin)
+        except Exception as exc:
+            self._oplog(f"reset_player_characters handler raised: {exc}", level="warning")
+            return build_dispatch_result(
+                "reset_player_characters",
+                False,
+                reason="exception",
+                error=str(exc),
+                request=request_contract,
+            )
+        return build_dispatch_result(
+            "reset_player_characters",
             True,
             request=request_contract,
         )

@@ -115,6 +115,10 @@ HELLISH_REBUKE_RESOLVE_FIELDS: Sequence[str] = (
     "slot_level",
     "target_cid",
 )
+SET_COLOR_FIELDS: Sequence[str] = ("type", "color", "border_color")
+SET_FACING_FIELDS: Sequence[str] = ("type", "facing_deg")
+SET_AURAS_ENABLED_FIELDS: Sequence[str] = ("type", "enabled")
+RESET_PLAYER_CHARACTERS_FIELDS: Sequence[str] = ("type",)
 
 END_TURN_FIELDS: Sequence[str] = ("type",)
 MOUNT_REQUEST_FIELDS: Sequence[str] = ("type", "rider_cid", "mount_cid")
@@ -294,6 +298,15 @@ INITIATIVE_REACTION_SPECIALTY_COMMAND_TYPES = frozenset(
     }
 )
 
+UTILITY_ADMIN_COMMAND_TYPES = frozenset(
+    {
+        "set_color",
+        "set_facing",
+        "set_auras_enabled",
+        "reset_player_characters",
+    }
+)
+
 
 def _copy(value: Any) -> Any:
     try:
@@ -456,6 +469,70 @@ def build_hellish_rebuke_resolve_contract(
     return build_command_request_contract(
         "hellish_rebuke_resolve",
         _project_payload(msg, HELLISH_REBUKE_RESOLVE_FIELDS, "hellish_rebuke_resolve"),
+        cid=cid,
+        ws_id=ws_id,
+        is_admin=is_admin,
+    )
+
+
+def build_set_color_contract(
+    msg: Dict[str, Any],
+    *,
+    cid: Optional[int],
+    ws_id: Any,
+    is_admin: bool,
+) -> Dict[str, Any]:
+    return build_command_request_contract(
+        "set_color",
+        _project_payload(msg, SET_COLOR_FIELDS, "set_color"),
+        cid=cid,
+        ws_id=ws_id,
+        is_admin=is_admin,
+    )
+
+
+def build_set_facing_contract(
+    msg: Dict[str, Any],
+    *,
+    cid: Optional[int],
+    ws_id: Any,
+    is_admin: bool,
+) -> Dict[str, Any]:
+    return build_command_request_contract(
+        "set_facing",
+        _project_payload(msg, SET_FACING_FIELDS, "set_facing"),
+        cid=cid,
+        ws_id=ws_id,
+        is_admin=is_admin,
+    )
+
+
+def build_set_auras_enabled_contract(
+    msg: Dict[str, Any],
+    *,
+    cid: Optional[int],
+    ws_id: Any,
+    is_admin: bool,
+) -> Dict[str, Any]:
+    return build_command_request_contract(
+        "set_auras_enabled",
+        _project_payload(msg, SET_AURAS_ENABLED_FIELDS, "set_auras_enabled"),
+        cid=cid,
+        ws_id=ws_id,
+        is_admin=is_admin,
+    )
+
+
+def build_reset_player_characters_contract(
+    msg: Dict[str, Any],
+    *,
+    cid: Optional[int],
+    ws_id: Any,
+    is_admin: bool,
+) -> Dict[str, Any]:
+    return build_command_request_contract(
+        "reset_player_characters",
+        _project_payload(msg, RESET_PLAYER_CHARACTERS_FIELDS, "reset_player_characters"),
         cid=cid,
         ws_id=ws_id,
         is_admin=is_admin,
