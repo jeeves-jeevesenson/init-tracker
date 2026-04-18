@@ -63,6 +63,7 @@ When this file and older migration notes disagree, treat the code, tests, and th
   - atomic YAML writes already exist for multiple paths
   - session saves are JSON snapshots with `SESSION_SNAPSHOT_SCHEMA_VERSION = 2`
   - session snapshots preserve a canonical map payload while maintaining legacy compatibility projections
+  - DM-owned session save/load is now also web-operable via authenticated routes (`GET /api/dm/sessions`, `POST /api/dm/sessions/save`, `POST /api/dm/sessions/load`, `POST /api/dm/sessions/quick-save`, `POST /api/dm/sessions/quick-load`) that reuse `_save_session_to_path` / `_load_session_from_path` / `_session_quicksave_path`; Tk file-dialog flows remain as a compatibility entrypoint, not the only operational path.
 - A canonical map-domain seam already exists:
   - `map_state.py` defines `MapState`, `MapQueryAPI`, delta helpers, canonical-only layers, and legacy conversion helpers
   - `_capture_canonical_map_state()` and `_apply_canonical_map_state()` already bridge canonical map data with legacy/Tk state
@@ -551,21 +552,21 @@ Blockers / dependencies: source-content references, generated-entity schema deci
 
 Desired end state: versioned runtime encounter/session documents that are UI-agnostic and map-canonical.
 
-Current state: session snapshots already exist and preserve canonical map state; the migrated player-command slice now also persists canonical pending prompt records through `combat.pending_prompts` while projecting legacy prompt dictionaries for compatibility. Save/load entrypoints remain desktop-centric and runtime state is still closely tied to the tracker class.
+Current state: session snapshots already exist and preserve canonical map state; the migrated player-command slice now also persists canonical pending prompt records through `combat.pending_prompts` while projecting legacy prompt dictionaries for compatibility. Web-owned DM session save/load/quick-save/quick-load/list routes now reuse the same `_save_session_to_path` / `_load_session_from_path` / `_session_quicksave_path` helpers, so backend-initiated persistence is possible without invoking Tk file dialogs. Runtime state still lives on the tracker class, and Tk dialog flows remain as a compatibility entrypoint.
 
-Next likely major pass: expose session save/load through backend-owned APIs and shrink assumptions about Tk-owned state.
+Next likely major pass: shrink the remaining Tk-owned assumptions inside `_load_session_from_path` / `_apply_session_snapshot` (map-window hydration, direct canvas touches) so session restore can run cleanly in a headless web-primary environment and reopen a canonical encounter+map schema conversation.
 
-Blockers / dependencies: authoritative encounter schema, pending-prompt serialization decisions.
+Blockers / dependencies: authoritative encounter schema, pending-prompt serialization decisions, Tk-free map hydration path.
 
 ### Workstream: DM web console
 
 Desired end state: the DM can run standard encounters from the browser without relying on desktop widgets for ordinary operation.
 
-Current state: `/dm` already supports snapshot viewing, turn control, HP/temp HP, conditions, add/remove combatants, initiative, and auth refresh handling.
+Current state: `/dm` already supports snapshot viewing, turn control, HP/temp HP, conditions, add/remove combatants, initiative, auth refresh handling, and — as of 2026-04-17 — session save/load, quick save, quick load, and snapshot listing via new `/api/dm/sessions/*` routes plus a Session Persistence card in `assets/web/dm/index.html`. After a web-triggered load, the tracker broadcasts canonical state back to LAN clients and pushes a refreshed DM snapshot to connected DM WebSocket clients.
 
-Next likely major pass: complete encounter/session operational parity for the browser path and make it the default operator workflow for migrated slices.
+Next likely major pass: close remaining encounter-loop gaps (start/end combat parity, encounter template/population ergonomics, log/state recovery UX) and formalize operational contracts for the DM persistence routes so reconnect/resume behavior is fixture-backed.
 
-Blockers / dependencies: Phase 1 authority completeness, session save/load exposure, unresolved desktop-only encounter tools.
+Blockers / dependencies: Phase 1 authority completeness (done for migrated slices), unresolved desktop-only encounter authoring tools, pending encounter schema decisions.
 
 ### Workstream: Player / LAN client
 
@@ -671,6 +672,7 @@ Pass-shape labels are heuristic:
    - Likely pass shape: `Seam hardening pass`
    - Dependencies: items 1-3
    - Exit criteria: migrated encounter/session save-load flows can be invoked from backend/web paths without depending on Tk dialogs as the authoritative entrypoint.
+   - Status (2026-04-17): **Initial web vertical slice landed.** DM save/load/quick-save/quick-load/list are available as authenticated `/api/dm/sessions/*` routes; the DM console has UI controls for each. Remaining work is to make `_load_session_from_path` / `_apply_session_snapshot` fully Tk-optional and to formalize persistence payload contracts, not to add new entrypoints.
 
 8. **Move tactical map authority and editing to canonical web-first flows**
    - Priority: `P2`
@@ -798,8 +800,15 @@ Pass-shape labels are heuristic:
     - reaction-response dispatch results now carry prompt lifecycle metadata (`trigger`, `choice`, `prompt_state`) from the service resolver, while shield/absorb/interception resume dispatch behavior remains intact.
     - `InitiativeTracker._adjudicate_reaction_response` remains only as a compatibility wrapper that forwards to the service-owned resolver.
     - focused ownership coverage was extended in `tests/test_player_command_contracts.py` (`ReactionResumeDispatchTests.test_reaction_response_resolution_no_longer_uses_tracker_adjudicator`) and existing shield/absorb/hellish/interception suites continue to cover behavior.
-- In-progress pass: `None. Coherent prompt/reaction offer + resolution ownership pass landed.`
-- Next recommended pass: `Close the remaining web-vertical prerequisites by locking reconnect/resume contract fixtures and exposing session-persistence APIs before the DM web-primary pivot.`
+  - **First web-owned DM session persistence vertical slice landed (2026-04-17):**
+    - new authenticated routes on `LanController._fastapi_app`: `GET /api/dm/sessions` (list saves + quick-save metadata + default filename), `POST /api/dm/sessions/save` (accepts optional `filename`/`label`), `POST /api/dm/sessions/load` (reloads by filename and broadcasts), `POST /api/dm/sessions/quick-save`, and `POST /api/dm/sessions/quick-load`.
+    - all five routes share the `_check_dm_auth(request)` admin-token gate, reuse existing `_save_session_to_path` / `_load_session_from_path` / `_session_saves_dir` / `_session_quicksave_path` / `_session_default_filename` helpers, and validate filenames through `_SESSION_FILENAME_RE` plus `Path.relative_to(saves_dir.resolve())` to prevent path-traversal escape.
+    - load-path routes push a fresh `CombatService.combat_snapshot()` to the DM WebSocket via `_push_dm_snapshot_to_ws_clients` and call `_lan_force_state_broadcast()` so LAN clients see restored state without a Tk event.
+    - `assets/web/dm/index.html` gained a "Session Persistence" mut-card with Quick Save / Quick Load, named Save (filename input + label), and Load (dropdown of discovered snapshots + Refresh) controls; destructive loads prompt `confirm()` and `startAutoRefresh()` now populates the list on login.
+    - focused coverage added in `tests/test_dm_session_persistence_routes.py` (16 fastapi/httpx-gated route tests covering list/save/load/quick flows, auth, and path-traversal rejection, plus a fastapi-free HTML-surface test).
+    - Tk file-dialog save/load remains as a compatibility entrypoint; the DM browser console is now honestly able to drive the encounter-loop save/load cycle without Tk being the primary owner.
+- In-progress pass: `None. First web-owned DM session persistence vertical slice landed.`
+- Next recommended pass: `Shrink Tk coupling inside _load_session_from_path / _apply_session_snapshot so session restore works headlessly, and lock reconnect/resume contract fixtures for the prompt/map payloads the DM web console already touches.`
 - Blocked items:
   - `Broad YAML-backed validation still depends on python3-yaml in the test environment. Minimal Debian-style environments without that package leave item-backed and monster-backed combat suites partially unrunnable even though the migrated combat service/tests can now import without real Tk.`
   - `No hard architecture blocker is confirmed yet, but framework/runtime choice should remain deferred until contracts stabilize.`
@@ -822,6 +831,7 @@ Pass-shape labels are heuristic:
   - **Utility/admin extraction follows the same service-envelope pattern (2026-04-17).** `PlayerCommandService.dispatch_utility_admin_command` now owns the transport/authority boundary for `set_color`, `set_facing`, `set_auras_enabled`, and `reset_player_characters`; deep runtime bodies moved into dedicated `_handle_*_request` tracker helpers to preserve user-visible behavior while shrinking `_lan_apply_action()`.
   - **Combat-trigger prompt creation is now atomic in `PromptState` (2026-04-17).** The separate two-step create+attach_resolution pattern for shield, absorb_elements, hellish_rebuke, and interception prompt offers is replaced by a single atomic `PromptState.create_reaction_offer` call that includes `resolution` and `resume_dispatch` at creation time. For hellish_rebuke, the prompt_id is pre-generated so the `player_visible` reconnect field can be included at creation.
   - **Turn-local / mobility-lite extraction follows the same service-envelope pattern (2026-04-17).** `PlayerCommandService` now owns validation/mutation orchestration/result shaping for mount request/response, dismount, dash, action/bonus-action spending, stand up, and turn reset, while tracker helpers remain compatibility adapters for live map state, mount initiative, and snapshot restore.
+  - **DM session persistence is now web-operable first, Tk file dialog second (2026-04-17).** Authenticated DM routes under `/api/dm/sessions/...` reuse the existing `_save_session_to_path` / `_load_session_from_path` / `_session_quicksave_path` helpers rather than reimplementing snapshot semantics; the Tk file dialog remains only as a compatibility entrypoint. This locks the first honest web vertical slice into the DM console while preserving the existing JSON snapshot schema (`SESSION_SNAPSHOT_SCHEMA_VERSION = 2`).
 - Open questions:
   - `When should the backend leave the Tk process: after DM web-primary parity, or only after player command extraction too?`
   - `When is it worth introducing a typed frontend build pipeline for LAN/DM clients?`
@@ -849,36 +859,32 @@ Pass-shape labels are heuristic:
 
 ## 14. Recommended immediate next pass
 
-### Prompt/reaction ownership landed; finish prereqs for first web-owned vertical slice
+### First web-owned DM persistence slice landed; make session restore headless and lock reconnect/resume contracts
 
-After the utility/admin pass, prompt-override relocation, and service-owned reaction-offer entrypoint pass, `_lan_apply_action()` is mostly shared claim/turn gating plus one-line service delegations (family dispatchers plus a handful of single-command branches: `manual_override_hp` / `manual_override_spell_slot` / `manual_override_resource_pool`, `reaction_prefs_update`, `reaction_response`, `attack_request`, `spell_target_request`, `lay_on_hands_use`, `inventory_adjust_consumable`, `use_consumable`, `end_turn`). Bundling those residual branches into another "family" would still be mechanical and buy little real ownership.
+The DM console can now drive save/load/quick-save/quick-load through `/api/dm/sessions/...` without the Tk file dialog being the primary owner. That establishes an honest web vertical slice but exposes the next real bottleneck: the load path still runs through Tk-coupled helpers (`_remove_combatants_with_lan_cleanup`, `_rebuild_table`, and adjacent helpers used by `_load_session_from_path` / `_apply_session_snapshot`). Until session restore works headlessly, the web-operable save/load still depends on a Tk-hosted process to actually apply the snapshot.
 
-What is actually still architecturally meaningful near `_lan_apply_action()`:
-- the shared claim / summon-control / turn gating block is still tracker-hosted glue; prompt-specific gating has already moved into `PlayerCommandService`.
-- tracker compatibility wrappers (`_create_reaction_offer` / `_maybe_offer_*`) still exist, but authoritative reaction-offer creation/emission now runs through service-owned entry points.
-- the `_adjudicate_*` tracker methods still binding to Tk / map / YAML, which keeps player-command authority tethered to desktop state.
+What is actually architecturally meaningful next:
+- `_load_session_from_path` and `_apply_session_snapshot` still reach into Tk widget mutation during restore; this blocks running the DM web console against a non-Tk host.
+- reconnect/resume payloads (`you.pending_prompts`, `combat.pending_prompts`, claim/turn snapshots) are already persisted, but there are no canonical contract fixtures locking their shape against drift.
+- the map payload has a canonical layer (`MapState` / `map_state.py`) but load-path rehydration is still mixed with Tk canvas state.
 
-Why this still matters before a web-owned vertical slice:
-- offer creation/emission is now centralized enough to avoid further tracker-led prompt sprawl.
-- trigger-specific reaction resolution now also sits behind `PlayerCommandService`, reducing mixed-owner prompt lifecycle drift.
-- the remaining risk is reconnect/resume/session payload drift unless fixtures/API contracts are locked before broader web vertical work.
-
-Why not pivot directly to a web-primary DM vertical slice yet:
-- Phase 2 (DM web-primary operator surface, backlog item 3) is the right strategic milestone, but shifting there before prompt ownership and contract fixtures catch up risks reopening prompt/reaction semantics without canonical coverage.
-- session save/load exposure and contract fixtures for prompt payloads are still prerequisites.
+Why this matters before the DM web-primary pivot:
+- Phase 2 (DM web-primary operator surface, backlog item 3) needs a load path that runs without the Tk main loop; right now it does not.
+- contract fixtures for reconnect/resume payloads become load-bearing the moment a second consumer (the DM browser console) depends on them; fixture coverage prevents silent schema drift across the session-persistence boundary that just landed.
 
 Recommended scope:
+- shrink Tk coupling inside `_load_session_from_path` / `_apply_session_snapshot`: extract the snapshot-application body into a tracker helper that accepts canonical state only, and keep the Tk widget refresh as a thin compatibility adapter around it.
+- add canonical contract fixtures for the session snapshot (`combat.pending_prompts`, claim/turn, map payload) and for reconnect payloads (`you.pending_prompts` / `you.pending_prompt`) so the new DM persistence routes and existing LAN reconnect flow share locked shapes.
 - keep `_lan_apply_action()` as transport/delegation glue; avoid reopening command-family extraction churn.
-- add/lock contract fixtures for prompt lifecycle payloads used by reconnect/resume.
-- expose/lock session-persistence API payload shape needed by web consumers so prompt snapshots and resume metadata stay stable across reconnect/save-load.
 
 Recommended validation:
-- focused coverage for prompt lifecycle (offer → resolve → resume) plus the reaction suites already in `tests/test_lan_reaction_action.py`, `tests/test_lan_reaction_prompts.py`, `tests/test_hellish_rebuke_reaction.py`, `tests/test_absorb_elements_reaction.py`.
-- contract/allowlist regression coverage for the affected payloads.
-- spot-check the dispatch suites (`tests/test_lan_*_dispatch.py`) to confirm the residual single-command branches stay green.
+- focused coverage for a Tk-free snapshot application path (apply canonical snapshot → inspect combat/prompt/map state) independent of the Tk event loop.
+- contract-fixture regressions for `SESSION_SNAPSHOT_SCHEMA_VERSION = 2` payloads and reconnect payload shape.
+- re-run the persistence route suite in `tests/test_dm_session_persistence_routes.py` plus existing session save/load suites and the reaction/prompt suites already tracked in section 12.
 
 Deferred (not this pass):
-- bundling the residual single-command dispatch branches into another "super-family" — low ownership gain; revisit only if it simplifies the shared gating after prompt ownership lands.
-- pivoting to the DM web-primary vertical slice (backlog item 3) — the right next *strategic* milestone, but still gated on completing prompt-resolution ownership and session/contract prerequisites.
+- bundling the residual single-command dispatch branches in `_lan_apply_action()` into another "super-family" — low ownership gain; revisit only if it simplifies the shared gating after headless restore lands.
+- pivoting fully to the DM web-primary vertical slice (backlog item 3) — still gated on a Tk-free restore path and locked reconnect/resume contracts.
+- exposing player-facing session persistence routes — the first slice is deliberately DM-authority-scoped; opening it to non-admin surfaces is a separate policy decision.
 
 If this pass lands cleanly, `_lan_apply_action()` will continue trending toward transport/delegation glue and backend authority will advance toward web-first ownership.

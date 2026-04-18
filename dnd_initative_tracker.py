@@ -4024,6 +4024,223 @@ class LanController:
             except Exception:
                 raise HTTPException(status_code=500, detail="Failed to remove combatant.")
 
+        # ── DM session persistence routes ─────────────────────────────────
+        # Web-owned save/load over the existing JSON session snapshot
+        # machinery. These routes reuse `_save_session_to_path` /
+        # `_load_session_from_path` / `_session_quicksave_path` on the
+        # tracker so semantics match the desktop save/load path; the
+        # backend is the authority for what gets written and restored.
+
+        _SESSION_FILENAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.\-]{0,127}\.json$")
+
+        def _resolve_session_path(filename: str) -> Path:
+            name = str(filename or "").strip()
+            if not name:
+                raise HTTPException(status_code=400, detail="filename is required.")
+            if not _SESSION_FILENAME_RE.match(name):
+                raise HTTPException(status_code=400, detail="filename must match [A-Za-z0-9_.-]+.json.")
+            saves_dir = self.app._session_saves_dir()
+            target = (saves_dir / name).resolve()
+            try:
+                target.relative_to(saves_dir.resolve())
+            except ValueError:
+                raise HTTPException(status_code=400, detail="filename must resolve inside the saves directory.")
+            return target
+
+        def _session_snapshot_entry(path: Path, quick_save_path: Path) -> Dict[str, Any]:
+            try:
+                stat = path.stat()
+            except Exception:
+                return {
+                    "name": path.name,
+                    "size": None,
+                    "modified": None,
+                    "is_quick_save": path.resolve() == quick_save_path.resolve(),
+                }
+            return {
+                "name": path.name,
+                "size": int(stat.st_size),
+                "modified": float(stat.st_mtime),
+                "is_quick_save": path.resolve() == quick_save_path.resolve(),
+            }
+
+        def _dm_broadcast_after_load() -> None:
+            try:
+                self.app._lan_force_state_broadcast()
+            except Exception:
+                pass
+            if _dm_service is not None:
+                try:
+                    snap = _dm_service.combat_snapshot()
+                    self._push_dm_snapshot_to_ws_clients(snap)
+                except Exception:
+                    pass
+
+        @self._fastapi_app.get("/api/dm/sessions")
+        async def dm_list_sessions(request: Request):
+            """List available session snapshots saved by this tracker.
+
+            Returns: {ok, saves_dir, default_filename, quick_save: {name, exists, ...},
+                      snapshots: [{name, size, modified, is_quick_save}, ...]}
+            """
+            _check_dm_auth(request)
+            try:
+                saves_dir = self.app._session_saves_dir()
+                quick_path = self.app._session_quicksave_path()
+                default_name = self.app._session_default_filename()
+            except Exception:
+                raise HTTPException(status_code=500, detail="Failed to read session saves directory.")
+            snapshots: List[Dict[str, Any]] = []
+            try:
+                for entry in saves_dir.iterdir():
+                    if not entry.is_file():
+                        continue
+                    if entry.suffix.lower() != ".json":
+                        continue
+                    snapshots.append(_session_snapshot_entry(entry, quick_path))
+            except Exception:
+                raise HTTPException(status_code=500, detail="Failed to list session snapshots.")
+            snapshots.sort(key=lambda item: (item.get("modified") or 0.0), reverse=True)
+            quick_info: Dict[str, Any] = {"name": quick_path.name, "exists": bool(quick_path.exists())}
+            if quick_info["exists"]:
+                try:
+                    stat = quick_path.stat()
+                    quick_info["size"] = int(stat.st_size)
+                    quick_info["modified"] = float(stat.st_mtime)
+                except Exception:
+                    pass
+            return {
+                "ok": True,
+                "saves_dir": str(saves_dir),
+                "default_filename": default_name,
+                "quick_save": quick_info,
+                "snapshots": snapshots,
+            }
+
+        @self._fastapi_app.post("/api/dm/sessions/save")
+        async def dm_save_session(request: Request, payload: Optional[Dict[str, Any]] = Body(default=None)):
+            """Save the current session snapshot to a named file in the saves dir.
+
+            Body (optional): {filename?: str, label?: str}
+              - filename defaults to a timestamped `session_YYYYMMDD_HHMMSS.json`.
+              - label is passed through to the snapshot payload.
+            Returns: {ok, name, size, modified, saves_dir}
+            """
+            _check_dm_auth(request)
+            body = payload if isinstance(payload, dict) else {}
+            label_raw = body.get("label")
+            label = str(label_raw).strip() if label_raw is not None else None
+            if label == "":
+                label = None
+            filename_raw = body.get("filename")
+            try:
+                saves_dir = self.app._session_saves_dir()
+            except Exception:
+                raise HTTPException(status_code=500, detail="Failed to resolve session saves directory.")
+            if filename_raw is None or str(filename_raw).strip() == "":
+                name = self.app._session_default_filename()
+                if not _SESSION_FILENAME_RE.match(name):
+                    raise HTTPException(status_code=500, detail="Default session filename is invalid.")
+                target = (saves_dir / name).resolve()
+            else:
+                target = _resolve_session_path(str(filename_raw))
+            try:
+                self.app._save_session_to_path(target, label=label)
+            except Exception as exc:
+                raise HTTPException(status_code=500, detail=f"Failed to save session: {exc}")
+            try:
+                stat = target.stat()
+                size = int(stat.st_size)
+                modified = float(stat.st_mtime)
+            except Exception:
+                size = None
+                modified = None
+            return {
+                "ok": True,
+                "name": target.name,
+                "size": size,
+                "modified": modified,
+                "saves_dir": str(saves_dir),
+            }
+
+        @self._fastapi_app.post("/api/dm/sessions/load")
+        async def dm_load_session(request: Request, payload: Dict[str, Any] = Body(...)):
+            """Load a named session snapshot from the saves dir.
+
+            Body: {filename: str}
+            Returns: {ok, name, snapshot}
+            """
+            _check_dm_auth(request)
+            if not isinstance(payload, dict):
+                raise HTTPException(status_code=400, detail="Invalid payload.")
+            target = _resolve_session_path(str(payload.get("filename") or ""))
+            if not target.exists() or not target.is_file():
+                raise HTTPException(status_code=404, detail="Session snapshot not found.")
+            try:
+                self.app._load_session_from_path(target)
+            except Exception as exc:
+                raise HTTPException(status_code=500, detail=f"Failed to load session: {exc}")
+            snapshot = None
+            if _dm_service is not None:
+                try:
+                    snapshot = _dm_service.combat_snapshot()
+                except Exception:
+                    snapshot = None
+            _dm_broadcast_after_load()
+            return {"ok": True, "name": target.name, "snapshot": snapshot}
+
+        @self._fastapi_app.post("/api/dm/sessions/quick-save")
+        async def dm_quick_save_session(request: Request):
+            """Write the quick-save snapshot to the tracker's quick-save path.
+
+            Returns: {ok, name, size, modified}
+            """
+            _check_dm_auth(request)
+            try:
+                path = self.app._session_quicksave_path()
+            except Exception:
+                raise HTTPException(status_code=500, detail="Failed to resolve quick-save path.")
+            try:
+                self.app._save_session_to_path(path, label="quick_save")
+            except Exception as exc:
+                raise HTTPException(status_code=500, detail=f"Failed to quick-save: {exc}")
+            try:
+                stat = path.stat()
+                size = int(stat.st_size)
+                modified = float(stat.st_mtime)
+            except Exception:
+                size = None
+                modified = None
+            return {"ok": True, "name": path.name, "size": size, "modified": modified}
+
+        @self._fastapi_app.post("/api/dm/sessions/quick-load")
+        async def dm_quick_load_session(request: Request):
+            """Load the tracker's quick-save snapshot.
+
+            Returns: {ok, name, snapshot}  (404 if no quick save exists yet)
+            """
+            _check_dm_auth(request)
+            try:
+                path = self.app._session_quicksave_path()
+            except Exception:
+                raise HTTPException(status_code=500, detail="Failed to resolve quick-save path.")
+            if not path.exists() or not path.is_file():
+                raise HTTPException(status_code=404, detail="No quick save found.")
+            try:
+                self.app._load_session_from_path(path)
+            except Exception as exc:
+                raise HTTPException(status_code=500, detail=f"Failed to quick-load: {exc}")
+            snapshot = None
+            if _dm_service is not None:
+                try:
+                    snapshot = _dm_service.combat_snapshot()
+                except Exception:
+                    snapshot = None
+            _dm_broadcast_after_load()
+            return {"ok": True, "name": path.name, "snapshot": snapshot}
+
+        # ── End DM session persistence routes ────────────────────────────
+
         @self._fastapi_app.websocket("/ws/dm")
         async def ws_dm_endpoint(ws: WebSocket):
             """Real-time DM snapshot push channel.

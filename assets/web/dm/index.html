@@ -415,6 +415,29 @@
       <button class="btn-action remove" id="removeCombatantBtn">Remove from Encounter</button>
       <div class="mut-result" id="removeCombatantResult"></div>
     </div>
+
+    <!-- Session persistence -->
+    <div class="mut-card">
+      <h3>Session Persistence</h3>
+      <div style="display:flex;gap:6px;margin-bottom:8px">
+        <button class="btn-action heal" id="quickSaveBtn" style="flex:1">⚡ Quick Save</button>
+        <button class="btn-action" id="quickLoadBtn" style="flex:1">⟲ Quick Load</button>
+      </div>
+      <div class="form-group">
+        <label>Save filename (optional — defaults to timestamped)</label>
+        <input type="text" id="sessionSaveName" placeholder="e.g. boss_fight.json" />
+      </div>
+      <button class="btn-action" id="sessionSaveBtn">💾 Save Session</button>
+      <div class="form-group" style="margin-top:10px">
+        <label>Load from existing snapshot</label>
+        <select id="sessionLoadSelect"><option value="">— select a snapshot —</option></select>
+      </div>
+      <div style="display:flex;gap:6px">
+        <button class="btn-action" id="sessionLoadBtn" style="flex:1">📂 Load Selected</button>
+        <button class="btn-sm" id="sessionRefreshBtn" style="flex:0 0 auto">↺ Refresh</button>
+      </div>
+      <div class="mut-result" id="sessionResult"></div>
+    </div>
   </div>
 
 </div>
@@ -661,6 +684,7 @@ function startAutoRefresh() {
     if (document.getElementById('autoRefreshCb').checked) fetchSnapshot();
   }, POLL_INTERVAL_MS);
   connectDmWs();
+  refreshSessionList();
 }
 
 // ── Real-time WebSocket push ──────────────────────────────────────────
@@ -1087,6 +1111,129 @@ document.getElementById('removeCombatantBtn').addEventListener('click', async ()
     const data = await r.json();
     if (r.ok && data.ok) {
       res.textContent = `Combatant removed (cid ${data.cid}).`;
+      if (data.snapshot) applySnapshot(data.snapshot);
+    } else {
+      res.textContent = data.detail || data.error || 'Error.';
+      res.classList.add('error');
+    }
+  } catch (e) { res.textContent = 'Request failed.'; res.classList.add('error'); }
+});
+
+// ── Session persistence ───────────────────────────────────────────────
+function formatSessionModified(modified) {
+  if (!(modified > 0)) return '';
+  try { return new Date(modified * 1000).toLocaleString(); } catch (_) { return ''; }
+}
+
+function formatSessionSize(size) {
+  if (!(size > 0)) return '';
+  if (size < 1024) return size + ' B';
+  if (size < 1024 * 1024) return (size / 1024).toFixed(1) + ' KB';
+  return (size / (1024 * 1024)).toFixed(1) + ' MB';
+}
+
+async function refreshSessionList() {
+  const sel = document.getElementById('sessionLoadSelect');
+  try {
+    const r = await fetch(`${BASE}/api/dm/sessions`, { headers: authHeaders() });
+    if (r.status === 401 || r.status === 403) {
+      clearAdminAuthState('Session expired. Please log in again.');
+      return;
+    }
+    if (!r.ok) return;
+    const data = await r.json();
+    const prev = sel.value;
+    sel.innerHTML = '<option value="">— select a snapshot —</option>';
+    for (const entry of (data.snapshots || [])) {
+      const opt = document.createElement('option');
+      opt.value = entry.name;
+      const tag = entry.is_quick_save ? ' [quick save]' : '';
+      const when = formatSessionModified(entry.modified);
+      const size = formatSessionSize(entry.size);
+      const bits = [when, size].filter(Boolean).join(' · ');
+      opt.textContent = entry.name + tag + (bits ? ` — ${bits}` : '');
+      sel.appendChild(opt);
+    }
+    if (prev) {
+      const stillPresent = Array.from(sel.options).some(opt => opt.value === prev);
+      if (stillPresent) sel.value = prev;
+    }
+  } catch (_) { /* ignore */ }
+}
+
+document.getElementById('sessionSaveBtn').addEventListener('click', async () => {
+  const name = document.getElementById('sessionSaveName').value.trim();
+  const res = document.getElementById('sessionResult');
+  res.className = 'mut-result';
+  const body = name ? { filename: name } : {};
+  try {
+    const r = await fetch(`${BASE}/api/dm/sessions/save`, {
+      method: 'POST', headers: authHeaders(), body: JSON.stringify(body),
+    });
+    const data = await r.json();
+    if (r.ok && data.ok) {
+      res.textContent = `Saved: ${data.name}`;
+      document.getElementById('sessionSaveName').value = '';
+      refreshSessionList();
+    } else {
+      res.textContent = data.detail || data.error || 'Error.';
+      res.classList.add('error');
+    }
+  } catch (e) { res.textContent = 'Request failed.'; res.classList.add('error'); }
+});
+
+document.getElementById('sessionLoadBtn').addEventListener('click', async () => {
+  const name = document.getElementById('sessionLoadSelect').value;
+  const res = document.getElementById('sessionResult');
+  res.className = 'mut-result';
+  if (!name) { res.textContent = 'Select a snapshot to load.'; res.classList.add('error'); return; }
+  if (!confirm(`Load "${name}"? This replaces the current encounter state.`)) return;
+  try {
+    const r = await fetch(`${BASE}/api/dm/sessions/load`, {
+      method: 'POST', headers: authHeaders(), body: JSON.stringify({ filename: name }),
+    });
+    const data = await r.json();
+    if (r.ok && data.ok) {
+      res.textContent = `Loaded: ${data.name}`;
+      if (data.snapshot) applySnapshot(data.snapshot);
+    } else {
+      res.textContent = data.detail || data.error || 'Error.';
+      res.classList.add('error');
+    }
+  } catch (e) { res.textContent = 'Request failed.'; res.classList.add('error'); }
+});
+
+document.getElementById('sessionRefreshBtn').addEventListener('click', () => refreshSessionList());
+
+document.getElementById('quickSaveBtn').addEventListener('click', async () => {
+  const res = document.getElementById('sessionResult');
+  res.className = 'mut-result';
+  try {
+    const r = await fetch(`${BASE}/api/dm/sessions/quick-save`, {
+      method: 'POST', headers: authHeaders(),
+    });
+    const data = await r.json();
+    if (r.ok && data.ok) {
+      res.textContent = `Quick save written: ${data.name}`;
+      refreshSessionList();
+    } else {
+      res.textContent = data.detail || data.error || 'Error.';
+      res.classList.add('error');
+    }
+  } catch (e) { res.textContent = 'Request failed.'; res.classList.add('error'); }
+});
+
+document.getElementById('quickLoadBtn').addEventListener('click', async () => {
+  const res = document.getElementById('sessionResult');
+  res.className = 'mut-result';
+  if (!confirm('Load the quick save? This replaces the current encounter state.')) return;
+  try {
+    const r = await fetch(`${BASE}/api/dm/sessions/quick-load`, {
+      method: 'POST', headers: authHeaders(),
+    });
+    const data = await r.json();
+    if (r.ok && data.ok) {
+      res.textContent = `Quick load applied: ${data.name}`;
       if (data.snapshot) applySnapshot(data.snapshot);
     } else {
       res.textContent = data.detail || data.error || 'Error.';
