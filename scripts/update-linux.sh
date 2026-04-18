@@ -22,6 +22,11 @@ normalize_repo_slug() {
     if [ -z "$remote_url" ]; then
         return 1
     fi
+    # Normalize common GitHub remote forms to owner/repo:
+    # - strip protocol
+    # - strip optional git@ prefix
+    # - strip github.com host + separators
+    # - strip optional .git suffix
     local normalized
     normalized="$(printf '%s' "$remote_url" | sed -E 's#^[^:]+://##; s#^git@##; s#github.com[:/]##; s#\.git$##')"
     normalized="${normalized#/}"
@@ -109,6 +114,7 @@ LOCAL_COMMIT=$(git rev-parse HEAD)
 REMOTE_BRANCH="origin/main"
 if ! git rev-parse --verify "${REMOTE_BRANCH}" >/dev/null 2>&1; then
     echo "Error: Could not resolve update branch ${REMOTE_BRANCH}."
+    echo "Run 'git fetch origin --prune --tags' and verify origin/main exists."
     exit 1
 fi
 REMOTE_COMMIT=$(git rev-parse "$REMOTE_BRANCH")

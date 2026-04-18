@@ -14,6 +14,11 @@ normalize_repo_slug() {
     if [ -z "$remote_url" ]; then
         return 1
     fi
+    # Normalize common GitHub remote forms to owner/repo:
+    # - strip protocol
+    # - strip optional git@ prefix
+    # - strip github.com host + separators
+    # - strip optional .git suffix
     local normalized
     normalized="$(printf '%s' "$remote_url" | sed -E 's#^[^:]+://##; s#^git@##; s#github.com[:/]##; s#\.git$##')"
     normalized="${normalized#/}"
