@@ -102,7 +102,6 @@ from player_command_contracts import (
     UTILITY_ADMIN_COMMAND_TYPES,
     WILD_SHAPE_COMMAND_TYPES,
     build_attack_request_contract,
-    build_hellish_rebuke_resolve_start_payload,
     build_resume_dispatch,
     build_spell_target_rejection_payload,
     build_spell_target_request_contract,
@@ -30021,227 +30020,24 @@ class InitiativeTracker(base.InitiativeTracker):
         offer: Dict[str, Any],
         request_id: str,
     ) -> Dict[str, Any]:
-        """Resolve a player reaction_response command against a pending offer.
+        """Compatibility wrapper for migrated reaction-resolution ownership.
 
-        This is the backend-owned adjudicator for shield, hellish rebuke,
-        absorb elements, interception, and generic accept/decline reaction
-        flows.  It was extracted from the monolithic ``_lan_apply_action``
-        branch so that ownership of prompt lifecycle (pop, toast, resume) is
-        expressed on the tracker rather than inside transport glue.
-        Dispatched by ``PlayerCommandService.reaction_response``.  Returns an
-        optional ``resume_dispatch`` payload when the resolved reaction should
-        resume a previously gated migrated command through the backend service.
+        Trigger-specific ``reaction_response`` resolution now lives on
+        ``PlayerCommandService``. Keep this wrapper so older direct-call tests
+        or scripts still execute the canonical service-owned resolver.
         """
-        choice = str(msg.get("choice") or "").strip().lower()
-        prompts = self._ensure_player_commands().prompts
-        trigger = str(offer.get("trigger") or "").strip().lower()
-        if trigger == "shield":
-            pending = prompts.get_resolution(request_id)
-            resume_dispatch = prompts.get_resume_dispatch(request_id)
-            if not isinstance(pending, dict):
-                self._lan.toast(ws_id, "That Shield offer expired, matey.")
-                return
-            reactor_cid = _normalize_cid_value(offer.get("reactor_cid"), "reaction_response.shield.reactor")
-            reactor = self.combatants.get(int(reactor_cid)) if reactor_cid is not None else None
-            if reactor is None:
-                prompts.pop_prompt(request_id)
-                return
-            if choice in ("shield_never", "never"):
-                self._set_reaction_prefs(int(reactor_cid), {"shield": "off"})
-            if choice in ("shield_yes", "shield_cast", "shield"):
-                if not self._use_reaction(reactor):
-                    self._lan.toast(ws_id, "No reactions left for Shield, matey.")
-                    choice = "shield_no"
-                else:
-                    ok_cast, err_cast = self._consume_shield_cast(reactor)
-                    if not ok_cast:
-                        self._lan.toast(ws_id, err_cast or "Could not cast Shield, matey.")
-                        choice = "shield_no"
-                    else:
-                        self._shield_effect_start(reactor)
-                        self._log(f"{getattr(reactor, 'name', 'Target')} casts Shield.", cid=int(getattr(reactor, 'cid', 0) or 0))
-            prompts.pop_prompt(request_id)
-            if isinstance(resume_dispatch, dict):
-                flags = dict(resume_dispatch.get("flags") if isinstance(resume_dispatch.get("flags"), dict) else {})
-                flags["_shield_resolution_done"] = True
-                resume_dispatch["flags"] = flags
-                self._oplog(
-                    f"reaction_offer:shield resolved request_id={request_id} choice={choice}",
-                    level="info",
-                )
-                return {"resume_dispatch": resume_dispatch}
+        service = self._ensure_player_commands()
+        resolver = getattr(service, "_resolve_reaction_response", None)
+        if not callable(resolver):
             return {}
-        if trigger == "hellish_rebuke":
-            pending = prompts.get_resolution(request_id)
-            if not isinstance(pending, dict):
-                self._lan.toast(ws_id, "That Hellish Rebuke offer expired, matey.")
-                return
-            reactor_cid = _normalize_cid_value(offer.get("reactor_cid"), "reaction_response.hellish_rebuke.reactor")
-            reactor = self.combatants.get(int(reactor_cid)) if reactor_cid is not None else None
-            if reactor is None:
-                prompts.pop_prompt(request_id)
-                return
-            if choice in ("never", "hellish_rebuke_never"):
-                prompts.pop_prompt(request_id)
-                self._set_reaction_prefs(int(reactor_cid), {"hellish_rebuke": "off"})
-                return {}
-            if choice in ("", "decline", "ignore", "hellish_rebuke_no"):
-                prompts.pop_prompt(request_id)
-                return {}
-            if choice not in ("cast_hellish_rebuke", "hellish_rebuke", "hellish_rebuke_yes"):
-                return {}
-            if not self._use_reaction(reactor):
-                self._lan.toast(ws_id, "No reactions left for Hellish Rebuke, matey.")
-                return
-            attacker_cid = _normalize_cid_value(pending.get("attacker_cid"), "reaction_response.hellish_rebuke.attacker")
-            if attacker_cid is None or int(attacker_cid) not in self.combatants:
-                self._lan.toast(ws_id, "The attacker is gone; Hellish Rebuke fizzles.")
-                return
-            prompts.set_lifecycle_state(
-                request_id,
-                "accepted",
-                accepted_choice=choice,
-                response_details={"reaction_spent": True},
-            )
-            self._oplog(f"reaction_offer:hellish_rebuke accepted request_id={request_id} reactor={int(reactor_cid)} attacker={int(attacker_cid)}", level="info")
-            loop = getattr(self._lan, "_loop", None)
-            if ws_id is not None and loop:
-                try:
-                    asyncio.run_coroutine_threadsafe(
-                        self._lan._send_async(
-                            int(ws_id),
-                            build_hellish_rebuke_resolve_start_payload(
-                                request_id=str(request_id),
-                                caster_cid=int(reactor_cid),
-                                attacker_cid=int(attacker_cid),
-                                target_cid=int(attacker_cid),
-                            ),
-                        ),
-                        loop,
-                    )
-                except Exception:
-                    pass
-            return {}
-        if trigger == "absorb_elements":
-            pending = prompts.get_resolution(request_id)
-            resume_dispatch = prompts.get_resume_dispatch(request_id)
-            if not isinstance(pending, dict):
-                self._lan.toast(ws_id, "That Absorb Elements offer expired, matey.")
-                return
-            reactor_cid = _normalize_cid_value(offer.get("reactor_cid"), "reaction_response.absorb_elements.reactor")
-            reactor = self.combatants.get(int(reactor_cid)) if reactor_cid is not None else None
-            if reactor is None:
-                prompts.pop_prompt(request_id)
-                return
-            if choice in ("absorb_elements_never", "never"):
-                self._set_reaction_prefs(int(reactor_cid), {"absorb_elements": "off"})
-            flags = dict(resume_dispatch.get("flags") if isinstance(resume_dispatch, dict) and isinstance(resume_dispatch.get("flags"), dict) else {})
-            flags["_absorb_elements_resolution_done"] = True
-            if choice in ("absorb_elements_never", "never", "", "decline", "ignore", "absorb_elements_decline"):
-                prompts.pop_prompt(request_id)
-                if isinstance(resume_dispatch, dict):
-                    resume_dispatch["flags"] = flags
-                    return {"resume_dispatch": resume_dispatch}
-                return {}
-            if not choice.startswith("cast_absorb_elements_"):
-                prompts.pop_prompt(request_id)
-                if isinstance(resume_dispatch, dict):
-                    resume_dispatch["flags"] = flags
-                    return {"resume_dispatch": resume_dispatch}
-                return {}
-            chosen_type = self._canonical_damage_type(choice.replace("cast_absorb_elements_", "", 1))
-            allowed_types = {
-                self._canonical_damage_type(item)
-                for item in (pending.get("trigger_types") if isinstance(pending.get("trigger_types"), list) else [])
-            }
-            allowed_types = {item for item in allowed_types if item}
-            if chosen_type not in allowed_types:
-                self._lan.toast(ws_id, "That damage type is invalid for Absorb Elements.")
-                prompts.pop_prompt(request_id)
-                if isinstance(resume_dispatch, dict):
-                    resume_dispatch["flags"] = flags
-                    return {"resume_dispatch": resume_dispatch}
-                return {}
-            if not self._use_reaction(reactor):
-                self._lan.toast(ws_id, "No reactions left for Absorb Elements, matey.")
-                prompts.pop_prompt(request_id)
-                if isinstance(resume_dispatch, dict):
-                    resume_dispatch["flags"] = flags
-                    return {"resume_dispatch": resume_dispatch}
-                return {}
-            try:
-                slot_level = int(msg.get("slot_level")) if msg.get("slot_level") is not None else 1
-            except Exception:
-                slot_level = 1
-            slot_level = max(1, min(9, int(slot_level)))
-            player_name = self._pc_name_for(int(reactor.cid))
-            ok_slot, slot_err, spent_level = self._consume_spell_slot_for_cast(player_name, slot_level, 1)
-            if not ok_slot:
-                self._lan.toast(ws_id, slot_err or "Could not cast Absorb Elements, matey.")
-                prompts.pop_prompt(request_id)
-                if isinstance(resume_dispatch, dict):
-                    resume_dispatch["flags"] = flags
-                    return {"resume_dispatch": resume_dispatch}
-                return {}
-            spend_level = int(spent_level) if spent_level is not None else int(slot_level)
-            self._activate_absorb_elements(reactor, chosen_type, max(1, int(spend_level)))
-            self._log(
-                f"{getattr(reactor, 'name', 'Target')} casts Absorb Elements ({chosen_type.title()}).",
-                cid=int(getattr(reactor, "cid", 0) or 0),
-            )
-            prompts.pop_prompt(request_id)
-            if isinstance(resume_dispatch, dict):
-                resume_dispatch["flags"] = flags
-                return {"resume_dispatch": resume_dispatch}
-            return {}
-        if trigger == "interception":
-            pending = prompts.get_resolution(request_id)
-            resume_dispatch = prompts.get_resume_dispatch(request_id)
-            if not isinstance(pending, dict):
-                self._lan.toast(ws_id, "That Interception offer expired, matey.")
-                return
-            reactor_cid = _normalize_cid_value(offer.get("reactor_cid"), "reaction_response.interception.reactor")
-            reactor = self.combatants.get(int(reactor_cid)) if reactor_cid is not None else None
-            if reactor is None:
-                prompts.pop_prompt(request_id)
-                return
-            if choice in ("interception_never", "never"):
-                self._set_reaction_prefs(int(reactor_cid), {"interception": "off"})
-            flags = dict(resume_dispatch.get("flags") if isinstance(resume_dispatch, dict) and isinstance(resume_dispatch.get("flags"), dict) else {})
-            flags["_interception_resolution_done"] = True
-            if choice in ("interception_never", "never", "", "decline", "ignore", "interception_no"):
-                prompts.pop_prompt(request_id)
-                if isinstance(resume_dispatch, dict):
-                    resume_dispatch["flags"] = flags
-                    return {"resume_dispatch": resume_dispatch}
-                return {}
-            if choice not in ("interception_yes", "interception"):
-                prompts.pop_prompt(request_id)
-                if isinstance(resume_dispatch, dict):
-                    resume_dispatch["flags"] = flags
-                    return {"resume_dispatch": resume_dispatch}
-                return {}
-            if not self._use_reaction(reactor):
-                self._lan.toast(ws_id, "No reactions left for Interception, matey.")
-                prompts.pop_prompt(request_id)
-                if isinstance(resume_dispatch, dict):
-                    resume_dispatch["flags"] = flags
-                    return {"resume_dispatch": resume_dispatch}
-                return {}
-            reduction_roll = int(random.randint(1, 10))
-            reduction = int(reduction_roll) + int(self._interception_reduction_bonus(reactor))
-            prompts.pop_prompt(request_id)
-            if isinstance(resume_dispatch, dict):
-                flags["_interception_reduction"] = max(0, int(reduction))
-                flags["_interception_reactor_cid"] = int(reactor_cid)
-                resume_dispatch["flags"] = flags
-                return {"resume_dispatch": resume_dispatch}
-            return {}
-        if choice in ("", "decline", "ignore"):
-            prompts.pop_prompt(request_id)
-            return {}
-        prompts.set_lifecycle_state(request_id, "accepted", accepted_choice=choice)
-        return {}
+        result = resolver(
+            msg if isinstance(msg, dict) else {},
+            cid=int(cid),
+            ws_id=ws_id,
+            offer=dict(offer) if isinstance(offer, dict) else {},
+            request_id=str(request_id or ""),
+        )
+        return dict(result) if isinstance(result, dict) else {}
 
     def _adjudicate_spell_target_request(
         self,

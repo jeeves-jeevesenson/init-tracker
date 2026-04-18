@@ -48,16 +48,15 @@ Service-owned (this module):
     reaction-gate check, delegation to ``InitiativeTracker._adjudicate_attack_request``
   - player "spell target request" envelope: delegation to
     ``InitiativeTracker._adjudicate_spell_target_request``
-  - player "reaction response" lifecycle: request-id lookup, reactor-cid
-    match, delegation to ``InitiativeTracker._adjudicate_reaction_response``
+  - player "reaction response" lifecycle and trigger-specific resolution:
+    request-id lookup, reactor-cid match, and shield / hellish rebuke /
+    absorb elements / interception handling
 
 Still tracker-owned (delegated to by this service):
   - deep attack adjudication (damage math, spell riders, weapon mastery,
     opportunity attack halting)
   - deep spell adjudication (save rolls, spell mark/curse state, healing
     and damage resolution)
-  - trigger-specific reaction resolution (shield, hellish rebuke, absorb
-    elements, interception, sentinel)
 
 Authority note
 --------------
@@ -748,9 +747,11 @@ class PlayerCommandService:
     """Backend authority for player-originated combat commands.
 
     This seam makes player-command adjudication explicit.  The deep rules
-    logic still lives on the tracker (``_adjudicate_attack_request``,
-    ``_adjudicate_spell_target_request``, ``_adjudicate_reaction_response``),
-    but every migrated player command enters through this service so that
+    logic still lives on the tracker for attack/spell adjudication
+    (``_adjudicate_attack_request``, ``_adjudicate_spell_target_request``),
+    and trigger-specific reaction resolution now lives in this service while
+    still calling tracker runtime helpers. Every migrated player command enters
+    through this service so that
     future passes can evolve the tracker-side implementation without moving
     the transport/authority boundary again.
     """
@@ -5925,6 +5926,380 @@ class PlayerCommandService:
     # reaction_response
     # ------------------------------------------------------------------
 
+    def _resolve_reaction_response(
+        self,
+        msg: Dict[str, Any],
+        *,
+        cid: int,
+        ws_id: Any,
+        offer: Dict[str, Any],
+        request_id: str,
+    ) -> Dict[str, Any]:
+        choice = str(msg.get("choice") or "").strip().lower()
+        trigger = str(offer.get("trigger") or "").strip().lower()
+        if trigger == "shield":
+            return self._resolve_shield_reaction(
+                msg,
+                request_id=request_id,
+                offer=offer,
+                choice=choice,
+                ws_id=ws_id,
+            )
+        if trigger == "hellish_rebuke":
+            return self._resolve_hellish_rebuke_reaction(
+                msg,
+                request_id=request_id,
+                offer=offer,
+                choice=choice,
+                ws_id=ws_id,
+            )
+        if trigger == "absorb_elements":
+            return self._resolve_absorb_elements_reaction(
+                msg,
+                request_id=request_id,
+                offer=offer,
+                choice=choice,
+                ws_id=ws_id,
+            )
+        if trigger == "interception":
+            return self._resolve_interception_reaction(
+                msg,
+                request_id=request_id,
+                offer=offer,
+                choice=choice,
+                ws_id=ws_id,
+            )
+        if choice in ("", "decline", "ignore"):
+            self.prompts.pop_prompt(request_id)
+            return {"ok": True, "trigger": trigger, "choice": choice, "prompt_state": "declined"}
+        self.prompts.set_lifecycle_state(request_id, "accepted", accepted_choice=choice)
+        return {"ok": True, "trigger": trigger, "choice": choice, "prompt_state": "accepted"}
+
+    def _resolve_shield_reaction(
+        self,
+        msg: Dict[str, Any],
+        *,
+        request_id: str,
+        offer: Dict[str, Any],
+        choice: str,
+        ws_id: Any,
+    ) -> Dict[str, Any]:
+        t = self._tracker
+        pending = self.prompts.get_resolution(request_id)
+        resume_dispatch = self.prompts.get_resume_dispatch(request_id)
+        if not isinstance(pending, dict):
+            self._toast(ws_id, "That Shield offer expired, matey.")
+            return {"ok": False, "reason": "expired_offer", "trigger": "shield", "choice": choice}
+        reactor_cid = self._normalize_cid(offer.get("reactor_cid"), "reaction_response.shield.reactor")
+        reactor = t.combatants.get(int(reactor_cid)) if reactor_cid is not None else None
+        if reactor is None:
+            self.prompts.pop_prompt(request_id)
+            return {"ok": False, "reason": "reactor_missing", "trigger": "shield", "choice": choice}
+        if choice in ("shield_never", "never"):
+            t._set_reaction_prefs(int(reactor_cid), {"shield": "off"})
+        if choice in ("shield_yes", "shield_cast", "shield"):
+            if not t._use_reaction(reactor):
+                self._toast(ws_id, "No reactions left for Shield, matey.")
+                choice = "shield_no"
+            else:
+                ok_cast, err_cast = t._consume_shield_cast(reactor)
+                if not ok_cast:
+                    self._toast(ws_id, err_cast or "Could not cast Shield, matey.")
+                    choice = "shield_no"
+                else:
+                    t._shield_effect_start(reactor)
+                    t._log(
+                        f"{getattr(reactor, 'name', 'Target')} casts Shield.",
+                        cid=int(getattr(reactor, "cid", 0) or 0),
+                    )
+        self.prompts.pop_prompt(request_id)
+        if isinstance(resume_dispatch, dict):
+            flags = dict(resume_dispatch.get("flags") if isinstance(resume_dispatch.get("flags"), dict) else {})
+            flags["_shield_resolution_done"] = True
+            resume_dispatch["flags"] = flags
+            self._oplog(
+                f"reaction_offer:shield resolved request_id={request_id} choice={choice}",
+                level="info",
+            )
+            return {
+                "ok": True,
+                "trigger": "shield",
+                "choice": choice,
+                "prompt_state": "resolved",
+                "resume_dispatch": resume_dispatch,
+            }
+        return {"ok": True, "trigger": "shield", "choice": choice, "prompt_state": "resolved"}
+
+    def _resolve_hellish_rebuke_reaction(
+        self,
+        msg: Dict[str, Any],
+        *,
+        request_id: str,
+        offer: Dict[str, Any],
+        choice: str,
+        ws_id: Any,
+    ) -> Dict[str, Any]:
+        t = self._tracker
+        pending = self.prompts.get_resolution(request_id)
+        if not isinstance(pending, dict):
+            self._toast(ws_id, "That Hellish Rebuke offer expired, matey.")
+            return {"ok": False, "reason": "expired_offer", "trigger": "hellish_rebuke", "choice": choice}
+        reactor_cid = self._normalize_cid(offer.get("reactor_cid"), "reaction_response.hellish_rebuke.reactor")
+        reactor = t.combatants.get(int(reactor_cid)) if reactor_cid is not None else None
+        if reactor is None:
+            self.prompts.pop_prompt(request_id)
+            return {"ok": False, "reason": "reactor_missing", "trigger": "hellish_rebuke", "choice": choice}
+        if choice in ("never", "hellish_rebuke_never"):
+            self.prompts.pop_prompt(request_id)
+            t._set_reaction_prefs(int(reactor_cid), {"hellish_rebuke": "off"})
+            return {"ok": True, "trigger": "hellish_rebuke", "choice": choice, "prompt_state": "declined"}
+        if choice in ("", "decline", "ignore", "hellish_rebuke_no"):
+            self.prompts.pop_prompt(request_id)
+            return {"ok": True, "trigger": "hellish_rebuke", "choice": choice, "prompt_state": "declined"}
+        if choice not in ("cast_hellish_rebuke", "hellish_rebuke", "hellish_rebuke_yes"):
+            return {"ok": True, "trigger": "hellish_rebuke", "choice": choice}
+        if not t._use_reaction(reactor):
+            self._toast(ws_id, "No reactions left for Hellish Rebuke, matey.")
+            return {"ok": False, "reason": "reaction_unavailable", "trigger": "hellish_rebuke", "choice": choice}
+        attacker_cid = self._normalize_cid(pending.get("attacker_cid"), "reaction_response.hellish_rebuke.attacker")
+        if attacker_cid is None or int(attacker_cid) not in t.combatants:
+            self._toast(ws_id, "The attacker is gone; Hellish Rebuke fizzles.")
+            return {"ok": False, "reason": "attacker_missing", "trigger": "hellish_rebuke", "choice": choice}
+        self.prompts.set_lifecycle_state(
+            request_id,
+            "accepted",
+            accepted_choice=choice,
+            response_details={"reaction_spent": True},
+        )
+        self._oplog(
+            "reaction_offer:hellish_rebuke accepted "
+            f"request_id={request_id} reactor={int(reactor_cid)} attacker={int(attacker_cid)}",
+            level="info",
+        )
+        lan = t.__dict__.get("_lan")
+        loop = getattr(lan, "_loop", None) if lan is not None else None
+        send_async = getattr(lan, "_send_async", None) if lan is not None else None
+        if ws_id is not None and callable(send_async) and loop:
+            try:
+                asyncio.run_coroutine_threadsafe(
+                    send_async(
+                        int(ws_id),
+                        build_hellish_rebuke_resolve_start_payload(
+                            request_id=str(request_id),
+                            caster_cid=int(reactor_cid),
+                            attacker_cid=int(attacker_cid),
+                            target_cid=int(attacker_cid),
+                        ),
+                    ),
+                    loop,
+                )
+            except Exception:
+                pass
+        return {"ok": True, "trigger": "hellish_rebuke", "choice": choice, "prompt_state": "accepted"}
+
+    def _resolve_absorb_elements_reaction(
+        self,
+        msg: Dict[str, Any],
+        *,
+        request_id: str,
+        offer: Dict[str, Any],
+        choice: str,
+        ws_id: Any,
+    ) -> Dict[str, Any]:
+        t = self._tracker
+        pending = self.prompts.get_resolution(request_id)
+        resume_dispatch = self.prompts.get_resume_dispatch(request_id)
+        if not isinstance(pending, dict):
+            self._toast(ws_id, "That Absorb Elements offer expired, matey.")
+            return {"ok": False, "reason": "expired_offer", "trigger": "absorb_elements", "choice": choice}
+        reactor_cid = self._normalize_cid(offer.get("reactor_cid"), "reaction_response.absorb_elements.reactor")
+        reactor = t.combatants.get(int(reactor_cid)) if reactor_cid is not None else None
+        if reactor is None:
+            self.prompts.pop_prompt(request_id)
+            return {"ok": False, "reason": "reactor_missing", "trigger": "absorb_elements", "choice": choice}
+        if choice in ("absorb_elements_never", "never"):
+            t._set_reaction_prefs(int(reactor_cid), {"absorb_elements": "off"})
+        flags = dict(
+            resume_dispatch.get("flags")
+            if isinstance(resume_dispatch, dict) and isinstance(resume_dispatch.get("flags"), dict)
+            else {}
+        )
+        flags["_absorb_elements_resolution_done"] = True
+        if choice in ("absorb_elements_never", "never", "", "decline", "ignore", "absorb_elements_decline"):
+            self.prompts.pop_prompt(request_id)
+            if isinstance(resume_dispatch, dict):
+                resume_dispatch["flags"] = flags
+                return {
+                    "ok": True,
+                    "trigger": "absorb_elements",
+                    "choice": choice,
+                    "prompt_state": "declined",
+                    "resume_dispatch": resume_dispatch,
+                }
+            return {"ok": True, "trigger": "absorb_elements", "choice": choice, "prompt_state": "declined"}
+        if not choice.startswith("cast_absorb_elements_"):
+            self.prompts.pop_prompt(request_id)
+            if isinstance(resume_dispatch, dict):
+                resume_dispatch["flags"] = flags
+                return {
+                    "ok": True,
+                    "trigger": "absorb_elements",
+                    "choice": choice,
+                    "prompt_state": "resolved",
+                    "resume_dispatch": resume_dispatch,
+                }
+            return {"ok": True, "trigger": "absorb_elements", "choice": choice, "prompt_state": "resolved"}
+        chosen_type = t._canonical_damage_type(choice.replace("cast_absorb_elements_", "", 1))
+        allowed_types = {
+            t._canonical_damage_type(item)
+            for item in (pending.get("trigger_types") if isinstance(pending.get("trigger_types"), list) else [])
+        }
+        allowed_types = {item for item in allowed_types if item}
+        if chosen_type not in allowed_types:
+            self._toast(ws_id, "That damage type is invalid for Absorb Elements.")
+            self.prompts.pop_prompt(request_id)
+            if isinstance(resume_dispatch, dict):
+                resume_dispatch["flags"] = flags
+                return {
+                    "ok": False,
+                    "reason": "invalid_damage_type",
+                    "trigger": "absorb_elements",
+                    "choice": choice,
+                    "resume_dispatch": resume_dispatch,
+                }
+            return {"ok": False, "reason": "invalid_damage_type", "trigger": "absorb_elements", "choice": choice}
+        if not t._use_reaction(reactor):
+            self._toast(ws_id, "No reactions left for Absorb Elements, matey.")
+            self.prompts.pop_prompt(request_id)
+            if isinstance(resume_dispatch, dict):
+                resume_dispatch["flags"] = flags
+                return {
+                    "ok": False,
+                    "reason": "reaction_unavailable",
+                    "trigger": "absorb_elements",
+                    "choice": choice,
+                    "resume_dispatch": resume_dispatch,
+                }
+            return {"ok": False, "reason": "reaction_unavailable", "trigger": "absorb_elements", "choice": choice}
+        try:
+            slot_level = int(msg.get("slot_level")) if msg.get("slot_level") is not None else 1
+        except Exception:
+            slot_level = 1
+        slot_level = max(1, min(9, int(slot_level)))
+        player_name = t._pc_name_for(int(reactor.cid))
+        ok_slot, slot_err, spent_level = t._consume_spell_slot_for_cast(player_name, slot_level, 1)
+        if not ok_slot:
+            self._toast(ws_id, slot_err or "Could not cast Absorb Elements, matey.")
+            self.prompts.pop_prompt(request_id)
+            if isinstance(resume_dispatch, dict):
+                resume_dispatch["flags"] = flags
+                return {
+                    "ok": False,
+                    "reason": "slot_unavailable",
+                    "trigger": "absorb_elements",
+                    "choice": choice,
+                    "resume_dispatch": resume_dispatch,
+                }
+            return {"ok": False, "reason": "slot_unavailable", "trigger": "absorb_elements", "choice": choice}
+        spend_level = int(spent_level) if spent_level is not None else int(slot_level)
+        t._activate_absorb_elements(reactor, chosen_type, max(1, int(spend_level)))
+        t._log(
+            f"{getattr(reactor, 'name', 'Target')} casts Absorb Elements ({chosen_type.title()}).",
+            cid=int(getattr(reactor, "cid", 0) or 0),
+        )
+        self.prompts.pop_prompt(request_id)
+        if isinstance(resume_dispatch, dict):
+            resume_dispatch["flags"] = flags
+            return {
+                "ok": True,
+                "trigger": "absorb_elements",
+                "choice": choice,
+                "prompt_state": "resolved",
+                "resume_dispatch": resume_dispatch,
+            }
+        return {"ok": True, "trigger": "absorb_elements", "choice": choice, "prompt_state": "resolved"}
+
+    def _resolve_interception_reaction(
+        self,
+        msg: Dict[str, Any],
+        *,
+        request_id: str,
+        offer: Dict[str, Any],
+        choice: str,
+        ws_id: Any,
+    ) -> Dict[str, Any]:
+        t = self._tracker
+        pending = self.prompts.get_resolution(request_id)
+        resume_dispatch = self.prompts.get_resume_dispatch(request_id)
+        if not isinstance(pending, dict):
+            self._toast(ws_id, "That Interception offer expired, matey.")
+            return {"ok": False, "reason": "expired_offer", "trigger": "interception", "choice": choice}
+        reactor_cid = self._normalize_cid(offer.get("reactor_cid"), "reaction_response.interception.reactor")
+        reactor = t.combatants.get(int(reactor_cid)) if reactor_cid is not None else None
+        if reactor is None:
+            self.prompts.pop_prompt(request_id)
+            return {"ok": False, "reason": "reactor_missing", "trigger": "interception", "choice": choice}
+        if choice in ("interception_never", "never"):
+            t._set_reaction_prefs(int(reactor_cid), {"interception": "off"})
+        flags = dict(
+            resume_dispatch.get("flags")
+            if isinstance(resume_dispatch, dict) and isinstance(resume_dispatch.get("flags"), dict)
+            else {}
+        )
+        flags["_interception_resolution_done"] = True
+        if choice in ("interception_never", "never", "", "decline", "ignore", "interception_no"):
+            self.prompts.pop_prompt(request_id)
+            if isinstance(resume_dispatch, dict):
+                resume_dispatch["flags"] = flags
+                return {
+                    "ok": True,
+                    "trigger": "interception",
+                    "choice": choice,
+                    "prompt_state": "declined",
+                    "resume_dispatch": resume_dispatch,
+                }
+            return {"ok": True, "trigger": "interception", "choice": choice, "prompt_state": "declined"}
+        if choice not in ("interception_yes", "interception"):
+            self.prompts.pop_prompt(request_id)
+            if isinstance(resume_dispatch, dict):
+                resume_dispatch["flags"] = flags
+                return {
+                    "ok": True,
+                    "trigger": "interception",
+                    "choice": choice,
+                    "prompt_state": "resolved",
+                    "resume_dispatch": resume_dispatch,
+                }
+            return {"ok": True, "trigger": "interception", "choice": choice, "prompt_state": "resolved"}
+        if not t._use_reaction(reactor):
+            self._toast(ws_id, "No reactions left for Interception, matey.")
+            self.prompts.pop_prompt(request_id)
+            if isinstance(resume_dispatch, dict):
+                resume_dispatch["flags"] = flags
+                return {
+                    "ok": False,
+                    "reason": "reaction_unavailable",
+                    "trigger": "interception",
+                    "choice": choice,
+                    "resume_dispatch": resume_dispatch,
+                }
+            return {"ok": False, "reason": "reaction_unavailable", "trigger": "interception", "choice": choice}
+        reduction_roll = int(random.randint(1, 10))
+        reduction = int(reduction_roll) + int(t._interception_reduction_bonus(reactor))
+        self.prompts.pop_prompt(request_id)
+        if isinstance(resume_dispatch, dict):
+            flags["_interception_reduction"] = max(0, int(reduction))
+            flags["_interception_reactor_cid"] = int(reactor_cid)
+            resume_dispatch["flags"] = flags
+            return {
+                "ok": True,
+                "trigger": "interception",
+                "choice": choice,
+                "prompt_state": "resolved",
+                "resume_dispatch": resume_dispatch,
+            }
+        return {"ok": True, "trigger": "interception", "choice": choice, "prompt_state": "resolved"}
+
     def reaction_response(
         self,
         msg: Dict[str, Any],
@@ -5938,12 +6313,9 @@ class PlayerCommandService:
           - request-id presence
           - offer lookup via ``PromptState``
           - reactor-cid match against the stored offer
-
-        Delegates trigger-specific reaction resolution (shield, hellish rebuke,
-        absorb elements, interception, generic accept/decline) to
-        ``InitiativeTracker._adjudicate_reaction_response``.
+          - trigger-specific reaction resolution (shield, hellish rebuke,
+            absorb elements, interception, generic accept/decline)
         """
-        t = self._tracker
         request_contract = build_reaction_response_contract(msg, cid=cid, ws_id=ws_id)
         request_id = str(msg.get("request_id") or "").strip()
         if not request_id:
@@ -5968,25 +6340,36 @@ class PlayerCommandService:
                 reason="reactor_mismatch",
                 request=request_contract,
             )
-        adjudicate = getattr(t, "_adjudicate_reaction_response", None)
-        if not callable(adjudicate):
-            return build_dispatch_result("reaction_response", False, reason="no_adjudicator", request=request_contract)
-        adjudicate_result = adjudicate(
+        adjudicate_result = self._resolve_reaction_response(
             msg,
             cid=reactor_got,
             ws_id=ws_id,
             offer=dict(prompt),
             request_id=request_id,
         )
+        if not isinstance(adjudicate_result, dict):
+            adjudicate_result = {}
+        resolve_ok = bool(adjudicate_result.get("ok", True))
+        reason = str(adjudicate_result.get("reason") or "").strip().lower()
         resume_dispatch = None
-        if isinstance(adjudicate_result, dict):
-            resume_dispatch = adjudicate_result.get("resume_dispatch") or adjudicate_result.get("resume")
+        resume_dispatch = adjudicate_result.get("resume_dispatch") or adjudicate_result.get("resume")
         resume_result = self._dispatch_resume(resume_dispatch) if isinstance(resume_dispatch, dict) else None
+        result_kwargs: Dict[str, Any] = {
+            "request": request_contract,
+            "prompt_id": request_id,
+            "resume_dispatched": bool(resume_result),
+            "resume_result": resume_result,
+        }
+        if reason:
+            result_kwargs["reason"] = reason
+        if "trigger" in adjudicate_result:
+            result_kwargs["trigger"] = adjudicate_result.get("trigger")
+        if "choice" in adjudicate_result:
+            result_kwargs["choice"] = adjudicate_result.get("choice")
+        if "prompt_state" in adjudicate_result:
+            result_kwargs["prompt_state"] = adjudicate_result.get("prompt_state")
         return build_dispatch_result(
             "reaction_response",
-            True,
-            request=request_contract,
-            prompt_id=request_id,
-            resume_dispatched=bool(resume_result),
-            resume_result=resume_result,
+            resolve_ok,
+            **result_kwargs,
         )

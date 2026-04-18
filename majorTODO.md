@@ -27,7 +27,7 @@ When this file and older migration notes disagree, treat the code, tests, and th
   - Service methods currently cover combat snapshots, start/end combat, next/prev turn, set turn, HP/temp HP/conditions, add/remove combatants, set/roll initiative, deep damage, healing, long-rest batch healing, and encounter population for player profiles and monster specs.
 - A second backend seam now exists for player-originated combat/resource commands:
   - `player_command_service.py` exposes `PlayerCommandService` (envelope: gates, validation, toasts, service-vs-fallback dispatch) and `PromptState` (accessor for pending reaction/prompt state).
-- `_lan_apply_action()` delegates `attack_request`, `spell_target_request`, `reaction_response`, `end_turn`, `move`, `cycle_movement_mode`, `perform_action`, `aoe_move`, `aoe_remove`, `manual_override_hp`, `manual_override_spell_slot`, `manual_override_resource_pool`, `reaction_prefs_update`, `mount_request`, `mount_response`, `dismount`, `dash`, `use_action`, `use_bonus_action`, `stand_up`, `reset_turn`, `lay_on_hands_use`, `inventory_adjust_consumable`, `use_consumable`, `second_wind_use`, `action_surge_use`, `star_advantage_use`, `monk_patient_defense`, `monk_step_of_wind`, `monk_elemental_attunement`, `monk_elemental_burst`, `monk_uncanny_metabolism`, `echo_summon`, `echo_swap`, `dismiss_summons`, `dismiss_persistent_summon`, `reappear_persistent_summon`, `assign_pre_summon`, `echo_tether_response`, `initiative_roll`, `hellish_rebuke_resolve`, `set_color`, `set_facing`, `set_auras_enabled`, and `reset_player_characters` through the service; movement/action, AoE manipulation, turn-local/mobility-lite, fighter/monk resource-actions, summon/echo specialty, initiative/reaction specialty, and utility/admin commands now flow through family dispatcher branches keyed by `MOVEMENT_ACTION_COMMAND_TYPES`, `AOE_MANIPULATION_COMMAND_TYPES`, `TURN_LOCAL_COMMAND_TYPES`, `FIGHTER_MONK_RESOURCE_ACTION_TYPES`, `SUMMON_ECHO_SPECIALTY_COMMAND_TYPES`, `INITIATIVE_REACTION_SPECIALTY_COMMAND_TYPES`, and `UTILITY_ADMIN_COMMAND_TYPES`, and the former ~2600 lines of inline combat adjudication now live in named `InitiativeTracker._adjudicate_attack_request`, `_adjudicate_spell_target_request`, and `_adjudicate_reaction_response` methods.
+- `_lan_apply_action()` delegates `attack_request`, `spell_target_request`, `reaction_response`, `end_turn`, `move`, `cycle_movement_mode`, `perform_action`, `aoe_move`, `aoe_remove`, `manual_override_hp`, `manual_override_spell_slot`, `manual_override_resource_pool`, `reaction_prefs_update`, `mount_request`, `mount_response`, `dismount`, `dash`, `use_action`, `use_bonus_action`, `stand_up`, `reset_turn`, `lay_on_hands_use`, `inventory_adjust_consumable`, `use_consumable`, `second_wind_use`, `action_surge_use`, `star_advantage_use`, `monk_patient_defense`, `monk_step_of_wind`, `monk_elemental_attunement`, `monk_elemental_burst`, `monk_uncanny_metabolism`, `echo_summon`, `echo_swap`, `dismiss_summons`, `dismiss_persistent_summon`, `reappear_persistent_summon`, `assign_pre_summon`, `echo_tether_response`, `initiative_roll`, `hellish_rebuke_resolve`, `set_color`, `set_facing`, `set_auras_enabled`, and `reset_player_characters` through the service; movement/action, AoE manipulation, turn-local/mobility-lite, fighter/monk resource-actions, summon/echo specialty, initiative/reaction specialty, and utility/admin commands now flow through family dispatcher branches keyed by `MOVEMENT_ACTION_COMMAND_TYPES`, `AOE_MANIPULATION_COMMAND_TYPES`, `TURN_LOCAL_COMMAND_TYPES`, `FIGHTER_MONK_RESOURCE_ACTION_TYPES`, `SUMMON_ECHO_SPECIALTY_COMMAND_TYPES`, `INITIATIVE_REACTION_SPECIALTY_COMMAND_TYPES`, and `UTILITY_ADMIN_COMMAND_TYPES`, and the former ~2600 lines of inline combat adjudication now live in named `InitiativeTracker._adjudicate_attack_request` / `_adjudicate_spell_target_request` methods plus service-owned trigger-specific `reaction_response` handlers.
   - `player_command_contracts.py` now defines versioned request/result/event/prompt builders for the migrated player command slice, including attack/spell/resource request contracts, result payload finalizers, reaction-offer events, prompt snapshots, and structured resume dispatch objects.
   - migrated prompt state is now canonically stored in tracker-owned `_pending_prompts` records with stable prompt ids, lifecycle metadata, response metadata, and resume metadata; legacy `_pending_*` prompt/reaction dicts remain as compatibility projections derived from that canonical store.
   - reconnect and save/load now preserve migrated pending prompts explicitly (`you.pending_prompts` / `you.pending_prompt` on reconnect payloads and `combat.pending_prompts` in session snapshots).
@@ -203,7 +203,7 @@ Confirmed leverage:
 - `player_command_service.py` owns envelope logic for migrated player combat plus movement/action, AoE manipulation, wild-shape, resource/consumable, turn-local, self-state, spell-launch, bard/glamour specialty, summon/echo specialty, and initiative/reaction specialty commands: turn/claim validation, pending-reaction attacker gate, reactor-cid match, move/mobility/action-economy orchestration, AoE manipulation request dispatch, wild-shape/YAML/resource orchestration, manual override/resource/inventory orchestration, spell-launch/specialty dispatch, and `CombatService` manual-override dispatch/fallback mutation.
 - `player_command_contracts.py` owns the explicit request/result/event/prompt builders for the migrated player command slice.
 - `PromptState` now treats `_pending_prompts` as the canonical prompt store for the migrated slice and projects legacy `_pending_*` reaction dictionaries from that state for compatibility.
-- deep adjudication lives in named `InitiativeTracker._adjudicate_attack_request`, `_adjudicate_spell_target_request`, and `_adjudicate_reaction_response` methods.
+- deep adjudication lives in named `InitiativeTracker._adjudicate_attack_request` / `_adjudicate_spell_target_request` methods, while trigger-specific `reaction_response` resolution now lives in `PlayerCommandService`.
 - migrated reconnect and session save/load now preserve pending prompt state explicitly via prompt snapshots and `combat.pending_prompts`.
 - service-dispatched resume replaced transport recursion for the migrated reaction resume path.
 - `_lan_apply_action()` now routes movement/action, AoE manipulation, wild-shape, turn-local/mobility-lite, spell-launch, bard/glamour specialty, summon/echo specialty, initiative/reaction specialty, and utility/admin families through `PlayerCommandService` family dispatchers instead of keeping those branches inline.
@@ -718,7 +718,7 @@ Pass-shape labels are heuristic:
   - LAN reconnect recovery, hidden-AC-safe attack resolution, spell targeting, reactions, token portraits, and condition-icon payloads all have focused coverage.
   - **Player combat commands now enter through `PlayerCommandService` (new `player_command_service.py`):**
     - `attack_request`, `spell_target_request`, `reaction_response`, `end_turn`, `manual_override_hp` all dispatch through the service envelope.
-    - The ~2600 lines of deep adjudication that used to live inline inside `_lan_apply_action()` are now owned by named `InitiativeTracker._adjudicate_attack_request`, `_adjudicate_spell_target_request`, `_adjudicate_reaction_response` methods.
+    - The ~2600 lines of deep adjudication that used to live inline inside `_lan_apply_action()` are now owned by named `InitiativeTracker._adjudicate_attack_request` / `_adjudicate_spell_target_request` methods plus service-owned trigger-specific `reaction_response` handlers.
     - Pending reaction/prompt state (`_pending_reaction_offers`, `_pending_shield_resolutions`, `_pending_hellish_rebuke_resolutions`, `_pending_absorb_elements_resolutions`, `_pending_interception_resolutions`) has a `PromptState` accessor that owns lifecycle concerns (lookup, expiry sweep, attacker-gate check).
     - The `attack_request` pending-reaction attacker gate (the block that used to stall a new attack while a previous reaction was outstanding) now lives in `PromptState.has_pending_attacker_gate()`.
     - `manual_override_hp` continues to prefer the existing `CombatService.manual_override` entry point with the same direct-mutation fallback the inline branch had.
@@ -793,8 +793,13 @@ Pass-shape labels are heuristic:
     - tracker adjudicators and movement/perform-action OA sentinel call sites now invoke service-owned prompt entry points instead of tracker-owned `_create_reaction_offer` / `_maybe_offer_*`.
     - tracker `_create_reaction_offer` / `_maybe_offer_*` remain only as compatibility delegates to the service boundary.
     - focused boundary coverage added in `tests/test_player_command_contracts.py` (`PlayerCommandServiceReactionOfferOwnershipTests`) and existing reaction suites continue covering behavior.
-- In-progress pass: `None. Coherent prompt/reaction offer ownership pass landed.`
-- Next recommended pass: `Complete prompt/reaction ownership by moving trigger-specific reaction resolution (`_adjudicate_reaction_response` branches and specialty follow-ups) toward service/domain-owned handlers, then close remaining web-vertical prerequisites (session persistence APIs + contract fixtures) before DM web-primary pivot.`
+  - **Trigger-specific reaction resolution now runs through service-owned handlers (2026-04-18):**
+    - `PlayerCommandService.reaction_response(...)` now resolves shield / hellish rebuke / absorb elements / interception via service-owned `_resolve_*_reaction` helpers instead of delegating those branches to `InitiativeTracker._adjudicate_reaction_response`.
+    - reaction-response dispatch results now carry prompt lifecycle metadata (`trigger`, `choice`, `prompt_state`) from the service resolver, while shield/absorb/interception resume dispatch behavior remains intact.
+    - `InitiativeTracker._adjudicate_reaction_response` remains only as a compatibility wrapper that forwards to the service-owned resolver.
+    - focused ownership coverage was extended in `tests/test_player_command_contracts.py` (`ReactionResumeDispatchTests.test_reaction_response_resolution_no_longer_uses_tracker_adjudicator`) and existing shield/absorb/hellish/interception suites continue to cover behavior.
+- In-progress pass: `None. Coherent prompt/reaction offer + resolution ownership pass landed.`
+- Next recommended pass: `Close the remaining web-vertical prerequisites by locking reconnect/resume contract fixtures and exposing session-persistence APIs before the DM web-primary pivot.`
 - Blocked items:
   - `Broad YAML-backed validation still depends on python3-yaml in the test environment. Minimal Debian-style environments without that package leave item-backed and monster-backed combat suites partially unrunnable even though the migrated combat service/tests can now import without real Tk.`
   - `No hard architecture blocker is confirmed yet, but framework/runtime choice should remain deferred until contracts stabilize.`
@@ -804,7 +809,7 @@ Pass-shape labels are heuristic:
   - rendering remains client-side.
   - YAML/session compatibility is preserved until replacement paths are validated.
   - older migration docs are historical context when they drift from code/tests.
-  - **Player command service seam uses a thin envelope + delegate pattern (2026-04-17).** The service validates turn ownership, reaction-gating, and prompt lifecycle, then delegates deep rules logic to extracted tracker methods rather than duplicating the adjudication. This mirrors the `CombatService` pattern and keeps the behavior change from this pass zero while making ownership explicit.
+  - **Player command service seam uses a thin envelope + delegate pattern (updated 2026-04-18).** The service validates turn ownership, reaction-gating, and prompt lifecycle; attack/spell deep rules still delegate to extracted tracker methods, while trigger-specific reaction resolution is now service-owned. This keeps the authority boundary explicit while preserving runtime behavior.
   - **Canonical prompt records now live in tracker-owned `_pending_prompts` with compatibility projections (2026-04-17).** `PromptState` still uses the tracker instance for storage and compatibility, but the canonical shape for the migrated slice is now the prompt record rather than the legacy `_pending_*` dictionaries.
   - **Migrated reaction resume now returns structured dispatch metadata instead of transport recursion (2026-04-17).** Resume for shield / absorb elements / interception is now backend/service owned, not a recursive `_lan_apply_action(resume_msg)` side effect.
   - **Resource/consumable extraction follows the same service-envelope pattern (2026-04-17).** `PlayerCommandService` now owns validation/mutation orchestration/result shaping for slot/pool overrides, reaction preference updates, Lay on Hands, and consumable inventory/use, while tracker helpers remain compatibility/persistence adapters.
@@ -844,7 +849,7 @@ Pass-shape labels are heuristic:
 
 ## 14. Recommended immediate next pass
 
-### Prompt/reaction offer ownership landed; finish prereqs for first web-owned vertical slice
+### Prompt/reaction ownership landed; finish prereqs for first web-owned vertical slice
 
 After the utility/admin pass, prompt-override relocation, and service-owned reaction-offer entrypoint pass, `_lan_apply_action()` is mostly shared claim/turn gating plus one-line service delegations (family dispatchers plus a handful of single-command branches: `manual_override_hp` / `manual_override_spell_slot` / `manual_override_resource_pool`, `reaction_prefs_update`, `reaction_response`, `attack_request`, `spell_target_request`, `lay_on_hands_use`, `inventory_adjust_consumable`, `use_consumable`, `end_turn`). Bundling those residual branches into another "family" would still be mechanical and buy little real ownership.
 
@@ -855,17 +860,17 @@ What is actually still architecturally meaningful near `_lan_apply_action()`:
 
 Why this still matters before a web-owned vertical slice:
 - offer creation/emission is now centralized enough to avoid further tracker-led prompt sprawl.
-- the remaining high-risk ownership gap is trigger-specific reaction resolution still living in tracker adjudicators.
-- closing that gap plus session/contract prerequisites is safer than pivoting directly with mixed prompt-resolution owners.
+- trigger-specific reaction resolution now also sits behind `PlayerCommandService`, reducing mixed-owner prompt lifecycle drift.
+- the remaining risk is reconnect/resume/session payload drift unless fixtures/API contracts are locked before broader web vertical work.
 
 Why not pivot directly to a web-primary DM vertical slice yet:
 - Phase 2 (DM web-primary operator surface, backlog item 3) is the right strategic milestone, but shifting there before prompt ownership and contract fixtures catch up risks reopening prompt/reaction semantics without canonical coverage.
 - session save/load exposure and contract fixtures for prompt payloads are still prerequisites.
 
 Recommended scope:
-- move trigger-specific reaction resolution branches (shield / absorb elements / hellish rebuke / interception / sentinel follow-ups) onto service/domain-owned handlers while preserving behavior.
 - keep `_lan_apply_action()` as transport/delegation glue; avoid reopening command-family extraction churn.
 - add/lock contract fixtures for prompt lifecycle payloads used by reconnect/resume.
+- expose/lock session-persistence API payload shape needed by web consumers so prompt snapshots and resume metadata stay stable across reconnect/save-load.
 
 Recommended validation:
 - focused coverage for prompt lifecycle (offer → resolve → resume) plus the reaction suites already in `tests/test_lan_reaction_action.py`, `tests/test_lan_reaction_prompts.py`, `tests/test_hellish_rebuke_reaction.py`, `tests/test_absorb_elements_reaction.py`.
