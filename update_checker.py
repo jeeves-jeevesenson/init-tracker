@@ -215,8 +215,11 @@ def check_for_updates() -> Tuple[bool, str, Optional[Dict]]:
     """
     current_version = get_current_version()
     local_commit = get_local_git_commit()
-    local_slug = get_local_git_remote_slug()
-    is_official_checkout = local_slug == EXPECTED_REPO_SLUG
+    local_slug = None
+    is_official_checkout = False
+    if local_commit:
+        local_slug = get_local_git_remote_slug()
+        is_official_checkout = local_slug == EXPECTED_REPO_SLUG
     
     # Check for latest release
     latest_release = check_latest_release()
