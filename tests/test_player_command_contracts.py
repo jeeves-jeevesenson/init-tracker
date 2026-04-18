@@ -10,6 +10,7 @@ from player_command_contracts import (
     BARD_GLAMOUR_SPECIALTY_COMMAND_TYPES,
     MOVEMENT_ACTION_COMMAND_TYPES,
     SPELL_LAUNCH_COMMAND_TYPES,
+    SUMMON_ECHO_SPECIALTY_COMMAND_TYPES,
     TURN_LOCAL_COMMAND_TYPES,
     WILD_SHAPE_COMMAND_TYPES,
     build_aoe_move_contract,
@@ -26,6 +27,11 @@ from player_command_contracts import (
     build_cycle_movement_mode_contract,
     build_dash_contract,
     build_dismount_contract,
+    build_dismiss_persistent_summon_contract,
+    build_dismiss_summons_contract,
+    build_echo_summon_contract,
+    build_echo_swap_contract,
+    build_echo_tether_response_contract,
     build_inventory_adjust_consumable_contract,
     build_lay_on_hands_use_contract,
     build_monk_elemental_attunement_contract,
@@ -41,11 +47,13 @@ from player_command_contracts import (
     build_mount_response_contract,
     build_perform_action_contract,
     build_reaction_prefs_update_contract,
+    build_reappear_persistent_summon_contract,
     build_reset_turn_contract,
     build_resume_dispatch,
     build_second_wind_use_contract,
     build_star_advantage_use_contract,
     build_stand_up_contract,
+    build_assign_pre_summon_contract,
     build_use_action_contract,
     build_use_bonus_action_contract,
     build_use_consumable_contract,
@@ -365,6 +373,67 @@ class BardGlamourSpecialtyCommandContractTests(unittest.TestCase):
                 f"player_command.{command_type}.request",
             )
             self.assertEqual((contract.get("actor") or {}).get("cid"), 31)
+            self.assertEqual((contract.get("payload") or {}).get("type"), command_type)
+
+
+class SummonEchoSpecialtyCommandContractTests(unittest.TestCase):
+    def test_summon_echo_specialty_contract_builders_cover_the_family(self):
+        builders = {
+            "echo_summon": (
+                build_echo_summon_contract,
+                {
+                    "type": "echo_summon",
+                    "to": {"col": 5, "row": 6},
+                    "payload": {"to": {"col": 5, "row": 6}},
+                },
+            ),
+            "echo_swap": (
+                build_echo_swap_contract,
+                {"type": "echo_swap"},
+            ),
+            "dismiss_summons": (
+                build_dismiss_summons_contract,
+                {"type": "dismiss_summons", "target_caster_cid": 31},
+            ),
+            "dismiss_persistent_summon": (
+                build_dismiss_persistent_summon_contract,
+                {"type": "dismiss_persistent_summon", "summon_group_id": "echo:31"},
+            ),
+            "reappear_persistent_summon": (
+                build_reappear_persistent_summon_contract,
+                {
+                    "type": "reappear_persistent_summon",
+                    "summon_group_id": "echo:31",
+                    "to": {"col": 8, "row": 4},
+                },
+            ),
+            "assign_pre_summon": (
+                build_assign_pre_summon_contract,
+                {
+                    "type": "assign_pre_summon",
+                    "target_cid": 31,
+                    "spell_slug": "find-familiar",
+                    "monster_slug": "owl",
+                    "variant": "default",
+                    "slot_level": 1,
+                },
+            ),
+            "echo_tether_response": (
+                build_echo_tether_response_contract,
+                {"type": "echo_tether_response", "request_id": "req-1", "accept": True},
+            ),
+        }
+
+        self.assertEqual(set(builders.keys()), set(SUMMON_ECHO_SPECIALTY_COMMAND_TYPES))
+
+        for command_type, (builder, msg) in builders.items():
+            contract = builder(dict(msg), cid=41, ws_id=42, is_admin=False)
+            self.assertEqual(contract.get("command_type"), command_type)
+            self.assertEqual(
+                (contract.get("contract") or {}).get("schema"),
+                f"player_command.{command_type}.request",
+            )
+            self.assertEqual((contract.get("actor") or {}).get("cid"), 41)
             self.assertEqual((contract.get("payload") or {}).get("type"), command_type)
 
 

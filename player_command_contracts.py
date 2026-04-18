@@ -183,6 +183,20 @@ BARDIC_INSPIRATION_USE_FIELDS: Sequence[str] = ("type",)
 MANTLE_OF_INSPIRATION_FIELDS: Sequence[str] = ("type", "target_cids", "die_override")
 BEGUILING_MAGIC_RESTORE_FIELDS: Sequence[str] = ("type",)
 BEGUILING_MAGIC_USE_FIELDS: Sequence[str] = ("type", "target_cid", "condition", "restore_with_bi")
+ECHO_SUMMON_FIELDS: Sequence[str] = ("type", "to", "payload")
+ECHO_SWAP_FIELDS: Sequence[str] = ("type",)
+DISMISS_SUMMONS_FIELDS: Sequence[str] = ("type", "target_caster_cid")
+DISMISS_PERSISTENT_SUMMON_FIELDS: Sequence[str] = ("type", "summon_group_id")
+REAPPEAR_PERSISTENT_SUMMON_FIELDS: Sequence[str] = ("type", "summon_group_id", "to")
+ASSIGN_PRE_SUMMON_FIELDS: Sequence[str] = (
+    "type",
+    "target_cid",
+    "spell_slug",
+    "monster_slug",
+    "variant",
+    "slot_level",
+)
+ECHO_TETHER_RESPONSE_FIELDS: Sequence[str] = ("type", "request_id", "accept")
 
 FIGHTER_MONK_RESOURCE_ACTION_TYPES = frozenset(
     {
@@ -251,6 +265,18 @@ BARD_GLAMOUR_SPECIALTY_COMMAND_TYPES = frozenset(
         "mantle_of_inspiration",
         "beguiling_magic_restore",
         "beguiling_magic_use",
+    }
+)
+
+SUMMON_ECHO_SPECIALTY_COMMAND_TYPES = frozenset(
+    {
+        "echo_summon",
+        "echo_swap",
+        "dismiss_summons",
+        "dismiss_persistent_summon",
+        "reappear_persistent_summon",
+        "assign_pre_summon",
+        "echo_tether_response",
     }
 )
 
@@ -1076,6 +1102,118 @@ def build_beguiling_magic_use_contract(
     return build_command_request_contract(
         "beguiling_magic_use",
         _project_payload(msg, BEGUILING_MAGIC_USE_FIELDS, "beguiling_magic_use"),
+        cid=cid,
+        ws_id=ws_id,
+        is_admin=is_admin,
+    )
+
+
+def build_echo_summon_contract(
+    msg: Dict[str, Any],
+    *,
+    cid: Optional[int],
+    ws_id: Any,
+    is_admin: bool,
+) -> Dict[str, Any]:
+    return build_command_request_contract(
+        "echo_summon",
+        _project_payload(msg, ECHO_SUMMON_FIELDS, "echo_summon"),
+        cid=cid,
+        ws_id=ws_id,
+        is_admin=is_admin,
+    )
+
+
+def build_echo_swap_contract(
+    msg: Dict[str, Any],
+    *,
+    cid: Optional[int],
+    ws_id: Any,
+    is_admin: bool,
+) -> Dict[str, Any]:
+    return build_command_request_contract(
+        "echo_swap",
+        _project_payload(msg, ECHO_SWAP_FIELDS, "echo_swap"),
+        cid=cid,
+        ws_id=ws_id,
+        is_admin=is_admin,
+    )
+
+
+def build_dismiss_summons_contract(
+    msg: Dict[str, Any],
+    *,
+    cid: Optional[int],
+    ws_id: Any,
+    is_admin: bool,
+) -> Dict[str, Any]:
+    return build_command_request_contract(
+        "dismiss_summons",
+        _project_payload(msg, DISMISS_SUMMONS_FIELDS, "dismiss_summons"),
+        cid=cid,
+        ws_id=ws_id,
+        is_admin=is_admin,
+    )
+
+
+def build_dismiss_persistent_summon_contract(
+    msg: Dict[str, Any],
+    *,
+    cid: Optional[int],
+    ws_id: Any,
+    is_admin: bool,
+) -> Dict[str, Any]:
+    return build_command_request_contract(
+        "dismiss_persistent_summon",
+        _project_payload(msg, DISMISS_PERSISTENT_SUMMON_FIELDS, "dismiss_persistent_summon"),
+        cid=cid,
+        ws_id=ws_id,
+        is_admin=is_admin,
+    )
+
+
+def build_reappear_persistent_summon_contract(
+    msg: Dict[str, Any],
+    *,
+    cid: Optional[int],
+    ws_id: Any,
+    is_admin: bool,
+) -> Dict[str, Any]:
+    return build_command_request_contract(
+        "reappear_persistent_summon",
+        _project_payload(msg, REAPPEAR_PERSISTENT_SUMMON_FIELDS, "reappear_persistent_summon"),
+        cid=cid,
+        ws_id=ws_id,
+        is_admin=is_admin,
+    )
+
+
+def build_assign_pre_summon_contract(
+    msg: Dict[str, Any],
+    *,
+    cid: Optional[int],
+    ws_id: Any,
+    is_admin: bool,
+) -> Dict[str, Any]:
+    return build_command_request_contract(
+        "assign_pre_summon",
+        _project_payload(msg, ASSIGN_PRE_SUMMON_FIELDS, "assign_pre_summon"),
+        cid=cid,
+        ws_id=ws_id,
+        is_admin=is_admin,
+    )
+
+
+def build_echo_tether_response_contract(
+    msg: Dict[str, Any],
+    *,
+    cid: Optional[int],
+    ws_id: Any,
+    is_admin: bool,
+) -> Dict[str, Any]:
+    return build_command_request_contract(
+        "echo_tether_response",
+        _project_payload(msg, ECHO_TETHER_RESPONSE_FIELDS, "echo_tether_response"),
         cid=cid,
         ws_id=ws_id,
         is_admin=is_admin,

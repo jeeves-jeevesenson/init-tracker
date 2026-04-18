@@ -18,6 +18,10 @@ Service-owned (this module):
     ``command_resolve``, ``bardic_inspiration_grant``,
     ``bardic_inspiration_use``, ``mantle_of_inspiration``,
     ``beguiling_magic_restore``, and ``beguiling_magic_use``
+  - player summon/echo specialty family:
+    ``echo_summon``, ``echo_swap``, ``dismiss_summons``,
+    ``dismiss_persistent_summon``, ``reappear_persistent_summon``,
+    ``assign_pre_summon``, and ``echo_tether_response``
   - player wild-shape family:
     ``wild_shape_apply``, ``wild_shape_pool_set_current``,
     ``wild_shape_revert``, ``wild_shape_regain_use``,
@@ -90,6 +94,7 @@ from player_command_contracts import (
     MOVEMENT_ACTION_COMMAND_TYPES,
     SPECIAL_REACTION_TRIGGERS,
     SPELL_LAUNCH_COMMAND_TYPES,
+    SUMMON_ECHO_SPECIALTY_COMMAND_TYPES,
     TURN_LOCAL_COMMAND_TYPES,
     WILD_SHAPE_COMMAND_TYPES,
     apply_resume_dispatch,
@@ -107,7 +112,12 @@ from player_command_contracts import (
     build_cycle_movement_mode_contract,
     build_dash_contract,
     build_dispatch_result,
+    build_dismiss_persistent_summon_contract,
+    build_dismiss_summons_contract,
     build_dismount_contract,
+    build_echo_summon_contract,
+    build_echo_swap_contract,
+    build_echo_tether_response_contract,
     build_end_turn_contract,
     build_inventory_adjust_consumable_contract,
     build_lay_on_hands_use_contract,
@@ -129,12 +139,14 @@ from player_command_contracts import (
     build_reaction_offer_event,
     build_reaction_prefs_update_contract,
     build_reaction_response_contract,
+    build_reappear_persistent_summon_contract,
     build_reset_turn_contract,
     build_resume_dispatch,
     build_second_wind_use_contract,
     build_spell_target_request_contract,
     build_stand_up_contract,
     build_star_advantage_use_contract,
+    build_assign_pre_summon_contract,
     build_use_action_contract,
     build_use_bonus_action_contract,
     build_use_consumable_contract,
@@ -739,6 +751,9 @@ class PlayerCommandService:
     }
     _BARD_GLAMOUR_SPECIALTY_COMMAND_HANDLERS = {
         command_type: command_type for command_type in BARD_GLAMOUR_SPECIALTY_COMMAND_TYPES
+    }
+    _SUMMON_ECHO_SPECIALTY_COMMAND_HANDLERS = {
+        command_type: command_type for command_type in SUMMON_ECHO_SPECIALTY_COMMAND_TYPES
     }
     _TURN_LOCAL_COMMAND_HANDLERS = {
         command_type: command_type for command_type in TURN_LOCAL_COMMAND_TYPES
@@ -2705,6 +2720,320 @@ class PlayerCommandService:
             True,
             request=request_contract,
         )
+
+    # ------------------------------------------------------------------
+    # summon/echo specialty commands
+    # ------------------------------------------------------------------
+
+    def dispatch_summon_echo_specialty_command(
+        self,
+        msg: Dict[str, Any],
+        *,
+        cid: Optional[int],
+        ws_id: Any,
+        is_admin: bool,
+        claimed: Optional[int] = None,
+    ) -> Dict[str, Any]:
+        command_type = str(msg.get("type") if isinstance(msg, dict) else "").strip().lower()
+        handler_name = self._SUMMON_ECHO_SPECIALTY_COMMAND_HANDLERS.get(command_type)
+        if not handler_name:
+            return build_dispatch_result(
+                "summon_echo_specialty_command",
+                False,
+                reason="unsupported_command",
+                received_type=command_type,
+            )
+        handler = getattr(self, handler_name, None)
+        if not callable(handler):
+            return build_dispatch_result(
+                command_type,
+                False,
+                reason="handler_missing",
+            )
+        return handler(
+            msg if isinstance(msg, dict) else {},
+            cid=cid,
+            ws_id=ws_id,
+            is_admin=is_admin,
+            claimed=claimed,
+        )
+
+    def echo_summon(
+        self,
+        msg: Dict[str, Any],
+        *,
+        cid: Optional[int],
+        ws_id: Any,
+        is_admin: bool,
+        claimed: Optional[int] = None,
+    ) -> Dict[str, Any]:
+        t = self._tracker
+        request_contract = build_echo_summon_contract(
+            msg,
+            cid=cid,
+            ws_id=ws_id,
+            is_admin=is_admin,
+        )
+        handler = getattr(t, "_handle_echo_summon_request", None)
+        if not callable(handler):
+            return build_dispatch_result(
+                "echo_summon",
+                False,
+                reason="handler_missing",
+                request=request_contract,
+            )
+        try:
+            handler(msg if isinstance(msg, dict) else {}, cid=cid, ws_id=ws_id, is_admin=is_admin)
+        except Exception as exc:
+            self._oplog(f"echo_summon handler raised: {exc}", level="warning")
+            return build_dispatch_result(
+                "echo_summon",
+                False,
+                reason="exception",
+                error=str(exc),
+                request=request_contract,
+            )
+        return build_dispatch_result("echo_summon", True, request=request_contract)
+
+    def echo_swap(
+        self,
+        msg: Dict[str, Any],
+        *,
+        cid: Optional[int],
+        ws_id: Any,
+        is_admin: bool,
+        claimed: Optional[int] = None,
+    ) -> Dict[str, Any]:
+        t = self._tracker
+        request_contract = build_echo_swap_contract(
+            msg,
+            cid=cid,
+            ws_id=ws_id,
+            is_admin=is_admin,
+        )
+        handler = getattr(t, "_handle_echo_swap_request", None)
+        if not callable(handler):
+            return build_dispatch_result(
+                "echo_swap",
+                False,
+                reason="handler_missing",
+                request=request_contract,
+            )
+        try:
+            handler(msg if isinstance(msg, dict) else {}, cid=cid, ws_id=ws_id, is_admin=is_admin)
+        except Exception as exc:
+            self._oplog(f"echo_swap handler raised: {exc}", level="warning")
+            return build_dispatch_result(
+                "echo_swap",
+                False,
+                reason="exception",
+                error=str(exc),
+                request=request_contract,
+            )
+        return build_dispatch_result("echo_swap", True, request=request_contract)
+
+    def dismiss_summons(
+        self,
+        msg: Dict[str, Any],
+        *,
+        cid: Optional[int],
+        ws_id: Any,
+        is_admin: bool,
+        claimed: Optional[int] = None,
+    ) -> Dict[str, Any]:
+        t = self._tracker
+        request_contract = build_dismiss_summons_contract(
+            msg,
+            cid=cid,
+            ws_id=ws_id,
+            is_admin=is_admin,
+        )
+        handler = getattr(t, "_handle_dismiss_summons_request", None)
+        if not callable(handler):
+            return build_dispatch_result(
+                "dismiss_summons",
+                False,
+                reason="handler_missing",
+                request=request_contract,
+            )
+        try:
+            handler(
+                msg if isinstance(msg, dict) else {},
+                cid=cid,
+                ws_id=ws_id,
+                is_admin=is_admin,
+                claimed=claimed,
+            )
+        except Exception as exc:
+            self._oplog(f"dismiss_summons handler raised: {exc}", level="warning")
+            return build_dispatch_result(
+                "dismiss_summons",
+                False,
+                reason="exception",
+                error=str(exc),
+                request=request_contract,
+            )
+        return build_dispatch_result("dismiss_summons", True, request=request_contract)
+
+    def dismiss_persistent_summon(
+        self,
+        msg: Dict[str, Any],
+        *,
+        cid: Optional[int],
+        ws_id: Any,
+        is_admin: bool,
+        claimed: Optional[int] = None,
+    ) -> Dict[str, Any]:
+        t = self._tracker
+        request_contract = build_dismiss_persistent_summon_contract(
+            msg,
+            cid=cid,
+            ws_id=ws_id,
+            is_admin=is_admin,
+        )
+        handler = getattr(t, "_handle_dismiss_persistent_summon_request", None)
+        if not callable(handler):
+            return build_dispatch_result(
+                "dismiss_persistent_summon",
+                False,
+                reason="handler_missing",
+                request=request_contract,
+            )
+        try:
+            handler(
+                msg if isinstance(msg, dict) else {},
+                cid=cid,
+                ws_id=ws_id,
+                is_admin=is_admin,
+                claimed=claimed,
+            )
+        except Exception as exc:
+            self._oplog(f"dismiss_persistent_summon handler raised: {exc}", level="warning")
+            return build_dispatch_result(
+                "dismiss_persistent_summon",
+                False,
+                reason="exception",
+                error=str(exc),
+                request=request_contract,
+            )
+        return build_dispatch_result("dismiss_persistent_summon", True, request=request_contract)
+
+    def reappear_persistent_summon(
+        self,
+        msg: Dict[str, Any],
+        *,
+        cid: Optional[int],
+        ws_id: Any,
+        is_admin: bool,
+        claimed: Optional[int] = None,
+    ) -> Dict[str, Any]:
+        t = self._tracker
+        request_contract = build_reappear_persistent_summon_contract(
+            msg,
+            cid=cid,
+            ws_id=ws_id,
+            is_admin=is_admin,
+        )
+        handler = getattr(t, "_handle_reappear_persistent_summon_request", None)
+        if not callable(handler):
+            return build_dispatch_result(
+                "reappear_persistent_summon",
+                False,
+                reason="handler_missing",
+                request=request_contract,
+            )
+        try:
+            handler(
+                msg if isinstance(msg, dict) else {},
+                cid=cid,
+                ws_id=ws_id,
+                is_admin=is_admin,
+                claimed=claimed,
+            )
+        except Exception as exc:
+            self._oplog(f"reappear_persistent_summon handler raised: {exc}", level="warning")
+            return build_dispatch_result(
+                "reappear_persistent_summon",
+                False,
+                reason="exception",
+                error=str(exc),
+                request=request_contract,
+            )
+        return build_dispatch_result("reappear_persistent_summon", True, request=request_contract)
+
+    def assign_pre_summon(
+        self,
+        msg: Dict[str, Any],
+        *,
+        cid: Optional[int],
+        ws_id: Any,
+        is_admin: bool,
+        claimed: Optional[int] = None,
+    ) -> Dict[str, Any]:
+        t = self._tracker
+        request_contract = build_assign_pre_summon_contract(
+            msg,
+            cid=cid,
+            ws_id=ws_id,
+            is_admin=is_admin,
+        )
+        handler = getattr(t, "_handle_assign_pre_summon_request", None)
+        if not callable(handler):
+            return build_dispatch_result(
+                "assign_pre_summon",
+                False,
+                reason="handler_missing",
+                request=request_contract,
+            )
+        try:
+            handler(msg if isinstance(msg, dict) else {}, cid=cid, ws_id=ws_id, is_admin=is_admin)
+        except Exception as exc:
+            self._oplog(f"assign_pre_summon handler raised: {exc}", level="warning")
+            return build_dispatch_result(
+                "assign_pre_summon",
+                False,
+                reason="exception",
+                error=str(exc),
+                request=request_contract,
+            )
+        return build_dispatch_result("assign_pre_summon", True, request=request_contract)
+
+    def echo_tether_response(
+        self,
+        msg: Dict[str, Any],
+        *,
+        cid: Optional[int],
+        ws_id: Any,
+        is_admin: bool,
+        claimed: Optional[int] = None,
+    ) -> Dict[str, Any]:
+        t = self._tracker
+        request_contract = build_echo_tether_response_contract(
+            msg,
+            cid=cid,
+            ws_id=ws_id,
+            is_admin=is_admin,
+        )
+        handler = getattr(t, "_handle_echo_tether_response_request", None)
+        if not callable(handler):
+            return build_dispatch_result(
+                "echo_tether_response",
+                False,
+                reason="handler_missing",
+                request=request_contract,
+            )
+        try:
+            handler(msg if isinstance(msg, dict) else {}, cid=cid, ws_id=ws_id, is_admin=is_admin)
+        except Exception as exc:
+            self._oplog(f"echo_tether_response handler raised: {exc}", level="warning")
+            return build_dispatch_result(
+                "echo_tether_response",
+                False,
+                reason="exception",
+                error=str(exc),
+                request=request_contract,
+            )
+        return build_dispatch_result("echo_tether_response", True, request=request_contract)
 
     # ------------------------------------------------------------------
     # turn-local / mobility-lite commands
