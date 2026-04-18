@@ -82,7 +82,16 @@ core encounter population for:
 
 ## What the DM web UI can do
 
-The DM console lives at `http://<lan-ip>:<port>/dm` and provides:
+The DM web surface now has two DM entry points:
+
+- `http://<lan-ip>:<port>/dm` — DM dashboard for initiative/session/control flow
+- `http://<lan-ip>:<port>/dm/map` — dedicated DM map workspace with a full-size
+  central tactical lane
+
+Both routes use the same backend snapshot/mutation authority (`/api/dm/...`,
+`/ws/dm`) and the same browser tactical logic.
+
+The DM routes provide:
 
 - **Initiative order** – all combatants in order with current-turn marker
 - **HP display** – current / max HP with visual health bar, temp HP
@@ -104,7 +113,7 @@ The DM console lives at `http://<lan-ip>:<port>/dm` and provides:
 - **Set Temp HP** – set (or clear) temporary HP for any combatant
 - **Add / Remove Condition** – apply any of the 15 standard D&D 5e conditions
 - **Map bootstrap/setup** – create a new blank tactical map and set grid
-  dimensions directly from `/dm` (no Tk map-size prompt required)
+  dimensions directly from DM web routes (no Tk map-size prompt required)
 - **Tactical token control** – place/reposition, rules-aware move, and facing
   updates for combatants on the tactical map
 - **Battlefield prep controls** – obstacle cell block/clear and rough-terrain
@@ -116,12 +125,13 @@ The DM console lives at `http://<lan-ip>:<port>/dm` and provides:
   AoE placement/move/removal, and aura-overlay toggle
 - **Advanced ship/template deployment** – browse structure templates and ship
   blueprints, preview ship placement blockers, instantiate templates/ships at a
-  target cell/facing, and create/update/remove boarding links from `/dm`
+  target cell/facing, and create/update/remove boarding links from DM web
+  routes
 - **Ship engagement operations** – load ship engagement summaries and run
-  maneuver preview/apply, weapon fire, and ram actions from `/dm`
+  maneuver preview/apply, weapon fire, and ram actions from DM web routes
 - **Monster turn controls** – select an enemy combatant as actor, load parsed
   monster attack options, resolve attack sequences, apply manual damage,
-  execute `perform_action`, and run targeted spell requests from `/dm` through
+  execute `perform_action`, and run targeted spell requests through
   authenticated backend routes and existing snapshot/broadcast updates
 - **Battle Log** – last 30 lines from the tracker's history file
 - **Real-time updates** – receives instant snapshots via WebSocket (`/ws/dm`);
@@ -310,14 +320,15 @@ via the web.
 ## How to launch
 
 There are now two host modes. Both run the same `InitiativeTracker`
-backend authority and serve the same `/dm` and `/` web surfaces.
+backend authority and serve the same `/dm`, `/dm/map`, and `/` web surfaces.
 
 ### Desktop / Tk host (compatibility entrypoint)
 
 1. Start the desktop app (`python dnd_initative_tracker.py`).
 2. Enable the LAN server from the app (LAN menu → Start LAN Server) if it
    did not auto-start.
-3. On any device on the same LAN, navigate to `http://<ip>:<port>/dm`.
+3. On any device on the same LAN, navigate to `http://<ip>:<port>/dm` for the
+   dashboard or `http://<ip>:<port>/dm/map` for the dedicated map workspace.
 4. If an admin password is configured, enter it when prompted.
 5. The console will auto-populate with live combat state.
 
@@ -346,7 +357,8 @@ What happens under the hood:
   backend-owned combat/session/map authority operate normally.
 - `Ctrl+C` (or `SIGTERM`) shuts the LAN server down and exits cleanly.
 
-The DM operator surface remains `http://<host>:<port>/dm` in both modes.
+The DM operator surface remains available at
+`http://<host>:<port>/dm` and `http://<host>:<port>/dm/map` in both modes.
 
 The host-mode seam (`self.host_mode`) now gates the following startup
 blocks on `host_mode == "desktop"`:
