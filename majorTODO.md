@@ -207,12 +207,13 @@ Confirmed leverage:
 - migrated reconnect and session save/load now preserve pending prompt state explicitly via prompt snapshots and `combat.pending_prompts`.
 - service-dispatched resume replaced transport recursion for the migrated reaction resume path.
 - `_lan_apply_action()` now routes movement/action, AoE manipulation, wild-shape, turn-local/mobility-lite, spell-launch, bard/glamour specialty, summon/echo specialty, initiative/reaction specialty, and utility/admin families through `PlayerCommandService` family dispatchers instead of keeping those branches inline.
+- the `attack_request` / `spell_target_request` prompt-claim override gate now delegates from `_lan_apply_action()` to `PlayerCommandService.allow_prompt_claim_override(...)`, reducing command-family prompt leakage in the shared claim gate.
 
 Remaining coupling:
 - prompt/reaction storage still lives on `InitiativeTracker`, and legacy `_pending_*` dictionaries still exist as compatibility projections for older save/load and helper code.
-- prompt creation still starts from tracker methods such as `_create_reaction_offer`, even though the canonical storage and event shaping now flow through `PromptState`.
+- the canonical reaction-offer creation/emission boundary now lives on `PlayerCommandService` (`create_reaction_offer`, `maybe_offer_absorb_elements`, `maybe_offer_hellish_rebuke`, `maybe_offer_interception`), but compatibility wrappers (`InitiativeTracker._create_reaction_offer` / `_maybe_offer_*`) still exist and trigger qualification still depends on tracker combat/map helpers.
 - hellish rebuke still uses a dedicated follow-up `hellish_rebuke_resolve` command path; it now dispatches through `PlayerCommandService` and reads canonical prompt resolution metadata, but the broader prompt family is not yet fully collapsed into one generic handler.
-- the adjudicate methods remain on `InitiativeTracker`, so they still bind to other tracker concerns (Tk, map helpers, YAML caches). Extracting them fully belongs to a later pass once the surrounding non-migrated command families move off `_lan_apply_action()`.
+- the adjudicate methods remain on `InitiativeTracker`, so they still bind to other tracker concerns (Tk, map helpers, YAML caches). Extracting them fully belongs to a later pass once prompt creation and deeper adjudication ownership are moved off tracker helpers.
 
 ### Schema-backed browser content tools
 
@@ -781,9 +782,19 @@ Pass-shape labels are heuristic:
     - The tracker's `_create_reaction_offer` wrapper now accepts the same optional params and passes them through, eliminating all post-creation `prompts.attach_resolution(...)` calls at call sites.
     - Five call sites updated: shield offer in `_adjudicate_attack_request`, shield offer in `_adjudicate_spell_target_request`, `_maybe_offer_absorb_elements`, `_maybe_offer_hellish_rebuke`, and `_maybe_offer_interception`.
     - For hellish rebuke, the prompt_id is pre-generated before the call so `player_visible` (needed for reconnect `next_step` in the prompt snapshot) can be built atomically at creation time.
-    - Remaining tracker-owned entry points: `sentinel_hit_other` / `leave_reach` / `sentinel_disengage` OA reaction offers (no resolution/resume_dispatch needed); the `_create_reaction_offer` tracker wrapper itself (WS dispatch requires `self._lan`); the `_maybe_offer_*` methods themselves.
-- In-progress pass: `None. The bounded utility/admin extraction pass has landed.`
-- Next recommended pass: `Continue extending backend authority: extract the next non-migrated inline command branches and remaining tracker-owned prompt creation entry points behind explicit service seams.`
+    - Remaining tracker-owned entry points at this stage were `sentinel_hit_other` / `leave_reach` / `sentinel_disengage` OA reaction offers plus `_create_reaction_offer` / `_maybe_offer_*`.
+  - **Prompt-override claim gate now dispatches through `PlayerCommandService` (2026-04-17):**
+    - `_lan_apply_action()` no longer embeds the action-family-specific `prompt_override_ok` branch for `attack_request` / `spell_target_request`.
+    - new `PlayerCommandService.allow_prompt_claim_override(...)` owns that prompt-follow-up rule set (turn-owner follow-up, OA follow-up, and persistent AoE follow-up target inclusion checks).
+    - focused regression coverage for the new service-owned gate lives in `tests/test_player_command_contracts.py` (`PlayerCommandServicePromptOverrideTests`) in addition to existing LAN attack/spell prompt override tests.
+  - **Prompt/reaction offer creation + emission now routes through service-owned entry points (2026-04-17):**
+    - `PlayerCommandService` now owns reaction-offer creation/emission via `create_reaction_offer(...)`.
+    - `PlayerCommandService` now owns the three tracker-local offer builders via service entry points: `maybe_offer_absorb_elements(...)`, `maybe_offer_hellish_rebuke(...)`, and `maybe_offer_interception(...)`.
+    - tracker adjudicators and movement/perform-action OA sentinel call sites now invoke service-owned prompt entry points instead of tracker-owned `_create_reaction_offer` / `_maybe_offer_*`.
+    - tracker `_create_reaction_offer` / `_maybe_offer_*` remain only as compatibility delegates to the service boundary.
+    - focused boundary coverage added in `tests/test_player_command_contracts.py` (`PlayerCommandServiceReactionOfferOwnershipTests`) and existing reaction suites continue covering behavior.
+- In-progress pass: `None. Coherent prompt/reaction offer ownership pass landed.`
+- Next recommended pass: `Complete prompt/reaction ownership by moving trigger-specific reaction resolution (`_adjudicate_reaction_response` branches and specialty follow-ups) toward service/domain-owned handlers, then close remaining web-vertical prerequisites (session persistence APIs + contract fixtures) before DM web-primary pivot.`
 - Blocked items:
   - `Broad YAML-backed validation still depends on python3-yaml in the test environment. Minimal Debian-style environments without that package leave item-backed and monster-backed combat suites partially unrunnable even though the migrated combat service/tests can now import without real Tk.`
   - `No hard architecture blocker is confirmed yet, but framework/runtime choice should remain deferred until contracts stabilize.`
@@ -833,22 +844,36 @@ Pass-shape labels are heuristic:
 
 ## 14. Recommended immediate next pass
 
-### Continue shrinking `_lan_apply_action()` to delegation glue
+### Prompt/reaction offer ownership landed; finish prereqs for first web-owned vertical slice
 
-The bounded utility/admin extraction pass landed, so the next clean authority target is the remaining non-migrated inline branch set plus tracker-owned prompt creation entry points that still co-locate transport checks and command logic in `_lan_apply_action()` and adjacent helpers.
+After the utility/admin pass, prompt-override relocation, and service-owned reaction-offer entrypoint pass, `_lan_apply_action()` is mostly shared claim/turn gating plus one-line service delegations (family dispatchers plus a handful of single-command branches: `manual_override_hp` / `manual_override_spell_slot` / `manual_override_resource_pool`, `reaction_prefs_update`, `reaction_response`, `attack_request`, `spell_target_request`, `lay_on_hands_use`, `inventory_adjust_consumable`, `use_consumable`, `end_turn`). Bundling those residual branches into another "family" would still be mechanical and buy little real ownership.
 
-Why this is next:
-- `_lan_apply_action()` still contains shared claim/admin/turn gating and several non-family inline command branches.
-- Prompt creation still starts from tracker-owned `_create_reaction_offer` call paths even though canonical prompt storage/lifecycle is service-shaped.
-- Continuing extraction here advances backend ownership without broad DM-side or map-rendering rewrites.
+What is actually still architecturally meaningful near `_lan_apply_action()`:
+- the shared claim / summon-control / turn gating block is still tracker-hosted glue; prompt-specific gating has already moved into `PlayerCommandService`.
+- tracker compatibility wrappers (`_create_reaction_offer` / `_maybe_offer_*`) still exist, but authoritative reaction-offer creation/emission now runs through service-owned entry points.
+- the `_adjudicate_*` tracker methods still binding to Tk / map / YAML, which keeps player-command authority tethered to desktop state.
+
+Why this still matters before a web-owned vertical slice:
+- offer creation/emission is now centralized enough to avoid further tracker-led prompt sprawl.
+- the remaining high-risk ownership gap is trigger-specific reaction resolution still living in tracker adjudicators.
+- closing that gap plus session/contract prerequisites is safer than pivoting directly with mixed prompt-resolution owners.
+
+Why not pivot directly to a web-primary DM vertical slice yet:
+- Phase 2 (DM web-primary operator surface, backlog item 3) is the right strategic milestone, but shifting there before prompt ownership and contract fixtures catch up risks reopening prompt/reaction semantics without canonical coverage.
+- session save/load exposure and contract fixtures for prompt payloads are still prerequisites.
 
 Recommended scope:
-- extract the next coherent non-migrated command family from `_lan_apply_action()` through explicit service-envelope dispatch.
-- keep already-migrated command families stable.
-- reduce tracker-owned prompt entry points where practical while preserving reconnect/auth/hidden-info safety.
+- move trigger-specific reaction resolution branches (shield / absorb elements / hellish rebuke / interception / sentinel follow-ups) onto service/domain-owned handlers while preserving behavior.
+- keep `_lan_apply_action()` as transport/delegation glue; avoid reopening command-family extraction churn.
+- add/lock contract fixtures for prompt lifecycle payloads used by reconnect/resume.
 
 Recommended validation:
-- service/dispatch coverage for the extracted family.
-- focused behavior tests for the touched commands plus adjacent contract/allowlist coverage.
+- focused coverage for prompt lifecycle (offer → resolve → resume) plus the reaction suites already in `tests/test_lan_reaction_action.py`, `tests/test_lan_reaction_prompts.py`, `tests/test_hellish_rebuke_reaction.py`, `tests/test_absorb_elements_reaction.py`.
+- contract/allowlist regression coverage for the affected payloads.
+- spot-check the dispatch suites (`tests/test_lan_*_dispatch.py`) to confirm the residual single-command branches stay green.
+
+Deferred (not this pass):
+- bundling the residual single-command dispatch branches into another "super-family" — low ownership gain; revisit only if it simplifies the shared gating after prompt ownership lands.
+- pivoting to the DM web-primary vertical slice (backlog item 3) — the right next *strategic* milestone, but still gated on completing prompt-resolution ownership and session/contract prerequisites.
 
 If this pass lands cleanly, `_lan_apply_action()` will continue trending toward transport/delegation glue and backend authority will advance toward web-first ownership.

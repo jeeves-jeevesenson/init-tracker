@@ -52,8 +52,8 @@ Service-owned (this module):
     match, delegation to ``InitiativeTracker._adjudicate_reaction_response``
 
 Still tracker-owned (delegated to by this service):
-  - deep attack adjudication (damage math, spell riders, reaction offer
-    creation, weapon mastery, opportunity attack halting)
+  - deep attack adjudication (damage math, spell riders, weapon mastery,
+    opportunity attack halting)
   - deep spell adjudication (save rolls, spell mark/curse state, healing
     and damage resolution)
   - trigger-specific reaction resolution (shield, hellish rebuke, absorb
@@ -84,6 +84,7 @@ from __future__ import annotations
 
 import random
 import asyncio
+import math
 import sys
 import threading
 import time
@@ -126,6 +127,7 @@ from player_command_contracts import (
     build_echo_swap_contract,
     build_echo_tether_response_contract,
     build_end_turn_contract,
+    build_hellish_rebuke_resolve_start_payload,
     build_hellish_rebuke_resolve_contract,
     build_initiative_roll_contract,
     build_inventory_adjust_consumable_contract,
@@ -863,6 +865,417 @@ class PlayerCommandService:
         except Exception:
             return fallback
 
+    def _lan_log_warning(self, message: str) -> None:
+        lan = self._tracker.__dict__.get("_lan")
+        append_log = getattr(lan, "_append_lan_log", None) if lan is not None else None
+        if callable(append_log):
+            try:
+                append_log(message, level="warning")
+            except Exception:
+                pass
+
+    def _normalize_cid(self, value: Any, context: str) -> Optional[int]:
+        module = self._tracker_module()
+        normalize = getattr(module, "_normalize_cid_value", None) if module is not None else None
+        if callable(normalize):
+            try:
+                return normalize(value, context, log_fn=self._lan_log_warning)
+            except Exception:
+                pass
+        return self._coerce_optional_int(value)
+
+    def allow_prompt_claim_override(
+        self,
+        msg: Dict[str, Any],
+        *,
+        action_type: str,
+        cid: Optional[int],
+        claimed: Optional[int],
+    ) -> bool:
+        """Return True when a prompt follow-up may bypass claim mismatch gating.
+
+        This owns the action-family-specific prompt override rules that were
+        previously embedded in the shared `_lan_apply_action()` claim gate.
+        """
+        if not isinstance(msg, dict):
+            return False
+        if cid is None or claimed is None or int(cid) == int(claimed):
+            return False
+        command_type = str(action_type or "").strip().lower()
+        if command_type not in {"attack_request", "spell_target_request"}:
+            return False
+        prompt_attacker_cid = self._normalize_cid(
+            msg.get("prompt_attacker_cid"),
+            f"{command_type}.prompt_attacker_cid",
+        )
+        if prompt_attacker_cid is None or int(prompt_attacker_cid) != int(cid):
+            return False
+
+        current_turn_cid = self._normalize_cid(
+            getattr(self._tracker, "current_cid", None),
+            f"{command_type}.prompt.current_cid",
+        )
+        if current_turn_cid is not None and int(current_turn_cid) == int(cid):
+            return True
+
+        if command_type == "attack_request":
+            return str(msg.get("opportunity_attack") or "").strip().lower() in ("1", "true", "yes", "on")
+
+        target_cid_for_prompt = self._normalize_cid(
+            msg.get("target_cid"),
+            "spell_target_request.prompt_target_cid",
+        )
+        if target_cid_for_prompt is None:
+            return False
+        spell_slug_for_prompt = str(msg.get("spell_slug") or "").strip().lower()
+        spell_id_for_prompt = str(msg.get("spell_id") or "").strip().lower()
+        aoes = self._tracker.__dict__.get("_lan_aoes", {})
+        if not isinstance(aoes, dict):
+            return False
+        compute_included = getattr(self._tracker, "_lan_compute_included_units_for_aoe", None)
+        for prompt_aoe in list(aoes.values()):
+            if not isinstance(prompt_aoe, dict):
+                continue
+            if not bool(prompt_aoe.get("over_time")) and not bool(prompt_aoe.get("persistent")):
+                continue
+            owner_cid = self._normalize_cid(
+                prompt_aoe.get("owner_cid"),
+                "spell_target_request.prompt.owner_cid",
+            )
+            if owner_cid is None or int(owner_cid) != int(prompt_attacker_cid):
+                continue
+            aoe_slug = str(prompt_aoe.get("spell_slug") or "").strip().lower()
+            aoe_id = str(prompt_aoe.get("spell_id") or "").strip().lower()
+            if spell_slug_for_prompt and aoe_slug and aoe_slug != spell_slug_for_prompt:
+                continue
+            if spell_id_for_prompt and aoe_id and aoe_id != spell_id_for_prompt:
+                continue
+            try:
+                included = compute_included(prompt_aoe) if callable(compute_included) else []
+            except Exception:
+                included = []
+            for value in included if isinstance(included, list) else []:
+                included_cid = self._normalize_cid(value, "spell_target_request.prompt.included")
+                if included_cid is not None and int(included_cid) == int(target_cid_for_prompt):
+                    return True
+        return False
+
+    def create_reaction_offer(
+        self,
+        reactor_cid: int,
+        trigger: str,
+        source_cid: int,
+        target_cid: int,
+        allowed_choices: list[Dict[str, Any]],
+        ws_ids: list[int],
+        *,
+        extra_payload: Optional[Dict[str, Any]] = None,
+        resolution: Optional[Dict[str, Any]] = None,
+        resume_dispatch: Optional[Dict[str, Any]] = None,
+        prompt_id: Optional[str] = None,
+    ) -> Optional[str]:
+        resolved_ws_ids: list[int] = []
+        for ws_id in ws_ids or []:
+            try:
+                resolved_ws_ids.append(int(ws_id))
+            except Exception:
+                continue
+        self._oplog(
+            "reaction_offer:create "
+            f"trigger={str(trigger)} reactor_cid={int(reactor_cid)} source_cid={int(source_cid)} "
+            f"target_cid={int(target_cid)} ws_ids={resolved_ws_ids}",
+            level="info",
+        )
+        if not allowed_choices:
+            self._oplog("reaction_offer:create skipped (no allowed choices)", level="warning")
+            return None
+        if not resolved_ws_ids:
+            self._oplog("reaction_offer:create skipped (no websocket targets)", level="warning")
+            return None
+        prompt = self.prompts.create_reaction_offer(
+            reactor_cid=int(reactor_cid),
+            trigger=str(trigger),
+            source_cid=int(source_cid),
+            target_cid=int(target_cid),
+            allowed_choices=list(allowed_choices or []),
+            ws_ids=resolved_ws_ids,
+            extra_payload=dict(extra_payload) if isinstance(extra_payload, dict) else None,
+            resolution=dict(resolution) if isinstance(resolution, dict) else None,
+            resume_dispatch=dict(resume_dispatch) if isinstance(resume_dispatch, dict) else None,
+            prompt_id=str(prompt_id).strip() if prompt_id else None,
+        )
+        payload = build_reaction_offer_event(prompt)
+        lan = self._tracker.__dict__.get("_lan")
+        loop = getattr(lan, "_loop", None) if lan is not None else None
+        send_async = getattr(lan, "_send_async", None) if lan is not None else None
+        if callable(send_async):
+            for ws_id in resolved_ws_ids:
+                try:
+                    maybe_coro = send_async(int(ws_id), payload)
+                    if asyncio.iscoroutine(maybe_coro):
+                        if isinstance(loop, asyncio.AbstractEventLoop) and loop.is_running():
+                            asyncio.run_coroutine_threadsafe(maybe_coro, loop)
+                        else:
+                            asyncio.run(maybe_coro)
+                except Exception as exc:
+                    self._oplog(
+                        f"reaction_offer:send failed ws_id={int(ws_id)} trigger={str(trigger)} ({exc})",
+                        level="warning",
+                    )
+        return str(payload.get("request_id") or "")
+
+    def maybe_offer_absorb_elements(
+        self,
+        victim_cid: int,
+        attacker_cid: Optional[int],
+        *,
+        pending_msg: Optional[Dict[str, Any]],
+        damage_entries: list[Dict[str, Any]],
+    ) -> Optional[str]:
+        t = self._tracker
+        attacker_cid = self._normalize_cid(attacker_cid, "absorb_elements.attacker")
+        if attacker_cid is None:
+            return None
+        if int(attacker_cid) == int(victim_cid):
+            return None
+        victim = t.combatants.get(int(victim_cid))
+        attacker = t.combatants.get(int(attacker_cid))
+        if victim is None or attacker is None:
+            return None
+        trigger_types = t._absorb_elements_trigger_types(damage_entries)
+        if not trigger_types:
+            return None
+        mode = t._reaction_mode_for(int(victim_cid), "absorb_elements", default="ask")
+        if mode == "off":
+            return None
+        can_offer, _reason = t._can_offer_absorb_elements_reaction(victim, trigger_types)
+        if not can_offer:
+            return None
+        ws_targets = t._find_ws_for_cid(int(victim_cid))
+        choices = [
+            {
+                "kind": f"cast_absorb_elements_{dtype}",
+                "label": f"Absorb Elements ({dtype.title()})",
+                "mode": mode,
+            }
+            for dtype in trigger_types
+        ]
+        choices.extend(
+            [
+                {"kind": "absorb_elements_decline", "label": "No", "mode": "ask"},
+                {"kind": "absorb_elements_never", "label": "No (don't ask again)", "mode": "ask"},
+            ]
+        )
+        resume_dispatch = None
+        if isinstance(pending_msg, dict):
+            pending_type = str(pending_msg.get("type") or "").strip().lower()
+            if pending_type == "attack_request":
+                resume_dispatch = build_resume_dispatch(
+                    "attack_request",
+                    actor_cid=int(attacker_cid),
+                    ws_id=pending_msg.get("_ws_id"),
+                    is_admin=bool(str(pending_msg.get("admin_token") or "").strip()),
+                    payload=build_attack_request_contract(
+                        pending_msg,
+                        cid=int(attacker_cid),
+                        ws_id=pending_msg.get("_ws_id"),
+                        is_admin=bool(str(pending_msg.get("admin_token") or "").strip()),
+                    )["payload"],
+                )
+            elif pending_type == "spell_target_request":
+                resume_dispatch = build_resume_dispatch(
+                    "spell_target_request",
+                    actor_cid=int(attacker_cid),
+                    ws_id=pending_msg.get("_ws_id"),
+                    is_admin=bool(str(pending_msg.get("admin_token") or "").strip()),
+                    payload=build_spell_target_request_contract(
+                        pending_msg,
+                        cid=int(attacker_cid),
+                        ws_id=pending_msg.get("_ws_id"),
+                        is_admin=bool(str(pending_msg.get("admin_token") or "").strip()),
+                    )["payload"],
+                )
+        return self.create_reaction_offer(
+            int(victim_cid),
+            "absorb_elements",
+            int(attacker_cid),
+            int(victim_cid),
+            choices,
+            ws_targets,
+            extra_payload={
+                "prompt": f"You took {', '.join(dtype.title() for dtype in trigger_types)} damage from {getattr(attacker, 'name', 'an attacker')}. Cast Absorb Elements?",
+            },
+            resolution={
+                "victim_cid": int(victim_cid),
+                "attacker_cid": int(attacker_cid),
+                "trigger_types": list(trigger_types),
+            },
+            resume_dispatch=resume_dispatch,
+        )
+
+    def maybe_offer_hellish_rebuke(
+        self,
+        victim_cid: int,
+        attacker_cid: Optional[int],
+        damage_total: int,
+    ) -> Optional[str]:
+        if int(damage_total or 0) <= 0:
+            return None
+        t = self._tracker
+        attacker_cid = self._normalize_cid(attacker_cid, "hellish_rebuke.attacker")
+        if attacker_cid is None:
+            return None
+        if int(attacker_cid) == int(victim_cid):
+            return None
+        victim = t.combatants.get(int(victim_cid))
+        attacker = t.combatants.get(int(attacker_cid))
+        if victim is None or attacker is None:
+            return None
+        mode = t._reaction_mode_for(int(victim_cid), "hellish_rebuke", default="ask")
+        if mode == "off":
+            return None
+        can_offer, _reason = t._can_offer_hellish_rebuke_reaction(victim)
+        if not can_offer:
+            return None
+        positions = dict(getattr(t, "_lan_positions", {}) or {})
+        victim_pos = positions.get(int(victim_cid)) or t._lan_current_position(int(victim_cid))
+        attacker_pos = positions.get(int(attacker_cid)) or t._lan_current_position(int(attacker_cid))
+        if victim_pos is None or attacker_pos is None:
+            return None
+        dist_ft = math.hypot(
+            float(victim_pos[0]) - float(attacker_pos[0]),
+            float(victim_pos[1]) - float(attacker_pos[1]),
+        ) * t._lan_feet_per_square()
+        if dist_ft - 60.0 > 1e-6:
+            return None
+        ws_targets = t._find_ws_for_cid(int(victim_cid))
+        choices = [
+            {"kind": "cast_hellish_rebuke", "label": "Hellish Rebuke", "mode": mode},
+            {"kind": "decline", "label": "No", "mode": "ask"},
+            {"kind": "never", "label": "No (don't ask again)", "mode": "ask"},
+        ]
+        pre_id = uuid.uuid4().hex
+        req_id = self.create_reaction_offer(
+            int(victim_cid),
+            "hellish_rebuke",
+            int(attacker_cid),
+            int(attacker_cid),
+            choices,
+            ws_targets,
+            extra_payload={
+                "prompt": f"You took damage from {getattr(attacker, 'name', 'an attacker')}. React with Hellish Rebuke?",
+            },
+            prompt_id=pre_id,
+            resolution={
+                "victim_cid": int(victim_cid),
+                "attacker_cid": int(attacker_cid),
+                "spell_id": "hellish-rebuke",
+                "max_range_ft": 60,
+                "player_visible": build_hellish_rebuke_resolve_start_payload(
+                    request_id=pre_id,
+                    caster_cid=int(victim_cid),
+                    attacker_cid=int(attacker_cid),
+                    target_cid=int(attacker_cid),
+                ),
+            },
+        )
+        if req_id:
+            self._oplog(
+                "reaction_offer:hellish_rebuke pending "
+                f"request_id={req_id} victim={int(victim_cid)} attacker={int(attacker_cid)} dist_ft={dist_ft:.1f}",
+                level="info",
+            )
+        return req_id
+
+    def maybe_offer_interception(
+        self,
+        victim_cid: int,
+        attacker_cid: Optional[int],
+        *,
+        pending_msg: Optional[Dict[str, Any]],
+        damage_entries: list[Dict[str, Any]],
+    ) -> Optional[str]:
+        t = self._tracker
+        attacker_cid = self._normalize_cid(attacker_cid, "interception.attacker")
+        if attacker_cid is None or int(attacker_cid) == int(victim_cid):
+            return None
+        victim = t.combatants.get(int(victim_cid))
+        attacker = t.combatants.get(int(attacker_cid))
+        if victim is None or attacker is None:
+            return None
+        if int(sum(int((entry or {}).get("amount") or 0) for entry in damage_entries if isinstance(entry, dict))) <= 0:
+            return None
+        positions = dict(getattr(t, "_lan_positions", {}) or {})
+        victim_pos = positions.get(int(victim_cid)) or t._lan_current_position(int(victim_cid))
+        if victim_pos is None:
+            return None
+        fps = t._lan_feet_per_square()
+        best_reactor: Optional[Any] = None
+        for reactor_cid, reactor in list(t.combatants.items()):
+            try:
+                rcid = int(reactor_cid)
+            except Exception:
+                continue
+            if rcid in (int(victim_cid), int(attacker_cid)):
+                continue
+            if t._lan_is_friendly_unit(int(rcid)) != t._lan_is_friendly_unit(int(victim_cid)):
+                continue
+            if not t._can_offer_interception_reaction(reactor):
+                continue
+            reactor_pos = positions.get(int(rcid)) or t._lan_current_position(int(rcid))
+            if not (isinstance(reactor_pos, tuple) and len(reactor_pos) == 2):
+                continue
+            dist_ft = max(
+                abs(int(reactor_pos[0]) - int(victim_pos[0])),
+                abs(int(reactor_pos[1]) - int(victim_pos[1])),
+            ) * fps
+            if dist_ft - 5.0 > 1e-6:
+                continue
+            best_reactor = reactor
+            break
+        if best_reactor is None:
+            return None
+        mode = t._reaction_mode_for(int(getattr(best_reactor, "cid", 0) or 0), "interception", default="ask")
+        if mode == "off":
+            return None
+        ws_targets = t._find_ws_for_cid(int(getattr(best_reactor, "cid", 0) or 0))
+        choices = [
+            {"kind": "interception_yes", "label": "Interception", "mode": mode},
+            {"kind": "interception_no", "label": "No", "mode": "ask"},
+            {"kind": "interception_never", "label": "No (don't ask again)", "mode": "ask"},
+        ]
+        resume_dispatch = None
+        if isinstance(pending_msg, dict):
+            resume_dispatch = build_resume_dispatch(
+                "attack_request",
+                actor_cid=int(attacker_cid),
+                ws_id=pending_msg.get("_ws_id"),
+                is_admin=bool(str(pending_msg.get("admin_token") or "").strip()),
+                payload=build_attack_request_contract(
+                    pending_msg,
+                    cid=int(attacker_cid),
+                    ws_id=pending_msg.get("_ws_id"),
+                    is_admin=bool(str(pending_msg.get("admin_token") or "").strip()),
+                )["payload"],
+            )
+        return self.create_reaction_offer(
+            int(getattr(best_reactor, "cid", 0) or 0),
+            "interception",
+            int(attacker_cid),
+            int(victim_cid),
+            choices,
+            ws_targets,
+            extra_payload={
+                "prompt": f"{getattr(victim, 'name', 'Ally')} was hit by {getattr(attacker, 'name', 'an attacker')}. Use Interception?",
+            },
+            resolution={
+                "reactor_cid": int(getattr(best_reactor, "cid", 0) or 0),
+                "victim_cid": int(victim_cid),
+                "attacker_cid": int(attacker_cid),
+            },
+            resume_dispatch=resume_dispatch,
+        )
+
     def _resolve_pc_name(self, cid: Optional[int]) -> str:
         if cid is None:
             return ""
@@ -1156,7 +1569,6 @@ class PlayerCommandService:
         feet_per_square = getattr(t, "_lan_feet_per_square", None)
         build_oa_choices = getattr(t, "_build_oa_reaction_choices", None)
         find_ws_for_cid = getattr(t, "_find_ws_for_cid", None)
-        create_reaction_offer = getattr(t, "_create_reaction_offer", None)
         if (
             mover is not None
             and isinstance(before_pos, tuple)
@@ -1165,7 +1577,6 @@ class PlayerCommandService:
             and callable(feet_per_square)
             and callable(build_oa_choices)
             and callable(find_ws_for_cid)
-            and callable(create_reaction_offer)
         ):
             fps = feet_per_square()
             mover_friendly = bool(lan_is_friendly_unit(int(cid_int)))
@@ -1201,7 +1612,7 @@ class PlayerCommandService:
                 if not choices:
                     continue
                 ws_targets = find_ws_for_cid(int(ocid))
-                create_reaction_offer(int(ocid), "leave_reach", int(cid_int), int(cid_int), choices, ws_targets)
+                self.create_reaction_offer(int(ocid), "leave_reach", int(cid_int), int(cid_int), choices, ws_targets)
 
         self._toast(ws_id, f"Moved ({cost} ft).")
         return build_dispatch_result(
@@ -1552,14 +1963,12 @@ class PlayerCommandService:
                 unit_has_sentinel_feat = getattr(t, "_unit_has_sentinel_feat", None)
                 build_oa_choices = getattr(t, "_build_oa_reaction_choices", None)
                 find_ws_for_cid = getattr(t, "_find_ws_for_cid", None)
-                create_reaction_offer = getattr(t, "_create_reaction_offer", None)
                 lan_is_friendly_unit = getattr(t, "_lan_is_friendly_unit", None)
                 if (
                     callable(feet_per_square)
                     and callable(unit_has_sentinel_feat)
                     and callable(build_oa_choices)
                     and callable(find_ws_for_cid)
-                    and callable(create_reaction_offer)
                     and callable(lan_is_friendly_unit)
                 ):
                     fps = feet_per_square()
@@ -1591,7 +2000,7 @@ class PlayerCommandService:
                             if not choices:
                                 continue
                             ws_targets = find_ws_for_cid(ocid)
-                            create_reaction_offer(ocid, "sentinel_disengage", int(cid_int), int(cid_int), choices, ws_targets)
+                            self.create_reaction_offer(ocid, "sentinel_disengage", int(cid_int), int(cid_int), choices, ws_targets)
             if action_effect in ("recover_spell_slots", "recover_spell_slot") or action_key in (
                 "arcane recovery",
                 "natural recovery (recover spell slots)",

@@ -72,7 +72,7 @@ from player_command_contracts import (
     build_wild_shape_revert_contract,
     build_wild_shape_set_known_contract,
 )
-from player_command_service import PromptState
+from player_command_service import PlayerCommandService, PromptState
 
 
 class PromptContractStateTests(unittest.TestCase):
@@ -126,6 +126,173 @@ class PromptContractStateTests(unittest.TestCase):
         self.assertEqual(visible[0]["prompt_id"], prompt_id)
         self.assertEqual(visible[0]["trigger"], "shield")
         self.assertEqual((visible[0].get("contract") or {}).get("schema"), "player_command.prompt_snapshot")
+
+
+class PlayerCommandServicePromptOverrideTests(unittest.TestCase):
+    def _build_tracker(self):
+        tracker = object.__new__(tracker_mod.InitiativeTracker)
+        tracker._lan = type("LanStub", (), {"_append_lan_log": lambda *args, **kwargs: None})()
+        tracker.current_cid = 99
+        tracker._lan_aoes = {}
+        tracker._lan_compute_included_units_for_aoe = lambda _aoe: []
+        return tracker
+
+    def test_prompt_override_allows_opportunity_attack_follow_up(self):
+        tracker = self._build_tracker()
+        service = PlayerCommandService(tracker)
+        allowed = service.allow_prompt_claim_override(
+            {
+                "type": "attack_request",
+                "prompt_attacker_cid": 1,
+                "opportunity_attack": True,
+            },
+            action_type="attack_request",
+            cid=1,
+            claimed=2,
+        )
+        self.assertTrue(allowed)
+
+    def test_prompt_override_allows_spell_follow_up_inside_persistent_aoe(self):
+        tracker = self._build_tracker()
+        tracker._lan_aoes = {
+            "aoe-1": {
+                "owner_cid": 1,
+                "over_time": True,
+                "persistent": True,
+                "spell_slug": "wall-of-fire",
+                "spell_id": "wall-of-fire",
+            }
+        }
+        tracker._lan_compute_included_units_for_aoe = lambda _aoe: [2]
+        service = PlayerCommandService(tracker)
+        allowed = service.allow_prompt_claim_override(
+            {
+                "type": "spell_target_request",
+                "prompt_attacker_cid": 1,
+                "target_cid": 2,
+                "spell_slug": "wall-of-fire",
+                "spell_id": "wall-of-fire",
+            },
+            action_type="spell_target_request",
+            cid=1,
+            claimed=3,
+        )
+        self.assertTrue(allowed)
+
+    def test_prompt_override_rejects_spell_follow_up_outside_persistent_aoe(self):
+        tracker = self._build_tracker()
+        tracker._lan_aoes = {
+            "aoe-1": {
+                "owner_cid": 1,
+                "over_time": True,
+                "persistent": True,
+                "spell_slug": "wall-of-fire",
+                "spell_id": "wall-of-fire",
+            }
+        }
+        tracker._lan_compute_included_units_for_aoe = lambda _aoe: [999]
+        service = PlayerCommandService(tracker)
+        allowed = service.allow_prompt_claim_override(
+            {
+                "type": "spell_target_request",
+                "prompt_attacker_cid": 1,
+                "target_cid": 2,
+                "spell_slug": "wall-of-fire",
+                "spell_id": "wall-of-fire",
+            },
+            action_type="spell_target_request",
+            cid=1,
+            claimed=3,
+        )
+        self.assertFalse(allowed)
+
+
+class PlayerCommandServiceReactionOfferOwnershipTests(unittest.TestCase):
+    def test_service_create_reaction_offer_emits_and_records_prompt(self):
+        sent = []
+        tracker = object.__new__(tracker_mod.InitiativeTracker)
+        tracker._oplog = lambda *args, **kwargs: None
+        tracker._lan = type(
+            "LanStub",
+            (),
+            {
+                "_append_lan_log": lambda *args, **kwargs: None,
+                "_loop": object(),
+                "_send_async": lambda _self, ws_id, payload: sent.append((int(ws_id), dict(payload))),
+            },
+        )()
+        service = PlayerCommandService(tracker)
+        request_id = service.create_reaction_offer(
+            1,
+            "leave_reach",
+            2,
+            2,
+            [{"kind": "opportunity_attack", "label": "Opportunity Attack", "mode": "ask"}],
+            [101],
+            extra_payload={"prompt": "Take reaction?"},
+        )
+        self.assertTrue(request_id)
+        self.assertTrue(sent)
+        self.assertEqual(sent[0][0], 101)
+        payload = sent[0][1]
+        self.assertEqual(payload.get("type"), "reaction_offer")
+        self.assertEqual(str(payload.get("request_id") or ""), str(request_id))
+        prompt = service.prompts.get_prompt(str(request_id))
+        self.assertIsInstance(prompt, dict)
+        self.assertEqual(str((prompt or {}).get("trigger") or ""), "leave_reach")
+
+    def test_tracker_prompt_offer_methods_delegate_to_service_entrypoints(self):
+        class PromptOwnershipServiceStub:
+            def __init__(self):
+                self.calls = []
+
+            def create_reaction_offer(self, *args, **kwargs):
+                self.calls.append(("create", args, kwargs))
+                return "req-create"
+
+            def maybe_offer_absorb_elements(self, *args, **kwargs):
+                self.calls.append(("absorb", args, kwargs))
+                return "req-absorb"
+
+            def maybe_offer_hellish_rebuke(self, *args, **kwargs):
+                self.calls.append(("hellish", args, kwargs))
+                return "req-hellish"
+
+            def maybe_offer_interception(self, *args, **kwargs):
+                self.calls.append(("interception", args, kwargs))
+                return "req-interception"
+
+        tracker = object.__new__(tracker_mod.InitiativeTracker)
+        stub = PromptOwnershipServiceStub()
+        tracker._ensure_player_commands = lambda: stub
+
+        created = tracker._create_reaction_offer(
+            1,
+            "leave_reach",
+            2,
+            2,
+            [{"kind": "opportunity_attack", "label": "Opportunity Attack", "mode": "ask"}],
+            [101],
+        )
+        absorb = tracker._maybe_offer_absorb_elements(
+            3,
+            2,
+            pending_msg={"type": "attack_request"},
+            damage_entries=[{"amount": 5, "type": "fire"}],
+        )
+        hellish = tracker._maybe_offer_hellish_rebuke(3, 2, 7)
+        intercept = tracker._maybe_offer_interception(
+            3,
+            2,
+            pending_msg={"type": "attack_request"},
+            damage_entries=[{"amount": 5, "type": "slashing"}],
+        )
+
+        self.assertEqual(created, "req-create")
+        self.assertEqual(absorb, "req-absorb")
+        self.assertEqual(hellish, "req-hellish")
+        self.assertEqual(intercept, "req-interception")
+        self.assertEqual([entry[0] for entry in stub.calls], ["create", "absorb", "hellish", "interception"])
 
 
 class TurnLocalCommandContractTests(unittest.TestCase):
