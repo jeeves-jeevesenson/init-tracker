@@ -168,6 +168,21 @@ CAST_AOE_FIELDS: Sequence[str] = (
     "damage_entries",
     "payload",
 )
+COMMAND_RESOLVE_FIELDS: Sequence[str] = (
+    "type",
+    "command_option",
+    "option",
+    "target_cids",
+    "target_cid",
+    "slot_level",
+    "spell_slug",
+    "spell_id",
+)
+BARDIC_INSPIRATION_GRANT_FIELDS: Sequence[str] = ("type", "target_cid")
+BARDIC_INSPIRATION_USE_FIELDS: Sequence[str] = ("type",)
+MANTLE_OF_INSPIRATION_FIELDS: Sequence[str] = ("type", "target_cids", "die_override")
+BEGUILING_MAGIC_RESTORE_FIELDS: Sequence[str] = ("type",)
+BEGUILING_MAGIC_USE_FIELDS: Sequence[str] = ("type", "target_cid", "condition", "restore_with_bi")
 
 FIGHTER_MONK_RESOURCE_ACTION_TYPES = frozenset(
     {
@@ -225,6 +240,17 @@ AOE_MANIPULATION_COMMAND_TYPES = frozenset(
     {
         "aoe_move",
         "aoe_remove",
+    }
+)
+
+BARD_GLAMOUR_SPECIALTY_COMMAND_TYPES = frozenset(
+    {
+        "command_resolve",
+        "bardic_inspiration_grant",
+        "bardic_inspiration_use",
+        "mantle_of_inspiration",
+        "beguiling_magic_restore",
+        "beguiling_magic_use",
     }
 )
 
@@ -954,6 +980,102 @@ def build_cast_aoe_contract(
     return build_command_request_contract(
         "cast_aoe",
         _project_payload(msg, CAST_AOE_FIELDS, "cast_aoe"),
+        cid=cid,
+        ws_id=ws_id,
+        is_admin=is_admin,
+    )
+
+
+def build_command_resolve_contract(
+    msg: Dict[str, Any],
+    *,
+    cid: Optional[int],
+    ws_id: Any,
+    is_admin: bool,
+) -> Dict[str, Any]:
+    return build_command_request_contract(
+        "command_resolve",
+        _project_payload(msg, COMMAND_RESOLVE_FIELDS, "command_resolve"),
+        cid=cid,
+        ws_id=ws_id,
+        is_admin=is_admin,
+    )
+
+
+def build_bardic_inspiration_grant_contract(
+    msg: Dict[str, Any],
+    *,
+    cid: Optional[int],
+    ws_id: Any,
+    is_admin: bool,
+) -> Dict[str, Any]:
+    return build_command_request_contract(
+        "bardic_inspiration_grant",
+        _project_payload(msg, BARDIC_INSPIRATION_GRANT_FIELDS, "bardic_inspiration_grant"),
+        cid=cid,
+        ws_id=ws_id,
+        is_admin=is_admin,
+    )
+
+
+def build_bardic_inspiration_use_contract(
+    msg: Dict[str, Any],
+    *,
+    cid: Optional[int],
+    ws_id: Any,
+    is_admin: bool,
+) -> Dict[str, Any]:
+    return build_command_request_contract(
+        "bardic_inspiration_use",
+        _project_payload(msg, BARDIC_INSPIRATION_USE_FIELDS, "bardic_inspiration_use"),
+        cid=cid,
+        ws_id=ws_id,
+        is_admin=is_admin,
+    )
+
+
+def build_mantle_of_inspiration_contract(
+    msg: Dict[str, Any],
+    *,
+    cid: Optional[int],
+    ws_id: Any,
+    is_admin: bool,
+) -> Dict[str, Any]:
+    return build_command_request_contract(
+        "mantle_of_inspiration",
+        _project_payload(msg, MANTLE_OF_INSPIRATION_FIELDS, "mantle_of_inspiration"),
+        cid=cid,
+        ws_id=ws_id,
+        is_admin=is_admin,
+    )
+
+
+def build_beguiling_magic_restore_contract(
+    msg: Dict[str, Any],
+    *,
+    cid: Optional[int],
+    ws_id: Any,
+    is_admin: bool,
+) -> Dict[str, Any]:
+    return build_command_request_contract(
+        "beguiling_magic_restore",
+        _project_payload(msg, BEGUILING_MAGIC_RESTORE_FIELDS, "beguiling_magic_restore"),
+        cid=cid,
+        ws_id=ws_id,
+        is_admin=is_admin,
+    )
+
+
+def build_beguiling_magic_use_contract(
+    msg: Dict[str, Any],
+    *,
+    cid: Optional[int],
+    ws_id: Any,
+    is_admin: bool,
+) -> Dict[str, Any]:
+    return build_command_request_contract(
+        "beguiling_magic_use",
+        _project_payload(msg, BEGUILING_MAGIC_USE_FIELDS, "beguiling_magic_use"),
         cid=cid,
         ws_id=ws_id,
         is_admin=is_admin,

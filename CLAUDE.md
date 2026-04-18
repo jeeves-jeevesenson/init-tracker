@@ -1,31 +1,31 @@
-# Copilot instructions for this repository
+# Claude project instructions
 
 ## Mission
 
 This repository is in a broad migration away from a Tkinter/canvas-heavy desktop host toward a production-ready, web-first, backend-owned system.
 
-Treat this repo as migration/extraction work first:
+Treat work here as migration/extraction work first:
 - move authority out of monolithic desktop-owned handlers
-- keep rendering/client concerns separate from backend authority
-- prefer explicit service seams and contracts
+- favor explicit service seams and contracts
+- keep client/rendering concerns separate from backend authority
 - do not optimize for preserving Tk/desktop behavior as the end-state
 
-The final target is not a better desktop shell. The final target is a web-first product with backend-owned combat/session authority.
+The final target is not a cleaned-up desktop shell. The final target is a web-first product with backend-owned combat/session authority.
 
 ## Source of truth
 
 Before making strong claims:
 - inspect the current repository state
-- use current code plus `majorTODO.md` as the source of truth
+- use current code plus `majorTODO.md` as source of truth
 - trust code/tests over stale docs when they disagree
 - update `majorTODO.md` honestly when the repo state has changed
 
 Do not invent:
-- missing branches
-- stale TODO items
-- file paths or systems that are not present in the repo
+- nonexistent command branches
+- stale TODO items as if they are live
+- file paths or architecture that are not present in the repo
 
-If a TODO/reference is stale, say so plainly and fix the tracker instead of fabricating compatibility work.
+If a TODO/reference is stale, update the tracker instead of fabricating a compatibility path.
 
 ## Working style
 
@@ -47,7 +47,7 @@ Avoid:
 - micro-cleanup passes that do not materially reduce inline ownership
 - unnecessary renames, comment cleanup, or abstraction churn
 
-## Migration pattern to prefer
+## Preferred migration pattern
 
 When extracting a player-command family, prefer this shape when it fits the repo:
 
@@ -55,7 +55,7 @@ When extracting a player-command family, prefer this shape when it fits the repo
 2. add family command constants and request/result contract builders in `player_command_contracts.py`
 3. add family dispatch + handlers in `player_command_service.py`
 4. move deep logic into named tracker helper methods if needed for compatibility
-5. keep `_lan_apply_action()` as transport/delegation glue for the migrated family
+5. keep `_lan_apply_action()` as delegation glue for the migrated family
 6. add focused tests for contracts/dispatch where needed
 7. update `majorTODO.md` honestly
 
@@ -68,7 +68,7 @@ Prefer:
 - explicit contracts
 - canonical state models
 - testable helper/service seams
-- removing or shrinking monolithic ownership hotspots
+- shrinking monolithic ownership hotspots
 
 Do not:
 - spread tracker/desktop coupling into new code

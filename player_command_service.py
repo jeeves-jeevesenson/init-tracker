@@ -14,6 +14,10 @@ Service-owned (this module):
     ``move``, ``cycle_movement_mode``, and ``perform_action``
   - player AoE manipulation family:
     ``aoe_move`` and ``aoe_remove``
+  - player bard/glamour specialty family:
+    ``command_resolve``, ``bardic_inspiration_grant``,
+    ``bardic_inspiration_use``, ``mantle_of_inspiration``,
+    ``beguiling_magic_restore``, and ``beguiling_magic_use``
   - player wild-shape family:
     ``wild_shape_apply``, ``wild_shape_pool_set_current``,
     ``wild_shape_revert``, ``wild_shape_regain_use``,
@@ -81,6 +85,7 @@ from typing import TYPE_CHECKING, Any, Dict, Optional
 from player_command_contracts import (
     ACTIVE_PROMPT_STATES,
     AOE_MANIPULATION_COMMAND_TYPES,
+    BARD_GLAMOUR_SPECIALTY_COMMAND_TYPES,
     FIGHTER_MONK_RESOURCE_ACTION_TYPES,
     MOVEMENT_ACTION_COMMAND_TYPES,
     SPECIAL_REACTION_TRIGGERS,
@@ -92,8 +97,13 @@ from player_command_contracts import (
     build_aoe_remove_contract,
     build_attack_request_contract,
     build_action_surge_use_contract,
+    build_bardic_inspiration_grant_contract,
+    build_bardic_inspiration_use_contract,
+    build_beguiling_magic_restore_contract,
+    build_beguiling_magic_use_contract,
     build_cast_aoe_contract,
     build_cast_spell_contract,
+    build_command_resolve_contract,
     build_cycle_movement_mode_contract,
     build_dash_contract,
     build_dispatch_result,
@@ -106,6 +116,7 @@ from player_command_contracts import (
     build_monk_patient_defense_contract,
     build_monk_step_of_wind_contract,
     build_monk_uncanny_metabolism_contract,
+    build_mantle_of_inspiration_contract,
     build_manual_override_contract,
     build_manual_override_resource_pool_contract,
     build_manual_override_spell_slot_contract,
@@ -725,6 +736,9 @@ class PlayerCommandService:
     }
     _AOE_MANIPULATION_COMMAND_HANDLERS = {
         command_type: command_type for command_type in AOE_MANIPULATION_COMMAND_TYPES
+    }
+    _BARD_GLAMOUR_SPECIALTY_COMMAND_HANDLERS = {
+        command_type: command_type for command_type in BARD_GLAMOUR_SPECIALTY_COMMAND_TYPES
     }
     _TURN_LOCAL_COMMAND_HANDLERS = {
         command_type: command_type for command_type in TURN_LOCAL_COMMAND_TYPES
@@ -2413,6 +2427,281 @@ class PlayerCommandService:
             )
         return build_dispatch_result(
             "cast_aoe",
+            True,
+            request=request_contract,
+        )
+
+    # ------------------------------------------------------------------
+    # bard/glamour specialty commands
+    # ------------------------------------------------------------------
+
+    def dispatch_bard_glamour_specialty_command(
+        self,
+        msg: Dict[str, Any],
+        *,
+        cid: Optional[int],
+        ws_id: Any,
+        is_admin: bool,
+    ) -> Dict[str, Any]:
+        command_type = str(msg.get("type") if isinstance(msg, dict) else "").strip().lower()
+        handler_name = self._BARD_GLAMOUR_SPECIALTY_COMMAND_HANDLERS.get(command_type)
+        if not handler_name:
+            return build_dispatch_result(
+                "bard_glamour_specialty_command",
+                False,
+                reason="unsupported_command",
+                received_type=command_type,
+            )
+        handler = getattr(self, handler_name, None)
+        if not callable(handler):
+            return build_dispatch_result(
+                command_type,
+                False,
+                reason="handler_missing",
+            )
+        return handler(
+            msg if isinstance(msg, dict) else {},
+            cid=cid,
+            ws_id=ws_id,
+            is_admin=is_admin,
+        )
+
+    def command_resolve(
+        self,
+        msg: Dict[str, Any],
+        *,
+        cid: Optional[int],
+        ws_id: Any,
+        is_admin: bool,
+    ) -> Dict[str, Any]:
+        t = self._tracker
+        request_contract = build_command_resolve_contract(
+            msg,
+            cid=cid,
+            ws_id=ws_id,
+            is_admin=is_admin,
+        )
+        handler = getattr(t, "_handle_command_resolve_request", None)
+        if not callable(handler):
+            return build_dispatch_result(
+                "command_resolve",
+                False,
+                reason="handler_missing",
+                request=request_contract,
+            )
+        try:
+            handler(msg if isinstance(msg, dict) else {}, cid=cid, ws_id=ws_id, is_admin=is_admin)
+        except Exception as exc:
+            self._oplog(f"command_resolve handler raised: {exc}", level="warning")
+            return build_dispatch_result(
+                "command_resolve",
+                False,
+                reason="exception",
+                error=str(exc),
+                request=request_contract,
+            )
+        return build_dispatch_result(
+            "command_resolve",
+            True,
+            request=request_contract,
+        )
+
+    def bardic_inspiration_grant(
+        self,
+        msg: Dict[str, Any],
+        *,
+        cid: Optional[int],
+        ws_id: Any,
+        is_admin: bool,
+    ) -> Dict[str, Any]:
+        t = self._tracker
+        request_contract = build_bardic_inspiration_grant_contract(
+            msg,
+            cid=cid,
+            ws_id=ws_id,
+            is_admin=is_admin,
+        )
+        handler = getattr(t, "_handle_bardic_inspiration_grant_request", None)
+        if not callable(handler):
+            return build_dispatch_result(
+                "bardic_inspiration_grant",
+                False,
+                reason="handler_missing",
+                request=request_contract,
+            )
+        try:
+            handler(msg if isinstance(msg, dict) else {}, cid=cid, ws_id=ws_id, is_admin=is_admin)
+        except Exception as exc:
+            self._oplog(f"bardic_inspiration_grant handler raised: {exc}", level="warning")
+            return build_dispatch_result(
+                "bardic_inspiration_grant",
+                False,
+                reason="exception",
+                error=str(exc),
+                request=request_contract,
+            )
+        return build_dispatch_result(
+            "bardic_inspiration_grant",
+            True,
+            request=request_contract,
+        )
+
+    def bardic_inspiration_use(
+        self,
+        msg: Dict[str, Any],
+        *,
+        cid: Optional[int],
+        ws_id: Any,
+        is_admin: bool,
+    ) -> Dict[str, Any]:
+        t = self._tracker
+        request_contract = build_bardic_inspiration_use_contract(
+            msg,
+            cid=cid,
+            ws_id=ws_id,
+            is_admin=is_admin,
+        )
+        handler = getattr(t, "_handle_bardic_inspiration_use_request", None)
+        if not callable(handler):
+            return build_dispatch_result(
+                "bardic_inspiration_use",
+                False,
+                reason="handler_missing",
+                request=request_contract,
+            )
+        try:
+            handler(msg if isinstance(msg, dict) else {}, cid=cid, ws_id=ws_id, is_admin=is_admin)
+        except Exception as exc:
+            self._oplog(f"bardic_inspiration_use handler raised: {exc}", level="warning")
+            return build_dispatch_result(
+                "bardic_inspiration_use",
+                False,
+                reason="exception",
+                error=str(exc),
+                request=request_contract,
+            )
+        return build_dispatch_result(
+            "bardic_inspiration_use",
+            True,
+            request=request_contract,
+        )
+
+    def mantle_of_inspiration(
+        self,
+        msg: Dict[str, Any],
+        *,
+        cid: Optional[int],
+        ws_id: Any,
+        is_admin: bool,
+    ) -> Dict[str, Any]:
+        t = self._tracker
+        request_contract = build_mantle_of_inspiration_contract(
+            msg,
+            cid=cid,
+            ws_id=ws_id,
+            is_admin=is_admin,
+        )
+        handler = getattr(t, "_handle_mantle_of_inspiration_request", None)
+        if not callable(handler):
+            return build_dispatch_result(
+                "mantle_of_inspiration",
+                False,
+                reason="handler_missing",
+                request=request_contract,
+            )
+        try:
+            handler(msg if isinstance(msg, dict) else {}, cid=cid, ws_id=ws_id, is_admin=is_admin)
+        except Exception as exc:
+            self._oplog(f"mantle_of_inspiration handler raised: {exc}", level="warning")
+            return build_dispatch_result(
+                "mantle_of_inspiration",
+                False,
+                reason="exception",
+                error=str(exc),
+                request=request_contract,
+            )
+        return build_dispatch_result(
+            "mantle_of_inspiration",
+            True,
+            request=request_contract,
+        )
+
+    def beguiling_magic_restore(
+        self,
+        msg: Dict[str, Any],
+        *,
+        cid: Optional[int],
+        ws_id: Any,
+        is_admin: bool,
+    ) -> Dict[str, Any]:
+        t = self._tracker
+        request_contract = build_beguiling_magic_restore_contract(
+            msg,
+            cid=cid,
+            ws_id=ws_id,
+            is_admin=is_admin,
+        )
+        handler = getattr(t, "_handle_beguiling_magic_restore_request", None)
+        if not callable(handler):
+            return build_dispatch_result(
+                "beguiling_magic_restore",
+                False,
+                reason="handler_missing",
+                request=request_contract,
+            )
+        try:
+            handler(msg if isinstance(msg, dict) else {}, cid=cid, ws_id=ws_id, is_admin=is_admin)
+        except Exception as exc:
+            self._oplog(f"beguiling_magic_restore handler raised: {exc}", level="warning")
+            return build_dispatch_result(
+                "beguiling_magic_restore",
+                False,
+                reason="exception",
+                error=str(exc),
+                request=request_contract,
+            )
+        return build_dispatch_result(
+            "beguiling_magic_restore",
+            True,
+            request=request_contract,
+        )
+
+    def beguiling_magic_use(
+        self,
+        msg: Dict[str, Any],
+        *,
+        cid: Optional[int],
+        ws_id: Any,
+        is_admin: bool,
+    ) -> Dict[str, Any]:
+        t = self._tracker
+        request_contract = build_beguiling_magic_use_contract(
+            msg,
+            cid=cid,
+            ws_id=ws_id,
+            is_admin=is_admin,
+        )
+        handler = getattr(t, "_handle_beguiling_magic_use_request", None)
+        if not callable(handler):
+            return build_dispatch_result(
+                "beguiling_magic_use",
+                False,
+                reason="handler_missing",
+                request=request_contract,
+            )
+        try:
+            handler(msg if isinstance(msg, dict) else {}, cid=cid, ws_id=ws_id, is_admin=is_admin)
+        except Exception as exc:
+            self._oplog(f"beguiling_magic_use handler raised: {exc}", level="warning")
+            return build_dispatch_result(
+                "beguiling_magic_use",
+                False,
+                reason="exception",
+                error=str(exc),
+                request=request_contract,
+            )
+        return build_dispatch_result(
+            "beguiling_magic_use",
             True,
             request=request_contract,
         )

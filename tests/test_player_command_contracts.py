@@ -7,6 +7,7 @@ from pathlib import Path
 import dnd_initative_tracker as tracker_mod
 from player_command_contracts import (
     AOE_MANIPULATION_COMMAND_TYPES,
+    BARD_GLAMOUR_SPECIALTY_COMMAND_TYPES,
     MOVEMENT_ACTION_COMMAND_TYPES,
     SPELL_LAUNCH_COMMAND_TYPES,
     TURN_LOCAL_COMMAND_TYPES,
@@ -17,6 +18,11 @@ from player_command_contracts import (
     build_attack_request_contract,
     build_cast_aoe_contract,
     build_cast_spell_contract,
+    build_bardic_inspiration_grant_contract,
+    build_bardic_inspiration_use_contract,
+    build_beguiling_magic_restore_contract,
+    build_beguiling_magic_use_contract,
+    build_command_resolve_contract,
     build_cycle_movement_mode_contract,
     build_dash_contract,
     build_dismount_contract,
@@ -27,6 +33,7 @@ from player_command_contracts import (
     build_monk_patient_defense_contract,
     build_monk_step_of_wind_contract,
     build_monk_uncanny_metabolism_contract,
+    build_mantle_of_inspiration_contract,
     build_move_contract,
     build_manual_override_resource_pool_contract,
     build_manual_override_spell_slot_contract,
@@ -295,6 +302,69 @@ class AoeManipulationCommandContractTests(unittest.TestCase):
                 f"player_command.{command_type}.request",
             )
             self.assertEqual((contract.get("actor") or {}).get("cid"), 23)
+            self.assertEqual((contract.get("payload") or {}).get("type"), command_type)
+
+
+class BardGlamourSpecialtyCommandContractTests(unittest.TestCase):
+    def test_bard_glamour_specialty_contract_builders_cover_the_family(self):
+        builders = {
+            "command_resolve": (
+                build_command_resolve_contract,
+                {
+                    "type": "command_resolve",
+                    "target_cids": [2, 3],
+                    "command_option": "halt",
+                    "slot_level": 2,
+                },
+            ),
+            "bardic_inspiration_grant": (
+                build_bardic_inspiration_grant_contract,
+                {
+                    "type": "bardic_inspiration_grant",
+                    "target_cid": 2,
+                },
+            ),
+            "bardic_inspiration_use": (
+                build_bardic_inspiration_use_contract,
+                {
+                    "type": "bardic_inspiration_use",
+                },
+            ),
+            "mantle_of_inspiration": (
+                build_mantle_of_inspiration_contract,
+                {
+                    "type": "mantle_of_inspiration",
+                    "target_cids": [2, 3],
+                    "die_override": 4,
+                },
+            ),
+            "beguiling_magic_restore": (
+                build_beguiling_magic_restore_contract,
+                {
+                    "type": "beguiling_magic_restore",
+                },
+            ),
+            "beguiling_magic_use": (
+                build_beguiling_magic_use_contract,
+                {
+                    "type": "beguiling_magic_use",
+                    "target_cid": 2,
+                    "condition": "charmed",
+                    "restore_with_bi": True,
+                },
+            ),
+        }
+
+        self.assertEqual(set(builders.keys()), set(BARD_GLAMOUR_SPECIALTY_COMMAND_TYPES))
+
+        for command_type, (builder, msg) in builders.items():
+            contract = builder(dict(msg), cid=31, ws_id=32, is_admin=False)
+            self.assertEqual(contract.get("command_type"), command_type)
+            self.assertEqual(
+                (contract.get("contract") or {}).get("schema"),
+                f"player_command.{command_type}.request",
+            )
+            self.assertEqual((contract.get("actor") or {}).get("cid"), 31)
             self.assertEqual((contract.get("payload") or {}).get("type"), command_type)
 
 
