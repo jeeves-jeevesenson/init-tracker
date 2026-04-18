@@ -4138,6 +4138,82 @@ class LanController:
                 raise HTTPException(status_code=500, detail=f"Failed to load tactical presets: {exc}")
             return {"ok": True, "presets": presets}
 
+        @self._fastapi_app.get("/api/dm/map/ship-blueprints")
+        async def dm_ship_blueprints(request: Request):
+            """List available ship blueprints for browser tactical authoring."""
+            _check_dm_auth(request)
+            try:
+                blueprints = self.app._dm_list_ship_blueprints()
+            except Exception as exc:
+                raise HTTPException(status_code=500, detail=f"Failed to load ship blueprints: {exc}")
+            return {"ok": True, "blueprints": blueprints}
+
+        @self._fastapi_app.get("/api/dm/map/structure-templates")
+        async def dm_structure_templates(request: Request):
+            """List persisted structure templates for browser tactical authoring."""
+            _check_dm_auth(request)
+            try:
+                templates = self.app._dm_list_structure_templates()
+            except Exception as exc:
+                raise HTTPException(status_code=500, detail=f"Failed to load structure templates: {exc}")
+            return {"ok": True, "templates": templates}
+
+        @self._fastapi_app.get("/api/dm/map/boarding-links")
+        async def dm_boarding_links(request: Request):
+            """List current boarding links from canonical map state."""
+            _check_dm_auth(request)
+            try:
+                links = self.app._dm_list_boarding_links()
+            except Exception as exc:
+                raise HTTPException(status_code=500, detail=f"Failed to load boarding links: {exc}")
+            return {"ok": True, "boarding_links": links}
+
+        @self._fastapi_app.post("/api/dm/map/ship-blueprints/{blueprint_id}/preview")
+        async def dm_ship_blueprint_preview(blueprint_id: str, request: Request, payload: Dict[str, Any] = Body(...)):
+            """Preview ship-blueprint placement blockers at an anchor/facing."""
+            _check_dm_auth(request)
+            if not isinstance(payload, dict):
+                raise HTTPException(status_code=400, detail="Invalid payload.")
+            try:
+                anchor_col = int(payload.get("anchor_col"))
+                anchor_row = int(payload.get("anchor_row"))
+            except Exception:
+                raise HTTPException(status_code=400, detail="anchor_col and anchor_row must be integers.")
+            facing_raw = payload.get("facing_deg", 0.0)
+            try:
+                facing_deg = float(facing_raw)
+            except Exception:
+                raise HTTPException(status_code=400, detail="facing_deg must be numeric.")
+            try:
+                result = self.app._dm_preview_ship_blueprint_on_map(
+                    blueprint_id=blueprint_id,
+                    anchor_col=anchor_col,
+                    anchor_row=anchor_row,
+                    facing_deg=facing_deg,
+                )
+            except Exception as exc:
+                raise HTTPException(status_code=500, detail=f"Failed to preview ship placement: {exc}")
+            if not result.get("ok"):
+                response: Dict[str, Any] = {
+                    "ok": False,
+                    "error": result.get("error", "Cannot preview ship placement."),
+                    "reason": result.get("reason", ""),
+                    "target_cells": result.get("target_cells", []),
+                }
+                blockers = result.get("blockers")
+                if isinstance(blockers, dict):
+                    response["blockers"] = blockers
+                raise HTTPException(status_code=400, detail=response)
+            return {
+                "ok": True,
+                "blueprint_id": result.get("blueprint_id"),
+                "anchor_col": result.get("anchor_col"),
+                "anchor_row": result.get("anchor_row"),
+                "facing_deg": result.get("facing_deg"),
+                "target_cells": result.get("target_cells", []),
+                "blockers": result.get("blockers", {}),
+            }
+
         @self._fastapi_app.get("/api/dm/map/backgrounds/assets")
         async def dm_map_background_assets(request: Request):
             """List available background assets under /assets for DM map prep."""
@@ -4474,6 +4550,363 @@ class LanController:
                 "snapshot": _dm_console_snapshot(),
             }
 
+        @self._fastapi_app.post("/api/dm/map/ships")
+        async def dm_instantiate_ship(request: Request, payload: Dict[str, Any] = Body(...)):
+            """Instantiate a ship blueprint on the tactical map."""
+            _check_dm_auth(request)
+            if not isinstance(payload, dict):
+                raise HTTPException(status_code=400, detail="Invalid payload.")
+            blueprint_id = str(payload.get("blueprint_id") or "").strip().lower()
+            if not blueprint_id:
+                raise HTTPException(status_code=400, detail="blueprint_id is required.")
+            try:
+                anchor_col = int(payload.get("anchor_col"))
+                anchor_row = int(payload.get("anchor_row"))
+            except Exception:
+                raise HTTPException(status_code=400, detail="anchor_col and anchor_row must be integers.")
+            facing_raw = payload.get("facing_deg", 0.0)
+            try:
+                facing_deg = float(facing_raw)
+            except Exception:
+                raise HTTPException(status_code=400, detail="facing_deg must be numeric.")
+            name = str(payload.get("name") or "").strip() or None
+            try:
+                result = self.app._dm_instantiate_ship_blueprint_on_map(
+                    blueprint_id=blueprint_id,
+                    anchor_col=anchor_col,
+                    anchor_row=anchor_row,
+                    facing_deg=facing_deg,
+                    name=name,
+                )
+            except Exception as exc:
+                raise HTTPException(status_code=500, detail=f"Failed to place ship: {exc}")
+            if not result.get("ok"):
+                response: Dict[str, Any] = {
+                    "ok": False,
+                    "error": result.get("error", "Cannot place ship."),
+                    "reason": result.get("reason", ""),
+                }
+                blockers = result.get("blockers")
+                if isinstance(blockers, dict):
+                    response["blockers"] = blockers
+                raise HTTPException(status_code=400, detail=response)
+            return {
+                "ok": True,
+                "blueprint_id": result.get("blueprint_id"),
+                "structure_id": result.get("structure_id"),
+                "structure": result.get("structure", {}),
+                "ship": result.get("ship", {}),
+                "snapshot": _dm_console_snapshot(),
+            }
+
+        @self._fastapi_app.get("/api/dm/map/ships/{structure_id}/engagement")
+        async def dm_ship_engagement_summary(structure_id: str, request: Request):
+            """Load detailed ship engagement state for one ship structure."""
+            _check_dm_auth(request)
+            try:
+                result = self.app._dm_ship_engagement_summary(structure_id=structure_id)
+            except Exception as exc:
+                raise HTTPException(status_code=500, detail=f"Failed to load ship engagement summary: {exc}")
+            if not result.get("ok"):
+                response: Dict[str, Any] = {
+                    "ok": False,
+                    "error": result.get("error", "Cannot load ship engagement summary."),
+                    "reason": result.get("reason", ""),
+                }
+                raise HTTPException(status_code=400, detail=response)
+            return {
+                "ok": True,
+                "structure_id": result.get("structure_id"),
+                "ship": result.get("ship", {}),
+            }
+
+        @self._fastapi_app.post("/api/dm/map/ships/{structure_id}/maneuver-preview")
+        async def dm_ship_maneuver_preview(structure_id: str, request: Request, payload: Dict[str, Any] = Body(...)):
+            """Preview a ship maneuver without mutating canonical map state."""
+            _check_dm_auth(request)
+            if not isinstance(payload, dict):
+                raise HTTPException(status_code=400, detail="Invalid payload.")
+            maneuver = str(payload.get("maneuver") or "").strip().lower()
+            if not maneuver:
+                raise HTTPException(status_code=400, detail="maneuver is required.")
+            try:
+                result = self.app._dm_ship_maneuver_on_map(
+                    structure_id=structure_id,
+                    maneuver=maneuver,
+                    steps=payload.get("steps"),
+                    preview_only=True,
+                )
+            except Exception as exc:
+                raise HTTPException(status_code=500, detail=f"Failed to preview ship maneuver: {exc}")
+            if not result.get("ok"):
+                response: Dict[str, Any] = {
+                    "ok": False,
+                    "error": result.get("error", "Cannot preview ship maneuver."),
+                    "reason": result.get("reason", ""),
+                }
+                blockers = result.get("blockers")
+                if isinstance(blockers, dict):
+                    response["blockers"] = blockers
+                target_cells = result.get("target_cells")
+                if isinstance(target_cells, list):
+                    response["target_cells"] = target_cells
+                raise HTTPException(status_code=400, detail=response)
+            return {
+                "ok": True,
+                "structure_id": result.get("structure_id"),
+                "maneuver": result.get("maneuver"),
+                "steps": result.get("steps"),
+                "preview_only": True,
+                "result": result.get("result", {}),
+                "ship": result.get("ship", {}),
+            }
+
+        @self._fastapi_app.post("/api/dm/map/ships/{structure_id}/maneuver")
+        async def dm_ship_maneuver(structure_id: str, request: Request, payload: Dict[str, Any] = Body(...)):
+            """Execute a ship maneuver using canonical ship engagement semantics."""
+            _check_dm_auth(request)
+            if not isinstance(payload, dict):
+                raise HTTPException(status_code=400, detail="Invalid payload.")
+            maneuver = str(payload.get("maneuver") or "").strip().lower()
+            if not maneuver:
+                raise HTTPException(status_code=400, detail="maneuver is required.")
+            try:
+                result = self.app._dm_ship_maneuver_on_map(
+                    structure_id=structure_id,
+                    maneuver=maneuver,
+                    steps=payload.get("steps"),
+                    preview_only=False,
+                )
+            except Exception as exc:
+                raise HTTPException(status_code=500, detail=f"Failed to execute ship maneuver: {exc}")
+            if not result.get("ok"):
+                response: Dict[str, Any] = {
+                    "ok": False,
+                    "error": result.get("error", "Cannot execute ship maneuver."),
+                    "reason": result.get("reason", ""),
+                }
+                blockers = result.get("blockers")
+                if isinstance(blockers, dict):
+                    response["blockers"] = blockers
+                target_cells = result.get("target_cells")
+                if isinstance(target_cells, list):
+                    response["target_cells"] = target_cells
+                raise HTTPException(status_code=400, detail=response)
+            return {
+                "ok": True,
+                "structure_id": result.get("structure_id"),
+                "maneuver": result.get("maneuver"),
+                "steps": result.get("steps"),
+                "result": result.get("result", {}),
+                "ship": result.get("ship", {}),
+                "snapshot": _dm_console_snapshot(),
+            }
+
+        @self._fastapi_app.post("/api/dm/map/ships/{source_structure_id}/weapons/fire")
+        async def dm_ship_fire_weapon(source_structure_id: str, request: Request, payload: Dict[str, Any] = Body(...)):
+            """Resolve ship-weapon fire from one ship structure onto another."""
+            _check_dm_auth(request)
+            if not isinstance(payload, dict):
+                raise HTTPException(status_code=400, detail="Invalid payload.")
+            weapon_id = str(payload.get("weapon_id") or "").strip().lower()
+            target_structure_id = str(payload.get("target_structure_id") or "").strip()
+            target_component_id = str(payload.get("target_component_id") or "").strip().lower() or None
+            if not weapon_id:
+                raise HTTPException(status_code=400, detail="weapon_id is required.")
+            if not target_structure_id:
+                raise HTTPException(status_code=400, detail="target_structure_id is required.")
+            try:
+                result = self.app._dm_ship_fire_weapon_on_map(
+                    source_structure_id=source_structure_id,
+                    target_structure_id=target_structure_id,
+                    weapon_id=weapon_id,
+                    target_component_id=target_component_id,
+                )
+            except Exception as exc:
+                raise HTTPException(status_code=500, detail=f"Failed to resolve ship weapon fire: {exc}")
+            if not result.get("ok"):
+                response = {
+                    "ok": False,
+                    "error": result.get("error", "Cannot resolve ship weapon fire."),
+                    "reason": result.get("reason", ""),
+                }
+                raise HTTPException(status_code=400, detail=response)
+            return {
+                "ok": True,
+                "result": result.get("result", {}),
+                "source_ship": result.get("source_ship", {}),
+                "target_ship": result.get("target_ship", {}),
+                "snapshot": _dm_console_snapshot(),
+            }
+
+        @self._fastapi_app.post("/api/dm/map/ships/{source_structure_id}/ram")
+        async def dm_ship_ram(source_structure_id: str, request: Request, payload: Dict[str, Any] = Body(...)):
+            """Resolve a ship ramming action between two contacted ships."""
+            _check_dm_auth(request)
+            if not isinstance(payload, dict):
+                raise HTTPException(status_code=400, detail="Invalid payload.")
+            target_structure_id = str(payload.get("target_structure_id") or "").strip()
+            if not target_structure_id:
+                raise HTTPException(status_code=400, detail="target_structure_id is required.")
+            try:
+                result = self.app._dm_ship_ram_on_map(
+                    source_structure_id=source_structure_id,
+                    target_structure_id=target_structure_id,
+                )
+            except Exception as exc:
+                raise HTTPException(status_code=500, detail=f"Failed to resolve ship ram action: {exc}")
+            if not result.get("ok"):
+                response = {
+                    "ok": False,
+                    "error": result.get("error", "Cannot resolve ship ram action."),
+                    "reason": result.get("reason", ""),
+                }
+                raise HTTPException(status_code=400, detail=response)
+            return {
+                "ok": True,
+                "result": result.get("result", {}),
+                "source_ship": result.get("source_ship", {}),
+                "target_ship": result.get("target_ship", {}),
+                "snapshot": _dm_console_snapshot(),
+            }
+
+        @self._fastapi_app.post("/api/dm/map/structure-templates/{template_id}/instantiate")
+        async def dm_instantiate_structure_template(
+            template_id: str,
+            request: Request,
+            payload: Dict[str, Any] = Body(...),
+        ):
+            """Instantiate a saved structure template on the tactical map."""
+            _check_dm_auth(request)
+            if not isinstance(payload, dict):
+                raise HTTPException(status_code=400, detail="Invalid payload.")
+            try:
+                anchor_col = int(payload.get("anchor_col"))
+                anchor_row = int(payload.get("anchor_row"))
+            except Exception:
+                raise HTTPException(status_code=400, detail="anchor_col and anchor_row must be integers.")
+            facing_raw = payload.get("facing_deg", 0.0)
+            try:
+                facing_deg = float(facing_raw)
+            except Exception:
+                raise HTTPException(status_code=400, detail="facing_deg must be numeric.")
+            try:
+                result = self.app._dm_instantiate_structure_template_on_map(
+                    template_id=template_id,
+                    anchor_col=anchor_col,
+                    anchor_row=anchor_row,
+                    facing_deg=facing_deg,
+                )
+            except Exception as exc:
+                raise HTTPException(status_code=500, detail=f"Failed to place structure template: {exc}")
+            if not result.get("ok"):
+                response: Dict[str, Any] = {
+                    "ok": False,
+                    "error": result.get("error", "Cannot place structure template."),
+                    "reason": result.get("reason", ""),
+                }
+                blockers = result.get("blockers")
+                if isinstance(blockers, dict):
+                    response["blockers"] = blockers
+                raise HTTPException(status_code=400, detail=response)
+            return {
+                "ok": True,
+                "template_id": result.get("template_id"),
+                "structure_id": result.get("structure_id"),
+                "structure": result.get("structure", {}),
+                "snapshot": _dm_console_snapshot(),
+            }
+
+        @self._fastapi_app.post("/api/dm/map/boarding-links")
+        async def dm_upsert_boarding_link(request: Request, payload: Dict[str, Any] = Body(...)):
+            """Create or update a boarding link between two ship structures."""
+            _check_dm_auth(request)
+            if not isinstance(payload, dict):
+                raise HTTPException(status_code=400, detail="Invalid payload.")
+            source_structure_id = str(payload.get("source_structure_id") or "").strip()
+            target_structure_id = str(payload.get("target_structure_id") or "").strip()
+            if not source_structure_id or not target_structure_id:
+                raise HTTPException(status_code=400, detail="source_structure_id and target_structure_id are required.")
+            status = str(payload.get("status") or "active").strip().lower() or "active"
+            notes = str(payload.get("notes") or "").strip() or None
+            try:
+                result = self.app._dm_upsert_boarding_link_on_map(
+                    source_structure_id=source_structure_id,
+                    target_structure_id=target_structure_id,
+                    status=status,
+                    notes=notes,
+                )
+            except Exception as exc:
+                raise HTTPException(status_code=500, detail=f"Failed to update boarding link: {exc}")
+            if not result.get("ok"):
+                response: Dict[str, Any] = {
+                    "ok": False,
+                    "error": result.get("error", "Cannot update boarding link."),
+                    "reason": result.get("reason", ""),
+                }
+                raise HTTPException(status_code=400, detail=response)
+            return {
+                "ok": True,
+                "boarding_link": result.get("boarding_link", {}),
+                "message": result.get("message", ""),
+                "snapshot": _dm_console_snapshot(),
+            }
+
+        @self._fastapi_app.post("/api/dm/map/boarding-links/{link_id}/status")
+        async def dm_set_boarding_link_status(link_id: str, request: Request, payload: Dict[str, Any] = Body(...)):
+            """Set status for an existing boarding link."""
+            _check_dm_auth(request)
+            if not isinstance(payload, dict):
+                raise HTTPException(status_code=400, detail="Invalid payload.")
+            status = str(payload.get("status") or "").strip().lower()
+            if not status:
+                raise HTTPException(status_code=400, detail="status is required.")
+            notes = str(payload.get("notes") or "").strip() or None
+            try:
+                result = self.app._dm_set_boarding_link_status_on_map(
+                    link_id=link_id,
+                    status=status,
+                    notes=notes,
+                )
+            except Exception as exc:
+                raise HTTPException(status_code=500, detail=f"Failed to set boarding link status: {exc}")
+            if not result.get("ok"):
+                response: Dict[str, Any] = {
+                    "ok": False,
+                    "error": result.get("error", "Cannot update boarding link status."),
+                    "reason": result.get("reason", ""),
+                }
+                raise HTTPException(status_code=400, detail=response)
+            return {
+                "ok": True,
+                "boarding_link_id": result.get("boarding_link_id"),
+                "status": result.get("status"),
+                "boarding_link": result.get("boarding_link", {}),
+                "message": result.get("message", ""),
+                "snapshot": _dm_console_snapshot(),
+            }
+
+        @self._fastapi_app.delete("/api/dm/map/boarding-links/{link_id}")
+        async def dm_remove_boarding_link(link_id: str, request: Request):
+            """Remove an existing boarding link."""
+            _check_dm_auth(request)
+            try:
+                result = self.app._dm_remove_boarding_link_on_map(link_id=link_id)
+            except Exception as exc:
+                raise HTTPException(status_code=500, detail=f"Failed to remove boarding link: {exc}")
+            if not result.get("ok"):
+                response: Dict[str, Any] = {
+                    "ok": False,
+                    "error": result.get("error", "Cannot remove boarding link."),
+                    "reason": result.get("reason", ""),
+                }
+                raise HTTPException(status_code=400, detail=response)
+            return {
+                "ok": True,
+                "boarding_link_id": result.get("boarding_link_id"),
+                "snapshot": _dm_console_snapshot(),
+            }
+
         @self._fastapi_app.post("/api/dm/map/elevation/cell")
         async def dm_set_map_elevation(request: Request, payload: Dict[str, Any] = Body(...)):
             """Set elevation for a tactical map cell."""
@@ -4550,6 +4983,29 @@ class LanController:
             return {
                 "ok": True,
                 "bid": result.get("bid"),
+                "snapshot": _dm_console_snapshot(),
+            }
+
+        @self._fastapi_app.post("/api/dm/map/backgrounds/{bid}/order")
+        async def dm_reorder_background(bid: int, request: Request, payload: Dict[str, Any] = Body(...)):
+            """Reorder map background layer stacking in canonical presentation."""
+            _check_dm_auth(request)
+            if not isinstance(payload, dict):
+                raise HTTPException(status_code=400, detail="Invalid payload.")
+            direction = str(payload.get("direction") or "").strip().lower()
+            if not direction:
+                raise HTTPException(status_code=400, detail="direction is required.")
+            try:
+                result = self.app._dm_reorder_background_layer(bid=bid, direction=direction)
+            except Exception as exc:
+                raise HTTPException(status_code=500, detail=f"Failed to reorder background layer: {exc}")
+            if not result.get("ok"):
+                raise HTTPException(status_code=400, detail=result.get("error", "Cannot reorder background layer."))
+            return {
+                "ok": True,
+                "bid": result.get("bid"),
+                "background": result.get("background", {}),
+                "backgrounds": result.get("backgrounds", []),
                 "snapshot": _dm_console_snapshot(),
             }
 
@@ -40552,6 +41008,552 @@ class InitiativeTracker(base.InitiativeTracker):
         except Exception:
             pass
         return {"ok": True, "bid": int(target_bid)}
+
+    def _dm_reorder_background_layer(self, *, bid: Any, direction: Any) -> Dict[str, Any]:
+        try:
+            target_bid = int(bid)
+        except Exception:
+            return {"ok": False, "error": "bid must be an integer."}
+        if target_bid <= 0:
+            return {"ok": False, "error": "bid must be a positive integer."}
+        direction_key = str(direction or "").strip().lower()
+        if direction_key not in {"up", "down", "front", "back"}:
+            return {"ok": False, "error": "direction must be one of: up, down, front, back."}
+        found = False
+        moved_entry: Dict[str, Any] = {}
+        ordered_layers: List[Dict[str, Any]] = []
+
+        def _mutate(state: MapState) -> None:
+            nonlocal found, moved_entry, ordered_layers
+            presentation = dict(state.presentation if isinstance(state.presentation, dict) else {})
+            layers: List[Dict[str, Any]] = []
+            for raw in list(presentation.get("bg_images") if isinstance(presentation.get("bg_images"), list) else []):
+                if not isinstance(raw, dict):
+                    continue
+                try:
+                    raw_bid = int(raw.get("bid"))
+                except Exception:
+                    continue
+                layers.append(
+                    {
+                        "bid": int(raw_bid),
+                        "path": str(raw.get("path") or ""),
+                        "x": float(raw.get("x", 0.0) or 0.0),
+                        "y": float(raw.get("y", 0.0) or 0.0),
+                        "scale_pct": float(raw.get("scale_pct", 100.0) or 100.0),
+                        "trans_pct": float(raw.get("trans_pct", 0.0) or 0.0),
+                        "locked": bool(raw.get("locked", False)),
+                    }
+                )
+            layers.sort(key=lambda item: int(item.get("bid", 0)))
+            index = next((i for i, item in enumerate(layers) if int(item.get("bid", 0)) == int(target_bid)), None)
+            if index is None:
+                return
+            found = True
+            if len(layers) > 1:
+                if direction_key == "up":
+                    new_index = min(len(layers) - 1, int(index) + 1)
+                elif direction_key == "down":
+                    new_index = max(0, int(index) - 1)
+                elif direction_key == "front":
+                    new_index = len(layers) - 1
+                else:
+                    new_index = 0
+                if new_index != index:
+                    selected = dict(layers.pop(index))
+                    layers.insert(new_index, selected)
+            for idx, layer in enumerate(layers, start=1):
+                layer["bid"] = int(idx)
+            ordered_layers = [dict(item) for item in layers]
+            if ordered_layers:
+                selected_index = min(max(0, int(index)), len(ordered_layers) - 1)
+                if direction_key == "up":
+                    selected_index = min(len(ordered_layers) - 1, int(index) + 1)
+                elif direction_key == "down":
+                    selected_index = max(0, int(index) - 1)
+                elif direction_key == "front":
+                    selected_index = len(ordered_layers) - 1
+                elif direction_key == "back":
+                    selected_index = 0
+                moved_entry = dict(ordered_layers[selected_index])
+            presentation["bg_images"] = ordered_layers
+            presentation["next_bg_id"] = max(int(presentation.get("next_bg_id", 1) or 1), len(ordered_layers) + 1)
+            state.presentation = presentation
+
+        self._mutate_canonical_map_state(_mutate, hydrate_window=True, broadcast=True)
+        if not found:
+            return {"ok": False, "error": "Background layer not found."}
+        try:
+            self._restore_map_backgrounds(list(self.__dict__.get("_session_bg_images", []) or []))
+        except Exception:
+            pass
+        payload_layers: List[Dict[str, Any]] = []
+        for item in ordered_layers:
+            layer_path = str(item.get("path") or "")
+            payload_layers.append(
+                {
+                    **dict(item),
+                    "asset_url": self._lan_asset_url_for_path(layer_path),
+                }
+            )
+        moved_path = str(moved_entry.get("path") or "")
+        return {
+            "ok": True,
+            "bid": int(moved_entry.get("bid", 0) or 0),
+            "background": {
+                **dict(moved_entry),
+                "asset_url": self._lan_asset_url_for_path(moved_path),
+            },
+            "backgrounds": payload_layers,
+        }
+
+    def _dm_ship_engagement_summary(self, *, structure_id: Any) -> Dict[str, Any]:
+        sid = str(structure_id or "").strip()
+        if not sid:
+            return {"ok": False, "error": "structure_id is required.", "reason": "missing_structure_id"}
+        summary = self._selected_ship_summary(sid)
+        if not bool(summary.get("ok")):
+            reason = str(summary.get("reason") or "ship_not_found")
+            message = {
+                "ship_not_found": "Selected structure is not a ship.",
+                "missing_structure_id": "Select a ship first.",
+            }.get(reason, "Could not load ship engagement state.")
+            return {"ok": False, "error": message, "reason": reason}
+        return {"ok": True, "structure_id": sid, "ship": dict(summary)}
+
+    def _dm_sync_ship_engagement_state(self) -> None:
+        try:
+            state = self._capture_canonical_map_state(prefer_window=False).normalized()
+            self._apply_canonical_map_state(state, hydrate_window=True)
+        except Exception:
+            pass
+        try:
+            self._lan_force_state_broadcast()
+        except Exception:
+            pass
+
+    def _dm_ship_maneuver_on_map(
+        self,
+        *,
+        structure_id: Any,
+        maneuver: Any,
+        steps: Any = 1,
+        preview_only: bool = False,
+    ) -> Dict[str, Any]:
+        sid = str(structure_id or "").strip()
+        action = str(maneuver or "").strip().lower()
+        if not sid:
+            return {"ok": False, "error": "structure_id is required.", "reason": "missing_structure_id"}
+        allowed = {
+            "move_forward",
+            "move_reverse",
+            "move_port",
+            "move_starboard",
+            "turn_port",
+            "turn_starboard",
+        }
+        if action not in allowed:
+            return {"ok": False, "error": "Unsupported ship maneuver.", "reason": "unsupported_maneuver"}
+        step_count = 1
+        if action in {"move_forward", "move_reverse"}:
+            try:
+                step_count = max(1, int(steps if steps is not None else 1))
+            except Exception:
+                return {"ok": False, "error": "steps must be an integer >= 1 for this maneuver.", "reason": "invalid_steps"}
+        result = self._ship_engagement_maneuver(
+            sid,
+            action,
+            steps=int(step_count),
+            preview_only=bool(preview_only),
+        )
+        if not bool(result.get("ok")):
+            response: Dict[str, Any] = {
+                "ok": False,
+                "error": str(result.get("message") or result.get("reason") or "Ship maneuver failed."),
+                "reason": str(result.get("reason") or "ship_maneuver_failed"),
+            }
+            blockers = result.get("blockers")
+            if isinstance(blockers, dict):
+                response["blockers"] = blockers
+            target_cells = result.get("target_cells")
+            if isinstance(target_cells, list):
+                response["target_cells"] = target_cells
+            return response
+        if not preview_only:
+            self._dm_sync_ship_engagement_state()
+        summary = self._selected_ship_summary(sid)
+        return {
+            "ok": True,
+            "structure_id": sid,
+            "maneuver": action,
+            "steps": int(step_count),
+            "preview_only": bool(preview_only),
+            "result": dict(result),
+            "ship": dict(summary) if isinstance(summary, dict) and bool(summary.get("ok")) else {},
+        }
+
+    def _dm_ship_fire_weapon_on_map(
+        self,
+        *,
+        source_structure_id: Any,
+        target_structure_id: Any,
+        weapon_id: Any,
+        target_component_id: Any = None,
+    ) -> Dict[str, Any]:
+        source_id = str(source_structure_id or "").strip()
+        target_id = str(target_structure_id or "").strip()
+        wid = str(weapon_id or "").strip().lower()
+        component_id = str(target_component_id or "").strip().lower() or None
+        if not source_id:
+            return {"ok": False, "error": "source_structure_id is required.", "reason": "missing_source_structure_id"}
+        if not target_id:
+            return {"ok": False, "error": "target_structure_id is required.", "reason": "missing_target_structure_id"}
+        if not wid:
+            return {"ok": False, "error": "weapon_id is required.", "reason": "missing_weapon_id"}
+        result = self._ship_engagement_fire_weapon(
+            source_id,
+            wid,
+            target_id,
+            target_component_id=component_id,
+        )
+        if not bool(result.get("ok")):
+            return {
+                "ok": False,
+                "error": str(result.get("message") or result.get("reason") or "Ship weapon action failed."),
+                "reason": str(result.get("reason") or "ship_weapon_failed"),
+            }
+        self._dm_sync_ship_engagement_state()
+        source_ship = self._selected_ship_summary(source_id)
+        target_ship = self._selected_ship_summary(target_id)
+        return {
+            "ok": True,
+            "result": dict(result),
+            "source_ship": dict(source_ship) if isinstance(source_ship, dict) and bool(source_ship.get("ok")) else {},
+            "target_ship": dict(target_ship) if isinstance(target_ship, dict) and bool(target_ship.get("ok")) else {},
+        }
+
+    def _dm_ship_ram_on_map(
+        self,
+        *,
+        source_structure_id: Any,
+        target_structure_id: Any,
+    ) -> Dict[str, Any]:
+        source_id = str(source_structure_id or "").strip()
+        target_id = str(target_structure_id or "").strip()
+        if not source_id:
+            return {"ok": False, "error": "source_structure_id is required.", "reason": "missing_source_structure_id"}
+        if not target_id:
+            return {"ok": False, "error": "target_structure_id is required.", "reason": "missing_target_structure_id"}
+        result = self._ship_engagement_ram(source_id, target_id)
+        if not bool(result.get("ok")):
+            return {
+                "ok": False,
+                "error": str(result.get("message") or result.get("reason") or "Ship ram action failed."),
+                "reason": str(result.get("reason") or "ship_ram_failed"),
+            }
+        self._dm_sync_ship_engagement_state()
+        source_ship = self._selected_ship_summary(source_id)
+        target_ship = self._selected_ship_summary(target_id)
+        return {
+            "ok": True,
+            "result": dict(result),
+            "source_ship": dict(source_ship) if isinstance(source_ship, dict) and bool(source_ship.get("ok")) else {},
+            "target_ship": dict(target_ship) if isinstance(target_ship, dict) and bool(target_ship.get("ok")) else {},
+        }
+
+    def _dm_list_structure_templates(self) -> List[Dict[str, Any]]:
+        templates = self._structure_templates()
+        payload: List[Dict[str, Any]] = []
+        for template_id, template in sorted(templates.items(), key=lambda item: str(item[0]).lower()):
+            if not isinstance(template, dict):
+                continue
+            footprint = template.get("footprint") if isinstance(template.get("footprint"), list) else []
+            features = template.get("features") if isinstance(template.get("features"), list) else []
+            decks = template.get("decks") if isinstance(template.get("decks"), list) else []
+            anchor_points = template.get("anchor_points") if isinstance(template.get("anchor_points"), list) else []
+            payload.append(
+                {
+                    "id": str(template_id),
+                    "name": str(template.get("name") or template_id),
+                    "kind": str(template.get("kind") or "structure"),
+                    "footprint_cells": int(len(footprint)),
+                    "feature_count": int(len(features)),
+                    "deck_count": int(len(decks)),
+                    "anchor_point_count": int(len(anchor_points)),
+                }
+            )
+        return payload
+
+    def _dm_instantiate_structure_template_on_map(
+        self,
+        *,
+        template_id: Any,
+        anchor_col: int,
+        anchor_row: int,
+        facing_deg: Any = 0.0,
+    ) -> Dict[str, Any]:
+        template_key = str(template_id or "").strip()
+        if not template_key:
+            return {"ok": False, "error": "template_id is required.", "reason": "missing_template_id"}
+        error = self._dm_validate_map_cell(int(anchor_col), int(anchor_row))
+        if error:
+            return {"ok": False, "error": error, "reason": "invalid_anchor"}
+        try:
+            facing = float(facing_deg or 0.0)
+        except Exception:
+            return {"ok": False, "error": "facing_deg must be numeric.", "reason": "invalid_facing"}
+        structure_id = self._instantiate_structure_template(
+            template_key,
+            anchor_col=int(anchor_col),
+            anchor_row=int(anchor_row),
+            facing_deg=float(facing),
+        )
+        if not structure_id:
+            reason = str(getattr(self, "_last_map_template_error", "") or "template_instantiate_failed")
+            blockers = getattr(self, "_last_map_template_blockers", {})
+            message = {
+                "template_not_found": "Structure template not found.",
+                "template_out_of_bounds": "Template placement is out of bounds.",
+                "template_conflict": "Template placement is blocked.",
+            }.get(reason, "Cannot instantiate structure template.")
+            response: Dict[str, Any] = {"ok": False, "error": message, "reason": reason}
+            if isinstance(blockers, dict) and blockers:
+                response["blockers"] = blockers
+            return response
+        state = self._capture_canonical_map_state(prefer_window=True).normalized()
+        structure = (state.structures or {}).get(str(structure_id))
+        structure_view = structure.to_dict() if isinstance(structure, MapStructure) else {}
+        return {
+            "ok": True,
+            "template_id": template_key,
+            "structure_id": str(structure_id),
+            "structure": structure_view,
+        }
+
+    def _dm_list_ship_blueprints(self) -> List[Dict[str, Any]]:
+        blueprints = self._ship_blueprints()
+        payload: List[Dict[str, Any]] = []
+        for blueprint_id, blueprint in sorted(blueprints.items(), key=lambda item: str(item[0]).lower()):
+            if not isinstance(blueprint, dict):
+                continue
+            template = blueprint.get("template") if isinstance(blueprint.get("template"), dict) else {}
+            footprint = template.get("footprint") if isinstance(template.get("footprint"), list) else []
+            deck_regions = blueprint.get("deck_regions") if isinstance(blueprint.get("deck_regions"), list) else []
+            components = blueprint.get("components") if isinstance(blueprint.get("components"), list) else []
+            mounted_weapons = blueprint.get("mounted_weapons") if isinstance(blueprint.get("mounted_weapons"), list) else []
+            decks = blueprint.get("decks") if isinstance(blueprint.get("decks"), list) else []
+            payload.append(
+                {
+                    "id": str(blueprint_id),
+                    "name": str(blueprint.get("name") or blueprint_id),
+                    "kind": str(blueprint.get("kind") or "ship_hull"),
+                    "category": str(blueprint.get("category") or "ship"),
+                    "size": str(blueprint.get("size") or "medium"),
+                    "default_facing_deg": float(blueprint.get("default_facing_deg", 0.0) or 0.0),
+                    "footprint_cells": int(len(footprint)),
+                    "deck_count": int(len(decks)),
+                    "deck_region_count": int(len(deck_regions)),
+                    "component_count": int(len(components)),
+                    "weapon_count": int(len(mounted_weapons)),
+                }
+            )
+        return payload
+
+    def _dm_preview_ship_blueprint_on_map(
+        self,
+        *,
+        blueprint_id: Any,
+        anchor_col: int,
+        anchor_row: int,
+        facing_deg: Any = 0.0,
+    ) -> Dict[str, Any]:
+        blueprint_key = str(blueprint_id or "").strip().lower()
+        if not blueprint_key:
+            return {"ok": False, "error": "blueprint_id is required.", "reason": "missing_blueprint_id"}
+        error = self._dm_validate_map_cell(int(anchor_col), int(anchor_row))
+        if error:
+            return {"ok": False, "error": error, "reason": "invalid_anchor"}
+        try:
+            facing = float(facing_deg or 0.0)
+        except Exception:
+            return {"ok": False, "error": "facing_deg must be numeric.", "reason": "invalid_facing"}
+        preview = self._ship_blueprint_placement_preview(
+            blueprint_key,
+            anchor_col=int(anchor_col),
+            anchor_row=int(anchor_row),
+            facing_deg=float(facing),
+        )
+        if not bool(preview.get("ok")):
+            reason = str(preview.get("reason") or "ship_blueprint_blocked")
+            message = (
+                "Ship blueprint not found."
+                if reason == "ship_blueprint_not_found"
+                else "Ship placement is blocked."
+            )
+            return {
+                "ok": False,
+                "error": message,
+                "reason": reason,
+                "target_cells": list(preview.get("target_cells") if isinstance(preview.get("target_cells"), list) else []),
+                "blockers": dict(preview.get("blockers") if isinstance(preview.get("blockers"), dict) else {}),
+            }
+        return {
+            "ok": True,
+            "blueprint_id": blueprint_key,
+            "anchor_col": int(preview.get("anchor_col", anchor_col) or anchor_col),
+            "anchor_row": int(preview.get("anchor_row", anchor_row) or anchor_row),
+            "facing_deg": float(preview.get("facing_deg", facing) or facing),
+            "target_cells": list(preview.get("target_cells") if isinstance(preview.get("target_cells"), list) else []),
+            "blockers": dict(preview.get("blockers") if isinstance(preview.get("blockers"), dict) else {}),
+        }
+
+    def _dm_instantiate_ship_blueprint_on_map(
+        self,
+        *,
+        blueprint_id: Any,
+        anchor_col: int,
+        anchor_row: int,
+        facing_deg: Any = 0.0,
+        name: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        blueprint_key = str(blueprint_id or "").strip().lower()
+        if not blueprint_key:
+            return {"ok": False, "error": "blueprint_id is required.", "reason": "missing_blueprint_id"}
+        error = self._dm_validate_map_cell(int(anchor_col), int(anchor_row))
+        if error:
+            return {"ok": False, "error": error, "reason": "invalid_anchor"}
+        try:
+            facing = float(facing_deg or 0.0)
+        except Exception:
+            return {"ok": False, "error": "facing_deg must be numeric.", "reason": "invalid_facing"}
+        display_name = str(name or "").strip() or None
+        structure_id = self._instantiate_ship_blueprint(
+            blueprint_key,
+            anchor_col=int(anchor_col),
+            anchor_row=int(anchor_row),
+            facing_deg=float(facing),
+            name=display_name,
+        )
+        if not structure_id:
+            reason = str(getattr(self, "_last_map_template_error", "") or "ship_blueprint_instantiate_failed")
+            blockers = getattr(self, "_last_map_template_blockers", {})
+            message = {
+                "ship_blueprint_not_found": "Ship blueprint not found.",
+                "ship_blueprint_template_missing": "Ship blueprint template is missing.",
+                "template_out_of_bounds": "Ship placement is out of bounds.",
+                "template_conflict": "Ship placement is blocked.",
+            }.get(reason, "Cannot place ship blueprint.")
+            response: Dict[str, Any] = {"ok": False, "error": message, "reason": reason}
+            if isinstance(blockers, dict) and blockers:
+                response["blockers"] = blockers
+            return response
+        state = self._capture_canonical_map_state(prefer_window=True).normalized()
+        structure = (state.structures or {}).get(str(structure_id))
+        structure_view = structure.to_dict() if isinstance(structure, MapStructure) else {}
+        ship_summary = self._selected_ship_summary(str(structure_id))
+        return {
+            "ok": True,
+            "blueprint_id": blueprint_key,
+            "structure_id": str(structure_id),
+            "structure": structure_view,
+            "ship": ship_summary if isinstance(ship_summary, dict) else {},
+        }
+
+    def _dm_list_boarding_links(self) -> List[Dict[str, Any]]:
+        return [
+            dict(link)
+            for link in self._boarding_links()
+            if isinstance(link, dict)
+        ]
+
+    def _dm_upsert_boarding_link_on_map(
+        self,
+        *,
+        source_structure_id: Any,
+        target_structure_id: Any,
+        status: Any = "active",
+        notes: Any = None,
+    ) -> Dict[str, Any]:
+        source_id = str(source_structure_id or "").strip()
+        target_id = str(target_structure_id or "").strip()
+        if not source_id or not target_id:
+            return {"ok": False, "error": "source_structure_id and target_structure_id are required.", "reason": "missing_structure_id"}
+        status_key = str(status or "active").strip().lower() or "active"
+        if status_key not in BOARDING_LINK_STATUSES:
+            return {"ok": False, "error": "Invalid boarding status.", "reason": "invalid_status"}
+        result = self._create_boarding_link(
+            source_id,
+            target_id,
+            initiator="dm",
+            status=status_key,
+            notes=str(notes).strip() if notes is not None and str(notes).strip() else None,
+        )
+        if not bool(result.get("ok")):
+            return {
+                "ok": False,
+                "error": str(result.get("message") or "Could not create boarding link."),
+                "reason": str(result.get("reason") or "boarding_link_failed"),
+            }
+        link = result.get("boarding_link")
+        return {
+            "ok": True,
+            "boarding_link": dict(link) if isinstance(link, dict) else {},
+            "message": str(result.get("message") or ""),
+        }
+
+    def _dm_set_boarding_link_status_on_map(
+        self,
+        *,
+        link_id: Any,
+        status: Any,
+        notes: Any = None,
+    ) -> Dict[str, Any]:
+        link_key = str(link_id or "").strip()
+        if not link_key:
+            return {"ok": False, "error": "link_id is required.", "reason": "missing_link_id"}
+        status_key = str(status or "withdrawn").strip().lower() or "withdrawn"
+        if status_key not in BOARDING_LINK_STATUSES:
+            return {"ok": False, "error": "Invalid boarding status.", "reason": "invalid_status"}
+        result = self._set_boarding_link_status(
+            link_id=link_key,
+            status=status_key,
+            notes=str(notes).strip() if notes is not None and str(notes).strip() else None,
+            remove=False,
+        )
+        if not bool(result.get("ok")):
+            return {
+                "ok": False,
+                "error": str(result.get("message") or "Could not update boarding link."),
+                "reason": str(result.get("reason") or "boarding_link_failed"),
+            }
+        refreshed = next(
+            (
+                dict(item)
+                for item in self._boarding_links()
+                if isinstance(item, dict) and str(item.get("id") or "").strip() == link_key
+            ),
+            None,
+        )
+        return {
+            "ok": True,
+            "boarding_link_id": link_key,
+            "status": status_key,
+            "boarding_link": dict(refreshed) if isinstance(refreshed, dict) else {},
+            "message": str(result.get("message") or ""),
+        }
+
+    def _dm_remove_boarding_link_on_map(self, *, link_id: Any) -> Dict[str, Any]:
+        link_key = str(link_id or "").strip()
+        if not link_key:
+            return {"ok": False, "error": "link_id is required.", "reason": "missing_link_id"}
+        result = self._set_boarding_link_status(link_id=link_key, remove=True)
+        if not bool(result.get("ok")):
+            return {
+                "ok": False,
+                "error": str(result.get("message") or "Could not remove boarding link."),
+                "reason": str(result.get("reason") or "boarding_link_failed"),
+            }
+        return {"ok": True, "boarding_link_id": link_key}
 
     def _dm_list_tactical_presets(self, *, categories: Optional[Set[str]] = None) -> List[Dict[str, Any]]:
         catalog = tactical_preset_catalog()

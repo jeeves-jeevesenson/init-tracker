@@ -105,10 +105,15 @@ The DM console lives at `http://<lan-ip>:<port>/dm` and provides:
 - **Battlefield prep controls** – obstacle cell block/clear and rough-terrain
   cell edits (ground/water/clear)
 - **Map authoring controls** – feature place/remove, structure place/move/remove,
-  elevation cell edits, and background-layer asset/position/scale/lock updates
-  from the browser tactical card
+  elevation cell edits, and background-layer asset/position/scale/lock/order
+  updates from the browser tactical card
 - **Live tactical effects** – hazard placement/removal (preset-backed),
   AoE placement/move/removal, and aura-overlay toggle
+- **Advanced ship/template deployment** – browse structure templates and ship
+  blueprints, preview ship placement blockers, instantiate templates/ships at a
+  target cell/facing, and create/update/remove boarding links from `/dm`
+- **Ship engagement operations** – load ship engagement summaries and run
+  maneuver preview/apply, weapon fire, and ram actions from `/dm`
 - **Battle Log** – last 30 lines from the tracker's history file
 - **Real-time updates** – receives instant snapshots via WebSocket (`/ws/dm`);
   falls back to 2.5-second polling if WebSocket is unavailable
@@ -147,9 +152,9 @@ in the desktop app settings.
 The following areas remain desktop-primary (hybrid) after this pass:
 
 - Full Tkinter canvas rendering and all desktop UI widgets
-- Advanced Tk map editor workflows (template/ship blueprint authoring,
-  rich layer workflows, and desktop tactical authoring conveniences beyond the
-  browser tactical card)
+- Advanced Tk map editor workflows (template/ship blueprint authoring and edit
+  tooling, higher-fidelity tactical overlays/debug tooling, and desktop tactical
+  authoring conveniences beyond the browser tactical card)
 - Player-facing LAN client at `/` (existing WebSocket + `/ws` routes)
 - Character editor, sheet management (`/edit_character`, `/new_character`)
 - Shop, item and spell management
@@ -268,27 +273,80 @@ via the web.
 
 ## Recommended next migration targets
 
-1. **Advanced map-editor parity**: keep closing the desktop-only tactical author
-   workflows that remain (template/deck/ship tooling, richer layer controls,
-   and higher-fidelity overlay/debug UX).
+1. **Tk-host/runtime extraction readiness**: start demoting Tk from runtime
+   authority for the already migrated DM workflows while preserving existing
+   backend snapshot/broadcast ownership.
 
-2. **Snapshot enhancements**: add operator-facing fields as needed
+2. **Residual advanced authoring parity**: close only the remaining high-value
+   desktop-primary authoring/polish workflows (template/blueprint authoring/edit
+   and overlay/debug UX) as needed for ongoing browser-first validation.
+
+3. **Snapshot enhancements**: add operator-facing fields as needed
    (for example richer tactical metadata or resource tooltips) while keeping
    backend-owned authority.
 
-3. **Token refresh diagnostics**: proactive DM token renewal is in place;
+4. **Token refresh diagnostics**: proactive DM token renewal is in place;
    follow-up telemetry can make refresh failures easier to diagnose in live LAN
    use.
 
-4. **Player-facing LAN client state sync**: continue reconnect hardening and
+5. **Player-facing LAN client state sync**: continue reconnect hardening and
    broadcast reliability work for `/ws`.
 
 ---
 
 ## How to launch
 
+There are now two host modes. Both run the same `InitiativeTracker`
+backend authority and serve the same `/dm` and `/` web surfaces.
+
+### Desktop / Tk host (compatibility entrypoint)
+
 1. Start the desktop app (`python dnd_initative_tracker.py`).
-2. Enable the LAN server from the app (Settings → LAN Server → Start).
+2. Enable the LAN server from the app (LAN menu → Start LAN Server) if it
+   did not auto-start.
 3. On any device on the same LAN, navigate to `http://<ip>:<port>/dm`.
 4. If an admin password is configured, enter it when prompted.
 5. The console will auto-populate with live combat state.
+
+### Headless / server host (Tk-optional entrypoint)
+
+The first headless host extraction pass (2026-04-18) makes Tk optional
+as the host shell. The headless mode does **not** open a Tk window and
+does **not** require Tkinter to keep the process alive.
+
+```bash
+python3 serve_headless.py [--host 0.0.0.0] [--port 8787] [--no-auto-lan]
+```
+
+What happens under the hood:
+
+- `serve_headless.py` sets `INIT_TRACKER_HEADLESS=1` before importing the
+  tracker.
+- `tk_compat.load_tk_modules()` then returns the headless module set with
+  `tk.Tk` swapped for `tk_compat.HeadlessRoot`, which provides a real
+  `after()`/`mainloop()` scheduler running on the main thread.
+- The same `InitiativeTracker` runtime authority used in desktop mode is
+  constructed; widget calls become no-ops on dummy widgets, but the LAN
+  poll tick, the FastAPI/uvicorn server thread, the DM/LAN WebSockets,
+  and all backend-owned combat/session/map authority operate normally.
+- `Ctrl+C` (or `SIGTERM`) shuts the LAN server down and exits cleanly.
+
+The DM operator surface remains `http://<host>:<port>/dm` in both modes.
+
+Residual coupling worth knowing about:
+
+- `helper_script.InitiativeTracker(tk.Tk)` and the
+  `dnd_initative_tracker.InitiativeTracker` subclass still inherit from
+  `tk.Tk` (which becomes `HeadlessRoot` in headless mode).
+- `_build_ui()` still constructs widget objects under headless mode; they
+  are dummy no-ops, not real Tk windows, but the construction code path
+  still runs.
+- A small number of features that only ever lived behind Tk dialogs
+  (e.g. file-dialog save/load, the desktop map window) are not reachable
+  in headless mode. Use the corresponding `/api/dm/...` routes or the
+  `/dm` web surface instead.
+
+This is the first headless milestone, not the final Tk-removal pass; the
+next planned step is to gate the remaining widget-construction blocks on
+an explicit host-mode flag rather than relying on dummy widgets as a
+structural prop.

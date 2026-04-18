@@ -702,6 +702,125 @@
         <select id="structureIdSelect"><option value="">— select structure —</option></select>
       </div>
       <div class="tactical-divider"></div>
+      <div class="tactical-section-title">Structure Templates</div>
+      <div class="form-group">
+        <label>Template</label>
+        <select id="structureTemplateSelect"><option value="">— select template —</option></select>
+      </div>
+      <div class="tactical-inline">
+        <div class="form-group">
+          <label>Facing°</label>
+          <input type="number" id="templateFacingInput" min="0" max="359" step="1" value="0" />
+        </div>
+        <div class="form-group">
+          <label>&nbsp;</label>
+          <button class="btn-action" id="placeTemplateBtn">Place Template at Cell</button>
+        </div>
+      </div>
+      <div class="tactical-divider"></div>
+      <div class="tactical-section-title">Ships & Boarding</div>
+      <div class="form-group">
+        <label>Ship Blueprint</label>
+        <select id="shipBlueprintSelect"><option value="">— select ship blueprint —</option></select>
+      </div>
+      <div class="form-group">
+        <label>Ship Name (optional)</label>
+        <input type="text" id="shipNameInput" placeholder="e.g. Sea Ghost" />
+      </div>
+      <div class="tactical-inline">
+        <div class="form-group">
+          <label>Facing°</label>
+          <input type="number" id="shipFacingInput" min="0" max="359" step="1" value="0" />
+        </div>
+        <div class="form-group">
+          <label>&nbsp;</label>
+          <button class="btn-sm" id="previewShipBtn">Preview Placement</button>
+        </div>
+      </div>
+      <button class="btn-action" id="placeShipBtn">Place Ship at Cell</button>
+      <div class="form-group" style="margin-top:8px">
+        <label>Existing Boarding Links</label>
+        <select id="boardingLinkSelect"><option value="">— select boarding link —</option></select>
+      </div>
+      <div class="tactical-inline">
+        <div class="form-group">
+          <label>Source Ship Structure</label>
+          <select id="boardingSourceStructureSelect"><option value="">— source —</option></select>
+        </div>
+        <div class="form-group">
+          <label>Target Ship Structure</label>
+          <select id="boardingTargetStructureSelect"><option value="">— target —</option></select>
+        </div>
+      </div>
+      <div class="tactical-inline">
+        <div class="form-group">
+          <label>Status</label>
+          <select id="boardingStatusSelect">
+            <option value="active">active</option>
+            <option value="blocked">blocked</option>
+            <option value="withdrawn">withdrawn</option>
+            <option value="broken">broken</option>
+          </select>
+        </div>
+        <div class="form-group">
+          <label>Notes (optional)</label>
+          <input type="text" id="boardingNotesInput" placeholder="e.g. Gangplank raised" />
+        </div>
+      </div>
+      <div style="display:flex;gap:6px">
+        <button class="btn-action" id="upsertBoardingLinkBtn" style="flex:1">Create / Update Link</button>
+        <button class="btn-sm" id="setBoardingLinkStatusBtn" style="flex:1">Set Selected Link Status</button>
+      </div>
+      <button class="btn-action remove" id="removeBoardingLinkBtn" style="margin-top:6px">Remove Selected Boarding Link</button>
+      <div class="tactical-inline" style="margin-top:8px">
+        <div class="form-group">
+          <label>Engagement Source Ship</label>
+          <select id="shipEngagementSourceStructureSelect"><option value="">— source ship —</option></select>
+        </div>
+        <div class="form-group">
+          <label>Engagement Target Ship</label>
+          <select id="shipEngagementTargetStructureSelect"><option value="">— target ship —</option></select>
+        </div>
+      </div>
+      <div class="tactical-inline" style="margin-top:8px">
+        <div class="form-group">
+          <label>Maneuver</label>
+          <select id="shipEngagementManeuverSelect">
+            <option value="move_forward">move_forward</option>
+            <option value="move_reverse">move_reverse</option>
+            <option value="move_port">move_port</option>
+            <option value="move_starboard">move_starboard</option>
+            <option value="turn_port">turn_port</option>
+            <option value="turn_starboard">turn_starboard</option>
+          </select>
+        </div>
+        <div class="form-group">
+          <label>Steps</label>
+          <input type="number" id="shipEngagementStepsInput" min="1" step="1" value="1" />
+        </div>
+      </div>
+      <div style="display:flex;gap:6px">
+        <button class="btn-sm" id="previewShipManeuverBtn" style="flex:1">Preview Maneuver</button>
+        <button class="btn-action" id="applyShipManeuverBtn" style="flex:1">Apply Maneuver</button>
+      </div>
+      <div class="tactical-inline" style="margin-top:8px">
+        <div class="form-group">
+          <label>Weapon</label>
+          <select id="shipEngagementWeaponSelect"><option value="">— select weapon —</option></select>
+        </div>
+        <div class="form-group">
+          <label>Target Component</label>
+          <select id="shipEngagementComponentSelect"><option value="">Hull (auto)</option></select>
+        </div>
+      </div>
+      <div style="display:flex;gap:6px">
+        <button class="btn-action" id="fireShipWeaponBtn" style="flex:1">Fire Weapon</button>
+        <button class="btn-action remove" id="ramShipTargetBtn" style="flex:1">Ram Target</button>
+      </div>
+      <div id="shipEngagementState" class="mut-result" style="margin-top:6px">
+        Engagement: select a source ship to stage maneuvers and attacks.
+      </div>
+      <div class="tactical-divider"></div>
       <div class="tactical-section-title">Elevation</div>
       <div class="tactical-inline">
         <div class="form-group">
@@ -750,6 +869,12 @@
       <div style="display:flex;gap:6px;margin-top:8px">
         <button class="btn-action" id="upsertBackgroundBtn" style="flex:1">Apply Background Layer</button>
         <button class="btn-action remove" id="removeBackgroundBtn" style="flex:1">Remove Selected Layer</button>
+      </div>
+      <div style="display:flex;gap:6px;margin-top:6px">
+        <button class="btn-sm" id="bgLayerBackBtn" style="flex:1">Send to Back</button>
+        <button class="btn-sm" id="bgLayerDownBtn" style="flex:1">Move Down</button>
+        <button class="btn-sm" id="bgLayerUpBtn" style="flex:1">Move Up</button>
+        <button class="btn-sm" id="bgLayerFrontBtn" style="flex:1">Bring to Front</button>
       </div>
       <div class="tactical-divider"></div>
       <div class="tactical-section-title">Area Effects (AoE)</div>
@@ -846,6 +971,20 @@
       POST   /api/dm/map/combatants/{cid}/place              → place/reposition on map
       POST   /api/dm/map/combatants/{cid}/facing             → set tactical facing
       GET    /api/dm/map/tactical-presets                    → list tactical map presets
+      GET    /api/dm/map/ship-blueprints                     → list ship blueprints
+      POST   /api/dm/map/ship-blueprints/{blueprint_id}/preview → preview ship placement blockers
+      POST   /api/dm/map/ships                               → instantiate ship blueprint
+      GET    /api/dm/map/ships/{structure_id}/engagement     → ship engagement summary/details
+      POST   /api/dm/map/ships/{structure_id}/maneuver-preview → preview ship maneuver
+      POST   /api/dm/map/ships/{structure_id}/maneuver       → execute ship maneuver
+      POST   /api/dm/map/ships/{source_structure_id}/weapons/fire → resolve ship weapon fire
+      POST   /api/dm/map/ships/{source_structure_id}/ram      → resolve ship ram action
+      GET    /api/dm/map/structure-templates                 → list saved structure templates
+      POST   /api/dm/map/structure-templates/{template_id}/instantiate → instantiate structure template
+      GET    /api/dm/map/boarding-links                      → list boarding links
+      POST   /api/dm/map/boarding-links                      → create/update boarding link
+      POST   /api/dm/map/boarding-links/{link_id}/status     → set boarding link status
+      DELETE /api/dm/map/boarding-links/{link_id}            → remove boarding link
       GET    /api/dm/map/backgrounds/assets                  → list map background assets
       POST   /api/dm/map/obstacles/cell                      → set obstacle cell blocked/clear
       POST   /api/dm/map/terrain/cell                        → set rough terrain cell
@@ -859,6 +998,7 @@
       POST   /api/dm/map/elevation/cell                      → set elevation cell
       POST   /api/dm/map/backgrounds                         → place/update background layer
       DELETE /api/dm/map/backgrounds/{bid}                   → remove background layer
+      POST   /api/dm/map/backgrounds/{bid}/order             → reorder background layer stack
       POST   /api/dm/map/aoes                                → place AoE effect
       POST   /api/dm/map/aoes/{aid}/move                     → move/re-angle AoE
       DELETE /api/dm/map/aoes/{aid}                          → remove AoE
@@ -894,6 +1034,9 @@ let wsReconnectTimer = null;
 let tacticalSelection = { col: null, row: null };
 let tacticalPresetsByCategory = { hazard: [], feature: [], structure: [] };
 let tacticalBackgroundAssets = [];
+let tacticalShipBlueprints = [];
+let tacticalStructureTemplates = [];
+let shipEngagementDetailByStructure = {};
 const POLL_INTERVAL_MS = 2500;
 const WS_RECONNECT_MS = 5000;
 const ADMIN_REFRESH_MAX_LEAD_MS = 120000;
@@ -1104,6 +1247,9 @@ function startAutoRefresh() {
   refreshSessionList();
   refreshEncounterOptions();
   refreshTacticalPresets();
+  refreshShipBlueprints();
+  refreshStructureTemplates();
+  refreshBoardingLinks();
   refreshBackgroundAssets();
 }
 
@@ -1139,6 +1285,9 @@ document.getElementById('refreshBtn').addEventListener('click', () => {
   refreshSessionList();
   refreshEncounterOptions();
   refreshTacticalPresets();
+  refreshShipBlueprints();
+  refreshStructureTemplates();
+  refreshBoardingLinks();
   refreshBackgroundAssets();
 });
 
@@ -1323,6 +1472,211 @@ function tacticalAoes(tactical) {
   return Array.isArray(tactical && tactical.aoes) ? tactical.aoes : [];
 }
 
+function tacticalBoardingLinks(tactical) {
+  return Array.isArray(tactical && tactical.boarding_links) ? tactical.boarding_links : [];
+}
+
+function isShipStructure(structure) {
+  if (!structure || typeof structure !== 'object') return false;
+  if (structure.ship_state && typeof structure.ship_state === 'object') return true;
+  const kind = String(structure.kind || '').trim().toLowerCase();
+  if (kind.includes('ship')) return true;
+  const payload = structure.payload && typeof structure.payload === 'object' ? structure.payload : {};
+  return !!(payload.ship_instance_id || payload.ship_blueprint_id);
+}
+
+function tacticalStructureById(tactical, structureId) {
+  const sid = String(structureId || '').trim();
+  if (!sid) return null;
+  return tacticalStructures(tactical).find(entry => String(entry && entry.id || '').trim() === sid) || null;
+}
+
+function selectedShipEngagementSourceId() {
+  const engagementSel = document.getElementById('shipEngagementSourceStructureSelect');
+  const direct = String(engagementSel && engagementSel.value || '').trim();
+  if (direct) return direct;
+  return String(document.getElementById('boardingSourceStructureSelect').value || '').trim();
+}
+
+function selectedShipEngagementTargetId() {
+  const engagementSel = document.getElementById('shipEngagementTargetStructureSelect');
+  const direct = String(engagementSel && engagementSel.value || '').trim();
+  if (direct) return direct;
+  return String(document.getElementById('boardingTargetStructureSelect').value || '').trim();
+}
+
+function setShipEngagementState(text, isError = false) {
+  const el = document.getElementById('shipEngagementState');
+  if (!el) return;
+  el.className = 'mut-result' + (isError ? ' error' : '');
+  el.textContent = text || '';
+}
+
+function populateShipEngagementWeaponSelect(summary) {
+  const sel = document.getElementById('shipEngagementWeaponSelect');
+  if (!sel) return;
+  const prev = String(sel.value || '').trim();
+  sel.innerHTML = '<option value="">— select weapon —</option>';
+  const weapons = Array.isArray(summary && summary.mounted_weapons) ? summary.mounted_weapons : [];
+  const weaponState = summary && typeof summary.weapon_state === 'object' ? summary.weapon_state : {};
+  for (const weapon of weapons) {
+    const wid = String(weapon && weapon.id || '').trim().toLowerCase();
+    if (!wid) continue;
+    const state = weaponState && typeof weaponState === 'object' && weaponState[wid] && typeof weaponState[wid] === 'object'
+      ? weaponState[wid]
+      : {};
+    const tags = [];
+    if (state.disabled) tags.push('disabled');
+    if (state.spent) tags.push('reloading');
+    const name = String(weapon.name || wid);
+    const opt = document.createElement('option');
+    opt.value = wid;
+    opt.textContent = `${name} (${wid})${tags.length ? ` [${tags.join(', ')}]` : ''}`;
+    sel.appendChild(opt);
+  }
+  if (prev && Array.from(sel.options).some(opt => opt.value === prev)) {
+    sel.value = prev;
+  }
+}
+
+function populateShipEngagementComponentSelect(summary) {
+  const sel = document.getElementById('shipEngagementComponentSelect');
+  if (!sel) return;
+  const prev = String(sel.value || '').trim();
+  sel.innerHTML = '<option value="">Hull (auto)</option>';
+  const components = Array.isArray(summary && summary.components) ? summary.components : [];
+  for (const component of components) {
+    const cid = String(component && component.id || '').trim().toLowerCase();
+    if (!cid || cid === 'hull') continue;
+    const name = String(component.name || cid);
+    const opt = document.createElement('option');
+    opt.value = cid;
+    opt.textContent = `${name} (${cid})`;
+    sel.appendChild(opt);
+  }
+  if (prev && Array.from(sel.options).some(opt => opt.value === prev)) {
+    sel.value = prev;
+  }
+}
+
+function applyShipEngagementSummary(summary) {
+  if (!summary || typeof summary !== 'object') return;
+  const sid = selectedShipEngagementSourceId();
+  if (!sid) return;
+  const movement = Number(summary.movement_remaining);
+  const turns = Number(summary.turns_remaining);
+  const actions = Number(summary.actions_remaining);
+  const hp = Number(summary.hull_hp);
+  const maxHp = Number(summary.hull_max_hp);
+  const name = String(summary.name || sid);
+  const parts = [
+    `Engagement source: ${name}`,
+    Number.isFinite(hp) && Number.isFinite(maxHp) ? `Hull ${hp}/${maxHp}` : '',
+    Number.isFinite(movement) ? `Move ${movement}` : '',
+    Number.isFinite(turns) ? `Turns ${turns}` : '',
+    Number.isFinite(actions) ? `Actions ${actions}` : '',
+  ].filter(Boolean);
+  setShipEngagementState(parts.join(' · '), false);
+  populateShipEngagementWeaponSelect(summary);
+  populateShipEngagementComponentSelect(summary);
+}
+
+function syncShipEngagementStateFromSnapshot() {
+  const sid = selectedShipEngagementSourceId();
+  if (!sid) {
+    setShipEngagementState('Engagement: select a source ship to stage maneuvers and attacks.');
+    populateShipEngagementWeaponSelect({});
+    populateShipEngagementComponentSelect({});
+    return;
+  }
+  const cached = shipEngagementDetailByStructure[sid];
+  if (cached && typeof cached === 'object') {
+    applyShipEngagementSummary(cached);
+    return;
+  }
+  const tactical = currentTacticalMap();
+  const structure = tacticalStructureById(tactical, sid);
+  if (!isShipStructure(structure)) {
+    setShipEngagementState('Selected source is not a ship structure.', true);
+    populateShipEngagementWeaponSelect({});
+    populateShipEngagementComponentSelect({});
+    return;
+  }
+  const shipState = structure && typeof structure.ship_state === 'object' ? structure.ship_state : {};
+  const name = String(shipState.name || structure.name || sid);
+  const hp = Number(shipState.hull_hp);
+  const maxHp = Number(shipState.hull_max_hp);
+  const movement = Number(shipState.movement_remaining);
+  const turns = Number(shipState.turns_remaining);
+  const actions = Number(shipState.actions_remaining);
+  const parts = [
+    `Engagement source: ${name}`,
+    Number.isFinite(hp) && Number.isFinite(maxHp) ? `Hull ${hp}/${maxHp}` : '',
+    Number.isFinite(movement) ? `Move ${movement}` : '',
+    Number.isFinite(turns) ? `Turns ${turns}` : '',
+    Number.isFinite(actions) ? `Actions ${actions}` : '',
+  ].filter(Boolean);
+  setShipEngagementState(parts.join(' · ') || `Engagement source: ${sid}`);
+}
+
+async function refreshShipEngagementSummaryForSource(force = false) {
+  const sid = selectedShipEngagementSourceId();
+  if (!sid) {
+    syncShipEngagementStateFromSnapshot();
+    return;
+  }
+  if (!force && shipEngagementDetailByStructure[sid]) {
+    applyShipEngagementSummary(shipEngagementDetailByStructure[sid]);
+    return;
+  }
+  try {
+    const r = await fetch(`${BASE}/api/dm/map/ships/${encodeURIComponent(sid)}/engagement`, { headers: authHeaders() });
+    if (r.status === 401 || r.status === 403) {
+      clearAdminAuthState('Session expired. Please log in again.');
+      return;
+    }
+    const data = await r.json();
+    if (!(r.ok && data && data.ok)) {
+      setShipEngagementState(extractApiErrorMessage(data, 'Could not load ship engagement details.'), true);
+      return;
+    }
+    const summary = data && typeof data.ship === 'object' ? data.ship : {};
+    shipEngagementDetailByStructure[sid] = summary;
+    applyShipEngagementSummary(summary);
+  } catch (_) {
+    setShipEngagementState('Request failed while loading ship engagement details.', true);
+  }
+}
+
+async function refreshShipEngagementSummaryForTarget(force = false) {
+  const sid = selectedShipEngagementTargetId();
+  if (!sid) {
+    populateShipEngagementComponentSelect({});
+    return;
+  }
+  if (!force && shipEngagementDetailByStructure[sid]) {
+    populateShipEngagementComponentSelect(shipEngagementDetailByStructure[sid]);
+    return;
+  }
+  try {
+    const r = await fetch(`${BASE}/api/dm/map/ships/${encodeURIComponent(sid)}/engagement`, { headers: authHeaders() });
+    if (r.status === 401 || r.status === 403) {
+      clearAdminAuthState('Session expired. Please log in again.');
+      return;
+    }
+    const data = await r.json();
+    if (!(r.ok && data && data.ok)) {
+      populateShipEngagementComponentSelect({});
+      return;
+    }
+    const summary = data && typeof data.ship === 'object' ? data.ship : {};
+    shipEngagementDetailByStructure[sid] = summary;
+    populateShipEngagementComponentSelect(summary);
+  } catch (_) {
+    populateShipEngagementComponentSelect({});
+  }
+}
+
 function setMapSetupResult(text, isError = false) {
   const el = document.getElementById('mapSetupResult');
   el.className = 'mut-result' + (isError ? ' error' : '');
@@ -1465,6 +1819,56 @@ function updateStructurePresetSelect() {
   updatePresetSelect('structurePresetSelect', tacticalPresetCategory('structure'), '— select structure —');
 }
 
+function updateShipBlueprintSelect() {
+  const sel = document.getElementById('shipBlueprintSelect');
+  if (!sel) return;
+  const prev = sel.value;
+  sel.innerHTML = '<option value="">— select ship blueprint —</option>';
+  for (const blueprint of (Array.isArray(tacticalShipBlueprints) ? tacticalShipBlueprints : [])) {
+    const bid = String(blueprint && blueprint.id || '').trim();
+    if (!bid) continue;
+    const name = String(blueprint.name || bid);
+    const footprint = Number(blueprint.footprint_cells);
+    const decks = Number(blueprint.deck_count);
+    const suffix = [
+      Number.isFinite(footprint) ? `${footprint} cells` : '',
+      Number.isFinite(decks) ? `${decks} decks` : '',
+    ].filter(Boolean).join(' · ');
+    const opt = document.createElement('option');
+    opt.value = bid;
+    opt.textContent = suffix ? `${name} — ${suffix}` : name;
+    sel.appendChild(opt);
+  }
+  if (prev && Array.from(sel.options).some(opt => opt.value === prev)) {
+    sel.value = prev;
+  }
+}
+
+function updateStructureTemplateSelect() {
+  const sel = document.getElementById('structureTemplateSelect');
+  if (!sel) return;
+  const prev = sel.value;
+  sel.innerHTML = '<option value="">— select template —</option>';
+  for (const template of (Array.isArray(tacticalStructureTemplates) ? tacticalStructureTemplates : [])) {
+    const tid = String(template && template.id || '').trim();
+    if (!tid) continue;
+    const name = String(template.name || tid);
+    const footprint = Number(template.footprint_cells);
+    const features = Number(template.feature_count);
+    const suffix = [
+      Number.isFinite(footprint) ? `${footprint} cells` : '',
+      Number.isFinite(features) ? `${features} fixtures` : '',
+    ].filter(Boolean).join(' · ');
+    const opt = document.createElement('option');
+    opt.value = tid;
+    opt.textContent = suffix ? `${name} — ${suffix}` : name;
+    sel.appendChild(opt);
+  }
+  if (prev && Array.from(sel.options).some(opt => opt.value === prev)) {
+    sel.value = prev;
+  }
+}
+
 function updateBackgroundAssetSelect() {
   const sel = document.getElementById('bgAssetSelect');
   if (!sel) return;
@@ -1513,6 +1917,52 @@ function updateBackgroundLayerInputsFromSelection() {
   }
 }
 
+async function refreshShipBlueprints() {
+  try {
+    const r = await fetch(`${BASE}/api/dm/map/ship-blueprints`, { headers: authHeaders() });
+    if (r.status === 401 || r.status === 403) {
+      clearAdminAuthState('Session expired. Please log in again.');
+      return;
+    }
+    if (!r.ok) return;
+    const data = await r.json();
+    tacticalShipBlueprints = Array.isArray(data && data.blueprints) ? data.blueprints : [];
+    updateShipBlueprintSelect();
+  } catch (_) { /* ignore */ }
+}
+
+async function refreshStructureTemplates() {
+  try {
+    const r = await fetch(`${BASE}/api/dm/map/structure-templates`, { headers: authHeaders() });
+    if (r.status === 401 || r.status === 403) {
+      clearAdminAuthState('Session expired. Please log in again.');
+      return;
+    }
+    if (!r.ok) return;
+    const data = await r.json();
+    tacticalStructureTemplates = Array.isArray(data && data.templates) ? data.templates : [];
+    updateStructureTemplateSelect();
+  } catch (_) { /* ignore */ }
+}
+
+async function refreshBoardingLinks() {
+  try {
+    const r = await fetch(`${BASE}/api/dm/map/boarding-links`, { headers: authHeaders() });
+    if (r.status === 401 || r.status === 403) {
+      clearAdminAuthState('Session expired. Please log in again.');
+      return;
+    }
+    if (!r.ok) return;
+    const data = await r.json();
+    const tactical = currentTacticalMap();
+    if (tactical && typeof tactical === 'object') {
+      tactical.boarding_links = Array.isArray(data && data.boarding_links) ? data.boarding_links : [];
+      tactical.active_boarding_links = tactical.boarding_links.filter(item => !!(item && item.traversable));
+      updateTacticalEntitySelectors(tactical);
+    }
+  } catch (_) { /* ignore */ }
+}
+
 async function refreshTacticalPresets() {
   try {
     const r = await fetch(`${BASE}/api/dm/map/tactical-presets`, { headers: authHeaders() });
@@ -1556,16 +2006,31 @@ function updateTacticalEntitySelectors(tactical) {
   const structureSel = document.getElementById('structureIdSelect');
   const aoeSel = document.getElementById('aoeIdSelect');
   const bgSel = document.getElementById('bgLayerSelect');
+  const boardingLinkSel = document.getElementById('boardingLinkSelect');
+  const boardingSourceSel = document.getElementById('boardingSourceStructureSelect');
+  const boardingTargetSel = document.getElementById('boardingTargetStructureSelect');
+  const shipEngagementSourceSel = document.getElementById('shipEngagementSourceStructureSelect');
+  const shipEngagementTargetSel = document.getElementById('shipEngagementTargetStructureSelect');
   const hazardPrev = hazardSel.value;
   const featurePrev = featureSel.value;
   const structurePrev = structureSel.value;
   const aoePrev = aoeSel.value;
   const bgPrev = bgSel.value;
+  const boardingLinkPrev = boardingLinkSel.value;
+  const boardingSourcePrev = boardingSourceSel.value;
+  const boardingTargetPrev = boardingTargetSel.value;
+  const shipEngagementSourcePrev = shipEngagementSourceSel.value;
+  const shipEngagementTargetPrev = shipEngagementTargetSel.value;
   hazardSel.innerHTML = '<option value="">— select hazard —</option>';
   featureSel.innerHTML = '<option value="">— select feature —</option>';
   structureSel.innerHTML = '<option value="">— select structure —</option>';
   aoeSel.innerHTML = '<option value="">— select AoE —</option>';
   bgSel.innerHTML = '<option value="">— new layer —</option>';
+  boardingLinkSel.innerHTML = '<option value="">— select boarding link —</option>';
+  boardingSourceSel.innerHTML = '<option value="">— source —</option>';
+  boardingTargetSel.innerHTML = '<option value="">— target —</option>';
+  shipEngagementSourceSel.innerHTML = '<option value="">— source ship —</option>';
+  shipEngagementTargetSel.innerHTML = '<option value="">— target ship —</option>';
 
   for (const hazard of tacticalHazards(tactical)) {
     const hid = String(hazard && hazard.id || '').trim();
@@ -1607,9 +2072,43 @@ function updateTacticalEntitySelectors(tactical) {
     opt.value = sid;
     opt.textContent = `${title} @ (${Number.isFinite(anchorCol) ? anchorCol : '?'}, ${Number.isFinite(anchorRow) ? anchorRow : '?'})`;
     structureSel.appendChild(opt);
+    if (isShipStructure(structure)) {
+      const sourceOpt = document.createElement('option');
+      sourceOpt.value = sid;
+      sourceOpt.textContent = opt.textContent;
+      const targetOpt = document.createElement('option');
+      targetOpt.value = sid;
+      targetOpt.textContent = opt.textContent;
+      boardingSourceSel.appendChild(sourceOpt);
+      boardingTargetSel.appendChild(targetOpt);
+      const engagementSourceOpt = document.createElement('option');
+      engagementSourceOpt.value = sid;
+      engagementSourceOpt.textContent = opt.textContent;
+      const engagementTargetOpt = document.createElement('option');
+      engagementTargetOpt.value = sid;
+      engagementTargetOpt.textContent = opt.textContent;
+      shipEngagementSourceSel.appendChild(engagementSourceOpt);
+      shipEngagementTargetSel.appendChild(engagementTargetOpt);
+    }
   }
   if (structurePrev && Array.from(structureSel.options).some(opt => opt.value === structurePrev)) {
     structureSel.value = structurePrev;
+  }
+  if (boardingSourcePrev && Array.from(boardingSourceSel.options).some(opt => opt.value === boardingSourcePrev)) {
+    boardingSourceSel.value = boardingSourcePrev;
+  }
+  if (boardingTargetPrev && Array.from(boardingTargetSel.options).some(opt => opt.value === boardingTargetPrev)) {
+    boardingTargetSel.value = boardingTargetPrev;
+  }
+  if (shipEngagementSourcePrev && Array.from(shipEngagementSourceSel.options).some(opt => opt.value === shipEngagementSourcePrev)) {
+    shipEngagementSourceSel.value = shipEngagementSourcePrev;
+  } else if (boardingSourceSel.value && Array.from(shipEngagementSourceSel.options).some(opt => opt.value === boardingSourceSel.value)) {
+    shipEngagementSourceSel.value = boardingSourceSel.value;
+  }
+  if (shipEngagementTargetPrev && Array.from(shipEngagementTargetSel.options).some(opt => opt.value === shipEngagementTargetPrev)) {
+    shipEngagementTargetSel.value = shipEngagementTargetPrev;
+  } else if (boardingTargetSel.value && Array.from(shipEngagementTargetSel.options).some(opt => opt.value === boardingTargetSel.value)) {
+    shipEngagementTargetSel.value = boardingTargetSel.value;
   }
 
   for (const aoe of tacticalAoes(tactical)) {
@@ -1644,11 +2143,61 @@ function updateTacticalEntitySelectors(tactical) {
     bgSel.value = bgPrev;
   }
 
+  for (const link of tacticalBoardingLinks(tactical)) {
+    const linkId = String(link && link.id || '').trim();
+    if (!linkId) continue;
+    const source = String(link && link.source_id || '').trim() || '?';
+    const target = String(link && link.target_id || '').trim() || '?';
+    const status = String(link && link.status || 'active').trim().toLowerCase() || 'active';
+    const opt = document.createElement('option');
+    opt.value = linkId;
+    opt.textContent = `${source} → ${target} [${status}]`;
+    boardingLinkSel.appendChild(opt);
+  }
+  if (boardingLinkPrev && Array.from(boardingLinkSel.options).some(opt => opt.value === boardingLinkPrev)) {
+    boardingLinkSel.value = boardingLinkPrev;
+  }
+
   const aurasEnabled = tactical && typeof tactical === 'object' && tactical.auras_enabled != null
     ? !!tactical.auras_enabled
     : true;
   document.getElementById('aurasEnabledToggle').checked = aurasEnabled;
   updateBackgroundLayerInputsFromSelection();
+  syncBoardingInputsFromSelectedLink();
+  syncShipEngagementStateFromSnapshot();
+  refreshShipEngagementSummaryForSource(false);
+  refreshShipEngagementSummaryForTarget(false);
+}
+
+function syncBoardingInputsFromSelectedLink() {
+  const tactical = currentTacticalMap();
+  const linkSel = document.getElementById('boardingLinkSelect');
+  const sourceSel = document.getElementById('boardingSourceStructureSelect');
+  const targetSel = document.getElementById('boardingTargetStructureSelect');
+  const statusSel = document.getElementById('boardingStatusSelect');
+  const notesInput = document.getElementById('boardingNotesInput');
+  const linkId = String(linkSel && linkSel.value || '').trim();
+  if (!linkId) return;
+  const link = tacticalBoardingLinks(tactical).find(item => String(item && item.id || '').trim() === linkId);
+  if (!link || typeof link !== 'object') return;
+  const sourceId = String(link.source_id || '').trim();
+  const targetId = String(link.target_id || '').trim();
+  const status = String(link.status || '').trim().toLowerCase();
+  if (sourceId && sourceSel && Array.from(sourceSel.options).some(opt => opt.value === sourceId)) {
+    sourceSel.value = sourceId;
+  }
+  if (targetId && targetSel && Array.from(targetSel.options).some(opt => opt.value === targetId)) {
+    targetSel.value = targetId;
+  }
+  if (status && statusSel && Array.from(statusSel.options).some(opt => opt.value === status)) {
+    statusSel.value = status;
+  }
+  if (notesInput) {
+    notesInput.value = String(link.notes || '');
+  }
+  syncShipEngagementStateFromSnapshot();
+  refreshShipEngagementSummaryForSource(false);
+  refreshShipEngagementSummaryForTarget(false);
 }
 
 function updateTacticalTargetCell(col, row) {
@@ -2491,6 +3040,44 @@ async function removeSelectedBackgroundLayer() {
   }
 }
 
+async function reorderSelectedBackgroundLayer(direction) {
+  const bidRaw = document.getElementById('bgLayerSelect').value;
+  const bid = Number(bidRaw);
+  const action = String(direction || '').trim().toLowerCase();
+  if (!Number.isFinite(bid) || bid <= 0) {
+    setTacticalResult('Select a background layer to reorder.', true);
+    return;
+  }
+  if (!action) {
+    setTacticalResult('Choose a background reorder direction.', true);
+    return;
+  }
+  try {
+    const r = await fetch(`${BASE}/api/dm/map/backgrounds/${Math.floor(bid)}/order`, {
+      method: 'POST',
+      headers: authHeaders(),
+      body: JSON.stringify({ direction: action }),
+    });
+    const data = await r.json();
+    if (r.ok && data.ok) {
+      const updatedBid = Number((data.background || {}).bid || data.bid || 0);
+      setTacticalResult(`Background layer reordered ${action}.`);
+      if (data.snapshot) applySnapshot(data.snapshot);
+      if (Number.isFinite(updatedBid) && updatedBid > 0) {
+        const layerSel = document.getElementById('bgLayerSelect');
+        if (layerSel && Array.from(layerSel.options).some(opt => Number(opt.value) === updatedBid)) {
+          layerSel.value = String(updatedBid);
+          updateBackgroundLayerInputsFromSelection();
+        }
+      }
+      return;
+    }
+    setTacticalResult(extractApiErrorMessage(data, 'Could not reorder background layer.'), true);
+  } catch (_) {
+    setTacticalResult('Request failed.', true);
+  }
+}
+
 function buildAoePayloadFromInputs(cell) {
   const shape = document.getElementById('aoeShapeSelect').value;
   const sizeFt = parseFloat(document.getElementById('aoeSizeFtInput').value);
@@ -2633,6 +3220,430 @@ async function applyAurasOverlaySetting() {
   }
 }
 
+function extractApiErrorMessage(data, fallback = 'Error.') {
+  if (data && typeof data === 'object') {
+    const detail = data.detail;
+    if (typeof detail === 'string' && detail.trim()) return detail;
+    if (detail && typeof detail === 'object') {
+      const nested = String(detail.error || detail.message || '').trim();
+      if (nested) return nested;
+    }
+    const direct = String(data.error || data.message || '').trim();
+    if (direct) return direct;
+  }
+  return fallback;
+}
+
+function blockerSummaryText(blockers) {
+  const root = blockers && typeof blockers === 'object' ? blockers : {};
+  const map = root.blockers && typeof root.blockers === 'object' ? root.blockers : root;
+  const labels = [
+    ['out_of_bounds', 'out of bounds'],
+    ['obstacles', 'obstacles'],
+    ['features', 'features'],
+    ['structures', 'structures'],
+    ['hazards', 'hazards'],
+    ['template_conflicts', 'template conflicts'],
+  ];
+  const bits = [];
+  for (const [key, label] of labels) {
+    const count = Array.isArray(map[key]) ? map[key].length : 0;
+    if (count > 0) bits.push(`${label}: ${count}`);
+  }
+  return bits.length ? bits.join(', ') : '';
+}
+
+function selectedShipBlueprintMeta() {
+  const blueprintId = String(document.getElementById('shipBlueprintSelect').value || '').trim();
+  if (!blueprintId) return null;
+  return tacticalShipBlueprints.find(item => String(item && item.id || '').trim() === blueprintId) || null;
+}
+
+function syncShipFacingFromSelection() {
+  const meta = selectedShipBlueprintMeta();
+  if (!meta || typeof meta !== 'object') return;
+  const facing = Number(meta.default_facing_deg);
+  if (!Number.isFinite(facing)) return;
+  document.getElementById('shipFacingInput').value = String(Math.round(facing));
+}
+
+async function previewShipPlacementAtCell() {
+  const meta = selectedShipBlueprintMeta();
+  const cell = selectedTacticalCell();
+  const facing = Number(document.getElementById('shipFacingInput').value);
+  if (!meta) {
+    setTacticalResult('Select a ship blueprint.', true);
+    return;
+  }
+  if (!cell) {
+    setTacticalResult('Select a valid target cell.', true);
+    return;
+  }
+  if (!Number.isFinite(facing)) {
+    setTacticalResult('Enter a valid ship facing.', true);
+    return;
+  }
+  try {
+    const r = await fetch(`${BASE}/api/dm/map/ship-blueprints/${encodeURIComponent(meta.id)}/preview`, {
+      method: 'POST',
+      headers: authHeaders(),
+      body: JSON.stringify({ anchor_col: cell.col, anchor_row: cell.row, facing_deg: facing }),
+    });
+    const data = await r.json();
+    if (r.ok && data.ok) {
+      setTacticalResult(`Ship placement preview is clear at (${cell.col}, ${cell.row}).`);
+      return;
+    }
+    const detail = data && data.detail && typeof data.detail === 'object' ? data.detail : data;
+    const summary = blockerSummaryText(detail && detail.blockers);
+    const message = extractApiErrorMessage(data, 'Ship placement preview failed.');
+    setTacticalResult(summary ? `${message} (${summary})` : message, true);
+  } catch (_) {
+    setTacticalResult('Request failed.', true);
+  }
+}
+
+async function placeShipAtCell() {
+  const meta = selectedShipBlueprintMeta();
+  const cell = selectedTacticalCell();
+  const facing = Number(document.getElementById('shipFacingInput').value);
+  const shipName = document.getElementById('shipNameInput').value.trim();
+  if (!meta) {
+    setTacticalResult('Select a ship blueprint.', true);
+    return;
+  }
+  if (!cell) {
+    setTacticalResult('Select a valid target cell.', true);
+    return;
+  }
+  if (!Number.isFinite(facing)) {
+    setTacticalResult('Enter a valid ship facing.', true);
+    return;
+  }
+  const body = {
+    blueprint_id: String(meta.id),
+    anchor_col: cell.col,
+    anchor_row: cell.row,
+    facing_deg: facing,
+  };
+  if (shipName) body.name = shipName;
+  try {
+    const r = await fetch(`${BASE}/api/dm/map/ships`, {
+      method: 'POST',
+      headers: authHeaders(),
+      body: JSON.stringify(body),
+    });
+    const data = await r.json();
+    if (r.ok && data.ok) {
+      setTacticalResult(`Placed ship ${String(meta.name || meta.id)} at (${cell.col}, ${cell.row}).`);
+      if (data.snapshot) applySnapshot(data.snapshot);
+      return;
+    }
+    const detail = data && data.detail && typeof data.detail === 'object' ? data.detail : data;
+    const summary = blockerSummaryText(detail && detail.blockers);
+    const message = extractApiErrorMessage(data, 'Could not place ship.');
+    setTacticalResult(summary ? `${message} (${summary})` : message, true);
+  } catch (_) {
+    setTacticalResult('Request failed.', true);
+  }
+}
+
+async function placeStructureTemplateAtCell() {
+  const templateId = String(document.getElementById('structureTemplateSelect').value || '').trim();
+  const cell = selectedTacticalCell();
+  const facing = Number(document.getElementById('templateFacingInput').value);
+  if (!templateId) {
+    setTacticalResult('Select a structure template.', true);
+    return;
+  }
+  if (!cell) {
+    setTacticalResult('Select a valid target cell.', true);
+    return;
+  }
+  if (!Number.isFinite(facing)) {
+    setTacticalResult('Enter a valid template facing.', true);
+    return;
+  }
+  try {
+    const r = await fetch(`${BASE}/api/dm/map/structure-templates/${encodeURIComponent(templateId)}/instantiate`, {
+      method: 'POST',
+      headers: authHeaders(),
+      body: JSON.stringify({ anchor_col: cell.col, anchor_row: cell.row, facing_deg: facing }),
+    });
+    const data = await r.json();
+    if (r.ok && data.ok) {
+      setTacticalResult(`Placed template ${templateId} at (${cell.col}, ${cell.row}).`);
+      if (data.snapshot) applySnapshot(data.snapshot);
+      return;
+    }
+    const detail = data && data.detail && typeof data.detail === 'object' ? data.detail : data;
+    const summary = blockerSummaryText(detail && detail.blockers);
+    const message = extractApiErrorMessage(data, 'Could not place structure template.');
+    setTacticalResult(summary ? `${message} (${summary})` : message, true);
+  } catch (_) {
+    setTacticalResult('Request failed.', true);
+  }
+}
+
+async function upsertBoardingLinkFromInputs() {
+  const sourceId = String(document.getElementById('boardingSourceStructureSelect').value || '').trim();
+  const targetId = String(document.getElementById('boardingTargetStructureSelect').value || '').trim();
+  const status = String(document.getElementById('boardingStatusSelect').value || '').trim().toLowerCase() || 'active';
+  const notes = document.getElementById('boardingNotesInput').value.trim();
+  if (!sourceId || !targetId) {
+    setTacticalResult('Select source and target ship structures.', true);
+    return;
+  }
+  if (sourceId === targetId) {
+    setTacticalResult('Source and target ships must be different.', true);
+    return;
+  }
+  const body = {
+    source_structure_id: sourceId,
+    target_structure_id: targetId,
+    status,
+  };
+  if (notes) body.notes = notes;
+  try {
+    const r = await fetch(`${BASE}/api/dm/map/boarding-links`, {
+      method: 'POST',
+      headers: authHeaders(),
+      body: JSON.stringify(body),
+    });
+    const data = await r.json();
+    if (r.ok && data.ok) {
+      setTacticalResult(`Boarding link ${status}.`);
+      if (data.snapshot) applySnapshot(data.snapshot);
+      return;
+    }
+    setTacticalResult(extractApiErrorMessage(data, 'Could not update boarding link.'), true);
+  } catch (_) {
+    setTacticalResult('Request failed.', true);
+  }
+}
+
+async function setSelectedBoardingLinkStatus() {
+  const linkId = String(document.getElementById('boardingLinkSelect').value || '').trim();
+  const status = String(document.getElementById('boardingStatusSelect').value || '').trim().toLowerCase();
+  const notes = document.getElementById('boardingNotesInput').value.trim();
+  if (!linkId) {
+    setTacticalResult('Select a boarding link first.', true);
+    return;
+  }
+  if (!status) {
+    setTacticalResult('Select a boarding status.', true);
+    return;
+  }
+  const body = { status };
+  if (notes) body.notes = notes;
+  try {
+    const r = await fetch(`${BASE}/api/dm/map/boarding-links/${encodeURIComponent(linkId)}/status`, {
+      method: 'POST',
+      headers: authHeaders(),
+      body: JSON.stringify(body),
+    });
+    const data = await r.json();
+    if (r.ok && data.ok) {
+      setTacticalResult(`Boarding link ${linkId} set to ${status}.`);
+      if (data.snapshot) applySnapshot(data.snapshot);
+      return;
+    }
+    setTacticalResult(extractApiErrorMessage(data, 'Could not set boarding link status.'), true);
+  } catch (_) {
+    setTacticalResult('Request failed.', true);
+  }
+}
+
+async function removeSelectedBoardingLink() {
+  const linkId = String(document.getElementById('boardingLinkSelect').value || '').trim();
+  if (!linkId) {
+    setTacticalResult('Select a boarding link first.', true);
+    return;
+  }
+  try {
+    const r = await fetch(`${BASE}/api/dm/map/boarding-links/${encodeURIComponent(linkId)}`, {
+      method: 'DELETE',
+      headers: authHeaders(),
+    });
+    const data = await r.json();
+    if (r.ok && data.ok) {
+      setTacticalResult(`Removed boarding link ${linkId}.`);
+      if (data.snapshot) applySnapshot(data.snapshot);
+      return;
+    }
+    setTacticalResult(extractApiErrorMessage(data, 'Could not remove boarding link.'), true);
+  } catch (_) {
+    setTacticalResult('Request failed.', true);
+  }
+}
+
+function readShipManeuverRequestFromInputs() {
+  const sourceId = selectedShipEngagementSourceId();
+  const maneuver = String(document.getElementById('shipEngagementManeuverSelect').value || '').trim().toLowerCase();
+  const stepsRaw = Number(document.getElementById('shipEngagementStepsInput').value);
+  if (!sourceId) return { error: 'Select a source ship structure first.' };
+  if (!maneuver) return { error: 'Select a ship maneuver.' };
+  if (!Number.isFinite(stepsRaw) || stepsRaw < 1) return { error: 'Steps must be an integer >= 1.' };
+  const steps = Math.max(1, Math.floor(stepsRaw));
+  return { sourceId, maneuver, steps };
+}
+
+function shipManeuverSummaryText(result) {
+  const root = result && typeof result === 'object' ? result : {};
+  const moved = Number(root.moved_squares);
+  const facing = Number(root.facing_deg);
+  const parts = [];
+  if (Number.isFinite(moved) && moved > 0) parts.push(`moved ${moved}`);
+  if (Number.isFinite(facing)) parts.push(`facing ${Math.round(facing)}°`);
+  if (Number.isFinite(Number(root.contact_count))) parts.push(`contacts ${Number(root.contact_count)}`);
+  return parts.join(' · ');
+}
+
+async function previewShipManeuverAction() {
+  const request = readShipManeuverRequestFromInputs();
+  if (request.error) {
+    setTacticalResult(request.error, true);
+    return;
+  }
+  try {
+    const r = await fetch(`${BASE}/api/dm/map/ships/${encodeURIComponent(request.sourceId)}/maneuver-preview`, {
+      method: 'POST',
+      headers: authHeaders(),
+      body: JSON.stringify({ maneuver: request.maneuver, steps: request.steps }),
+    });
+    const data = await r.json();
+    if (r.ok && data.ok) {
+      const details = shipManeuverSummaryText(data.result);
+      setTacticalResult(details ? `Preview ${request.maneuver}: ${details}.` : `Preview ${request.maneuver} ready.`);
+      if (data.ship && typeof data.ship === 'object') {
+        shipEngagementDetailByStructure[request.sourceId] = data.ship;
+        applyShipEngagementSummary(data.ship);
+      } else {
+        syncShipEngagementStateFromSnapshot();
+      }
+      return;
+    }
+    const summary = blockerSummaryText((data && data.detail && data.detail.blockers) || (data && data.blockers));
+    const message = extractApiErrorMessage(data, 'Ship maneuver preview failed.');
+    setTacticalResult(summary ? `${message} (${summary})` : message, true);
+  } catch (_) {
+    setTacticalResult('Request failed.', true);
+  }
+}
+
+async function applyShipManeuverAction() {
+  const request = readShipManeuverRequestFromInputs();
+  if (request.error) {
+    setTacticalResult(request.error, true);
+    return;
+  }
+  try {
+    const r = await fetch(`${BASE}/api/dm/map/ships/${encodeURIComponent(request.sourceId)}/maneuver`, {
+      method: 'POST',
+      headers: authHeaders(),
+      body: JSON.stringify({ maneuver: request.maneuver, steps: request.steps }),
+    });
+    const data = await r.json();
+    if (r.ok && data.ok) {
+      const details = shipManeuverSummaryText(data.result);
+      setTacticalResult(details ? `Executed ${request.maneuver}: ${details}.` : `Executed ${request.maneuver}.`);
+      if (data.snapshot) applySnapshot(data.snapshot);
+      await refreshShipEngagementSummaryForSource(true);
+      return;
+    }
+    const summary = blockerSummaryText((data && data.detail && data.detail.blockers) || (data && data.blockers));
+    const message = extractApiErrorMessage(data, 'Ship maneuver failed.');
+    setTacticalResult(summary ? `${message} (${summary})` : message, true);
+  } catch (_) {
+    setTacticalResult('Request failed.', true);
+  }
+}
+
+async function fireShipWeaponAction() {
+  const sourceId = selectedShipEngagementSourceId();
+  const targetId = selectedShipEngagementTargetId();
+  const weaponId = String(document.getElementById('shipEngagementWeaponSelect').value || '').trim().toLowerCase();
+  const targetComponentId = String(document.getElementById('shipEngagementComponentSelect').value || '').trim().toLowerCase();
+  if (!sourceId) {
+    setTacticalResult('Select a source ship structure first.', true);
+    return;
+  }
+  if (!targetId) {
+    setTacticalResult('Select a target ship structure first.', true);
+    return;
+  }
+  if (!weaponId) {
+    setTacticalResult('Select a mounted weapon first.', true);
+    return;
+  }
+  const body = { target_structure_id: targetId, weapon_id: weaponId };
+  if (targetComponentId) body.target_component_id = targetComponentId;
+  try {
+    const r = await fetch(`${BASE}/api/dm/map/ships/${encodeURIComponent(sourceId)}/weapons/fire`, {
+      method: 'POST',
+      headers: authHeaders(),
+      body: JSON.stringify(body),
+    });
+    const data = await r.json();
+    if (r.ok && data.ok) {
+      const result = data && typeof data.result === 'object' ? data.result : {};
+      const hitText = result.hit ? 'hit' : 'missed';
+      const attackTotal = Number(result.attack_total);
+      const targetAc = Number(result.target_ac);
+      const damage = Number(result.damage);
+      const detail = [
+        `${weaponId} ${hitText}`,
+        Number.isFinite(attackTotal) && Number.isFinite(targetAc) ? `${attackTotal} vs AC ${targetAc}` : '',
+        Number.isFinite(damage) ? `${Math.max(0, Math.floor(damage))} damage` : '',
+      ].filter(Boolean).join(' · ');
+      setTacticalResult(`Weapon fire: ${detail}.`);
+      if (data.snapshot) applySnapshot(data.snapshot);
+      await refreshShipEngagementSummaryForSource(true);
+      return;
+    }
+    setTacticalResult(extractApiErrorMessage(data, 'Ship weapon fire failed.'), true);
+  } catch (_) {
+    setTacticalResult('Request failed.', true);
+  }
+}
+
+async function ramShipTargetAction() {
+  const sourceId = selectedShipEngagementSourceId();
+  const targetId = selectedShipEngagementTargetId();
+  if (!sourceId) {
+    setTacticalResult('Select a source ship structure first.', true);
+    return;
+  }
+  if (!targetId) {
+    setTacticalResult('Select a target ship structure first.', true);
+    return;
+  }
+  try {
+    const r = await fetch(`${BASE}/api/dm/map/ships/${encodeURIComponent(sourceId)}/ram`, {
+      method: 'POST',
+      headers: authHeaders(),
+      body: JSON.stringify({ target_structure_id: targetId }),
+    });
+    const data = await r.json();
+    if (r.ok && data.ok) {
+      const result = data && typeof data.result === 'object' ? data.result : {};
+      const targetDamage = Number(result.target_damage);
+      const sourceDamage = Number(result.source_damage);
+      const detail = [
+        Number.isFinite(targetDamage) ? `target ${Math.max(0, Math.floor(targetDamage))}` : '',
+        Number.isFinite(sourceDamage) ? `source ${Math.max(0, Math.floor(sourceDamage))}` : '',
+      ].filter(Boolean).join(' · ');
+      setTacticalResult(`Ram resolved${detail ? ` (${detail})` : ''}.`);
+      if (data.snapshot) applySnapshot(data.snapshot);
+      await refreshShipEngagementSummaryForSource(true);
+      return;
+    }
+    setTacticalResult(extractApiErrorMessage(data, 'Ship ram action failed.'), true);
+  } catch (_) {
+    setTacticalResult('Request failed.', true);
+  }
+}
+
 document.getElementById('tacticalMapCanvas').addEventListener('click', handleTacticalCanvasClick);
 document.getElementById('mapActionModeSelect').addEventListener('change', () => {
   updateTacticalActionLabel();
@@ -2656,10 +3667,32 @@ document.getElementById('removeFeatureBtn').addEventListener('click', removeSele
 document.getElementById('placeStructureBtn').addEventListener('click', placeStructureAtCell);
 document.getElementById('moveStructureBtn').addEventListener('click', moveSelectedStructureToCell);
 document.getElementById('removeStructureBtn').addEventListener('click', removeSelectedStructure);
+document.getElementById('placeTemplateBtn').addEventListener('click', placeStructureTemplateAtCell);
+document.getElementById('previewShipBtn').addEventListener('click', previewShipPlacementAtCell);
+document.getElementById('placeShipBtn').addEventListener('click', placeShipAtCell);
+document.getElementById('upsertBoardingLinkBtn').addEventListener('click', upsertBoardingLinkFromInputs);
+document.getElementById('setBoardingLinkStatusBtn').addEventListener('click', setSelectedBoardingLinkStatus);
+document.getElementById('removeBoardingLinkBtn').addEventListener('click', removeSelectedBoardingLink);
 document.getElementById('applyElevationBtn').addEventListener('click', applyElevationAtCell);
 document.getElementById('upsertBackgroundBtn').addEventListener('click', applyBackgroundLayer);
 document.getElementById('removeBackgroundBtn').addEventListener('click', removeSelectedBackgroundLayer);
+document.getElementById('bgLayerBackBtn').addEventListener('click', () => reorderSelectedBackgroundLayer('back'));
+document.getElementById('bgLayerDownBtn').addEventListener('click', () => reorderSelectedBackgroundLayer('down'));
+document.getElementById('bgLayerUpBtn').addEventListener('click', () => reorderSelectedBackgroundLayer('up'));
+document.getElementById('bgLayerFrontBtn').addEventListener('click', () => reorderSelectedBackgroundLayer('front'));
 document.getElementById('bgLayerSelect').addEventListener('change', updateBackgroundLayerInputsFromSelection);
+document.getElementById('shipBlueprintSelect').addEventListener('change', syncShipFacingFromSelection);
+document.getElementById('boardingLinkSelect').addEventListener('change', syncBoardingInputsFromSelectedLink);
+document.getElementById('shipEngagementSourceStructureSelect').addEventListener('change', () => {
+  refreshShipEngagementSummaryForSource(true);
+});
+document.getElementById('shipEngagementTargetStructureSelect').addEventListener('change', () => {
+  refreshShipEngagementSummaryForTarget(true);
+});
+document.getElementById('previewShipManeuverBtn').addEventListener('click', previewShipManeuverAction);
+document.getElementById('applyShipManeuverBtn').addEventListener('click', applyShipManeuverAction);
+document.getElementById('fireShipWeaponBtn').addEventListener('click', fireShipWeaponAction);
+document.getElementById('ramShipTargetBtn').addEventListener('click', ramShipTargetAction);
 document.getElementById('placeAoeBtn').addEventListener('click', placeAoeAtCell);
 document.getElementById('moveAoeBtn').addEventListener('click', moveSelectedAoeToCell);
 document.getElementById('removeAoeBtn').addEventListener('click', removeSelectedAoe);

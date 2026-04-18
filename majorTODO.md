@@ -14,12 +14,12 @@ When this file and older migration notes disagree, treat the code, tests, and th
 
 ### Confirmed current state
 
-- The app is still fundamentally a Python desktop host. `helper_script.py` defines `InitiativeTracker(tk.Tk)`, and `dnd_initative_tracker.py` subclasses it to add LAN/web/server logic.
+- The app can now launch in two host modes. The desktop mode is the historical Python/Tk host (`helper_script.py` defines `InitiativeTracker(tk.Tk)`, and `dnd_initative_tracker.py` subclasses it to add LAN/web/server logic). The new headless mode is reached via `serve_headless.py` (or by setting `INIT_TRACKER_HEADLESS=1` before importing the tracker), in which `tk_compat.HeadlessRoot` substitutes for `tk.Tk` and provides a real `after()`/`mainloop()` scheduler. Backend authority and the same `InitiativeTracker` class are reused in both modes; only the host shell differs.
 - The codebase is still monolithic in the critical runtime paths:
-  - `dnd_initative_tracker.py`: 40,563 lines
+  - `dnd_initative_tracker.py`: 42,791 lines
   - `helper_script.py`: 15,444 lines
-  - `assets/web/lan/index.html`: 24,496 lines
-  - `assets/web/dm/index.html`: 1,107 lines
+  - `assets/web/lan/index.html`: 24,635 lines
+  - `assets/web/dm/index.html`: 4,227 lines
 - Tk, FastAPI routes, WebSocket handling, combat logic, persistence, and payload shaping are still mixed inside the Python host process.
 - A real backend/service seam already exists for part of the combat/session model:
   - `combat_service.py` exposes a `CombatService` with an `RLock`.
@@ -77,7 +77,7 @@ When this file and older migration notes disagree, treat the code, tests, and th
 
 ### Confirmed partial migrations / hybrid slices
 
-- DM combat state has a real browser console and service-owned API surface, and `/dm` can now run the ordinary encounter loop plus routine map-backed tactical play for bug testing (load/resume or start blank session, populate from player profiles or monster specs, start/end combat, operate turns, manage initiative/HP/temp HP/conditions, save/restore, and place/move/facing-manage combatants on the tactical map) without dropping back to Tk-first controls. The desktop host process still owns the runtime and more advanced map/editor workflows.
+- DM combat state has a real browser console and service-owned API surface, and `/dm` can now run the ordinary encounter loop plus routine tactical play and the current advanced ship/map prep slices for bug testing (load/resume or start blank session, populate from player profiles or monster specs, start/end combat, operate turns, manage initiative/HP/temp HP/conditions, save/restore, place/move/facing-manage combatants, place templates/ships with ship placement preview, manage boarding links, reorder background layers, and execute ship engagement maneuver/fire/ram flows) without dropping back to Tk-first controls for those high-value workflows. The desktop host process still owns the runtime and the remaining advanced authoring/polish map workflows.
 - Encounter population for player profiles and monster specs is already partially migrated through `CombatService`, but summon/generated combatant paths remain outside that seam.
 - `MapState` is a real canonical model, but map editing/rendering authority is still not web-primary; the Tk map window and legacy LAN fields still participate in canonical capture/projection.
 - Character creation/editing and shop/admin flows are already browser-reachable and API-backed, but they still live inside the same Python host and write to the same local YAML/content model.
@@ -566,9 +566,9 @@ Blockers / dependencies: authoritative encounter schema, remaining DM web encoun
 
 Desired end state: the DM can run standard encounters from the browser without relying on desktop widgets for ordinary operation.
 
-Current state: `/dm` now supports snapshot viewing, turn control, HP/temp HP, conditions, add/remove combatants, set/roll initiative, auth refresh handling, session save/load/quick-save/quick-load/list, browser-triggered new blank session, browser encounter population for the common player-profile and monster-spec paths via authenticated `/api/dm/encounter/*` routes, and a tactical map card driven by combined DM snapshots that include `tactical_map`. Browser-owned map setup now includes creating a blank map and setting tactical grid dimensions through authenticated `/api/dm/map/new` and `/api/dm/map/settings` routes, so ordinary DM map creation no longer depends on Tk map-size prompts. The DM can place/reposition tokens, move them using the existing rules-aware path, update facing, paint/clear obstacle and rough-terrain cells, place/remove tactical hazards from preset-backed payloads, place/remove features, place/move/remove structures, set elevation cells, place/update/remove background layers from `/assets`, place/move/remove AoE effects, and toggle aura overlays through authenticated `/api/dm/map/*` routes that reuse tracker-owned map helpers plus the existing LAN/DM broadcast path. After a web-triggered load, the tracker restores canonical combat/map/prompt/log state without depending on Tk widget mutation as the authoritative path, then broadcasts refreshed state to LAN clients and pushes a refreshed DM snapshot to connected DM WebSocket clients. Focused reconnect/session contract fixtures now guard the prompt/map/claim payloads this slice depends on.
+Current state: `/dm` now supports snapshot viewing, turn control, HP/temp HP, conditions, add/remove combatants, set/roll initiative, auth refresh handling, session save/load/quick-save/quick-load/list, browser-triggered new blank session, browser encounter population for the common player-profile and monster-spec paths via authenticated `/api/dm/encounter/*` routes, and a tactical map card driven by combined DM snapshots that include `tactical_map`. Browser-owned map setup now includes creating a blank map and setting tactical grid dimensions through authenticated `/api/dm/map/new` and `/api/dm/map/settings` routes, so ordinary DM map creation no longer depends on Tk map-size prompts. The DM can place/reposition tokens, move them using the existing rules-aware path, update facing, paint/clear obstacle and rough-terrain cells, place/remove tactical hazards from preset-backed payloads, place/remove features, place/move/remove structures, set elevation cells, place/update/remove/reorder background layers from `/assets`, place/move/remove AoE effects, and toggle aura overlays through authenticated `/api/dm/map/*` routes that reuse tracker-owned map helpers plus the existing LAN/DM broadcast path. Advanced browser tactical authoring now also covers structure-template placement, ship-blueprint listing/placement preview/instantiation, boarding-link create/status/remove, and ship engagement summary/maneuver/fire/ram flows without Tk controls. After a web-triggered load, the tracker restores canonical combat/map/prompt/log state without depending on Tk widget mutation as the authoritative path, then broadcasts refreshed state to LAN clients and pushes a refreshed DM snapshot to connected DM WebSocket clients. Focused reconnect/session contract fixtures now guard the prompt/map/claim payloads this slice depends on.
 
-Next likely major pass: close the remaining desktop-primary tactical editor gaps in `/dm` (layer ordering/deck/template authoring, richer overlay/debug controls, and advanced structure/ship tooling) without regressing canonical map ownership.
+Next likely major pass: close the remaining desktop-primary tactical **authoring/polish** gaps (template/blueprint authoring/editing and higher-fidelity overlay/debug tooling) only as needed, then pivot primary migration effort to Tk-optional/headless host extraction.
 
 Blockers / dependencies: Phase 1 authority completeness (done for migrated slices), unresolved desktop-only encounter authoring tools, pending encounter schema decisions.
 
@@ -586,9 +586,9 @@ Blockers / dependencies: prompt model, contract fixtures, hidden-information saf
 
 Desired end state: canonical map state is authoritative and web renderers/editors consume it directly.
 
-Current state: `MapState` is real, and tactical DM browser control now covers ordinary map bootstrap plus common encounter prep and live-play battlefield effects: combined DM snapshots carry canonical tactical state to `/dm`, and blank-map creation, grid-dimension setup, token placement/movement/facing, obstacle + rough-terrain cell edits, hazard placement/removal, feature placement/removal, structure placement/move/removal, elevation edits, background-layer updates, AoE placement/move/removal, and aura-overlay toggles all run through backend-owned helpers without Tk controls. Tk map tooling still participates in canonical capture/hydration and remains desktop-primary for advanced editor workflows (ship/template authoring, richer layer tooling, and higher-fidelity tactical overlays).
+Current state: `MapState` is real, and tactical DM browser control now covers ordinary map bootstrap plus common encounter prep and live-play battlefield effects: combined DM snapshots carry canonical tactical state to `/dm`, and blank-map creation, grid-dimension setup, token placement/movement/facing, obstacle + rough-terrain cell edits, hazard placement/removal, feature placement/removal, structure placement/move/removal, elevation edits, background-layer updates/reordering, AoE placement/move/removal, aura-overlay toggles, structure-template placement, ship-blueprint placement preview/instantiation, boarding-link create/status/remove, and ship engagement maneuver/fire/ram all run through backend-owned helpers without Tk controls. Tk map tooling still participates in canonical capture/hydration and remains desktop-primary for advanced authoring/polish workflows (template/blueprint authoring/editing and higher-fidelity tactical overlays/debug tooling).
 
-Next likely major pass: migrate one advanced map-editor slice (for example template/deck tooling or richer tactical overlay/debug controls) onto `/dm` while keeping canonical map state and LAN/DM snapshot sync behavior intact.
+Next likely major pass: if parity follow-up is still needed, migrate one remaining advanced authoring/polish slice; otherwise pivot map/runtime ownership work toward Tk-optional host extraction while preserving canonical map-state authority.
 
 Blockers / dependencies: authority cleanup, payload/perf work, map-editor UX decisions.
 
@@ -685,7 +685,7 @@ Pass-shape labels are heuristic:
    - Likely pass shape: `Broad migration pass`
    - Dependencies: items 2, 4, 5, and 7
    - Exit criteria: at least one meaningful tactical slice is fully web-owned on `MapState`, with Tk no longer acting as the primary source for that slice.
-   - Status (2026-04-18): **Routine tactical control plus ordinary browser map creation/setup landed in `/dm`.** The browser DM flow now handles blank-map initialization, grid-dimension updates, token placement/reposition, rules-aware movement, facing updates, obstacle and rough-terrain cell edits, hazard placement/removal, feature placement/removal, structure placement/move/removal, elevation edits, background-layer updates, AoE placement/move/removal, and aura-overlay toggles through authenticated backend routes tied to canonical map helpers and existing LAN/DM snapshot broadcast paths. Remaining work is advanced editor parity (template/deck/ship tooling, rich layer workflows, and higher-fidelity overlays).
+   - Status (2026-04-18): **Routine tactical control plus two advanced map/ship browser slices are landed in `/dm`.** The browser DM flow now handles blank-map initialization, grid-dimension updates, token placement/reposition, rules-aware movement, facing updates, obstacle and rough-terrain cell edits, hazard placement/removal, feature placement/removal, structure placement/move/removal, elevation edits, background-layer updates/reordering, AoE placement/move/removal, aura-overlay toggles, structure-template placement, ship-blueprint listing/placement preview/instantiation, boarding-link create/status/remove, and ship engagement summary/maneuver/fire/ram through authenticated backend routes tied to canonical map helpers and existing LAN/DM snapshot broadcast paths. Remaining work is narrower advanced authoring/polish parity (template/blueprint authoring/editing and higher-fidelity overlays/debug UX), not high-value ship/map staging operations.
 
 9. **Modularize LAN and DM web clients into maintainable source modules**
    - Priority: `P3`
@@ -716,7 +716,7 @@ Pass-shape labels are heuristic:
 
 ## 12. Progress tracking
 
-- Overall status: `Hybrid migration in progress. Web surfaces are real, but Tk desktop still hosts the runtime and remains the primary owner for advanced map-editor and many adjacent workflows. The migrated player combat + movement/action + resource/consumable + turn-local/mobility-lite + adjacent fighter/monk resource-action + spell-launch + bard/glamour specialty + summon/echo specialty + initiative/reaction specialty + utility/admin command slices now have explicit backend contracts, canonical prompt records, and service-dispatched reaction resume.`
+- Overall status: `Hybrid migration in progress. Web surfaces are real, and `/dm` now covers ordinary encounter operation plus the highest-value advanced map/ship staging workflows (including layer reorder and ship engagement maneuver/fire/ram), but Tk desktop still hosts the runtime and remains the primary owner for advanced authoring/polish map workflows and adjacent desktop-only surfaces. The migrated player combat + movement/action + resource/consumable + turn-local/mobility-lite + adjacent fighter/monk resource-action + spell-launch + bard/glamour specialty + summon/echo specialty + initiative/reaction specialty + utility/admin command slices now have explicit backend contracts, canonical prompt records, and service-dispatched reaction resume.`
 - Completed major passes:
   - `CombatService` and `/api/dm/...` / `/ws/dm` exist for a meaningful combat/session slice.
   - desktop/LAN wrappers already route multiple core combat mutations through the service seam.
@@ -830,6 +830,11 @@ Pass-shape labels are heuristic:
     - those routes reuse tracker-owned map semantics instead of browser-only logic: rules-aware movement routes through `_lan_try_move()`, placement/reposition routes through destination validation plus canonical position mutation helpers, and facing routes reuse the same facing/AoE synchronization semantics already used by LAN/admin control paths.
     - `assets/web/dm/index.html` now includes a lightweight tactical map canvas plus controls for selecting a combatant, targeting a cell, placing/repositioning, spending movement, and updating facing during ordinary map-backed combat.
     - focused coverage landed in `tests/test_dm_tactical_map_routes.py`, including fastapi/httpx-gated route tests, a fastapi-free HTML-surface test, direct tracker helper tests, and a combined DM snapshot contract test.
+  - **DM browser advanced composition + ship engagement operations slice landed (2026-04-18):**
+    - new authenticated routes on `LanController._fastapi_app`: `GET /api/dm/map/ships/{structure_id}/engagement`, `POST /api/dm/map/ships/{structure_id}/maneuver-preview`, `POST /api/dm/map/ships/{structure_id}/maneuver`, `POST /api/dm/map/ships/{source_structure_id}/weapons/fire`, `POST /api/dm/map/ships/{source_structure_id}/ram`, and `POST /api/dm/map/backgrounds/{bid}/order`.
+    - new tracker helpers back those routes via canonical semantics (`_dm_ship_engagement_summary`, `_dm_ship_maneuver_on_map`, `_dm_ship_fire_weapon_on_map`, `_dm_ship_ram_on_map`, `_dm_reorder_background_layer`) and preserve LAN/DM synchronization through the existing snapshot + broadcast paths.
+    - `assets/web/dm/index.html` now exposes browser controls for ship engagement source/target staging, maneuver preview/apply, weapon fire, ram actions, and background-layer stack reordering.
+    - focused coverage extended in `tests/test_dm_tactical_map_routes.py` for route/auth/helper/HTML surfaces, plus focused regression runs for `tests/test_ship_engagement_gameplay.py`, `tests/test_map_state_foundation.py`, and `tests/test_session_save_load.py`.
   - **Core combat/resource fundamentals bug-fix pass landed for browser bug testing (2026-04-18):**
     - no-weapon `attack_request` now synthesizes an unarmed-strike fallback instead of hard-failing with "No weapon configured"; monk-style unarmed defaults are preserved.
     - shared resource-pool accounting now resolves `current` via normalized max defaults when YAML omits it, and materializes missing derived non-inventory pools before consume/set mutation paths.
@@ -840,8 +845,15 @@ Pass-shape labels are heuristic:
     - summon/custom-summon cast submission now closes cast modal surfaces before entering summon placement mode, so placement is the single active interaction state instead of a stale-open modal + placement hybrid.
     - cast-interaction reset now explicitly clears the AoE sync ghost path, keeping cancellation/open/close transitions deterministic.
     - focused browser regression coverage was extended in `tests/test_lan_cast_modal_regression.py` for AoE post-submit sync handling and summon modal-close-on-placement behavior.
-- In-progress pass: `None. Routine DM browser encounter-loop and tactical token operation are landed for bug testing.`
-- Next recommended pass: `Let the DM prepare and adjust the battlefield from the browser: common terrain/hazard/AoE controls and richer tactical overlays, not another baseline encounter-loop cleanup pass.`
+  - **First Tk-optional/headless host extraction pass landed (2026-04-18):**
+    - `tk_compat.py` now exposes a real `HeadlessRoot` class that stands in for `tk.Tk` with a thread-safe `after()` scheduler, working `mainloop()`/`quit()`/`destroy()`/`update()` semantics, and `after_cancel`/`after_idle` parity with the subset of Tk that the runtime actually uses.
+    - `tk_compat.load_tk_modules()` honors a new `INIT_TRACKER_HEADLESS=1` env flag (and `is_headless_env()` helper). When set, it forces the dummy widget set with `tk.Tk` swapped for `HeadlessRoot` and overrides `sys.modules["tkinter*"]` so subsequent `import tkinter` lookups resolve to the headless modules instead of constructing a real root window.
+    - new `serve_headless.py` entrypoint sets the env flag before importing the tracker, instantiates the same `InitiativeTracker` runtime authority used by desktop mode, supports `--host`/`--port`/`--no-auto-lan` overrides, installs SIGINT/SIGTERM signal handlers, prints the DM/LAN URLs, and runs `app.mainloop()` (which is now a real headless event loop, not Tk's).
+    - desktop `main()` in `dnd_initative_tracker.py` is unchanged: when `INIT_TRACKER_HEADLESS` is unset and tkinter is importable, the existing Tk path is preserved as a compatibility entrypoint.
+    - focused coverage landed in `tests/test_headless_host.py`: scheduler ordering + cancel + clean `quit()`, env-flag detection, and a subprocess-isolated end-to-end check that constructs a real `InitiativeTracker`, starts the LAN server on a loopback port, and confirms `GET /dm` returns 200 with no Tk window opened.
+    - residual coupling intentionally remaining after this pass: `helper_script.InitiativeTracker(tk.Tk)` and the `dnd_initative_tracker.InitiativeTracker` subclass still inherit from `tk.Tk` (now `HeadlessRoot` under the headless flag), `_build_ui()` still constructs widget objects (now no-op `_DummyTkWidget` instances), and many tracker dialogs/menus still issue Tk method calls that are absorbed as no-ops. This is acceptable for the "make Tk optional as a host" milestone; full structural decoupling of widget construction from runtime authority is still pending.
+- In-progress pass: `None. Headless host extraction first pass is landed; the runtime can launch and serve `/dm` without a Tk root window.`
+- Next recommended pass: `Reduce residual Tk coupling inside `InitiativeTracker` startup so headless mode no longer needs the dummy widget set as a structural prop (e.g., move UI-only construction behind a host-mode guard, and route widget mutation through an explicit host adapter).`
 - Blocked items:
   - `Broad YAML-backed validation still depends on python3-yaml in the test environment. Minimal Debian-style environments without that package leave item-backed and monster-backed combat suites partially unrunnable even though the migrated combat service/tests can now import without real Tk.`
   - `No hard architecture blocker is confirmed yet, but framework/runtime choice should remain deferred until contracts stabilize.`
@@ -892,32 +904,26 @@ Pass-shape labels are heuristic:
 
 ## 14. Recommended immediate next pass
 
-### DM browser should own battlefield preparation and advanced tactical control after routine token play
+### Reduce residual Tk coupling inside the tracker now that headless launch works
 
-The ordinary encounter-loop milestone plus routine tactical token control are now in place: the DM console can load/quick-load or start a blank session, populate common encounters from player profiles or monster specs, start/end combat, operate turns, manage initiative/HP/conditions, save/restore, and place/move/re-face tokens without falling back to Tk-first controls. The next product-shaped milestone is to keep the DM in the browser for battlefield preparation and live tactical effect control that still lean on the desktop host.
+The first headless host extraction pass landed (2026-04-18): `tk_compat.HeadlessRoot` plus the `INIT_TRACKER_HEADLESS=1` flag and the new `serve_headless.py` entrypoint let the same `InitiativeTracker` runtime authority launch and serve `/dm` and `/` without constructing a Tk root window. Desktop/Tk launch remains as a compatibility entrypoint.
 
-What is actually architecturally meaningful next:
-- the baseline browser encounter loop and routine token manipulation now work for ordinary bug testing, so the highest-value remaining DM gaps are battlefield prep and tactical-effect operation rather than basic start/end/populate flows.
-- the backend restore/persistence contracts plus the new combined DM tactical snapshot are already strong enough to support more browser-owned map control without first doing another backend cleanup pass.
-- remaining friction is now about richer battlefield management and tactical visibility, not about whether the browser can own the basic encounter lifecycle at all.
-
-Why this matters before wider frontend or runtime churn:
-- it extends browser-first DM testing into the next real product tier instead of spending another pass re-proving already-landed baseline parity.
-- it exposes the remaining battlefield/editor ownership seams that will matter before the desktop host can be demoted further.
+What is architecturally meaningful next:
+- shrink the implicit Tk surface that the tracker still touches during construction so headless mode does not depend on the dummy widget set as a structural prop.
+- carve a clean host adapter so widget mutation calls (menu install, dialog open, table refresh, map window construction) only fire under a `host_mode == "desktop"` branch.
+- preserve current desktop behavior; this pass is about isolating, not removing, the Tk-coupled construction path.
 
 Recommended scope:
-- close the highest-value remaining `/dm` tactical gaps: common obstacle/terrain/hazard/AoE operations and the visibility controls a DM needs to manage a battlefield live from the browser.
-- keep using the existing backend-owned seams (`CombatService`, canonical map state, session restore helper, DM routes, combined DM tactical snapshot) rather than reopening `_lan_apply_action()` cleanup or broad Tk gardening.
-- preserve the existing session snapshot schema and reconnect safety while broadening browser-owned operation.
+- introduce a small host-mode flag (probably `app.host_mode` derived from `tk_compat.is_headless_env()`) and gate Tk-only construction blocks on it (LAN menu, monster dropdown swap, starting players dialog, map window setup).
+- move the few remaining `self.after(...)` patterns in `_lan_apply_action()` paths and LAN tick wiring to the `HeadlessRoot` scheduler API explicitly, so desktop code does not assume Tk-specific scheduling semantics.
+- keep `/dm` and `LanController`-served routes as the primary operator surface during the cleanup.
 
 Recommended validation:
-- focused DM API tests for the newly browser-owned tactical actions.
-- focused browser/client smoke coverage for the DM console flows that now combine load + encounter + tactical map operation.
-- regression coverage for session restore + reconnect payloads should continue to run alongside the new DM-console tests.
+- extend `tests/test_headless_host.py` to cover a session save/load and a LAN attack/turn flow under headless mode.
+- focused DM route/contract regression to confirm `/dm` map/ship operations still produce identical snapshots in headless and desktop modes.
+- existing combat/session/reconnect suites continue to be the safety net.
 
 Deferred (not this pass):
-- bundling the residual single-command dispatch branches in `_lan_apply_action()` into another "super-family" — low ownership gain; the current leverage point is DM browser operation, not more transport micro-shrinking.
-- broad map/editor migration or standalone-backend runtime work — still better deferred until more of the DM encounter loop is proven against the current backend-owned seams.
-- exposing player-facing session persistence routes — the first slice is deliberately DM-authority-scoped; opening it to non-admin surfaces is a separate policy decision.
-
-If the next pass lands cleanly, the DM browser will own more of real battlefield operation while backend authority continues trending toward web-first ownership.
+- removing Tk imports entirely or renaming `helper_script.InitiativeTracker(tk.Tk)`; that is a follow-up structural pass once the host adapter is in place.
+- player-web tactical/editor ownership changes.
+- speculative frontend framework rewrites.

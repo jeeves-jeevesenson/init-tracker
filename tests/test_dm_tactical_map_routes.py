@@ -55,10 +55,24 @@ class _TacticalAppStub:
         self.background_asset_list_calls = 0
         self.background_upsert_calls: list = []
         self.background_remove_calls: list = []
+        self.background_reorder_calls: list = []
         self.aoe_create_calls: list = []
         self.aoe_move_calls: list = []
         self.aoe_remove_calls: list = []
         self.auras_overlay_calls: list = []
+        self.ship_blueprint_list_calls = 0
+        self.ship_blueprint_preview_calls: list = []
+        self.ship_instantiate_calls: list = []
+        self.structure_template_list_calls = 0
+        self.structure_template_instantiate_calls: list = []
+        self.boarding_link_list_calls = 0
+        self.boarding_link_upsert_calls: list = []
+        self.boarding_link_status_calls: list = []
+        self.boarding_link_remove_calls: list = []
+        self.ship_engagement_summary_calls: list = []
+        self.ship_maneuver_calls: list = []
+        self.ship_fire_calls: list = []
+        self.ship_ram_calls: list = []
         self.map_new_calls: list = []
         self.map_settings_calls: list = []
         self.broadcast_calls = 0
@@ -81,10 +95,94 @@ class _TacticalAppStub:
                 "anchor_row": 7,
                 "occupied_cells": [{"col": 0, "row": 7}, {"col": 1, "row": 7}],
                 "kind": "ship_hull",
-                "payload": {},
+                "payload": {"ship_instance_id": "ship_runtime_1", "ship_blueprint_id": "sloop"},
             }
         }
         self.next_structure_id = 2
+        self.boarding_links = []
+        self.next_boarding_link_id = 1
+        self.ships = [
+            {
+                "id": "ship_runtime_1",
+                "name": "Sloop One",
+                "blueprint_id": "sloop",
+                "parent_structure_id": "ship_1",
+                "facing_deg": 0.0,
+                "component_count": 2,
+                "weapon_count": 1,
+                "hull_hp": 100,
+                "hull_max_hp": 100,
+                "hull_status": "intact",
+                "active_crew": 8,
+                "crew_ready": True,
+                "movement_remaining": 0,
+                "turns_remaining": 0,
+                "actions_remaining": 0,
+            }
+        ]
+        self.ship_engagement_state = {
+            "ship_1": {
+                "ok": True,
+                "structure_id": "ship_1",
+                "ship_id": "ship_runtime_1",
+                "name": "Sloop One",
+                "blueprint_id": "sloop",
+                "facing_deg": 0.0,
+                "hull_hp": 100,
+                "hull_max_hp": 100,
+                "movement_remaining": 0,
+                "turns_remaining": 0,
+                "actions_remaining": 1,
+                "contact_structure_ids": [],
+                "contact_count": 0,
+                "mounted_weapons": [
+                    {"id": "ballista", "name": "Ballista", "arc": "forward", "range_cells": 12, "reload_remaining": 0},
+                ],
+                "components": [
+                    {"id": "hull", "name": "Hull", "type": "hull", "hp": 100, "max_hp": 100},
+                    {"id": "helm", "name": "Helm", "type": "control", "hp": 20, "max_hp": 20},
+                ],
+            }
+        }
+        self.ship_blueprints = [
+            {
+                "id": "sloop",
+                "name": "Sloop",
+                "kind": "ship_hull",
+                "category": "ship",
+                "size": "medium",
+                "default_facing_deg": 0.0,
+                "footprint_cells": 8,
+                "deck_count": 2,
+                "deck_region_count": 2,
+                "component_count": 3,
+                "weapon_count": 1,
+            },
+            {
+                "id": "rowboat_launch",
+                "name": "Rowboat Launch",
+                "kind": "ship_hull",
+                "category": "ship",
+                "size": "small",
+                "default_facing_deg": 90.0,
+                "footprint_cells": 4,
+                "deck_count": 1,
+                "deck_region_count": 1,
+                "component_count": 1,
+                "weapon_count": 0,
+            },
+        ]
+        self.structure_templates = [
+            {
+                "id": "fortified_gate",
+                "name": "Fortified Gate",
+                "kind": "structure",
+                "footprint_cells": 6,
+                "feature_count": 1,
+                "deck_count": 0,
+                "anchor_point_count": 1,
+            }
+        ]
         self.elevation_cells = {(3, 4): {"col": 3, "row": 4, "elevation": 10.0}}
         self.background_assets = [
             {"path": "/assets/maps/ship_deck.webp", "label": "maps/ship_deck.webp"},
@@ -197,9 +295,9 @@ class _TacticalAppStub:
             "up_next_cid": self._peek_next_turn_cid(self.current_cid),
             "round_num": self.round_num,
             "turn_order": [1, 2],
-            "boarding_links": [],
-            "active_boarding_links": [],
-            "ships": [],
+            "boarding_links": [dict(item) for item in self.boarding_links],
+            "active_boarding_links": [dict(item) for item in self.boarding_links if str(item.get("status") or "active") == "active"],
+            "ships": [dict(item) for item in self.ships],
             "auras_enabled": bool(self.auras_enabled),
         }
 
@@ -490,6 +588,8 @@ class _TacticalAppStub:
         if sid not in self.structures:
             return {"ok": False, "error": "Structure not found."}
         self.structures.pop(sid, None)
+        self.ship_engagement_state.pop(sid, None)
+        self.ships = [item for item in self.ships if str(item.get("parent_structure_id") or "") != sid]
         self._lan_force_state_broadcast()
         return {"ok": True, "structure_id": sid}
 
@@ -523,6 +623,10 @@ class _TacticalAppStub:
         self.next_feature_id = 1
         self.structures = {}
         self.next_structure_id = 1
+        self.boarding_links = []
+        self.next_boarding_link_id = 1
+        self.ships = []
+        self.ship_engagement_state = {}
         self.elevation_cells = {}
         self.background_layers = []
         self.next_background_id = 1
@@ -602,6 +706,41 @@ class _TacticalAppStub:
         self._lan_force_state_broadcast()
         return {"ok": True, "bid": int(target)}
 
+    def _dm_reorder_background_layer(self, *, bid, direction):
+        self.background_reorder_calls.append({"bid": int(bid), "direction": str(direction)})
+        target = int(bid)
+        action = str(direction or "").strip().lower()
+        if action not in {"up", "down", "front", "back"}:
+            return {"ok": False, "error": "direction must be one of: up, down, front, back."}
+        ordered = sorted(self.background_layers, key=lambda item: int(item.get("bid", 0)))
+        index = next((idx for idx, item in enumerate(ordered) if int(item.get("bid", 0)) == target), None)
+        if index is None:
+            return {"ok": False, "error": "Background layer not found."}
+        if action == "up":
+            new_index = min(len(ordered) - 1, int(index) + 1)
+        elif action == "down":
+            new_index = max(0, int(index) - 1)
+        elif action == "front":
+            new_index = len(ordered) - 1
+        else:
+            new_index = 0
+        if new_index != index:
+            layer = dict(ordered.pop(index))
+            ordered.insert(new_index, layer)
+        for idx, entry in enumerate(ordered, start=1):
+            entry["bid"] = int(idx)
+            entry["asset_url"] = str(entry.get("path") or "")
+        self.background_layers = [dict(entry) for entry in ordered]
+        self.next_background_id = max(int(self.next_background_id), len(self.background_layers) + 1)
+        selected = dict(self.background_layers[new_index])
+        self._lan_force_state_broadcast()
+        return {
+            "ok": True,
+            "bid": int(selected.get("bid", 0)),
+            "background": dict(selected),
+            "backgrounds": [dict(entry) for entry in self.background_layers],
+        }
+
     def _dm_create_aoe_on_map(self, payload):
         self.aoe_create_calls.append(dict(payload if isinstance(payload, dict) else {}))
         if not isinstance(payload, dict):
@@ -661,6 +800,476 @@ class _TacticalAppStub:
         if allowed:
             return [entry for entry in presets if str(entry.get("category") or "").strip().lower() in allowed]
         return presets
+
+    def _dm_list_ship_blueprints(self):
+        self.ship_blueprint_list_calls += 1
+        return [dict(item) for item in self.ship_blueprints]
+
+    def _dm_list_structure_templates(self):
+        self.structure_template_list_calls += 1
+        return [dict(item) for item in self.structure_templates]
+
+    def _dm_list_boarding_links(self):
+        self.boarding_link_list_calls += 1
+        return [dict(item) for item in self.boarding_links]
+
+    def _dm_preview_ship_blueprint_on_map(self, *, blueprint_id, anchor_col, anchor_row, facing_deg=0.0):
+        self.ship_blueprint_preview_calls.append(
+            {
+                "blueprint_id": str(blueprint_id),
+                "anchor_col": int(anchor_col),
+                "anchor_row": int(anchor_row),
+                "facing_deg": float(facing_deg),
+            }
+        )
+        if not any(str(item.get("id") or "") == str(blueprint_id) for item in self.ship_blueprints):
+            return {"ok": False, "error": "Ship blueprint not found.", "reason": "ship_blueprint_not_found"}
+        in_bounds = 0 <= int(anchor_col) < int(self.map_cols) and 0 <= int(anchor_row) < int(self.map_rows)
+        blockers = {
+            "ok": bool(in_bounds),
+            "blockers": {
+                "out_of_bounds": [] if in_bounds else [{"col": int(anchor_col), "row": int(anchor_row)}],
+                "obstacles": [],
+                "features": [],
+                "structures": [],
+                "hazards": [],
+                "template_conflicts": [],
+            },
+        }
+        return {
+            "ok": bool(in_bounds),
+            "blueprint_id": str(blueprint_id),
+            "anchor_col": int(anchor_col),
+            "anchor_row": int(anchor_row),
+            "facing_deg": float(facing_deg),
+            "target_cells": [{"col": int(anchor_col), "row": int(anchor_row)}],
+            "blockers": blockers,
+        }
+
+    def _dm_instantiate_ship_blueprint_on_map(
+        self,
+        *,
+        blueprint_id,
+        anchor_col,
+        anchor_row,
+        facing_deg=0.0,
+        name=None,
+    ):
+        self.ship_instantiate_calls.append(
+            {
+                "blueprint_id": str(blueprint_id),
+                "anchor_col": int(anchor_col),
+                "anchor_row": int(anchor_row),
+                "facing_deg": float(facing_deg),
+                "name": str(name or ""),
+            }
+        )
+        if not any(str(item.get("id") or "") == str(blueprint_id) for item in self.ship_blueprints):
+            return {"ok": False, "error": "Ship blueprint not found.", "reason": "ship_blueprint_not_found"}
+        if not (0 <= int(anchor_col) < int(self.map_cols) and 0 <= int(anchor_row) < int(self.map_rows)):
+            return {"ok": False, "error": "Cell out of bounds.", "reason": "invalid_anchor"}
+        sid = f"ship_structure_{self.next_structure_id}"
+        self.next_structure_id += 1
+        ship_id = f"ship_runtime_{self.next_structure_id}"
+        display_name = str(name or "").strip() or f"{str(blueprint_id).replace('_', ' ').title()} {sid}"
+        structure = {
+            "id": sid,
+            "anchor_col": int(anchor_col),
+            "anchor_row": int(anchor_row),
+            "occupied_cells": [{"col": int(anchor_col), "row": int(anchor_row)}],
+            "kind": "ship_hull",
+            "payload": {
+                "name": display_name,
+                "ship_instance_id": ship_id,
+                "ship_blueprint_id": str(blueprint_id),
+                "facing_deg": float(facing_deg),
+            },
+            "ship_state": {"ship_id": ship_id, "name": display_name, "blueprint_id": str(blueprint_id)},
+        }
+        ship_summary = {
+            "ok": True,
+            "ship_id": ship_id,
+            "structure_id": sid,
+            "name": display_name,
+            "blueprint_id": str(blueprint_id),
+            "facing_deg": float(facing_deg),
+            "hull_hp": 100,
+            "hull_max_hp": 100,
+            "movement_remaining": 0,
+            "turns_remaining": 0,
+            "actions_remaining": 1,
+            "contact_structure_ids": [],
+            "contact_count": 0,
+            "mounted_weapons": [
+                {"id": "ballista", "name": "Ballista", "arc": "forward", "range_cells": 12, "reload_remaining": 0},
+            ],
+            "components": [
+                {"id": "hull", "name": "Hull", "type": "hull", "hp": 100, "max_hp": 100},
+                {"id": "helm", "name": "Helm", "type": "control", "hp": 20, "max_hp": 20},
+            ],
+        }
+        self.structures[sid] = structure
+        self.ships.append(
+            {
+                "id": ship_id,
+                "name": display_name,
+                "blueprint_id": str(blueprint_id),
+                "parent_structure_id": sid,
+                "facing_deg": float(facing_deg),
+                "component_count": 0,
+                "weapon_count": 0,
+                "hull_hp": 100,
+                "hull_max_hp": 100,
+                "hull_status": "intact",
+                "active_crew": 8,
+                "crew_ready": True,
+                "movement_remaining": 0,
+                "turns_remaining": 0,
+                "actions_remaining": 1,
+            }
+        )
+        self.ship_engagement_state[sid] = dict(ship_summary)
+        self._lan_force_state_broadcast()
+        return {
+            "ok": True,
+            "blueprint_id": str(blueprint_id),
+            "structure_id": sid,
+            "structure": dict(structure),
+            "ship": dict(ship_summary),
+        }
+
+    def _dm_instantiate_structure_template_on_map(self, *, template_id, anchor_col, anchor_row, facing_deg=0.0):
+        self.structure_template_instantiate_calls.append(
+            {
+                "template_id": str(template_id),
+                "anchor_col": int(anchor_col),
+                "anchor_row": int(anchor_row),
+                "facing_deg": float(facing_deg),
+            }
+        )
+        if not any(str(item.get("id") or "") == str(template_id) for item in self.structure_templates):
+            return {"ok": False, "error": "Structure template not found.", "reason": "template_not_found"}
+        if not (0 <= int(anchor_col) < int(self.map_cols) and 0 <= int(anchor_row) < int(self.map_rows)):
+            return {"ok": False, "error": "Cell out of bounds.", "reason": "invalid_anchor"}
+        sid = f"template_structure_{self.next_structure_id}"
+        self.next_structure_id += 1
+        structure = {
+            "id": sid,
+            "anchor_col": int(anchor_col),
+            "anchor_row": int(anchor_row),
+            "occupied_cells": [{"col": int(anchor_col), "row": int(anchor_row)}],
+            "kind": "structure",
+            "payload": {"template_id": str(template_id), "facing_deg": float(facing_deg)},
+        }
+        self.structures[sid] = structure
+        self._lan_force_state_broadcast()
+        return {"ok": True, "template_id": str(template_id), "structure_id": sid, "structure": dict(structure)}
+
+    def _dm_upsert_boarding_link_on_map(self, *, source_structure_id, target_structure_id, status="active", notes=None):
+        self.boarding_link_upsert_calls.append(
+            {
+                "source_structure_id": str(source_structure_id),
+                "target_structure_id": str(target_structure_id),
+                "status": str(status),
+                "notes": str(notes or ""),
+            }
+        )
+        source_id = str(source_structure_id or "").strip()
+        target_id = str(target_structure_id or "").strip()
+        if not source_id or not target_id:
+            return {"ok": False, "error": "source_structure_id and target_structure_id are required.", "reason": "missing_structure_id"}
+        existing = next(
+            (
+                item
+                for item in self.boarding_links
+                if {str(item.get("source_id") or ""), str(item.get("target_id") or "")} == {source_id, target_id}
+            ),
+            None,
+        )
+        status_value = str(status or "active").strip().lower() or "active"
+        if existing is None:
+            link_id = f"boarding_link_{self.next_boarding_link_id}"
+            self.next_boarding_link_id += 1
+            link = {
+                "id": link_id,
+                "source_id": source_id,
+                "target_id": target_id,
+                "status": status_value,
+                "notes": str(notes or "").strip(),
+                "traversable": status_value == "active",
+            }
+            self.boarding_links.append(link)
+            result_link = link
+        else:
+            existing["status"] = status_value
+            existing["notes"] = str(notes or "").strip()
+            existing["traversable"] = status_value == "active"
+            result_link = existing
+        self._lan_force_state_broadcast()
+        return {"ok": True, "boarding_link": dict(result_link), "message": "Boarding link updated."}
+
+    def _dm_set_boarding_link_status_on_map(self, *, link_id, status, notes=None):
+        self.boarding_link_status_calls.append(
+            {"link_id": str(link_id), "status": str(status), "notes": str(notes or "")}
+        )
+        key = str(link_id or "").strip()
+        if not key:
+            return {"ok": False, "error": "link_id is required.", "reason": "missing_link_id"}
+        target = next((item for item in self.boarding_links if str(item.get("id") or "") == key), None)
+        if target is None:
+            return {"ok": False, "error": "Boarding link not found.", "reason": "boarding_link_not_found"}
+        status_value = str(status or "").strip().lower() or "active"
+        target["status"] = status_value
+        target["notes"] = str(notes or "").strip()
+        target["traversable"] = status_value == "active"
+        self._lan_force_state_broadcast()
+        return {
+            "ok": True,
+            "boarding_link_id": key,
+            "status": status_value,
+            "boarding_link": dict(target),
+            "message": "Boarding link status updated.",
+        }
+
+    def _dm_remove_boarding_link_on_map(self, *, link_id):
+        self.boarding_link_remove_calls.append(str(link_id))
+        key = str(link_id or "").strip()
+        before = len(self.boarding_links)
+        self.boarding_links = [item for item in self.boarding_links if str(item.get("id") or "") != key]
+        if len(self.boarding_links) == before:
+            return {"ok": False, "error": "Boarding link not found.", "reason": "boarding_link_not_found"}
+        self._lan_force_state_broadcast()
+        return {"ok": True, "boarding_link_id": key}
+
+    def _ship_engagement_summary_for(self, structure_id: str):
+        sid = str(structure_id or "").strip()
+        if not sid:
+            return None
+        structure = self.structures.get(sid)
+        if not isinstance(structure, dict):
+            return None
+        payload = structure.get("payload") if isinstance(structure.get("payload"), dict) else {}
+        ship_id = str(payload.get("ship_instance_id") or "")
+        if not ship_id:
+            return None
+        summary = self.ship_engagement_state.get(sid)
+        if not isinstance(summary, dict):
+            summary = {
+                "ok": True,
+                "structure_id": sid,
+                "ship_id": ship_id,
+                "name": str(payload.get("name") or sid),
+                "blueprint_id": str(payload.get("ship_blueprint_id") or ""),
+                "facing_deg": float(payload.get("facing_deg", 0.0) or 0.0),
+                "hull_hp": 100,
+                "hull_max_hp": 100,
+                "movement_remaining": 0,
+                "turns_remaining": 0,
+                "actions_remaining": 1,
+                "contact_structure_ids": [],
+                "contact_count": 0,
+                "mounted_weapons": [
+                    {"id": "ballista", "name": "Ballista", "arc": "forward", "range_cells": 12, "reload_remaining": 0},
+                ],
+                "components": [
+                    {"id": "hull", "name": "Hull", "type": "hull", "hp": 100, "max_hp": 100},
+                    {"id": "helm", "name": "Helm", "type": "control", "hp": 20, "max_hp": 20},
+                ],
+            }
+            self.ship_engagement_state[sid] = summary
+        ship_obj = next((item for item in self.ships if str(item.get("parent_structure_id") or "") == sid), None)
+        if isinstance(ship_obj, dict):
+            summary["facing_deg"] = float(ship_obj.get("facing_deg", summary.get("facing_deg", 0.0)) or 0.0)
+            summary["hull_hp"] = int(ship_obj.get("hull_hp", summary.get("hull_hp", 0)) or 0)
+            summary["hull_max_hp"] = int(ship_obj.get("hull_max_hp", summary.get("hull_max_hp", 0)) or 0)
+            summary["movement_remaining"] = int(ship_obj.get("movement_remaining", summary.get("movement_remaining", 0)) or 0)
+            summary["turns_remaining"] = int(ship_obj.get("turns_remaining", summary.get("turns_remaining", 0)) or 0)
+            summary["actions_remaining"] = int(ship_obj.get("actions_remaining", summary.get("actions_remaining", 0)) or 0)
+        contacts = {
+            str(item)
+            for item in (summary.get("contact_structure_ids") if isinstance(summary.get("contact_structure_ids"), list) else [])
+            if str(item).strip()
+        }
+        for link in self.boarding_links:
+            if not isinstance(link, dict):
+                continue
+            status = str(link.get("status") or "active").strip().lower() or "active"
+            if status != "active":
+                continue
+            source_id = str(link.get("source_id") or "").strip()
+            target_id = str(link.get("target_id") or "").strip()
+            if source_id == sid and target_id:
+                contacts.add(target_id)
+            elif target_id == sid and source_id:
+                contacts.add(source_id)
+        summary["contact_structure_ids"] = sorted(contacts)
+        summary["contact_count"] = len(summary["contact_structure_ids"])
+        return dict(summary)
+
+    def _dm_ship_engagement_summary(self, *, structure_id):
+        sid = str(structure_id or "").strip()
+        self.ship_engagement_summary_calls.append(sid)
+        summary = self._ship_engagement_summary_for(sid)
+        if not isinstance(summary, dict):
+            return {"ok": False, "error": "Selected structure is not a ship.", "reason": "ship_not_found"}
+        return {"ok": True, "structure_id": sid, "ship": dict(summary)}
+
+    def _dm_ship_maneuver_on_map(self, *, structure_id, maneuver, steps=1, preview_only=False):
+        sid = str(structure_id or "").strip()
+        action = str(maneuver or "").strip().lower()
+        self.ship_maneuver_calls.append(
+            {"structure_id": sid, "maneuver": action, "steps": steps, "preview_only": bool(preview_only)}
+        )
+        allowed = {"move_forward", "move_reverse", "move_port", "move_starboard", "turn_port", "turn_starboard"}
+        if action not in allowed:
+            return {"ok": False, "error": "Unsupported ship maneuver.", "reason": "unsupported_maneuver"}
+        summary = self._ship_engagement_summary_for(sid)
+        structure = self.structures.get(sid)
+        if not isinstance(summary, dict) or not isinstance(structure, dict):
+            return {"ok": False, "error": "Selected structure is not a ship.", "reason": "ship_not_found"}
+        step_count = 1
+        if action in {"move_forward", "move_reverse"}:
+            try:
+                step_count = max(1, int(steps if steps is not None else 1))
+            except Exception:
+                return {"ok": False, "error": "steps must be an integer >= 1 for this maneuver.", "reason": "invalid_steps"}
+        start_col = int(structure.get("anchor_col", 0))
+        start_row = int(structure.get("anchor_row", 0))
+        facing = float(summary.get("facing_deg", 0.0) or 0.0)
+        next_col = int(start_col)
+        next_row = int(start_row)
+        if action == "move_forward":
+            next_row = max(0, start_row - int(step_count))
+        elif action == "move_reverse":
+            next_row = min(int(self.map_rows) - 1, start_row + int(step_count))
+        elif action == "move_port":
+            next_col = max(0, start_col - 1)
+        elif action == "move_starboard":
+            next_col = min(int(self.map_cols) - 1, start_col + 1)
+        elif action == "turn_port":
+            facing = (float(facing) - 90.0) % 360.0
+        elif action == "turn_starboard":
+            facing = (float(facing) + 90.0) % 360.0
+        if not bool(preview_only):
+            structure["anchor_col"] = int(next_col)
+            structure["anchor_row"] = int(next_row)
+            structure["occupied_cells"] = [{"col": int(next_col), "row": int(next_row)}]
+            payload = structure.get("payload") if isinstance(structure.get("payload"), dict) else {}
+            payload["facing_deg"] = float(facing)
+            structure["payload"] = payload
+            ship_obj = next((item for item in self.ships if str(item.get("parent_structure_id") or "") == sid), None)
+            if isinstance(ship_obj, dict):
+                ship_obj["facing_deg"] = float(facing)
+            entry = self.ship_engagement_state.get(sid)
+            if isinstance(entry, dict):
+                entry["facing_deg"] = float(facing)
+            self._lan_force_state_broadcast()
+        refreshed = self._ship_engagement_summary_for(sid) or {}
+        return {
+            "ok": True,
+            "structure_id": sid,
+            "maneuver": action,
+            "steps": int(step_count),
+            "preview_only": bool(preview_only),
+            "result": {
+                "ok": True,
+                "maneuver": action,
+                "steps": int(step_count),
+                "moved_squares": int(step_count) if action in {"move_forward", "move_reverse"} else 0,
+                "facing_deg": float(facing),
+                "contact_count": int(refreshed.get("contact_count", 0) or 0),
+            },
+            "ship": dict(refreshed),
+        }
+
+    def _dm_ship_fire_weapon_on_map(self, *, source_structure_id, target_structure_id, weapon_id, target_component_id=None):
+        source_id = str(source_structure_id or "").strip()
+        target_id = str(target_structure_id or "").strip()
+        wid = str(weapon_id or "").strip().lower()
+        component = str(target_component_id or "").strip().lower() or None
+        self.ship_fire_calls.append(
+            {
+                "source_structure_id": source_id,
+                "target_structure_id": target_id,
+                "weapon_id": wid,
+                "target_component_id": component,
+            }
+        )
+        source = self._ship_engagement_summary_for(source_id)
+        target = self._ship_engagement_summary_for(target_id)
+        if not isinstance(source, dict):
+            return {"ok": False, "error": "source_structure_id is required.", "reason": "missing_source_structure_id"}
+        if not isinstance(target, dict):
+            return {"ok": False, "error": "target_structure_id is required.", "reason": "missing_target_structure_id"}
+        if not wid:
+            return {"ok": False, "error": "weapon_id is required.", "reason": "missing_weapon_id"}
+        weapons = source.get("mounted_weapons") if isinstance(source.get("mounted_weapons"), list) else []
+        if not any(str(item.get("id") or "").strip().lower() == wid for item in weapons if isinstance(item, dict)):
+            return {"ok": False, "error": "Weapon not found.", "reason": "weapon_not_found"}
+        damage = 11
+        target_ship = next((item for item in self.ships if str(item.get("parent_structure_id") or "") == target_id), None)
+        if isinstance(target_ship, dict):
+            target_ship["hull_hp"] = max(0, int(target_ship.get("hull_hp", 0) or 0) - int(damage))
+        source_ship = next((item for item in self.ships if str(item.get("parent_structure_id") or "") == source_id), None)
+        if isinstance(source_ship, dict):
+            source_ship["actions_remaining"] = max(0, int(source_ship.get("actions_remaining", 0) or 0) - 1)
+        target_state = self.ship_engagement_state.get(target_id)
+        if isinstance(target_state, dict):
+            target_state["hull_hp"] = max(0, int(target_state.get("hull_hp", 0) or 0) - int(damage))
+        self._lan_force_state_broadcast()
+        return {
+            "ok": True,
+            "result": {
+                "ok": True,
+                "weapon_id": wid,
+                "hit": True,
+                "attack_total": 18,
+                "target_ac": 14,
+                "damage": int(damage),
+                "target_structure_id": target_id,
+                "target_component_id": component,
+            },
+            "source_ship": self._ship_engagement_summary_for(source_id) or {},
+            "target_ship": self._ship_engagement_summary_for(target_id) or {},
+        }
+
+    def _dm_ship_ram_on_map(self, *, source_structure_id, target_structure_id):
+        source_id = str(source_structure_id or "").strip()
+        target_id = str(target_structure_id or "").strip()
+        self.ship_ram_calls.append(
+            {
+                "source_structure_id": source_id,
+                "target_structure_id": target_id,
+            }
+        )
+        source = self._ship_engagement_summary_for(source_id)
+        target = self._ship_engagement_summary_for(target_id)
+        if not isinstance(source, dict):
+            return {"ok": False, "error": "source_structure_id is required.", "reason": "missing_source_structure_id"}
+        if not isinstance(target, dict):
+            return {"ok": False, "error": "target_structure_id is required.", "reason": "missing_target_structure_id"}
+        target_damage = 14
+        source_damage = 5
+        for sid, delta in ((target_id, target_damage), (source_id, source_damage)):
+            ship_obj = next((item for item in self.ships if str(item.get("parent_structure_id") or "") == sid), None)
+            if isinstance(ship_obj, dict):
+                ship_obj["hull_hp"] = max(0, int(ship_obj.get("hull_hp", 0) or 0) - int(delta))
+            state = self.ship_engagement_state.get(sid)
+            if isinstance(state, dict):
+                state["hull_hp"] = max(0, int(state.get("hull_hp", 0) or 0) - int(delta))
+        self._lan_force_state_broadcast()
+        return {
+            "ok": True,
+            "result": {
+                "ok": True,
+                "source_structure_id": source_id,
+                "target_structure_id": target_id,
+                "target_damage": int(target_damage),
+                "source_damage": int(source_damage),
+            },
+            "source_ship": self._ship_engagement_summary_for(source_id) or {},
+            "target_ship": self._ship_engagement_summary_for(target_id) or {},
+        }
 
 
 @unittest.skipUnless(_HTTP_AVAILABLE, "fastapi/httpx not available in this environment")
@@ -903,6 +1512,16 @@ class DmTacticalMapRoutesTests(unittest.TestCase):
         bg_layers = upsert_payload["snapshot"]["tactical_map"]["map_state"]["presentation"]["bg_images"]
         self.assertTrue(any(int(layer["bid"]) == created_bid for layer in bg_layers))
 
+        reorder = client.post(f"/api/dm/map/backgrounds/{created_bid}/order", json={"direction": "down"})
+        self.assertEqual(200, reorder.status_code)
+        reorder_payload = reorder.json()
+        self.assertTrue(reorder_payload["ok"])
+        self.assertEqual("down", lan._tracker.background_reorder_calls[-1]["direction"])
+        reordered_layers = reorder_payload["snapshot"]["tactical_map"]["map_state"]["presentation"]["bg_images"]
+        reordered_target = next(layer for layer in reordered_layers if str(layer.get("path")) == "/assets/maps/cavern.png")
+        self.assertEqual(1, int(reordered_target["bid"]))
+        created_bid = int(reorder_payload["bid"])
+
         remove = client.delete(f"/api/dm/map/backgrounds/{created_bid}")
         self.assertEqual(200, remove.status_code)
         remove_payload = remove.json()
@@ -960,21 +1579,225 @@ class DmTacticalMapRoutesTests(unittest.TestCase):
         self.assertEqual([False], lan._tracker.auras_overlay_calls)
         self.assertFalse(overlays_payload["snapshot"]["tactical_map"]["auras_enabled"])
 
+    def test_ship_blueprint_and_structure_template_routes(self):
+        client, lan = self._build_client()
+
+        blueprints = client.get("/api/dm/map/ship-blueprints")
+        self.assertEqual(200, blueprints.status_code)
+        blueprints_payload = blueprints.json()
+        self.assertTrue(blueprints_payload["ok"])
+        self.assertTrue(any(entry["id"] == "sloop" for entry in blueprints_payload["blueprints"]))
+        self.assertEqual(1, lan._tracker.ship_blueprint_list_calls)
+
+        preview = client.post(
+            "/api/dm/map/ship-blueprints/sloop/preview",
+            json={"anchor_col": 5, "anchor_row": 5, "facing_deg": 90},
+        )
+        self.assertEqual(200, preview.status_code)
+        preview_payload = preview.json()
+        self.assertTrue(preview_payload["ok"])
+        self.assertEqual("sloop", preview_payload["blueprint_id"])
+        self.assertTrue(any(call["blueprint_id"] == "sloop" for call in lan._tracker.ship_blueprint_preview_calls))
+
+        place_ship = client.post(
+            "/api/dm/map/ships",
+            json={"blueprint_id": "sloop", "anchor_col": 6, "anchor_row": 6, "facing_deg": 180, "name": "Sea Ghost"},
+        )
+        self.assertEqual(200, place_ship.status_code)
+        ship_payload = place_ship.json()
+        self.assertTrue(ship_payload["ok"])
+        self.assertEqual("sloop", ship_payload["blueprint_id"])
+        structure_id = str(ship_payload["structure_id"])
+        snapshot_structure = next(item for item in ship_payload["snapshot"]["tactical_map"]["structures"] if item["id"] == structure_id)
+        self.assertEqual("sloop", snapshot_structure["payload"]["ship_blueprint_id"])
+        self.assertTrue(any(call["blueprint_id"] == "sloop" for call in lan._tracker.ship_instantiate_calls))
+
+        templates = client.get("/api/dm/map/structure-templates")
+        self.assertEqual(200, templates.status_code)
+        templates_payload = templates.json()
+        self.assertTrue(templates_payload["ok"])
+        self.assertTrue(any(entry["id"] == "fortified_gate" for entry in templates_payload["templates"]))
+        self.assertEqual(1, lan._tracker.structure_template_list_calls)
+
+        place_template = client.post(
+            "/api/dm/map/structure-templates/fortified_gate/instantiate",
+            json={"anchor_col": 3, "anchor_row": 3, "facing_deg": 270},
+        )
+        self.assertEqual(200, place_template.status_code)
+        template_payload = place_template.json()
+        self.assertTrue(template_payload["ok"])
+        self.assertEqual("fortified_gate", template_payload["template_id"])
+        self.assertTrue(any(call["template_id"] == "fortified_gate" for call in lan._tracker.structure_template_instantiate_calls))
+
+    def test_boarding_link_routes_create_status_update_and_remove(self):
+        client, lan = self._build_client()
+
+        create_ship_a = client.post(
+            "/api/dm/map/ships",
+            json={"blueprint_id": "sloop", "anchor_col": 2, "anchor_row": 2, "facing_deg": 0, "name": "A"},
+        )
+        create_ship_b = client.post(
+            "/api/dm/map/ships",
+            json={"blueprint_id": "rowboat_launch", "anchor_col": 3, "anchor_row": 2, "facing_deg": 90, "name": "B"},
+        )
+        self.assertEqual(200, create_ship_a.status_code)
+        self.assertEqual(200, create_ship_b.status_code)
+        source_id = str(create_ship_a.json()["structure_id"])
+        target_id = str(create_ship_b.json()["structure_id"])
+
+        create_link = client.post(
+            "/api/dm/map/boarding-links",
+            json={"source_structure_id": source_id, "target_structure_id": target_id, "status": "active", "notes": "Gangplank"},
+        )
+        self.assertEqual(200, create_link.status_code)
+        create_payload = create_link.json()
+        self.assertTrue(create_payload["ok"])
+        link_id = str(create_payload["boarding_link"]["id"])
+        self.assertTrue(any(call["source_structure_id"] == source_id for call in lan._tracker.boarding_link_upsert_calls))
+        self.assertTrue(any(item["id"] == link_id for item in create_payload["snapshot"]["tactical_map"]["boarding_links"]))
+
+        list_links = client.get("/api/dm/map/boarding-links")
+        self.assertEqual(200, list_links.status_code)
+        listed_payload = list_links.json()
+        self.assertTrue(listed_payload["ok"])
+        self.assertTrue(any(item["id"] == link_id for item in listed_payload["boarding_links"]))
+        self.assertEqual(1, lan._tracker.boarding_link_list_calls)
+
+        set_status = client.post(
+            f"/api/dm/map/boarding-links/{link_id}/status",
+            json={"status": "withdrawn", "notes": "Pulled away"},
+        )
+        self.assertEqual(200, set_status.status_code)
+        status_payload = set_status.json()
+        self.assertTrue(status_payload["ok"])
+        self.assertEqual("withdrawn", status_payload["status"])
+        self.assertTrue(any(call["link_id"] == link_id for call in lan._tracker.boarding_link_status_calls))
+
+        remove_link = client.delete(f"/api/dm/map/boarding-links/{link_id}")
+        self.assertEqual(200, remove_link.status_code)
+        remove_payload = remove_link.json()
+        self.assertTrue(remove_payload["ok"])
+        self.assertIn(link_id, lan._tracker.boarding_link_remove_calls)
+        self.assertFalse(any(item["id"] == link_id for item in remove_payload["snapshot"]["tactical_map"]["boarding_links"]))
+
+    def test_ship_engagement_routes_summary_maneuver_fire_and_ram(self):
+        client, lan = self._build_client()
+
+        create_ship_a = client.post(
+            "/api/dm/map/ships",
+            json={"blueprint_id": "sloop", "anchor_col": 5, "anchor_row": 5, "facing_deg": 0, "name": "A"},
+        )
+        create_ship_b = client.post(
+            "/api/dm/map/ships",
+            json={"blueprint_id": "sloop", "anchor_col": 7, "anchor_row": 5, "facing_deg": 180, "name": "B"},
+        )
+        self.assertEqual(200, create_ship_a.status_code)
+        self.assertEqual(200, create_ship_b.status_code)
+        source_id = str(create_ship_a.json()["structure_id"])
+        target_id = str(create_ship_b.json()["structure_id"])
+
+        link = client.post(
+            "/api/dm/map/boarding-links",
+            json={"source_structure_id": source_id, "target_structure_id": target_id, "status": "active"},
+        )
+        self.assertEqual(200, link.status_code)
+
+        summary = client.get(f"/api/dm/map/ships/{source_id}/engagement")
+        self.assertEqual(200, summary.status_code)
+        summary_payload = summary.json()
+        self.assertTrue(summary_payload["ok"])
+        self.assertEqual(source_id, summary_payload["structure_id"])
+        self.assertTrue(any(str(item.get("id")) == "ballista" for item in summary_payload["ship"]["mounted_weapons"]))
+        self.assertIn(source_id, lan._tracker.ship_engagement_summary_calls)
+
+        preview = client.post(
+            f"/api/dm/map/ships/{source_id}/maneuver-preview",
+            json={"maneuver": "move_forward", "steps": 2},
+        )
+        self.assertEqual(200, preview.status_code)
+        preview_payload = preview.json()
+        self.assertTrue(preview_payload["ok"])
+        self.assertTrue(preview_payload["preview_only"])
+        self.assertEqual("move_forward", preview_payload["maneuver"])
+        self.assertTrue(any(call["preview_only"] for call in lan._tracker.ship_maneuver_calls))
+
+        apply_maneuver = client.post(
+            f"/api/dm/map/ships/{source_id}/maneuver",
+            json={"maneuver": "move_forward", "steps": 2},
+        )
+        self.assertEqual(200, apply_maneuver.status_code)
+        maneuver_payload = apply_maneuver.json()
+        self.assertTrue(maneuver_payload["ok"])
+        self.assertEqual("move_forward", maneuver_payload["maneuver"])
+        moved_source = next(
+            item for item in maneuver_payload["snapshot"]["tactical_map"]["structures"] if item["id"] == source_id
+        )
+        self.assertEqual(3, int(moved_source["anchor_row"]))
+        self.assertTrue(any(not call["preview_only"] for call in lan._tracker.ship_maneuver_calls))
+
+        fire = client.post(
+            f"/api/dm/map/ships/{source_id}/weapons/fire",
+            json={"target_structure_id": target_id, "weapon_id": "ballista", "target_component_id": "hull"},
+        )
+        self.assertEqual(200, fire.status_code)
+        fire_payload = fire.json()
+        self.assertTrue(fire_payload["ok"])
+        self.assertTrue(fire_payload["result"]["hit"])
+        self.assertTrue(
+            any(
+                call["source_structure_id"] == source_id
+                and call["target_structure_id"] == target_id
+                and call["weapon_id"] == "ballista"
+                for call in lan._tracker.ship_fire_calls
+            )
+        )
+
+        ram = client.post(
+            f"/api/dm/map/ships/{source_id}/ram",
+            json={"target_structure_id": target_id},
+        )
+        self.assertEqual(200, ram.status_code)
+        ram_payload = ram.json()
+        self.assertTrue(ram_payload["ok"])
+        self.assertGreater(int(ram_payload["result"]["target_damage"]), 0)
+        self.assertTrue(
+            any(
+                call["source_structure_id"] == source_id and call["target_structure_id"] == target_id
+                for call in lan._tracker.ship_ram_calls
+            )
+        )
+
     def test_map_routes_require_admin_when_password_configured(self):
         client, lan = self._build_client(admin_password_configured=True)
         unauth_new = client.post("/api/dm/map/new", json={"cols": 20, "rows": 20})
         unauth_settings = client.post("/api/dm/map/settings", json={"cols": 22, "rows": 18})
         unauth_obstacle = client.post("/api/dm/map/obstacles/cell", json={"col": 2, "row": 2, "blocked": True})
+        unauth_ship = client.post("/api/dm/map/ships", json={"blueprint_id": "sloop", "anchor_col": 2, "anchor_row": 2})
+        unauth_ship_engagement = client.get("/api/dm/map/ships/ship_1/engagement")
+        unauth_bg_order = client.post("/api/dm/map/backgrounds/1/order", json={"direction": "front"})
         self.assertEqual(401, unauth_new.status_code)
         self.assertEqual(401, unauth_settings.status_code)
         self.assertEqual(401, unauth_obstacle.status_code)
+        self.assertEqual(401, unauth_ship.status_code)
+        self.assertEqual(401, unauth_ship_engagement.status_code)
+        self.assertEqual(401, unauth_bg_order.status_code)
         headers = self._auth_headers(client, lan)
         auth_new = client.post("/api/dm/map/new", json={"cols": 20, "rows": 20}, headers=headers)
         auth_settings = client.post("/api/dm/map/settings", json={"cols": 22, "rows": 18}, headers=headers)
         auth_obstacle = client.post("/api/dm/map/obstacles/cell", json={"col": 2, "row": 2, "blocked": True}, headers=headers)
+        auth_ship = client.post(
+            "/api/dm/map/ships",
+            json={"blueprint_id": "sloop", "anchor_col": 2, "anchor_row": 2},
+            headers=headers,
+        )
+        auth_ship_engagement = client.get("/api/dm/map/ships/ship_1/engagement", headers=headers)
+        auth_bg_order = client.post("/api/dm/map/backgrounds/1/order", json={"direction": "front"}, headers=headers)
         self.assertEqual(200, auth_new.status_code)
         self.assertEqual(200, auth_settings.status_code)
         self.assertEqual(200, auth_obstacle.status_code)
+        self.assertEqual(200, auth_ship.status_code)
+        self.assertEqual(200, auth_ship_engagement.status_code)
+        self.assertEqual(200, auth_bg_order.status_code)
 
 
 class _TrackerTacticalHarness:
@@ -1010,7 +1833,13 @@ class _TrackerTacticalHarness:
     _dm_resolve_background_asset_path = tracker_mod.InitiativeTracker._dm_resolve_background_asset_path
     _dm_upsert_background_layer = tracker_mod.InitiativeTracker._dm_upsert_background_layer
     _dm_remove_background_layer = tracker_mod.InitiativeTracker._dm_remove_background_layer
+    _dm_reorder_background_layer = tracker_mod.InitiativeTracker._dm_reorder_background_layer
     _dm_list_background_assets = tracker_mod.InitiativeTracker._dm_list_background_assets
+    _dm_ship_engagement_summary = tracker_mod.InitiativeTracker._dm_ship_engagement_summary
+    _dm_sync_ship_engagement_state = tracker_mod.InitiativeTracker._dm_sync_ship_engagement_state
+    _dm_ship_maneuver_on_map = tracker_mod.InitiativeTracker._dm_ship_maneuver_on_map
+    _dm_ship_fire_weapon_on_map = tracker_mod.InitiativeTracker._dm_ship_fire_weapon_on_map
+    _dm_ship_ram_on_map = tracker_mod.InitiativeTracker._dm_ship_ram_on_map
     _lan_tactical_entity_view = tracker_mod.InitiativeTracker._lan_tactical_entity_view
     _lan_asset_url_for_path = staticmethod(tracker_mod.InitiativeTracker._lan_asset_url_for_path)
     _normalize_facing_degrees = tracker_mod.InitiativeTracker._normalize_facing_degrees
@@ -1280,6 +2109,199 @@ class DmTacticalHelperTests(unittest.TestCase):
             if test_asset.exists():
                 test_asset.unlink()
 
+    def test_dm_background_reorder_helper_resequences_layer_bids(self):
+        app = _TrackerTacticalHarness()
+        repo_root = Path(__file__).resolve().parent.parent
+        assets_dir = repo_root / "assets"
+        test_asset_a = assets_dir / "_dm_web_bg_order_a.png"
+        test_asset_b = assets_dir / "_dm_web_bg_order_b.png"
+        test_asset_a.write_bytes(b"a")
+        test_asset_b.write_bytes(b"b")
+        try:
+            first = app._dm_upsert_background_layer(asset_path="/assets/_dm_web_bg_order_a.png", x=0, y=0)
+            second = app._dm_upsert_background_layer(asset_path="/assets/_dm_web_bg_order_b.png", x=1, y=1)
+            self.assertTrue(first["ok"])
+            self.assertTrue(second["ok"])
+            second_bid = int(second["background"]["bid"])
+            reorder = app._dm_reorder_background_layer(bid=second_bid, direction="back")
+            self.assertTrue(reorder["ok"])
+            self.assertEqual(1, int(reorder["bid"]))
+            state_after = app._capture_canonical_map_state(prefer_window=True).normalized()
+            presentation = state_after.presentation if isinstance(state_after.presentation, dict) else {}
+            layers = presentation.get("bg_images") if isinstance(presentation.get("bg_images"), list) else []
+            ordered_paths = [str(layer.get("path")) for layer in layers if isinstance(layer, dict)]
+            self.assertGreaterEqual(len(ordered_paths), 2)
+            self.assertTrue(ordered_paths[0].endswith("/assets/_dm_web_bg_order_b.png"))
+            self.assertTrue(ordered_paths[1].endswith("/assets/_dm_web_bg_order_a.png"))
+        finally:
+            if test_asset_a.exists():
+                test_asset_a.unlink()
+            if test_asset_b.exists():
+                test_asset_b.unlink()
+
+    def test_dm_ship_engagement_helper_family_wraps_ship_ops_and_sync(self):
+        app = types.SimpleNamespace()
+        sync_calls: list = []
+        app._dm_sync_ship_engagement_state = lambda: sync_calls.append("sync")
+        app._selected_ship_summary = lambda sid: {"ok": True, "structure_id": str(sid), "ship_id": f"runtime_{sid}"}
+        app._ship_engagement_maneuver = (
+            lambda sid, action, *, steps, preview_only: {
+                "ok": True,
+                "sid": str(sid),
+                "maneuver": str(action),
+                "steps": int(steps),
+                "preview_only": bool(preview_only),
+            }
+        )
+        app._ship_engagement_fire_weapon = (
+            lambda source_id, weapon_id, target_id, target_component_id=None: {
+                "ok": True,
+                "source_id": str(source_id),
+                "target_id": str(target_id),
+                "weapon_id": str(weapon_id),
+                "target_component_id": target_component_id,
+            }
+        )
+        app._ship_engagement_ram = (
+            lambda source_id, target_id: {
+                "ok": True,
+                "source_id": str(source_id),
+                "target_id": str(target_id),
+            }
+        )
+
+        preview = tracker_mod.InitiativeTracker._dm_ship_maneuver_on_map(
+            app,
+            structure_id="ship_a",
+            maneuver="move_forward",
+            steps=2,
+            preview_only=True,
+        )
+        self.assertTrue(preview["ok"])
+        self.assertTrue(preview["preview_only"])
+        self.assertEqual([], sync_calls)
+
+        applied = tracker_mod.InitiativeTracker._dm_ship_maneuver_on_map(
+            app,
+            structure_id="ship_a",
+            maneuver="move_forward",
+            steps=2,
+            preview_only=False,
+        )
+        self.assertTrue(applied["ok"])
+        self.assertFalse(applied["preview_only"])
+        self.assertEqual(["sync"], sync_calls)
+
+        fired = tracker_mod.InitiativeTracker._dm_ship_fire_weapon_on_map(
+            app,
+            source_structure_id="ship_a",
+            target_structure_id="ship_b",
+            weapon_id="ballista",
+            target_component_id="hull",
+        )
+        self.assertTrue(fired["ok"])
+        self.assertEqual("ballista", fired["result"]["weapon_id"])
+
+        rammed = tracker_mod.InitiativeTracker._dm_ship_ram_on_map(
+            app,
+            source_structure_id="ship_a",
+            target_structure_id="ship_b",
+        )
+        self.assertTrue(rammed["ok"])
+        self.assertEqual("ship_b", rammed["result"]["target_id"])
+        self.assertEqual(3, len(sync_calls))
+
+    def test_dm_ship_preview_helper_wraps_ship_blueprint_preview_semantics(self):
+        app = types.SimpleNamespace()
+        app._dm_validate_map_cell = lambda _col, _row: None
+        app._ship_blueprint_placement_preview = (
+            lambda _blueprint_id, *, anchor_col, anchor_row, facing_deg: {
+                "ok": False,
+                "target_cells": [{"col": int(anchor_col), "row": int(anchor_row)}],
+                "blockers": {"ok": False, "blockers": {"structures": [{"id": "structure_1"}]}},
+                "facing_deg": float(facing_deg),
+            }
+        )
+
+        blocked = tracker_mod.InitiativeTracker._dm_preview_ship_blueprint_on_map(
+            app,
+            blueprint_id="sloop",
+            anchor_col=4,
+            anchor_row=5,
+            facing_deg=90,
+        )
+        self.assertFalse(blocked["ok"])
+        self.assertEqual("ship_blueprint_blocked", blocked["reason"])
+        self.assertIn("structures", blocked["blockers"]["blockers"])
+
+        app._ship_blueprint_placement_preview = (
+            lambda _blueprint_id, *, anchor_col, anchor_row, facing_deg: {
+                "ok": True,
+                "blueprint_id": "sloop",
+                "anchor_col": int(anchor_col),
+                "anchor_row": int(anchor_row),
+                "facing_deg": float(facing_deg),
+                "target_cells": [{"col": int(anchor_col), "row": int(anchor_row)}],
+                "blockers": {"ok": True, "blockers": {}},
+            }
+        )
+        clear = tracker_mod.InitiativeTracker._dm_preview_ship_blueprint_on_map(
+            app,
+            blueprint_id="sloop",
+            anchor_col=6,
+            anchor_row=2,
+            facing_deg=180,
+        )
+        self.assertTrue(clear["ok"])
+        self.assertEqual("sloop", clear["blueprint_id"])
+        self.assertEqual(180.0, clear["facing_deg"])
+
+    def test_dm_boarding_link_helper_family_wraps_existing_boarding_mutators(self):
+        app = types.SimpleNamespace()
+        app._create_boarding_link = (
+            lambda _source_id, _target_id, **_kwargs: {
+                "ok": True,
+                "boarding_link": {"id": "boarding_link_1", "source_id": "ship_a", "target_id": "ship_b", "status": "active"},
+                "message": "created",
+            }
+        )
+        app._set_boarding_link_status = (
+            lambda **kwargs: {
+                "ok": True,
+                "boarding_link_id": str(kwargs.get("link_id") or ""),
+                "status": None if kwargs.get("remove") else str(kwargs.get("status") or ""),
+                "message": "updated",
+            }
+        )
+        app._boarding_links = lambda: [{"id": "boarding_link_1", "status": "withdrawn"}]
+
+        created = tracker_mod.InitiativeTracker._dm_upsert_boarding_link_on_map(
+            app,
+            source_structure_id="ship_a",
+            target_structure_id="ship_b",
+            status="active",
+            notes="gangplank",
+        )
+        self.assertTrue(created["ok"])
+        self.assertEqual("boarding_link_1", created["boarding_link"]["id"])
+
+        updated = tracker_mod.InitiativeTracker._dm_set_boarding_link_status_on_map(
+            app,
+            link_id="boarding_link_1",
+            status="withdrawn",
+            notes="pulled away",
+        )
+        self.assertTrue(updated["ok"])
+        self.assertEqual("withdrawn", updated["status"])
+        self.assertEqual("boarding_link_1", updated["boarding_link"]["id"])
+
+        removed = tracker_mod.InitiativeTracker._dm_remove_boarding_link_on_map(
+            app,
+            link_id="boarding_link_1",
+        )
+        self.assertTrue(removed["ok"])
+        self.assertEqual("boarding_link_1", removed["boarding_link_id"])
+
 
 class DmConsoleSnapshotPayloadTests(unittest.TestCase):
     def test_combined_snapshot_merges_combat_and_tactical_payloads(self):
@@ -1315,9 +2337,33 @@ class DmTacticalMapHtmlSurfaceTests(unittest.TestCase):
         self.assertIn('id="placeFeatureBtn"', html)
         self.assertIn('id="structurePresetSelect"', html)
         self.assertIn('id="placeStructureBtn"', html)
+        self.assertIn('id="structureTemplateSelect"', html)
+        self.assertIn('id="placeTemplateBtn"', html)
+        self.assertIn('id="shipBlueprintSelect"', html)
+        self.assertIn('id="previewShipBtn"', html)
+        self.assertIn('id="placeShipBtn"', html)
+        self.assertIn('id="boardingSourceStructureSelect"', html)
+        self.assertIn('id="boardingTargetStructureSelect"', html)
+        self.assertIn('id="boardingLinkSelect"', html)
+        self.assertIn('id="upsertBoardingLinkBtn"', html)
+        self.assertIn('id="setBoardingLinkStatusBtn"', html)
+        self.assertIn('id="removeBoardingLinkBtn"', html)
+        self.assertIn('id="shipEngagementSourceStructureSelect"', html)
+        self.assertIn('id="shipEngagementTargetStructureSelect"', html)
+        self.assertIn('id="previewShipManeuverBtn"', html)
+        self.assertIn('id="applyShipManeuverBtn"', html)
+        self.assertIn('id="shipEngagementWeaponSelect"', html)
+        self.assertIn('id="shipEngagementComponentSelect"', html)
+        self.assertIn('id="fireShipWeaponBtn"', html)
+        self.assertIn('id="ramShipTargetBtn"', html)
+        self.assertIn('id="shipEngagementState"', html)
         self.assertIn('id="applyElevationBtn"', html)
         self.assertIn('id="bgAssetSelect"', html)
         self.assertIn('id="upsertBackgroundBtn"', html)
+        self.assertIn('id="bgLayerBackBtn"', html)
+        self.assertIn('id="bgLayerDownBtn"', html)
+        self.assertIn('id="bgLayerUpBtn"', html)
+        self.assertIn('id="bgLayerFrontBtn"', html)
         self.assertIn('id="aoeShapeSelect"', html)
         self.assertIn('id="placeAoeBtn"', html)
         self.assertIn('id="applyOverlayBtn"', html)
@@ -1330,9 +2376,19 @@ class DmTacticalMapHtmlSurfaceTests(unittest.TestCase):
         self.assertIn("/api/dm/map/hazards", html)
         self.assertIn("/api/dm/map/features", html)
         self.assertIn("/api/dm/map/structures", html)
+        self.assertIn("/api/dm/map/ship-blueprints", html)
+        self.assertIn("/api/dm/map/ships", html)
+        self.assertIn("/api/dm/map/ships/{structure_id}/engagement", html)
+        self.assertIn("/api/dm/map/ships/{structure_id}/maneuver-preview", html)
+        self.assertIn("/api/dm/map/ships/{structure_id}/maneuver", html)
+        self.assertIn("/api/dm/map/ships/{source_structure_id}/weapons/fire", html)
+        self.assertIn("/api/dm/map/ships/{source_structure_id}/ram", html)
+        self.assertIn("/api/dm/map/structure-templates", html)
+        self.assertIn("/api/dm/map/boarding-links", html)
         self.assertIn("/api/dm/map/elevation/cell", html)
         self.assertIn("/api/dm/map/backgrounds/assets", html)
         self.assertIn("/api/dm/map/backgrounds", html)
+        self.assertIn("/api/dm/map/backgrounds/{bid}/order", html)
         self.assertIn("/api/dm/map/aoes", html)
         self.assertIn("/api/dm/map/overlays/auras", html)
         self.assertIn("/api/dm/map/combatants/${cid}/facing", html)

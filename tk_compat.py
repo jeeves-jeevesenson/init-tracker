@@ -1,9 +1,13 @@
 from __future__ import annotations
 
+import heapq
+import os
 import sys
+import threading
+import time
 from importlib import import_module
 from types import ModuleType
-from typing import Any, Tuple
+from typing import Any, Callable, List, Optional, Tuple
 
 
 class _DummyTkWidget:
@@ -149,6 +153,112 @@ class _DummyTkVariable(_DummyTkWidget):
     pass
 
 
+class HeadlessRoot(_DummyTkWidget):
+    """Headless stand-in for ``tk.Tk`` with a real ``after()`` scheduler.
+
+    The desktop tracker schedules startup work, the LAN polling tick, and
+    several deferred callbacks via ``self.after(ms, func)``. The dummy
+    widget makes those calls no-ops, which is fine for unit tests that
+    construct objects via ``__new__`` but useless as a real runtime host:
+    nothing ever fires, so the LAN poll loop never runs.
+
+    ``HeadlessRoot`` keeps a thread-safe heap of pending callbacks and a
+    ``mainloop`` that drains them on the calling thread until ``quit()``
+    or ``destroy()`` is invoked. This lets the existing tracker run with
+    no Tkinter window while preserving the ``after``/``mainloop`` shape
+    the rest of the code already speaks.
+    """
+
+    def __init__(self, *args: Any, **kwargs: Any) -> None:
+        super().__init__(*args, **kwargs)
+        self._after_lock = threading.Lock()
+        self._after_cv = threading.Condition(self._after_lock)
+        self._after_heap: List[Tuple[float, int, Callable[..., Any], tuple]] = []
+        self._after_seq = 0
+        self._after_cancelled: set = set()
+        self._stop_requested = False
+
+    def after(self, ms: Any = 0, func: Optional[Callable[..., Any]] = None, *args: Any) -> Optional[str]:
+        try:
+            delay_ms = max(0, int(ms or 0))
+        except Exception:
+            delay_ms = 0
+        if func is None:
+            time.sleep(delay_ms / 1000.0)
+            return None
+        deadline = time.monotonic() + delay_ms / 1000.0
+        with self._after_cv:
+            self._after_seq += 1
+            seq = self._after_seq
+            heapq.heappush(self._after_heap, (deadline, seq, func, tuple(args)))
+            self._after_cv.notify()
+        return f"after#{seq}"
+
+    def after_idle(self, func: Callable[..., Any], *args: Any) -> Optional[str]:
+        return self.after(0, func, *args)
+
+    def after_cancel(self, after_id: Any) -> None:
+        if not isinstance(after_id, str) or not after_id.startswith("after#"):
+            return
+        try:
+            seq = int(after_id.split("#", 1)[1])
+        except Exception:
+            return
+        with self._after_cv:
+            self._after_cancelled.add(seq)
+
+    def update(self) -> None:
+        self._drain_due()
+
+    def update_idletasks(self) -> None:
+        self._drain_due()
+
+    def _drain_due(self) -> None:
+        while True:
+            with self._after_cv:
+                if not self._after_heap or self._after_heap[0][0] > time.monotonic():
+                    return
+                _deadline, seq, callback, cb_args = heapq.heappop(self._after_heap)
+                if seq in self._after_cancelled:
+                    self._after_cancelled.discard(seq)
+                    continue
+            try:
+                callback(*cb_args)
+            except Exception:
+                pass
+
+    def mainloop(self, *args: Any, **kwargs: Any) -> None:
+        while True:
+            with self._after_cv:
+                if self._stop_requested:
+                    self._stop_requested = False
+                    return
+                if not self._after_heap:
+                    self._after_cv.wait(timeout=0.5)
+                    continue
+                deadline, seq, callback, cb_args = self._after_heap[0]
+                now = time.monotonic()
+                if deadline > now:
+                    self._after_cv.wait(timeout=min(deadline - now, 0.5))
+                    continue
+                heapq.heappop(self._after_heap)
+                if seq in self._after_cancelled:
+                    self._after_cancelled.discard(seq)
+                    continue
+            try:
+                callback(*cb_args)
+            except Exception:
+                pass
+
+    def quit(self) -> None:
+        with self._after_cv:
+            self._stop_requested = True
+            self._after_cv.notify_all()
+
+    def destroy(self) -> None:
+        self.quit()
+
+
 def _dummy_messagebox_response(*args: Any, **kwargs: Any) -> bool:
     return False
 
@@ -226,6 +336,9 @@ def _build_headless_modules() -> Tuple[ModuleType, ModuleType, ModuleType, Modul
     }
     for name in widget_names:
         setattr(tk, name, _DummyTkWidget)
+    # Tk root needs a real after()/mainloop() so the LAN polling tick and
+    # other deferred startup work actually fire under a headless host.
+    setattr(tk, "Tk", HeadlessRoot)
     for name in variable_names:
         setattr(tk, name, _DummyTkVariable)
     for name, value in constant_map.items():
@@ -278,17 +391,31 @@ def _build_headless_modules() -> Tuple[ModuleType, ModuleType, ModuleType, Modul
     tk.filedialog = filedialog
     tk.scrolledtext = scrolledtext
 
-    sys.modules.setdefault("tkinter", tk)
-    sys.modules.setdefault("tkinter.ttk", ttk)
-    sys.modules.setdefault("tkinter.messagebox", messagebox)
-    sys.modules.setdefault("tkinter.simpledialog", simpledialog)
-    sys.modules.setdefault("tkinter.filedialog", filedialog)
-    sys.modules.setdefault("tkinter.scrolledtext", scrolledtext)
-    sys.modules.setdefault("tkinter.font", tkfont)
+    sys.modules["tkinter"] = tk
+    sys.modules["tkinter.ttk"] = ttk
+    sys.modules["tkinter.messagebox"] = messagebox
+    sys.modules["tkinter.simpledialog"] = simpledialog
+    sys.modules["tkinter.filedialog"] = filedialog
+    sys.modules["tkinter.scrolledtext"] = scrolledtext
+    sys.modules["tkinter.font"] = tkfont
     return tk, filedialog, messagebox, scrolledtext, simpledialog, ttk, tkfont
 
 
+def is_headless_env() -> bool:
+    """Return True when the runtime should refuse to construct a real Tk root.
+
+    Set ``INIT_TRACKER_HEADLESS=1`` (or any truthy value) before importing the
+    tracker to force the dummy/headless tk modules even when tkinter is
+    importable. This is the seam the headless server entrypoint uses.
+    """
+
+    raw = os.getenv("INIT_TRACKER_HEADLESS", "").strip().lower()
+    return raw in {"1", "true", "yes", "on"}
+
+
 def load_tk_modules() -> Tuple[Any, Any, Any, Any, Any, Any, Any]:
+    if is_headless_env():
+        return _build_headless_modules()
     try:
         tk = import_module("tkinter")
         filedialog = import_module("tkinter.filedialog")

@@ -255,6 +255,32 @@ class LanAttackRequestTests(unittest.TestCase):
         self.assertNotIn("_attack_result", msg)
         self.assertIn((10, "Pick one of yer configured weapons first, matey."), self.toasts)
 
+    def test_attack_request_defaults_to_unarmed_when_no_weapon_is_configured(self):
+        self.app._profile_for_player_name = lambda name: {
+            "abilities": {"str": 16, "dex": 12},
+            "proficiency": {"bonus": 3},
+            "leveling": {"classes": [{"name": "Fighter", "level": 5, "attacks_per_action": 2}]},
+            "attacks": {"weapon_to_hit": 6, "weapons": []},
+        }
+        msg = {
+            "type": "attack_request",
+            "cid": 1,
+            "_claimed_cid": 1,
+            "_ws_id": 210,
+            "target_cid": 2,
+            "attack_roll": 10,
+            "attack_count": 1,
+        }
+
+        with mock.patch("dnd_initative_tracker.random.randint", return_value=4):
+            self.app._lan_apply_action(msg)
+
+        result = msg.get("_attack_result")
+        self.assertIsInstance(result, dict)
+        self.assertEqual(result.get("weapon_name"), "Unarmed Strike")
+        self.assertEqual(result.get("weapon_id"), "unarmed_strike")
+        self.assertNotIn((210, "Pick one of yer configured weapons first, matey."), self.toasts)
+
     def test_wild_shape_attack_request_accepts_inline_weapon_payload(self):
         self.app.combatants[1].is_wild_shaped = True
         self.app._profile_for_player_name = lambda name: {
