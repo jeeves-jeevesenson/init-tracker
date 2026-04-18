@@ -6,7 +6,24 @@ set -euo pipefail
 
 INSTALL_DIR="$HOME/.local/share/dnd-initiative-tracker"
 REPO_URL="https://github.com/jeeves-jeevesenson/init-tracker.git"
+EXPECTED_REPO_SLUG="jeeves-jeevesenson/init-tracker"
 OS_NAME="$(uname -s)"
+
+normalize_repo_slug() {
+    local remote_url="${1:-}"
+    if [ -z "$remote_url" ]; then
+        return 1
+    fi
+    # Normalize common GitHub remote forms to owner/repo:
+    # - strip protocol
+    # - strip optional git@ prefix
+    # - strip github.com host + separators
+    # - strip optional .git suffix
+    local normalized
+    normalized="$(printf '%s' "$remote_url" | sed -E 's#^[^:]+://##; s#^git@##; s#github.com[:/]##; s#\.git$##')"
+    normalized="${normalized#/}"
+    printf '%s' "$normalized" | tr '[:upper:]' '[:lower:]'
+}
 
 echo "=========================================="
 echo "D&D Initiative Tracker - Quick Install"
@@ -46,11 +63,22 @@ if [ -d "$INSTALL_DIR/.git" ]; then
     echo ""
     echo "Updating existing installation..."
     cd "$INSTALL_DIR"
-    git pull
+    ORIGIN_URL="$(git remote get-url origin 2>/dev/null || true)"
+    ORIGIN_SLUG="$(normalize_repo_slug "$ORIGIN_URL" || true)"
+    if [ -z "$ORIGIN_SLUG" ] || [ "$ORIGIN_SLUG" != "$EXPECTED_REPO_SLUG" ]; then
+        echo "Error: Existing install is not the supported repository."
+        echo "  Found origin: ${ORIGIN_URL:-<missing>}"
+        echo "  Expected: https://github.com/${EXPECTED_REPO_SLUG}.git"
+        echo "Refusing to update this directory automatically to avoid cross-repo corruption."
+        echo "Either reinstall into a clean directory or update this checkout manually."
+        exit 1
+    fi
+    git fetch origin --prune --tags
+    git pull --ff-only origin main
 else
     echo ""
     echo "Cloning repository to $INSTALL_DIR..."
-    git clone "$REPO_URL" "$INSTALL_DIR"
+    git clone --origin origin "$REPO_URL" "$INSTALL_DIR"
     cd "$INSTALL_DIR"
 fi
 
@@ -73,6 +101,7 @@ else
     echo ""
     echo "Creating launcher script..."
     LAUNCHER="$HOME/.local/bin/dnd-initiative-tracker"
+    HEADLESS_LAUNCHER="$HOME/.local/bin/dnd-initiative-tracker-headless"
     mkdir -p "$HOME/.local/bin"
 
     cat > "$LAUNCHER" << EOF
@@ -83,6 +112,15 @@ python dnd_initative_tracker.py "\$@"
 EOF
 
     chmod +x "$LAUNCHER"
+
+    cat > "$HEADLESS_LAUNCHER" << EOF
+#!/bin/bash
+cd "$INSTALL_DIR"
+source .venv/bin/activate
+python serve_headless.py "\$@"
+EOF
+
+    chmod +x "$HEADLESS_LAUNCHER"
 
     # Check if ~/.local/bin is in PATH
     if [[ ":$PATH:" != *":$HOME/.local/bin:"* ]]; then
@@ -106,8 +144,9 @@ if [[ "${OS_NAME}" == "Linux" ]]; then
     echo "  3. Or launch from your desktop menu"
 else
     echo "  1. Run: dnd-initiative-tracker"
-    echo "  2. Or: $LAUNCHER"
-    echo "  3. Or navigate to $INSTALL_DIR and run:"
+    echo "  2. Headless/browser-first: dnd-initiative-tracker-headless"
+    echo "  3. Or: $LAUNCHER"
+    echo "  4. Or navigate to $INSTALL_DIR and run:"
     echo "     source .venv/bin/activate && python dnd_initative_tracker.py"
 fi
 echo ""

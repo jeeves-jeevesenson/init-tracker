@@ -75,7 +75,9 @@ The app is intentionally split between desktop UI and LAN server responsibilitie
 
 ## 🚀 Quick start
 
-### Linux / macOS (recommended)
+### Managed local install (recommended for local users)
+
+#### Linux / macOS
 
 ```bash
 curl -sSL https://raw.githubusercontent.com/jeeves-jeevesenson/init-tracker/main/scripts/quick-install.sh | bash
@@ -87,7 +89,7 @@ Or:
 wget -qO- https://raw.githubusercontent.com/jeeves-jeevesenson/init-tracker/main/scripts/quick-install.sh | bash
 ```
 
-### Windows (recommended)
+#### Windows
 
 ```powershell
 irm https://raw.githubusercontent.com/jeeves-jeevesenson/init-tracker/main/scripts/quick-install.ps1 | iex
@@ -99,7 +101,11 @@ If execution policy blocks script execution:
 powershell -ExecutionPolicy Bypass -Command "irm https://raw.githubusercontent.com/jeeves-jeevesenson/init-tracker/main/scripts/quick-install.ps1 | iex"
 ```
 
-After install, launch the app from your shortcut/launcher and start LAN mode from **LAN → Start LAN Server** when needed.
+After install:
+- Desktop compatibility mode: launch from your shortcut or launcher command.
+- Headless/browser-first mode:
+  - Linux: `dnd-initiative-tracker-headless`
+  - Windows: `%LOCALAPPDATA%\DnDInitiativeTracker\launch-dnd-headless.bat`
 
 ## Installation
 
@@ -110,7 +116,9 @@ After install, launch the app from your shortcut/launcher and start LAN mode fro
 - Git
 - Tkinter (often bundled; Linux may need `python3-tk`)
 
-### Manual install (all platforms)
+### Source/developer checkout workflow
+
+For contributors and source checkouts:
 
 ```bash
 git clone https://github.com/jeeves-jeevesenson/init-tracker.git
@@ -133,36 +141,46 @@ Install dependencies and run:
 
 ```bash
 pip install -r requirements.txt
-python dnd_initative_tracker.py
+python dnd_initative_tracker.py   # desktop compatibility host
+python serve_headless.py          # headless/browser-first host
 ```
 
 ### Platform notes
 
-- **Linux quick install** places app files in `~/.local/share/dnd-initiative-tracker` (legacy path retained for update/backward compatibility)
+- **Linux quick install** places app files in `~/.local/share/dnd-initiative-tracker` (legacy path retained for compatibility)
 - **Windows quick install** places app files in `%LOCALAPPDATA%\DnDInitiativeTracker`
-- Quick install scripts are idempotent and can update an existing install
+- Managed installers create a local `.venv` inside the install directory
+- Managed installers now create both desktop and headless launchers
 
 ## Updating and uninstalling
 
 ### Updating
 
-You can update from within the app via **Help → Check for Updates**, or run scripts directly.
+Supported update paths are explicit:
 
-- Linux/macOS quick-install path:
+1) **Source/developer checkout**
+```bash
+git fetch origin --prune
+git pull --ff-only origin main
+python -m pip install -r requirements.txt
+```
+
+2) **Managed local install**
+- Linux/macOS:
   ```bash
   cd ~/.local/share/dnd-initiative-tracker
   ./scripts/update-linux.sh
   ```
-- Windows quick-install path:
+- Windows:
   ```powershell
   cd $env:LOCALAPPDATA\DnDInitiativeTracker
   .\scripts\update-windows.ps1
   ```
-- Manual clone installs:
-  ```bash
-  git pull origin main
-  pip install -r requirements.txt
-  ```
+
+Safety behavior:
+- Managed updater scripts now refuse to run if the checkout remote is not `github.com/jeeves-jeevesenson/init-tracker`.
+- In-app **Help → Check for Updates** may still notify you, but auto-running updater scripts is limited to safe managed installs.
+- For non-managed or non-official remotes (for example forks), use the source/developer checkout update flow.
 
 ### Uninstalling
 
@@ -179,19 +197,22 @@ If manually installed, remove the repository folder and its virtual environment.
 
 ## Running the tracker
 
-From a clone, desktop host:
+Desktop compatibility host:
 
 ```bash
 python dnd_initative_tracker.py
 ```
 
-Headless host (no Tk window, web/LAN runtime only):
+Headless/browser-first host (no Tk window):
 
 ```bash
-python serve_headless.py
+python serve_headless.py [--host 0.0.0.0] [--port 8787] [--no-auto-lan]
 ```
 
-In headless mode, desktop-only dialogs/popups/map windows are intentionally skipped at the host boundary; backend/session/combat authority stays in the same runtime.
+Mode boundaries:
+- **Desktop compatibility mode** keeps Tkinter menus/dialogs and the historical shell.
+- **Headless/browser-first mode** runs backend + DM/LAN web surfaces without a Tk window.
+- Both modes use the same runtime combat/session authority.
 
 Typical DM flow:
 

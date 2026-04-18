@@ -16760,12 +16760,7 @@ class InitiativeTracker(base.InitiativeTracker):
                 return
         messagebox.showinfo(
             "Update Available",
-            f"{message}\n\nTo update manually:\n\n"
-            "1. Close the application\n"
-            "2. Navigate to the installation directory\n"
-            "3. Run: git pull origin main\n"
-            "4. Run: pip install -r requirements.txt\n"
-            "5. Restart the application",
+            f"{message}\n\n{update_checker.get_manual_update_instructions()}",
         )
     
     def _show_about(self) -> None:
@@ -16786,7 +16781,7 @@ class InitiativeTracker(base.InitiativeTracker):
                 f"{version_info}\n\n"
                 f"A combat management system for D&D 5e\n"
                 f"with LAN/mobile web client support.\n\n"
-                f"Repository: github.com/jeeves-jeevesenson/dnd-initiative-tracker"
+                f"Repository: github.com/jeeves-jeevesenson/init-tracker"
             )
         except Exception as e:
             messagebox.showinfo(

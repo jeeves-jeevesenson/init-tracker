@@ -11,6 +11,7 @@ One-line installation script that handles everything automatically:
 - Creates a Python virtual environment
 - Installs all dependencies
 - Creates a launcher command at `~/.local/bin/dnd-initiative-tracker`
+- Creates a headless launcher command at `~/.local/bin/dnd-initiative-tracker-headless`
 
 **Usage:**
 ```bash
@@ -30,6 +31,7 @@ One-line installation script for Windows using PowerShell:
 - Creates a Python virtual environment
 - Installs all dependencies
 - Creates desktop and Start Menu shortcuts
+- Creates both desktop (`launch-dnd-tracker.bat`) and headless (`launch-dnd-headless.bat`) launch scripts
 
 **Usage:**
 ```powershell
@@ -46,10 +48,11 @@ irm https://raw.githubusercontent.com/jeeves-jeevesenson/init-tracker/main/scrip
 Automated update script that safely updates the application to the latest version:
 - Checks if updates are available from GitHub
 - Shows you the changes before applying them
-- Pulls latest code from the main branch
+- Pulls latest code from `origin/main` with `--ff-only`
 - Updates Python dependencies
 - **Automatically cleans up temporary files**
 - Safe to cancel at any time
+- Refuses to update if `origin` is not `github.com/jeeves-jeevesenson/init-tracker`
 
 **Usage:**
 ```bash
@@ -72,6 +75,7 @@ Automated update script for Windows:
 - Windows-specific error handling and UI
 - Automatically cleans up temporary files in `%TEMP%`
 - Works with the quick-install installation
+- Refuses to update if `origin` is not `github.com/jeeves-jeevesenson/init-tracker`
 
 **Usage:**
 ```powershell
@@ -90,7 +94,7 @@ cd $env:LOCALAPPDATA\DnDInitiativeTracker
 - ✓ Cleans up all temporary files automatically
 - ✓ Detailed error messages with solutions
 
-**Note:** Both update scripts require the application to be installed via git (using quick-install or manual git clone). If you installed from a ZIP download, you'll need to reinstall using the quick-install script to enable updates.
+**Important safety behavior:** updater scripts are intentionally restricted to the official `jeeves-jeevesenson/init-tracker` repository remote to avoid accidental cross-repo updates. For forks or custom remotes, update manually in your source checkout (`git fetch`, `git pull --ff-only`, `pip install -r requirements.txt`).
 
 ## Windows 11
 
@@ -228,6 +232,7 @@ Automated installer for Linux (Debian/Ubuntu-based) that:
 - Registers a desktop menu entry (`.desktop` file)
 - Optionally creates and populates a virtual environment
 - Creates a `~/.local/bin/dnd-initiative-tracker` launcher command
+- Creates a `~/.local/bin/dnd-initiative-tracker-headless` launcher command
 
 **Usage:**
 ```bash
