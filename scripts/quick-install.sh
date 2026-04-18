@@ -5,7 +5,7 @@
 set -euo pipefail
 
 INSTALL_DIR="$HOME/.local/share/dnd-initiative-tracker"
-REPO_URL="https://github.com/jeeves-jeevesenson/dnd-initiative-tracker.git"
+REPO_URL="https://github.com/jeeves-jeevesenson/init-tracker.git"
 OS_NAME="$(uname -s)"
 
 echo "=========================================="

@@ -78,25 +78,25 @@ The app is intentionally split between desktop UI and LAN server responsibilitie
 ### Linux / macOS (recommended)
 
 ```bash
-curl -sSL https://raw.githubusercontent.com/jeeves-jeevesenson/dnd-initiative-tracker/main/scripts/quick-install.sh | bash
+curl -sSL https://raw.githubusercontent.com/jeeves-jeevesenson/init-tracker/main/scripts/quick-install.sh | bash
 ```
 
 Or:
 
 ```bash
-wget -qO- https://raw.githubusercontent.com/jeeves-jeevesenson/dnd-initiative-tracker/main/scripts/quick-install.sh | bash
+wget -qO- https://raw.githubusercontent.com/jeeves-jeevesenson/init-tracker/main/scripts/quick-install.sh | bash
 ```
 
 ### Windows (recommended)
 
 ```powershell
-irm https://raw.githubusercontent.com/jeeves-jeevesenson/dnd-initiative-tracker/main/scripts/quick-install.ps1 | iex
+irm https://raw.githubusercontent.com/jeeves-jeevesenson/init-tracker/main/scripts/quick-install.ps1 | iex
 ```
 
 If execution policy blocks script execution:
 
 ```powershell
-powershell -ExecutionPolicy Bypass -Command "irm https://raw.githubusercontent.com/jeeves-jeevesenson/dnd-initiative-tracker/main/scripts/quick-install.ps1 | iex"
+powershell -ExecutionPolicy Bypass -Command "irm https://raw.githubusercontent.com/jeeves-jeevesenson/init-tracker/main/scripts/quick-install.ps1 | iex"
 ```
 
 After install, launch the app from your shortcut/launcher and start LAN mode from **LAN → Start LAN Server** when needed.
@@ -113,8 +113,8 @@ After install, launch the app from your shortcut/launcher and start LAN mode fro
 ### Manual install (all platforms)
 
 ```bash
-git clone https://github.com/jeeves-jeevesenson/dnd-initiative-tracker.git
-cd dnd-initiative-tracker
+git clone https://github.com/jeeves-jeevesenson/init-tracker.git
+cd init-tracker
 python -m venv .venv
 ```
 
@@ -138,7 +138,7 @@ python dnd_initative_tracker.py
 
 ### Platform notes
 
-- **Linux quick install** places app files in `~/.local/share/dnd-initiative-tracker`
+- **Linux quick install** places app files in `~/.local/share/dnd-initiative-tracker` (legacy path retained for update/backward compatibility)
 - **Windows quick install** places app files in `%LOCALAPPDATA%\DnDInitiativeTracker`
 - Quick install scripts are idempotent and can update an existing install
 
@@ -168,11 +168,11 @@ You can update from within the app via **Help → Check for Updates**, or run sc
 
 - Linux/macOS:
   ```bash
-  curl -sSL https://raw.githubusercontent.com/jeeves-jeevesenson/dnd-initiative-tracker/main/scripts/uninstall-linux.sh | bash
+  curl -sSL https://raw.githubusercontent.com/jeeves-jeevesenson/init-tracker/main/scripts/uninstall-linux.sh | bash
   ```
 - Windows:
   ```powershell
-  irm https://raw.githubusercontent.com/jeeves-jeevesenson/dnd-initiative-tracker/main/scripts/uninstall-windows.ps1 | iex
+  irm https://raw.githubusercontent.com/jeeves-jeevesenson/init-tracker/main/scripts/uninstall-windows.ps1 | iex
   ```
 
 If manually installed, remove the repository folder and its virtual environment.
