@@ -259,6 +259,16 @@ class LanCastModalRegressionTests(unittest.TestCase):
         self.assertIn('if (pendingAoePlacement){\n      if (pendingAoePlacement?.mode !== "aimless_self_centered"){\n        setPendingAoePlacementCursorFromPointer(p);\n      }\n      draw();', self.html)
         self.assertIn('if (pendingAoePlacement){\n      clearPendingAoePlacement();\n      localToast("AoE placement cancelled.");', self.html)
 
+    def test_aoe_cast_submission_keeps_preview_until_authoritative_sync(self):
+        self.assertIn("const AOE_CAST_SYNC_GHOST_TIMEOUT_MS = 2200;", self.html)
+        self.assertIn("let pendingAoeCastSyncGhost = null;", self.html)
+        self.assertIn("function beginPendingAoeCastSyncGhost(previewAoe, msg){", self.html)
+        self.assertIn("function pendingAoeCastSyncGhostPreview(){", self.html)
+        self.assertIn("const aoeCastSyncGhostPreview = pendingAoeCastSyncGhostPreview();", self.html)
+        self.assertIn("renderAoeOverlay(aoeCastSyncGhostPreview, {preview: true});", self.html)
+        self.assertIn('const previewAoe = getPendingAoePlacementPreview();\n        beginPendingAoeCastSyncGhost(previewAoe, msg);', self.html)
+        self.assertIn("clearPendingAoeCastSyncGhost(false);", self.html)
+
     def test_aoe_target_preview_panel_is_present_and_updates_during_preview(self):
         self.assertIn('id="aoeTargetPreview"', self.html)
         self.assertIn('id="aoeTargetPreviewAllies"', self.html)
@@ -357,6 +367,19 @@ class LanCastModalRegressionTests(unittest.TestCase):
         attack_idx = self.html.index('if (attackOverlayMode && !isMapView && !pendingRelocationPlacement && !pendingSummonPlacement && !hasTokenDragMove && !panning && !aoeDragging){')
         self.assertLess(relocation_idx, attack_idx)
         self.assertLess(summon_idx, attack_idx)
+
+    def test_summon_cast_submission_closes_modal_before_placement_mode(self):
+        summon_branch_idx = self.html.index("if (summonSpell && !customSummon){")
+        summon_close_idx = self.html.index('if (castSpellModal?.classList.contains("show")){\n          hideCastSpellModal();', summon_branch_idx)
+        summon_pending_idx = self.html.index("pendingSummonPlacement = {", summon_branch_idx)
+        self.assertLess(summon_branch_idx, summon_close_idx)
+        self.assertLess(summon_close_idx, summon_pending_idx)
+
+        custom_branch_idx = self.html.index("if (customSummon){")
+        custom_close_idx = self.html.index('if (castSpellModal?.classList.contains("show")){\n          hideCastSpellModal();', custom_branch_idx)
+        custom_pending_idx = self.html.index("pendingSummonPlacement = {", custom_branch_idx)
+        self.assertLess(custom_branch_idx, custom_close_idx)
+        self.assertLess(custom_close_idx, custom_pending_idx)
 
     def test_cast_preview_submit_surfaces_invalid_form(self):
         self.assertIn('castForm.requestSubmit();', self.html)

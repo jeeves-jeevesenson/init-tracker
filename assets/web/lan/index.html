@@ -5056,6 +5056,10 @@ __DAMAGE_TYPE_OPTIONS__
   let activeCastInteractionKind = "";
   let pendingSummonPlacement = null;
   let pendingAoePlacement = null;
+  const AOE_CAST_SYNC_GHOST_TIMEOUT_MS = 2200;
+  const AOE_CAST_SYNC_GHOST_STABLE_MS = 650;
+  let pendingAoeCastSyncGhost = null;
+  let pendingAoeCastSyncGhostTimer = null;
   let aoeAimGuide = null; // {start,end,blocked,outOfRange,invalid,distFt,rangeFt,facingDeg,casterCid}
   let pendingSpellResolve = null;
   let pendingSculptSelect = null;
@@ -12294,6 +12298,120 @@ __DAMAGE_TYPE_OPTIONS__
     }
   }
 
+  function clearPendingAoeCastSyncGhost(shouldRedraw = true){
+    pendingAoeCastSyncGhost = null;
+    if (pendingAoeCastSyncGhostTimer !== null){
+      clearTimeout(pendingAoeCastSyncGhostTimer);
+      pendingAoeCastSyncGhostTimer = null;
+    }
+    if (shouldRedraw){
+      draw();
+    }
+  }
+
+  function schedulePendingAoeCastSyncGhostExpiry(){
+    if (pendingAoeCastSyncGhostTimer !== null){
+      clearTimeout(pendingAoeCastSyncGhostTimer);
+      pendingAoeCastSyncGhostTimer = null;
+    }
+    if (!pendingAoeCastSyncGhost){
+      return;
+    }
+    const waitMs = Math.max(0, Number(pendingAoeCastSyncGhost.expiresAt || 0) - Date.now());
+    pendingAoeCastSyncGhostTimer = setTimeout(() => {
+      pendingAoeCastSyncGhostTimer = null;
+      if (!pendingAoeCastSyncGhost){
+        return;
+      }
+      if (Date.now() >= Number(pendingAoeCastSyncGhost.expiresAt || 0)){
+        clearPendingAoeCastSyncGhost();
+      } else {
+        schedulePendingAoeCastSyncGhostExpiry();
+      }
+    }, waitMs);
+  }
+
+  function aoeCastSyncGhostMatchesAoe(ghost, aoe){
+    if (!ghost || !aoe || typeof aoe !== "object"){
+      return false;
+    }
+    const ghostSlug = normalizeTextValue(ghost.spellSlug || "");
+    const ghostId = normalizeTextValue(ghost.spellId || "");
+    const aoeSlug = normalizeTextValue(aoe.spell_slug || aoe.spellSlug || "");
+    const aoeId = normalizeTextValue(aoe.spell_id || aoe.spellId || "");
+    if (ghostSlug && aoeSlug && getSpellKey(ghostSlug) === getSpellKey(aoeSlug)){
+      return true;
+    }
+    if (ghostId && aoeId && getSpellKey(ghostId) === getSpellKey(aoeId)){
+      return true;
+    }
+    const ghostShape = normalizeLowerValue(ghost.shape || "");
+    const aoeShape = normalizeLowerValue(aoe.kind || aoe.shape || "");
+    if (ghostShape && aoeShape && ghostShape !== aoeShape){
+      return false;
+    }
+    if (ghost.ownerCid !== null && !cidMatches(aoe.owner_cid, ghost.ownerCid, "aoeCastSync.ownerCid")){
+      return false;
+    }
+    const ghostName = normalizeLowerValue(ghost.name || "");
+    const aoeName = normalizeLowerValue(aoe.name || "");
+    const hasNameMatch = !!(ghostName && aoeName && ghostName === aoeName);
+    const aoeCx = Number(aoe.cx);
+    const aoeCy = Number(aoe.cy);
+    const hasCenter = Number.isFinite(aoeCx) && Number.isFinite(aoeCy) && Number.isFinite(Number(ghost.cx)) && Number.isFinite(Number(ghost.cy));
+    const centerDist = hasCenter ? Math.hypot(aoeCx - Number(ghost.cx), aoeCy - Number(ghost.cy)) : Number.POSITIVE_INFINITY;
+    return hasNameMatch || centerDist <= 0.85;
+  }
+
+  function beginPendingAoeCastSyncGhost(previewAoe, msg){
+    if (isPlanning){
+      clearPendingAoeCastSyncGhost(false);
+      return;
+    }
+    if (!previewAoe || typeof previewAoe !== "object"){
+      clearPendingAoeCastSyncGhost(false);
+      return;
+    }
+    const payload = msg?.payload && typeof msg.payload === "object" ? msg.payload : {};
+    const ownerCid = normalizeCid(msg?.cid, "aoeCastSync.msgCid");
+    pendingAoeCastSyncGhost = {
+      previewAoe: {...previewAoe},
+      shape: normalizeLowerValue(previewAoe.kind || previewAoe.shape || payload.shape || payload.kind || ""),
+      spellSlug: normalizeTextValue(msg?.spell_slug || payload.spell_slug || ""),
+      spellId: normalizeTextValue(msg?.spell_id || payload.spell_id || ""),
+      name: normalizeTextValue(previewAoe.name || payload.name || ""),
+      ownerCid,
+      cx: Number(previewAoe.cx),
+      cy: Number(previewAoe.cy),
+      observedMatchAt: null,
+      expiresAt: Date.now() + AOE_CAST_SYNC_GHOST_TIMEOUT_MS,
+    };
+    schedulePendingAoeCastSyncGhostExpiry();
+  }
+
+  function pendingAoeCastSyncGhostPreview(){
+    if (!pendingAoeCastSyncGhost){
+      return null;
+    }
+    const now = Date.now();
+    if (now >= Number(pendingAoeCastSyncGhost.expiresAt || 0)){
+      clearPendingAoeCastSyncGhost(false);
+      return null;
+    }
+    const aoes = Array.isArray(state?.aoes) ? state.aoes : [];
+    const matched = aoes.some((aoe) => aoeCastSyncGhostMatchesAoe(pendingAoeCastSyncGhost, aoe));
+    if (matched){
+      if (!Number.isFinite(Number(pendingAoeCastSyncGhost.observedMatchAt))){
+        pendingAoeCastSyncGhost.observedMatchAt = now;
+      }
+      if (now - Number(pendingAoeCastSyncGhost.observedMatchAt) >= AOE_CAST_SYNC_GHOST_STABLE_MS){
+        clearPendingAoeCastSyncGhost(false);
+      }
+      return null;
+    }
+    return pendingAoeCastSyncGhost.previewAoe || null;
+  }
+
   
   function isAimlessSelfCenteredAoePlacement(){
     return pendingAoePlacement?.mode === "aimless_self_centered";
@@ -13997,6 +14115,10 @@ __DAMAGE_TYPE_OPTIONS__
         if (!shouldRenderAoe(a)) return;
         renderAoeOverlay(a);
       });
+    }
+    const aoeCastSyncGhostPreview = pendingAoeCastSyncGhostPreview();
+    if (aoeCastSyncGhostPreview){
+      renderAoeOverlay(aoeCastSyncGhostPreview, {preview: true});
     }
     if (aoeDragPreview){
       const aoeSource = state?.aoes?.find(a => Number(a.aid) === Number(aoeDragPreview.aid));
@@ -17704,6 +17826,8 @@ __DAMAGE_TYPE_OPTIONS__
           draw();
           updateHud();
         }
+        const previewAoe = getPendingAoePlacementPreview();
+        beginPendingAoeCastSyncGhost(previewAoe, msg);
         send(msg);
         clearPendingAoePlacement(false);
         draw();
@@ -21021,6 +21145,7 @@ __DAMAGE_TYPE_OPTIONS__
     clearSummonPlacementState();
     clearRelocationPlacementState();
     clearSpellTargetingSession("");
+    clearPendingAoeCastSyncGhost(false);
     setSpellResolveModalOpen(false);
     if (clearAttackOverlay && attackOverlayMode){
       setAttackOverlayMode(false);
@@ -21693,6 +21818,8 @@ __DAMAGE_TYPE_OPTIONS__
           draw();
           updateHud();
         }
+        const previewAoe = getPendingAoePlacementPreview();
+        beginPendingAoeCastSyncGhost(previewAoe, msg);
         send(msg);
         clearPendingAoePlacement(false);
         draw();
@@ -21853,6 +21980,12 @@ __DAMAGE_TYPE_OPTIONS__
           clearForcedContext();
           return;
         }
+        if (castSpellModal?.classList.contains("show")){
+          hideCastSpellModal();
+        }
+        if (castOverlay?.classList.contains("show")){
+          setCastOverlayOpen(false);
+        }
         pendingSummonPlacement = {
           actionType,
           slotLevel,
@@ -21921,6 +22054,12 @@ __DAMAGE_TYPE_OPTIONS__
           localToast("Could not find caster position, matey.");
           clearForcedContext();
           return;
+        }
+        if (castSpellModal?.classList.contains("show")){
+          hideCastSpellModal();
+        }
+        if (castOverlay?.classList.contains("show")){
+          setCastOverlayOpen(false);
         }
         pendingSummonPlacement = {
           mode: "custom_summon",

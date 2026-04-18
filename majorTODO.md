@@ -830,6 +830,16 @@ Pass-shape labels are heuristic:
     - those routes reuse tracker-owned map semantics instead of browser-only logic: rules-aware movement routes through `_lan_try_move()`, placement/reposition routes through destination validation plus canonical position mutation helpers, and facing routes reuse the same facing/AoE synchronization semantics already used by LAN/admin control paths.
     - `assets/web/dm/index.html` now includes a lightweight tactical map canvas plus controls for selecting a combatant, targeting a cell, placing/repositioning, spending movement, and updating facing during ordinary map-backed combat.
     - focused coverage landed in `tests/test_dm_tactical_map_routes.py`, including fastapi/httpx-gated route tests, a fastapi-free HTML-surface test, direct tracker helper tests, and a combined DM snapshot contract test.
+  - **Core combat/resource fundamentals bug-fix pass landed for browser bug testing (2026-04-18):**
+    - no-weapon `attack_request` now synthesizes an unarmed-strike fallback instead of hard-failing with "No weapon configured"; monk-style unarmed defaults are preserved.
+    - shared resource-pool accounting now resolves `current` via normalized max defaults when YAML omits it, and materializes missing derived non-inventory pools before consume/set mutation paths.
+    - pact-magic runtime paths now stay playable for pact-only casters: profile payload projection can expose runtime pact slots for LAN clients, and spell-slot consumption can spend `pact_magic_slots` when no standard slot is available.
+    - focused regression coverage now includes `tests/test_resource_pool_accounting.py` (new), plus an added no-weapon unarmed fallback assertion in `tests/test_lan_attack_request.py`; existing action-surge and pact-slot suites remain green.
+  - **LAN browser AoE/summon action-flow reliability bug-fix pass landed for bug testing (2026-04-18):**
+    - AoE cast submission now keeps a short-lived sync ghost overlay (`pendingAoeCastSyncGhost`) between placement submit and authoritative AoE state arrival, so the map no longer flashes through contradictory "placed → missing → reappeared" visuals during normal cast completion races.
+    - summon/custom-summon cast submission now closes cast modal surfaces before entering summon placement mode, so placement is the single active interaction state instead of a stale-open modal + placement hybrid.
+    - cast-interaction reset now explicitly clears the AoE sync ghost path, keeping cancellation/open/close transitions deterministic.
+    - focused browser regression coverage was extended in `tests/test_lan_cast_modal_regression.py` for AoE post-submit sync handling and summon modal-close-on-placement behavior.
 - In-progress pass: `None. Routine DM browser encounter-loop and tactical token operation are landed for bug testing.`
 - Next recommended pass: `Let the DM prepare and adjust the battlefield from the browser: common terrain/hazard/AoE controls and richer tactical overlays, not another baseline encounter-loop cleanup pass.`
 - Blocked items:
