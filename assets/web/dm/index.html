@@ -239,6 +239,30 @@
     .tactical-inline {
       display: grid; grid-template-columns: 1fr 1fr; gap: 8px;
     }
+    .tactical-section-title {
+      margin-top: 8px;
+      font-size: 11px;
+      color: var(--gold);
+      text-transform: uppercase;
+      letter-spacing: .05em;
+    }
+    .tactical-divider {
+      margin-top: 10px;
+      border-top: 1px solid var(--border);
+      opacity: .8;
+    }
+    .tactical-toggle-row {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 8px;
+      margin-top: 8px;
+      font-size: 11px;
+      color: var(--muted);
+    }
+    .tactical-toggle-row input[type="checkbox"] {
+      width: auto;
+    }
     .tactical-facing-grid {
       display: grid; grid-template-columns: repeat(4, 1fr);
       gap: 6px; margin-top: 8px;
@@ -563,6 +587,192 @@
         <button class="btn-sm" data-facing="270">West 270°</button>
       </div>
       <button class="btn-action" id="setFacingBtn" style="margin-top:8px">Set Facing</button>
+      <div class="tactical-divider"></div>
+      <div class="tactical-section-title">Battlefield Cell</div>
+      <div class="tactical-inline">
+        <div class="form-group">
+          <label>Cell Edit</label>
+          <select id="mapCellModeSelect">
+            <option value="obstacle_on">Obstacle: Block Cell</option>
+            <option value="obstacle_off">Obstacle: Clear Cell</option>
+            <option value="rough_ground">Rough Terrain: Ground</option>
+            <option value="rough_water">Rough Terrain: Water</option>
+            <option value="terrain_clear">Terrain: Clear Cell</option>
+          </select>
+        </div>
+        <div class="form-group">
+          <label>&nbsp;</label>
+          <button class="btn-action" id="applyCellModeBtn">Apply Cell Edit</button>
+        </div>
+      </div>
+      <div class="tactical-divider"></div>
+      <div class="tactical-section-title">Hazards</div>
+      <div class="form-group">
+        <label>Hazard Preset</label>
+        <select id="hazardPresetSelect">
+          <option value="">— select hazard —</option>
+        </select>
+      </div>
+      <div class="form-group">
+        <label>Hazard Name (optional)</label>
+        <input type="text" id="hazardNameInput" placeholder="e.g. Burning Oil" />
+      </div>
+      <div style="display:flex;gap:6px">
+        <button class="btn-action" id="placeHazardBtn" style="flex:1">Place Hazard at Cell</button>
+        <button class="btn-action remove" id="removeHazardBtn" style="flex:1">Remove Selected Hazard</button>
+      </div>
+      <div class="form-group" style="margin-top:8px">
+        <label>Existing Hazards</label>
+        <select id="hazardIdSelect"><option value="">— select hazard —</option></select>
+      </div>
+      <div class="tactical-divider"></div>
+      <div class="tactical-section-title">Features</div>
+      <div class="form-group">
+        <label>Feature Preset</label>
+        <select id="featurePresetSelect">
+          <option value="">— select feature —</option>
+        </select>
+      </div>
+      <div class="form-group">
+        <label>Feature Name (optional)</label>
+        <input type="text" id="featureNameInput" placeholder="e.g. Crate Stack" />
+      </div>
+      <div style="display:flex;gap:6px">
+        <button class="btn-action" id="placeFeatureBtn" style="flex:1">Place Feature at Cell</button>
+        <button class="btn-action remove" id="removeFeatureBtn" style="flex:1">Remove Selected Feature</button>
+      </div>
+      <div class="form-group" style="margin-top:8px">
+        <label>Existing Features</label>
+        <select id="featureIdSelect"><option value="">— select feature —</option></select>
+      </div>
+      <div class="tactical-divider"></div>
+      <div class="tactical-section-title">Structures</div>
+      <div class="form-group">
+        <label>Structure Preset</label>
+        <select id="structurePresetSelect">
+          <option value="">— select structure —</option>
+        </select>
+      </div>
+      <div class="tactical-inline">
+        <div class="form-group">
+          <label>Width (cells)</label>
+          <input type="number" id="structureWidthInput" min="1" step="1" value="1" />
+        </div>
+        <div class="form-group">
+          <label>Height (cells)</label>
+          <input type="number" id="structureHeightInput" min="1" step="1" value="1" />
+        </div>
+      </div>
+      <div class="form-group">
+        <label>Structure Name (optional)</label>
+        <input type="text" id="structureNameInput" placeholder="e.g. Wagon" />
+      </div>
+      <div style="display:flex;gap:6px">
+        <button class="btn-action" id="placeStructureBtn" style="flex:1">Place Structure at Cell</button>
+        <button class="btn-action" id="moveStructureBtn" style="flex:1">Move Selected Structure to Cell</button>
+      </div>
+      <div style="display:flex;gap:6px;margin-top:6px">
+        <button class="btn-action remove" id="removeStructureBtn" style="flex:1">Remove Selected Structure</button>
+      </div>
+      <div class="form-group" style="margin-top:8px">
+        <label>Existing Structures</label>
+        <select id="structureIdSelect"><option value="">— select structure —</option></select>
+      </div>
+      <div class="tactical-divider"></div>
+      <div class="tactical-section-title">Elevation</div>
+      <div class="tactical-inline">
+        <div class="form-group">
+          <label>Elevation (ft)</label>
+          <input type="number" id="elevationInput" step="1" value="0" />
+        </div>
+        <div class="form-group">
+          <label>&nbsp;</label>
+          <button class="btn-action" id="applyElevationBtn">Set Cell Elevation</button>
+        </div>
+      </div>
+      <div class="tactical-divider"></div>
+      <div class="tactical-section-title">Background Layers</div>
+      <div class="form-group">
+        <label>Background Asset</label>
+        <select id="bgAssetSelect"><option value="">— select asset —</option></select>
+      </div>
+      <div class="form-group">
+        <label>Existing Layers</label>
+        <select id="bgLayerSelect"><option value="">— new layer —</option></select>
+      </div>
+      <div class="tactical-inline">
+        <div class="form-group">
+          <label>X</label>
+          <input type="number" id="bgXInput" step="1" value="0" />
+        </div>
+        <div class="form-group">
+          <label>Y</label>
+          <input type="number" id="bgYInput" step="1" value="0" />
+        </div>
+      </div>
+      <div class="tactical-inline">
+        <div class="form-group">
+          <label>Scale %</label>
+          <input type="number" id="bgScaleInput" min="1" max="1000" step="1" value="100" />
+        </div>
+        <div class="form-group">
+          <label>Transparency %</label>
+          <input type="number" id="bgTransInput" min="0" max="100" step="1" value="0" />
+        </div>
+      </div>
+      <div class="tactical-toggle-row">
+        <label for="bgLockedToggle">Lock background layer</label>
+        <input type="checkbox" id="bgLockedToggle" />
+      </div>
+      <div style="display:flex;gap:6px;margin-top:8px">
+        <button class="btn-action" id="upsertBackgroundBtn" style="flex:1">Apply Background Layer</button>
+        <button class="btn-action remove" id="removeBackgroundBtn" style="flex:1">Remove Selected Layer</button>
+      </div>
+      <div class="tactical-divider"></div>
+      <div class="tactical-section-title">Area Effects (AoE)</div>
+      <div class="tactical-inline">
+        <div class="form-group">
+          <label>Shape</label>
+          <select id="aoeShapeSelect">
+            <option value="circle">Circle</option>
+            <option value="square">Square</option>
+            <option value="line">Line</option>
+            <option value="cone">Cone</option>
+          </select>
+        </div>
+        <div class="form-group">
+          <label>Size (ft)</label>
+          <input type="number" id="aoeSizeFtInput" min="5" step="5" value="20" />
+        </div>
+      </div>
+      <div class="tactical-inline">
+        <div class="form-group">
+          <label>AoE Name (optional)</label>
+          <input type="text" id="aoeNameInput" placeholder="e.g. Web" />
+        </div>
+        <div class="form-group">
+          <label>Angle° (line/cone/square)</label>
+          <input type="number" id="aoeAngleInput" min="0" max="359" step="1" value="0" />
+        </div>
+      </div>
+      <div style="display:flex;gap:6px">
+        <button class="btn-action" id="placeAoeBtn" style="flex:1">Place AoE at Cell</button>
+        <button class="btn-action" id="moveAoeBtn" style="flex:1">Move Selected AoE to Cell</button>
+      </div>
+      <div style="display:flex;gap:6px;margin-top:6px">
+        <button class="btn-action remove" id="removeAoeBtn" style="flex:1">Remove Selected AoE</button>
+      </div>
+      <div class="form-group" style="margin-top:8px">
+        <label>Existing AoEs</label>
+        <select id="aoeIdSelect"><option value="">— select AoE —</option></select>
+      </div>
+      <div class="tactical-divider"></div>
+      <div class="tactical-section-title">Overlays</div>
+      <div class="tactical-toggle-row">
+        <label for="aurasEnabledToggle">Show aura overlays in tactical snapshots</label>
+        <input type="checkbox" id="aurasEnabledToggle" checked />
+      </div>
+      <button class="btn-sm" id="applyOverlayBtn" style="margin-top:8px">Apply Overlay Setting</button>
       <div class="mut-result" id="tacticalResult"></div>
     </div>
 
@@ -605,12 +815,30 @@
    Endpoints used:
      GET    /api/dm/combat                                  → snapshot
      GET    /api/dm/encounter/options                       → player/monster setup choices
-     POST   /api/dm/encounter/players/add                   → add player profiles
-     POST   /api/dm/encounter/monsters/add                  → add monster specs
-     POST   /api/dm/map/combatants/{cid}/move               → move on tactical map
-     POST   /api/dm/map/combatants/{cid}/place              → place/reposition on map
-     POST   /api/dm/map/combatants/{cid}/facing             → set tactical facing
-     POST   /api/dm/combat/next-turn                        → advance turn
+      POST   /api/dm/encounter/players/add                   → add player profiles
+      POST   /api/dm/encounter/monsters/add                  → add monster specs
+      POST   /api/dm/map/combatants/{cid}/move               → move on tactical map
+      POST   /api/dm/map/combatants/{cid}/place              → place/reposition on map
+      POST   /api/dm/map/combatants/{cid}/facing             → set tactical facing
+      GET    /api/dm/map/tactical-presets                    → list tactical map presets
+      GET    /api/dm/map/backgrounds/assets                  → list map background assets
+      POST   /api/dm/map/obstacles/cell                      → set obstacle cell blocked/clear
+      POST   /api/dm/map/terrain/cell                        → set rough terrain cell
+      POST   /api/dm/map/hazards                             → place/update hazard
+      DELETE /api/dm/map/hazards/{hazard_id}                 → remove hazard
+      POST   /api/dm/map/features                            → place/update feature
+      DELETE /api/dm/map/features/{feature_id}               → remove feature
+      POST   /api/dm/map/structures                          → place/update structure
+      POST   /api/dm/map/structures/{structure_id}/move      → move structure anchor
+      DELETE /api/dm/map/structures/{structure_id}           → remove structure
+      POST   /api/dm/map/elevation/cell                      → set elevation cell
+      POST   /api/dm/map/backgrounds                         → place/update background layer
+      DELETE /api/dm/map/backgrounds/{bid}                   → remove background layer
+      POST   /api/dm/map/aoes                                → place AoE effect
+      POST   /api/dm/map/aoes/{aid}/move                     → move/re-angle AoE
+      DELETE /api/dm/map/aoes/{aid}                          → remove AoE
+      POST   /api/dm/map/overlays/auras                      → toggle aura overlays
+      POST   /api/dm/combat/next-turn                        → advance turn
      POST   /api/dm/combat/prev-turn                        → go to previous turn
      POST   /api/dm/combat/set-turn                         → set active combatant
      POST   /api/dm/combat/start                            → start combat
@@ -639,6 +867,8 @@ let adminTokenRefreshTimer = null;
 let dmWs = null;
 let wsReconnectTimer = null;
 let tacticalSelection = { col: null, row: null };
+let tacticalPresetsByCategory = { hazard: [], feature: [], structure: [] };
+let tacticalBackgroundAssets = [];
 const POLL_INTERVAL_MS = 2500;
 const WS_RECONNECT_MS = 5000;
 const ADMIN_REFRESH_MAX_LEAD_MS = 120000;
@@ -848,6 +1078,8 @@ function startAutoRefresh() {
   connectDmWs();
   refreshSessionList();
   refreshEncounterOptions();
+  refreshTacticalPresets();
+  refreshBackgroundAssets();
 }
 
 // ── Real-time WebSocket push ──────────────────────────────────────────
@@ -881,6 +1113,8 @@ document.getElementById('refreshBtn').addEventListener('click', () => {
   fetchSnapshot();
   refreshSessionList();
   refreshEncounterOptions();
+  refreshTacticalPresets();
+  refreshBackgroundAssets();
 });
 
 function currentEncounterMembershipKey(snap) {
@@ -1029,6 +1263,258 @@ function setTacticalResult(text, isError = false) {
   const el = document.getElementById('tacticalResult');
   el.className = 'mut-result' + (isError ? ' error' : '');
   el.textContent = text || '';
+}
+
+function tacticalHazards(tactical) {
+  return Array.isArray(tactical && tactical.hazards) ? tactical.hazards : [];
+}
+
+function tacticalFeatures(tactical) {
+  return Array.isArray(tactical && tactical.features) ? tactical.features : [];
+}
+
+function tacticalStructures(tactical) {
+  return Array.isArray(tactical && tactical.structures) ? tactical.structures : [];
+}
+
+function tacticalBackgroundLayers(tactical) {
+  const mapState = tactical && typeof tactical.map_state === 'object' ? tactical.map_state : null;
+  const presentation = mapState && typeof mapState.presentation === 'object' ? mapState.presentation : null;
+  return Array.isArray(presentation && presentation.bg_images) ? presentation.bg_images : [];
+}
+
+function tacticalAoes(tactical) {
+  return Array.isArray(tactical && tactical.aoes) ? tactical.aoes : [];
+}
+
+function selectedTacticalCell() {
+  const col = parseInt(document.getElementById('mapColInput').value, 10);
+  const row = parseInt(document.getElementById('mapRowInput').value, 10);
+  if (!Number.isFinite(col) || !Number.isFinite(row)) return null;
+  return { col, row };
+}
+
+function tacticalPresetCategory(category) {
+  const key = String(category || '').trim().toLowerCase();
+  const entries = tacticalPresetsByCategory[key];
+  return Array.isArray(entries) ? entries : [];
+}
+
+function updatePresetSelect(selectId, presets, emptyLabel) {
+  const sel = document.getElementById(selectId);
+  if (!sel) return;
+  const prev = sel.value;
+  sel.innerHTML = `<option value="">${emptyLabel}</option>`;
+  for (const preset of (Array.isArray(presets) ? presets : [])) {
+    const presetId = String(preset && preset.id || '').trim();
+    if (!presetId) continue;
+    const opt = document.createElement('option');
+    opt.value = presetId;
+    opt.textContent = String(preset.display_name || preset.id || '')
+      + (preset.summary ? ` — ${preset.summary}` : '');
+    sel.appendChild(opt);
+  }
+  if (prev && Array.from(sel.options).some(opt => opt.value === prev)) {
+    sel.value = prev;
+  }
+}
+
+function updateHazardPresetSelect() {
+  updatePresetSelect('hazardPresetSelect', tacticalPresetCategory('hazard'), '— select hazard —');
+}
+
+function updateFeaturePresetSelect() {
+  updatePresetSelect('featurePresetSelect', tacticalPresetCategory('feature'), '— select feature —');
+}
+
+function updateStructurePresetSelect() {
+  updatePresetSelect('structurePresetSelect', tacticalPresetCategory('structure'), '— select structure —');
+}
+
+function updateBackgroundAssetSelect() {
+  const sel = document.getElementById('bgAssetSelect');
+  if (!sel) return;
+  const prev = sel.value;
+  sel.innerHTML = '<option value="">— select asset —</option>';
+  for (const item of (Array.isArray(tacticalBackgroundAssets) ? tacticalBackgroundAssets : [])) {
+    const assetPath = String(item && item.path || '').trim();
+    if (!assetPath) continue;
+    const opt = document.createElement('option');
+    opt.value = assetPath;
+    opt.textContent = String(item.label || assetPath);
+    sel.appendChild(opt);
+  }
+  if (prev && Array.from(sel.options).some(opt => opt.value === prev)) {
+    sel.value = prev;
+  }
+}
+
+function canonicalAssetPathForLayerPath(layerPath) {
+  const raw = String(layerPath || '').trim();
+  if (!raw) return '';
+  if (raw.startsWith('/assets/')) return raw;
+  if (raw.startsWith('assets/')) return `/${raw}`;
+  const marker = '/assets/';
+  const markerIdx = raw.lastIndexOf(marker);
+  if (markerIdx >= 0) return raw.slice(markerIdx);
+  return raw;
+}
+
+function updateBackgroundLayerInputsFromSelection() {
+  const layerSel = document.getElementById('bgLayerSelect');
+  const bidRaw = layerSel ? layerSel.value : '';
+  const bid = Number(bidRaw);
+  if (!Number.isFinite(bid)) return;
+  const layer = tacticalBackgroundLayers(currentTacticalMap()).find(entry => Number(entry && entry.bid) === bid);
+  if (!layer) return;
+  document.getElementById('bgXInput').value = String(Number(layer.x || 0));
+  document.getElementById('bgYInput').value = String(Number(layer.y || 0));
+  document.getElementById('bgScaleInput').value = String(Number(layer.scale_pct || 100));
+  document.getElementById('bgTransInput').value = String(Number(layer.trans_pct || 0));
+  document.getElementById('bgLockedToggle').checked = !!layer.locked;
+  const assetSel = document.getElementById('bgAssetSelect');
+  const normalizedPath = canonicalAssetPathForLayerPath(layer.path);
+  if (assetSel && normalizedPath && Array.from(assetSel.options).some(opt => opt.value === normalizedPath)) {
+    assetSel.value = normalizedPath;
+  }
+}
+
+async function refreshTacticalPresets() {
+  try {
+    const r = await fetch(`${BASE}/api/dm/map/tactical-presets`, { headers: authHeaders() });
+    if (r.status === 401 || r.status === 403) {
+      clearAdminAuthState('Session expired. Please log in again.');
+      return;
+    }
+    if (!r.ok) return;
+    const data = await r.json();
+    const grouped = { hazard: [], feature: [], structure: [] };
+    for (const preset of (Array.isArray(data && data.presets) ? data.presets : [])) {
+      if (!preset || typeof preset !== 'object') continue;
+      const category = String(preset.category || '').trim().toLowerCase();
+      if (category in grouped) grouped[category].push(preset);
+    }
+    tacticalPresetsByCategory = grouped;
+    updateHazardPresetSelect();
+    updateFeaturePresetSelect();
+    updateStructurePresetSelect();
+  } catch (_) { /* ignore */ }
+}
+
+async function refreshBackgroundAssets() {
+  try {
+    const r = await fetch(`${BASE}/api/dm/map/backgrounds/assets`, { headers: authHeaders() });
+    if (r.status === 401 || r.status === 403) {
+      clearAdminAuthState('Session expired. Please log in again.');
+      return;
+    }
+    if (!r.ok) return;
+    const data = await r.json();
+    tacticalBackgroundAssets = Array.isArray(data && data.assets) ? data.assets : [];
+    updateBackgroundAssetSelect();
+    updateBackgroundLayerInputsFromSelection();
+  } catch (_) { /* ignore */ }
+}
+
+function updateTacticalEntitySelectors(tactical) {
+  const hazardSel = document.getElementById('hazardIdSelect');
+  const featureSel = document.getElementById('featureIdSelect');
+  const structureSel = document.getElementById('structureIdSelect');
+  const aoeSel = document.getElementById('aoeIdSelect');
+  const bgSel = document.getElementById('bgLayerSelect');
+  const hazardPrev = hazardSel.value;
+  const featurePrev = featureSel.value;
+  const structurePrev = structureSel.value;
+  const aoePrev = aoeSel.value;
+  const bgPrev = bgSel.value;
+  hazardSel.innerHTML = '<option value="">— select hazard —</option>';
+  featureSel.innerHTML = '<option value="">— select feature —</option>';
+  structureSel.innerHTML = '<option value="">— select structure —</option>';
+  aoeSel.innerHTML = '<option value="">— select AoE —</option>';
+  bgSel.innerHTML = '<option value="">— new layer —</option>';
+
+  for (const hazard of tacticalHazards(tactical)) {
+    const hid = String(hazard && hazard.id || '').trim();
+    if (!hid) continue;
+    const col = Number(hazard && hazard.col);
+    const row = Number(hazard && hazard.row);
+    const title = String(hazard && (hazard.display_name || hazard.kind || hid) || hid);
+    const opt = document.createElement('option');
+    opt.value = hid;
+    opt.textContent = `${title} @ (${Number.isFinite(col) ? col : '?'}, ${Number.isFinite(row) ? row : '?'})`;
+    hazardSel.appendChild(opt);
+  }
+  if (hazardPrev && Array.from(hazardSel.options).some(opt => opt.value === hazardPrev)) {
+    hazardSel.value = hazardPrev;
+  }
+
+  for (const feature of tacticalFeatures(tactical)) {
+    const fid = String(feature && feature.id || '').trim();
+    if (!fid) continue;
+    const col = Number(feature && feature.col);
+    const row = Number(feature && feature.row);
+    const title = String(feature && (feature.display_name || feature.kind || fid) || fid);
+    const opt = document.createElement('option');
+    opt.value = fid;
+    opt.textContent = `${title} @ (${Number.isFinite(col) ? col : '?'}, ${Number.isFinite(row) ? row : '?'})`;
+    featureSel.appendChild(opt);
+  }
+  if (featurePrev && Array.from(featureSel.options).some(opt => opt.value === featurePrev)) {
+    featureSel.value = featurePrev;
+  }
+
+  for (const structure of tacticalStructures(tactical)) {
+    const sid = String(structure && structure.id || '').trim();
+    if (!sid) continue;
+    const anchorCol = Number(structure && structure.anchor_col);
+    const anchorRow = Number(structure && structure.anchor_row);
+    const title = String(structure && (structure.name || structure.kind || sid) || sid);
+    const opt = document.createElement('option');
+    opt.value = sid;
+    opt.textContent = `${title} @ (${Number.isFinite(anchorCol) ? anchorCol : '?'}, ${Number.isFinite(anchorRow) ? anchorRow : '?'})`;
+    structureSel.appendChild(opt);
+  }
+  if (structurePrev && Array.from(structureSel.options).some(opt => opt.value === structurePrev)) {
+    structureSel.value = structurePrev;
+  }
+
+  for (const aoe of tacticalAoes(tactical)) {
+    const aidRaw = aoe && aoe.aid;
+    if (!Number.isFinite(Number(aidRaw))) continue;
+    const aid = Number(aidRaw);
+    const cx = Number(aoe && aoe.cx);
+    const cy = Number(aoe && aoe.cy);
+    const kind = String(aoe && aoe.kind || '');
+    const name = String(aoe && (aoe.name || kind || `AoE ${aid}`));
+    const opt = document.createElement('option');
+    opt.value = String(aid);
+    opt.textContent = `${name} [${kind || 'aoe'}] @ (${Number.isFinite(cx) ? cx.toFixed(1) : '?'}, ${Number.isFinite(cy) ? cy.toFixed(1) : '?'})`;
+    aoeSel.appendChild(opt);
+  }
+  if (aoePrev && Array.from(aoeSel.options).some(opt => opt.value === aoePrev)) {
+    aoeSel.value = aoePrev;
+  }
+
+  for (const layer of tacticalBackgroundLayers(tactical)) {
+    const bidRaw = layer && layer.bid;
+    if (!Number.isFinite(Number(bidRaw))) continue;
+    const bid = Number(bidRaw);
+    const path = canonicalAssetPathForLayerPath(layer.path);
+    const title = path || String(layer.path || `Layer ${bid}`);
+    const opt = document.createElement('option');
+    opt.value = String(bid);
+    opt.textContent = `#${bid} — ${title}`;
+    bgSel.appendChild(opt);
+  }
+  if (bgPrev && Array.from(bgSel.options).some(opt => opt.value === bgPrev)) {
+    bgSel.value = bgPrev;
+  }
+
+  const aurasEnabled = tactical && typeof tactical === 'object' && tactical.auras_enabled != null
+    ? !!tactical.auras_enabled
+    : true;
+  document.getElementById('aurasEnabledToggle').checked = aurasEnabled;
+  updateBackgroundLayerInputsFromSelection();
 }
 
 function updateTacticalTargetCell(col, row) {
@@ -1373,6 +1859,7 @@ function applySnapshot(snap) {
   }
   syncTacticalFieldsFromSelection({ keepTargetCell: true });
   renderTacticalMap(snap.tactical_map || null);
+  updateTacticalEntitySelectors(snap.tactical_map || null);
 
   if (membershipChanged) refreshEncounterOptions();
 }
@@ -1523,6 +2010,494 @@ async function submitFacingUpdate(explicitFacing = null) {
   }
 }
 
+async function applyCellEdit() {
+  const cell = selectedTacticalCell();
+  const mode = document.getElementById('mapCellModeSelect').value;
+  if (!cell) {
+    setTacticalResult('Select a valid target cell.', true);
+    return;
+  }
+  let endpoint = '';
+  let body = {};
+  let successMessage = '';
+  if (mode === 'obstacle_on' || mode === 'obstacle_off') {
+    endpoint = '/api/dm/map/obstacles/cell';
+    body = { col: cell.col, row: cell.row, blocked: mode === 'obstacle_on' };
+    successMessage = `${mode === 'obstacle_on' ? 'Blocked' : 'Cleared'} obstacle at (${cell.col}, ${cell.row}).`;
+  } else if (mode === 'terrain_clear') {
+    endpoint = '/api/dm/map/terrain/cell';
+    body = { col: cell.col, row: cell.row, is_rough: false };
+    successMessage = `Cleared terrain at (${cell.col}, ${cell.row}).`;
+  } else if (mode === 'rough_water' || mode === 'rough_ground') {
+    endpoint = '/api/dm/map/terrain/cell';
+    const movementType = mode === 'rough_water' ? 'water' : 'ground';
+    body = { col: cell.col, row: cell.row, is_rough: true, movement_type: movementType };
+    successMessage = `Set rough ${movementType} terrain at (${cell.col}, ${cell.row}).`;
+  } else {
+    setTacticalResult('Pick a valid cell edit mode.', true);
+    return;
+  }
+  try {
+    const r = await fetch(`${BASE}${endpoint}`, {
+      method: 'POST',
+      headers: authHeaders(),
+      body: JSON.stringify(body),
+    });
+    const data = await r.json();
+    if (r.ok && data.ok) {
+      setTacticalResult(successMessage);
+      if (data.snapshot) applySnapshot(data.snapshot);
+    } else {
+      setTacticalResult(data.detail || data.error || 'Error.', true);
+    }
+  } catch (_) {
+    setTacticalResult('Request failed.', true);
+  }
+}
+
+async function placeHazardAtCell() {
+  const cell = selectedTacticalCell();
+  const tacticalPresetId = document.getElementById('hazardPresetSelect').value;
+  const hazardName = document.getElementById('hazardNameInput').value.trim();
+  if (!cell) {
+    setTacticalResult('Select a valid target cell.', true);
+    return;
+  }
+  if (!tacticalPresetId) {
+    setTacticalResult('Select a hazard preset.', true);
+    return;
+  }
+  const body = {
+    col: cell.col,
+    row: cell.row,
+    tactical_preset_id: tacticalPresetId,
+  };
+  if (hazardName) body.name = hazardName;
+  try {
+    const r = await fetch(`${BASE}/api/dm/map/hazards`, {
+      method: 'POST',
+      headers: authHeaders(),
+      body: JSON.stringify(body),
+    });
+    const data = await r.json();
+    if (r.ok && data.ok) {
+      setTacticalResult(`Placed hazard at (${cell.col}, ${cell.row}).`);
+      if (data.snapshot) applySnapshot(data.snapshot);
+    } else {
+      setTacticalResult(data.detail || data.error || 'Error.', true);
+    }
+  } catch (_) {
+    setTacticalResult('Request failed.', true);
+  }
+}
+
+async function removeSelectedHazard() {
+  const hazardId = document.getElementById('hazardIdSelect').value;
+  if (!hazardId) {
+    setTacticalResult('Select a hazard to remove.', true);
+    return;
+  }
+  try {
+    const r = await fetch(`${BASE}/api/dm/map/hazards/${encodeURIComponent(hazardId)}`, {
+      method: 'DELETE',
+      headers: authHeaders(),
+    });
+    const data = await r.json();
+    if (r.ok && data.ok) {
+      setTacticalResult(`Removed hazard ${hazardId}.`);
+      if (data.snapshot) applySnapshot(data.snapshot);
+    } else {
+      setTacticalResult(data.detail || data.error || 'Error.', true);
+    }
+  } catch (_) {
+    setTacticalResult('Request failed.', true);
+  }
+}
+
+async function placeFeatureAtCell() {
+  const cell = selectedTacticalCell();
+  const tacticalPresetId = document.getElementById('featurePresetSelect').value;
+  const featureName = document.getElementById('featureNameInput').value.trim();
+  if (!cell) {
+    setTacticalResult('Select a valid target cell.', true);
+    return;
+  }
+  if (!tacticalPresetId && !featureName) {
+    setTacticalResult('Select a feature preset or provide a feature name.', true);
+    return;
+  }
+  const body = {
+    col: cell.col,
+    row: cell.row,
+    tactical_preset_id: tacticalPresetId,
+  };
+  if (featureName) body.name = featureName;
+  try {
+    const r = await fetch(`${BASE}/api/dm/map/features`, {
+      method: 'POST',
+      headers: authHeaders(),
+      body: JSON.stringify(body),
+    });
+    const data = await r.json();
+    if (r.ok && data.ok) {
+      setTacticalResult(`Placed feature at (${cell.col}, ${cell.row}).`);
+      if (data.snapshot) applySnapshot(data.snapshot);
+    } else {
+      setTacticalResult(data.detail || data.error || 'Error.', true);
+    }
+  } catch (_) {
+    setTacticalResult('Request failed.', true);
+  }
+}
+
+async function removeSelectedFeature() {
+  const featureId = document.getElementById('featureIdSelect').value;
+  if (!featureId) {
+    setTacticalResult('Select a feature to remove.', true);
+    return;
+  }
+  try {
+    const r = await fetch(`${BASE}/api/dm/map/features/${encodeURIComponent(featureId)}`, {
+      method: 'DELETE',
+      headers: authHeaders(),
+    });
+    const data = await r.json();
+    if (r.ok && data.ok) {
+      setTacticalResult(`Removed feature ${featureId}.`);
+      if (data.snapshot) applySnapshot(data.snapshot);
+    } else {
+      setTacticalResult(data.detail || data.error || 'Error.', true);
+    }
+  } catch (_) {
+    setTacticalResult('Request failed.', true);
+  }
+}
+
+async function placeStructureAtCell() {
+  const cell = selectedTacticalCell();
+  const tacticalPresetId = document.getElementById('structurePresetSelect').value;
+  const structureName = document.getElementById('structureNameInput').value.trim();
+  const widthCells = Number(document.getElementById('structureWidthInput').value);
+  const heightCells = Number(document.getElementById('structureHeightInput').value);
+  if (!cell) {
+    setTacticalResult('Select a valid target cell.', true);
+    return;
+  }
+  if (!Number.isFinite(widthCells) || widthCells <= 0 || !Number.isFinite(heightCells) || heightCells <= 0) {
+    setTacticalResult('Set valid structure width/height values.', true);
+    return;
+  }
+  const body = {
+    anchor_col: cell.col,
+    anchor_row: cell.row,
+    width_cells: Math.floor(widthCells),
+    height_cells: Math.floor(heightCells),
+  };
+  if (tacticalPresetId) body.tactical_preset_id = tacticalPresetId;
+  if (structureName) body.name = structureName;
+  try {
+    const r = await fetch(`${BASE}/api/dm/map/structures`, {
+      method: 'POST',
+      headers: authHeaders(),
+      body: JSON.stringify(body),
+    });
+    const data = await r.json();
+    if (r.ok && data.ok) {
+      setTacticalResult(`Placed structure at (${cell.col}, ${cell.row}).`);
+      if (data.snapshot) applySnapshot(data.snapshot);
+    } else {
+      setTacticalResult(data.detail || data.error || 'Error.', true);
+    }
+  } catch (_) {
+    setTacticalResult('Request failed.', true);
+  }
+}
+
+async function moveSelectedStructureToCell() {
+  const structureId = document.getElementById('structureIdSelect').value;
+  const cell = selectedTacticalCell();
+  if (!structureId) {
+    setTacticalResult('Select a structure to move.', true);
+    return;
+  }
+  if (!cell) {
+    setTacticalResult('Select a valid destination cell.', true);
+    return;
+  }
+  try {
+    const r = await fetch(`${BASE}/api/dm/map/structures/${encodeURIComponent(structureId)}/move`, {
+      method: 'POST',
+      headers: authHeaders(),
+      body: JSON.stringify({ anchor_col: cell.col, anchor_row: cell.row }),
+    });
+    const data = await r.json();
+    if (r.ok && data.ok) {
+      setTacticalResult(`Moved structure ${structureId} to (${cell.col}, ${cell.row}).`);
+      if (data.snapshot) applySnapshot(data.snapshot);
+    } else {
+      setTacticalResult(data.detail || data.error || 'Error.', true);
+    }
+  } catch (_) {
+    setTacticalResult('Request failed.', true);
+  }
+}
+
+async function removeSelectedStructure() {
+  const structureId = document.getElementById('structureIdSelect').value;
+  if (!structureId) {
+    setTacticalResult('Select a structure to remove.', true);
+    return;
+  }
+  try {
+    const r = await fetch(`${BASE}/api/dm/map/structures/${encodeURIComponent(structureId)}`, {
+      method: 'DELETE',
+      headers: authHeaders(),
+    });
+    const data = await r.json();
+    if (r.ok && data.ok) {
+      setTacticalResult(`Removed structure ${structureId}.`);
+      if (data.snapshot) applySnapshot(data.snapshot);
+    } else {
+      setTacticalResult(data.detail || data.error || 'Error.', true);
+    }
+  } catch (_) {
+    setTacticalResult('Request failed.', true);
+  }
+}
+
+async function applyElevationAtCell() {
+  const cell = selectedTacticalCell();
+  const elevation = Number(document.getElementById('elevationInput').value);
+  if (!cell) {
+    setTacticalResult('Select a valid target cell.', true);
+    return;
+  }
+  if (!Number.isFinite(elevation)) {
+    setTacticalResult('Enter a valid elevation value.', true);
+    return;
+  }
+  try {
+    const r = await fetch(`${BASE}/api/dm/map/elevation/cell`, {
+      method: 'POST',
+      headers: authHeaders(),
+      body: JSON.stringify({ col: cell.col, row: cell.row, elevation }),
+    });
+    const data = await r.json();
+    if (r.ok && data.ok) {
+      setTacticalResult(`Set elevation ${Number(data.elevation)} at (${cell.col}, ${cell.row}).`);
+      if (data.snapshot) applySnapshot(data.snapshot);
+    } else {
+      setTacticalResult(data.detail || data.error || 'Error.', true);
+    }
+  } catch (_) {
+    setTacticalResult('Request failed.', true);
+  }
+}
+
+async function applyBackgroundLayer() {
+  const assetPath = document.getElementById('bgAssetSelect').value;
+  const bidRaw = document.getElementById('bgLayerSelect').value;
+  const x = Number(document.getElementById('bgXInput').value);
+  const y = Number(document.getElementById('bgYInput').value);
+  const scalePct = Number(document.getElementById('bgScaleInput').value);
+  const transPct = Number(document.getElementById('bgTransInput').value);
+  const locked = !!document.getElementById('bgLockedToggle').checked;
+  if (!assetPath) {
+    setTacticalResult('Select a background asset.', true);
+    return;
+  }
+  if (!Number.isFinite(x) || !Number.isFinite(y) || !Number.isFinite(scalePct) || !Number.isFinite(transPct)) {
+    setTacticalResult('Set valid background layer values.', true);
+    return;
+  }
+  const body = { asset_path: assetPath, x, y, scale_pct: scalePct, trans_pct: transPct, locked };
+  const bid = Number(bidRaw);
+  if (Number.isFinite(bid) && bid > 0) body.bid = bid;
+  try {
+    const r = await fetch(`${BASE}/api/dm/map/backgrounds`, {
+      method: 'POST',
+      headers: authHeaders(),
+      body: JSON.stringify(body),
+    });
+    const data = await r.json();
+    if (r.ok && data.ok) {
+      const bg = data.background && typeof data.background === 'object' ? data.background : {};
+      setTacticalResult(`Applied background layer #${Number(bg.bid || 0)}.`);
+      if (data.snapshot) applySnapshot(data.snapshot);
+    } else {
+      setTacticalResult(data.detail || data.error || 'Error.', true);
+    }
+  } catch (_) {
+    setTacticalResult('Request failed.', true);
+  }
+}
+
+async function removeSelectedBackgroundLayer() {
+  const bidRaw = document.getElementById('bgLayerSelect').value;
+  const bid = Number(bidRaw);
+  if (!Number.isFinite(bid) || bid <= 0) {
+    setTacticalResult('Select a background layer to remove.', true);
+    return;
+  }
+  try {
+    const r = await fetch(`${BASE}/api/dm/map/backgrounds/${Math.floor(bid)}`, {
+      method: 'DELETE',
+      headers: authHeaders(),
+    });
+    const data = await r.json();
+    if (r.ok && data.ok) {
+      setTacticalResult(`Removed background layer #${Math.floor(bid)}.`);
+      if (data.snapshot) applySnapshot(data.snapshot);
+    } else {
+      setTacticalResult(data.detail || data.error || 'Error.', true);
+    }
+  } catch (_) {
+    setTacticalResult('Request failed.', true);
+  }
+}
+
+function buildAoePayloadFromInputs(cell) {
+  const shape = document.getElementById('aoeShapeSelect').value;
+  const sizeFt = parseFloat(document.getElementById('aoeSizeFtInput').value);
+  const name = document.getElementById('aoeNameInput').value.trim();
+  const angleRaw = document.getElementById('aoeAngleInput').value;
+  const angleDeg = angleRaw === '' ? null : Number(angleRaw);
+  if (!Number.isFinite(sizeFt) || sizeFt <= 0) return null;
+  const payload = { shape, cx: cell.col, cy: cell.row };
+  if (name) payload.name = name;
+  if (shape === 'circle') {
+    payload.radius_ft = sizeFt;
+  } else if (shape === 'square') {
+    payload.side_ft = sizeFt;
+    payload.angle_deg = Number.isFinite(angleDeg) ? angleDeg : 0;
+  } else if (shape === 'line') {
+    payload.length_ft = sizeFt;
+    payload.width_ft = 5;
+    payload.angle_deg = Number.isFinite(angleDeg) ? angleDeg : 0;
+  } else if (shape === 'cone') {
+    payload.length_ft = sizeFt;
+    payload.spread_deg = Number.isFinite(angleDeg) && angleDeg > 0 ? angleDeg : 60;
+  } else {
+    return null;
+  }
+  return payload;
+}
+
+async function placeAoeAtCell() {
+  const cell = selectedTacticalCell();
+  if (!cell) {
+    setTacticalResult('Select a valid target cell.', true);
+    return;
+  }
+  const payload = buildAoePayloadFromInputs(cell);
+  if (!payload) {
+    setTacticalResult('Set a valid AoE shape and size.', true);
+    return;
+  }
+  try {
+    const r = await fetch(`${BASE}/api/dm/map/aoes`, {
+      method: 'POST',
+      headers: authHeaders(),
+      body: JSON.stringify(payload),
+    });
+    const data = await r.json();
+    if (r.ok && data.ok) {
+      setTacticalResult(`Placed AoE #${data.aid} at (${cell.col}, ${cell.row}).`);
+      if (data.snapshot) applySnapshot(data.snapshot);
+    } else {
+      setTacticalResult(data.detail || data.error || 'Error.', true);
+    }
+  } catch (_) {
+    setTacticalResult('Request failed.', true);
+  }
+}
+
+async function moveSelectedAoeToCell() {
+  const aidRaw = document.getElementById('aoeIdSelect').value;
+  const cell = selectedTacticalCell();
+  const angleRaw = document.getElementById('aoeAngleInput').value;
+  const angleDeg = angleRaw === '' ? null : Number(angleRaw);
+  if (!aidRaw) {
+    setTacticalResult('Select an AoE to move.', true);
+    return;
+  }
+  if (!cell) {
+    setTacticalResult('Select a valid destination cell.', true);
+    return;
+  }
+  const aid = Number(aidRaw);
+  if (!Number.isFinite(aid)) {
+    setTacticalResult('Select a valid AoE id.', true);
+    return;
+  }
+  const body = { col: cell.col, row: cell.row };
+  if (Number.isFinite(angleDeg)) body.angle_deg = angleDeg;
+  try {
+    const r = await fetch(`${BASE}/api/dm/map/aoes/${aid}/move`, {
+      method: 'POST',
+      headers: authHeaders(),
+      body: JSON.stringify(body),
+    });
+    const data = await r.json();
+    if (r.ok && data.ok) {
+      setTacticalResult(`Moved AoE #${aid} to (${cell.col}, ${cell.row}).`);
+      if (data.snapshot) applySnapshot(data.snapshot);
+    } else {
+      setTacticalResult(data.detail || data.error || 'Error.', true);
+    }
+  } catch (_) {
+    setTacticalResult('Request failed.', true);
+  }
+}
+
+async function removeSelectedAoe() {
+  const aidRaw = document.getElementById('aoeIdSelect').value;
+  if (!aidRaw) {
+    setTacticalResult('Select an AoE to remove.', true);
+    return;
+  }
+  const aid = Number(aidRaw);
+  if (!Number.isFinite(aid)) {
+    setTacticalResult('Select a valid AoE id.', true);
+    return;
+  }
+  try {
+    const r = await fetch(`${BASE}/api/dm/map/aoes/${aid}`, {
+      method: 'DELETE',
+      headers: authHeaders(),
+    });
+    const data = await r.json();
+    if (r.ok && data.ok) {
+      setTacticalResult(`Removed AoE #${aid}.`);
+      if (data.snapshot) applySnapshot(data.snapshot);
+    } else {
+      setTacticalResult(data.detail || data.error || 'Error.', true);
+    }
+  } catch (_) {
+    setTacticalResult('Request failed.', true);
+  }
+}
+
+async function applyAurasOverlaySetting() {
+  const enabled = !!document.getElementById('aurasEnabledToggle').checked;
+  try {
+    const r = await fetch(`${BASE}/api/dm/map/overlays/auras`, {
+      method: 'POST',
+      headers: authHeaders(),
+      body: JSON.stringify({ enabled }),
+    });
+    const data = await r.json();
+    if (r.ok && data.ok) {
+      setTacticalResult(`Aura overlays ${enabled ? 'enabled' : 'disabled'}.`);
+      if (data.snapshot) applySnapshot(data.snapshot);
+    } else {
+      setTacticalResult(data.detail || data.error || 'Error.', true);
+    }
+  } catch (_) {
+    setTacticalResult('Request failed.', true);
+  }
+}
+
 document.getElementById('tacticalMapCanvas').addEventListener('click', handleTacticalCanvasClick);
 document.getElementById('mapActionModeSelect').addEventListener('change', () => {
   updateTacticalActionLabel();
@@ -1538,6 +2513,22 @@ document.getElementById('syncMapSelectionBtn').addEventListener('click', () => {
 });
 document.getElementById('applyMapActionBtn').addEventListener('click', submitMapAction);
 document.getElementById('setFacingBtn').addEventListener('click', () => submitFacingUpdate());
+document.getElementById('applyCellModeBtn').addEventListener('click', applyCellEdit);
+document.getElementById('placeHazardBtn').addEventListener('click', placeHazardAtCell);
+document.getElementById('removeHazardBtn').addEventListener('click', removeSelectedHazard);
+document.getElementById('placeFeatureBtn').addEventListener('click', placeFeatureAtCell);
+document.getElementById('removeFeatureBtn').addEventListener('click', removeSelectedFeature);
+document.getElementById('placeStructureBtn').addEventListener('click', placeStructureAtCell);
+document.getElementById('moveStructureBtn').addEventListener('click', moveSelectedStructureToCell);
+document.getElementById('removeStructureBtn').addEventListener('click', removeSelectedStructure);
+document.getElementById('applyElevationBtn').addEventListener('click', applyElevationAtCell);
+document.getElementById('upsertBackgroundBtn').addEventListener('click', applyBackgroundLayer);
+document.getElementById('removeBackgroundBtn').addEventListener('click', removeSelectedBackgroundLayer);
+document.getElementById('bgLayerSelect').addEventListener('change', updateBackgroundLayerInputsFromSelection);
+document.getElementById('placeAoeBtn').addEventListener('click', placeAoeAtCell);
+document.getElementById('moveAoeBtn').addEventListener('click', moveSelectedAoeToCell);
+document.getElementById('removeAoeBtn').addEventListener('click', removeSelectedAoe);
+document.getElementById('applyOverlayBtn').addEventListener('click', applyAurasOverlaySetting);
 document.querySelectorAll('.tactical-facing-grid [data-facing]').forEach(btn => {
   btn.addEventListener('click', () => {
     const facing = Number(btn.getAttribute('data-facing'));

@@ -84,10 +84,13 @@ from map_state import (
     MapQueryAPI,
     MapState,
     MapStructure,
+    TerrainCell,
     apply_map_delta,
     build_map_delta,
     normalize_tactical_payload,
     map_delta_has_changes,
+    tactical_preset_author_summary,
+    tactical_preset_catalog,
 )
 from ship_blueprints import load_repo_runtime_ship_blueprints
 from player_command_contracts import (
@@ -4121,6 +4124,469 @@ class LanController:
                 "ok": True,
                 "cid": result.get("cid"),
                 "facing_deg": result.get("facing_deg"),
+                "snapshot": _dm_console_snapshot(),
+            }
+
+        @self._fastapi_app.get("/api/dm/map/tactical-presets")
+        async def dm_tactical_presets(request: Request):
+            """List tactical presets for DM battlefield/map controls."""
+            _check_dm_auth(request)
+            try:
+                presets = self.app._dm_list_tactical_presets(categories={"hazard", "feature", "structure"})
+            except Exception as exc:
+                raise HTTPException(status_code=500, detail=f"Failed to load tactical presets: {exc}")
+            return {"ok": True, "presets": presets}
+
+        @self._fastapi_app.get("/api/dm/map/backgrounds/assets")
+        async def dm_map_background_assets(request: Request):
+            """List available background assets under /assets for DM map prep."""
+            _check_dm_auth(request)
+            try:
+                assets = self.app._dm_list_background_assets()
+            except Exception as exc:
+                raise HTTPException(status_code=500, detail=f"Failed to list background assets: {exc}")
+            return {"ok": True, "assets": assets}
+
+        @self._fastapi_app.post("/api/dm/map/obstacles/cell")
+        async def dm_set_obstacle_cell(request: Request, payload: Dict[str, Any] = Body(...)):
+            """Set obstacle state for a specific tactical cell.
+
+            Body: {col: int, row: int, blocked?: bool}
+            """
+            _check_dm_auth(request)
+            if not isinstance(payload, dict):
+                raise HTTPException(status_code=400, detail="Invalid payload.")
+            try:
+                col = int(payload.get("col"))
+                row = int(payload.get("row"))
+            except Exception:
+                raise HTTPException(status_code=400, detail="col and row must be integers.")
+            blocked_raw = payload.get("blocked", True)
+            if isinstance(blocked_raw, str):
+                blocked = blocked_raw.strip().lower() in {"1", "true", "yes", "on"}
+            elif isinstance(blocked_raw, (int, float)):
+                blocked = bool(blocked_raw)
+            else:
+                blocked = bool(blocked_raw)
+            try:
+                result = self.app._dm_set_obstacle_on_map(int(col), int(row), bool(blocked))
+            except Exception as exc:
+                raise HTTPException(status_code=500, detail=f"Failed to update obstacle: {exc}")
+            if not result.get("ok"):
+                raise HTTPException(status_code=400, detail=result.get("error", "Cannot update obstacle."))
+            return {
+                "ok": True,
+                "col": result.get("col"),
+                "row": result.get("row"),
+                "blocked": result.get("blocked"),
+                "snapshot": _dm_console_snapshot(),
+            }
+
+        @self._fastapi_app.post("/api/dm/map/terrain/cell")
+        async def dm_set_terrain_cell(request: Request, payload: Dict[str, Any] = Body(...)):
+            """Set rough-terrain state for a specific tactical cell.
+
+            Body: {col: int, row: int, is_rough?: bool, movement_type?: str, color?: str, label?: str}
+            """
+            _check_dm_auth(request)
+            if not isinstance(payload, dict):
+                raise HTTPException(status_code=400, detail="Invalid payload.")
+            try:
+                col = int(payload.get("col"))
+                row = int(payload.get("row"))
+            except Exception:
+                raise HTTPException(status_code=400, detail="col and row must be integers.")
+            rough_raw = payload.get("is_rough", True)
+            if isinstance(rough_raw, str):
+                is_rough = rough_raw.strip().lower() in {"1", "true", "yes", "on"}
+            elif isinstance(rough_raw, (int, float)):
+                is_rough = bool(rough_raw)
+            else:
+                is_rough = bool(rough_raw)
+            movement_type = str(payload.get("movement_type") or "ground")
+            color = payload.get("color")
+            label = payload.get("label")
+            try:
+                result = self.app._dm_set_terrain_on_map(
+                    int(col),
+                    int(row),
+                    is_rough=bool(is_rough),
+                    movement_type=movement_type,
+                    color=str(color) if color not in (None, "") else None,
+                    label=str(label) if label not in (None, "") else None,
+                )
+            except Exception as exc:
+                raise HTTPException(status_code=500, detail=f"Failed to update terrain: {exc}")
+            if not result.get("ok"):
+                raise HTTPException(status_code=400, detail=result.get("error", "Cannot update terrain."))
+            return {
+                "ok": True,
+                "col": result.get("col"),
+                "row": result.get("row"),
+                "is_rough": result.get("is_rough"),
+                "movement_type": result.get("movement_type"),
+                "snapshot": _dm_console_snapshot(),
+            }
+
+        @self._fastapi_app.post("/api/dm/map/hazards")
+        async def dm_upsert_hazard(request: Request, payload: Dict[str, Any] = Body(...)):
+            """Create/update a tactical hazard at a map cell.
+
+            Body: {col: int, row: int, hazard_id?: str, kind?: str, tactical_preset_id?: str, count?: int, name?: str, payload?: dict}
+            """
+            _check_dm_auth(request)
+            if not isinstance(payload, dict):
+                raise HTTPException(status_code=400, detail="Invalid payload.")
+            try:
+                col = int(payload.get("col"))
+                row = int(payload.get("row"))
+            except Exception:
+                raise HTTPException(status_code=400, detail="col and row must be integers.")
+            custom_payload = payload.get("payload")
+            if custom_payload is not None and not isinstance(custom_payload, dict):
+                raise HTTPException(status_code=400, detail="payload must be an object when provided.")
+            try:
+                result = self.app._dm_upsert_hazard_on_map(
+                    col=int(col),
+                    row=int(row),
+                    hazard_id=str(payload.get("hazard_id") or "").strip() or None,
+                    kind=str(payload.get("kind") or "hazard"),
+                    tactical_preset_id=str(payload.get("tactical_preset_id") or "").strip() or None,
+                    count=payload.get("count"),
+                    name=str(payload.get("name") or "").strip() or None,
+                    payload=dict(custom_payload or {}),
+                )
+            except Exception as exc:
+                raise HTTPException(status_code=500, detail=f"Failed to update hazard: {exc}")
+            if not result.get("ok"):
+                raise HTTPException(status_code=400, detail=result.get("error", "Cannot update hazard."))
+            return {
+                "ok": True,
+                "hazard_id": result.get("hazard_id"),
+                "hazard": result.get("hazard"),
+                "snapshot": _dm_console_snapshot(),
+            }
+
+        @self._fastapi_app.delete("/api/dm/map/hazards/{hazard_id}")
+        async def dm_remove_hazard(hazard_id: str, request: Request):
+            """Remove a tactical hazard by id."""
+            _check_dm_auth(request)
+            try:
+                result = self.app._dm_remove_hazard_on_map(hazard_id)
+            except Exception as exc:
+                raise HTTPException(status_code=500, detail=f"Failed to remove hazard: {exc}")
+            if not result.get("ok"):
+                raise HTTPException(status_code=400, detail=result.get("error", "Cannot remove hazard."))
+            return {
+                "ok": True,
+                "hazard_id": result.get("hazard_id"),
+                "snapshot": _dm_console_snapshot(),
+            }
+
+        @self._fastapi_app.post("/api/dm/map/features")
+        async def dm_upsert_feature(request: Request, payload: Dict[str, Any] = Body(...)):
+            """Create/update a tactical feature at a map cell.
+
+            Body: {col: int, row: int, feature_id?: str, kind?: str, tactical_preset_id?: str, count?: int, name?: str, payload?: dict}
+            """
+            _check_dm_auth(request)
+            if not isinstance(payload, dict):
+                raise HTTPException(status_code=400, detail="Invalid payload.")
+            try:
+                col = int(payload.get("col"))
+                row = int(payload.get("row"))
+            except Exception:
+                raise HTTPException(status_code=400, detail="col and row must be integers.")
+            custom_payload = payload.get("payload")
+            if custom_payload is not None and not isinstance(custom_payload, dict):
+                raise HTTPException(status_code=400, detail="payload must be an object when provided.")
+            try:
+                result = self.app._dm_upsert_feature_on_map(
+                    col=int(col),
+                    row=int(row),
+                    feature_id=str(payload.get("feature_id") or "").strip() or None,
+                    kind=str(payload.get("kind") or "feature"),
+                    tactical_preset_id=str(payload.get("tactical_preset_id") or "").strip() or None,
+                    count=payload.get("count"),
+                    name=str(payload.get("name") or "").strip() or None,
+                    payload=dict(custom_payload or {}),
+                )
+            except Exception as exc:
+                raise HTTPException(status_code=500, detail=f"Failed to update feature: {exc}")
+            if not result.get("ok"):
+                raise HTTPException(status_code=400, detail=result.get("error", "Cannot update feature."))
+            return {
+                "ok": True,
+                "feature_id": result.get("feature_id"),
+                "feature": result.get("feature"),
+                "snapshot": _dm_console_snapshot(),
+            }
+
+        @self._fastapi_app.delete("/api/dm/map/features/{feature_id}")
+        async def dm_remove_feature(feature_id: str, request: Request):
+            """Remove a tactical feature by id."""
+            _check_dm_auth(request)
+            try:
+                result = self.app._dm_remove_feature_on_map(feature_id)
+            except Exception as exc:
+                raise HTTPException(status_code=500, detail=f"Failed to remove feature: {exc}")
+            if not result.get("ok"):
+                raise HTTPException(status_code=400, detail=result.get("error", "Cannot remove feature."))
+            return {
+                "ok": True,
+                "feature_id": result.get("feature_id"),
+                "snapshot": _dm_console_snapshot(),
+            }
+
+        @self._fastapi_app.post("/api/dm/map/structures")
+        async def dm_upsert_structure(request: Request, payload: Dict[str, Any] = Body(...)):
+            """Create/update a map structure anchored on a tactical cell."""
+            _check_dm_auth(request)
+            if not isinstance(payload, dict):
+                raise HTTPException(status_code=400, detail="Invalid payload.")
+            try:
+                anchor_col = int(payload.get("anchor_col"))
+                anchor_row = int(payload.get("anchor_row"))
+            except Exception:
+                raise HTTPException(status_code=400, detail="anchor_col and anchor_row must be integers.")
+            custom_payload = payload.get("payload")
+            if custom_payload is not None and not isinstance(custom_payload, dict):
+                raise HTTPException(status_code=400, detail="payload must be an object when provided.")
+            occupied_offsets = payload.get("occupied_offsets")
+            if occupied_offsets is not None and not isinstance(occupied_offsets, list):
+                raise HTTPException(status_code=400, detail="occupied_offsets must be a list when provided.")
+            try:
+                result = self.app._dm_upsert_structure_on_map(
+                    anchor_col=anchor_col,
+                    anchor_row=anchor_row,
+                    structure_id=str(payload.get("structure_id") or "").strip() or None,
+                    kind=str(payload.get("kind") or "structure"),
+                    tactical_preset_id=str(payload.get("tactical_preset_id") or "").strip() or None,
+                    width_cells=payload.get("width_cells"),
+                    height_cells=payload.get("height_cells"),
+                    occupied_offsets=list(occupied_offsets or []),
+                    name=str(payload.get("name") or "").strip() or None,
+                    payload=dict(custom_payload or {}),
+                )
+            except Exception as exc:
+                raise HTTPException(status_code=500, detail=f"Failed to update structure: {exc}")
+            if not result.get("ok"):
+                raise HTTPException(status_code=400, detail=result.get("error", "Cannot update structure."))
+            return {
+                "ok": True,
+                "structure_id": result.get("structure_id"),
+                "structure": result.get("structure"),
+                "snapshot": _dm_console_snapshot(),
+            }
+
+        @self._fastapi_app.post("/api/dm/map/structures/{structure_id}/move")
+        async def dm_move_structure(structure_id: str, request: Request, payload: Dict[str, Any] = Body(...)):
+            """Move a structure anchor to another tactical cell."""
+            _check_dm_auth(request)
+            if not isinstance(payload, dict):
+                raise HTTPException(status_code=400, detail="Invalid payload.")
+            try:
+                anchor_col = int(payload.get("anchor_col"))
+                anchor_row = int(payload.get("anchor_row"))
+            except Exception:
+                raise HTTPException(status_code=400, detail="anchor_col and anchor_row must be integers.")
+            try:
+                result = self.app._dm_move_structure_on_map(
+                    structure_id=structure_id,
+                    anchor_col=anchor_col,
+                    anchor_row=anchor_row,
+                )
+            except Exception as exc:
+                raise HTTPException(status_code=500, detail=f"Failed to move structure: {exc}")
+            if not result.get("ok"):
+                raise HTTPException(status_code=400, detail=result.get("error", "Cannot move structure."))
+            response: Dict[str, Any] = {
+                "ok": True,
+                "structure_id": result.get("structure_id"),
+                "anchor_col": result.get("anchor_col"),
+                "anchor_row": result.get("anchor_row"),
+                "structure": result.get("structure"),
+                "snapshot": _dm_console_snapshot(),
+            }
+            blockers = result.get("blockers")
+            if isinstance(blockers, dict):
+                response["blockers"] = blockers
+            return response
+
+        @self._fastapi_app.delete("/api/dm/map/structures/{structure_id}")
+        async def dm_remove_structure(structure_id: str, request: Request):
+            """Remove a map structure by id."""
+            _check_dm_auth(request)
+            try:
+                result = self.app._dm_remove_structure_on_map(structure_id)
+            except Exception as exc:
+                raise HTTPException(status_code=500, detail=f"Failed to remove structure: {exc}")
+            if not result.get("ok"):
+                raise HTTPException(status_code=400, detail=result.get("error", "Cannot remove structure."))
+            return {
+                "ok": True,
+                "structure_id": result.get("structure_id"),
+                "snapshot": _dm_console_snapshot(),
+            }
+
+        @self._fastapi_app.post("/api/dm/map/elevation/cell")
+        async def dm_set_map_elevation(request: Request, payload: Dict[str, Any] = Body(...)):
+            """Set elevation for a tactical map cell."""
+            _check_dm_auth(request)
+            if not isinstance(payload, dict):
+                raise HTTPException(status_code=400, detail="Invalid payload.")
+            try:
+                col = int(payload.get("col"))
+                row = int(payload.get("row"))
+            except Exception:
+                raise HTTPException(status_code=400, detail="col and row must be integers.")
+            if payload.get("elevation") is None:
+                raise HTTPException(status_code=400, detail="elevation is required.")
+            try:
+                result = self.app._dm_set_elevation_on_map(col=col, row=row, elevation=payload.get("elevation"))
+            except Exception as exc:
+                raise HTTPException(status_code=500, detail=f"Failed to set elevation: {exc}")
+            if not result.get("ok"):
+                raise HTTPException(status_code=400, detail=result.get("error", "Cannot set elevation."))
+            return {
+                "ok": True,
+                "col": result.get("col"),
+                "row": result.get("row"),
+                "elevation": result.get("elevation"),
+                "snapshot": _dm_console_snapshot(),
+            }
+
+        @self._fastapi_app.post("/api/dm/map/backgrounds")
+        async def dm_upsert_background(request: Request, payload: Dict[str, Any] = Body(...)):
+            """Create/update a map background layer."""
+            _check_dm_auth(request)
+            if not isinstance(payload, dict):
+                raise HTTPException(status_code=400, detail="Invalid payload.")
+            asset_path = payload.get("asset_path")
+            if asset_path in (None, ""):
+                raise HTTPException(status_code=400, detail="asset_path is required.")
+            locked_raw = payload.get("locked", False)
+            if isinstance(locked_raw, str):
+                locked = locked_raw.strip().lower() in {"1", "true", "yes", "on"}
+            elif isinstance(locked_raw, (int, float)):
+                locked = bool(locked_raw)
+            else:
+                locked = bool(locked_raw)
+            try:
+                result = self.app._dm_upsert_background_layer(
+                    asset_path=asset_path,
+                    bid=payload.get("bid"),
+                    x=payload.get("x", 0.0),
+                    y=payload.get("y", 0.0),
+                    scale_pct=payload.get("scale_pct", 100.0),
+                    trans_pct=payload.get("trans_pct", 0.0),
+                    locked=locked,
+                )
+            except Exception as exc:
+                raise HTTPException(status_code=500, detail=f"Failed to update background layer: {exc}")
+            if not result.get("ok"):
+                raise HTTPException(status_code=400, detail=result.get("error", "Cannot update background layer."))
+            return {
+                "ok": True,
+                "background": result.get("background"),
+                "snapshot": _dm_console_snapshot(),
+            }
+
+        @self._fastapi_app.delete("/api/dm/map/backgrounds/{bid}")
+        async def dm_remove_background(bid: int, request: Request):
+            """Remove a map background layer by id."""
+            _check_dm_auth(request)
+            try:
+                result = self.app._dm_remove_background_layer(bid)
+            except Exception as exc:
+                raise HTTPException(status_code=500, detail=f"Failed to remove background layer: {exc}")
+            if not result.get("ok"):
+                raise HTTPException(status_code=400, detail=result.get("error", "Cannot remove background layer."))
+            return {
+                "ok": True,
+                "bid": result.get("bid"),
+                "snapshot": _dm_console_snapshot(),
+            }
+
+        @self._fastapi_app.post("/api/dm/map/aoes")
+        async def dm_create_aoe(request: Request, payload: Dict[str, Any] = Body(...)):
+            """Create a map AoE effect.
+
+            Body: shape + geometry payload accepted by cast_aoe helpers.
+            """
+            _check_dm_auth(request)
+            if not isinstance(payload, dict):
+                raise HTTPException(status_code=400, detail="Invalid payload.")
+            try:
+                result = self.app._dm_create_aoe_on_map(payload)
+            except Exception as exc:
+                raise HTTPException(status_code=500, detail=f"Failed to create AoE: {exc}")
+            if not result.get("ok"):
+                raise HTTPException(status_code=400, detail=result.get("error", "Cannot create AoE."))
+            return {
+                "ok": True,
+                "aid": result.get("aid"),
+                "aoe": result.get("aoe"),
+                "snapshot": _dm_console_snapshot(),
+            }
+
+        @self._fastapi_app.post("/api/dm/map/aoes/{aid}/move")
+        async def dm_move_aoe(aid: int, request: Request, payload: Dict[str, Any] = Body(...)):
+            """Move/re-angle a map AoE effect."""
+            _check_dm_auth(request)
+            if not isinstance(payload, dict):
+                raise HTTPException(status_code=400, detail="Invalid payload.")
+            try:
+                result = self.app._dm_move_aoe_on_map(int(aid), payload)
+            except Exception as exc:
+                raise HTTPException(status_code=500, detail=f"Failed to move AoE: {exc}")
+            if not result.get("ok"):
+                raise HTTPException(status_code=400, detail=result.get("error", "Cannot move AoE."))
+            return {
+                "ok": True,
+                "aid": result.get("aid"),
+                "aoe": result.get("aoe"),
+                "snapshot": _dm_console_snapshot(),
+            }
+
+        @self._fastapi_app.delete("/api/dm/map/aoes/{aid}")
+        async def dm_remove_aoe(aid: int, request: Request):
+            """Remove a map AoE effect."""
+            _check_dm_auth(request)
+            try:
+                result = self.app._dm_remove_aoe_on_map(int(aid))
+            except Exception as exc:
+                raise HTTPException(status_code=500, detail=f"Failed to remove AoE: {exc}")
+            if not result.get("ok"):
+                raise HTTPException(status_code=400, detail=result.get("error", "Cannot remove AoE."))
+            return {
+                "ok": True,
+                "aid": result.get("aid"),
+                "snapshot": _dm_console_snapshot(),
+            }
+
+        @self._fastapi_app.post("/api/dm/map/overlays/auras")
+        async def dm_set_auras_overlay(request: Request, payload: Dict[str, Any] = Body(...)):
+            """Enable/disable tactical aura overlays in DM/LAN snapshots."""
+            _check_dm_auth(request)
+            if not isinstance(payload, dict):
+                raise HTTPException(status_code=400, detail="Invalid payload.")
+            enabled_raw = payload.get("enabled")
+            if isinstance(enabled_raw, str):
+                enabled = enabled_raw.strip().lower() in {"1", "true", "yes", "on"}
+            elif isinstance(enabled_raw, (int, float)):
+                enabled = bool(enabled_raw)
+            else:
+                enabled = bool(enabled_raw)
+            try:
+                result = self.app._dm_set_auras_enabled(bool(enabled))
+            except Exception as exc:
+                raise HTTPException(status_code=500, detail=f"Failed to update overlays: {exc}")
+            if not result.get("ok"):
+                raise HTTPException(status_code=400, detail=result.get("error", "Cannot update overlays."))
+            return {
+                "ok": True,
+                "enabled": result.get("enabled"),
                 "snapshot": _dm_console_snapshot(),
             }
 
@@ -39070,6 +39536,7 @@ class InitiativeTracker(base.InitiativeTracker):
             "boarding_links",
             "active_boarding_links",
             "ships",
+            "auras_enabled",
         ):
             snapshot[key] = raw.get(key)
         return snapshot
@@ -39167,6 +39634,767 @@ class InitiativeTracker(base.InitiativeTracker):
         except Exception:
             pass
         return {"ok": True, "cid": int(cid), "facing_deg": int(facing)}
+
+    def _dm_map_grid_bounds(self) -> Tuple[int, int]:
+        state = self._capture_canonical_map_state(prefer_window=True).normalized()
+        return int(state.grid.cols), int(state.grid.rows)
+
+    def _dm_validate_map_cell(self, col: int, row: int) -> Optional[str]:
+        cols, rows = self._dm_map_grid_bounds()
+        if int(col) < 0 or int(row) < 0 or int(col) >= int(cols) or int(row) >= int(rows):
+            return f"Cell ({int(col)}, {int(row)}) is outside the {int(cols)}x{int(rows)} tactical grid."
+        return None
+
+    def _dm_validate_map_point(self, cx: float, cy: float) -> Optional[str]:
+        cols, rows = self._dm_map_grid_bounds()
+        if float(cx) < 0 or float(cy) < 0 or float(cx) >= float(cols) or float(cy) >= float(rows):
+            return f"Point ({float(cx):.2f}, {float(cy):.2f}) is outside the {int(cols)}x{int(rows)} tactical grid."
+        return None
+
+    def _dm_set_obstacle_on_map(self, col: int, row: int, blocked: bool) -> Dict[str, Any]:
+        error = self._dm_validate_map_cell(int(col), int(row))
+        if error:
+            return {"ok": False, "error": error}
+        blocked_flag = bool(blocked)
+
+        def _mutate(state: MapState) -> None:
+            obstacle_map = dict(state.obstacles or {})
+            key = (int(col), int(row))
+            if blocked_flag:
+                obstacle_map[key] = True
+            else:
+                obstacle_map.pop(key, None)
+            state.obstacles = obstacle_map
+
+        self._mutate_canonical_map_state(_mutate, hydrate_window=True, broadcast=True)
+        return {"ok": True, "col": int(col), "row": int(row), "blocked": blocked_flag}
+
+    def _dm_set_terrain_on_map(
+        self,
+        col: int,
+        row: int,
+        *,
+        is_rough: bool,
+        movement_type: str = "ground",
+        color: Optional[str] = None,
+        label: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        error = self._dm_validate_map_cell(int(col), int(row))
+        if error:
+            return {"ok": False, "error": error}
+        rough_flag = bool(is_rough)
+        movement = str(movement_type or "ground").strip().lower()
+        if movement not in {"ground", "water"}:
+            movement = "ground"
+        default_color = "#4aa3df" if movement == "water" else "#8d6e63"
+        color_value = str(color or default_color).strip() or default_color
+        label_value = str(label or "").strip()
+
+        def _mutate(state: MapState) -> None:
+            terrain_map = dict(state.terrain_cells or {})
+            key = (int(col), int(row))
+            if rough_flag:
+                terrain_map[key] = TerrainCell(
+                    col=int(col),
+                    row=int(row),
+                    color=color_value,
+                    label=label_value,
+                    movement_type=movement,
+                    is_swim=(movement == "water"),
+                    is_rough=True,
+                ).normalized()
+            else:
+                terrain_map.pop(key, None)
+            state.terrain_cells = terrain_map
+
+        self._mutate_canonical_map_state(_mutate, hydrate_window=True, broadcast=True)
+        return {
+            "ok": True,
+            "col": int(col),
+            "row": int(row),
+            "is_rough": rough_flag,
+            "movement_type": movement,
+            "color": color_value,
+            "label": label_value,
+        }
+
+    def _dm_upsert_hazard_on_map(
+        self,
+        *,
+        col: int,
+        row: int,
+        hazard_id: Optional[str] = None,
+        kind: str = "hazard",
+        tactical_preset_id: Optional[str] = None,
+        count: Optional[Any] = None,
+        name: Optional[str] = None,
+        payload: Optional[Dict[str, Any]] = None,
+    ) -> Dict[str, Any]:
+        error = self._dm_validate_map_cell(int(col), int(row))
+        if error:
+            return {"ok": False, "error": error}
+        payload_dict = dict(payload if isinstance(payload, dict) else {})
+        preset_id = str(tactical_preset_id or "").strip().lower()
+        if preset_id:
+            payload_dict["tactical_preset_id"] = preset_id
+        if name is not None and str(name).strip():
+            payload_dict["name"] = str(name).strip()
+        if count is not None:
+            try:
+                normalized_count = int(count)
+            except Exception:
+                return {"ok": False, "error": "count must be a positive integer."}
+            if normalized_count <= 0:
+                return {"ok": False, "error": "count must be a positive integer."}
+            payload_dict["count"] = normalized_count
+        hazard_key = str(hazard_id or "").strip() or None
+        kind_key = str(kind or "hazard").strip().lower() or "hazard"
+        try:
+            resolved_hazard_id = self._upsert_map_hazard(
+                hazard_id=hazard_key,
+                col=int(col),
+                row=int(row),
+                kind=kind_key,
+                payload=payload_dict,
+                hydrate_window=True,
+                broadcast=True,
+            )
+        except Exception as exc:
+            return {"ok": False, "error": f"Failed to update hazard: {exc}"}
+
+        state = self._capture_canonical_map_state(prefer_window=True).normalized()
+        hazard = state.hazards.get(str(resolved_hazard_id))
+        hazard_view: Dict[str, Any] = {}
+        if isinstance(hazard, MapHazard):
+            hazard_view = self._lan_tactical_entity_view(hazard.to_dict(), category="hazard")
+        return {"ok": True, "hazard_id": str(resolved_hazard_id), "hazard": hazard_view}
+
+    def _dm_remove_hazard_on_map(self, hazard_id: Any) -> Dict[str, Any]:
+        key = str(hazard_id or "").strip()
+        if not key:
+            return {"ok": False, "error": "hazard_id is required."}
+        state = self._capture_canonical_map_state(prefer_window=True).normalized()
+        if key not in (state.hazards or {}):
+            return {"ok": False, "error": "Hazard not found."}
+        self._remove_map_hazard(key, hydrate_window=True, broadcast=True)
+        return {"ok": True, "hazard_id": key}
+
+    def _dm_upsert_feature_on_map(
+        self,
+        *,
+        col: int,
+        row: int,
+        feature_id: Optional[str] = None,
+        kind: str = "feature",
+        tactical_preset_id: Optional[str] = None,
+        count: Optional[Any] = None,
+        name: Optional[str] = None,
+        payload: Optional[Dict[str, Any]] = None,
+    ) -> Dict[str, Any]:
+        error = self._dm_validate_map_cell(int(col), int(row))
+        if error:
+            return {"ok": False, "error": error}
+        payload_dict = dict(payload if isinstance(payload, dict) else {})
+        preset_id = str(tactical_preset_id or "").strip().lower()
+        if preset_id:
+            payload_dict["tactical_preset_id"] = preset_id
+        if name is not None and str(name).strip():
+            payload_dict["name"] = str(name).strip()
+        if count is not None:
+            try:
+                normalized_count = int(count)
+            except Exception:
+                return {"ok": False, "error": "count must be a positive integer."}
+            if normalized_count <= 0:
+                return {"ok": False, "error": "count must be a positive integer."}
+            payload_dict["count"] = normalized_count
+        feature_key = str(feature_id or "").strip() or None
+        kind_key = str(kind or "feature").strip().lower() or "feature"
+        try:
+            resolved_feature_id = self._upsert_map_feature(
+                feature_id=feature_key,
+                col=int(col),
+                row=int(row),
+                kind=kind_key,
+                payload=payload_dict,
+                hydrate_window=True,
+                broadcast=True,
+            )
+        except Exception as exc:
+            return {"ok": False, "error": f"Failed to update feature: {exc}"}
+
+        state = self._capture_canonical_map_state(prefer_window=True).normalized()
+        feature = state.features.get(str(resolved_feature_id))
+        feature_view: Dict[str, Any] = {}
+        if isinstance(feature, MapFeature):
+            feature_view = self._lan_tactical_entity_view(feature.to_dict(), category="feature")
+        return {"ok": True, "feature_id": str(resolved_feature_id), "feature": feature_view}
+
+    def _dm_remove_feature_on_map(self, feature_id: Any) -> Dict[str, Any]:
+        key = str(feature_id or "").strip()
+        if not key:
+            return {"ok": False, "error": "feature_id is required."}
+        state = self._capture_canonical_map_state(prefer_window=True).normalized()
+        if key not in (state.features or {}):
+            return {"ok": False, "error": "Feature not found."}
+        self._remove_map_feature(key, hydrate_window=True, broadcast=True)
+        return {"ok": True, "feature_id": key}
+
+    @staticmethod
+    def _dm_structure_offsets_from_payload(
+        offsets_payload: Any,
+    ) -> List[Tuple[int, int]]:
+        offsets: List[Tuple[int, int]] = []
+        seen: set[Tuple[int, int]] = set()
+        for entry in offsets_payload if isinstance(offsets_payload, list) else []:
+            if not isinstance(entry, dict):
+                continue
+            try:
+                col = int(entry.get("col", 0))
+                row = int(entry.get("row", 0))
+            except Exception:
+                continue
+            key = (int(col), int(row))
+            if key in seen:
+                continue
+            seen.add(key)
+            offsets.append(key)
+        if (0, 0) not in seen:
+            offsets.insert(0, (0, 0))
+        return offsets
+
+    def _dm_upsert_structure_on_map(
+        self,
+        *,
+        anchor_col: int,
+        anchor_row: int,
+        structure_id: Optional[str] = None,
+        kind: str = "structure",
+        tactical_preset_id: Optional[str] = None,
+        width_cells: Optional[Any] = None,
+        height_cells: Optional[Any] = None,
+        occupied_offsets: Optional[List[Dict[str, Any]]] = None,
+        name: Optional[str] = None,
+        payload: Optional[Dict[str, Any]] = None,
+    ) -> Dict[str, Any]:
+        error = self._dm_validate_map_cell(int(anchor_col), int(anchor_row))
+        if error:
+            return {"ok": False, "error": error}
+        state = self._capture_canonical_map_state(prefer_window=True).normalized()
+        structure_key = str(structure_id or "").strip() or None
+        existing = state.structures.get(structure_key) if structure_key else None
+        existing_payload = dict(existing.payload if isinstance(existing, MapStructure) and isinstance(existing.payload, dict) else {})
+        payload_dict = dict(existing_payload)
+        payload_dict.update(dict(payload if isinstance(payload, dict) else {}))
+
+        preset_id = str(tactical_preset_id or "").strip().lower()
+        preset = tactical_preset_catalog().get(preset_id) if preset_id else None
+        kind_key = str(kind or "structure").strip().lower() or "structure"
+        if isinstance(preset, dict) and str(preset.get("category") or "").strip().lower() == "structure":
+            kind_key = str(preset.get("kind") or kind_key).strip().lower() or kind_key
+            preset_payload = dict(preset.get("payload") if isinstance(preset.get("payload"), dict) else {})
+            if preset_payload:
+                for entry_key, entry_value in preset_payload.items():
+                    payload_dict.setdefault(entry_key, entry_value)
+            payload_dict["tactical_preset_id"] = preset_id
+            if name is None:
+                name = str(preset.get("display_name") or preset.get("name") or "").strip() or None
+        elif preset_id:
+            payload_dict["tactical_preset_id"] = preset_id
+
+        if name is not None and str(name).strip():
+            payload_dict["name"] = str(name).strip()
+
+        offsets: List[Tuple[int, int]] = self._dm_structure_offsets_from_payload(occupied_offsets)
+        if not offsets and isinstance(preset, dict):
+            offsets = self._dm_structure_offsets_from_payload(preset.get("occupied_offsets"))
+        if not offsets:
+            try:
+                width = max(1, int(width_cells))
+            except Exception:
+                width = 1
+            try:
+                height = max(1, int(height_cells))
+            except Exception:
+                height = 1
+            offsets = [(int(col), int(row)) for row in range(int(height)) for col in range(int(width))]
+        if not offsets and isinstance(existing, MapStructure):
+            offsets = [
+                (int(col) - int(existing.anchor_col), int(row) - int(existing.anchor_row))
+                for col, row in list(existing.occupied_cells or [])
+            ]
+            if (0, 0) not in offsets:
+                offsets.insert(0, (0, 0))
+        if not offsets:
+            offsets = [(0, 0)]
+
+        occupied_cells = [
+            (int(anchor_col) + int(offset_col), int(anchor_row) + int(offset_row))
+            for offset_col, offset_row in offsets
+        ]
+        try:
+            resolved_structure_id = self._upsert_map_structure(
+                structure_id=structure_key,
+                kind=kind_key,
+                anchor_col=int(anchor_col),
+                anchor_row=int(anchor_row),
+                occupied_cells=occupied_cells,
+                payload=payload_dict,
+                hydrate_window=True,
+                broadcast=True,
+            )
+        except Exception as exc:
+            return {"ok": False, "error": f"Failed to update structure: {exc}"}
+
+        state_after = self._capture_canonical_map_state(prefer_window=True).normalized()
+        structure = state_after.structures.get(str(resolved_structure_id))
+        structure_view: Dict[str, Any] = {}
+        if isinstance(structure, MapStructure):
+            structure_view = structure.to_dict()
+        return {"ok": True, "structure_id": str(resolved_structure_id), "structure": structure_view}
+
+    def _dm_move_structure_on_map(self, structure_id: Any, anchor_col: int, anchor_row: int) -> Dict[str, Any]:
+        sid = str(structure_id or "").strip()
+        if not sid:
+            return {"ok": False, "error": "structure_id is required."}
+        error = self._dm_validate_map_cell(int(anchor_col), int(anchor_row))
+        if error:
+            return {"ok": False, "error": error}
+        state = self._capture_canonical_map_state(prefer_window=True).normalized()
+        structure = (state.structures or {}).get(sid)
+        if not isinstance(structure, MapStructure):
+            return {"ok": False, "error": "Structure not found."}
+        dc = int(anchor_col) - int(structure.anchor_col)
+        dr = int(anchor_row) - int(structure.anchor_row)
+        if dc == 0 and dr == 0:
+            return {"ok": True, "structure_id": sid, "anchor_col": int(anchor_col), "anchor_row": int(anchor_row)}
+        moved = bool(self._move_map_structure(sid, dc, dr))
+        if not moved:
+            reason = str(getattr(self, "_last_map_structure_move_error", "") or "Cannot move structure.")
+            blockers = getattr(self, "_last_map_structure_move_blockers", None)
+            if reason == "blocked" and isinstance(blockers, dict):
+                return {"ok": False, "error": "Destination is blocked.", "blockers": blockers}
+            if reason == "structure_not_found":
+                return {"ok": False, "error": "Structure not found."}
+            return {"ok": False, "error": "Cannot move structure."}
+        state_after = self._capture_canonical_map_state(prefer_window=True).normalized()
+        moved_structure = (state_after.structures or {}).get(sid)
+        if not isinstance(moved_structure, MapStructure):
+            return {"ok": False, "error": "Cannot move structure."}
+        return {
+            "ok": True,
+            "structure_id": sid,
+            "anchor_col": int(moved_structure.anchor_col),
+            "anchor_row": int(moved_structure.anchor_row),
+            "structure": moved_structure.to_dict(),
+        }
+
+    def _dm_remove_structure_on_map(self, structure_id: Any) -> Dict[str, Any]:
+        key = str(structure_id or "").strip()
+        if not key:
+            return {"ok": False, "error": "structure_id is required."}
+        state = self._capture_canonical_map_state(prefer_window=True).normalized()
+        if key not in (state.structures or {}):
+            return {"ok": False, "error": "Structure not found."}
+        self._remove_map_structure(key, hydrate_window=True, broadcast=True)
+        return {"ok": True, "structure_id": key}
+
+    def _dm_set_elevation_on_map(self, col: int, row: int, elevation: Any) -> Dict[str, Any]:
+        error = self._dm_validate_map_cell(int(col), int(row))
+        if error:
+            return {"ok": False, "error": error}
+        try:
+            value = float(elevation)
+        except Exception:
+            return {"ok": False, "error": "elevation must be numeric."}
+        self._set_map_elevation(int(col), int(row), float(value), hydrate_window=True, broadcast=True)
+        return {"ok": True, "col": int(col), "row": int(row), "elevation": float(value)}
+
+    def _dm_resolve_background_asset_path(self, asset_path: Any) -> Optional[Path]:
+        raw = str(asset_path or "").strip()
+        if not raw:
+            return None
+        repo_root = Path(__file__).resolve().parent
+        assets_root = (repo_root / "assets").resolve()
+        if raw.startswith("/assets/"):
+            candidate = (assets_root / raw[len("/assets/") :]).resolve()
+        elif raw.startswith("assets/"):
+            candidate = (repo_root / raw).resolve()
+        else:
+            candidate = Path(raw).expanduser()
+            if not candidate.is_absolute():
+                candidate = (repo_root / candidate).resolve()
+            else:
+                candidate = candidate.resolve()
+        try:
+            candidate.relative_to(assets_root)
+        except Exception:
+            return None
+        if not candidate.exists() or not candidate.is_file():
+            return None
+        return candidate
+
+    def _dm_list_background_assets(self) -> List[Dict[str, Any]]:
+        assets_root = (Path(__file__).resolve().parent / "assets").resolve()
+        allowed_exts = {".png", ".jpg", ".jpeg", ".webp", ".avif"}
+        items: List[Dict[str, Any]] = []
+        for entry in assets_root.rglob("*"):
+            if not entry.is_file():
+                continue
+            if entry.suffix.lower() not in allowed_exts:
+                continue
+            rel = entry.relative_to(assets_root).as_posix()
+            if rel.startswith("web/"):
+                continue
+            items.append(
+                {
+                    "path": f"/assets/{rel}",
+                    "label": rel,
+                }
+            )
+        items.sort(key=lambda entry: str(entry.get("label") or ""))
+        return items
+
+    def _dm_upsert_background_layer(
+        self,
+        *,
+        asset_path: Any,
+        bid: Optional[Any] = None,
+        x: Any = 0.0,
+        y: Any = 0.0,
+        scale_pct: Any = 100.0,
+        trans_pct: Any = 0.0,
+        locked: bool = False,
+    ) -> Dict[str, Any]:
+        resolved = self._dm_resolve_background_asset_path(asset_path)
+        if resolved is None:
+            return {"ok": False, "error": "Background asset path is invalid or not found."}
+        try:
+            x_val = float(x)
+            y_val = float(y)
+            scale_val = float(scale_pct)
+            trans_val = float(trans_pct)
+        except Exception:
+            return {"ok": False, "error": "Background position/scale/transparency must be numeric."}
+        scale_val = max(1.0, min(1000.0, float(scale_val)))
+        trans_val = max(0.0, min(100.0, float(trans_val)))
+        target_bid: Optional[int]
+        if bid is None:
+            target_bid = None
+        else:
+            try:
+                target_bid = int(bid)
+            except Exception:
+                return {"ok": False, "error": "bid must be an integer when provided."}
+            if target_bid <= 0:
+                return {"ok": False, "error": "bid must be a positive integer."}
+
+        persisted_entry: Dict[str, Any] = {}
+
+        def _mutate(state: MapState) -> None:
+            nonlocal target_bid, persisted_entry
+            presentation = dict(state.presentation if isinstance(state.presentation, dict) else {})
+            layers = []
+            for raw in list(presentation.get("bg_images") if isinstance(presentation.get("bg_images"), list) else []):
+                if not isinstance(raw, dict):
+                    continue
+                try:
+                    raw_bid = int(raw.get("bid"))
+                except Exception:
+                    continue
+                layers.append(
+                    {
+                        "bid": int(raw_bid),
+                        "path": str(raw.get("path") or ""),
+                        "x": float(raw.get("x", 0.0) or 0.0),
+                        "y": float(raw.get("y", 0.0) or 0.0),
+                        "scale_pct": float(raw.get("scale_pct", 100.0) or 100.0),
+                        "trans_pct": float(raw.get("trans_pct", 0.0) or 0.0),
+                        "locked": bool(raw.get("locked", False)),
+                    }
+                )
+            next_bid = int(presentation.get("next_bg_id", 1) or 1)
+            if target_bid is None:
+                used = {int(layer["bid"]) for layer in layers}
+                while next_bid in used:
+                    next_bid += 1
+                target_bid = int(next_bid)
+            updated = False
+            for layer in layers:
+                if int(layer.get("bid", 0)) != int(target_bid):
+                    continue
+                layer.update(
+                    {
+                        "path": str(resolved),
+                        "x": float(x_val),
+                        "y": float(y_val),
+                        "scale_pct": float(scale_val),
+                        "trans_pct": float(trans_val),
+                        "locked": bool(locked),
+                    }
+                )
+                persisted_entry = dict(layer)
+                updated = True
+                break
+            if not updated:
+                persisted_entry = {
+                    "bid": int(target_bid),
+                    "path": str(resolved),
+                    "x": float(x_val),
+                    "y": float(y_val),
+                    "scale_pct": float(scale_val),
+                    "trans_pct": float(trans_val),
+                    "locked": bool(locked),
+                }
+                layers.append(dict(persisted_entry))
+            max_bid = max([int(layer["bid"]) for layer in layers], default=0)
+            presentation["bg_images"] = sorted(layers, key=lambda layer: int(layer["bid"]))
+            presentation["next_bg_id"] = max(int(next_bid), int(max_bid) + 1, int(target_bid) + 1)
+            state.presentation = presentation
+
+        self._mutate_canonical_map_state(_mutate, hydrate_window=True, broadcast=True)
+        try:
+            self._restore_map_backgrounds(list(self.__dict__.get("_session_bg_images", []) or []))
+        except Exception:
+            pass
+        layer_path = str(persisted_entry.get("path") or "")
+        layer_url = self._lan_asset_url_for_path(layer_path)
+        return {
+            "ok": True,
+            "background": {
+                **dict(persisted_entry),
+                "asset_url": layer_url,
+            },
+        }
+
+    def _dm_remove_background_layer(self, bid: Any) -> Dict[str, Any]:
+        try:
+            target_bid = int(bid)
+        except Exception:
+            return {"ok": False, "error": "bid must be an integer."}
+        if target_bid <= 0:
+            return {"ok": False, "error": "bid must be a positive integer."}
+        removed = False
+
+        def _mutate(state: MapState) -> None:
+            nonlocal removed
+            presentation = dict(state.presentation if isinstance(state.presentation, dict) else {})
+            layers: List[Dict[str, Any]] = []
+            for raw in list(presentation.get("bg_images") if isinstance(presentation.get("bg_images"), list) else []):
+                if not isinstance(raw, dict):
+                    continue
+                try:
+                    raw_bid = int(raw.get("bid"))
+                except Exception:
+                    continue
+                if raw_bid == int(target_bid):
+                    removed = True
+                    continue
+                layers.append(dict(raw))
+            if removed:
+                max_bid = max(
+                    [
+                        int(entry.get("bid"))
+                        for entry in layers
+                        if isinstance(entry, dict) and str(entry.get("bid") or "").strip().isdigit()
+                    ],
+                    default=0,
+                )
+                presentation["bg_images"] = layers
+                presentation["next_bg_id"] = max(int(presentation.get("next_bg_id", 1) or 1), int(max_bid) + 1)
+                state.presentation = presentation
+
+        self._mutate_canonical_map_state(_mutate, hydrate_window=True, broadcast=True)
+        if not removed:
+            return {"ok": False, "error": "Background layer not found."}
+        try:
+            self._restore_map_backgrounds(list(self.__dict__.get("_session_bg_images", []) or []))
+        except Exception:
+            pass
+        return {"ok": True, "bid": int(target_bid)}
+
+    def _dm_list_tactical_presets(self, *, categories: Optional[Set[str]] = None) -> List[Dict[str, Any]]:
+        catalog = tactical_preset_catalog()
+        allowed_categories = {str(item).strip().lower() for item in (categories or set()) if str(item).strip()}
+        payload: List[Dict[str, Any]] = []
+        for preset_id, preset in sorted(catalog.items(), key=lambda item: str(item[0]).lower()):
+            if not isinstance(preset, dict):
+                continue
+            category = str(preset.get("category") or "").strip().lower()
+            if allowed_categories and category not in allowed_categories:
+                continue
+            default_count = preset.get("default_count")
+            payload.append(
+                {
+                    "id": str(preset_id),
+                    "display_name": str(preset.get("display_name") or preset.get("name") or preset_id),
+                    "category": category,
+                    "kind": str(preset.get("kind") or ""),
+                    "family": str(preset.get("family") or ""),
+                    "default_count": int(default_count) if isinstance(default_count, int) and default_count > 0 else None,
+                    "summary": tactical_preset_author_summary(preset_id, default_count),
+                }
+            )
+        return payload
+
+    def _dm_current_aoe_store(self) -> Dict[int, Dict[str, Any]]:
+        store: Dict[int, Dict[str, Any]] = {}
+        for raw_aid, raw_payload in dict(self.__dict__.get("_lan_aoes", {}) or {}).items():
+            try:
+                aid = int(raw_aid)
+            except Exception:
+                continue
+            if isinstance(raw_payload, dict):
+                store[aid] = dict(raw_payload)
+        mw = getattr(self, "_map_window", None)
+        try:
+            if mw is not None and mw.winfo_exists() and isinstance(getattr(mw, "aoes", None), dict):
+                window_store: Dict[int, Dict[str, Any]] = {}
+                for raw_aid, raw_payload in (getattr(mw, "aoes", {}) or {}).items():
+                    if not isinstance(raw_payload, dict):
+                        continue
+                    try:
+                        aid = int(raw_aid)
+                    except Exception:
+                        continue
+                    window_store[aid] = dict(raw_payload)
+                store = window_store
+        except Exception:
+            pass
+        return store
+
+    def _dm_aoe_snapshot_entry(self, aid: int) -> Optional[Dict[str, Any]]:
+        tactical = self._dm_tactical_snapshot()
+        for entry in tactical.get("aoes") if isinstance(tactical.get("aoes"), list) else []:
+            if not isinstance(entry, dict):
+                continue
+            try:
+                if int(entry.get("aid")) == int(aid):
+                    return dict(entry)
+            except Exception:
+                continue
+        return None
+
+    def _dm_create_aoe_on_map(self, payload: Dict[str, Any]) -> Dict[str, Any]:
+        if not isinstance(payload, dict):
+            return {"ok": False, "error": "Invalid payload."}
+        request_payload = dict(payload)
+        if request_payload.get("cx") is None and request_payload.get("col") is not None:
+            request_payload["cx"] = request_payload.get("col")
+        if request_payload.get("cy") is None and request_payload.get("row") is not None:
+            request_payload["cy"] = request_payload.get("row")
+        try:
+            cx = float(request_payload.get("cx"))
+            cy = float(request_payload.get("cy"))
+        except Exception:
+            return {"ok": False, "error": "cx and cy are required."}
+        error = self._dm_validate_map_point(cx, cy)
+        if error:
+            return {"ok": False, "error": error}
+        request_payload["cx"] = float(cx)
+        request_payload["cy"] = float(cy)
+        before_ids = set(self._dm_current_aoe_store().keys())
+        self._handle_cast_aoe_request(
+            {"payload": request_payload},
+            cid=None,
+            ws_id=None,
+            is_admin=True,
+            claimed=None,
+        )
+        after_store = self._dm_current_aoe_store()
+        new_ids = sorted(set(after_store.keys()) - before_ids)
+        if not new_ids:
+            return {"ok": False, "error": "Could not place AoE. Check shape and size values."}
+        aid = int(new_ids[-1])
+        try:
+            self._lan_force_state_broadcast()
+        except Exception:
+            pass
+        aoe_view = self._dm_aoe_snapshot_entry(aid) or dict(after_store.get(aid) or {})
+        return {"ok": True, "aid": aid, "aoe": aoe_view}
+
+    def _dm_move_aoe_on_map(self, aid: int, payload: Dict[str, Any]) -> Dict[str, Any]:
+        if not isinstance(payload, dict):
+            return {"ok": False, "error": "Invalid payload."}
+        before_store = self._dm_current_aoe_store()
+        if int(aid) not in before_store:
+            return {"ok": False, "error": "AoE not found."}
+        to_payload = dict(payload)
+        if to_payload.get("cx") is None and to_payload.get("col") is not None:
+            to_payload["cx"] = to_payload.get("col")
+        if to_payload.get("cy") is None and to_payload.get("row") is not None:
+            to_payload["cy"] = to_payload.get("row")
+        try:
+            cx = float(to_payload.get("cx"))
+            cy = float(to_payload.get("cy"))
+        except Exception:
+            return {"ok": False, "error": "cx and cy are required."}
+        error = self._dm_validate_map_point(cx, cy)
+        if error:
+            return {"ok": False, "error": error}
+        destination: Dict[str, Any] = {"cx": float(cx), "cy": float(cy)}
+        for key in ("angle_deg", "ax", "ay", "spread_deg"):
+            if to_payload.get(key) is None:
+                continue
+            try:
+                destination[key] = float(to_payload.get(key))
+            except Exception:
+                return {"ok": False, "error": f"{key} must be numeric."}
+        self._handle_aoe_move_request(
+            {"aid": int(aid), "to": destination},
+            cid=None,
+            ws_id=None,
+            is_admin=True,
+            claimed=None,
+        )
+        after_store = self._dm_current_aoe_store()
+        updated = after_store.get(int(aid))
+        if not isinstance(updated, dict):
+            return {"ok": False, "error": "Could not move AoE."}
+        try:
+            moved_cx = float(updated.get("cx"))
+            moved_cy = float(updated.get("cy"))
+        except Exception:
+            return {"ok": False, "error": "Could not move AoE."}
+        if abs(moved_cx - float(cx)) > 0.05 or abs(moved_cy - float(cy)) > 0.05:
+            return {"ok": False, "error": "Could not move AoE."}
+        try:
+            self._lan_force_state_broadcast()
+        except Exception:
+            pass
+        aoe_view = self._dm_aoe_snapshot_entry(int(aid)) or dict(updated)
+        return {"ok": True, "aid": int(aid), "aoe": aoe_view}
+
+    def _dm_remove_aoe_on_map(self, aid: int) -> Dict[str, Any]:
+        before_store = self._dm_current_aoe_store()
+        if int(aid) not in before_store:
+            return {"ok": False, "error": "AoE not found."}
+        self._handle_aoe_remove_request(
+            {"aid": int(aid)},
+            cid=None,
+            ws_id=None,
+            is_admin=True,
+            claimed=None,
+        )
+        after_store = self._dm_current_aoe_store()
+        if int(aid) in after_store:
+            return {"ok": False, "error": "Could not remove AoE."}
+        try:
+            self._lan_force_state_broadcast()
+        except Exception:
+            pass
+        return {"ok": True, "aid": int(aid)}
+
+    def _dm_set_auras_enabled(self, enabled: bool) -> Dict[str, Any]:
+        enabled_flag = bool(enabled)
+
+        def _mutate(state: MapState) -> None:
+            presentation = dict(state.presentation if isinstance(state.presentation, dict) else {})
+            presentation["auras_enabled"] = bool(enabled_flag)
+            state.presentation = presentation
+
+        self._mutate_canonical_map_state(_mutate, hydrate_window=True, broadcast=True)
+        return {"ok": True, "enabled": enabled_flag}
 
     def _lan_live_map_data(
         self,

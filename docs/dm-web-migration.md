@@ -98,6 +98,15 @@ The DM console lives at `http://<lan-ip>:<port>/dm` and provides:
 - **HP Adjustment** – apply damage (negative) or healing (positive)
 - **Set Temp HP** – set (or clear) temporary HP for any combatant
 - **Add / Remove Condition** – apply any of the 15 standard D&D 5e conditions
+- **Tactical token control** – place/reposition, rules-aware move, and facing
+  updates for combatants on the tactical map
+- **Battlefield prep controls** – obstacle cell block/clear and rough-terrain
+  cell edits (ground/water/clear)
+- **Map authoring controls** – feature place/remove, structure place/move/remove,
+  elevation cell edits, and background-layer asset/position/scale/lock updates
+  from the browser tactical card
+- **Live tactical effects** – hazard placement/removal (preset-backed),
+  AoE placement/move/removal, and aura-overlay toggle
 - **Battle Log** – last 30 lines from the tracker's history file
 - **Real-time updates** – receives instant snapshots via WebSocket (`/ws/dm`);
   falls back to 2.5-second polling if WebSocket is unavailable
@@ -136,7 +145,9 @@ in the desktop app settings.
 The following areas remain desktop-primary (hybrid) after this pass:
 
 - Full Tkinter canvas rendering and all desktop UI widgets
-- Map / battle-map editing and tactical view
+- Advanced Tk map editor workflows (template/ship blueprint authoring,
+  rich layer workflows, and desktop tactical authoring conveniences beyond the
+  browser tactical card)
 - Player-facing LAN client at `/` (existing WebSocket + `/ws` routes)
 - Character editor, sheet management (`/edit_character`, `/new_character`)
 - Shop, item and spell management
