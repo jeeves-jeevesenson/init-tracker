@@ -78,6 +78,7 @@ except Exception as e:  # pragma: no cover
 from map_state import (
     BOARDING_LINK_STATUSES,
     ElevationCell,
+    GridSpec,
     MAP_STATE_SCHEMA_VERSION,
     MapFeature,
     MapHazard,
@@ -4146,6 +4147,50 @@ class LanController:
             except Exception as exc:
                 raise HTTPException(status_code=500, detail=f"Failed to list background assets: {exc}")
             return {"ok": True, "assets": assets}
+
+        @self._fastapi_app.post("/api/dm/map/new")
+        async def dm_create_blank_map(request: Request, payload: Optional[Dict[str, Any]] = Body(default=None)):
+            """Initialize a new blank tactical map with optional grid dimensions."""
+            _check_dm_auth(request)
+            if payload is not None and not isinstance(payload, dict):
+                raise HTTPException(status_code=400, detail="Invalid payload.")
+            body = payload if isinstance(payload, dict) else {}
+            try:
+                result = self.app._dm_create_blank_map(
+                    cols=body.get("cols"),
+                    rows=body.get("rows"),
+                )
+            except Exception as exc:
+                raise HTTPException(status_code=500, detail=f"Failed to create blank map: {exc}")
+            if not result.get("ok"):
+                raise HTTPException(status_code=400, detail=result.get("error", "Cannot create blank map."))
+            return {
+                "ok": True,
+                "grid": result.get("grid"),
+                "snapshot": _dm_console_snapshot(),
+            }
+
+        @self._fastapi_app.post("/api/dm/map/settings")
+        async def dm_set_map_settings(request: Request, payload: Optional[Dict[str, Any]] = Body(default=None)):
+            """Update tactical map grid settings for browser-owned map setup."""
+            _check_dm_auth(request)
+            if payload is not None and not isinstance(payload, dict):
+                raise HTTPException(status_code=400, detail="Invalid payload.")
+            body = payload if isinstance(payload, dict) else {}
+            try:
+                result = self.app._dm_set_map_grid_settings(
+                    cols=body.get("cols"),
+                    rows=body.get("rows"),
+                )
+            except Exception as exc:
+                raise HTTPException(status_code=500, detail=f"Failed to update map settings: {exc}")
+            if not result.get("ok"):
+                raise HTTPException(status_code=400, detail=result.get("error", "Cannot update map settings."))
+            return {
+                "ok": True,
+                "grid": result.get("grid"),
+                "snapshot": _dm_console_snapshot(),
+            }
 
         @self._fastapi_app.post("/api/dm/map/obstacles/cell")
         async def dm_set_obstacle_cell(request: Request, payload: Dict[str, Any] = Body(...)):
@@ -24284,6 +24329,18 @@ class InitiativeTracker(base.InitiativeTracker):
         fighter_level = self._fighter_level_from_profile(data)
         paladin_level = self._class_level_from_profile(data, "paladin")
         monk_level = self._class_level_from_profile(data, "monk")
+        spellcasting = data.get("spellcasting") if isinstance(data.get("spellcasting"), dict) else {}
+        pact_magic = spellcasting.get("pact_magic_slots") if isinstance(spellcasting.get("pact_magic_slots"), dict) else {}
+        try:
+            pact_slot_level = int(pact_magic.get("level") or 0)
+        except Exception:
+            pact_slot_level = 0
+        pact_slot_level = max(0, min(9, pact_slot_level))
+        try:
+            pact_slot_count = int(pact_magic.get("count") or 0)
+        except Exception:
+            pact_slot_count = 0
+        pact_slot_count = max(0, pact_slot_count)
         wild_shape_max = self._wild_shape_max_uses_for_level(druid_level)
         second_wind_max = self._second_wind_max_uses_for_level(fighter_level)
         lay_on_hands_max = max(0, int(paladin_level) * 5)
@@ -24322,6 +24379,11 @@ class InitiativeTracker(base.InitiativeTracker):
                 reset = "long_rest"
                 max_formula = "paladin_level * 5"
                 max_value = lay_on_hands_max
+            if pool_id.lower() == "pact_magic_slots":
+                label = f"Pact Magic Slots (Level {int(pact_slot_level)})" if pact_slot_level >= 1 else "Pact Magic Slots"
+                reset = "short_rest"
+                max_formula = str(int(pact_slot_count))
+                max_value = int(pact_slot_count)
             try:
                 current_value = int(entry.get("current", max_value))
             except Exception:
@@ -24341,6 +24403,8 @@ class InitiativeTracker(base.InitiativeTracker):
                 payload["gain_on_short"] = 1
             if pool_id.lower() == "second_wind":
                 payload["gain_on_short"] = 1
+            if pool_id.lower() == "pact_magic_slots" and pact_slot_level >= 1:
+                payload["slot_level"] = int(pact_slot_level)
             normalized.append(payload)
         if druid_level >= 2 and "wild_shape" not in seen_pool_ids:
             normalized.append(
@@ -24386,6 +24450,18 @@ class InitiativeTracker(base.InitiativeTracker):
                     "max": lay_on_hands_max,
                     "max_formula": "paladin_level * 5",
                     "reset": "long_rest",
+                }
+            )
+        if pact_slot_level >= 1 and pact_slot_count >= 1 and "pact_magic_slots" not in seen_pool_ids:
+            normalized.append(
+                {
+                    "id": "pact_magic_slots",
+                    "label": f"Pact Magic Slots (Level {int(pact_slot_level)})",
+                    "current": int(pact_slot_count),
+                    "max": int(pact_slot_count),
+                    "max_formula": str(int(pact_slot_count)),
+                    "reset": "short_rest",
+                    "slot_level": int(pact_slot_level),
                 }
             )
         normalized.extend(inventory_item_pools)
@@ -24815,6 +24891,51 @@ class InitiativeTracker(base.InitiativeTracker):
             payload[name] = self._normalize_player_spell_config(data)
         return payload
 
+    def _apply_pact_magic_runtime_slots(self, profile_payload: Dict[str, Any]) -> Dict[str, Any]:
+        if not isinstance(profile_payload, dict):
+            return profile_payload
+        spellcasting = profile_payload.get("spellcasting")
+        if not isinstance(spellcasting, dict):
+            return profile_payload
+        pact_magic = spellcasting.get("pact_magic_slots")
+        if not isinstance(pact_magic, dict):
+            return profile_payload
+        try:
+            pact_level = int(pact_magic.get("level") or 0)
+        except Exception:
+            pact_level = 0
+        try:
+            pact_max = int(pact_magic.get("count") or 0)
+        except Exception:
+            pact_max = 0
+        if pact_level < 1 or pact_level > 9 or pact_max <= 0:
+            return profile_payload
+        slots = self._normalize_spell_slots(spellcasting.get("spell_slots"))
+        if any(int((entry or {}).get("max", 0) or 0) > 0 for entry in slots.values()):
+            return profile_payload
+        pact_current = int(pact_max)
+        pools = self._normalize_player_resource_pools(profile_payload)
+        pact_pool = next(
+            (
+                entry
+                for entry in pools
+                if isinstance(entry, dict) and str(entry.get("id") or "").strip().lower() == "pact_magic_slots"
+            ),
+            None,
+        )
+        if isinstance(pact_pool, dict):
+            try:
+                pact_current = int(pact_pool.get("current", pact_max))
+            except Exception:
+                pact_current = int(pact_max)
+        pact_current = max(0, min(int(pact_current), int(pact_max)))
+        slots[str(int(pact_level))] = {"max": int(pact_max), "current": int(pact_current)}
+        spellcasting = dict(spellcasting)
+        spellcasting["spell_slots"] = slots
+        profile_payload = dict(profile_payload)
+        profile_payload["spellcasting"] = spellcasting
+        return profile_payload
+
     def _player_profiles_payload(self) -> Dict[str, Dict[str, Any]]:
         self._load_player_yaml_cache()
         payload: Dict[str, Dict[str, Any]] = {}
@@ -24840,6 +24961,7 @@ class InitiativeTracker(base.InitiativeTracker):
                     spellcasting = dict(spellcasting)
                     spellcasting["save_dc"] = save_dc
                     profile_payload["spellcasting"] = spellcasting
+            profile_payload = self._apply_pact_magic_runtime_slots(profile_payload)
             known_map = self.__dict__.get("_wild_shape_known_by_player", {})
             persisted_known = self._normalized_prepared_wild_shapes_from_profile(profile_payload)
             known_runtime = []
@@ -24894,6 +25016,81 @@ class InitiativeTracker(base.InitiativeTracker):
             payload[name] = profile_payload
         return payload
 
+    def _materialize_missing_resource_pool_entry(
+        self,
+        raw_profile: Dict[str, Any],
+        player_name: str,
+        target_pool: str,
+        pools: List[Dict[str, Any]],
+    ) -> Optional[Dict[str, Any]]:
+        normalized_pools = self._normalize_player_resource_pools(raw_profile)
+        normalized_entry = next(
+            (
+                entry
+                for entry in normalized_pools
+                if isinstance(entry, dict) and str(entry.get("id") or "").strip().lower() == target_pool.lower()
+            ),
+            None,
+        )
+        if not isinstance(normalized_entry, dict):
+            return None
+        if bool(normalized_entry.get("derived_from_inventory")):
+            return None
+        if str(normalized_entry.get("source_type") or "").strip().lower() == "inventory_item":
+            return None
+        if str(normalized_entry.get("id") or "").strip().lower().startswith("consumable:"):
+            return None
+        materialized: Dict[str, Any] = {
+            "id": str(normalized_entry.get("id") or target_pool).strip() or target_pool,
+            "label": str(normalized_entry.get("label") or target_pool).strip() or target_pool,
+            "current": max(0, int(normalized_entry.get("current", normalized_entry.get("max", 0)) or 0)),
+        }
+        if normalized_entry.get("max") is not None:
+            try:
+                materialized["max"] = max(0, int(normalized_entry.get("max") or 0))
+            except Exception:
+                pass
+        max_formula = str(normalized_entry.get("max_formula") or "").strip()
+        if max_formula:
+            materialized["max_formula"] = max_formula
+        reset = str(normalized_entry.get("reset") or "").strip().lower()
+        if reset:
+            materialized["reset"] = reset
+        if int(normalized_entry.get("gain_on_short") or 0) > 0:
+            materialized["gain_on_short"] = int(normalized_entry.get("gain_on_short") or 0)
+        if int(normalized_entry.get("slot_level") or 0) > 0:
+            materialized["slot_level"] = int(normalized_entry.get("slot_level") or 0)
+        pools.append(materialized)
+        return materialized
+
+    def _resource_pool_current_and_max(
+        self,
+        raw_profile: Dict[str, Any],
+        player_name: str,
+        pool_state: Dict[str, Any],
+    ) -> Tuple[int, int]:
+        profile_for_max = self._normalize_player_profile(raw_profile, player_name)
+        max_formula = str(pool_state.get("max_formula") or "").strip()
+        max_fallback = pool_state.get("max", pool_state.get("current", 0))
+        max_value = self._compute_resource_pool_max(profile_for_max, max_formula, max_fallback)
+        if max_value <= 0:
+            try:
+                max_value = max(0, int(pool_state.get("max", 0) or 0))
+            except Exception:
+                max_value = 0
+        if "current" in pool_state:
+            try:
+                current_value = int(pool_state.get("current"))
+            except Exception:
+                current_value = max_value
+        else:
+            current_value = max_value
+        if max_value > 0:
+            current_value = max(0, min(int(current_value), int(max_value)))
+        else:
+            current_value = max(0, int(current_value))
+        return int(current_value), int(max_value)
+
     def _consume_resource_pool_for_cast(
         self,
         caster_name: str,
@@ -24919,10 +25116,10 @@ class InitiativeTracker(base.InitiativeTracker):
         item_owned_pool = self._resolve_active_inventory_item_pool_state(raw, target_pool)
         if item_owned_pool is not None:
             _item_entry, pool_state, _item_def = item_owned_pool
-            try:
-                current_value = int(pool_state.get("current", 0))
-            except Exception:
-                current_value = 0
+            current_value, max_value = self._resource_pool_current_and_max(raw, player_name, pool_state)
+            if max_value > 0:
+                pool_state["max"] = int(max_value)
+            pool_state["current"] = int(current_value)
             if current_value < spend_cost:
                 return False, "That resource pool be exhausted, matey."
             pool_state["current"] = int(current_value - spend_cost)
@@ -24937,14 +25134,16 @@ class InitiativeTracker(base.InitiativeTracker):
                     target_entry = entry
                     break
             if target_entry is None:
+                target_entry = self._materialize_missing_resource_pool_entry(raw, player_name, target_pool, pools)
+            if target_entry is None:
                 return False, "That spell pool could not be found, matey."
-            try:
-                current_value = int(target_entry.get("current", 0))
-            except Exception:
-                current_value = 0
+            current_value, max_value = self._resource_pool_current_and_max(raw, player_name, target_entry)
+            if max_value > 0:
+                target_entry["max"] = int(max_value)
+            target_entry["current"] = int(current_value)
             if current_value < spend_cost:
                 return False, "That resource pool be exhausted, matey."
-            target_entry["current"] = current_value - spend_cost
+            target_entry["current"] = int(current_value - spend_cost)
             resources = dict(resources)
             resources["pools"] = pools
             raw = dict(raw)
@@ -25135,12 +25334,10 @@ class InitiativeTracker(base.InitiativeTracker):
         item_owned_pool = self._resolve_active_inventory_item_pool_state(raw, target_pool)
         if item_owned_pool is not None:
             _item_entry, pool_state, _item_def = item_owned_pool
-            profile_for_max = self._normalize_player_profile(raw, player_name)
-            max_formula = str(pool_state.get("max_formula") or "").strip()
-            max_fallback = pool_state.get("max", current_value)
-            max_value = self._compute_resource_pool_max(profile_for_max, max_formula, max_fallback)
+            _existing_current, max_value = self._resource_pool_current_and_max(raw, player_name, pool_state)
             if max_value > 0:
                 current_value = min(current_value, max_value)
+                pool_state["max"] = int(max_value)
             pool_state["current"] = int(current_value)
         else:
             resources = raw.get("resources") if isinstance(raw.get("resources"), dict) else {}
@@ -25153,13 +25350,13 @@ class InitiativeTracker(base.InitiativeTracker):
                     target_entry = entry
                     break
             if target_entry is None:
+                target_entry = self._materialize_missing_resource_pool_entry(raw, player_name, target_pool, pools)
+            if target_entry is None:
                 return False, "That spell pool could not be found, matey."
-            try:
-                max_value = int(target_entry.get("max", current_value))
-            except Exception:
-                max_value = current_value
+            _existing_current, max_value = self._resource_pool_current_and_max(raw, player_name, target_entry)
             if max_value > 0:
                 current_value = min(current_value, max_value)
+                target_entry["max"] = int(max_value)
             target_entry["current"] = int(current_value)
             resources = dict(resources)
             resources["pools"] = pools
@@ -27974,7 +28171,29 @@ class InitiativeTracker(base.InitiativeTracker):
                 spend_level = lvl
                 break
         if spend_level is None:
-            return False, "No spell slots left for that level, matey.", None
+            profile = self._profile_for_player_name(player_name)
+            spellcasting = profile.get("spellcasting") if isinstance(profile, dict) and isinstance(profile.get("spellcasting"), dict) else {}
+            pact_magic = spellcasting.get("pact_magic_slots") if isinstance(spellcasting.get("pact_magic_slots"), dict) else {}
+            try:
+                pact_level = int(pact_magic.get("level") or 0)
+            except Exception:
+                pact_level = 0
+            try:
+                pact_count = int(pact_magic.get("count") or 0)
+            except Exception:
+                pact_count = 0
+            pact_eligible = (
+                pact_level >= 1
+                and pact_count > 0
+                and int(slot_level) <= int(pact_level)
+                and (minimum_level is None or int(minimum_level) <= int(pact_level))
+            )
+            if not pact_eligible:
+                return False, "No spell slots left for that level, matey.", None
+            ok_pool, pool_err = self._consume_resource_pool_for_cast(player_name, "pact_magic_slots", 1)
+            if not ok_pool:
+                return False, pool_err or "No spell slots left for that level, matey.", None
+            return True, "", int(pact_level)
 
         spend_key = str(spend_level)
         slots[spend_key]["current"] = max(0, int(slots[spend_key].get("current", 0) or 0) - 1)
@@ -32370,6 +32589,33 @@ class InitiativeTracker(base.InitiativeTracker):
         weapons = attacks.get("weapons") if isinstance(attacks, dict) else []
         selected_weapon: Dict[str, Any] = {}
         inline_weapon = msg.get("weapon") if isinstance(msg.get("weapon"), dict) else {}
+        def _synthesized_unarmed_weapon(profile_data: Any, attacks_data: Any) -> Dict[str, Any]:
+            monk_level = self._class_level_from_profile(profile_data, "monk") if isinstance(profile_data, dict) else 0
+            variables = _damage_formula_variables(profile_data)
+            str_mod = int(variables.get("str_mod", 0) or 0)
+            dex_mod = int(variables.get("dex_mod", 0) or 0)
+            use_dex = bool(int(monk_level) >= 1 and dex_mod > str_mod)
+            attack_ability_mod = int(dex_mod if use_dex else str_mod)
+            ability_token = "dex_mod" if use_dex else "str_mod"
+            proficiency_block = profile_data.get("proficiency") if isinstance(profile_data, dict) and isinstance(profile_data.get("proficiency"), dict) else {}
+            try:
+                prof_bonus = int(proficiency_block.get("bonus"))
+            except Exception:
+                prof_bonus = 0
+            default_to_hit = int(attack_ability_mod + max(0, int(prof_bonus)))
+            configured_to_hit = _parse_int(attacks_data.get("weapon_to_hit") if isinstance(attacks_data, dict) else None, default_to_hit)
+            die_size = self._monk_martial_arts_die(int(monk_level)) if int(monk_level) >= 1 else 4
+            return {
+                "id": "unarmed_strike",
+                "name": "Unarmed Strike",
+                "category": "simple_melee",
+                "weapon_group": "Simple Melee",
+                "range": "5 ft",
+                "to_hit": int(configured_to_hit if configured_to_hit is not None else default_to_hit),
+                "one_handed": {"damage_formula": f"1d{int(die_size)} + {ability_token}", "damage_type": "bludgeoning"},
+                "two_handed": {"damage_formula": "", "damage_type": ""},
+                "properties": [],
+            }
         def _weapon_equipped_flag(entry: Dict[str, Any]) -> bool:
             for key in ("equipped", "main_hand", "off_hand"):
                 raw = entry.get(key)
@@ -32448,6 +32694,16 @@ class InitiativeTracker(base.InitiativeTracker):
             inline_name = str(inline_weapon.get("name") or "").strip()
             if inline_name:
                 selected_weapon = copy.deepcopy(inline_weapon)
+        requested_unarmed = bool(
+            target_weapon_id == "unarmed_strike"
+            or target_weapon_name == "unarmed strike"
+        )
+        if (
+            not selected_weapon
+            and not bool(getattr(c, "is_wild_shaped", False))
+            and (requested_unarmed or (not target_weapon_id and not target_weapon_name))
+        ):
+            selected_weapon = _synthesized_unarmed_weapon(profile, attacks)
         if not selected_weapon:
             self._lan.toast(ws_id, "Pick one of yer configured weapons first, matey.")
             return
@@ -39539,6 +39795,10 @@ class InitiativeTracker(base.InitiativeTracker):
             "auras_enabled",
         ):
             snapshot[key] = raw.get(key)
+        if not isinstance(snapshot.get("grid"), dict):
+            map_state_payload = snapshot.get("map_state")
+            if isinstance(map_state_payload, dict) and isinstance(map_state_payload.get("grid"), dict):
+                snapshot["grid"] = dict(map_state_payload.get("grid"))
         return snapshot
 
     def _dm_move_combatant_on_map(self, cid: int, col: int, row: int) -> Dict[str, Any]:
@@ -39638,6 +39898,86 @@ class InitiativeTracker(base.InitiativeTracker):
     def _dm_map_grid_bounds(self) -> Tuple[int, int]:
         state = self._capture_canonical_map_state(prefer_window=True).normalized()
         return int(state.grid.cols), int(state.grid.rows)
+
+    def _dm_parse_grid_dimensions(
+        self,
+        *,
+        cols: Any = None,
+        rows: Any = None,
+    ) -> Tuple[Optional[int], Optional[int], Optional[str]]:
+        current_cols, current_rows = self._dm_map_grid_bounds()
+        if cols is None:
+            parsed_cols = int(current_cols)
+        else:
+            try:
+                parsed_cols = int(cols)
+            except Exception:
+                return None, None, "cols must be an integer."
+        if rows is None:
+            parsed_rows = int(current_rows)
+        else:
+            try:
+                parsed_rows = int(rows)
+            except Exception:
+                return None, None, "rows must be an integer."
+        if parsed_cols < 10 or parsed_cols > 1000:
+            return None, None, "cols must be between 10 and 1000."
+        if parsed_rows < 10 or parsed_rows > 1000:
+            return None, None, "rows must be between 10 and 1000."
+        return int(parsed_cols), int(parsed_rows), None
+
+    def _dm_create_blank_map(self, *, cols: Any = None, rows: Any = None) -> Dict[str, Any]:
+        parsed_cols, parsed_rows, error = self._dm_parse_grid_dimensions(cols=cols, rows=rows)
+        if error:
+            return {"ok": False, "error": error}
+
+        def _mutate(state: MapState) -> None:
+            current_grid = state.grid.normalized() if isinstance(state.grid, GridSpec) else GridSpec()
+            presentation = dict(state.presentation if isinstance(state.presentation, dict) else {})
+            auras_enabled = bool(
+                presentation.get("auras_enabled", self.__dict__.get("_lan_auras_enabled", True))
+            )
+            state.grid = GridSpec(
+                cols=int(parsed_cols),
+                rows=int(parsed_rows),
+                feet_per_square=float(current_grid.feet_per_square or 5.0),
+            ).normalized()
+            state.terrain_cells = {}
+            state.obstacles = {}
+            state.features = {}
+            state.hazards = {}
+            state.structures = {}
+            state.elevation_cells = {}
+            state.token_positions = {}
+            state.aoes = {}
+            state.presentation = {
+                "auras_enabled": bool(auras_enabled),
+                "bg_images": [],
+                "next_bg_id": 1,
+            }
+
+        updated_state = self._mutate_canonical_map_state(_mutate, hydrate_window=True, broadcast=True)
+        try:
+            self._restore_map_backgrounds(list(self.__dict__.get("_session_bg_images", []) or []))
+        except Exception:
+            pass
+        return {"ok": True, "grid": updated_state.grid.to_dict()}
+
+    def _dm_set_map_grid_settings(self, *, cols: Any = None, rows: Any = None) -> Dict[str, Any]:
+        parsed_cols, parsed_rows, error = self._dm_parse_grid_dimensions(cols=cols, rows=rows)
+        if error:
+            return {"ok": False, "error": error}
+
+        def _mutate(state: MapState) -> None:
+            current_grid = state.grid.normalized() if isinstance(state.grid, GridSpec) else GridSpec()
+            state.grid = GridSpec(
+                cols=int(parsed_cols),
+                rows=int(parsed_rows),
+                feet_per_square=float(current_grid.feet_per_square or 5.0),
+            ).normalized()
+
+        updated_state = self._mutate_canonical_map_state(_mutate, hydrate_window=True, broadcast=True)
+        return {"ok": True, "grid": updated_state.grid.to_dict()}
 
     def _dm_validate_map_cell(self, col: int, row: int) -> Optional[str]:
         cols, rows = self._dm_map_grid_bounds()

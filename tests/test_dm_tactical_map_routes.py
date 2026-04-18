@@ -34,6 +34,8 @@ class _TacticalAppStub:
         self.turn_num = 1
         self.current_cid = 1
         self.in_combat = True
+        self.map_cols = 12
+        self.map_rows = 8
         self._name_role_memory = {"Aelar": "pc", "Goblin": "enemy"}
         self.positions = {1: (1, 1), 2: (4, 2)}
         self.facings = {1: 0, 2: 180}
@@ -57,6 +59,8 @@ class _TacticalAppStub:
         self.aoe_move_calls: list = []
         self.aoe_remove_calls: list = []
         self.auras_overlay_calls: list = []
+        self.map_new_calls: list = []
+        self.map_settings_calls: list = []
         self.broadcast_calls = 0
         self.obstacles = {(3, 3)}
         self.rough_cells = {
@@ -157,7 +161,7 @@ class _TacticalAppStub:
         units = []
         for cid in sorted(self.combatants.keys()):
             combatant = self.combatants[cid]
-            col, row = self.positions[int(cid)]
+            col, row = self.positions.get(int(cid), (0, 0))
             role = "pc" if bool(getattr(combatant, "is_pc", False)) else "enemy"
             units.append(
                 {
@@ -172,12 +176,12 @@ class _TacticalAppStub:
                 }
             )
         return {
-            "grid": {"cols": 12, "rows": 8, "feet_per_square": 5.0},
+            "grid": {"cols": int(self.map_cols), "rows": int(self.map_rows), "feet_per_square": 5.0},
             "obstacles": [{"col": int(col), "row": int(row)} for col, row in sorted(self.obstacles)],
             "rough_terrain": [dict(cell) for _key, cell in sorted(self.rough_cells.items())],
             "aoes": [dict(self.aoes[aid]) for aid in sorted(self.aoes.keys())],
             "map_state": {
-                "grid": {"cols": 12, "rows": 8, "feet_per_square": 5.0},
+                "grid": {"cols": int(self.map_cols), "rows": int(self.map_rows), "feet_per_square": 5.0},
                 "presentation": {
                     "bg_images": [dict(layer) for layer in self.background_layers],
                     "next_bg_id": int(self.next_background_id),
@@ -216,7 +220,7 @@ class _TacticalAppStub:
         self.move_calls.append({"cid": int(cid), "col": int(col), "row": int(row)})
         if cid not in self.combatants:
             return {"ok": False, "error": "Combatant not found."}
-        if not (0 <= int(col) < 12 and 0 <= int(row) < 8):
+        if not (0 <= int(col) < int(self.map_cols) and 0 <= int(row) < int(self.map_rows)):
             return {"ok": False, "error": "Off the map, matey."}
         if self._occupied_by_other(cid, col, row):
             return {"ok": False, "error": "Destination is occupied."}
@@ -228,7 +232,7 @@ class _TacticalAppStub:
         self.place_calls.append({"cid": int(cid), "col": int(col), "row": int(row)})
         if cid not in self.combatants:
             return {"ok": False, "error": "Combatant not found."}
-        if not (0 <= int(col) < 12 and 0 <= int(row) < 8):
+        if not (0 <= int(col) < int(self.map_cols) and 0 <= int(row) < int(self.map_rows)):
             return {"ok": False, "error": "Destination is out of map bounds."}
         if self._occupied_by_other(cid, col, row):
             return {"ok": False, "error": "Destination is occupied."}
@@ -246,7 +250,7 @@ class _TacticalAppStub:
 
     def _dm_set_obstacle_on_map(self, col: int, row: int, blocked: bool):
         self.obstacle_calls.append({"col": int(col), "row": int(row), "blocked": bool(blocked)})
-        if not (0 <= int(col) < 12 and 0 <= int(row) < 8):
+        if not (0 <= int(col) < int(self.map_cols) and 0 <= int(row) < int(self.map_rows)):
             return {"ok": False, "error": "Cell out of bounds."}
         if blocked:
             self.obstacles.add((int(col), int(row)))
@@ -273,7 +277,7 @@ class _TacticalAppStub:
                 "movement_type": str(movement_type),
             }
         )
-        if not (0 <= int(col) < 12 and 0 <= int(row) < 8):
+        if not (0 <= int(col) < int(self.map_cols) and 0 <= int(row) < int(self.map_rows)):
             return {"ok": False, "error": "Cell out of bounds."}
         key = (int(col), int(row))
         if bool(is_rough):
@@ -315,7 +319,7 @@ class _TacticalAppStub:
                 "tactical_preset_id": str(tactical_preset_id or ""),
             }
         )
-        if not (0 <= int(col) < 12 and 0 <= int(row) < 8):
+        if not (0 <= int(col) < int(self.map_cols) and 0 <= int(row) < int(self.map_rows)):
             return {"ok": False, "error": "Cell out of bounds."}
         hid = str(hazard_id or "").strip()
         if not hid:
@@ -370,7 +374,7 @@ class _TacticalAppStub:
                 "tactical_preset_id": str(tactical_preset_id or ""),
             }
         )
-        if not (0 <= int(col) < 12 and 0 <= int(row) < 8):
+        if not (0 <= int(col) < int(self.map_cols) and 0 <= int(row) < int(self.map_rows)):
             return {"ok": False, "error": "Cell out of bounds."}
         fid = str(feature_id or "").strip()
         if not fid:
@@ -427,7 +431,7 @@ class _TacticalAppStub:
                 "tactical_preset_id": str(tactical_preset_id or ""),
             }
         )
-        if not (0 <= int(anchor_col) < 12 and 0 <= int(anchor_row) < 8):
+        if not (0 <= int(anchor_col) < int(self.map_cols) and 0 <= int(anchor_row) < int(self.map_rows)):
             return {"ok": False, "error": "Cell out of bounds."}
         sid = str(structure_id or "").strip()
         if not sid:
@@ -463,7 +467,7 @@ class _TacticalAppStub:
         sid = str(structure_id or "").strip()
         if sid not in self.structures:
             return {"ok": False, "error": "Structure not found."}
-        if not (0 <= int(anchor_col) < 12 and 0 <= int(anchor_row) < 8):
+        if not (0 <= int(anchor_col) < int(self.map_cols) and 0 <= int(anchor_row) < int(self.map_rows)):
             return {"ok": False, "error": "Cell out of bounds."}
         existing = dict(self.structures[sid])
         old_anchor_col = int(existing.get("anchor_col", 0))
@@ -491,7 +495,7 @@ class _TacticalAppStub:
 
     def _dm_set_elevation_on_map(self, col: int, row: int, elevation):
         self.elevation_calls.append({"col": int(col), "row": int(row), "elevation": float(elevation)})
-        if not (0 <= int(col) < 12 and 0 <= int(row) < 8):
+        if not (0 <= int(col) < int(self.map_cols) and 0 <= int(row) < int(self.map_rows)):
             return {"ok": False, "error": "Cell out of bounds."}
         self.elevation_cells[(int(col), int(row))] = {"col": int(col), "row": int(row), "elevation": float(elevation)}
         self._lan_force_state_broadcast()
@@ -500,6 +504,46 @@ class _TacticalAppStub:
     def _dm_list_background_assets(self):
         self.background_asset_list_calls += 1
         return [dict(item) for item in self.background_assets]
+
+    def _dm_create_blank_map(self, *, cols=None, rows=None):
+        next_cols = int(self.map_cols if cols is None else cols)
+        next_rows = int(self.map_rows if rows is None else rows)
+        if next_cols < 10 or next_cols > 1000:
+            return {"ok": False, "error": "cols must be between 10 and 1000."}
+        if next_rows < 10 or next_rows > 1000:
+            return {"ok": False, "error": "rows must be between 10 and 1000."}
+        self.map_new_calls.append({"cols": int(next_cols), "rows": int(next_rows)})
+        self.map_cols = int(next_cols)
+        self.map_rows = int(next_rows)
+        self.obstacles = set()
+        self.rough_cells = {}
+        self.hazards = {}
+        self.next_hazard_id = 1
+        self.features = {}
+        self.next_feature_id = 1
+        self.structures = {}
+        self.next_structure_id = 1
+        self.elevation_cells = {}
+        self.background_layers = []
+        self.next_background_id = 1
+        self.aoes = {}
+        self.next_aoe_id = 1
+        self.positions = {}
+        self._lan_force_state_broadcast()
+        return {"ok": True, "grid": {"cols": int(next_cols), "rows": int(next_rows), "feet_per_square": 5.0}}
+
+    def _dm_set_map_grid_settings(self, *, cols=None, rows=None):
+        next_cols = int(self.map_cols if cols is None else cols)
+        next_rows = int(self.map_rows if rows is None else rows)
+        if next_cols < 10 or next_cols > 1000:
+            return {"ok": False, "error": "cols must be between 10 and 1000."}
+        if next_rows < 10 or next_rows > 1000:
+            return {"ok": False, "error": "rows must be between 10 and 1000."}
+        self.map_settings_calls.append({"cols": int(next_cols), "rows": int(next_rows)})
+        self.map_cols = int(next_cols)
+        self.map_rows = int(next_rows)
+        self._lan_force_state_broadcast()
+        return {"ok": True, "grid": {"cols": int(next_cols), "rows": int(next_rows), "feet_per_square": 5.0}}
 
     def _dm_upsert_background_layer(
         self,
@@ -677,6 +721,28 @@ class DmTacticalMapRoutesTests(unittest.TestCase):
         self.assertIn("tactical_map", payload)
         self.assertEqual(12, payload["tactical_map"]["grid"]["cols"])
         self.assertEqual({"col": 1, "row": 1}, payload["tactical_map"]["units"][0]["pos"])
+
+    def test_map_new_route_initializes_blank_map(self):
+        client, lan = self._build_client()
+        response = client.post("/api/dm/map/new", json={"cols": 30, "rows": 18})
+        self.assertEqual(200, response.status_code)
+        payload = response.json()
+        self.assertTrue(payload["ok"])
+        self.assertEqual([{"cols": 30, "rows": 18}], lan._tracker.map_new_calls)
+        self.assertEqual(30, payload["snapshot"]["tactical_map"]["grid"]["cols"])
+        self.assertEqual(18, payload["snapshot"]["tactical_map"]["grid"]["rows"])
+        self.assertEqual([], payload["snapshot"]["tactical_map"]["hazards"])
+        self.assertEqual([], payload["snapshot"]["tactical_map"]["features"])
+
+    def test_map_settings_route_updates_grid_dimensions(self):
+        client, lan = self._build_client()
+        response = client.post("/api/dm/map/settings", json={"cols": 16, "rows": 11})
+        self.assertEqual(200, response.status_code)
+        payload = response.json()
+        self.assertTrue(payload["ok"])
+        self.assertEqual([{"cols": 16, "rows": 11}], lan._tracker.map_settings_calls)
+        self.assertEqual(16, payload["snapshot"]["tactical_map"]["grid"]["cols"])
+        self.assertEqual(11, payload["snapshot"]["tactical_map"]["grid"]["rows"])
 
     def test_move_route_updates_position_and_returns_combined_snapshot(self):
         client, lan = self._build_client()
@@ -896,11 +962,19 @@ class DmTacticalMapRoutesTests(unittest.TestCase):
 
     def test_map_routes_require_admin_when_password_configured(self):
         client, lan = self._build_client(admin_password_configured=True)
-        unauthenticated = client.post("/api/dm/map/obstacles/cell", json={"col": 2, "row": 2, "blocked": True})
-        self.assertEqual(401, unauthenticated.status_code)
+        unauth_new = client.post("/api/dm/map/new", json={"cols": 20, "rows": 20})
+        unauth_settings = client.post("/api/dm/map/settings", json={"cols": 22, "rows": 18})
+        unauth_obstacle = client.post("/api/dm/map/obstacles/cell", json={"col": 2, "row": 2, "blocked": True})
+        self.assertEqual(401, unauth_new.status_code)
+        self.assertEqual(401, unauth_settings.status_code)
+        self.assertEqual(401, unauth_obstacle.status_code)
         headers = self._auth_headers(client, lan)
-        authenticated = client.post("/api/dm/map/obstacles/cell", json={"col": 2, "row": 2, "blocked": True}, headers=headers)
-        self.assertEqual(200, authenticated.status_code)
+        auth_new = client.post("/api/dm/map/new", json={"cols": 20, "rows": 20}, headers=headers)
+        auth_settings = client.post("/api/dm/map/settings", json={"cols": 22, "rows": 18}, headers=headers)
+        auth_obstacle = client.post("/api/dm/map/obstacles/cell", json={"col": 2, "row": 2, "blocked": True}, headers=headers)
+        self.assertEqual(200, auth_new.status_code)
+        self.assertEqual(200, auth_settings.status_code)
+        self.assertEqual(200, auth_obstacle.status_code)
 
 
 class _TrackerTacticalHarness:
@@ -919,6 +993,9 @@ class _TrackerTacticalHarness:
     _dm_place_combatant_on_map = tracker_mod.InitiativeTracker._dm_place_combatant_on_map
     _dm_set_combatant_facing = tracker_mod.InitiativeTracker._dm_set_combatant_facing
     _dm_map_grid_bounds = tracker_mod.InitiativeTracker._dm_map_grid_bounds
+    _dm_parse_grid_dimensions = tracker_mod.InitiativeTracker._dm_parse_grid_dimensions
+    _dm_create_blank_map = tracker_mod.InitiativeTracker._dm_create_blank_map
+    _dm_set_map_grid_settings = tracker_mod.InitiativeTracker._dm_set_map_grid_settings
     _dm_validate_map_cell = tracker_mod.InitiativeTracker._dm_validate_map_cell
     _dm_set_obstacle_on_map = tracker_mod.InitiativeTracker._dm_set_obstacle_on_map
     _dm_set_terrain_on_map = tracker_mod.InitiativeTracker._dm_set_terrain_on_map
@@ -1049,6 +1126,17 @@ class DmTacticalHelperTests(unittest.TestCase):
         self.assertEqual({"col": 1, "row": 1}, payload["units"][0]["pos"])
         self.assertNotIn("spell_presets", payload)
 
+    def test_dm_tactical_snapshot_falls_back_to_map_state_grid(self):
+        app = _TrackerTacticalHarness()
+        app._lan_snapshot = lambda *_, **__: {
+            "grid": None,
+            "map_state": {"grid": {"cols": 14, "rows": 9, "feet_per_square": 5.0}},
+            "units": [],
+        }
+        payload = app._dm_tactical_snapshot()
+        self.assertEqual(14, payload["grid"]["cols"])
+        self.assertEqual(9, payload["grid"]["rows"])
+
     def test_dm_move_combatant_on_map_routes_through_lan_move_and_broadcasts(self):
         app = _TrackerTacticalHarness()
         result = app._dm_move_combatant_on_map(1, 3, 2)
@@ -1095,6 +1183,29 @@ class DmTacticalHelperTests(unittest.TestCase):
         state_after_clear = app._capture_canonical_map_state(prefer_window=True).normalized()
         self.assertNotIn((2, 3), state_after_clear.terrain_cells)
         self.assertEqual(3, app.broadcast_calls)
+
+    def test_dm_create_blank_map_helper_resets_map_layers_and_grid(self):
+        app = _TrackerTacticalHarness()
+        app._dm_set_obstacle_on_map(2, 3, True)
+        app._dm_upsert_feature_on_map(col=4, row=4, tactical_preset_id="crate", name="Crate")
+        result = app._dm_create_blank_map(cols=14, rows=12)
+        self.assertTrue(result["ok"])
+        state = app._capture_canonical_map_state(prefer_window=True).normalized()
+        self.assertEqual(14, state.grid.cols)
+        self.assertEqual(12, state.grid.rows)
+        self.assertEqual({}, state.obstacles)
+        self.assertEqual({}, state.features)
+        self.assertEqual({}, state.token_positions)
+
+    def test_dm_set_map_grid_settings_helper_preserves_existing_layers(self):
+        app = _TrackerTacticalHarness()
+        app._dm_set_obstacle_on_map(2, 3, True)
+        result = app._dm_set_map_grid_settings(cols=16, rows=11)
+        self.assertTrue(result["ok"])
+        state = app._capture_canonical_map_state(prefer_window=True).normalized()
+        self.assertEqual(16, state.grid.cols)
+        self.assertEqual(11, state.grid.rows)
+        self.assertIn((2, 3), state.obstacles)
 
     def test_dm_set_auras_enabled_helper_updates_projection(self):
         app = _TrackerTacticalHarness()
@@ -1189,6 +1300,10 @@ class DmConsoleSnapshotPayloadTests(unittest.TestCase):
 class DmTacticalMapHtmlSurfaceTests(unittest.TestCase):
     def test_dm_console_contains_tactical_map_controls(self):
         html = _DM_HTML_PATH.read_text(encoding="utf-8")
+        self.assertIn('id="mapColsInput"', html)
+        self.assertIn('id="mapRowsInput"', html)
+        self.assertIn('id="createMapBtn"', html)
+        self.assertIn('id="applyMapSettingsBtn"', html)
         self.assertIn('id="tacticalMapCanvas"', html)
         self.assertIn('id="mapActionModeSelect"', html)
         self.assertIn('id="applyMapActionBtn"', html)
@@ -1210,6 +1325,8 @@ class DmTacticalMapHtmlSurfaceTests(unittest.TestCase):
         self.assertIn("/api/dm/map/combatants/{cid}/place", html)
         self.assertIn("/api/dm/map/obstacles/cell", html)
         self.assertIn("/api/dm/map/terrain/cell", html)
+        self.assertIn("/api/dm/map/new", html)
+        self.assertIn("/api/dm/map/settings", html)
         self.assertIn("/api/dm/map/hazards", html)
         self.assertIn("/api/dm/map/features", html)
         self.assertIn("/api/dm/map/structures", html)

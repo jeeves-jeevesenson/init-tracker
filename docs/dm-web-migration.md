@@ -98,6 +98,8 @@ The DM console lives at `http://<lan-ip>:<port>/dm` and provides:
 - **HP Adjustment** – apply damage (negative) or healing (positive)
 - **Set Temp HP** – set (or clear) temporary HP for any combatant
 - **Add / Remove Condition** – apply any of the 15 standard D&D 5e conditions
+- **Map bootstrap/setup** – create a new blank tactical map and set grid
+  dimensions directly from `/dm` (no Tk map-size prompt required)
 - **Tactical token control** – place/reposition, rules-aware move, and facing
   updates for combatants on the tactical map
 - **Battlefield prep controls** – obstacle cell block/clear and rough-terrain
@@ -266,19 +268,20 @@ via the web.
 
 ## Recommended next migration targets
 
-1. **Initiative-roll support**: Expose full initiative-roll support through
-   the backend service so the DM web console can trigger initiative rolls
-   without Tkinter fallback.
+1. **Advanced map-editor parity**: keep closing the desktop-only tactical author
+   workflows that remain (template/deck/ship tooling, richer layer controls,
+   and higher-fidelity overlay/debug UX).
 
-2. **Token refresh hardening**: Proactive DM token renewal is now in place.
-   Follow-up work can improve diagnostics/telemetry around refresh failures.
+2. **Snapshot enhancements**: add operator-facing fields as needed
+   (for example richer tactical metadata or resource tooltips) while keeping
+   backend-owned authority.
 
-3. **Snapshot enhancements**: Additional fields (e.g. per-combatant AC tooltip,
-   resource pools) can be added as the DM console grows.
+3. **Token refresh diagnostics**: proactive DM token renewal is in place;
+   follow-up telemetry can make refresh failures easier to diagnose in live LAN
+   use.
 
-4. **Player-facing LAN client state sync**: Continue hardening reconnect
-   recovery and broadcast reliability for the player-facing LAN WebSocket
-   client.
+4. **Player-facing LAN client state sync**: continue reconnect hardening and
+   broadcast reliability work for `/ws`.
 
 ---
 

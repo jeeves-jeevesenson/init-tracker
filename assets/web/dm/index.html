@@ -536,6 +536,29 @@
       <div class="mut-result" id="removeCombatantResult"></div>
     </div>
 
+    <!-- Map setup -->
+    <div class="mut-card">
+      <h3>Map Setup</h3>
+      <div class="tactical-status" style="margin-bottom:10px">
+        Create a fresh blank map, then adjust grid size before tactical prep.
+      </div>
+      <div class="tactical-inline">
+        <div class="form-group">
+          <label>Grid Columns</label>
+          <input type="number" id="mapColsInput" min="10" max="1000" step="1" value="20" />
+        </div>
+        <div class="form-group">
+          <label>Grid Rows</label>
+          <input type="number" id="mapRowsInput" min="10" max="1000" step="1" value="20" />
+        </div>
+      </div>
+      <div style="display:flex;gap:6px">
+        <button class="btn-action remove" id="createMapBtn" style="flex:1">🗺 Create Blank Map</button>
+        <button class="btn-action" id="applyMapSettingsBtn" style="flex:1">Apply Grid Settings</button>
+      </div>
+      <div class="mut-result" id="mapSetupResult"></div>
+    </div>
+
     <!-- Tactical encounter management -->
     <div class="mut-card tactical-card">
       <h3>Tactical Map</h3>
@@ -817,6 +840,8 @@
      GET    /api/dm/encounter/options                       → player/monster setup choices
       POST   /api/dm/encounter/players/add                   → add player profiles
       POST   /api/dm/encounter/monsters/add                  → add monster specs
+      POST   /api/dm/map/new                                 → create blank tactical map
+      POST   /api/dm/map/settings                            → update tactical map grid settings
       POST   /api/dm/map/combatants/{cid}/move               → move on tactical map
       POST   /api/dm/map/combatants/{cid}/place              → place/reposition on map
       POST   /api/dm/map/combatants/{cid}/facing             → set tactical facing
@@ -1237,6 +1262,17 @@ function currentTacticalMap() {
     : null;
 }
 
+function tacticalGridSpec(tactical) {
+  if (tactical && tactical.grid && typeof tactical.grid === 'object') {
+    return tactical.grid;
+  }
+  const mapState = tactical && typeof tactical.map_state === 'object' ? tactical.map_state : null;
+  if (mapState && mapState.grid && typeof mapState.grid === 'object') {
+    return mapState.grid;
+  }
+  return null;
+}
+
 function tacticalUnits(tactical) {
   return Array.isArray(tactical && tactical.units) ? tactical.units : [];
 }
@@ -1285,6 +1321,104 @@ function tacticalBackgroundLayers(tactical) {
 
 function tacticalAoes(tactical) {
   return Array.isArray(tactical && tactical.aoes) ? tactical.aoes : [];
+}
+
+function setMapSetupResult(text, isError = false) {
+  const el = document.getElementById('mapSetupResult');
+  el.className = 'mut-result' + (isError ? ' error' : '');
+  el.textContent = text || '';
+}
+
+function readMapSetupDimensions() {
+  const cols = parseInt(document.getElementById('mapColsInput').value, 10);
+  const rows = parseInt(document.getElementById('mapRowsInput').value, 10);
+  if (!Number.isFinite(cols) || !Number.isFinite(rows)) {
+    return { error: 'Grid columns and rows must be whole numbers.' };
+  }
+  if (cols < 10 || cols > 1000) {
+    return { error: 'Grid columns must be between 10 and 1000.' };
+  }
+  if (rows < 10 || rows > 1000) {
+    return { error: 'Grid rows must be between 10 and 1000.' };
+  }
+  return { cols, rows };
+}
+
+function syncMapSetupInputsFromSnapshot(snap) {
+  const tactical = snap && snap.tactical_map && typeof snap.tactical_map === 'object'
+    ? snap.tactical_map
+    : null;
+  const grid = tacticalGridSpec(tactical);
+  if (!grid) return;
+  const cols = Number(grid.cols);
+  const rows = Number(grid.rows);
+  const colsInput = document.getElementById('mapColsInput');
+  const rowsInput = document.getElementById('mapRowsInput');
+  if (Number.isFinite(cols) && document.activeElement !== colsInput) {
+    colsInput.value = String(Math.trunc(cols));
+  }
+  if (Number.isFinite(rows) && document.activeElement !== rowsInput) {
+    rowsInput.value = String(Math.trunc(rows));
+  }
+}
+
+async function createBlankMapFromSetup() {
+  const res = document.getElementById('mapSetupResult');
+  res.className = 'mut-result';
+  const dims = readMapSetupDimensions();
+  if (dims.error) {
+    setMapSetupResult(dims.error, true);
+    return;
+  }
+  if (!confirm('Create a new blank map? This clears current map layout, layers, tokens, and tactical effects.')) return;
+  try {
+    const r = await fetch(`${BASE}/api/dm/map/new`, {
+      method: 'POST',
+      headers: authHeaders(),
+      body: JSON.stringify({ cols: dims.cols, rows: dims.rows }),
+    });
+    if (r.status === 401 || r.status === 403) {
+      clearAdminAuthState('Session expired. Please log in again.');
+      return;
+    }
+    const data = await r.json();
+    if (r.ok && data.ok) {
+      setMapSetupResult(`Blank map ready at ${dims.cols}×${dims.rows}.`);
+      if (data.snapshot) applySnapshot(data.snapshot);
+    } else {
+      setMapSetupResult(data.detail || data.error || 'Error.', true);
+    }
+  } catch (_) {
+    setMapSetupResult('Request failed.', true);
+  }
+}
+
+async function applyMapGridSettingsFromSetup() {
+  const dims = readMapSetupDimensions();
+  if (dims.error) {
+    setMapSetupResult(dims.error, true);
+    return;
+  }
+  try {
+    const r = await fetch(`${BASE}/api/dm/map/settings`, {
+      method: 'POST',
+      headers: authHeaders(),
+      body: JSON.stringify({ cols: dims.cols, rows: dims.rows }),
+    });
+    if (r.status === 401 || r.status === 403) {
+      clearAdminAuthState('Session expired. Please log in again.');
+      return;
+    }
+    const data = await r.json();
+    if (r.ok && data.ok) {
+      setMapSetupResult(`Map grid updated to ${dims.cols}×${dims.rows}.`);
+      if (data.snapshot) applySnapshot(data.snapshot);
+    } else {
+      setMapSetupResult(data.detail || data.error || 'Error.', true);
+    }
+  } catch (_) {
+    setMapSetupResult('Request failed.', true);
+  }
 }
 
 function selectedTacticalCell() {
@@ -1563,7 +1697,7 @@ function resizeCanvasToDisplaySize(canvas) {
 }
 
 function tacticalGeometry(tactical, width, height) {
-  const grid = tactical && tactical.grid && typeof tactical.grid === 'object' ? tactical.grid : null;
+  const grid = tacticalGridSpec(tactical);
   const cols = Number(grid && grid.cols);
   const rows = Number(grid && grid.rows);
   if (!Number.isFinite(cols) || !Number.isFinite(rows) || cols <= 0 || rows <= 0) return null;
@@ -1860,6 +1994,7 @@ function applySnapshot(snap) {
   syncTacticalFieldsFromSelection({ keepTargetCell: true });
   renderTacticalMap(snap.tactical_map || null);
   updateTacticalEntitySelectors(snap.tactical_map || null);
+  syncMapSetupInputsFromSnapshot(snap);
 
   if (membershipChanged) refreshEncounterOptions();
 }
@@ -2538,6 +2673,8 @@ document.querySelectorAll('.tactical-facing-grid [data-facing]').forEach(btn => 
 });
 window.addEventListener('resize', () => renderTacticalMap(currentTacticalMap()));
 updateTacticalActionLabel();
+document.getElementById('createMapBtn').addEventListener('click', createBlankMapFromSetup);
+document.getElementById('applyMapSettingsBtn').addEventListener('click', applyMapGridSettingsFromSetup);
 
 // ── Mutations ─────────────────────────────────────────────────────────
 document.getElementById('startCombatBtn').addEventListener('click', async () => {
