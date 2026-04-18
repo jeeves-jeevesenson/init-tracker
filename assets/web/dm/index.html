@@ -924,6 +924,81 @@
       <div class="mut-result" id="tacticalResult"></div>
     </div>
 
+    <!-- Monster turn controls -->
+    <div class="mut-card">
+      <h3>Monster Turn Controls</h3>
+      <div class="tactical-status" style="margin-bottom:10px">
+        Use existing backend combat semantics to run enemy turns from the browser.
+      </div>
+      <div class="form-group">
+        <label>Acting monster / enemy</label>
+        <select id="monsterActorCidSelect"><option value="">— select enemy —</option></select>
+      </div>
+      <div class="form-group">
+        <label>Target combatant</label>
+        <select id="monsterTargetCidSelect"><option value="">— select target —</option></select>
+      </div>
+      <div class="form-group">
+        <label>Turn resource to spend</label>
+        <select id="monsterSpendSelect">
+          <option value="action">Action</option>
+          <option value="bonus">Bonus Action</option>
+          <option value="reaction">Reaction</option>
+          <option value="none">No Spend</option>
+        </select>
+      </div>
+      <div style="display:flex;gap:6px">
+        <button class="btn-sm" id="loadMonsterAttacksBtn" style="flex:1">Load Monster Attacks</button>
+      </div>
+      <div class="tactical-inline" style="margin-top:8px">
+        <div class="form-group">
+          <label>Attack</label>
+          <select id="monsterAttackSelect"><option value="">— load attacks first —</option></select>
+        </div>
+        <div class="form-group">
+          <label>Count</label>
+          <input type="number" id="monsterAttackCountInput" min="1" max="10" value="1" />
+        </div>
+        <div class="form-group">
+          <label>Roll mode</label>
+          <select id="monsterRollModeSelect">
+            <option value="normal">Normal</option>
+            <option value="advantage">Advantage</option>
+            <option value="disadvantage">Disadvantage</option>
+          </select>
+        </div>
+      </div>
+      <button class="btn-action" id="resolveMonsterAttackBtn" style="margin-top:8px">Resolve Monster Attack</button>
+      <div class="form-group" style="margin-top:8px">
+        <label>Manual damage entries (type:amount, comma-separated)</label>
+        <input type="text" id="monsterDamageEntriesInput" placeholder="slashing:5, fire:3" />
+      </div>
+      <button class="btn-action remove" id="applyMonsterDamageBtn">Apply Monster Damage</button>
+      <div class="tactical-divider"></div>
+      <div class="form-group">
+        <label>Monster action name</label>
+        <input type="text" id="monsterActionNameInput" placeholder="e.g. Nimble Escape" />
+      </div>
+      <button class="btn-sm" id="performMonsterActionBtn">Perform Monster Action</button>
+      <div class="tactical-divider"></div>
+      <div class="form-group">
+        <label>Spell name</label>
+        <input type="text" id="monsterSpellNameInput" placeholder="e.g. Fire Bolt" />
+      </div>
+      <div class="tactical-inline">
+        <div class="form-group">
+          <label>Spell slug (preferred)</label>
+          <input type="text" id="monsterSpellSlugInput" placeholder="e.g. fire-bolt" />
+        </div>
+        <div class="form-group">
+          <label>Spell id (optional)</label>
+          <input type="text" id="monsterSpellIdInput" placeholder="optional preset id" />
+        </div>
+      </div>
+      <button class="btn-action" id="castMonsterSpellBtn">Cast Monster Spell (Targeted)</button>
+      <div class="mut-result" id="monsterTurnResult"></div>
+    </div>
+
     <!-- Session persistence -->
     <div class="mut-card">
       <h3>Session Persistence</h3>
@@ -1012,10 +1087,15 @@
      POST   /api/dm/combat/combatants/{cid}/hp              → HP adjustment
      POST   /api/dm/combat/combatants/{cid}/condition       → add/remove condition
      POST   /api/dm/combat/combatants/{cid}/temp-hp         → set temp HP
-     POST   /api/dm/combat/combatants/{cid}/temp-hp-adjust  → delta temp HP adjust
-     POST   /api/dm/combat/combatants/{cid}/initiative      → set initiative
-     POST   /api/dm/combat/combatants/{cid}/initiative/roll → roll initiative
-     DELETE /api/dm/combat/combatants/{cid}                 → remove combatant
+      POST   /api/dm/combat/combatants/{cid}/temp-hp-adjust  → delta temp HP adjust
+      POST   /api/dm/combat/combatants/{cid}/initiative      → set initiative
+      POST   /api/dm/combat/combatants/{cid}/initiative/roll → roll initiative
+      GET    /api/dm/combat/combatants/{cid}/monster-attacks → list parsed monster attacks
+      POST   /api/dm/combat/monster-attacks/resolve          → resolve monster attack sequence
+      POST   /api/dm/combat/monster-attacks/apply-damage     → apply manual monster attack damage
+      POST   /api/dm/combat/combatants/{cid}/perform-action  → execute monster/non-PC perform_action
+      POST   /api/dm/combat/combatants/{cid}/spell-target    → execute monster/non-PC targeted spell
+      DELETE /api/dm/combat/combatants/{cid}                 → remove combatant
      POST   /api/admin/login                                → optional admin login
      POST   /api/dm/sessions/new                            → clear to blank session
      WS     /ws/dm[?token=…]                                → real-time DM state push
@@ -1037,6 +1117,9 @@ let tacticalBackgroundAssets = [];
 let tacticalShipBlueprints = [];
 let tacticalStructureTemplates = [];
 let shipEngagementDetailByStructure = {};
+let monsterAttackCatalog = [];
+let monsterAttackDefaults = {};
+let lastMonsterAttackResolution = null;
 const POLL_INTERVAL_MS = 2500;
 const WS_RECONNECT_MS = 5000;
 const ADMIN_REFRESH_MAX_LEAD_MS = 120000;
@@ -1448,6 +1531,416 @@ function setTacticalResult(text, isError = false) {
   const el = document.getElementById('tacticalResult');
   el.className = 'mut-result' + (isError ? ' error' : '');
   el.textContent = text || '';
+}
+
+function setMonsterTurnResult(text, isError = false) {
+  const el = document.getElementById('monsterTurnResult');
+  if (!el) return;
+  el.className = 'mut-result' + (isError ? ' error' : '');
+  el.textContent = text || '';
+}
+
+function selectedMonsterActorCid() {
+  const raw = String(document.getElementById('monsterActorCidSelect').value || '').trim();
+  if (!raw) return null;
+  const cid = Number(raw);
+  return Number.isFinite(cid) ? cid : null;
+}
+
+function selectedMonsterTargetCid() {
+  const raw = String(document.getElementById('monsterTargetCidSelect').value || '').trim();
+  if (!raw) return null;
+  const cid = Number(raw);
+  return Number.isFinite(cid) ? cid : null;
+}
+
+function isEnemyCombatantEntry(entry) {
+  const role = String(entry && entry.role || '').trim().toLowerCase();
+  if (role === 'enemy') return true;
+  return !!(entry && entry.ally === false && role !== 'pc');
+}
+
+function syncMonsterAttackCountFromSelection() {
+  const key = String(document.getElementById('monsterAttackSelect').value || '').trim();
+  if (!key) return;
+  const suggested = Number(monsterAttackDefaults[key] || 0);
+  if (Number.isFinite(suggested) && suggested > 0) {
+    document.getElementById('monsterAttackCountInput').value = String(Math.max(1, Math.floor(suggested)));
+  }
+}
+
+function populateMonsterAttackSelect(options = [], defaults = {}) {
+  const select = document.getElementById('monsterAttackSelect');
+  const previous = String(select.value || '').trim();
+  select.innerHTML = '<option value="">— select attack —</option>';
+  const entries = Array.isArray(options) ? options : [];
+  for (const option of entries) {
+    if (!option || typeof option !== 'object') continue;
+    const key = String(option.key || '').trim();
+    if (!key) continue;
+    const toHit = Number(option.to_hit);
+    const damage = Array.isArray(option.damage) ? option.damage : [];
+    const dmgSummary = damage
+      .map(part => {
+        if (!part || typeof part !== 'object') return '';
+        const amount = Number(part.amount);
+        const type = String(part.type || '').trim();
+        if (!Number.isFinite(amount) || !type) return '';
+        return `${Math.round(amount)} ${type}`;
+      })
+      .filter(Boolean)
+      .join(' + ');
+    const label = String(option.label || option.name || key).trim() || key;
+    const parts = [label];
+    if (Number.isFinite(toHit)) parts.push(`+${Math.round(toHit)} to hit`);
+    if (dmgSummary) parts.push(dmgSummary);
+    const opt = document.createElement('option');
+    opt.value = key;
+    opt.textContent = parts.join(' · ');
+    select.appendChild(opt);
+  }
+  if (previous && Array.from(select.options).some(opt => opt.value === previous)) {
+    select.value = previous;
+  } else if (select.options.length > 1) {
+    select.selectedIndex = 1;
+  }
+  monsterAttackDefaults = defaults && typeof defaults === 'object' ? defaults : {};
+  syncMonsterAttackCountFromSelection();
+}
+
+function populateMonsterTurnSelectors(snap) {
+  const combatants = Array.isArray(snap && snap.combatants) ? snap.combatants : [];
+  const actorSelect = document.getElementById('monsterActorCidSelect');
+  const targetSelect = document.getElementById('monsterTargetCidSelect');
+  const previousActor = String(actorSelect.value || '').trim();
+  const previousTarget = String(targetSelect.value || '').trim();
+
+  actorSelect.innerHTML = '<option value="">— select enemy —</option>';
+  for (const c of combatants) {
+    const cid = Number(c && c.cid);
+    if (!Number.isFinite(cid)) continue;
+    if (!isEnemyCombatantEntry(c)) continue;
+    if (Number(c.hp) <= 0) continue;
+    const opt = document.createElement('option');
+    opt.value = String(cid);
+    opt.textContent = `${String(c.name || `Enemy ${cid}`)} (HP ${Math.max(0, Math.floor(Number(c.hp) || 0))})`;
+    actorSelect.appendChild(opt);
+  }
+
+  targetSelect.innerHTML = '<option value="">— select target —</option>';
+  for (const c of combatants) {
+    const cid = Number(c && c.cid);
+    if (!Number.isFinite(cid)) continue;
+    if (Number(c.hp) <= 0) continue;
+    const opt = document.createElement('option');
+    opt.value = String(cid);
+    const role = String(c && c.role || '').trim().toLowerCase();
+    const roleTag = role ? ` · ${role}` : '';
+    opt.textContent = `${String(c.name || `Combatant ${cid}`)}${roleTag} · HP ${Math.max(0, Math.floor(Number(c.hp) || 0))}`;
+    targetSelect.appendChild(opt);
+  }
+
+  if (previousActor && Array.from(actorSelect.options).some(opt => opt.value === previousActor)) {
+    actorSelect.value = previousActor;
+  }
+  if (previousTarget && Array.from(targetSelect.options).some(opt => opt.value === previousTarget)) {
+    targetSelect.value = previousTarget;
+  }
+
+  if (!actorSelect.value) {
+    const activeEnemy = combatants.find(c => Number(c && c.cid) === Number(snap && snap.active_cid) && isEnemyCombatantEntry(c) && Number(c.hp) > 0);
+    if (activeEnemy) {
+      actorSelect.value = String(Number(activeEnemy.cid));
+    } else if (actorSelect.options.length > 1) {
+      actorSelect.selectedIndex = 1;
+    }
+  }
+
+  if (!targetSelect.value) {
+    const activeCid = Number(snap && snap.active_cid);
+    if (Number.isFinite(activeCid) && Array.from(targetSelect.options).some(opt => Number(opt.value) === activeCid)) {
+      targetSelect.value = String(activeCid);
+    } else {
+      const actorCid = Number(actorSelect.value || 0);
+      const firstOther = Array.from(targetSelect.options).find(opt => opt.value && Number(opt.value) !== actorCid);
+      if (firstOther) targetSelect.value = firstOther.value;
+      else if (targetSelect.options.length > 1) targetSelect.selectedIndex = 1;
+    }
+  }
+
+  if (String(actorSelect.value || '') !== previousActor) {
+    monsterAttackCatalog = [];
+    monsterAttackDefaults = {};
+    lastMonsterAttackResolution = null;
+    document.getElementById('monsterDamageEntriesInput').value = '';
+    populateMonsterAttackSelect([], {});
+  }
+}
+
+function defaultMonsterDamageFromResolution(resolution) {
+  const root = resolution && typeof resolution === 'object' ? resolution : {};
+  const rows = Array.isArray(root.results) ? root.results : [];
+  const rowWithDamage = rows.find(item => item && typeof item === 'object' && Array.isArray(item.damage_rolls) && item.damage_rolls.length > 0);
+  if (!rowWithDamage) return { attackName: 'Attack', entries: [] };
+  const attackName = String(rowWithDamage.attack_name || 'Attack').trim() || 'Attack';
+  const byType = new Map();
+  for (const roll of rowWithDamage.damage_rolls) {
+    if (!roll || typeof roll !== 'object') continue;
+    const amountRaw = Number(roll.default_total);
+    const amount = Number.isFinite(amountRaw) ? Math.floor(amountRaw) : 0;
+    if (amount <= 0) continue;
+    const type = String(roll.type || 'damage').trim().toLowerCase() || 'damage';
+    byType.set(type, (byType.get(type) || 0) + amount);
+  }
+  const entries = Array.from(byType.entries()).map(([type, amount]) => ({ type, amount }));
+  return { attackName, entries };
+}
+
+function parseMonsterDamageEntries(raw) {
+  const text = String(raw || '').trim();
+  if (!text) return { entries: [], error: '' };
+  const segments = text.split(',');
+  const entries = [];
+  for (const segmentRaw of segments) {
+    const segment = String(segmentRaw || '').trim();
+    if (!segment) continue;
+    const parts = segment.split(':');
+    if (parts.length < 2) {
+      return { entries: [], error: `Invalid damage entry "${segment}". Use type:amount.` };
+    }
+    const type = String(parts[0] || '').trim().toLowerCase();
+    const amount = Number(parts.slice(1).join(':').trim());
+    if (!type || !Number.isFinite(amount) || Math.floor(amount) <= 0) {
+      return { entries: [], error: `Invalid damage entry "${segment}". Use type:amount with amount > 0.` };
+    }
+    entries.push({ type, amount: Math.floor(amount) });
+  }
+  return { entries, error: '' };
+}
+
+async function loadMonsterAttackOptions() {
+  const actorCid = selectedMonsterActorCid();
+  if (!actorCid) {
+    setMonsterTurnResult('Select an enemy combatant first.', true);
+    return;
+  }
+  try {
+    const r = await fetch(`${BASE}/api/dm/combat/combatants/${actorCid}/monster-attacks`, {
+      headers: authHeaders(),
+    });
+    const data = await r.json();
+    if (r.ok && data.ok) {
+      monsterAttackCatalog = Array.isArray(data.attack_options) ? data.attack_options : [];
+      const defaults = {};
+      const defaultSeq = Array.isArray(data.default_sequence) ? data.default_sequence : [];
+      for (const block of defaultSeq) {
+        if (!block || typeof block !== 'object') continue;
+        const key = String(block.attack_key || '').trim();
+        if (!key) continue;
+        const count = Number(block.count);
+        if (Number.isFinite(count) && count > 0) defaults[key] = Math.floor(count);
+      }
+      populateMonsterAttackSelect(monsterAttackCatalog, defaults);
+      const multiattack = String(data.multiattack_description || '').trim();
+      setMonsterTurnResult(multiattack ? `Loaded attacks. ${multiattack}` : 'Loaded monster attack options.');
+      if (data.snapshot) applySnapshot(data.snapshot);
+      return;
+    }
+    setMonsterTurnResult(extractApiErrorMessage(data, 'Failed to load monster attacks.'), true);
+  } catch (_) {
+    setMonsterTurnResult('Request failed.', true);
+  }
+}
+
+async function resolveMonsterAttackAction() {
+  const actorCid = selectedMonsterActorCid();
+  const targetCid = selectedMonsterTargetCid();
+  const attackKey = String(document.getElementById('monsterAttackSelect').value || '').trim();
+  const count = Number(document.getElementById('monsterAttackCountInput').value);
+  const rollMode = String(document.getElementById('monsterRollModeSelect').value || 'normal').trim().toLowerCase();
+  const spend = String(document.getElementById('monsterSpendSelect').value || 'action').trim().toLowerCase();
+  if (!actorCid) {
+    setMonsterTurnResult('Select an acting enemy combatant.', true);
+    return;
+  }
+  if (!targetCid) {
+    setMonsterTurnResult('Select a target combatant.', true);
+    return;
+  }
+  if (!attackKey) {
+    setMonsterTurnResult('Select an attack (load attacks first).', true);
+    return;
+  }
+  if (!Number.isFinite(count) || Math.floor(count) <= 0) {
+    setMonsterTurnResult('Attack count must be at least 1.', true);
+    return;
+  }
+  const mode = ['normal', 'advantage', 'disadvantage'].includes(rollMode) ? rollMode : 'normal';
+  try {
+    const r = await fetch(`${BASE}/api/dm/combat/monster-attacks/resolve`, {
+      method: 'POST',
+      headers: authHeaders(),
+      body: JSON.stringify({
+        attacker_cid: actorCid,
+        target_cid: targetCid,
+        spend,
+        sequence: [{ attack_key: attackKey, count: Math.min(10, Math.floor(count)), roll_mode: mode }],
+      }),
+    });
+    const data = await r.json();
+    if (r.ok && data.ok && data.result && data.result.ok) {
+      const result = data.result;
+      lastMonsterAttackResolution = result;
+      const rows = Array.isArray(result.results) ? result.results : [];
+      const hitCount = rows.filter(item => !!(item && item.hit)).length;
+      const critCount = rows.filter(item => !!(item && item.crit)).length;
+      const summaryBits = [`Resolved ${rows.length} attack${rows.length === 1 ? '' : 's'}.`];
+      summaryBits.push(`Hits: ${hitCount}`);
+      if (critCount > 0) summaryBits.push(`Crits: ${critCount}`);
+      setMonsterTurnResult(summaryBits.join(' '));
+      const defaults = defaultMonsterDamageFromResolution(result);
+      const damageInput = document.getElementById('monsterDamageEntriesInput');
+      if (Array.isArray(defaults.entries) && defaults.entries.length) {
+        damageInput.value = defaults.entries.map(entry => `${entry.type}:${entry.amount}`).join(', ');
+      } else {
+        damageInput.value = '';
+      }
+      if (data.snapshot) applySnapshot(data.snapshot);
+      return;
+    }
+    setMonsterTurnResult(extractApiErrorMessage(data, 'Monster attack resolution failed.'), true);
+  } catch (_) {
+    setMonsterTurnResult('Request failed.', true);
+  }
+}
+
+async function applyMonsterDamageAction() {
+  const actorCid = selectedMonsterActorCid();
+  const targetCid = selectedMonsterTargetCid();
+  if (!actorCid) {
+    setMonsterTurnResult('Select an acting enemy combatant.', true);
+    return;
+  }
+  if (!targetCid) {
+    setMonsterTurnResult('Select a target combatant.', true);
+    return;
+  }
+  const parsed = parseMonsterDamageEntries(document.getElementById('monsterDamageEntriesInput').value);
+  if (parsed.error) {
+    setMonsterTurnResult(parsed.error, true);
+    return;
+  }
+  const defaults = defaultMonsterDamageFromResolution(lastMonsterAttackResolution);
+  const damageEntries = parsed.entries.length ? parsed.entries : defaults.entries;
+  if (!damageEntries.length) {
+    setMonsterTurnResult('No damage entries to apply. Resolve an attack first or enter manual entries.', true);
+    return;
+  }
+  const attackName = String(defaults.attackName || 'Attack').trim() || 'Attack';
+  try {
+    const r = await fetch(`${BASE}/api/dm/combat/monster-attacks/apply-damage`, {
+      method: 'POST',
+      headers: authHeaders(),
+      body: JSON.stringify({
+        attacker_cid: actorCid,
+        target_cid: targetCid,
+        attack_name: attackName,
+        damage_entries: damageEntries,
+      }),
+    });
+    const data = await r.json();
+    if (r.ok && data.ok && data.result && data.result.ok) {
+      const removed = !!(data.result && data.result.removed_target);
+      if (removed) {
+        setMonsterTurnResult('Monster damage applied; target dropped to 0 HP and was removed.');
+      } else {
+        const targetHp = Number(data.result && data.result.target_hp);
+        if (Number.isFinite(targetHp)) {
+          setMonsterTurnResult(`Monster damage applied. Target HP is now ${Math.max(0, Math.floor(targetHp))}.`);
+        } else {
+          setMonsterTurnResult('Monster damage applied.');
+        }
+      }
+      if (data.snapshot) applySnapshot(data.snapshot);
+      return;
+    }
+    setMonsterTurnResult(extractApiErrorMessage(data, 'Applying monster damage failed.'), true);
+  } catch (_) {
+    setMonsterTurnResult('Request failed.', true);
+  }
+}
+
+async function performMonsterAction() {
+  const actorCid = selectedMonsterActorCid();
+  const actionName = String(document.getElementById('monsterActionNameInput').value || '').trim();
+  const spend = String(document.getElementById('monsterSpendSelect').value || 'action').trim().toLowerCase();
+  if (!actorCid) {
+    setMonsterTurnResult('Select an acting enemy combatant.', true);
+    return;
+  }
+  if (!actionName) {
+    setMonsterTurnResult('Enter a monster action name.', true);
+    return;
+  }
+  try {
+    const r = await fetch(`${BASE}/api/dm/combat/combatants/${actorCid}/perform-action`, {
+      method: 'POST',
+      headers: authHeaders(),
+      body: JSON.stringify({ action: actionName, spend }),
+    });
+    const data = await r.json();
+    if (r.ok && data.ok && data.result && data.result.ok) {
+      setMonsterTurnResult(`Performed action: ${actionName}.`);
+      if (data.snapshot) applySnapshot(data.snapshot);
+      return;
+    }
+    setMonsterTurnResult(extractApiErrorMessage(data, 'Monster action failed.'), true);
+  } catch (_) {
+    setMonsterTurnResult('Request failed.', true);
+  }
+}
+
+async function castMonsterSpellTarget() {
+  const actorCid = selectedMonsterActorCid();
+  const targetCid = selectedMonsterTargetCid();
+  const spellName = String(document.getElementById('monsterSpellNameInput').value || '').trim();
+  const spellSlug = String(document.getElementById('monsterSpellSlugInput').value || '').trim();
+  const spellId = String(document.getElementById('monsterSpellIdInput').value || '').trim();
+  const spend = String(document.getElementById('monsterSpendSelect').value || 'action').trim().toLowerCase();
+  if (!actorCid) {
+    setMonsterTurnResult('Select an acting enemy combatant.', true);
+    return;
+  }
+  if (!targetCid) {
+    setMonsterTurnResult('Select a target combatant.', true);
+    return;
+  }
+  if (!spellName && !spellSlug && !spellId) {
+    setMonsterTurnResult('Enter spell name and/or spell slug.', true);
+    return;
+  }
+  const body = { target_cid: targetCid, spend };
+  if (spellName) body.spell_name = spellName;
+  if (spellSlug) body.spell_slug = spellSlug;
+  if (spellId) body.spell_id = spellId;
+  try {
+    const r = await fetch(`${BASE}/api/dm/combat/combatants/${actorCid}/spell-target`, {
+      method: 'POST',
+      headers: authHeaders(),
+      body: JSON.stringify(body),
+    });
+    const data = await r.json();
+    if (r.ok && data.ok && data.result && data.result.ok) {
+      const pending = !!(data.result && data.result.pending);
+      if (pending) setMonsterTurnResult('Spell submitted; awaiting reaction/prompt resolution.');
+      else setMonsterTurnResult('Monster spell resolved.');
+      if (data.snapshot) applySnapshot(data.snapshot);
+      return;
+    }
+    setMonsterTurnResult(extractApiErrorMessage(data, 'Monster spell failed.'), true);
+  } catch (_) {
+    setMonsterTurnResult('Request failed.', true);
+  }
 }
 
 function tacticalHazards(tactical) {
@@ -2530,6 +3023,7 @@ function applySnapshot(snap) {
   populateCidSelect('initCidSelect', combatants);
   populateCidSelect('removeCidSelect', combatants);
   populateCidSelect('mapCidSelect', combatants);
+  populateMonsterTurnSelectors(snap);
 
   // Render list
   renderCombatants(snap);
@@ -2619,6 +3113,17 @@ function quickSelect(cid) {
   document.getElementById('initCidSelect').value = cid;
   document.getElementById('removeCidSelect').value = cid;
   document.getElementById('mapCidSelect').value = cid;
+  if (Array.from(document.getElementById('monsterTargetCidSelect').options).some(opt => String(opt.value) === String(cid))) {
+    document.getElementById('monsterTargetCidSelect').value = String(cid);
+  }
+  const row = (currentSnapshot && Array.isArray(currentSnapshot.combatants))
+    ? currentSnapshot.combatants.find(entry => Number(entry && entry.cid) === Number(cid))
+    : null;
+  if (isEnemyCombatantEntry(row) && Number(row && row.hp) > 0) {
+    if (Array.from(document.getElementById('monsterActorCidSelect').options).some(opt => String(opt.value) === String(cid))) {
+      document.getElementById('monsterActorCidSelect').value = String(cid);
+    }
+  }
   syncTacticalFieldsFromSelection();
   renderTacticalMap(currentTacticalMap());
 }
@@ -3697,6 +4202,19 @@ document.getElementById('placeAoeBtn').addEventListener('click', placeAoeAtCell)
 document.getElementById('moveAoeBtn').addEventListener('click', moveSelectedAoeToCell);
 document.getElementById('removeAoeBtn').addEventListener('click', removeSelectedAoe);
 document.getElementById('applyOverlayBtn').addEventListener('click', applyAurasOverlaySetting);
+document.getElementById('monsterActorCidSelect').addEventListener('change', () => {
+  monsterAttackCatalog = [];
+  monsterAttackDefaults = {};
+  lastMonsterAttackResolution = null;
+  populateMonsterAttackSelect([], {});
+  document.getElementById('monsterDamageEntriesInput').value = '';
+});
+document.getElementById('monsterAttackSelect').addEventListener('change', syncMonsterAttackCountFromSelection);
+document.getElementById('loadMonsterAttacksBtn').addEventListener('click', loadMonsterAttackOptions);
+document.getElementById('resolveMonsterAttackBtn').addEventListener('click', resolveMonsterAttackAction);
+document.getElementById('applyMonsterDamageBtn').addEventListener('click', applyMonsterDamageAction);
+document.getElementById('performMonsterActionBtn').addEventListener('click', performMonsterAction);
+document.getElementById('castMonsterSpellBtn').addEventListener('click', castMonsterSpellTarget);
 document.querySelectorAll('.tactical-facing-grid [data-facing]').forEach(btn => {
   btn.addEventListener('click', () => {
     const facing = Number(btn.getAttribute('data-facing'));

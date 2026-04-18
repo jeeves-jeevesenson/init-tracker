@@ -75,6 +75,11 @@ class _TacticalAppStub:
         self.ship_ram_calls: list = []
         self.map_new_calls: list = []
         self.map_settings_calls: list = []
+        self.dm_monster_attack_options_calls: list = []
+        self.dm_monster_attack_resolve_calls: list = []
+        self.dm_monster_attack_damage_calls: list = []
+        self.dm_monster_perform_action_calls: list = []
+        self.dm_monster_spell_target_calls: list = []
         self.broadcast_calls = 0
         self.obstacles = {(3, 3)}
         self.rough_cells = {
@@ -345,6 +350,108 @@ class _TacticalAppStub:
         self.facings[int(cid)] = int(facing_deg) % 360
         self._lan_force_state_broadcast()
         return {"ok": True, "cid": int(cid), "facing_deg": int(facing_deg) % 360}
+
+    def _dm_monster_attack_options(self, attacker_cid: int):
+        self.dm_monster_attack_options_calls.append({"attacker_cid": int(attacker_cid)})
+        if int(attacker_cid) not in self.combatants:
+            return {"ok": False, "error": "Combatant not found."}
+        combatant = self.combatants[int(attacker_cid)]
+        if bool(getattr(combatant, "is_pc", False)):
+            return {"ok": False, "error": "Monster control only supports non-PC combatants."}
+        return {
+            "ok": True,
+            "attacker_cid": int(attacker_cid),
+            "attacker_name": str(getattr(combatant, "name", "")),
+            "multiattack_description": "The goblin makes two scimitar attacks.",
+            "multiattack_counts": {"scimitar": 2},
+            "default_sequence": [{"attack_key": "scimitar", "count": 2, "roll_mode": "normal"}],
+            "attack_options": [
+                {
+                    "key": "scimitar",
+                    "label": "Scimitar",
+                    "to_hit": 4,
+                    "attack_type": "melee",
+                    "reach_ft": 5,
+                    "damage": [{"amount": 5, "roll": "1d6+2", "type": "slashing"}],
+                }
+            ],
+        }
+
+    def _dm_resolve_monster_attack_sequence(self, *, attacker_cid: int, target_cid: int, sequence_blocks, spend="action"):
+        self.dm_monster_attack_resolve_calls.append(
+            {
+                "attacker_cid": int(attacker_cid),
+                "target_cid": int(target_cid),
+                "sequence_blocks": list(sequence_blocks) if isinstance(sequence_blocks, list) else sequence_blocks,
+                "spend": spend,
+            }
+        )
+        if int(attacker_cid) not in self.combatants or int(target_cid) not in self.combatants:
+            return {"ok": False, "error": "Combatant not found."}
+        return {
+            "ok": True,
+            "attacker_cid": int(attacker_cid),
+            "target_cid": int(target_cid),
+            "spend": str(spend or "action"),
+            "results": [
+                {
+                    "attack_key": "scimitar",
+                    "attack_name": "Scimitar",
+                    "roll_mode": "normal",
+                    "to_hit_roll": 18,
+                    "to_hit_bonus": 4,
+                    "total_to_hit": 22,
+                    "target_ac": 16,
+                    "hit": True,
+                    "crit": False,
+                    "damage_rolls": [{"type": "slashing", "roll": "1d6+2", "default_total": 5}],
+                }
+            ],
+            "reason": "Resolved.",
+        }
+
+    def _dm_apply_monster_attack_damage(self, *, attacker_cid: int, target_cid: int, attack_name: str, damage_entries):
+        self.dm_monster_attack_damage_calls.append(
+            {
+                "attacker_cid": int(attacker_cid),
+                "target_cid": int(target_cid),
+                "attack_name": str(attack_name),
+                "damage_entries": list(damage_entries) if isinstance(damage_entries, list) else damage_entries,
+            }
+        )
+        if int(attacker_cid) not in self.combatants or int(target_cid) not in self.combatants:
+            return {"ok": False, "error": "Combatant not found."}
+        return {"ok": True, "target_hp": 2, "removed_target": False, "message": "Applied manual damage."}
+
+    def _dm_monster_perform_action(self, *, actor_cid: int, action_name: str, spend="action"):
+        self.dm_monster_perform_action_calls.append(
+            {"actor_cid": int(actor_cid), "action_name": str(action_name), "spend": spend}
+        )
+        if int(actor_cid) not in self.combatants:
+            return {"ok": False, "error": "Combatant not found."}
+        return {
+            "ok": True,
+            "actor_cid": int(actor_cid),
+            "actor_name": str(getattr(self.combatants[int(actor_cid)], "name", "")),
+            "action": str(action_name),
+            "spend": str(spend or "action"),
+        }
+
+    def _dm_monster_spell_target(self, *, actor_cid: int, payload):
+        self.dm_monster_spell_target_calls.append({"actor_cid": int(actor_cid), "payload": dict(payload or {})})
+        if int(actor_cid) not in self.combatants:
+            return {"ok": False, "error": "Combatant not found."}
+        target_cid = int((payload or {}).get("target_cid") or actor_cid)
+        if target_cid not in self.combatants:
+            return {"ok": False, "error": "Target combatant not found."}
+        return {
+            "ok": True,
+            "actor_cid": int(actor_cid),
+            "target_cid": int(target_cid),
+            "target_name": str(getattr(self.combatants[int(target_cid)], "name", "")),
+            "pending": False,
+            "spell_result": {"ok": True, "reason": "resolved"},
+        }
 
     def _dm_set_obstacle_on_map(self, col: int, row: int, blocked: bool):
         self.obstacle_calls.append({"col": int(col), "row": int(row), "blocked": bool(blocked)})
@@ -1767,6 +1874,78 @@ class DmTacticalMapRoutesTests(unittest.TestCase):
             )
         )
 
+    def test_dm_monster_attack_routes_resolve_and_apply_damage(self):
+        client, lan = self._build_client()
+        options = client.get("/api/dm/combat/combatants/2/monster-attacks")
+        self.assertEqual(200, options.status_code)
+        options_payload = options.json()
+        self.assertTrue(options_payload["ok"])
+        self.assertEqual(2, options_payload["attacker_cid"])
+        self.assertTrue(any(call["attacker_cid"] == 2 for call in lan._tracker.dm_monster_attack_options_calls))
+
+        resolve = client.post(
+            "/api/dm/combat/monster-attacks/resolve",
+            json={
+                "attacker_cid": 2,
+                "target_cid": 1,
+                "spend": "action",
+                "sequence": [{"attack_key": "scimitar", "count": 2, "roll_mode": "normal"}],
+            },
+        )
+        self.assertEqual(200, resolve.status_code)
+        resolve_payload = resolve.json()
+        self.assertTrue(resolve_payload["ok"])
+        self.assertTrue(resolve_payload["result"]["ok"])
+        self.assertEqual("action", resolve_payload["result"]["spend"])
+        self.assertTrue(
+            any(
+                call["attacker_cid"] == 2 and call["target_cid"] == 1
+                for call in lan._tracker.dm_monster_attack_resolve_calls
+            )
+        )
+
+        apply_damage = client.post(
+            "/api/dm/combat/monster-attacks/apply-damage",
+            json={
+                "attacker_cid": 2,
+                "target_cid": 1,
+                "attack_name": "Scimitar",
+                "damage_entries": [{"type": "slashing", "amount": 5}],
+            },
+        )
+        self.assertEqual(200, apply_damage.status_code)
+        damage_payload = apply_damage.json()
+        self.assertTrue(damage_payload["ok"])
+        self.assertTrue(damage_payload["result"]["ok"])
+        self.assertEqual(2, damage_payload["result"]["target_hp"])
+        self.assertTrue(
+            any(
+                call["attacker_cid"] == 2 and call["target_cid"] == 1
+                for call in lan._tracker.dm_monster_attack_damage_calls
+            )
+        )
+
+    def test_dm_monster_action_and_spell_routes(self):
+        client, lan = self._build_client()
+        action = client.post("/api/dm/combat/combatants/2/perform-action", json={"action": "Nimble Escape"})
+        self.assertEqual(200, action.status_code)
+        action_payload = action.json()
+        self.assertTrue(action_payload["ok"])
+        self.assertTrue(action_payload["result"]["ok"])
+        self.assertEqual("Nimble Escape", action_payload["result"]["action"])
+        self.assertTrue(any(call["actor_cid"] == 2 for call in lan._tracker.dm_monster_perform_action_calls))
+
+        spell = client.post(
+            "/api/dm/combat/combatants/2/spell-target",
+            json={"target_cid": 1, "spell_slug": "fire-bolt", "spell_name": "Fire Bolt"},
+        )
+        self.assertEqual(200, spell.status_code)
+        spell_payload = spell.json()
+        self.assertTrue(spell_payload["ok"])
+        self.assertTrue(spell_payload["result"]["ok"])
+        self.assertEqual(1, spell_payload["result"]["target_cid"])
+        self.assertTrue(any(call["actor_cid"] == 2 for call in lan._tracker.dm_monster_spell_target_calls))
+
     def test_map_routes_require_admin_when_password_configured(self):
         client, lan = self._build_client(admin_password_configured=True)
         unauth_new = client.post("/api/dm/map/new", json={"cols": 20, "rows": 20})
@@ -1775,12 +1954,16 @@ class DmTacticalMapRoutesTests(unittest.TestCase):
         unauth_ship = client.post("/api/dm/map/ships", json={"blueprint_id": "sloop", "anchor_col": 2, "anchor_row": 2})
         unauth_ship_engagement = client.get("/api/dm/map/ships/ship_1/engagement")
         unauth_bg_order = client.post("/api/dm/map/backgrounds/1/order", json={"direction": "front"})
+        unauth_monster_attacks = client.get("/api/dm/combat/combatants/2/monster-attacks")
+        unauth_monster_action = client.post("/api/dm/combat/combatants/2/perform-action", json={"action": "Strike"})
         self.assertEqual(401, unauth_new.status_code)
         self.assertEqual(401, unauth_settings.status_code)
         self.assertEqual(401, unauth_obstacle.status_code)
         self.assertEqual(401, unauth_ship.status_code)
         self.assertEqual(401, unauth_ship_engagement.status_code)
         self.assertEqual(401, unauth_bg_order.status_code)
+        self.assertEqual(401, unauth_monster_attacks.status_code)
+        self.assertEqual(401, unauth_monster_action.status_code)
         headers = self._auth_headers(client, lan)
         auth_new = client.post("/api/dm/map/new", json={"cols": 20, "rows": 20}, headers=headers)
         auth_settings = client.post("/api/dm/map/settings", json={"cols": 22, "rows": 18}, headers=headers)
@@ -1792,12 +1975,20 @@ class DmTacticalMapRoutesTests(unittest.TestCase):
         )
         auth_ship_engagement = client.get("/api/dm/map/ships/ship_1/engagement", headers=headers)
         auth_bg_order = client.post("/api/dm/map/backgrounds/1/order", json={"direction": "front"}, headers=headers)
+        auth_monster_attacks = client.get("/api/dm/combat/combatants/2/monster-attacks", headers=headers)
+        auth_monster_action = client.post(
+            "/api/dm/combat/combatants/2/perform-action",
+            json={"action": "Strike"},
+            headers=headers,
+        )
         self.assertEqual(200, auth_new.status_code)
         self.assertEqual(200, auth_settings.status_code)
         self.assertEqual(200, auth_obstacle.status_code)
         self.assertEqual(200, auth_ship.status_code)
         self.assertEqual(200, auth_ship_engagement.status_code)
         self.assertEqual(200, auth_bg_order.status_code)
+        self.assertEqual(200, auth_monster_attacks.status_code)
+        self.assertEqual(200, auth_monster_action.status_code)
 
 
 class _TrackerTacticalHarness:
@@ -1815,6 +2006,14 @@ class _TrackerTacticalHarness:
     _dm_move_combatant_on_map = tracker_mod.InitiativeTracker._dm_move_combatant_on_map
     _dm_place_combatant_on_map = tracker_mod.InitiativeTracker._dm_place_combatant_on_map
     _dm_set_combatant_facing = tracker_mod.InitiativeTracker._dm_set_combatant_facing
+    _dm_normalize_turn_spend = staticmethod(tracker_mod.InitiativeTracker._dm_normalize_turn_spend)
+    _dm_validate_monster_actor_for_turn = tracker_mod.InitiativeTracker._dm_validate_monster_actor_for_turn
+    _dm_spend_combatant_turn_resource = tracker_mod.InitiativeTracker._dm_spend_combatant_turn_resource
+    _dm_monster_attack_options = tracker_mod.InitiativeTracker._dm_monster_attack_options
+    _dm_resolve_monster_attack_sequence = tracker_mod.InitiativeTracker._dm_resolve_monster_attack_sequence
+    _dm_apply_monster_attack_damage = tracker_mod.InitiativeTracker._dm_apply_monster_attack_damage
+    _dm_monster_perform_action = tracker_mod.InitiativeTracker._dm_monster_perform_action
+    _dm_monster_spell_target = tracker_mod.InitiativeTracker._dm_monster_spell_target
     _dm_map_grid_bounds = tracker_mod.InitiativeTracker._dm_map_grid_bounds
     _dm_parse_grid_dimensions = tracker_mod.InitiativeTracker._dm_parse_grid_dimensions
     _dm_create_blank_map = tracker_mod.InitiativeTracker._dm_create_blank_map
@@ -1846,9 +2045,21 @@ class _TrackerTacticalHarness:
 
     def __init__(self) -> None:
         self.combatants = {
-            1: types.SimpleNamespace(cid=1, name="Aelar", rider_cid=None, mounted_by_cid=None, facing_deg=0),
+            1: types.SimpleNamespace(
+                cid=1,
+                name="Aelar",
+                is_pc=True,
+                hp=20,
+                max_hp=20,
+                rider_cid=None,
+                mounted_by_cid=None,
+                facing_deg=0,
+            ),
+            2: types.SimpleNamespace(cid=2, name="Goblin", is_pc=False, hp=7, max_hp=7, rider_cid=None, mounted_by_cid=None),
         }
         self.positions = {1: (1, 1)}
+        self.current_cid = 2
+        self.in_combat = True
         self._map_window = None
         self._lan_grid_cols = 10
         self._lan_grid_rows = 10
@@ -1992,6 +2203,138 @@ class DmTacticalHelperTests(unittest.TestCase):
         self.assertEqual(90, result["facing_deg"])
         self.assertEqual(90, getattr(app.combatants[1], "facing_deg"))
         self.assertEqual(1, app.broadcast_calls)
+
+    def test_dm_monster_turn_spend_normalization(self):
+        self.assertEqual("action", _TrackerTacticalHarness._dm_normalize_turn_spend("actions"))
+        self.assertEqual("bonus", _TrackerTacticalHarness._dm_normalize_turn_spend("bonus_action"))
+        self.assertEqual("reaction", _TrackerTacticalHarness._dm_normalize_turn_spend("reaction"))
+        self.assertEqual("none", _TrackerTacticalHarness._dm_normalize_turn_spend("none", allow_none=True))
+        self.assertIsNone(_TrackerTacticalHarness._dm_normalize_turn_spend("none", allow_none=False))
+        self.assertIsNone(_TrackerTacticalHarness._dm_normalize_turn_spend("mystery"))
+
+    def test_dm_validate_monster_actor_for_turn_enforces_non_pc_and_turn(self):
+        app = _TrackerTacticalHarness()
+        actor, error, actor_cid = app._dm_validate_monster_actor_for_turn(2)
+        self.assertIsNone(error)
+        self.assertEqual(2, actor_cid)
+        self.assertEqual("Goblin", getattr(actor, "name", ""))
+
+        _, pc_error, _ = app._dm_validate_monster_actor_for_turn(1)
+        self.assertEqual("Monster control only supports non-PC combatants.", pc_error)
+
+        app.current_cid = 1
+        _, turn_error, _ = app._dm_validate_monster_actor_for_turn(2)
+        self.assertEqual("It's not that combatant's turn.", turn_error)
+
+    def test_dm_monster_attack_options_and_resolve_helpers_use_existing_attack_engine(self):
+        app = _TrackerTacticalHarness()
+        app._monster_attack_options_for_map = lambda _attacker: (
+            [
+                {
+                    "key": "scimitar",
+                    "label": "Scimitar",
+                    "to_hit": 4,
+                    "damage": [{"amount": 5, "roll": "1d6+2", "type": "slashing"}],
+                }
+            ],
+            {"scimitar": 2},
+        )
+        app._monster_multiattack_description_for_map = lambda _attacker: "The goblin makes two scimitar attacks."
+        app._build_map_attack_sequence_defaults = (
+            lambda _attacker, _options, _counts: [{"attack_key": "scimitar", "count": 2, "roll_mode": "normal"}]
+        )
+        app._use_action = lambda _combatant: True
+        app._use_bonus_action = lambda _combatant: True
+        app._use_reaction = lambda _combatant: True
+        resolve_calls: list = []
+        app._resolve_map_attack_sequence = (
+            lambda attacker_cid, target_cid, blocks: (
+                resolve_calls.append(
+                    {
+                        "attacker_cid": int(attacker_cid),
+                        "target_cid": int(target_cid),
+                        "blocks": list(blocks),
+                    }
+                )
+                or {
+                    "ok": True,
+                    "reason": "Resolved.",
+                    "results": [
+                        {
+                            "attack_name": "Scimitar",
+                            "hit": True,
+                            "damage_rolls": [{"type": "slashing", "default_total": 5}],
+                        }
+                    ],
+                }
+            )
+        )
+        options = app._dm_monster_attack_options(2)
+        self.assertTrue(options["ok"])
+        self.assertEqual(2, options["multiattack_counts"]["scimitar"])
+        self.assertEqual("scimitar", options["default_sequence"][0]["attack_key"])
+
+        result = app._dm_resolve_monster_attack_sequence(
+            attacker_cid=2,
+            target_cid=1,
+            sequence_blocks=[{"attack_key": "scimitar", "count": 2, "roll_mode": "normal"}],
+            spend="action",
+        )
+        self.assertTrue(result["ok"])
+        self.assertEqual("action", result["spend"])
+        self.assertEqual(1, len(resolve_calls))
+        self.assertEqual(1, app.broadcast_calls)
+        self.assertEqual(1, app.rebuild_calls)
+
+    def test_dm_monster_perform_action_helper_dispatches_player_command_service(self):
+        app = _TrackerTacticalHarness()
+        app._use_action = lambda _combatant: True
+        app._use_bonus_action = lambda _combatant: True
+        app._use_reaction = lambda _combatant: True
+        calls: list = []
+
+        class _PlayerCommands:
+            def perform_action(self, msg, *, cid, ws_id, is_admin):
+                calls.append({"msg": dict(msg), "cid": int(cid), "ws_id": ws_id, "is_admin": bool(is_admin)})
+                return {"ok": True}
+
+        app._ensure_player_commands = lambda: _PlayerCommands()
+        result = app._dm_monster_perform_action(actor_cid=2, action_name="Nimble Escape", spend="action")
+        self.assertTrue(result["ok"])
+        self.assertEqual("Nimble Escape", result["action"])
+        self.assertEqual(1, len(calls))
+        self.assertEqual(2, calls[0]["cid"])
+        self.assertFalse(calls[0]["is_admin"])
+        self.assertEqual("perform_action", calls[0]["msg"]["type"])
+
+    def test_dm_monster_spell_target_helper_dispatches_existing_spell_target_request(self):
+        app = _TrackerTacticalHarness()
+        app._use_action = lambda _combatant: True
+        app._use_bonus_action = lambda _combatant: True
+        app._use_reaction = lambda _combatant: True
+        app._find_spell_preset = lambda _slug, _spell_id: {"slug": "fire-bolt", "id": "fire_bolt", "name": "Fire Bolt"}
+        app._is_produce_flame_spell_key = lambda *_args, **_kwargs: False
+        calls: list = []
+
+        class _PlayerCommands:
+            def spell_target_request(self, msg, *, cid, ws_id, is_admin):
+                calls.append({"msg": dict(msg), "cid": int(cid), "ws_id": ws_id, "is_admin": bool(is_admin)})
+                msg["_spell_target_result"] = {"ok": True, "reason": "resolved"}
+                return {"ok": True}
+
+        app._ensure_player_commands = lambda: _PlayerCommands()
+        result = app._dm_monster_spell_target(
+            actor_cid=2,
+            payload={"target_cid": 1, "spell_slug": "fire-bolt", "spell_name": "Fire Bolt", "spend": "action"},
+        )
+        self.assertTrue(result["ok"])
+        self.assertFalse(result["pending"])
+        self.assertEqual(1, result["target_cid"])
+        self.assertEqual(1, len(calls))
+        self.assertEqual(2, calls[0]["cid"])
+        self.assertFalse(calls[0]["is_admin"])
+        self.assertEqual("spell_target_request", calls[0]["msg"]["type"])
+        self.assertEqual(1, calls[0]["msg"]["target_cid"])
 
     def test_dm_set_obstacle_and_terrain_helpers_mutate_canonical_map_state(self):
         app = _TrackerTacticalHarness()
@@ -2331,6 +2674,15 @@ class DmTacticalMapHtmlSurfaceTests(unittest.TestCase):
         self.assertIn('id="applyMapActionBtn"', html)
         self.assertIn('id="setFacingBtn"', html)
         self.assertIn('id="applyCellModeBtn"', html)
+        self.assertIn('id="monsterActorCidSelect"', html)
+        self.assertIn('id="monsterTargetCidSelect"', html)
+        self.assertIn('id="monsterSpendSelect"', html)
+        self.assertIn('id="loadMonsterAttacksBtn"', html)
+        self.assertIn('id="monsterAttackSelect"', html)
+        self.assertIn('id="resolveMonsterAttackBtn"', html)
+        self.assertIn('id="applyMonsterDamageBtn"', html)
+        self.assertIn('id="performMonsterActionBtn"', html)
+        self.assertIn('id="castMonsterSpellBtn"', html)
         self.assertIn('id="hazardPresetSelect"', html)
         self.assertIn('id="placeHazardBtn"', html)
         self.assertIn('id="featurePresetSelect"', html)
@@ -2392,6 +2744,11 @@ class DmTacticalMapHtmlSurfaceTests(unittest.TestCase):
         self.assertIn("/api/dm/map/aoes", html)
         self.assertIn("/api/dm/map/overlays/auras", html)
         self.assertIn("/api/dm/map/combatants/${cid}/facing", html)
+        self.assertIn("/api/dm/combat/combatants/{cid}/monster-attacks", html)
+        self.assertIn("/api/dm/combat/monster-attacks/resolve", html)
+        self.assertIn("/api/dm/combat/monster-attacks/apply-damage", html)
+        self.assertIn("/api/dm/combat/combatants/{cid}/perform-action", html)
+        self.assertIn("/api/dm/combat/combatants/{cid}/spell-target", html)
 
 
 if __name__ == "__main__":

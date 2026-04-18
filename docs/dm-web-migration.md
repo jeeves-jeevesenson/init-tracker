@@ -28,6 +28,11 @@ The following slice of combat/session state is now authoritatively owned by
 | Add combatant | `POST /api/dm/combat/combatants` |
 | Set initiative | `POST /api/dm/combat/combatants/{cid}/initiative` |
 | Roll initiative (service-owned d20 path) | `POST /api/dm/combat/combatants/{cid}/initiative/roll` |
+| List parsed monster attacks for a non-PC actor | `GET /api/dm/combat/combatants/{cid}/monster-attacks` |
+| Resolve monster attack sequence (hit/miss + damage templates) | `POST /api/dm/combat/monster-attacks/resolve` |
+| Apply manual monster attack damage | `POST /api/dm/combat/monster-attacks/apply-damage` |
+| Execute non-PC perform_action command | `POST /api/dm/combat/combatants/{cid}/perform-action` |
+| Execute non-PC targeted spell command | `POST /api/dm/combat/combatants/{cid}/spell-target` |
 | Remove combatant | `DELETE /api/dm/combat/combatants/{cid}` |
 | Real-time DM state push | `WS /ws/dm[?token=…]` |
 
@@ -114,6 +119,10 @@ The DM console lives at `http://<lan-ip>:<port>/dm` and provides:
   target cell/facing, and create/update/remove boarding links from `/dm`
 - **Ship engagement operations** – load ship engagement summaries and run
   maneuver preview/apply, weapon fire, and ram actions from `/dm`
+- **Monster turn controls** – select an enemy combatant as actor, load parsed
+  monster attack options, resolve attack sequences, apply manual damage,
+  execute `perform_action`, and run targeted spell requests from `/dm` through
+  authenticated backend routes and existing snapshot/broadcast updates
 - **Battle Log** – last 30 lines from the tracker's history file
 - **Real-time updates** – receives instant snapshots via WebSocket (`/ws/dm`);
   falls back to 2.5-second polling if WebSocket is unavailable
@@ -155,6 +164,10 @@ The following areas remain desktop-primary (hybrid) after this pass:
 - Advanced Tk map editor workflows (template/ship blueprint authoring and edit
   tooling, higher-fidelity tactical overlays/debug tooling, and desktop tactical
   authoring conveniences beyond the browser tactical card)
+- Full monster-action UX parity for every prompt-heavy or bespoke spell/action
+  branch (browser currently covers enemy attack resolution/manual damage,
+  `perform_action`, and targeted spell requests, but not every specialized cast
+  path or rich prompt workflow)
 - Player-facing LAN client at `/` (existing WebSocket + `/ws` routes)
 - Character editor, sheet management (`/edit_character`, `/new_character`)
 - Shop, item and spell management

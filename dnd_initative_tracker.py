@@ -4128,6 +4128,138 @@ class LanController:
                 "snapshot": _dm_console_snapshot(),
             }
 
+        @self._fastapi_app.get("/api/dm/combat/combatants/{cid}/monster-attacks")
+        async def dm_monster_attack_options(cid: int, request: Request):
+            """List parsed monster attack options for a non-PC combatant."""
+            _check_dm_auth(request)
+            try:
+                result = self.app._dm_monster_attack_options(int(cid))
+            except Exception as exc:
+                raise HTTPException(status_code=500, detail=f"Failed to load monster attacks: {exc}")
+            if not result.get("ok"):
+                raise HTTPException(status_code=400, detail=result.get("error", "Cannot load monster attacks."))
+            return {
+                "ok": True,
+                "attacker_cid": result.get("attacker_cid"),
+                "attacker_name": result.get("attacker_name"),
+                "multiattack_description": result.get("multiattack_description", ""),
+                "multiattack_counts": result.get("multiattack_counts", {}),
+                "default_sequence": result.get("default_sequence", []),
+                "attack_options": result.get("attack_options", []),
+                "snapshot": _dm_console_snapshot(),
+            }
+
+        @self._fastapi_app.post("/api/dm/combat/monster-attacks/resolve")
+        async def dm_resolve_monster_attack(request: Request, payload: Dict[str, Any] = Body(...)):
+            """Resolve hit/miss rolls for a monster attack sequence and spend turn economy."""
+            _check_dm_auth(request)
+            if not isinstance(payload, dict):
+                raise HTTPException(status_code=400, detail="Invalid payload.")
+            try:
+                attacker_cid = int(payload.get("attacker_cid"))
+                target_cid = int(payload.get("target_cid"))
+            except Exception:
+                raise HTTPException(status_code=400, detail="attacker_cid and target_cid must be integers.")
+            sequence = payload.get("sequence")
+            if not isinstance(sequence, list):
+                sequence = payload.get("sequence_blocks")
+            if not isinstance(sequence, list):
+                raise HTTPException(status_code=400, detail="sequence must be an array.")
+            try:
+                result = self.app._dm_resolve_monster_attack_sequence(
+                    attacker_cid=int(attacker_cid),
+                    target_cid=int(target_cid),
+                    sequence_blocks=sequence,
+                    spend=payload.get("spend", "action"),
+                )
+            except Exception as exc:
+                raise HTTPException(status_code=500, detail=f"Failed to resolve monster attack: {exc}")
+            if not result.get("ok"):
+                raise HTTPException(status_code=400, detail=result.get("error", "Cannot resolve monster attack."))
+            return {
+                "ok": True,
+                "result": result,
+                "snapshot": _dm_console_snapshot(),
+            }
+
+        @self._fastapi_app.post("/api/dm/combat/monster-attacks/apply-damage")
+        async def dm_apply_monster_attack_damage(request: Request, payload: Dict[str, Any] = Body(...)):
+            """Apply manual damage totals after monster attack rolls are resolved."""
+            _check_dm_auth(request)
+            if not isinstance(payload, dict):
+                raise HTTPException(status_code=400, detail="Invalid payload.")
+            try:
+                attacker_cid = int(payload.get("attacker_cid"))
+                target_cid = int(payload.get("target_cid"))
+            except Exception:
+                raise HTTPException(status_code=400, detail="attacker_cid and target_cid must be integers.")
+            attack_name = str(payload.get("attack_name") or "Attack").strip() or "Attack"
+            damage_entries = payload.get("damage_entries")
+            if not isinstance(damage_entries, list):
+                raise HTTPException(status_code=400, detail="damage_entries must be an array.")
+            try:
+                result = self.app._dm_apply_monster_attack_damage(
+                    attacker_cid=int(attacker_cid),
+                    target_cid=int(target_cid),
+                    attack_name=attack_name,
+                    damage_entries=damage_entries,
+                )
+            except Exception as exc:
+                raise HTTPException(status_code=500, detail=f"Failed to apply monster damage: {exc}")
+            if not result.get("ok"):
+                raise HTTPException(status_code=400, detail=result.get("error", "Cannot apply monster damage."))
+            return {
+                "ok": True,
+                "result": result,
+                "snapshot": _dm_console_snapshot(),
+            }
+
+        @self._fastapi_app.post("/api/dm/combat/combatants/{cid}/perform-action")
+        async def dm_monster_perform_action(cid: int, request: Request, payload: Dict[str, Any] = Body(...)):
+            """Execute a combatant action entry through existing perform_action semantics."""
+            _check_dm_auth(request)
+            if not isinstance(payload, dict):
+                raise HTTPException(status_code=400, detail="Invalid payload.")
+            action_name = str(payload.get("action") or payload.get("name") or "").strip()
+            if not action_name:
+                raise HTTPException(status_code=400, detail="action is required.")
+            try:
+                result = self.app._dm_monster_perform_action(
+                    actor_cid=int(cid),
+                    action_name=action_name,
+                    spend=payload.get("spend", "action"),
+                )
+            except Exception as exc:
+                raise HTTPException(status_code=500, detail=f"Failed to perform action: {exc}")
+            if not result.get("ok"):
+                raise HTTPException(status_code=400, detail=result.get("error", "Cannot perform action."))
+            return {
+                "ok": True,
+                "result": result,
+                "snapshot": _dm_console_snapshot(),
+            }
+
+        @self._fastapi_app.post("/api/dm/combat/combatants/{cid}/spell-target")
+        async def dm_monster_spell_target(cid: int, request: Request, payload: Dict[str, Any] = Body(...)):
+            """Resolve a single-target spell for a non-PC combatant via existing adjudication."""
+            _check_dm_auth(request)
+            if not isinstance(payload, dict):
+                raise HTTPException(status_code=400, detail="Invalid payload.")
+            try:
+                result = self.app._dm_monster_spell_target(
+                    actor_cid=int(cid),
+                    payload=payload,
+                )
+            except Exception as exc:
+                raise HTTPException(status_code=500, detail=f"Failed to resolve spell target: {exc}")
+            if not result.get("ok"):
+                raise HTTPException(status_code=400, detail=result.get("error", "Cannot resolve spell target."))
+            return {
+                "ok": True,
+                "result": result,
+                "snapshot": _dm_console_snapshot(),
+            }
+
         @self._fastapi_app.get("/api/dm/map/tactical-presets")
         async def dm_tactical_presets(request: Request):
             """List tactical presets for DM battlefield/map controls."""
@@ -40454,6 +40586,289 @@ class InitiativeTracker(base.InitiativeTracker):
         except Exception:
             pass
         return {"ok": True, "cid": int(cid), "facing_deg": int(facing)}
+
+    @staticmethod
+    def _dm_normalize_turn_spend(value: Any, *, default: str = "action", allow_none: bool = False) -> Optional[str]:
+        raw = str(value if value is not None else default).strip().lower()
+        if raw in {"", "action", "actions"}:
+            return "action"
+        if raw in {"bonus", "bonus_action", "bonus-action", "bonus action"}:
+            return "bonus"
+        if raw in {"reaction", "reactions"}:
+            return "reaction"
+        if allow_none and raw in {"none", "free", "no_spend", "no-spend"}:
+            return "none"
+        return None
+
+    def _dm_validate_monster_actor_for_turn(self, cid: Any) -> Tuple[Optional[Any], Optional[str], Optional[int]]:
+        normalized = _normalize_cid_value(cid, "dm.monster.actor_cid")
+        if normalized is None:
+            return None, "actor_cid must be an integer.", None
+        actor_cid = int(normalized)
+        combatant = self.combatants.get(int(actor_cid))
+        if combatant is None:
+            return None, "Combatant not found.", int(actor_cid)
+        if bool(getattr(combatant, "is_pc", False)):
+            return None, "Monster control only supports non-PC combatants.", int(actor_cid)
+        if int(getattr(combatant, "hp", 0) or 0) <= 0:
+            return None, "That combatant is at 0 HP.", int(actor_cid)
+        if bool(getattr(self, "in_combat", False)):
+            active_cid = _normalize_cid_value(getattr(self, "current_cid", None), "dm.monster.current_cid")
+            if active_cid is not None and int(active_cid) != int(actor_cid):
+                return None, "It's not that combatant's turn.", int(actor_cid)
+        return combatant, None, int(actor_cid)
+
+    def _dm_spend_combatant_turn_resource(self, combatant: Any, spend: str) -> Tuple[bool, str]:
+        spend_key = str(spend or "action").strip().lower()
+        if spend_key == "none":
+            return True, ""
+        if spend_key == "bonus":
+            if not self._use_bonus_action(combatant):
+                return False, "No bonus actions left, matey."
+            return True, ""
+        if spend_key == "reaction":
+            if not self._use_reaction(combatant):
+                return False, "No reactions left, matey."
+            return True, ""
+        if not self._use_action(combatant):
+            return False, "No actions left, matey."
+        return True, ""
+
+    def _dm_monster_attack_options(self, attacker_cid: Any) -> Dict[str, Any]:
+        attacker, error, normalized_cid = self._dm_validate_monster_actor_for_turn(attacker_cid)
+        if attacker is None:
+            return {"ok": False, "error": error or "Invalid attacker.", "attacker_cid": normalized_cid}
+        attack_options, multiattack_counts = self._monster_attack_options_for_map(attacker)
+        if not attack_options:
+            return {"ok": False, "error": "No parsed monster attacks were found for that combatant.", "attacker_cid": int(normalized_cid or 0)}
+        multiattack_description = self._monster_multiattack_description_for_map(attacker)
+        default_sequence = self._build_map_attack_sequence_defaults(attacker, attack_options, multiattack_counts)
+        return {
+            "ok": True,
+            "attacker_cid": int(normalized_cid or 0),
+            "attacker_name": str(getattr(attacker, "name", "") or ""),
+            "attack_options": attack_options,
+            "multiattack_counts": multiattack_counts,
+            "multiattack_description": multiattack_description,
+            "default_sequence": default_sequence,
+        }
+
+    def _dm_resolve_monster_attack_sequence(
+        self,
+        *,
+        attacker_cid: Any,
+        target_cid: Any,
+        sequence_blocks: Any,
+        spend: Any = "action",
+    ) -> Dict[str, Any]:
+        attacker, error, normalized_attacker_cid = self._dm_validate_monster_actor_for_turn(attacker_cid)
+        if attacker is None:
+            return {"ok": False, "error": error or "Invalid attacker."}
+        normalized_target_cid = _normalize_cid_value(target_cid, "dm.monster.target_cid")
+        if normalized_target_cid is None:
+            return {"ok": False, "error": "target_cid must be an integer."}
+        target = self.combatants.get(int(normalized_target_cid))
+        if target is None:
+            return {"ok": False, "error": "Target combatant not found."}
+        options_result = self._dm_monster_attack_options(int(normalized_attacker_cid or 0))
+        if not options_result.get("ok"):
+            return {"ok": False, "error": options_result.get("error", "No monster attacks are available.")}
+        option_by_key = {
+            str(entry.get("key") or ""): entry
+            for entry in list(options_result.get("attack_options") or [])
+            if isinstance(entry, dict) and str(entry.get("key") or "")
+        }
+        if not isinstance(sequence_blocks, list):
+            return {"ok": False, "error": "sequence must be an array."}
+        normalized_blocks: List[Dict[str, Any]] = []
+        for raw_block in sequence_blocks:
+            if not isinstance(raw_block, dict):
+                continue
+            attack_key = str(raw_block.get("attack_key") or "").strip()
+            option = option_by_key.get(attack_key)
+            if not isinstance(option, dict):
+                continue
+            try:
+                count = int(raw_block.get("count") or 1)
+            except Exception:
+                count = 1
+            roll_mode = str(raw_block.get("roll_mode") or "normal").strip().lower()
+            if roll_mode not in {"normal", "advantage", "disadvantage"}:
+                roll_mode = "normal"
+            normalized_blocks.append(
+                {
+                    "attack_key": attack_key,
+                    "count": int(max(1, min(10, count))),
+                    "roll_mode": roll_mode,
+                    "attack_option": option,
+                }
+            )
+        if not normalized_blocks:
+            return {"ok": False, "error": "Choose at least one valid monster attack block."}
+        spend_key = self._dm_normalize_turn_spend(spend, default="action", allow_none=True)
+        if spend_key is None:
+            return {"ok": False, "error": "spend must be action, bonus, reaction, or none."}
+        spent_ok, spend_error = self._dm_spend_combatant_turn_resource(attacker, spend_key)
+        if not spent_ok:
+            return {"ok": False, "error": spend_error or "No turn resource available."}
+        result = self._resolve_map_attack_sequence(
+            int(normalized_attacker_cid or 0),
+            int(normalized_target_cid),
+            normalized_blocks,
+        )
+        if not bool(result.get("ok")):
+            return {"ok": False, "error": str(result.get("reason") or "Failed to resolve monster attacks.")}
+        try:
+            self._rebuild_table(scroll_to_current=True)
+        except Exception:
+            pass
+        try:
+            self._lan_force_state_broadcast()
+        except Exception:
+            pass
+        payload = dict(result)
+        payload["spend"] = spend_key
+        payload["attacker_name"] = str(getattr(attacker, "name", "Attacker") or "Attacker")
+        payload["target_name"] = str(getattr(target, "name", "Target") or "Target")
+        return payload
+
+    def _dm_apply_monster_attack_damage(
+        self,
+        *,
+        attacker_cid: Any,
+        target_cid: Any,
+        attack_name: Any,
+        damage_entries: Any,
+    ) -> Dict[str, Any]:
+        normalized_attacker = _normalize_cid_value(attacker_cid, "dm.monster.damage.attacker")
+        normalized_target = _normalize_cid_value(target_cid, "dm.monster.damage.target")
+        if normalized_attacker is None or normalized_target is None:
+            return {"ok": False, "error": "attacker_cid and target_cid must be integers."}
+        if not isinstance(damage_entries, list):
+            return {"ok": False, "error": "damage_entries must be an array."}
+        result = self._apply_map_attack_manual_damage(
+            int(normalized_attacker),
+            int(normalized_target),
+            str(attack_name or "Attack"),
+            list(damage_entries),
+        )
+        if not result.get("ok"):
+            return result
+        try:
+            self._lan_force_state_broadcast()
+        except Exception:
+            pass
+        return result
+
+    def _dm_monster_perform_action(self, *, actor_cid: Any, action_name: Any, spend: Any = "action") -> Dict[str, Any]:
+        actor, error, normalized_actor_cid = self._dm_validate_monster_actor_for_turn(actor_cid)
+        if actor is None:
+            return {"ok": False, "error": error or "Invalid actor."}
+        spend_key = self._dm_normalize_turn_spend(spend, default="action", allow_none=False)
+        if spend_key is None:
+            return {"ok": False, "error": "spend must be action, bonus, or reaction."}
+        action_text = str(action_name or "").strip()
+        if not action_text:
+            return {"ok": False, "error": "action is required."}
+        dispatch = self._ensure_player_commands().perform_action(
+            {
+                "type": "perform_action",
+                "spend": spend_key,
+                "action": action_text,
+                "name": action_text,
+            },
+            cid=int(normalized_actor_cid or 0),
+            ws_id=None,
+            is_admin=False,
+        )
+        if not bool(dispatch.get("ok")):
+            reason = str(dispatch.get("reason") or dispatch.get("error") or "Action failed.")
+            return {"ok": False, "error": reason, "dispatch": dispatch}
+        try:
+            self._rebuild_table(scroll_to_current=True)
+        except Exception:
+            pass
+        try:
+            self._lan_force_state_broadcast()
+        except Exception:
+            pass
+        return {
+            "ok": True,
+            "actor_cid": int(normalized_actor_cid or 0),
+            "actor_name": str(getattr(actor, "name", "") or ""),
+            "spend": spend_key,
+            "action": action_text,
+            "dispatch": dispatch,
+        }
+
+    def _dm_monster_spell_target(self, *, actor_cid: Any, payload: Dict[str, Any]) -> Dict[str, Any]:
+        actor, error, normalized_actor_cid = self._dm_validate_monster_actor_for_turn(actor_cid)
+        if actor is None:
+            return {"ok": False, "error": error or "Invalid actor."}
+        if not isinstance(payload, dict):
+            return {"ok": False, "error": "Invalid payload."}
+        target_cid = _normalize_cid_value(payload.get("target_cid"), "dm.monster.spell.target_cid")
+        if target_cid is None:
+            target_cid = int(normalized_actor_cid or 0)
+        target = self.combatants.get(int(target_cid))
+        if target is None:
+            return {"ok": False, "error": "Target combatant not found."}
+        spell_slug = str(payload.get("spell_slug") or "").strip()
+        spell_id = str(payload.get("spell_id") or "").strip()
+        preset = self._find_spell_preset(spell_slug, spell_id)
+        preset_slug = str((preset or {}).get("slug") or "").strip().lower()
+        preset_id = str((preset or {}).get("id") or "").strip().lower()
+        spend_key = self._dm_normalize_turn_spend(payload.get("spend"), default="action", allow_none=True)
+        if spend_key is None:
+            return {"ok": False, "error": "spend must be action, bonus, reaction, or none."}
+        is_produce_flame = self._is_produce_flame_spell_key(
+            preset_slug,
+            preset_id,
+            spell_slug,
+            spell_id,
+        )
+        if not is_produce_flame:
+            spent_ok, spend_error = self._dm_spend_combatant_turn_resource(actor, spend_key)
+            if not spent_ok:
+                return {"ok": False, "error": spend_error or "No turn resource available."}
+        msg = dict(payload)
+        msg["type"] = "spell_target_request"
+        msg["target_cid"] = int(target_cid)
+        if "spell_name" not in msg or not str(msg.get("spell_name") or "").strip():
+            fallback_name = str((preset or {}).get("name") or spell_slug or spell_id or "Spell").strip() or "Spell"
+            msg["spell_name"] = fallback_name
+        dispatch = self._ensure_player_commands().spell_target_request(
+            msg,
+            cid=int(normalized_actor_cid or 0),
+            ws_id=None,
+            is_admin=False,
+        )
+        if not bool(dispatch.get("ok")):
+            reason = str(dispatch.get("reason") or dispatch.get("error") or "Spell resolution failed.")
+            return {"ok": False, "error": reason, "dispatch": dispatch}
+        spell_result = msg.get("_spell_target_result")
+        if isinstance(spell_result, dict) and not bool(spell_result.get("ok", False)):
+            reason = str(spell_result.get("reason") or spell_result.get("error") or "Spell resolution failed.")
+            return {"ok": False, "error": reason, "spell_result": spell_result, "dispatch": dispatch}
+        try:
+            self._rebuild_table(scroll_to_current=True)
+        except Exception:
+            pass
+        try:
+            self._lan_force_state_broadcast()
+        except Exception:
+            pass
+        return {
+            "ok": True,
+            "actor_cid": int(normalized_actor_cid or 0),
+            "actor_name": str(getattr(actor, "name", "") or ""),
+            "target_cid": int(target_cid),
+            "target_name": str(getattr(target, "name", "") or ""),
+            "spend": spend_key,
+            "pending": not isinstance(spell_result, dict),
+            "spell_result": spell_result if isinstance(spell_result, dict) else {},
+            "dispatch": dispatch,
+        }
 
     def _dm_map_grid_bounds(self) -> Tuple[int, int]:
         state = self._capture_canonical_map_state(prefer_window=True).normalized()
