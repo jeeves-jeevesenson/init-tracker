@@ -10,6 +10,24 @@ $YamlDirs = @("players")
 $YamlBackupDir = Join-Path $TempDir "yaml_backup"
 $LogDir = Join-Path $InstallDir "logs"
 $LogFile = Join-Path $LogDir "update.log"
+$ExpectedRepoSlug = "jeeves-jeevesenson/init-tracker"
+
+function Get-NormalizedRepoSlug {
+    param([string]$RemoteUrl)
+    if ([string]::IsNullOrWhiteSpace($RemoteUrl)) { return $null }
+    $value = $RemoteUrl.Trim()
+    if ($value -match '^git@github\.com:(.+)$') {
+        $slug = $matches[1]
+    } elseif ($value -match '^(?:https?|ssh)://(?:[^@/]+@)?github\.com/(.+)$') {
+        $slug = $matches[1]
+    } else {
+        return $null
+    }
+    if ($slug.EndsWith(".git")) { $slug = $slug.Substring(0, $slug.Length - 4) }
+    $slug = $slug.Trim("/")
+    if ($slug -notmatch '^[^/]+/[^/]+$') { return $null }
+    return $slug.ToLowerInvariant()
+}
 
 if (!(Test-Path $LogDir)) {
     New-Item -ItemType Directory -Path $LogDir -Force | Out-Null
@@ -84,8 +102,22 @@ if (!(Test-Path "$InstallDir\.git")) {
 Write-Host "Checking for updates..." -ForegroundColor Yellow
 Set-Location $InstallDir
 
+# Ensure this install tracks the supported repository only
+$originUrl = (git remote get-url origin 2>$null | Out-String).Trim()
+$originSlug = Get-NormalizedRepoSlug -RemoteUrl $originUrl
+if ([string]::IsNullOrWhiteSpace($originSlug) -or $originSlug -ne $ExpectedRepoSlug) {
+    Write-Host "Error: This install is not connected to the supported update repository." -ForegroundColor Red
+    Write-Host "Found origin: $originUrl" -ForegroundColor Yellow
+    Write-Host "Expected: https://github.com/$ExpectedRepoSlug.git" -ForegroundColor Yellow
+    Write-Host "Refusing automatic update to avoid pulling the wrong project." -ForegroundColor Yellow
+    Read-Host "Press Enter to exit"
+    Cleanup-TempFiles
+    Stop-UpdateTranscript
+    exit 1
+}
+
 # Fetch latest changes
-git fetch origin
+git fetch origin --prune --tags
 if ($LASTEXITCODE -ne 0) {
     Write-Host "Error: Failed to fetch updates from GitHub" -ForegroundColor Red
     Write-Host "Please check your internet connection and try again." -ForegroundColor Yellow
@@ -149,7 +181,7 @@ foreach ($yamlDir in $YamlDirs) {
 }
 
 # Pull latest changes
-git pull origin main
+git pull --ff-only origin main
 if ($LASTEXITCODE -ne 0) {
     Write-Host "Error: Failed to pull updates" -ForegroundColor Red
     Read-Host "Press Enter to exit"

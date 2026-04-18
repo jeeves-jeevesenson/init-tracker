@@ -15,6 +15,18 @@ YAML_DIRS=("players")
 YAML_BACKUP_DIR="$TEMP_DIR/yaml_backup"
 LOG_DIR="$INSTALL_DIR/logs"
 LOG_FILE="$LOG_DIR/update.log"
+EXPECTED_REPO_SLUG="jeeves-jeevesenson/init-tracker"
+
+normalize_repo_slug() {
+    local remote_url="${1:-}"
+    if [ -z "$remote_url" ]; then
+        return 1
+    fi
+    local normalized
+    normalized="$(printf '%s' "$remote_url" | sed -E 's#^[^:]+://##; s#^git@##; s#github.com[:/]##; s#\.git$##')"
+    normalized="${normalized#/}"
+    printf '%s' "$normalized" | tr '[:upper:]' '[:lower:]'
+}
 
 mkdir -p "$LOG_DIR"
 {
@@ -73,37 +85,30 @@ fi
 echo "Checking for updates..."
 cd "$INSTALL_DIR"
 
-# Fetch latest changes
-DEFAULT_REMOTE="origin"
-if ! git remote get-url "$DEFAULT_REMOTE" >/dev/null 2>&1; then
-    DEFAULT_REMOTE=$(git remote | head -n 1)
-fi
-if [ -z "$DEFAULT_REMOTE" ] || ! git remote get-url "$DEFAULT_REMOTE" >/dev/null 2>&1; then
-    echo "Error: No valid git remotes found to check for updates."
+# Fetch latest changes from the supported repo only
+if ! git remote get-url origin >/dev/null 2>&1; then
+    echo "Error: No 'origin' remote found."
     exit 1
 fi
 
-git fetch "$DEFAULT_REMOTE" --prune --tags
+ORIGIN_URL="$(git remote get-url origin 2>/dev/null || true)"
+ORIGIN_SLUG="$(normalize_repo_slug "$ORIGIN_URL" || true)"
+if [ -z "$ORIGIN_SLUG" ] || [ "$ORIGIN_SLUG" != "$EXPECTED_REPO_SLUG" ]; then
+    echo "Error: This install is not connected to the supported update repository."
+    echo "  Found origin: ${ORIGIN_URL:-<missing>}"
+    echo "  Expected: https://github.com/${EXPECTED_REPO_SLUG}.git"
+    echo "Refusing to run automatic update to avoid pulling the wrong project."
+    echo "Use a manual/source update flow for this checkout."
+    exit 1
+fi
+
+git fetch origin --prune --tags
 
 # Check if there are updates
 LOCAL_COMMIT=$(git rev-parse HEAD)
-DEFAULT_BRANCH_REF=$(git symbolic-ref -q "refs/remotes/${DEFAULT_REMOTE}/HEAD" 2>/dev/null || true)
-DEFAULT_BRANCH_NAME="${DEFAULT_BRANCH_REF#refs/remotes/${DEFAULT_REMOTE}/}"
-if [ -z "$DEFAULT_BRANCH_NAME" ]; then
-    echo "Warning: Could not detect remote default branch; falling back to 'main'."
-    echo "         Run 'git remote set-head ${DEFAULT_REMOTE} --auto' to configure it."
-fi
-DEFAULT_BRANCH_NAME="${DEFAULT_BRANCH_NAME:-main}"
-# Set UPDATE_BRANCH in your environment to override the default branch.
-# Accepts "remote/branch" or a branch name that will be prefixed with the default remote.
-REMOTE_BRANCH="${UPDATE_BRANCH:-${DEFAULT_REMOTE}/${DEFAULT_BRANCH_NAME}}"
-case "$REMOTE_BRANCH" in
-    */*) ;;
-    *) REMOTE_BRANCH="${DEFAULT_REMOTE}/${REMOTE_BRANCH}" ;;
-esac
+REMOTE_BRANCH="origin/main"
 if ! git rev-parse --verify "${REMOTE_BRANCH}" >/dev/null 2>&1; then
     echo "Error: Could not resolve update branch ${REMOTE_BRANCH}."
-    echo "Try again after fetching or set UPDATE_BRANCH to a valid remote branch (e.g., ${DEFAULT_REMOTE}/${DEFAULT_BRANCH_NAME})."
     exit 1
 fi
 REMOTE_COMMIT=$(git rev-parse "$REMOTE_BRANCH")
@@ -213,14 +218,7 @@ for yaml_dir in "${YAML_DIRS[@]}"; do
 done
 
 # Pull latest changes
-REMOTE_NAME="${REMOTE_BRANCH%%/*}"
-REMOTE_BRANCH_PATH="${REMOTE_BRANCH#${REMOTE_NAME}/}"
-if [ -z "$REMOTE_NAME" ] || [ -z "$REMOTE_BRANCH_PATH" ] || ! git remote get-url "$REMOTE_NAME" >/dev/null 2>&1; then
-    echo "Error: Unable to determine update remote/branch from ${REMOTE_BRANCH}."
-    echo "       Expected format: remote/branch and a configured git remote."
-    exit 1
-fi
-git pull "$REMOTE_NAME" "$REMOTE_BRANCH_PATH"
+git pull --ff-only origin main
 git clean -fd -e "logs/" -e "launch-inittracker.sh"
 
 # Update dependencies

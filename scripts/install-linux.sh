@@ -10,6 +10,7 @@ ICON_BASE="$HOME/.local/share/icons/hicolor"
 DESKTOP_FILE="$HOME/.local/share/applications/inittracker.desktop"
 WRAPPER="${APPDIR}/launch-inittracker.sh"
 LAUNCHER="${HOME}/.local/bin/dnd-initiative-tracker"
+HEADLESS_LAUNCHER="${HOME}/.local/bin/dnd-initiative-tracker-headless"
 PYTHON_BIN="${PYTHON:-/usr/bin/python3}"
 VENV_DIR="${APPDIR}/.venv"
 INSTALL_DESKTOP_ENTRY="${INSTALL_DESKTOP_ENTRY:-}"
@@ -56,6 +57,15 @@ APPDIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 LOG_DIR="${APPDIR}/logs"
 PYTHON_BIN="${PYTHON:-/usr/bin/python3}"
 VENV_PYTHON="${APPDIR}/.venv/bin/python"
+MODE="desktop"
+
+if [[ "${1:-}" == "--headless" ]]; then
+  MODE="headless"
+  shift
+elif [[ "${1:-}" == "--desktop" ]]; then
+  MODE="desktop"
+  shift
+fi
 
 if [[ -x "${VENV_PYTHON}" ]]; then
   PYTHON_BIN="${VENV_PYTHON}"
@@ -63,9 +73,14 @@ fi
 
 mkdir -p "${LOG_DIR}"
 cd "${APPDIR}"
-nohup "${PYTHON_BIN}" "${APPDIR}/dnd_initative_tracker.py" >> "${LOG_DIR}/launcher.log" 2>&1 &
+if [[ "${MODE}" == "headless" ]]; then
+  exec "${PYTHON_BIN}" "${APPDIR}/serve_headless.py" "$@"
+fi
 
-echo "D&D Initiative Tracker launched."
+nohup "${PYTHON_BIN}" "${APPDIR}/dnd_initative_tracker.py" "$@" >> "${LOG_DIR}/launcher.log" 2>&1 &
+
+echo "D&D Initiative Tracker desktop mode launched."
+echo "Headless mode: ${APPDIR}/launch-inittracker.sh --headless [--host HOST] [--port PORT]"
 echo "Logs: ${LOG_DIR}/launcher.log"
 EOF
 
@@ -79,6 +94,14 @@ set -euo pipefail
 EOF
 
 chmod +x "${LAUNCHER}"
+
+cat > "${HEADLESS_LAUNCHER}" <<EOF
+#!/usr/bin/env bash
+set -euo pipefail
+"${WRAPPER}" --headless "\$@"
+EOF
+
+chmod +x "${HEADLESS_LAUNCHER}"
 
 if [[ ":${PATH}:" != *":${HOME}/.local/bin:"* ]]; then
   echo ""
@@ -153,4 +176,7 @@ echo "Install complete!"
 echo "Launch from your desktop menu or run:"
 echo "  ${WRAPPER}"
 echo "  ${LAUNCHER}"
+echo "Headless/browser-first mode:"
+echo "  ${HEADLESS_LAUNCHER}"
+echo "  ${WRAPPER} --headless [--host HOST] [--port PORT] [--no-auto-lan]"
 echo "Logs are stored in: ${APPDIR}/logs/launcher.log"

@@ -5,6 +5,24 @@ $ErrorActionPreference = "Stop"
 
 $InstallDir = "$env:LOCALAPPDATA\DnDInitiativeTracker"
 $RepoUrl = "https://github.com/jeeves-jeevesenson/init-tracker.git"
+$ExpectedRepoSlug = "jeeves-jeevesenson/init-tracker"
+
+function Get-NormalizedRepoSlug {
+    param([string]$RemoteUrl)
+    if ([string]::IsNullOrWhiteSpace($RemoteUrl)) { return $null }
+    $value = $RemoteUrl.Trim()
+    if ($value -match '^git@github\.com:(.+)$') {
+        $slug = $matches[1]
+    } elseif ($value -match '^(?:https?|ssh)://(?:[^@/]+@)?github\.com/(.+)$') {
+        $slug = $matches[1]
+    } else {
+        return $null
+    }
+    if ($slug.EndsWith(".git")) { $slug = $slug.Substring(0, $slug.Length - 4) }
+    $slug = $slug.Trim("/")
+    if ($slug -notmatch '^[^/]+/[^/]+$') { return $null }
+    return $slug.ToLowerInvariant()
+}
 
 # Function to show error popup and wait
 function Show-ErrorAndExit {
@@ -164,7 +182,16 @@ try {
         Write-Host ""
         Write-Host "Updating existing installation..." -ForegroundColor Yellow
         Set-Location $InstallDir
-        git pull
+        $originUrl = (git remote get-url origin 2>$null | Out-String).Trim()
+        $originSlug = Get-NormalizedRepoSlug -RemoteUrl $originUrl
+        if ([string]::IsNullOrWhiteSpace($originSlug) -or $originSlug -ne $ExpectedRepoSlug) {
+            throw "Existing install origin '$originUrl' does not match supported repository '$ExpectedRepoSlug'. Refusing automatic update."
+        }
+        git fetch origin --prune --tags
+        if ($LASTEXITCODE -ne 0) {
+            throw "Git fetch failed with exit code $LASTEXITCODE"
+        }
+        git pull --ff-only origin main
         if ($LASTEXITCODE -ne 0) {
             throw "Git pull failed with exit code $LASTEXITCODE"
         }
@@ -214,6 +241,7 @@ try {
 
 Write-Host ""
 Write-Host "Creating icon file..." -ForegroundColor Yellow
+$venvPython = "$InstallDir\.venv\Scripts\python.exe"
 try {
     & "$venvPython" "$InstallDir\scripts\create_icon.py"
     if ($LASTEXITCODE -eq 0) {
@@ -224,8 +252,9 @@ try {
 }
 
 Write-Host ""
-Write-Host "Creating launcher script..." -ForegroundColor Yellow
+Write-Host "Creating launcher scripts..." -ForegroundColor Yellow
 $LauncherBat = "$InstallDir\launch-dnd-tracker.bat"
+$HeadlessLauncherBat = "$InstallDir\launch-dnd-headless.bat"
 
 try {
     @"
@@ -251,9 +280,25 @@ if exist "%APP_DIR%.venv\Scripts\pythonw.exe" (
 
 endlocal
 "@ | Out-File -FilePath $LauncherBat -Encoding ASCII
-    Write-Host "✓ Launcher script created" -ForegroundColor Green
+@"
+@echo off
+REM D&D Initiative Tracker Headless Launcher
+setlocal
+
+set "APP_DIR=%~dp0"
+cd /d "%APP_DIR%"
+
+if exist "%APP_DIR%.venv\Scripts\python.exe" (
+    "%APP_DIR%.venv\Scripts\python.exe" "%APP_DIR%serve_headless.py" %*
+) else (
+    python "%APP_DIR%serve_headless.py" %*
+)
+
+endlocal
+"@ | Out-File -FilePath $HeadlessLauncherBat -Encoding ASCII
+    Write-Host "✓ Launcher scripts created" -ForegroundColor Green
 } catch {
-    Show-Warning -Title "Launcher Creation Failed" -Message "Failed to create launcher script, but installation may still work.`n`nError: $($_.Exception.Message)"
+    Show-Warning -Title "Launcher Creation Failed" -Message "Failed to create one or more launcher scripts, but installation may still work.`n`nError: $($_.Exception.Message)"
 }
 
 # Create desktop shortcut
@@ -330,7 +375,8 @@ Write-Host ""
 Write-Host "To run the D&D Initiative Tracker:" -ForegroundColor White
 Write-Host "  1. Use the Desktop shortcut 'D&D Initiative Tracker'" -ForegroundColor White
 Write-Host "  2. Search for 'D&D Initiative Tracker' in the Start Menu" -ForegroundColor White
-Write-Host "  3. Run: $LauncherBat" -ForegroundColor White
+Write-Host "  3. Desktop compatibility mode: $LauncherBat" -ForegroundColor White
+Write-Host "  4. Headless/browser-first mode: $HeadlessLauncherBat" -ForegroundColor White
 Write-Host ""
 Write-Host "Press Enter to exit..." -ForegroundColor Cyan
 Read-Host

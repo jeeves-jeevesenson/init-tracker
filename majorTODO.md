@@ -74,6 +74,10 @@ When this file and older migration notes disagree, treat the code, tests, and th
 - Current CI is narrower than the test surface:
   - `.github/workflows/lan-inline-script-check.yml` validates LAN inline script syntax and runs a Playwright smoke test
   - there is no broad default CI run of the full Python test suite
+- Install/update/launch flow has a new safety baseline (2026-04-18 pass):
+  - `update_checker.py` now points at the live repo (`jeeves-jeevesenson/init-tracker`) and only offers in-app script execution for managed installs whose git `origin` matches that repository.
+  - Linux/Windows updater scripts now explicitly verify repo identity and refuse to mutate installs that point at a different remote, instead of pulling whichever repo happened to be configured.
+  - quick-install/update paths now use explicit `origin/main` fast-forward updates, and managed launchers now expose headless/browser-first entrypoints alongside desktop compatibility launchers.
 
 ### Confirmed partial migrations / hybrid slices
 
