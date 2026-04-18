@@ -4,7 +4,7 @@
 $ErrorActionPreference = "Stop"
 
 $InstallDir = "$env:LOCALAPPDATA\DnDInitiativeTracker"
-$RepoUrl = "https://github.com/jeeves-jeevesenson/dnd-initiative-tracker.git"
+$RepoUrl = "https://github.com/jeeves-jeevesenson/init-tracker.git"
 
 # Function to show error popup and wait
 function Show-ErrorAndExit {
@@ -64,7 +64,7 @@ Or run this script with execution policy bypass (downloaded file):
     powershell -ExecutionPolicy Bypass -File quick-install.ps1
 
 Or for the web install method:
-    powershell -ExecutionPolicy Bypass -Command "irm https://raw.githubusercontent.com/jeeves-jeevesenson/dnd-initiative-tracker/main/scripts/quick-install.ps1 | iex"
+    powershell -ExecutionPolicy Bypass -Command "irm https://raw.githubusercontent.com/jeeves-jeevesenson/init-tracker/main/scripts/quick-install.ps1 | iex"
 
 Would you like to continue anyway? (Some features may not work correctly)
 "@

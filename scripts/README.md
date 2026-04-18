@@ -15,10 +15,10 @@ One-line installation script that handles everything automatically:
 **Usage:**
 ```bash
 # Using curl
-curl -sSL https://raw.githubusercontent.com/jeeves-jeevesenson/dnd-initiative-tracker/main/scripts/quick-install.sh | bash
+curl -sSL https://raw.githubusercontent.com/jeeves-jeevesenson/init-tracker/main/scripts/quick-install.sh | bash
 
 # Using wget
-wget -qO- https://raw.githubusercontent.com/jeeves-jeevesenson/dnd-initiative-tracker/main/scripts/quick-install.sh | bash
+wget -qO- https://raw.githubusercontent.com/jeeves-jeevesenson/init-tracker/main/scripts/quick-install.sh | bash
 
 # Or if repository is already cloned
 ./scripts/quick-install.sh
@@ -34,7 +34,7 @@ One-line installation script for Windows using PowerShell:
 **Usage:**
 ```powershell
 # One-line install
-irm https://raw.githubusercontent.com/jeeves-jeevesenson/dnd-initiative-tracker/main/scripts/quick-install.ps1 | iex
+irm https://raw.githubusercontent.com/jeeves-jeevesenson/init-tracker/main/scripts/quick-install.ps1 | iex
 
 # Or if repository is already cloned
 .\scripts\quick-install.ps1
