@@ -40,11 +40,14 @@
       background: rgba(255,255,255,.07); color: var(--muted);
     }
     .topbar .status-badge.active { background: rgba(76,175,130,.18); color: var(--heal); }
-    #refreshBtn {
+    #refreshBtn, .workspace-link {
       background: none; border: 1px solid var(--border); color: var(--muted);
       border-radius: var(--radius); padding: 5px 12px; cursor: pointer; font-size: 12px;
+      text-decoration: none;
+      display: inline-flex;
+      align-items: center;
     }
-    #refreshBtn:hover { border-color: var(--accent); color: var(--accent); }
+    #refreshBtn:hover, .workspace-link:hover { border-color: var(--accent); color: var(--accent); }
     #autoRefreshLabel { font-size: 12px; color: var(--muted); display: flex; align-items: center; gap: 5px; }
 
     /* ── Auth overlay ───────────────────────────────────────────── */
@@ -272,6 +275,39 @@
       .tactical-inline { grid-template-columns: 1fr; }
       .tactical-facing-grid { grid-template-columns: repeat(2, 1fr); }
     }
+    .map-workspace-panel { display: none; }
+    body[data-dm-workspace="map"] .main {
+      grid-template-columns: 280px minmax(0, 1fr) 340px;
+    }
+    body[data-dm-workspace="map"] .map-workspace-panel {
+      display: flex;
+      flex-direction: column;
+      gap: 12px;
+      overflow-y: auto;
+      padding: 12px;
+      border-right: 1px solid var(--border);
+    }
+    body[data-dm-workspace="map"] #tacticalMapCanvas {
+      height: max(62vh, 520px);
+    }
+    @media (max-width: 1200px) {
+      body[data-dm-workspace="map"] .main {
+        grid-template-columns: 260px minmax(0, 1fr) 320px;
+      }
+    }
+    @media (max-width: 1024px) {
+      body[data-dm-workspace="map"] .main {
+        grid-template-columns: 1fr;
+        grid-template-rows: auto auto auto auto;
+      }
+      body[data-dm-workspace="map"] .map-workspace-panel {
+        border-right: none;
+        border-bottom: 1px solid var(--border);
+      }
+      body[data-dm-workspace="map"] #tacticalMapCanvas {
+        height: min(70vh, 620px);
+      }
+    }
 
     /* ── Battle log ─────────────────────────────────────────────── */
     .log-panel {
@@ -292,7 +328,7 @@
     @keyframes pulse { 0%,100%{opacity:.5} 50%{opacity:1} }
   </style>
 </head>
-<body>
+<body data-dm-workspace="__DM_WORKSPACE__">
 
 <!-- ── Auth overlay ──────────────────────────────────────────────── -->
 <div id="authOverlay">
@@ -313,6 +349,7 @@
   <label id="autoRefreshLabel">
     <input type="checkbox" id="autoRefreshCb" checked /> Auto-refresh
   </label>
+  <a class="workspace-link" id="workspaceNavLink" href="/dm/map">🗺 Map Workspace</a>
   <button id="refreshBtn">↺ Refresh</button>
 </div>
 
@@ -356,6 +393,9 @@
       <div class="empty-state loading-pulse">Loading combat state…</div>
     </div>
   </div>
+
+  <!-- Dedicated map workspace lane (active only on /dm/map) -->
+  <div class="map-workspace-panel" id="mapWorkspacePanel"></div>
 
   <!-- Mutation panel -->
   <div class="mutation-panel">
@@ -537,7 +577,7 @@
     </div>
 
     <!-- Map setup -->
-    <div class="mut-card">
+    <div class="mut-card" id="mapSetupCard">
       <h3>Map Setup</h3>
       <div class="tactical-status" style="margin-bottom:10px">
         Create a fresh blank map, then adjust grid size before tactical prep.
@@ -560,7 +600,7 @@
     </div>
 
     <!-- Tactical encounter management -->
-    <div class="mut-card tactical-card">
+    <div class="mut-card tactical-card" id="tacticalMapCard">
       <h3>Tactical Map</h3>
       <div class="tactical-status" id="tacticalStatus">
         Click a token to select it, then click a destination cell for Move or Place.
@@ -925,7 +965,7 @@
     </div>
 
     <!-- Monster turn controls -->
-    <div class="mut-card">
+    <div class="mut-card" id="monsterTurnCard">
       <h3>Monster Turn Controls</h3>
       <div class="tactical-status" style="margin-bottom:10px">
         Use existing backend combat semantics to run enemy turns from the browser.
@@ -1102,6 +1142,9 @@
    ───────────────────────────────────────────────────────────────── */
 
 const BASE = '';  // same origin
+const rawDmWorkspace = String(document.body.dataset.dmWorkspace || 'dashboard').trim().toLowerCase();
+const DM_WORKSPACE = rawDmWorkspace === 'map' ? 'map' : 'dashboard';
+const IS_DM_MAP_WORKSPACE = DM_WORKSPACE === 'map';
 
 let adminToken = null;      // null → no auth required (or not yet obtained)
 let currentSnapshot = null;
@@ -1139,6 +1182,37 @@ const ADMIN_REFRESH_OUTCOME_CLEARED = 'cleared';
 const ADMIN_REFRESH_OUTCOME_SUCCEEDED = 'refresh_succeeded';
 let adminRefreshRetryAttempts = 0;
 let adminRefreshLastOutcome = ADMIN_REFRESH_OUTCOME_IDLE;
+let dmWorkspaceLayoutConfigured = false;
+
+function configureDmWorkspaceLayout() {
+  if (dmWorkspaceLayoutConfigured) return;
+  dmWorkspaceLayoutConfigured = true;
+  const nav = document.getElementById('workspaceNavLink');
+  const topTitle = document.querySelector('.topbar h1');
+  if (!IS_DM_MAP_WORKSPACE) {
+    if (nav) {
+      nav.href = '/dm/map';
+      nav.textContent = '🗺 Map Workspace';
+      nav.title = 'Open dedicated DM map workspace';
+    }
+    return;
+  }
+  if (topTitle) topTitle.textContent = '🗺️ DM Map Workspace';
+  document.title = 'DM Map Workspace – Initiative Tracker';
+  if (nav) {
+    nav.href = '/dm';
+    nav.textContent = '↩ Dashboard';
+    nav.title = 'Return to DM dashboard';
+  }
+  const workspacePanel = document.getElementById('mapWorkspacePanel');
+  if (!workspacePanel) return;
+  ['mapSetupCard', 'tacticalMapCard', 'monsterTurnCard'].forEach((id) => {
+    const card = document.getElementById(id);
+    if (card) workspacePanel.appendChild(card);
+  });
+}
+
+configureDmWorkspaceLayout();
 
 // ── Auth ─────────────────────────────────────────────────────────────
 function authHeaders() {

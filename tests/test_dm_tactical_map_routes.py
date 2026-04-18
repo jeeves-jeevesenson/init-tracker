@@ -1438,6 +1438,19 @@ class DmTacticalMapRoutesTests(unittest.TestCase):
         self.assertEqual(12, payload["tactical_map"]["grid"]["cols"])
         self.assertEqual({"col": 1, "row": 1}, payload["tactical_map"]["units"][0]["pos"])
 
+    def test_dm_dashboard_and_map_workspace_routes_render_workspace_mode(self):
+        client, _lan = self._build_client()
+        dashboard = client.get("/dm")
+        self.assertEqual(200, dashboard.status_code)
+        self.assertIn('data-dm-workspace="dashboard"', dashboard.text)
+        self.assertIn('id="workspaceNavLink" href="/dm/map"', dashboard.text)
+        map_workspace = client.get("/dm/map")
+        self.assertEqual(200, map_workspace.status_code)
+        self.assertIn('data-dm-workspace="map"', map_workspace.text)
+        self.assertIn("nav.href = '/dm';", map_workspace.text)
+        self.assertIn("DM_WORKSPACE", map_workspace.text)
+        self.assertIn('id="mapWorkspacePanel"', map_workspace.text)
+
     def test_map_new_route_initializes_blank_map(self):
         client, lan = self._build_client()
         response = client.post("/api/dm/map/new", json={"cols": 30, "rows": 18})
@@ -2665,6 +2678,12 @@ class DmConsoleSnapshotPayloadTests(unittest.TestCase):
 class DmTacticalMapHtmlSurfaceTests(unittest.TestCase):
     def test_dm_console_contains_tactical_map_controls(self):
         html = _DM_HTML_PATH.read_text(encoding="utf-8")
+        self.assertIn('data-dm-workspace="__DM_WORKSPACE__"', html)
+        self.assertIn('id="workspaceNavLink"', html)
+        self.assertIn('id="mapWorkspacePanel"', html)
+        self.assertIn('id="mapSetupCard"', html)
+        self.assertIn('id="tacticalMapCard"', html)
+        self.assertIn('id="monsterTurnCard"', html)
         self.assertIn('id="mapColsInput"', html)
         self.assertIn('id="mapRowsInput"', html)
         self.assertIn('id="createMapBtn"', html)

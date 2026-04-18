@@ -2325,7 +2325,7 @@ class LanController:
             response = await call_next(request)
             path = request.url.path
             # Never cache HTML shells; they decide which JS/CSS to load.
-            if path in ("/", "/planning", "/new_character", "/edit_character", "/shop_admin", "/shop", "/dm"):
+            if path in ("/", "/planning", "/new_character", "/edit_character", "/shop_admin", "/shop", "/dm", "/dm/map"):
                 response.headers["Cache-Control"] = "no-store"
             # Force revalidation of the web editors so updates show up immediately.
             elif (
@@ -3572,12 +3572,24 @@ class LanController:
         def _dm_console_snapshot() -> Dict[str, Any]:
             return self._dm_console_snapshot_payload()
 
+        def _load_dm_console_html(workspace: str = "dashboard") -> str:
+            if not dm_entrypoint.exists():
+                raise HTTPException(status_code=404, detail="DM console page missing.")
+            workspace_key = str(workspace or "dashboard").strip().lower()
+            if workspace_key != "map":
+                workspace_key = "dashboard"
+            html = _inject_asset_version(dm_entrypoint.read_text(encoding="utf-8"))
+            return html.replace("__DM_WORKSPACE__", workspace_key)
+
         @self._fastapi_app.get("/dm")
         async def dm_console(request: Request):
             """Serve the DM web console."""
-            if not dm_entrypoint.exists():
-                raise HTTPException(status_code=404, detail="DM console page missing.")
-            return HTMLResponse(dm_entrypoint.read_text(encoding="utf-8"))
+            return HTMLResponse(_load_dm_console_html("dashboard"))
+
+        @self._fastapi_app.get("/dm/map")
+        async def dm_map_workspace(request: Request):
+            """Serve the dedicated DM map workspace."""
+            return HTMLResponse(_load_dm_console_html("map"))
 
         @self._fastapi_app.get("/api/dm/combat")
         async def dm_combat_snapshot(request: Request):
