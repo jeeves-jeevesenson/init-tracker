@@ -228,6 +228,8 @@ class DmSessionPersistenceRoutesTests(unittest.TestCase):
     # ── load ──────────────────────────────────────────────────────────
     def test_load_session_reads_file_and_broadcasts(self):
         client, lan = self._build_client()
+        dm_pushes: list = []
+        lan._push_dm_snapshot_to_ws_clients = lambda snapshot: dm_pushes.append(dict(snapshot) if isinstance(snapshot, dict) else snapshot)
         # Write a fake session snapshot the stub will consume.
         self.saves_dir.mkdir(parents=True, exist_ok=True)
         sample = self.saves_dir / "boss_fight.json"
@@ -242,6 +244,7 @@ class DmSessionPersistenceRoutesTests(unittest.TestCase):
         self.assertEqual(str(sample), lan._tracker.load_calls[0]["path"])
         # After load, the LAN state broadcast helper should have fired.
         self.assertEqual(1, lan._tracker.broadcast_calls)
+        self.assertEqual([], dm_pushes)
 
     def test_load_session_missing_file_returns_404(self):
         client, lan = self._build_client()

@@ -2007,6 +2007,7 @@ class DmTacticalMapRoutesTests(unittest.TestCase):
 class _TrackerTacticalHarness:
     _capture_canonical_map_state = tracker_mod.InitiativeTracker._capture_canonical_map_state
     _apply_canonical_map_state = tracker_mod.InitiativeTracker._apply_canonical_map_state
+    _broadcast_tactical_state_update = tracker_mod.InitiativeTracker._broadcast_tactical_state_update
     _mutate_canonical_map_state = tracker_mod.InitiativeTracker._mutate_canonical_map_state
     _next_map_entity_id = tracker_mod.InitiativeTracker._next_map_entity_id
     _normalize_tactical_entity_payload = tracker_mod.InitiativeTracker._normalize_tactical_entity_payload
@@ -2015,6 +2016,7 @@ class _TrackerTacticalHarness:
     _upsert_map_structure = tracker_mod.InitiativeTracker._upsert_map_structure
     _remove_map_structure = tracker_mod.InitiativeTracker._remove_map_structure
     _set_map_elevation = tracker_mod.InitiativeTracker._set_map_elevation
+    _dm_tactical_snapshot_from_lan_snapshot = staticmethod(tracker_mod.InitiativeTracker._dm_tactical_snapshot_from_lan_snapshot)
     _dm_tactical_snapshot = tracker_mod.InitiativeTracker._dm_tactical_snapshot
     _dm_move_combatant_on_map = tracker_mod.InitiativeTracker._dm_move_combatant_on_map
     _dm_place_combatant_on_map = tracker_mod.InitiativeTracker._dm_place_combatant_on_map
@@ -2095,6 +2097,7 @@ class _TrackerTacticalHarness:
             presentation={"auras_enabled": True, "bg_images": [], "next_bg_id": 1},
         )
         self.broadcast_calls = 0
+        self.broadcast_include_static: list = []
         self.move_calls: list = []
         self.log_messages: list = []
         self.rebuild_calls = 0
@@ -2139,8 +2142,9 @@ class _TrackerTacticalHarness:
         self.positions[int(cid)] = (int(col), int(row))
         return (True, "", 15)
 
-    def _lan_force_state_broadcast(self):
+    def _lan_force_state_broadcast(self, include_static=True):
         self.broadcast_calls += 1
+        self.broadcast_include_static.append(bool(include_static))
 
     def _lan_live_map_data(self):
         return (10, 10, set(), {}, dict(self.positions))
@@ -2190,6 +2194,18 @@ class DmTacticalHelperTests(unittest.TestCase):
         self.assertEqual(14, payload["grid"]["cols"])
         self.assertEqual(9, payload["grid"]["rows"])
 
+    def test_dm_tactical_snapshot_projection_helper_reuses_lan_shape(self):
+        payload = _TrackerTacticalHarness._dm_tactical_snapshot_from_lan_snapshot(
+            {
+                "grid": {"cols": 8, "rows": 6, "feet_per_square": 5.0},
+                "units": [{"cid": 1, "pos": {"col": 2, "row": 3}}],
+                "spell_presets": ["ignored"],
+            }
+        )
+        self.assertEqual(8, payload["grid"]["cols"])
+        self.assertEqual({"col": 2, "row": 3}, payload["units"][0]["pos"])
+        self.assertNotIn("spell_presets", payload)
+
     def test_dm_move_combatant_on_map_routes_through_lan_move_and_broadcasts(self):
         app = _TrackerTacticalHarness()
         result = app._dm_move_combatant_on_map(1, 3, 2)
@@ -2198,6 +2214,7 @@ class DmTacticalHelperTests(unittest.TestCase):
         self.assertEqual((3, 2), app.positions[1])
         self.assertEqual([{"cid": 1, "col": 3, "row": 2}], app.move_calls)
         self.assertEqual(1, app.broadcast_calls)
+        self.assertEqual([False], app.broadcast_include_static)
 
     def test_dm_place_combatant_on_map_updates_position_and_logs(self):
         app = _TrackerTacticalHarness()
@@ -2207,6 +2224,7 @@ class DmTacticalHelperTests(unittest.TestCase):
         self.assertIn(1, app.synced_aoes)
         self.assertIn(1, app.tethered)
         self.assertEqual(1, app.broadcast_calls)
+        self.assertEqual([False], app.broadcast_include_static)
         self.assertTrue(any("placed on map" in entry["message"] for entry in app.log_messages))
 
     def test_dm_set_combatant_facing_normalizes_and_broadcasts(self):
@@ -2216,6 +2234,7 @@ class DmTacticalHelperTests(unittest.TestCase):
         self.assertEqual(90, result["facing_deg"])
         self.assertEqual(90, getattr(app.combatants[1], "facing_deg"))
         self.assertEqual(1, app.broadcast_calls)
+        self.assertEqual([False], app.broadcast_include_static)
 
     def test_dm_monster_turn_spend_normalization(self):
         self.assertEqual("action", _TrackerTacticalHarness._dm_normalize_turn_spend("actions"))
@@ -2368,6 +2387,7 @@ class DmTacticalHelperTests(unittest.TestCase):
         state_after_clear = app._capture_canonical_map_state(prefer_window=True).normalized()
         self.assertNotIn((2, 3), state_after_clear.terrain_cells)
         self.assertEqual(3, app.broadcast_calls)
+        self.assertEqual([False, False, False], app.broadcast_include_static)
 
     def test_dm_create_blank_map_helper_resets_map_layers_and_grid(self):
         app = _TrackerTacticalHarness()
@@ -2673,6 +2693,18 @@ class DmConsoleSnapshotPayloadTests(unittest.TestCase):
         self.assertEqual("Aelar", payload["combatants"][0]["name"])
         self.assertEqual(6, payload["tactical_map"]["grid"]["cols"])
         self.assertEqual({"col": 1, "row": 2}, payload["tactical_map"]["units"][0]["pos"])
+
+    def test_combined_snapshot_uses_precomputed_tactical_payload_when_provided(self):
+        lan = object.__new__(tracker_mod.LanController)
+        lan._tracker = types.SimpleNamespace(
+            _dm_tactical_snapshot=lambda: (_ for _ in ()).throw(AssertionError("unexpected tactical snapshot call"))
+        )
+        lan._dm_service = types.SimpleNamespace(combat_snapshot=lambda: {"in_combat": False})
+        payload = tracker_mod.LanController._dm_console_snapshot_payload(
+            lan,
+            tactical_snapshot={"grid": {"cols": 9, "rows": 9}, "units": []},
+        )
+        self.assertEqual(9, payload["tactical_map"]["grid"]["cols"])
 
 
 class DmTacticalMapHtmlSurfaceTests(unittest.TestCase):

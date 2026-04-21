@@ -5461,10 +5461,6 @@ class LanController:
                 self.app._lan_force_state_broadcast()
             except Exception:
                 pass
-            try:
-                self._push_dm_snapshot_to_ws_clients(_dm_console_snapshot())
-            except Exception:
-                pass
 
         @self._fastapi_app.post("/api/dm/sessions/new")
         async def dm_new_blank_session(request: Request):
@@ -6778,7 +6774,11 @@ class LanController:
                     self._clients_meta.pop(ws_id, None)
                     self._client_hosts.pop(ws_id, None)
 
-    def _dm_console_snapshot_payload(self) -> Dict[str, Any]:
+    def _dm_console_snapshot_payload(
+        self,
+        *,
+        tactical_snapshot: Optional[Dict[str, Any]] = None,
+    ) -> Dict[str, Any]:
         snapshot: Dict[str, Any] = {}
         dm_service = getattr(self, "_dm_service", None)
         if dm_service is not None:
@@ -6788,16 +6788,19 @@ class LanController:
                     snapshot = dict(candidate)
             except Exception:
                 snapshot = {}
-        tactical_snapshot: Dict[str, Any] = {}
-        try:
-            tactical_builder = getattr(self.app, "_dm_tactical_snapshot", None)
-            if callable(tactical_builder):
-                candidate = tactical_builder()
-                if isinstance(candidate, dict):
-                    tactical_snapshot = candidate
-        except Exception:
-            tactical_snapshot = {}
-        snapshot["tactical_map"] = tactical_snapshot
+        tactical_payload: Dict[str, Any] = {}
+        if isinstance(tactical_snapshot, dict):
+            tactical_payload = dict(tactical_snapshot)
+        else:
+            try:
+                tactical_builder = getattr(self.app, "_dm_tactical_snapshot", None)
+                if callable(tactical_builder):
+                    candidate = tactical_builder()
+                    if isinstance(candidate, dict):
+                        tactical_payload = candidate
+            except Exception:
+                tactical_payload = {}
+        snapshot["tactical_map"] = tactical_payload
         return snapshot
 
     def _push_dm_snapshot_to_ws_clients(self, snapshot: Dict[str, Any]) -> None:
@@ -13576,9 +13579,9 @@ class InitiativeTracker(base.InitiativeTracker):
                     if callable(scheduler):
                         scheduler()
                     else:
-                        self._lan_force_state_broadcast()
+                        self._broadcast_tactical_state_update()
                 else:
-                    self._lan_force_state_broadcast()
+                    self._broadcast_tactical_state_update()
             except Exception:
                 pass
         return normalized
@@ -19141,6 +19144,15 @@ class InitiativeTracker(base.InitiativeTracker):
                     snap[key] = default
         return snap
 
+    def _broadcast_tactical_state_update(self) -> None:
+        broadcaster = getattr(self, "_lan_force_state_broadcast", None)
+        if not callable(broadcaster):
+            return
+        try:
+            broadcaster(include_static=False)
+        except TypeError:
+            broadcaster()
+
     def _schedule_lan_state_broadcast(self, delay_ms: Optional[int] = None) -> None:
         try:
             existing = getattr(self, "_lan_state_broadcast_after_id", None)
@@ -19160,24 +19172,19 @@ class InitiativeTracker(base.InitiativeTracker):
 
             def _flush() -> None:
                 self._lan_state_broadcast_after_id = None
-                broadcaster = getattr(self, "_lan_force_state_broadcast", None)
-                if not callable(broadcaster):
-                    return
-                try:
-                    broadcaster(include_static=False)
-                except TypeError:
-                    broadcaster()
+                self._broadcast_tactical_state_update()
 
             self._lan_state_broadcast_after_id = self.after(broadcast_delay, _flush)
         except Exception:
             try:
-                self._lan_force_state_broadcast()
+                self._broadcast_tactical_state_update()
             except Exception:
                 pass
 
     def _lan_force_state_broadcast(self, include_static: bool = True) -> None:
+        snap: Dict[str, Any] = {}
         try:
-            snap = self._lan_snapshot()
+            snap = self._lan_snapshot(include_static=bool(include_static))
             self._lan._cached_snapshot = snap
             try:
                 self._lan._cached_pcs = list(
@@ -19204,7 +19211,8 @@ class InitiativeTracker(base.InitiativeTracker):
         try:
             dm_svc = getattr(self._lan, "_dm_service", None)
             if dm_svc is not None:
-                dm_snap = self._lan._dm_console_snapshot_payload()
+                tactical_snapshot = self._dm_tactical_snapshot_from_lan_snapshot(snap)
+                dm_snap = self._lan._dm_console_snapshot_payload(tactical_snapshot=tactical_snapshot)
                 self._lan._push_dm_snapshot_to_ws_clients(dm_snap)
         except Exception:
             pass
@@ -40485,8 +40493,8 @@ class InitiativeTracker(base.InitiativeTracker):
         self._rebuild_table(scroll_to_current=True)
         return (True, "", int(cost))
 
-    def _dm_tactical_snapshot(self) -> Dict[str, Any]:
-        raw = self._lan_snapshot(include_static=False, hydrate_static=False)
+    @staticmethod
+    def _dm_tactical_snapshot_from_lan_snapshot(raw: Dict[str, Any]) -> Dict[str, Any]:
         if not isinstance(raw, dict):
             return {}
         snapshot: Dict[str, Any] = {}
@@ -40517,6 +40525,10 @@ class InitiativeTracker(base.InitiativeTracker):
                 snapshot["grid"] = dict(map_state_payload.get("grid"))
         return snapshot
 
+    def _dm_tactical_snapshot(self) -> Dict[str, Any]:
+        raw = self._lan_snapshot(include_static=False, hydrate_static=False)
+        return self._dm_tactical_snapshot_from_lan_snapshot(raw)
+
     def _dm_move_combatant_on_map(self, cid: int, col: int, row: int) -> Dict[str, Any]:
         try:
             ok, reason, cost = self._lan_try_move(int(cid), int(col), int(row))
@@ -40525,7 +40537,7 @@ class InitiativeTracker(base.InitiativeTracker):
         if not ok:
             return {"ok": False, "error": str(reason or "Cannot move combatant.")}
         try:
-            self._lan_force_state_broadcast()
+            self._broadcast_tactical_state_update()
         except Exception:
             pass
         return {
@@ -40575,7 +40587,7 @@ class InitiativeTracker(base.InitiativeTracker):
             return {"ok": False, "error": f"Failed to place combatant: {exc}"}
 
         try:
-            self._lan_force_state_broadcast()
+            self._broadcast_tactical_state_update()
         except Exception:
             pass
         return {
@@ -40606,7 +40618,7 @@ class InitiativeTracker(base.InitiativeTracker):
             return {"ok": False, "error": f"Failed to set facing: {exc}"}
 
         try:
-            self._lan_force_state_broadcast()
+            self._broadcast_tactical_state_update()
         except Exception:
             pass
         return {"ok": True, "cid": int(cid), "facing_deg": int(facing)}
@@ -41671,7 +41683,7 @@ class InitiativeTracker(base.InitiativeTracker):
         except Exception:
             pass
         try:
-            self._lan_force_state_broadcast()
+            self._broadcast_tactical_state_update()
         except Exception:
             pass
 
@@ -42192,7 +42204,7 @@ class InitiativeTracker(base.InitiativeTracker):
             return {"ok": False, "error": "Could not place AoE. Check shape and size values."}
         aid = int(new_ids[-1])
         try:
-            self._lan_force_state_broadcast()
+            self._broadcast_tactical_state_update()
         except Exception:
             pass
         aoe_view = self._dm_aoe_snapshot_entry(aid) or dict(after_store.get(aid) or {})
@@ -42244,7 +42256,7 @@ class InitiativeTracker(base.InitiativeTracker):
         if abs(moved_cx - float(cx)) > 0.05 or abs(moved_cy - float(cy)) > 0.05:
             return {"ok": False, "error": "Could not move AoE."}
         try:
-            self._lan_force_state_broadcast()
+            self._broadcast_tactical_state_update()
         except Exception:
             pass
         aoe_view = self._dm_aoe_snapshot_entry(int(aid)) or dict(updated)
@@ -42265,7 +42277,7 @@ class InitiativeTracker(base.InitiativeTracker):
         if int(aid) in after_store:
             return {"ok": False, "error": "Could not remove AoE."}
         try:
-            self._lan_force_state_broadcast()
+            self._broadcast_tactical_state_update()
         except Exception:
             pass
         return {"ok": True, "aid": int(aid)}
