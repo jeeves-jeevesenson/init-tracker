@@ -3591,6 +3591,18 @@ class LanController:
             """Serve the dedicated DM map workspace."""
             return HTMLResponse(_load_dm_console_html("map"))
 
+        @self._fastapi_app.get("/dm/map")
+        async def dm_console_map(request: Request):
+            """Serve the DM console in map-first layout.
+
+            Same HTML shell as /dm; the client inspects ``location.pathname``
+            to activate the map-focused CSS mode, hiding encounter/session
+            setup cards and enlarging the tactical canvas for live use.
+            """
+            if not dm_entrypoint.exists():
+                raise HTTPException(status_code=404, detail="DM console page missing.")
+            return HTMLResponse(dm_entrypoint.read_text(encoding="utf-8"))
+
         @self._fastapi_app.get("/api/dm/combat")
         async def dm_combat_snapshot(request: Request):
             """Return the current DM combat/session snapshot.

@@ -309,6 +309,31 @@
       }
     }
 
+    /* ── Map-first mode (/dm/map) ───────────────────────────────── */
+    /* The /dm/map route serves the same shell in a focused layout
+       where the tactical canvas is the primary workspace and the
+       encounter/session authoring cards are hidden. Live-play cards
+       (HP, conditions, temp HP, monster turn controls) stay visible
+       alongside the map. */
+    body.map-mode .main {
+      grid-template-columns: 260px 1fr;
+    }
+    body.map-mode .initiative-panel { padding: 10px 10px 10px 12px; }
+    body.map-mode #tacticalMapCanvas { height: 640px; }
+    body.map-mode [data-dm-card="setup"] { display: none !important; }
+    body.map-mode .tactical-card { padding-bottom: 14px; }
+    body.map-mode .log-panel { max-height: 110px; }
+    .mode-toggle {
+      font-size: 12px; color: var(--muted); text-decoration: none;
+      border: 1px solid var(--border); border-radius: var(--radius);
+      padding: 5px 10px;
+    }
+    .mode-toggle:hover { border-color: var(--accent); color: var(--accent); }
+    @media (max-width: 900px) {
+      body.map-mode .main { grid-template-columns: 1fr; }
+      body.map-mode #tacticalMapCanvas { height: 420px; }
+    }
+
     /* ── Battle log ─────────────────────────────────────────────── */
     .log-panel {
       grid-column: 1 / -1;
@@ -346,6 +371,7 @@
 <div class="topbar">
   <h1>⚔️ DM Console</h1>
   <span class="status-badge" id="combatBadge">Not in combat</span>
+  <a class="mode-toggle" id="modeToggleLink" href="/dm/map">🗺 Map view</a>
   <label id="autoRefreshLabel">
     <input type="checkbox" id="autoRefreshCb" checked /> Auto-refresh
   </label>
@@ -468,7 +494,7 @@
     </div>
 
     <!-- Encounter setup: add player profiles -->
-    <div class="mut-card">
+    <div class="mut-card" data-dm-card="setup">
       <h3>Add Player Profiles</h3>
       <div style="display:flex;gap:6px;margin-bottom:8px">
         <button class="btn-sm" id="selectAllPlayersBtn" style="flex:1">Select Available</button>
@@ -482,7 +508,7 @@
     </div>
 
     <!-- Encounter setup: add monster specs -->
-    <div class="mut-card">
+    <div class="mut-card" data-dm-card="setup">
       <h3>Add Monster Specs</h3>
       <div class="form-group">
         <label>Monster</label>
@@ -511,7 +537,7 @@
     </div>
 
     <!-- Encounter setup: add combatant -->
-    <div class="mut-card">
+    <div class="mut-card" data-dm-card="setup">
       <h3>Add Combatant</h3>
       <div class="form-group">
         <label>Name</label>
@@ -548,7 +574,7 @@
     </div>
 
     <!-- Encounter setup: set initiative -->
-    <div class="mut-card">
+    <div class="mut-card" data-dm-card="setup">
       <h3>Set Initiative</h3>
       <div class="form-group">
         <label>Combatant</label>
@@ -566,7 +592,7 @@
     </div>
 
     <!-- Encounter setup: remove combatant -->
-    <div class="mut-card">
+    <div class="mut-card" data-dm-card="setup">
       <h3>Remove Combatant</h3>
       <div class="form-group">
         <label>Combatant</label>
@@ -577,7 +603,11 @@
     </div>
 
     <!-- Map setup -->
+<<<<<<< HEAD
     <div class="mut-card" id="mapSetupCard">
+=======
+    <div class="mut-card" data-dm-card="setup">
+>>>>>>> 1ec22f4 (Stabilize DM map workspace route and live refresh behavior)
       <h3>Map Setup</h3>
       <div class="tactical-status" style="margin-bottom:10px">
         Create a fresh blank map, then adjust grid size before tactical prep.
@@ -1040,7 +1070,7 @@
     </div>
 
     <!-- Session persistence -->
-    <div class="mut-card">
+    <div class="mut-card" data-dm-card="setup">
       <h3>Session Persistence</h3>
       <div style="display:flex;gap:6px;margin-bottom:8px">
         <button class="btn-action heal" id="quickSaveBtn" style="flex:1">⚡ Quick Save</button>
@@ -1398,6 +1428,10 @@ document.getElementById('passwordInput').addEventListener('keydown', e => {
 function startAutoRefresh() {
   if (autoRefreshTimer) return;
   autoRefreshTimer = setInterval(() => {
+    // The DM WebSocket pushes snapshots on every state change, so while
+    // it is open the HTTP poll is redundant and drops snapshot load on the
+    // backend during live play. Fall back to polling only when WS is down.
+    if (dmWs && dmWs.readyState === 1) return;
     if (document.getElementById('autoRefreshCb').checked) fetchSnapshot();
   }, POLL_INTERVAL_MS);
   connectDmWs();
@@ -4811,6 +4845,25 @@ document.getElementById('quickLoadBtn').addEventListener('click', async () => {
 function escHtml(s) {
   return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
 }
+
+// ── Map-mode detection ────────────────────────────────────────────────
+// The /dm/map route serves this same HTML; enabling map-mode hides
+// encounter/session setup cards and enlarges the tactical canvas so the
+// DM can run a live tactical turn without scrolling through authoring UI.
+(function applyDmConsoleMode() {
+  const isMap = location.pathname.replace(/\/+$/, '') === '/dm/map';
+  if (isMap) document.body.classList.add('map-mode');
+  const toggle = document.getElementById('modeToggleLink');
+  if (toggle) {
+    if (isMap) {
+      toggle.href = '/dm';
+      toggle.textContent = '📋 Full console';
+    } else {
+      toggle.href = '/dm/map';
+      toggle.textContent = '🗺 Map view';
+    }
+  }
+})();
 
 // ── Boot ──────────────────────────────────────────────────────────────
 tryAutoLogin();
