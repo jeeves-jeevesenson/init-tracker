@@ -132,6 +132,34 @@ class CombatService:
         self._tracker = tracker
         self._lock = threading.RLock()
 
+    def _refresh_tracker_outputs(self) -> None:
+        """Refresh desktop UI and LAN state without blocking server threads."""
+        t = self._tracker
+
+        def _refresh() -> None:
+            try:
+                t._rebuild_table(scroll_to_current=True)
+            except Exception:
+                pass
+            try:
+                broadcast = getattr(t, "_lan_force_state_broadcast", None)
+                if callable(broadcast):
+                    try:
+                        broadcast(include_static=False)
+                    except TypeError:
+                        broadcast()
+            except Exception:
+                pass
+
+        after = getattr(t, "after", None)
+        if callable(after) and threading.current_thread() is not threading.main_thread():
+            try:
+                after(0, _refresh)
+                return
+            except Exception:
+                pass
+        _refresh()
+
     # ------------------------------------------------------------------
     # Read: snapshot
     # ------------------------------------------------------------------
@@ -1114,14 +1142,7 @@ class CombatService:
                     skipped.append(name)
 
             if created:
-                try:
-                    t._rebuild_table(scroll_to_current=True)
-                except Exception:
-                    pass
-                try:
-                    t._lan_force_state_broadcast()
-                except Exception:
-                    pass
+                self._refresh_tracker_outputs()
 
             return {
                 "ok": True,
@@ -1244,14 +1265,7 @@ class CombatService:
                     )
 
             if added:
-                try:
-                    t._rebuild_table(scroll_to_current=True)
-                except Exception:
-                    pass
-                try:
-                    t._lan_force_state_broadcast()
-                except Exception:
-                    pass
+                self._refresh_tracker_outputs()
 
             return {
                 "ok": True,

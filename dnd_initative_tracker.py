@@ -3550,9 +3550,11 @@ class LanController:
             from combat_service import CombatService  # noqa: PLC0415
             _dm_service = CombatService(self.app)
             self._dm_service = _dm_service
+            self.app.__dict__["_dm_service"] = _dm_service
         except Exception as _dm_import_err:
             _dm_service = None
             self._dm_service = None
+            self.app.__dict__["_dm_service"] = None
             self.app._oplog(f"DM combat service unavailable: {_dm_import_err}", level="warning")
 
         def _check_dm_auth(request: "Request") -> None:
@@ -3590,18 +3592,6 @@ class LanController:
         async def dm_map_workspace(request: Request):
             """Serve the dedicated DM map workspace."""
             return HTMLResponse(_load_dm_console_html("map"))
-
-        @self._fastapi_app.get("/dm/map")
-        async def dm_console_map(request: Request):
-            """Serve the DM console in map-first layout.
-
-            Same HTML shell as /dm; the client inspects ``location.pathname``
-            to activate the map-focused CSS mode, hiding encounter/session
-            setup cards and enlarging the tactical canvas for live use.
-            """
-            if not dm_entrypoint.exists():
-                raise HTTPException(status_code=404, detail="DM console page missing.")
-            return HTMLResponse(dm_entrypoint.read_text(encoding="utf-8"))
 
         @self._fastapi_app.get("/api/dm/combat")
         async def dm_combat_snapshot(request: Request):
@@ -17374,10 +17364,11 @@ class InitiativeTracker(base.InitiativeTracker):
         skip_existing: bool = False,
     ) -> Dict[str, Any]:
         """Route player-profile encounter population through CombatService when available."""
-        dm_svc = getattr(self, "_dm_service", None)
-        if dm_svc is not None:
+        dm_svc = self.__dict__.get("_dm_service")
+        add_players = getattr(dm_svc, "add_player_profile_combatants", None) if dm_svc is not None else None
+        if callable(add_players):
             try:
-                result = dm_svc.add_player_profile_combatants(
+                result = add_players(
                     list(names) if isinstance(names, list) else [],
                     skip_existing=skip_existing,
                 )
@@ -17434,10 +17425,11 @@ class InitiativeTracker(base.InitiativeTracker):
 
     def _add_monster_spec_combatants_via_service(self, entries: List[Dict[str, Any]]) -> Dict[str, Any]:
         """Route core monster-spec encounter population through CombatService when available."""
-        dm_svc = getattr(self, "_dm_service", None)
-        if dm_svc is not None:
+        dm_svc = self.__dict__.get("_dm_service")
+        add_monsters = getattr(dm_svc, "add_monster_spec_combatants", None) if dm_svc is not None else None
+        if callable(add_monsters):
             try:
-                result = dm_svc.add_monster_spec_combatants(
+                result = add_monsters(
                     list(entries) if isinstance(entries, list) else [],
                 )
                 if result.get("ok"):
