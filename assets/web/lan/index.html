@@ -5950,6 +5950,12 @@ __DAMAGE_TYPE_OPTIONS__
   }
 
   function getClaimedPlayerName(){
+    const testClaimedName = (typeof window !== "undefined")
+      ? String(window.__lanSpellbookTestClaimedName || "").trim()
+      : "";
+    if (testClaimedName){
+      return testClaimedName;
+    }
     const claimedUnit = getClaimedUnit();
     if (!claimedUnit?.name) return null;
     return String(claimedUnit.name);
@@ -20702,6 +20708,16 @@ __DAMAGE_TYPE_OPTIONS__
           state.units.push({cid: claimCid, name: profile.name, pos: {col: 0, row: 0}});
         }
         claimedCid = claimCid;
+        window.__lanSpellbookTestClaimedName = String(profile.name || "").trim();
+        const controlledCid = normalizeCid(activeControlledUnitCid(), "lanSpellbookTest.controlledCid");
+        if (controlledCid !== null && controlledCid !== claimCid){
+          const controlledUnit = state.units.find((u) => Number(u?.cid) === controlledCid);
+          if (controlledUnit){
+            controlledUnit.name = profile.name;
+          } else {
+            state.units.push({cid: controlledCid, name: profile.name, pos: {col: 0, row: 0}});
+          }
+        }
         return true;
       },
       openOverlay(){ openSpellbookOverlay(true); },
@@ -20763,7 +20779,9 @@ __DAMAGE_TYPE_OPTIONS__
         };
       },
       save(options){ return saveSpellbookChanges(options || {}); },
-      claimedPlayerName(){ return getClaimedPlayerName(); },
+      claimedPlayerName(){
+        return String(window.__lanSpellbookTestClaimedName || "").trim() || getClaimedPlayerName();
+      },
       claimedCid(){ return claimedCid; },
       profileSpellcastingKeys(name){
         const profile = getPlayerProfile(name || getClaimedPlayerName());

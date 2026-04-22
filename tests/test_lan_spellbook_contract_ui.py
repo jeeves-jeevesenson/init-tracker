@@ -51,6 +51,16 @@ class LanSpellbookContractUiTests(unittest.TestCase):
         self.assertIn("cantrips_free_list: Array.from(pendingCantripFreeSet),", self.html)
         self.assertIn("syncSpellbookClaimedPlayer({preserveMode: true, markSaved: true});", self.html)
 
+    def test_spellbook_test_hook_claim_recovers_from_stale_controlled_cid(self):
+        self.assertIn("window.__lanSpellbookTestClaimedName", self.html)
+        self.assertIn("if (testClaimedName){", self.html)
+        self.assertIn(
+            'const controlledCid = normalizeCid(activeControlledUnitCid(), "lanSpellbookTest.controlledCid");',
+            self.html,
+        )
+        self.assertIn('window.__lanSpellbookTestClaimedName = String(profile.name || "").trim();', self.html)
+        self.assertIn("if (controlledCid !== null && controlledCid !== claimCid){", self.html)
+
 
 if __name__ == "__main__":
     unittest.main()

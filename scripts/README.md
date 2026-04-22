@@ -214,8 +214,11 @@ node scripts/check-lan-script.mjs
 ```
 
 ### lan-smoke-playwright.py
-Launches a local HTTP server, opens `/lan` in Playwright, and fails if a page error
-fires or the LAN boot marker does not appear.
+Launches a local HTTP server, opens `/lan` in Playwright, and runs deterministic
+spell-manager smoke coverage for wizard and prepared-only profiles in isolated
+browser contexts. The script fails on page errors, boot failure, spell-manager
+mode/tab regressions, search/add/remove/save regressions, or cross-profile state
+contamination.
 
 **Usage:**
 ```bash
