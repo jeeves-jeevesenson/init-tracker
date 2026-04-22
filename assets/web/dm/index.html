@@ -436,6 +436,19 @@
     .card-collapse-btn:hover { border-color: var(--accent); color: var(--accent); }
     .mut-card.is-collapsed .mut-card-header { margin-bottom: 0; }
     .mut-card.is-collapsed .mut-card-body { display: none; }
+    .setup-group {
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+    }
+    .setup-group-label {
+      font-size: 11px;
+      text-transform: uppercase;
+      letter-spacing: .08em;
+      color: var(--muted);
+      padding: 0 2px 4px;
+      border-bottom: 1px solid var(--border);
+    }
     .form-group { display: flex; flex-direction: column; gap: 6px; margin-bottom: 8px; }
     .form-group label { font-size: 11px; color: var(--muted); }
     .form-group select, .form-group input {
@@ -790,137 +803,177 @@
       <div class="mut-result" id="tempHpResult"></div>
     </div>
 
-    <!-- Encounter setup: add player profiles -->
-    <div class="mut-card" data-dm-card="setup">
-      <h3>Add Player Profiles</h3>
-      <div style="display:flex;gap:6px;margin-bottom:8px">
-        <button class="btn-sm" id="selectAllPlayersBtn" style="flex:1">Select Available</button>
-        <button class="btn-sm" id="clearPlayerSelectionBtn" style="flex:1">Clear</button>
-      </div>
-      <div id="encounterPlayerList" class="choice-list">
-        <div class="empty-state loading-pulse" style="padding:12px 8px">Loading player roster…</div>
-      </div>
-      <button class="btn-action" id="addPlayersBtn" style="margin-top:8px">+ Add Selected Players</button>
-      <div class="mut-result" id="addPlayersResult"></div>
-    </div>
+    <section class="setup-group" data-dm-card="setup" data-setup-group="roster" aria-labelledby="setupRosterGroupTitle">
+      <div class="setup-group-label" id="setupRosterGroupTitle">Roster</div>
 
-    <!-- Encounter setup: add monster specs -->
-    <div class="mut-card" data-dm-card="setup">
-      <h3>Add Monster Specs</h3>
-      <div class="form-group">
-        <label>Monster</label>
-        <select id="monsterSlugSelect"><option value="">— select monster —</option></select>
+      <!-- Encounter setup: add player profiles -->
+      <div class="mut-card" data-dm-card="setup">
+        <h3>Add Player Profiles</h3>
+        <div style="display:flex;gap:6px;margin-bottom:8px">
+          <button class="btn-sm" id="selectAllPlayersBtn" style="flex:1">Select Available</button>
+          <button class="btn-sm" id="clearPlayerSelectionBtn" style="flex:1">Clear</button>
+        </div>
+        <div id="encounterPlayerList" class="choice-list">
+          <div class="empty-state loading-pulse" style="padding:12px 8px">Loading player roster…</div>
+        </div>
+        <button class="btn-action" id="addPlayersBtn" style="margin-top:8px">+ Add Selected Players</button>
+        <div class="mut-result" id="addPlayersResult"></div>
       </div>
-      <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px">
-        <div class="form-group">
-          <label>Count</label>
-          <input type="number" id="monsterCount" value="1" min="1" />
-        </div>
-        <div class="form-group">
-          <label>Initiative</label>
-          <input type="number" id="monsterInit" value="0" />
-        </div>
-        <div class="form-group">
-          <label>Name prefix (optional)</label>
-          <input type="text" id="monsterNamePrefix" placeholder="defaults to monster name" />
-        </div>
-        <div class="form-group" style="justify-content:flex-end;flex-direction:row;align-items:center;gap:8px;padding-top:18px">
-          <label style="font-size:11px;color:var(--muted)">Ally</label>
-          <input type="checkbox" id="monsterAlly" style="width:auto" />
-        </div>
-      </div>
-      <button class="btn-action" id="addMonsterBtn">+ Add Monster Group</button>
-      <div class="mut-result" id="addMonsterResult"></div>
-    </div>
 
-    <!-- Encounter setup: add combatant -->
-    <div class="mut-card" data-dm-card="setup">
-      <h3>Add Combatant</h3>
-      <div class="form-group">
-        <label>Name</label>
-        <input type="text" id="newCombatantName" placeholder="e.g. Goblin A" />
+      <!-- Encounter setup: add monster specs -->
+      <div class="mut-card" data-dm-card="setup">
+        <h3>Add Monster Specs</h3>
+        <div class="form-group">
+          <label>Monster</label>
+          <select id="monsterSlugSelect"><option value="">— select monster —</option></select>
+        </div>
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px">
+          <div class="form-group">
+            <label>Count</label>
+            <input type="number" id="monsterCount" value="1" min="1" />
+          </div>
+          <div class="form-group">
+            <label>Initiative</label>
+            <input type="number" id="monsterInit" value="0" />
+          </div>
+          <div class="form-group">
+            <label>Name prefix (optional)</label>
+            <input type="text" id="monsterNamePrefix" placeholder="defaults to monster name" />
+          </div>
+          <div class="form-group" style="justify-content:flex-end;flex-direction:row;align-items:center;gap:8px;padding-top:18px">
+            <label style="font-size:11px;color:var(--muted)">Ally</label>
+            <input type="checkbox" id="monsterAlly" style="width:auto" />
+          </div>
+        </div>
+        <button class="btn-action" id="addMonsterBtn">+ Add Monster Group</button>
+        <div class="mut-result" id="addMonsterResult"></div>
       </div>
-      <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px">
-        <div class="form-group">
-          <label>HP</label>
-          <input type="number" id="newCombatantHp" placeholder="e.g. 15" min="0" />
-        </div>
-        <div class="form-group">
-          <label>Max HP (blank = HP)</label>
-          <input type="number" id="newCombatantMaxHp" placeholder="same as HP" min="0" />
-        </div>
-        <div class="form-group">
-          <label>Initiative</label>
-          <input type="number" id="newCombatantInit" placeholder="e.g. 14" />
-        </div>
-        <div class="form-group">
-          <label>AC</label>
-          <input type="number" id="newCombatantAc" placeholder="e.g. 13" min="0" />
-        </div>
-        <div class="form-group">
-          <label>Speed (ft)</label>
-          <input type="number" id="newCombatantSpeed" placeholder="30" min="0" />
-        </div>
-        <div class="form-group" style="justify-content:flex-end;flex-direction:row;align-items:center;gap:8px;padding-top:18px">
-          <label style="font-size:11px;color:var(--muted)">Ally</label>
-          <input type="checkbox" id="newCombatantAlly" style="width:auto" />
-        </div>
-      </div>
-      <button class="btn-action" id="addCombatantBtn">+ Add to Encounter</button>
-      <div class="mut-result" id="addCombatantResult"></div>
-    </div>
 
-    <!-- Encounter setup: set initiative -->
-    <div class="mut-card" data-dm-card="setup">
-      <h3>Set Initiative</h3>
-      <div class="form-group">
-        <label>Combatant</label>
-        <select id="initCidSelect"><option value="">— select —</option></select>
-      </div>
-      <div class="form-group">
-        <label>New Initiative</label>
-        <input type="number" id="initValue" placeholder="e.g. 18" />
-      </div>
-      <div style="display:flex;gap:6px">
-        <button class="btn-action" id="setInitBtn" style="flex:1">Set Initiative</button>
-        <button class="btn-sm" id="rollInitBtn" style="flex:1">🎲 Roll</button>
-      </div>
-      <div class="mut-result" id="initResult"></div>
-    </div>
-
-    <!-- Encounter setup: remove combatant -->
-    <div class="mut-card" data-dm-card="setup">
-      <h3>Remove Combatant</h3>
-      <div class="form-group">
-        <label>Combatant</label>
-        <select id="removeCidSelect"><option value="">— select —</option></select>
-      </div>
-      <button class="btn-action remove" id="removeCombatantBtn">Remove from Encounter</button>
-      <div class="mut-result" id="removeCombatantResult"></div>
-    </div>
-
-    <!-- Map setup -->
-    <div class="mut-card" id="mapSetupCard" data-dm-card="setup">
-      <h3>Map Setup</h3>
-      <div class="tactical-status" style="margin-bottom:10px">
-        Create a fresh blank map, then adjust grid size before tactical prep.
-      </div>
-      <div class="tactical-inline">
+      <!-- Encounter setup: add combatant -->
+      <div class="mut-card" data-dm-card="setup">
+        <h3>Add Combatant</h3>
         <div class="form-group">
-          <label>Grid Columns</label>
-          <input type="number" id="mapColsInput" min="10" max="1000" step="1" value="20" />
+          <label>Name</label>
+          <input type="text" id="newCombatantName" placeholder="e.g. Goblin A" />
+        </div>
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px">
+          <div class="form-group">
+            <label>HP</label>
+            <input type="number" id="newCombatantHp" placeholder="e.g. 15" min="0" />
+          </div>
+          <div class="form-group">
+            <label>Max HP (blank = HP)</label>
+            <input type="number" id="newCombatantMaxHp" placeholder="same as HP" min="0" />
+          </div>
+          <div class="form-group">
+            <label>Initiative</label>
+            <input type="number" id="newCombatantInit" placeholder="e.g. 14" />
+          </div>
+          <div class="form-group">
+            <label>AC</label>
+            <input type="number" id="newCombatantAc" placeholder="e.g. 13" min="0" />
+          </div>
+          <div class="form-group">
+            <label>Speed (ft)</label>
+            <input type="number" id="newCombatantSpeed" placeholder="30" min="0" />
+          </div>
+          <div class="form-group" style="justify-content:flex-end;flex-direction:row;align-items:center;gap:8px;padding-top:18px">
+            <label style="font-size:11px;color:var(--muted)">Ally</label>
+            <input type="checkbox" id="newCombatantAlly" style="width:auto" />
+          </div>
+        </div>
+        <button class="btn-action" id="addCombatantBtn">+ Add to Encounter</button>
+        <div class="mut-result" id="addCombatantResult"></div>
+      </div>
+    </section>
+
+    <section class="setup-group" data-dm-card="setup" data-setup-group="combat-setup" aria-labelledby="setupCombatGroupTitle">
+      <div class="setup-group-label" id="setupCombatGroupTitle">Combat Setup</div>
+
+      <!-- Encounter setup: set initiative -->
+      <div class="mut-card" data-dm-card="setup">
+        <h3>Set Initiative</h3>
+        <div class="form-group">
+          <label>Combatant</label>
+          <select id="initCidSelect"><option value="">— select —</option></select>
         </div>
         <div class="form-group">
-          <label>Grid Rows</label>
-          <input type="number" id="mapRowsInput" min="10" max="1000" step="1" value="20" />
+          <label>New Initiative</label>
+          <input type="number" id="initValue" placeholder="e.g. 18" />
         </div>
+        <div style="display:flex;gap:6px">
+          <button class="btn-action" id="setInitBtn" style="flex:1">Set Initiative</button>
+          <button class="btn-sm" id="rollInitBtn" style="flex:1">🎲 Roll</button>
+        </div>
+        <div class="mut-result" id="initResult"></div>
       </div>
-      <div style="display:flex;gap:6px">
-        <button class="btn-action remove" id="createMapBtn" style="flex:1">🗺 Create Blank Map</button>
-        <button class="btn-action" id="applyMapSettingsBtn" style="flex:1">Apply Grid Settings</button>
+
+      <!-- Encounter setup: remove combatant -->
+      <div class="mut-card" data-dm-card="setup">
+        <h3>Remove Combatant</h3>
+        <div class="form-group">
+          <label>Combatant</label>
+          <select id="removeCidSelect"><option value="">— select —</option></select>
+        </div>
+        <button class="btn-action remove" id="removeCombatantBtn">Remove from Encounter</button>
+        <div class="mut-result" id="removeCombatantResult"></div>
       </div>
-      <div class="mut-result" id="mapSetupResult"></div>
-    </div>
+    </section>
+
+    <section class="setup-group" data-dm-card="setup" data-setup-group="map-setup" aria-labelledby="setupMapGroupTitle">
+      <div class="setup-group-label" id="setupMapGroupTitle">Map Setup</div>
+
+      <!-- Map setup -->
+      <div class="mut-card" id="mapSetupCard" data-dm-card="setup">
+        <h3>Map Setup</h3>
+        <div class="tactical-status" style="margin-bottom:10px">
+          Create a fresh blank map, then adjust grid size before tactical prep.
+        </div>
+        <div class="tactical-inline">
+          <div class="form-group">
+            <label>Grid Columns</label>
+            <input type="number" id="mapColsInput" min="10" max="1000" step="1" value="20" />
+          </div>
+          <div class="form-group">
+            <label>Grid Rows</label>
+            <input type="number" id="mapRowsInput" min="10" max="1000" step="1" value="20" />
+          </div>
+        </div>
+        <div style="display:flex;gap:6px">
+          <button class="btn-action remove" id="createMapBtn" style="flex:1">🗺 Create Blank Map</button>
+          <button class="btn-action" id="applyMapSettingsBtn" style="flex:1">Apply Grid Settings</button>
+        </div>
+        <div class="mut-result" id="mapSetupResult"></div>
+      </div>
+    </section>
+
+    <section class="setup-group" data-dm-card="setup" data-setup-group="session" aria-labelledby="setupSessionGroupTitle">
+      <div class="setup-group-label" id="setupSessionGroupTitle">Session</div>
+
+      <!-- Session persistence -->
+      <div class="mut-card" data-dm-card="setup">
+        <h3>Session Persistence</h3>
+        <div style="display:flex;gap:6px;margin-bottom:8px">
+          <button class="btn-action heal" id="quickSaveBtn" style="flex:1">⚡ Quick Save</button>
+          <button class="btn-action" id="quickLoadBtn" style="flex:1">⟲ Quick Load</button>
+        </div>
+        <button class="btn-action remove" id="newBlankSessionBtn" style="margin-bottom:10px">🧹 New Blank Session</button>
+        <div class="form-group">
+          <label>Save filename (optional — defaults to timestamped)</label>
+          <input type="text" id="sessionSaveName" placeholder="e.g. boss_fight.json" />
+        </div>
+        <button class="btn-action" id="sessionSaveBtn">💾 Save Session</button>
+        <div class="form-group" style="margin-top:10px">
+          <label>Load from existing snapshot</label>
+          <select id="sessionLoadSelect"><option value="">— select a snapshot —</option></select>
+        </div>
+        <div style="display:flex;gap:6px">
+          <button class="btn-action" id="sessionLoadBtn" style="flex:1">📂 Load Selected</button>
+          <button class="btn-sm" id="sessionRefreshBtn" style="flex:0 0 auto">↺ Refresh</button>
+        </div>
+        <div class="mut-result" id="sessionResult"></div>
+      </div>
+    </section>
 
     <!-- Tactical encounter management -->
     <div class="mut-card tactical-card" id="tacticalMapCard">
@@ -1362,29 +1415,6 @@
       <div class="mut-result" id="monsterTurnResult"></div>
     </div>
 
-    <!-- Session persistence -->
-    <div class="mut-card" data-dm-card="setup">
-      <h3>Session Persistence</h3>
-      <div style="display:flex;gap:6px;margin-bottom:8px">
-        <button class="btn-action heal" id="quickSaveBtn" style="flex:1">⚡ Quick Save</button>
-        <button class="btn-action" id="quickLoadBtn" style="flex:1">⟲ Quick Load</button>
-      </div>
-      <button class="btn-action remove" id="newBlankSessionBtn" style="margin-bottom:10px">🧹 New Blank Session</button>
-      <div class="form-group">
-        <label>Save filename (optional — defaults to timestamped)</label>
-        <input type="text" id="sessionSaveName" placeholder="e.g. boss_fight.json" />
-      </div>
-      <button class="btn-action" id="sessionSaveBtn">💾 Save Session</button>
-      <div class="form-group" style="margin-top:10px">
-        <label>Load from existing snapshot</label>
-        <select id="sessionLoadSelect"><option value="">— select a snapshot —</option></select>
-      </div>
-      <div style="display:flex;gap:6px">
-        <button class="btn-action" id="sessionLoadBtn" style="flex:1">📂 Load Selected</button>
-        <button class="btn-sm" id="sessionRefreshBtn" style="flex:0 0 auto">↺ Refresh</button>
-      </div>
-      <div class="mut-result" id="sessionResult"></div>
-    </div>
       </div>
     </div>
   </div>
