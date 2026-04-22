@@ -84,6 +84,9 @@ Required outcomes:
 Notes:
 - This pass is product correction + rules-model cleanup.
 - Keep compatibility where practical, but do not preserve incorrect abstractions just for inertia.
+- Live-session foundation landed: LAN Manage Spells no longer exposes a user toggle for known-spell mode, backend spellbook normalization/save now derives known mode from wizard class data when available, and prepared free-spell persistence no longer drops entries when clients omit `prepared_free_list`.
+- Live-session contract pass landed: backend now emits explicit `spellbook_contract` list/mode policy for spell-management, and LAN Manage Spells consumes that contract for tabs plus list ownership/edit gating instead of client-side class/boolean inference.
+- Spellbook first-load/stabilization pass (2026-04-21): headless first-WS client now receives populated `spell_presets` (seed snapshot with static data, with live hydration fallback in `_static_data_payload`); browser-executed wizard and non-wizard smoke flows validated in clean single-character mode; added focused unit coverage for `_static_data_payload` preset hydration and for wizard vs non-wizard `_build_live_spellbook_contract` tab shape. Multi-player switch in the test harness (reusing cid=99) remains stale-state prone; real user flow (one claim per session) is not affected.
 
 ### 4.2 Adjacent rules/model corrective cleanup
 

@@ -6,6 +6,41 @@ import dnd_initative_tracker as tracker_mod
 
 
 class LanSnapshotStaticTests(unittest.TestCase):
+    def test_static_data_payload_hydrates_presets_when_cache_empty(self):
+        lan = object.__new__(tracker_mod.LanController)
+        lan._cached_snapshot = {}
+        lan._monster_choices_cache = []
+        lan._monster_choices_cache_key = None
+
+        live_presets = [{"name": "Aid", "slug": "aid", "level": 2}]
+
+        class AppStub:
+            _monster_specs = []
+
+            def _spell_presets_payload(self_inner):
+                return live_presets
+
+        lan._tracker = AppStub()
+        payload = lan._static_data_payload(planning=False)
+        self.assertEqual(payload["spell_presets"], live_presets)
+
+    def test_static_data_payload_prefers_cached_presets_when_present(self):
+        lan = object.__new__(tracker_mod.LanController)
+        cached = [{"name": "Bless", "slug": "bless", "level": 1}]
+        lan._cached_snapshot = {"spell_presets": cached}
+        lan._monster_choices_cache = []
+        lan._monster_choices_cache_key = None
+
+        class AppStub:
+            _monster_specs = []
+
+            def _spell_presets_payload(self_inner):
+                raise AssertionError("should not hydrate when cache populated")
+
+        lan._tracker = AppStub()
+        payload = lan._static_data_payload(planning=False)
+        self.assertEqual(payload["spell_presets"], cached)
+
     def test_monster_choices_payload_cache_uses_monster_specs_id_and_len(self):
         lan = object.__new__(tracker_mod.LanController)
 

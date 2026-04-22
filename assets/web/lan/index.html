@@ -1415,6 +1415,25 @@
     }
     .spellbook-title{font-size:14px; font-weight:650;}
     .spellbook-spacer{flex:1;}
+    .spellbook-save-state{
+      font-size: 11px;
+      color: var(--muted);
+      padding: 4px 8px;
+      border-radius: 999px;
+      border: 1px solid rgba(255,255,255,0.12);
+      background: rgba(255,255,255,0.04);
+      text-transform: lowercase;
+    }
+    .spellbook-save-state[data-state="dirty"]{
+      color: #ffd6a1;
+      border-color: rgba(255, 193, 122, 0.45);
+      background: rgba(255, 180, 90, 0.12);
+    }
+    .spellbook-save-state[data-state="saved"]{
+      color: #b8f0c8;
+      border-color: rgba(130, 220, 150, 0.35);
+      background: rgba(72, 168, 96, 0.14);
+    }
     .spellbook-body{
       display:flex;
       flex-direction:column;
@@ -3697,13 +3716,14 @@ __DAMAGE_TYPE_OPTIONS__
     <button class="btn" id="spellbookBack" type="button">Back</button>
     <div class="spellbook-title" id="spellbookTitle">Manage Spells</div>
     <div class="spellbook-spacer"></div>
+    <div class="spellbook-save-state" id="spellbookSaveState" data-state="clean" aria-live="polite">no changes made</div>
     <button class="btn accent" id="spellbookSave" type="button">Save</button>
   </div>
   <div class="spellbook-body">
     <div class="spellbook-tabs">
       <button class="btn" id="spellbookTabKnown" type="button">Known Spells</button>
+      <button class="btn" id="spellbookTabCantrips" type="button">Cantrips</button>
       <button class="btn" id="spellbookTabPrepared" type="button">Prepared Spells</button>
-      <label class="chip spellbook-toggle"><input type="checkbox" id="spellbookKnownEnabled" />Known spells enabled</label>
     </div>
     <div class="spellbook-controls">
       <input id="spellbookSearch" type="search" placeholder="Search spells..." />
@@ -3763,11 +3783,11 @@ __DAMAGE_TYPE_OPTIONS__
 </div>
 <div class="modal" id="spellbookConfirmModal" aria-hidden="true">
   <div class="card">
-    <h2>Confirm Spellbook</h2>
-    <p class="spellbook-confirm-text" id="spellbookConfirmText">Overwrite player file?</p>
+    <h2>Unsaved Changes</h2>
+    <p class="spellbook-confirm-text" id="spellbookConfirmText">Save your spell changes before leaving?</p>
     <div class="modal-actions">
-      <button class="btn" id="spellbookConfirmCancel" type="button">Cancel</button>
-      <button class="btn accent" id="spellbookConfirmYes" type="button">Overwrite</button>
+      <button class="btn" id="spellbookConfirmCancel" type="button">Stay</button>
+      <button class="btn accent" id="spellbookConfirmYes" type="button">Save &amp; Exit</button>
     </div>
   </div>
 </div>
@@ -4885,9 +4905,10 @@ __DAMAGE_TYPE_OPTIONS__
   const spellbookBackBtn = document.getElementById("spellbookBack");
   const spellbookBackFloatingBtn = document.getElementById("spellbookBackFloating");
   const spellbookSaveBtn = document.getElementById("spellbookSave");
+  const spellbookSaveState = document.getElementById("spellbookSaveState");
   const spellbookTabKnown = document.getElementById("spellbookTabKnown");
+  const spellbookTabCantrips = document.getElementById("spellbookTabCantrips");
   const spellbookTabPrepared = document.getElementById("spellbookTabPrepared");
-  const spellbookKnownEnabledToggle = document.getElementById("spellbookKnownEnabled");
   const spellbookSearchInput = document.getElementById("spellbookSearch");
   const spellbookSortSelect = document.getElementById("spellbookSort");
   const spellbookLeftTitle = document.getElementById("spellbookLeftTitle");
@@ -5077,9 +5098,10 @@ __DAMAGE_TYPE_OPTIONS__
     known: [],
     knownFree: [],
     knownLimit: null,
-    knownEnabled: true,
     cantrips: [],
+    cantripsFree: [],
     cantripsMax: null,
+    contract: null,
   };
 
   const canvas = document.getElementById("c");
@@ -8284,8 +8306,270 @@ __DAMAGE_TYPE_OPTIONS__
     }
   }
 
+  function buildLegacySpellbookContract(knownEnabled){
+    const managedKnown = knownEnabled !== false;
+    const preparedLeftSource = managedKnown ? "known" : "eligible_spells";
+    return {
+      version: 3,
+      mode: managedKnown ? "known_and_prepared" : "prepared_only",
+      source: "legacy_known_enabled_fallback_client",
+      known_spells_managed: managedKnown,
+      prepared_spells_managed: true,
+      cantrips_managed: true,
+      limits: {
+        known: {max: null, counts_free: false},
+        prepared: {max: null, counts_free: false},
+        cantrips: {max: null, counts_free: false},
+      },
+      source_lists: {},
+      lists: {
+        known: {
+          exists: managedKnown,
+          editable: managedKnown,
+          owner: "known_spells.known",
+          policy: "subset_non_cantrip_spells",
+          candidate_source: "eligible_spells",
+          direct_remove: true,
+        },
+        known_free: {
+          exists: managedKnown,
+          editable: managedKnown,
+          owner: "known_spells.free",
+          policy: "subset_of_known",
+          direct_remove: false,
+        },
+        cantrips: {
+          exists: true,
+          editable: true,
+          owner: "cantrips.known",
+          policy: "cantrip_only",
+          candidate_source: "eligible_cantrips",
+          direct_remove: true,
+        },
+        cantrips_free: {
+          exists: true,
+          editable: true,
+          owner: "cantrips.free",
+          policy: "subset_of_cantrips",
+          direct_remove: false,
+        },
+        prepared: {
+          exists: true,
+          editable: true,
+          owner: "prepared_spells.prepared",
+          policy: "subset_non_cantrip_spells",
+          candidate_source: preparedLeftSource,
+          direct_remove: true,
+        },
+        prepared_free: {
+          exists: true,
+          editable: true,
+          owner: "prepared_spells.free",
+          policy: "subset_of_prepared",
+          direct_remove: false,
+        },
+      },
+      ui: {
+        default_mode: managedKnown ? "known" : "prepared",
+        tabs: {
+          known: {visible: managedKnown, label: "Known Spells"},
+          cantrips: {visible: true, label: "Cantrips"},
+          prepared: {visible: true, label: "Prepared Spells"},
+        },
+        modes: {
+          known: {
+            left_source: "eligible_spells",
+            left_title: "Eligible Spells",
+            right_source: "known_paid",
+            right_title: "Known Spells",
+            free_source: "known_free",
+            free_title: "Free Known",
+            actions: {
+              add: managedKnown,
+              add_free: managedKnown,
+              remove: managedKnown,
+            },
+          },
+          cantrips: {
+            left_source: "eligible_cantrips",
+            left_title: "Eligible Cantrips",
+            right_source: "cantrips_paid",
+            right_title: "Cantrips",
+            free_source: "cantrips_free",
+            free_title: "Free Cantrips",
+            actions: {
+              add: true,
+              add_free: true,
+              remove: true,
+            },
+          },
+          prepared: {
+            left_source: preparedLeftSource,
+            left_title: managedKnown ? "Known Spells" : "Eligible Spells",
+            right_source: "prepared_paid",
+            right_title: "Prepared Spells",
+            free_source: "prepared_free",
+            free_title: "Free Prepared",
+            actions: {
+              add: true,
+              add_free: true,
+              remove: true,
+            },
+          },
+        },
+      },
+    };
+  }
+
+  function normalizeSpellbookContract(rawContract, knownEnabledFallback){
+    const fallback = buildLegacySpellbookContract(knownEnabledFallback);
+    if (!rawContract || typeof rawContract !== "object"){
+      return fallback;
+    }
+    const rawLists = rawContract.lists && typeof rawContract.lists === "object" ? rawContract.lists : {};
+    const rawLimits = rawContract.limits && typeof rawContract.limits === "object" ? rawContract.limits : {};
+    const rawSourceLists = rawContract.source_lists && typeof rawContract.source_lists === "object"
+      ? rawContract.source_lists
+      : {};
+    const rawUi = rawContract.ui && typeof rawContract.ui === "object" ? rawContract.ui : {};
+    const rawTabs = rawUi.tabs && typeof rawUi.tabs === "object" ? rawUi.tabs : {};
+    const rawModes = rawUi.modes && typeof rawUi.modes === "object" ? rawUi.modes : {};
+
+    const normalizeList = (key) => {
+      const fallbackList = fallback.lists[key] && typeof fallback.lists[key] === "object" ? fallback.lists[key] : {};
+      const rawList = rawLists[key] && typeof rawLists[key] === "object" ? rawLists[key] : {};
+      return {
+        exists: rawList.exists === true ? true : rawList.exists === false ? false : fallbackList.exists === true,
+        editable: rawList.editable === true ? true : rawList.editable === false ? false : fallbackList.editable === true,
+        owner: normalizeTextValue(rawList.owner) || normalizeTextValue(fallbackList.owner),
+        policy: normalizeTextValue(rawList.policy) || normalizeTextValue(fallbackList.policy),
+        candidate_source: normalizeLowerValue(rawList.candidate_source || fallbackList.candidate_source || ""),
+        direct_remove: rawList.direct_remove === true ? true : rawList.direct_remove === false ? false : fallbackList.direct_remove === true,
+      };
+    };
+
+    const normalizeLimit = (key) => {
+      const fallbackLimit = fallback.limits[key] && typeof fallback.limits[key] === "object" ? fallback.limits[key] : {};
+      const rawLimit = rawLimits[key] && typeof rawLimits[key] === "object" ? rawLimits[key] : {};
+      const rawMax = rawLimit.max ?? fallbackLimit.max;
+      const max = Number.isFinite(Number(rawMax)) ? Math.max(0, Math.floor(Number(rawMax))) : null;
+      return {
+        max,
+        counts_free: rawLimit.counts_free === true
+          ? true
+          : rawLimit.counts_free === false
+          ? false
+          : fallbackLimit.counts_free === true,
+      };
+    };
+
+    const normalizeActions = (rawActions, fallbackActions) => {
+      const actions = rawActions && typeof rawActions === "object" ? rawActions : {};
+      const base = fallbackActions && typeof fallbackActions === "object" ? fallbackActions : {};
+      return {
+        add: actions.add === true ? true : actions.add === false ? false : base.add === true,
+        add_free: actions.add_free === true ? true : actions.add_free === false ? false : base.add_free === true,
+        remove: actions.remove === true ? true : actions.remove === false ? false : base.remove === true,
+      };
+    };
+
+    const normalizeModePolicy = (modeKey) => {
+      const fallbackMode = fallback.ui.modes[modeKey] && typeof fallback.ui.modes[modeKey] === "object"
+        ? fallback.ui.modes[modeKey]
+        : {};
+      const rawMode = rawModes[modeKey] && typeof rawModes[modeKey] === "object" ? rawModes[modeKey] : {};
+      return {
+        left_source: normalizeLowerValue(rawMode.left_source || fallbackMode.left_source || ""),
+        left_title: normalizeTextValue(rawMode.left_title) || normalizeTextValue(fallbackMode.left_title),
+        right_source: normalizeLowerValue(rawMode.right_source || fallbackMode.right_source || ""),
+        right_title: normalizeTextValue(rawMode.right_title) || normalizeTextValue(fallbackMode.right_title),
+        free_source: normalizeLowerValue(rawMode.free_source || fallbackMode.free_source || ""),
+        free_title: normalizeTextValue(rawMode.free_title) || normalizeTextValue(fallbackMode.free_title),
+        actions: normalizeActions(rawMode.actions, fallbackMode.actions),
+      };
+    };
+
+    let mode = normalizeLowerValue(rawContract.mode);
+    if (mode !== "known_and_prepared" && mode !== "prepared_only"){
+      mode = fallback.mode;
+    }
+    const knownManaged = rawContract.known_spells_managed === true
+      ? true
+      : rawContract.known_spells_managed === false
+      ? false
+      : mode === "known_and_prepared";
+    const preparedManaged = rawContract.prepared_spells_managed === false ? false : true;
+    const cantripsManaged = rawContract.cantrips_managed === false ? false : true;
+    const knownTabFallback = fallback.ui.tabs.known || {};
+    const cantripsTabFallback = fallback.ui.tabs.cantrips || {};
+    const preparedTabFallback = fallback.ui.tabs.prepared || {};
+    const knownTabRaw = rawTabs.known && typeof rawTabs.known === "object" ? rawTabs.known : {};
+    const cantripsTabRaw = rawTabs.cantrips && typeof rawTabs.cantrips === "object" ? rawTabs.cantrips : {};
+    const preparedTabRaw = rawTabs.prepared && typeof rawTabs.prepared === "object" ? rawTabs.prepared : {};
+    const defaultModeRaw = normalizeLowerValue(rawUi.default_mode || "");
+    const defaultMode = defaultModeRaw === "known" || defaultModeRaw === "cantrips" || defaultModeRaw === "prepared"
+      ? defaultModeRaw
+      : fallback.ui.default_mode;
+    const versionRaw = Number(rawContract.version);
+    const version = Number.isFinite(versionRaw) ? Math.max(1, Math.floor(versionRaw)) : fallback.version;
+    const sourceLists = {};
+    Object.entries({...fallback.source_lists, ...rawSourceLists}).forEach(([key, value]) => {
+      sourceLists[normalizeLowerValue(key)] = normalizePreparedSpellList(value);
+    });
+
+    return {
+      version,
+      mode,
+      source: normalizeTextValue(rawContract.source) || fallback.source,
+      known_spells_managed: knownManaged,
+      prepared_spells_managed: preparedManaged,
+      cantrips_managed: cantripsManaged,
+      limits: {
+        known: normalizeLimit("known"),
+        prepared: normalizeLimit("prepared"),
+        cantrips: normalizeLimit("cantrips"),
+      },
+      source_lists: sourceLists,
+      lists: {
+        known: normalizeList("known"),
+        known_free: normalizeList("known_free"),
+        cantrips: normalizeList("cantrips"),
+        cantrips_free: normalizeList("cantrips_free"),
+        prepared: normalizeList("prepared"),
+        prepared_free: normalizeList("prepared_free"),
+      },
+      ui: {
+        default_mode: defaultMode,
+        tabs: {
+          known: {
+            visible: knownTabRaw.visible === true ? true : knownTabRaw.visible === false ? false : knownTabFallback.visible === true,
+            label: normalizeTextValue(knownTabRaw.label) || normalizeTextValue(knownTabFallback.label) || "Known Spells",
+          },
+          cantrips: {
+            visible: cantripsTabRaw.visible === true ? true : cantripsTabRaw.visible === false ? false : cantripsTabFallback.visible !== false,
+            label: normalizeTextValue(cantripsTabRaw.label) || normalizeTextValue(cantripsTabFallback.label) || "Cantrips",
+          },
+          prepared: {
+            visible: preparedTabRaw.visible === true ? true : preparedTabRaw.visible === false ? false : preparedTabFallback.visible !== false,
+            label: normalizeTextValue(preparedTabRaw.label) || normalizeTextValue(preparedTabFallback.label) || "Prepared Spells",
+          },
+        },
+        modes: {
+          known: normalizeModePolicy("known"),
+          cantrips: normalizeModePolicy("cantrips"),
+          prepared: normalizeModePolicy("prepared"),
+        },
+      },
+    };
+  }
+
   function getSpellbookConfig(name){
-    const defaults = {...preparedSpellDefaults};
+    const defaults = {
+      ...preparedSpellDefaults,
+      knownEnabled: true,
+      knownMode: "known_and_prepared",
+      contract: normalizeSpellbookContract(null, true),
+    };
     if (!name) return defaults;
     const profile = getPlayerProfile(name);
     const spellcasting = profile?.spellcasting && typeof profile.spellcasting === "object"
@@ -8309,14 +8593,24 @@ __DAMAGE_TYPE_OPTIONS__
     );
     const maxValue = Number(preparedBlock.max ?? preparedBlock.max_spells ?? preparedBlock.max_prepared);
     const limit = getPreparedSpellLimit(profile, {maxFormula, maxValue});
-    const knownLimitRaw = spellcasting.known_limit ?? knownBlock.max ?? spellcasting.known_spells;
+    const backendKnownEnabled = spellcasting.known_enabled;
+    const spellbookContract = normalizeSpellbookContract(
+      spellcasting.spellbook_contract,
+      backendKnownEnabled !== false
+    );
+    const preparedLimitRaw = spellbookContract.limits?.prepared?.max;
+    const preparedLimit = Number.isFinite(Number(preparedLimitRaw))
+      ? Math.max(0, Math.floor(Number(preparedLimitRaw)))
+      : limit;
+    const knownLimitRaw = spellbookContract.limits?.known?.max ?? spellcasting.known_limit ?? knownBlock.max ?? spellcasting.known_spells;
     const knownLimit = Number.isFinite(Number(knownLimitRaw))
       ? Math.max(0, Math.floor(Number(knownLimitRaw)))
       : null;
-    const cantripsMaxRaw = cantripsBlock.max;
+    const cantripsMaxRaw = spellbookContract.limits?.cantrips?.max ?? spellcasting.cantrips_limit ?? cantripsBlock.max;
     const cantripsMax = Number.isFinite(Number(cantripsMaxRaw))
       ? Math.max(0, Math.floor(Number(cantripsMaxRaw)))
       : null;
+    const knownEnabled = spellbookContract.known_spells_managed === true;
     return {
       prepared: normalizePreparedSpellList(
         spellcasting.prepared_list ?? preparedBlock.prepared
@@ -8324,7 +8618,7 @@ __DAMAGE_TYPE_OPTIONS__
       preparedFree: normalizePreparedSpellList(
         spellcasting.prepared_free_list ?? preparedBlock.free
       ),
-      max: limit,
+      max: preparedLimit,
       maxFormula,
       known: normalizePreparedSpellList(
         spellcasting.known_list ?? knownBlock.known ?? spellcasting.known_spell_names
@@ -8333,11 +8627,16 @@ __DAMAGE_TYPE_OPTIONS__
         spellcasting.known_free_list ?? knownBlock.free
       ),
       knownLimit,
-      knownEnabled: spellcasting.known_enabled !== false,
+      knownEnabled,
+      knownMode: normalizeLowerValue(spellbookContract.mode) || (knownEnabled ? "known_and_prepared" : "prepared_only"),
       cantrips: normalizePreparedSpellList(
         spellcasting.cantrips_list ?? cantripsBlock.known ?? spellcasting.cantrips
       ),
+      cantripsFree: normalizePreparedSpellList(
+        spellcasting.cantrips_free_list ?? cantripsBlock.free
+      ),
       cantripsMax,
+      contract: spellbookContract,
     };
   }
 
@@ -18979,7 +19278,7 @@ __DAMAGE_TYPE_OPTIONS__
   let spellbookMode = "known";
   let spellbookSearchTerm = "";
   let spellbookSortMode = "alpha";
-  let spellbookKnownEnabled = true;
+  let spellbookContractPolicy = null;
   let spellbookKnownLimit = null;
   let spellbookPreparedLimit = null;
   let spellbookCantripsMax = null;
@@ -18988,9 +19287,13 @@ __DAMAGE_TYPE_OPTIONS__
   let pendingKnownFreeSet = new Set();
   let pendingPreparedFreeSet = new Set();
   let pendingCantripsSet = new Set();
+  let pendingCantripFreeSet = new Set();
   let spellbookLeftSelection = new Set();
   let spellbookRightSelection = new Set();
   let spellbookPreviousFocus = null;
+  let spellbookInitialSnapshotJson = "";
+  let spellbookLastSavedSnapshotJson = "";
+  let spellbookIsSaving = false;
   let spellDetailPreviousFocus = null;
   let activeSpellDetailSlug = null;
   let rulesStatusCache = null;
@@ -19022,6 +19325,72 @@ __DAMAGE_TYPE_OPTIONS__
   function getPresetLevelBySlug(slug){
     const preset = spellPresetBySlug.get(getSpellKey(slug));
     return preset ? getPresetLevelNumber(preset) : null;
+  }
+
+  function getSpellbookProfileClassLists(profile){
+    const classNames = new Set();
+    const subclassNames = new Set();
+    const leveling = profile?.leveling && typeof profile.leveling === "object" ? profile.leveling : null;
+    const classes = Array.isArray(leveling?.classes) ? leveling.classes : [];
+    classes.forEach((entry) => {
+      const className = normalizeLowerValue(entry?.name || "");
+      const subclassName = normalizeLowerValue(entry?.subclass || "");
+      if (className) classNames.add(className);
+      if (subclassName) subclassNames.add(subclassName);
+    });
+    const fallbackClass = normalizeLowerValue(leveling?.class || "");
+    const fallbackSubclass = normalizeLowerValue(leveling?.subclass || "");
+    if (fallbackClass) classNames.add(fallbackClass);
+    if (fallbackSubclass) subclassNames.add(fallbackSubclass);
+    return {classNames, subclassNames};
+  }
+
+  function presetMatchesSpellbookProfile(preset, classNames, subclassNames){
+    const lists = preset?.lists && typeof preset.lists === "object" ? preset.lists : {};
+    const presetClasses = Array.isArray(lists.classes)
+      ? lists.classes.map((value) => normalizeLowerValue(value)).filter(Boolean)
+      : [];
+    const presetSubclasses = Array.isArray(lists.subclasses)
+      ? lists.subclasses.map((value) => normalizeLowerValue(value)).filter(Boolean)
+      : [];
+    if (!presetClasses.length && !presetSubclasses.length){
+      return classNames.size === 0 && subclassNames.size === 0;
+    }
+    return presetClasses.some((value) => classNames.has(value))
+      || presetSubclasses.some((value) => subclassNames.has(value));
+  }
+
+  function getSpellbookMaxCastableLevel(profile, extraSlugs = []){
+    const spellcasting = profile?.spellcasting && typeof profile.spellcasting === "object" ? profile.spellcasting : {};
+    const spellSlots = spellcasting.spell_slots && typeof spellcasting.spell_slots === "object"
+      ? spellcasting.spell_slots
+      : {};
+    let maxLevel = 0;
+    Object.entries(spellSlots).forEach(([rawLevel, entry]) => {
+      const level = Number(rawLevel);
+      const count = Number(entry?.max ?? 0);
+      if (Number.isFinite(level) && level > 0 && Number.isFinite(count) && count > 0){
+        maxLevel = Math.max(maxLevel, Math.floor(level));
+      }
+    });
+    const pactMagic = spellcasting.pact_magic_slots && typeof spellcasting.pact_magic_slots === "object"
+      ? spellcasting.pact_magic_slots
+      : {};
+    const pactCount = Number(pactMagic.count || 0);
+    const pactLevel = Number(pactMagic.level || 0);
+    if (Number.isFinite(pactCount) && pactCount > 0 && Number.isFinite(pactLevel) && pactLevel > 0){
+      maxLevel = Math.max(maxLevel, Math.floor(pactLevel));
+    }
+    extraSlugs.forEach((slug) => {
+      const level = getPresetLevelBySlug(slug);
+      if (Number.isFinite(level) && level > maxLevel){
+        maxLevel = Math.floor(level);
+      }
+    });
+    if (maxLevel > 0){
+      return maxLevel;
+    }
+    return maxSpellLevelForCharacter(getPlayerLevel(profile));
   }
 
   function sortSlugsByName(slugs){
@@ -19068,20 +19437,78 @@ __DAMAGE_TYPE_OPTIONS__
     });
   }
 
-  function getEligibleSpellSlugs(profile){
-    const allowedLevel = maxSpellLevelForCharacter(getPlayerLevel(profile));
-    const slugs = [];
+  function buildLegacySpellbookEligibleSources(profile){
+    const explicitSlugs = [
+      ...Array.from(pendingKnownSet),
+      ...Array.from(pendingKnownFreeSet),
+      ...Array.from(pendingPreparedSet),
+      ...Array.from(pendingPreparedFreeSet),
+      ...Array.from(pendingCantripsSet),
+      ...Array.from(pendingCantripFreeSet),
+    ];
+    const {classNames, subclassNames} = getSpellbookProfileClassLists(profile);
+    const maxSpellLevel = getSpellbookMaxCastableLevel(profile, explicitSlugs);
+    const eligibleSpells = [];
+    const eligibleCantrips = [];
+    const eligibleSpellSeen = new Set();
+    const eligibleCantripSeen = new Set();
+    const appendUnique = (target, seen, slug) => {
+      const normalized = normalizeTextValue(slug);
+      if (!normalized) return;
+      const key = getSpellKey(normalized);
+      if (seen.has(key)) return;
+      seen.add(key);
+      target.push(normalized);
+    };
+
     cachedSpellPresets.forEach((preset) => {
-      const level = getPresetLevelNumber(preset);
-      if (Number.isFinite(level) && level > allowedLevel){
+      const slug = getPresetSlug(preset);
+      if (!slug){
         return;
       }
-      const slug = getPresetSlug(preset);
-      if (slug){
-        slugs.push(slug);
+      const level = getPresetLevelNumber(preset);
+      if (!Number.isFinite(level)){
+        return;
+      }
+      if ((classNames.size || subclassNames.size) && !presetMatchesSpellbookProfile(preset, classNames, subclassNames)){
+        return;
+      }
+      if (level === 0){
+        appendUnique(eligibleCantrips, eligibleCantripSeen, slug);
+        return;
+      }
+      if (level <= maxSpellLevel){
+        appendUnique(eligibleSpells, eligibleSpellSeen, slug);
       }
     });
-    return sortSlugsByName(Array.from(new Set(slugs.map(normalizeTextValue).filter(Boolean))));
+
+    explicitSlugs.forEach((slug) => {
+      const level = getPresetLevelBySlug(slug);
+      if (level === 0){
+        appendUnique(eligibleCantrips, eligibleCantripSeen, slug);
+      } else {
+        appendUnique(eligibleSpells, eligibleSpellSeen, slug);
+      }
+    });
+
+    return {
+      eligible_spells: sortSlugsByName(eligibleSpells),
+      eligible_cantrips: sortSlugsByName(eligibleCantrips),
+    };
+  }
+
+  function getSpellbookEligibleSources(profile){
+    const contract = getSpellbookContractPolicy();
+    const sourceLists = contract.source_lists && typeof contract.source_lists === "object" ? contract.source_lists : {};
+    const eligibleSpells = normalizePreparedSpellList(sourceLists.eligible_spells);
+    const eligibleCantrips = normalizePreparedSpellList(sourceLists.eligible_cantrips);
+    if (eligibleSpells.length || eligibleCantrips.length){
+      return {
+        eligible_spells: sortSlugsByName(Array.from(new Set(eligibleSpells.map(normalizeTextValue).filter(Boolean)))),
+        eligible_cantrips: sortSlugsByName(Array.from(new Set(eligibleCantrips.map(normalizeTextValue).filter(Boolean)))),
+      };
+    }
+    return buildLegacySpellbookEligibleSources(profile);
   }
 
   function getSpellLibraryDescription(data){
@@ -19566,6 +19993,7 @@ __DAMAGE_TYPE_OPTIONS__
       const item = document.createElement("button");
       item.type = "button";
       item.className = "spellbook-item";
+      item.dataset.slug = String(slug);
       if (locked){
         item.classList.add("locked");
         item.setAttribute("aria-disabled", "true");
@@ -19610,97 +20038,431 @@ __DAMAGE_TYPE_OPTIONS__
     spellbookRightSelection = new Set();
   }
 
+  function getSpellbookContractPolicy(){
+    if (spellbookContractPolicy && typeof spellbookContractPolicy === "object"){
+      return spellbookContractPolicy;
+    }
+    return normalizeSpellbookContract(null, true);
+  }
+
+  function getSpellbookListPolicy(listKey){
+    const contract = getSpellbookContractPolicy();
+    const lists = contract.lists && typeof contract.lists === "object" ? contract.lists : {};
+    const normalized = normalizeLowerValue(listKey);
+    const listPolicy = lists[normalized];
+    if (listPolicy && typeof listPolicy === "object"){
+      return listPolicy;
+    }
+    return {
+      exists: false,
+      editable: false,
+      owner: "",
+      policy: "",
+      candidate_source: "",
+      direct_remove: false,
+    };
+  }
+
+  function isSpellbookListEditable(listKey){
+    const policy = getSpellbookListPolicy(listKey);
+    return policy.exists === true && policy.editable === true;
+  }
+
+  function spellbookListAllowsSlug(listKey, slug){
+    const normalizedSlug = normalizeTextValue(slug);
+    if (!normalizedSlug) return false;
+    const policy = normalizeLowerValue(getSpellbookListPolicy(listKey).policy);
+    const level = getPresetLevelBySlug(normalizedSlug);
+    if (policy === "cantrip_only"){
+      return level === 0;
+    }
+    if (policy === "subset_non_cantrip_spells"){
+      return level !== 0;
+    }
+    if (policy === "subset_of_known"){
+      return pendingKnownSet.has(normalizedSlug);
+    }
+    if (policy === "subset_of_cantrips"){
+      return pendingCantripsSet.has(normalizedSlug);
+    }
+    if (policy === "subset_of_prepared"){
+      return pendingPreparedSet.has(normalizedSlug);
+    }
+    return true;
+  }
+
+  function getSpellbookLimitPolicy(limitKey){
+    const contract = getSpellbookContractPolicy();
+    const limits = contract.limits && typeof contract.limits === "object" ? contract.limits : {};
+    const normalized = normalizeLowerValue(limitKey);
+    const rawLimit = limits[normalized] && typeof limits[normalized] === "object" ? limits[normalized] : {};
+    let max = Number.isFinite(Number(rawLimit.max)) ? Math.max(0, Math.floor(Number(rawLimit.max))) : null;
+    if (!Number.isFinite(max)){
+      if (normalized === "known"){
+        max = spellbookKnownLimit;
+      } else if (normalized === "prepared"){
+        max = spellbookPreparedLimit;
+      } else if (normalized === "cantrips"){
+        max = spellbookCantripsMax;
+      }
+    }
+    return {
+      max: Number.isFinite(Number(max)) ? Math.max(0, Math.floor(Number(max))) : null,
+      counts_free: rawLimit.counts_free === true,
+    };
+  }
+
+  function getSpellbookModePolicy(modeKey){
+    const contract = getSpellbookContractPolicy();
+    const ui = contract.ui && typeof contract.ui === "object" ? contract.ui : {};
+    const modes = ui.modes && typeof ui.modes === "object" ? ui.modes : {};
+    const normalized = normalizeLowerValue(modeKey);
+    if (modes[normalized] && typeof modes[normalized] === "object"){
+      return modes[normalized];
+    }
+    if (modes.prepared && typeof modes.prepared === "object"){
+      return modes.prepared;
+    }
+    if (modes.cantrips && typeof modes.cantrips === "object"){
+      return modes.cantrips;
+    }
+    if (modes.known && typeof modes.known === "object"){
+      return modes.known;
+    }
+    return {
+      left_source: "",
+      left_title: "",
+      right_source: "",
+      right_title: "",
+      free_source: "",
+      free_title: "",
+      actions: {add: false, add_free: false, remove: false},
+    };
+  }
+
+  function isSpellbookTabVisible(modeKey){
+    const contract = getSpellbookContractPolicy();
+    const ui = contract.ui && typeof contract.ui === "object" ? contract.ui : {};
+    const tabs = ui.tabs && typeof ui.tabs === "object" ? ui.tabs : {};
+    const normalized = normalizeLowerValue(modeKey);
+    const fallbackVisibility = normalized !== "known";
+    const tab = tabs[normalized];
+    if (!tab || typeof tab !== "object"){
+      return fallbackVisibility;
+    }
+    return tab.visible !== false;
+  }
+
+  function resolveSpellbookMode(modeKey){
+    const contract = getSpellbookContractPolicy();
+    const preferredMode = normalizeLowerValue(contract.ui?.default_mode || "");
+    const normalized = normalizeLowerValue(modeKey);
+    if ((normalized === "known" || normalized === "cantrips" || normalized === "prepared") && isSpellbookTabVisible(normalized)){
+      return normalized;
+    }
+    if ((preferredMode === "known" || preferredMode === "cantrips" || preferredMode === "prepared") && isSpellbookTabVisible(preferredMode)){
+      return preferredMode;
+    }
+    if (isSpellbookTabVisible("known")){
+      return "known";
+    }
+    if (isSpellbookTabVisible("cantrips")){
+      return "cantrips";
+    }
+    return "prepared";
+  }
+
+  function getSpellbookCountSets(limitKey){
+    const normalized = normalizeLowerValue(limitKey);
+    if (normalized === "known"){
+      return {all: pendingKnownSet, free: pendingKnownFreeSet};
+    }
+    if (normalized === "cantrips"){
+      return {all: pendingCantripsSet, free: pendingCantripFreeSet};
+    }
+    return {all: pendingPreparedSet, free: pendingPreparedFreeSet};
+  }
+
+  function getSpellbookCurrentCount(limitKey){
+    const limitPolicy = getSpellbookLimitPolicy(limitKey);
+    const sets = getSpellbookCountSets(limitKey);
+    if (limitPolicy.counts_free){
+      return sets.all.size;
+    }
+    return Array.from(sets.all).filter((slug) => !sets.free.has(slug)).length;
+  }
+
+  function formatSpellbookLimitLabel(limitKey, label){
+    const limitPolicy = getSpellbookLimitPolicy(limitKey);
+    const count = getSpellbookCurrentCount(limitKey);
+    if (Number.isFinite(Number(limitPolicy.max))){
+      return `${count}/${limitPolicy.max} ${label}`;
+    }
+    return `${count} ${label}`;
+  }
+
+  function getSpellbookSnapshot(){
+    const sorted = (values) => values.slice().sort((a, b) => a.localeCompare(b));
+    return {
+      known: sorted(Array.from(pendingKnownSet)),
+      known_free: sorted(Array.from(pendingKnownFreeSet)),
+      cantrips: sorted(Array.from(pendingCantripsSet)),
+      cantrips_free: sorted(Array.from(pendingCantripFreeSet)),
+      prepared: sorted(Array.from(pendingPreparedSet)),
+      prepared_free: sorted(Array.from(pendingPreparedFreeSet)),
+    };
+  }
+
+  function getSpellbookSnapshotJson(){
+    return JSON.stringify(getSpellbookSnapshot());
+  }
+
+  function spellbookHasUnsavedChanges(){
+    return Boolean(spellbookLastSavedSnapshotJson) && getSpellbookSnapshotJson() !== spellbookLastSavedSnapshotJson;
+  }
+
+  function setSpellbookSaveStateMessage(message, state){
+    if (!spellbookSaveState) return;
+    spellbookSaveState.textContent = message || "no changes made";
+    spellbookSaveState.dataset.state = state || "clean";
+  }
+
+  function updateSpellbookSaveStateUi(){
+    const currentSnapshotJson = getSpellbookSnapshotJson();
+    const hasUnsavedChanges = Boolean(spellbookLastSavedSnapshotJson) && currentSnapshotJson !== spellbookLastSavedSnapshotJson;
+    let message = "no changes made";
+    let state = "clean";
+    if (hasUnsavedChanges){
+      message = "changes made, not saved";
+      state = "dirty";
+    } else if (spellbookLastSavedSnapshotJson && spellbookLastSavedSnapshotJson !== spellbookInitialSnapshotJson){
+      message = "changes made, saved";
+      state = "saved";
+    }
+    setSpellbookSaveStateMessage(message, state);
+    if (spellbookSaveBtn){
+      spellbookSaveBtn.textContent = spellbookIsSaving ? "Saving…" : "Save";
+      spellbookSaveBtn.disabled = spellbookIsSaving || state === "clean";
+      spellbookSaveBtn.setAttribute("aria-disabled", spellbookSaveBtn.disabled ? "true" : "false");
+    }
+  }
+
+  function markSpellbookBaseline(){
+    const snapshotJson = getSpellbookSnapshotJson();
+    spellbookInitialSnapshotJson = snapshotJson;
+    spellbookLastSavedSnapshotJson = snapshotJson;
+    updateSpellbookSaveStateUi();
+  }
+
+  function markSpellbookSavedState(){
+    spellbookLastSavedSnapshotJson = getSpellbookSnapshotJson();
+    updateSpellbookSaveStateUi();
+  }
+
+  function showSpellbookExitConfirm(){
+    if (!spellbookConfirmModal) return;
+    if (spellbookConfirmText){
+      spellbookConfirmText.textContent = "Save your spell changes before leaving?";
+    }
+    if (spellbookConfirmCancel){
+      spellbookConfirmCancel.textContent = "Stay";
+      spellbookConfirmCancel.disabled = spellbookIsSaving;
+    }
+    if (spellbookConfirmYes){
+      spellbookConfirmYes.textContent = spellbookIsSaving ? "Saving…" : "Save & Exit";
+      spellbookConfirmYes.disabled = spellbookIsSaving;
+    }
+    spellbookConfirmModal.classList.add("show");
+    spellbookConfirmModal.setAttribute("aria-hidden", "false");
+  }
+
+  function hideSpellbookConfirm(){
+    if (!spellbookConfirmModal) return;
+    spellbookConfirmModal.classList.remove("show");
+    spellbookConfirmModal.setAttribute("aria-hidden", "true");
+    if (spellbookConfirmCancel){
+      spellbookConfirmCancel.disabled = false;
+    }
+    if (spellbookConfirmYes){
+      spellbookConfirmYes.disabled = false;
+      spellbookConfirmYes.textContent = "Save & Exit";
+    }
+  }
+
+  function requestCloseSpellbookOverlay(){
+    if (!spellbookOverlay?.classList.contains("show") || spellbookIsSaving){
+      return;
+    }
+    if (spellbookHasUnsavedChanges()){
+      showSpellbookExitConfirm();
+      return;
+    }
+    openSpellbookOverlay(false);
+  }
+
+  function getSpellbookSourceSlugs(sourceKey, eligibleSources = {}){
+    const normalized = normalizeLowerValue(sourceKey);
+    const contract = getSpellbookContractPolicy();
+    const sourceLists = contract.source_lists && typeof contract.source_lists === "object" ? contract.source_lists : {};
+    const contractSource = sourceLists[normalized];
+    if (Array.isArray(contractSource)){
+      return normalizePreparedSpellList(contractSource);
+    }
+    if (normalized === "eligible_spells" || normalized === "eligible_cantrips"){
+      return Array.isArray(eligibleSources?.[normalized]) ? eligibleSources[normalized].slice() : [];
+    }
+    if (normalized === "known"){
+      return Array.from(pendingKnownSet);
+    }
+    if (normalized === "known_paid"){
+      return Array.from(pendingKnownSet).filter((slug) => !pendingKnownFreeSet.has(slug));
+    }
+    if (normalized === "known_free"){
+      return Array.from(pendingKnownFreeSet);
+    }
+    if (normalized === "cantrips"){
+      return Array.from(pendingCantripsSet);
+    }
+    if (normalized === "cantrips_paid"){
+      return Array.from(pendingCantripsSet).filter((slug) => !pendingCantripFreeSet.has(slug));
+    }
+    if (normalized === "cantrips_free"){
+      return Array.from(pendingCantripFreeSet);
+    }
+    if (normalized === "prepared"){
+      return Array.from(pendingPreparedSet);
+    }
+    if (normalized === "prepared_paid"){
+      return Array.from(pendingPreparedSet).filter((slug) => !pendingPreparedFreeSet.has(slug));
+    }
+    if (normalized === "prepared_free"){
+      return Array.from(pendingPreparedFreeSet);
+    }
+    return [];
+  }
+
+  function setSpellbookActionButtonState(button, visible, enabled){
+    if (!button) return;
+    button.classList.toggle("hidden", !visible);
+    button.disabled = !visible || !enabled;
+    button.setAttribute("aria-disabled", (!visible || !enabled) ? "true" : "false");
+  }
+
   function renderSpellbook(){
     const playerName = getClaimedPlayerName();
     const profile = playerName ? getPlayerProfile(playerName) : null;
     if (!profile){
       setSpellbookStatus("Claim a character to manage spells.");
+      setSpellbookSaveStateMessage("no changes made", "clean");
       return;
     }
-    if (spellbookKnownEnabledToggle){
-      spellbookKnownEnabledToggle.checked = spellbookKnownEnabled;
-    }
+    const contract = getSpellbookContractPolicy();
+    const ui = contract.ui && typeof contract.ui === "object" ? contract.ui : {};
+    const tabs = ui.tabs && typeof ui.tabs === "object" ? ui.tabs : {};
+    const knownTab = tabs.known && typeof tabs.known === "object" ? tabs.known : {visible: false, label: "Known Spells"};
+    const cantripsTab = tabs.cantrips && typeof tabs.cantrips === "object" ? tabs.cantrips : {visible: true, label: "Cantrips"};
+    const preparedTab = tabs.prepared && typeof tabs.prepared === "object" ? tabs.prepared : {visible: true, label: "Prepared Spells"};
+    spellbookMode = resolveSpellbookMode(spellbookMode);
     if (spellbookTabKnown){
-      spellbookTabKnown.classList.toggle("hidden", !spellbookKnownEnabled);
+      spellbookTabKnown.textContent = knownTab.label || "Known Spells";
+      spellbookTabKnown.classList.toggle("hidden", knownTab.visible !== true);
       spellbookTabKnown.classList.toggle("accent", spellbookMode === "known");
     }
-    if (!spellbookKnownEnabled && spellbookMode === "known"){
-      spellbookMode = "prepared";
+    if (spellbookTabCantrips){
+      spellbookTabCantrips.textContent = cantripsTab.label || "Cantrips";
+      spellbookTabCantrips.classList.toggle("hidden", cantripsTab.visible === false);
+      spellbookTabCantrips.classList.toggle("accent", spellbookMode === "cantrips");
     }
     if (spellbookTabPrepared){
+      spellbookTabPrepared.textContent = preparedTab.label || "Prepared Spells";
+      spellbookTabPrepared.classList.toggle("hidden", preparedTab.visible === false);
       spellbookTabPrepared.classList.toggle("accent", spellbookMode === "prepared");
     }
-    const eligibleSlugs = getEligibleSpellSlugs(profile);
-    const freePreparedSlugs = spellbookMode === "prepared"
-      ? Array.from(pendingPreparedFreeSet)
-      : [];
-    const freePreparedSet = new Set(freePreparedSlugs.map(getSpellKey));
-    const paidPreparedSlugs = spellbookMode === "prepared"
-      ? Array.from(pendingPreparedSet).filter((slug) => !freePreparedSet.has(getSpellKey(slug)))
-      : [];
-    const rightSlugs = spellbookMode === "prepared"
-      ? paidPreparedSlugs
-      : Array.from(new Set([...pendingKnownSet, ...pendingCantripsSet]));
-    const rightSet = new Set((spellbookMode === "prepared" ? [...rightSlugs, ...freePreparedSlugs] : rightSlugs).map(getSpellKey));
+    const modePolicy = getSpellbookModePolicy(spellbookMode);
+    const modeActions = modePolicy.actions && typeof modePolicy.actions === "object"
+      ? modePolicy.actions
+      : {add: false, add_free: false, remove: false};
+    const eligibleSources = getSpellbookEligibleSources(profile);
+    const freeSlugs = getSpellbookSourceSlugs(modePolicy.free_source, eligibleSources);
+    const freeSet = new Set(freeSlugs.map(getSpellKey));
+    const rightSlugs = getSpellbookSourceSlugs(modePolicy.right_source, eligibleSources)
+      .filter((slug) => !freeSet.has(getSpellKey(slug)));
+    const rightSet = new Set([...rightSlugs, ...freeSlugs].map(getSpellKey));
     const emptyLabel = spellbookSearchTerm.trim() ? "No spells match that search." : "No spells available.";
-    let leftSlugs = [];
-    if (spellbookMode === "known"){
-      leftSlugs = eligibleSlugs.filter((slug) => !rightSet.has(getSpellKey(slug)));
-      if (spellbookLeftTitle) spellbookLeftTitle.textContent = "Eligible Spells";
-      if (spellbookRightTitle) spellbookRightTitle.textContent = "Known & Cantrips";
-    } else {
-      if (spellbookKnownEnabled){
-        const knownSlugs = sortSlugsByName(Array.from(new Set([...pendingKnownSet, ...pendingCantripsSet])));
-        leftSlugs = knownSlugs.filter((slug) => !rightSet.has(getSpellKey(slug)));
-        if (spellbookLeftTitle) spellbookLeftTitle.textContent = "Known & Cantrips";
-      } else {
-        leftSlugs = eligibleSlugs.filter((slug) => !rightSet.has(getSpellKey(slug)));
-        if (spellbookLeftTitle) spellbookLeftTitle.textContent = "Eligible Spells";
-      }
-      if (spellbookRightTitle) spellbookRightTitle.textContent = "Prepared Spells";
-      const filteredFreePrepared = filterSpellbookSlugs(freePreparedSlugs);
-      const sortedFreePrepared = sortSpellbookSlugs(filteredFreePrepared);
-      if (spellbookFreePreparedTitle){
-        spellbookFreePreparedTitle.classList.toggle("hidden", !sortedFreePrepared.length);
-      }
-      if (spellbookFreePreparedList){
-        spellbookFreePreparedList.classList.toggle("hidden", !sortedFreePrepared.length);
-      }
-      renderSpellbookList(
-        spellbookFreePreparedList,
-        sortedFreePrepared,
-        new Set(),
-        emptyLabel,
-        {locked: true},
-      );
+    const leftSlugs = getSpellbookSourceSlugs(modePolicy.left_source, eligibleSources)
+      .filter((slug) => !rightSet.has(getSpellKey(slug)));
+    if (spellbookLeftTitle){
+      spellbookLeftTitle.textContent = modePolicy.left_title || "Eligible Spells";
     }
-    if (spellbookMode !== "prepared"){
-      if (spellbookFreePreparedTitle) spellbookFreePreparedTitle.classList.add("hidden");
-      if (spellbookFreePreparedList) spellbookFreePreparedList.classList.add("hidden");
+    if (spellbookRightTitle){
+      spellbookRightTitle.textContent = modePolicy.right_title || "Selected Spells";
     }
+    const filteredFree = filterSpellbookSlugs(freeSlugs);
+    const sortedFree = sortSpellbookSlugs(filteredFree);
+    const showFreeList = Boolean(modePolicy.free_source) && sortedFree.length > 0;
+    if (spellbookFreePreparedTitle){
+      spellbookFreePreparedTitle.textContent = modePolicy.free_title || "Free Spells";
+      spellbookFreePreparedTitle.classList.toggle("hidden", !showFreeList);
+    }
+    if (spellbookFreePreparedList){
+      spellbookFreePreparedList.classList.toggle("hidden", !showFreeList);
+    }
+    renderSpellbookList(
+      spellbookFreePreparedList,
+      sortedFree,
+      new Set(),
+      emptyLabel,
+      {locked: true},
+    );
     const filteredLeft = filterSpellbookSlugs(leftSlugs);
     const filteredRight = filterSpellbookSlugs(rightSlugs);
-    renderSpellbookList(spellbookLeftList, sortSpellbookSlugs(filteredLeft), spellbookLeftSelection, emptyLabel);
-    renderSpellbookList(spellbookRightList, sortSpellbookSlugs(filteredRight), spellbookRightSelection, emptyLabel);
-    const preparedCount = Array.from(pendingPreparedSet).filter((slug) => !pendingPreparedFreeSet.has(slug)).length;
-    const preparedLimitLabel = Number.isFinite(spellbookPreparedLimit)
-      ? `${preparedCount}/${spellbookPreparedLimit} prepared`
-      : `${preparedCount} prepared`;
-    const knownCount = Array.from(pendingKnownSet).filter((slug) => !pendingKnownFreeSet.has(slug)).length;
-    const knownLimitLabel = Number.isFinite(spellbookKnownLimit)
-      ? `${knownCount}/${spellbookKnownLimit} known`
-      : `${knownCount} known`;
-    const cantripCount = pendingCantripsSet.size;
-    const cantripLimitLabel = Number.isFinite(spellbookCantripsMax)
-      ? `${cantripCount}/${spellbookCantripsMax} cantrips`
-      : `${cantripCount} cantrips`;
-    setSpellbookStatus(`${knownLimitLabel} · ${cantripLimitLabel} · ${preparedLimitLabel}`);
+    renderSpellbookList(
+      spellbookLeftList,
+      sortSpellbookSlugs(filteredLeft),
+      spellbookLeftSelection,
+      emptyLabel,
+      {locked: modeActions.add !== true && modeActions.add_free !== true},
+    );
+    renderSpellbookList(
+      spellbookRightList,
+      sortSpellbookSlugs(filteredRight),
+      spellbookRightSelection,
+      emptyLabel,
+      {locked: modeActions.remove !== true},
+    );
+    setSpellbookActionButtonState(
+      spellbookAddBtn,
+      modeActions.add === true,
+      modeActions.add === true && spellbookLeftSelection.size > 0,
+    );
+    setSpellbookActionButtonState(
+      spellbookAddFreeBtn,
+      modeActions.add_free === true,
+      modeActions.add_free === true && spellbookLeftSelection.size > 0,
+    );
+    setSpellbookActionButtonState(
+      spellbookRemoveBtn,
+      modeActions.remove === true,
+      modeActions.remove === true && spellbookRightSelection.size > 0,
+    );
+    const statusParts = [];
+    if (getSpellbookListPolicy("known").exists === true){
+      statusParts.push(formatSpellbookLimitLabel("known", "known"));
+    }
+    statusParts.push(formatSpellbookLimitLabel("cantrips", "cantrips"));
+    statusParts.push(formatSpellbookLimitLabel("prepared", "prepared"));
+    setSpellbookStatus(statusParts.join(" · "));
+    updateSpellbookSaveStateUi();
   }
 
-  function syncSpellbookClaimedPlayer(){
+  function syncSpellbookClaimedPlayer(options = {}){
+    const {preserveMode = false, resetBaseline = false, markSaved = false} = options;
     const playerName = getClaimedPlayerName();
     const config = getSpellbookConfig(playerName);
-    spellbookKnownEnabled = config.knownEnabled !== false;
+    const previousMode = spellbookMode;
+    spellbookContractPolicy = config.contract && typeof config.contract === "object"
+      ? config.contract
+      : normalizeSpellbookContract(null, config.knownEnabled !== false);
     spellbookKnownLimit = config.knownLimit;
     spellbookPreparedLimit = config.max;
     spellbookCantripsMax = config.cantripsMax;
@@ -19717,8 +20479,21 @@ __DAMAGE_TYPE_OPTIONS__
         .filter((slug) => Boolean(slug) && pendingPreparedSet.has(slug))
     );
     pendingCantripsSet = new Set(config.cantrips.map(normalizeTextValue).filter(Boolean));
-    spellbookMode = spellbookKnownEnabled ? "known" : "prepared";
+    pendingCantripFreeSet = new Set(
+      config.cantripsFree
+        .map(normalizeTextValue)
+        .filter((slug) => Boolean(slug) && pendingCantripsSet.has(slug))
+    );
+    const defaultMode = getSpellbookContractPolicy().ui?.default_mode || (config.knownEnabled !== false ? "known" : "prepared");
+    spellbookMode = resolveSpellbookMode(preserveMode ? previousMode : defaultMode);
     resetSpellbookSelections();
+    if (resetBaseline){
+      markSpellbookBaseline();
+    } else if (markSaved){
+      markSpellbookSavedState();
+    } else {
+      updateSpellbookSaveStateUi();
+    }
   }
 
   function openSpellbookOverlay(open){
@@ -19735,17 +20510,22 @@ __DAMAGE_TYPE_OPTIONS__
       spellbookPreviousFocus = document.activeElement instanceof HTMLElement
         ? document.activeElement
         : null;
-      syncSpellbookClaimedPlayer();
+      syncSpellbookClaimedPlayer({resetBaseline: true});
       if (spellbookSearchInput) spellbookSearchInput.value = spellbookSearchTerm;
       if (spellbookSortSelect) spellbookSortSelect.value = spellbookSortMode;
       renderSpellbook();
       requestAnimationFrame(() => {
         spellbookBackBtn?.focus();
       });
-    } else if (spellbookPreviousFocus){
+    } else {
+      hideSpellbookConfirm();
       closeSpellDetailOverlay();
-      spellbookPreviousFocus.focus();
-      spellbookPreviousFocus = null;
+      spellbookIsSaving = false;
+      updateSpellbookSaveStateUi();
+      if (spellbookPreviousFocus){
+        spellbookPreviousFocus.focus();
+        spellbookPreviousFocus = null;
+      }
     }
     updateModalOffsets();
     resize();
@@ -19761,49 +20541,43 @@ __DAMAGE_TYPE_OPTIONS__
 
   function applySpellbookAddWithMode(addAsFree){
     if (!spellbookLeftSelection.size) return;
+    spellbookMode = resolveSpellbookMode(spellbookMode);
+    const modePolicy = getSpellbookModePolicy(spellbookMode);
+    const modeActions = modePolicy.actions && typeof modePolicy.actions === "object"
+      ? modePolicy.actions
+      : {add: false, add_free: false, remove: false};
+    if ((addAsFree ? modeActions.add_free : modeActions.add) !== true){
+      return;
+    }
     const additions = Array.from(spellbookLeftSelection);
-    if (spellbookMode === "prepared"){
+    const addToManagedList = (listKey, freeListKey, limitKey, limitLabel) => {
+      if (!isSpellbookListEditable(listKey)){
+        return;
+      }
+      const limitPolicy = getSpellbookLimitPolicy(limitKey);
       additions.forEach((slug) => {
-        if (pendingPreparedSet.has(slug)) return;
-        const nextCount = addAsFree
-          ? Array.from(pendingPreparedSet).filter((item) => !pendingPreparedFreeSet.has(item)).length
-          : Array.from(pendingPreparedSet).filter((item) => !pendingPreparedFreeSet.has(item)).length + 1;
-        if (Number.isFinite(spellbookPreparedLimit) && nextCount > spellbookPreparedLimit){
-          localToast(`Prepared spells limited to ${spellbookPreparedLimit}.`);
+        const targetSet = getSpellbookCountSets(limitKey).all;
+        const targetFreeSet = getSpellbookCountSets(limitKey).free;
+        if (!spellbookListAllowsSlug(listKey, slug) || targetSet.has(slug)){
           return;
         }
-        pendingPreparedSet.add(slug);
-        if (addAsFree){
-          pendingPreparedFreeSet.add(slug);
+        const delta = addAsFree && limitPolicy.counts_free !== true ? 0 : 1;
+        if (Number.isFinite(Number(limitPolicy.max)) && getSpellbookCurrentCount(limitKey) + delta > limitPolicy.max){
+          localToast(`${limitLabel} limited to ${limitPolicy.max}.`);
+          return;
+        }
+        targetSet.add(slug);
+        if (addAsFree && isSpellbookListEditable(freeListKey) && spellbookListAllowsSlug(freeListKey, slug)){
+          targetFreeSet.add(slug);
         }
       });
+    };
+    if (spellbookMode === "known"){
+      addToManagedList("known", "known_free", "known", "Known spells");
+    } else if (spellbookMode === "cantrips"){
+      addToManagedList("cantrips", "cantrips_free", "cantrips", "Cantrips");
     } else {
-      additions.forEach((slug) => {
-        const level = getPresetLevelBySlug(slug);
-        if (level === 0){
-          const nextCount = pendingCantripsSet.size + 1;
-          if (Number.isFinite(spellbookCantripsMax) && nextCount > spellbookCantripsMax){
-            localToast(`Cantrips limited to ${spellbookCantripsMax}.`);
-            return;
-          }
-          pendingCantripsSet.add(slug);
-        } else {
-          if (!spellbookKnownEnabled){
-            return;
-          }
-          const nextCount = addAsFree
-            ? Array.from(pendingKnownSet).filter((item) => !pendingKnownFreeSet.has(item)).length
-            : Array.from(pendingKnownSet).filter((item) => !pendingKnownFreeSet.has(item)).length + 1;
-          if (Number.isFinite(spellbookKnownLimit) && nextCount > spellbookKnownLimit){
-            localToast(`Known spells limited to ${spellbookKnownLimit}.`);
-            return;
-          }
-          pendingKnownSet.add(slug);
-          if (addAsFree){
-            pendingKnownFreeSet.add(slug);
-          }
-        }
-      });
+      addToManagedList("prepared", "prepared_free", "prepared", "Prepared spells");
     }
     resetSpellbookSelections();
     renderSpellbook();
@@ -19811,58 +20585,71 @@ __DAMAGE_TYPE_OPTIONS__
 
   function applySpellbookRemove(){
     if (!spellbookRightSelection.size) return;
+    spellbookMode = resolveSpellbookMode(spellbookMode);
+    const modePolicy = getSpellbookModePolicy(spellbookMode);
+    const modeActions = modePolicy.actions && typeof modePolicy.actions === "object"
+      ? modePolicy.actions
+      : {add: false, add_free: false, remove: false};
+    if (modeActions.remove !== true){
+      return;
+    }
     const removals = Array.from(spellbookRightSelection);
-    if (spellbookMode === "prepared"){
+    const removeFromManagedList = (listKey, freeSet) => {
+      if (!isSpellbookListEditable(listKey)){
+        return;
+      }
       removals.forEach((slug) => {
-        if (pendingPreparedFreeSet.has(slug)) return;
-        pendingPreparedSet.delete(slug);
-      });
-    } else {
-      removals.forEach((slug) => {
-        const level = getPresetLevelBySlug(slug);
-        if (level === 0){
-          pendingCantripsSet.delete(slug);
-        } else {
-          pendingKnownSet.delete(slug);
-          pendingKnownFreeSet.delete(slug);
+        if (!spellbookListAllowsSlug(listKey, slug)){
+          return;
         }
+        getSpellbookCountSets(listKey).all.delete(slug);
+        freeSet.delete(slug);
       });
+    };
+    if (spellbookMode === "known"){
+      removeFromManagedList("known", pendingKnownFreeSet);
+    } else if (spellbookMode === "cantrips"){
+      removeFromManagedList("cantrips", pendingCantripFreeSet);
+    } else {
+      removeFromManagedList("prepared", pendingPreparedFreeSet);
     }
     resetSpellbookSelections();
     renderSpellbook();
   }
 
-  function showSpellbookConfirm(){
-    if (!spellbookConfirmModal) return;
-    const playerName = getClaimedPlayerName() || "player";
-    const fileName = playerName.replace(/[^a-z0-9._-]+/gi, "-");
-    if (spellbookConfirmText){
-      spellbookConfirmText.textContent = `Overwrite players/${fileName}.yaml?`;
-    }
-    spellbookConfirmModal.classList.add("show");
-    spellbookConfirmModal.setAttribute("aria-hidden", "false");
-  }
-
-  function hideSpellbookConfirm(){
-    if (!spellbookConfirmModal) return;
-    spellbookConfirmModal.classList.remove("show");
-    spellbookConfirmModal.setAttribute("aria-hidden", "true");
-  }
-
-  async function saveSpellbookChanges(){
+  async function saveSpellbookChanges(options = {}){
+    const {closeOnSuccess = false} = options;
     const playerName = getClaimedPlayerName();
     if (!playerName){
       localToast("Claim a character first.");
-      return;
+      return false;
+    }
+    if (spellbookIsSaving){
+      return false;
+    }
+    if (!spellbookHasUnsavedChanges()){
+      if (closeOnSuccess){
+        hideSpellbookConfirm();
+        openSpellbookOverlay(false);
+      } else {
+        localToast("No spell changes to save.");
+      }
+      return true;
     }
     const payload = {
-      known_enabled: spellbookKnownEnabled,
       known_list: Array.from(pendingKnownSet),
       known_free_list: Array.from(pendingKnownFreeSet),
       prepared_list: Array.from(pendingPreparedSet),
       prepared_free_list: Array.from(pendingPreparedFreeSet),
       cantrips_list: Array.from(pendingCantripsSet),
+      cantrips_free_list: Array.from(pendingCantripFreeSet),
     };
+    const confirmWasOpen = spellbookConfirmModal?.classList.contains("show") === true;
+    spellbookIsSaving = true;
+    updateSpellbookSaveStateUi();
+    if (confirmWasOpen){
+      showSpellbookExitConfirm();
+    }
     try {
       const response = await fetch(`/api/players/${encodeURIComponent(playerName)}/spellbook`, {
         method: "POST",
@@ -19876,13 +20663,140 @@ __DAMAGE_TYPE_OPTIONS__
       if (data?.player && state?.player_profiles){
         state.player_profiles[data.player.name] = data.player;
       }
+      syncSpellbookClaimedPlayer({preserveMode: true, markSaved: true});
+      refreshSpellPresetOptions();
       localToast("Spellbook saved.");
       hideSpellbookConfirm();
-      refreshSpellPresetOptions();
+      renderSpellbook();
+      if (closeOnSuccess){
+        openSpellbookOverlay(false);
+      }
+      return true;
     } catch (err){
       console.warn("Failed to save spellbook.", err);
       localToast("Unable to save spellbook.");
+      if (confirmWasOpen){
+        showSpellbookExitConfirm();
+      }
+      return false;
+    } finally {
+      spellbookIsSaving = false;
+      updateSpellbookSaveStateUi();
     }
+  }
+
+  if (localStorage.getItem("lanSpellbookTest") === "1"
+    || (typeof window.location !== "undefined" && String(window.location.search || "").indexOf("lanSpellbookTest=1") >= 0)){
+    window.__lanSpellbookTest = {
+      claim(profile, cid){
+        if (!profile || typeof profile !== "object") return false;
+        const claimCid = Number.isFinite(Number(cid)) ? Number(cid) : 99;
+        state = state || {};
+        if (!Array.isArray(state.units)) state.units = [];
+        state.player_profiles = state.player_profiles || {};
+        state.player_profiles[profile.name] = profile;
+        const existing = state.units.find((u) => Number(u?.cid) === claimCid);
+        if (existing){
+          existing.name = profile.name;
+        } else {
+          state.units.push({cid: claimCid, name: profile.name, pos: {col: 0, row: 0}});
+        }
+        claimedCid = claimCid;
+        return true;
+      },
+      openOverlay(){ openSpellbookOverlay(true); },
+      closeOverlay(){ openSpellbookOverlay(false); },
+      requestClose(){ requestCloseSpellbookOverlay(); },
+      render(){ renderSpellbook(); },
+      setMode(mode){ spellbookMode = resolveSpellbookMode(mode); renderSpellbook(); },
+      setSearch(text){ spellbookSearchTerm = String(text || ""); if (spellbookSearchInput) spellbookSearchInput.value = spellbookSearchTerm; renderSpellbook(); },
+      snapshot(){
+        return {
+          mode: spellbookMode,
+          contract: spellbookContractPolicy,
+          pending: {
+            known: Array.from(pendingKnownSet),
+            known_free: Array.from(pendingKnownFreeSet),
+            cantrips: Array.from(pendingCantripsSet),
+            cantrips_free: Array.from(pendingCantripFreeSet),
+            prepared: Array.from(pendingPreparedSet),
+            prepared_free: Array.from(pendingPreparedFreeSet),
+          },
+          limits: {
+            known: spellbookKnownLimit,
+            prepared: spellbookPreparedLimit,
+            cantrips: spellbookCantripsMax,
+          },
+          eligible: (() => {
+            const claimedName = getClaimedPlayerName();
+            const profile = claimedName ? getPlayerProfile(claimedName) : null;
+            if (!profile) return null;
+            return getSpellbookEligibleSources(profile);
+          })(),
+          presetCount: cachedSpellPresets?.length || 0,
+        };
+      },
+      addTo(mode, slug, asFree){
+        spellbookMode = resolveSpellbookMode(mode);
+        spellbookLeftSelection = new Set([String(slug)]);
+        if (asFree){ applySpellbookAddFree(); } else { applySpellbookAdd(); }
+        return {
+          known: Array.from(pendingKnownSet),
+          known_free: Array.from(pendingKnownFreeSet),
+          cantrips: Array.from(pendingCantripsSet),
+          cantrips_free: Array.from(pendingCantripFreeSet),
+          prepared: Array.from(pendingPreparedSet),
+          prepared_free: Array.from(pendingPreparedFreeSet),
+        };
+      },
+      removeFrom(mode, slug){
+        spellbookMode = resolveSpellbookMode(mode);
+        spellbookRightSelection = new Set([String(slug)]);
+        applySpellbookRemove();
+        return {
+          known: Array.from(pendingKnownSet),
+          known_free: Array.from(pendingKnownFreeSet),
+          cantrips: Array.from(pendingCantripsSet),
+          cantrips_free: Array.from(pendingCantripFreeSet),
+          prepared: Array.from(pendingPreparedSet),
+          prepared_free: Array.from(pendingPreparedFreeSet),
+        };
+      },
+      save(options){ return saveSpellbookChanges(options || {}); },
+      claimedPlayerName(){ return getClaimedPlayerName(); },
+      claimedCid(){ return claimedCid; },
+      profileSpellcastingKeys(name){
+        const profile = getPlayerProfile(name || getClaimedPlayerName());
+        const spellcasting = profile?.spellcasting;
+        if (!spellcasting || typeof spellcasting !== "object") return null;
+        return {
+          prepared_list: Array.isArray(spellcasting.prepared_list) ? spellcasting.prepared_list.slice() : null,
+          prepared_free_list: Array.isArray(spellcasting.prepared_free_list) ? spellcasting.prepared_free_list.slice() : null,
+          cantrips_list: Array.isArray(spellcasting.cantrips_list) ? spellcasting.cantrips_list.slice() : null,
+          cantrips_free_list: Array.isArray(spellcasting.cantrips_free_list) ? spellcasting.cantrips_free_list.slice() : null,
+          known_list: Array.isArray(spellcasting.known_list) ? spellcasting.known_list.slice() : null,
+          known_free_list: Array.isArray(spellcasting.known_free_list) ? spellcasting.known_free_list.slice() : null,
+          known_enabled: spellcasting.known_enabled ?? null,
+        };
+      },
+      searchTerm(){ return spellbookSearchTerm; },
+      confirmModalShown(){
+        return !!(spellbookConfirmModal && spellbookConfirmModal.classList.contains("show"));
+      },
+      hideConfirm(){ hideSpellbookConfirm(); },
+      overlayShown(){
+        return !!(spellbookOverlay && spellbookOverlay.classList.contains("show"));
+      },
+      waitForPresets(){
+        return new Promise((resolve) => {
+          const check = () => {
+            if (cachedSpellPresets && cachedSpellPresets.length > 0){ resolve(cachedSpellPresets.length); return; }
+            setTimeout(check, 40);
+          };
+          check();
+        });
+      },
+    };
   }
 
   function setSpellDetailStatus(text){
@@ -23484,12 +24398,12 @@ __DAMAGE_TYPE_OPTIONS__
   }
   if (spellbookBackBtn){
     spellbookBackBtn.addEventListener("click", () => {
-      openSpellbookOverlay(false);
+      requestCloseSpellbookOverlay();
     });
   }
   if (spellbookBackFloatingBtn){
     spellbookBackFloatingBtn.addEventListener("click", () => {
-      openSpellbookOverlay(false);
+      requestCloseSpellbookOverlay();
     });
   }
   if (spellDetailBackBtn){
@@ -23513,24 +24427,21 @@ __DAMAGE_TYPE_OPTIONS__
   }
   if (spellbookTabKnown){
     spellbookTabKnown.addEventListener("click", () => {
-      spellbookMode = "known";
+      spellbookMode = resolveSpellbookMode("known");
+      resetSpellbookSelections();
+      renderSpellbook();
+    });
+  }
+  if (spellbookTabCantrips){
+    spellbookTabCantrips.addEventListener("click", () => {
+      spellbookMode = resolveSpellbookMode("cantrips");
       resetSpellbookSelections();
       renderSpellbook();
     });
   }
   if (spellbookTabPrepared){
     spellbookTabPrepared.addEventListener("click", () => {
-      spellbookMode = "prepared";
-      resetSpellbookSelections();
-      renderSpellbook();
-    });
-  }
-  if (spellbookKnownEnabledToggle){
-    spellbookKnownEnabledToggle.addEventListener("change", (event) => {
-      spellbookKnownEnabled = !!event.target.checked;
-      if (!spellbookKnownEnabled){
-        spellbookMode = "prepared";
-      }
+      spellbookMode = resolveSpellbookMode("prepared");
       resetSpellbookSelections();
       renderSpellbook();
     });
@@ -23564,7 +24475,7 @@ __DAMAGE_TYPE_OPTIONS__
   }
   if (spellbookSaveBtn){
     spellbookSaveBtn.addEventListener("click", () => {
-      showSpellbookConfirm();
+      saveSpellbookChanges();
     });
   }
   if (spellbookConfirmCancel){
@@ -23574,7 +24485,7 @@ __DAMAGE_TYPE_OPTIONS__
   }
   if (spellbookConfirmYes){
     spellbookConfirmYes.addEventListener("click", () => {
-      saveSpellbookChanges();
+      saveSpellbookChanges({closeOnSuccess: true});
     });
   }
   if (spellbookConfirmModal){
@@ -23684,7 +24595,7 @@ __DAMAGE_TYPE_OPTIONS__
         return;
       }
       if (spellbookOverlay?.classList.contains("show")){
-        openSpellbookOverlay(false);
+        requestCloseSpellbookOverlay();
         return;
       }
       if (castOverlay?.classList.contains("show")){

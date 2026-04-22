@@ -5670,12 +5670,18 @@ class LanController:
 
         # Start uvicorn server in a thread (with its own event loop).
         try:
-            self._cached_snapshot = self.app._lan_snapshot(include_static=False, hydrate_static=False)
+            # Seed with static data so the first connecting WS client receives
+            # populated spell_presets / player_profiles / player_spells instead
+            # of waiting for the first include_static broadcast.
+            self._cached_snapshot = self.app._lan_snapshot(include_static=True, hydrate_static=True)
             self._cached_pcs = list(
                 self.app._lan_pcs() if hasattr(self.app, "_lan_pcs") else self.app._lan_claimable()
             )
         except Exception:
-            pass
+            try:
+                self._cached_snapshot = self.app._lan_snapshot(include_static=False, hydrate_static=False)
+            except Exception:
+                pass
         def run_server():
             # Create fresh loop for this thread
             loop = asyncio.new_event_loop()
@@ -7466,6 +7472,14 @@ class LanController:
     def _static_data_payload(self, planning: bool = False) -> Dict[str, Any]:
         """Return static data that only needs to be sent once on connection."""
         spell_presets = self.app._spell_presets_payload() if planning else self._cached_snapshot.get("spell_presets", [])
+        if not spell_presets:
+            # Cached snapshot may not yet carry static data (e.g. headless startup
+            # before the first include_static broadcast). Hydrate live so the
+            # first WS client still receives a populated spell list.
+            try:
+                spell_presets = self.app._spell_presets_payload()
+            except Exception:
+                spell_presets = []
         monster_choices = self._monster_choices_payload()
         return {
             "spell_presets": spell_presets,
@@ -24289,41 +24303,91 @@ class InitiativeTracker(base.InitiativeTracker):
                 spellcasting["cantrips"] = spellcasting.get("known_cantrips")
         if "prepared_spells" not in spellcasting and "prepared_spells" in data:
             spellcasting["prepared_spells"] = data.get("prepared_spells")
+        runtime_lists = self._normalize_spellbook_runtime_lists(data, spellcasting)
+        cantrip_list = runtime_lists["cantrips_list"]
+        cantrips_free_list = runtime_lists["cantrips_free_list"]
+        cantrips_limit = runtime_lists["cantrips_limit"]
+        known_list = runtime_lists["known_list"]
+        known_free_list = runtime_lists["known_free_list"]
+        known_limit = runtime_lists["known_limit"]
+        prepared_list = runtime_lists["prepared_list"]
+        prepared_free_list = runtime_lists["prepared_free_list"]
+        prepared_limit = runtime_lists["prepared_limit"]
+        prepared_limit_formula = runtime_lists["prepared_limit_formula"]
+
         cantrips_section = spellcasting.get("cantrips")
-        cantrip_list: List[str] = []
-        if isinstance(cantrips_section, dict):
-            cantrip_list = self._normalize_spell_slug_list(cantrips_section.get("known"))
-            if cantrip_list:
-                cantrips_section = dict(cantrips_section)
-                cantrips_section["known"] = cantrip_list
-                spellcasting["cantrips"] = cantrips_section
-                if "known_cantrips" not in spellcasting:
-                    spellcasting["known_cantrips"] = len(cantrip_list)
+        if not isinstance(cantrips_section, dict):
+            cantrips_section = {}
+        cantrips_section = dict(cantrips_section)
+        cantrips_section["known"] = list(cantrip_list)
+        if cantrips_free_list:
+            cantrips_section["free"] = list(cantrips_free_list)
+        else:
+            cantrips_section.pop("free", None)
+        if cantrips_limit is not None:
+            cantrips_section["max"] = int(cantrips_limit)
+        spellcasting["cantrips"] = cantrips_section
+        spellcasting["known_cantrips"] = len(cantrip_list)
+
         prepared_section = spellcasting.get("prepared_spells")
-        prepared_list: List[str] = []
-        prepared_limit_formula = ""
-        if isinstance(prepared_section, dict):
-            prepared_list = self._normalize_spell_slug_list(prepared_section.get("prepared"))
-            if prepared_list:
-                prepared_section = dict(prepared_section)
-                prepared_section["prepared"] = prepared_list
-                spellcasting["prepared_spells"] = prepared_section
-            prepared_limit_formula = str(prepared_section.get("max_formula") or "").strip()
+        if not isinstance(prepared_section, dict):
+            prepared_section = {}
+        prepared_section = dict(prepared_section)
+        prepared_section["prepared"] = list(prepared_list)
+        if prepared_free_list:
+            prepared_section["free"] = list(prepared_free_list)
+        else:
+            prepared_section.pop("free", None)
+        spellcasting["prepared_spells"] = prepared_section
 
         known_section = spellcasting.get("known_spells")
-        known_limit = None
-        known_list: List[str] = []
-        if isinstance(known_section, dict):
-            known_limit = known_section.get("max")
-            known_list = self._normalize_spell_slug_list(known_section.get("known"))
+        if not isinstance(known_section, dict):
+            known_section = {}
+        known_section = dict(known_section)
+        if known_list:
+            known_section["known"] = list(known_list)
+        else:
+            known_section.pop("known", None)
+        if known_free_list:
+            known_section["free"] = list(known_free_list)
+        else:
+            known_section.pop("free", None)
+        spellcasting["known_spells"] = known_section
 
-        if "known_enabled" not in spellcasting:
-            spellcasting["known_enabled"] = known_section is not None
-        spellcasting["known_limit"] = int(known_limit) if str(known_limit).isdigit() else None
+        known_enabled = spellcasting.get("known_enabled")
+        if isinstance(known_enabled, str):
+            known_enabled = known_enabled.strip().lower() not in ("false", "0", "no", "off")
+        if known_enabled is None:
+            known_enabled = known_section is not None
+        source_lists = self._build_spellbook_source_lists(
+            data,
+            known_list=known_list,
+            known_free_list=known_free_list,
+            cantrips_list=cantrip_list,
+            cantrips_free_list=cantrips_free_list,
+            prepared_list=prepared_list,
+            prepared_free_list=prepared_free_list,
+        )
+        spellbook_contract = self._build_live_spellbook_contract(
+            data,
+            fallback_known_enabled=bool(known_enabled),
+            known_limit=known_limit,
+            prepared_limit=prepared_limit,
+            cantrips_limit=cantrips_limit,
+            source_lists=source_lists,
+        )
+        spellcasting["spellbook_contract"] = spellbook_contract
+        spellcasting["known_enabled"] = bool(spellbook_contract.get("known_spells_managed"))
+        spellcasting["known_limit"] = known_limit
+        spellcasting["prepared_limit"] = prepared_limit
         spellcasting["prepared_limit_formula"] = prepared_limit_formula
         spellcasting["known_list"] = known_list
+        spellcasting["known_free_list"] = known_free_list
         spellcasting["prepared_list"] = prepared_list
+        spellcasting["prepared_free_list"] = prepared_free_list
         spellcasting["cantrips_list"] = cantrip_list
+        spellcasting["cantrips_free_list"] = cantrips_free_list
+        spellcasting["cantrips_limit"] = cantrips_limit
 
         druid_level = self._druid_level_from_profile({"leveling": leveling})
         known_limit = self._wild_shape_known_limit(druid_level) if druid_level >= 2 else None
@@ -24920,6 +24984,442 @@ class InitiativeTracker(base.InitiativeTracker):
                 slugs.append(slug)
         return slugs
 
+    def _spell_preset_level_by_slug(self, slug: Any) -> Optional[int]:
+        normalized = str(slug or "").strip().lower()
+        if not normalized:
+            return None
+        try:
+            preset = self._find_spell_preset(spell_slug=normalized, spell_id=normalized)
+        except Exception:
+            preset = None
+        if not isinstance(preset, dict):
+            return None
+        try:
+            value = int(preset.get("level"))
+        except Exception:
+            return None
+        return max(0, value)
+
+    def _normalize_spellbook_runtime_lists(
+        self,
+        profile: Dict[str, Any],
+        spellcasting: Dict[str, Any],
+    ) -> Dict[str, Any]:
+        cantrips_section = spellcasting.get("cantrips") if isinstance(spellcasting.get("cantrips"), dict) else {}
+        known_section = spellcasting.get("known_spells") if isinstance(spellcasting.get("known_spells"), dict) else {}
+        prepared_section = spellcasting.get("prepared_spells") if isinstance(spellcasting.get("prepared_spells"), dict) else {}
+
+        cantrips_max_raw = cantrips_section.get("max")
+        try:
+            cantrips_limit = max(0, int(cantrips_max_raw))
+        except Exception:
+            cantrips_limit = None
+
+        known_limit_raw = known_section.get("max")
+        try:
+            known_limit = max(0, int(known_limit_raw))
+        except Exception:
+            known_limit = None
+
+        prepared_limit_formula = str(prepared_section.get("max_formula") or "").strip()
+        prepared_limit_fallback = None
+        for key in ("max", "max_spells", "max_prepared"):
+            try:
+                prepared_limit_fallback = max(0, int(prepared_section.get(key)))
+                break
+            except Exception:
+                continue
+        prepared_limit = None
+        if prepared_limit_formula or prepared_limit_fallback is not None:
+            prepared_limit = self._compute_resource_pool_max(profile, prepared_limit_formula, prepared_limit_fallback)
+
+        cantrips_list = self._normalize_spell_slug_list(cantrips_section.get("known"))
+        cantrips_free_list = self._normalize_spell_slug_list(cantrips_section.get("free"))
+        known_list_raw = self._normalize_spell_slug_list(known_section.get("known"))
+        known_free_raw = self._normalize_spell_slug_list(known_section.get("free"))
+        prepared_list_raw = self._normalize_spell_slug_list(prepared_section.get("prepared"))
+        prepared_free_raw = self._normalize_spell_slug_list(prepared_section.get("free"))
+
+        known_list: List[str] = []
+        known_free_list: List[str] = []
+        prepared_list: List[str] = []
+        prepared_free_list: List[str] = []
+        known_seen: set[str] = set()
+        known_free_seen: set[str] = set()
+        prepared_seen: set[str] = set()
+        prepared_free_seen: set[str] = set()
+        cantrip_seen = {slug.lower(): slug for slug in cantrips_list}
+        cantrip_free_seen = {slug.lower(): slug for slug in cantrips_free_list}
+        known_free_keys = {slug.lower() for slug in known_free_raw}
+        prepared_free_keys = {slug.lower() for slug in prepared_free_raw}
+
+        def add_unique(target: List[str], seen: set[str], slug: Any) -> None:
+            value = str(slug or "").strip()
+            if not value:
+                return
+            key = value.lower()
+            if key in seen:
+                return
+            seen.add(key)
+            target.append(value)
+
+        def add_cantrip(slug: Any, *, is_free: bool) -> None:
+            value = str(slug or "").strip()
+            if not value:
+                return
+            key = value.lower()
+            if key not in cantrip_seen:
+                cantrip_seen[key] = value
+                cantrips_list.append(value)
+            if is_free and key not in cantrip_free_seen:
+                cantrip_free_seen[key] = value
+                cantrips_free_list.append(value)
+
+        def is_cantrip(slug: Any) -> bool:
+            return self._spell_preset_level_by_slug(slug) == 0
+
+        for slug in known_list_raw:
+            if is_cantrip(slug):
+                add_cantrip(slug, is_free=slug.lower() in known_free_keys)
+                continue
+            add_unique(known_list, known_seen, slug)
+        for slug in prepared_list_raw:
+            if is_cantrip(slug):
+                add_cantrip(slug, is_free=slug.lower() in prepared_free_keys)
+                continue
+            add_unique(prepared_list, prepared_seen, slug)
+
+        always_prepared = self._feature_always_prepared_spell_slugs(profile)
+        for slug in always_prepared:
+            if is_cantrip(slug):
+                add_cantrip(slug, is_free=True)
+                continue
+            add_unique(prepared_list, prepared_seen, slug)
+            add_unique(prepared_free_list, prepared_free_seen, slug)
+
+        for slug in known_free_raw:
+            key = str(slug or "").strip().lower()
+            if not key:
+                continue
+            if is_cantrip(slug):
+                add_cantrip(slug, is_free=True)
+                continue
+            if key in known_seen:
+                add_unique(known_free_list, known_free_seen, slug)
+
+        for slug in prepared_free_raw:
+            key = str(slug or "").strip().lower()
+            if not key:
+                continue
+            if is_cantrip(slug):
+                add_cantrip(slug, is_free=True)
+                continue
+            if key in prepared_seen:
+                add_unique(prepared_free_list, prepared_free_seen, slug)
+
+        cantrip_keys = {slug.lower() for slug in cantrips_list}
+        cantrips_free_list = [slug for slug in cantrips_free_list if slug.lower() in cantrip_keys]
+
+        return {
+            "known_list": known_list,
+            "known_free_list": known_free_list,
+            "known_limit": known_limit,
+            "prepared_list": prepared_list,
+            "prepared_free_list": prepared_free_list,
+            "prepared_limit": prepared_limit,
+            "prepared_limit_formula": prepared_limit_formula,
+            "cantrips_list": cantrips_list,
+            "cantrips_free_list": cantrips_free_list,
+            "cantrips_limit": cantrips_limit,
+        }
+
+    @staticmethod
+    def _spellbook_profile_classes(profile: Dict[str, Any]) -> Tuple[set[str], set[str]]:
+        leveling = profile.get("leveling") if isinstance(profile.get("leveling"), dict) else {}
+        class_names: set[str] = set()
+        subclass_names: set[str] = set()
+        classes = leveling.get("classes")
+        if isinstance(classes, list):
+            for entry in classes:
+                if not isinstance(entry, dict):
+                    continue
+                class_name = str(entry.get("name") or "").strip().lower()
+                subclass_name = str(entry.get("subclass") or "").strip().lower()
+                if class_name:
+                    class_names.add(class_name)
+                if subclass_name:
+                    subclass_names.add(subclass_name)
+        fallback_class = str(leveling.get("class") or "").strip().lower()
+        fallback_subclass = str(leveling.get("subclass") or "").strip().lower()
+        if fallback_class:
+            class_names.add(fallback_class)
+        if fallback_subclass:
+            subclass_names.add(fallback_subclass)
+        return class_names, subclass_names
+
+    def _spellbook_max_castable_spell_level(self, profile: Dict[str, Any], extra_slugs: Optional[List[str]] = None) -> int:
+        spellcasting = profile.get("spellcasting") if isinstance(profile.get("spellcasting"), dict) else {}
+        slots = self._normalize_spell_slots(spellcasting.get("spell_slots"))
+        max_level = 0
+        for raw_level, entry in slots.items():
+            try:
+                level = int(raw_level)
+                count = int((entry or {}).get("max", 0) or 0)
+            except Exception:
+                continue
+            if level > 0 and count > 0:
+                max_level = max(max_level, level)
+        pact_magic = spellcasting.get("pact_magic_slots") if isinstance(spellcasting.get("pact_magic_slots"), dict) else {}
+        try:
+            pact_count = int(pact_magic.get("count") or 0)
+            pact_level = int(pact_magic.get("level") or 0)
+        except Exception:
+            pact_count = 0
+            pact_level = 0
+        if pact_count > 0 and pact_level > 0:
+            max_level = max(max_level, pact_level)
+        for slug in extra_slugs or []:
+            level = self._spell_preset_level_by_slug(slug)
+            if isinstance(level, int) and level > max_level:
+                max_level = level
+        return max(0, max_level)
+
+    def _spellbook_matches_profile_lists(
+        self,
+        preset: Dict[str, Any],
+        *,
+        class_names: set[str],
+        subclass_names: set[str],
+    ) -> bool:
+        lists = preset.get("lists") if isinstance(preset.get("lists"), dict) else {}
+        preset_classes = {
+            str(value or "").strip().lower()
+            for value in (lists.get("classes") if isinstance(lists.get("classes"), list) else [])
+            if str(value or "").strip()
+        }
+        preset_subclasses = {
+            str(value or "").strip().lower()
+            for value in (lists.get("subclasses") if isinstance(lists.get("subclasses"), list) else [])
+            if str(value or "").strip()
+        }
+        if preset_classes and class_names.intersection(preset_classes):
+            return True
+        if preset_subclasses and subclass_names.intersection(preset_subclasses):
+            return True
+        return False
+
+    def _build_spellbook_source_lists(
+        self,
+        profile: Dict[str, Any],
+        *,
+        known_list: List[str],
+        known_free_list: List[str],
+        cantrips_list: List[str],
+        cantrips_free_list: List[str],
+        prepared_list: List[str],
+        prepared_free_list: List[str],
+    ) -> Dict[str, List[str]]:
+        def append_unique(target: List[str], seen: set[str], slug: Any) -> None:
+            value = str(slug or "").strip()
+            if not value:
+                return
+            key = value.lower()
+            if key in seen:
+                return
+            seen.add(key)
+            target.append(value)
+
+        class_names, subclass_names = self._spellbook_profile_classes(profile)
+        explicit_slugs = [
+            *known_list,
+            *known_free_list,
+            *cantrips_list,
+            *cantrips_free_list,
+            *prepared_list,
+            *prepared_free_list,
+        ]
+        max_spell_level = self._spellbook_max_castable_spell_level(profile, extra_slugs=explicit_slugs)
+        eligible_spells: List[str] = []
+        eligible_cantrips: List[str] = []
+        eligible_spell_seen: set[str] = set()
+        eligible_cantrip_seen: set[str] = set()
+
+        try:
+            presets = self._spell_presets_payload()
+        except Exception:
+            presets = []
+        for preset in presets if isinstance(presets, list) else []:
+            if not isinstance(preset, dict):
+                continue
+            slug = str(preset.get("slug") or preset.get("id") or "").strip().lower()
+            if not slug:
+                continue
+            try:
+                level = max(0, int(preset.get("level")))
+            except Exception:
+                level = None
+            if level is None:
+                continue
+            if not self._spellbook_matches_profile_lists(
+                preset,
+                class_names=class_names,
+                subclass_names=subclass_names,
+            ):
+                continue
+            if level == 0:
+                append_unique(eligible_cantrips, eligible_cantrip_seen, slug)
+                continue
+            if level <= max_spell_level:
+                append_unique(eligible_spells, eligible_spell_seen, slug)
+
+        for slug in known_list + known_free_list + prepared_list + prepared_free_list:
+            if self._spell_preset_level_by_slug(slug) == 0:
+                append_unique(eligible_cantrips, eligible_cantrip_seen, slug)
+            else:
+                append_unique(eligible_spells, eligible_spell_seen, slug)
+        for slug in cantrips_list + cantrips_free_list:
+            append_unique(eligible_cantrips, eligible_cantrip_seen, slug)
+
+        return {
+            "eligible_spells": eligible_spells,
+            "eligible_cantrips": eligible_cantrips,
+        }
+
+    def _build_live_spellbook_contract(
+        self,
+        profile: Dict[str, Any],
+        *,
+        fallback_known_enabled: bool,
+        known_limit: Optional[int] = None,
+        prepared_limit: Optional[int] = None,
+        cantrips_limit: Optional[int] = None,
+        source_lists: Optional[Dict[str, List[str]]] = None,
+    ) -> Dict[str, Any]:
+        fallback = bool(fallback_known_enabled)
+        leveling = profile.get("leveling") if isinstance(profile.get("leveling"), dict) else {}
+        has_class_data = isinstance(leveling.get("classes"), list) or bool(
+            str(leveling.get("class") or "").strip()
+        )
+        if has_class_data:
+            is_wizard = self._class_level_from_profile(profile, "wizard") > 0
+            mode = "known_and_prepared" if is_wizard else "prepared_only"
+            source = "wizard_class_levels" if is_wizard else "non_wizard_class_levels"
+        else:
+            mode = "known_and_prepared" if fallback else "prepared_only"
+            source = "legacy_known_enabled_fallback"
+        known_managed = mode == "known_and_prepared"
+        prepared_left_source = "known" if known_managed else "eligible_spells"
+        return {
+            "version": 3,
+            "mode": mode,
+            "known_spells_managed": known_managed,
+            "prepared_spells_managed": True,
+            "cantrips_managed": True,
+            "source": source,
+            "limits": {
+                "known": {"max": known_limit, "counts_free": False},
+                "prepared": {"max": prepared_limit, "counts_free": False},
+                "cantrips": {"max": cantrips_limit, "counts_free": False},
+            },
+            "source_lists": copy.deepcopy(source_lists) if isinstance(source_lists, dict) else {},
+            "lists": {
+                "known": {
+                    "exists": known_managed,
+                    "editable": known_managed,
+                    "owner": "known_spells.known",
+                    "policy": "subset_non_cantrip_spells",
+                    "candidate_source": "eligible_spells",
+                    "direct_remove": True,
+                },
+                "known_free": {
+                    "exists": known_managed,
+                    "editable": known_managed,
+                    "owner": "known_spells.free",
+                    "policy": "subset_of_known",
+                    "direct_remove": False,
+                },
+                "cantrips": {
+                    "exists": True,
+                    "editable": True,
+                    "owner": "cantrips.known",
+                    "policy": "cantrip_only",
+                    "candidate_source": "eligible_cantrips",
+                    "direct_remove": True,
+                },
+                "cantrips_free": {
+                    "exists": True,
+                    "editable": True,
+                    "owner": "cantrips.free",
+                    "policy": "subset_of_cantrips",
+                    "direct_remove": False,
+                },
+                "prepared": {
+                    "exists": True,
+                    "editable": True,
+                    "owner": "prepared_spells.prepared",
+                    "policy": "subset_non_cantrip_spells",
+                    "candidate_source": prepared_left_source,
+                    "direct_remove": True,
+                },
+                "prepared_free": {
+                    "exists": True,
+                    "editable": True,
+                    "owner": "prepared_spells.free",
+                    "policy": "subset_of_prepared",
+                    "direct_remove": False,
+                },
+            },
+            "ui": {
+                "default_mode": "known" if known_managed else "prepared",
+                "tabs": {
+                    "known": {"visible": known_managed, "label": "Known Spells"},
+                    "cantrips": {"visible": True, "label": "Cantrips"},
+                    "prepared": {"visible": True, "label": "Prepared Spells"},
+                },
+                "modes": {
+                    "known": {
+                        "left_source": "eligible_spells",
+                        "left_title": "Eligible Spells",
+                        "right_source": "known_paid",
+                        "right_title": "Known Spells",
+                        "free_source": "known_free",
+                        "free_title": "Free Known",
+                        "actions": {
+                            "add": known_managed,
+                            "add_free": known_managed,
+                            "remove": known_managed,
+                        },
+                    },
+                    "cantrips": {
+                        "left_source": "eligible_cantrips",
+                        "left_title": "Eligible Cantrips",
+                        "right_source": "cantrips_paid",
+                        "right_title": "Cantrips",
+                        "free_source": "cantrips_free",
+                        "free_title": "Free Cantrips",
+                        "actions": {
+                            "add": True,
+                            "add_free": True,
+                            "remove": True,
+                        },
+                    },
+                    "prepared": {
+                        "left_source": prepared_left_source,
+                        "left_title": "Known Spells" if known_managed else "Eligible Spells",
+                        "right_source": "prepared_paid",
+                        "right_title": "Prepared Spells",
+                        "free_source": "prepared_free",
+                        "free_title": "Free Prepared",
+                        "actions": {
+                            "add": True,
+                            "add_free": True,
+                            "remove": True,
+                        },
+                    },
+                },
+            },
+        }
+
     def _normalize_player_spell_config(
         self,
         data: Dict[str, Any],
@@ -24939,13 +25439,20 @@ class InitiativeTracker(base.InitiativeTracker):
         source = data
         if isinstance(data.get("spellcasting"), dict):
             source = data.get("spellcasting", {})
-        cantrip_list: List[str] = []
-        cantrips_section = source.get("cantrips")
-        if isinstance(cantrips_section, dict):
-            cantrip_list = self._normalize_spell_slug_list(cantrips_section.get("known"))
+        runtime_lists = self._normalize_spellbook_runtime_lists(data, source if isinstance(source, dict) else {})
+        cantrip_list = runtime_lists["cantrips_list"]
+        cantrips_free_list = runtime_lists["cantrips_free_list"]
+        cantrips_limit = runtime_lists["cantrips_limit"]
+        known_list = runtime_lists["known_list"]
+        known_free_list = runtime_lists["known_free_list"]
+        known_limit = runtime_lists["known_limit"]
+        prepared_names = runtime_lists["prepared_list"]
+        prepared_free = runtime_lists["prepared_free_list"]
+        prepared_limit = runtime_lists["prepared_limit"]
+        prepared_formula = runtime_lists["prepared_limit_formula"]
         known_cantrips_source = source.get("known_cantrips")
-        if known_cantrips_source is None and cantrip_list:
-            known_cantrips_source = len(cantrip_list)
+        if known_cantrips_source is None:
+            known_cantrips_source = cantrips_limit if cantrips_limit is not None else len(cantrip_list)
         known_cantrips = normalize_limit(known_cantrips_source, 0)
         known_spells = normalize_limit(source.get("known_spells", source.get("spells")), 15)
         raw_names = source.get("known_spell_names")
@@ -24955,29 +25462,35 @@ class InitiativeTracker(base.InitiativeTracker):
                 if cantrip not in names:
                     names.append(cantrip)
         known_section = source.get("known_spells")
-        known_limit = None
-        known_list: List[str] = []
-        if isinstance(known_section, dict):
-            known_limit = known_section.get("max")
-            known_list = self._normalize_spell_slug_list(known_section.get("known"))
         known_enabled = source.get("known_enabled")
         if known_enabled is None and isinstance(known_section, dict):
             known_enabled = True
         if isinstance(known_enabled, str):
             known_enabled = known_enabled.strip().lower() not in ("false", "0", "no", "off")
-        known_enabled = bool(known_enabled)
+        source_lists = self._build_spellbook_source_lists(
+            data,
+            known_list=known_list,
+            known_free_list=known_free_list,
+            cantrips_list=cantrip_list,
+            cantrips_free_list=cantrips_free_list,
+            prepared_list=prepared_names,
+            prepared_free_list=prepared_free,
+        )
+        spellbook_contract = self._build_live_spellbook_contract(
+            data,
+            fallback_known_enabled=bool(known_enabled),
+            known_limit=known_limit,
+            prepared_limit=prepared_limit,
+            cantrips_limit=cantrips_limit,
+            source_lists=source_lists,
+        )
+        known_enabled = bool(spellbook_contract.get("known_spells_managed"))
         prepared_payload: Dict[str, Any] = {}
         prepared_spells = source.get("prepared_spells")
-        prepared_names: List[str] = []
-        prepared_formula = ""
-        prepared_free: List[str] = []
         if isinstance(prepared_spells, dict):
-            prepared_names = self._normalize_spell_slug_list(prepared_spells.get("prepared"))
-            prepared_free = self._normalize_spell_slug_list(prepared_spells.get("free"))
             max_formula = prepared_spells.get("max_formula")
             if isinstance(max_formula, str) and max_formula.strip():
                 prepared_payload["max_formula"] = max_formula.strip()
-                prepared_formula = max_formula.strip()
             if "max" in prepared_spells:
                 prepared_payload["max"] = normalize_limit(prepared_spells.get("max"), 0)
             if "max_spells" in prepared_spells:
@@ -24988,24 +25501,10 @@ class InitiativeTracker(base.InitiativeTracker):
                 prepared_payload["max_prepared"] = normalize_limit(
                     prepared_spells.get("max_prepared"), 0
                 )
-        always_prepared = self._feature_always_prepared_spell_slugs(data)
-        if always_prepared:
-            prepared_seen = {item.lower() for item in prepared_names}
-            for slug in always_prepared:
-                if slug.lower() not in prepared_seen:
-                    prepared_names.append(slug)
-                    prepared_seen.add(slug.lower())
-            free_seen = {item.lower() for item in prepared_free}
-            for slug in always_prepared:
-                if slug.lower() not in free_seen:
-                    prepared_free.append(slug)
-                    free_seen.add(slug.lower())
         if prepared_names:
             prepared_payload["prepared"] = prepared_names
         elif include_missing_prepared:
             prepared_payload["prepared"] = []
-        prepared_set = {item.lower() for item in prepared_names}
-        prepared_free = [item for item in prepared_free if item.lower() in prepared_set]
         if prepared_free:
             prepared_payload["free"] = prepared_free
         payload = {
@@ -25013,11 +25512,17 @@ class InitiativeTracker(base.InitiativeTracker):
             "known_spells": known_spells,
             "known_spell_names": names,
             "known_enabled": known_enabled,
-            "known_limit": int(known_limit) if str(known_limit).isdigit() else None,
+            "spellbook_contract": copy.deepcopy(spellbook_contract),
+            "known_limit": known_limit,
+            "prepared_limit": prepared_limit,
             "prepared_limit_formula": prepared_formula,
             "known_list": known_list,
+            "known_free_list": known_free_list,
             "prepared_list": prepared_names,
+            "prepared_free_list": prepared_free,
             "cantrips_list": cantrip_list,
+            "cantrips_free_list": cantrips_free_list,
+            "cantrips_limit": cantrips_limit,
         }
         if prepared_payload:
             payload["prepared_spells"] = prepared_payload
@@ -25026,11 +25531,17 @@ class InitiativeTracker(base.InitiativeTracker):
             "known_spells": known_spells,
             "known_spell_names": names,
             "known_enabled": known_enabled,
-            "known_limit": int(known_limit) if str(known_limit).isdigit() else None,
+            "spellbook_contract": copy.deepcopy(spellbook_contract),
+            "known_limit": known_limit,
+            "prepared_limit": prepared_limit,
             "prepared_limit_formula": prepared_formula,
             "known_list": known_list,
+            "known_free_list": known_free_list,
             "prepared_list": prepared_names,
+            "prepared_free_list": prepared_free,
             "cantrips_list": cantrip_list,
+            "cantrips_free_list": cantrips_free_list,
+            "cantrips_limit": cantrips_limit,
         }
         if prepared_payload:
             spellcasting_payload["prepared_spells"] = prepared_payload
@@ -26625,8 +27136,15 @@ class InitiativeTracker(base.InitiativeTracker):
         normalized = self._normalize_player_spell_config(payload, include_missing_prepared=False)
         prepared_payload = normalized.get("prepared_spells")
         spellcasting_payload = normalized.get("spellcasting")
+        persisted_spellcasting_payload = (
+            {k: v for k, v in spellcasting_payload.items() if k != "spellbook_contract"}
+            if isinstance(spellcasting_payload, dict)
+            else None
+        )
         normalized_known = {
-            k: v for k, v in normalized.items() if k not in ("prepared_spells", "spellcasting")
+            k: v
+            for k, v in normalized.items()
+            if k not in ("prepared_spells", "spellcasting", "spellbook_contract")
         }
 
         if int(existing.get("format_version") or 0) == 1:
@@ -26634,8 +27152,8 @@ class InitiativeTracker(base.InitiativeTracker):
             if not isinstance(spellcasting, dict):
                 spellcasting = {}
             spellcasting.update(normalized_known)
-            if isinstance(spellcasting_payload, dict):
-                spellcasting.update(spellcasting_payload)
+            if isinstance(persisted_spellcasting_payload, dict):
+                spellcasting.update(persisted_spellcasting_payload)
             if prepared_payload is not None:
                 existing_prepared = spellcasting.get("prepared_spells")
                 if not isinstance(existing_prepared, dict):
@@ -26663,8 +27181,8 @@ class InitiativeTracker(base.InitiativeTracker):
             if not isinstance(spellcasting, dict):
                 spellcasting = {}
             spellcasting.update(normalized_known)
-            if isinstance(spellcasting_payload, dict):
-                spellcasting.update(spellcasting_payload)
+            if isinstance(persisted_spellcasting_payload, dict):
+                spellcasting.update(persisted_spellcasting_payload)
             if prepared_payload is not None:
                 existing_prepared = spellcasting.get("prepared_spells")
                 if not isinstance(existing_prepared, dict):
@@ -26770,16 +27288,6 @@ class InitiativeTracker(base.InitiativeTracker):
                 out.append(item)
             return out
 
-        known_enabled = payload.get("known_enabled")
-        if isinstance(known_enabled, str):
-            known_enabled = known_enabled.strip().lower() not in ("false", "0", "no", "off")
-        known_enabled = bool(known_enabled)
-        known_list = normalize_slug_list(payload.get("known_list"))
-        known_free_list = normalize_slug_list(payload.get("known_free_list"))
-        prepared_list = normalize_slug_list(payload.get("prepared_list"))
-        prepared_free_list = normalize_slug_list(payload.get("prepared_free_list"))
-        cantrips_list = normalize_slug_list(payload.get("cantrips_list"))
-
         self._load_player_yaml_cache()
         path = self._find_player_profile_path(name)
         if path is None:
@@ -26795,33 +27303,102 @@ class InitiativeTracker(base.InitiativeTracker):
         spellcasting = existing.get("spellcasting")
         if not isinstance(spellcasting, dict):
             spellcasting = {}
+        existing_runtime_lists = self._normalize_spellbook_runtime_lists(existing, spellcasting)
+
+        known_list = normalize_slug_list(payload.get("known_list"))
+        prepared_list = normalize_slug_list(payload.get("prepared_list"))
+        cantrips_list = normalize_slug_list(payload.get("cantrips_list"))
+        known_free_list = (
+            normalize_slug_list(payload.get("known_free_list"))
+            if "known_free_list" in payload
+            else list(existing_runtime_lists.get("known_free_list") or [])
+        )
+        prepared_free_list = (
+            normalize_slug_list(payload.get("prepared_free_list"))
+            if "prepared_free_list" in payload
+            else list(existing_runtime_lists.get("prepared_free_list") or [])
+        )
+        cantrips_free_list = (
+            normalize_slug_list(payload.get("cantrips_free_list"))
+            if "cantrips_free_list" in payload
+            else list(existing_runtime_lists.get("cantrips_free_list") or [])
+        )
+
+        known_enabled = payload.get("known_enabled")
+        if isinstance(known_enabled, str):
+            known_enabled = known_enabled.strip().lower() not in ("false", "0", "no", "off")
+        spellbook_contract = self._build_live_spellbook_contract(
+            existing,
+            fallback_known_enabled=bool(known_enabled),
+        )
+        known_enabled = bool(spellbook_contract.get("known_spells_managed"))
+        draft_spellcasting = copy.deepcopy(spellcasting)
+        draft_spellcasting.pop("spellbook_contract", None)
+        draft_spellcasting["known_enabled"] = known_enabled
+
+        cantrips = draft_spellcasting.get("cantrips")
+        if not isinstance(cantrips, dict):
+            cantrips = {}
+        cantrips = dict(cantrips)
+        cantrips["known"] = list(cantrips_list)
+        if cantrips_free_list:
+            cantrips["free"] = list(cantrips_free_list)
+        else:
+            cantrips.pop("free", None)
+        draft_spellcasting["cantrips"] = cantrips
+
+        prepared_spells = draft_spellcasting.get("prepared_spells")
+        if not isinstance(prepared_spells, dict):
+            prepared_spells = {}
+        prepared_spells = dict(prepared_spells)
+        prepared_spells["prepared"] = list(prepared_list)
+        if prepared_free_list:
+            prepared_spells["free"] = list(prepared_free_list)
+        else:
+            prepared_spells.pop("free", None)
+        draft_spellcasting["prepared_spells"] = prepared_spells
+
+        known_spells = draft_spellcasting.get("known_spells")
+        if not isinstance(known_spells, dict):
+            known_spells = {}
+        known_spells = dict(known_spells)
+        if known_enabled:
+            known_spells["known"] = list(known_list)
+            if known_free_list:
+                known_spells["free"] = list(known_free_list)
+            else:
+                known_spells.pop("free", None)
+        else:
+            known_spells.pop("known", None)
+            known_spells.pop("free", None)
+        draft_spellcasting["known_spells"] = known_spells
+
+        draft_profile = copy.deepcopy(existing)
+        draft_profile["spellcasting"] = draft_spellcasting
+        runtime_lists = self._normalize_spellbook_runtime_lists(draft_profile, draft_spellcasting)
+
+        spellcasting.pop("spellbook_contract", None)
         spellcasting["known_enabled"] = known_enabled
+        spellcasting["known_cantrips"] = len(runtime_lists["cantrips_list"])
 
         cantrips = spellcasting.get("cantrips")
         if not isinstance(cantrips, dict):
             cantrips = {}
-        cantrips["known"] = cantrips_list
+        cantrips = dict(cantrips)
+        cantrips["known"] = list(runtime_lists["cantrips_list"])
+        if runtime_lists["cantrips_free_list"]:
+            cantrips["free"] = list(runtime_lists["cantrips_free_list"])
+        else:
+            cantrips.pop("free", None)
         spellcasting["cantrips"] = cantrips
 
         prepared_spells = spellcasting.get("prepared_spells")
         if not isinstance(prepared_spells, dict):
             prepared_spells = {}
-        always_prepared = self._feature_always_prepared_spell_slugs(existing)
-        prepared_seen = {item.lower() for item in prepared_list}
-        for slug in always_prepared:
-            if slug.lower() not in prepared_seen:
-                prepared_list.append(slug)
-                prepared_seen.add(slug.lower())
-        prepared_spells["prepared"] = prepared_list
-        prepared_set = {item.lower() for item in prepared_list}
-        prepared_free = [item for item in prepared_free_list if item.lower() in prepared_set]
-        free_seen = {item.lower() for item in prepared_free}
-        for slug in always_prepared:
-            if slug.lower() not in free_seen:
-                prepared_free.append(slug)
-                free_seen.add(slug.lower())
-        if prepared_free:
-            prepared_spells["free"] = prepared_free
+        prepared_spells = dict(prepared_spells)
+        prepared_spells["prepared"] = list(runtime_lists["prepared_list"])
+        if runtime_lists["prepared_free_list"]:
+            prepared_spells["free"] = list(runtime_lists["prepared_free_list"])
         else:
             prepared_spells.pop("free", None)
         spellcasting["prepared_spells"] = prepared_spells
@@ -26829,15 +27406,15 @@ class InitiativeTracker(base.InitiativeTracker):
         known_spells = spellcasting.get("known_spells")
         if not isinstance(known_spells, dict):
             known_spells = {}
+        known_spells = dict(known_spells)
         if known_enabled:
-            known_spells["known"] = known_list
+            known_spells["known"] = list(runtime_lists["known_list"])
+            if runtime_lists["known_free_list"]:
+                known_spells["free"] = list(runtime_lists["known_free_list"])
+            else:
+                known_spells.pop("free", None)
         else:
             known_spells.pop("known", None)
-        known_set = {item.lower() for item in known_list}
-        known_free = [item for item in known_free_list if item.lower() in known_set]
-        if known_free:
-            known_spells["free"] = known_free
-        else:
             known_spells.pop("free", None)
         spellcasting["known_spells"] = known_spells
 
