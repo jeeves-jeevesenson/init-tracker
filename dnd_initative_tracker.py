@@ -17239,7 +17239,13 @@ class InitiativeTracker(base.InitiativeTracker):
         except Exception:
             pass
 
-    def _create_pc_from_profile(self, name: str, profile: Dict[str, Any]) -> Optional[int]:
+    def _create_pc_from_profile(
+        self,
+        name: str,
+        profile: Dict[str, Any],
+        *,
+        from_normalized_cache: bool = False,
+    ) -> Optional[int]:
         def to_int(value: Any, fallback: Optional[int] = None) -> Optional[int]:
             try:
                 return int(value)
@@ -17249,7 +17255,19 @@ class InitiativeTracker(base.InitiativeTracker):
         if not isinstance(profile, dict):
             return None
 
-        normalized = self._normalize_player_profile(profile, name)
+        perf_debug = os.getenv("LAN_PERF_DEBUG") == "1"
+        perf_total_start = time.perf_counter() if perf_debug else 0.0
+        perf_norm_ms = 0.0
+        perf_create_ms = 0.0
+        perf_summons_ms = 0.0
+
+        if from_normalized_cache:
+            normalized = profile
+        else:
+            _norm_start = time.perf_counter() if perf_debug else 0.0
+            normalized = self._normalize_player_profile(profile, name)
+            if perf_debug:
+                perf_norm_ms = (time.perf_counter() - _norm_start) * 1000.0
         resources = normalized.get("resources", {}) if isinstance(normalized, dict) else {}
         vitals = normalized.get("vitals", {}) if isinstance(normalized, dict) else {}
         defenses = normalized.get("defenses", {}) if isinstance(normalized, dict) else {}
@@ -17306,6 +17324,7 @@ class InitiativeTracker(base.InitiativeTracker):
         except Exception:
             init_total = 10
 
+        _create_start = time.perf_counter() if perf_debug else 0.0
         try:
             cid = self._create_combatant(
                 name=self._unique_name(str(normalized.get("name") or name)),
@@ -17327,6 +17346,8 @@ class InitiativeTracker(base.InitiativeTracker):
             )
         except Exception:
             return None
+        if perf_debug:
+            perf_create_ms = (time.perf_counter() - _create_start) * 1000.0
 
         combatant = self.combatants.get(cid)
         if combatant is not None:
@@ -17400,6 +17421,7 @@ class InitiativeTracker(base.InitiativeTracker):
             setattr(combatant, "saving_throws", saving_throws)
         summon_entries = normalized.get("summon_on_start", []) if isinstance(normalized, dict) else []
         if isinstance(summon_entries, list) and summon_entries:
+            _summons_start = time.perf_counter() if perf_debug else 0.0
             try:
                 self._spawn_startup_summons_for_pc(cid, summon_entries)
             except Exception as exc:
@@ -17407,6 +17429,17 @@ class InitiativeTracker(base.InitiativeTracker):
                     f"Player YAML {normalized.get('name') or name}: failed to spawn summon_on_start entries ({exc}).",
                     level="warning",
                 )
+            if perf_debug:
+                perf_summons_ms = (time.perf_counter() - _summons_start) * 1000.0
+        if perf_debug:
+            total_ms = (time.perf_counter() - perf_total_start) * 1000.0
+            self._oplog(
+                f"LAN_PERF _create_pc_from_profile elapsed_ms={total_ms:.2f}"
+                f" normalize_ms={perf_norm_ms:.2f} create_ms={perf_create_ms:.2f}"
+                f" summons_ms={perf_summons_ms:.2f} from_cache={bool(from_normalized_cache)}"
+                f" name={name!r}",
+                level="info",
+            )
         return cid
 
     def _add_player_profile_combatants_via_service(
@@ -17477,7 +17510,10 @@ class InitiativeTracker(base.InitiativeTracker):
             if skip_existing and name.lower() in existing:
                 skipped.append(name)
                 continue
-            cid = self._create_pc_from_profile(name, profile)
+            try:
+                cid = self._create_pc_from_profile(name, profile, from_normalized_cache=True)
+            except TypeError:
+                cid = self._create_pc_from_profile(name, profile)
             if isinstance(cid, int):
                 added.append(name)
                 if skip_existing:

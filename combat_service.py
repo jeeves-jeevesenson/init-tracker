@@ -1156,7 +1156,14 @@ class CombatService:
                             skipped.append(name)
                             continue
                         try:
-                            cid = create_pc(name, profile)
+                            cid = create_pc(name, profile, from_normalized_cache=True)
+                        except TypeError:
+                            # Back-compat: older tracker shims may not accept
+                            # from_normalized_cache. Fall back to positional call.
+                            try:
+                                cid = create_pc(name, profile)
+                            except Exception:
+                                cid = None
                         except Exception:
                             cid = None
                         if isinstance(cid, int):
