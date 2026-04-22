@@ -153,6 +153,22 @@ class CombatService:
             except Exception:
                 pass
 
+    def _broadcast_tracker_state(self, *, include_static: bool = False) -> None:
+        """Broadcast tracker state with compatibility fallback for legacy stubs."""
+        t = self._tracker
+        broadcast = getattr(t, "_lan_force_state_broadcast", None)
+        if not callable(broadcast):
+            return
+        try:
+            broadcast(include_static=bool(include_static))
+        except TypeError:
+            try:
+                broadcast()
+            except Exception:
+                pass
+        except Exception:
+            pass
+
     def _refresh_tracker_outputs(self) -> None:
         """Refresh desktop UI and LAN state without blocking server threads."""
         t = self._tracker
@@ -162,15 +178,7 @@ class CombatService:
                 t._rebuild_table(scroll_to_current=True)
             except Exception:
                 pass
-            try:
-                broadcast = getattr(t, "_lan_force_state_broadcast", None)
-                if callable(broadcast):
-                    try:
-                        broadcast(include_static=False)
-                    except TypeError:
-                        broadcast()
-            except Exception:
-                pass
+            self._broadcast_tracker_state(include_static=False)
 
         after = getattr(t, "after", None)
         if callable(after) and threading.current_thread() is not threading.main_thread():
@@ -329,10 +337,7 @@ class CombatService:
                     t._rebuild_table(scroll_to_current=True)
                 except Exception:
                     pass
-                try:
-                    t._lan_force_state_broadcast()
-                except Exception:
-                    pass
+                self._broadcast_tracker_state(include_static=False)
                 return {"ok": True, "snapshot": self.combat_snapshot()}
         finally:
             self._perf_log("CombatService.next_turn", perf_start)
@@ -356,10 +361,7 @@ class CombatService:
                 t._rebuild_table(scroll_to_current=True)
             except Exception:
                 pass
-            try:
-                t._lan_force_state_broadcast()
-            except Exception:
-                pass
+            self._broadcast_tracker_state(include_static=False)
             return {"ok": True, "snapshot": self.combat_snapshot()}
 
     def set_turn_here(self, cid: int) -> Dict[str, Any]:
@@ -410,10 +412,7 @@ class CombatService:
                 t._rebuild_table(scroll_to_current=True)
             except Exception:
                 pass
-            try:
-                t._lan_force_state_broadcast()
-            except Exception:
-                pass
+            self._broadcast_tracker_state(include_static=False)
             return {
                 "ok": True,
                 "cid": cid,
@@ -454,10 +453,7 @@ class CombatService:
                 t._rebuild_table(scroll_to_current=True)
             except Exception:
                 pass
-            try:
-                t._lan_force_state_broadcast()
-            except Exception:
-                pass
+            self._broadcast_tracker_state(include_static=False)
             return {
                 "ok": True,
                 "cid": int(cid),
@@ -528,10 +524,7 @@ class CombatService:
                 t._rebuild_table(scroll_to_current=True)
             except Exception:
                 pass
-            try:
-                t._lan_force_state_broadcast()
-            except Exception:
-                pass
+            self._broadcast_tracker_state(include_static=False)
 
             return {
                 "ok": True,
@@ -569,10 +562,7 @@ class CombatService:
                 t._rebuild_table(scroll_to_current=True)
             except Exception:
                 pass
-            try:
-                t._lan_force_state_broadcast()
-            except Exception:
-                pass
+            self._broadcast_tracker_state(include_static=False)
             return {
                 "ok": True,
                 "cid": int(cid),
@@ -615,10 +605,7 @@ class CombatService:
                 t._rebuild_table(scroll_to_current=True)
             except Exception:
                 pass
-            try:
-                t._lan_force_state_broadcast()
-            except Exception:
-                pass
+            self._broadcast_tracker_state(include_static=False)
             return {
                 "ok": True,
                 "cid": int(cid),
@@ -685,10 +672,7 @@ class CombatService:
                 t._rebuild_table(scroll_to_current=True)
             except Exception:
                 pass
-            try:
-                t._lan_force_state_broadcast()
-            except Exception:
-                pass
+            self._broadcast_tracker_state(include_static=False)
             return {
                 "ok": True,
                 "cid": int(cid),
@@ -756,10 +740,7 @@ class CombatService:
                     t._rebuild_table(scroll_to_current=True)
                 except Exception:
                     pass
-                try:
-                    t._lan_force_state_broadcast()
-                except Exception:
-                    pass
+                self._broadcast_tracker_state(include_static=False)
             return {
                 "ok": True,
                 "cid": int(cid),
@@ -835,10 +816,7 @@ class CombatService:
                     t._rebuild_table(scroll_to_current=True)
                 except Exception:
                     pass
-                try:
-                    t._lan_force_state_broadcast()
-                except Exception:
-                    pass
+                self._broadcast_tracker_state(include_static=False)
             return {
                 "ok": True,
                 "cid": int(cid),
@@ -912,10 +890,7 @@ class CombatService:
                 t._rebuild_table(scroll_to_current=True)
             except Exception:
                 pass
-            try:
-                t._lan_force_state_broadcast()
-            except Exception:
-                pass
+            self._broadcast_tracker_state(include_static=False)
 
             return {
                 "ok": True,
@@ -947,10 +922,7 @@ class CombatService:
                     return {"ok": False, "error": "Could not start combat.", "snapshot": self.combat_snapshot()}
                 # Explicitly mark in_combat so the flag is truthful for this session.
                 t.in_combat = True
-                try:
-                    t._lan_force_state_broadcast()
-                except Exception:
-                    pass
+                self._broadcast_tracker_state(include_static=False)
                 return {"ok": True, "snapshot": self.combat_snapshot()}
         finally:
             self._perf_log("CombatService.start_combat", perf_start)
@@ -978,10 +950,7 @@ class CombatService:
                 t._rebuild_table(scroll_to_current=True)
             except Exception:
                 pass
-            try:
-                t._lan_force_state_broadcast()
-            except Exception:
-                pass
+            self._broadcast_tracker_state(include_static=False)
             return {"ok": True, "snapshot": self.combat_snapshot()}
 
     # ------------------------------------------------------------------
@@ -1086,10 +1055,7 @@ class CombatService:
                 t._rebuild_table(scroll_to_current=True)
             except Exception:
                 pass
-            try:
-                t._lan_force_state_broadcast()
-            except Exception:
-                pass
+            self._broadcast_tracker_state(include_static=False)
             return {"ok": True, "cid": cid, "snapshot": self.combat_snapshot()}
 
     def add_player_profile_combatants(
@@ -1372,10 +1338,7 @@ class CombatService:
                 t._rebuild_table(scroll_to_current=True)
             except Exception:
                 pass
-            try:
-                t._lan_force_state_broadcast()
-            except Exception:
-                pass
+            self._broadcast_tracker_state(include_static=False)
             return {
                 "ok": True,
                 "cid": int(cid),
@@ -1466,8 +1429,5 @@ class CombatService:
                 t._rebuild_table(scroll_to_current=True)
             except Exception:
                 pass
-            try:
-                t._lan_force_state_broadcast()
-            except Exception:
-                pass
+            self._broadcast_tracker_state(include_static=False)
             return {"ok": True, "cid": cid, "snapshot": self.combat_snapshot()}

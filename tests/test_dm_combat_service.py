@@ -37,8 +37,8 @@ def _make_tracker(num_combatants: int = 3):
     def _rebuild_table(scroll_to_current=False):
         app._rebuild_calls.append(scroll_to_current)
 
-    def _lan_force_state_broadcast():
-        app._broadcast_calls.append(1)
+    def _lan_force_state_broadcast(*, include_static=True):
+        app._broadcast_calls.append(bool(include_static))
 
     def _next_turn():
         app._next_turn_calls.append(1)
@@ -220,6 +220,10 @@ class CombatServiceNextTurnTests(unittest.TestCase):
     def test_next_turn_calls_broadcast(self):
         self.service.next_turn()
         self.assertGreater(len(self.tracker._broadcast_calls), 0)
+
+    def test_next_turn_uses_non_static_broadcast(self):
+        self.service.next_turn()
+        self.assertFalse(self.tracker._broadcast_calls[-1])
 
     def test_next_turn_snapshot_in_result(self):
         result = self.service.next_turn()
@@ -549,6 +553,12 @@ class CombatServiceStartCombatTests(unittest.TestCase):
         service.start_combat()
         self.assertGreater(len(tracker._broadcast_calls), 0)
 
+    def test_start_combat_uses_non_static_broadcast(self):
+        tracker = self._make_tracker_with_start()
+        service = CombatService(tracker)
+        service.start_combat()
+        self.assertFalse(tracker._broadcast_calls[-1])
+
 
 class CombatServiceEndCombatTests(unittest.TestCase):
     """Tests for CombatService.end_combat()."""
@@ -586,6 +596,10 @@ class CombatServiceEndCombatTests(unittest.TestCase):
     def test_end_combat_triggers_broadcast(self):
         self.service.end_combat()
         self.assertGreater(len(self.tracker._broadcast_calls), 0)
+
+    def test_end_combat_uses_non_static_broadcast(self):
+        self.service.end_combat()
+        self.assertFalse(self.tracker._broadcast_calls[-1])
 
     def test_end_combat_logs_round(self):
         self.tracker.round_num = 4

@@ -77,6 +77,7 @@ These specific blockers appear to have been addressed in repo and should be kept
 - `CombatService.add_player_profile_combatants` wrapper/service-binding failure caused by Tk fallback attribute lookup
 - duplicate `/dm/map` route definition
 - the specific inline heavy refresh path in encounter player/enemy population methods
+- LAN combat mutation refresh follow-up (2026-04-22): normal `CombatService` mutation broadcasts now run in non-static mode (`include_static=False`), `_lan_force_state_broadcast(include_static=False)` now snapshots with `hydrate_static=False`, and the live-client `_tick` polling snapshot also uses `hydrate_static=False` to avoid rebuilding static payloads on normal combat-state updates.
 
 ### 3.2 `/dm/map` validation, responsiveness, and workspace correction
 

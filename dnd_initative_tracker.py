@@ -6006,7 +6006,7 @@ class LanController:
                 return
 
             # 2) broadcast snapshot if changed (polling-based, avoids wiring every hook)
-            snap = self.app._lan_snapshot(include_static=False)
+            snap = self.app._lan_snapshot(include_static=False, hydrate_static=False)
             self._cached_snapshot = snap
             try:
                 self._cached_pcs = list(
@@ -19234,8 +19234,12 @@ class InitiativeTracker(base.InitiativeTracker):
         perf_debug = os.getenv("LAN_PERF_DEBUG") == "1"
         perf_start = time.perf_counter() if perf_debug else 0.0
         snap: Dict[str, Any] = {}
+        include_static_flag = bool(include_static)
         try:
-            snap = self._lan_snapshot(include_static=bool(include_static))
+            snap = self._lan_snapshot(
+                include_static=include_static_flag,
+                hydrate_static=include_static_flag,
+            )
             self._lan._cached_snapshot = snap
             try:
                 self._lan._cached_pcs = list(
@@ -19247,7 +19251,7 @@ class InitiativeTracker(base.InitiativeTracker):
                 self._lan._last_snapshot = copy.deepcopy(snap)
             except Exception:
                 pass
-            if include_static:
+            if include_static_flag:
                 try:
                     static_payload = self._lan._static_data_payload()
                     static_json = json.dumps(static_payload, sort_keys=True, separators=(",", ":"))
@@ -19272,7 +19276,7 @@ class InitiativeTracker(base.InitiativeTracker):
             unit_count = len(snap.get("units")) if isinstance(snap.get("units"), list) else 0
             self._oplog(
                 f"LAN_PERF _lan_force_state_broadcast elapsed_ms={elapsed_ms:.2f}"
-                f" include_static={bool(include_static)} units={unit_count}",
+                f" include_static={include_static_flag} units={unit_count}",
                 level="info",
             )
 

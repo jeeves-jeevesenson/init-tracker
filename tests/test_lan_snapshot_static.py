@@ -1,5 +1,6 @@
 import queue
 import threading
+import types
 import unittest
 
 import dnd_initative_tracker as tracker_mod
@@ -770,10 +771,12 @@ class LanSnapshotStaticTests(unittest.TestCase):
 
         scheduled = []
         call_counts = {"snap": 0}
+        snapshot_calls = []
 
         class AppStub:
             def _lan_snapshot(self, include_static=False, hydrate_static=True):
                 call_counts["snap"] += 1
+                snapshot_calls.append((bool(include_static), bool(hydrate_static)))
                 return {"grid": {}}
 
             def _lan_claimable(self):
@@ -787,6 +790,7 @@ class LanSnapshotStaticTests(unittest.TestCase):
         lan._tick()
 
         self.assertEqual(call_counts["snap"], 1)
+        self.assertEqual(snapshot_calls, [(False, False)])
         self.assertEqual(len(scheduled), 1)
         self.assertEqual(scheduled[0][0], 350)
 
@@ -820,6 +824,7 @@ class LanSnapshotStaticTests(unittest.TestCase):
         lan._static_check_interval_s = 10.0
 
         static_call_count = {"count": 0}
+        snapshot_calls = []
 
         def _fake_static_data_payload():
             static_call_count["count"] += 1
@@ -838,6 +843,7 @@ class LanSnapshotStaticTests(unittest.TestCase):
 
         class AppStub:
             def _lan_snapshot(self, include_static=False, hydrate_static=True):
+                snapshot_calls.append((bool(include_static), bool(hydrate_static)))
                 return {
                     "grid": {"cols": 8, "rows": 8},
                     "units": [],
@@ -861,10 +867,39 @@ class LanSnapshotStaticTests(unittest.TestCase):
         lan._tick()
         lan._tick()
         self.assertEqual(static_call_count["count"], 1)
+        self.assertEqual(snapshot_calls, [(False, False), (False, False)])
 
         lan._actions.put({"type": "noop"})
         lan._tick()
         self.assertEqual(static_call_count["count"], 2)
+        self.assertEqual(snapshot_calls, [(False, False), (False, False), (False, False)])
+
+    def test_force_state_broadcast_non_static_skips_static_hydration(self):
+        app = object.__new__(tracker_mod.InitiativeTracker)
+        snapshot_calls = []
+        broadcast_states = []
+
+        def _lan_snapshot(*, include_static=True, hydrate_static=True):
+            snapshot_calls.append((bool(include_static), bool(hydrate_static)))
+            return {"units": [], "grid": {}, "obstacles": []}
+
+        lan_stub = types.SimpleNamespace(
+            _cached_snapshot={},
+            _cached_pcs=[],
+            _last_snapshot=None,
+            _dm_service=None,
+            _broadcast_state=lambda snap: broadcast_states.append(dict(snap)),
+        )
+
+        app._lan_snapshot = _lan_snapshot
+        app._lan = lan_stub
+        app._lan_pcs = lambda: []
+        app._lan_claimable = lambda: []
+
+        tracker_mod.InitiativeTracker._lan_force_state_broadcast(app, include_static=False)
+
+        self.assertEqual(snapshot_calls, [(False, False)])
+        self.assertEqual(len(broadcast_states), 1)
 
     def test_build_map_delta_envelope_includes_terrain_and_token_updates(self):
         lan = object.__new__(tracker_mod.LanController)
