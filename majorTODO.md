@@ -52,6 +52,18 @@ Execution shape:
 2. Prioritize issues that interrupt flow, create state drift, or force DM fallback behavior.
 3. Close high-value regressions in coherent batches (not one-off scattered edits).
 
+
+#### 3.1.a Active live-session blocker bucket (2026-04-22 testing)
+
+These reports now outrank lower-stakes polish work and should drive the next grouped stabilization pass:
+
+- **DM dashboard merge-conflict artifact visible in live UI**: stray conflict-marker text (`<<<<<<< HEAD`, `=======`, `>>>>>>> …`) is rendering near the Map Setup section. Treat this as a real shipped UI corruption bug, not cosmetic noise.
+- **Add Players path appears functionally broken and/or severely blocked**: live testing hit `CombatService.add_player_profile_combatants exception: 'function' object has no attribute 'add_player_profile_combatants'`. In the same session, player adds either failed or took multiple minutes before appearing.
+- **Add Enemies path appears similarly hung or non-completing** during live encounter setup.
+- **Whole app can stall after encounter setup actions**: after adding players / creating a map, `/dm/map` loaded forever and even `/` stopped responding, indicating a likely server-side hang, blocking operation, or deadlocked/very-long-running update path.
+- **Practical priority implication**: next stabilization work should focus on encounter add flows, service binding/dispatch correctness, request latency/hangs, and whole-app responsiveness under DM setup actions before returning to lower-priority polish.
+
+
 ### 3.2 `/dm/map` validation and responsiveness
 
 Current route/API/test coverage is strong enough to support this as an active validation lane.
