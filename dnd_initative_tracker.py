@@ -8406,6 +8406,8 @@ class InitiativeTracker(base.InitiativeTracker):
         self._oplog(f"YAML player roster updated: key={key} enabled={bool(enabled)}", level="info")
 
     def _yaml_players_refresh_cache(self, rebuild: bool = True) -> None:
+        perf_debug = os.getenv("LAN_PERF_DEBUG") == "1"
+        perf_start = time.perf_counter() if perf_debug else 0.0
         self._player_yaml_cache_by_path = {}
         self._player_yaml_meta_by_path = {}
         self._player_yaml_data_by_name = {}
@@ -8434,6 +8436,13 @@ class InitiativeTracker(base.InitiativeTracker):
             pass
         enabled_count = len(self._player_yaml_data_by_name)
         self._oplog(f"YAML player cache refreshed: enabled_profiles={enabled_count}", level="info")
+        if perf_debug:
+            elapsed_ms = (time.perf_counter() - perf_start) * 1000.0
+            self._oplog(
+                f"LAN_PERF _yaml_players_refresh_cache elapsed_ms={elapsed_ms:.2f}"
+                f" rebuild={bool(rebuild)} enabled_profiles={enabled_count}",
+                level="info",
+            )
 
     def _refresh_player_yaml_index(self) -> None:
         self._yaml_players_rescan()
@@ -17386,7 +17395,30 @@ class InitiativeTracker(base.InitiativeTracker):
 
         added: List[str] = []
         skipped: List[str] = []
-        self._yaml_players_refresh_cache(rebuild=True)
+        load_cache = getattr(self, "_load_player_yaml_cache", None)
+        if callable(load_cache):
+            try:
+                load_cache(force_refresh=False)
+            except TypeError:
+                load_cache()
+            except Exception:
+                pass
+        profiles = getattr(self, "_player_yaml_data_by_name", {}) or {}
+        requested_names = [
+            str(raw_name or "").strip()
+            for raw_name in (names if isinstance(names, list) else [])
+        ]
+        requested_names = [name for name in requested_names if name]
+        if requested_names and callable(load_cache):
+            missing = [name for name in requested_names if not isinstance(profiles.get(name), dict)]
+            if missing:
+                try:
+                    load_cache(force_refresh=True)
+                except TypeError:
+                    load_cache()
+                except Exception:
+                    pass
+                profiles = getattr(self, "_player_yaml_data_by_name", {}) or {}
         existing = set()
         if skip_existing:
             existing = {
@@ -17394,11 +17426,8 @@ class InitiativeTracker(base.InitiativeTracker):
                 for c in self.combatants.values()
                 if str(getattr(c, "name", "")).strip()
             }
-        for raw_name in names if isinstance(names, list) else []:
-            name = str(raw_name or "").strip()
-            if not name:
-                continue
-            profile = self._player_yaml_data_by_name.get(name)
+        for name in requested_names:
+            profile = profiles.get(name)
             if not isinstance(profile, dict):
                 skipped.append(name)
                 continue
@@ -18506,6 +18535,8 @@ class InitiativeTracker(base.InitiativeTracker):
         return moved
 
     def _lan_snapshot(self, include_static: bool = True, hydrate_static: bool = True) -> Dict[str, Any]:
+        perf_debug = os.getenv("LAN_PERF_DEBUG") == "1"
+        perf_start = time.perf_counter() if perf_debug else 0.0
         # Prefer map window live state when available
         mw = None
         try:
@@ -19148,6 +19179,18 @@ class InitiativeTracker(base.InitiativeTracker):
                         self._lan_resource_pools_last_build = now
                 except Exception:
                     snap[key] = default
+        if perf_debug:
+            elapsed_ms = (time.perf_counter() - perf_start) * 1000.0
+            unit_count = len(snap.get("units")) if isinstance(snap.get("units"), list) else 0
+            aoe_count = len(snap.get("aoes")) if isinstance(snap.get("aoes"), list) else 0
+            obstacle_count = len(snap.get("obstacles")) if isinstance(snap.get("obstacles"), list) else 0
+            self._oplog(
+                f"LAN_PERF _lan_snapshot elapsed_ms={elapsed_ms:.2f}"
+                f" include_static={bool(include_static)}"
+                f" hydrate_static={bool(hydrate_static)}"
+                f" units={unit_count} aoes={aoe_count} obstacles={obstacle_count}",
+                level="info",
+            )
         return snap
 
     def _broadcast_tactical_state_update(self) -> None:
@@ -19188,6 +19231,8 @@ class InitiativeTracker(base.InitiativeTracker):
                 pass
 
     def _lan_force_state_broadcast(self, include_static: bool = True) -> None:
+        perf_debug = os.getenv("LAN_PERF_DEBUG") == "1"
+        perf_start = time.perf_counter() if perf_debug else 0.0
         snap: Dict[str, Any] = {}
         try:
             snap = self._lan_snapshot(include_static=bool(include_static))
@@ -19222,6 +19267,14 @@ class InitiativeTracker(base.InitiativeTracker):
                 self._lan._push_dm_snapshot_to_ws_clients(dm_snap)
         except Exception:
             pass
+        if perf_debug:
+            elapsed_ms = (time.perf_counter() - perf_start) * 1000.0
+            unit_count = len(snap.get("units")) if isinstance(snap.get("units"), list) else 0
+            self._oplog(
+                f"LAN_PERF _lan_force_state_broadcast elapsed_ms={elapsed_ms:.2f}"
+                f" include_static={bool(include_static)} units={unit_count}",
+                level="info",
+            )
 
     def _lan_marks_for(self, c: Any) -> str:
         # Match main-map effect markers (conditions, DoT, star advantage, etc.)
@@ -26009,102 +26062,113 @@ class InitiativeTracker(base.InitiativeTracker):
             pools.append(temp_pool)
 
     def _load_player_yaml_cache(self, force_refresh: bool = False) -> None:
-        if not force_refresh:
-            now = time.monotonic()
-            if self._player_yaml_last_refresh and (
-                now - self._player_yaml_last_refresh < self._player_yaml_refresh_interval_s
-            ):
-                return
-        if yaml is None:
-            self._player_yaml_cache_by_path = {}
-            self._player_yaml_meta_by_path = {}
-            self._player_yaml_data_by_name = {}
-            self._player_yaml_name_map = {}
-            self._player_yaml_dir_signature = None
-            self._player_yaml_last_refresh = time.monotonic()
-            return
-
-        players_dir = self._players_dir()
-        if not players_dir.exists():
-            self._player_yaml_cache_by_path = {}
-            self._player_yaml_meta_by_path = {}
-            self._player_yaml_data_by_name = {}
-            self._player_yaml_name_map = {}
-            self._player_yaml_dir_signature = None
-            self._player_yaml_last_refresh = time.monotonic()
-            return
-
+        perf_debug = os.getenv("LAN_PERF_DEBUG") == "1"
+        perf_start = time.perf_counter() if perf_debug else 0.0
         try:
-            files = sorted(list(players_dir.glob("*.yaml")) + list(players_dir.glob("*.yml")))
-        except Exception:
-            files = []
-        index_entries = self._yaml_players_sync_index(files)
-        enabled_files: List[Path] = []
-        for path in files:
-            key = self._yaml_player_key(path, players_dir)
-            entry = index_entries.get(key, {})
-            if isinstance(entry, dict) and not bool(entry.get("enabled", True)):
-                continue
-            enabled_files.append(path)
-        dir_signature = _directory_signature(players_dir, files)
-        enabled_signature = tuple(sorted(path.name for path in enabled_files))
-        combined_signature = (dir_signature, enabled_signature)
-        if (
-            not force_refresh
-            and self._player_yaml_cache_by_path
-            and combined_signature == self._player_yaml_dir_signature
-        ):
-            self._player_yaml_last_refresh = time.monotonic()
-            return
+            if not force_refresh:
+                now = time.monotonic()
+                if self._player_yaml_last_refresh and (
+                    now - self._player_yaml_last_refresh < self._player_yaml_refresh_interval_s
+                ):
+                    return
+            if yaml is None:
+                self._player_yaml_cache_by_path = {}
+                self._player_yaml_meta_by_path = {}
+                self._player_yaml_data_by_name = {}
+                self._player_yaml_name_map = {}
+                self._player_yaml_dir_signature = None
+                self._player_yaml_last_refresh = time.monotonic()
+                return
 
-        data_by_path = dict(self._player_yaml_cache_by_path)
-        meta_by_path = dict(self._player_yaml_meta_by_path)
-        data_by_name = dict(self._player_yaml_data_by_name)
-        name_map = dict(self._player_yaml_name_map)
+            players_dir = self._players_dir()
+            if not players_dir.exists():
+                self._player_yaml_cache_by_path = {}
+                self._player_yaml_meta_by_path = {}
+                self._player_yaml_data_by_name = {}
+                self._player_yaml_name_map = {}
+                self._player_yaml_dir_signature = None
+                self._player_yaml_last_refresh = time.monotonic()
+                return
 
-        def purge_path_entries(target_path: Path) -> None:
-            keys_to_remove = [key for key, value in name_map.items() if value == target_path]
-            for key in keys_to_remove:
-                name_map.pop(key, None)
-            if keys_to_remove:
-                keys_lower = set(keys_to_remove)
-                for name in list(data_by_name.keys()):
-                    if name.lower() in keys_lower:
-                        data_by_name.pop(name, None)
-
-        valid_paths = set(enabled_files)
-        for cached_path in list(data_by_path.keys()):
-            if cached_path not in valid_paths:
-                data_by_path.pop(cached_path, None)
-                meta_by_path.pop(cached_path, None)
-                purge_path_entries(cached_path)
-
-        for path in enabled_files:
-            meta = _file_stat_metadata(path)
-            cached_meta = meta_by_path.get(path)
-            if cached_meta and _metadata_matches(cached_meta, meta):
-                continue
             try:
-                raw = path.read_text(encoding="utf-8")
-                parsed = yaml.safe_load(raw)
+                files = sorted(list(players_dir.glob("*.yaml")) + list(players_dir.glob("*.yml")))
             except Exception:
-                parsed = None
-            data_by_path[path] = parsed if isinstance(parsed, dict) else None
-            meta_by_path[path] = meta
-            purge_path_entries(path)
-            if isinstance(parsed, dict):
-                profile = self._normalize_player_profile(parsed, path.stem)
-                name = str(profile.get("name") or path.stem).strip() or path.stem
-                data_by_name[name] = profile
-                name_map[self._normalize_character_lookup_key(name)] = path
-                name_map[self._normalize_character_lookup_key(path.stem)] = path
+                files = []
+            index_entries = self._yaml_players_sync_index(files)
+            enabled_files: List[Path] = []
+            for path in files:
+                key = self._yaml_player_key(path, players_dir)
+                entry = index_entries.get(key, {})
+                if isinstance(entry, dict) and not bool(entry.get("enabled", True)):
+                    continue
+                enabled_files.append(path)
+            dir_signature = _directory_signature(players_dir, files)
+            enabled_signature = tuple(sorted(path.name for path in enabled_files))
+            combined_signature = (dir_signature, enabled_signature)
+            if (
+                not force_refresh
+                and self._player_yaml_cache_by_path
+                and combined_signature == self._player_yaml_dir_signature
+            ):
+                self._player_yaml_last_refresh = time.monotonic()
+                return
 
-        self._player_yaml_cache_by_path = data_by_path
-        self._player_yaml_meta_by_path = meta_by_path
-        self._player_yaml_data_by_name = data_by_name
-        self._player_yaml_name_map = name_map
-        self._player_yaml_dir_signature = combined_signature
-        self._player_yaml_last_refresh = time.monotonic()
+            data_by_path = dict(self._player_yaml_cache_by_path)
+            meta_by_path = dict(self._player_yaml_meta_by_path)
+            data_by_name = dict(self._player_yaml_data_by_name)
+            name_map = dict(self._player_yaml_name_map)
+
+            def purge_path_entries(target_path: Path) -> None:
+                keys_to_remove = [key for key, value in name_map.items() if value == target_path]
+                for key in keys_to_remove:
+                    name_map.pop(key, None)
+                if keys_to_remove:
+                    keys_lower = set(keys_to_remove)
+                    for name in list(data_by_name.keys()):
+                        if name.lower() in keys_lower:
+                            data_by_name.pop(name, None)
+
+            valid_paths = set(enabled_files)
+            for cached_path in list(data_by_path.keys()):
+                if cached_path not in valid_paths:
+                    data_by_path.pop(cached_path, None)
+                    meta_by_path.pop(cached_path, None)
+                    purge_path_entries(cached_path)
+
+            for path in enabled_files:
+                meta = _file_stat_metadata(path)
+                cached_meta = meta_by_path.get(path)
+                if cached_meta and _metadata_matches(cached_meta, meta):
+                    continue
+                try:
+                    raw = path.read_text(encoding="utf-8")
+                    parsed = yaml.safe_load(raw)
+                except Exception:
+                    parsed = None
+                data_by_path[path] = parsed if isinstance(parsed, dict) else None
+                meta_by_path[path] = meta
+                purge_path_entries(path)
+                if isinstance(parsed, dict):
+                    profile = self._normalize_player_profile(parsed, path.stem)
+                    name = str(profile.get("name") or path.stem).strip() or path.stem
+                    data_by_name[name] = profile
+                    name_map[self._normalize_character_lookup_key(name)] = path
+                    name_map[self._normalize_character_lookup_key(path.stem)] = path
+
+            self._player_yaml_cache_by_path = data_by_path
+            self._player_yaml_meta_by_path = meta_by_path
+            self._player_yaml_data_by_name = data_by_name
+            self._player_yaml_name_map = name_map
+            self._player_yaml_dir_signature = combined_signature
+            self._player_yaml_last_refresh = time.monotonic()
+        finally:
+            if perf_debug:
+                elapsed_ms = (time.perf_counter() - perf_start) * 1000.0
+                self._oplog(
+                    f"LAN_PERF _load_player_yaml_cache elapsed_ms={elapsed_ms:.2f}"
+                    f" force_refresh={bool(force_refresh)} profiles={len(self._player_yaml_data_by_name)}",
+                    level="info",
+                )
     def _player_spell_config_payload(self) -> Dict[str, Dict[str, Any]]:
         self._load_player_yaml_cache()
         payload: Dict[str, Dict[str, Any]] = {}
@@ -41095,8 +41159,18 @@ class InitiativeTracker(base.InitiativeTracker):
         return snapshot
 
     def _dm_tactical_snapshot(self) -> Dict[str, Any]:
+        perf_debug = os.getenv("LAN_PERF_DEBUG") == "1"
+        perf_start = time.perf_counter() if perf_debug else 0.0
         raw = self._lan_snapshot(include_static=False, hydrate_static=False)
-        return self._dm_tactical_snapshot_from_lan_snapshot(raw)
+        tactical = self._dm_tactical_snapshot_from_lan_snapshot(raw)
+        if perf_debug:
+            elapsed_ms = (time.perf_counter() - perf_start) * 1000.0
+            unit_count = len(tactical.get("units")) if isinstance(tactical.get("units"), list) else 0
+            self._oplog(
+                f"LAN_PERF _dm_tactical_snapshot elapsed_ms={elapsed_ms:.2f} units={unit_count}",
+                level="info",
+            )
+        return tactical
 
     def _dm_move_combatant_on_map(self, cid: int, col: int, row: int) -> Dict[str, Any]:
         try:

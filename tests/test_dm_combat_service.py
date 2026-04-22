@@ -645,15 +645,18 @@ def _make_tracker_with_encounter_setup(num_combatants: int = 2):
 
 def _make_tracker_with_player_profile_population():
     app = _make_tracker_with_encounter_setup(num_combatants=0)
-    app._yaml_players_refresh_calls = []
+    app._load_player_yaml_cache_calls = []
     app._create_pc_from_profile_calls = []
-    app._player_yaml_data_by_name = {
+    app._player_yaml_refresh_source = {
         "Aelar": {"name": "Aelar"},
         "Mira": {"name": "Mira"},
     }
+    app._player_yaml_data_by_name = dict(app._player_yaml_refresh_source)
 
-    def _yaml_players_refresh_cache(rebuild=True):
-        app._yaml_players_refresh_calls.append(bool(rebuild))
+    def _load_player_yaml_cache(force_refresh=False):
+        app._load_player_yaml_cache_calls.append(bool(force_refresh))
+        if force_refresh:
+            app._player_yaml_data_by_name = dict(app._player_yaml_refresh_source)
 
     def _create_pc_from_profile(name, profile):
         cid = app._next_id
@@ -673,7 +676,7 @@ def _make_tracker_with_player_profile_population():
         app._create_pc_from_profile_calls.append({"name": name, "profile": profile})
         return cid
 
-    app._yaml_players_refresh_cache = _yaml_players_refresh_cache
+    app._load_player_yaml_cache = _load_player_yaml_cache
     app._create_pc_from_profile = _create_pc_from_profile
     return app
 
@@ -823,9 +826,16 @@ class CombatServicePlayerProfilePopulationTests(unittest.TestCase):
         self.assertEqual(["Aelar", "Mira"], result["added"])
         self.assertEqual(2, len(result["created"]))
 
-    def test_add_player_profile_combatants_refreshes_cache_before_create(self):
+    def test_add_player_profile_combatants_loads_cache_before_create(self):
         self.service.add_player_profile_combatants(["Aelar"])
-        self.assertEqual([True], self.tracker._yaml_players_refresh_calls)
+        self.assertEqual([False], self.tracker._load_player_yaml_cache_calls)
+
+    def test_add_player_profile_combatants_force_refreshes_when_requested_name_missing(self):
+        self.tracker._player_yaml_data_by_name = {}
+        result = self.service.add_player_profile_combatants(["Aelar"])
+        self.assertTrue(result["ok"])
+        self.assertEqual(["Aelar"], result["added"])
+        self.assertEqual([False, True], self.tracker._load_player_yaml_cache_calls)
 
     def test_add_player_profile_combatants_skip_existing_respects_current_encounter(self):
         existing = types.SimpleNamespace(
@@ -1832,6 +1842,7 @@ class AddPlayerProfileCombatantsViaServiceWrapperTests(unittest.TestCase):
 
         self.assertEqual(["Aelar"], result["added"])
         self.assertEqual(1, len(tracker._create_pc_from_profile_calls))
+        self.assertEqual([False], tracker._load_player_yaml_cache_calls)
         self.assertEqual(1, len(tracker._rebuild_calls))
         self.assertEqual(1, len(tracker._broadcast_calls))
 
@@ -1848,8 +1859,23 @@ class AddPlayerProfileCombatantsViaServiceWrapperTests(unittest.TestCase):
         )
 
         self.assertEqual(["Aelar"], result["added"])
+        self.assertEqual([False], tracker._load_player_yaml_cache_calls)
         warnings = [(m, l) for m, l in tracker._oplog_calls if l == "warning"]
         self.assertTrue(any("add_player_profile_combatants" in m for m, _ in warnings))
+
+    def test_fallback_force_refreshes_missing_profile_name(self):
+        tracker = _make_tracker_with_player_profile_population()
+        tracker._dm_service = None
+        tracker._player_yaml_data_by_name = {}
+
+        result = InitiativeTracker._add_player_profile_combatants_via_service(
+            tracker,
+            ["Aelar"],
+            skip_existing=False,
+        )
+
+        self.assertEqual(["Aelar"], result["added"])
+        self.assertEqual([False, True], tracker._load_player_yaml_cache_calls)
 
 
 class AddMonsterSpecCombatantsViaServiceWrapperTests(unittest.TestCase):

@@ -88,6 +88,8 @@ from __future__ import annotations
 
 import random
 import threading
+import os
+import time
 from typing import TYPE_CHECKING, Any, Dict, List, Optional
 
 if TYPE_CHECKING:
@@ -131,6 +133,25 @@ class CombatService:
             raise ValueError("CombatService requires an InitiativeTracker instance.")
         self._tracker = tracker
         self._lock = threading.RLock()
+
+    @staticmethod
+    def _perf_debug_enabled() -> bool:
+        return os.getenv("LAN_PERF_DEBUG") == "1"
+
+    def _perf_log(self, label: str, started_at: float, **fields: Any) -> None:
+        if started_at <= 0.0:
+            return
+        elapsed_ms = (time.perf_counter() - started_at) * 1000.0
+        extras = " ".join(f"{key}={value}" for key, value in fields.items())
+        message = f"LAN_PERF {label} elapsed_ms={elapsed_ms:.2f}"
+        if extras:
+            message = f"{message} {extras}"
+        oplog = getattr(self._tracker, "_oplog", None)
+        if callable(oplog):
+            try:
+                oplog(message, level="info")
+            except Exception:
+                pass
 
     def _refresh_tracker_outputs(self) -> None:
         """Refresh desktop UI and LAN state without blocking server threads."""
@@ -296,21 +317,25 @@ class CombatService:
         Next Turn button invokes), then broadcasts state to all LAN clients and
         returns the updated snapshot.
         """
-        with self._lock:
-            t = self._tracker
-            try:
-                t._next_turn()
-            except Exception as exc:
-                return {"ok": False, "error": str(exc), "snapshot": self.combat_snapshot()}
-            try:
-                t._rebuild_table(scroll_to_current=True)
-            except Exception:
-                pass
-            try:
-                t._lan_force_state_broadcast()
-            except Exception:
-                pass
-            return {"ok": True, "snapshot": self.combat_snapshot()}
+        perf_start = time.perf_counter() if self._perf_debug_enabled() else 0.0
+        try:
+            with self._lock:
+                t = self._tracker
+                try:
+                    t._next_turn()
+                except Exception as exc:
+                    return {"ok": False, "error": str(exc), "snapshot": self.combat_snapshot()}
+                try:
+                    t._rebuild_table(scroll_to_current=True)
+                except Exception:
+                    pass
+                try:
+                    t._lan_force_state_broadcast()
+                except Exception:
+                    pass
+                return {"ok": True, "snapshot": self.combat_snapshot()}
+        finally:
+            self._perf_log("CombatService.next_turn", perf_start)
 
     def prev_turn(self) -> Dict[str, Any]:
         """Go back to the previous combatant's turn.
@@ -909,22 +934,26 @@ class CombatService:
         Requires at least one combatant to be present in the initiative list.
         Returns: {ok, snapshot}  or  {ok: False, error: str}
         """
-        with self._lock:
-            t = self._tracker
-            combatants = getattr(t, "combatants", {}) or {}
-            if not combatants:
-                return {"ok": False, "error": "No combatants in the initiative list."}
-            try:
-                t._start_turns()
-            except Exception:
-                return {"ok": False, "error": "Could not start combat.", "snapshot": self.combat_snapshot()}
-            # Explicitly mark in_combat so the flag is truthful for this session.
-            t.in_combat = True
-            try:
-                t._lan_force_state_broadcast()
-            except Exception:
-                pass
-            return {"ok": True, "snapshot": self.combat_snapshot()}
+        perf_start = time.perf_counter() if self._perf_debug_enabled() else 0.0
+        try:
+            with self._lock:
+                t = self._tracker
+                combatants = getattr(t, "combatants", {}) or {}
+                if not combatants:
+                    return {"ok": False, "error": "No combatants in the initiative list."}
+                try:
+                    t._start_turns()
+                except Exception:
+                    return {"ok": False, "error": "Could not start combat.", "snapshot": self.combat_snapshot()}
+                # Explicitly mark in_combat so the flag is truthful for this session.
+                t.in_combat = True
+                try:
+                    t._lan_force_state_broadcast()
+                except Exception:
+                    pass
+                return {"ok": True, "snapshot": self.combat_snapshot()}
+        finally:
+            self._perf_log("CombatService.start_combat", perf_start)
 
     def end_combat(self) -> Dict[str, Any]:
         """End the current combat, resetting turn tracking.
@@ -1089,68 +1118,89 @@ class CombatService:
         Returns:
             ``{ok, added, skipped, created, snapshot}``
         """
-        if not isinstance(names, list):
-            return {"ok": False, "error": "names must be a list."}
+        perf_start = time.perf_counter() if self._perf_debug_enabled() else 0.0
+        try:
+            if not isinstance(names, list):
+                return {"ok": False, "error": "names must be a list."}
 
-        with self._lock:
-            t = self._tracker
-            refresh_cache = getattr(t, "_yaml_players_refresh_cache", None)
-            if callable(refresh_cache):
-                try:
-                    refresh_cache(rebuild=True)
-                except Exception:
-                    pass
+            with self._lock:
+                t = self._tracker
+                load_cache = getattr(t, "_load_player_yaml_cache", None)
+                if callable(load_cache):
+                    try:
+                        load_cache(force_refresh=False)
+                    except TypeError:
+                        load_cache()
+                    except Exception:
+                        pass
 
-            create_pc = getattr(t, "_create_pc_from_profile", None)
-            if not callable(create_pc):
-                return {"ok": False, "error": "Player-profile creation is unavailable."}
+                create_pc = getattr(t, "_create_pc_from_profile", None)
+                if not callable(create_pc):
+                    return {"ok": False, "error": "Player-profile creation is unavailable."}
 
-            profiles = getattr(t, "_player_yaml_data_by_name", {}) or {}
-            existing_names = set()
-            if skip_existing:
-                existing_names = {
-                    str(getattr(c, "name", "")).strip().lower()
-                    for c in (getattr(t, "combatants", {}) or {}).values()
-                    if str(getattr(c, "name", "")).strip()
+                requested_names = [str(raw_name or "").strip() for raw_name in names]
+                requested_names = [name for name in requested_names if name]
+                profiles = getattr(t, "_player_yaml_data_by_name", {}) or {}
+                if requested_names and callable(load_cache):
+                    missing = [name for name in requested_names if not isinstance(profiles.get(name), dict)]
+                    if missing:
+                        try:
+                            load_cache(force_refresh=True)
+                        except TypeError:
+                            load_cache()
+                        except Exception:
+                            pass
+                        profiles = getattr(t, "_player_yaml_data_by_name", {}) or {}
+
+                existing_names = set()
+                if skip_existing:
+                    existing_names = {
+                        str(getattr(c, "name", "")).strip().lower()
+                        for c in (getattr(t, "combatants", {}) or {}).values()
+                        if str(getattr(c, "name", "")).strip()
+                    }
+
+                added: List[str] = []
+                skipped: List[str] = []
+                created: List[Dict[str, Any]] = []
+
+                for name in requested_names:
+                    profile = profiles.get(name)
+                    if not isinstance(profile, dict):
+                        skipped.append(name)
+                        continue
+                    if skip_existing and name.lower() in existing_names:
+                        skipped.append(name)
+                        continue
+                    try:
+                        cid = create_pc(name, profile)
+                    except Exception:
+                        cid = None
+                    if isinstance(cid, int):
+                        added.append(name)
+                        created.append({"cid": cid, "name": name})
+                        if skip_existing:
+                            existing_names.add(name.lower())
+                    else:
+                        skipped.append(name)
+
+                if created:
+                    self._refresh_tracker_outputs()
+
+                return {
+                    "ok": True,
+                    "added": added,
+                    "skipped": skipped,
+                    "created": created,
+                    "snapshot": self.combat_snapshot(),
                 }
-
-            added: List[str] = []
-            skipped: List[str] = []
-            created: List[Dict[str, Any]] = []
-
-            for raw_name in names:
-                name = str(raw_name or "").strip()
-                if not name:
-                    continue
-                profile = profiles.get(name)
-                if not isinstance(profile, dict):
-                    skipped.append(name)
-                    continue
-                if skip_existing and name.lower() in existing_names:
-                    skipped.append(name)
-                    continue
-                try:
-                    cid = create_pc(name, profile)
-                except Exception:
-                    cid = None
-                if isinstance(cid, int):
-                    added.append(name)
-                    created.append({"cid": cid, "name": name})
-                    if skip_existing:
-                        existing_names.add(name.lower())
-                else:
-                    skipped.append(name)
-
-            if created:
-                self._refresh_tracker_outputs()
-
-            return {
-                "ok": True,
-                "added": added,
-                "skipped": skipped,
-                "created": created,
-                "snapshot": self.combat_snapshot(),
-            }
+        finally:
+            self._perf_log(
+                "CombatService.add_player_profile_combatants",
+                perf_start,
+                requested=(len(names) if isinstance(names, list) else 0),
+                skip_existing=bool(skip_existing),
+            )
 
     def add_monster_spec_combatants(self, entries: List[Dict[str, Any]]) -> Dict[str, Any]:
         """Add encounter combatants from monster specs.
@@ -1169,110 +1219,118 @@ class CombatService:
         Returns:
             ``{ok, added, skipped, snapshot}``
         """
-        if not isinstance(entries, list):
-            return {"ok": False, "error": "entries must be a list."}
+        perf_start = time.perf_counter() if self._perf_debug_enabled() else 0.0
+        try:
+            if not isinstance(entries, list):
+                return {"ok": False, "error": "entries must be a list."}
 
-        with self._lock:
-            t = self._tracker
-            find_spec = getattr(t, "_find_monster_spec_by_slug", None)
-            create_monster = getattr(t, "_create_monster_spec_combatant", None)
-            if not callable(find_spec) or not callable(create_monster):
-                return {"ok": False, "error": "Monster-spec creation is unavailable."}
+            with self._lock:
+                t = self._tracker
+                find_spec = getattr(t, "_find_monster_spec_by_slug", None)
+                create_monster = getattr(t, "_create_monster_spec_combatant", None)
+                if not callable(find_spec) or not callable(create_monster):
+                    return {"ok": False, "error": "Monster-spec creation is unavailable."}
 
-            added: List[Dict[str, Any]] = []
-            skipped: List[Dict[str, Any]] = []
+                added: List[Dict[str, Any]] = []
+                skipped: List[Dict[str, Any]] = []
 
-            for entry in entries:
-                if not isinstance(entry, dict):
-                    skipped.append({"reason": "invalid_entry"})
-                    continue
+                for entry in entries:
+                    if not isinstance(entry, dict):
+                        skipped.append({"reason": "invalid_entry"})
+                        continue
 
-                name = str(entry.get("name") or "").strip()
-                monster_slug = str(entry.get("monster_slug") or "").strip().lower()
-                if not name or not monster_slug:
-                    skipped.append(
-                        {
-                            "name": name or None,
-                            "monster_slug": monster_slug or None,
-                            "reason": "missing_name_or_slug",
-                        }
-                    )
-                    continue
+                    name = str(entry.get("name") or "").strip()
+                    monster_slug = str(entry.get("monster_slug") or "").strip().lower()
+                    if not name or not monster_slug:
+                        skipped.append(
+                            {
+                                "name": name or None,
+                                "monster_slug": monster_slug or None,
+                                "reason": "missing_name_or_slug",
+                            }
+                        )
+                        continue
 
-                try:
-                    initiative = int(entry.get("initiative"))
-                except Exception:
-                    skipped.append(
-                        {
-                            "name": name,
-                            "monster_slug": monster_slug,
-                            "reason": "invalid_initiative",
-                        }
-                    )
-                    continue
+                    try:
+                        initiative = int(entry.get("initiative"))
+                    except Exception:
+                        skipped.append(
+                            {
+                                "name": name,
+                                "monster_slug": monster_slug,
+                                "reason": "invalid_initiative",
+                            }
+                        )
+                        continue
 
-                spec = find_spec(monster_slug)
-                if spec is None:
-                    skipped.append(
-                        {
-                            "name": name,
-                            "monster_slug": monster_slug,
-                            "reason": "monster_not_found",
-                        }
-                    )
-                    continue
+                    spec = find_spec(monster_slug)
+                    if spec is None:
+                        skipped.append(
+                            {
+                                "name": name,
+                                "monster_slug": monster_slug,
+                                "reason": "monster_not_found",
+                            }
+                        )
+                        continue
 
-                try:
-                    cid = create_monster(
-                        name=name,
-                        monster_spec=spec,
-                        hp=entry.get("hp"),
-                        speed=entry.get("speed"),
-                        swim_speed=entry.get("swim_speed"),
-                        fly_speed=entry.get("fly_speed"),
-                        burrow_speed=entry.get("burrow_speed"),
-                        climb_speed=entry.get("climb_speed"),
-                        movement_mode=entry.get("movement_mode"),
-                        initiative=initiative,
-                        dex=entry.get("dex"),
-                        ally=bool(entry.get("ally", False)),
-                        saving_throws=entry.get("saving_throws"),
-                        ability_mods=entry.get("ability_mods"),
-                        actions=entry.get("actions"),
-                        bonus_actions=entry.get("bonus_actions"),
-                        reactions=entry.get("reactions"),
-                        roll=entry.get("roll"),
-                        nat20=entry.get("nat20"),
-                    )
-                except Exception:
-                    cid = None
+                    try:
+                        cid = create_monster(
+                            name=name,
+                            monster_spec=spec,
+                            hp=entry.get("hp"),
+                            speed=entry.get("speed"),
+                            swim_speed=entry.get("swim_speed"),
+                            fly_speed=entry.get("fly_speed"),
+                            burrow_speed=entry.get("burrow_speed"),
+                            climb_speed=entry.get("climb_speed"),
+                            movement_mode=entry.get("movement_mode"),
+                            initiative=initiative,
+                            dex=entry.get("dex"),
+                            ally=bool(entry.get("ally", False)),
+                            saving_throws=entry.get("saving_throws"),
+                            ability_mods=entry.get("ability_mods"),
+                            actions=entry.get("actions"),
+                            bonus_actions=entry.get("bonus_actions"),
+                            reactions=entry.get("reactions"),
+                            roll=entry.get("roll"),
+                            nat20=entry.get("nat20"),
+                        )
+                    except Exception:
+                        cid = None
 
-                if isinstance(cid, int):
-                    added.append(
-                        {
-                            "cid": cid,
-                            "name": name,
-                            "monster_slug": monster_slug,
-                        }
-                    )
-                else:
-                    skipped.append(
-                        {
-                            "name": name,
-                            "monster_slug": monster_slug,
-                            "reason": "create_failed",
-                        }
-                    )
+                    if isinstance(cid, int):
+                        added.append(
+                            {
+                                "cid": cid,
+                                "name": name,
+                                "monster_slug": monster_slug,
+                            }
+                        )
+                    else:
+                        skipped.append(
+                            {
+                                "name": name,
+                                "monster_slug": monster_slug,
+                                "reason": "create_failed",
+                            }
+                        )
 
-            if added:
-                self._refresh_tracker_outputs()
+                if added:
+                    self._refresh_tracker_outputs()
 
-            return {
-                "ok": True,
-                "added": added,
-                "skipped": skipped,
-                "snapshot": self.combat_snapshot(),
-            }
+                return {
+                    "ok": True,
+                    "added": added,
+                    "skipped": skipped,
+                    "snapshot": self.combat_snapshot(),
+                }
+        finally:
+            self._perf_log(
+                "CombatService.add_monster_spec_combatants",
+                perf_start,
+                requested=(len(entries) if isinstance(entries, list) else 0),
+            )
 
     def set_initiative(self, cid: int, initiative: int) -> Dict[str, Any]:
         """Update the initiative value for an existing combatant.
