@@ -222,6 +222,8 @@ class CombatService:
             "up_next_name": str | None,
             "turn_order":   [int, ...],
             "combatants":   [{cid, name, hp, max_hp, ac, role,
+                              speed, passive_perception,
+                              temp_hp, defenses, concentration/state markers,
                               is_pc, conditions, initiative}, ...],
             "battle_log":   [str, ...],    # last 30 lines
           }
@@ -232,6 +234,115 @@ class CombatService:
         round_num = int(getattr(t, "round_num", 0) or 0)
         turn_num = int(getattr(t, "turn_num", 0) or 0)
         in_combat = bool(getattr(t, "in_combat", False))
+
+        def _role_for_combatant(combatant: Any) -> str:
+            if bool(getattr(combatant, "is_pc", False)):
+                return "pc"
+            if bool(getattr(combatant, "ally", False)):
+                return "ally"
+            role_for_name = getattr(t, "_role_for_name", None)
+            if callable(role_for_name):
+                try:
+                    role = str(role_for_name(str(getattr(combatant, "name", "") or "")) or "").strip().lower()
+                except Exception:
+                    role = ""
+                if role in {"pc", "ally", "enemy"}:
+                    return role
+            return "enemy"
+
+        def _titleize_key(value: Any) -> str:
+            text = str(value or "").strip().replace("_", " ").replace("-", " ")
+            return " ".join(part.capitalize() for part in text.split())
+
+        def _passive_perception_for(combatant: Any) -> Optional[int]:
+            getter = getattr(t, "_observer_passive_perception", None)
+            if not callable(getter):
+                return None
+            try:
+                value = int(getter(combatant))
+            except Exception:
+                return None
+            return value if value > 0 else None
+
+        def _defense_lists_for(combatant: Any) -> Dict[str, List[str]]:
+            empty = {
+                "damage_resistances": [],
+                "damage_immunities": [],
+                "damage_vulnerabilities": [],
+                "condition_immunities": [],
+            }
+            getter = getattr(t, "_combatant_defense_sets", None)
+            if not callable(getter):
+                return empty
+            try:
+                raw = getter(combatant)
+            except Exception:
+                return empty
+            if not isinstance(raw, dict):
+                return empty
+
+            def _normalize_list(key: str) -> List[str]:
+                values = raw.get(key) or set()
+                if not isinstance(values, (list, tuple, set)):
+                    return []
+                return sorted(
+                    {
+                        str(item).strip().lower()
+                        for item in values
+                        if str(item or "").strip()
+                    }
+                )
+
+            return {
+                "damage_resistances": _normalize_list("damage_resistances"),
+                "damage_immunities": _normalize_list("damage_immunities"),
+                "damage_vulnerabilities": _normalize_list("damage_vulnerabilities"),
+                "condition_immunities": _normalize_list("condition_immunities"),
+            }
+
+        def _state_markers_for(combatant: Any) -> List[Dict[str, Any]]:
+            markers: List[Dict[str, Any]] = []
+            concentration_spell = _titleize_key(getattr(combatant, "concentration_spell", ""))
+            if bool(getattr(combatant, "concentrating", False)):
+                markers.append(
+                    {
+                        "key": "concentration",
+                        "label": "Concentration",
+                        "detail": concentration_spell or None,
+                        "tone": "accent",
+                    }
+                )
+            if bool(getattr(combatant, "is_hidden", False)):
+                markers.append({"key": "hidden", "label": "Hidden", "detail": None, "tone": "neutral"})
+            if bool(getattr(combatant, "is_wild_shaped", False)):
+                form_name = str(
+                    getattr(combatant, "wild_shape_form_name", "")
+                    or getattr(combatant, "wild_shape_form", "")
+                    or ""
+                ).strip()
+                markers.append(
+                    {
+                        "key": "wild_shape",
+                        "label": "Wild Shape",
+                        "detail": form_name or None,
+                        "tone": "accent",
+                    }
+                )
+            if getattr(combatant, "summoned_by_cid", None) is not None:
+                summon_source = _titleize_key(getattr(combatant, "summon_source_spell", ""))
+                markers.append(
+                    {
+                        "key": "summoned",
+                        "label": "Summoned",
+                        "detail": summon_source or None,
+                        "tone": "warn",
+                    }
+                )
+            if getattr(combatant, "mounted_by_cid", None) is not None:
+                markers.append({"key": "mounted", "label": "Mounted", "detail": None, "tone": "neutral"})
+            elif bool(getattr(combatant, "is_mount", False)):
+                markers.append({"key": "mount", "label": "Mount", "detail": None, "tone": "neutral"})
+            return markers
 
         # Build ordered list using the tracker's display ordering when available
         try:
@@ -251,15 +362,19 @@ class CombatService:
             hp = int(getattr(c, "hp", 0) or 0)
             max_hp = int(getattr(c, "max_hp", hp) or hp)
             ac = int(getattr(c, "ac", 0) or 0)
+            ac_modifier_getter = getattr(t, "_combatant_ac_modifier", None)
+            if callable(ac_modifier_getter):
+                try:
+                    ac += int(ac_modifier_getter(c) or 0)
+                except Exception:
+                    pass
             temp_hp = int(getattr(c, "temp_hp", 0) or 0)
             initiative = int(getattr(c, "initiative", 0) or 0)
             is_pc = bool(getattr(c, "is_pc", False))
-            role = str(
-                (getattr(t, "_name_role_memory", {}) or {}).get(
-                    str(getattr(c, "name", "") or ""), "enemy"
-                )
-                or "enemy"
-            )
+            role = _role_for_combatant(c)
+            passive_perception = _passive_perception_for(c)
+            defense_lists = _defense_lists_for(c)
+            state_markers = _state_markers_for(c)
 
             # Conditions: extract from condition_stacks
             stacks = list(getattr(c, "condition_stacks", []) or [])
@@ -272,6 +387,7 @@ class CombatService:
                 conditions.append(
                     {
                         "type": ctype,
+                        "label": _titleize_key(ctype),
                         "remaining_turns": remaining,
                     }
                 )
@@ -285,6 +401,19 @@ class CombatService:
                     "temp_hp": temp_hp,
                     "ac": ac,
                     "initiative": initiative,
+                    "speed": int(getattr(c, "speed", 0) or 0),
+                    "swim_speed": int(getattr(c, "swim_speed", 0) or 0),
+                    "fly_speed": int(getattr(c, "fly_speed", 0) or 0),
+                    "burrow_speed": int(getattr(c, "burrow_speed", 0) or 0),
+                    "climb_speed": int(getattr(c, "climb_speed", 0) or 0),
+                    "passive_perception": passive_perception,
+                    "damage_vulnerabilities": defense_lists["damage_vulnerabilities"],
+                    "damage_resistances": defense_lists["damage_resistances"],
+                    "damage_immunities": defense_lists["damage_immunities"],
+                    "condition_immunities": defense_lists["condition_immunities"],
+                    "concentrating": bool(getattr(c, "concentrating", False)),
+                    "concentration_spell": str(getattr(c, "concentration_spell", "") or "") or None,
+                    "state_markers": state_markers,
                     "is_pc": is_pc,
                     "role": role,
                     "conditions": conditions,

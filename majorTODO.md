@@ -96,6 +96,8 @@ Current live-use UI correction needs called out explicitly:
 - **Map view is too small / constrained** inside the current workspace and does not feel like a dedicated full-screen tactical surface.
 - **Scrollbars and cramped card layout** are degrading usability across DM workspace menus.
 - The DM workspace should move toward **modular, hideable, resizable panels/cards**, so the DM can choose what remains visible during active play.
+- DM tracker readability follow-up (2026-04-22): the initiative cards now read as a real combat cockpit instead of sparse rows. `/dm` card rendering now shows explicit PC/ally/enemy badges, red enemy HP emphasis, AC/speed/passive perception/temp HP, defense chips (resistances, vulnerabilities, damage immunities, condition immunities), and compact condition/state badges; the duplicate topbar map link was also removed. This improves glanceability, but it does **not** replace the still-needed modular/resizable workspace pass.
+- DM workspace layout follow-up (2026-04-22): `/dm` and `/dm/map` now use a real three-lane workspace shell instead of the old cramped stacked-card layout. The initiative cockpit, tactical map lane, and control lane can now be resized from the browser; cockpit/tools/log can be hidden via panel toggles; secondary control cards collapse instead of permanently consuming vertical space; and the tactical map card now keeps the canvas in the primary lane while advanced map-authoring sections are collapsed into explicit subsections. This materially reduces layout-pressure-driven overflow, though the longer-term panel modularity pass is still not fully done.
 
 ### 3.3 Performance / hot-path investigation (active, not speculative)
 

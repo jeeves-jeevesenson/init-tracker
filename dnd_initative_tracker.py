@@ -3630,6 +3630,8 @@ class LanController:
 
             Shape: {in_combat, round, turn, active_cid, turn_order,
                     combatants:[{cid, name, hp, max_hp, temp_hp, ac, initiative,
+                                 speed, passive_perception, defenses,
+                                 concentration/state markers,
                                  is_pc, role, conditions, is_current}],
                     battle_log:[str]}
             """

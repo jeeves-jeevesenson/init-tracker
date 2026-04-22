@@ -141,6 +141,20 @@ def _make_tracker(num_combatants: int = 3):
             ac=14 + i,
             initiative=20 - i * 3,
             is_pc=(i == 0),
+            ally=False,
+            speed=30,
+            swim_speed=0,
+            fly_speed=0,
+            burrow_speed=0,
+            climb_speed=0,
+            concentrating=False,
+            concentration_spell="",
+            is_hidden=False,
+            is_wild_shaped=False,
+            summoned_by_cid=None,
+            summon_source_spell="",
+            mounted_by_cid=None,
+            is_mount=False,
             condition_stacks=[],
         )
         app.combatants[cid] = c
@@ -174,7 +188,32 @@ class CombatServiceSnapshotTests(unittest.TestCase):
     def test_snapshot_combatant_fields(self):
         snap = self.service.combat_snapshot()
         c = snap["combatants"][0]
-        for field in ("cid", "name", "hp", "max_hp", "temp_hp", "ac", "initiative", "is_pc", "role", "conditions", "is_current"):
+        for field in (
+            "cid",
+            "name",
+            "hp",
+            "max_hp",
+            "temp_hp",
+            "ac",
+            "initiative",
+            "speed",
+            "swim_speed",
+            "fly_speed",
+            "burrow_speed",
+            "climb_speed",
+            "passive_perception",
+            "damage_vulnerabilities",
+            "damage_resistances",
+            "damage_immunities",
+            "condition_immunities",
+            "concentrating",
+            "concentration_spell",
+            "state_markers",
+            "is_pc",
+            "role",
+            "conditions",
+            "is_current",
+        ):
             self.assertIn(field, c, f"Missing combatant field: {field}")
 
     def test_snapshot_current_combatant_flagged(self):
@@ -182,6 +221,48 @@ class CombatServiceSnapshotTests(unittest.TestCase):
         current = [c for c in snap["combatants"] if c["is_current"]]
         self.assertEqual(len(current), 1)
         self.assertEqual(current[0]["cid"], 1)
+
+    def test_snapshot_uses_pc_and_ally_role_fallbacks(self):
+        self.tracker.combatants[2].ally = True
+        snap = self.service.combat_snapshot()
+        roles = {entry["cid"]: entry["role"] for entry in snap["combatants"]}
+        self.assertEqual("pc", roles[1])
+        self.assertEqual("ally", roles[2])
+        self.assertEqual("enemy", roles[3])
+
+    def test_snapshot_includes_readability_fields_when_tracker_helpers_available(self):
+        c = self.tracker.combatants[1]
+        c.temp_hp = 6
+        c.fly_speed = 60
+        c.concentrating = True
+        c.concentration_spell = "bless"
+        c.is_hidden = True
+        c.condition_stacks = [ConditionStack(sid=1, ctype="poisoned", remaining_turns=2)]
+        self.tracker._observer_passive_perception = lambda combatant: 17 if combatant.cid == 1 else 11
+        self.tracker._combatant_defense_sets = lambda combatant: {
+            "damage_resistances": {"fire", "cold"} if combatant.cid == 1 else set(),
+            "damage_immunities": {"poison"} if combatant.cid == 1 else set(),
+            "damage_vulnerabilities": {"radiant"} if combatant.cid == 1 else set(),
+            "condition_immunities": {"frightened"} if combatant.cid == 1 else set(),
+        }
+
+        snap = self.service.combat_snapshot()
+        row = next(entry for entry in snap["combatants"] if entry["cid"] == 1)
+
+        self.assertEqual(17, row["passive_perception"])
+        self.assertEqual(30, row["speed"])
+        self.assertEqual(60, row["fly_speed"])
+        self.assertEqual(["cold", "fire"], row["damage_resistances"])
+        self.assertEqual(["poison"], row["damage_immunities"])
+        self.assertEqual(["radiant"], row["damage_vulnerabilities"])
+        self.assertEqual(["frightened"], row["condition_immunities"])
+        self.assertTrue(row["concentrating"])
+        self.assertEqual("bless", row["concentration_spell"])
+        self.assertEqual("Poisoned", row["conditions"][0]["label"])
+        self.assertEqual(2, row["conditions"][0]["remaining_turns"])
+        state_keys = {marker["key"] for marker in row["state_markers"]}
+        self.assertIn("concentration", state_keys)
+        self.assertIn("hidden", state_keys)
 
     def test_snapshot_turn_order(self):
         snap = self.service.combat_snapshot()
