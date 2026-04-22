@@ -1416,6 +1416,37 @@ def _files_signature(files: List[Path]) -> Tuple[Tuple[str, int, int], ...]:
     return tuple(sorted(rows))
 
 
+class _PlayerYamlCacheHold:
+    """Reentrant hold that suppresses _load_player_yaml_cache re-validation.
+
+    Used around bounded mutation windows (e.g. Add Players + its follow-on
+    broadcast) so the in-memory cache is reused instead of repeatedly
+    re-stat'ing the players directory and rewriting the players index.
+    """
+
+    __slots__ = ("_tracker",)
+
+    def __init__(self, tracker: Any) -> None:
+        self._tracker = tracker
+
+    def __enter__(self) -> "_PlayerYamlCacheHold":
+        t = self._tracker
+        try:
+            current = int(t.__dict__.get("_player_yaml_cache_hold_depth", 0) or 0)
+        except Exception:
+            current = 0
+        t._player_yaml_cache_hold_depth = current + 1
+        return self
+
+    def __exit__(self, exc_type: Any, exc: Any, tb: Any) -> None:
+        t = self._tracker
+        try:
+            current = int(t.__dict__.get("_player_yaml_cache_hold_depth", 0) or 0)
+        except Exception:
+            current = 0
+        t._player_yaml_cache_hold_depth = max(0, current - 1)
+
+
 # --- App metadata ---
 APP_VERSION = "41"
 
@@ -8048,7 +8079,8 @@ class InitiativeTracker(base.InitiativeTracker):
         self._player_yaml_name_map: Dict[str, Path] = {}
         self._player_yaml_dir_signature: Optional[Tuple[int, int, Tuple[str, ...]]] = None
         self._player_yaml_last_refresh = 0.0
-        self._player_yaml_refresh_interval_s = 1.0
+        self._player_yaml_refresh_interval_s = 10.0
+        self._player_yaml_cache_hold_depth = 0
         self._lan_resource_pools_last_build = 0.0
         self._player_yaml_lock = threading.Lock()
         self._spell_yaml_lock = threading.Lock()
@@ -19171,9 +19203,7 @@ class InitiativeTracker(base.InitiativeTracker):
                 "consumables_library": self._consumables_registry_list_payload,
                 "beast_forms": self._load_beast_forms,
             }
-            resource_refresh_interval_s = max(
-                0.25, float(self.__dict__.get("_player_yaml_refresh_interval_s", 1.0) or 1.0)
-            )
+            resource_refresh_interval_s = 1.0
             now = time.monotonic()
             last_resource_build = float(self.__dict__.get("_lan_resource_pools_last_build", 0.0))
             for key, default in static_defaults.items():
@@ -26105,11 +26135,25 @@ class InitiativeTracker(base.InitiativeTracker):
             }
             pools.append(temp_pool)
 
+    def _player_yaml_cache_hold(self) -> "_PlayerYamlCacheHold":
+        """Suspend _load_player_yaml_cache re-validation for a bounded hot-path window.
+
+        While held and the cache is populated, _load_player_yaml_cache(force_refresh=False)
+        returns immediately instead of re-stat'ing the players directory. Explicit
+        force_refresh=True callers still bypass the hold. Reentrant via a depth counter.
+        """
+        return _PlayerYamlCacheHold(self)
+
     def _load_player_yaml_cache(self, force_refresh: bool = False) -> None:
         perf_debug = os.getenv("LAN_PERF_DEBUG") == "1"
         perf_start = time.perf_counter() if perf_debug else 0.0
         try:
             if not force_refresh:
+                if (
+                    int(self.__dict__.get("_player_yaml_cache_hold_depth", 0) or 0) > 0
+                    and (self._player_yaml_cache_by_path or self._player_yaml_data_by_name)
+                ):
+                    return
                 now = time.monotonic()
                 if self._player_yaml_last_refresh and (
                     now - self._player_yaml_last_refresh < self._player_yaml_refresh_interval_s

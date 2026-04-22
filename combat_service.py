@@ -173,12 +173,24 @@ class CombatService:
         """Refresh desktop UI and LAN state without blocking server threads."""
         t = self._tracker
 
+        hold_factory = getattr(t, "_player_yaml_cache_hold", None)
+
         def _refresh() -> None:
+            hold_cm = hold_factory() if callable(hold_factory) else None
             try:
-                t._rebuild_table(scroll_to_current=True)
-            except Exception:
-                pass
-            self._broadcast_tracker_state(include_static=False)
+                if hold_cm is not None:
+                    hold_cm.__enter__()
+                try:
+                    t._rebuild_table(scroll_to_current=True)
+                except Exception:
+                    pass
+                self._broadcast_tracker_state(include_static=False)
+            finally:
+                if hold_cm is not None:
+                    try:
+                        hold_cm.__exit__(None, None, None)
+                    except Exception:
+                        pass
 
         after = getattr(t, "after", None)
         if callable(after) and threading.current_thread() is not threading.main_thread():
@@ -1091,75 +1103,86 @@ class CombatService:
 
             with self._lock:
                 t = self._tracker
-                load_cache = getattr(t, "_load_player_yaml_cache", None)
-                if callable(load_cache):
-                    try:
-                        load_cache(force_refresh=False)
-                    except TypeError:
-                        load_cache()
-                    except Exception:
-                        pass
-
-                create_pc = getattr(t, "_create_pc_from_profile", None)
-                if not callable(create_pc):
-                    return {"ok": False, "error": "Player-profile creation is unavailable."}
-
-                requested_names = [str(raw_name or "").strip() for raw_name in names]
-                requested_names = [name for name in requested_names if name]
-                profiles = getattr(t, "_player_yaml_data_by_name", {}) or {}
-                if requested_names and callable(load_cache):
-                    missing = [name for name in requested_names if not isinstance(profiles.get(name), dict)]
-                    if missing:
+                hold_factory = getattr(t, "_player_yaml_cache_hold", None)
+                hold_cm = hold_factory() if callable(hold_factory) else None
+                if hold_cm is not None:
+                    hold_cm.__enter__()
+                try:
+                    load_cache = getattr(t, "_load_player_yaml_cache", None)
+                    if callable(load_cache):
                         try:
-                            load_cache(force_refresh=True)
+                            load_cache(force_refresh=False)
                         except TypeError:
                             load_cache()
                         except Exception:
                             pass
-                        profiles = getattr(t, "_player_yaml_data_by_name", {}) or {}
 
-                existing_names = set()
-                if skip_existing:
-                    existing_names = {
-                        str(getattr(c, "name", "")).strip().lower()
-                        for c in (getattr(t, "combatants", {}) or {}).values()
-                        if str(getattr(c, "name", "")).strip()
+                    create_pc = getattr(t, "_create_pc_from_profile", None)
+                    if not callable(create_pc):
+                        return {"ok": False, "error": "Player-profile creation is unavailable."}
+
+                    requested_names = [str(raw_name or "").strip() for raw_name in names]
+                    requested_names = [name for name in requested_names if name]
+                    profiles = getattr(t, "_player_yaml_data_by_name", {}) or {}
+                    if requested_names and callable(load_cache):
+                        missing = [name for name in requested_names if not isinstance(profiles.get(name), dict)]
+                        if missing:
+                            try:
+                                load_cache(force_refresh=True)
+                            except TypeError:
+                                load_cache()
+                            except Exception:
+                                pass
+                            profiles = getattr(t, "_player_yaml_data_by_name", {}) or {}
+
+                    existing_names = set()
+                    if skip_existing:
+                        existing_names = {
+                            str(getattr(c, "name", "")).strip().lower()
+                            for c in (getattr(t, "combatants", {}) or {}).values()
+                            if str(getattr(c, "name", "")).strip()
+                        }
+
+                    added: List[str] = []
+                    skipped: List[str] = []
+                    created: List[Dict[str, Any]] = []
+
+                    for name in requested_names:
+                        profile = profiles.get(name)
+                        if not isinstance(profile, dict):
+                            skipped.append(name)
+                            continue
+                        if skip_existing and name.lower() in existing_names:
+                            skipped.append(name)
+                            continue
+                        try:
+                            cid = create_pc(name, profile)
+                        except Exception:
+                            cid = None
+                        if isinstance(cid, int):
+                            added.append(name)
+                            created.append({"cid": cid, "name": name})
+                            if skip_existing:
+                                existing_names.add(name.lower())
+                        else:
+                            skipped.append(name)
+
+                    if created:
+                        self._refresh_tracker_outputs()
+
+                    return {
+                        "ok": True,
+                        "added": added,
+                        "skipped": skipped,
+                        "created": created,
+                        "snapshot": self.combat_snapshot(),
                     }
-
-                added: List[str] = []
-                skipped: List[str] = []
-                created: List[Dict[str, Any]] = []
-
-                for name in requested_names:
-                    profile = profiles.get(name)
-                    if not isinstance(profile, dict):
-                        skipped.append(name)
-                        continue
-                    if skip_existing and name.lower() in existing_names:
-                        skipped.append(name)
-                        continue
-                    try:
-                        cid = create_pc(name, profile)
-                    except Exception:
-                        cid = None
-                    if isinstance(cid, int):
-                        added.append(name)
-                        created.append({"cid": cid, "name": name})
-                        if skip_existing:
-                            existing_names.add(name.lower())
-                    else:
-                        skipped.append(name)
-
-                if created:
-                    self._refresh_tracker_outputs()
-
-                return {
-                    "ok": True,
-                    "added": added,
-                    "skipped": skipped,
-                    "created": created,
-                    "snapshot": self.combat_snapshot(),
-                }
+                finally:
+                    if hold_cm is not None:
+                        try:
+                            hold_cm.__exit__(None, None, None)
+                        except Exception:
+                            pass
         finally:
             self._perf_log(
                 "CombatService.add_player_profile_combatants",
