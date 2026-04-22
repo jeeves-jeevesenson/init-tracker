@@ -6649,16 +6649,27 @@ class LanController:
         pcs = list(self._cached_pcs)
         with self._clients_lock:
             cid_to_host = {cid: set(hosts) for cid, hosts in self._cid_to_host.items()}
+        if not pcs:
+            return []
         profiles: Dict[str, Any] = {}
-        try:
-            profiles_fn = object.__getattribute__(self.app, "_player_profiles_payload")
-        except Exception:
-            profiles_fn = None
-        if callable(profiles_fn):
+        cached_profiles = None
+        cached_snapshot = self._cached_snapshot if isinstance(self._cached_snapshot, dict) else {}
+        if isinstance(cached_snapshot, dict):
+            cached_profiles = cached_snapshot.get("player_profiles")
+        if isinstance(cached_profiles, dict):
+            # Reuse LAN-cached static profiles instead of rebuilding on every
+            # state send; this avoids repeated YAML/profile hot-path churn.
+            profiles = cached_profiles
+        else:
             try:
-                profiles = profiles_fn()
+                profiles_fn = object.__getattribute__(self.app, "_player_profiles_payload")
             except Exception:
-                profiles = {}
+                profiles_fn = None
+            if callable(profiles_fn):
+                try:
+                    profiles = profiles_fn()
+                except Exception:
+                    profiles = {}
         out: List[Dict[str, Any]] = []
         for p in pcs:
             pp = dict(p)
@@ -19347,11 +19358,35 @@ class InitiativeTracker(base.InitiativeTracker):
         self,
         positions: Optional[Dict[int, Tuple[int, int]]] = None,
         feet_per_square: float = 5.0,
+        profiles_by_name: Optional[Dict[str, Dict[str, Any]]] = None,
     ) -> List[Dict[str, Any]]:
         if not bool(self.__dict__.get("_lan_auras_enabled", True)):
             return []
         pos_map = positions if isinstance(positions, dict) else dict(getattr(self, "_lan_positions", {}) or {})
         fps = max(1.0, float(feet_per_square or 5.0))
+        if not isinstance(profiles_by_name, dict):
+            try:
+                self._load_player_yaml_cache()
+            except Exception:
+                pass
+            profiles_by_name = (
+                self._player_yaml_data_by_name if isinstance(getattr(self, "_player_yaml_data_by_name", None), dict) else {}
+            )
+        profile_lookup: Dict[str, Dict[str, Any]] = {}
+        for raw_name, raw_profile in (profiles_by_name or {}).items():
+            if not isinstance(raw_profile, dict):
+                continue
+            name_key = str(raw_name or "").strip()
+            if not name_key:
+                continue
+            profile_lookup.setdefault(name_key, raw_profile)
+            norm_name = self._normalize_character_lookup_key(name_key)
+            if norm_name:
+                profile_lookup.setdefault(norm_name, raw_profile)
+        alias_map = self._player_yaml_name_map if isinstance(getattr(self, "_player_yaml_name_map", None), dict) else {}
+        profile_by_path = (
+            self._player_yaml_cache_by_path if isinstance(getattr(self, "_player_yaml_cache_by_path", None), dict) else {}
+        )
         contexts: List[Dict[str, Any]] = []
         for combatant in self.combatants.values():
             cid = _normalize_cid_value(getattr(combatant, "cid", None), "lan.aura.cid")
@@ -19360,9 +19395,14 @@ class InitiativeTracker(base.InitiativeTracker):
             if self._has_condition(combatant, "incapacitated"):
                 continue
             source_name = str(getattr(combatant, "name", "") or "").strip()
-            try:
-                profile = self._profile_for_player_name(source_name)
-            except Exception:
+            source_profile_key = self._normalize_character_lookup_key(source_name)
+            profile = profile_lookup.get(source_name)
+            if not isinstance(profile, dict) and source_profile_key:
+                profile = profile_lookup.get(source_profile_key)
+            if not isinstance(profile, dict) and source_profile_key:
+                alias_path = alias_map.get(source_profile_key)
+                profile = profile_by_path.get(alias_path) if isinstance(alias_path, Path) else None
+            if not isinstance(profile, dict):
                 profile = {}
             features = profile.get("features") if isinstance(profile, dict) else []
             if not isinstance(features, list):

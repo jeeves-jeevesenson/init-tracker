@@ -78,6 +78,7 @@ These specific blockers appear to have been addressed in repo and should be kept
 - duplicate `/dm/map` route definition
 - the specific inline heavy refresh path in encounter player/enemy population methods
 - LAN combat mutation refresh follow-up (2026-04-22): normal `CombatService` mutation broadcasts now run in non-static mode (`include_static=False`), `_lan_force_state_broadcast(include_static=False)` now snapshots with `hydrate_static=False`, and the live-client `_tick` polling snapshot also uses `hydrate_static=False` to avoid rebuilding static payloads on normal combat-state updates.
+- Add-Players profile churn follow-up (2026-04-22): `LanController._pcs_payload()` now reuses `self._cached_snapshot["player_profiles"]` when present instead of rebuilding live profiles on every state payload send (fallback to live `_player_profiles_payload()` remains when cache is unavailable), and `_lan_active_aura_contexts()` now preloads player profile cache once per snapshot pass instead of repeatedly calling `_profile_for_player_name()` for each combatant.
 
 ### 3.2 `/dm/map` validation, responsiveness, and workspace correction
 

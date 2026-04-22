@@ -7,6 +7,67 @@ import dnd_initative_tracker as tracker_mod
 
 
 class LanSnapshotStaticTests(unittest.TestCase):
+    def test_pcs_payload_prefers_cached_player_profiles(self):
+        lan = object.__new__(tracker_mod.LanController)
+        lan._clients_lock = threading.RLock()
+        lan._cached_pcs = [{"cid": 1, "name": "Alice"}]
+        lan._cid_to_host = {1: {"host-a"}}
+        lan._cached_snapshot = {"player_profiles": {"Alice": {"name": "Alice", "class": "wizard"}}}
+
+        class AppStub:
+            def _player_profiles_payload(self_inner):
+                raise AssertionError("should use cached snapshot player_profiles")
+
+        lan._tracker = AppStub()
+        payload = lan._pcs_payload()
+        self.assertEqual(1, len(payload))
+        self.assertEqual({"name": "Alice", "class": "wizard"}, payload[0]["player_profile"])
+        self.assertEqual("host-a", payload[0]["claimed_by"])
+
+    def test_pcs_payload_falls_back_to_live_profile_builder_when_cache_missing(self):
+        lan = object.__new__(tracker_mod.LanController)
+        lan._clients_lock = threading.RLock()
+        lan._cached_pcs = [{"cid": 1, "name": "Alice"}]
+        lan._cid_to_host = {}
+        lan._cached_snapshot = {}
+        calls = {"profiles": 0}
+
+        class AppStub:
+            def _player_profiles_payload(self_inner):
+                calls["profiles"] += 1
+                return {"Alice": {"name": "Alice", "level": 5}}
+
+        lan._tracker = AppStub()
+        payload = lan._pcs_payload()
+        self.assertEqual(1, calls["profiles"])
+        self.assertEqual(1, len(payload))
+        self.assertEqual({"name": "Alice", "level": 5}, payload[0]["player_profile"])
+
+    def test_lan_active_aura_contexts_loads_profile_cache_once_for_snapshot(self):
+        app = object.__new__(tracker_mod.InitiativeTracker)
+        app._lan_auras_enabled = True
+        app._lan_positions = {1: (0, 0), 2: (1, 0)}
+        app._player_yaml_data_by_name = {
+            "Alice": {"features": [{"grants": {"aura": {"radius_ft": 10}}}]},
+            "Bob": {"features": [{"grants": {"aura": {"radius_ft": 10}}}]},
+        }
+        app._player_yaml_name_map = {}
+        app._player_yaml_cache_by_path = {}
+        app._normalize_character_lookup_key = lambda value: str(value or "").strip().lower()
+        app._has_condition = lambda _combatant, _condition: False
+        app._lan_is_friendly_unit = lambda _cid: True
+        load_calls = {"count": 0}
+        app._load_player_yaml_cache = lambda force_refresh=False: load_calls.__setitem__("count", load_calls["count"] + 1)
+        app.combatants = {
+            1: types.SimpleNamespace(cid=1, name="Alice", ability_mods={}),
+            2: types.SimpleNamespace(cid=2, name="Bob", ability_mods={}),
+        }
+
+        contexts = tracker_mod.InitiativeTracker._lan_active_aura_contexts(app, positions=app._lan_positions)
+
+        self.assertEqual(1, load_calls["count"])
+        self.assertEqual(2, len(contexts))
+
     def test_static_data_payload_hydrates_presets_when_cache_empty(self):
         lan = object.__new__(tracker_mod.LanController)
         lan._cached_snapshot = {}
