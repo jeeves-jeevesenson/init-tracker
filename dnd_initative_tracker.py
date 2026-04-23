@@ -3602,8 +3602,15 @@ class LanController:
 
         dm_entrypoint = assets_dir / "web" / "dm" / "index.html"
 
-        def _dm_console_snapshot() -> Dict[str, Any]:
-            return self._dm_console_snapshot_payload()
+        def _dm_console_snapshot(
+            *,
+            combat_snapshot: Optional[Dict[str, Any]] = None,
+            tactical_snapshot: Optional[Dict[str, Any]] = None,
+        ) -> Dict[str, Any]:
+            return self._dm_console_snapshot_payload(
+                combat_snapshot=combat_snapshot,
+                tactical_snapshot=tactical_snapshot,
+            )
 
         def _load_dm_console_html(workspace: str = "dashboard") -> str:
             if not dm_entrypoint.exists():
@@ -3658,7 +3665,10 @@ class LanController:
                 result = _dm_service.next_turn()
                 if not result.get("ok"):
                     raise HTTPException(status_code=500, detail="Combat service failed to advance turn.")
-                return {"ok": True, "snapshot": _dm_console_snapshot()}
+                combat_snapshot = result.get("snapshot")
+                if not isinstance(combat_snapshot, dict):
+                    raise HTTPException(status_code=500, detail="Combat service returned an invalid snapshot.")
+                return {"ok": True, "snapshot": _dm_console_snapshot(combat_snapshot=combat_snapshot)}
             except HTTPException:
                 raise
             except Exception:
@@ -6817,18 +6827,35 @@ class LanController:
     def _dm_console_snapshot_payload(
         self,
         *,
+        combat_snapshot: Optional[Dict[str, Any]] = None,
         tactical_snapshot: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
+        perf_debug = os.getenv("LAN_PERF_DEBUG") == "1"
+        perf_start = time.perf_counter() if perf_debug else 0.0
+        combat_snapshot_ms = 0.0
+        tactical_snapshot_ms = 0.0
+        combat_source = "provided" if isinstance(combat_snapshot, dict) else "service"
+        tactical_source = "provided" if isinstance(tactical_snapshot, dict) else "tracker"
         snapshot: Dict[str, Any] = {}
-        dm_service = getattr(self, "_dm_service", None)
-        if dm_service is not None:
-            try:
-                candidate = dm_service.combat_snapshot()
-                if isinstance(candidate, dict):
-                    snapshot = dict(candidate)
-            except Exception:
-                snapshot = {}
+        if isinstance(combat_snapshot, dict):
+            snapshot = dict(combat_snapshot)
+        else:
+            dm_service = getattr(self, "_dm_service", None)
+            if dm_service is None:
+                combat_source = "missing"
+            else:
+                combat_started_at = time.perf_counter() if perf_debug else 0.0
+                try:
+                    candidate = dm_service.combat_snapshot()
+                    if isinstance(candidate, dict):
+                        snapshot = dict(candidate)
+                except Exception:
+                    snapshot = {}
+                finally:
+                    if combat_started_at > 0.0:
+                        combat_snapshot_ms = (time.perf_counter() - combat_started_at) * 1000.0
         tactical_payload: Dict[str, Any] = {}
+        tactical_started_at = time.perf_counter() if perf_debug else 0.0
         if isinstance(tactical_snapshot, dict):
             tactical_payload = dict(tactical_snapshot)
         else:
@@ -6840,7 +6867,26 @@ class LanController:
                         tactical_payload = candidate
             except Exception:
                 tactical_payload = {}
+        if tactical_started_at > 0.0:
+            tactical_snapshot_ms = (time.perf_counter() - tactical_started_at) * 1000.0
         snapshot["tactical_map"] = tactical_payload
+        if perf_start > 0.0:
+            elapsed_ms = (time.perf_counter() - perf_start) * 1000.0
+            combatant_count = len(snapshot.get("combatants")) if isinstance(snapshot.get("combatants"), list) else 0
+            unit_count = len(tactical_payload.get("units")) if isinstance(tactical_payload.get("units"), list) else 0
+            try:
+                self.app._oplog(
+                    f"LAN_PERF _dm_console_snapshot_payload elapsed_ms={elapsed_ms:.2f}"
+                    f" combat_source={combat_source}"
+                    f" combat_snapshot_ms={combat_snapshot_ms:.2f}"
+                    f" tactical_snapshot_ms={tactical_snapshot_ms:.2f}"
+                    f" tactical_source={tactical_source}"
+                    f" combatants={combatant_count}"
+                    f" units={unit_count}",
+                    level="info",
+                )
+            except Exception:
+                pass
         return snapshot
 
     def _push_dm_snapshot_to_ws_clients(self, snapshot: Dict[str, Any]) -> None:

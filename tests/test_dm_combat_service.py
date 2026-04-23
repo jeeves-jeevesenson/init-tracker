@@ -6,6 +6,7 @@ without requiring the Tkinter UI to be running.
 """
 import types
 import unittest
+import os
 from unittest.mock import Mock, patch
 
 import helper_script as base_tracker_mod
@@ -318,6 +319,21 @@ class CombatServiceNextTurnTests(unittest.TestCase):
         self.service.next_turn()
         self.service.next_turn()
         self.assertGreater(self.tracker.round_num, 1)
+
+    def test_next_turn_perf_log_breaks_out_hot_path_steps(self):
+        with patch.dict(os.environ, {"LAN_PERF_DEBUG": "1"}):
+            self.service.next_turn()
+        info_logs = [
+            message
+            for message, level in self.tracker._oplog_calls
+            if level == "info" and "LAN_PERF CombatService.next_turn" in message
+        ]
+        self.assertTrue(info_logs)
+        log = info_logs[-1]
+        self.assertIn("advance_turn_ms=", log)
+        self.assertIn("rebuild_ms=", log)
+        self.assertIn("broadcast_ms=", log)
+        self.assertIn("snapshot_ms=", log)
 
 
 class CombatServiceAdjustHpTests(unittest.TestCase):

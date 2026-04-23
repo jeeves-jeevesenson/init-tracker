@@ -467,21 +467,47 @@ class CombatService:
         returns the updated snapshot.
         """
         perf_start = time.perf_counter() if self._perf_debug_enabled() else 0.0
+        advance_turn_ms = 0.0
+        rebuild_ms = 0.0
+        broadcast_ms = 0.0
+        snapshot_ms = 0.0
         try:
             with self._lock:
                 t = self._tracker
+                advance_started_at = time.perf_counter() if perf_start > 0.0 else 0.0
                 try:
                     t._next_turn()
                 except Exception as exc:
                     return {"ok": False, "error": str(exc), "snapshot": self.combat_snapshot()}
+                finally:
+                    if advance_started_at > 0.0:
+                        advance_turn_ms = (time.perf_counter() - advance_started_at) * 1000.0
+                rebuild_started_at = time.perf_counter() if perf_start > 0.0 else 0.0
                 try:
                     t._rebuild_table(scroll_to_current=True)
                 except Exception:
                     pass
+                finally:
+                    if rebuild_started_at > 0.0:
+                        rebuild_ms = (time.perf_counter() - rebuild_started_at) * 1000.0
+                broadcast_started_at = time.perf_counter() if perf_start > 0.0 else 0.0
                 self._broadcast_tracker_state(include_static=False)
-                return {"ok": True, "snapshot": self.combat_snapshot()}
+                if broadcast_started_at > 0.0:
+                    broadcast_ms = (time.perf_counter() - broadcast_started_at) * 1000.0
+                snapshot_started_at = time.perf_counter() if perf_start > 0.0 else 0.0
+                snapshot = self.combat_snapshot()
+                if snapshot_started_at > 0.0:
+                    snapshot_ms = (time.perf_counter() - snapshot_started_at) * 1000.0
+                return {"ok": True, "snapshot": snapshot}
         finally:
-            self._perf_log("CombatService.next_turn", perf_start)
+            self._perf_log(
+                "CombatService.next_turn",
+                perf_start,
+                advance_turn_ms=f"{advance_turn_ms:.2f}",
+                rebuild_ms=f"{rebuild_ms:.2f}",
+                broadcast_ms=f"{broadcast_ms:.2f}",
+                snapshot_ms=f"{snapshot_ms:.2f}",
+            )
 
     def prev_turn(self) -> Dict[str, Any]:
         """Go back to the previous combatant's turn.

@@ -118,6 +118,8 @@ Current likely investigation targets:
 - combat mutation request paths (add players, add enemies, start combat, turn changes)
 - tactical snapshot/build/broadcast costs
 - YAML/profile/cache refresh behavior on live mutation paths
+- DM next-turn instrumentation follow-up (2026-04-22): `CombatService.next_turn()` now breaks its existing `LAN_PERF` total into `advance_turn_ms`, `rebuild_ms`, `broadcast_ms`, and `snapshot_ms`, and `LanController._dm_console_snapshot_payload()` now logs `combat_snapshot_ms` vs `tactical_snapshot_ms` plus `tactical_source`. This keeps behavior unchanged while exposing whether turn-change latency is dominated by the mutation itself, LAN broadcast, or the follow-up DM response snapshot build.
+- DM next-turn snapshot reuse follow-up (2026-04-22): `/api/dm/combat/next-turn` now threads the already-built `CombatService.next_turn()` combat snapshot into `_dm_console_snapshot_payload()` instead of re-calling `CombatService.combat_snapshot()` for the HTTP response. The helper now accepts optional precomputed combat payloads and logs `combat_source=provided|service|missing`, keeping the route payload shape unchanged while removing one duplicate combat snapshot build from the DM next-turn path.
 
 ---
 

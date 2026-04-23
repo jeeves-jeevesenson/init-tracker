@@ -1456,6 +1456,30 @@ class DmTacticalMapRoutesTests(unittest.TestCase):
         self.assertIn("DM_WORKSPACE", map_workspace.text)
         self.assertIn('id="mapWorkspacePanel"', map_workspace.text)
 
+    def test_next_turn_route_reuses_service_snapshot_for_dm_response(self):
+        client, lan = self._build_client()
+        service_snapshot = {
+            "in_combat": True,
+            "round": 3,
+            "turn": 2,
+            "active_cid": 2,
+            "turn_order": [1, 2],
+            "combatants": [{"cid": 2, "name": "Goblin", "is_current": True}],
+            "battle_log": ["Goblin acts."],
+        }
+        lan._dm_service.next_turn = lambda: {"ok": True, "snapshot": dict(service_snapshot)}
+        lan._dm_service.combat_snapshot = lambda: (_ for _ in ()).throw(AssertionError("unexpected combat snapshot call"))
+
+        response = client.post("/api/dm/combat/next-turn")
+
+        self.assertEqual(200, response.status_code)
+        payload = response.json()
+        self.assertTrue(payload["ok"])
+        self.assertEqual(3, payload["snapshot"]["round"])
+        self.assertEqual("Goblin", payload["snapshot"]["combatants"][0]["name"])
+        self.assertIn("tactical_map", payload["snapshot"])
+        self.assertEqual(12, payload["snapshot"]["tactical_map"]["grid"]["cols"])
+
     def test_map_new_route_initializes_blank_map(self):
         client, lan = self._build_client()
         response = client.post("/api/dm/map/new", json={"cols": 30, "rows": 18})
@@ -2688,7 +2712,8 @@ class DmConsoleSnapshotPayloadTests(unittest.TestCase):
     def test_combined_snapshot_merges_combat_and_tactical_payloads(self):
         lan = object.__new__(tracker_mod.LanController)
         lan._tracker = types.SimpleNamespace(
-            _dm_tactical_snapshot=lambda: {"grid": {"cols": 6, "rows": 6}, "units": [{"cid": 1, "pos": {"col": 1, "row": 2}}]}
+            _dm_tactical_snapshot=lambda: {"grid": {"cols": 6, "rows": 6}, "units": [{"cid": 1, "pos": {"col": 1, "row": 2}}]},
+            _oplog=lambda *_args, **_kwargs: None,
         )
         lan._dm_service = types.SimpleNamespace(
             combat_snapshot=lambda: {"in_combat": True, "combatants": [{"cid": 1, "name": "Aelar"}]}
@@ -2702,7 +2727,8 @@ class DmConsoleSnapshotPayloadTests(unittest.TestCase):
     def test_combined_snapshot_uses_precomputed_tactical_payload_when_provided(self):
         lan = object.__new__(tracker_mod.LanController)
         lan._tracker = types.SimpleNamespace(
-            _dm_tactical_snapshot=lambda: (_ for _ in ()).throw(AssertionError("unexpected tactical snapshot call"))
+            _dm_tactical_snapshot=lambda: (_ for _ in ()).throw(AssertionError("unexpected tactical snapshot call")),
+            _oplog=lambda *_args, **_kwargs: None,
         )
         lan._dm_service = types.SimpleNamespace(combat_snapshot=lambda: {"in_combat": False})
         payload = tracker_mod.LanController._dm_console_snapshot_payload(
@@ -2710,6 +2736,78 @@ class DmConsoleSnapshotPayloadTests(unittest.TestCase):
             tactical_snapshot={"grid": {"cols": 9, "rows": 9}, "units": []},
         )
         self.assertEqual(9, payload["tactical_map"]["grid"]["cols"])
+
+    def test_combined_snapshot_uses_precomputed_combat_payload_when_provided(self):
+        lan = object.__new__(tracker_mod.LanController)
+        lan._tracker = types.SimpleNamespace(
+            _dm_tactical_snapshot=lambda: {"grid": {"cols": 6, "rows": 6}, "units": [{"cid": 1, "pos": {"col": 1, "row": 2}}]},
+            _oplog=lambda *_args, **_kwargs: None,
+        )
+        lan._dm_service = types.SimpleNamespace(
+            combat_snapshot=lambda: (_ for _ in ()).throw(AssertionError("unexpected combat snapshot call"))
+        )
+        payload = tracker_mod.LanController._dm_console_snapshot_payload(
+            lan,
+            combat_snapshot={"in_combat": True, "combatants": [{"cid": 7, "name": "Provided"}]},
+        )
+        self.assertTrue(payload["in_combat"])
+        self.assertEqual("Provided", payload["combatants"][0]["name"])
+        self.assertEqual(6, payload["tactical_map"]["grid"]["cols"])
+
+    def test_combined_snapshot_perf_log_breaks_out_service_and_tactical_build(self):
+        oplog_calls = []
+
+        def _oplog(message, level="info"):
+            oplog_calls.append((str(message), str(level)))
+
+        lan = object.__new__(tracker_mod.LanController)
+        lan._tracker = types.SimpleNamespace(
+            _dm_tactical_snapshot=lambda: {"grid": {"cols": 6, "rows": 6}, "units": [{"cid": 1, "pos": {"col": 1, "row": 2}}]},
+            _oplog=_oplog,
+        )
+        lan._dm_service = types.SimpleNamespace(
+            combat_snapshot=lambda: {"in_combat": True, "combatants": [{"cid": 1, "name": "Aelar"}]}
+        )
+
+        with mock.patch.dict("os.environ", {"LAN_PERF_DEBUG": "1"}):
+            payload = tracker_mod.LanController._dm_console_snapshot_payload(lan)
+
+        self.assertTrue(payload["in_combat"])
+        info_logs = [message for message, level in oplog_calls if level == "info" and "LAN_PERF _dm_console_snapshot_payload" in message]
+        self.assertTrue(info_logs)
+        log = info_logs[-1]
+        self.assertIn("combat_source=service", log)
+        self.assertIn("combat_snapshot_ms=", log)
+        self.assertIn("tactical_snapshot_ms=", log)
+        self.assertIn("tactical_source=tracker", log)
+
+    def test_combined_snapshot_perf_log_marks_provided_combat_snapshot(self):
+        oplog_calls = []
+
+        def _oplog(message, level="info"):
+            oplog_calls.append((str(message), str(level)))
+
+        lan = object.__new__(tracker_mod.LanController)
+        lan._tracker = types.SimpleNamespace(
+            _dm_tactical_snapshot=lambda: {"grid": {"cols": 6, "rows": 6}, "units": [{"cid": 1, "pos": {"col": 1, "row": 2}}]},
+            _oplog=_oplog,
+        )
+        lan._dm_service = types.SimpleNamespace(
+            combat_snapshot=lambda: (_ for _ in ()).throw(AssertionError("unexpected combat snapshot call"))
+        )
+
+        with mock.patch.dict("os.environ", {"LAN_PERF_DEBUG": "1"}):
+            payload = tracker_mod.LanController._dm_console_snapshot_payload(
+                lan,
+                combat_snapshot={"in_combat": True, "combatants": [{"cid": 1, "name": "Aelar"}]},
+            )
+
+        self.assertTrue(payload["in_combat"])
+        info_logs = [message for message, level in oplog_calls if level == "info" and "LAN_PERF _dm_console_snapshot_payload" in message]
+        self.assertTrue(info_logs)
+        log = info_logs[-1]
+        self.assertIn("combat_source=provided", log)
+        self.assertIn("tactical_source=tracker", log)
 
 
 class DmTacticalMapHtmlSurfaceTests(unittest.TestCase):
