@@ -204,6 +204,36 @@ class LanSpellTargetRequestTests(unittest.TestCase):
         self.assertEqual(self.app.combatants[2].hp, 11)
         self.assertIn((11, "Fire Bolt hits: 9 damage (9 fire)."), self.toasts)
 
+    def test_spell_target_request_preset_backed_resolution_stays_low_level_without_cast_authority_context(self):
+        self.app._find_spell_preset = lambda *_args, **_kwargs: {
+            "slug": "fire-bolt",
+            "id": "fire-bolt",
+            "name": "Fire Bolt",
+            "level": 0,
+            "mechanics": {"sequence": []},
+        }
+        msg = {
+            "type": "spell_target_request",
+            "cid": 1,
+            "_claimed_cid": 1,
+            "_ws_id": 41,
+            "target_cid": 2,
+            "spell_name": "Fire Bolt",
+            "spell_slug": "fire-bolt",
+            "spell_id": "fire-bolt",
+            "spell_mode": "attack",
+            "hit": True,
+            "damage_entries": [{"amount": 6, "type": "fire"}],
+        }
+
+        self.app._lan_apply_action(msg)
+
+        result = msg.get("_spell_target_result")
+        self.assertIsInstance(result, dict)
+        self.assertTrue(result.get("hit"))
+        self.assertEqual(self.app.combatants[2].hp, 14)
+        self.assertFalse(bool(msg.get("_spell_cast_authorized")))
+
 
     def test_spell_target_request_toast_includes_beam_label_for_multi_projectile(self):
         msg = {

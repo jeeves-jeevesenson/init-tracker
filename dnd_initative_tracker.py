@@ -30204,26 +30204,379 @@ class InitiativeTracker(base.InitiativeTracker):
         slots = self._normalize_spell_slots(spellcasting.get("spell_slots") if isinstance(spellcasting, dict) else None)
         return player_name, slots
 
-    def _consume_spell_slot_for_cast(
+    @staticmethod
+    def _spell_resource_spend_provenance(pool_id: Any, slot_level: Optional[int] = None) -> Dict[str, Any]:
+        payload: Dict[str, Any] = {"pool_id": str(pool_id or "").strip().lower()}
+        try:
+            lvl = int(slot_level) if slot_level is not None else None
+        except Exception:
+            lvl = None
+        if lvl is not None and lvl > 0:
+            payload["slot_level"] = int(lvl)
+        return payload
+
+    def _spell_resource_spend_provenance_for_pool(
+        self,
+        caster_name: str,
+        pool_id: Any,
+        *,
+        slot_level: Optional[int] = None,
+    ) -> Optional[Dict[str, Any]]:
+        pool_key = str(pool_id or "").strip().lower()
+        if not pool_key:
+            return None
+        actual_slot_level = None
+        player_name = str(caster_name or "").strip()
+        if player_name:
+            try:
+                profile = self._profile_for_player_name(player_name)
+            except Exception:
+                profile = {}
+            pools = self._normalize_player_resource_pools(profile if isinstance(profile, dict) else {})
+            pool_entry = next(
+                (
+                    entry
+                    for entry in pools
+                    if isinstance(entry, dict) and str(entry.get("id") or "").strip().lower() == pool_key
+                ),
+                None,
+            )
+            if isinstance(pool_entry, dict):
+                try:
+                    actual_slot_level = int(pool_entry.get("slot_level"))
+                except Exception:
+                    actual_slot_level = None
+        if actual_slot_level is None:
+            try:
+                actual_slot_level = int(slot_level) if slot_level is not None else None
+            except Exception:
+                actual_slot_level = None
+        return self._spell_resource_spend_provenance(pool_key, actual_slot_level)
+
+    def _pending_spell_target_cast_authorities(self) -> Dict[int, Dict[str, Any]]:
+        pending = self.__dict__.get("_pending_spell_target_cast_authority_map")
+        if not isinstance(pending, dict):
+            pending = {}
+            self.__dict__["_pending_spell_target_cast_authority_map"] = pending
+        return pending
+
+    def _record_pending_spell_target_cast_authority(
+        self,
+        caster_cid: Optional[int],
+        *,
+        spell_slug: Any,
+        spell_id: Any,
+        requested_slot_level: Optional[int],
+        spend_provenance: Optional[Dict[str, Any]],
+    ) -> None:
+        if caster_cid is None:
+            return
+        try:
+            cid_int = int(caster_cid)
+        except Exception:
+            return
+        pending = self._pending_spell_target_cast_authorities()
+        pending[cid_int] = {
+            "spell_slug": str(spell_slug or "").strip().lower(),
+            "spell_id": str(spell_id or "").strip().lower(),
+            "requested_slot_level": int(requested_slot_level) if requested_slot_level is not None else None,
+            "spend_provenance": copy.deepcopy(spend_provenance) if isinstance(spend_provenance, dict) else None,
+            "created_at": float(time.monotonic()),
+        }
+
+    def _consume_pending_spell_target_cast_authority_for_request(
+        self,
+        caster_cid: Optional[int],
+        *,
+        spell_slug: Any,
+        spell_id: Any,
+        requested_slot_level: Optional[int],
+    ) -> Optional[Dict[str, Any]]:
+        if caster_cid is None:
+            return None
+        try:
+            cid_int = int(caster_cid)
+        except Exception:
+            return None
+        pending = self._pending_spell_target_cast_authorities()
+        record = pending.get(cid_int)
+        if not isinstance(record, dict):
+            return None
+        try:
+            created_at = float(record.get("created_at") or 0.0)
+        except Exception:
+            created_at = 0.0
+        if created_at > 0.0 and time.monotonic() - created_at > 30.0:
+            pending.pop(cid_int, None)
+            return None
+        stored_keys = {
+            str(record.get("spell_slug") or "").strip().lower(),
+            str(record.get("spell_id") or "").strip().lower(),
+        } - {""}
+        request_keys = {
+            str(spell_slug or "").strip().lower(),
+            str(spell_id or "").strip().lower(),
+        } - {""}
+        if stored_keys and request_keys and not stored_keys.intersection(request_keys):
+            return None
+        stored_requested_level = record.get("requested_slot_level")
+        try:
+            requested_level = int(requested_slot_level) if requested_slot_level is not None else None
+        except Exception:
+            requested_level = None
+        if (
+            stored_requested_level is not None
+            and requested_level is not None
+            and int(stored_requested_level) != int(requested_level)
+        ):
+            return None
+        spend_provenance = record.get("spend_provenance")
+        pending.pop(cid_int, None)
+        return {
+            "authorized": True,
+            "source": "cast_spell",
+            "spend_provenance": copy.deepcopy(spend_provenance) if isinstance(spend_provenance, dict) else None,
+        }
+
+    def _record_pending_spell_target_resource_spend(
+        self,
+        caster_cid: Optional[int],
+        *,
+        spell_slug: Any,
+        spell_id: Any,
+        requested_slot_level: Optional[int],
+        provenance: Optional[Dict[str, Any]],
+    ) -> None:
+        self._record_pending_spell_target_cast_authority(
+            caster_cid,
+            spell_slug=spell_slug,
+            spell_id=spell_id,
+            requested_slot_level=requested_slot_level,
+            spend_provenance=provenance,
+        )
+
+    def _pending_spell_target_resource_spends(self) -> Dict[int, Dict[str, Any]]:
+        return self._pending_spell_target_cast_authorities()
+
+    def _pending_spell_target_resource_spend_for_request(
+        self,
+        caster_cid: Optional[int],
+        *,
+        spell_slug: Any,
+        spell_id: Any,
+        requested_slot_level: Optional[int],
+    ) -> Optional[Dict[str, Any]]:
+        authority = self._consume_pending_spell_target_cast_authority_for_request(
+            caster_cid,
+            spell_slug=spell_slug,
+            spell_id=spell_id,
+            requested_slot_level=requested_slot_level,
+        )
+        if not isinstance(authority, dict):
+            return None
+        spend_provenance = authority.get("spend_provenance")
+        return copy.deepcopy(spend_provenance) if isinstance(spend_provenance, dict) else None
+
+    def _authorize_spell_cast_for_resolution(
+        self,
+        *,
+        msg: Dict[str, Any],
+        caster_cid: Optional[int],
+        combatant: Any,
+        preset: Optional[Dict[str, Any]],
+        spell_slug: Any,
+        spell_id: Any,
+        slot_level: Optional[int],
+        preset_level: Optional[int],
+        ws_id: Any,
+        is_admin: bool,
+        record_pending_target: bool,
+        allow_compat_passthrough: bool,
+    ) -> Dict[str, Any]:
+        result: Dict[str, Any] = {
+            "ok": True,
+            "handled": False,
+            "spend_provenance": None,
+        }
+        if not isinstance(msg, dict) or combatant is None or is_admin:
+            return result
+        payload = msg.get("payload") if isinstance(msg.get("payload"), dict) else {}
+        spend = self._resolve_spell_spend_type(preset=preset, msg=msg, payload=payload)
+        player_name = self._pc_name_for(int(caster_cid)) if caster_cid is not None else ""
+        if allow_compat_passthrough and (not player_name or str(player_name).strip().startswith("cid:")):
+            return result
+        try:
+            profile = self._profile_for_player_name(player_name)
+        except Exception:
+            profile = {}
+        spellcasting = profile.get("spellcasting") if isinstance(profile, dict) and isinstance(profile.get("spellcasting"), dict) else {}
+        if allow_compat_passthrough and not self._is_spellcasting_enabled(spellcasting):
+            return result
+        if allow_compat_passthrough:
+            has_turn_gate = hasattr(combatant, "spell_cast_remaining")
+            action_entries = self._iter_combatant_actions(combatant, spend)
+            if spend == "bonus":
+                action_entries = list(action_entries) + list(self._iter_combatant_actions(combatant, "action"))
+            if not has_turn_gate or not action_entries:
+                return result
+
+        preset_slug = str((preset or {}).get("slug") or "").strip().lower()
+        preset_id = str((preset or {}).get("id") or "").strip().lower()
+        preset_school = str((preset or {}).get("school") or "").strip().lower()
+        beguiling_magic_slot_equivalent_used = False
+        spell_resource_spend_provenance: Optional[Dict[str, Any]] = None
+        consumes_pool = payload.get("consumes_pool") if isinstance(payload.get("consumes_pool"), dict) else {}
+        pool_id = str(
+            msg.get("consumes_pool_id")
+            or payload.get("consumes_pool_id")
+            or consumes_pool.get("id")
+            or consumes_pool.get("pool")
+            or ""
+        ).strip()
+        try:
+            pool_cost = int(
+                msg.get("consumes_pool_cost")
+                if msg.get("consumes_pool_cost") is not None
+                else payload.get("consumes_pool_cost")
+                if payload.get("consumes_pool_cost") is not None
+                else consumes_pool.get("cost", 1)
+            )
+        except Exception:
+            pool_cost = 1
+        pool_cost = max(1, pool_cost)
+        if pool_id:
+            ok_pool, pool_err = self._consume_resource_pool_for_cast(
+                caster_name=player_name,
+                pool_id=pool_id,
+                cost=pool_cost,
+            )
+            if not ok_pool:
+                return {
+                    "ok": False,
+                    "handled": True,
+                    "error": str(pool_err or "Could not spend that spell resource, matey."),
+                    "spend_provenance": None,
+                }
+            spell_resource_spend_provenance = self._spell_resource_spend_provenance_for_pool(
+                player_name,
+                pool_id,
+                slot_level=slot_level,
+            )
+            if str(pool_id or "").strip().lower() == "pact_magic_slots":
+                beguiling_magic_slot_equivalent_used = True
+        else:
+            ok_slot, slot_err, _spent_level, spell_resource_spend_provenance = self._consume_spell_slot_for_cast_with_provenance(
+                caster_name=player_name,
+                slot_level=slot_level,
+                minimum_level=preset_level,
+            )
+            if not ok_slot:
+                return {
+                    "ok": False,
+                    "handled": True,
+                    "error": str(slot_err or "Could not spend a spell slot, matey."),
+                    "spend_provenance": None,
+                }
+            beguiling_magic_slot_equivalent_used = True
+        if spend != "reaction" and int(getattr(combatant, "spell_cast_remaining", 0) or 0) <= 0:
+            return {
+                "ok": False,
+                "handled": True,
+                "error": "Already cast a spell this turn, matey.",
+                "spend_provenance": spell_resource_spend_provenance,
+            }
+        if not self._combatant_can_cast_spell(combatant, spend):
+            return {
+                "ok": False,
+                "handled": True,
+                "error": "No spellcasting action available, matey.",
+                "spend_provenance": spell_resource_spend_provenance,
+            }
+        blocked, blocked_msg = self._spellcast_blocked_by_environment(combatant, preset)
+        if blocked:
+            return {
+                "ok": False,
+                "handled": True,
+                "error": str(blocked_msg or "The environment prevents that spell, matey."),
+                "spend_provenance": spell_resource_spend_provenance,
+            }
+        spell_name = self._spell_label_from_identifiers(
+            (preset or {}).get("name") if isinstance(preset, dict) else None,
+            preset_slug,
+            spell_slug,
+            spell_id,
+        )
+        cast_log = self._spell_cast_log_message(getattr(combatant, "name", "Caster"), spell_name, slot_level)
+        if spend == "bonus":
+            if not self._use_bonus_action(combatant, log_message=cast_log):
+                return {
+                    "ok": False,
+                    "handled": True,
+                    "error": "No bonus actions left, matey.",
+                    "spend_provenance": spell_resource_spend_provenance,
+                }
+        elif spend == "reaction":
+            if not self._use_reaction(combatant, log_message=cast_log):
+                return {
+                    "ok": False,
+                    "handled": True,
+                    "error": "No reactions left, matey.",
+                    "spend_provenance": spell_resource_spend_provenance,
+                }
+        else:
+            if not self._use_action(combatant, log_message=cast_log):
+                return {
+                    "ok": False,
+                    "handled": True,
+                    "error": "No actions left, matey.",
+                    "spend_provenance": spell_resource_spend_provenance,
+                }
+        combatant.spell_cast_remaining = max(0, int(getattr(combatant, "spell_cast_remaining", 0) or 0) - 1)
+        if record_pending_target:
+            self._record_pending_spell_target_cast_authority(
+                int(caster_cid) if caster_cid is not None else None,
+                spell_slug=spell_slug or preset_slug,
+                spell_id=spell_id or preset_id,
+                requested_slot_level=slot_level,
+                spend_provenance=spell_resource_spend_provenance,
+            )
+        smite_slug = self._smite_slug_from_preset(preset)
+        if smite_slug and smite_slug in _SMITE_SPELL_CONFIG:
+            setattr(
+                combatant,
+                "pending_smite_charge",
+                {
+                    "slug": smite_slug,
+                    "name": str((preset or {}).get("name") or smite_slug.replace("-", " ").title()),
+                    "slot_level": slot_level,
+                },
+            )
+        if beguiling_magic_slot_equivalent_used and preset_school in {"enchantment", "illusion"}:
+            self._arm_beguiling_magic_window(combatant, duration_s=20.0)
+        result["handled"] = True
+        result["spend_provenance"] = copy.deepcopy(spell_resource_spend_provenance) if isinstance(spell_resource_spend_provenance, dict) else None
+        return result
+
+    def _consume_spell_slot_for_cast_with_provenance(
         self,
         caster_name: str,
         slot_level: Optional[int],
         minimum_level: Optional[int],
-    ) -> Tuple[bool, str, Optional[int]]:
+    ) -> Tuple[bool, str, Optional[int], Optional[Dict[str, Any]]]:
         if slot_level is None:
-            return True, "", None
+            return True, "", None, None
         if slot_level == 0:
-            return True, "", 0
+            return True, "", 0, None
         if slot_level < 1 or slot_level > 9:
-            return False, "Pick a valid spell slot level, matey.", None
+            return False, "Pick a valid spell slot level, matey.", None, None
         if minimum_level is not None and slot_level < minimum_level:
-            return False, "Ye can't downcast that spell, matey.", None
+            return False, "Ye can't downcast that spell, matey.", None, None
         try:
             player_name, slots = self._resolve_spell_slot_profile(caster_name)
         except ValueError as exc:
-            return False, str(exc), None
+            return False, str(exc), None, None
         except Exception:
-            return False, "No spell slots set up for that caster, matey.", None
+            return False, "No spell slots set up for that caster, matey.", None, None
 
         spend_level = None
         for lvl in range(slot_level, 10):
@@ -30251,26 +30604,45 @@ class InitiativeTracker(base.InitiativeTracker):
                 and (minimum_level is None or int(minimum_level) <= int(pact_level))
             )
             if not pact_eligible:
-                return False, "No spell slots left for that level, matey.", None
+                return False, "No spell slots left for that level, matey.", None, None
             ok_pool, pool_err = self._consume_resource_pool_for_cast(player_name, "pact_magic_slots", 1)
             if not ok_pool:
-                return False, pool_err or "No spell slots left for that level, matey.", None
-            return True, "", int(pact_level)
+                return False, pool_err or "No spell slots left for that level, matey.", None, None
+            return True, "", int(pact_level), self._spell_resource_spend_provenance("pact_magic_slots", int(pact_level))
 
         spend_key = str(spend_level)
         slots[spend_key]["current"] = max(0, int(slots[spend_key].get("current", 0) or 0) - 1)
         try:
             self._save_player_spell_slots(player_name, slots)
         except Exception:
-            return False, "Could not update spell slots, matey.", None
-        return True, "", spend_level
+            return False, "Could not update spell slots, matey.", None, None
+        return True, "", spend_level, self._spell_resource_spend_provenance("spell_slots", int(spend_level))
 
-    def _refund_spell_slot(self, caster_name: str, slot_level: int) -> bool:
+    def _consume_spell_slot_for_cast(
+        self,
+        caster_name: str,
+        slot_level: Optional[int],
+        minimum_level: Optional[int],
+    ) -> Tuple[bool, str, Optional[int]]:
+        ok, err, spent_level, _provenance = self._consume_spell_slot_for_cast_with_provenance(
+            caster_name,
+            slot_level,
+            minimum_level,
+        )
+        return ok, err, spent_level
+
+    def _refund_spell_slot(
+        self,
+        caster_name: str,
+        slot_level: int,
+        spend_provenance: Optional[Dict[str, Any]] = None,
+    ) -> bool:
         """Refund a spell slot previously consumed (used by Counterspell on contest success).
 
-        Best-effort; returns True on success, False otherwise. Does not
-        handle pact-magic-slot refunds (counterspell-refunded pact slots
-        are a deferred edge case).
+        Best-effort; returns True on success, False otherwise. Pact-only
+        casters with no standard slot capacity refund the matching
+        ``pact_magic_slots`` resource pool instead of materializing fake
+        standard slots.
         """
         try:
             lvl = int(slot_level)
@@ -30278,6 +30650,114 @@ class InitiativeTracker(base.InitiativeTracker):
             return False
         if lvl < 1 or lvl > 9:
             return False
+        player_name = str(caster_name or "").strip()
+        if not player_name:
+            return False
+        provenance_pool_id = ""
+        provenance_level: Optional[int] = None
+        if isinstance(spend_provenance, dict):
+            provenance_pool_id = str(spend_provenance.get("pool_id") or "").strip().lower()
+            try:
+                provenance_level = int(spend_provenance.get("slot_level")) if spend_provenance.get("slot_level") is not None else None
+            except Exception:
+                provenance_level = None
+        if provenance_pool_id:
+            if provenance_pool_id == "spell_slots":
+                if provenance_level is not None and provenance_level > 0:
+                    lvl = int(provenance_level)
+                else:
+                    return False
+            elif provenance_pool_id == "pact_magic_slots":
+                if provenance_level is not None and provenance_level > 0:
+                    lvl = int(provenance_level)
+                pact_pool = self._spell_resource_spend_provenance_for_pool(player_name, "pact_magic_slots", slot_level=lvl)
+                if not isinstance(pact_pool, dict):
+                    return False
+                try:
+                    profile = self._profile_for_player_name(player_name)
+                except Exception:
+                    profile = {}
+                pools = self._normalize_player_resource_pools(profile if isinstance(profile, dict) else {})
+                pool_entry = next(
+                    (
+                        entry
+                        for entry in pools
+                        if isinstance(entry, dict) and str(entry.get("id") or "").strip().lower() == "pact_magic_slots"
+                    ),
+                    None,
+                )
+                if not isinstance(pool_entry, dict):
+                    return False
+                try:
+                    current_value = int(pool_entry.get("current", 0))
+                except Exception:
+                    current_value = 0
+                try:
+                    max_value = int(pool_entry.get("max", 0))
+                except Exception:
+                    max_value = 0
+                if max_value > 0:
+                    current_value = max(0, min(current_value, max_value))
+                else:
+                    current_value = max(0, current_value)
+                target_value = min(current_value + 1, max_value) if max_value > 0 else current_value + 1
+                if target_value == current_value:
+                    return True
+                ok_pool, _pool_err = self._set_player_resource_pool_current(player_name, "pact_magic_slots", int(target_value))
+                return bool(ok_pool)
+            else:
+                return False
+        try:
+            profile = self._profile_for_player_name(player_name)
+        except Exception:
+            profile = {}
+        spellcasting = profile.get("spellcasting") if isinstance(profile, dict) and isinstance(profile.get("spellcasting"), dict) else {}
+        slots_payload = spellcasting.get("spell_slots") if isinstance(spellcasting, dict) else None
+        slots = self._normalize_spell_slots(slots_payload)
+        standard_slot_capacity = any(int((entry or {}).get("max", 0) or 0) > 0 for entry in slots.values())
+        pact_magic = spellcasting.get("pact_magic_slots") if isinstance(spellcasting.get("pact_magic_slots"), dict) else {}
+        try:
+            pact_level = int(pact_magic.get("level") or 0)
+        except Exception:
+            pact_level = 0
+        try:
+            pact_count = int(pact_magic.get("count") or 0)
+        except Exception:
+            pact_count = 0
+        if (
+            not standard_slot_capacity
+            and pact_level >= 1
+            and pact_count > 0
+            and lvl <= pact_level
+        ):
+            pools = self._normalize_player_resource_pools(profile if isinstance(profile, dict) else {})
+            pact_pool = next(
+                (
+                    entry
+                    for entry in pools
+                    if isinstance(entry, dict) and str(entry.get("id") or "").strip().lower() == "pact_magic_slots"
+                ),
+                None,
+            )
+            if not isinstance(pact_pool, dict):
+                return False
+            try:
+                current_value = int(pact_pool.get("current", pact_count))
+            except Exception:
+                current_value = int(pact_count)
+            try:
+                max_value = int(pact_pool.get("max", pact_count))
+            except Exception:
+                max_value = int(pact_count)
+            if max_value > 0:
+                current_value = max(0, min(current_value, max_value))
+            else:
+                current_value = max(0, current_value)
+            target_value = min(current_value + 1, max_value) if max_value > 0 else current_value + 1
+            if target_value == current_value:
+                return True
+            ok_pool, _pool_err = self._set_player_resource_pool_current(player_name, "pact_magic_slots", int(target_value))
+            return bool(ok_pool)
         try:
             player_name, slots = self._resolve_spell_slot_profile(caster_name)
         except Exception:
@@ -30289,6 +30769,8 @@ class InitiativeTracker(base.InitiativeTracker):
         if not isinstance(entry, dict):
             return False
         max_val = int(entry.get("max", 0) or 0)
+        if max_val <= 0:
+            return False
         current = int(entry.get("current", 0) or 0)
         new_current = current + 1
         if max_val > 0:
@@ -33603,6 +34085,9 @@ class InitiativeTracker(base.InitiativeTracker):
         sequence = mechanics.get("sequence") if isinstance(mechanics.get("sequence"), list) else []
         preset_slug = str((preset or {}).get("slug") or "").strip().lower()
         preset_id = str((preset or {}).get("id") or "").strip().lower()
+        request_slot_level = _parse_int(msg.get("slot_level"), None)
+        if request_slot_level is None and isinstance(preset, dict):
+            request_slot_level = _parse_int(preset.get("level"), None)
 
         def _reject_invalid_spell_target(reason: str) -> None:
             msg["_spell_target_result"] = build_spell_target_rejection_payload(
@@ -33628,6 +34113,47 @@ class InitiativeTracker(base.InitiativeTracker):
         if requested_spell_mode == "effect" and has_destination and not self._spell_supports_relocation_followup(preset):
             _reject_invalid_spell_target("Relocation follow-up is invalid for that spell.")
             return
+        if isinstance(msg.get("_spell_resource_spend_provenance"), dict):
+            msg["_spell_cast_authorized"] = True
+            if not str(msg.get("_spell_cast_authority_source") or "").strip():
+                msg["_spell_cast_authority_source"] = "resume_dispatch"
+        if not bool(msg.get("_spell_cast_authorized")):
+            pending_authority = self._consume_pending_spell_target_cast_authority_for_request(
+                int(cid),
+                spell_slug=msg.get("spell_slug") or preset_slug,
+                spell_id=msg.get("spell_id") or preset_id,
+                requested_slot_level=request_slot_level,
+            )
+            if isinstance(pending_authority, dict):
+                msg["_spell_cast_authorized"] = True
+                msg["_spell_cast_authority_source"] = str(pending_authority.get("source") or "cast_spell")
+                spend_provenance = pending_authority.get("spend_provenance")
+                if isinstance(spend_provenance, dict):
+                    msg["_spell_resource_spend_provenance"] = spend_provenance
+            else:
+                direct_auth_result = self._authorize_spell_cast_for_resolution(
+                    msg=msg,
+                    caster_cid=cid,
+                    combatant=c,
+                    preset=preset if isinstance(preset, dict) else None,
+                    spell_slug=msg.get("spell_slug") or preset_slug,
+                    spell_id=msg.get("spell_id") or preset_id,
+                    slot_level=request_slot_level,
+                    preset_level=_parse_int((preset or {}).get("level") if isinstance(preset, dict) else None, None),
+                    ws_id=ws_id,
+                    is_admin=bool(is_admin),
+                    record_pending_target=False,
+                    allow_compat_passthrough=True,
+                )
+                if not bool(direct_auth_result.get("ok")):
+                    _reject_invalid_spell_target(str(direct_auth_result.get("error") or "Could not cast that spell, matey."))
+                    return
+                if bool(direct_auth_result.get("handled")):
+                    msg["_spell_cast_authorized"] = True
+                    msg["_spell_cast_authority_source"] = "spell_target_request_direct"
+                    spend_provenance = direct_auth_result.get("spend_provenance")
+                    if isinstance(spend_provenance, dict):
+                        msg["_spell_resource_spend_provenance"] = spend_provenance
 
         is_magic_missile = preset_slug in ("magic-missile", "magic_missile") or preset_id in ("magic-missile", "magic_missile")
         if is_magic_missile and not bool(msg.get("_shield_resolution_done")):
@@ -37658,91 +38184,28 @@ class InitiativeTracker(base.InitiativeTracker):
                         if dist_ft - max_range_ft > 1e-6:
                             self._lan.toast(ws_id, "That square be out of spell range, matey.")
                             return
-        beguiling_magic_slot_equivalent_used = False
-        preset_school = str(preset.get("school") or "").strip().lower()
+        records_target_authority = (
+            not isinstance(summon_cfg, dict)
+            and bool(self._infer_spell_targeting_mode(preset))
+        )
         if c is not None and not is_admin:
-            player_name = self._pc_name_for(int(cid)) if cid is not None else ""
-            consumes_pool = payload.get("consumes_pool") if isinstance(payload.get("consumes_pool"), dict) else {}
-            pool_id = str(
-                msg.get("consumes_pool_id")
-                or payload.get("consumes_pool_id")
-                or consumes_pool.get("id")
-                or consumes_pool.get("pool")
-                or ""
-            ).strip()
-            try:
-                pool_cost = int(
-                    msg.get("consumes_pool_cost")
-                    if msg.get("consumes_pool_cost") is not None
-                    else payload.get("consumes_pool_cost")
-                    if payload.get("consumes_pool_cost") is not None
-                    else consumes_pool.get("cost", 1)
-                )
-            except Exception:
-                pool_cost = 1
-            pool_cost = max(1, pool_cost)
-            if pool_id:
-                ok_pool, pool_err = self._consume_resource_pool_for_cast(
-                    caster_name=player_name,
-                    pool_id=pool_id,
-                    cost=pool_cost,
-                )
-                if not ok_pool:
-                    self._lan.toast(ws_id, pool_err)
-                    return
-                if str(pool_id or "").strip().lower() == "pact_magic_slots":
-                    beguiling_magic_slot_equivalent_used = True
-            else:
-                ok_slot, slot_err, _spent_level = self._consume_spell_slot_for_cast(
-                    caster_name=player_name,
-                    slot_level=slot_level,
-                    minimum_level=preset_level,
-                )
-                if not ok_slot:
-                    self._lan.toast(ws_id, slot_err)
-                    return
-                beguiling_magic_slot_equivalent_used = True
-            if spend != "reaction" and int(getattr(c, "spell_cast_remaining", 0) or 0) <= 0:
-                self._lan.toast(ws_id, "Already cast a spell this turn, matey.")
-                return
-            if not self._combatant_can_cast_spell(c, spend):
-                self._lan.toast(ws_id, "No spellcasting action available, matey.")
-                return
-            blocked, blocked_msg = self._spellcast_blocked_by_environment(c, preset)
-            if blocked:
-                self._lan.toast(ws_id, blocked_msg or "The environment prevents that spell, matey.")
-                return
-            spell_name = self._spell_label_from_identifiers(
-                preset.get("name"),
-                preset.get("slug"),
-                spell_slug,
-                spell_id,
+            auth_result = self._authorize_spell_cast_for_resolution(
+                msg=msg,
+                caster_cid=cid,
+                combatant=c,
+                preset=preset,
+                spell_slug=spell_slug,
+                spell_id=spell_id,
+                slot_level=slot_level,
+                preset_level=preset_level,
+                ws_id=ws_id,
+                is_admin=bool(is_admin),
+                record_pending_target=records_target_authority,
+                allow_compat_passthrough=False,
             )
-            cast_log = self._spell_cast_log_message(c.name, spell_name, slot_level)
-            if spend == "bonus":
-                if not self._use_bonus_action(c, log_message=cast_log):
-                    self._lan.toast(ws_id, "No bonus actions left, matey.")
-                    return
-            elif spend == "reaction":
-                if not self._use_reaction(c, log_message=cast_log):
-                    self._lan.toast(ws_id, "No reactions left, matey.")
-                    return
-            else:
-                if not self._use_action(c, log_message=cast_log):
-                    self._lan.toast(ws_id, "No actions left, matey.")
-                    return
-            c.spell_cast_remaining = max(0, int(getattr(c, "spell_cast_remaining", 0) or 0) - 1)
-            smite_slug = self._smite_slug_from_preset(preset)
-            if smite_slug and smite_slug in _SMITE_SPELL_CONFIG:
-                setattr(
-                    c,
-                    "pending_smite_charge",
-                    {
-                        "slug": smite_slug,
-                        "name": str(preset.get("name") or smite_slug.replace("-", " ").title()),
-                        "slot_level": slot_level,
-                    },
-                )
+            if not bool(auth_result.get("ok")):
+                self._lan.toast(ws_id, str(auth_result.get("error") or "Could not cast that spell, matey."))
+                return
             if summon_cfg and cid is not None:
                 spawned_cids = self._spawn_summons_from_cast(
                     caster_cid=cid,
@@ -37787,8 +38250,6 @@ class InitiativeTracker(base.InitiativeTracker):
                     targets=[int(x) for x in spawned_cids],
                 )
         if c is not None:
-            if beguiling_magic_slot_equivalent_used and preset_school in {"enchantment", "illusion"}:
-                self._arm_beguiling_magic_window(c, duration_s=20.0)
             spell_key_for_effect = str(preset.get("slug") or preset.get("id") or spell_slug or spell_id or "").strip().lower()
             if c is not None and spell_key_for_effect in {
                 "divine-favor",

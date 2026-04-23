@@ -243,6 +243,9 @@ class FredBhallRequestContractTests(unittest.TestCase):
                 "hit": True,
                 "murderspawn_spend": 1,
                 "blood_in_the_air_choice": "reactions",
+                "_spell_cast_authorized": True,
+                "_spell_cast_authority_source": "spell_target_request_direct",
+                "_spell_resource_spend_provenance": {"pool_id": "spell_slots", "slot_level": 1},
             },
             cid=1,
             ws_id=78,
@@ -252,6 +255,9 @@ class FredBhallRequestContractTests(unittest.TestCase):
         payload = contract.get("payload") or {}
         self.assertEqual(payload.get("murderspawn_spend"), 1)
         self.assertEqual(payload.get("blood_in_the_air_choice"), "reactions")
+        self.assertTrue(payload.get("_spell_cast_authorized"))
+        self.assertEqual(payload.get("_spell_cast_authority_source"), "spell_target_request_direct")
+        self.assertEqual(payload.get("_spell_resource_spend_provenance"), {"pool_id": "spell_slots", "slot_level": 1})
 
 
 class PlayerCommandServiceReactionOfferOwnershipTests(unittest.TestCase):

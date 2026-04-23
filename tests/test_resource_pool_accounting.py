@@ -88,6 +88,35 @@ class ResourcePoolAccountingRegressionTests(unittest.TestCase):
         self.assertEqual(spent, 4)
         self.assertEqual(consumed, [("Vicnor", "pact_magic_slots", 1)])
 
+    def test_consume_spell_slot_with_provenance_prefers_standard_slots_before_pact_on_mixed_profile(self):
+        profile = {
+            "name": "Throat Goat",
+            "spellcasting": {
+                "enabled": True,
+                "spell_slots": {
+                    **{str(level): {"max": 0, "current": 0} for level in range(1, 10)},
+                    "1": {"max": 4, "current": 4},
+                },
+                "pact_magic_slots": {"level": 1, "count": 2},
+            },
+            "resources": {
+                "pools": [
+                    {"id": "pact_magic_slots", "current": 1, "max_formula": "2", "reset": "short_rest", "slot_level": 1},
+                ]
+            },
+        }
+        saved_slots = []
+        self.app._profile_for_player_name = lambda _name: copy.deepcopy(profile)
+        self.app._save_player_spell_slots = lambda _name, slots: saved_slots.append(copy.deepcopy(slots)) or slots
+
+        ok, err, spent, provenance = self.app._consume_spell_slot_for_cast_with_provenance("Throat Goat", 1, 1)
+
+        self.assertTrue(ok, err)
+        self.assertEqual(err, "")
+        self.assertEqual(spent, 1)
+        self.assertEqual(provenance, {"pool_id": "spell_slots", "slot_level": 1})
+        self.assertEqual(int((saved_slots[-1].get("1") or {}).get("current") or 0), 3)
+
     def test_player_profiles_payload_projects_runtime_pact_slots_from_pool(self):
         self.app._load_player_yaml_cache = lambda force_refresh=False: None
         self.app._player_yaml_data_by_name = {

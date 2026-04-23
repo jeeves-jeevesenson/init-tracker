@@ -107,6 +107,9 @@ SPELL_TARGET_REQUEST_FIELDS: Sequence[str] = (
     "blood_in_the_air_choice",
     "blood_in_the_air_destination_col",
     "blood_in_the_air_destination_row",
+    "_spell_cast_authorized",
+    "_spell_cast_authority_source",
+    "_spell_resource_spend_provenance",
     "_shield_resolution_done",
     "_absorb_elements_resolution_done",
 )

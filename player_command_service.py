@@ -6733,18 +6733,34 @@ class PlayerCommandService:
             # known on the resume payload. The AoE insertion fires BEFORE consumption so
             # no refund is needed there; this refund targets the targeted path.
             refund_level: Optional[int] = None
+            refund_provenance: Optional[Dict[str, Any]] = None
             if isinstance(resume_dispatch, dict):
                 payload = resume_dispatch.get("payload") if isinstance(resume_dispatch.get("payload"), dict) else {}
                 try:
                     refund_level = int(payload.get("slot_level"))
                 except Exception:
                     refund_level = None
-            if refund_level is not None and refund_level > 0 and caster is not None:
+                refund_provenance = payload.get("_spell_resource_spend_provenance") if isinstance(payload.get("_spell_resource_spend_provenance"), dict) else None
+            if caster is not None and (
+                (refund_level is not None and refund_level > 0)
+                or isinstance(refund_provenance, dict)
+            ):
                 caster_name_for_refund = t._pc_name_for(int(getattr(caster, "cid", 0) or 0))
                 refunder = getattr(t, "_refund_spell_slot", None)
                 if callable(refunder) and caster_name_for_refund:
                     try:
-                        refunder(caster_name_for_refund, int(refund_level))
+                        effective_refund_level = int(refund_level or 0)
+                        if effective_refund_level <= 0 and isinstance(refund_provenance, dict):
+                            try:
+                                effective_refund_level = int(refund_provenance.get("slot_level") or 0)
+                            except Exception:
+                                effective_refund_level = 0
+                        if effective_refund_level > 0:
+                            refunder(
+                                caster_name_for_refund,
+                                int(effective_refund_level),
+                                refund_provenance,
+                            )
                     except Exception:
                         pass
         else:

@@ -6,11 +6,11 @@ and gating when no counterspell is prepared / no 3rd+ slot is available.
 
 The counterspell core mirrors the Spell Stopper reaction (same seam in
 ``_adjudicate_spell_target_request``), but is gated on a prepared spell +
-3rd-level slot instead of an equipped item + pool. The Intelligence-save
-contest for higher-level triggering spells is NOT implemented in this pass
-(counterspell auto-succeeds on accept).
+3rd-level slot instead of an equipped item + pool. Success/failure is driven
+by the caster's Constitution save against the counterspeller's spell save DC.
 """
 
+import copy
 import unittest
 
 import dnd_initative_tracker as tracker_mod
@@ -37,18 +37,31 @@ class CounterspellReactionTests(unittest.TestCase):
         self.app._unit_has_sentinel_feat = lambda unit: False
         self.app._lan_apply_forced_movement = lambda *args, **kwargs: False
         self.app._clear_hide_state = lambda *args, **kwargs: None
+        self.saved_spell_slot_payloads = []
+        self.pool_set_calls = []
+        self._profile_data = {
+            "Eldramar Thunderclopper": {
+                "name": "Eldramar Thunderclopper",
+                "features": [],
+                "attacks": {"weapon_to_hit": 3},
+                "leveling": {"classes": [{"name": "Wizard", "attacks_per_action": 1}]},
+                "spellcasting": {
+                    "prepared_spells": {"prepared": ["counterspell", "shield"]},
+                },
+            },
+            "Enemy Caster": {
+                "name": "Enemy Caster",
+                "features": [],
+                "attacks": {"weapon_to_hit": 3},
+                "leveling": {"classes": [{"name": "Sorcerer", "attacks_per_action": 1}]},
+                "spellcasting": {"prepared_spells": {"prepared": ["magic-missile"]}},
+            },
+        }
 
         def _profile_for(name):
-            if "Eldramar" in (name or ""):
-                return {
-                    "name": name,
-                    "features": [],
-                    "attacks": {"weapon_to_hit": 3},
-                    "leveling": {"classes": [{"name": "Wizard", "attacks_per_action": 1}]},
-                    "spellcasting": {
-                        "prepared_spells": {"prepared": ["counterspell", "shield"]},
-                    },
-                }
+            profile = self._profile_data.get(str(name or "").strip())
+            if isinstance(profile, dict):
+                return copy.deepcopy(profile)
             return {
                 "name": name,
                 "features": [],
@@ -65,7 +78,10 @@ class CounterspellReactionTests(unittest.TestCase):
         def _resolve_slot_profile(caster_name):
             if "Eldramar" in (caster_name or ""):
                 return caster_name, self._slot_state
-            return caster_name, {}
+            profile = self._profile_data.get(str(caster_name or "").strip()) or {}
+            spellcasting = profile.get("spellcasting") if isinstance(profile.get("spellcasting"), dict) else {}
+            slots = self.app._normalize_spell_slots(spellcasting.get("spell_slots"))
+            return caster_name, slots
 
         self.app._resolve_spell_slot_profile = _resolve_slot_profile
 
@@ -81,6 +97,8 @@ class CounterspellReactionTests(unittest.TestCase):
 
         self.app._consume_spell_slot_for_cast = _consume_slot
         self.app._consume_resource_pool_for_cast = lambda *a, **k: (False, "no_pool")
+        self.app._save_player_spell_slots = self._save_player_spell_slots
+        self.app._set_player_resource_pool_current = self._set_player_resource_pool_current
 
         self.app._use_action = lambda c, **kwargs: True
         self.app._use_bonus_action = lambda c, **kwargs: True
@@ -148,10 +166,98 @@ class CounterspellReactionTests(unittest.TestCase):
         })()
         self.app.combatants = {1: eldramar, 2: enemy}
 
-        self.app._normalize_player_resource_pools = lambda profile: []
+        self.app._normalize_player_resource_pools = tracker_mod.InitiativeTracker._normalize_player_resource_pools.__get__(
+            self.app,
+            tracker_mod.InitiativeTracker,
+        )
 
-    def _spell_target_msg(self, caster_cid=2, target_cid=1, spell_slug="guiding-bolt", spell_name="Guiding Bolt"):
-        return {
+    def _set_player_resource_pool_current(self, caster_name, pool_id, new_current):
+        self.pool_set_calls.append((str(caster_name), str(pool_id), int(new_current)))
+        profile = self._profile_data.get(str(caster_name or "").strip())
+        if not isinstance(profile, dict):
+            return False, "missing_profile"
+        resources = profile.setdefault("resources", {})
+        pools = resources.setdefault("pools", [])
+        for entry in pools:
+            if not isinstance(entry, dict):
+                continue
+            if str(entry.get("id") or "").strip().lower() != str(pool_id or "").strip().lower():
+                continue
+            entry["current"] = int(new_current)
+            return True, ""
+        return False, "missing_pool"
+
+    def _save_player_spell_slots(self, caster_name, slots):
+        self.saved_spell_slot_payloads.append(copy.deepcopy(slots))
+        profile = self._profile_data.get(str(caster_name or "").strip())
+        if isinstance(profile, dict):
+            spellcasting = profile.setdefault("spellcasting", {})
+            spellcasting["spell_slots"] = copy.deepcopy(slots)
+        return slots
+
+    def _install_pact_magic_caster(self, *, current, count=2, level=4):
+        self._profile_data["Enemy Caster"] = {
+            "name": "Enemy Caster",
+            "features": [],
+            "attacks": {"weapon_to_hit": 3},
+            "leveling": {"classes": [{"name": "Warlock", "attacks_per_action": 1}]},
+            "spellcasting": {
+                "enabled": True,
+                "prepared_spells": {"prepared": ["guiding-bolt", "fireball"]},
+                "spell_slots": {str(spell_level): {"max": 0, "current": 0} for spell_level in range(1, 10)},
+                "pact_magic_slots": {"level": int(level), "count": int(count)},
+            },
+            "resources": {
+                "pools": [
+                    {
+                        "id": "pact_magic_slots",
+                        "label": f"Pact Magic Slots (Level {int(level)})",
+                        "current": int(current),
+                        "max": int(count),
+                        "max_formula": str(int(count)),
+                        "reset": "short_rest",
+                        "slot_level": int(level),
+                    }
+                ]
+            },
+        }
+
+    def _install_mixed_slot_caster(self, *, standard_current=4, standard_max=4, pact_current=1, pact_count=2, pact_level=1):
+        spell_slots = {str(spell_level): {"max": 0, "current": 0} for spell_level in range(1, 10)}
+        spell_slots["1"] = {"max": int(standard_max), "current": int(standard_current)}
+        self._profile_data["Enemy Caster"] = {
+            "name": "Enemy Caster",
+            "features": [],
+            "attacks": {"weapon_to_hit": 3},
+            "leveling": {
+                "classes": [
+                    {"name": "Bard", "attacks_per_action": 1, "level": 9},
+                    {"name": "Warlock", "attacks_per_action": 1, "level": 2},
+                ]
+            },
+            "spellcasting": {
+                "enabled": True,
+                "prepared_spells": {"prepared": ["guiding-bolt", "fireball"]},
+                "spell_slots": spell_slots,
+                "pact_magic_slots": {"level": int(pact_level), "count": int(pact_count)},
+            },
+            "resources": {
+                "pools": [
+                    {
+                        "id": "pact_magic_slots",
+                        "label": f"Pact Magic Slots (Level {int(pact_level)})",
+                        "current": int(pact_current),
+                        "max": int(pact_count),
+                        "max_formula": str(int(pact_count)),
+                        "reset": "short_rest",
+                        "slot_level": int(pact_level),
+                    }
+                ]
+            },
+        }
+
+    def _spell_target_msg(self, caster_cid=2, target_cid=1, spell_slug="guiding-bolt", spell_name="Guiding Bolt", slot_level=None):
+        msg = {
             "type": "spell_target_request",
             "cid": caster_cid,
             "_claimed_cid": caster_cid,
@@ -162,6 +268,9 @@ class CounterspellReactionTests(unittest.TestCase):
             "spell_mode": "auto_hit",
             "damage_entries": [{"amount": 9, "type": "radiant"}],
         }
+        if slot_level is not None:
+            msg["slot_level"] = int(slot_level)
+        return msg
 
     def _offers(self, trigger="counterspell"):
         return [
@@ -379,6 +488,210 @@ class CounterspellReactionTests(unittest.TestCase):
             any("spell was countered" in str(log).lower() for log in self.logs),
             f"Interruption log expected; logs={self.logs}",
         )
+
+    def test_counterspell_refunds_pact_slot_for_targeted_pact_magic_caster(self):
+        self._install_pact_magic_caster(current=1, count=2, level=4)
+        self.app._find_spell_preset = lambda *a, **k: {
+            "slug": "guiding-bolt",
+            "id": "guiding-bolt",
+            "name": "Guiding Bolt",
+            "mechanics": {"sequence": []},
+        }
+        self.app._infer_spell_targeting_mode = lambda preset: "auto_hit"
+        self._force_dc(15)
+        self._force_save_roll(1)
+
+        self.app._lan_apply_action(self._spell_target_msg(slot_level=4))
+        req_id = self._offers()[-1]["request_id"]
+
+        response = self.app._ensure_player_commands().reaction_response(
+            {
+                "type": "reaction_response",
+                "cid": 1,
+                "_claimed_cid": 1,
+                "_ws_id": 101,
+                "request_id": req_id,
+                "choice": "counterspell_yes",
+            },
+            cid=1,
+            ws_id=101,
+        )
+
+        self.assertTrue(response.get("ok"), f"Counterspell accept should succeed: {response}")
+        self.assertEqual(self.pool_set_calls, [("Enemy Caster", "pact_magic_slots", 2)])
+        self.assertEqual(self.saved_spell_slot_payloads, [], "pact refund should not mint fake standard spell slots")
+        pact_pool = self._profile_data["Enemy Caster"]["resources"]["pools"][0]
+        self.assertEqual(int(pact_pool.get("current") or 0), 2)
+
+    def test_counterspell_refunds_standard_slot_for_mixed_slot_caster_using_recorded_provenance(self):
+        self._install_mixed_slot_caster(standard_current=4, standard_max=4, pact_current=1, pact_count=2, pact_level=1)
+        self.app._find_spell_preset = lambda *a, **k: {
+            "slug": "guiding-bolt",
+            "id": "guiding-bolt",
+            "name": "Guiding Bolt",
+            "level": 1,
+            "mechanics": {"sequence": []},
+        }
+        self.app._infer_spell_targeting_mode = lambda preset: "auto_hit"
+        self.app._resolve_spell_spend_type = lambda preset, msg, payload: "action"
+        self.app._combatant_can_cast_spell = lambda c, spend: True
+        self.app._spellcast_blocked_by_environment = lambda c, preset: (False, "")
+        self.app._spell_label_from_identifiers = lambda *a, **k: "Guiding Bolt"
+        self.app._spell_cast_log_message = lambda *a, **k: "cast"
+        self.app._smite_slug_from_preset = lambda preset: None
+        self._force_dc(15)
+        self._force_save_roll(1)
+
+        cast_msg = {
+            "type": "cast_spell",
+            "cid": 2,
+            "_claimed_cid": 2,
+            "_ws_id": 202,
+            "spell_slug": "guiding-bolt",
+            "spell_id": "guiding-bolt",
+            "spell_name": "Guiding Bolt",
+            "slot_level": 1,
+            "payload": {
+                "action_type": "action",
+                "name": "Guiding Bolt",
+            },
+        }
+        self.app._handle_cast_spell_request(cast_msg, cid=2, ws_id=202, is_admin=False, claimed=2)
+
+        self.assertGreaterEqual(len(self.saved_spell_slot_payloads), 1)
+        self.assertEqual(int((self.saved_spell_slot_payloads[-1].get("1") or {}).get("current") or 0), 3)
+        self.assertEqual(self.pool_set_calls, [], "mixed-slot cast should spend the standard slot before pact")
+
+        self.app._lan_apply_action(self._spell_target_msg(slot_level=1))
+        self.assertNotIn(2, self.app._pending_spell_target_resource_spends())
+        req_id = self._offers()[-1]["request_id"]
+
+        response = self.app._ensure_player_commands().reaction_response(
+            {
+                "type": "reaction_response",
+                "cid": 1,
+                "_claimed_cid": 1,
+                "_ws_id": 101,
+                "request_id": req_id,
+                "choice": "counterspell_yes",
+            },
+            cid=1,
+            ws_id=101,
+        )
+
+        self.assertTrue(response.get("ok"), f"Counterspell accept should succeed: {response}")
+        self.assertGreaterEqual(len(self.saved_spell_slot_payloads), 2)
+        self.assertEqual(int((self.saved_spell_slot_payloads[-1].get("1") or {}).get("current") or 0), 4)
+        self.assertEqual(self.pool_set_calls, [], "refund should not guess pact usage when standard slot provenance was recorded")
+        pact_pool = self._profile_data["Enemy Caster"]["resources"]["pools"][0]
+        self.assertEqual(int(pact_pool.get("current") or 0), 1)
+
+    def test_direct_spell_target_request_auto_authorizes_before_counterspell_refund_path(self):
+        self._install_mixed_slot_caster(standard_current=4, standard_max=4, pact_current=1, pact_count=2, pact_level=1)
+        self.app._find_spell_preset = lambda *a, **k: {
+            "slug": "guiding-bolt",
+            "id": "guiding-bolt",
+            "name": "Guiding Bolt",
+            "level": 1,
+            "mechanics": {"sequence": []},
+        }
+        self.app._infer_spell_targeting_mode = lambda preset: "auto_hit"
+        self.app._combatant_can_cast_spell = lambda c, spend: True
+        self.app._spellcast_blocked_by_environment = lambda c, preset: (False, "")
+        self.app._spell_label_from_identifiers = lambda *a, **k: "Guiding Bolt"
+        self.app._spell_cast_log_message = lambda *a, **k: "cast"
+        self.app._smite_slug_from_preset = lambda preset: None
+        self.app.combatants[2].spell_cast_remaining = 1
+        self.app.combatants[2].actions = [{"name": "Magic"}]
+        self._force_dc(15)
+        self._force_save_roll(1)
+
+        msg = self._spell_target_msg(slot_level=1)
+        self.app._lan_apply_action(msg)
+
+        self.assertTrue(msg.get("_spell_cast_authorized"))
+        self.assertEqual(msg.get("_spell_cast_authority_source"), "spell_target_request_direct")
+        self.assertEqual(msg.get("_spell_resource_spend_provenance"), {"pool_id": "spell_slots", "slot_level": 1})
+        self.assertGreaterEqual(len(self.saved_spell_slot_payloads), 1)
+        self.assertEqual(int((self.saved_spell_slot_payloads[-1].get("1") or {}).get("current") or 0), 3)
+
+        req_id = self._offers()[-1]["request_id"]
+        response = self.app._ensure_player_commands().reaction_response(
+            {
+                "type": "reaction_response",
+                "cid": 1,
+                "_claimed_cid": 1,
+                "_ws_id": 101,
+                "request_id": req_id,
+                "choice": "counterspell_yes",
+            },
+            cid=1,
+            ws_id=101,
+        )
+
+        self.assertTrue(response.get("ok"), f"Counterspell accept should succeed: {response}")
+        self.assertGreaterEqual(len(self.saved_spell_slot_payloads), 2)
+        self.assertEqual(int((self.saved_spell_slot_payloads[-1].get("1") or {}).get("current") or 0), 4)
+        self.assertEqual(self.pool_set_calls, [], "direct targeted-cast authority should preserve standard-slot provenance")
+
+    def test_aoe_counterspell_for_pact_magic_caster_does_not_touch_pact_pool(self):
+        self._install_pact_magic_caster(current=2, count=2, level=4)
+        self._force_dc(15)
+        self._force_save_roll(1)
+
+        self.app._find_spell_preset = lambda *a, **k: {
+            "slug": "fireball",
+            "id": "fireball",
+            "name": "Fireball",
+            "level": 3,
+            "range": "150 feet",
+            "mechanics": {"sequence": []},
+        }
+        self.app._resolve_spell_spend_type = lambda preset, msg, payload: "action"
+        self.app._combatant_can_cast_spell = lambda c, spend: True
+        self.app._spellcast_blocked_by_environment = lambda c, preset: (False, "")
+        self.app._spell_label_from_identifiers = lambda *a, **k: "Fireball"
+        self.app._spell_cast_log_message = lambda *a, **k: "cast"
+        self.app._normalize_map_environment_metadata = lambda env: {}
+        self.app._find_summon_requested_variant = lambda *a, **k: None
+        self.app._lan_auto_resolve_cast_aoe = lambda *a, **k: False
+
+        msg = {
+            "type": "cast_aoe",
+            "cid": 2,
+            "_claimed_cid": 2,
+            "_ws_id": 202,
+            "spell_slug": "fireball",
+            "spell_name": "Fireball",
+            "slot_level": 4,
+            "payload": {
+                "shape": "sphere",
+                "center_col": 10,
+                "center_row": 10,
+                "radius_ft": 20,
+            },
+        }
+
+        self.app._handle_cast_aoe_request(msg, cid=2, ws_id=202, is_admin=False, claimed=2)
+        req_id = self._offers()[-1]["request_id"]
+
+        response = self.app._ensure_player_commands().reaction_response(
+            {
+                "type": "reaction_response",
+                "cid": 1,
+                "_claimed_cid": 1,
+                "_ws_id": 101,
+                "request_id": req_id,
+                "choice": "counterspell_yes",
+            },
+            cid=1,
+            ws_id=101,
+        )
+
+        self.assertTrue(response.get("ok"), f"AoE counterspell accept should succeed: {response}")
+        self.assertEqual(self.pool_set_calls, [], "AoE counterspell should not need a pact-slot refund")
+        pact_pool = self._profile_data["Enemy Caster"]["resources"]["pools"][0]
+        self.assertEqual(int(pact_pool.get("current") or 0), 2)
 
     def test_aoe_counterspell_offer_fires(self):
         """Counterspell offer appears on a cast_aoe cast (e.g. fireball)."""

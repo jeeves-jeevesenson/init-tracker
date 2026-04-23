@@ -71,6 +71,72 @@ class PactMagicSpellSlotRegressionTests(unittest.TestCase):
         self.assertEqual(int(pact.get("count") or 0), 2)
         self.assertEqual(int(pact.get("level") or 0), 1)
 
+    def test_refund_spell_slot_restores_pact_pool_without_materializing_fake_standard_slots(self):
+        raw = self._load_vicnor_profile()
+        normalized = self.app._normalize_player_profile(copy.deepcopy(raw), "Vicnor")
+        normalized.setdefault("resources", {})["pools"] = [
+            {
+                "id": "pact_magic_slots",
+                "label": "Pact Magic Slots (Level 4)",
+                "current": 1,
+                "max": 2,
+                "max_formula": "2",
+                "reset": "short_rest",
+                "slot_level": 4,
+            }
+        ]
+        pool_updates = []
+        saved_payloads = []
+
+        self.app._profile_for_player_name = lambda _name: copy.deepcopy(normalized)
+        self.app._set_player_resource_pool_current = (
+            lambda player_name, pool_id, new_current: pool_updates.append((player_name, pool_id, int(new_current))) or (True, "")
+        )
+        self.app._save_player_spell_slots = lambda _name, slots: saved_payloads.append(copy.deepcopy(slots)) or slots
+
+        refunded = self.app._refund_spell_slot("Vicnor", 4)
+
+        self.assertTrue(refunded)
+        self.assertEqual(pool_updates, [("Vicnor", "pact_magic_slots", 2)])
+        self.assertEqual(saved_payloads, [])
+
+    def test_refund_spell_slot_uses_standard_provenance_for_mixed_slot_profile(self):
+        raw = self._load_throat_goat_profile()
+        normalized = self.app._normalize_player_profile(copy.deepcopy(raw), "Throat Goat")
+        spellcasting = normalized.setdefault("spellcasting", {})
+        slots = self.app._normalize_spell_slots(spellcasting.get("spell_slots"))
+        slots["1"] = {"max": 4, "current": 3}
+        spellcasting["spell_slots"] = slots
+        normalized.setdefault("resources", {})["pools"] = [
+            {
+                "id": "pact_magic_slots",
+                "label": "Pact Magic Slots (Level 1)",
+                "current": 1,
+                "max": 2,
+                "max_formula": "2",
+                "reset": "short_rest",
+                "slot_level": 1,
+            }
+        ]
+        pool_updates = []
+        saved_payloads = []
+
+        self.app._profile_for_player_name = lambda _name: copy.deepcopy(normalized)
+        self.app._save_player_spell_slots = lambda _name, slots: saved_payloads.append(copy.deepcopy(slots)) or slots
+        self.app._set_player_resource_pool_current = (
+            lambda player_name, pool_id, new_current: pool_updates.append((player_name, pool_id, int(new_current))) or (True, "")
+        )
+
+        refunded = self.app._refund_spell_slot(
+            "Throat Goat",
+            1,
+            {"pool_id": "spell_slots", "slot_level": 1},
+        )
+
+        self.assertTrue(refunded)
+        self.assertEqual(int((saved_payloads[-1].get("1") or {}).get("current") or 0), 4)
+        self.assertEqual(pool_updates, [])
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -451,17 +451,39 @@ Finishes the bounded counterspell work from §6.6. Two deferred branches are now
   failed caster save. Per YAML text, on interruption the caster's spell
   slot is refunded via a new `_refund_spell_slot` helper (applies when
   resume payload carries a `slot_level`; the AoE path needs no refund since
-  it offers pre-consumption).
+  it offers pre-consumption). Follow-up landed for pact-only warlock/pact
+  casters: `_refund_spell_slot` now restores `pact_magic_slots` instead of
+  materializing fake standard slots when the profile has no standard slot
+  capacity. Follow-up landed for mixed-slot multiclass casters: the player
+  `cast_spell` path now records the actual resource spend provenance
+  (`spell_slots` vs `pact_magic_slots`) and threads it into the resumed
+  `spell_target_request` payload so counterspell refunds restore the pool
+  that was actually consumed instead of inferring from profile shape.
+  Follow-up landed for targeted-cast authority: pending targeted casts now
+  carry canonical cast authority (not just spend provenance), and
+  `_adjudicate_spell_target_request` consumes that authority or directly
+  authorizes a real player `spell_target_request` through the same
+  spend/action seam before shield / spell stopper / counterspell offers can
+  interrupt the cast. Hidden `_spell_cast_authorized` /
+  `_spell_cast_authority_source` fields now persist that authority through
+  prompt and resume payloads, so slotless targeted casts and resumed casts
+  no longer rely on the old provenance-only bridge.
 - `reaction_response` dispatch result now propagates a `contest` block
   (`dc`, `save_roll`, `save_mod`, `save_total`, `countered`).
-- `tests/test_counterspell_reaction.py` expanded from 7 → 11 cases:
-  contest success interrupts, contest failure lets the spell through,
-  AoE offer fires on cast_aoe, AoE accept cancels before effects apply.
+- `tests/test_counterspell_reaction.py` expanded further with targeted pact
+  refund coverage, targeted mixed-slot provenance/refund coverage, direct
+  `spell_target_request` auto-authorization coverage, and the AoE no-refund
+  regression so the landed interrupt/refund seam is exercised across
+  standard-slot, pact-only, and mixed-slot caster shapes.
 
 **Still deferred (explicitly out of scope):**
   1. Line-of-sight / verbal-somatic-material component visibility gating.
-  2. Pact-slot refund path (`_refund_spell_slot` targets level-indexed slots,
-     not pact-magic pool).
+  2. Low-level targeted-spell resolver split: `spell_target_request` still
+     serves explicit low-context compatibility callers (DM helper paths,
+     persistent-effect follow-ups, and direct test harnesses) when no real
+     spellcasting authority context is present. A later pass should split
+     those into an internal resolver/DM-owned path so the public
+     player-targeted cast route no longer needs compatibility heuristics.
   3. Counterspell-on-summon / counterspell-on-concentration-sustain paths.
 
 ---
