@@ -485,8 +485,10 @@ inventory:
     equipped: true
     description: +1 AC while worn.
   - name: The Rotted Fork
+    id: rotted_fork
+    instance_id: rotted_fork__001
     quantity: 1
-    equipped: false
+    equipped: true
     description: +1 weapon; causes bleeding on hit. Exact bleed automation pending.
   - name: Magnum Revolver
     quantity: 1
@@ -505,6 +507,8 @@ inventory:
     equipped: true
     description: ''
   - name: +2 Spell Stopper Throat-Cutting Dagger
+    id: spell_stopper_dagger
+    instance_id: spell_stopper_dagger__001
     quantity: 1
     equipped: false
     description: Reaction property tracked manually; once per short rest.

@@ -1,0 +1,13 @@
+id: small_mithril_chain_undershirt
+name: Small Mithril Chain Undershirt
+category: armor
+armor_type: light
+description: |
+  A lightweight mithril chain undergarment that provides magical protection without
+  restricting movement.
+  
+  **Magical Defense**: You gain a +1 bonus to your AC while wearing this armor.
+
+rarity: uncommon
+magic_bonus: 1
+ac_bonus: 1

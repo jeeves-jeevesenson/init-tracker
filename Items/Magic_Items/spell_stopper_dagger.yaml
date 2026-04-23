@@ -1,0 +1,26 @@
+id: spell_stopper_dagger
+name: +2 Spell Stopper Throat-Cutting Dagger
+category: weapon
+weapon_type: melee
+description: |
+  A +2 magical dagger with an edge that seems to shimmer with anti-magic intent.
+  
+  **Spell Stopper Reaction**: Once per short rest, when a creature you can see within
+  melee range (5 feet) casts a spell, you can use your reaction to slash its throat.
+  The spell is canceled and expends no spell slot, and the target is silenced until
+  the end of its next turn (cannot speak or cast spells with verbal components).
+  
+  **Backend Note**: This item requires explicit reaction integration. The reaction
+  should be triggered during spell casting within melee range and consume the
+  spell_stopper_reaction pool. Silence condition application is pending.
+
+rarity: rare
+magic_bonus: 2
+
+grants:
+  pools:
+    - id: spell_stopper_reaction
+      label: Spell Stopper Reaction
+      current: 1
+      max_formula: '1'
+      reset: short_rest

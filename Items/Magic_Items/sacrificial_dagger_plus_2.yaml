@@ -1,0 +1,12 @@
+id: sacrificial_dagger_plus_2
+name: +2 Sacrificial Dagger of Murder
+category: weapon
+weapon_type: melee
+description: |
+  A pair of +2 enchanted daggers bearing the mark of dark rituals. They feel perfectly
+  balanced for a swift, twin-wielded fighting style.
+  
+  These weapons are designed for Fred's signature dual-dagger assassination attacks.
+
+rarity: rare
+magic_bonus: 2

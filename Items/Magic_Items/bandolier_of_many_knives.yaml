@@ -1,0 +1,24 @@
+id: bandolier_of_many_knives
+name: Bandolier of Many Knives
+category: wondrous_item
+requires_attunement: true
+description: |
+  A leather bandolier containing eight magical daggers that shimmer with an arcane sheen.
+  
+  **Reusable Daggers**: You can draw one of the eight magical daggers as part of an attack action.
+  If you throw the dagger, it vanishes at the end of your turn and reappears in the bandolier
+  unless you deliberately keep it wielded in melee.
+  
+  **Fan of Blades Action**: Once per dawn, you can use an action to hurl the daggers in a fan.
+  Each creature in a 15-foot cone must make a DC 15 Dexterity saving throw, taking 8d4 + 8 piercing
+  damage on a failed save, or half as much on a successful one.
+
+rarity: very_rare
+
+grants:
+  pools:
+    - id: bandolier_fan_of_blades
+      label: Bandolier Fan of Blades
+      current: 1
+      max_formula: '1'
+      reset: long_rest

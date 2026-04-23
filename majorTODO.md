@@ -320,6 +320,44 @@ Fred's first bounded backend/runtime support pass is now reflected in repo:
 
 ---
 
+### 6.4 Fred magic items pass (2026-04-23) — item backend support landed
+
+Fred's magic items are now normalized in YAML and wired into the existing runtime system via item grants:
+
+- **Bandolier of Many Knives**: Item definition created with `grants.pools` for the once-per-dawn `Fan of Blades` action. 
+  Pool resets on long rest and exists in Fred's resources when Bandolier is equipped and attuned.
+  Dagger reuse patterns follow the standard item pool model (similar to bag-of-infinite-something patterns).
+
+- **Rotted Fork**: Item definition created with `grants.damage_riders` for on-hit bleeding effect (1d4 necrotic).
+  Trigger list uses `['weapon_attack_hit', 'melee_weapon_attack']` to ensure both melee and unarmed melee paths apply the rider.
+  Damage rider is active when Fork is equipped (no attunement required), following existing damage-rider precedent.
+  Fork is now equipped: true in Fred's inventory.
+
+- **Spell Stopper Dagger**: Item definition created with `grants.pools` for the anti-caster throat-cut reaction (pool resets short rest).
+  Full reaction automation (offer creation during spell-casting) scoped for separate pass; current backend already projects the pool.
+  Dagger itself defined and tagged but reaction seam would require larger spell-casting flow work.
+
+- **Sacrificial Dagger +2** and **Small Mithril Chain Undershirt**: Supporting item definitions added for consistency.
+  Undershirt provides +1 AC (light armor) via existing armor model; daggers available for companion/binding patterns if needed.
+
+- **Fred's inventory normalized**: All magic items now have proper `id` and `instance_id` fields. 
+  Rotted Fork and Spell Stopper dagger added ID fields (previously missing).
+  All items in inventory maintain proper state tracking for equipped/attuned flags.
+
+- **Item grant system tested and validated**: 
+  - Pools project correctly when items are equipped and attuned (if required)
+  - Damage riders load from item grants and apply during attack resolution
+  - Attunement logic respected (pools only project if both equipped AND attuned for items that require it)
+  - 7 focused regression tests written and passing (test_fred_item_behavior.py)
+  - Full test suite validation: 38 tests passing (YAML validity, inventory pools, Bhall backend, item behavior)
+
+- **Unresolved for future passes**:
+  1. Spell Stopper reaction offer integration: Requires explicit seam in spell-casting flow to detect melee-range casters and create reaction offers.
+  2. Fan of Blades extended patterns: Current pool model covers once-per-dawn reset; multi-target reuse/resource patterns would expand in next pass if needed.
+  3. Revolver / venom vial / additional item effects: Skipped as out-of-scope for this pass; no existing author-driven behavior requirements.
+
+---
+
 ## 7. Working guardrails for major passes
 
 - Prefer stabilization evidence over milestone rhetoric.

@@ -1,0 +1,27 @@
+id: rotted_fork
+name: The Rotted Fork
+category: weapon
+weapon_type: melee
+description: |
+  A +1 magical weapon that strikes with an unnatural plague. Created by dark artifice,
+  its tines seem to perpetually weep a poisonous ichor.
+  
+  **Plague Bearer**: When you hit a creature with this weapon, the creature begins to bleed.
+  The bleeding persists until the target uses an action to make a DC 15 Medicine check or
+  receives magical healing. While bleeding, the target takes 1d4 necrotic damage at the start
+  of each of its turns.
+  
+  **Backend Note**: The on-hit necrotic damage is applied. The bleeding condition and
+  start-of-turn damage re-application require separate condition/rider tracking per target.
+
+rarity: rare
+magic_bonus: 1
+
+grants:
+  damage_riders:
+    - id: rotted_fork_bleed
+      trigger:
+        - weapon_attack_hit
+        - melee_weapon_attack
+      damage_type: necrotic
+      damage_formula: 1d4
