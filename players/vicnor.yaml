@@ -8,14 +8,14 @@ identity:
   alignment: Lawful Neutral
   description: Vicnor "The PackRat", age 28, 4'3\", 45 lbs, sickly yellow eyes, pale pink skin, greyish brown hair.
 leveling:
-  level: 10
+  level: 11
   classes:
   - name: Rogue
     subclass: Swashbuckler
     level: 3
   - name: Warlock
     subclass: The Noble Genie
-    level: 7
+    level: 8
 abilities:
   str: 6
   dex: 16
@@ -58,7 +58,7 @@ vitals:
   temp_hp: 0
   hit_dice:
     die: d8
-    total: 10
+    total: 11
     spent: 0
   speed:
     walk: 30
@@ -233,12 +233,10 @@ spellcasting:
     - poison-spray
     - prestidigitation
   known_spells:
-    max: 0
     known: []
   prepared_spells:
-    max_formula: '10'
+    max_formula: '9'
     prepared:
-    - absorb-elements
     - chaos-bolt-izzet
     - distort-value
     - hellish-rebuke
@@ -248,9 +246,9 @@ spellcasting:
     - dimension-door
     - phantasmal-killer
     - disguise-self
-    - silent-image
     free:
     - absorb-elements
+    - silent-image
   spell_slots:
     '1':
       max: 0

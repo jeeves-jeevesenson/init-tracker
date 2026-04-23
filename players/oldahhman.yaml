@@ -8,11 +8,11 @@ identity:
   alignment: ''
   description: ''
 leveling:
-  level: 10
+  level: 11
   classes:
   - name: Monk
     subclass: Warrior of the Elements
-    level: 10
+    level: 11
     attacks_per_action: 2
 abilities:
   str: 10
@@ -46,12 +46,12 @@ vitals:
   temp_hp: 0
   hit_dice:
     die: d8
-    total: 10
+    total: 11
     spent: 0
   speed:
     walk: 50
     climb: 0
-    fly: 0
+    fly: 50
     swim: 0
   initiative:
     formula: dex_mod
@@ -82,23 +82,21 @@ attacks:
     magic_bonus: 0
     range: '5'
     one_handed:
-      damage_formula: 1d8 + dex_mod
+      damage_formula: 1d10 + dex_mod
       damage_type: bludgeoning
     two_handed:
       damage_formula: ''
       damage_type: ''
     properties: []
     effect:
-      on_hit: Martial Arts baseline at Monk 10 uses a d8. Monk rules allow Dexterity
-        instead of Strength for attack/damage rolls; this entry currently uses the
-        best-fit ability score formula for now.
+      on_hit: Martial Arts baseline at Monk 11 uses a d10. Monk rules allow Dexterity instead of Strength for attack/damage rolls; this entry currently uses the best-fit ability score formula for now.
       save_ability: ''
       save_dc: 0
 resources:
   pools:
   - id: focus_points
     label: Focus Points
-    current: 10
+    current: 11
     max_formula: monk_level
     reset: short_rest
   - id: uncanny_metabolism
@@ -112,29 +110,23 @@ features:
   category: Monk Feature
   source: PHB2024
   level: 2
-  description: Focus save DC = 8 + prof + wis_mod. Baseline Focus spenders include
-    Flurry of Blows, Patient Defense, and Step of the Wind.
+  description: Focus save DC = 8 + prof + wis_mod. Baseline Focus spenders include Flurry of Blows, Patient Defense, and Step of the Wind.
 - id: warrior_of_the_elements
   name: Warrior of the Elements
   category: Monk Subclass Feature
   source: PHB2024
   level: 3
-  description: Elemental Attunement, Elemental Burst, and Manipulate Elements (Elementalism
-    known).
+  description: Elemental Attunement, Elemental Burst, and Manipulate Elements (Elementalism known).
 - id: lucky
   name: Lucky
   category: Feat
   source: Player Notes
-  description: Gain Luck Points that can be spent to reroll d20 checks as described
-    by the Lucky feat. Tracked manually for now.
+  description: Gain Luck Points that can be spent to reroll d20 checks as described by the Lucky feat. Tracked manually for now.
 - id: sentinel
   name: Sentinel
   category: Feat
   source: PHB2024
-  description: When a hostile creature moves out of your reach, you can make an opportunity
-    attack; on hit, the target speed becomes 0 for the rest of the turn. You can also
-    make this reaction against nearby creatures that Disengage or attack someone other
-    than you.
+  description: When a hostile creature moves out of your reach, you can make an opportunity attack; on hit, the target speed becomes 0 for the rest of the turn. You can also make this reaction against nearby creatures that Disengage or attack someone other than you.
 - id: charger
   name: Charger
   category: Feat
@@ -149,10 +141,13 @@ features:
   name: Fight or Flight
   category: Custom Feature
   source: Homebrew (Player Notes)
-  description: 'Trigger: when HP drops below 18. Choose Strength (fight) or Dexterity
-    (flight). For 1 minute, gain advantage on all saving throws, ability checks, and
-    attack rolls using the chosen ability. When the effect ends, become incapacitated.
-    Track trigger/duration manually.'
+  description: 'Trigger: when HP drops below 18. Choose Strength (fight) or Dexterity (flight). For 1 minute, gain advantage on all saving throws, ability checks, and attack rolls using the chosen ability. When the effect ends, become incapacitated. Track trigger/duration manually.'
+- id: stride_of_the_elements
+  name: Stride of the Elements
+  category: Monk Subclass Feature
+  source: PHB2024
+  level: 11
+  description: While your Elemental Attunement is active, you gain a Fly Speed equal to your Speed and can move across liquids and vertical surfaces during the movement. Default sheet fly speed set to 50 per player request; backend/runtime behavior still needs verification.
 actions:
 - name: Attack
   description: Make a weapon or unarmed attack against a target within range.
@@ -161,50 +156,41 @@ actions:
   description: Gain extra movement for the current turn equal to your speed.
   type: action
 - name: Disengage
-  description: Your movement does not provoke opportunity attacks for the rest of
-    the turn.
+  description: Your movement does not provoke opportunity attacks for the rest of the turn.
   type: action
 - name: Dodge
-  description: Until the start of your next turn, attack rolls against you have disadvantage
-    if you can see the attacker, and you make Dexterity saves with advantage.
+  description: Until the start of your next turn, attack rolls against you have disadvantage if you can see the attacker, and you make Dexterity saves with advantage.
   type: action
 - name: Help
-  description: Aid a creature in the next ability check or attack roll against a target
-    within 5 feet of you.
+  description: Aid a creature in the next ability check or attack roll against a target within 5 feet of you.
   type: action
 - name: Hide
   description: Attempt to hide by making a Dexterity (Stealth) check.
   type: action
 - name: Influence
-  description: Attempt to influence a creature through conversation, bargaining, or
-    intimidation.
+  description: Attempt to influence a creature through conversation, bargaining, or intimidation.
   type: action
 - name: Magic
   description: Cast a spell or use a magical feature that takes an action.
   type: action
 - name: Ready
-  description: Prepare an action and a trigger; use your reaction to perform it when
-    the trigger occurs.
+  description: Prepare an action and a trigger; use your reaction to perform it when the trigger occurs.
   type: action
 - name: Search
-  description: Devote attention to finding something by making a Wisdom (Perception)
-    or Intelligence (Investigation) check.
+  description: Devote attention to finding something by making a Wisdom (Perception) or Intelligence (Investigation) check.
   type: action
 - name: Study
-  description: Focus on detailed observation or research to gain information about
-    a creature, object, or situation.
+  description: Focus on detailed observation or research to gain information about a creature, object, or situation.
   type: action
 - name: Utilize
   description: Use an object or interact with the environment in a significant way.
   type: action
 reactions:
 - name: Opportunity Attack
-  description: When a hostile creature you can see moves out of your reach, you can
-    use your reaction to make one melee attack against it.
+  description: When a hostile creature you can see moves out of your reach, you can use your reaction to make one melee attack against it.
   type: reaction
 - name: Reaction
-  description: You can take a reaction when a trigger occurs. A reaction is only available
-    once per round.
+  description: You can take a reaction when a trigger occurs. A reaction is only available once per round.
   type: reaction
 bonus_actions:
 - name: Patient Defense (Disengage)
@@ -326,15 +312,10 @@ inventory:
     quantity: 1
     description: Ask about bone armor for Stephen.
 notes:
-  note_1: Speed is 30 (human) + 20 (monk) = 50 walk.
-  note_2: Tinker's Tools crafting rule - spend one long rest and 20 gp to craft a
-    pistol/musket to make it permanent.
-  note_3: Proficient with all simple and martial weapons with the light property (manual
-    reminder).
-  note_4: Playstyle - fight up close with team; run in and use Flurry of Blows for
-    up to 5 attacks.
-  note_5: Use push on last attack so target cannot opportunity attack, then reposition
-    near teammates to exploit Sentinel.
-  note_6: Opportunity attack reminder - can occur when enemies leave reach willingly
-    or unwillingly.
+  note_1: Speed is 30 (human) + 20 (monk) = 50 walk, with default fly speed also set to 50 per player request.
+  note_2: Tinker's Tools crafting rule - spend one long rest and 20 gp to craft a pistol/musket to make it permanent.
+  note_3: Proficient with all simple and martial weapons with the light property (manual reminder).
+  note_4: Playstyle - fight up close with team; run in and use Flurry of Blows for up to 5 attacks.
+  note_5: Use push on last attack so target cannot opportunity attack, then reposition near teammates to exploit Sentinel.
+  note_6: Opportunity attack reminder - can occur when enemies leave reach willingly or unwillingly.
   note_7: 'Future wishlist (not owned/equipped): Unarmed Wraps.'
