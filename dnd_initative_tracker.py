@@ -106,6 +106,7 @@ from player_command_contracts import (
     UTILITY_ADMIN_COMMAND_TYPES,
     WILD_SHAPE_COMMAND_TYPES,
     build_attack_request_contract,
+    build_cast_aoe_contract,
     build_resume_dispatch,
     build_spell_target_rejection_payload,
     build_spell_target_request_contract,
@@ -30264,6 +30265,41 @@ class InitiativeTracker(base.InitiativeTracker):
             return False, "Could not update spell slots, matey.", None
         return True, "", spend_level
 
+    def _refund_spell_slot(self, caster_name: str, slot_level: int) -> bool:
+        """Refund a spell slot previously consumed (used by Counterspell on contest success).
+
+        Best-effort; returns True on success, False otherwise. Does not
+        handle pact-magic-slot refunds (counterspell-refunded pact slots
+        are a deferred edge case).
+        """
+        try:
+            lvl = int(slot_level)
+        except Exception:
+            return False
+        if lvl < 1 or lvl > 9:
+            return False
+        try:
+            player_name, slots = self._resolve_spell_slot_profile(caster_name)
+        except Exception:
+            return False
+        if not isinstance(slots, dict):
+            return False
+        key = str(lvl)
+        entry = slots.get(key)
+        if not isinstance(entry, dict):
+            return False
+        max_val = int(entry.get("max", 0) or 0)
+        current = int(entry.get("current", 0) or 0)
+        new_current = current + 1
+        if max_val > 0:
+            new_current = min(new_current, max_val)
+        entry["current"] = new_current
+        try:
+            self._save_player_spell_slots(player_name, slots)
+        except Exception:
+            return False
+        return True
+
     def _set_wild_shape_pool_current(self, player_name: str, current_value: int) -> Tuple[bool, str, Optional[int]]:
         self._load_player_yaml_cache()
         player_path = self._find_player_profile_path(player_name)
@@ -31881,6 +31917,104 @@ class InitiativeTracker(base.InitiativeTracker):
     ) -> Optional[str]:
         """Offer Spell Stopper reaction during a hostile spellcast in melee range."""
         return self._ensure_player_commands().maybe_offer_spell_stopper(
+            int(reactor_cid),
+            source_cid,
+            target_cid,
+            pending_msg=dict(pending_msg) if isinstance(pending_msg, dict) else None,
+        )
+
+    _COUNTERSPELL_MIN_SLOT = 3
+    _COUNTERSPELL_RANGE_FT = 60
+
+    def _counterspell_prepared_slots(self, reactor: Any) -> Tuple[bool, int]:
+        """Return (has_counterspell_prepared, lowest_available_slot>=3) for this reactor."""
+        player_name = self._pc_name_for(int(getattr(reactor, "cid", 0) or 0))
+        profile = self._profile_for_player_name(player_name) if player_name else None
+        if not isinstance(profile, dict):
+            return False, 0
+        spellcasting = profile.get("spellcasting") if isinstance(profile.get("spellcasting"), dict) else {}
+        prepared_block = spellcasting.get("prepared_spells") if isinstance(spellcasting.get("prepared_spells"), dict) else {}
+        prepared_list = prepared_block.get("prepared") if isinstance(prepared_block.get("prepared"), list) else []
+        has_prepared = any(
+            str(entry or "").strip().lower() in ("counterspell",)
+            for entry in prepared_list
+        )
+        if not has_prepared:
+            return False, 0
+        _caster_name, slot_state = self._resolve_spell_slot_profile(player_name)
+        if not isinstance(slot_state, dict):
+            return True, 0
+        for level in range(self._COUNTERSPELL_MIN_SLOT, 10):
+            entry = slot_state.get(str(level))
+            if isinstance(entry, dict) and int(entry.get("current", 0) or 0) > 0:
+                return True, level
+        return True, 0
+
+    def _can_offer_counterspell_reaction(self, reactor: Any, source_cid: Optional[int]) -> Tuple[bool, str]:
+        """Check if ``reactor`` can interrupt a spellcast from ``source_cid`` with Counterspell.
+
+        Gates: reaction remaining, counterspell prepared, 3rd+ slot available,
+        source exists and is distinct from reactor, within 60 ft of source.
+        """
+        if reactor is None:
+            return False, "missing_reactor"
+        if int(getattr(reactor, "reaction_remaining", 0) or 0) <= 0:
+            return False, "no_reaction"
+        if source_cid is None:
+            return False, "missing_source"
+        reactor_cid = int(getattr(reactor, "cid", 0) or 0)
+        if reactor_cid <= 0 or int(source_cid) == reactor_cid:
+            return False, "self_cast"
+        has_prepared, slot_level = self._counterspell_prepared_slots(reactor)
+        if not has_prepared:
+            return False, "no_counterspell"
+        if slot_level < self._COUNTERSPELL_MIN_SLOT:
+            return False, "no_slot"
+        try:
+            reactor_pos = self._lan_positions.get(int(reactor_cid)) if isinstance(self._lan_positions, dict) else None
+            source_pos = self._lan_positions.get(int(source_cid)) if isinstance(self._lan_positions, dict) else None
+        except Exception:
+            reactor_pos = source_pos = None
+        if reactor_pos and source_pos:
+            try:
+                dist_squares = ((reactor_pos[0] - source_pos[0]) ** 2 + (reactor_pos[1] - source_pos[1]) ** 2) ** 0.5
+                dist_ft = float(dist_squares) * 5.0
+            except Exception:
+                dist_ft = 0.0
+            if dist_ft > float(self._COUNTERSPELL_RANGE_FT):
+                return False, "out_of_range"
+        return True, "slot_available"
+
+    def _find_counterspell_reactor(self, source_cid: int) -> Optional[int]:
+        """Find first eligible combatant that can counterspell the cast from ``source_cid``."""
+        try:
+            combatants = dict(self.combatants)
+        except Exception:
+            return None
+        for cand_cid, cand in combatants.items():
+            if cand is None:
+                continue
+            try:
+                cand_cid_int = int(getattr(cand, "cid", cand_cid) or 0)
+            except Exception:
+                continue
+            if cand_cid_int == int(source_cid):
+                continue
+            can_offer, _reason = self._can_offer_counterspell_reaction(cand, int(source_cid))
+            if can_offer:
+                return cand_cid_int
+        return None
+
+    def _maybe_offer_counterspell(
+        self,
+        reactor_cid: int,
+        source_cid: Optional[int],
+        target_cid: Optional[int],
+        *,
+        pending_msg: Optional[Dict[str, Any]],
+    ) -> Optional[str]:
+        """Offer Counterspell reaction to interrupt a hostile spellcast (bounded core: auto-succeeds, no contest)."""
+        return self._ensure_player_commands().maybe_offer_counterspell(
             int(reactor_cid),
             source_cid,
             target_cid,
@@ -33606,6 +33740,69 @@ class InitiativeTracker(base.InitiativeTracker):
                 reason="spell_interrupted_by_spell_stopper",
             )
             self._log(f"{spell_name} was interrupted by Spell Stopper!", cid=int(target_cid))
+            return
+
+        # Counterspell offer: any eligible reactor within 60 ft may interrupt this
+        # hostile spellcast. Skip if the triggering spell is itself counterspell
+        # (prevents recursive counterspell-of-counterspell in the bounded core).
+        is_counterspell_cast = preset_slug == "counterspell" or preset_id == "counterspell"
+        if (
+            not bool(msg.get("_counterspell_resolution_done"))
+            and not is_counterspell_cast
+        ):
+            reactor_cid = self._find_counterspell_reactor(int(cid))
+            if reactor_cid is not None:
+                mode = self._reaction_mode_for(int(reactor_cid), "counterspell", default="ask")
+                if mode != "off":
+                    ws_targets = self._find_ws_for_cid(int(reactor_cid))
+                    choices = [
+                        {"kind": "counterspell_yes", "label": "Counterspell", "mode": mode},
+                        {"kind": "counterspell_decline", "label": "No", "mode": "ask"},
+                        {"kind": "counterspell_never", "label": "No (don't ask again)", "mode": "ask"},
+                    ]
+                    req_id = self._ensure_player_commands().create_reaction_offer(
+                        int(reactor_cid),
+                        "counterspell",
+                        int(cid),
+                        int(target_cid),
+                        choices,
+                        ws_targets,
+                        extra_payload={"prompt_attack": str(spell_name or "Spell")},
+                        resume_dispatch=build_resume_dispatch(
+                            "spell_target_request",
+                            actor_cid=int(cid),
+                            ws_id=ws_id,
+                            is_admin=bool(is_admin),
+                            payload=build_spell_target_request_contract(
+                                msg,
+                                cid=int(cid),
+                                ws_id=ws_id,
+                                is_admin=bool(is_admin),
+                            )["payload"],
+                        ),
+                    )
+                    if req_id:
+                        self._oplog(
+                            f"reaction_offer:counterspell pending request_id={req_id} spell={spell_name} caster={int(cid)} target={int(target_cid)} reactor={int(reactor_cid)}",
+                            level="info",
+                        )
+                        caster_ws_targets = self._find_ws_for_cid(int(cid))
+                        for caster_ws in caster_ws_targets:
+                            self._lan.toast(int(caster_ws), "Waiting for Counterspell response…")
+                        return
+
+        # Check if spell was interrupted by Counterspell
+        if bool(msg.get("_spell_counterspelled")):
+            self._lan.toast(ws_id, "The spell was countered!")
+            msg["_spell_target_result"] = build_spell_target_rejection_payload(
+                attacker_cid=int(cid),
+                target_cid=int(target_cid),
+                spell_name=spell_name,
+                spell_slug=preset_slug or None,
+                spell_id=preset_id or None,
+                reason="spell_counterspelled",
+            )
+            self._log(f"{spell_name} was countered!", cid=int(cid))
             return
 
         is_polymorph = preset_slug == "polymorph" or preset_id == "polymorph"
@@ -36323,6 +36520,77 @@ class InitiativeTracker(base.InitiativeTracker):
         if summon_cfg and not is_admin:
             self._lan.toast(ws_id, "Summon spawning is DM-only for now, matey.")
             return
+
+        # Counterspell offer for the AoE / non-targeted cast path.
+        # Mirrors the targeted-path insertion in ``_adjudicate_spell_target_request``
+        # but fires BEFORE resource consumption so a declined resume does not
+        # double-spend action/slot. A spell that is itself counterspell is skipped
+        # to prevent recursive counterspell-of-counterspell. Admin / DM-driven
+        # casts also bypass this seam.
+        preset_slug_str = str((preset or {}).get("slug") or spell_slug or "").strip().lower()
+        preset_id_str = str((preset or {}).get("id") or spell_id or "").strip().lower()
+        is_counterspell_cast = preset_slug_str == "counterspell" or preset_id_str == "counterspell"
+        if (
+            c is not None
+            and not is_admin
+            and cid is not None
+            and not is_counterspell_cast
+            and not bool(msg.get("_counterspell_resolution_done"))
+        ):
+            reactor_cid_aoe = self._find_counterspell_reactor(int(cid))
+            if reactor_cid_aoe is not None:
+                mode = self._reaction_mode_for(int(reactor_cid_aoe), "counterspell", default="ask")
+                if mode != "off":
+                    ws_targets = self._find_ws_for_cid(int(reactor_cid_aoe))
+                    choices = [
+                        {"kind": "counterspell_yes", "label": "Counterspell", "mode": mode},
+                        {"kind": "counterspell_decline", "label": "No", "mode": "ask"},
+                        {"kind": "counterspell_never", "label": "No (don't ask again)", "mode": "ask"},
+                    ]
+                    spell_name_prompt = str(
+                        (preset.get("name") if isinstance(preset, dict) else "")
+                        or spell_slug
+                        or spell_id
+                        or "Spell"
+                    )
+                    req_id = self._ensure_player_commands().create_reaction_offer(
+                        int(reactor_cid_aoe),
+                        "counterspell",
+                        int(cid),
+                        0,
+                        choices,
+                        ws_targets,
+                        extra_payload={"prompt_attack": spell_name_prompt},
+                        resume_dispatch=build_resume_dispatch(
+                            "cast_aoe",
+                            actor_cid=int(cid),
+                            ws_id=ws_id,
+                            is_admin=bool(is_admin),
+                            payload=build_cast_aoe_contract(
+                                msg,
+                                cid=int(cid),
+                                ws_id=ws_id,
+                                is_admin=bool(is_admin),
+                            )["payload"],
+                        ),
+                    )
+                    if req_id:
+                        self._oplog(
+                            f"reaction_offer:counterspell pending request_id={req_id} cast_aoe caster={int(cid)} reactor={int(reactor_cid_aoe)} spell={spell_name_prompt}",
+                            level="info",
+                        )
+                        for caster_ws in self._find_ws_for_cid(int(cid)):
+                            self._lan.toast(int(caster_ws), "Waiting for Counterspell response…")
+                        return
+
+        if bool(msg.get("_spell_counterspelled")):
+            self._lan.toast(ws_id, "The spell was countered!")
+            self._log(
+                f"{getattr(c, 'name', 'Caster')}'s spell was countered!",
+                cid=int(cid) if cid is not None else None,
+            )
+            return
+
         if c is not None and not is_admin:
             preset_level = None
             try:

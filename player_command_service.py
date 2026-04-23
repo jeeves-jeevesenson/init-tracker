@@ -113,7 +113,7 @@ from player_command_contracts import (
     build_bardic_inspiration_use_contract,
     build_beguiling_magic_restore_contract,
     build_beguiling_magic_use_contract,
-    build_cast_aoe_contract,
+    build_cast_aoe_contract,  # noqa: F401 — also used for counterspell AoE resume_dispatch
     build_cast_spell_contract,
     build_command_resolve_contract,
     build_cycle_movement_mode_contract,
@@ -1347,6 +1347,93 @@ class PlayerCommandService:
             resume_dispatch=resume_dispatch,
         )
 
+    def maybe_offer_counterspell(
+        self,
+        reactor_cid: int,
+        source_cid: Optional[int],
+        target_cid: Optional[int],
+        *,
+        pending_msg: Optional[Dict[str, Any]],
+    ) -> Optional[str]:
+        """Offer Counterspell reaction to interrupt a hostile spellcast.
+
+        Bounded core: auto-succeeds on accept; no Intelligence-save contest branch.
+        """
+        t = self._tracker
+        reactor_cid = self._normalize_cid(reactor_cid, "counterspell.reactor")
+        if reactor_cid is None:
+            return None
+        reactor = t.combatants.get(int(reactor_cid))
+        if reactor is None:
+            return None
+
+        mode = t._reaction_mode_for(int(reactor_cid), "counterspell", default="ask")
+        if mode == "off":
+            return None
+
+        can_offer, _reason = t._can_offer_counterspell_reaction(reactor, source_cid)
+        if not can_offer:
+            return None
+
+        ws_targets = t._find_ws_for_cid(int(reactor_cid))
+        choices = [
+            {"kind": "counterspell_yes", "label": "Counterspell", "mode": mode},
+            {"kind": "counterspell_decline", "label": "No", "mode": "ask"},
+            {"kind": "counterspell_never", "label": "No (don't ask again)", "mode": "ask"},
+        ]
+
+        resume_dispatch = None
+        if isinstance(pending_msg, dict):
+            pending_type = str(pending_msg.get("type") or "").strip().lower()
+            actor_cid_norm = self._normalize_cid(source_cid, "counterspell.source")
+            if pending_type == "spell_target_request":
+                resume_dispatch = build_resume_dispatch(
+                    "spell_target_request",
+                    actor_cid=actor_cid_norm,
+                    ws_id=pending_msg.get("_ws_id"),
+                    is_admin=bool(str(pending_msg.get("admin_token") or "").strip()),
+                    payload=build_spell_target_request_contract(
+                        pending_msg,
+                        cid=actor_cid_norm,
+                        ws_id=pending_msg.get("_ws_id"),
+                        is_admin=bool(str(pending_msg.get("admin_token") or "").strip()),
+                    )["payload"],
+                )
+            elif pending_type == "cast_aoe":
+                resume_dispatch = build_resume_dispatch(
+                    "cast_aoe",
+                    actor_cid=actor_cid_norm,
+                    ws_id=pending_msg.get("_ws_id"),
+                    is_admin=bool(str(pending_msg.get("admin_token") or "").strip()),
+                    payload=build_cast_aoe_contract(
+                        pending_msg,
+                        cid=actor_cid_norm,
+                        ws_id=pending_msg.get("_ws_id"),
+                        is_admin=bool(str(pending_msg.get("admin_token") or "").strip()),
+                    )["payload"],
+                )
+
+        source_name = t._pc_name_for(int(source_cid)) if source_cid is not None else "Caster"
+        target_name = t._pc_name_for(int(target_cid)) if target_cid is not None else "Target"
+
+        return self.create_reaction_offer(
+            int(reactor_cid),
+            "counterspell",
+            int(source_cid) if source_cid is not None else 0,
+            int(target_cid) if target_cid is not None else 0,
+            choices,
+            ws_targets,
+            extra_payload={
+                "prompt": f"{source_name} is casting a spell at {target_name}. Counterspell?",
+            },
+            resolution={
+                "reactor_cid": int(reactor_cid),
+                "source_cid": int(source_cid) if source_cid is not None else 0,
+                "target_cid": int(target_cid) if target_cid is not None else 0,
+            },
+            resume_dispatch=resume_dispatch,
+        )
+
     def _resolve_pc_name(self, cid: Optional[int]) -> str:
         if cid is None:
             return ""
@@ -1390,6 +1477,8 @@ class PlayerCommandService:
             return self.attack_request(payload, cid=actor_cid, ws_id=ws_id, is_admin=is_admin)
         if command_type == "spell_target_request":
             return self.spell_target_request(payload, cid=actor_cid, ws_id=ws_id, is_admin=is_admin)
+        if command_type == "cast_aoe":
+            return self.cast_aoe(payload, cid=actor_cid, ws_id=ws_id, is_admin=is_admin, claimed=actor_cid)
         return build_dispatch_result(
             "resume_dispatch",
             False,
@@ -6047,6 +6136,14 @@ class PlayerCommandService:
                 choice=choice,
                 ws_id=ws_id,
             )
+        if trigger == "counterspell":
+            return self._resolve_counterspell_reaction(
+                msg,
+                request_id=request_id,
+                offer=offer,
+                choice=choice,
+                ws_id=ws_id,
+            )
         if choice in ("", "decline", "ignore"):
             self.prompts.pop_prompt(request_id)
             return {"ok": True, "trigger": trigger, "choice": choice, "prompt_state": "declined"}
@@ -6497,6 +6594,204 @@ class PlayerCommandService:
             }
         return {"ok": True, "trigger": "spell_stopper", "choice": choice, "prompt_state": "resolved"}
 
+    def _resolve_counterspell_reaction(
+        self,
+        msg: Dict[str, Any],
+        *,
+        request_id: str,
+        offer: Dict[str, Any],
+        choice: str,
+        ws_id: Any,
+    ) -> Dict[str, Any]:
+        """Resolve a Counterspell reaction offer.
+
+        On accept (counterspell_yes): spend a 3rd+ slot + reaction, mark the
+        triggering spell as countered (no effect, no target damage applied).
+        Bounded core: no Intelligence-save contest for higher-level spells;
+        counterspell auto-succeeds.
+        """
+        t = self._tracker
+        pending = self.prompts.get_resolution(request_id)
+        resume_dispatch = self.prompts.get_resume_dispatch(request_id)
+        if not isinstance(pending, dict):
+            self._toast(ws_id, "That Counterspell offer expired, matey.")
+            return {"ok": False, "reason": "expired_offer", "trigger": "counterspell", "choice": choice}
+
+        reactor_cid = self._normalize_cid(offer.get("reactor_cid"), "reaction_response.counterspell.reactor")
+        reactor = t.combatants.get(int(reactor_cid)) if reactor_cid is not None else None
+        if reactor is None:
+            self.prompts.pop_prompt(request_id)
+            return {"ok": False, "reason": "reactor_missing", "trigger": "counterspell", "choice": choice}
+
+        if choice in ("counterspell_never", "never"):
+            t._set_reaction_prefs(int(reactor_cid), {"counterspell": "off"})
+
+        flags = dict(
+            resume_dispatch.get("flags")
+            if isinstance(resume_dispatch, dict) and isinstance(resume_dispatch.get("flags"), dict)
+            else {}
+        )
+        flags["_counterspell_resolution_done"] = True
+
+        if choice in ("counterspell_never", "never", "", "decline", "ignore", "counterspell_no", "counterspell_decline"):
+            self.prompts.pop_prompt(request_id)
+            if isinstance(resume_dispatch, dict):
+                resume_dispatch["flags"] = flags
+                return {
+                    "ok": True,
+                    "trigger": "counterspell",
+                    "choice": choice,
+                    "prompt_state": "declined",
+                    "resume_dispatch": resume_dispatch,
+                }
+            return {"ok": True, "trigger": "counterspell", "choice": choice, "prompt_state": "declined"}
+
+        if choice not in ("counterspell_yes", "counterspell"):
+            self.prompts.pop_prompt(request_id)
+            if isinstance(resume_dispatch, dict):
+                resume_dispatch["flags"] = flags
+                return {
+                    "ok": True,
+                    "trigger": "counterspell",
+                    "choice": choice,
+                    "prompt_state": "resolved",
+                    "resume_dispatch": resume_dispatch,
+                }
+            return {"ok": True, "trigger": "counterspell", "choice": choice, "prompt_state": "resolved"}
+
+        # counterspell_yes: spend reaction + 3rd-level (or lowest available >=3) slot
+        if not t._use_reaction(reactor):
+            self._toast(ws_id, "No reactions left for Counterspell, matey.")
+            self.prompts.pop_prompt(request_id)
+            if isinstance(resume_dispatch, dict):
+                resume_dispatch["flags"] = flags
+                return {
+                    "ok": False,
+                    "reason": "reaction_unavailable",
+                    "trigger": "counterspell",
+                    "choice": choice,
+                    "resume_dispatch": resume_dispatch,
+                }
+            return {"ok": False, "reason": "reaction_unavailable", "trigger": "counterspell", "choice": choice}
+
+        player_name = t._pc_name_for(int(reactor_cid))
+        slot_ok, slot_msg, _spent_level = t._consume_spell_slot_for_cast(
+            player_name,
+            t._COUNTERSPELL_MIN_SLOT,
+            t._COUNTERSPELL_MIN_SLOT,
+        )
+        if not slot_ok:
+            self._toast(ws_id, f"Could not spend Counterspell slot: {slot_msg}")
+            self.prompts.pop_prompt(request_id)
+            if isinstance(resume_dispatch, dict):
+                resume_dispatch["flags"] = flags
+                return {
+                    "ok": False,
+                    "reason": "slot_unavailable",
+                    "trigger": "counterspell",
+                    "choice": choice,
+                    "resume_dispatch": resume_dispatch,
+                }
+            return {"ok": False, "reason": "slot_unavailable", "trigger": "counterspell", "choice": choice}
+
+        # Constitution-save contest (2024 counterspell per Spells/counterspell.yaml):
+        # the caster rolls CON save vs. counterspeller's spell save DC. On fail the
+        # spell dissipates and its slot is refunded; on success the spell proceeds.
+        source_cid_norm = self._normalize_cid(offer.get("source_cid"), "reaction_response.counterspell.source")
+        caster = t.combatants.get(int(source_cid_norm)) if source_cid_norm is not None else None
+        reactor_profile = t._profile_for_player_name(t._pc_name_for(int(reactor_cid)))
+        try:
+            dc = int(
+                t._compute_spell_save_dc(reactor_profile if isinstance(reactor_profile, dict) else {})
+                or 0
+            )
+        except Exception:
+            dc = 0
+        if dc <= 0:
+            dc = 8 + t._COUNTERSPELL_MIN_SLOT  # safe fallback so the contest still resolves
+        save_mod = int(t._combatant_save_modifier(caster, "con")) if caster is not None else 0
+        save_roll, _alt = t._roll_save_with_mode(caster, "con") if caster is not None else (10, 10)
+        save_total = int(save_roll) + int(save_mod)
+        contest_success = save_total < int(dc)  # counterspell succeeds on caster's failure
+
+        reactor_name = getattr(reactor, "name", "Reactor")
+        caster_name = getattr(caster, "name", "the caster") if caster is not None else "the caster"
+        t._log(
+            f"{reactor_name} casts Counterspell (DC {dc}); "
+            f"{caster_name}'s CON save: {save_roll}+{save_mod}={save_total}",
+            cid=int(getattr(reactor, "cid", 0) or 0),
+        )
+
+        if contest_success:
+            flags["_spell_counterspelled"] = True
+            t._log(
+                f"{caster_name} fails the save; the spell was countered!",
+                cid=int(getattr(reactor, "cid", 0) or 0),
+            )
+            # Refund the caster's slot per YAML ("If that spell was cast with a spell slot,
+            # the slot isn't expended"). Best-effort: only applies when a slot_level is
+            # known on the resume payload. The AoE insertion fires BEFORE consumption so
+            # no refund is needed there; this refund targets the targeted path.
+            refund_level: Optional[int] = None
+            if isinstance(resume_dispatch, dict):
+                payload = resume_dispatch.get("payload") if isinstance(resume_dispatch.get("payload"), dict) else {}
+                try:
+                    refund_level = int(payload.get("slot_level"))
+                except Exception:
+                    refund_level = None
+            if refund_level is not None and refund_level > 0 and caster is not None:
+                caster_name_for_refund = t._pc_name_for(int(getattr(caster, "cid", 0) or 0))
+                refunder = getattr(t, "_refund_spell_slot", None)
+                if callable(refunder) and caster_name_for_refund:
+                    try:
+                        refunder(caster_name_for_refund, int(refund_level))
+                    except Exception:
+                        pass
+        else:
+            t._log(
+                f"{caster_name} succeeds on the save; Counterspell fails!",
+                cid=int(getattr(caster, "cid", 0) or 0) if caster is not None else int(getattr(reactor, "cid", 0) or 0),
+            )
+
+        self.prompts.pop_prompt(request_id)
+        if isinstance(resume_dispatch, dict):
+            resume_dispatch["flags"] = flags
+            self._oplog(
+                (
+                    f"reaction_offer:counterspell resolved request_id={request_id} "
+                    f"choice={choice} reactor={int(reactor_cid)} "
+                    f"dc={dc} save_total={save_total} countered={bool(contest_success)}"
+                ),
+                level="info",
+            )
+            return {
+                "ok": True,
+                "trigger": "counterspell",
+                "choice": choice,
+                "prompt_state": "resolved",
+                "resume_dispatch": resume_dispatch,
+                "contest": {
+                    "dc": int(dc),
+                    "save_roll": int(save_roll),
+                    "save_mod": int(save_mod),
+                    "save_total": int(save_total),
+                    "countered": bool(contest_success),
+                },
+            }
+        return {
+            "ok": True,
+            "trigger": "counterspell",
+            "choice": choice,
+            "prompt_state": "resolved",
+            "contest": {
+                "dc": int(dc),
+                "save_roll": int(save_roll),
+                "save_mod": int(save_mod),
+                "save_total": int(save_total),
+                "countered": bool(contest_success),
+            },
+        }
+
     def reaction_response(
         self,
         msg: Dict[str, Any],
@@ -6565,6 +6860,8 @@ class PlayerCommandService:
             result_kwargs["choice"] = adjudicate_result.get("choice")
         if "prompt_state" in adjudicate_result:
             result_kwargs["prompt_state"] = adjudicate_result.get("prompt_state")
+        if "contest" in adjudicate_result:
+            result_kwargs["contest"] = adjudicate_result.get("contest")
         return build_dispatch_result(
             "reaction_response",
             resolve_ok,

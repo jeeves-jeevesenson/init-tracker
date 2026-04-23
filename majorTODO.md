@@ -398,6 +398,72 @@ Fred's Spell Stopper dagger now offers a real reaction flow during hostile spell
   3. Resumption of spell with interruption state: Spell is fully canceled; rebinding/resumption patterns not yet implemented
   4. UI/prompt rendering: Backend seam is request-driven; frontend rendering of Spell Stopper prompt deferred to UI pass
 
+### 6.6 Counterspell reaction flow (2026-04-23) — bounded core landed
+
+Counterspell now fires as a real offered reaction during hostile targeted spellcasts.
+Mirrors the Spell Stopper pattern (same seam in `_adjudicate_spell_target_request`),
+but is universal to any combatant with counterspell prepared.
+
+- `_can_offer_counterspell_reaction` / `_find_counterspell_reactor` /
+  `_counterspell_prepared_slots` added to `InitiativeTracker`. Gates: reaction
+  remaining, `counterspell` in prepared spells list, 3rd+ level slot available,
+  within 60 ft of caster, not the caster themselves.
+- Offer creation inside `_adjudicate_spell_target_request` right after the
+  Spell Stopper block; suppressed when the triggering spell is itself
+  counterspell (prevents recursive counterspell-of-counterspell in this pass).
+- `PlayerCommandService.maybe_offer_counterspell` and
+  `_resolve_counterspell_reaction` mirror the Spell Stopper handlers. On
+  accept, spends reaction + 3rd-level slot, sets `_spell_counterspelled` flag
+  that the resumed `spell_target_request` dispatches see as a rejection.
+- `counterspell` added to `SPECIAL_REACTION_TRIGGERS`.
+- `tests/test_counterspell_reaction.py` covers: offer creation in-range,
+  range gating, prepared gating, slot gating, self-counterspell suppression,
+  accept spends resources + interrupts spell, decline preserves resources.
+
+**Bounded/deferred branches not in this pass (documented explicitly):**
+  1. Intelligence (spellcasting ability) check for higher-level triggering
+     spells: counterspell currently auto-succeeds regardless of the
+     triggering spell's level. 2024 PHB rules require a DC 10 + spell level
+     check when countering above the slot level used. Needs reaction-offer
+     extension to carry a post-accept roll stage.
+  2. AoE / untargeted spell interruption: the insertion point is in
+     `_adjudicate_spell_target_request`; AoE casts routed through the AoE
+     pipeline (fireball, etc.) are not interruptible yet. Requires a parallel
+     insertion in the AoE cast path or a unified pre-effect hook.
+  3. Line-of-sight / component visibility: counterspell requires seeing the
+     caster's somatic/verbal/material components; not modeled here.
+
+### 6.7 Counterspell completion (2026-04-23) — AoE interruption + CON-save contest
+
+Finishes the bounded counterspell work from §6.6. Two deferred branches are now landed:
+
+- **AoE / non-targeted cast interruption**: `_handle_cast_aoe_request` now
+  offers counterspell BEFORE resource consumption (so a declined resume does
+  not double-spend). On accept the `_spell_counterspelled` flag aborts AoE
+  template/damage/concentration side-effects. `_dispatch_resume` routes
+  `cast_aoe` resume payloads back through `PlayerCommandService.cast_aoe`.
+  The targeted-path insertion in `_adjudicate_spell_target_request` is
+  preserved unchanged.
+- **Constitution-save contest (2024 rules per Spells/counterspell.yaml)**:
+  `_resolve_counterspell_reaction` now rolls the caster's CON save vs. the
+  counterspeller's spell save DC. Counterspeller always spends their
+  reaction + 3rd-level slot; the triggering spell is only interrupted on a
+  failed caster save. Per YAML text, on interruption the caster's spell
+  slot is refunded via a new `_refund_spell_slot` helper (applies when
+  resume payload carries a `slot_level`; the AoE path needs no refund since
+  it offers pre-consumption).
+- `reaction_response` dispatch result now propagates a `contest` block
+  (`dc`, `save_roll`, `save_mod`, `save_total`, `countered`).
+- `tests/test_counterspell_reaction.py` expanded from 7 → 11 cases:
+  contest success interrupts, contest failure lets the spell through,
+  AoE offer fires on cast_aoe, AoE accept cancels before effects apply.
+
+**Still deferred (explicitly out of scope):**
+  1. Line-of-sight / verbal-somatic-material component visibility gating.
+  2. Pact-slot refund path (`_refund_spell_slot` targets level-indexed slots,
+     not pact-magic pool).
+  3. Counterspell-on-summon / counterspell-on-concentration-sustain paths.
+
 ---
 
 

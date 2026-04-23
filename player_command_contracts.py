@@ -31,6 +31,7 @@ SPECIAL_REACTION_TRIGGERS = {
     "absorb_elements",
     "interception",
     "spell_stopper",
+    "counterspell",
 }
 ACTIVE_PROMPT_STATES = {"offered", "accepted"}
 
