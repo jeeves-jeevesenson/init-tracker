@@ -221,6 +221,74 @@ These remain important but are **not** current top-of-stack while stabilization 
 4. Broad release/packaging pushes before real-play stability is proven
 5. Detailed runtime migration RFC / implementation planning docs before the exploration track is intentionally promoted
 
+### 6.1 Level-11 player follow-up (2026-04-22)
+
+Backend/runtime support for the level-11 player updates landed this pass. The
+following YAML-level updates are **still deferred to a focused player-file pass**:
+
+- **Dorian (Paladin 10 → 11)**: backend trigger tags now recognize
+  `melee_weapon_attack` / `melee_weapon_or_unarmed_attack` /
+  `unarmed_strike` on `grants.damage_riders`, so Radiant Strikes wires in
+  via YAML. The player YAML is still at level 10; when bumping to 11, add:
+  ```yaml
+  - id: radiant_strikes
+    name: Radiant Strikes
+    category: Paladin Feature
+    source: PHB2024
+    level: 11
+    grants:
+      damage_riders:
+      - id: radiant_strikes
+        trigger: [melee_weapon_or_unarmed_attack]
+        damage_formula: '1d8'
+        damage_type: radiant
+  ```
+  Also bump `leveling.level` / `classes[].level` to 11, `prepared_spells.max_formula`
+  to `'12'`, and add a 3rd-level slot (`4/3/3`).
+- **Malagrou (Barbarian 10 → 11)**: `_maybe_apply_relentless_rage` now
+  intercepts at 0 HP while raging at barbarian 11+ (CON save vs DC
+  `10 + 5 * uses_since_rest`; on success, HP becomes `2 * barbarian_level`;
+  use-counter resets when rage ends). Player YAML still needs the level
+  bump and (optional) a no-op `relentless_rage` feature entry for sheet
+  clarity.
+- **Old Man (Monk 10 → 11)**: vitals.speed fly/swim bumped to match walk
+  so cycle_movement_mode offers Fly/Swim, matching Stride of the Elements
+  intent. Player YAML still at level 10 and needs the level bump; no other
+  backend work required for the Warrior of the Elements chassis at 11.
+- **Vicnor (Rogue 3 / Warlock 7 → Warlock 8)**: YAML still shows Warlock 7
+  with 4 invocations. At Warlock 8 (2024 PHB) the player should gain an
+  ASI/feat and an additional invocation, then the DM should pick a new
+  invocation per the 2024 list. This is a **player-file follow-up**: no
+  backend gap blocks it, but the file must be authored. Legacy "Noble
+  Genie" subclass sanity: the backend treats it as free-form features;
+  no rules-automation depends on Genie subclass keys, so legacy
+  compatibility is preserved.
+- **Throat Goat (Bard 9 / Warlock 2, level 11)**: backend already
+  auto-derives free/always-prepared via `_feature_always_prepared_spell_slugs`,
+  so Beguiling Magic and Mantle of Majesty entries in features add their
+  spells to prepared + free without YAML redundancy. Two multiclass gaps
+  are **not** in scope for this pass and should be tracked for a later
+  spell-management corrective slice:
+  1. `prepared_spells.max_formula` is a single static value; 2024 PHB
+     Bard 9 = 14 and Warlock 2 = 3 per-class prep budgets are not modeled
+     separately in the normalizer.
+  2. `pact_magic_slots` vs `spell_slots` are two distinct pools but the
+     prepared list does not track per-class origin for a spell. Multiclass
+     warlock/other casters work in practice because the UI surfaces both
+     slot groups, but there is no backend constraint that forces warlock
+     spells to use pact slots.
+
+### 6.2 Eldramar wand migration (2026-04-22) — landed
+
+Eldramar's `shocking-grasp` and `lightning-bolt` entries were removed
+from his wizard cantrips/known/prepared lists; the `Wand of Sparking`
+magic item now grants both via `always_prepared_spells` and also exposes
+a `wand_of_sparking_lightning_bolt` pool (1/LR) with a `spells.casts`
+mapping so the lightning-bolt cast consumes the item pool instead of a
+wizard slot. The pool state is tracked under the wand's
+`inventory.items[].state.pools` so long-rest reset and current-charge
+persistence route through the existing item-granted pool path.
+
 ---
 
 ## 7. Working guardrails for major passes

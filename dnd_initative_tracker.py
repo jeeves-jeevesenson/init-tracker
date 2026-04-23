@@ -27965,6 +27965,7 @@ class InitiativeTracker(base.InitiativeTracker):
                 maintained = bool(getattr(c, "_rage_attack_made_this_turn", False)) or bool(getattr(c, "_rage_took_damage_this_turn", False))
                 if not maintained:
                     setattr(c, "rage_active", False)
+                    setattr(c, "_relentless_rage_uses", 0)
                     self._remove_condition_type(c, "rage")
                     self._log(f"{c.name}'s Rage ends.", cid=getattr(c, "cid", None))
                     continue
@@ -34684,6 +34685,12 @@ class InitiativeTracker(base.InitiativeTracker):
             weapon_range_text = str(selected_weapon.get("range") or "").strip().lower()
             if "/" in weapon_range_text or "ranged" in weapon_range_text:
                 trigger_tags.add("ranged_weapon_attack")
+            if is_melee_attack:
+                trigger_tags.add("melee_weapon_attack")
+                trigger_tags.add("melee_weapon_or_unarmed_attack")
+            if is_unarmed_strike:
+                trigger_tags.add("unarmed_strike")
+                trigger_tags.add("melee_weapon_or_unarmed_attack")
             advantage_flag = bool(_parse_bool(msg.get("attack_has_advantage")))
             disadvantage_flag = bool(_parse_bool(msg.get("attack_has_disadvantage")))
             advantage_flag = bool(advantage_flag or self._attack_roll_mode_against_target(c, target) == "advantage")
@@ -41006,6 +41013,83 @@ class InitiativeTracker(base.InitiativeTracker):
             f"{getattr(target, 'name', 'Target')} fails to collect themself ({save_total} vs DC {save_dc}); Otto's dance continues.",
         )
 
+    def _maybe_apply_relentless_rage(
+        self,
+        target: Any,
+        *,
+        hp_before: int,
+        hp_after: int,
+    ) -> Optional[int]:
+        """Barbarian 11+ Relentless Rage 0-HP intercept.
+
+        Returns the new hp_after value on a successful save (target drops to
+        twice barbarian level instead of 0), or None if the feature does not
+        apply. Escalating DC (+5 per use, starts at 10) is tracked on the
+        combatant and reset when rage ends.
+        """
+        try:
+            if int(hp_before) <= 0 or int(hp_after) > 0:
+                return None
+        except Exception:
+            return None
+        if not bool(getattr(target, "rage_active", False)):
+            return None
+        if not bool(getattr(target, "is_pc", False)):
+            return None
+        cid = int(getattr(target, "cid", 0) or 0)
+        if cid <= 0:
+            return None
+        player_name = str(self._pc_name_for(cid) or "").strip()
+        if not player_name:
+            return None
+        profile = self._profile_for_player_name(player_name)
+        if not isinstance(profile, dict):
+            return None
+        barb_level = int(self._class_level_from_profile(profile, "barbarian") or 0)
+        if barb_level < 11:
+            return None
+        uses = max(0, int(getattr(target, "_relentless_rage_uses", 0) or 0))
+        save_dc = 10 + 5 * uses
+        save_mode = self._combatant_save_roll_mode(target, "con")
+        save_roll, _alt = self._roll_save_with_mode(
+            target,
+            "con",
+            advantage=(save_mode == "advantage"),
+            disadvantage=(save_mode == "disadvantage"),
+        )
+        save_mod = 0
+        saves = getattr(target, "saving_throws", None)
+        if isinstance(saves, dict):
+            try:
+                save_mod = int(saves.get("con") or 0)
+            except Exception:
+                save_mod = 0
+        if save_mod == 0:
+            mods = getattr(target, "ability_mods", None)
+            if isinstance(mods, dict):
+                try:
+                    save_mod = int(mods.get("con") or 0)
+                except Exception:
+                    save_mod = 0
+        save_total = int(save_roll) + int(save_mod)
+        save_passed = bool(save_roll != 1 and save_total >= int(save_dc))
+        target_name = str(getattr(target, "name", player_name) or player_name)
+        if save_passed:
+            new_hp = max(1, 2 * int(barb_level))
+            setattr(target, "_relentless_rage_uses", uses + 1)
+            self._log(
+                f"{target_name}'s Relentless Rage holds them at {int(new_hp)} HP "
+                f"(CON {save_roll} + {save_mod} = {save_total} vs DC {save_dc}).",
+                cid=cid,
+            )
+            return int(new_hp)
+        self._log(
+            f"{target_name}'s Relentless Rage fails "
+            f"(CON {save_roll} + {save_mod} = {save_total} vs DC {save_dc}).",
+            cid=cid,
+        )
+        return None
+
     def _apply_damage_to_target_with_temp_hp(self, target: Any, raw_damage: int) -> Dict[str, int]:
         damage = max(0, int(raw_damage or 0))
         temp_before = max(0, int(getattr(target, "temp_hp", 0) or 0))
@@ -41014,6 +41098,9 @@ class InitiativeTracker(base.InitiativeTracker):
         temp_after = max(0, temp_before - absorbed)
         hp_damage = max(0, damage - absorbed)
         hp_after = max(0, hp_before - hp_damage)
+        relentless_result = self._maybe_apply_relentless_rage(target, hp_before=hp_before, hp_after=hp_after)
+        if relentless_result is not None:
+            hp_after = int(relentless_result)
         setattr(target, "temp_hp", int(temp_after))
         setattr(target, "hp", int(hp_after))
         self._refresh_monster_phase_for_combatant(target, reason="damage")

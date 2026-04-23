@@ -4,3 +4,16 @@ requires_attunement: true
 grants:
   always_prepared_spells:
     - shocking-grasp
+    - lightning-bolt
+  pools:
+    - id: wand_of_sparking_lightning_bolt
+      label: Wand of Sparking (Lightning Bolt)
+      max_formula: '1'
+      reset: long_rest
+  spells:
+    casts:
+      - spell: lightning-bolt
+        action_type: action
+        consumes:
+          pool: wand_of_sparking_lightning_bolt
+          cost: 1

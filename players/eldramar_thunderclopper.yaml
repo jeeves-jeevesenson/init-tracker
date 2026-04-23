@@ -81,11 +81,6 @@ resources:
     current: 1
     max_formula: '1'
     reset: long_rest
-  - id: wand_of_sparking_lightning_bolt
-    label: Wand of Sparking (Lightning Bolt)
-    current: 1
-    max_formula: '1'
-    reset: long_rest
 features:
 - id: war_caster
   name: War Caster
@@ -96,7 +91,8 @@ features:
   name: Arcane Recovery
   level: 1
   source: Wizard
-  description: After a Short Rest, recover expended spell slots with combined levels up to half your Wizard level (round up). No recovered slot can be level 6+.
+  description: After a Short Rest, recover expended spell slots with combined levels up
+    to half your Wizard level (round up). No recovered slot can be level 6+.
   automation:
     activation_time: short_rest
     consumes_pool: arcane_recovery
@@ -107,7 +103,9 @@ features:
   name: Sculpt Spells
   level: 2
   source: Wizard (Evoker)
-  description: When you cast an Evocation spell that affects allies, you can protect up to 1 + the spell level creatures from the effect; protected creatures automatically succeed and take no damage on successful-save damage effects.
+  description: When you cast an Evocation spell that affects allies, you can protect up
+    to 1 + the spell level creatures from the effect; protected creatures automatically
+    succeed and take no damage on successful-save damage effects.
 actions:
 - name: Attack
   description: Make a weapon or unarmed attack against a target within range.
@@ -116,51 +114,62 @@ actions:
   description: Gain extra movement for the current turn equal to your speed.
   type: action
 - name: Disengage
-  description: Your movement does not provoke opportunity attacks for the rest of the turn.
+  description: Your movement does not provoke opportunity attacks for the rest of
+    the turn.
   type: action
 - name: Dodge
-  description: Until the start of your next turn, attack rolls against you have disadvantage if you can see the attacker, and you make Dexterity saves with advantage.
+  description: Until the start of your next turn, attack rolls against you have disadvantage
+    if you can see the attacker, and you make Dexterity saves with advantage.
   type: action
 - name: Help
-  description: Aid a creature in the next ability check or attack roll against a target within 5 feet of you.
+  description: Aid a creature in the next ability check or attack roll against a target
+    within 5 feet of you.
   type: action
 - name: Hide
   description: Attempt to hide by making a Dexterity (Stealth) check.
   type: action
 - name: Influence
-  description: Attempt to influence a creature through conversation, bargaining, or intimidation.
+  description: Attempt to influence a creature through conversation, bargaining, or
+    intimidation.
   type: action
 - name: Magic
   description: Cast a spell or use a magical feature that takes an action.
   type: action
 - name: Arcane Recovery
-  description: After a Short Rest, recover expended spell slots with combined levels up to half your Wizard level (round up). Recovered slots must be level 5 or lower.
+  description: After a Short Rest, recover expended spell slots with combined levels
+    up to half your Wizard level (round up). Recovered slots must be level 5 or lower.
   type: action
   uses:
     pool: arcane_recovery
     cost: 1
 - name: Ready
-  description: Prepare an action and a trigger; use your reaction to perform it when the trigger occurs.
+  description: Prepare an action and a trigger; use your reaction to perform it when
+    the trigger occurs.
   type: action
 - name: Search
-  description: Devote attention to finding something by making a Wisdom (Perception) or Intelligence (Investigation) check.
+  description: Devote attention to finding something by making a Wisdom (Perception)
+    or Intelligence (Investigation) check.
   type: action
 - name: Study
-  description: Focus on detailed observation or research to gain information about a creature, object, or situation.
+  description: Focus on detailed observation or research to gain information about
+    a creature, object, or situation.
   type: action
 - name: Utilize
   description: Use an object or interact with the environment in a significant way.
   type: action
 reactions:
 - name: Opportunity Attack
-  description: When a hostile creature you can see moves out of your reach, you can use your reaction to make one melee attack against it.
+  description: When a hostile creature you can see moves out of your reach, you can
+    use your reaction to make one melee attack against it.
   type: reaction
 - name: Reaction
-  description: You can take a reaction when a trigger occurs. A reaction is only available once per round.
+  description: You can take a reaction when a trigger occurs. A reaction is only available
+    once per round.
   type: reaction
 bonus_actions:
 - name: Bonus Action
-  description: You can take a bonus action only when a feature, spell, or ability says you can.
+  description: You can take a bonus action only when a feature, spell, or ability
+    says you can.
   type: bonus_action
 spellcasting:
   enabled: true
@@ -175,11 +184,11 @@ spellcasting:
     - fire-bolt
     - toll-the-dead
     - chill-touch
-    - shocking-grasp
     - eldritch-blast
     - mage-hand
     - message
   known_spells:
+    max: 30
     known:
     - bigby-s-hand
     - wall-of-fire
@@ -209,15 +218,13 @@ spellcasting:
     - haste
     - greater-invisibility
     - summon-construct
-    - lightning-bolt
     - disintegrate
     - otto-s-irresistible-dance
     - create-undead
   prepared_spells:
-    max_formula: '16'
+    max_formula: '18'
     prepared:
     - find-familiar
-    - lightning-bolt
     - wall-of-force
     - bigby-s-hand
     - banishment
@@ -277,6 +284,13 @@ inventory:
     equipped: true
     attuned: true
     description: Grants shocking grasp and 1 free cast of lightning bolt per long rest.
+    state:
+      pools:
+      - id: wand_of_sparking_lightning_bolt
+        label: Wand of Sparking (Lightning Bolt)
+        current: 1
+        max_formula: '1'
+        reset: long_rest
   - id: melvins_magic_hat
     instance_id: melvins_magic_hat__001
     name: Melvins Magic Hat
