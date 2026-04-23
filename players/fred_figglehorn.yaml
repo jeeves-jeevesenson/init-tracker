@@ -510,7 +510,7 @@ inventory:
     id: spell_stopper_dagger
     instance_id: spell_stopper_dagger__001
     quantity: 1
-    equipped: false
+    equipped: true
     description: Reaction property tracked manually; once per short rest.
   - name: Dagger
     quantity: 2

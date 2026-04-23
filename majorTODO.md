@@ -358,6 +358,49 @@ Fred's magic items are now normalized in YAML and wired into the existing runtim
 
 ---
 
+### 6.5 Fred Spell Stopper reaction flow (2026-04-23) — reaction prompt/resume landed
+
+Fred's Spell Stopper dagger now offers a real reaction flow during hostile spellcasts in melee range:
+
+- **Offer creation**: During spell_target_request adjudication, detect if:
+  1. Caster is within 5ft (melee range) of Fred
+  2. Fred has equipped Spell Stopper dagger
+  3. Fred has reaction available and spell_stopper_reaction pool > 0
+  If all true, create reaction_offer with spell_stopper trigger and resume_dispatch for the pending spell
+
+- **Acceptance routing**: Reaction response dispatcher added for "spell_stopper" trigger:
+  - Routes spell_stopper_yes/decline to _resolve_spell_stopper_reaction()
+  - On accept: spends reaction, spends spell_stopper_reaction pool, sets _spell_stopped_by_spell_stopper flag
+  - Returns resume_dispatch with interruption flag to resume underlying spell_target_request
+
+- **Spell interruption**: Early check in _adjudicate_spell_target_request() detects _spell_stopped_by_spell_stopper flag:
+  - If set, rejects spell as "spell_interrupted_by_spell_stopper"
+  - Spell slot is preserved (no consumption)
+  - Spell effects do not apply
+
+- **Summon/shared-turn ownership**: Existing allow_prompt_claim_override() logic already supports reaction responses:
+  - Summon/shared-turn controlling player can respond to Spell Stopper offer during their turn
+  - _summon_can_be_controlled_by() and _is_valid_summon_turn_for_controller() enforce proper ownership
+
+- **Item equip state**: Spell Stopper is now equipped: true in Fred's inventory so pool grants project
+
+- **Focused regression tests** (test_spell_stopper_reaction.py, 6 tests, all passing):
+  - Offer appears on qualifying hostile spellcast in melee range
+  - Offer does NOT appear when out of range
+  - Offer does NOT appear without equipped dagger
+  - Acceptance interrupts spell and rejects it cleanly
+  - Acceptance consumes reaction and pool
+  - Decline allows spell to resolve normally
+
+- **Unresolved / bounded partial support for this pass**:
+  1. Silence condition (unable-to-cast until end of target's next turn): Requires condition state model, scoped for separate pass
+  2. Hostile spell detection: Currently simplified to "non-Fred-owned caster". Extended patterns (triggered spells, AoE, summon casting) left for future
+  3. Resumption of spell with interruption state: Spell is fully canceled; rebinding/resumption patterns not yet implemented
+  4. UI/prompt rendering: Backend seam is request-driven; frontend rendering of Spell Stopper prompt deferred to UI pass
+
+---
+
+
 ## 7. Working guardrails for major passes
 
 - Prefer stabilization evidence over milestone rhetoric.

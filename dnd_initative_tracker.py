@@ -31831,6 +31831,62 @@ class InitiativeTracker(base.InitiativeTracker):
             damage_entries=list(damage_entries or []),
         )
 
+    def _can_offer_spell_stopper_reaction(self, reactor: Any, source_cid: Optional[int]) -> Tuple[bool, str]:
+        """Check if a combatant can offer Spell Stopper reaction to interrupt a spell.
+        
+        Returns: (can_offer, reason)
+        - Checks: reaction remaining > 0, has equipped Spell Stopper dagger, pool available
+        """
+        if reactor is None:
+            return False, "missing_reactor"
+        if int(getattr(reactor, "reaction_remaining", 0) or 0) <= 0:
+            return False, "no_reaction"
+        
+        # Check if equipped Spell Stopper dagger exists (item grants pool)
+        inventory = getattr(reactor, "inventory", None)
+        if not isinstance(inventory, dict):
+            inventory = {}
+        items = inventory.get("items") if isinstance(inventory.get("items"), list) else []
+        has_spell_stopper = False
+        for item in items:
+            if not isinstance(item, dict):
+                continue
+            item_id = str(item.get("id") or "").strip().lower()
+            if item_id == "spell_stopper_dagger" and bool(item.get("equipped")):
+                has_spell_stopper = True
+                break
+        if not has_spell_stopper:
+            return False, "no_spell_stopper"
+        
+        # Check pool availability
+        player_name = self._pc_name_for(int(getattr(reactor, "cid", 0) or 0))
+        profile = self._profile_for_player_name(player_name)
+        pool_state = {
+            str(entry.get("id") or "").strip().lower(): int(entry.get("current", 0) or 0)
+            for entry in self._normalize_player_resource_pools(profile if isinstance(profile, dict) else {})
+            if isinstance(entry, dict)
+        }
+        pool_current = int(pool_state.get("spell_stopper_reaction", 0))
+        if pool_current <= 0:
+            return False, "pool_exhausted"
+        return True, "pool_available"
+
+    def _maybe_offer_spell_stopper(
+        self,
+        reactor_cid: int,
+        source_cid: Optional[int],
+        target_cid: Optional[int],
+        *,
+        pending_msg: Optional[Dict[str, Any]],
+    ) -> Optional[str]:
+        """Offer Spell Stopper reaction during a hostile spellcast in melee range."""
+        return self._ensure_player_commands().maybe_offer_spell_stopper(
+            int(reactor_cid),
+            source_cid,
+            target_cid,
+            pending_msg=dict(pending_msg) if isinstance(pending_msg, dict) else None,
+        )
+
     def _maybe_offer_hellish_rebuke(self, victim_cid: int, attacker_cid: Optional[int], damage_total: int) -> Optional[str]:
         return self._ensure_player_commands().maybe_offer_hellish_rebuke(
             int(victim_cid),
@@ -33476,6 +33532,82 @@ class InitiativeTracker(base.InitiativeTracker):
                     for caster_ws in caster_ws_targets:
                         self._lan.toast(int(caster_ws), "Waiting for Shield response…")
                     return
+        
+        # Check for Spell Stopper reaction offer (Fred's anti-caster throat-cut)
+        # Spell Stopper triggers on hostile spellcasts within melee range
+        if not bool(msg.get("_spell_stopper_resolution_done")):
+            # Find Fred combatant (Spell Stopper user)
+            fred = None
+            fred_cid = None
+            for potential_fred in self.combatants.values():
+                if potential_fred is None:
+                    continue
+                fred_name = str(getattr(potential_fred, "name", "")).strip().lower()
+                if "fred" in fred_name and "figglehorn" in fred_name:
+                    fred = potential_fred
+                    fred_cid = int(getattr(potential_fred, "cid", 0) or 0)
+                    break
+            
+            if fred is not None and fred_cid is not None and int(fred_cid) != int(cid):
+                # Check if Fred is in melee range (5 ft) of the caster
+                fred_pos = self._lan_positions.get(int(fred_cid)) if isinstance(self._lan_positions, dict) else None
+                caster_pos = self._lan_positions.get(int(cid)) if isinstance(self._lan_positions, dict) else None
+                in_melee_range = False
+                if fred_pos and caster_pos:
+                    dist = ((fred_pos[0] - caster_pos[0])**2 + (fred_pos[1] - caster_pos[1])**2) ** 0.5
+                    in_melee_range = bool(dist <= 1)  # 5 ft ≈ 1 grid square at typical scale
+                
+                if in_melee_range:
+                    spell_stopper_mode = self._reaction_mode_for(int(fred_cid), "spell_stopper", default="ask")
+                    can_offer, _reason = self._can_offer_spell_stopper_reaction(fred, int(cid))
+                    if spell_stopper_mode != "off" and can_offer:
+                        choices = [{"kind": "spell_stopper_yes", "label": "Yes", "mode": spell_stopper_mode}]
+                        ws_targets = self._find_ws_for_cid(int(fred_cid))
+                        req_id = self._ensure_player_commands().create_reaction_offer(
+                            int(fred_cid),
+                            "spell_stopper",
+                            int(cid),
+                            int(target_cid),
+                            choices,
+                            ws_targets,
+                            extra_payload={"prompt_attack": str(spell_name or "Spell")},
+                            resume_dispatch=build_resume_dispatch(
+                                "spell_target_request",
+                                actor_cid=int(cid),
+                                ws_id=ws_id,
+                                is_admin=bool(is_admin),
+                                payload=build_spell_target_request_contract(
+                                    msg,
+                                    cid=int(cid),
+                                    ws_id=ws_id,
+                                    is_admin=bool(is_admin),
+                                )["payload"],
+                            ),
+                        )
+                        if req_id:
+                            self._oplog(
+                                f"reaction_offer:spell_stopper pending request_id={req_id} spell={spell_name} caster={int(cid)} target={int(target_cid)} fred={int(fred_cid)}",
+                                level="info",
+                            )
+                            fred_ws_targets = self._find_ws_for_cid(int(fred_cid))
+                            for fred_ws in fred_ws_targets:
+                                self._lan.toast(int(fred_ws), f"Spell Stopper reaction available…")
+                            return
+
+        # Check if spell was interrupted by Spell Stopper
+        if bool(msg.get("_spell_stopped_by_spell_stopper")):
+            self._lan.toast(ws_id, "The spell was interrupted by Spell Stopper!")
+            msg["_spell_target_result"] = build_spell_target_rejection_payload(
+                attacker_cid=int(cid),
+                target_cid=int(target_cid),
+                spell_name=spell_name,
+                spell_slug=preset_slug or None,
+                spell_id=preset_id or None,
+                reason="spell_interrupted_by_spell_stopper",
+            )
+            self._log(f"{spell_name} was interrupted by Spell Stopper!", cid=int(target_cid))
+            return
+
         is_polymorph = preset_slug == "polymorph" or preset_id == "polymorph"
         is_phantasmal_killer = preset_slug == "phantasmal-killer" or preset_id == "phantasmal-killer"
         is_heat_metal = preset_slug in ("heat-metal", "heat_metal") or preset_id in ("heat-metal", "heat_metal")

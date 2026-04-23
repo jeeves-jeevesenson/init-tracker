@@ -1277,6 +1277,76 @@ class PlayerCommandService:
             resume_dispatch=resume_dispatch,
         )
 
+    def maybe_offer_spell_stopper(
+        self,
+        reactor_cid: int,
+        source_cid: Optional[int],
+        target_cid: Optional[int],
+        *,
+        pending_msg: Optional[Dict[str, Any]],
+    ) -> Optional[str]:
+        """Offer Fred's Spell Stopper reaction to interrupt a hostile spellcast."""
+        t = self._tracker
+        reactor_cid = self._normalize_cid(reactor_cid, "spell_stopper.reactor")
+        if reactor_cid is None:
+            return None
+        reactor = t.combatants.get(int(reactor_cid))
+        if reactor is None:
+            return None
+        
+        mode = t._reaction_mode_for(int(reactor_cid), "spell_stopper", default="ask")
+        if mode == "off":
+            return None
+        
+        can_offer, _reason = t._can_offer_spell_stopper_reaction(reactor, source_cid)
+        if not can_offer:
+            return None
+        
+        ws_targets = t._find_ws_for_cid(int(reactor_cid))
+        choices = [
+            {"kind": "spell_stopper_yes", "label": "Spell Stopper", "mode": mode},
+            {"kind": "spell_stopper_decline", "label": "No", "mode": "ask"},
+            {"kind": "spell_stopper_never", "label": "No (don't ask again)", "mode": "ask"},
+        ]
+        
+        resume_dispatch = None
+        if isinstance(pending_msg, dict):
+            pending_type = str(pending_msg.get("type") or "").strip().lower()
+            if pending_type == "spell_target_request":
+                resume_dispatch = build_resume_dispatch(
+                    "spell_target_request",
+                    actor_cid=self._normalize_cid(source_cid, "spell_stopper.source"),
+                    ws_id=pending_msg.get("_ws_id"),
+                    is_admin=bool(str(pending_msg.get("admin_token") or "").strip()),
+                    payload=build_spell_target_request_contract(
+                        pending_msg,
+                        cid=self._normalize_cid(source_cid, "spell_stopper.source"),
+                        ws_id=pending_msg.get("_ws_id"),
+                        is_admin=bool(str(pending_msg.get("admin_token") or "").strip()),
+                    )["payload"],
+                )
+        
+        source_name = t._pc_name_for(int(source_cid)) if source_cid is not None else "Caster"
+        target_name = t._pc_name_for(int(target_cid)) if target_cid is not None else "Target"
+        
+        return self.create_reaction_offer(
+            int(reactor_cid),
+            "spell_stopper",
+            int(source_cid) if source_cid is not None else 0,
+            int(target_cid) if target_cid is not None else 0,
+            choices,
+            ws_targets,
+            extra_payload={
+                "prompt": f"{source_name} is casting a spell at {target_name}. Use Spell Stopper?",
+            },
+            resolution={
+                "reactor_cid": int(reactor_cid),
+                "source_cid": int(source_cid) if source_cid is not None else 0,
+                "target_cid": int(target_cid) if target_cid is not None else 0,
+            },
+            resume_dispatch=resume_dispatch,
+        )
+
     def _resolve_pc_name(self, cid: Optional[int]) -> str:
         if cid is None:
             return ""
@@ -5969,6 +6039,14 @@ class PlayerCommandService:
                 choice=choice,
                 ws_id=ws_id,
             )
+        if trigger == "spell_stopper":
+            return self._resolve_spell_stopper_reaction(
+                msg,
+                request_id=request_id,
+                offer=offer,
+                choice=choice,
+                ws_id=ws_id,
+            )
         if choice in ("", "decline", "ignore"):
             self.prompts.pop_prompt(request_id)
             return {"ok": True, "trigger": trigger, "choice": choice, "prompt_state": "declined"}
@@ -6299,6 +6377,125 @@ class PlayerCommandService:
                 "resume_dispatch": resume_dispatch,
             }
         return {"ok": True, "trigger": "interception", "choice": choice, "prompt_state": "resolved"}
+
+    def _resolve_spell_stopper_reaction(
+        self,
+        msg: Dict[str, Any],
+        *,
+        request_id: str,
+        offer: Dict[str, Any],
+        choice: str,
+        ws_id: Any,
+    ) -> Dict[str, Any]:
+        """Resolve Fred's Spell Stopper reaction.
+        
+        On accept (spell_stopper_yes):
+        - Spend the spell_stopper_reaction pool
+        - Mark spell as interrupted (canceled, slot preserved)
+        """
+        t = self._tracker
+        pending = self.prompts.get_resolution(request_id)
+        resume_dispatch = self.prompts.get_resume_dispatch(request_id)
+        if not isinstance(pending, dict):
+            self._toast(ws_id, "That Spell Stopper offer expired, matey.")
+            return {"ok": False, "reason": "expired_offer", "trigger": "spell_stopper", "choice": choice}
+        
+        reactor_cid = self._normalize_cid(offer.get("reactor_cid"), "reaction_response.spell_stopper.reactor")
+        reactor = t.combatants.get(int(reactor_cid)) if reactor_cid is not None else None
+        if reactor is None:
+            self.prompts.pop_prompt(request_id)
+            return {"ok": False, "reason": "reactor_missing", "trigger": "spell_stopper", "choice": choice}
+        
+        if choice in ("spell_stopper_never", "never"):
+            t._set_reaction_prefs(int(reactor_cid), {"spell_stopper": "off"})
+        
+        flags = dict(
+            resume_dispatch.get("flags")
+            if isinstance(resume_dispatch, dict) and isinstance(resume_dispatch.get("flags"), dict)
+            else {}
+        )
+        flags["_spell_stopper_resolution_done"] = True
+        
+        if choice in ("spell_stopper_never", "never", "", "decline", "ignore", "spell_stopper_no", "spell_stopper_decline"):
+            self.prompts.pop_prompt(request_id)
+            if isinstance(resume_dispatch, dict):
+                resume_dispatch["flags"] = flags
+                return {
+                    "ok": True,
+                    "trigger": "spell_stopper",
+                    "choice": choice,
+                    "prompt_state": "declined",
+                    "resume_dispatch": resume_dispatch,
+                }
+            return {"ok": True, "trigger": "spell_stopper", "choice": choice, "prompt_state": "declined"}
+        
+        if choice not in ("spell_stopper_yes", "spell_stopper"):
+            self.prompts.pop_prompt(request_id)
+            if isinstance(resume_dispatch, dict):
+                resume_dispatch["flags"] = flags
+                return {
+                    "ok": True,
+                    "trigger": "spell_stopper",
+                    "choice": choice,
+                    "prompt_state": "resolved",
+                    "resume_dispatch": resume_dispatch,
+                }
+            return {"ok": True, "trigger": "spell_stopper", "choice": choice, "prompt_state": "resolved"}
+        
+        # spell_stopper_yes: spend reaction + pool
+        if not t._use_reaction(reactor):
+            self._toast(ws_id, "No reactions left for Spell Stopper, matey.")
+            self.prompts.pop_prompt(request_id)
+            if isinstance(resume_dispatch, dict):
+                resume_dispatch["flags"] = flags
+                return {
+                    "ok": False,
+                    "reason": "reaction_unavailable",
+                    "trigger": "spell_stopper",
+                    "choice": choice,
+                    "resume_dispatch": resume_dispatch,
+                }
+            return {"ok": False, "reason": "reaction_unavailable", "trigger": "spell_stopper", "choice": choice}
+        
+        # Spend the spell_stopper_reaction pool
+        player_name = self._tracker._pc_name_for(int(reactor_cid))
+        pool_ok, pool_msg = t._consume_resource_pool_for_cast(player_name, "spell_stopper_reaction", 1)
+        if not pool_ok:
+            self._toast(ws_id, f"Could not spend Spell Stopper pool: {pool_msg}")
+            self.prompts.pop_prompt(request_id)
+            if isinstance(resume_dispatch, dict):
+                resume_dispatch["flags"] = flags
+                return {
+                    "ok": False,
+                    "reason": "pool_unavailable",
+                    "trigger": "spell_stopper",
+                    "choice": choice,
+                    "resume_dispatch": resume_dispatch,
+                }
+            return {"ok": False, "reason": "pool_unavailable", "trigger": "spell_stopper", "choice": choice}
+        
+        # Mark spell as interrupted: set flag to prevent damage/effects
+        flags["_spell_stopped_by_spell_stopper"] = True
+        t._log(
+            f"{getattr(reactor, 'name', 'Reactor')} slashes with Spell Stopper, cutting off the spell!",
+            cid=int(getattr(reactor, "cid", 0) or 0),
+        )
+        
+        self.prompts.pop_prompt(request_id)
+        if isinstance(resume_dispatch, dict):
+            resume_dispatch["flags"] = flags
+            self._oplog(
+                f"reaction_offer:spell_stopper resolved request_id={request_id} choice={choice} reactor={int(reactor_cid)}",
+                level="info",
+            )
+            return {
+                "ok": True,
+                "trigger": "spell_stopper",
+                "choice": choice,
+                "prompt_state": "resolved",
+                "resume_dispatch": resume_dispatch,
+            }
+        return {"ok": True, "trigger": "spell_stopper", "choice": choice, "prompt_state": "resolved"}
 
     def reaction_response(
         self,

@@ -30,6 +30,7 @@ SPECIAL_REACTION_TRIGGERS = {
     "hellish_rebuke",
     "absorb_elements",
     "interception",
+    "spell_stopper",
 }
 ACTIVE_PROMPT_STATES = {"offered", "accepted"}
 
