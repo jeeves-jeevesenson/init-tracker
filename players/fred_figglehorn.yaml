@@ -3,40 +3,51 @@ name: Fred
 player: Fred
 identity:
   pronouns: null
-  ancestry: null
-  background: null
+  ancestry: Drow
+  background: Acolyte
   alignment: null
-  description: null
+  description: Drow assassin-warlock and DMPC devoted to Bhall. Blood-themed spell presentation; underlying spell mechanics remain the base spell.
 leveling:
-  level: 7
+  level: 8
   classes:
   - name: Warlock
-    subclass: Pact of Blood
-    level: 7
+    subclass: Acolyte of Bhall
+    level: 8
 abilities:
-  str: 12
-  dex: 12
-  con: 14
-  int: 14
-  wis: 16
-  cha: 16
+  str: 6
+  dex: 14
+  con: 15
+  int: 9
+  wis: 12
+  cha: 20
 proficiency:
   bonus: 3
   saves:
-  - CHA
   - WIS
+  - CHA
   skills:
-    proficient: []
+    proficient:
+    - Deception
+    - Insight
+    - Intimidation
+    - Investigation
+    - Perception
     expertise: []
-  tools: []
-  languages: []
+  tools:
+  - Cartographer's Tools
+  - Light Armor
+  - Simple Weapons
+  languages:
+  - Common
+  - Elvish
+  - Undercommon
 vitals:
-  max_hp: 78
-  current_hp: 78
+  max_hp: 59
+  current_hp: 59
   temp_hp: 0
   hit_dice:
     die: d8
-    total: 7
+    total: 8
     spent: 0
   speed:
     walk: 30
@@ -44,9 +55,9 @@ vitals:
     fly: 0
     swim: 0
   initiative:
-    formula: dex_mod
+    formula: dex_mod + 5
   passive_perception:
-    formula: 10 + wis_mod
+    formula: 10 + wis_mod + prof
 defenses:
   ac:
     sources:
@@ -54,48 +65,285 @@ defenses:
       label: Unarmored
       when: always
       base_formula: 10 + dex_mod
-    bonuses: []
+    bonuses:
+    - id: mithril_chain_undershirt
+      label: Small Mithril Chain Undershirt
+      value: 1
+      when: while worn
   resistances: []
   immunities: []
   vulnerabilities: []
 attacks:
-  weapon_to_hit: 4
+  weapon_to_hit: 7
   weapons:
-  - id: unarmed_strike
-    name: Unarmed Strike
-    equipped: true
-    proficient: true
-    to_hit: 4
-    range: '5'
-    properties: []
-    one_handed:
-      damage_formula: 1 + str_mod
-      damage_type: bludgeoning
-    two_handed: {}
-    effect:
-      on_hit: ''
-      save_ability: ''
-      save_dc: 0
-  - id: dagger
-    name: Dagger
+  - id: rotted_fork
+    name: The Rotted Fork
     equipped: false
     proficient: true
-    to_hit: 4
+    to_hit: 6
+    magic_bonus: 1
+    range: '5'
+    properties:
+    - light
+    one_handed:
+      damage_formula: 1d4 + dex_mod + 1
+      damage_type: piercing
+    two_handed: {}
+    effect:
+      on_hit: On hit, causes bleeding. Exact bleed automation pending backend pass.
+      save_ability: ''
+      save_dc: 0
+  - id: sacrificial_dagger_plus_2
+    name: +2 Sacrificial Dagger of Murder
+    equipped: true
+    main_hand: true
+    proficient: true
+    to_hit: 7
+    magic_bonus: 2
     range: 20/60
     properties:
     - finesse
     - light
+    - thrown
     one_handed:
-      damage_formula: 1d4 + max(str_mod, dex_mod)
+      damage_formula: 1d4 + dex_mod + 2
       damage_type: piercing
     two_handed: {}
     effect:
       on_hit: ''
       save_ability: ''
       save_dc: 0
+  - id: sacrificial_dagger_plus_2_offhand
+    name: +2 Sacrificial Dagger of Murder
+    equipped: true
+    proficient: true
+    to_hit: 7
+    magic_bonus: 2
+    range: 20/60
+    properties:
+    - finesse
+    - light
+    - thrown
+    one_handed:
+      damage_formula: 1d4 + dex_mod + 2
+      damage_type: piercing
+    two_handed: {}
+    effect:
+      on_hit: ''
+      save_ability: ''
+      save_dc: 0
+  - id: spell_stopper_dagger
+    name: +2 Spell Stopper Throat-Cutting Dagger
+    equipped: false
+    proficient: true
+    to_hit: 7
+    magic_bonus: 2
+    range: 20/60
+    properties:
+    - finesse
+    - light
+    - thrown
+    one_handed:
+      damage_formula: 1d4 + dex_mod + 2
+      damage_type: piercing
+    two_handed: {}
+    effect:
+      on_hit: 'Special reaction rider tracked separately: once per short rest, cancel a spell from a creature casting within melee range; target is silenced until the end of its next turn.'
+      save_ability: ''
+      save_dc: 0
+  - id: magnum_revolver
+    name: Magnum Revolver
+    category: martial_ranged
+    weapon_group: Martial Ranged
+    equipped: false
+    proficient: true
+    to_hit: 5
+    magic_bonus: 0
+    range: 30/90
+    properties:
+    - ammunition
+    - light
+    one_handed:
+      damage_formula: 1d12 + dex_mod
+      damage_type: piercing
+    two_handed: {}
+    effect:
+      on_hit: Magazine tracks 19 shots manually.
+      save_ability: ''
+      save_dc: 0
 resources:
-  pools: []
-features: []
+  pools:
+  - id: murderous_intent
+    label: Murderous Intent
+    current: 0
+    max_formula: prof
+    reset: short_rest
+  - id: bandolier_fan_of_blades
+    label: Bandolier Fan of Blades
+    current: 1
+    max_formula: '1'
+    reset: long_rest
+  - id: spell_stopper_reaction
+    label: Spell Stopper Reaction
+    current: 1
+    max_formula: '1'
+    reset: short_rest
+  - id: faerie_fire_drow
+    label: Faerie Fire (Drow)
+    current: 1
+    max_formula: '1'
+    reset: long_rest
+  - id: darkness_drow
+    label: Darkness (Drow)
+    current: 1
+    max_formula: '1'
+    reset: long_rest
+  - id: inflict_wounds_magic_initiate
+    label: Inflict Wounds (Magic Initiate)
+    current: 1
+    max_formula: '1'
+    reset: long_rest
+features:
+- id: darkvision_drow
+  name: Darkvision
+  category: Species Feature
+  source: Drow
+  level: 1
+  description: Darkvision 120 ft.
+- id: fey_ancestry
+  name: Fey Ancestry
+  category: Species Feature
+  source: Elf
+  level: 1
+  description: Advantage on saving throws to avoid or end the Charmed condition.
+- id: trance
+  name: Trance
+  category: Species Feature
+  source: Elf
+  level: 1
+  description: Elven Trance.
+- id: keen_senses
+  name: Keen Senses
+  category: Species Feature
+  source: Drow
+  level: 1
+  description: Perception proficiency from drow lineage.
+- id: drow_spellcasting
+  name: Drow Spellcasting
+  category: Species Feature
+  source: Drow
+  level: 1
+  description: Dancing Lights at will; Faerie Fire once per long rest; Darkness once per long rest.
+  grants:
+    always_prepared_spells:
+    - faerie-fire
+    - darkness
+    pools:
+    - id: faerie_fire_drow
+      label: Faerie Fire (Drow)
+      max_formula: '1'
+      reset: long_rest
+    - id: darkness_drow
+      label: Darkness (Drow)
+      max_formula: '1'
+      reset: long_rest
+    spells:
+      casts:
+      - spell: faerie-fire
+        action_type: action
+        consumes:
+          pool: faerie_fire_drow
+          cost: 1
+      - spell: darkness
+        action_type: action
+        consumes:
+          pool: darkness_drow
+          cost: 1
+- id: magic_initiate_cleric
+  name: Magic Initiate (Cleric)
+  category: Feat
+  source: Player Notes
+  description: Thaumaturgy cantrip plus Inflict Wounds once per long rest. Existing sheet note also tied an earlier +2 CON boost here; CON is already set directly in abilities for now.
+  grants:
+    always_prepared_spells:
+    - inflict-wounds
+    pools:
+    - id: inflict_wounds_magic_initiate
+      label: Inflict Wounds (Magic Initiate)
+      max_formula: '1'
+      reset: long_rest
+    spells:
+      casts:
+      - spell: inflict-wounds
+        action_type: action
+        consumes:
+          pool: inflict_wounds_magic_initiate
+          cost: 1
+- id: alert
+  name: Alert
+  category: Feat
+  source: PHB2024
+  description: Gain a +5 bonus to Initiative.
+- id: murderspawn
+  name: Murderspawn
+  category: Warlock Subclass Feature
+  source: Homebrew (Bhall)
+  level: 3
+  description: Once per turn when you deal damage to a hostile creature, gain 1 Murderous Intent (MI), up to your proficiency bonus. Once on each of your turns, when you hit with a weapon attack or deal damage with a warlock spell/cantrip, you may spend any number of MI to deal 1d4 necrotic damage per point spent. When you reduce a creature to 0 HP, gain 1 MI. Track manually until backend support lands.
+  grants:
+    always_prepared_spells:
+    - dissonant-whispers
+    - detect-thoughts
+    - phantasmal-force
+    - cloud-of-daggers
+    - enthrall
+    pools:
+    - id: murderous_intent
+      label: Murderous Intent
+      max_formula: prof
+      reset: short_rest
+- id: cull_the_weak
+  name: Cull the Weak
+  category: Warlock Subclass Feature
+  source: Homebrew (Bhall)
+  level: 6
+  description: You know immediately when a creature you can see within 30 feet is below half its hit points.
+- id: blood_in_the_air
+  name: Blood in the Air
+  category: Warlock Subclass Feature
+  source: Homebrew (Bhall)
+  level: 6
+  description: You know immediately when a creature you can see within 30 feet is at or below one-quarter of its hit points. Once per turn when you damage a creature that is below half its hit points, you may either move up to 10 feet without provoking opportunity attacks or force that creature to make a Wisdom save against your spell save DC; on a failure it cannot take Reactions until the start of its next turn. Track manually until backend support lands.
+- id: agonizing_blast
+  name: Agonizing Blast
+  category: Eldritch Invocation
+  source: Warlock
+  description: Add your Charisma modifier to Eldritch Blast damage.
+- id: devils_sight
+  name: Devil's Sight
+  category: Eldritch Invocation
+  source: Warlock
+  description: See normally in Darkness, magical and nonmagical, out to 120 feet.
+- id: mask_of_many_faces
+  name: Mask of Many Faces
+  category: Eldritch Invocation
+  source: Warlock
+  description: Cast Disguise Self at will without expending a spell slot.
+- id: misty_visions
+  name: Misty Visions
+  category: Eldritch Invocation
+  source: Warlock
+  description: Cast Silent Image at will without expending a spell slot.
+- id: pact_of_the_blade
+  name: Pact of the Blade
+  category: Eldritch Invocation
+  source: Warlock
+  description: Use a conjured or bonded weapon as your pact weapon. Current dagger/fork setup remains largely manual until a backend pass decides how far to formalize pact-weapon handling for Fred.
+- id: thirsting_blade
+  name: Thirsting Blade
+  category: Eldritch Invocation
+  source: Warlock
+  description: If using Pact of the Blade, you can attack twice instead of once when you take the Attack action with your pact weapon.
 actions:
 - name: Attack
   description: Make a weapon or unarmed attack against a target within range.
@@ -104,55 +352,54 @@ actions:
   description: Gain extra movement for the current turn equal to your speed.
   type: action
 - name: Disengage
-  description: Your movement does not provoke opportunity attacks for the rest of
-    the turn.
+  description: Your movement does not provoke opportunity attacks for the rest of the turn.
   type: action
 - name: Dodge
-  description: Until the start of your next turn, attack rolls against you have disadvantage
-    if you can see the attacker, and you make Dexterity saves with advantage.
+  description: Until the start of your next turn, attack rolls against you have disadvantage if you can see the attacker, and you make Dexterity saves with advantage.
   type: action
 - name: Help
-  description: Aid a creature in the next ability check or attack roll against a target
-    within 5 feet of you.
+  description: Aid a creature in the next ability check or attack roll against a target within 5 feet of you.
   type: action
 - name: Hide
   description: Attempt to hide by making a Dexterity (Stealth) check.
   type: action
 - name: Influence
-  description: Attempt to influence a creature through conversation, bargaining, or
-    intimidation.
+  description: Attempt to influence a creature through conversation, bargaining, or intimidation.
   type: action
 - name: Magic
   description: Cast a spell or use a magical feature that takes an action.
   type: action
+- name: Murderous Intent
+  description: Homebrew blood-themed cantrip presentation. Underlying repo spell for current YAML is Toll the Dead, skinned at the table as Murderous Intent.
+  type: action
+- name: Fan of Blades
+  description: 'Bandolier of Many Knives: each creature in a 15-foot cone makes a DC 15 Dexterity save, taking 8d4 + 8 piercing on a failure or half on a success. Refreshes at next dawn; tracked here as a long-rest style pool for now.'
+  type: action
 - name: Ready
-  description: Prepare an action and a trigger; use your reaction to perform it when
-    the trigger occurs.
+  description: Prepare an action and a trigger; use your reaction to perform it when the trigger occurs.
   type: action
 - name: Search
-  description: Devote attention to finding something by making a Wisdom (Perception)
-    or Intelligence (Investigation) check.
+  description: Devote attention to finding something by making a Wisdom (Perception) or Intelligence (Investigation) check.
   type: action
 - name: Study
-  description: Focus on detailed observation or research to gain information about
-    a creature, object, or situation.
+  description: Focus on detailed observation or research to gain information about a creature, object, or situation.
   type: action
 - name: Utilize
   description: Use an object or interact with the environment in a significant way.
   type: action
 reactions:
 - name: Opportunity Attack
-  description: When a hostile creature you can see moves out of your reach, you can
-    use your reaction to make one melee attack against it.
+  description: When a hostile creature you can see moves out of your reach, you can use your reaction to make one melee attack against it.
   type: reaction
 - name: Reaction
-  description: You can take a reaction when a trigger occurs. A reaction is only available
-    once per round.
+  description: You can take a reaction when a trigger occurs. A reaction is only available once per round.
+  type: reaction
+- name: Spell Stopper
+  description: Once per short rest, when a creature within melee range casts a spell, cut its throat with the Spell Stopper dagger as a reaction. The spell is canceled, no slot is consumed, and the target is silenced until the end of its next turn. Track manually until backend support lands.
   type: reaction
 bonus_actions:
 - name: Bonus Action
-  description: You can take a bonus action only when a feature, spell, or ability
-    says you can.
+  description: You can take a bonus action only when a feature, spell, or ability says you can.
   type: bonus_action
 spellcasting:
   enabled: true
@@ -162,28 +409,32 @@ spellcasting:
   save_dc_formula: 8 + prof + casting_mod
   spell_attack_formula: prof + casting_mod
   cantrips:
-    max: 4
+    max: 5
     known:
-    - produce-flame
-    - minor-illusion
-    - message
-    - sorcerous-burst
+    - eldritch-blast
+    - mage-hand
+    - toll-the-dead
+    - thaumaturgy
+    - dancing-lights
   known_spells:
     max: 0
+    known: []
   prepared_spells:
-    max_formula: '15'
+    max_formula: '9'
     prepared:
-    - summon-aberration
-    - summon-fey
-    - summon-construct
-    - summon-celestial
-    - summon-undead
-    - create-undead
-    - find-familiar
-    - fireball
-    - thunderwave
-    - lightning-bolt
-    - cone-of-cold
+    - armor-of-agathys
+    - grease
+    - hellish-rebuke
+    - cloud-of-daggers
+    - detect-thoughts
+    - dissonant-whispers
+    - enthrall
+    - phantasmal-force
+    - tasha-s-hideous-laughter
+    free:
+    - faerie-fire
+    - darkness
+    - inflict-wounds
   spell_slots:
     '1':
       max: 0
@@ -212,14 +463,53 @@ spellcasting:
     '9':
       max: 0
       current: 0
+  pact_magic_slots:
+    level: 4
+    count: 2
 inventory:
   currency:
-    gp: 0
+    gp: 3875
     sp: 0
     cp: 0
   items:
-  - id: shield
-    instance_id: shield__001
-    name: Shield
-    category: shield
-notes: {}
+  - name: Old Drow Clothes
+    quantity: 1
+  - name: Map Kit
+    quantity: 1
+  - name: Venom Vial
+    quantity: 1
+  - name: Small Mithril Chain Undershirt
+    quantity: 1
+    equipped: true
+    description: +1 AC while worn.
+  - name: The Rotted Fork
+    quantity: 1
+    equipped: false
+    description: +1 weapon; causes bleeding on hit. Exact bleed automation pending.
+  - name: Magnum Revolver
+    quantity: 1
+    equipped: false
+    description: 1d12 piercing, 19-shot magazine tracked manually.
+  - name: +2 Sacrificial Dagger of Murder
+    quantity: 2
+    equipped: true
+    description: ''
+  - name: +2 Spell Stopper Throat-Cutting Dagger
+    quantity: 1
+    equipped: false
+    description: Reaction property tracked manually; once per short rest.
+  - name: Dagger
+    quantity: 2
+  - name: Bandolier of Many Knives
+    quantity: 1
+    equipped: true
+    attuned: true
+    description: 'Eight +1 magic daggers. Draw as part of attack. Thrown daggers vanish at end of turn and reappear unless still wielded in melee. Fan of Blades action: 15-foot cone, DC 15 Dex, 8d4 + 8 piercing, half on success, refreshes at next dawn.'
+notes:
+  sheet_status: Level 8 rebuild from sparse sheet plus user notes. Backend automation still needed for custom subclass features, custom weapon effects, and deeper item formalization.
+  hp_note: Max HP set to 59 as a clean level-8 warlock baseline using average gains and CON 15. Adjust if table used rolled HP or a different prior total.
+  spell_reskins: Murderous Intent uses Toll the Dead as the underlying repo spell for now. Blood Slick = Grease. Bloody Rebuke = Hellish Rebuke. Blood-themed spell names are presentation only.
+  subclass_expanded_spells_future: 'Current Bhall expanded/always-prepared list at level 8: Dissonant Whispers, Detect Thoughts, Phantasmal Force, Cloud of Daggers, Enthrall. Future planned additions: Fear and Vampiric Touch when higher-level subclass spell access comes online.'
+  subclass_future_level_10: 'Cloak of the Murder Lord (planned): resistance to psychic and necrotic damage; advantage on saves against Charmed/Frightened; possibly recover some Murderous Intent when using Magical Cunning. Keep as planning note until finalized.'
+  subclass_future_level_14: 'Bhalls Chosen (planned): 1/long-rest transformation for 1 minute with speed/positioning payoff, first-hit extra necrotic each turn, and a kill-trigger reposition or brief invisibility effect. Keep as planning note until finalized.'
+  dm_assassin_direction: Alert selected at level 8. Fred is intentionally built as a lean assassin-style DMPC rather than a fully optimized generalist.
