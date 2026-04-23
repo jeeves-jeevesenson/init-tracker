@@ -54,7 +54,10 @@ class PlayerYamlValidityTests(unittest.TestCase):
         leveling = data.get("leveling") or {}
         classes = leveling.get("classes") or []
         class_level_sum = sum(int((entry or {}).get("level") or 0) for entry in classes if isinstance(entry, dict))
+        self.assertEqual(int(leveling.get("level") or 0), 11)
         self.assertEqual(int(leveling.get("level") or 0), class_level_sum)
+        hit_dice = ((data.get("vitals") or {}).get("hit_dice") or {})
+        self.assertEqual(int(hit_dice.get("total") or 0), 11)
         speed = ((data.get("vitals") or {}).get("speed") or {})
         self.assertEqual(set(speed.keys()), {"walk", "climb", "fly", "swim"})
 
@@ -91,11 +94,11 @@ class PlayerYamlValidityTests(unittest.TestCase):
         self.assertEqual(identity.get("alignment"), "Lawful Neutral")
 
         leveling = data.get("leveling") or {}
-        self.assertEqual(leveling.get("level"), 10)
+        self.assertEqual(leveling.get("level"), 11)
         classes = {(entry or {}).get("name"): (entry or {}) for entry in (leveling.get("classes") or [])}
         self.assertEqual((classes.get("Rogue") or {}).get("level"), 3)
         self.assertEqual((classes.get("Rogue") or {}).get("subclass"), "Swashbuckler")
-        self.assertEqual((classes.get("Warlock") or {}).get("level"), 7)
+        self.assertEqual((classes.get("Warlock") or {}).get("level"), 8)
         self.assertEqual((classes.get("Warlock") or {}).get("subclass"), "The Noble Genie")
 
         self.assertEqual(data.get("abilities"), {"str": 6, "dex": 16, "con": 12, "int": 7, "wis": 14, "cha": 18})
@@ -120,6 +123,52 @@ class PlayerYamlValidityTests(unittest.TestCase):
         self.assertTrue(all(int(((spell_slots.get(str(level)) or {}).get("max")) or 0) == 0 for level in range(1, 10)))
         cantrips = ((spellcasting.get("cantrips") or {}).get("known") or [])
         self.assertEqual(cantrips, ["eldritch-blast", "poison-spray", "prestidigitation"])
+        features = data.get("features") or []
+        invocations = [entry for entry in features if (entry or {}).get("source") == "Eldritch Invocation"]
+        self.assertEqual(len(invocations), 5)
+        pending_invocation = next(
+            (entry for entry in features if (entry or {}).get("id") == "eldritch_invocation_warlock_8_choice_pending"),
+            {},
+        )
+        self.assertEqual(pending_invocation.get("level"), 8)
+        pending_asi = next(
+            (entry for entry in features if (entry or {}).get("id") == "warlock_8_asi_or_feat_pending"),
+            {},
+        )
+        self.assertEqual(pending_asi.get("level"), 8)
+        notes = data.get("notes") or {}
+        self.assertIn("Warlock (The Noble Genie) 8", str(notes.get("sheet_migration") or ""))
+        self.assertIn("player input", str(notes.get("advancement_pending") or ""))
+
+    def test_dorian_level_11_paladin_followup_state(self):
+        data = self._load("players/dorian_vandergraff.yaml")
+        leveling = data.get("leveling") or {}
+        self.assertEqual(int(leveling.get("level") or 0), 11)
+        classes = {(entry or {}).get("name"): (entry or {}) for entry in (leveling.get("classes") or [])}
+        self.assertEqual(int((classes.get("Paladin") or {}).get("level") or 0), 11)
+        hit_dice = ((data.get("vitals") or {}).get("hit_dice") or {})
+        self.assertEqual(int(hit_dice.get("total") or 0), 11)
+        pools = (((data.get("resources") or {}).get("pools")) or [])
+        channel_divinity = next((entry for entry in pools if (entry or {}).get("id") == "channel_divinity"), {})
+        self.assertEqual(int(channel_divinity.get("current") or 0), 3)
+        self.assertEqual(int(channel_divinity.get("max") or 0), 3)
+        self.assertEqual(str(channel_divinity.get("max_formula") or "").strip(), "3")
+        lay_on_hands = next((entry for entry in pools if (entry or {}).get("id") == "lay_on_hands"), {})
+        self.assertEqual(int(lay_on_hands.get("max") or 0), 55)
+        features = data.get("features") or []
+        radiant_strikes = next((entry for entry in features if (entry or {}).get("id") == "radiant_strikes"), {})
+        riders = ((radiant_strikes.get("grants") or {}).get("damage_riders")) or []
+        rider = next((entry for entry in riders if (entry or {}).get("id") == "radiant_strikes"), {})
+        self.assertIn("melee_weapon_or_unarmed_attack", rider.get("trigger") or [])
+        self.assertEqual(str(rider.get("damage_formula") or "").strip(), "1d8")
+        self.assertEqual(str(rider.get("damage_type") or "").strip(), "radiant")
+        spellcasting = data.get("spellcasting") or {}
+        prepared = (spellcasting.get("prepared_spells") or {})
+        self.assertEqual(str(prepared.get("max_formula") or "").strip(), "10")
+        spell_slots = spellcasting.get("spell_slots") or {}
+        self.assertEqual(int(((spell_slots.get("1") or {}).get("max")) or 0), 4)
+        self.assertEqual(int(((spell_slots.get("2") or {}).get("max")) or 0), 3)
+        self.assertEqual(int(((spell_slots.get("3") or {}).get("max")) or 0), 3)
 
 
     def test_dorian_paladins_smite_feature_present(self):
@@ -136,6 +185,21 @@ class PlayerYamlValidityTests(unittest.TestCase):
         self.assertEqual(paladins_smite_pool.get("max"), 1)
         self.assertEqual(paladins_smite_pool.get("current"), 1)
         self.assertEqual(paladins_smite_pool.get("reset"), "long_rest")
+
+    def test_malagrou_level_11_barbarian_followup_state(self):
+        data = self._load("players/malagrou.yaml")
+        leveling = data.get("leveling") or {}
+        self.assertEqual(int(leveling.get("level") or 0), 11)
+        classes = {(entry or {}).get("name"): (entry or {}) for entry in (leveling.get("classes") or [])}
+        self.assertEqual(int((classes.get("Barbarian") or {}).get("level") or 0), 11)
+        pools = (((data.get("resources") or {}).get("pools")) or [])
+        mastery_pool = next((entry for entry in pools if (entry or {}).get("id") == "weapon_mastery_known"), {})
+        self.assertEqual(int(mastery_pool.get("current") or 0), 4)
+        features = data.get("features") or []
+        relentless_rage = next((entry for entry in features if (entry or {}).get("id") == "relentless_rage"), {})
+        description = str(relentless_rage.get("description") or "")
+        self.assertIn("2 x barbarian level", description)
+        self.assertNotIn("backend support lands", description)
 
     def test_stikhiya_save_abbreviation_uses_cha(self):
         data = self._load("players/стихия.yaml")

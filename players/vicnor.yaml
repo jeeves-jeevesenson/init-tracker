@@ -204,6 +204,18 @@ features:
   level: 2
   source: Eldritch Invocation
   description: Cast Silent Image at will without expending a spell slot.
+- id: eldritch_invocation_warlock_8_choice_pending
+  name: Eldritch Invocation (Choice Pending)
+  level: 8
+  source: Eldritch Invocation
+  description: Warlock 8 grants a fifth invocation. Player choice not yet provided;
+    this placeholder keeps the slot explicit without inventing the invocation.
+- id: warlock_8_asi_or_feat_pending
+  name: Ability Score Improvement / Feat (Choice Pending)
+  level: 8
+  source: Warlock
+  description: Warlock 8 grants an ASI or feat. Player choice not yet provided; abilities
+    and feat list intentionally remain unchanged.
 actions:
 - name: Attack
   description: Make a weapon or unarmed attack against a target within range.
@@ -335,5 +347,8 @@ inventory:
   - name: Waterskin
     quantity: 1
 notes:
-  sheet_migration: Updated from Rogue 9/Warlock 1 sheet to Rogue (Swashbuckler) 3 / Warlock (The Noble Genie) 7 from uploaded PDF.
+  sheet_migration: Updated from Rogue 9/Warlock 1 sheet to Rogue (Swashbuckler)
+    3 / Warlock (The Noble Genie) 8.
+  advancement_pending: Warlock 8 still needs player input for the final invocation
+    choice and ASI/feat selection; placeholders remain explicit until that arrives.
   normalization: Retained repo-consistent formulas for derived fields; listed AC/attack damage follow explicit sheet entries where reliable.

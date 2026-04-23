@@ -8,11 +8,11 @@ identity:
   alignment: null
   description: null
 leveling:
-  level: 10
+  level: 11
   classes:
   - name: Paladin
     subclass: Oath of Ancients
-    level: 10
+    level: 11
     attacks_per_action: 2
 abilities:
   str: 19
@@ -40,7 +40,7 @@ vitals:
   temp_hp: 0
   hit_dice:
     die: d10
-    total: 10
+    total: 11
     spent: 0
   speed:
     walk: 30
@@ -93,14 +93,14 @@ resources:
   pools:
   - id: channel_divinity
     label: Channel Divinity
-    current: 2
-    max: 2
-    max_formula: '2'
+    current: 3
+    max: 3
+    max_formula: '3'
     reset: short_rest
   - id: lay_on_hands
     label: Lay on Hands
     current: 50
-    max: 50
+    max: 55
     max_formula: paladin_level * 5
     reset: long_rest
   - id: faithful_steed
@@ -125,7 +125,7 @@ features:
     pools:
     - id: channel_divinity
       label: Channel Divinity
-      max_formula: '2'
+      max_formula: '3'
       reset: short_rest
     spells:
       casts:
@@ -211,6 +211,18 @@ features:
         consumes:
           pool: paladins_smite
           cost: 1
+- id: radiant_strikes
+  name: Radiant Strikes
+  category: Paladin Feature
+  source: PHB2024
+  level: 11
+  grants:
+    damage_riders:
+    - id: radiant_strikes
+      trigger:
+      - melee_weapon_or_unarmed_attack
+      damage_formula: 1d8
+      damage_type: radiant
 actions:
 - name: Attack
   description: Make a weapon or unarmed attack against a target within range.
@@ -278,7 +290,7 @@ spellcasting:
   known_spells:
     max: 0
   prepared_spells:
-    max_formula: '9'
+    max_formula: '10'
     prepared:
     - ensnaring-strike
     - moonbeam
@@ -312,8 +324,8 @@ spellcasting:
       max: 3
       current: 3
     '3':
-      max: 2
-      current: 1
+      max: 3
+      current: 2
     '4':
       max: 0
       current: 0

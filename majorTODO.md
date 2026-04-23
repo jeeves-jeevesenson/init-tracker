@@ -221,48 +221,31 @@ These remain important but are **not** current top-of-stack while stabilization 
 4. Broad release/packaging pushes before real-play stability is proven
 5. Detailed runtime migration RFC / implementation planning docs before the exploration track is intentionally promoted
 
-### 6.1 Level-11 player follow-up (2026-04-22)
+### 6.1 Level-11 player follow-up (2026-04-22) — landed
 
-Backend/runtime support for the level-11 player updates landed this pass. The
-following YAML-level updates are **still deferred to a focused player-file pass**:
+The focused player-file follow-up is now reflected in repo:
 
-- **Dorian (Paladin 10 → 11)**: backend trigger tags now recognize
-  `melee_weapon_attack` / `melee_weapon_or_unarmed_attack` /
-  `unarmed_strike` on `grants.damage_riders`, so Radiant Strikes wires in
-  via YAML. The player YAML is still at level 10; when bumping to 11, add:
-  ```yaml
-  - id: radiant_strikes
-    name: Radiant Strikes
-    category: Paladin Feature
-    source: PHB2024
-    level: 11
-    grants:
-      damage_riders:
-      - id: radiant_strikes
-        trigger: [melee_weapon_or_unarmed_attack]
-        damage_formula: '1d8'
-        damage_type: radiant
-  ```
-  Also bump `leveling.level` / `classes[].level` to 11, `prepared_spells.max_formula`
-  to `'12'`, and add a 3rd-level slot (`4/3/3`).
-- **Malagrou (Barbarian 10 → 11)**: `_maybe_apply_relentless_rage` now
-  intercepts at 0 HP while raging at barbarian 11+ (CON save vs DC
-  `10 + 5 * uses_since_rest`; on success, HP becomes `2 * barbarian_level`;
-  use-counter resets when rage ends). Player YAML still needs the level
-  bump and (optional) a no-op `relentless_rage` feature entry for sheet
-  clarity.
-- **Old Man (Monk 10 → 11)**: vitals.speed fly/swim bumped to match walk
-  so cycle_movement_mode offers Fly/Swim, matching Stride of the Elements
-  intent. Player YAML still at level 10 and needs the level bump; no other
-  backend work required for the Warrior of the Elements chassis at 11.
-- **Vicnor (Rogue 3 / Warlock 7 → Warlock 8)**: YAML still shows Warlock 7
-  with 4 invocations. At Warlock 8 (2024 PHB) the player should gain an
-  ASI/feat and an additional invocation, then the DM should pick a new
-  invocation per the 2024 list. This is a **player-file follow-up**: no
-  backend gap blocks it, but the file must be authored. Legacy "Noble
-  Genie" subclass sanity: the backend treats it as free-form features;
-  no rules-automation depends on Genie subclass keys, so legacy
-  compatibility is preserved.
+- **Dorian** is now authored as Paladin 11 with the Radiant Strikes
+  `damage_riders` stanza, Channel Divinity 3, prepared-spell target `10`,
+  and level-11 slot ceilings (`4/3/3`). HP was left unchanged; Lay on
+  Hands max now reflects the higher paladin level while preserving the
+  current spent-state.
+- **Malagrou** already had the level 11 class/resource bump in YAML; the
+  follow-up here was keeping `Weapon Mastery Choices` at current `4` and
+  updating the Relentless Rage descriptor so it matches the landed backend
+  behavior instead of the old manual-placeholder wording.
+- **Old Man** is now level 11 in YAML and keeps Fly/Swim defaults aligned
+  with walk speed so `cycle_movement_mode` continues to surface the
+  Stride of the Elements travel modes cleanly. HP was left unchanged.
+- **Vicnor** remains Rogue 3 / Warlock 8 with the 2024 warlock chassis +
+  legacy Noble Genie direction preserved. The 5th invocation is now
+  represented as an explicit pending-choice placeholder instead of being
+  invented, and the missing Warlock 8 ASI/feat is left explicitly
+  unresolved until player input arrives.
+- **Remaining follow-up after this pass**: Vicnor still needs actual
+  player input to replace the pending Warlock 8 invocation/ASI placeholders,
+  and the updated player files should still get normal in-app/at-table
+  eyeball verification during live use.
 - **Throat Goat (Bard 9 / Warlock 2, level 11)**: backend already
   auto-derives free/always-prepared via `_feature_always_prepared_spell_slugs`,
   so Beguiling Magic and Mantle of Majesty entries in features add their

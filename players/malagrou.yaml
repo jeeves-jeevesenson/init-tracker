@@ -275,7 +275,7 @@ features:
   name: Relentless Rage
   level: 11
   source: PHB2024
-  description: If you would drop to 0 HP while raging and do not die outright, you can make a DC 10 Constitution save to drop to 1 HP instead. Each use before a rest increases the DC by 5. Manual note until backend support lands.
+  description: If you would drop to 0 HP while raging and do not die outright, the backend resolves a DC 10 Constitution save that increases by 5 after each success. On a success, your HP becomes 2 x barbarian level instead of 0; the use counter resets when Rage ends.
 actions:
 - name: Attack
   description: Make a weapon or unarmed attack against a target within range.
