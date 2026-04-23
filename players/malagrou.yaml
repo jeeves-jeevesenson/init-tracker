@@ -8,11 +8,11 @@ identity:
   alignment: ''
   description: ''
 leveling:
-  level: 10
+  level: 11
   classes:
   - name: Barbarian
     subclass: Path of the Berserker
-    level: 10
+    level: 11
     attacks_per_action: 2
 abilities:
   str: 18
@@ -42,7 +42,7 @@ vitals:
   temp_hp: 0
   hit_dice:
     die: d12
-    total: 10
+    total: 11
     spent: 0
   speed:
     walk: 40
@@ -53,8 +53,6 @@ vitals:
     formula: dex_mod
   passive_perception:
     formula: 10 + wis_mod + prof
-
-
 defenses:
   ac:
     sources:
@@ -67,7 +65,6 @@ defenses:
   resistances: []
   immunities: []
   vulnerabilities: []
-
 attacks:
   weapon_to_hit: 8
   weapon_mastery_enabled: true
@@ -100,21 +97,19 @@ attacks:
       on_hit: ''
       save_ability: ''
       save_dc: 0
-
 resources:
   pools:
   - id: rage
     name: Rage
     current: 4
-    max_formula: "2 if barbarian_level < 3 else 3 if barbarian_level < 6 else 4 if barbarian_level < 12 else 5 if barbarian_level < 17 else 6"
+    max_formula: 2 if barbarian_level < 3 else 3 if barbarian_level < 6 else 4 if barbarian_level < 12 else 5 if barbarian_level < 17 else 6
     reset: short_rest_one
     reset_all: long_rest
   - id: weapon_mastery_known
     name: Weapon Mastery Choices
-    current: 3
-    max_formula: "2 if barbarian_level < 4 else 3 if barbarian_level < 10 else 4"
+    current: 4
+    max_formula: 2 if barbarian_level < 4 else 3 if barbarian_level < 10 else 4
     reset: long_rest
-
 features:
 - id: barbarian_rage
   name: Rage
@@ -148,7 +143,7 @@ features:
         applies_to:
         - strength_weapon_attack
         - strength_unarmed_strike
-        formula: "2 if barbarian_level < 9 else 3 if barbarian_level < 16 else 4"
+        formula: 2 if barbarian_level < 9 else 3 if barbarian_level < 16 else 4
 - id: weapon_mastery
   name: Weapon Mastery
   level: 1
@@ -251,7 +246,7 @@ features:
     - reckless_attack_on
     trigger: first_strength_attack_hit_on_turn
     extra_damage:
-      formula: "{rage_damage_bonus}d6"
+      formula: '{rage_damage_bonus}d6'
       type: same_as_attack
 - id: mindless_rage
   name: Mindless Rage
@@ -276,7 +271,11 @@ features:
     - took_damage_from_creature_within_5ft
     reaction:
       make_one_melee_attack_against_triggering_creature: true
-
+- id: relentless_rage
+  name: Relentless Rage
+  level: 11
+  source: PHB2024
+  description: If you would drop to 0 HP while raging and do not die outright, you can make a DC 10 Constitution save to drop to 1 HP instead. Each use before a rest increases the DC by 5. Manual note until backend support lands.
 actions:
 - name: Attack
   description: Make a weapon or unarmed attack against a target within range.
@@ -311,7 +310,6 @@ actions:
 - name: Utilize
   description: Use an object or interact with the environment in a significant way.
   type: action
-
 reactions:
 - name: Opportunity Attack
   description: When a hostile creature you can see moves out of your reach, you can use your reaction to make one melee attack against it.
@@ -319,7 +317,6 @@ reactions:
 - name: Retaliation
   description: When a creature within 5 feet damages you, use your reaction to make one melee attack against that creature.
   type: reaction
-
 bonus_actions:
 - name: Rage
   description: Enter Rage and apply Rage automation effects.
@@ -333,7 +330,6 @@ bonus_actions:
 - name: Bonus Action
   description: You can take a bonus action only when a feature, spell, or ability says you can.
   type: bonus_action
-
 spellcasting:
   enabled: false
   spell_yaml_paths: []
@@ -377,7 +373,6 @@ spellcasting:
     '9':
       max: 0
       current: 0
-
 inventory:
   currency:
     gp: 0
@@ -391,5 +386,4 @@ inventory:
     equipped: true
     attuned: true
     description: ''
-
 notes: {}

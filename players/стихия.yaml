@@ -100,7 +100,7 @@ attacks:
       damage_formula: 1d12 + str_mod + 2
       damage_type: force
     effect:
-      on_hit: 'Heavy, Reach, Two-Handed (halberd profile). Cleave mastery. On hit, target makes a STR save (DC 18, attacker spell save DC) or is pushed 5 ft.'
+      on_hit: Heavy, Reach, Two-Handed (halberd profile). Cleave mastery. On hit, target makes a STR save (DC 18, attacker spell save DC) or is pushed 5 ft.
       save_ability: str
       save_dc: 18
 resources:
@@ -108,12 +108,12 @@ resources:
   - id: channel_divinity
     label: Channel Divinity
     current: 3
-    max_formula: '2 + (1 if cleric_level >= 6 else 0) + (1 if cleric_level >= 18 else 0)'
+    max_formula: 2 + (1 if cleric_level >= 6 else 0) + (1 if cleric_level >= 18 else 0)
     reset: short_rest
   - id: wrath_of_the_storm
     label: Wrath of the Storm
     current: 5
-    max_formula: 'max(1, wis_mod)'
+    max_formula: max(1, wis_mod)
     reset: long_rest
   - id: divine_intervention
     label: Divine Intervention
@@ -141,15 +141,15 @@ features:
     pools:
     - id: channel_divinity
       label: Channel Divinity
-      max_formula: '2 + (1 if cleric_level >= 6 else 0) + (1 if cleric_level >= 18 else 0)'
+      max_formula: 2 + (1 if cleric_level >= 6 else 0) + (1 if cleric_level >= 18 else 0)
       reset: short_rest
     actions:
     - id: divine_spark
       name: Divine Spark
       activation: action
       range_ft: 30
-      heal_formula: '(1 + (1 if cleric_level >= 7 else 0) + (1 if cleric_level >= 13 else 0) + (1 if cleric_level >= 18 else 0))d8 + wis_mod'
-      damage_formula: '(1 + (1 if cleric_level >= 7 else 0) + (1 if cleric_level >= 13 else 0) + (1 if cleric_level >= 18 else 0))d8 + wis_mod'
+      heal_formula: (1 + (1 if cleric_level >= 7 else 0) + (1 if cleric_level >= 13 else 0) + (1 if cleric_level >= 18 else 0))d8 + wis_mod
+      damage_formula: (1 + (1 if cleric_level >= 7 else 0) + (1 if cleric_level >= 13 else 0) + (1 if cleric_level >= 18 else 0))d8 + wis_mod
       damage_types:
       - radiant
       - necrotic
@@ -192,7 +192,7 @@ features:
     modifiers:
     - id: sear_undead_damage
       applies_to: turn_undead
-      damage_formula: 'max(1, wis_mod)d8'
+      damage_formula: max(1, wis_mod)d8
       damage_type: radiant
       trigger: on_failed_save
       does_not_break_turn: true
@@ -268,7 +268,7 @@ features:
     pools:
     - id: wrath_of_the_storm
       label: Wrath of the Storm
-      max_formula: 'max(1, wis_mod)'
+      max_formula: max(1, wis_mod)
       reset: long_rest
     reactions:
     - id: wrath_of_the_storm_reaction
@@ -326,7 +326,7 @@ features:
     - id: tempest_divine_strike_damage
       once_per_turn: true
       trigger: weapon_attack_hit
-      damage_formula: '1d8 + (1d8 if cleric_level >= 14 else 0)'
+      damage_formula: 1d8 + (1d8 if cleric_level >= 14 else 0)
       damage_type: thunder
     modifiers: []
     actions: []
@@ -341,46 +341,38 @@ actions:
   description: Gain extra movement for the current turn equal to your speed.
   type: action
 - name: Disengage
-  description: Your movement does not provoke opportunity attacks for the rest of
-    the turn.
+  description: Your movement does not provoke opportunity attacks for the rest of the turn.
   type: action
 - name: Dodge
-  description: Until the start of your next turn, attack rolls against you have disadvantage
-    if you can see the attacker, and you make Dexterity saves with advantage.
+  description: Until the start of your next turn, attack rolls against you have disadvantage if you can see the attacker, and you make Dexterity saves with advantage.
   type: action
 - name: Help
-  description: Aid a creature in the next ability check or attack roll against a target
-    within 5 feet of you.
+  description: Aid a creature in the next ability check or attack roll against a target within 5 feet of you.
   type: action
 - name: Hide
   description: Attempt to hide by making a Dexterity (Stealth) check.
   type: action
 - name: Influence
-  description: Attempt to influence a creature through conversation, bargaining, or
-    intimidation.
+  description: Attempt to influence a creature through conversation, bargaining, or intimidation.
   type: action
 - name: Magic
   description: Cast a spell or use a magical feature that takes an action.
   type: action
 - name: Ready
-  description: Prepare an action and a trigger; use your reaction to perform it when
-    the trigger occurs.
+  description: Prepare an action and a trigger; use your reaction to perform it when the trigger occurs.
   type: action
 - name: Search
-  description: Devote attention to finding something by making a Wisdom (Perception)
-    or Intelligence (Investigation) check.
+  description: Devote attention to finding something by making a Wisdom (Perception) or Intelligence (Investigation) check.
   type: action
 - name: Study
-  description: Focus on detailed observation or research to gain information about
-    a creature, object, or situation.
+  description: Focus on detailed observation or research to gain information about a creature, object, or situation.
   type: action
 - name: Utilize
   description: Use an object or interact with the environment in a significant way.
   type: action
 reactions:
 - name: Opportunity Attack
-  description: When a hostile creature you can see moves out of your reach, you can
-    use your reaction to make one melee attack against it.
+  description: When a hostile creature you can see moves out of your reach, you can use your reaction to make one melee attack against it.
   type: reaction
 bonus_actions: []
 spellcasting:
@@ -402,29 +394,19 @@ spellcasting:
     max: 0
     known: []
   prepared_spells:
-    max_formula: '25'
+    max_formula: '16'
     prepared:
-    - thunderwave
     - healing-word
     - create-or-destroy-water
     - guiding-bolt
-    - fog-cloud
     - cure-wounds
     - inflict-wounds
-    - gust-of-wind
-    - shatter
     - prayer-of-healing
     - lesser-restoration
     - find-traps
-    - call-lightning
-    - sleet-storm
     - revivify
     - dispel-magic
     - bestow-curse
-    - control-water
-    - ice-storm
-    - destructive-wave
-    - insect-plague
     - flame-strike
     - harm
     - dispel-evil-and-good
