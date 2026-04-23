@@ -71,6 +71,7 @@ from player_command_contracts import (
     build_wild_shape_regain_use_contract,
     build_wild_shape_revert_contract,
     build_wild_shape_set_known_contract,
+    build_spell_target_request_contract,
 )
 from player_command_service import PlayerCommandService, PromptState
 
@@ -205,6 +206,52 @@ class PlayerCommandServicePromptOverrideTests(unittest.TestCase):
             claimed=3,
         )
         self.assertFalse(allowed)
+
+
+class FredBhallRequestContractTests(unittest.TestCase):
+    def test_attack_request_contract_preserves_bhall_choice_fields(self):
+        contract = build_attack_request_contract(
+            {
+                "type": "attack_request",
+                "target_cid": 2,
+                "weapon_id": "rotted_fork",
+                "hit": True,
+                "damage_entries": [{"amount": 4, "type": "piercing"}],
+                "murderspawn_spend": 2,
+                "blood_in_the_air_choice": "move",
+                "blood_in_the_air_destination_col": 7,
+                "blood_in_the_air_destination_row": 5,
+            },
+            cid=1,
+            ws_id=77,
+            is_admin=False,
+        )
+
+        payload = contract.get("payload") or {}
+        self.assertEqual(payload.get("murderspawn_spend"), 2)
+        self.assertEqual(payload.get("blood_in_the_air_choice"), "move")
+        self.assertEqual(payload.get("blood_in_the_air_destination_col"), 7)
+        self.assertEqual(payload.get("blood_in_the_air_destination_row"), 5)
+
+    def test_spell_target_request_contract_preserves_bhall_choice_fields(self):
+        contract = build_spell_target_request_contract(
+            {
+                "type": "spell_target_request",
+                "target_cid": 2,
+                "spell_slug": "eldritch-blast",
+                "spell_name": "Eldritch Blast",
+                "hit": True,
+                "murderspawn_spend": 1,
+                "blood_in_the_air_choice": "reactions",
+            },
+            cid=1,
+            ws_id=78,
+            is_admin=False,
+        )
+
+        payload = contract.get("payload") or {}
+        self.assertEqual(payload.get("murderspawn_spend"), 1)
+        self.assertEqual(payload.get("blood_in_the_air_choice"), "reactions")
 
 
 class PlayerCommandServiceReactionOfferOwnershipTests(unittest.TestCase):

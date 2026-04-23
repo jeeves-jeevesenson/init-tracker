@@ -479,6 +479,8 @@ inventory:
   - name: Venom Vial
     quantity: 1
   - name: Small Mithril Chain Undershirt
+    id: small_mithril_chain_undershirt
+    instance_id: small_mithril_chain_undershirt__001
     quantity: 1
     equipped: true
     description: +1 AC while worn.
@@ -491,7 +493,15 @@ inventory:
     equipped: false
     description: 1d12 piercing, 19-shot magazine tracked manually.
   - name: +2 Sacrificial Dagger of Murder
-    quantity: 2
+    id: sacrificial_dagger_plus_2
+    instance_id: sacrificial_dagger_plus_2__001
+    quantity: 1
+    equipped: true
+    description: ''
+  - name: +2 Sacrificial Dagger of Murder
+    id: sacrificial_dagger_plus_2_offhand
+    instance_id: sacrificial_dagger_plus_2__002
+    quantity: 1
     equipped: true
     description: ''
   - name: +2 Spell Stopper Throat-Cutting Dagger
@@ -501,6 +511,8 @@ inventory:
   - name: Dagger
     quantity: 2
   - name: Bandolier of Many Knives
+    id: bandolier_of_many_knives
+    instance_id: bandolier_of_many_knives__001
     quantity: 1
     equipped: true
     attuned: true

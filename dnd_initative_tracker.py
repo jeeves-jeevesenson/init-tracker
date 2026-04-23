@@ -19443,6 +19443,537 @@ class InitiativeTracker(base.InitiativeTracker):
                 return True
         return False
 
+    def _combatants_are_hostile(self, source: Any, target: Any) -> bool:
+        source_cid = _normalize_cid_value(getattr(source, "cid", source), "combatants_are_hostile.source")
+        target_cid = _normalize_cid_value(getattr(target, "cid", target), "combatants_are_hostile.target")
+        if source_cid is None or target_cid is None:
+            return False
+        def _friendly_flag(cid_value: int, combatant: Any) -> bool:
+            if bool(getattr(combatant, "is_pc", False)) or bool(getattr(combatant, "ally", False)):
+                return True
+            try:
+                return bool(self._lan_is_friendly_unit(int(cid_value)))
+            except Exception:
+                return False
+
+        return bool(
+            _friendly_flag(int(source_cid), source) != _friendly_flag(int(target_cid), target)
+        )
+
+    def _combatant_distance_ft(self, source: Any, target: Any) -> Optional[float]:
+        source_cid = _normalize_cid_value(getattr(source, "cid", source), "combatant_distance.source")
+        target_cid = _normalize_cid_value(getattr(target, "cid", target), "combatant_distance.target")
+        if source_cid is None or target_cid is None:
+            return None
+        positions = dict(getattr(self, "_lan_positions", {}) or {})
+        source_pos = positions.get(int(source_cid)) or self._lan_current_position(int(source_cid))
+        target_pos = positions.get(int(target_cid)) or self._lan_current_position(int(target_cid))
+        if not (isinstance(source_pos, tuple) and len(source_pos) == 2 and isinstance(target_pos, tuple) and len(target_pos) == 2):
+            return None
+        return float(math.hypot(float(source_pos[0]) - float(target_pos[0]), float(source_pos[1]) - float(target_pos[1])) * self._lan_feet_per_square())
+
+    def _combatant_save_modifier(self, combatant: Any, ability_key: Any) -> int:
+        key = str(ability_key or "").strip().lower()
+        if combatant is None or not key:
+            return 0
+        aura_bonus = int((self._lan_aura_effects_for_target(combatant) or {}).get("save_bonus") or 0)
+        saves = getattr(combatant, "saving_throws", None)
+        if isinstance(saves, dict):
+            try:
+                return int(saves.get(key) or 0) + aura_bonus
+            except Exception:
+                pass
+        mods = getattr(combatant, "ability_mods", None)
+        if isinstance(mods, dict):
+            try:
+                return int(mods.get(key) or 0) + aura_bonus
+            except Exception:
+                pass
+        return aura_bonus
+
+    def _bhall_awareness_state(self, attacker: Any, target: Any) -> Dict[str, Any]:
+        try:
+            hp = int(getattr(target, "hp", 0) or 0)
+        except Exception:
+            hp = 0
+        try:
+            max_hp = int(getattr(target, "max_hp", hp) or hp)
+        except Exception:
+            max_hp = hp
+        max_hp = max(0, int(max_hp))
+        hp = max(0, int(hp))
+        below_half = bool(max_hp > 0 and int(hp) * 2 <= int(max_hp))
+        below_quarter = bool(max_hp > 0 and int(hp) * 4 <= int(max_hp))
+        distance_ft = self._combatant_distance_ft(attacker, target)
+        within_30ft = bool(distance_ft is not None and float(distance_ft) <= 30.000001)
+        payload: Dict[str, Any] = {
+            "target_hp": int(hp),
+            "target_max_hp": int(max_hp),
+            "below_half_hp": bool(below_half),
+            "below_quarter_hp": bool(below_quarter),
+            "within_30ft": bool(within_30ft),
+        }
+        if distance_ft is not None:
+            payload["distance_ft"] = float(distance_ft)
+        return payload
+
+    def _bhall_murderous_intent_state(
+        self,
+        player_name: str,
+        profile: Dict[str, Any],
+    ) -> Dict[str, int]:
+        current = 0
+        maximum = 0
+        for entry in self._normalize_player_resource_pools(profile if isinstance(profile, dict) else {}):
+            if not isinstance(entry, dict):
+                continue
+            if str(entry.get("id") or "").strip().lower() != "murderous_intent":
+                continue
+            try:
+                current = max(0, int(entry.get("current") or 0))
+            except Exception:
+                current = 0
+            try:
+                maximum = max(0, int(entry.get("max") or 0))
+            except Exception:
+                maximum = 0
+            break
+        return {"current": int(current), "max": int(maximum)}
+
+    def _bhall_spell_qualifies_for_murderspawn_spend(self, profile: Dict[str, Any], spell_key: Any) -> bool:
+        if not isinstance(profile, dict):
+            return False
+        try:
+            warlock_level = int(self._class_level_from_profile(profile, "warlock"))
+        except Exception:
+            warlock_level = 0
+        if warlock_level <= 0:
+            return False
+        normalized_key = str(spell_key or "").strip().lower()
+        if not normalized_key:
+            return False
+        spellcasting = profile.get("spellcasting") if isinstance(profile.get("spellcasting"), dict) else {}
+        cantrips = spellcasting.get("cantrips") if isinstance(spellcasting.get("cantrips"), dict) else {}
+        prepared = spellcasting.get("prepared_spells") if isinstance(spellcasting.get("prepared_spells"), dict) else {}
+        qualifying_spells = {
+            *self._normalize_spell_slug_list(cantrips.get("known")),
+            *self._normalize_spell_slug_list(prepared.get("prepared")),
+        }
+        return normalized_key in qualifying_spells
+
+    def _apply_murderspawn_explicit_spend(
+        self,
+        *,
+        attacker: Any,
+        target: Any,
+        player_name: str,
+        profile: Dict[str, Any],
+        damage_entries: List[Dict[str, Any]],
+        requested_spend: Any,
+        qualifies: bool,
+        trigger: str,
+        critical: bool,
+    ) -> Tuple[List[Dict[str, Any]], Dict[str, Any]]:
+        updated_entries: List[Dict[str, Any]] = [
+            dict(entry)
+            for entry in list(damage_entries or [])
+            if isinstance(entry, dict)
+        ]
+        state = self._bhall_murderous_intent_state(player_name, profile)
+        current = int(state.get("current") or 0)
+        maximum = int(state.get("max") or 0)
+        try:
+            spend_requested = max(0, int(requested_spend or 0))
+        except Exception:
+            spend_requested = 0
+        attacker_cid = _normalize_cid_value(getattr(attacker, "cid", attacker), "murderspawn_spend.attacker")
+        target_cid = _normalize_cid_value(getattr(target, "cid", target), "murderspawn_spend.target")
+        payload: Dict[str, Any] = {
+            "pool_id": "murderous_intent",
+            "current": int(current),
+            "max": int(maximum),
+            "gained": 0,
+            "damage_gain_triggered": False,
+            "kill_gain_triggered": False,
+            "spend_supported": True,
+            "spend_requested": int(spend_requested),
+            "spent": 0,
+            "spend_trigger": str(trigger or "").strip().lower() or None,
+            "bonus_damage_type": "necrotic",
+            "bonus_damage_total": 0,
+        }
+        if spend_requested <= 0:
+            return updated_entries, payload
+        if not bool(qualifies):
+            payload["reason"] = "not_qualifying_event"
+            return updated_entries, payload
+        if attacker_cid is None:
+            payload["reason"] = "missing_attacker"
+            return updated_entries, payload
+        if not self._once_per_turn_limiter_allows(int(attacker_cid), "murderspawn_spend"):
+            payload["reason"] = "once_per_turn_already_used"
+            return updated_entries, payload
+        if int(spend_requested) > int(current):
+            payload["reason"] = "insufficient_murderous_intent"
+            return updated_entries, payload
+        ok_set, set_error = self._set_player_resource_pool_current(
+            player_name,
+            "murderous_intent",
+            int(current) - int(spend_requested),
+        )
+        if not ok_set:
+            payload["error"] = str(set_error or "Could not update Murderous Intent.")
+            return updated_entries, payload
+        self._once_per_turn_limiter_mark(int(attacker_cid), "murderspawn_spend")
+        current = max(0, int(current) - int(spend_requested))
+        dice_count = max(0, int(spend_requested) * (2 if bool(critical) else 1))
+        bonus_damage = self._roll_dice_expression(f"{int(dice_count)}d4") if dice_count > 0 else 0
+        if bonus_damage > 0:
+            updated_entries.append({"amount": int(bonus_damage), "type": "necrotic"})
+        payload["current"] = int(current)
+        payload["spent"] = int(spend_requested)
+        payload["bonus_damage_total"] = int(max(0, bonus_damage))
+        self._log(
+            f"{getattr(attacker, 'name', 'Attacker')} spends {int(spend_requested)} Murderous Intent "
+            f"for {int(max(0, bonus_damage))} necrotic damage.",
+            cid=int(target_cid) if target_cid is not None else attacker_cid,
+        )
+        return updated_entries, payload
+
+    def _apply_bhall_pre_damage_effects(
+        self,
+        *,
+        attacker: Any,
+        target: Any,
+        player_name: str,
+        profile: Dict[str, Any],
+        damage_entries: List[Dict[str, Any]],
+        murderspawn_spend: Any,
+        murderspawn_qualifies: bool,
+        murderspawn_trigger: str,
+        critical: bool,
+    ) -> Tuple[List[Dict[str, Any]], Dict[str, Any]]:
+        updated_entries: List[Dict[str, Any]] = [
+            dict(entry)
+            for entry in list(damage_entries or [])
+            if isinstance(entry, dict)
+        ]
+        bhall_state: Dict[str, Any] = {}
+        if not isinstance(profile, dict):
+            return updated_entries, bhall_state
+        if not self._profile_has_feature_id(profile, "murderspawn"):
+            return updated_entries, bhall_state
+        updated_entries, murderous_intent_state = self._apply_murderspawn_explicit_spend(
+            attacker=attacker,
+            target=target,
+            player_name=player_name,
+            profile=profile,
+            damage_entries=updated_entries,
+            requested_spend=murderspawn_spend,
+            qualifies=bool(murderspawn_qualifies),
+            trigger=murderspawn_trigger,
+            critical=bool(critical),
+        )
+        bhall_state["murderous_intent"] = murderous_intent_state
+        return updated_entries, bhall_state
+
+    def _apply_murderspawn_damage_gain(
+        self,
+        *,
+        attacker: Any,
+        player_name: str,
+        profile: Dict[str, Any],
+        reduced_to_zero: bool,
+    ) -> Dict[str, Any]:
+        attacker_cid = _normalize_cid_value(getattr(attacker, "cid", attacker), "murderspawn.attacker")
+        state = self._bhall_murderous_intent_state(player_name, profile)
+        current = int(state.get("current") or 0)
+        maximum = int(state.get("max") or 0)
+        damage_gain_armed = False
+        kill_gain_armed = bool(reduced_to_zero)
+        if attacker_cid is not None and self._once_per_turn_limiter_allows(int(attacker_cid), "murderspawn_damage_gain"):
+            damage_gain_armed = True
+            self._once_per_turn_limiter_mark(int(attacker_cid), "murderspawn_damage_gain")
+        requested_gain = (1 if damage_gain_armed else 0) + (1 if kill_gain_armed else 0)
+        actual_gain = 0
+        set_error = ""
+        if requested_gain > 0 and maximum > 0 and current < maximum:
+            actual_gain = min(int(requested_gain), max(0, int(maximum) - int(current)))
+            ok_set, set_error = self._set_player_resource_pool_current(player_name, "murderous_intent", int(current) + int(actual_gain))
+            if ok_set:
+                current = int(current) + int(actual_gain)
+            else:
+                actual_gain = 0
+        if actual_gain > 0:
+            reason_bits: List[str] = []
+            if damage_gain_armed:
+                reason_bits.append("damage")
+            if kill_gain_armed:
+                reason_bits.append("kill")
+            reason_text = f" ({', '.join(reason_bits)})" if reason_bits else ""
+            self._log(
+                f"{getattr(attacker, 'name', 'Attacker')} gains {int(actual_gain)} Murderous Intent{reason_text}.",
+                cid=attacker_cid,
+            )
+        payload: Dict[str, Any] = {
+            "pool_id": "murderous_intent",
+            "current": int(current),
+            "max": int(maximum),
+            "gained": int(actual_gain),
+            "damage_gain_triggered": bool(damage_gain_armed),
+            "kill_gain_triggered": bool(kill_gain_armed),
+            "spend_supported": True,
+            "spend_requested": 0,
+            "spent": 0,
+            "bonus_damage_type": "necrotic",
+            "bonus_damage_total": 0,
+        }
+        if set_error:
+            payload["error"] = str(set_error)
+        return payload
+
+    @staticmethod
+    def _normalize_blood_in_the_air_choice(value: Any) -> str:
+        normalized = str(value or "").strip().lower().replace("-", "_").replace(" ", "_")
+        if normalized in {"reaction", "reactions", "reaction_lock", "reaction_denial", "deny_reactions", "no_reactions"}:
+            return "reactions"
+        if normalized in {"move", "movement", "move_without_oa", "move_without_opportunity_attacks"}:
+            return "move"
+        return ""
+
+    def _apply_blood_in_the_air_choice(
+        self,
+        *,
+        attacker: Any,
+        target: Any,
+        profile: Dict[str, Any],
+        awareness: Dict[str, Any],
+        selected_choice: Any,
+        destination_col: Any = None,
+        destination_row: Any = None,
+    ) -> Dict[str, Any]:
+        attacker_cid = _normalize_cid_value(getattr(attacker, "cid", attacker), "blood_in_the_air.attacker")
+        target_cid = _normalize_cid_value(getattr(target, "cid", target), "blood_in_the_air.target")
+        normalized_choice = self._normalize_blood_in_the_air_choice(selected_choice)
+        payload: Dict[str, Any] = {
+            "available": False,
+            "awareness_threshold": "below_quarter_hp",
+            "trigger_threshold": "below_half_hp",
+            "selected_choice": normalized_choice or None,
+            "supported_choices": ["reactions", "move"],
+            "reactions_branch_supported": True,
+            "move_branch_supported": True,
+            "applied": False,
+        }
+        if attacker_cid is None or target_cid is None:
+            return payload
+        if int(getattr(target, "hp", 0) or 0) <= 0:
+            return payload
+        if not bool((awareness or {}).get("below_half_hp")):
+            return payload
+        payload["available"] = True
+        if not normalized_choice:
+            payload["reason"] = "choice_required"
+            return payload
+        if not self._once_per_turn_limiter_allows(int(attacker_cid), "blood_in_the_air"):
+            payload["reason"] = "once_per_turn_already_used"
+            return payload
+        if normalized_choice == "move":
+            origin_cell = None
+            try:
+                _cols, _rows, _obstacles, _rough, positions = self._lan_live_map_data()
+                origin_cell = positions.get(int(attacker_cid)) if isinstance(positions, dict) else None
+            except Exception:
+                origin_cell = None
+            if origin_cell is None:
+                try:
+                    origin_cell = self._lan_current_position(int(attacker_cid))
+                except Exception:
+                    origin_cell = None
+            if not (isinstance(origin_cell, tuple) and len(origin_cell) == 2):
+                payload["reason"] = "missing_origin_position"
+                return payload
+            move_col = self._parse_int_value(destination_col, None)
+            move_row = self._parse_int_value(destination_row, None)
+            if move_col is None or move_row is None:
+                payload["reason"] = "missing_destination"
+                return payload
+            if (int(origin_cell[0]), int(origin_cell[1])) == (int(move_col), int(move_row)):
+                payload["reason"] = "destination_matches_origin"
+                return payload
+            cols, rows, obstacles, rough_terrain, _positions = self._lan_live_map_data()
+            valid_dest, reason = self._validate_relocation_destination(
+                destination_col=int(move_col),
+                destination_row=int(move_row),
+                target_cid=int(attacker_cid),
+                origin_cell=(int(origin_cell[0]), int(origin_cell[1])),
+                range_ft=10.0,
+                requires_unoccupied=True,
+                source_cid=int(attacker_cid),
+            )
+            if not bool(valid_dest):
+                payload["reason"] = str(reason or "invalid_destination")
+                return payload
+            try:
+                path_cost = self._lan_shortest_cost(
+                    (int(origin_cell[0]), int(origin_cell[1])),
+                    (int(move_col), int(move_row)),
+                    obstacles if isinstance(obstacles, set) else set(obstacles or []),
+                    rough_terrain if isinstance(rough_terrain, dict) else {},
+                    int(cols),
+                    int(rows),
+                    10,
+                    attacker,
+                )
+            except Exception:
+                path_cost = None
+            if path_cost is None or int(path_cost) > 10:
+                payload["reason"] = "destination_out_of_range"
+                return payload
+            self._once_per_turn_limiter_mark(int(attacker_cid), "blood_in_the_air")
+            self._apply_spell_relocation(
+                target_cid=int(attacker_cid),
+                destination_col=int(move_col),
+                destination_row=int(move_row),
+            )
+            payload["applied"] = True
+            payload["movement"] = {
+                "origin_col": int(origin_cell[0]),
+                "origin_row": int(origin_cell[1]),
+                "destination_col": int(move_col),
+                "destination_row": int(move_row),
+                "distance_ft": int(path_cost),
+            }
+            self._log(
+                f"{getattr(attacker, 'name', 'Attacker')} uses Blood in the Air to move "
+                f"{int(path_cost)} ft without provoking opportunity attacks.",
+                cid=int(attacker_cid),
+            )
+            return payload
+        save_dc = int(self._compute_spell_save_dc(profile if isinstance(profile, dict) else {}) or 0)
+        payload["save_dc"] = int(save_dc)
+        if save_dc <= 0:
+            payload["reason"] = "missing_spell_save_dc"
+            return payload
+        save_roll = int(random.randint(1, 20))
+        save_mod = int(self._combatant_save_modifier(target, "wis"))
+        save_total = int(save_roll) + int(save_mod)
+        save_passed = bool(save_roll != 1 and save_total >= int(save_dc))
+        payload["save_result"] = {
+            "ability": "wis",
+            "dc": int(save_dc),
+            "roll": int(save_roll),
+            "modifier": int(save_mod),
+            "total": int(save_total),
+            "passed": bool(save_passed),
+        }
+        self._once_per_turn_limiter_mark(int(attacker_cid), "blood_in_the_air")
+        if save_passed:
+            return payload
+        clear_group = f"blood_in_the_air_{int(attacker_cid)}_{int(target_cid)}"
+        self._register_target_spell_effect(
+            int(attacker_cid),
+            int(target_cid),
+            "blood-in-the-air",
+            clear_group=clear_group,
+            effect_tags=["reaction_block"],
+            primitives={"modifiers": {"reactions_blocked": True}},
+        )
+        self._register_clear_target_effect_group_hook(
+            target,
+            when="start_turn",
+            target_cid=int(target_cid),
+            clear_group=clear_group,
+            source="Blood in the Air",
+            remaining_triggers=1,
+        )
+        payload["applied"] = True
+        self._log(
+            f"{getattr(attacker, 'name', 'Attacker')} uses Blood in the Air: "
+            f"{getattr(target, 'name', 'Target')} loses reactions until the start of their next turn.",
+            cid=int(target_cid),
+        )
+        return payload
+
+    def _apply_bhall_post_damage_effects(
+        self,
+        *,
+        attacker: Any,
+        target: Any,
+        total_damage: int,
+        result_payload: Optional[Dict[str, Any]] = None,
+        initial_state: Optional[Dict[str, Any]] = None,
+        blood_in_the_air_choice: Any = None,
+        blood_in_the_air_destination_col: Any = None,
+        blood_in_the_air_destination_row: Any = None,
+    ) -> Dict[str, Any]:
+        if attacker is None or target is None or int(total_damage or 0) <= 0:
+            return {}
+        if not self._combatants_are_hostile(attacker, target):
+            return {}
+        attacker_cid = _normalize_cid_value(getattr(attacker, "cid", attacker), "bhall_post_damage.attacker")
+        if attacker_cid is None:
+            return {}
+        try:
+            player_name = str(self._pc_name_for(int(attacker_cid)) or "").strip()
+        except Exception:
+            player_name = ""
+        if not player_name:
+            player_name = str(getattr(attacker, "name", "") or "").strip()
+        profile = self._profile_for_player_name(player_name)
+        if not isinstance(profile, dict):
+            return {}
+        has_murderspawn = bool(self._profile_has_feature_id(profile, "murderspawn"))
+        has_cull = bool(self._profile_has_feature_id(profile, "cull_the_weak"))
+        has_blood = bool(self._profile_has_feature_id(profile, "blood_in_the_air"))
+        if not any((has_murderspawn, has_cull, has_blood)):
+            return {}
+        awareness = self._bhall_awareness_state(attacker, target)
+        bhall_state: Dict[str, Any] = copy.deepcopy(initial_state) if isinstance(initial_state, dict) else {}
+        bhall_state["awareness"] = {
+            **awareness,
+            "cull_the_weak_active": bool(has_cull and awareness.get("within_30ft") and awareness.get("below_half_hp")),
+            "blood_in_the_air_awareness_active": bool(has_blood and awareness.get("within_30ft") and awareness.get("below_quarter_hp")),
+        }
+        if has_murderspawn:
+            prior_murderous_intent_state = (
+                dict(bhall_state.get("murderous_intent") or {})
+                if isinstance(bhall_state.get("murderous_intent"), dict)
+                else {}
+            )
+            murderous_intent_state = self._apply_murderspawn_damage_gain(
+                attacker=attacker,
+                player_name=player_name,
+                profile=profile,
+                reduced_to_zero=bool(int(getattr(target, "hp", 0) or 0) <= 0),
+            )
+            for preserve_key in (
+                "spend_supported",
+                "spend_requested",
+                "spent",
+                "spend_trigger",
+                "bonus_damage_type",
+                "bonus_damage_total",
+                "reason",
+                "error",
+            ):
+                if preserve_key in prior_murderous_intent_state:
+                    murderous_intent_state[preserve_key] = prior_murderous_intent_state.get(preserve_key)
+            bhall_state["murderous_intent"] = murderous_intent_state
+        if has_blood:
+            bhall_state["blood_in_the_air"] = self._apply_blood_in_the_air_choice(
+                attacker=attacker,
+                target=target,
+                profile=profile,
+                awareness=awareness,
+                selected_choice=blood_in_the_air_choice,
+                destination_col=blood_in_the_air_destination_col,
+                destination_row=blood_in_the_air_destination_row,
+            )
+        if isinstance(result_payload, dict) and bhall_state:
+            result_payload["bhall_feature_state"] = copy.deepcopy(bhall_state)
+        return bhall_state
+
     def _lan_sculpt_spells_context(
         self,
         caster: Optional[base.Combatant],
@@ -33636,6 +34167,27 @@ class InitiativeTracker(base.InitiativeTracker):
         if is_magic_missile and self._shield_is_active(target):
             damage_entries = []
             self._log(f"Shield negates Magic Missile damage on {getattr(target, 'name', 'Target')}.", cid=int(target_cid))
+        bhall_pre_damage_state: Dict[str, Any] = {}
+        if hit and c is not None and msg.get("murderspawn_spend") is not None:
+            try:
+                bhall_player_name = self._pc_name_for(int(cid))
+            except Exception:
+                bhall_player_name = ""
+            bhall_player_name = str(bhall_player_name or getattr(c, "name", "") or "").strip()
+            bhall_profile = self._profile_for_player_name(bhall_player_name)
+            spell_key_for_bhall = preset_slug or preset_id or str(msg.get("spell_slug") or msg.get("spell_id") or "").strip().lower()
+            if isinstance(bhall_profile, dict):
+                damage_entries, bhall_pre_damage_state = self._apply_bhall_pre_damage_effects(
+                    attacker=c,
+                    target=target,
+                    player_name=bhall_player_name,
+                    profile=bhall_profile,
+                    damage_entries=damage_entries,
+                    murderspawn_spend=msg.get("murderspawn_spend"),
+                    murderspawn_qualifies=bool(damage_entries) and self._bhall_spell_qualifies_for_murderspawn_spend(bhall_profile, spell_key_for_bhall),
+                    murderspawn_trigger="warlock_spell_damage",
+                    critical=bool(critical and spell_mode == "attack"),
+                )
         adjustment = self._adjust_damage_entries_for_target(target, damage_entries)
         damage_entries = list(adjustment.get("entries") or [])
         adjustment_notes = list(adjustment.get("notes") or [])
@@ -33724,6 +34276,16 @@ class InitiativeTracker(base.InitiativeTracker):
         if hit and total_damage > 0:
             before_hp = _parse_int(getattr(target, "hp", None), None)
             damage_state = self._apply_damage_via_service(target, int(total_damage))
+            self._apply_bhall_post_damage_effects(
+                attacker=c,
+                target=target,
+                total_damage=int(total_damage),
+                result_payload=result_payload,
+                initial_state=bhall_pre_damage_state,
+                blood_in_the_air_choice=msg.get("blood_in_the_air_choice"),
+                blood_in_the_air_destination_col=msg.get("blood_in_the_air_destination_col"),
+                blood_in_the_air_destination_row=msg.get("blood_in_the_air_destination_row"),
+            )
             if before_hp is not None:
                 after_hp = int(damage_state.get("hp_after", before_hp))
                 if int(before_hp) > 0 and int(after_hp) <= 0:
@@ -33782,6 +34344,8 @@ class InitiativeTracker(base.InitiativeTracker):
                     else:
                         self._log(f"{c.name} expends Star Advantage and refreshes {target.name}.", cid=int(target_cid))
         elif hit:
+            if bhall_pre_damage_state:
+                result_payload["bhall_feature_state"] = copy.deepcopy(bhall_pre_damage_state)
             if star_advantage_attempted and int(target_cid) in self.combatants and int(getattr(target, "hp", 0) or 0) > 0:
                 if self._condition_is_immune_for_target(target, "star_advantage"):
                     self._log(f"{c.name}'s Star Advantage can't affect {target.name} (immune).", cid=int(target_cid))
@@ -34832,6 +35396,25 @@ class InitiativeTracker(base.InitiativeTracker):
                 raw_type = str(entry.get("type") or "").strip().lower()
                 if raw_type in ("", "damage", "bludgeoning"):
                     entry["type"] = damage_type_override
+        bhall_pre_damage_state: Dict[str, Any] = {}
+        if hit and c is not None and isinstance(profile, dict) and msg.get("murderspawn_spend") is not None:
+            murderspawn_owner_name = str(
+                self._pc_name_for(int(getattr(resource_c, "cid", cid) or cid))
+                or getattr(resource_c, "name", "")
+                or getattr(c, "name", "")
+                or ""
+            ).strip()
+            damage_entries, bhall_pre_damage_state = self._apply_bhall_pre_damage_effects(
+                attacker=resource_c,
+                target=target,
+                player_name=murderspawn_owner_name,
+                profile=profile,
+                damage_entries=damage_entries,
+                murderspawn_spend=msg.get("murderspawn_spend"),
+                murderspawn_qualifies=bool(hit),
+                murderspawn_trigger="weapon_attack_hit",
+                critical=bool(auto_crit or requested_critical),
+            )
         resolved_bucket = locals().get("resolved_bucket", [])
         sequence = locals().get("sequence", [])
         spell_mode = locals().get("spell_mode", "")
@@ -34969,11 +35552,21 @@ class InitiativeTracker(base.InitiativeTracker):
         if mastery_vex_advantage:
             mastery_notes.append("Vex: Advantage applies to this attack.")
             setattr(target, "_vexed_by_cid", None)
+        bhall_post_damage_state: Dict[str, Any] = {}
         if damage_applied and total_damage > 0:
             setattr(target, "_rage_took_damage_this_turn", True)
             before_hp = _parse_int(getattr(target, "hp", None), None)
             if before_hp is not None:
                 damage_state = self._apply_damage_via_service(target, int(total_damage))
+                bhall_post_damage_state = self._apply_bhall_post_damage_effects(
+                    attacker=resource_c,
+                    target=target,
+                    total_damage=int(total_damage),
+                    initial_state=bhall_pre_damage_state,
+                    blood_in_the_air_choice=msg.get("blood_in_the_air_choice"),
+                    blood_in_the_air_destination_col=msg.get("blood_in_the_air_destination_col"),
+                    blood_in_the_air_destination_row=msg.get("blood_in_the_air_destination_row"),
+                )
                 after_hp = int(damage_state.get("hp_after", before_hp))
                 if int(before_hp) > 0 and int(after_hp) <= 0:
                     pre_order: List[int] = []
@@ -35238,6 +35831,10 @@ class InitiativeTracker(base.InitiativeTracker):
                 "damage_type_override": damage_type_override if override_honored else None,
             }
         )
+        if bhall_post_damage_state:
+            result_payload["bhall_feature_state"] = copy.deepcopy(bhall_post_damage_state)
+        elif bhall_pre_damage_state:
+            result_payload["bhall_feature_state"] = copy.deepcopy(bhall_pre_damage_state)
         if mastery_cleave_candidates:
             result_payload["cleave_candidates"] = list(mastery_cleave_candidates)
         if mastery_notes:
@@ -39336,6 +39933,27 @@ class InitiativeTracker(base.InitiativeTracker):
                     self._lan.toast(int(attacker_ws), "Waiting for Absorb Elements response…")
                 return True
 
+        bhall_pre_damage_state: Dict[str, Any] = {}
+        if hit and caster is not None and msg.get("murderspawn_spend") is not None:
+            try:
+                bhall_player_name = self._pc_name_for(int(attacker_cid))
+            except Exception:
+                bhall_player_name = ""
+            bhall_player_name = str(bhall_player_name or getattr(caster, "name", "") or "").strip()
+            bhall_profile = self._profile_for_player_name(bhall_player_name)
+            if isinstance(bhall_profile, dict):
+                damage_entries, bhall_pre_damage_state = self._apply_bhall_pre_damage_effects(
+                    attacker=caster,
+                    target=target,
+                    player_name=bhall_player_name,
+                    profile=bhall_profile,
+                    damage_entries=damage_entries,
+                    murderspawn_spend=msg.get("murderspawn_spend"),
+                    murderspawn_qualifies=bool(damage_entries) and self._bhall_spell_qualifies_for_murderspawn_spend(bhall_profile, spell_key),
+                    murderspawn_trigger="warlock_spell_damage",
+                    critical=bool(critical and str(ctx.get("spell_mode") or "").strip().lower() == "attack"),
+                )
+
         adjustment = self._adjust_damage_entries_for_target(target, damage_entries)
         damage_entries = list(adjustment.get("entries") or [])
         adjustment_notes = list(adjustment.get("notes") or [])
@@ -39369,6 +39987,19 @@ class InitiativeTracker(base.InitiativeTracker):
         result_payload["critical"] = bool(critical and hit)
         result_payload["damage_entries"] = list(damage_entries if hit else [])
         result_payload["damage_total"] = int(total_damage if hit else 0)
+        if total_damage > 0 and hit:
+            self._apply_bhall_post_damage_effects(
+                attacker=caster,
+                target=target,
+                total_damage=int(total_damage),
+                result_payload=result_payload,
+                initial_state=bhall_pre_damage_state,
+                blood_in_the_air_choice=msg.get("blood_in_the_air_choice"),
+                blood_in_the_air_destination_col=msg.get("blood_in_the_air_destination_col"),
+                blood_in_the_air_destination_row=msg.get("blood_in_the_air_destination_row"),
+            )
+        elif bhall_pre_damage_state:
+            result_payload["bhall_feature_state"] = copy.deepcopy(bhall_pre_damage_state)
         if adjustment_notes:
             result_payload["damage_adjustment_notes"] = adjustment_notes
         if healing_entries:

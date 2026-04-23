@@ -186,6 +186,26 @@ class PlayerYamlValidityTests(unittest.TestCase):
         self.assertEqual(paladins_smite_pool.get("current"), 1)
         self.assertEqual(paladins_smite_pool.get("reset"), "long_rest")
 
+    def test_fred_bhall_yaml_shape_for_backend_pass(self):
+        data = self._load("players/fred_figglehorn.yaml")
+        leveling = data.get("leveling") or {}
+        self.assertEqual(int(leveling.get("level") or 0), 8)
+        classes = {(entry or {}).get("name"): (entry or {}) for entry in (leveling.get("classes") or [])}
+        self.assertEqual((classes.get("Warlock") or {}).get("subclass"), "Acolyte of Bhall")
+        pools = {(entry or {}).get("id"): (entry or {}) for entry in (((data.get("resources") or {}).get("pools")) or [])}
+        murderous_intent = pools.get("murderous_intent") or {}
+        self.assertEqual(murderous_intent.get("max_formula"), "prof")
+        self.assertEqual(murderous_intent.get("reset"), "short_rest")
+        features = {(entry or {}).get("id"): (entry or {}) for entry in (data.get("features") or [])}
+        self.assertIn("murderspawn", features)
+        self.assertIn("cull_the_weak", features)
+        self.assertIn("blood_in_the_air", features)
+        murderspawn_grants = (features.get("murderspawn") or {}).get("grants") or {}
+        self.assertIn("dissonant-whispers", murderspawn_grants.get("always_prepared_spells") or [])
+        blood_in_the_air_desc = str((features.get("blood_in_the_air") or {}).get("description") or "").lower()
+        self.assertIn("one-quarter", blood_in_the_air_desc)
+        self.assertIn("below half", blood_in_the_air_desc)
+
     def test_malagrou_level_11_barbarian_followup_state(self):
         data = self._load("players/malagrou.yaml")
         leveling = data.get("leveling") or {}

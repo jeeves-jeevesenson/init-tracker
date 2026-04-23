@@ -272,6 +272,52 @@ wizard slot. The pool state is tracked under the wand's
 `inventory.items[].state.pools` so long-rest reset and current-charge
 persistence route through the existing item-granted pool path.
 
+### 6.3 Fred Bhall backend pass (2026-04-23) — explicit-choice pass landed
+
+Fred's first bounded backend/runtime support pass is now reflected in repo:
+
+- `players/fred_figglehorn.yaml` remains the source of truth for this pass:
+  Warlock 8 / `Acolyte of Bhall`, `murderspawn`, `cull_the_weak`,
+  `blood_in_the_air`, and the `murderous_intent` short-rest pool are all
+  authored in YAML and were used directly for the runtime work.
+- `Murderspawn` now gains Murderous Intent in backend runtime on the real
+  single-target attack/spell damage paths:
+  1. first hostile-damage event each turn grants `+1 MI`
+  2. dropping a creature to `0 HP` grants an additional `+1 MI`
+  3. gain is clamped to the current pool max and no longer relies on a
+     manual table-side increment for those paths
+- `Murderspawn` spend now has a small explicit backend seam instead of a
+  table-side default:
+  send `murderspawn_spend` on a qualifying Fred attack / spell-target
+  request, the backend spends that exact amount from the existing
+  `murderous_intent` pool, adds the matching necrotic bonus damage, and
+  preserves the choice through Shield / Absorb Elements / Interception
+  resumes via the request contract payload.
+- `Cull the Weak` / `Blood in the Air` threshold awareness is now carried in
+  attack/spell result payloads as backend-produced Bhall awareness state:
+  below-half HP, below-quarter HP, within-30-feet, and which authored
+  awareness threshold is currently active.
+- `Blood in the Air` no longer auto-picks a branch. The backend now expects
+  an explicit `blood_in_the_air_choice` on the qualifying Fred damage event:
+  - `reactions` applies the Wisdom-save-gated `reactions_blocked` rider that
+    clears at the start of the target's next turn
+  - `move` uses a bounded destination seam
+    (`blood_in_the_air_destination_col` / `_row`) to relocate Fred up to
+    `10 ft` without provoking opportunity attacks
+- Important authored-YAML reality: the current Fred YAML says the
+  `blood_in_the_air` damage rider triggers on damaging a creature below
+  half HP, while quarter HP is only the awareness threshold. Runtime follows
+  that authored source for now rather than older out-of-repo drafts.
+- Still pending after this pass:
+  1. There is still no frontend prompt/UI flow for Fred's Bhall choices;
+     the backend seam is request-driven for now.
+  2. Murderspawn spend qualification is intentionally conservative:
+     weapon hits plus warlock cantrips / prepared warlock spells from Fred's
+     authored sheet, not every possible future spell-origin edge case.
+  3. Murderspawn gain is not yet broadened across every indirect/AoE/triggered
+     damage path; this pass is intentionally limited to the current direct
+     single-target player attack/spell runtime.
+
 ---
 
 ## 7. Working guardrails for major passes
