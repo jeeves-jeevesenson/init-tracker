@@ -441,6 +441,27 @@
       flex-direction: column;
       gap: 10px;
     }
+    .live-group {
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+    }
+    .live-group-label {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      font-size: 10px;
+      text-transform: uppercase;
+      letter-spacing: .08em;
+      color: var(--muted);
+      padding: 0 2px;
+    }
+    .live-group-label::after {
+      content: "";
+      flex: 1;
+      height: 1px;
+      background: var(--border);
+    }
     .setup-group-label {
       font-size: 11px;
       text-transform: uppercase;
@@ -735,73 +756,160 @@
     <!-- Mutation panel -->
     <div class="workspace-column tools-column" id="toolsColumn">
       <div class="mutation-panel">
-    <!-- HP adjustment -->
-    <div class="mut-card">
-      <h3>HP Adjustment</h3>
-      <div class="form-group">
-        <label>Target combatant</label>
-        <select id="hpCidSelect"><option value="">— select —</option></select>
-      </div>
-      <div class="form-group">
-        <label>Amount</label>
-        <input type="number" id="hpDelta" placeholder="e.g. -5 (damage) or 8 (heal)" />
-      </div>
-      <button class="btn-action heal" id="applyHpBtn">Apply HP Change</button>
-      <div class="mut-result" id="hpResult"></div>
-    </div>
+    <section class="live-group" data-live-group="health" aria-labelledby="liveHealthGroupTitle">
+      <div class="live-group-label" id="liveHealthGroupTitle">Health</div>
 
-    <!-- Condition management -->
-    <div class="mut-card">
-      <h3>Conditions</h3>
-      <div class="form-group">
-        <label>Target combatant</label>
-        <select id="condCidSelect"><option value="">— select —</option></select>
+      <!-- HP adjustment -->
+      <div class="mut-card">
+        <h3>HP Adjustment</h3>
+        <div class="form-group">
+          <label>Target combatant</label>
+          <select id="hpCidSelect"><option value="">— select —</option></select>
+        </div>
+        <div class="form-group">
+          <label>Amount</label>
+          <input type="number" id="hpDelta" placeholder="e.g. -5 (damage) or 8 (heal)" />
+        </div>
+        <button class="btn-action heal" id="applyHpBtn">Apply HP Change</button>
+        <div class="mut-result" id="hpResult"></div>
       </div>
-      <div class="form-group">
-        <label>Condition</label>
-        <select id="condTypeSelect">
-          <option value="blinded">Blinded</option>
-          <option value="charmed">Charmed</option>
-          <option value="deafened">Deafened</option>
-          <option value="exhaustion">Exhaustion</option>
-          <option value="frightened">Frightened</option>
-          <option value="grappled">Grappled</option>
-          <option value="incapacitated">Incapacitated</option>
-          <option value="invisible">Invisible</option>
-          <option value="paralyzed">Paralyzed</option>
-          <option value="petrified">Petrified</option>
-          <option value="poisoned">Poisoned</option>
-          <option value="prone">Prone</option>
-          <option value="restrained">Restrained</option>
-          <option value="stunned">Stunned</option>
-          <option value="unconscious">Unconscious</option>
-        </select>
-      </div>
-      <div class="form-group">
-        <label>Duration (turns, blank = indefinite)</label>
-        <input type="number" id="condTurns" placeholder="e.g. 3 or leave blank" min="1" />
-      </div>
-      <div style="display:flex;gap:6px">
-        <button class="btn-action" id="addCondBtn" style="flex:1">+ Add</button>
-        <button class="btn-action remove" id="removeCondBtn" style="flex:1">− Remove</button>
-      </div>
-      <div class="mut-result" id="condResult"></div>
-    </div>
 
-    <!-- Temp HP -->
-    <div class="mut-card">
-      <h3>Temp HP</h3>
-      <div class="form-group">
-        <label>Target combatant</label>
-        <select id="tempHpCidSelect"><option value="">— select —</option></select>
+      <!-- Temp HP -->
+      <div class="mut-card">
+        <h3>Temp HP</h3>
+        <div class="form-group">
+          <label>Target combatant</label>
+          <select id="tempHpCidSelect"><option value="">— select —</option></select>
+        </div>
+        <div class="form-group">
+          <label>Amount (0 = clear temp HP)</label>
+          <input type="number" id="tempHpAmount" placeholder="e.g. 10" min="0" />
+        </div>
+        <button class="btn-action" id="applyTempHpBtn">Set Temp HP</button>
+        <div class="mut-result" id="tempHpResult"></div>
       </div>
-      <div class="form-group">
-        <label>Amount (0 = clear temp HP)</label>
-        <input type="number" id="tempHpAmount" placeholder="e.g. 10" min="0" />
+    </section>
+
+    <section class="live-group" data-live-group="status" aria-labelledby="liveStatusGroupTitle">
+      <div class="live-group-label" id="liveStatusGroupTitle">Status</div>
+
+      <!-- Condition management -->
+      <div class="mut-card">
+        <h3>Conditions</h3>
+        <div class="form-group">
+          <label>Target combatant</label>
+          <select id="condCidSelect"><option value="">— select —</option></select>
+        </div>
+        <div class="form-group">
+          <label>Condition</label>
+          <select id="condTypeSelect">
+            <option value="blinded">Blinded</option>
+            <option value="charmed">Charmed</option>
+            <option value="deafened">Deafened</option>
+            <option value="exhaustion">Exhaustion</option>
+            <option value="frightened">Frightened</option>
+            <option value="grappled">Grappled</option>
+            <option value="incapacitated">Incapacitated</option>
+            <option value="invisible">Invisible</option>
+            <option value="paralyzed">Paralyzed</option>
+            <option value="petrified">Petrified</option>
+            <option value="poisoned">Poisoned</option>
+            <option value="prone">Prone</option>
+            <option value="restrained">Restrained</option>
+            <option value="stunned">Stunned</option>
+            <option value="unconscious">Unconscious</option>
+          </select>
+        </div>
+        <div class="form-group">
+          <label>Duration (turns, blank = indefinite)</label>
+          <input type="number" id="condTurns" placeholder="e.g. 3 or leave blank" min="1" />
+        </div>
+        <div style="display:flex;gap:6px">
+          <button class="btn-action" id="addCondBtn" style="flex:1">+ Add</button>
+          <button class="btn-action remove" id="removeCondBtn" style="flex:1">− Remove</button>
+        </div>
+        <div class="mut-result" id="condResult"></div>
       </div>
-      <button class="btn-action" id="applyTempHpBtn">Set Temp HP</button>
-      <div class="mut-result" id="tempHpResult"></div>
-    </div>
+    </section>
+
+    <section class="live-group" data-live-group="monster-turn" aria-labelledby="liveMonsterTurnGroupTitle">
+      <div class="live-group-label" id="liveMonsterTurnGroupTitle">Monster Turns</div>
+
+      <!-- Monster turn controls -->
+      <div class="mut-card" id="monsterTurnCard">
+        <h3>Monster Turn Controls</h3>
+        <div class="tactical-status" style="margin-bottom:10px">
+          Use existing backend combat semantics to run enemy turns from the browser.
+        </div>
+        <div class="form-group">
+          <label>Acting monster / enemy</label>
+          <select id="monsterActorCidSelect"><option value="">— select enemy —</option></select>
+        </div>
+        <div class="form-group">
+          <label>Target combatant</label>
+          <select id="monsterTargetCidSelect"><option value="">— select target —</option></select>
+        </div>
+        <div class="form-group">
+          <label>Turn resource to spend</label>
+          <select id="monsterSpendSelect">
+            <option value="action">Action</option>
+            <option value="bonus">Bonus Action</option>
+            <option value="reaction">Reaction</option>
+            <option value="none">No Spend</option>
+          </select>
+        </div>
+        <div style="display:flex;gap:6px">
+          <button class="btn-sm" id="loadMonsterAttacksBtn" style="flex:1">Load Monster Attacks</button>
+        </div>
+        <div class="tactical-inline" style="margin-top:8px">
+          <div class="form-group">
+            <label>Attack</label>
+            <select id="monsterAttackSelect"><option value="">— load attacks first —</option></select>
+          </div>
+          <div class="form-group">
+            <label>Count</label>
+            <input type="number" id="monsterAttackCountInput" min="1" max="10" value="1" />
+          </div>
+          <div class="form-group">
+            <label>Roll mode</label>
+            <select id="monsterRollModeSelect">
+              <option value="normal">Normal</option>
+              <option value="advantage">Advantage</option>
+              <option value="disadvantage">Disadvantage</option>
+            </select>
+          </div>
+        </div>
+        <button class="btn-action" id="resolveMonsterAttackBtn" style="margin-top:8px">Resolve Monster Attack</button>
+        <div class="form-group" style="margin-top:8px">
+          <label>Manual damage entries (type:amount, comma-separated)</label>
+          <input type="text" id="monsterDamageEntriesInput" placeholder="slashing:5, fire:3" />
+        </div>
+        <button class="btn-action remove" id="applyMonsterDamageBtn">Apply Monster Damage</button>
+        <div class="tactical-divider"></div>
+        <div class="form-group">
+          <label>Monster action name</label>
+          <input type="text" id="monsterActionNameInput" placeholder="e.g. Nimble Escape" />
+        </div>
+        <button class="btn-sm" id="performMonsterActionBtn">Perform Monster Action</button>
+        <div class="tactical-divider"></div>
+        <div class="form-group">
+          <label>Spell name</label>
+          <input type="text" id="monsterSpellNameInput" placeholder="e.g. Fire Bolt" />
+        </div>
+        <div class="tactical-inline">
+          <div class="form-group">
+            <label>Spell slug (preferred)</label>
+            <input type="text" id="monsterSpellSlugInput" placeholder="e.g. fire-bolt" />
+          </div>
+          <div class="form-group">
+            <label>Spell id (optional)</label>
+            <input type="text" id="monsterSpellIdInput" placeholder="optional preset id" />
+          </div>
+        </div>
+        <button class="btn-action" id="castMonsterSpellBtn">Cast Monster Spell (Targeted)</button>
+        <div class="mut-result" id="monsterTurnResult"></div>
+      </div>
+    </section>
 
     <section class="setup-group" data-dm-card="setup" data-setup-group="roster" aria-labelledby="setupRosterGroupTitle">
       <div class="setup-group-label" id="setupRosterGroupTitle">Roster</div>
@@ -1338,81 +1446,6 @@
       </div>
       <button class="btn-sm" id="applyOverlayBtn" style="margin-top:8px">Apply Overlay Setting</button>
       <div class="mut-result" id="tacticalResult"></div>
-    </div>
-
-    <!-- Monster turn controls -->
-    <div class="mut-card" id="monsterTurnCard">
-      <h3>Monster Turn Controls</h3>
-      <div class="tactical-status" style="margin-bottom:10px">
-        Use existing backend combat semantics to run enemy turns from the browser.
-      </div>
-      <div class="form-group">
-        <label>Acting monster / enemy</label>
-        <select id="monsterActorCidSelect"><option value="">— select enemy —</option></select>
-      </div>
-      <div class="form-group">
-        <label>Target combatant</label>
-        <select id="monsterTargetCidSelect"><option value="">— select target —</option></select>
-      </div>
-      <div class="form-group">
-        <label>Turn resource to spend</label>
-        <select id="monsterSpendSelect">
-          <option value="action">Action</option>
-          <option value="bonus">Bonus Action</option>
-          <option value="reaction">Reaction</option>
-          <option value="none">No Spend</option>
-        </select>
-      </div>
-      <div style="display:flex;gap:6px">
-        <button class="btn-sm" id="loadMonsterAttacksBtn" style="flex:1">Load Monster Attacks</button>
-      </div>
-      <div class="tactical-inline" style="margin-top:8px">
-        <div class="form-group">
-          <label>Attack</label>
-          <select id="monsterAttackSelect"><option value="">— load attacks first —</option></select>
-        </div>
-        <div class="form-group">
-          <label>Count</label>
-          <input type="number" id="monsterAttackCountInput" min="1" max="10" value="1" />
-        </div>
-        <div class="form-group">
-          <label>Roll mode</label>
-          <select id="monsterRollModeSelect">
-            <option value="normal">Normal</option>
-            <option value="advantage">Advantage</option>
-            <option value="disadvantage">Disadvantage</option>
-          </select>
-        </div>
-      </div>
-      <button class="btn-action" id="resolveMonsterAttackBtn" style="margin-top:8px">Resolve Monster Attack</button>
-      <div class="form-group" style="margin-top:8px">
-        <label>Manual damage entries (type:amount, comma-separated)</label>
-        <input type="text" id="monsterDamageEntriesInput" placeholder="slashing:5, fire:3" />
-      </div>
-      <button class="btn-action remove" id="applyMonsterDamageBtn">Apply Monster Damage</button>
-      <div class="tactical-divider"></div>
-      <div class="form-group">
-        <label>Monster action name</label>
-        <input type="text" id="monsterActionNameInput" placeholder="e.g. Nimble Escape" />
-      </div>
-      <button class="btn-sm" id="performMonsterActionBtn">Perform Monster Action</button>
-      <div class="tactical-divider"></div>
-      <div class="form-group">
-        <label>Spell name</label>
-        <input type="text" id="monsterSpellNameInput" placeholder="e.g. Fire Bolt" />
-      </div>
-      <div class="tactical-inline">
-        <div class="form-group">
-          <label>Spell slug (preferred)</label>
-          <input type="text" id="monsterSpellSlugInput" placeholder="e.g. fire-bolt" />
-        </div>
-        <div class="form-group">
-          <label>Spell id (optional)</label>
-          <input type="text" id="monsterSpellIdInput" placeholder="optional preset id" />
-        </div>
-      </div>
-      <button class="btn-action" id="castMonsterSpellBtn">Cast Monster Spell (Targeted)</button>
-      <div class="mut-result" id="monsterTurnResult"></div>
     </div>
 
       </div>
