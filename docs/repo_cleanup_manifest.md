@@ -2,7 +2,7 @@
 
 Cleanup classification manifest for the repo cleanup workstream.
 
-Classification labels are from `cleanupplan.md`: `keep-root`, `move-to-scripts`, `move-to-docs`, `move-to-tests`, `archive`, `delete-candidate`, `unknown`.
+Classification labels used during cleanup: `keep-root`, `move-to-scripts`, `move-to-docs`, `move-to-tests`, `archive`, `delete-candidate`, `unknown`.
 
 ## Audit Inputs
 
@@ -38,7 +38,6 @@ Note: `rg` was not installed in this environment, so `grep` fallbacks were used.
 | `assets/` | `keep-root` | Keep at repo root. | README documents `assets/web/lan/`; scripts and app reference assets. | None for repo-structure cleanup. | Core app/web asset directory. |
 | `character_autofill.py` | `keep-root` | Keep at repo root unless a later package-layout pass moves core modules together. | `tests/test_character_autofill.py` exists; discovered as Python module. | Run focused tests if moved. | Runtime/helper module, not simple script clutter. |
 | `claude-skills/` | `delete-candidate` | Keep local on development machines, ignore with `.gitignore`, and remove tracked entries from the Git index only. | User decision in cleanup pass 5: local-only agent context; `git ls-files claude-skills` showed tracked skill files before index cleanup. | `git ls-files claude-skills`; `git check-ignore -v claude-skills/`; confirm directory remains on disk. | Removed from index with `git rm --cached -r claude-skills`; do not delete local directory. |
-| `cleanupplan.md` | `keep-root` | Keep during cleanup workstream; delete in Phase 6 per its own plan. | User states it is temporary source of truth; cleanupplan final action says delete `cleanupplan.md`. | Before deletion, verify cleanup complete and no unknown classifications remain. | Active temporary tracker, not dead clutter yet. |
 | `combat_service.py` | `keep-root` | Keep at repo root unless a future package-layout migration moves core modules. | `majorTODO.md` and docs identify `CombatService`; tests import/use it broadly. | Focused service tests if moved. | Core backend/service module. |
 | `dnd_initative_tracker.py` | `keep-root` | Keep at repo root. | README calls it main entry script; AGENTS/CLAUDE guardrail says do not rename. | None for cleanup. | Historical typo intentionally preserved. |
 | `docs/` | `keep-root` | Keep at repo root. | Cleanupplan deliverable lives in `docs/`; existing docs are under `docs/`. | Later docs pass may archive stale docs. | Proper documentation directory. |
@@ -79,7 +78,6 @@ Note: `rg` was not installed in this environment, so `grep` fallbacks were used.
 
 | Current path | Classification | Proposed final path or disposition | Evidence/references found | Validation needed before move/delete | Risk/notes |
 | --- | --- | --- | --- | --- | --- |
-| `cleanupplan.md` | `keep-root` | Keep until cleanup Phase 6, then delete. | Temporary source of truth for cleanup workstream. | Verify final cleanup criteria before deletion. | Active temporary file. |
 | `majorTODO.md` | `keep-root` | Keep root unless later user decision moves planning into docs. | Declares itself durable planning source; agent instructions require it. | Update all references if moved. | High-value active tracker. |
 | `AGENTS.md` | `keep-root` | Keep root. | Standing Codex/autonomous-agent context. | None. | User-facing agent control file. |
 | `CLAUDE.md` | `keep-root` | Keep root or consolidate only after user decision. | Standing Claude context; duplicates much of `AGENTS.md`. | Confirm whether Claude-specific file is still needed. | Duplication is intentional until proven otherwise. |
@@ -127,8 +125,9 @@ Unknown/risky files needing user decision:
 - Local agent/developer context directories were made local-only in cleanup pass 5: `.claude/`, `.codex/`, and `claude-skills/` are ignored by `.gitignore`; tracked `claude-skills/` entries were removed from the Git index only.
 - Generated local artifacts were cleaned in cleanup pass 6: non-`.venv` `__pycache__/` directories were removed from the working tree, no generated artifacts in the requested set were tracked, `.venv/` was preserved on disk, and `.gitignore` now covers standard Python/test coverage caches.
 - Root launcher clutter was cleaned in cleanup pass 7: `launcher.py` moved to `scripts/launchers/launcher.py`; `scripts/build/build_exe.py`, `scripts/README.md`, and `docs/WINDOWS_EXECUTABLE.md` were updated.
+- Temporary cleanup plan was removed in the final verification pass after manifest/root/script/doc checks passed.
 
 ## Audit Counts
 
-- Root-level entries classified: 34
+- Root-level entries classified: 33
 - Script-like files under `scripts/` classified: 13
