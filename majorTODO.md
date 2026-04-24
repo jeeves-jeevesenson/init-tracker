@@ -9,7 +9,7 @@ Use this file to keep reality ahead of aspiration:
 - keep current priorities clear
 - record long-term direction so it survives session boundaries
 
-`todo.md` is still fine for smaller feature/backlog items. This file is for major direction and sequencing.
+Older root backlog notes were retired during repo cleanup. This file is now the active planning source for major direction and sequencing.
 
 ---
 

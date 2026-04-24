@@ -12,13 +12,12 @@ from pathlib import Path
 
 def main():
     """Launch the D&D Initiative Tracker without console window"""
-    # Get the directory where this script is located
     if getattr(sys, 'frozen', False):
-        # Running as compiled executable
+        # PyInstaller executable is expected to live in the repo/install root.
         app_dir = Path(sys.executable).parent
     else:
-        # Running as Python script
-        app_dir = Path(__file__).parent
+        # Source launcher lives under scripts/launchers/.
+        app_dir = Path(__file__).resolve().parents[2]
     
     # Main tracker script
     tracker_script = app_dir / "dnd_initative_tracker.py"

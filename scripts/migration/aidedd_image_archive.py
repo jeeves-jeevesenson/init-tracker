@@ -7,13 +7,13 @@ Also supports batch download from monster-list.xml (list of <monster>slug</monst
 
 Examples:
   # single
-  python aidedd_image_archive.py --slug ape --outdir Monsters/Images
+  python scripts/migration/aidedd_image_archive.py --slug ape --outdir Monsters/Images
 
   # batch from XML (your uploaded file path)
-  python aidedd_image_archive.py --xml /mnt/data/monster-list.xml --outdir Monsters/Images --sleep 0.2
+  python scripts/migration/aidedd_image_archive.py --xml /mnt/data/monster-list.xml --outdir Monsters/Images --sleep 0.2
 
   # batch but limit for testing
-  python aidedd_image_archive.py --xml /mnt/data/monster-list.xml --outdir Monsters/Images --limit 20 --sleep 0.2
+  python scripts/migration/aidedd_image_archive.py --xml /mnt/data/monster-list.xml --outdir Monsters/Images --limit 20 --sleep 0.2
 """
 
 from __future__ import annotations

@@ -165,20 +165,6 @@ def is_supported_update_checkout() -> Tuple[bool, str]:
     return True, ""
 
 
-def _is_managed_install_path(repo_dir: str) -> bool:
-    """Detect managed quick-install style locations used by update scripts."""
-    repo_norm = os.path.normpath(repo_dir)
-    if sys.platform.startswith("win"):
-        local_app_data = os.getenv("LOCALAPPDATA", "")
-        if not local_app_data:
-            return False
-        managed_root = os.path.normpath(os.path.join(local_app_data, "DnDInitiativeTracker"))
-        return repo_norm.startswith(managed_root)
-    home_dir = os.path.expanduser("~")
-    managed_root = os.path.normpath(os.path.join(home_dir, ".local", "share", "dnd-initiative-tracker"))
-    return repo_norm.startswith(managed_root)
-
-
 def get_local_git_commit() -> Optional[str]:
     """Get the current local git commit SHA if in a git repository.
     
@@ -262,67 +248,30 @@ def check_for_updates() -> Tuple[bool, str, Optional[Dict]]:
 
 
 def get_update_command() -> Optional[str]:
-    """Get the appropriate update command for the current platform and installation type.
+    """Return an auto-update command if one is supported.
     
-    Returns:
-        Command string to run for updating, or None if not applicable
+    Legacy managed-install updater scripts were retired. Returning None keeps
+    the in-app update prompt on the safe manual-instructions path.
     """
-    script_dir = os.path.dirname(__file__)
-    is_supported_repo, _reason = is_supported_update_checkout()
-    if not is_supported_repo:
-        return None
-    if not _is_managed_install_path(script_dir):
-        return None
-
-    if sys.platform.startswith("win"):
-        update_script = os.path.join(script_dir, "scripts", "update-windows.ps1")
-        if os.path.exists(update_script):
-            return f'powershell -ExecutionPolicy Bypass -File "{update_script}"'
-    else:
-        update_script = os.path.join(script_dir, "scripts", "update-linux.sh")
-        if os.path.exists(update_script):
-            return f'bash "{update_script}"'
-
     return None
 
 
 def get_manual_update_instructions() -> str:
     """Return explicit safe update instructions for current checkout/install type."""
-    repo_dir = os.path.dirname(__file__)
     is_supported_repo, reason = is_supported_update_checkout()
-    in_managed_install = _is_managed_install_path(repo_dir)
 
     lines = [
-        "Supported update paths:",
+        "Supported update path:",
         "",
-        "1) Source/developer checkout",
         "   - git fetch origin --prune",
         "   - git pull --ff-only origin main",
-        "   - python -m pip install -r requirements.txt",
-        "",
-        "2) Managed local install (quick-install path)",
+        "   - bash scripts/quick-install.sh",
     ]
-    if sys.platform.startswith("win"):
-        lines.extend([
-            "   - Close the app",
-            r"   - Run: .\scripts\update-windows.ps1",
-        ])
-    else:
-        lines.extend([
-            "   - Close the app",
-            "   - Run: ./scripts/update-linux.sh",
-        ])
 
     if not is_supported_repo and reason:
         lines.extend([
             "",
-            "Managed in-app updater is disabled for this checkout:",
+            "Update checking is limited for this checkout:",
             f"  {reason}",
-            f"Only '{EXPECTED_REPO_SLUG}' is supported for managed updater scripts.",
-        ])
-    elif not in_managed_install:
-        lines.extend([
-            "",
-            "This appears to be a source checkout, so in-app managed update scripts are not auto-launched.",
         ])
     return "\n".join(lines)

@@ -703,9 +703,9 @@ def build_argument_parser() -> argparse.ArgumentParser:
         epilog=textwrap.dedent(
             """\
             Examples:
-              python scripts/import_srd_items.py
-              python scripts/import_srd_items.py --include-weapons
-              python scripts/import_srd_items.py --overwrite --write-shop-suggestions Items/Shop/import_suggestions.yaml
+              python scripts/migration/import_srd_items.py
+              python scripts/migration/import_srd_items.py --include-weapons
+              python scripts/migration/import_srd_items.py --overwrite --write-shop-suggestions Items/Shop/import_suggestions.yaml
             """
         ),
     )

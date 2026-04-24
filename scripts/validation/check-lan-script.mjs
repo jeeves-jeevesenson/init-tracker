@@ -5,7 +5,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const scriptDir = path.dirname(fileURLToPath(import.meta.url));
-const repoRoot = path.resolve(scriptDir, '..');
+const repoRoot = path.resolve(scriptDir, '..', '..');
 const htmlPath = path.join(repoRoot, 'assets', 'web', 'lan', 'index.html');
 
 const html = readFileSync(htmlPath, 'utf8');

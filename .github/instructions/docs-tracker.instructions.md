@@ -1,5 +1,5 @@
 ---
-applyTo: "majorTODO.md,docs/**/*.md,todo.md"
+applyTo: "majorTODO.md,docs/**/*.md"
 ---
 
 For migration docs and trackers:

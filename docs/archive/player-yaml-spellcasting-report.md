@@ -1,5 +1,7 @@
 # Player YAML spellcasting pipeline audit
 
+Archived during the repo cleanup workstream. This was a point-in-time audit note and is not an active planning source.
+
 ## Scope
 This report traces how `players/*.yaml` is loaded, normalized, sent to the LAN client, and used to gate spellcasting + render spell slots.
 

@@ -5,7 +5,7 @@ import unittest
 
 
 def _load_backfill_module():
-    path = pathlib.Path(__file__).resolve().parents[1] / "scripts" / "backfill_monster_sections.py"
+    path = pathlib.Path(__file__).resolve().parents[1] / "scripts" / "migration" / "backfill_monster_sections.py"
     spec = importlib.util.spec_from_file_location("backfill_monster_sections", path)
     module = importlib.util.module_from_spec(spec)
     assert spec and spec.loader

@@ -176,13 +176,13 @@ git pull --ff-only origin main
 bash scripts/quick-install.sh
 ```
 
-Legacy managed installs can still use the platform-specific updater scripts in `scripts/`, but new source checkouts should rerun `bash scripts/quick-install.sh` after pulling changes.
+After pulling changes, rerun `bash scripts/quick-install.sh`.
 
 ### Uninstalling
 
 For the current checkout installer flow, remove the checkout directory. The virtual environment lives inside it by default as `.venv`.
 
-Legacy managed installs can still use the platform-specific uninstall scripts in `scripts/`.
+Legacy managed-install uninstall scripts have been retired. For the supported checkout flow, remove the checkout directory.
 
 ## Running the tracker
 
@@ -622,7 +622,7 @@ Check:
 - `dnd_initative_tracker.py` — app entry point + LAN integration
 - `helper_script.py` — core UI/combat logic
 - `assets/web/` — LAN web client files
-- `scripts/` — install/update/uninstall and smoke-test scripts
+- `scripts/` — installer, utility, and smoke-test scripts
 - `tests/` — Python test suite
 
 ### Local setup
@@ -640,7 +640,7 @@ python -m compileall .
 python -m pytest
 ```
 
-If you modify LAN/web behavior, run LAN smoke tooling in `scripts/` (for example `scripts/lan-smoke-playwright.py`).
+If you modify LAN/web behavior, run LAN smoke tooling in `scripts/validation/` (for example `scripts/validation/lan-smoke-playwright.py`).
 
 ## Contributing
 

@@ -25,11 +25,11 @@ jobs:
         with:
           node-version: '20'
       - name: Validate LAN inline script syntax
-        run: node scripts/check-lan-script.mjs
+        run: node scripts/validation/check-lan-script.mjs
       - name: Install Playwright
         run: |
           python -m pip install --upgrade pip
           python -m pip install playwright
           python -m playwright install --with-deps chromium
       - name: Run LAN Playwright smoke test
-        run: python scripts/lan-smoke-playwright.py
+        run: python scripts/validation/lan-smoke-playwright.py

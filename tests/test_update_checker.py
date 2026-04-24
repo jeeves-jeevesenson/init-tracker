@@ -35,13 +35,18 @@ class UpdateCheckerSafetyTests(unittest.TestCase):
         with patch("update_checker.is_supported_update_checkout", return_value=(False, "bad remote")):
             self.assertIsNone(update_checker.get_update_command())
 
-    @patch("update_checker.os.path.exists", return_value=True)
-    @patch("update_checker._is_managed_install_path", return_value=True)
     @patch("update_checker.is_supported_update_checkout", return_value=(True, ""))
-    def test_get_update_command_linux_managed_install(self, *_mocks):
+    def test_get_update_command_returns_none_after_legacy_updater_removal(self, *_mocks):
         with patch("update_checker.sys.platform", "linux"):
             command = update_checker.get_update_command()
-        self.assertIn("update-linux.sh", command)
+        self.assertIsNone(command)
+
+    @patch("update_checker.is_supported_update_checkout", return_value=(True, ""))
+    def test_manual_update_instructions_use_live_checkout_installer(self, *_mocks):
+        instructions = update_checker.get_manual_update_instructions()
+        self.assertIn("bash scripts/quick-install.sh", instructions)
+        self.assertNotIn("update-linux.sh", instructions)
+        self.assertNotIn("update-windows.ps1", instructions)
 
 
 if __name__ == "__main__":

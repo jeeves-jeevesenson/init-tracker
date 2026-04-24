@@ -2,7 +2,7 @@
 """Build or refresh the shop catalog from item definition directories.
 
 Usage:
-  python scripts/build_shop_catalog.py [--items-dir Items] [--catalog Items/Shop/catalog.yaml]
+  python scripts/migration/build_shop_catalog.py [--items-dir Items] [--catalog Items/Shop/catalog.yaml]
                                        [--enable-buckets weapon,armor,magic_item,consumable,gear]
                                        [--enable-tiers A,B,C]
                                        [--dry-run]
@@ -28,7 +28,7 @@ from typing import Any, Dict, List, Optional, Set, Tuple
 
 import yaml
 
-REPO_ROOT = Path(__file__).resolve().parent.parent
+REPO_ROOT = Path(__file__).resolve().parents[2]
 
 DEFAULT_ITEMS_DIR = REPO_ROOT / "Items"
 DEFAULT_CATALOG_PATH = DEFAULT_ITEMS_DIR / "Shop" / "catalog.yaml"

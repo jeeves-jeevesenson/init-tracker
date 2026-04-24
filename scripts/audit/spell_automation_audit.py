@@ -8,7 +8,7 @@ from typing import Any
 
 import yaml
 
-ROOT = Path(__file__).resolve().parents[1]
+ROOT = Path(__file__).resolve().parents[2]
 SPELLS_DIR = ROOT / "Spells"
 PLAYERS_DIR = ROOT / "players"
 REPORT_PATH = SPELLS_DIR / "automation_audit_level_0_6.md"

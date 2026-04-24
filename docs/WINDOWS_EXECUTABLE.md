@@ -19,6 +19,14 @@ pip install pyinstaller
 
 ### Creating the Executable
 
+The repository includes an optional build helper that packages the launcher wrapper in `scripts/launchers/launcher.py`:
+
+```cmd
+python scripts/build/build_exe.py
+```
+
+You can also run PyInstaller manually:
+
 ```cmd
 # Navigate to the repository directory
 cd dnd-initiative-tracker
@@ -68,7 +76,7 @@ Pre-built executables are not included in this repository for several reasons:
 ## Recommendations
 
 For most users, we recommend:
-- **Regular users**: Use the automated installer scripts (`install-windows.bat` or `install-windows.ps1`)
+- **Regular users**: Use the current checkout installer documented in the root `README.md` (`bash scripts/quick-install.sh`)
 - **Developers**: Run directly with Python for easier debugging and development
 - **Distribution**: Only create executables if you need to distribute to non-technical users without Python
 

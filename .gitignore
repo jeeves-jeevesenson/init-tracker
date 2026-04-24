@@ -1,21 +1,32 @@
-dnd_initative_tracker_history.log
-old logs/
+# generated local artifacts
 __pycache__/
 *.pyc
+*.py[cod]
 .venv/
+venv/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
 *.egg-info/
 dist/
 build/
+*.spec
+DNDInitiativeTracker.exe
+
+dnd_initative_tracker_history.log
+old logs/
 logs/*.log
 logs/lan_account_links.json
 logs/monster_index.json
-*.spec
-DNDInitiativeTracker.exe
 
 # local image archive artifacts
 manifest.jsonl
 failed_slugs.txt
 monster-list.xml
 
+# local agent/developer context
 .claude/
-.codex
+.codex/
+claude-skills/
