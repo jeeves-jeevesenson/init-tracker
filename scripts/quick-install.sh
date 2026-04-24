@@ -1,152 +1,212 @@
-#!/bin/bash
-# Quick install script for D&D Initiative Tracker
-# This script clones the repository, installs dependencies, and sets up the application
-
+#!/usr/bin/env bash
 set -euo pipefail
 
-INSTALL_DIR="$HOME/.local/share/dnd-initiative-tracker"
-REPO_URL="https://github.com/jeeves-jeevesenson/init-tracker.git"
-EXPECTED_REPO_SLUG="jeeves-jeevesenson/init-tracker"
-OS_NAME="$(uname -s)"
+MIN_PYTHON_MAJOR=3
+MIN_PYTHON_MINOR=9
 
-normalize_repo_slug() {
-    local remote_url="${1:-}"
-    if [ -z "$remote_url" ]; then
-        return 1
-    fi
-    # Normalize common GitHub remote forms to owner/repo:
-    # - strip protocol
-    # - strip optional git@ prefix
-    # - strip github.com host + separators
-    # - strip optional .git suffix
-    local normalized
-    normalized="$(printf '%s' "$remote_url" | sed -E 's#^[^:]+://##; s#^git@##; s#github.com[:/]##; s#\.git$##')"
-    normalized="${normalized#/}"
-    printf '%s' "$normalized" | tr '[:upper:]' '[:lower:]'
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+REPO_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
+VENV_DIR="${VENV_DIR:-${REPO_ROOT}/.venv}"
+DRY_RUN=0
+
+log() {
+  printf '[install] %s\n' "$*"
 }
 
-echo "=========================================="
-echo "D&D Initiative Tracker - Quick Install"
-echo "=========================================="
-echo ""
+die() {
+  printf '[install] ERROR: %s\n' "$*" >&2
+  exit 1
+}
 
-# Check if Python 3 is installed
-if ! command -v python3 &> /dev/null; then
-    echo "Error: Python 3 is not installed. Please install Python 3.9 or higher."
-    exit 1
-fi
+usage() {
+  cat <<EOF
+Usage: bash scripts/quick-install.sh [--dry-run] [--venv PATH]
 
-# Check Python version
-PYTHON_VERSION=$(python3 -c 'import sys; print(".".join(map(str, sys.version_info[:2])))')
-REQUIRED_VERSION="3.9"
+Set up this repository from a fresh checkout.
 
-if ! python3 -c "import sys; exit(0 if sys.version_info >= (3, 9) else 1)"; then
-    echo "Error: Python $PYTHON_VERSION found, but Python $REQUIRED_VERSION or higher is required."
-    exit 1
-fi
+Options:
+  --dry-run       Verify paths and Python discovery without creating a venv.
+  --venv PATH     Create or reuse PATH instead of .venv.
+  -h, --help      Show this help.
 
-echo "✓ Python $PYTHON_VERSION found"
+Environment:
+  PYTHON          Explicit Python interpreter path to use.
+  VENV_DIR        Virtual environment path, overridden by --venv.
 
-# Check if git is installed
-if ! command -v git &> /dev/null; then
-    echo "Error: git is not installed. Please install git first."
-    exit 1
-fi
-
-echo "✓ Git found"
-
-# Create install directory if it doesn't exist
-mkdir -p "$INSTALL_DIR"
-
-# Clone or update the repository
-if [ -d "$INSTALL_DIR/.git" ]; then
-    echo ""
-    echo "Updating existing installation..."
-    cd "$INSTALL_DIR"
-    ORIGIN_URL="$(git remote get-url origin 2>/dev/null || true)"
-    ORIGIN_SLUG="$(normalize_repo_slug "$ORIGIN_URL" || true)"
-    if [ -z "$ORIGIN_SLUG" ] || [ "$ORIGIN_SLUG" != "$EXPECTED_REPO_SLUG" ]; then
-        echo "Error: Existing install is not the supported repository."
-        echo "  Found origin: ${ORIGIN_URL:-<missing>}"
-        echo "  Expected: https://github.com/${EXPECTED_REPO_SLUG}.git"
-        echo "Refusing to update this directory automatically to avoid cross-repo corruption."
-        echo "Either reinstall into a clean directory or update this checkout manually."
-        exit 1
-    fi
-    git fetch origin --prune --tags
-    git pull --ff-only origin main
-else
-    echo ""
-    echo "Cloning repository to $INSTALL_DIR..."
-    git clone --origin origin "$REPO_URL" "$INSTALL_DIR"
-    cd "$INSTALL_DIR"
-fi
-
-if [[ "${OS_NAME}" == "Linux" ]]; then
-    echo ""
-    echo "Running Linux installer..."
-    APPDIR="$INSTALL_DIR" INSTALL_PIP_DEPS=1 "$INSTALL_DIR/scripts/install-linux.sh"
-else
-    echo ""
-    echo "Creating virtual environment..."
-    python3 -m venv .venv
-
-    echo "Activating virtual environment..."
-    source .venv/bin/activate
-
-    echo "Installing dependencies..."
-    pip install --upgrade pip
-    pip install -r requirements.txt
-
-    echo ""
-    echo "Creating launcher script..."
-    LAUNCHER="$HOME/.local/bin/dnd-initiative-tracker"
-    HEADLESS_LAUNCHER="$HOME/.local/bin/dnd-initiative-tracker-headless"
-    mkdir -p "$HOME/.local/bin"
-
-    cat > "$LAUNCHER" << EOF
-#!/bin/bash
-cd "$INSTALL_DIR"
-source .venv/bin/activate
-python dnd_initative_tracker.py "\$@"
+Examples:
+  bash scripts/quick-install.sh
+  PYTHON=/opt/python3.12/bin/python3 bash scripts/quick-install.sh
+  bash scripts/quick-install.sh --venv .venv
 EOF
+}
 
-    chmod +x "$LAUNCHER"
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --dry-run)
+      DRY_RUN=1
+      shift
+      ;;
+    --venv)
+      [[ $# -ge 2 ]] || die "--venv requires a path."
+      VENV_DIR="$2"
+      shift 2
+      ;;
+    -h|--help)
+      usage
+      exit 0
+      ;;
+    *)
+      die "Unknown option: $1. Run with --help for usage."
+      ;;
+  esac
+done
 
-    cat > "$HEADLESS_LAUNCHER" << EOF
-#!/bin/bash
-cd "$INSTALL_DIR"
-source .venv/bin/activate
-python serve_headless.py "\$@"
-EOF
+if [[ "${VENV_DIR}" != /* ]]; then
+  VENV_DIR="${REPO_ROOT}/${VENV_DIR}"
+fi
 
-    chmod +x "$HEADLESS_LAUNCHER"
+REQUIREMENTS_FILE="${REPO_ROOT}/requirements.txt"
+DESKTOP_ENTRY="${REPO_ROOT}/dnd_initative_tracker.py"
+HEADLESS_ENTRY="${REPO_ROOT}/serve_headless.py"
 
-    # Check if ~/.local/bin is in PATH
-    if [[ ":$PATH:" != *":$HOME/.local/bin:"* ]]; then
-        echo ""
-        echo "⚠️  Note: $HOME/.local/bin is not in your PATH"
-        echo "   Add this line to your ~/.bashrc or ~/.zshrc:"
-        echo "   export PATH=\"\$HOME/.local/bin:\$PATH\""
-        echo ""
+[[ -f "${REQUIREMENTS_FILE}" ]] || die "requirements.txt was not found at ${REQUIREMENTS_FILE}. Run this script from a complete checkout."
+[[ -f "${DESKTOP_ENTRY}" ]] || die "Desktop entrypoint was not found at ${DESKTOP_ENTRY}."
+[[ -f "${HEADLESS_ENTRY}" ]] || die "Headless entrypoint was not found at ${HEADLESS_ENTRY}."
+
+python_version_check='
+import sys
+major, minor = sys.version_info[:2]
+required = (3, 9)
+if (major, minor) < required:
+    raise SystemExit(1)
+print(f"{major}.{minor}.{sys.version_info.micro}")
+'
+
+venv_check='
+try:
+    import venv  # noqa: F401
+except Exception as exc:
+    raise SystemExit(f"venv module is unavailable: {exc}")
+'
+
+SELECTED_PYTHON=()
+SELECTED_VERSION=""
+
+try_python() {
+  local -a candidate=("$@")
+  local version
+  if ! command -v "${candidate[0]}" >/dev/null 2>&1; then
+    return 1
+  fi
+  if ! version="$("${candidate[@]}" -c "${python_version_check}" 2>/dev/null)"; then
+    return 1
+  fi
+  if ! "${candidate[@]}" -c "${venv_check}" >/dev/null 2>&1; then
+    die "Python ${version} at $(command -v "${candidate[0]}") does not provide the venv module. Install the venv package for this Python and rerun."
+  fi
+  SELECTED_PYTHON=("${candidate[@]}")
+  SELECTED_VERSION="${version}"
+  return 0
+}
+
+discover_python() {
+  if [[ -n "${PYTHON:-}" ]]; then
+    [[ -x "${PYTHON}" || -n "$(command -v "${PYTHON}" 2>/dev/null || true)" ]] || die "PYTHON is set to '${PYTHON}', but it is not executable or on PATH."
+    if try_python "${PYTHON}"; then
+      return 0
     fi
+    die "PYTHON='${PYTHON}' is not Python ${MIN_PYTHON_MAJOR}.${MIN_PYTHON_MINOR}+ or cannot run venv."
+  fi
+
+  local candidate
+  for candidate in python3.13 python3.12 python3.11 python3.10 python3.9 python3 python; do
+    if try_python "${candidate}"; then
+      return 0
+    fi
+  done
+
+  if try_python py -3; then
+    return 0
+  fi
+
+  die "No usable Python interpreter found. Install Python ${MIN_PYTHON_MAJOR}.${MIN_PYTHON_MINOR}+ or rerun with PYTHON=/path/to/python."
+}
+
+venv_python_path() {
+  if [[ -x "${VENV_DIR}/bin/python" ]]; then
+    printf '%s\n' "${VENV_DIR}/bin/python"
+    return 0
+  fi
+  if [[ -x "${VENV_DIR}/Scripts/python.exe" ]]; then
+    printf '%s\n' "${VENV_DIR}/Scripts/python.exe"
+    return 0
+  fi
+  return 1
+}
+
+planned_venv_python_path() {
+  local os_name
+  if venv_python_path; then
+    return 0
+  fi
+  os_name="$(uname -s 2>/dev/null || true)"
+  case "${os_name}" in
+    MINGW*|MSYS*|CYGWIN*)
+      printf '%s\n' "${VENV_DIR}/Scripts/python.exe"
+      ;;
+    *)
+      printf '%s\n' "${VENV_DIR}/bin/python"
+      ;;
+  esac
+}
+
+print_next_commands() {
+  local venv_python="$1"
+  local activate_cmd
+  if [[ -f "${VENV_DIR}/bin/activate" ]]; then
+    activate_cmd="source ${VENV_DIR}/bin/activate"
+  elif [[ -f "${VENV_DIR}/Scripts/activate" ]]; then
+    activate_cmd="source ${VENV_DIR}/Scripts/activate"
+  else
+    activate_cmd="<activate script not found>"
+  fi
+
+  log "Next commands:"
+  printf '  cd %q\n' "${REPO_ROOT}"
+  printf '  %s\n' "${activate_cmd}"
+  printf '  %q %q\n' "${venv_python}" "${DESKTOP_ENTRY}"
+  printf '  %q %q --host 0.0.0.0 --port 8787\n' "${venv_python}" "${HEADLESS_ENTRY}"
+}
+
+log "Repository root: ${REPO_ROOT}"
+log "Virtual environment: ${VENV_DIR}"
+discover_python
+log "Using Python ${SELECTED_VERSION}: ${SELECTED_PYTHON[*]}"
+
+if [[ "${DRY_RUN}" == "1" ]]; then
+  log "Dry run complete. requirements.txt and entrypoints were found."
+  print_next_commands "$(planned_venv_python_path)"
+  exit 0
 fi
 
-echo ""
-echo "=========================================="
-echo "✓ Installation complete!"
-echo "=========================================="
-echo ""
-echo "To run the D&D Initiative Tracker:"
-if [[ "${OS_NAME}" == "Linux" ]]; then
-    echo "  1. Run: dnd-initiative-tracker"
-    echo "  2. Or: $INSTALL_DIR/launch-inittracker.sh"
-    echo "  3. Or launch from your desktop menu"
+if [[ ! -d "${VENV_DIR}" ]]; then
+  log "Creating virtual environment."
+  "${SELECTED_PYTHON[@]}" -m venv "${VENV_DIR}"
 else
-    echo "  1. Run: dnd-initiative-tracker"
-    echo "  2. Headless/browser-first: dnd-initiative-tracker-headless"
-    echo "  3. Or: $LAUNCHER"
-    echo "  4. Or navigate to $INSTALL_DIR and run:"
-    echo "     source .venv/bin/activate && python dnd_initative_tracker.py"
+  log "Reusing existing virtual environment."
+  if ! venv_python_path >/dev/null; then
+    log "Existing venv has no Python executable; refreshing it in place."
+    "${SELECTED_PYTHON[@]}" -m venv "${VENV_DIR}"
+  fi
 fi
-echo ""
+
+VENV_PYTHON="$(venv_python_path)" || die "Virtual environment was created, but no Python executable was found in ${VENV_DIR}."
+
+log "Upgrading pip."
+"${VENV_PYTHON}" -m pip install --upgrade pip
+
+log "Installing requirements from ${REQUIREMENTS_FILE}."
+"${VENV_PYTHON}" -m pip install -r "${REQUIREMENTS_FILE}"
+
+log "Installation complete."
+print_next_commands "${VENV_PYTHON}"

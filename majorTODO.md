@@ -215,7 +215,7 @@ The previous Tk→web/headless migration already consumed substantial time and m
 
 These remain important but are **not** current top-of-stack while stabilization is active:
 
-1. Production/install/update polish beyond current safety baseline
+1. Broader production/update/release polish beyond the current fresh-checkout installer baseline
 2. Visual/front-end polish and broad UI refinement that is not directly tied to active live-session blockers
 3. Advanced cleanup of legacy desktop/editor surfaces not required for current stabilization or migration exploration
 4. Broad release/packaging pushes before real-play stability is proven

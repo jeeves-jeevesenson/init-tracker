@@ -75,125 +75,114 @@ The app is intentionally split between desktop UI and LAN server responsibilitie
 
 ## 🚀 Quick start
 
-### Managed local install (recommended for local users)
-
-#### Linux / macOS
+From a checkout:
 
 ```bash
-curl -sSL https://raw.githubusercontent.com/jeeves-jeevesenson/init-tracker/main/scripts/quick-install.sh | bash
+bash scripts/quick-install.sh
+.venv/bin/python dnd_initative_tracker.py
 ```
 
-Or:
+Headless/browser-first mode:
 
 ```bash
-wget -qO- https://raw.githubusercontent.com/jeeves-jeevesenson/init-tracker/main/scripts/quick-install.sh | bash
+.venv/bin/python serve_headless.py --host 0.0.0.0 --port 8787
 ```
-
-#### Windows
-
-```powershell
-irm https://raw.githubusercontent.com/jeeves-jeevesenson/init-tracker/main/scripts/quick-install.ps1 | iex
-```
-
-If execution policy blocks script execution:
-
-```powershell
-powershell -ExecutionPolicy Bypass -Command "irm https://raw.githubusercontent.com/jeeves-jeevesenson/init-tracker/main/scripts/quick-install.ps1 | iex"
-```
-
-After install:
-- Desktop compatibility mode: launch from your shortcut or launcher command.
-- Headless/browser-first mode:
-  - Linux: `dnd-initiative-tracker-headless`
-  - Windows: `%LOCALAPPDATA%\DnDInitiativeTracker\launch-dnd-headless.bat`
 
 ## Installation
 
 ### Prerequisites
 
-- Python **3.9+**
-- `pip`
-- Git
-- Tkinter (often bundled; Linux may need `python3-tk`)
+- Python **3.9+** with the standard `venv` module available
+- `pip` access from the created virtual environment
+- Git, if you still need to clone or update the repository
+- Tkinter for desktop compatibility mode; Linux distributions may package it separately as `python3-tk`
+- Bash for the installer script; on Windows, run it from Git Bash, WSL, or another Bash-compatible shell
 
-### Source/developer checkout workflow
+### Run the installer
 
-For contributors and source checkouts:
+The installer sets up the current checkout in place. It creates or reuses `.venv`, upgrades pip inside that venv, installs `requirements.txt`, and prints the exact launch commands at the end.
 
 ```bash
 git clone https://github.com/jeeves-jeevesenson/init-tracker.git
 cd init-tracker
-python -m venv .venv
+bash scripts/quick-install.sh
 ```
 
-Activate venv:
-
-- Linux/macOS:
-  ```bash
-  source .venv/bin/activate
-  ```
-- Windows:
-  ```powershell
-  .venv\Scripts\activate
-  ```
-
-Install dependencies and run:
+To validate interpreter discovery and repository paths without creating or changing the venv:
 
 ```bash
-pip install -r requirements.txt
-python dnd_initative_tracker.py   # desktop compatibility host
-python serve_headless.py          # headless/browser-first host
+bash scripts/quick-install.sh --dry-run
 ```
 
-### Platform notes
+### Custom Python interpreter
 
-- **Linux quick install** places app files in `~/.local/share/dnd-initiative-tracker` (legacy path retained for compatibility)
-- **Windows quick install** places app files in `%LOCALAPPDATA%\DnDInitiativeTracker`
-- Managed installers create a local `.venv` inside the install directory
-- Managed installers now create both desktop and headless launchers
+If the default discovery picks the wrong interpreter, set `PYTHON` to the interpreter you want:
+
+```bash
+PYTHON=/opt/python3.12/bin/python3 bash scripts/quick-install.sh
+```
+
+Without `PYTHON`, the installer probes common commands such as `python3.13`, `python3.12`, `python3.11`, `python3.10`, `python3.9`, `python3`, `python`, and `py -3`, then verifies Python 3.9+ and `venv` support before using one.
+
+To place the virtual environment somewhere other than `.venv`:
+
+```bash
+bash scripts/quick-install.sh --venv .venv-local
+```
+
+### Activate or use the venv
+
+Activation is optional because you can call the venv Python directly.
+
+Linux/macOS/Git Bash:
+
+```bash
+source .venv/bin/activate
+python dnd_initative_tracker.py
+```
+
+PowerShell, if you created the venv from a Windows Python:
+
+```powershell
+.\.venv\Scripts\Activate.ps1
+python dnd_initative_tracker.py
+```
+
+Direct execution without activation:
+
+```bash
+.venv/bin/python dnd_initative_tracker.py
+.venv/bin/python serve_headless.py --host 0.0.0.0 --port 8787
+```
+
+On Windows-created venvs, use `.\.venv\Scripts\python.exe` in place of `.venv/bin/python`.
+
+### Common install failures
+
+- `No usable Python interpreter found`: install Python 3.9+ or rerun with `PYTHON=/path/to/python`.
+- `venv module is unavailable`: install your platform's venv package for that Python, then rerun the installer.
+- `requirements.txt was not found`: run the installer from a complete checkout, or use the checked-in `scripts/quick-install.sh` path.
+- `pip install -r requirements.txt` fails: check network access and the package error from pip, then rerun `bash scripts/quick-install.sh`; reruns reuse the same venv.
 
 ## Updating and uninstalling
 
 ### Updating
 
-Supported update paths are explicit:
+For the current checkout installer flow:
 
-1) **Source/developer checkout**
 ```bash
 git fetch origin --prune
 git pull --ff-only origin main
-python -m pip install -r requirements.txt
+bash scripts/quick-install.sh
 ```
 
-2) **Managed local install**
-- Linux/macOS:
-  ```bash
-  cd ~/.local/share/dnd-initiative-tracker
-  ./scripts/update-linux.sh
-  ```
-- Windows:
-  ```powershell
-  cd $env:LOCALAPPDATA\DnDInitiativeTracker
-  .\scripts\update-windows.ps1
-  ```
-
-Safety behavior:
-- Managed updater scripts now refuse to run if the checkout remote is not `github.com/jeeves-jeevesenson/init-tracker`.
-- In-app **Help → Check for Updates** may still notify you, but auto-running updater scripts is limited to safe managed installs.
-- For non-managed or non-official remotes (for example forks), use the source/developer checkout update flow.
+Legacy managed installs can still use the platform-specific updater scripts in `scripts/`, but new source checkouts should rerun `bash scripts/quick-install.sh` after pulling changes.
 
 ### Uninstalling
 
-- Linux/macOS:
-  ```bash
-  curl -sSL https://raw.githubusercontent.com/jeeves-jeevesenson/init-tracker/main/scripts/uninstall-linux.sh | bash
-  ```
-- Windows:
-  ```powershell
-  irm https://raw.githubusercontent.com/jeeves-jeevesenson/init-tracker/main/scripts/uninstall-windows.ps1 | iex
-  ```
+For the current checkout installer flow, remove the checkout directory. The virtual environment lives inside it by default as `.venv`.
 
-If manually installed, remove the repository folder and its virtual environment.
+Legacy managed installs can still use the platform-specific uninstall scripts in `scripts/`.
 
 ## Running the tracker
 

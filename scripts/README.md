@@ -1,45 +1,41 @@
 # Installation Scripts
 
-This directory contains automated installation and launcher scripts for different platforms.
+This directory contains setup, update, launcher, and smoke-test scripts.
 
-## Quick Install Scripts (Recommended)
+## Checkout Installer
 
-### quick-install.sh (Linux/macOS)
-One-line installation script that handles everything automatically:
-- Clones the repository to `~/.local/share/dnd-initiative-tracker` (legacy install path retained for backward compatibility)
-- On Linux, runs `install-linux.sh` (including the KDE/desktop entry prompt)
-- Creates a Python virtual environment
-- Installs all dependencies
-- Creates a launcher command at `~/.local/bin/dnd-initiative-tracker`
-- Creates a headless launcher command at `~/.local/bin/dnd-initiative-tracker-headless`
+### quick-install.sh
+Fresh-checkout installer for the current repository:
+- Locates the repository root from the script path
+- Discovers a usable Python interpreter, or uses `PYTHON=/path/to/python`
+- Verifies Python 3.9+ and `venv` support
+- Creates or reuses a local `.venv`
+- Upgrades pip inside the venv
+- Installs `requirements.txt`
+- Prints exact desktop and headless launch commands
 
 **Usage:**
 ```bash
-# Using curl
-curl -sSL https://raw.githubusercontent.com/jeeves-jeevesenson/init-tracker/main/scripts/quick-install.sh | bash
-
-# Using wget
-wget -qO- https://raw.githubusercontent.com/jeeves-jeevesenson/init-tracker/main/scripts/quick-install.sh | bash
-
-# Or if repository is already cloned
-./scripts/quick-install.sh
+bash scripts/quick-install.sh
+bash scripts/quick-install.sh --dry-run
+PYTHON=/opt/python3.12/bin/python3 bash scripts/quick-install.sh
 ```
 
+## Legacy Platform Installers
+
+The older platform-specific installers remain for existing managed installs and shortcut workflows, but the root README now documents `quick-install.sh` as the normal fresh-checkout setup path.
+
 ### quick-install.ps1 (Windows)
-One-line installation script for Windows using PowerShell:
+Legacy one-line installation script for Windows using PowerShell:
 - Clones the repository to `%LOCALAPPDATA%\DnDInitiativeTracker`
 - Creates a Python virtual environment
-- Installs all dependencies
+- Installs dependencies
 - Creates desktop and Start Menu shortcuts
 - Creates both desktop (`launch-dnd-tracker.bat`) and headless (`launch-dnd-headless.bat`) launch scripts
 
 **Usage:**
 ```powershell
-# One-line install
 irm https://raw.githubusercontent.com/jeeves-jeevesenson/init-tracker/main/scripts/quick-install.ps1 | iex
-
-# Or if repository is already cloned
-.\scripts\quick-install.ps1
 ```
 
 ## Update Scripts
@@ -256,7 +252,7 @@ Removes the installed application from Linux systems.
 ## Notes
 
 - Windows scripts use `.bat` extension and are designed for Command Prompt
-- Linux scripts use `.sh` extension and require bash shell
-- All scripts are designed to be run from the repository root directory
+- Shell scripts use `.sh` extension and require bash
+- `quick-install.sh` locates the repository root from its own path; older scripts may still expect the repository or managed install root as the current directory
 - Virtual environments are created automatically by the installers
 - Manual installation is still possible - see main README.md for instructions
