@@ -6,7 +6,7 @@ from unittest import mock
 
 try:
     from fastapi.testclient import TestClient
-except ImportError:  # pragma: no cover - optional dependency in lightweight envs
+except (ImportError, RuntimeError):  # pragma: no cover - optional dependency in lightweight envs
     TestClient = None
 
 import dnd_initative_tracker as tracker_mod
@@ -38,8 +38,8 @@ class LanReconnectRecoveryTests(unittest.TestCase):
         tracker._pc_name_for = lambda cid: "Alice" if int(cid) == 1 else f"cid:{cid}"
         return tracker
 
-    def _build_client_and_lan(self):
-        tracker = self._build_tracker()
+    def _build_client_and_lan(self, tracker=None):
+        tracker = tracker or self._build_tracker()
         lan = tracker_mod.LanController(tracker)
         lan._clients_lock = threading.RLock()
         with mock.patch("threading.Thread.start", return_value=None):
@@ -65,6 +65,7 @@ class LanReconnectRecoveryTests(unittest.TestCase):
             "active_cid": 1,
             "round_num": 2,
             "claims": lan._claims_payload(),
+            "map_state": {},
         }
         return TestClient(lan._fastapi_app), lan
 
@@ -199,6 +200,7 @@ class LanReconnectRecoveryTests(unittest.TestCase):
                 metadata={"prompt_attack": "Sword"},
             )
         }
+        tracker._ensure_player_commands().prompts.replace_prompts(tracker._pending_prompts)
         lan = tracker_mod.LanController(tracker)
         lan._clients_lock = threading.RLock()
         with mock.patch("threading.Thread.start", return_value=None):
@@ -257,7 +259,8 @@ class LanReconnectRecoveryTests(unittest.TestCase):
             expires_at=112.0,
         )
         tracker._pending_prompts = {"prompt-1": prompt}
-        client, _lan = self._build_client_and_lan()
+        tracker._ensure_player_commands().prompts.replace_prompts(tracker._pending_prompts)
+        client, _lan = self._build_client_and_lan(tracker=tracker)
 
         with client.websocket_connect("/ws") as ws:
             self._recv_until_type(ws, "state")

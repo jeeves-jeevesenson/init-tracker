@@ -1908,6 +1908,9 @@ class LanController:
     def app(self, _value: "InitiativeTracker") -> None:
         raise AttributeError("LanController.app is read-only.")
 
+    def _ensure_player_commands(self) -> PlayerCommandService:
+        return self._tracker._ensure_player_commands()
+
     def __setattr__(self, name: str, value: Any) -> None:
         if name == "_tracker" and hasattr(self, "_tracker"):
             if os.getenv("LAN_BIND_DEBUG") == "1":

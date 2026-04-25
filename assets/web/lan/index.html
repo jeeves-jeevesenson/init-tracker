@@ -4156,9 +4156,10 @@ __DAMAGE_TYPE_OPTIONS__
   const isPlanning = normalizedPath === "/planning";
   const wsPath = "/ws";
   const wsUrl = (() => {
+    const pageOrigin = (location.origin && location.origin !== "null") ? location.origin : "";
     const lanBase = (window.LAN_BASE_URL || "").trim();
-    const fallbackOrigin = (location.origin && location.origin !== "null") ? location.origin : "";
-    const baseCandidate = lanBase || fallbackOrigin;
+    const browserServedAppPage = !!pageOrigin && (location.protocol === "http:" || location.protocol === "https:");
+    const baseCandidate = browserServedAppPage ? pageOrigin : (lanBase || pageOrigin);
     if (!baseCandidate){
       const host = location.host || location.hostname;
       if (!host) return "";
