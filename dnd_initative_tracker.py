@@ -36,7 +36,7 @@ import traceback
 import urllib.parse
 import urllib.request
 import urllib.error
-from datetime import datetime
+from datetime import datetime, timezone
 from dataclasses import asdict, dataclass, field, is_dataclass
 from typing import Any, Callable, Dict, Iterable, List, Optional, Set, Tuple
 import copy
@@ -1089,13 +1089,48 @@ class ShopCatalogConflictError(Exception):
 
 def _ensure_logs_dir() -> Path:
     """Create logs/ in the app data directory (best effort)."""
-    base_dir = _app_data_dir()
-    logs = base_dir / "logs"
+    override = str(os.getenv("INITTRACKER_LOG_DIR") or "").strip()
+    if override:
+        try:
+            logs = Path(override).expanduser()
+        except Exception:
+            logs = Path("logs")
+        if not logs.is_absolute():
+            logs = _app_base_dir() / logs
+    elif str(os.getenv("INITTRACKER_WS_DEBUG") or "").strip().lower() in {"1", "true", "yes", "on"}:
+        logs = _app_base_dir() / "logs"
+    else:
+        base_dir = _app_data_dir()
+        logs = base_dir / "logs"
     try:
         logs.mkdir(parents=True, exist_ok=True)
     except Exception:
         pass
     return logs
+
+
+def _env_flag_enabled(name: str) -> bool:
+    raw = str(os.getenv(name) or "").strip().lower()
+    return raw in {"1", "true", "yes", "on"}
+
+
+def _ws_debug_log_dir() -> Path:
+    raw = str(os.getenv("INITTRACKER_LOG_DIR") or "logs").strip() or "logs"
+    try:
+        path = Path(raw).expanduser()
+    except Exception:
+        path = Path("logs")
+    if not path.is_absolute():
+        path = _app_base_dir() / path
+    try:
+        path.mkdir(parents=True, exist_ok=True)
+    except Exception:
+        pass
+    return path
+
+
+def _ws_debug_log_path() -> Path:
+    return _ws_debug_log_dir() / "websocket_debug.jsonl"
 
 
 @lru_cache(maxsize=1)
@@ -1852,6 +1887,9 @@ class LanController:
         self._lan_logger = _make_lan_logger()
         self._lan_log_lock = threading.Lock()
         self._lan_log_buffer = deque(maxlen=2000)
+        self._ws_debug_enabled = _env_flag_enabled("INITTRACKER_WS_DEBUG")
+        self._ws_debug_log_path = _ws_debug_log_path() if self._ws_debug_enabled else None
+        self._ws_debug_log_lock = threading.Lock()
         if os.getenv("LAN_BIND_DEBUG") == "1":
             self._lan_logger.info(
                 "LAN_BIND_DEBUG LanController init tracker=%s id=%s",
@@ -2069,6 +2107,55 @@ class LanController:
             self._client_error_logger.info(payload)
         except Exception:
             self.app._oplog("Failed to record client error log entry.", level="warning")
+
+    def _ws_debug_log(self, event: str, **fields: Any) -> None:
+        if not self._ws_debug_enabled or self._ws_debug_log_path is None:
+            return
+        entry: Dict[str, Any] = {
+            "timestamp": datetime.now(timezone.utc).isoformat(timespec="milliseconds").replace("+00:00", "Z"),
+            "event": str(event or "unknown"),
+        }
+        for key, value in fields.items():
+            if value is None:
+                continue
+            if key == "exception":
+                entry[key] = repr(value)
+            elif isinstance(value, (str, int, float, bool)):
+                text = value
+                if isinstance(text, str) and len(text) > 1000:
+                    text = text[:1000]
+                entry[key] = text
+            else:
+                try:
+                    text = repr(value)
+                except Exception:
+                    text = "<unrepresentable>"
+                entry[key] = text[:1000]
+        try:
+            line = self._json_dumps(entry)
+            with self._ws_debug_log_lock:
+                with self._ws_debug_log_path.open("a", encoding="utf-8") as fh:
+                    fh.write(line + "\n")
+        except Exception:
+            pass
+
+    def _ws_debug_client_fields(self, ws_id: int) -> Dict[str, Any]:
+        with self._clients_lock:
+            meta = dict(self._clients_meta.get(ws_id) or {})
+            claimed_cid = self._claims.get(ws_id)
+        fields: Dict[str, Any] = {
+            "ws_id": ws_id,
+            "host": meta.get("host"),
+            "port": meta.get("port"),
+            "user_agent": meta.get("ua"),
+        }
+        if claimed_cid is not None:
+            fields["claimed_cid"] = int(claimed_cid)
+            try:
+                fields["claimed_character"] = self._tracker._pc_name_for(int(claimed_cid))
+            except Exception:
+                pass
+        return fields
 
     def _append_lan_log(self, message: str, level: str = "error") -> None:
         text = str(message)
@@ -2459,6 +2546,7 @@ class LanController:
             push_key = self.cfg.vapid_public_key
             push_key_value = json.dumps(push_key) if push_key else "undefined"
             html = HTML_INDEX.replace("__PUSH_PUBLIC_KEY__", push_key_value)
+            html = html.replace("__INITTRACKER_WS_DEBUG__", "true" if self._ws_debug_enabled else "false")
             base_url = self.html_injected_base_url()
             html = html.replace("__LAN_BASE_URL__", "undefined" if base_url is None else json.dumps(base_url))
             return HTMLResponse(html)
@@ -2468,6 +2556,7 @@ class LanController:
             push_key = self.cfg.vapid_public_key
             push_key_value = json.dumps(push_key) if push_key else "undefined"
             html = HTML_INDEX.replace("__PUSH_PUBLIC_KEY__", push_key_value)
+            html = html.replace("__INITTRACKER_WS_DEBUG__", "true" if self._ws_debug_enabled else "false")
             base_url = self.html_injected_base_url()
             html = html.replace("__LAN_BASE_URL__", "undefined" if base_url is None else json.dumps(base_url))
             return HTMLResponse(html)
@@ -3180,6 +3269,11 @@ class LanController:
 
         @self._fastapi_app.websocket("/ws")
         async def ws_endpoint(ws: WebSocket):
+            phase = "accepting"
+            ws_id = id(ws)
+            disconnect_code = None
+            disconnect_reason = None
+            loop_exception = None
             try:
                 host = getattr(getattr(ws, "client", None), "host", "?")
                 port = getattr(getattr(ws, "client", None), "port", "")
@@ -3193,12 +3287,21 @@ class LanController:
                 host, port, ua, connected_at = "?", "", "", ""
             if not self._is_host_allowed(host):
                 await ws.accept()
+                self._ws_debug_log(
+                    "rejected",
+                    phase=phase,
+                    ws_id=ws_id,
+                    host=host,
+                    port=port,
+                    user_agent=ua,
+                    disconnect_code=1008,
+                    disconnect_reason="Unauthorized IP.",
+                )
                 await ws.close(code=1008, reason="Unauthorized IP.")
                 self.app._oplog(f"LAN session rejected host={host}:{port} ua={ua}", level="warning")
                 return
 
             await ws.accept()
-            ws_id = id(ws)
             reverse_dns = self._resolve_reverse_dns(host)
 
             with self._clients_lock:
@@ -3213,7 +3316,17 @@ class LanController:
                 }
                 self._client_hosts[ws_id] = host
             self.app._oplog(f"LAN session connected ws_id={ws_id} host={host}:{port} ua={ua}")
+            self._ws_debug_log(
+                "connect",
+                phase=phase,
+                ws_id=ws_id,
+                host=host,
+                port=port,
+                user_agent=ua,
+                reverse_dns=reverse_dns,
+            )
             try:
+                phase = "sending initial state"
                 await self._send_grid_update_async(ws_id, self._cached_snapshot.get("grid", {}))
                 await self._send_terrain_update_async(ws_id, self._terrain_payload())
                 # Send static data first (spell presets, etc.) - only sent once
@@ -3231,6 +3344,7 @@ class LanController:
                     })
                 )
             except (TypeError, ValueError) as exc:
+                loop_exception = exc
                 error_details = traceback.format_exc()
                 self.app._oplog(
                     f"LAN session serialization failed during initial send ws_id={ws_id}: {exc}\n{error_details}",
@@ -3239,19 +3353,44 @@ class LanController:
                 self._log_lan_exception(
                     f"LAN session serialization failed during initial send ws_id={ws_id}", exc
                 )
+                self._ws_debug_log(
+                    "disconnect",
+                    phase=phase,
+                    final_phase="initial-send-return",
+                    ws_id=ws_id,
+                    host=host,
+                    port=port,
+                    user_agent=ua,
+                    disconnect_code=1011,
+                    disconnect_reason="Server error while preparing state.",
+                    exception=exc,
+                )
                 await ws.close(code=1011, reason="Server error while preparing state.")
                 return
             except Exception as exc:
+                loop_exception = exc
                 error_details = traceback.format_exc()
                 self.app._oplog(
                     f"LAN session error during initial send ws_id={ws_id}: {exc}\n{error_details}",
                     level="warning",
                 )
                 self._log_lan_exception(f"LAN session error during initial send ws_id={ws_id}", exc)
+                self._ws_debug_log(
+                    "disconnect",
+                    phase=phase,
+                    final_phase="initial-send-return",
+                    ws_id=ws_id,
+                    host=host,
+                    port=port,
+                    user_agent=ua,
+                    exception=exc,
+                )
                 return
             try:
                 while True:
+                    phase = "waiting receive loop"
                     raw = await ws.receive_text()
+                    phase = "handling client message"
                     try:
                         with self._clients_lock:
                             if ws_id in self._clients_meta:
@@ -3314,6 +3453,19 @@ class LanController:
                                 "reason": "restoring_claim",
                             }
                         )
+                        character_name = self._tracker._pc_name_for(int(cached_claim))
+                        self._ws_debug_log(
+                            "restored_claim",
+                            phase=phase,
+                            ws_id=ws_id,
+                            host=host,
+                            port=port,
+                            user_agent=ua,
+                            claimed_cid=int(cached_claim),
+                            claimed_character=character_name,
+                            client_id=client_id,
+                        )
+                        phase = "sending recovery/state payload"
                         await self._claim_ws_async(ws_id, int(cached_claim), note="Restored claim.")
                         claim_rev = int(self._client_claim_revs.get(client_id, 0))
                         await self._send_async(
@@ -3344,10 +3496,13 @@ class LanController:
                         preset = self._host_presets.get(host_key)
                         await ws.send_text(self._json_dumps({"type": "preset", "preset": preset}))
                     elif typ == "grid_request":
+                        phase = "sending recovery/state payload"
                         await self._send_grid_update_async(ws_id, self._cached_snapshot.get("grid", {}))
                     elif typ == "terrain_request":
+                        phase = "sending recovery/state payload"
                         await self._send_terrain_update_async(ws_id, self._terrain_payload())
                     elif typ == "state_request":
+                        phase = "sending recovery/state payload"
                         await self._send_full_state_async(ws_id)
                     elif typ == "grid_ack":
                         ver = msg.get("version")
@@ -3546,12 +3701,16 @@ class LanController:
                     elif typ == "toast":
                         # Client wants a toast? ignore
                         pass
-            except WebSocketDisconnect:
+            except WebSocketDisconnect as exc:
+                disconnect_code = getattr(exc, "code", None)
+                disconnect_reason = getattr(exc, "reason", None)
                 pass
             except Exception as exc:
+                loop_exception = exc
                 self.app._oplog(f"LAN session error during loop ws_id={ws_id}: {exc}", level="warning")
                 self._log_lan_exception(f"LAN session error during loop ws_id={ws_id}", exc)
             finally:
+                final_phase = "cleanup/finally"
                 with self._clients_lock:
                     self._clients.pop(ws_id, None)
                     self._clients_meta.pop(ws_id, None)
@@ -3574,7 +3733,22 @@ class LanController:
                     name = self._tracker._pc_name_for(int(old))
                     self.app._oplog(f"LAN session disconnected ws_id={ws_id} (claimed {name})")
                 else:
+                    name = None
                     self.app._oplog(f"LAN session disconnected ws_id={ws_id}")
+                self._ws_debug_log(
+                    "disconnect",
+                    phase=phase,
+                    final_phase=final_phase,
+                    ws_id=ws_id,
+                    host=host,
+                    port=port,
+                    user_agent=ua,
+                    claimed_cid=int(old) if old is not None else None,
+                    claimed_character=name,
+                    disconnect_code=disconnect_code,
+                    disconnect_reason=disconnect_reason,
+                    exception=loop_exception,
+                )
 
         # ── DM Console routes ──────────────────────────────────────────────
         # These routes form the canonical backend API for the DM web console.
@@ -6996,6 +7170,13 @@ class LanController:
         except Exception as exc:
             with self._clients_lock:
                 self._grid_pending.pop(ws_id, None)
+            self._ws_debug_log(
+                "send_failed",
+                phase="sending grid payload",
+                payload_type="grid_update",
+                exception=exc,
+                **self._ws_debug_client_fields(ws_id),
+            )
             self._log_lan_exception(f"LAN grid update send failed ws_id={ws_id}", exc)
 
     async def _send_terrain_update_async(self, ws_id: int, terrain: Dict[str, Any]) -> None:
@@ -7011,6 +7192,13 @@ class LanController:
         except Exception as exc:
             with self._clients_lock:
                 self._terrain_pending.pop(ws_id, None)
+            self._ws_debug_log(
+                "send_failed",
+                phase="sending terrain payload",
+                payload_type="terrain_update",
+                exception=exc,
+                **self._ws_debug_client_fields(ws_id),
+            )
             self._log_lan_exception(f"LAN terrain update send failed ws_id={ws_id}", exc)
 
     def _resend_grid_updates(self) -> None:
@@ -7157,6 +7345,13 @@ class LanController:
         try:
             await ws.send_text(self._json_dumps(payload))
         except Exception as exc:
+            self._ws_debug_log(
+                "send_failed",
+                phase="sending websocket payload",
+                payload_type=str(payload.get("type") or ""),
+                exception=exc,
+                **self._ws_debug_client_fields(ws_id),
+            )
             self._log_lan_exception(f"LAN send failed ws_id={ws_id}", exc)
 
     async def _send_full_state_async(self, ws_id: int) -> None:

@@ -12,6 +12,7 @@
   <title>InitTracker LAN</title>
   <script>window.PUSH_PUBLIC_KEY=__PUSH_PUBLIC_KEY__;</script>
   <script>window.LAN_BASE_URL=__LAN_BASE_URL__;</script>
+  <script>window.INITTRACKER_WS_DEBUG=__INITTRACKER_WS_DEBUG__;</script>
   <style>
     :root{
       --bg:#0b0d10;
@@ -4116,6 +4117,32 @@ __DAMAGE_TYPE_OPTIONS__
     } catch (err) {
       console.error("Failed to report client error:", err);
     }
+  };
+  const wsDebugEnabled = (() => {
+    if (window.INITTRACKER_WS_DEBUG === true) return true;
+    try {
+      const params = new URLSearchParams(window.location.search || "");
+      return params.get("ws_debug") === "1" || params.get("v") === "ws-debug" || params.has("ws-debug");
+    } catch (_) {
+      return false;
+    }
+  })();
+  const logWsDebug = (eventName, details = {}) => {
+    if (!wsDebugEnabled) return;
+    const payload = {
+      timestamp: new Date().toISOString(),
+      userAgent: navigator.userAgent,
+      url: location.href,
+      message: `ws_debug:${eventName}`,
+      stack: JSON.stringify({event: eventName, ...details}),
+    };
+    try {
+      fetch("/api/client-log", {
+        method: "POST",
+        headers: {"Content-Type": "application/json"},
+        body: JSON.stringify(payload),
+      }).catch(() => {});
+    } catch (_) {}
   };
 
   window.onerror = (message, source, line, column, error) => {
@@ -17033,6 +17060,20 @@ __DAMAGE_TYPE_OPTIONS__
     }
     socket.addEventListener("open", () => {
       if (!isCurrentSocket(socket, socketGeneration)) return;
+      logWsDebug("onopen", {
+        wsGeneration: socketGeneration,
+        websocketUrl: wsUrl,
+        reconnectTimerPending: !!reconnectTimer,
+        recoveryTimerPending: !!(reconnectFallbackTimer || reconnectEscalationTimer),
+        reconnecting,
+        reconnectRecoveryPending,
+        reconnectRecoveryStateSeen,
+        reconnectRecoveryClaimSeen,
+        reconnectRecoveryGridSeen,
+        reconnectFallbackRequested,
+        reconnectEscalated,
+        reconnectCycle,
+      });
       clearReconnectTimer();
       clearReconnectRecoveryTimers();
       reconnecting = false;
@@ -17048,6 +17089,25 @@ __DAMAGE_TYPE_OPTIONS__
     });
     socket.addEventListener("close", (ev) => {
       if (!isCurrentSocket(socket, socketGeneration)) return;
+      const closeDebug = {
+        wsGeneration: socketGeneration,
+        websocketUrl: wsUrl,
+        code: ev?.code ?? null,
+        reason: ev?.reason ?? "",
+        wasClean: ev?.wasClean ?? null,
+        intentionalClose: !!reconnecting || (ev?.code === 4001),
+        reconnectTimerPending: !!reconnectTimer,
+        recoveryTimerPending: !!(reconnectFallbackTimer || reconnectEscalationTimer),
+        reconnecting,
+        reconnectRecoveryPending,
+        reconnectRecoveryStateSeen,
+        reconnectRecoveryClaimSeen,
+        reconnectRecoveryGridSeen,
+        reconnectFallbackRequested,
+        reconnectEscalated,
+        reconnectCycle,
+      };
+      logWsDebug("onclose", closeDebug);
       ws = null;
       battleLogSubscribed = false;
       reconnectRecoveryPending = false;
@@ -17069,6 +17129,15 @@ __DAMAGE_TYPE_OPTIONS__
     });
     socket.addEventListener("error", () => {
       if (!isCurrentSocket(socket, socketGeneration)) return;
+      logWsDebug("onerror", {
+        wsGeneration: socketGeneration,
+        websocketUrl: wsUrl,
+        reconnectTimerPending: !!reconnectTimer,
+        recoveryTimerPending: !!(reconnectFallbackTimer || reconnectEscalationTimer),
+        reconnecting,
+        reconnectRecoveryPending,
+        reconnectCycle,
+      });
     });
     socket.addEventListener("message", (ev) => {
       if (!isCurrentSocket(socket, socketGeneration)) return;

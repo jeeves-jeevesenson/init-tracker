@@ -18,6 +18,9 @@ DNDInitiativeTracker.exe
 dnd_initative_tracker_history.log
 old logs/
 logs/*.log
+logs/*.jsonl
+logs/*.txt
+!logs/.gitkeep
 logs/lan_account_links.json
 logs/monster_index.json
 

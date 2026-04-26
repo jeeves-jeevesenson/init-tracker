@@ -198,6 +198,14 @@ Headless/browser-first host (no Tk window):
 python serve_headless.py [--host 0.0.0.0] [--port 8787] [--no-auto-lan]
 ```
 
+LAN/WebSocket diagnostics are opt-in. To capture close-cause evidence for a reconnect/debugging session:
+
+```bash
+INITTRACKER_WS_DEBUG=1 python serve_headless.py --host 0.0.0.0 --port 8787
+```
+
+Debug output is written under `logs/` by default (`INITTRACKER_LOG_DIR` can override it), and generated log files in that directory are ignored by git.
+
 Mode boundaries:
 - **Desktop compatibility mode** keeps Tkinter menus/dialogs and the historical shell.
 - **Headless/browser-first mode** runs backend + DM/LAN web surfaces without a Tk window.

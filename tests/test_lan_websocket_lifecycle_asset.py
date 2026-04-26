@@ -40,6 +40,7 @@ class LanWebsocketLifecycleAssetTests(unittest.TestCase):
             const sent = [];
             const connStates = [];
             const waitingUpdates = [];
+            const wsDebugEvents = [];
             let nextTimerId = 1;
             const timers = new Map();
             global.setTimeout = (fn, delay) => {{
@@ -85,7 +86,7 @@ class LanWebsocketLifecycleAssetTests(unittest.TestCase):
               close(code, reason) {{
                 this.closed.push({{code, reason}});
                 this.readyState = FakeWebSocket.CLOSED;
-                this.listeners.close?.({{code}});
+                this.listeners.close?.({{code, reason, wasClean: code === 1000}});
               }}
             }}
             global.WebSocket = FakeWebSocket;
@@ -124,6 +125,9 @@ class LanWebsocketLifecycleAssetTests(unittest.TestCase):
               ws.send(JSON.stringify(msg));
             }}
             function refreshMapViewLogPolling() {{}}
+            function logWsDebug(eventName, details) {{
+              wsDebugEvents.push({{eventName, details}});
+            }}
 
             {lifecycle_helpers}
             {connect_fn}
@@ -160,6 +164,14 @@ class LanWebsocketLifecycleAssetTests(unittest.TestCase):
             second.open();
             assert.strictEqual(reconnectTimer, null, "no reconnect timer should be pending while active socket is open");
             second.close(1006, "network");
+            const closeDebug = wsDebugEvents.find((entry) => entry.eventName === "onclose" && entry.details.reason === "network");
+            assert(closeDebug, "active close should emit websocket debug lifecycle payload");
+            assert.strictEqual(closeDebug.details.wsGeneration, 2, "close debug payload must include wsGeneration");
+            assert.strictEqual(closeDebug.details.code, 1006, "close debug payload must include close code");
+            assert.strictEqual(closeDebug.details.reason, "network", "close debug payload must include close reason");
+            assert.strictEqual(closeDebug.details.wasClean, false, "close debug payload must include wasClean");
+            assert.strictEqual(closeDebug.details.websocketUrl, wsUrl, "close debug payload must include websocket URL");
+            assert.strictEqual(closeDebug.details.intentionalClose, false, "network close should not be marked intentional");
             const activeReconnectTimer = reconnectTimer;
             assert(activeReconnectTimer && timers.has(activeReconnectTimer), "real active close should schedule one reconnect");
             second.close(1006, "duplicate-close");
