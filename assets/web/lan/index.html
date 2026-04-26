@@ -5109,6 +5109,7 @@ __DAMAGE_TYPE_OPTIONS__
   const ctx = canvas.getContext("2d");
 
   let ws = null;
+  let wsGeneration = 0;
   let state = null;
   let planningSnapshotLocked = false;
   let planningChatOpen = false;
@@ -5492,9 +5493,27 @@ __DAMAGE_TYPE_OPTIONS__
     setConnPopover(false);
   }
 
-  function scheduleReconnect(delayMs){
+  function isSocketConnectingOrOpen(socket){
+    return !!socket && (
+      socket.readyState === WebSocket.CONNECTING
+      || socket.readyState === WebSocket.OPEN
+    );
+  }
+
+  function isCurrentSocket(socket, generation){
+    return socket === ws && generation === wsGeneration;
+  }
+
+  function clearReconnectTimer(){
     if (reconnectTimer){
       clearTimeout(reconnectTimer);
+      reconnectTimer = null;
+    }
+  }
+
+  function scheduleReconnect(delayMs){
+    if (reconnectTimer){
+      return;
     }
     reconnectTimer = setTimeout(() => {
       reconnectTimer = null;
@@ -5552,7 +5571,7 @@ __DAMAGE_TYPE_OPTIONS__
       if (!reconnectRecoveryPending || cycle !== reconnectCycle) return;
       if (reconnectFallbackRequested) return;
       reconnectFallbackRequested = true;
-      if (ws && ws.readyState === WebSocket.OPEN){
+      if (isSocketConnectingOrOpen(ws) && ws.readyState === WebSocket.OPEN){
         send({type:"state_request"});
         send({type:"grid_request"});
         send({type:"terrain_request"});
@@ -5577,7 +5596,7 @@ __DAMAGE_TYPE_OPTIONS__
     reconnecting = true;
     setConn(false, "Reconnecting…");
     closeConnPopover();
-    if (ws && ws.readyState === 1){
+    if (ws && ws.readyState !== WebSocket.CLOSED){
       ws.close(4001, "reconnect");
     } else {
       scheduleReconnect(200);
@@ -16991,15 +17010,31 @@ __DAMAGE_TYPE_OPTIONS__
       scheduleReconnect(1000);
       return;
     }
+    if (isSocketConnectingOrOpen(ws)){
+      return;
+    }
+    if (ws && ws.readyState !== WebSocket.CLOSED){
+      try { ws.close(4001, "replaced"); } catch (_) {}
+    }
+    const socketGeneration = wsGeneration + 1;
+    wsGeneration = socketGeneration;
+    let socket = null;
     try {
-      ws = new WebSocket(wsUrl);
+      socket = new WebSocket(wsUrl);
+      ws = socket;
     } catch (err){
       console.warn("WebSocket connect failed.", err);
+      if (socketGeneration === wsGeneration){
+        ws = null;
+      }
       setConn(false, "Disconnected");
       scheduleReconnect(1000);
       return;
     }
-    ws.addEventListener("open", () => {
+    socket.addEventListener("open", () => {
+      if (!isCurrentSocket(socket, socketGeneration)) return;
+      clearReconnectTimer();
+      clearReconnectRecoveryTimers();
       reconnecting = false;
       beginReconnectRecoveryCycle();
       setConn(false, "Recovering…");
@@ -17011,7 +17046,9 @@ __DAMAGE_TYPE_OPTIONS__
       send({type:"terrain_request"});
       refreshMapViewLogPolling();
     });
-    ws.addEventListener("close", (ev) => {
+    socket.addEventListener("close", (ev) => {
+      if (!isCurrentSocket(socket, socketGeneration)) return;
+      ws = null;
       battleLogSubscribed = false;
       reconnectRecoveryPending = false;
       clearReconnectRecoveryTimers();
@@ -17030,7 +17067,11 @@ __DAMAGE_TYPE_OPTIONS__
         scheduleReconnect(1000);
       }
     });
-    ws.addEventListener("message", (ev) => {
+    socket.addEventListener("error", () => {
+      if (!isCurrentSocket(socket, socketGeneration)) return;
+    });
+    socket.addEventListener("message", (ev) => {
+      if (!isCurrentSocket(socket, socketGeneration)) return;
       let msg = null;
       try { msg = JSON.parse(ev.data); } catch(e){ return; }
       if (isPlanning && planningSnapshotLocked && planningFreezeTypes.has(msg.type)){
