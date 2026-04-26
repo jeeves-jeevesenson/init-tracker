@@ -122,7 +122,8 @@ class LanWebsocketLifecycleAssetTests(unittest.TestCase):
             function setConn(ok, text) {{ connStates.push([ok, text]); }}
             function closeConnPopover() {{}}
             function updateWaitingOverlay() {{ waitingUpdates.push(reconnectRecoveryPending); }}
-            function gridReady() {{ return false; }}
+            let gridIsReady = false;
+            function gridReady() {{ return gridIsReady; }}
             function send(msg) {{
               if (!ws || ws.readyState !== WebSocket.OPEN) return;
               ws.send(JSON.stringify(msg));
@@ -208,13 +209,38 @@ class LanWebsocketLifecycleAssetTests(unittest.TestCase):
             assert.strictEqual(
               FakeWebSocket.instances.length,
               socketsBeforeRecovery,
-              "recovery escalation soft reconnect must close the active socket before reconnecting",
+              "recovery escalation must not create a socket while the active socket is open",
             );
-            assert.strictEqual(third.closed.length, 1, "soft reconnect should close the active socket once");
+            assert.strictEqual(third.closed.length, 0, "recovery escalation must not close a healthy active socket");
+            const escalationDebug = wsDebugEvents.find((entry) => entry.eventName === "recovery_escalation_action");
+            assert(escalationDebug, "recovery escalation action must be debug logged");
+            assert.strictEqual(
+              escalationDebug.details.action,
+              "request_missing_baseline",
+              "open-socket recovery escalation should request missing baseline data instead of reconnecting",
+            );
+            reconnectRecoveryStateSeen = true;
+            reconnectRecoveryClaimSeen = true;
+            reconnectRecoveryGridSeen = true;
+            claimStateSeen = true;
+            lastPcList = [{{cid: 1, name: "Fred"}}];
+            gridIsReady = true;
+            updateClaimDataReady();
+            maybeFinishReconnectRecovery();
+            assert.strictEqual(reconnectRecoveryPending, false, "healthy baseline must finish recovery");
+            assert.strictEqual(reconnectFallbackRequested, false, "healthy baseline must clear fallback state");
+            assert.strictEqual(reconnectEscalated, false, "healthy baseline must clear escalation state");
+            assert.strictEqual(reconnectFallbackTimer, null, "healthy baseline must clear fallback timer");
+            assert.strictEqual(reconnectEscalationTimer, null, "healthy baseline must clear escalation timer");
+            const recoveryCancelDebug = wsDebugEvents.find(
+              (entry) => entry.eventName === "recovery_cancelled"
+                && entry.details.reason === "healthy_baseline_received",
+            );
+            assert(recoveryCancelDebug, "healthy recovery completion must be debug logged");
             const reconnectsAfterEscalation = timers.size;
             scheduleReconnect(200);
             scheduleReconnect(200);
-            assert.strictEqual(timers.size, reconnectsAfterEscalation, "only one reconnect timer may be pending");
+            assert.strictEqual(timers.size, reconnectsAfterEscalation + 1, "only one reconnect timer may be pending");
             """
         )
 
@@ -294,6 +320,16 @@ class LanWebsocketLifecycleAssetTests(unittest.TestCase):
             timeout=5,
         )
         self.assertEqual(result.returncode, 0, result.stderr)
+
+    def test_recovery_escalation_does_not_reload_or_rebootstrap_page(self):
+        html = LAN_INDEX.read_text(encoding="utf-8")
+        begin_recovery = _extract_function(html, "beginReconnectRecoveryCycle")
+
+        self.assertIn('requestReconnectRecoveryBaseline("escalation")', begin_recovery)
+        self.assertNotIn("softReconnect(", begin_recovery)
+        self.assertNotIn("location.href", begin_recovery)
+        self.assertNotIn("location.reload", begin_recovery)
+        self.assertNotIn("location.replace", begin_recovery)
 
 
 if __name__ == "__main__":

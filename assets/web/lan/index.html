@@ -5739,11 +5739,63 @@ __DAMAGE_TYPE_OPTIONS__
       && gridReady();
   }
 
+  function reconnectRecoveryDebugState(extra){
+    return {
+      wsGeneration,
+      websocketUrl: wsUrl,
+      socketReadyState: ws ? ws.readyState : null,
+      reconnecting,
+      reconnectRecoveryPending,
+      reconnectRecoveryStateSeen,
+      reconnectRecoveryClaimSeen,
+      reconnectRecoveryGridSeen,
+      reconnectFallbackRequested,
+      reconnectEscalated,
+      reconnectCycle,
+      recoveryTimerPending: !!(reconnectFallbackTimer || reconnectEscalationTimer),
+      reconnectTimerPending: !!reconnectTimer,
+      claimDataReady,
+      gridReady: gridReady(),
+      ...(extra || {}),
+    };
+  }
+
+  function requestReconnectRecoveryBaseline(reason){
+    if (!(isSocketConnectingOrOpen(ws) && ws.readyState === WebSocket.OPEN)){
+      return false;
+    }
+    logWsDebug("recovery_baseline_requested", reconnectRecoveryDebugState({reason}));
+    send({type:"state_request"});
+    send({type:"grid_request"});
+    send({type:"terrain_request"});
+    return true;
+  }
+
+  function resetReconnectRecoveryState(reason){
+    const wasRecovering = reconnectRecoveryPending
+      || reconnectFallbackRequested
+      || reconnectEscalated
+      || reconnectFallbackTimer
+      || reconnectEscalationTimer;
+    reconnectRecoveryPending = false;
+    reconnectFallbackRequested = false;
+    reconnectEscalated = false;
+    if (wasRecovering){
+      reconnectCycle += 1;
+    }
+    reconnectRecoveryStateSeen = false;
+    reconnectRecoveryClaimSeen = false;
+    reconnectRecoveryGridSeen = false;
+    clearReconnectRecoveryTimers();
+    if (wasRecovering){
+      logWsDebug("recovery_cancelled", reconnectRecoveryDebugState({reason}));
+    }
+  }
+
   function maybeFinishReconnectRecovery(){
     if (!reconnectRecoveryPending) return;
     if (!reconnectRecoveryReady()) return;
-    reconnectRecoveryPending = false;
-    clearReconnectRecoveryTimers();
+    resetReconnectRecoveryState("healthy_baseline_received");
     setConn(true, "Connected");
     updateWaitingOverlay();
   }
@@ -5761,22 +5813,31 @@ __DAMAGE_TYPE_OPTIONS__
     updateWaitingOverlay();
     clearReconnectRecoveryTimers();
     const cycle = reconnectCycle;
+    logWsDebug("recovery_cycle_started", reconnectRecoveryDebugState({cycle}));
     reconnectFallbackTimer = setTimeout(() => {
       reconnectFallbackTimer = null;
       if (!reconnectRecoveryPending || cycle !== reconnectCycle) return;
       if (reconnectFallbackRequested) return;
       reconnectFallbackRequested = true;
-      if (isSocketConnectingOrOpen(ws) && ws.readyState === WebSocket.OPEN){
-        send({type:"state_request"});
-        send({type:"grid_request"});
-        send({type:"terrain_request"});
-      }
+      logWsDebug("recovery_fallback_started", reconnectRecoveryDebugState({cycle}));
+      requestReconnectRecoveryBaseline("fallback");
       reconnectEscalationTimer = setTimeout(() => {
         reconnectEscalationTimer = null;
         if (!reconnectRecoveryPending || cycle !== reconnectCycle) return;
         if (reconnectEscalated) return;
         reconnectEscalated = true;
-        softReconnect();
+        logWsDebug("recovery_escalation_started", reconnectRecoveryDebugState({cycle}));
+        if (requestReconnectRecoveryBaseline("escalation")){
+          logWsDebug("recovery_escalation_action", reconnectRecoveryDebugState({
+            cycle,
+            action: "request_missing_baseline",
+          }));
+          return;
+        }
+        logWsDebug("recovery_escalation_action", reconnectRecoveryDebugState({
+          cycle,
+          action: "wait_for_socket_close",
+        }));
       }, reconnectEscalationDelayMs);
     }, reconnectFallbackDelayMs);
   }
@@ -17278,8 +17339,7 @@ __DAMAGE_TYPE_OPTIONS__
       logWsDebug("onclose", closeDebug);
       ws = null;
       battleLogSubscribed = false;
-      reconnectRecoveryPending = false;
-      clearReconnectRecoveryTimers();
+      resetReconnectRecoveryState("socket_closed");
       updateWaitingOverlay();
       const wasReconnect = reconnecting;
       reconnecting = false;
