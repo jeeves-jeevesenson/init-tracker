@@ -2101,6 +2101,18 @@ class LanController:
             self._client_log_state[host] = (window_start, count)
             return True
 
+    def _is_ws_debug_client_message(self, message: Any) -> bool:
+        if not self._ws_debug_enabled:
+            return False
+        text = str(message or "").strip()
+        if not text:
+            return False
+        return (
+            text == "LAN client initialized"
+            or text.startswith("ws_debug:")
+            or text.startswith("page_debug:")
+        )
+
     def _log_client_error(self, entry: Dict[str, Any]) -> None:
         try:
             payload = self._json_dumps(entry)
@@ -2586,7 +2598,11 @@ class LanController:
 
         @self._fastapi_app.get("/sw.js")
         async def service_worker():
-            return Response(SERVICE_WORKER_JS, media_type="application/javascript")
+            return Response(
+                SERVICE_WORKER_JS,
+                media_type="application/javascript",
+                headers={"Cache-Control": "no-store"},
+            )
 
         @self._fastapi_app.get("/rules.pdf")
         async def rules_pdf(request: Request):
@@ -2766,7 +2782,9 @@ class LanController:
             host = getattr(getattr(request, "client", None), "host", "")
             if not self._is_host_allowed(host):
                 raise HTTPException(status_code=403, detail="Unauthorized host.")
-            if not self._allow_client_log(host):
+            raw_message = payload.get("message")
+            debug_client_message = self._is_ws_debug_client_message(raw_message)
+            if not debug_client_message and not self._allow_client_log(host):
                 return {"ok": True, "logged": False, "rate_limited": True}
             missing = [
                 field
@@ -2811,6 +2829,15 @@ class LanController:
                 "received_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
             }
             self._log_client_error(entry)
+            if debug_client_message:
+                self._ws_debug_log(
+                    "client_lifecycle",
+                    host=host,
+                    client_message=message,
+                    page_url=url,
+                    user_agent=user_agent,
+                    details=stack,
+                )
             return {"ok": True, "logged": True}
 
         @self._fastapi_app.get("/api/spells")

@@ -134,6 +134,42 @@ class LanWsDebugLoggingTests(unittest.TestCase):
             self.assertEqual(response.status_code, 200)
             self.assertIn("window.INITTRACKER_WS_DEBUG=true;", response.text)
 
+    def test_debug_client_logs_bypass_rate_limit_and_reach_client_errors_log(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            env = {"INITTRACKER_WS_DEBUG": "1", "INITTRACKER_LOG_DIR": tmpdir}
+            with mock.patch.dict("os.environ", env, clear=False):
+                lan = self._build_lan()
+                client = TestClient(lan._fastapi_app)
+                for idx in range(lan._client_log_max + 5):
+                    response = client.post(
+                        "/api/client-log",
+                        json={
+                            "timestamp": "2026-04-25T22:00:00.000Z",
+                            "userAgent": "test-agent",
+                            "url": "http://127.0.0.1:8787/?v=reload-loop",
+                            "message": f"ws_debug:onclose_{idx}",
+                            "stack": "{\"code\":1001}",
+                        },
+                    )
+                    self.assertEqual(response.status_code, 200)
+                    self.assertTrue(response.json().get("logged"))
+
+            log_path = Path(tmpdir) / "client_errors.log"
+            self.assertTrue(log_path.exists())
+            log_text = log_path.read_text(encoding="utf-8")
+            self.assertIn("ws_debug:onclose_0", log_text)
+            self.assertIn(f"ws_debug:onclose_{lan._client_log_max + 4}", log_text)
+
+    def test_service_worker_route_is_no_store(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            env = {"INITTRACKER_WS_DEBUG": "1", "INITTRACKER_LOG_DIR": tmpdir}
+            with mock.patch.dict("os.environ", env, clear=False):
+                lan = self._build_lan()
+                client = TestClient(lan._fastapi_app)
+                response = client.get("/sw.js")
+            self.assertEqual(response.status_code, 200)
+            self.assertEqual(response.headers.get("cache-control"), "no-store")
+
 
 if __name__ == "__main__":
     unittest.main()

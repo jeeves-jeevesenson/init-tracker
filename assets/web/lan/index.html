@@ -4106,18 +4106,6 @@ __DAMAGE_TYPE_OPTIONS__
 
 <script>
 (() => {
-  const logClientError = (payload) => {
-    try {
-      console.error("Client error:", payload);
-      fetch("/api/client-log", {
-        method: "POST",
-        headers: {"Content-Type": "application/json"},
-        body: JSON.stringify(payload),
-      }).catch(() => {});
-    } catch (err) {
-      console.error("Failed to report client error:", err);
-    }
-  };
   const wsDebugEnabled = (() => {
     if (window.INITTRACKER_WS_DEBUG === true) return true;
     try {
@@ -4127,7 +4115,37 @@ __DAMAGE_TYPE_OPTIONS__
       return false;
     }
   })();
-  const logWsDebug = (eventName, details = {}) => {
+  const emitClientLog = (payload, {preferBeacon = false} = {}) => {
+    try {
+      const body = JSON.stringify(payload);
+      if (preferBeacon && navigator.sendBeacon){
+        try {
+          const blob = new Blob([body], {type: "application/json"});
+          if (navigator.sendBeacon("/api/client-log", blob)){
+            return true;
+          }
+        } catch (_) {}
+      }
+      fetch("/api/client-log", {
+        method: "POST",
+        headers: {"Content-Type": "application/json"},
+        body,
+        keepalive: !!preferBeacon,
+      }).catch(() => {});
+      return true;
+    } catch (err) {
+      return false;
+    }
+  };
+  const logClientError = (payload) => {
+    try {
+      console.error("Client error:", payload);
+      emitClientLog(payload);
+    } catch (err) {
+      console.error("Failed to report client error:", err);
+    }
+  };
+  const logWsDebug = (eventName, details = {}, options = {}) => {
     if (!wsDebugEnabled) return;
     const payload = {
       timestamp: new Date().toISOString(),
@@ -4136,13 +4154,13 @@ __DAMAGE_TYPE_OPTIONS__
       message: `ws_debug:${eventName}`,
       stack: JSON.stringify({event: eventName, ...details}),
     };
-    try {
-      fetch("/api/client-log", {
-        method: "POST",
-        headers: {"Content-Type": "application/json"},
-        body: JSON.stringify(payload),
-      }).catch(() => {});
-    } catch (_) {}
+    emitClientLog(payload, options);
+  };
+  window.__INITTRACKER_LAN_DEBUG_HELPERS = {
+    wsDebugEnabled,
+    emitClientLog,
+    logClientError,
+    logWsDebug,
   };
 
   window.onerror = (message, source, line, column, error) => {
@@ -4151,6 +4169,7 @@ __DAMAGE_TYPE_OPTIONS__
       timestamp: new Date().toISOString(),
       userAgent: navigator.userAgent,
       url: location.href,
+      message: message ? String(message) : "Window error",
       stack: stack || `${message} at ${source}:${line}:${column}`,
     });
   };
@@ -4163,17 +4182,67 @@ __DAMAGE_TYPE_OPTIONS__
       timestamp: new Date().toISOString(),
       userAgent: navigator.userAgent,
       url: location.href,
+      message: message || "Unhandled promise rejection",
       stack: stack || message || "Unhandled promise rejection",
     });
   };
 })();
 
 (() => {
+  const lanDebug = window.__INITTRACKER_LAN_DEBUG_HELPERS || {};
+  const wsDebugEnabled = lanDebug.wsDebugEnabled === true;
+  const emitClientLog = typeof lanDebug.emitClientLog === "function" ? lanDebug.emitClientLog : (() => false);
+  const logWsDebugBase = typeof lanDebug.logWsDebug === "function" ? lanDebug.logWsDebug : (() => {});
   document.addEventListener("contextmenu", (e) => e.preventDefault());
   const canVibrate = "vibrate" in navigator;
   function vibrate(pattern){
     if (!canVibrate) return false;
     return navigator.vibrate(pattern);
+  }
+
+  function createPageInstanceId(){
+    const existing = window.__INITTRACKER_LAN_PAGE_INSTANCE_ID;
+    if (existing){
+      return String(existing);
+    }
+    let fresh = "";
+    try {
+      if (window.crypto && typeof window.crypto.randomUUID === "function"){
+        fresh = window.crypto.randomUUID();
+      }
+    } catch (_) {}
+    if (!fresh){
+      fresh = `lan_page_${Date.now().toString(36)}_${Math.random().toString(36).slice(2)}`;
+    }
+    window.__INITTRACKER_LAN_PAGE_INSTANCE_ID = fresh;
+    return fresh;
+  }
+
+  function claimLanBootstrap(pageInstanceId, logFn){
+    const active = window.__INITTRACKER_LAN_BOOTSTRAP_STATE;
+    if (active && active.active){
+      if (typeof logFn === "function"){
+        logFn("duplicate_bootstrap", {
+          pageInstanceId,
+          existingPageInstanceId: String(active.pageInstanceId || ""),
+        });
+      }
+      return false;
+    }
+    window.__INITTRACKER_LAN_BOOTSTRAP_STATE = {
+      active: true,
+      pageInstanceId,
+      startedAt: Date.now(),
+    };
+    if (typeof logFn === "function"){
+      logFn("lan_page_init", {pageInstanceId});
+    }
+    return true;
+  }
+
+  function isLanShellPath(pathname){
+    const normalized = String(pathname || "").replace(/\/+$/, "") || "/";
+    return normalized === "/" || normalized === "/planning";
   }
 
   const qs = new URLSearchParams(location.search);
@@ -4203,6 +4272,55 @@ __DAMAGE_TYPE_OPTIONS__
       return "";
     }
   })();
+  const pageInstanceId = createPageInstanceId();
+  let lastPageLifecycleEvent = "bootstrap_pending";
+  const logPageDebug = (eventName, details = {}, options = {}) => {
+    if (!wsDebugEnabled) return;
+    lastPageLifecycleEvent = String(eventName || lastPageLifecycleEvent || "");
+    emitClientLog(
+      {
+        timestamp: new Date().toISOString(),
+        userAgent: navigator.userAgent,
+        url: location.href,
+        message: `page_debug:${eventName}`,
+        stack: JSON.stringify({
+          event: eventName,
+          pageInstanceId,
+          pageVisibility: document.visibilityState,
+          ...details,
+        }),
+      },
+      options,
+    );
+  };
+  const logWsDebug = (eventName, details = {}, options = {}) => {
+    logWsDebugBase(
+      eventName,
+      {
+        pageInstanceId,
+        lastPageLifecycleEvent,
+        pageVisibility: document.visibilityState,
+        ...details,
+      },
+      options,
+    );
+  };
+  if (!claimLanBootstrap(pageInstanceId, logPageDebug)){
+    return;
+  }
+  if (document.documentElement){
+    document.documentElement.dataset.lanBoot = "true";
+    document.documentElement.dataset.lanPageInstanceId = pageInstanceId;
+  }
+  window.addEventListener("pageshow", (event) => {
+    logPageDebug("pageshow", {persisted: !!event.persisted});
+  });
+  window.addEventListener("pagehide", (event) => {
+    logPageDebug("pagehide", {persisted: !!event.persisted}, {preferBeacon: true});
+  });
+  window.addEventListener("beforeunload", () => {
+    logPageDebug("beforeunload", {}, {preferBeacon: true});
+  });
   const pushPublicKey = (window.PUSH_PUBLIC_KEY || "").trim();
   const turnAlertStorageKey = "inittracker_turnAlertSubscription";
   const turnAlertHideKey = "inittracker_hideTurnAlerts";
@@ -4429,19 +4547,54 @@ __DAMAGE_TYPE_OPTIONS__
     return subscription;
   }
 
-  function routeDeepLink(url){
+  function shouldSuppressDeepLinkNavigation(target){
+    if (!target || typeof target.href !== "string"){
+      return false;
+    }
+    if (target.href === location.href){
+      return true;
+    }
+    if (target.origin !== location.origin){
+      return false;
+    }
+    const targetPath = String(target.pathname || "").replace(/\/+$/, "") || "/";
+    return isLanShellPath(targetPath) && isLanShellPath(normalizedPath);
+  }
+
+  function routeDeepLink(url, source = "app"){
     if (!url) return;
     try {
       const target = new URL(url, location.origin);
-      if (target.href === location.href){
+      const targetPath = String(target.pathname || "").replace(/\/+$/, "") || "/";
+      if (shouldSuppressDeepLinkNavigation(target)){
+        logPageDebug("navigation_suppressed", {
+          source,
+          targetUrl: target.href,
+          currentUrl: location.href,
+          currentPath: normalizedPath,
+          targetPath,
+        });
         return;
       }
+      logPageDebug("navigation_requested", {
+        source,
+        targetUrl: target.href,
+        currentUrl: location.href,
+        currentPath: normalizedPath,
+        targetPath,
+      });
       if (target.origin === location.origin){
         location.href = target.href;
       } else {
         location.href = url;
       }
     } catch (err){
+      logPageDebug("navigation_requested", {
+        source,
+        targetUrl: String(url || ""),
+        currentUrl: location.href,
+        invalidTarget: true,
+      });
       location.href = url;
     }
   }
@@ -4498,22 +4651,37 @@ __DAMAGE_TYPE_OPTIONS__
 
   const clientId = getClientId();
 
-  if ("serviceWorker" in navigator){
-    navigator.serviceWorker.register("/sw.js")
-      .then(() => navigator.serviceWorker.ready)
-      .then((registration) => {
-        swRegistration = registration;
-        navigator.serviceWorker.addEventListener("message", (event) => {
-          const data = event.data || {};
-          if (data && data.type === "deep-link" && typeof data.url === "string"){
-            routeDeepLink(data.url);
-          }
-        });
-      })
-      .catch((err) => {
-        console.warn("Service worker registration failed.", err);
+  async function configureServiceWorker(){
+    if (!("serviceWorker" in navigator)){
+      return;
+    }
+    navigator.serviceWorker.addEventListener("message", (event) => {
+      const data = event.data || {};
+      if (data && data.type === "deep-link" && typeof data.url === "string"){
+        routeDeepLink(data.url, "service_worker_deep_link");
+        return;
+      }
+      if (data && data.type === "notification-focus" && typeof data.url === "string"){
+        logPageDebug("notification_focus", {url: data.url});
+      }
+    });
+    if (!pushPublicKey){
+      logPageDebug("service_worker_skipped", {reason: "missing_push_public_key"});
+      return;
+    }
+    try {
+      await navigator.serviceWorker.register("/sw.js");
+      swRegistration = await navigator.serviceWorker.ready;
+      logPageDebug("service_worker_registered", {scope: swRegistration?.scope || ""});
+    } catch (err){
+      console.warn("Service worker registration failed.", err);
+      logPageDebug("service_worker_registration_failed", {
+        error: err?.message ? String(err.message) : String(err || ""),
       });
+    }
   }
+
+  configureServiceWorker();
 
   const connEl = document.getElementById("conn");
   const connFullTextEl = document.getElementById("connFullText");
@@ -5069,16 +5237,16 @@ __DAMAGE_TYPE_OPTIONS__
     userAgent: navigator.userAgent,
     url: location.href,
     message: "LAN client initialized",
-    stack: "",
+    stack: JSON.stringify({
+      pageInstanceId,
+      currentPath: normalizedPath,
+      wsUrl,
+      visibilityState: document.visibilityState,
+    }),
   };
   console.info("LAN client initialized");
-  document.documentElement.dataset.lanBoot = "true";
   try {
-    fetch("/api/client-log", {
-      method: "POST",
-      headers: {"Content-Type": "application/json"},
-      body: JSON.stringify(clientInitPayload),
-    }).catch(() => {});
+    emitClientLog(clientInitPayload);
   } catch (err) {
     console.warn("Failed to report LAN client init:", err);
   }

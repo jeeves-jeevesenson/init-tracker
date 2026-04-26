@@ -27,7 +27,7 @@ self.addEventListener("notificationclick", (event) => {
   event.waitUntil((async () => {
     const clientList = await clients.matchAll({ type: "window", includeUncontrolled: true });
     for (const client of clientList){
-      client.postMessage({ type: "deep-link", url });
+      client.postMessage({ type: "notification-focus", url });
       if ("focus" in client){
         await client.focus();
         return;

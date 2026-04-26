@@ -116,6 +116,9 @@ class LanWebsocketLifecycleAssetTests(unittest.TestCase):
             let isPlanning = false;
             let planningSnapshotLocked = false;
             const planningFreezeTypes = new Set();
+            const document = {{ visibilityState: "visible" }};
+            const pageInstanceId = "page-1";
+            let lastPageLifecycleEvent = "pageshow";
             function setConn(ok, text) {{ connStates.push([ok, text]); }}
             function closeConnPopover() {{}}
             function updateWaitingOverlay() {{ waitingUpdates.push(reconnectRecoveryPending); }}
@@ -126,7 +129,15 @@ class LanWebsocketLifecycleAssetTests(unittest.TestCase):
             }}
             function refreshMapViewLogPolling() {{}}
             function logWsDebug(eventName, details) {{
-              wsDebugEvents.push({{eventName, details}});
+              wsDebugEvents.push({{
+                eventName,
+                details: {{
+                  pageInstanceId,
+                  lastPageLifecycleEvent,
+                  pageVisibility: document.visibilityState,
+                  ...details,
+                }},
+              }});
             }}
 
             {lifecycle_helpers}
@@ -172,6 +183,8 @@ class LanWebsocketLifecycleAssetTests(unittest.TestCase):
             assert.strictEqual(closeDebug.details.wasClean, false, "close debug payload must include wasClean");
             assert.strictEqual(closeDebug.details.websocketUrl, wsUrl, "close debug payload must include websocket URL");
             assert.strictEqual(closeDebug.details.intentionalClose, false, "network close should not be marked intentional");
+            assert.strictEqual(closeDebug.details.pageInstanceId, "page-1", "close debug payload must include page instance id");
+            assert.strictEqual(closeDebug.details.lastPageLifecycleEvent, "pageshow", "close debug payload must include page lifecycle context");
             const activeReconnectTimer = reconnectTimer;
             assert(activeReconnectTimer && timers.has(activeReconnectTimer), "real active close should schedule one reconnect");
             second.close(1006, "duplicate-close");
@@ -202,6 +215,73 @@ class LanWebsocketLifecycleAssetTests(unittest.TestCase):
             scheduleReconnect(200);
             scheduleReconnect(200);
             assert.strictEqual(timers.size, reconnectsAfterEscalation, "only one reconnect timer may be pending");
+            """
+        )
+
+        result = subprocess.run(
+            ["node", "-e", script],
+            cwd=str(REPO_ROOT),
+            env=os.environ.copy(),
+            capture_output=True,
+            text=True,
+            timeout=5,
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+
+    def test_lan_bootstrap_guard_suppresses_same_shell_navigation(self):
+        html = LAN_INDEX.read_text(encoding="utf-8")
+        create_page_instance_id = _extract_function(html, "createPageInstanceId")
+        claim_lan_bootstrap = _extract_function(html, "claimLanBootstrap")
+        is_lan_shell_path = _extract_function(html, "isLanShellPath")
+        should_suppress = _extract_function(html, "shouldSuppressDeepLinkNavigation")
+        route_deep_link = _extract_function(html, "routeDeepLink")
+
+        script = textwrap.dedent(
+            f"""
+            const assert = require("assert");
+            const logEntries = [];
+            const locationState = new URL("http://127.0.0.1:8787/?v=reload-loop");
+            const location = {{
+              get href() {{ return locationState.href; }},
+              set href(value) {{
+                throw new Error(`unexpected navigation to ${{value}}`);
+              }},
+              get origin() {{ return locationState.origin; }},
+              get pathname() {{ return locationState.pathname; }},
+              get search() {{ return locationState.search; }},
+            }};
+            const window = {{
+              __INITTRACKER_LAN_PAGE_INSTANCE_ID: undefined,
+              __INITTRACKER_LAN_BOOTSTRAP_STATE: undefined,
+              crypto: {{
+                randomUUID() {{ return "page-1"; }},
+              }},
+            }};
+            const normalizedPath = location.pathname.replace(/\\/+$/, "") || "/";
+            function logPageDebug(eventName, details) {{
+              logEntries.push({{eventName, details}});
+            }}
+
+            global.window = window;
+            global.location = location;
+            {create_page_instance_id}
+            {claim_lan_bootstrap}
+            {is_lan_shell_path}
+            {should_suppress}
+            {route_deep_link}
+
+            const pageInstanceId = createPageInstanceId();
+            assert.strictEqual(pageInstanceId, "page-1", "page instance id must remain stable within one document");
+            assert.strictEqual(claimLanBootstrap(pageInstanceId, logPageDebug), true, "first bootstrap claim must succeed");
+            assert.strictEqual(claimLanBootstrap(pageInstanceId, logPageDebug), false, "duplicate bootstrap must be blocked");
+            routeDeepLink("/", "service_worker_deep_link");
+
+            assert(logEntries.some((entry) => entry.eventName === "lan_page_init"), "page init must be logged once");
+            assert(logEntries.some((entry) => entry.eventName === "duplicate_bootstrap"), "duplicate bootstrap must be logged");
+            const suppressed = logEntries.find((entry) => entry.eventName === "navigation_suppressed");
+            assert(suppressed, "same-shell deep link must be suppressed instead of reloading the page");
+            assert.strictEqual(suppressed.details.currentPath, "/", "suppressed navigation must report current path");
+            assert.strictEqual(suppressed.details.targetPath, "/", "suppressed navigation must report target path");
             """
         )
 
