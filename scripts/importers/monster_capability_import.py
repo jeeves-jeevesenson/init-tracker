@@ -56,7 +56,47 @@ def normalize_o5e_action(action: Dict[str, Any], monster_slug: str) -> Dict[str,
     # Multiattack detection
     if "multiattack" in cap["name"].lower():
         cap["action_type"] = "composite"
-        cap["executable"] = False # Multiattack logic is complex to automate without better links
+        cap["executable"] = False 
+        
+        # Try to parse description
+        desc = cap["desc"] or ""
+        import re
+        num_map = {"one": 1, "two": 2, "three": 3, "four": 4, "five": 5}
+        
+        # Pattern 1: "one with its Bite and two with its Claws"
+        matches = re.findall(r"(one|two|three|four|five|\d+)\s+(?:with its|with their)\s+([A-Za-z ]+?)(?=[,.]| and |$)", desc, re.IGNORECASE)
+        if matches:
+            cap["mechanics"]["composite"] = []
+            for count_str, sub_name in matches:
+                count = num_map.get(count_str.lower())
+                if count is None:
+                    try: count = int(count_str)
+                    except: count = 1
+                
+                sub_name = sub_name.strip()
+                if sub_name.lower().endswith("s") and not sub_name.lower().endswith("ss"):
+                    sub_name = sub_name[:-1]
+                
+                cap["mechanics"]["composite"].append({
+                    "action_id": sub_name.lower().replace(" ", "-"),
+                    "name": sub_name,
+                    "count": count
+                })
+        
+        # Pattern 2: "makes two scimitar attacks"
+        if not cap["mechanics"].get("composite"):
+            m = re.search(r"makes (one|two|three|four|five|\d+) ([A-Za-z ]+?) attacks", desc, re.IGNORECASE)
+            if m:
+                count_str, sub_name = m.groups()
+                count = num_map.get(count_str.lower())
+                if count is None:
+                    try: count = int(count_str)
+                    except: count = 1
+                cap["mechanics"]["composite"] = [{
+                    "action_id": sub_name.lower().replace(" ", "-"),
+                    "name": sub_name,
+                    "count": count
+                }]
     
     # Recharge detection
     if "recharge" in cap["name"].lower():
@@ -138,6 +178,64 @@ def normalize_dnd5eapi_action(action: Dict[str, Any], monster_slug: str) -> Dict
     if "multiattack" in cap["name"].lower():
         cap["action_type"] = "composite"
         cap["executable"] = False
+        
+        # dnd5eapi structured multiattack
+        dnd_actions = action.get("actions", [])
+        if dnd_actions:
+            cap["mechanics"]["composite"] = []
+            for sub in dnd_actions:
+                sub_name = sub.get("action_name")
+                if sub_name:
+                    cap["mechanics"]["composite"].append({
+                        "action_id": sub_name.lower().replace(" ", "-"),
+                        "name": sub_name,
+                        "count": int(sub.get("count", 1))
+                    })
+        else:
+            # Fallback to description parsing
+            desc = cap["desc"] or ""
+            import re
+            # Simple patterns
+            # 1. "makes two melee attacks"
+            # 2. "makes three attacks: one with its bite and two with its claws"
+            # 3. "makes two scimitar attacks"
+            
+            # Pattern 2: "one with its Bite and two with its Claws"
+            # We look for "one with its ([A-Za-z ]+)" or "([0-9]|two|three) with its ([A-Za-z ]+)"
+            num_map = {"one": 1, "two": 2, "three": 3, "four": 4, "five": 5}
+            matches = re.findall(r"(one|two|three|four|five|\d+)\s+(?:with its|with their)\s+([A-Za-z ]+?)(?=[,.]| and |$)", desc, re.IGNORECASE)
+            if matches:
+                cap["mechanics"]["composite"] = []
+                for count_str, sub_name in matches:
+                    count = num_map.get(count_str.lower())
+                    if count is None:
+                        try: count = int(count_str)
+                        except: count = 1
+                    
+                    sub_name = sub_name.strip()
+                    if sub_name.lower().endswith("s") and not sub_name.lower().endswith("ss"):
+                        sub_name = sub_name[:-1]
+                    
+                    cap["mechanics"]["composite"].append({
+                        "action_id": sub_name.lower().replace(" ", "-"),
+                        "name": sub_name,
+                        "count": count
+                    })
+            
+            # Pattern 3: "makes two scimitar attacks"
+            if not cap["mechanics"].get("composite"):
+                m = re.search(r"makes (one|two|three|four|five|\d+) ([A-Za-z ]+?) attacks", desc, re.IGNORECASE)
+                if m:
+                    count_str, sub_name = m.groups()
+                    count = num_map.get(count_str.lower())
+                    if count is None:
+                        try: count = int(count_str)
+                        except: count = 1
+                    cap["mechanics"]["composite"] = [{
+                        "action_id": sub_name.lower().replace(" ", "-"),
+                        "name": sub_name,
+                        "count": count
+                    }]
 
     return cap
 

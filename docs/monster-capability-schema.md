@@ -12,7 +12,7 @@ The purpose of this schema is to provide a normalized, executable representation
 - **Primary Source:** Open5e (V2) for comprehensive structured data.
 - **Secondary Source:** dnd5eapi.co for SRD baseline validation.
 - **Legacy Source:** Existing `Monsters/*.yaml` for custom/AideDD-specific data.
-- **Normalization:** A Python-based importer (`scripts/import/monster_capability_import.py`) maps source fields to this schema.
+- **Normalization:** A Python-based importer (`scripts/importers/monster_capability_import.py`) maps source fields to this schema.
 
 ## 4. Licensing & Provenance
 - All generated capability files must include `source` and `license` fields.

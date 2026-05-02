@@ -1,0 +1,177 @@
+{
+  "key": "srd_zombie",
+  "name": "Zombie",
+  "document": {
+    "name": "System Reference Document 5.1",
+    "key": "srd-2014",
+    "type": "SOURCE",
+    "display_name": "5e 2014 Rules",
+    "publisher": {
+      "name": "Wizards of the Coast",
+      "key": "wizards-of-the-coast"
+    },
+    "gamesystem": {
+      "name": "5th Edition 2014",
+      "key": "5e-2014"
+    },
+    "permalink": "https://dnd.wizards.com/resources/systems-reference-document"
+  },
+  "type": {
+    "name": "Undead",
+    "key": "undead"
+  },
+  "size": {
+    "name": "Medium",
+    "key": "medium"
+  },
+  "challenge_rating": 0.25,
+  "proficiency_bonus": null,
+  "speed": {
+    "walk": 20,
+    "unit": "feet"
+  },
+  "speed_all": {
+    "unit": "feet",
+    "walk": 20,
+    "crawl": 10,
+    "hover": false,
+    "fly": 0,
+    "burrow": 0,
+    "climb": 10,
+    "swim": 10
+  },
+  "category": "Monsters",
+  "subcategory": "Zombies",
+  "alignment": "neutral evil",
+  "languages": {
+    "as_string": "understands the languages it knew in life but can't speak",
+    "data": []
+  },
+  "armor_class": 8,
+  "armor_detail": "",
+  "hit_points": 22,
+  "hit_dice": "3d8+9",
+  "experience_points": 50,
+  "ability_scores": {
+    "strength": 13,
+    "dexterity": 6,
+    "constitution": 16,
+    "intelligence": 3,
+    "wisdom": 6,
+    "charisma": 5
+  },
+  "modifiers": {
+    "strength": 1,
+    "dexterity": -2,
+    "constitution": 3,
+    "intelligence": -4,
+    "wisdom": -2,
+    "charisma": -3
+  },
+  "initiative_bonus": -2,
+  "saving_throws": {
+    "wisdom": 0
+  },
+  "saving_throws_all": {
+    "strength": 1,
+    "dexterity": -2,
+    "constitution": 3,
+    "intelligence": -4,
+    "wisdom": 0,
+    "charisma": -3
+  },
+  "skill_bonuses": {},
+  "skill_bonuses_all": {
+    "acrobatics": -2,
+    "animal_handling": -2,
+    "arcana": -4,
+    "athletics": 1,
+    "deception": -3,
+    "history": -4,
+    "insight": -2,
+    "intimidation": -3,
+    "investigation": -4,
+    "medicine": -2,
+    "nature": -4,
+    "perception": -2,
+    "performance": -3,
+    "persuasion": -3,
+    "religion": -4,
+    "sleight_of_hand": -2,
+    "stealth": -2,
+    "survival": -2
+  },
+  "passive_perception": 8,
+  "resistances_and_immunities": {
+    "damage_immunities_display": "",
+    "damage_immunities": [],
+    "damage_resistances_display": "",
+    "damage_resistances": [],
+    "damage_vulnerabilities_display": "",
+    "damage_vulnerabilities": [],
+    "condition_immunities_display": "poisoned",
+    "condition_immunities": [
+      {
+        "name": "Poisoned",
+        "key": "poisoned"
+      }
+    ]
+  },
+  "normal_sight_range": 10560,
+  "darkvision_range": 60,
+  "blindsight_range": null,
+  "tremorsense_range": null,
+  "truesight_range": null,
+  "actions": [
+    {
+      "name": "Slam",
+      "desc": "Melee Weapon Attack: +3 to hit, reach 5 ft., one target. Hit: 4 (1d6 + 1) bludgeoning damage.",
+      "attacks": [
+        {
+          "name": "Slam attack",
+          "attack_type": "WEAPON",
+          "to_hit_mod": 3,
+          "reach": 5,
+          "range": null,
+          "long_range": null,
+          "target_creature_only": false,
+          "damage_die_count": 1,
+          "damage_die_type": "D6",
+          "damage_bonus": null,
+          "damage_type": {
+            "name": "Thunder",
+            "key": "thunder"
+          },
+          "extra_damage_die_count": null,
+          "extra_damage_die_type": null,
+          "extra_damage_bonus": null,
+          "extra_damage_type": null,
+          "distance_unit": "feet"
+        }
+      ],
+      "action_type": "ACTION",
+      "order_in_statblock": 0,
+      "legendary_action_cost": 1,
+      "limited_to_form": null,
+      "usage_limits": null
+    }
+  ],
+  "traits": [
+    {
+      "name": "Undead Fortitude",
+      "desc": "If damage reduces the zombie to 0 hit points, it must make a Constitution saving throw with a DC of 5+the damage taken, unless the damage is radiant or from a critical hit. On a success, the zombie drops to 1 hit point instead."
+    }
+  ],
+  "creaturesets": [],
+  "environments": [
+    {
+      "name": "Forest or Jungle",
+      "key": "forest"
+    },
+    {
+      "name": "Urban",
+      "key": "urban"
+    }
+  ],
+  "illustration": null
+}

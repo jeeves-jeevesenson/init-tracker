@@ -49,7 +49,7 @@ class TestMonsterCapabilityService(unittest.TestCase):
         combatant = {"monster_slug": "adult-red-dragon", "name": "Dragon"}
         summary = self.svc.summarize_capabilities_for_ui(1, combatant)
         self.assertTrue(summary["matched"])
-        
+
         actions = summary["groups"]["actions"]
         fire_breath = next((a for s in summary["groups"].values() for a in s if a["id"] == "fire-breath"), None)
         self.assertIsNotNone(fire_breath)
@@ -58,11 +58,31 @@ class TestMonsterCapabilityService(unittest.TestCase):
     def test_save_ability_summarization(self):
         combatant = {"monster_slug": "adult-red-dragon", "name": "Dragon"}
         summary = self.svc.summarize_capabilities_for_ui(1, combatant)
-        
+
         fire_breath = next((a for s in summary["groups"].values() for a in s if a["id"] == "fire-breath"), None)
         self.assertEqual(fire_breath["action_type"], "save_ability")
         self.assertEqual(fire_breath["mechanics"]["save_dc"], 21)
         self.assertEqual(fire_breath["mechanics"]["save_ability"], "dex")
+
+    def test_composite_summarization(self):
+        # Adult Red Dragon has multiattack
+        combatant = {"monster_slug": "adult-red-dragon", "name": "Dragon"}
+        summary = self.svc.summarize_capabilities_for_ui(1, combatant)
+
+        multi = next((a for s in summary["groups"].values() for a in s if a["id"] == "multiattack"), None)
+        self.assertIsNotNone(multi)
+        self.assertEqual(multi["action_type"], "composite")
+        self.assertIn("resolved_composite", multi["mechanics"])
+
+        steps = multi["mechanics"]["resolved_composite"]
+        self.assertGreaterEqual(len(steps), 2)
+
+        # Check bite resolution
+        bite_step = next((s for s in steps if s["action_id"] == "bite"), None)
+        self.assertIsNotNone(bite_step)
+        self.assertTrue(bite_step["matched"])
+        self.assertTrue(bite_step["executable"])
+        self.assertEqual(bite_step["count"], 1)
 
 if __name__ == "__main__":
     unittest.main()

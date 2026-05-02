@@ -1,0 +1,199 @@
+{
+  "key": "srd_cultist",
+  "name": "Cultist",
+  "document": {
+    "name": "System Reference Document 5.1",
+    "key": "srd-2014",
+    "type": "SOURCE",
+    "display_name": "5e 2014 Rules",
+    "publisher": {
+      "name": "Wizards of the Coast",
+      "key": "wizards-of-the-coast"
+    },
+    "gamesystem": {
+      "name": "5th Edition 2014",
+      "key": "5e-2014"
+    },
+    "permalink": "https://dnd.wizards.com/resources/systems-reference-document"
+  },
+  "type": {
+    "name": "Humanoid",
+    "key": "humanoid"
+  },
+  "size": {
+    "name": "Medium",
+    "key": "medium"
+  },
+  "challenge_rating": 0.125,
+  "proficiency_bonus": null,
+  "speed": {
+    "walk": 30,
+    "unit": "feet"
+  },
+  "speed_all": {
+    "unit": "feet",
+    "walk": 30,
+    "crawl": 15,
+    "hover": false,
+    "fly": 0,
+    "burrow": 0,
+    "climb": 15,
+    "swim": 15
+  },
+  "category": "Monsters",
+  "subcategory": null,
+  "alignment": "any non-good alignment",
+  "languages": {
+    "as_string": "any one language (usually Common)",
+    "data": [
+      {
+        "name": "Common",
+        "key": "common",
+        "desc": "Typical speakers are Humans."
+      }
+    ]
+  },
+  "armor_class": 12,
+  "armor_detail": "leather armor",
+  "hit_points": 9,
+  "hit_dice": "2d8",
+  "experience_points": 25,
+  "ability_scores": {
+    "strength": 11,
+    "dexterity": 12,
+    "constitution": 10,
+    "intelligence": 10,
+    "wisdom": 11,
+    "charisma": 10
+  },
+  "modifiers": {
+    "strength": 0,
+    "dexterity": 1,
+    "constitution": 0,
+    "intelligence": 0,
+    "wisdom": 0,
+    "charisma": 0
+  },
+  "initiative_bonus": 1,
+  "saving_throws": {},
+  "saving_throws_all": {
+    "strength": 0,
+    "dexterity": 1,
+    "constitution": 0,
+    "intelligence": 0,
+    "wisdom": 0,
+    "charisma": 0
+  },
+  "skill_bonuses": {
+    "deception": 2,
+    "religion": 2
+  },
+  "skill_bonuses_all": {
+    "acrobatics": 1,
+    "animal_handling": 0,
+    "arcana": 0,
+    "athletics": 0,
+    "deception": 2,
+    "history": 0,
+    "insight": 0,
+    "intimidation": 0,
+    "investigation": 0,
+    "medicine": 0,
+    "nature": 0,
+    "perception": 0,
+    "performance": 0,
+    "persuasion": 0,
+    "religion": 2,
+    "sleight_of_hand": 1,
+    "stealth": 1,
+    "survival": 0
+  },
+  "passive_perception": 10,
+  "resistances_and_immunities": {
+    "damage_immunities_display": "",
+    "damage_immunities": [],
+    "damage_resistances_display": "",
+    "damage_resistances": [],
+    "damage_vulnerabilities_display": "",
+    "damage_vulnerabilities": [],
+    "condition_immunities_display": "",
+    "condition_immunities": []
+  },
+  "normal_sight_range": 10560,
+  "darkvision_range": null,
+  "blindsight_range": null,
+  "tremorsense_range": null,
+  "truesight_range": null,
+  "actions": [
+    {
+      "name": "Scimitar",
+      "desc": "Melee Weapon Attack: +3 to hit, reach 5 ft., one creature. Hit: 4 (1d6 + 1) slashing damage.",
+      "attacks": [
+        {
+          "name": "Scimitar attack",
+          "attack_type": "WEAPON",
+          "to_hit_mod": 3,
+          "reach": 5,
+          "range": null,
+          "long_range": null,
+          "target_creature_only": true,
+          "damage_die_count": 1,
+          "damage_die_type": "D6",
+          "damage_bonus": null,
+          "damage_type": {
+            "name": "Thunder",
+            "key": "thunder"
+          },
+          "extra_damage_die_count": null,
+          "extra_damage_die_type": null,
+          "extra_damage_bonus": null,
+          "extra_damage_type": null,
+          "distance_unit": "feet"
+        }
+      ],
+      "action_type": "ACTION",
+      "order_in_statblock": 0,
+      "legendary_action_cost": 1,
+      "limited_to_form": null,
+      "usage_limits": null
+    }
+  ],
+  "traits": [
+    {
+      "name": "Dark Devotion",
+      "desc": "The cultist has advantage on saving throws against being charmed or frightened."
+    }
+  ],
+  "creaturesets": [],
+  "environments": [
+    {
+      "name": "Desert",
+      "key": "desert"
+    },
+    {
+      "name": "Forest or Jungle",
+      "key": "forest"
+    },
+    {
+      "name": "Hills",
+      "key": "hills"
+    },
+    {
+      "name": "Ruins",
+      "key": "ruins"
+    },
+    {
+      "name": "Sewer",
+      "key": "sewer"
+    },
+    {
+      "name": "Temple",
+      "key": "temple"
+    },
+    {
+      "name": "Urban",
+      "key": "urban"
+    }
+  ],
+  "illustration": null
+}

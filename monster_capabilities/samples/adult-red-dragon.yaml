@@ -10,7 +10,17 @@ capabilities:
   desc: 'The dragon can use its Frightful Presence. It then makes three attacks: one
     with its bite and two with its claws.'
   action_type: composite
-  mechanics: {}
+  mechanics:
+    composite:
+    - action_id: frightful-presence
+      name: Frightful Presence
+      count: 1
+    - action_id: bite
+      name: Bite
+      count: 1
+    - action_id: claw
+      name: Claw
+      count: 2
 - id: bite
   name: Bite
   type: action

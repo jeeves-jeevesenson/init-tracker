@@ -50,7 +50,7 @@ class TestMonsterCapabilityBackend(unittest.TestCase):
         }
         # Fire breath is recharge 5
         self.app._monster_recharge_state["1:fire-breath"] = True
-        
+
         result = self.app._dm_monster_capability_execute(actor_cid=1, payload=payload)
         self.assertTrue(result["ok"])
         self.assertEqual(result["resolution"], "assisted")
@@ -66,10 +66,25 @@ class TestMonsterCapabilityBackend(unittest.TestCase):
             "target_cid": 2
         }
         self.app._monster_recharge_state["1:fire-breath"] = False
-        
+
         result = self.app._dm_monster_capability_execute(actor_cid=1, payload=payload)
         self.assertFalse(result["ok"])
         self.assertIn("not recharged", result["error"])
+
+    def test_execute_composite_assisted_sequence(self):
+        payload = {
+            "capability_id": "multiattack"
+        }
+        result = self.app._dm_monster_capability_execute(actor_cid=1, payload=payload)
+        self.assertTrue(result["ok"])
+        self.assertEqual(result["resolution"], "assisted_sequence")
+        self.assertIn("steps", result)
+        self.assertGreaterEqual(len(result["steps"]), 2)
+
+        # Check bite step
+        bite_step = next((s for s in result["steps"] if s["action_id"] == "bite"), None)
+        self.assertIsNotNone(bite_step)
+        self.assertTrue(bite_step["executable"])
 
 if __name__ == "__main__":
     unittest.main()

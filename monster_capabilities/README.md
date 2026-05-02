@@ -19,14 +19,14 @@ The backend now includes a `MonsterCapabilityService` that loads these YAMLs.
 A new DM API is available:
 - `GET /api/dm/monster-capabilities`: Lists active monsters with capability overlays.
 - `GET /api/dm/monster-capabilities/{cid}`: Returns the grouped capabilities for a specific combatant.
-- `POST /api/dm/monster-capabilities/{cid}/execute`: Executes a simple attack capability.
+- `POST /api/dm/monster-capabilities/{cid}/execute`: Executes a simple attack or save capability. For composite (Multiattack) actions, returns an assisted sequence summary.
 
-The DM UI (`/dm` or `/dm/map`) now displays a "Monster Capabilities" card in the control lane when a supported monster is selected.
+The DM UI (`/dm` or `/dm/map`) now displays a "Monster Capabilities" card in the control lane when a supported monster is selected. Composite/Multiattack actions render as a sequence of executable child buttons for assisted sequential resolution.
 
 ## Generating Overlays
 You can regenerate the capability files using the import script:
 ```bash
-./.venv/bin/python3 scripts/import/monster_capability_import.py
+./.venv/bin/python3 scripts/importers/monster_capability_import.py
 ```
 
 ## Inventory Audit

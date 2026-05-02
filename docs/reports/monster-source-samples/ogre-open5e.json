@@ -1,0 +1,273 @@
+{
+  "key": "srd_ogre",
+  "name": "Ogre",
+  "document": {
+    "name": "System Reference Document 5.1",
+    "key": "srd-2014",
+    "type": "SOURCE",
+    "display_name": "5e 2014 Rules",
+    "publisher": {
+      "name": "Wizards of the Coast",
+      "key": "wizards-of-the-coast"
+    },
+    "gamesystem": {
+      "name": "5th Edition 2014",
+      "key": "5e-2014"
+    },
+    "permalink": "https://dnd.wizards.com/resources/systems-reference-document"
+  },
+  "type": {
+    "name": "Giant",
+    "key": "giant"
+  },
+  "size": {
+    "name": "Large",
+    "key": "large"
+  },
+  "challenge_rating": 2.0,
+  "proficiency_bonus": null,
+  "speed": {
+    "walk": 40,
+    "unit": "feet"
+  },
+  "speed_all": {
+    "unit": "feet",
+    "walk": 40,
+    "crawl": 20,
+    "hover": false,
+    "fly": 0,
+    "burrow": 0,
+    "climb": 20,
+    "swim": 20
+  },
+  "category": "Monsters",
+  "subcategory": null,
+  "alignment": "chaotic evil",
+  "languages": {
+    "as_string": "Common, Giant",
+    "data": [
+      {
+        "name": "Common",
+        "key": "common",
+        "desc": "Typical speakers are Humans."
+      },
+      {
+        "name": "Giant",
+        "key": "giant",
+        "desc": "Typical speakers include ogres, and giants."
+      }
+    ]
+  },
+  "armor_class": 11,
+  "armor_detail": "hide armor",
+  "hit_points": 59,
+  "hit_dice": "7d10+21",
+  "experience_points": 450,
+  "ability_scores": {
+    "strength": 19,
+    "dexterity": 8,
+    "constitution": 16,
+    "intelligence": 5,
+    "wisdom": 7,
+    "charisma": 7
+  },
+  "modifiers": {
+    "strength": 4,
+    "dexterity": -1,
+    "constitution": 3,
+    "intelligence": -3,
+    "wisdom": -2,
+    "charisma": -2
+  },
+  "initiative_bonus": -1,
+  "saving_throws": {},
+  "saving_throws_all": {
+    "strength": 4,
+    "dexterity": -1,
+    "constitution": 3,
+    "intelligence": -3,
+    "wisdom": -2,
+    "charisma": -2
+  },
+  "skill_bonuses": {},
+  "skill_bonuses_all": {
+    "acrobatics": -1,
+    "animal_handling": -2,
+    "arcana": -3,
+    "athletics": 4,
+    "deception": -2,
+    "history": -3,
+    "insight": -2,
+    "intimidation": -2,
+    "investigation": -3,
+    "medicine": -2,
+    "nature": -3,
+    "perception": -2,
+    "performance": -2,
+    "persuasion": -2,
+    "religion": -3,
+    "sleight_of_hand": -1,
+    "stealth": -1,
+    "survival": -2
+  },
+  "passive_perception": 8,
+  "resistances_and_immunities": {
+    "damage_immunities_display": "",
+    "damage_immunities": [],
+    "damage_resistances_display": "",
+    "damage_resistances": [],
+    "damage_vulnerabilities_display": "",
+    "damage_vulnerabilities": [],
+    "condition_immunities_display": "",
+    "condition_immunities": []
+  },
+  "normal_sight_range": 10560,
+  "darkvision_range": 60,
+  "blindsight_range": null,
+  "tremorsense_range": null,
+  "truesight_range": null,
+  "actions": [
+    {
+      "name": "Greatclub",
+      "desc": "Melee Weapon Attack: +6 to hit, reach 5 ft., one target. Hit: 13 (2d8 + 4) bludgeoning damage.",
+      "attacks": [
+        {
+          "name": "Greatclub attack",
+          "attack_type": "WEAPON",
+          "to_hit_mod": 6,
+          "reach": 5,
+          "range": null,
+          "long_range": null,
+          "target_creature_only": false,
+          "damage_die_count": 2,
+          "damage_die_type": "D8",
+          "damage_bonus": null,
+          "damage_type": {
+            "name": "Thunder",
+            "key": "thunder"
+          },
+          "extra_damage_die_count": null,
+          "extra_damage_die_type": null,
+          "extra_damage_bonus": null,
+          "extra_damage_type": null,
+          "distance_unit": "feet"
+        }
+      ],
+      "action_type": "ACTION",
+      "order_in_statblock": 0,
+      "legendary_action_cost": 1,
+      "limited_to_form": null,
+      "usage_limits": null
+    },
+    {
+      "name": "Javelin",
+      "desc": "Melee or Ranged Weapon Attack: +6 to hit, reach 5 ft. or range 30/120 ft., one target. Hit: 11 (2d6 + 4) piercing damage.",
+      "attacks": [
+        {
+          "name": "Javelin Melee attack",
+          "attack_type": "WEAPON",
+          "to_hit_mod": 6,
+          "reach": 5,
+          "range": 30,
+          "long_range": 120,
+          "target_creature_only": false,
+          "damage_die_count": 2,
+          "damage_die_type": "D6",
+          "damage_bonus": null,
+          "damage_type": {
+            "name": "Thunder",
+            "key": "thunder"
+          },
+          "extra_damage_die_count": null,
+          "extra_damage_die_type": null,
+          "extra_damage_bonus": null,
+          "extra_damage_type": null,
+          "distance_unit": "feet"
+        },
+        {
+          "name": "Javelin Ranged attack",
+          "attack_type": "WEAPON",
+          "to_hit_mod": 6,
+          "reach": null,
+          "range": 30,
+          "long_range": 120,
+          "target_creature_only": false,
+          "damage_die_count": 2,
+          "damage_die_type": "D6",
+          "damage_bonus": null,
+          "damage_type": {
+            "name": "Thunder",
+            "key": "thunder"
+          },
+          "extra_damage_die_count": null,
+          "extra_damage_die_type": null,
+          "extra_damage_bonus": null,
+          "extra_damage_type": null,
+          "distance_unit": "feet"
+        }
+      ],
+      "action_type": "ACTION",
+      "order_in_statblock": 1,
+      "legendary_action_cost": 1,
+      "limited_to_form": null,
+      "usage_limits": null
+    }
+  ],
+  "traits": [],
+  "creaturesets": [],
+  "environments": [
+    {
+      "name": "Arctic or Tundra",
+      "key": "arctic"
+    },
+    {
+      "name": "Caves",
+      "key": "caves"
+    },
+    {
+      "name": "Coast",
+      "key": "coast"
+    },
+    {
+      "name": "Desert",
+      "key": "desert"
+    },
+    {
+      "name": "Forest or Jungle",
+      "key": "forest"
+    },
+    {
+      "name": "Grassland or Plains",
+      "key": "grassland"
+    },
+    {
+      "name": "Hills",
+      "key": "hills"
+    },
+    {
+      "name": "Mountain",
+      "key": "mountain"
+    },
+    {
+      "name": "Ruins",
+      "key": "ruins"
+    },
+    {
+      "name": "Feywild",
+      "key": "srd_feywild"
+    },
+    {
+      "name": "Plane of Earth",
+      "key": "srd_plane-of-earth"
+    },
+    {
+      "name": "Swamp or Marsh",
+      "key": "swamp"
+    },
+    {
+      "name": "Underworld",
+      "key": "underworld"
+    }
+  ],
+  "illustration": null
+}

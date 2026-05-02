@@ -1,0 +1,181 @@
+{
+  "key": "srd_wolf",
+  "name": "Wolf",
+  "document": {
+    "name": "System Reference Document 5.1",
+    "key": "srd-2014",
+    "type": "SOURCE",
+    "display_name": "5e 2014 Rules",
+    "publisher": {
+      "name": "Wizards of the Coast",
+      "key": "wizards-of-the-coast"
+    },
+    "gamesystem": {
+      "name": "5th Edition 2014",
+      "key": "5e-2014"
+    },
+    "permalink": "https://dnd.wizards.com/resources/systems-reference-document"
+  },
+  "type": {
+    "name": "Beast",
+    "key": "beast"
+  },
+  "size": {
+    "name": "Medium",
+    "key": "medium"
+  },
+  "challenge_rating": 0.25,
+  "proficiency_bonus": null,
+  "speed": {
+    "walk": 40,
+    "unit": "feet"
+  },
+  "speed_all": {
+    "unit": "feet",
+    "walk": 40,
+    "crawl": 20,
+    "hover": false,
+    "fly": 0,
+    "burrow": 0,
+    "climb": 20,
+    "swim": 20
+  },
+  "category": "Monsters",
+  "subcategory": null,
+  "alignment": "unaligned",
+  "languages": {
+    "as_string": "",
+    "data": []
+  },
+  "armor_class": 13,
+  "armor_detail": "natural armor",
+  "hit_points": 11,
+  "hit_dice": "2d8+2",
+  "experience_points": 50,
+  "ability_scores": {
+    "strength": 12,
+    "dexterity": 15,
+    "constitution": 12,
+    "intelligence": 3,
+    "wisdom": 12,
+    "charisma": 6
+  },
+  "modifiers": {
+    "strength": 1,
+    "dexterity": 2,
+    "constitution": 1,
+    "intelligence": -4,
+    "wisdom": 1,
+    "charisma": -2
+  },
+  "initiative_bonus": 2,
+  "saving_throws": {},
+  "saving_throws_all": {
+    "strength": 1,
+    "dexterity": 2,
+    "constitution": 1,
+    "intelligence": -4,
+    "wisdom": 1,
+    "charisma": -2
+  },
+  "skill_bonuses": {
+    "perception": 3,
+    "stealth": 4
+  },
+  "skill_bonuses_all": {
+    "acrobatics": 2,
+    "animal_handling": 1,
+    "arcana": -4,
+    "athletics": 1,
+    "deception": -2,
+    "history": -4,
+    "insight": 1,
+    "intimidation": -2,
+    "investigation": -4,
+    "medicine": 1,
+    "nature": -4,
+    "perception": 3,
+    "performance": -2,
+    "persuasion": -2,
+    "religion": -4,
+    "sleight_of_hand": 2,
+    "stealth": 4,
+    "survival": 1
+  },
+  "passive_perception": 13,
+  "resistances_and_immunities": {
+    "damage_immunities_display": "",
+    "damage_immunities": [],
+    "damage_resistances_display": "",
+    "damage_resistances": [],
+    "damage_vulnerabilities_display": "",
+    "damage_vulnerabilities": [],
+    "condition_immunities_display": "",
+    "condition_immunities": []
+  },
+  "normal_sight_range": 10560,
+  "darkvision_range": null,
+  "blindsight_range": null,
+  "tremorsense_range": null,
+  "truesight_range": null,
+  "actions": [
+    {
+      "name": "Bite",
+      "desc": "Melee Weapon Attack: +4 to hit, reach 5 ft., one target. Hit: 7 (2d4 + 2) piercing damage. If the target is a creature, it must succeed on a DC 11 Strength saving throw or be knocked prone.",
+      "attacks": [
+        {
+          "name": "Bite attack",
+          "attack_type": "WEAPON",
+          "to_hit_mod": 4,
+          "reach": 5,
+          "range": null,
+          "long_range": null,
+          "target_creature_only": false,
+          "damage_die_count": 2,
+          "damage_die_type": "D4",
+          "damage_bonus": null,
+          "damage_type": {
+            "name": "Thunder",
+            "key": "thunder"
+          },
+          "extra_damage_die_count": null,
+          "extra_damage_die_type": null,
+          "extra_damage_bonus": null,
+          "extra_damage_type": null,
+          "distance_unit": "feet"
+        }
+      ],
+      "action_type": "ACTION",
+      "order_in_statblock": 0,
+      "legendary_action_cost": 1,
+      "limited_to_form": null,
+      "usage_limits": null
+    }
+  ],
+  "traits": [
+    {
+      "name": "Keen Hearing and Smell",
+      "desc": "The wolf has advantage on Wisdom (Perception) checks that rely on hearing or smell."
+    },
+    {
+      "name": "Pack Tactics",
+      "desc": "The wolf has advantage on an attack roll against a creature if at least one of the wolf's allies is within 5 ft. of the creature and the ally isn't incapacitated."
+    }
+  ],
+  "creaturesets": [],
+  "environments": [
+    {
+      "name": "Forest or Jungle",
+      "key": "forest"
+    },
+    {
+      "name": "Grassland or Plains",
+      "key": "grassland"
+    },
+    {
+      "name": "Hills",
+      "key": "hills"
+    }
+  ],
+  "illustration": null
+}

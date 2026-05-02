@@ -5698,9 +5698,31 @@ function renderMonsterCapabilities(summary) {
       if (actionType === 'save_ability' && cap.mechanics) {
           const m = cap.mechanics;
           html += `<div class="cap-source" style="margin-bottom:8px">
-            DC ${m.save_dc} ${escHtml(m.save_ability || '')} 
+            DC ${m.save_dc} ${escHtml(m.save_ability || '')}
             ${m.damage ? `· ${m.damage.map(d => `${d.formula} ${d.type}`).join(' + ')}` : ''}
           </div>`;
+      }
+
+      if (actionType === 'composite' && cap.mechanics && cap.mechanics.resolved_composite) {
+          html += `<div class="cap-composite-steps" style="margin: 8px 0; border-left: 2px solid #555; padding-left: 8px;">`;
+          for (const step of cap.mechanics.resolved_composite) {
+              html += `<div class="cap-composite-step" style="margin-bottom:4px">
+                <span style="font-size:13px"><strong>${escHtml(step.name)}</strong> × ${step.count}</span>
+                ${step.matched ?
+                    (step.executable ?
+                        `<span class="cap-badge exec" style="font-size:10px; padding:1px 4px">Link OK</span>` :
+                        `<span class="cap-badge manual" style="font-size:10px; padding:1px 4px">Manual</span>`) :
+                    `<span class="cap-badge error" style="font-size:10px; padding:1px 4px">Missing</span>`}
+              </div>`;
+              if (step.executable && available) {
+                  html += `<div style="margin: 4px 0 8px 12px; display: flex; flex-wrap: wrap; gap: 4px;">`;
+                  for (let i = 0; i < step.count; i++) {
+                      html += `<button class="btn-sm" onclick="executeMonsterCapability(${summary.combatant_id}, '${step.action_id}')">Execute ${escHtml(step.name)}${step.count > 1 ? ' '+(i+1) : ''}</button>`;
+                  }
+                  html += `</div>`;
+              }
+          }
+          html += `</div>`;
       }
 
       html += `<div class="cap-actions">`;

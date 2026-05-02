@@ -8,6 +8,15 @@ import sys
 SAMPLES = [
     {"o5e": "srd_skeleton", "dnd": "skeleton"},
     {"o5e": "srd_goblin", "dnd": "goblin"},
+    {"o5e": "srd_zombie", "dnd": "zombie"},
+    {"o5e": "srd_wolf", "dnd": "wolf"},
+    {"o5e": "srd_bandit", "dnd": "bandit"},
+    {"o5e": "srd_cultist", "dnd": "cultist"},
+    {"o5e": "srd_orc", "dnd": "orc"},
+    {"o5e": "srd_kobold", "dnd": "kobold"},
+    {"o5e": "srd_bugbear", "dnd": "bugbear"},
+    {"o5e": "srd_ogre", "dnd": "ogre"},
+    {"o5e": "srd_troll", "dnd": "troll"},
     {"o5e": "srd_adult-red-dragon", "dnd": "adult-red-dragon"},
     {"o5e": "srd_archmage", "dnd": "archmage"}
 ]

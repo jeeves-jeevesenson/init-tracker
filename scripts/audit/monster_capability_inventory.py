@@ -15,8 +15,8 @@ def audit_inventory():
 
     files = sorted([f for f in os.listdir(CAPABILITY_DIR) if f.endswith(".yaml")])
     
-    print(f"{'Slug':<25} | {'Name':<25} | {'Caps':<5} | {'Exec':<5} | {'Save':<5} | {'Rech':<5}")
-    print("-" * 100)
+    print(f"{'Slug':<25} | {'Name':<25} | {'Caps':<5} | {'Exec':<5} | {'Save':<5} | {'Rech':<5} | {'Comp':<5}")
+    print("-" * 110)
     
     for f in files:
         path = os.path.join(CAPABILITY_DIR, f)
@@ -31,8 +31,9 @@ def audit_inventory():
             executable = sum(1 for c in caps if c.get("executable"))
             saves = sum(1 for c in caps if c.get("action_type") == "save_ability")
             recharges = sum(1 for c in caps if "recharge" in c)
+            composite = sum(1 for c in caps if c.get("action_type") == "composite")
             
-            print(f"{slug:<25} | {name:<25} | {total:<5} | {executable:<5} | {saves:<5} | {recharges:<5}")
+            print(f"{slug:<25} | {name:<25} | {total:<5} | {executable:<5} | {saves:<5} | {recharges:<5} | {composite:<5}")
             
             inventory.append({
                 "slug": slug,
@@ -40,7 +41,8 @@ def audit_inventory():
                 "total": total,
                 "executable": executable,
                 "saves": saves,
-                "recharges": recharges
+                "recharges": recharges,
+                "composite": composite
             })
             
     return inventory

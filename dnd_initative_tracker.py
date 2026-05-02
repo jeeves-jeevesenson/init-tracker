@@ -3392,8 +3392,8 @@ class LanController:
                         # Then send initial state without static data, with personalized "you" field
                         you_data = self._build_you_payload(ws_id)
                         state_payload = self._json_dumps({
-                            "type": "state", 
-                            "state": self._dynamic_snapshot_payload(), 
+                            "type": "state",
+                            "state": self._dynamic_snapshot_payload(),
                             "pcs": self._pcs_payload(),
                             "you": you_data
                         })
@@ -4642,7 +4642,7 @@ class LanController:
                 cap_id = payload.get("capability_id")
                 if not cap_id:
                     raise HTTPException(status_code=400, detail="capability_id is required.")
-                
+
                 result = self.app._dm_monster_capability_roll_recharge(cid=int(cid), capability_id=str(cap_id))
                 return {
                     "ok": result.get("ok"),
@@ -4661,11 +4661,11 @@ class LanController:
                 available = bool(payload.get("available", True))
                 if not cap_id:
                     raise HTTPException(status_code=400, detail="capability_id is required.")
-                
+
                 key = f"{cid}:{cap_id}"
                 self.app._monster_recharge_state[key] = available
                 self.app._lan_force_state_broadcast()
-                
+
                 return {
                     "ok": True,
                     "capability_id": cap_id,
@@ -7148,7 +7148,7 @@ class LanController:
             self.app._oplog(f"LAN state broadcast serialization failed: {exc}", level="warning")
             self._log_lan_exception("LAN state broadcast serialization failed", exc)
             return
-        
+
         to_drop: List[int] = []
         with self._clients_lock:
             items = list(self._clients.items())
@@ -7156,15 +7156,15 @@ class LanController:
         view_only_state = None
         if view_only_clients:
             view_only_state = self._view_only_state_payload(state_data)
-        
+
         # Send personalized payload to each client with their own "you" field
         for ws_id, ws in items:
             try:
                 you_data = self._build_you_payload(ws_id)
                 payload_state = view_only_state if ws_id in view_only_clients and view_only_state is not None else state_data
                 payload = self._json_dumps({
-                    "type": "state", 
-                    "state": payload_state, 
+                    "type": "state",
+                    "state": payload_state,
                     "pcs": pcs_data,
                     "you": you_data
                 })
@@ -7547,14 +7547,14 @@ class LanController:
         lock = None
         with self._clients_lock:
             lock = self._ws_send_locks.get(ws_id)
-        
+
         if lock is None:
             return
-            
+
         async with lock:
             try:
                 with self._clients_lock:
-                    is_current = (self._clients.get(ws_id) is ws or 
+                    is_current = (self._clients.get(ws_id) is ws or
                                   self._dm_ws_clients.get(ws_id) is ws)
                 if is_current:
                     await ws.send_text(text)
@@ -7604,8 +7604,8 @@ class LanController:
             await self._send_async(
                 ws_id,
                 {
-                    "type": "state", 
-                    "state": state_payload, 
+                    "type": "state",
+                    "state": state_payload,
                     "pcs": self._pcs_payload(),
                     "you": you_data
                 },
@@ -11928,14 +11928,14 @@ class InitiativeTracker(base.InitiativeTracker):
             session_menu.add_separator()
             session_menu.add_command(label="Reset Map", command=self._reset_map_state)
             menubar.add_cascade(label="Session", menu=session_menu)
-            
+
             # Add Help menu
             help_menu = tk.Menu(menubar, tearoff=0)
             help_menu.add_command(label="Check for Updates", command=self._check_for_updates)
             help_menu.add_command(label="Update Log", command=self._show_update_log)
             help_menu.add_command(label="About", command=self._show_about)
             menubar.add_cascade(label="Help", menu=help_menu)
-            
+
             self.config(menu=menubar)
         except Exception:
             pass
@@ -17238,7 +17238,7 @@ class InitiativeTracker(base.InitiativeTracker):
         ttk.Button(controls, text="Close", command=win.destroy).pack(side=tk.RIGHT)
 
         refresh_sessions()
-    
+
     def _check_for_updates(self) -> None:
         """Check for available updates from GitHub."""
         if not self._allow_desktop_runtime_surface("update_check_dialog"):
@@ -17285,7 +17285,7 @@ class InitiativeTracker(base.InitiativeTracker):
                 "This may take a few moments.",
                 icon="info"
             )
-            
+
         except Exception as e:
             messagebox.showerror(
                 "Update Check Error",
@@ -17466,7 +17466,7 @@ class InitiativeTracker(base.InitiativeTracker):
             "Update Available",
             f"{message}\n\n{update_checker.get_manual_update_instructions()}",
         )
-    
+
     def _show_about(self) -> None:
         """Show about dialog with version information."""
         if not self._allow_desktop_runtime_surface("about_dialog"):
@@ -17474,11 +17474,11 @@ class InitiativeTracker(base.InitiativeTracker):
         try:
             current_version = update_checker.get_current_version()
             local_commit = update_checker.get_local_git_commit()
-            
+
             version_info = f"Version: v{current_version}"
             if local_commit:
                 version_info += f"\nCommit: {local_commit}"
-            
+
             messagebox.showinfo(
                 "About D&D Initiative Tracker",
                 f"D&D Initiative Tracker\n\n"
@@ -17527,7 +17527,7 @@ class InitiativeTracker(base.InitiativeTracker):
         text.pack(fill=tk.BOTH, expand=True)
         text.insert("1.0", log_text)
         text.configure(state=tk.DISABLED)
-    
+
     def _poc_seed_all_player_characters(self) -> None:
         """Temporary POC behavior: add all starting roster PCs to initiative and roll initiative.
 
@@ -19548,8 +19548,8 @@ class InitiativeTracker(base.InitiativeTracker):
         grid_payload = None
         if map_ready:
             grid_payload = {
-                "cols": int(cols), 
-                "rows": int(rows), 
+                "cols": int(cols),
+                "rows": int(rows),
                 "feet_per_square": float(feet_per_square),
                 "ready": map_ready and not map_batching,
                 "version": self._grid_version,
@@ -32799,7 +32799,7 @@ class InitiativeTracker(base.InitiativeTracker):
 
     def _can_offer_spell_stopper_reaction(self, reactor: Any, source_cid: Optional[int]) -> Tuple[bool, str]:
         """Check if a combatant can offer Spell Stopper reaction to interrupt a spell.
-        
+
         Returns: (can_offer, reason)
         - Checks: reaction remaining > 0, has equipped Spell Stopper dagger, pool available
         """
@@ -32807,7 +32807,7 @@ class InitiativeTracker(base.InitiativeTracker):
             return False, "missing_reactor"
         if int(getattr(reactor, "reaction_remaining", 0) or 0) <= 0:
             return False, "no_reaction"
-        
+
         # Check if equipped Spell Stopper dagger exists (item grants pool)
         inventory = getattr(reactor, "inventory", None)
         if not isinstance(inventory, dict):
@@ -32823,7 +32823,7 @@ class InitiativeTracker(base.InitiativeTracker):
                 break
         if not has_spell_stopper:
             return False, "no_spell_stopper"
-        
+
         # Check pool availability
         player_name = self._pc_name_for(int(getattr(reactor, "cid", 0) or 0))
         profile = self._profile_for_player_name(player_name)
@@ -34649,7 +34649,7 @@ class InitiativeTracker(base.InitiativeTracker):
                     for caster_ws in caster_ws_targets:
                         self._lan.toast(int(caster_ws), "Waiting for Shield response…")
                     return
-        
+
         # Check for Spell Stopper reaction offer (Fred's anti-caster throat-cut)
         # Spell Stopper triggers on hostile spellcasts within melee range
         if not bool(msg.get("_spell_stopper_resolution_done")):
@@ -34664,7 +34664,7 @@ class InitiativeTracker(base.InitiativeTracker):
                     fred = potential_fred
                     fred_cid = int(getattr(potential_fred, "cid", 0) or 0)
                     break
-            
+
             if fred is not None and fred_cid is not None and int(fred_cid) != int(cid):
                 # Check if Fred is in melee range (5 ft) of the caster
                 fred_pos = self._lan_positions.get(int(fred_cid)) if isinstance(self._lan_positions, dict) else None
@@ -34673,7 +34673,7 @@ class InitiativeTracker(base.InitiativeTracker):
                 if fred_pos and caster_pos:
                     dist = ((fred_pos[0] - caster_pos[0])**2 + (fred_pos[1] - caster_pos[1])**2) ** 0.5
                     in_melee_range = bool(dist <= 1)  # 5 ft ≈ 1 grid square at typical scale
-                
+
                 if in_melee_range:
                     spell_stopper_mode = self._reaction_mode_for(int(fred_cid), "spell_stopper", default="ask")
                     can_offer, _reason = self._can_offer_spell_stopper_reaction(fred, int(cid))
@@ -43670,6 +43670,34 @@ class InitiativeTracker(base.InitiativeTracker):
         if not cap:
             return {"ok": False, "error": f"Capability {cap_id} not found."}
 
+        action_type = cap.get("action_type")
+        mechanics = cap.get("mechanics", {})
+
+        # Check if composite first to allow assisted_sequence even if executable=false
+        if action_type == "composite":
+             # Assisted sequence
+             resolved_children = []
+             composite_mechanics = mechanics.get("composite", [])
+             for child in composite_mechanics:
+                 child_id = child.get("action_id")
+                 matched_child = next((c for c in data.get("capabilities", []) if c.get("id") == child_id), None)
+                 resolved_children.append({
+                     "action_id": child_id,
+                     "name": child.get("name"),
+                     "count": child.get("count", 1),
+                     "executable": matched_child.get("executable", False) if matched_child else False,
+                     "matched": matched_child is not None
+                 })
+
+             return {
+                 "ok": True,
+                 "resolution": "assisted_sequence",
+                 "capability_id": cap_id,
+                 "name": cap.get("name"),
+                 "desc": cap.get("desc"),
+                 "steps": resolved_children
+             }
+
         # Check if executable
         if not cap.get("executable"):
              return {"ok": False, "resolution": "manual", "reason": "Capability not marked as executable.", "capability": cap}
@@ -43680,9 +43708,6 @@ class InitiativeTracker(base.InitiativeTracker):
             available = self._monster_recharge_state.get(f"{normalized_actor_cid}:{cap_id}", True)
             if not available:
                 return {"ok": False, "error": f"{cap.get('name')} is not recharged."}
-
-        action_type = cap.get("action_type")
-        mechanics = cap.get("mechanics", {})
 
         if action_type in ("melee_attack", "ranged_attack") and target_cid is not None:
             # 1. Target validation
@@ -43757,19 +43782,19 @@ class InitiativeTracker(base.InitiativeTracker):
              damage_entries = mechanics.get("damage", [])
              total_fail = 0
              total_success = 0
-             
+
              for entry in damage_entries:
                  formula = entry.get("formula")
                  dtype = entry.get("type", "unspecified")
                  on_save = entry.get("on_save", "half")
-                 
+
                  roll = self._roll_monster_attack_formula(formula)
                  success_roll = 0
                  if on_save == "half":
                      success_roll = roll // 2
                  elif on_save == "none":
                      success_roll = 0
-                 
+
                  damage_rolls.append({
                      "formula": formula,
                      "type": dtype,
@@ -43834,13 +43859,13 @@ class InitiativeTracker(base.InitiativeTracker):
         roll = random.randint(1, 6)
         success = roll >= int(threshold)
         key = f"{cid}:{capability_id}"
-        
+
         if success:
             self._monster_recharge_state[key] = True
             self._lan_force_state_broadcast()
 
         self._oplog(f"{getattr(actor, 'name', 'Monster')} rolls {roll} for {cap.get('name')} recharge (needs {threshold}+): {'Success!' if success else 'Failed'}")
-        
+
         return {
             "ok": True,
             "roll": roll,
