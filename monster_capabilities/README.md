@@ -44,6 +44,13 @@ To see a summary of available capability overlays:
 ```
 The audit reports executable, save, area, resource, composite, rider, spellcasting, and warning counts so data-quality regressions are easier to spot after regeneration.
 
+## Quality Gate
+To validate normalized overlay structure and common data-quality regressions:
+```bash
+./.venv/bin/python3 scripts/audit/monster_capability_quality_gate.py
+```
+The quality gate scans `monster_capabilities/**/*.yaml`, writes `docs/reports/monster-capability-quality.md`, and exits nonzero only on hard errors by default. Use `--strict` to make warnings fail for future CI-style checks. The gate is deterministic and does not modify overlay YAML files.
+
 ## Coverage Report
 A detailed coverage report is available at `docs/reports/monster-capability-coverage.md`.
 

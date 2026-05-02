@@ -53,3 +53,9 @@ Full current counts are available from `./.venv/bin/python3 scripts/audit/monste
 ```bash
 ./.venv/bin/python3 scripts/audit/monster_capability_inventory.py
 ```
+
+## Quality Gate
+```bash
+./.venv/bin/python3 scripts/audit/monster_capability_quality_gate.py
+```
+The quality gate validates normalized overlays for malformed YAML, missing required fields, duplicate capability ids, incomplete executable attacks/save abilities, invalid condition riders, unparseable resource metadata, and practical warning-level drift. It writes `docs/reports/monster-capability-quality.md`; warnings remain non-fatal unless `--strict` is used.
