@@ -24,6 +24,8 @@ capabilities:
   executable: false
   desc: The archmage has advantage on saving throws against spells and other magical
     effects.
+  action_type: utility
+  mechanics: {}
 - id: spellcasting
   name: Spellcasting
   type: trait
@@ -55,3 +57,78 @@ capabilities:
     - 9th level (1 slot): time stop
 
     * The archmage casts these spells on itself before combat.'
+  action_type: spellcasting
+  mechanics:
+    spellcasting:
+      ability: int
+      save_dc: 17
+      attack_bonus: 9
+      lists:
+      - frequency: at_will
+        spells:
+        - disguise-self
+        - invisibility
+      - frequency: at_will
+        level: 0
+        spells:
+        - fire-bolt
+        - light
+        - mage-hand
+        - prestidigitation
+        - shocking-grasp
+      - frequency: slot
+        level: 1
+        slots: 4
+        spells:
+        - detect-magic
+        - identify
+        - mage-armor
+        - magic-missile
+      - frequency: slot
+        level: 2
+        slots: 3
+        spells:
+        - detect-thoughts
+        - mirror-image
+        - misty-step
+      - frequency: slot
+        level: 3
+        slots: 3
+        spells:
+        - counterspell
+        - fly
+        - lightning-bolt
+      - frequency: slot
+        level: 4
+        slots: 3
+        spells:
+        - banishment
+        - fire-shield
+        - stoneskin
+      - frequency: slot
+        level: 5
+        slots: 3
+        spells:
+        - cone-of-cold
+        - scrying
+        - wall-of-force
+      - frequency: slot
+        level: 6
+        slots: 1
+        spells:
+        - globe-of-invulnerability
+      - frequency: slot
+        level: 7
+        slots: 1
+        spells:
+        - teleport
+      - frequency: slot
+        level: 8
+        slots: 1
+        spells:
+        - mind-blank
+      - frequency: slot
+        level: 9
+        slots: 1
+        spells:
+        - time-stop

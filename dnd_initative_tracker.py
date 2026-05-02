@@ -43734,6 +43734,27 @@ class InitiativeTracker(base.InitiativeTracker):
                  "steps": resolved_children
              }
 
+        elif action_type == "spellcasting":
+             spell_slug = payload.get("spell_slug")
+             if not spell_slug:
+                 return {"ok": True, "resolution": "assisted_spellcasting", "capability": cap}
+             
+             # Resolve individual spell
+             s_meta = mechanics.get("spellcasting", {})
+             spell_data = svc.get_spell_by_slug(spell_slug)
+             
+             res = {
+                 "ok": True,
+                 "resolution": "assisted_spell",
+                 "spell_slug": spell_slug,
+                 "spell_name": spell_data.get("name", spell_slug.replace("-", " ").title()) if spell_data else spell_slug.replace("-", " ").title(),
+                 "level": spell_data.get("level") if spell_data else None,
+                 "save_dc": s_meta.get("save_dc"),
+                 "attack_bonus": s_meta.get("attack_bonus"),
+                 "save_ability": spell_data.get("mechanics", {}).get("sequence", [{}])[0].get("check", {}).get("ability") if spell_data else None
+             }
+             return res
+
         # Check if executable
         if not cap.get("executable"):
              return {"ok": False, "resolution": "manual", "reason": "Capability not marked as executable.", "capability": cap}

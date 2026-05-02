@@ -84,5 +84,30 @@ class TestMonsterCapabilityService(unittest.TestCase):
         self.assertTrue(bite_step["executable"])
         self.assertEqual(bite_step["count"], 1)
 
+    def test_spellcasting_summarization(self):
+        # Archmage has spellcasting
+        combatant = {"monster_slug": "archmage", "name": "Mage"}
+        summary = self.svc.summarize_capabilities_for_ui(1, combatant)
+        
+        spellcasting = next((a for s in summary["groups"].values() for a in s if a["id"] == "spellcasting"), None)
+        self.assertIsNotNone(spellcasting)
+        self.assertEqual(spellcasting["action_type"], "spellcasting")
+        self.assertIn("resolved_lists", spellcasting["mechanics"])
+        
+        s_meta = spellcasting["mechanics"]["spellcasting"]
+        self.assertEqual(s_meta["ability"], "int")
+        self.assertEqual(s_meta["save_dc"], 17)
+        
+        lists = spellcasting["mechanics"]["resolved_lists"]
+        self.assertGreaterEqual(len(lists), 3)
+        
+        # Check lightning-bolt in level 3 list
+        slot_3 = next((l for l in lists if l.get("level") == 3), None)
+        self.assertIsNotNone(slot_3)
+        l_bolt = next((s for s in slot_3["resolved_spells"] if s["slug"] == "lightning-bolt"), None)
+        self.assertIsNotNone(l_bolt)
+        self.assertTrue(l_bolt["matched"])
+        self.assertEqual(l_bolt["level"], 3)
+
 if __name__ == "__main__":
     unittest.main()

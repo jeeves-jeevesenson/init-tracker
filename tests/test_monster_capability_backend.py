@@ -123,5 +123,20 @@ class TestMonsterCapabilityBackend(unittest.TestCase):
         self.assertFalse(result["ok"])
         self.assertIn("out of range", result["error"])
 
+    def test_execute_spellcasting_assisted(self):
+        # Archmage spellcasting
+        self.app.combatants[1].monster_slug = "archmage"
+        payload = {
+            "capability_id": "spellcasting",
+            "spell_slug": "lightning-bolt",
+            "target_cid": 2
+        }
+        result = self.app._dm_monster_capability_execute(actor_cid=1, payload=payload)
+        self.assertTrue(result["ok"])
+        self.assertEqual(result["resolution"], "assisted_spell")
+        self.assertEqual(result["spell_slug"], "lightning-bolt")
+        self.assertEqual(result["save_dc"], 17)
+        self.assertEqual(result["save_ability"], "dexterity")
+
 if __name__ == "__main__":
     unittest.main()

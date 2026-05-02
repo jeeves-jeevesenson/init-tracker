@@ -5718,6 +5718,35 @@ function renderMonsterCapabilities(summary) {
           html += `</div>`;
       }
 
+      if (actionType === 'spellcasting' && cap.mechanics && cap.mechanics.resolved_lists) {
+          const s = cap.mechanics.spellcasting;
+          html += `<div class="cap-source" style="margin-bottom:8px">
+            ${escHtml(s.ability?.toUpperCase() || '')} DC ${s.save_dc} · +${s.attack_bonus} to hit
+          </div>`;
+          
+          for (const list of cap.mechanics.resolved_lists) {
+              let freqLabel = list.frequency.replace('_', ' ');
+              if (list.frequency === 'slot') freqLabel = `Level ${list.level} (${list.slots} slots)`;
+              else if (list.frequency === 'daily') freqLabel = `${list.uses}/Day`;
+
+              html += `<div class="cap-spell-list" style="margin-bottom:8px">
+                <div style="font-size:11px; color:#aaa; text-transform:uppercase; margin-bottom:2px">${escHtml(freqLabel)}</div>
+                <div style="display:flex; flex-wrap:wrap; gap:4px">`;
+              
+              for (const spell of list.resolved_spells) {
+                  html += `<div class="cap-spell-item" style="background:#222; border:1px solid #444; border-radius:4px; padding:2px 6px; font-size:12px; display:flex; align-items:center; gap:6px">
+                    <span style="${spell.matched ? '' : 'color:#888'}" title="${spell.matched ? 'Matched to local Spells/' : 'No local spell file found'}">
+                      ${escHtml(spell.name)}
+                    </span>
+                    <button class="btn-xs" style="padding:0 4px" onclick="executeMonsterSpell(${summary.combatant_id}, '${cap.id}', '${spell.slug}')">
+                      ${spell.matched ? 'Assist' : 'Manual'}
+                    </button>
+                  </div>`;
+              }
+              html += `</div></div>`;
+          }
+      }
+
       if (actionType === 'composite' && cap.mechanics && cap.mechanics.resolved_composite) {
 
           html += `<div class="cap-composite-steps" style="margin: 8px 0; border-left: 2px solid #555; padding-left: 8px;">`;
@@ -5862,6 +5891,45 @@ async function executeMonsterCapability(cid, capId) {
     res.textContent = 'Request failed.';
     res.classList.add('error');
   }
+}
+
+async function executeMonsterSpell(cid, capId, spellSlug) {
+  const targetCid = document.getElementById('monsterCapTargetCidSelect').value;
+  const res = document.getElementById('monsterCapResult');
+  const spend = document.getElementById('monsterSpendSelect').value || 'action';
+
+  res.className = 'mut-result';
+  res.style.display = 'inline';
+  res.textContent = 'Preparing spell...';
+
+  try {
+    const r = await fetch(`${BASE}/api/dm/monster-capabilities/${cid}/execute`, {
+      method: 'POST',
+      headers: authHeaders(),
+      body: JSON.stringify({
+        capability_id: capId,
+        spell_slug: spellSlug,
+        target_cid: targetCid,
+        spend: spend
+      }),
+    });
+    const data = await r.json();
+    if (r.ok && data.ok) {
+      if (data.result && data.result.resolution === 'assisted_spell') {
+         const s = data.result;
+         let msg = `Assist: ${s.spell_name} (Level ${s.level}). `;
+         if (s.save_dc) msg += `DC ${s.save_dc} ${s.save_ability?.toUpperCase() || ''}. `;
+         if (s.attack_bonus) msg += `+${s.attack_bonus} to hit. `;
+         res.textContent = msg;
+      } else {
+         res.textContent = `Manual resolution for ${spellSlug}.`;
+      }
+      if (data.snapshot) applySnapshot(data.snapshot);
+    } else {
+      res.textContent = data.detail || (data.result && data.result.error) || 'Error.';
+      res.classList.add('error');
+    }
+  } catch (e) { res.textContent = 'Request failed.'; res.classList.add('error'); }
 }
 
 async function applyMonsterEffect(cid, capId, effectIdx) {

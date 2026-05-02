@@ -6,10 +6,13 @@ from typing import Dict, List, Any, Optional
 class MonsterCapabilityService:
     """Service for loading and matching normalized monster capability overlays."""
 
-    def __init__(self, root_dir: str = "monster_capabilities"):
+    def __init__(self, root_dir: str = "monster_capabilities", spells_dir: str = "Spells"):
         self.root_dir = root_dir
+        self.spells_dir = spells_dir
         self.capabilities_by_slug: Dict[str, Dict[str, Any]] = {}
+        self.spells_by_slug: Dict[str, Dict[str, Any]] = {}
         self.load_all_capabilities()
+        self.load_all_spells()
 
     def load_all_capabilities(self):
         """Load all normalized capability YAMLs from the root directory."""
@@ -31,6 +34,29 @@ class MonsterCapabilityService:
             except Exception as e:
                 # For this pass, we just print/log and continue
                 print(f"Error loading monster capability {f}: {e}")
+
+    def load_all_spells(self):
+        """Load all spell YAMLs from the spells directory."""
+        self.spells_by_slug = {}
+        if not os.path.exists(self.spells_dir):
+            return
+            
+        pattern = os.path.join(self.spells_dir, "**", "*.yaml")
+        files = glob.glob(pattern, recursive=True)
+        
+        for f in sorted(files):
+            try:
+                with open(f, "r", encoding="utf-8") as stream:
+                    data = yaml.safe_load(stream)
+                    if data and isinstance(data, dict):
+                        slug = os.path.splitext(os.path.basename(f))[0].lower()
+                        self.spells_by_slug[slug] = data
+            except Exception as e:
+                print(f"Error loading spell {f}: {e}")
+
+    def get_spell_by_slug(self, slug: str) -> Optional[Dict[str, Any]]:
+        """Retrieve spell definition by slug."""
+        return self.spells_by_slug.get(slug.lower())
 
     def get_capability_by_slug(self, slug: Optional[str]) -> Optional[Dict[str, Any]]:
         """Retrieve capability overlay by slug."""
@@ -117,6 +143,40 @@ class MonsterCapabilityService:
             effects = mechanics.get("effects")
             if effects:
                 cap["effects"] = effects
+
+            # Resolve spellcasting
+            if action_type == "spellcasting" and "spellcasting" in mechanics:
+                s = mechanics["spellcasting"]
+                resolved_lists = []
+                for lst in s.get("lists", []):
+                    resolved_spells = []
+                    for slug in lst.get("spells", []):
+                        spell_data = self.get_spell_by_slug(slug)
+                        resolved = {
+                            "slug": slug,
+                            "name": spell_data.get("name", slug.replace("-", " ").title()) if spell_data else slug.replace("-", " ").title(),
+                            "matched": spell_data is not None,
+                            "level": spell_data.get("level") if spell_data else None,
+                            "casting_time": spell_data.get("casting_time") if spell_data else None,
+                        }
+                        # Add basic mechanics if matched
+                        if spell_data:
+                            m = spell_data.get("mechanics", {})
+                            resolved["automation"] = m.get("automation", "manual")
+                            # Try to extract damage/save info from local spell
+                            if "sequence" in m:
+                                for seq in m["sequence"]:
+                                    if "check" in seq and seq["check"].get("kind") == "saving_throw":
+                                        resolved["save_ability"] = seq["check"].get("ability")
+                                    if "outcomes" in seq:
+                                        # Very basic extraction for UI
+                                        resolved["has_damage"] = True
+                        resolved_spells.append(resolved)
+                    
+                    resolved_lst = dict(lst)
+                    resolved_lst["resolved_spells"] = resolved_spells
+                    resolved_lists.append(resolved_lst)
+                cap["mechanics"]["resolved_lists"] = resolved_lists
 
             # Resolve composite children
             if action_type == "composite" and "composite" in mechanics:

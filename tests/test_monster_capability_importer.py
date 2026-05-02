@@ -78,5 +78,31 @@ class TestMonsterCapabilityImporter(unittest.TestCase):
         self.assertEqual(riders[0]["trigger"], "on_hit")
         self.assertEqual(riders[0]["escape_dc"], 14)
 
+    def test_dnd5eapi_spellcasting_extraction(self):
+        action = {
+            "name": "Spellcasting",
+            "spellcasting": {
+                "ability": {"index": "int"},
+                "dc": 17,
+                "modifier": 9,
+                "slots": {"1": 4, "2": 3},
+                "spells": [
+                    {"name": "Magic Missile", "level": 1},
+                    {"name": "Shield", "level": 1},
+                    {"name": "Misty Step", "level": 2},
+                    {"name": "Detect Magic", "level": 1, "usage": {"type": "at will"}}
+                ]
+            }
+        }
+        cap = normalize_dnd5eapi_action(action, "test-mage")
+        self.assertEqual(cap["action_type"], "spellcasting")
+        s = cap["mechanics"]["spellcasting"]
+        self.assertEqual(s["ability"], "int")
+        self.assertEqual(s["save_dc"], 17)
+        self.assertEqual(len(s["lists"]), 3) # at_will, slot lvl 1, slot lvl 2
+        
+        at_will = next(l for l in s["lists"] if l["frequency"] == "at_will")
+        self.assertIn("detect-magic", at_will["spells"])
+
 if __name__ == "__main__":
     unittest.main()

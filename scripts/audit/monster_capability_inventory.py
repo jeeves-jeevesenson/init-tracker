@@ -15,8 +15,8 @@ def audit_inventory():
 
     files = sorted([f for f in os.listdir(CAPABILITY_DIR) if f.endswith(".yaml")])
     
-    print(f"{'Slug':<25} | {'Name':<25} | {'Caps':<5} | {'Exec':<5} | {'Save':<5} | {'Rech':<5} | {'Comp':<5} | {'Ride':<5}")
-    print("-" * 120)
+    print(f"{'Slug':<25} | {'Name':<25} | {'Caps':<5} | {'Exec':<5} | {'Save':<5} | {'Rech':<5} | {'Comp':<5} | {'Ride':<5} | {'Spell':<5}")
+    print("-" * 135)
     
     for f in files:
         path = os.path.join(CAPABILITY_DIR, f)
@@ -33,8 +33,9 @@ def audit_inventory():
             recharges = sum(1 for c in caps if "recharge" in c)
             composite = sum(1 for c in caps if c.get("action_type") == "composite")
             riders = sum(len(c.get("mechanics", {}).get("effects", [])) for c in caps)
+            spells = sum(1 for c in caps if c.get("action_type") in ("spellcasting", "spell"))
             
-            print(f"{slug:<25} | {name:<25} | {total:<5} | {executable:<5} | {saves:<5} | {recharges:<5} | {composite:<5} | {riders:<5}")
+            print(f"{slug:<25} | {name:<25} | {total:<5} | {executable:<5} | {saves:<5} | {recharges:<5} | {composite:<5} | {riders:<5} | {spells:<5}")
             
             inventory.append({
                 "slug": slug,
@@ -44,7 +45,8 @@ def audit_inventory():
                 "saves": saves,
                 "recharges": recharges,
                 "composite": composite,
-                "riders": riders
+                "riders": riders,
+                "spells": spells
             })
             
     return inventory

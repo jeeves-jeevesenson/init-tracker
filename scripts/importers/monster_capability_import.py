@@ -188,6 +188,66 @@ def normalize_dnd5eapi_action(action: Dict[str, Any], monster_slug: str) -> Dict
         "mechanics": {}
     }
 
+    # Check for spellcasting
+    if "spellcasting" in action:
+        s = action["spellcasting"]
+        cap["action_type"] = "spellcasting"
+        cap["mechanics"]["spellcasting"] = {
+            "ability": s.get("ability", {}).get("index"),
+            "save_dc": s.get("dc"),
+            "attack_bonus": s.get("modifier"),
+            "lists": []
+        }
+        
+        # Group spells by frequency/resource
+        # dnd5eapi spells are a flat list, we need to group them
+        at_will = []
+        daily = {} # uses -> list
+        slots = {} # level -> list
+        
+        for spell in s.get("spells", []):
+            name = spell.get("name")
+            slug = name.lower().replace(" ", "-").replace("'", "")
+            usage = spell.get("usage")
+            level = spell.get("level")
+            
+            if usage and usage.get("type") == "at will":
+                at_will.append(slug)
+            elif usage and usage.get("type") == "per day":
+                uses = usage.get("times", 1)
+                if uses not in daily: daily[uses] = []
+                daily[uses].append(slug)
+            elif level is not None:
+                if level not in slots: slots[level] = []
+                slots[level].append(slug)
+        
+        if at_will:
+            cap["mechanics"]["spellcasting"]["lists"].append({
+                "frequency": "at_will",
+                "spells": at_will
+            })
+        for uses, spell_list in sorted(daily.items()):
+            cap["mechanics"]["spellcasting"]["lists"].append({
+                "frequency": "daily",
+                "uses": uses,
+                "spells": spell_list
+            })
+        slot_counts = s.get("slots", {})
+        for level, spell_list in sorted(slots.items()):
+            if level == 0:
+                cap["mechanics"]["spellcasting"]["lists"].append({
+                    "frequency": "at_will",
+                    "level": 0,
+                    "spells": spell_list
+                })
+            else:
+                cap["mechanics"]["spellcasting"]["lists"].append({
+                    "frequency": "slot",
+                    "level": level,
+                    "slots": int(slot_counts.get(str(level), 0)),
+                    "spells": spell_list
+                })
+
     # Check for recharge
     usage = action.get("usage")
     if usage and usage.get("type") == "recharge on roll":
@@ -354,14 +414,9 @@ def import_monster(source_slug: str, target_slug: str = None):
             cap["type"] = "legendary_action"
             norm["capabilities"].append(cap)
         for trait in data.get("special_abilities", []):
-            # Try to normalize traits if they have actions/usage
-            cap = {
-                "id": trait.get("name", "trait").lower().replace(" ", "-"),
-                "name": trait.get("name"),
-                "type": "trait",
-                "executable": False,
-                "desc": trait.get("desc")
-            }
+            # Try to normalize traits if they have actions/usage/spellcasting
+            cap = normalize_dnd5eapi_action(trait, target_slug)
+            cap["type"] = "trait"
             norm["capabilities"].append(cap)
     else:
         # Fallback to O5E normalization

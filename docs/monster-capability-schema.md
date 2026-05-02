@@ -82,7 +82,31 @@ mechanics:
       text: "The target is knocked prone."
 ```
 
-## 7. Effect Trigger Types
+#### Spellcasting
+```yaml
+type: "trait" # or action
+action_type: "spellcasting"
+executable: false
+name: "Spellcasting"
+mechanics:
+  spellcasting:
+    ability: "int"
+    save_dc: 17
+    attack_bonus: 9
+    lists:
+      - frequency: "at_will"
+        spells: ["detect-magic", "mage-hand"]
+      - frequency: "daily"
+        uses: 1
+        spells: ["time-stop"]
+      - frequency: "slot"
+        level: 1
+        slots: 4
+        spells: ["magic-missile", "shield"]
+```
+
+  ## 7. Effect Trigger Types
+
 - `on_hit`: Applied when an attack hits.
 - `on_failed_save`: Applied when a target fails a saving throw.
 - `on_failed_escape`: Applied when a target fails to escape a grapple.
