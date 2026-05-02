@@ -1,0 +1,210 @@
+{
+  "key": "srd_archmage",
+  "name": "Archmage",
+  "document": {
+    "name": "System Reference Document 5.1",
+    "key": "srd-2014",
+    "type": "SOURCE",
+    "display_name": "5e 2014 Rules",
+    "publisher": {
+      "name": "Wizards of the Coast",
+      "key": "wizards-of-the-coast"
+    },
+    "gamesystem": {
+      "name": "5th Edition 2014",
+      "key": "5e-2014"
+    },
+    "permalink": "https://dnd.wizards.com/resources/systems-reference-document"
+  },
+  "type": {
+    "name": "Humanoid",
+    "key": "humanoid"
+  },
+  "size": {
+    "name": "Medium",
+    "key": "medium"
+  },
+  "challenge_rating": 12.0,
+  "proficiency_bonus": null,
+  "speed": {
+    "walk": 30,
+    "unit": "feet"
+  },
+  "speed_all": {
+    "unit": "feet",
+    "walk": 30,
+    "crawl": 15,
+    "hover": false,
+    "fly": 0,
+    "burrow": 0,
+    "climb": 15,
+    "swim": 15
+  },
+  "category": "Monsters",
+  "subcategory": null,
+  "alignment": "any alignment",
+  "languages": {
+    "as_string": "any six languages",
+    "data": []
+  },
+  "armor_class": 12,
+  "armor_detail": "15 with _mage armor_",
+  "hit_points": 99,
+  "hit_dice": "18d8+18",
+  "experience_points": 8400,
+  "ability_scores": {
+    "strength": 10,
+    "dexterity": 14,
+    "constitution": 12,
+    "intelligence": 20,
+    "wisdom": 15,
+    "charisma": 16
+  },
+  "modifiers": {
+    "strength": 0,
+    "dexterity": 2,
+    "constitution": 1,
+    "intelligence": 5,
+    "wisdom": 2,
+    "charisma": 3
+  },
+  "initiative_bonus": 2,
+  "saving_throws": {
+    "intelligence": 9,
+    "wisdom": 6
+  },
+  "saving_throws_all": {
+    "strength": 0,
+    "dexterity": 2,
+    "constitution": 1,
+    "intelligence": 9,
+    "wisdom": 6,
+    "charisma": 3
+  },
+  "skill_bonuses": {
+    "arcana": 13,
+    "history": 13
+  },
+  "skill_bonuses_all": {
+    "acrobatics": 2,
+    "animal_handling": 2,
+    "arcana": 13,
+    "athletics": 0,
+    "deception": 3,
+    "history": 13,
+    "insight": 2,
+    "intimidation": 3,
+    "investigation": 5,
+    "medicine": 2,
+    "nature": 5,
+    "perception": 2,
+    "performance": 3,
+    "persuasion": 3,
+    "religion": 5,
+    "sleight_of_hand": 2,
+    "stealth": 2,
+    "survival": 2
+  },
+  "passive_perception": 12,
+  "resistances_and_immunities": {
+    "damage_immunities_display": "",
+    "damage_immunities": [],
+    "damage_resistances_display": "damage from spells; non magical bludgeoning, piercing, and slashing (from stoneskin)",
+    "damage_resistances": [
+      {
+        "name": "Piercing",
+        "key": "piercing"
+      }
+    ],
+    "damage_vulnerabilities_display": "",
+    "damage_vulnerabilities": [],
+    "condition_immunities_display": "",
+    "condition_immunities": []
+  },
+  "normal_sight_range": 10560,
+  "darkvision_range": null,
+  "blindsight_range": null,
+  "tremorsense_range": null,
+  "truesight_range": null,
+  "actions": [
+    {
+      "name": "Dagger",
+      "desc": "Melee or Ranged Weapon Attack: +6 to hit, reach 5 ft. or range 20/60 ft., one target. Hit: 4 (1d4 + 2) piercing damage.",
+      "attacks": [
+        {
+          "name": "Dagger Melee attack",
+          "attack_type": "WEAPON",
+          "to_hit_mod": 6,
+          "reach": 5,
+          "range": 20,
+          "long_range": 60,
+          "target_creature_only": false,
+          "damage_die_count": 1,
+          "damage_die_type": "D4",
+          "damage_bonus": null,
+          "damage_type": {
+            "name": "Thunder",
+            "key": "thunder"
+          },
+          "extra_damage_die_count": null,
+          "extra_damage_die_type": null,
+          "extra_damage_bonus": null,
+          "extra_damage_type": null,
+          "distance_unit": "feet"
+        },
+        {
+          "name": "Dagger Ranged attack",
+          "attack_type": "WEAPON",
+          "to_hit_mod": 6,
+          "reach": null,
+          "range": 20,
+          "long_range": 60,
+          "target_creature_only": false,
+          "damage_die_count": 1,
+          "damage_die_type": "D4",
+          "damage_bonus": null,
+          "damage_type": {
+            "name": "Thunder",
+            "key": "thunder"
+          },
+          "extra_damage_die_count": null,
+          "extra_damage_die_type": null,
+          "extra_damage_bonus": null,
+          "extra_damage_type": null,
+          "distance_unit": "feet"
+        }
+      ],
+      "action_type": "ACTION",
+      "order_in_statblock": 0,
+      "legendary_action_cost": 1,
+      "limited_to_form": null,
+      "usage_limits": null
+    }
+  ],
+  "traits": [
+    {
+      "name": "Magic Resistance",
+      "desc": "The archmage has advantage on saving throws against spells and other magical effects."
+    },
+    {
+      "name": "Spellcasting",
+      "desc": "The archmage is an 18th-level spellcaster. Its spellcasting ability is Intelligence (spell save DC 17, +9 to hit with spell attacks). The archmage can cast disguise self and invisibility at will and has the following wizard spells prepared:\n\n* Cantrips (at will): fire bolt, light, mage hand, prestidigitation, shocking grasp\n* 1st level (4 slots): detect magic, identify, mage armor*, magic missile\n* 2nd level (3 slots): detect thoughts, mirror image, misty step\n* 3rd level (3 slots): counterspell,fly, lightning bolt\n* 4th level (3 slots): banishment, fire shield, stoneskin*\n* 5th level (3 slots): cone of cold, scrying, wall of force\n* 6th level (1 slot): globe of invulnerability\n* 7th level (1 slot): teleport\n* 8th level (1 slot): mind blank*\n* 9th level (1 slot): time stop\n* The archmage casts these spells on itself before combat."
+    }
+  ],
+  "creaturesets": [],
+  "environments": [
+    {
+      "name": "Forest or Jungle",
+      "key": "forest"
+    },
+    {
+      "name": "Laboratory",
+      "key": "laboratory"
+    },
+    {
+      "name": "Urban",
+      "key": "urban"
+    }
+  ],
+  "illustration": null
+}
