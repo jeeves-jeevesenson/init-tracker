@@ -33,3 +33,16 @@ monster-list.xml
 .claude/
 .codex/
 claude-skills/
+
+# Local Gemini runtime/settings
+.gemini/settings.json
+.gemini/*.local.json
+.gemini/tmp/
+.gemini/cache/
+.gemini/logs/
+
+# Runtime logs and generated runtime indexes
+logs/*.log
+logs/*.json
+logs/*.jsonl
+logs/old logs/

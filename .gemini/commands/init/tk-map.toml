@@ -1,0 +1,52 @@
+description = "Inventory remaining Tk/desktop usage and propose bounded removal slices (analysis only)."
+
+prompt = """
+You are mapping remaining Tk/desktop dependencies in init-tracker so
+they can be removed in bounded slices. Tk is a transitional surface,
+not an end-state goal. The headless/browser-first path
+(`INIT_TRACKER_HEADLESS=1` + `HeadlessRoot` + `serve_headless.py`) is
+the permanent runtime direction.
+
+This pass is analysis only — do not delete or rewrite product code.
+
+Files to inspect:
+- tk_compat.py (HeadlessRoot, dummy module construction, the `after()`
+  / `mainloop()` shape that headless still relies on)
+- serve_headless.py
+- dnd_initative_tracker.py (Tk references inside `InitiativeTracker`,
+  `LanController`, and the route handlers)
+- assets/web/* (whether replacement web surfaces already exist for
+  each Tk surface)
+- docs/WINDOWS_EXECUTABLE.md (PyInstaller / desktop exe implications)
+
+For each Tk reference cluster, classify it as exactly one of:
+- LOAD-BEARING under headless (removing it would break the headless
+  host — typically anything riding on `after()`/`mainloop()` scheduling)
+- LOAD-BEARING under desktop only (only meaningful when a real Tk
+  window exists; safe to retire when the desktop shell is retired)
+- VESTIGIAL (already replaced by backend/web equivalents)
+
+Then propose an ordered list of bounded removal slices:
+- each slice removable without big-bang rewrites
+- each slice ships with focused validation (which `tests/test_*.py`
+  files cover it, plus a headless smoke if appropriate)
+- each slice respects strangler-style sequencing per `majorTODO.md`
+  §5.3 (no big-bang Tk removal)
+
+Hard rules:
+- Do not delete or rewrite product code in this pass.
+- Do not propose a big-bang Tk removal.
+- Do not propose moving things off `HeadlessRoot.after()/mainloop()`
+  unless you have a concrete replacement scheduling story.
+- Do not preserve desktop-first behavior as an end-state goal.
+- Do not invent files, modules, or surfaces not present in the repo.
+- Do not rename `dnd_initative_tracker.py`.
+
+End-of-pass report (required):
+- Tk-surface inventory (file refs, classification)
+- headless-impact note per cluster
+- ordered bounded removal slices, each with do-not list and
+  validation surface
+- open questions / decisions that need user input first
+- one suggested first slice ready to hand off to a coding agent
+"""

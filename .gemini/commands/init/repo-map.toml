@@ -1,0 +1,56 @@
+description = "Produce a grounded architecture snapshot of the init-tracker repo (no edits)."
+
+prompt = """
+You are mapping the current state of the init-tracker repository. This is
+analysis only — do not edit any files.
+
+Read these for grounding (in this order):
+- GEMINI.md, AGENTS.md, CLAUDE.md
+- majorTODO.md (the durable platform tracker)
+- .github/copilot-instructions.md
+- .github/instructions/*.instructions.md
+
+Then inspect, with concrete file/line references where possible:
+- dnd_initative_tracker.py — focus on `_lan_apply_action()`, `LanController`,
+  `InitiativeTracker`, the `/dm` and `/dm/map` route blocks, and how they
+  interact with `tk_compat.HeadlessRoot`.
+- player_command_service.py and player_command_contracts.py — current
+  family dispatch, contract builders, reaction-flow seams.
+- combat_service.py — backend authority for combat mutations.
+- serve_headless.py and tk_compat.py — the headless host seam
+  (`INIT_TRACKER_HEADLESS=1`, `HeadlessRoot.after()/mainloop()`).
+- assets/web/{dm,lan} — operator and player surfaces.
+- tests/ — focused tests that pin behavior for each family above.
+
+Produce a report with these sections:
+
+1. Authority boundary today
+   - what is owned by `_lan_apply_action()` directly
+   - what is owned by `PlayerCommandService` / contracts
+   - what is owned by `CombatService`
+   - what is owned by `LanController` vs the tracker
+
+2. Headless/browser-first runtime
+   - how `serve_headless.py` boots authority without a real Tk window
+   - which Tk surfaces are still load-bearing under headless
+   - which Tk surfaces are vestigial
+
+3. Stabilization signals
+   - which `majorTODO.md` §3 / §4 items are still open
+   - which §6 items have already landed
+   - any tracker entries that look stale relative to repo reality
+
+4. Suggested next bounded passes
+   - one for stabilization / hot-path work
+   - one for backend family extraction
+   - one for Tk-removal investigation
+   For each: scope, in-scope files, explicit do-not list, validation
+   shape, end-of-pass report shape.
+
+Hard rules:
+- Do not edit any files.
+- Do not modify YAML data files even read-only-equivalent reformatting.
+- Do not invent files or branches that are not in the repo.
+- Do not propose desktop-first end-state work.
+- Do not rename `dnd_initative_tracker.py`.
+"""

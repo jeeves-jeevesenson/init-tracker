@@ -1,0 +1,66 @@
+description = "Review the spell-management contract surface and propose one bounded corrective slice."
+
+prompt = """
+You are reviewing the spell-management product surface and proposing
+one bounded corrective slice. Per `majorTODO.md` §4.1 the goal is
+backend-derived class-aware behavior, not incremental UI patching.
+
+Read for grounding:
+- GEMINI.md, AGENTS.md
+- majorTODO.md §4.1 (corrective pass status), §6.1 (Throat Goat
+  multiclass gaps), §6.6 / §6.7 (counterspell / refund provenance)
+
+Inspect, with concrete file/line references:
+- dnd_initative_tracker.py — `spellbook_contract`,
+  `_build_live_spellbook_contract`, `_static_data_payload`,
+  `_feature_always_prepared_spell_slugs`, related normalization
+  helpers, and the spell-cast / spell-target adjudication paths.
+- player_command_service.py — spell cast authority, slot provenance
+  threading, refund helpers (`_refund_spell_slot` and adjacent).
+- player_command_contracts.py — spell-related contract builders.
+- assets/web/lan/* — Manage Spells surface, list/mode/tab gating,
+  any residual class/boolean inference.
+- Spells/*.yaml — read for shape and known-spell / always-prepared
+  conventions; do not edit.
+- tests/test_*spell*, tests/test_spell_*, tests/test_counterspell_*,
+  tests/test_command_spell.py — focused regression coverage.
+
+Produce a report with:
+
+1. Contract surface today — what `spellbook_contract` emits, what
+   the LAN Manage Spells surface consumes, and where the client is
+   still inferring instead of consuming.
+
+2. Gap list against `majorTODO.md` §4.1 + §6.1:
+   - any residual generic "known spells" toggle path
+   - wizard known-spell automation status
+   - multiclass per-class prep budgets
+   - pact-vs-standard slot accounting on prepared spells, including
+     refund provenance
+   - always-prepared / free-spell hydration on first WS payload
+
+3. One bounded corrective slice — pick a single contract field, single
+   class boundary, or single multiclass concern. Provide:
+   - in-scope files
+   - proposed contract change (additive where possible)
+   - server-side derivation plan
+   - client-side cleanup plan (replace inference with consumption)
+   - focused test plan
+   - explicit do-not list
+
+Hard rules:
+- Do not reintroduce a generic global "known spells" toggle.
+- Do not push class/boolean inference back into the LAN client.
+- Do not modify YAML data files in a contract-only pass.
+- Do not silently treat warlock pact slots as standard spell slots.
+- Do not lose per-spell origin where refunds depend on it.
+- Do not rename `dnd_initative_tracker.py`.
+
+End-of-pass report (required):
+- files inspected
+- contract surface map and gap list
+- one chosen corrective slice with full scope + do-not list
+- focused test surface
+- proposed `majorTODO.md` §4.1 / §6.1 update wording (propose; do not
+  edit the tracker in this pass)
+"""

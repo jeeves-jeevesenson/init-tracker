@@ -1,0 +1,64 @@
+description = "Produce a handoff report from a Gemini session, ready to paste into a Claude or Codex prompt."
+
+prompt = """
+You are wrapping up a Gemini session and producing a handoff report
+that another agent (Claude or Codex) can pick up cold. The downstream
+agent will not see this Gemini conversation — the report must be
+self-contained.
+
+Use the conversation context to assemble these sections. Do not
+introduce new findings during the handoff itself; if something is
+unsupported by the conversation, leave it out and flag it as an
+open question.
+
+Required sections (use this exact order):
+
+1. Task framing
+   - one sentence on what was being worked on
+   - one sentence on why it matters (link to `majorTODO.md` section
+     if relevant)
+
+2. Grounded findings
+   - bullet list of what was confirmed in this session, each with a
+     file/line reference or a captured evidence anchor
+   - clearly separated from "suspected"
+
+3. Suspected / unconfirmed
+   - hypotheses that did not get evidence yet
+   - what would prove or disprove each one
+
+4. Files inspected
+   - flat list of paths
+
+5. Files changed (if any)
+   - flat list of paths with a one-line description per file
+
+6. Validation run and results
+   - exact commands run
+   - results, with pre-existing failures called out separately
+   - environment blockers (missing deps, missing pytest, etc.)
+
+7. Suggested next pass (single best one)
+   - goal
+   - in-scope files
+   - explicit do-not list
+   - focused validation surface
+   - which downstream agent it best fits (Claude for product slice
+     work, Codex for narrow patches, Gemini again for more
+     analysis)
+
+8. `majorTODO.md` impact
+   - either the exact wording proposed for an update, or
+     "no update needed" with a one-line reason
+
+Hard rules:
+- Do not invent findings. If the session did not confirm it, do not
+  put it under "Grounded findings".
+- Do not paste large code blocks; give file/line references instead.
+- Do not include secrets, tokens, machine-specific paths, or local
+  user identifiers.
+- Do not propose desktop-first end-state work.
+
+The output should be paste-ready into a fresh Claude Code or Codex
+prompt.
+"""

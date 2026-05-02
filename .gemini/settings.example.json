@@ -1,0 +1,28 @@
+{
+  "contextFileName": "GEMINI.md",
+  "fileFiltering": {
+    "respectGitIgnore": true,
+    "enableRecursiveFileSearch": true
+  },
+  "checkpointing": {
+    "enabled": true
+  },
+  "autoAccept": false,
+  "tools": {
+    "exclude": [
+      "run_shell_command(rm -rf)",
+      "run_shell_command(git push)",
+      "run_shell_command(git push --force)",
+      "run_shell_command(git reset --hard)",
+      "run_shell_command(git clean -fd)",
+      "run_shell_command(git commit --amend)",
+      "run_shell_command(sudo)",
+      "run_shell_command(curl)",
+      "run_shell_command(wget)",
+      "run_shell_command(npm publish)",
+      "run_shell_command(pip install)",
+      "run_shell_command(pip uninstall)"
+    ]
+  },
+  "mcpServers": {}
+}

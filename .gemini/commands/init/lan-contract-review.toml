@@ -1,0 +1,65 @@
+description = "Review LAN/player-command contracts and propose one bounded extraction or contract-shape slice."
+
+prompt = """
+You are reviewing the LAN / player-command contract surface in
+init-tracker and proposing one bounded next slice of work.
+
+Read for grounding:
+- GEMINI.md and AGENTS.md
+- .github/instructions/lan-web.instructions.md
+- .github/skills/backend-family-extraction/SKILL.md
+- majorTODO.md §3 and §6.5 / §6.6 / §6.7 (recent reaction-flow work)
+
+Inspect, with concrete file/line references:
+- dnd_initative_tracker.py — `_lan_apply_action()` and any inline
+  command branches still living there
+- player_command_service.py — current family dispatchers and reaction
+  resolvers (Spell Stopper, Counterspell, Shield, Absorb Elements,
+  Interception, etc.)
+- player_command_contracts.py — `*_COMMAND_TYPES`, request/result
+  contract builders, per-family request field sets
+- assets/web/lan/* — how the client uses these payloads, especially
+  reconnect/recovery and additive-field handling
+- tests/test_lan_*, tests/test_player_command_*,
+  tests/test_*_reaction.py — focused regression coverage
+
+Produce a report with:
+
+1. Inline residue map — which command branches still live in
+   `_lan_apply_action()` vs. which are already behind
+   `PlayerCommandService` and contracts. Group residue into coherent
+   families.
+
+2. Contract shape audit — additive-only? Are there any payload
+   field renames or breaking changes pending? Are reaction-flow resume
+   payloads carrying the right authority/provenance fields per
+   `majorTODO.md` §6.7 (e.g. `_spell_cast_authority_source`,
+   pact-vs-standard slot provenance)?
+
+3. Compatibility risks — older DM hosts and clients may still exist;
+   call out anywhere the current contract design would break them.
+
+4. One bounded next pass — pick the largest coherent family that can
+   be migrated in a single safe pass. Provide:
+   - in-scope files
+   - new contract constants / builders
+   - new dispatcher / handler shape
+   - what stays inline as compatibility glue
+   - test plan (focused, not whole-repo)
+   - explicit do-not list
+
+Hard rules:
+- Do not propose breaking renames on existing payload fields.
+- Do not modify YAML data files.
+- Do not broaden into unrelated map / DM workspace UI work.
+- Do not push class/boolean inference back into the LAN client.
+- Do not rename `dnd_initative_tracker.py`.
+
+End-of-pass report (required):
+- files inspected
+- residue map and contract audit findings
+- one chosen next bounded pass with full scope + do-not list
+- test surface that would prove the next pass safely landed
+- proposed `majorTODO.md` update wording (do not edit the tracker in
+  this pass; just propose the wording)
+"""

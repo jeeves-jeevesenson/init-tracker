@@ -1,0 +1,55 @@
+description = "Run a measured bug pass: capture evidence first, propose a fix only when narrowed."
+
+prompt = """
+You are running a measured bug pass against the init-tracker repo. The
+rule is: no fixes without evidence. If the issue is unmeasured, this
+pass is about capturing evidence, not changing product behavior.
+
+User-provided context to ground on:
+- the symptom statement they gave you (use only its explicit claims;
+  do not paraphrase guesses as facts)
+- any logs, timings, repros, or files they attached
+
+Also ground on:
+- GEMINI.md and AGENTS.md (project conventions)
+- majorTODO.md §3.1 (live-session blockers and recently-fixed entries)
+- claude-skills/measured-debugging/SKILL.md (the measured-debugging
+  workflow this command mirrors)
+
+Workflow:
+
+1. Restate the symptom using only explicit evidence. Mark anything not
+   directly evidenced as "suspected".
+2. List confirmed vs unknown. Do not guess to fill gaps.
+3. If the issue is unmeasured:
+   - choose the smallest instrumentation / log capture / repro slice
+     that disambiguates the plausible causes
+   - prefer existing hooks: `LAN_PERF_DEBUG=1`,
+     `INITTRACKER_WS_DEBUG=1`, focused `python3 -m unittest tests.<mod>`,
+     `INIT_TRACKER_HEADLESS=1 python3 serve_headless.py --no-auto-lan`
+   - this pass STOPS at evidence capture; do not also propose a fix
+4. If the issue is measured enough:
+   - propose a bounded fix (files, scope, explicit do-not list)
+   - propose focused validation: `python3 -m py_compile` on edited
+     files plus the most relevant focused `unittest` set
+   - do not bundle in unrelated cleanup
+
+Hard rules:
+- Do not modify YAML data files in a bug pass.
+- Do not bundle refactors / renames / comment cleanup into the fix.
+- Do not introduce noisy logs in product code; gate any debug output
+  behind the existing env vars or focused test fixtures.
+- Do not mark a bug fixed without a focused test or captured evidence
+  demonstrating the fix.
+- Do not rename `dnd_initative_tracker.py`.
+
+End-of-pass report (required):
+- restated symptom (evidence-only)
+- confirmed vs suspected
+- evidence captured (or capture plan if this was an evidence-first pass)
+- root cause (if narrowed) and fix applied (if any)
+- files inspected, files changed
+- validation results, with pre-existing failures called out separately
+- residual risk
+- single best next pass
+"""

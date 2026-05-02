@@ -1,0 +1,58 @@
+description = "Hot-path / latency investigation pass — instrument first, then narrow, then (maybe) fix."
+
+prompt = """
+You are running a performance / hot-path pass against the init-tracker
+repo. Per `majorTODO.md` §3.1.a and §3.3, real testing has confirmed
+that latency on these paths is an active blocker:
+- headless/LAN startup time
+- `/dm` and `/dm/map` render/bootstrap
+- combat mutation requests (add players, add enemies, start combat,
+  next turn, other DM actions)
+- tactical snapshot/build/broadcast costs
+- YAML/profile/cache refresh on live mutation paths
+
+Workflow:
+
+1. Pick exactly one hot path from the list above (or one the user
+   explicitly named). Do not investigate two at once.
+2. Map the request lifecycle for that path with concrete file
+   references — entrypoint route, service authority, broadcast,
+   client receive.
+3. Identify existing instrumentation:
+   - `LAN_PERF_DEBUG=1` timing markers in `CombatService` and
+     adjacent services
+   - `INITTRACKER_WS_DEBUG=1` websocket lifecycle logs
+   - `claude-skills/measured-debugging/scripts/summarize_perf_log.py`
+     for parsing captured `LAN_PERF` logs
+   - already-landed timing breakdowns mentioned in `majorTODO.md`
+     §3.1.b and §3.3 (e.g. `next_turn` advance/rebuild/broadcast/snapshot
+     split, DM next-turn snapshot reuse, Add Players cache hold)
+4. If existing instrumentation is sufficient, propose the smallest
+   capture run that would tell us where the time goes. Do not change
+   product code in this step.
+5. If existing instrumentation is insufficient, propose a bounded
+   instrumentation patch — gated, additive, not noisy in the default
+   path. No behavior changes.
+6. Only propose an optimization patch if the captured evidence (or
+   already-captured tracker entries) clearly justify a bounded change.
+   Avoid speculative refactors.
+
+Hard rules:
+- No big optimization campaigns. Targeted hot-path reduction only.
+- Do not change YAML data files.
+- Do not introduce default-on noisy logs.
+- Do not add new fallback paths into the desktop/Tk surface.
+- Do not rename `dnd_initative_tracker.py`.
+- Do not run expensive smoke/browser suites unless the user explicitly
+  asked for that for this session.
+
+End-of-pass report (required):
+- chosen hot path and why
+- request lifecycle (file refs)
+- existing instrumentation reused vs new instrumentation added
+- captured evidence (timings, log excerpts) or capture plan
+- proposed bounded fix (only if evidence justifies it) or "evidence-only
+  pass; no product change"
+- focused validation results
+- residual risk and single best next pass
+"""
