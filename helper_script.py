@@ -2165,6 +2165,8 @@ class InitiativeTracker(tk.Tk):
         return any(st.ctype == ctype for st in c.condition_stacks)
 
     def _remove_condition_type(self, c: Combatant, ctype: str) -> None:
+        if not hasattr(c, "condition_stacks"):
+            return
         c.condition_stacks = [st for st in c.condition_stacks if st.ctype != ctype]
 
     @staticmethod

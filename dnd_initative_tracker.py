@@ -1089,24 +1089,33 @@ class ShopCatalogConflictError(Exception):
 
 def _ensure_logs_dir() -> Path:
     """Create logs/ in the app data directory (best effort)."""
-    override = str(os.getenv("INITTRACKER_LOG_DIR") or "").strip()
-    if override:
+    override_log = str(os.getenv("INITTRACKER_LOG_DIR") or "").strip()
+    if override_log:
         try:
-            logs = Path(override).expanduser()
+            logs = Path(override_log).expanduser()
+            if not logs.is_absolute():
+                logs = _app_base_dir() / logs
+            logs.mkdir(parents=True, exist_ok=True)
+            return logs
         except Exception:
-            logs = Path("logs")
-        if not logs.is_absolute():
-            logs = _app_base_dir() / logs
-    elif str(os.getenv("INITTRACKER_WS_DEBUG") or "").strip().lower() in {"1", "true", "yes", "on"}:
-        logs = _app_base_dir() / "logs"
-    else:
-        base_dir = _app_data_dir()
-        logs = base_dir / "logs"
+            pass
+
+    override_data = str(os.getenv("INITTRACKER_DATA_DIR") or "").strip()
+    if override_data:
+        try:
+            logs = Path(override_data).expanduser() / "logs"
+            logs.mkdir(parents=True, exist_ok=True)
+            return logs
+        except Exception:
+            pass
+
+    # Fallback to default data dir
     try:
+        logs = _app_data_dir() / "logs"
         logs.mkdir(parents=True, exist_ok=True)
+        return logs
     except Exception:
-        pass
-    return logs
+        return Path("logs")
 
 
 def _env_flag_enabled(name: str) -> bool:
@@ -1135,7 +1144,7 @@ def _ws_debug_log_path() -> Path:
 
 @lru_cache(maxsize=1)
 def _load_backfill_helpers_module() -> Optional[Any]:
-    module_path = _app_base_dir() / "scripts" / "backfill_monster_sections.py"
+    module_path = _app_base_dir() / "scripts" / "migration" / "backfill_monster_sections.py"
     try:
         if not module_path.exists():
             return None
@@ -1263,15 +1272,22 @@ def _make_ops_logger() -> logging.Logger:
 def _make_client_error_logger() -> logging.Logger:
     """Return a logger that writes to ./logs/client_errors.log."""
     lg = logging.getLogger("inittracker.client_errors")
-    if getattr(lg, "_inittracker_configured", False):
-        return lg
+    logs = _ensure_logs_dir()
+    expected_path = logs / "client_errors.log"
+
+    # Check if already configured for the CURRENT logs dir
+    for h in list(lg.handlers):
+        if isinstance(h, logging.FileHandler):
+            if Path(h.baseFilename).resolve() == expected_path.resolve():
+                return lg
+            # Wrong path (likely from a previous test), remove it
+            lg.removeHandler(h)
 
     lg.setLevel(logging.INFO)
-    logs = _ensure_logs_dir()
     fmt = logging.Formatter("[%(asctime)s] %(levelname)s %(message)s", "%Y-%m-%d %H:%M:%S")
 
     try:
-        fh = logging.FileHandler(logs / "client_errors.log", encoding="utf-8")
+        fh = logging.FileHandler(expected_path, encoding="utf-8")
         fh.setLevel(logging.INFO)
         fh.setFormatter(fmt)
         lg.addHandler(fh)
