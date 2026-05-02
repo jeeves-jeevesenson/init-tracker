@@ -2,12 +2,127 @@
 import json
 import yaml
 import os
-from typing import Dict, List, Any
+import re
+from typing import Dict, List, Any, Optional
 
 # Paths
 SAMPLE_DATA_DIR = "docs/reports/monster-source-samples"
 OUTPUT_DIR = "monster_capabilities/samples"
 LEGACY_DIR = "Monsters"
+
+ABILITY_WORDS = {
+    "strength": "str",
+    "dexterity": "dex",
+    "constitution": "con",
+    "intelligence": "int",
+    "wisdom": "wis",
+    "charisma": "cha",
+    "str": "str",
+    "dex": "dex",
+    "con": "con",
+    "int": "int",
+    "wis": "wis",
+    "cha": "cha",
+}
+
+CONDITION_WORDS = ("prone", "frightened", "grappled", "restrained", "poisoned")
+
+def slugify(value: Any) -> str:
+    text = str(value or "").strip().lower()
+    text = text.replace("'", "")
+    text = re.sub(r"\s+", "-", text)
+    return text or "action"
+
+def canonical_action_key(value: Any) -> str:
+    text = str(value or "").strip().lower()
+    text = re.sub(r"\([^)]*\)", "", text)
+    text = text.replace("'", "")
+    text = re.sub(r"[^a-z0-9]+", "-", text).strip("-")
+    if text.endswith("s") and not text.endswith("ss"):
+        text = text[:-1]
+    return text
+
+def compact_formula(value: Any) -> str:
+    return str(value or "").strip().lower().replace(" ", "")
+
+def normalize_ability(value: Any) -> Optional[str]:
+    raw = str(value or "").strip().lower()
+    return ABILITY_WORDS.get(raw)
+
+def parse_save_metadata(desc: str) -> Dict[str, Any]:
+    text = str(desc or "")
+    match = re.search(
+        r"dc\s+(\d+)\s+(strength|dexterity|constitution|intelligence|wisdom|charisma|str|dex|con|int|wis|cha)\s+saving throw",
+        text,
+        flags=re.IGNORECASE,
+    )
+    if not match:
+        return {}
+    return {"save_dc": int(match.group(1)), "save_ability": normalize_ability(match.group(2))}
+
+def parse_area_metadata(desc: str) -> Dict[str, Any]:
+    text = str(desc or "")
+    area: Dict[str, Any] = {}
+    match = re.search(r"(\d+)\s*[- ]\s*foot\s+(cone|line|sphere|radius)", text, flags=re.IGNORECASE)
+    if match:
+        area["size"] = int(match.group(1))
+        area["shape"] = match.group(2).lower()
+    line_match = re.search(
+        r"line\s+that\s+is\s+(\d+)\s+feet\s+long\s+and\s+(\d+)\s+feet\s+wide",
+        text,
+        flags=re.IGNORECASE,
+    )
+    if line_match:
+        area["shape"] = "line"
+        area["size"] = int(line_match.group(1))
+        area["width"] = int(line_match.group(2))
+    radius_match = re.search(r"(?:each creature|creatures?|target)\s+(?:of [^.]+? )?within\s+(\d+)\s+(?:ft\.?|feet)", text, flags=re.IGNORECASE)
+    if radius_match and "shape" not in area:
+        area["shape"] = "radius"
+        area["size"] = int(radius_match.group(1))
+    sphere_match = re.search(r"(\d+)\s*[- ]\s*foot-radius\s+sphere", text, flags=re.IGNORECASE)
+    if sphere_match:
+        area["shape"] = "sphere"
+        area["size"] = int(sphere_match.group(1))
+    return area
+
+def parse_on_save(desc: str, success_type: Any = None, has_damage: bool = False) -> str:
+    text = str(desc or "").lower()
+    success = str(success_type or "").strip().lower()
+    if "half as much damage" in text or "half damage" in text or success == "half":
+        return "half"
+    if "no damage" in text or success in {"none", "no_effect"}:
+        return "none"
+    if has_damage:
+        return "manual"
+    return "none"
+
+def parse_range_metadata(desc: str) -> Dict[str, Any]:
+    text = str(desc or "").lower()
+    mechanics: Dict[str, Any] = {}
+    reach_match = re.search(r"reach\s+(\d+)\s*ft", text)
+    if reach_match:
+        mechanics["reach"] = int(reach_match.group(1))
+    range_match = re.search(r"range\s+(\d+)\s*/\s*(\d+)\s*ft", text)
+    if range_match:
+        mechanics["range"] = int(range_match.group(1))
+        mechanics["long_range"] = int(range_match.group(2))
+    return mechanics
+
+def parse_duration_text(desc: str, condition: str) -> Optional[str]:
+    text = str(desc or "")
+    match = re.search(rf"{re.escape(condition)}(?:ed)?\s+for\s+([^.;]+)", text, flags=re.IGNORECASE)
+    if match:
+        return match.group(1).strip()
+    return None
+
+def add_warning(cap: Dict[str, Any], code: str, detail: Optional[str] = None) -> None:
+    warnings = cap.setdefault("warnings", [])
+    entry: Dict[str, Any] = {"code": code}
+    if detail:
+        entry["detail"] = detail
+    if entry not in warnings:
+        warnings.append(entry)
 
 def extract_riders(desc: str) -> List[Dict[str, Any]]:
     """Extract common condition riders from description text."""
@@ -16,24 +131,15 @@ def extract_riders(desc: str) -> List[Dict[str, Any]]:
     
     effects = []
     desc_lower = desc.lower()
-    import re
+    save_meta = parse_save_metadata(desc)
 
     # 1. Prone
     if "knocked prone" in desc_lower or "is prone" in desc_lower:
         effect = {"kind": "condition", "condition": "prone", "text": "The target is knocked prone."}
-        # Check for save
-        m = re.search(r"dc (\d+) (strength|dexterity) saving throw (?:or|and) (?:be|become) knocked prone", desc_lower)
-        if m:
+        if save_meta:
             effect["trigger"] = "on_failed_save"
-            effect["save_dc"] = int(m.group(1))
-            effect["save_ability"] = m.group(2)[:3]
-        elif "must succeed on a dc" in desc_lower and "saving throw" in desc_lower and "prone" in desc_lower:
-            # Try more generic
-            m = re.search(r"dc (\d+) ([a-z]+) saving throw", desc_lower)
-            if m:
-                effect["trigger"] = "on_failed_save"
-                effect["save_dc"] = int(m.group(1))
-                effect["save_ability"] = m.group(2)[:3]
+            effect["save_dc"] = save_meta.get("save_dc")
+            effect["save_ability"] = save_meta.get("save_ability")
         else:
             effect["trigger"] = "on_hit"
         effects.append(effect)
@@ -41,25 +147,31 @@ def extract_riders(desc: str) -> List[Dict[str, Any]]:
     # 2. Frightened
     if "become frightened" in desc_lower or "is frightened" in desc_lower:
         effect = {"kind": "condition", "condition": "frightened", "text": "The target is frightened."}
-        m = re.search(r"dc (\d+) (wisdom|charisma) saving throw or become frightened", desc_lower)
-        if m:
+        if save_meta:
             effect["trigger"] = "on_failed_save"
-            effect["save_dc"] = int(m.group(1))
-            effect["save_ability"] = m.group(2)[:3]
+            effect["save_dc"] = save_meta.get("save_dc")
+            effect["save_ability"] = save_meta.get("save_ability")
         else:
             effect["trigger"] = "on_failed_save"
+        duration = parse_duration_text(desc, "frightened")
+        if duration:
+            effect["duration"] = duration
+        if "repeat the saving throw" in desc_lower:
+            effect["repeat_save"] = "end_of_turn"
         effects.append(effect)
 
     # 3. Poisoned
     if "is poisoned" in desc_lower or "become poisoned" in desc_lower:
         effect = {"kind": "condition", "condition": "poisoned", "text": "The target is poisoned."}
-        m = re.search(r"dc (\d+) constitution saving throw or be poisoned", desc_lower)
-        if m:
+        if save_meta:
             effect["trigger"] = "on_failed_save"
-            effect["save_dc"] = int(m.group(1))
-            effect["save_ability"] = "con"
+            effect["save_dc"] = save_meta.get("save_dc")
+            effect["save_ability"] = save_meta.get("save_ability")
         else:
             effect["trigger"] = "on_failed_save"
+        duration = parse_duration_text(desc, "poisoned")
+        if duration:
+            effect["duration"] = duration
         effects.append(effect)
 
     # 4. Grappled / Restrained
@@ -74,10 +186,51 @@ def extract_riders(desc: str) -> List[Dict[str, Any]]:
 
     return effects
 
+def extract_manual_warnings(desc: str, cap: Dict[str, Any]) -> None:
+    text = str(desc or "").lower()
+    if not text:
+        return
+    if "has advantage" in text or "advantage on " in text or "can't benefit" in text:
+        return
+    if any(word in text for word in CONDITION_WORDS) and not cap.get("mechanics", {}).get("effects"):
+        add_warning(cap, "ambiguous_condition_text", "Condition-like text was preserved for manual review.")
+    if "if " in text and ("damage" in text or "attack" in text) and not cap.get("executable"):
+        add_warning(cap, "manual_resolution_required", "Conditional trait/action remains display-only.")
+
+def normalize_dnd_damage_entries(action: Dict[str, Any], on_save: Optional[str] = None) -> List[Dict[str, Any]]:
+    entries: List[Dict[str, Any]] = []
+    for dmg in action.get("damage", []):
+        if not isinstance(dmg, dict) or not dmg.get("damage_dice"):
+            continue
+        damage_type = dmg.get("damage_type", {}).get("index")
+        if not damage_type:
+            continue
+        entry = {
+            "formula": compact_formula(dmg.get("damage_dice")),
+            "type": str(damage_type).strip().lower(),
+        }
+        if on_save:
+            entry["on_save"] = on_save
+        entries.append(entry)
+    return entries
+
+def apply_usage_metadata(cap: Dict[str, Any], usage: Any) -> None:
+    if not isinstance(usage, dict):
+        return
+    usage_type = str(usage.get("type") or "").strip().lower()
+    if usage_type == "recharge on roll":
+        cap["recharge"] = usage.get("min_value", 5)
+    elif usage_type == "per day":
+        try:
+            max_uses = int(usage.get("times", 1) or 1)
+        except Exception:
+            max_uses = 1
+        cap.setdefault("mechanics", {})["uses"] = {"max": max_uses, "per": "day"}
+
 def normalize_o5e_action(action: Dict[str, Any], monster_slug: str) -> Dict[str, Any]:
     """Normalize an Open5e V2 action object."""
     cap = {
-        "id": action.get("name", "action").lower().replace(" ", "-"),
+        "id": slugify(action.get("name", "action")),
         "name": action.get("name"),
         "type": "action",
         "executable": False,
@@ -110,14 +263,22 @@ def normalize_o5e_action(action: Dict[str, Any], monster_slug: str) -> Dict[str,
             if atk.get("damage_bonus"):
                 formula += f"+{atk.get('damage_bonus')}"
             
-            damage_type = "unspecified"
-            if atk.get("extra_damage_type"):
-                damage_type = atk.get("extra_damage_type", {}).get("key", "unspecified")
-            
-            cap["mechanics"]["damage"].append({
-                "formula": formula.lower(),
-                "type": damage_type
-            })
+            damage_type = None
+            if isinstance(atk.get("damage_type"), dict):
+                damage_type = atk.get("damage_type", {}).get("key")
+            if not damage_type:
+                add_warning(cap, "source_damage_type_uncertain", "Open5e attack did not expose a reliable damage type.")
+            else:
+                cap["mechanics"]["damage"].append({
+                    "formula": formula.lower(),
+                    "type": str(damage_type).lower()
+                })
+        if atk.get("reach"):
+            cap["mechanics"]["reach"] = int(atk.get("reach"))
+        if atk.get("range"):
+            cap["mechanics"]["range"] = int(atk.get("range"))
+        if atk.get("long_range"):
+            cap["mechanics"]["long_range"] = int(atk.get("long_range"))
 
     # Riders
     riders = extract_riders(cap["desc"])
@@ -146,11 +307,9 @@ def normalize_o5e_action(action: Dict[str, Any], monster_slug: str) -> Dict[str,
                     except: count = 1
                 
                 sub_name = sub_name.strip()
-                if sub_name.lower().endswith("s") and not sub_name.lower().endswith("ss"):
-                    sub_name = sub_name[:-1]
                 
                 cap["mechanics"]["composite"].append({
-                    "action_id": sub_name.lower().replace(" ", "-"),
+                    "action_id": slugify(sub_name),
                     "name": sub_name,
                     "count": count
                 })
@@ -165,7 +324,7 @@ def normalize_o5e_action(action: Dict[str, Any], monster_slug: str) -> Dict[str,
                     try: count = int(count_str)
                     except: count = 1
                 cap["mechanics"]["composite"] = [{
-                    "action_id": sub_name.lower().replace(" ", "-"),
+                    "action_id": slugify(sub_name),
                     "name": sub_name,
                     "count": count
                 }]
@@ -174,12 +333,14 @@ def normalize_o5e_action(action: Dict[str, Any], monster_slug: str) -> Dict[str,
     if "recharge" in cap["name"].lower():
         cap["recharge"] = 5 # Default 5-6 if not specified
 
+    extract_manual_warnings(cap.get("desc") or "", cap)
+
     return cap
 
 def normalize_dnd5eapi_action(action: Dict[str, Any], monster_slug: str) -> Dict[str, Any]:
     """Normalize a dnd5eapi action object."""
     cap = {
-        "id": action.get("name", "action").lower().replace(" ", "-"),
+        "id": slugify(action.get("name", "action")),
         "name": action.get("name"),
         "type": "action",
         "executable": False,
@@ -196,6 +357,8 @@ def normalize_dnd5eapi_action(action: Dict[str, Any], monster_slug: str) -> Dict
             "ability": s.get("ability", {}).get("index"),
             "save_dc": s.get("dc"),
             "attack_bonus": s.get("modifier"),
+            "level": s.get("level"),
+            "school": s.get("school"),
             "lists": []
         }
         
@@ -207,7 +370,7 @@ def normalize_dnd5eapi_action(action: Dict[str, Any], monster_slug: str) -> Dict
         
         for spell in s.get("spells", []):
             name = spell.get("name")
-            slug = name.lower().replace(" ", "-").replace("'", "")
+            slug = slugify(name)
             usage = spell.get("usage")
             level = spell.get("level")
             
@@ -248,34 +411,28 @@ def normalize_dnd5eapi_action(action: Dict[str, Any], monster_slug: str) -> Dict
                     "spells": spell_list
                 })
 
-    # Check for recharge
-    usage = action.get("usage")
-    if usage and usage.get("type") == "recharge on roll":
-        cap["recharge"] = usage.get("min_value", 5)
+    apply_usage_metadata(cap, action.get("usage"))
 
     # Check for save ability
     dc = action.get("dc")
     if dc:
         cap["executable"] = True
         cap["action_type"] = "save_ability"
+        damage_entries = action.get("damage", []) if isinstance(action.get("damage"), list) else []
+        on_save = parse_on_save(action.get("desc", ""), dc.get("success_type"), bool(damage_entries))
         cap["mechanics"] = {
             "save_dc": dc.get("dc_value"),
             "save_ability": dc.get("dc_type", {}).get("index", "dex").lower(),
-            "damage": []
+            "damage": [],
+            "on_save": on_save,
         }
-        # Success type
-        if dc.get("success_type") == "half":
-            cap["mechanics"]["on_save"] = "half"
-        else:
-            cap["mechanics"]["on_save"] = "none"
+        area = parse_area_metadata(action.get("desc", ""))
+        cap["mechanics"].update(area)
 
         # Damage for save
-        for dmg in action.get("damage", []):
-            if dmg.get("damage_dice"):
-                cap["mechanics"]["damage"].append({
-                    "formula": dmg.get("damage_dice").lower(),
-                    "type": dmg.get("damage_type", {}).get("index", "unspecified")
-                })
+        cap["mechanics"]["damage"] = normalize_dnd_damage_entries(action, on_save=on_save)
+        if on_save == "manual":
+            add_warning(cap, "manual_save_outcome", "Save success behavior could not be confidently parsed.")
 
     # Check for attacks (if not already a save_ability)
     elif action.get("attack_bonus") is not None or action.get("damage"):
@@ -286,25 +443,10 @@ def normalize_dnd5eapi_action(action: Dict[str, Any], monster_slug: str) -> Dict
             "attack_bonus": action.get("attack_bonus"),
             "damage": []
         }
-        for dmg in action.get("damage", []):
-            if dmg.get("damage_dice"):
-                cap["mechanics"]["damage"].append({
-                    "formula": dmg.get("damage_dice").lower(),
-                    "type": dmg.get("damage_type", {}).get("index", "unspecified")
-                })
+        cap["mechanics"]["damage"] = normalize_dnd_damage_entries(action)
         
         # Range/Reach extraction from desc if possible
-        if "reach" in desc_lower:
-            import re
-            reach_match = re.search(r"reach (\d+) ft", desc_lower)
-            if reach_match:
-                cap["mechanics"]["reach"] = int(reach_match.group(1))
-        if "range" in desc_lower:
-            import re
-            range_match = re.search(r"range (\d+)/(\d+) ft", desc_lower)
-            if range_match:
-                cap["mechanics"]["range"] = int(range_match.group(1))
-                cap["mechanics"]["long_range"] = int(range_match.group(2))
+        cap["mechanics"].update(parse_range_metadata(desc_lower))
 
     # Riders
     riders = extract_riders(cap["desc"])
@@ -324,7 +466,7 @@ def normalize_dnd5eapi_action(action: Dict[str, Any], monster_slug: str) -> Dict
                 sub_name = sub.get("action_name")
                 if sub_name:
                     cap["mechanics"]["composite"].append({
-                        "action_id": sub_name.lower().replace(" ", "-"),
+                        "action_id": slugify(sub_name),
                         "name": sub_name,
                         "count": int(sub.get("count", 1))
                     })
@@ -350,11 +492,9 @@ def normalize_dnd5eapi_action(action: Dict[str, Any], monster_slug: str) -> Dict
                         except: count = 1
                     
                     sub_name = sub_name.strip()
-                    if sub_name.lower().endswith("s") and not sub_name.lower().endswith("ss"):
-                        sub_name = sub_name[:-1]
                     
                     cap["mechanics"]["composite"].append({
-                        "action_id": sub_name.lower().replace(" ", "-"),
+                        "action_id": slugify(sub_name),
                         "name": sub_name,
                         "count": count
                     })
@@ -369,12 +509,42 @@ def normalize_dnd5eapi_action(action: Dict[str, Any], monster_slug: str) -> Dict
                         try: count = int(count_str)
                         except: count = 1
                     cap["mechanics"]["composite"] = [{
-                        "action_id": sub_name.lower().replace(" ", "-"),
+                        "action_id": slugify(sub_name),
                         "name": sub_name,
                         "count": count
                     }]
 
+    extract_manual_warnings(cap.get("desc") or "", cap)
+
     return cap
+
+def validate_composite_children(norm: Dict[str, Any]) -> None:
+    caps = norm.get("capabilities", []) if isinstance(norm.get("capabilities"), list) else []
+    by_key: Dict[str, Dict[str, Any]] = {}
+    for cap in caps:
+        if not isinstance(cap, dict):
+            continue
+        by_key[canonical_action_key(cap.get("id"))] = cap
+        by_key[canonical_action_key(cap.get("name"))] = cap
+
+    for cap in caps:
+        if not isinstance(cap, dict) or cap.get("action_type") != "composite":
+            continue
+        mechanics = cap.get("mechanics") if isinstance(cap.get("mechanics"), dict) else {}
+        composite = mechanics.get("composite") if isinstance(mechanics.get("composite"), list) else []
+        for child in composite:
+            if not isinstance(child, dict):
+                continue
+            match = by_key.get(canonical_action_key(child.get("action_id"))) or by_key.get(canonical_action_key(child.get("name")))
+            if match:
+                child["action_id"] = match.get("id")
+                child["name"] = match.get("name")
+                child["matched"] = True
+                child["executable"] = bool(match.get("executable"))
+            else:
+                child["matched"] = False
+                child["executable"] = False
+                add_warning(cap, "unmatched_multiattack_child", f"Could not match multiattack child {child.get('name') or child.get('action_id')}.")
 
 def import_monster(source_slug: str, target_slug: str = None):
     if not target_slug:
@@ -424,12 +594,17 @@ def import_monster(source_slug: str, target_slug: str = None):
             norm["capabilities"].append(normalize_o5e_action(action, target_slug))
         for trait in data.get("traits", []):
             norm["capabilities"].append({
-                "id": trait.get("name", "trait").lower().replace(" ", "-"),
+                "id": slugify(trait.get("name", "trait")),
                 "name": trait.get("name"),
                 "type": "trait",
                 "executable": False,
-                "desc": trait.get("desc")
+                "desc": trait.get("desc"),
+                "action_type": "utility",
+                "mechanics": {},
+                "warnings": [{"code": "manual_resolution_required", "detail": "Open5e trait fallback is display-only."}],
             })
+
+    validate_composite_children(norm)
 
     os.makedirs(OUTPUT_DIR, exist_ok=True)
     out_path = os.path.join(OUTPUT_DIR, f"{target_slug}.yaml")

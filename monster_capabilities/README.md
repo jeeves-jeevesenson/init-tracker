@@ -8,7 +8,10 @@ This directory contains normalized, executable monster capabilities. These files
 ## Purpose
 The current `Monsters/*.yaml` files are primarily display-oriented. The capability YAMLs in this directory provide a structured overlay that includes:
 - Executable attack bonuses and damage formulas.
+- Structured save/area metadata where the source text is clear.
+- Condition rider metadata for common riders.
 - Normalized action types (melee, ranged, composite, etc.).
+- Sparse importer warnings for conditional/manual fallbacks.
 - Provenance and licensing information.
 
 ## How to use
@@ -39,6 +42,7 @@ To see a summary of available capability overlays:
 ```bash
 ./.venv/bin/python3 scripts/audit/monster_capability_inventory.py
 ```
+The audit reports executable, save, area, resource, composite, rider, spellcasting, and warning counts so data-quality regressions are easier to spot after regeneration.
 
 ## Coverage Report
 A detailed coverage report is available at `docs/reports/monster-capability-coverage.md`.

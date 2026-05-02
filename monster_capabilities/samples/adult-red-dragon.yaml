@@ -15,12 +15,18 @@ capabilities:
     - action_id: frightful-presence
       name: Frightful Presence
       count: 1
+      matched: true
+      executable: true
     - action_id: bite
       name: Bite
       count: 1
+      matched: true
+      executable: true
     - action_id: claw
       name: Claw
       count: 2
+      matched: true
+      executable: true
 - id: bite
   name: Bite
   type: action
@@ -78,6 +84,8 @@ capabilities:
     save_ability: wis
     damage: []
     on_save: none
+    shape: radius
+    size: 120
     effects:
     - kind: condition
       condition: frightened
@@ -85,6 +93,8 @@ capabilities:
       trigger: on_failed_save
       save_dc: 19
       save_ability: wis
+      duration: 1 minute
+      repeat_save: end_of_turn
 - id: fire-breath
   name: Fire Breath
   type: action
@@ -99,7 +109,10 @@ capabilities:
     damage:
     - formula: 18d6
       type: fire
-    on_save: none
+      on_save: half
+    on_save: half
+    size: 60
+    shape: cone
   recharge: 5
 - id: detect
   name: Detect
@@ -129,7 +142,10 @@ capabilities:
     damage:
     - formula: 2d6+8
       type: bludgeoning
+      on_save: none
     on_save: none
+    shape: radius
+    size: 10
     effects:
     - kind: condition
       condition: prone
@@ -143,4 +159,7 @@ capabilities:
   executable: false
   desc: If the dragon fails a saving throw, it can choose to succeed instead.
   action_type: utility
-  mechanics: {}
+  mechanics:
+    uses:
+      max: 3
+      per: day

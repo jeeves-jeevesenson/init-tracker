@@ -37,6 +37,7 @@ Each capability object includes:
 - `recharge`: Optional (e.g., `5` for 5-6, `short_rest`, `long_rest`).
 - `cost`: Action cost (default 1).
 - `mechanics`: Structured data for the backend (see below).
+- `warnings`: Optional list of importer quality warnings for useful manual review notes.
 
 ### 6.1 Mechanics Shape (Examples)
 
@@ -112,6 +113,15 @@ mechanics:
     max: 3
     per: "day" # or "long_rest", "short_rest"
 ```
+
+#### Import Quality Warnings
+```yaml
+warnings:
+  - code: "manual_resolution_required"
+    detail: "Conditional trait/action remains display-only."
+```
+
+Warnings are intentionally sparse. They identify places where the source text was preserved but the importer could not safely produce executable mechanics, such as unmatched multiattack children, uncertain damage typing, ambiguous condition text, or manual conditional traits.
 
 ## 7. Resource Tracking (In-Memory)
 The backend tracks the current state of limited-use resources in-memory during the session.

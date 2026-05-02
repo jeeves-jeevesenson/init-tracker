@@ -137,5 +137,13 @@ class TestMonsterCapabilityService(unittest.TestCase):
         self.assertTrue(l_bolt["matched"])
         self.assertEqual(l_bolt["level"], 3)
 
+    def test_warning_fields_do_not_break_summary(self):
+        combatant = {"monster_slug": "bugbear", "name": "Bugbear"}
+        summary = self.svc.summarize_capabilities_for_ui(1, combatant)
+
+        surprise = next((a for s in summary["groups"].values() for a in s if a["id"] == "surprise-attack"), None)
+        self.assertIsNotNone(surprise)
+        self.assertEqual(surprise["warnings"][0]["code"], "manual_resolution_required")
+
 if __name__ == "__main__":
     unittest.main()

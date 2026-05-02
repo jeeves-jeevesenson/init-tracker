@@ -48,3 +48,6 @@ capabilities:
     first round of combat, the target takes an extra 7 (2d6) damage from the attack.
   action_type: utility
   mechanics: {}
+  warnings:
+  - code: manual_resolution_required
+    detail: Conditional trait/action remains display-only.

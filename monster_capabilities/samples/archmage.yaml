@@ -63,6 +63,8 @@ capabilities:
       ability: int
       save_dc: 17
       attack_bonus: 9
+      level: 18
+      school: wizard
       lists:
       - frequency: at_will
         spells:

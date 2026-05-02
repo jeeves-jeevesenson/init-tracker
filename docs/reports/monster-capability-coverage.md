@@ -9,27 +9,30 @@ This report summarizes the results of the monster-control pass to broaden normal
 
 ## Monster Coverage Summary
 
-| Slug | Name | Caps | Exec | Save | Rech | Comp | Ride | Status |
-|------|------|------|------|------|------|------|------|--------|
-| adult-red-dragon | Adult Red Dragon | 10 | 6 | 3 | 1 | 1 | 2 | **Multi-target Assisted** |
-| archmage | Archmage | 3 | 1 | 0 | 0 | 0 | 0 | **Display-only spells** |
-| bandit | Bandit | 2 | 2 | 0 | 0 | 0 | 0 | **Safe to use** |
-| bugbear-warrior | Bugbear | 4 | 2 | 0 | 0 | 0 | 0 | **Safe to use** |
-| cultist | Cultist | 2 | 1 | 0 | 0 | 0 | 0 | **Safe to use** |
-| goblin-warrior | Goblin | 3 | 2 | 0 | 0 | 0 | 0 | **Safe to use** |
-| kobold-warrior | Kobold | 4 | 2 | 0 | 0 | 0 | 0 | **Safe to use** |
-| ogre | Ogre | 2 | 2 | 0 | 0 | 0 | 0 | **Safe to use** |
-| orc | Orc | 3 | 2 | 0 | 0 | 0 | 0 | **Safe to use** |
-| skeleton | Skeleton | 2 | 2 | 0 | 0 | 0 | 0 | **Safe to use** |
-| troll | Troll | 5 | 2 | 0 | 0 | 1 | 0 | **Assisted Multiattack** |
-| wolf | Wolf | 3 | 1 | 0 | 0 | 0 | 1 | **Assisted Prone** |
-| zombie | Zombie | 2 | 1 | 0 | 0 | 0 | 0 | **Safe to use** |
+| Slug | Name | Caps | Exec | Save | Area | Res | Comp | Ride | Spell | Warn | Status |
+|------|------|------|------|------|------|-----|------|------|-------|------|--------|
+| adult-red-dragon | Adult Red Dragon | 10 | 6 | 3 | 3 | 2 | 1 | 2 | 0 | 0 | **Multi-target Assisted** |
+| archmage | Archmage | 3 | 1 | 0 | 0 | 0 | 0 | 0 | 1 | 0 | **Assisted spells** |
+| bandit | Bandit | 2 | 2 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | **Safe to use** |
+| bugbear-warrior | Bugbear | 4 | 2 | 0 | 0 | 0 | 0 | 0 | 0 | 1 | **Manual fallback noted** |
+| cultist | Cultist | 2 | 1 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | **Safe to use** |
+| goblin-warrior | Goblin | 3 | 2 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | **Safe to use** |
+| kobold-warrior | Kobold | 4 | 2 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | **Safe to use** |
+| ogre | Ogre | 2 | 2 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | **Safe to use** |
+| orc | Orc | 3 | 2 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | **Safe to use** |
+| skeleton | Skeleton | 2 | 2 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | **Safe to use** |
+| troll | Troll | 5 | 2 | 0 | 0 | 0 | 1 | 0 | 0 | 1 | **Assisted Multiattack** |
+| wolf | Wolf | 3 | 1 | 0 | 0 | 0 | 0 | 1 | 0 | 0 | **Assisted Prone** |
+| zombie | Zombie | 2 | 1 | 0 | 0 | 0 | 0 | 0 | 0 | 1 | **Manual fallback noted** |
+
+Full current counts are available from `./.venv/bin/python3 scripts/audit/monster_capability_inventory.py`; the table above highlights the monsters most affected by the data-quality pass.
 
 ## Key Improvements
 - **Condition Rider Support:** Extract common riders (Prone, Frightened, Grappled) and allow DM-assisted application/removal.
 - **Assisted Multiattack Support:** Multiattack (Composite) actions are now executable via sequential child buttons.
 - **Save Ability Support:** Monsters like the Adult Red Dragon now have executable save DCs and damage (Fire Breath, Wing Attack).
 - **Manual Multi-Target Resolution:** Save/area actions expose DM-selected multi-target rows with fail/success/no-effect/manual outcomes and explicit apply-damage/apply-effects controls.
+- **Importer Quality Pass:** Adult Red Dragon save/area actions now carry explicit cone/radius metadata, correct Fire Breath successful-save half damage, Frightful Presence duration/repeat-save rider metadata, and Legendary Resistance daily-use metadata. Troll and Adult Red Dragon multiattacks now record matched executable child links. Archmage spellcasting carries level/school summary metadata. Conditional display-only traits such as Regeneration, Surprise Attack, and Undead Fortitude now carry sparse manual fallback warnings.
 - **Recharge Mechanics:** Recharge metadata is now extracted (e.g., Fire Breath 5-6).
 - **Legacy Matching:** Added variant slugs (e.g., `goblin-warrior`) to match existing `Monsters/*.yaml` filenames.
 - **Range/Reach Extraction:** Melee reach and ranged attack distances are now extracted where possible.
@@ -39,6 +42,7 @@ This report summarizes the results of the monster-control pass to broaden normal
 - **Multiattack:** "Assisted sequential" means DM clicks each child attack; no single-click full automation yet.
 - **Spellcasting:** Display-only in this pass.
 - **AoE Targeting:** Manual target selection only; no map-template geometry detection.
+- **Data Quality:** Importer warnings are not runtime automation. They identify display-only mechanics that should eventually be handled by authoring tools or explicit backend contracts.
 
 ## How to Regenerate
 ```bash

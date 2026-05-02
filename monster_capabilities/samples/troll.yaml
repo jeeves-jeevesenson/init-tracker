@@ -14,9 +14,13 @@ capabilities:
     - action_id: bite
       name: Bite
       count: 1
+      matched: true
+      executable: true
     - action_id: claw
       name: Claw
       count: 2
+      matched: true
+      executable: true
 - id: bite
   name: Bite
   type: action
@@ -60,3 +64,6 @@ capabilities:
     regenerate.
   action_type: utility
   mechanics: {}
+  warnings:
+  - code: manual_resolution_required
+    detail: Conditional trait/action remains display-only.

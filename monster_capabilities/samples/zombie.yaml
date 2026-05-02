@@ -25,3 +25,6 @@ capabilities:
     from a critical hit. On a success, the zombie drops to 1 hit point instead.
   action_type: utility
   mechanics: {}
+  warnings:
+  - code: manual_resolution_required
+    detail: Conditional trait/action remains display-only.
