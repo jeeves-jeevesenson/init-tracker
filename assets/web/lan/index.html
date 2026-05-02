@@ -5317,6 +5317,8 @@ __DAMAGE_TYPE_OPTIONS__
   let shownNoOwnedToast = false;
   let pendingClaim = null;
   let lastPcList = [];
+  let lastMessageSummaryLogTs = 0;
+  const messageSummaryLogIntervalMs = 5000;
   let claimStaticDataSeen = false;
   let claimStateSeen = false;
   let claimDataReady = false;
@@ -5345,8 +5347,8 @@ __DAMAGE_TYPE_OPTIONS__
   let reconnectCycle = 0;
   let reconnectFallbackTimer = null;
   let reconnectEscalationTimer = null;
-  const reconnectFallbackDelayMs = 1800;
-  const reconnectEscalationDelayMs = 2200;
+  const reconnectFallbackDelayMs = 5000;
+  const reconnectEscalationDelayMs = 8000;
   let lastActiveCid = null;
   let lastTurnRound = null;
   let turnAlertPrimed = false;
@@ -5710,8 +5712,10 @@ __DAMAGE_TYPE_OPTIONS__
     if (reconnectTimer){
       return;
     }
+    logWsDebug("reconnect_scheduled", {delayMs, wsGeneration, reconnectCycle});
     reconnectTimer = setTimeout(() => {
       reconnectTimer = null;
+      logWsDebug("reconnect_timer_fired", {wsGeneration, reconnectCycle});
       connect();
     }, delayMs);
   }
@@ -5732,14 +5736,21 @@ __DAMAGE_TYPE_OPTIONS__
   }
 
   function reconnectRecoveryReady(){
+    const hasGrid = (typeof gridReady !== 'undefined') ? gridReady() : false;
+    const currentGridState = (typeof state !== 'undefined' && state) ? state.grid : undefined;
+    const gridSeen = (typeof reconnectRecoveryGridSeen !== 'undefined') ? reconnectRecoveryGridSeen : false;
+    
+    // Recovery is ready if we have the baseline state and claim data,
+    // AND we've seen some form of grid response (even if null or not-ready).
     return reconnectRecoveryStateSeen
       && reconnectRecoveryClaimSeen
-      && reconnectRecoveryGridSeen
-      && claimDataReady
-      && gridReady();
+      && gridSeen
+      && claimDataReady;
   }
 
   function reconnectRecoveryDebugState(extra){
+    const hasGrid = (typeof gridReady !== 'undefined') ? gridReady() : false;
+    const gridSeen = (typeof reconnectRecoveryGridSeen !== 'undefined') ? reconnectRecoveryGridSeen : false;
     return {
       wsGeneration,
       websocketUrl: wsUrl,
@@ -5748,14 +5759,15 @@ __DAMAGE_TYPE_OPTIONS__
       reconnectRecoveryPending,
       reconnectRecoveryStateSeen,
       reconnectRecoveryClaimSeen,
-      reconnectRecoveryGridSeen,
+      reconnectRecoveryGridSeen: gridSeen,
       reconnectFallbackRequested,
       reconnectEscalated,
       reconnectCycle,
       recoveryTimerPending: !!(reconnectFallbackTimer || reconnectEscalationTimer),
       reconnectTimerPending: !!reconnectTimer,
       claimDataReady,
-      gridReady: gridReady(),
+      gridSeen: gridSeen,
+      gridReady: hasGrid,
       ...(extra || {}),
     };
   }
@@ -5792,9 +5804,22 @@ __DAMAGE_TYPE_OPTIONS__
     }
   }
 
+  let lastRecoveryBlockLogTs = 0;
   function maybeFinishReconnectRecovery(){
     if (!reconnectRecoveryPending) return;
-    if (!reconnectRecoveryReady()) return;
+    if (!reconnectRecoveryReady()){
+      const now = Date.now();
+      if (!lastRecoveryBlockLogTs || (now - lastRecoveryBlockLogTs > 2000)){
+        lastRecoveryBlockLogTs = now;
+        const currentGridState = (typeof state !== 'undefined' && state) ? state.grid : undefined;
+        logWsDebug("recovery_blocked", reconnectRecoveryDebugState({
+          reason: "missing_state_or_claim",
+          stateGridIsNull: currentGridState === null,
+        }));
+      }
+      return;
+    }
+    logWsDebug("recovery_done", reconnectRecoveryDebugState());
     resetReconnectRecoveryState("healthy_baseline_received");
     setConn(true, "Connected");
     updateWaitingOverlay();
@@ -5803,12 +5828,7 @@ __DAMAGE_TYPE_OPTIONS__
   function beginReconnectRecoveryCycle(){
     reconnectCycle += 1;
     reconnectRecoveryPending = true;
-    reconnectRecoveryStateSeen = false;
-    reconnectRecoveryClaimSeen = false;
-    reconnectRecoveryGridSeen = false;
-    reconnectFallbackRequested = false;
-    reconnectEscalated = false;
-    claimStateSeen = false;
+    logWsDebug("recovery_begin", {reconnectCycle, wsGeneration});
     updateClaimDataReady();
     updateWaitingOverlay();
     clearReconnectRecoveryTimers();
@@ -5840,6 +5860,7 @@ __DAMAGE_TYPE_OPTIONS__
         }));
       }, reconnectEscalationDelayMs);
     }, reconnectFallbackDelayMs);
+    maybeFinishReconnectRecovery();
   }
 
   function isReconnectClaimSyncToast(text){
@@ -11937,9 +11958,39 @@ __DAMAGE_TYPE_OPTIONS__
 
 
   function gridReady(){
-    if (!state || !state.grid) return false;
-    if (state.grid.ready === false) return false;
-    return Number.isFinite(state.grid.cols) && Number.isFinite(state.grid.rows);
+    if (!state){
+      return false;
+    }
+    const g = state.grid;
+    if (!g){
+      return false;
+    }
+    // Only block if explicitly set to false
+    if (g.ready === false){
+      return false;
+    }
+    const ok = Number.isFinite(g.cols) && Number.isFinite(g.rows) && g.cols > 0 && g.rows > 0;
+    return ok;
+  }
+
+  function logGridStatus(context){
+    if (!wsDebugEnabled) return;
+    const g = state?.grid;
+    const ms = state?.map_state;
+    const msg = {
+      context,
+      hasState: !!state,
+      hasGrid: !!g,
+      gridReady: gridReady(),
+      cols: g?.cols,
+      rows: g?.rows,
+      readyField: g?.ready,
+      hasMapState: !!ms,
+      mapStateCols: ms?.grid?.cols,
+      mapStateRows: ms?.grid?.rows,
+      units: state?.units?.length || 0,
+    };
+    logWsDebug("grid_status_diag", msg);
   }
 
   function updateWaitingOverlay(){
@@ -17274,11 +17325,30 @@ __DAMAGE_TYPE_OPTIONS__
     }
     const socketGeneration = wsGeneration + 1;
     wsGeneration = socketGeneration;
+    reconnectRecoveryStateSeen = false;
+    reconnectRecoveryClaimSeen = false;
+    reconnectRecoveryGridSeen = false;
+    reconnectFallbackRequested = false;
+    reconnectEscalated = false;
+    claimStateSeen = false;
+
+    logWsDebug("connect_attempt", {
+      wsGeneration: socketGeneration,
+      websocketUrl: wsUrl,
+      reconnectCycle,
+      reconnectTimerPending: !!reconnectTimer,
+      reconnecting,
+    });
+
     let socket = null;
     try {
       socket = new WebSocket(wsUrl);
       ws = socket;
     } catch (err){
+      logWsDebug("connect_failed_sync", {
+        wsGeneration: socketGeneration,
+        error: String(err),
+      });
       console.warn("WebSocket connect failed.", err);
       if (socketGeneration === wsGeneration){
         ws = null;
@@ -17288,7 +17358,10 @@ __DAMAGE_TYPE_OPTIONS__
       return;
     }
     socket.addEventListener("open", () => {
-      if (!isCurrentSocket(socket, socketGeneration)) return;
+      if (!isCurrentSocket(socket, socketGeneration)) {
+        logWsDebug("stale_open_ignored", {wsGeneration: socketGeneration, currentGeneration: wsGeneration});
+        return;
+      }
       logWsDebug("onopen", {
         wsGeneration: socketGeneration,
         websocketUrl: wsUrl,
@@ -17317,7 +17390,10 @@ __DAMAGE_TYPE_OPTIONS__
       refreshMapViewLogPolling();
     });
     socket.addEventListener("close", (ev) => {
-      if (!isCurrentSocket(socket, socketGeneration)) return;
+      if (!isCurrentSocket(socket, socketGeneration)) {
+        logWsDebug("stale_close_ignored", {wsGeneration: socketGeneration, currentGeneration: wsGeneration});
+        return;
+      }
       const closeDebug = {
         wsGeneration: socketGeneration,
         websocketUrl: wsUrl,
@@ -17355,15 +17431,11 @@ __DAMAGE_TYPE_OPTIONS__
         scheduleReconnect(1000);
       }
     });
-    socket.addEventListener("error", () => {
+    socket.addEventListener("error", (ev) => {
       if (!isCurrentSocket(socket, socketGeneration)) return;
       logWsDebug("onerror", {
         wsGeneration: socketGeneration,
-        websocketUrl: wsUrl,
-        reconnectTimerPending: !!reconnectTimer,
-        recoveryTimerPending: !!(reconnectFallbackTimer || reconnectEscalationTimer),
-        reconnecting,
-        reconnectRecoveryPending,
+        readyState: socket.readyState,
         reconnectCycle,
       });
     });
@@ -17371,6 +17443,23 @@ __DAMAGE_TYPE_OPTIONS__
       if (!isCurrentSocket(socket, socketGeneration)) return;
       let msg = null;
       try { msg = JSON.parse(ev.data); } catch(e){ return; }
+
+      const now = Date.now();
+      if (now - lastMessageSummaryLogTs > messageSummaryLogIntervalMs){
+        lastMessageSummaryLogTs = now;
+        logWsDebug("message_summary", {
+          type: msg.type,
+          size: ev.data.length,
+          wsGeneration: socketGeneration,
+          reconnectRecoveryPending,
+          reconnectRecoveryStateSeen,
+          reconnectRecoveryClaimSeen,
+          reconnectRecoveryGridSeen,
+          claimDataReady,
+          gridReady: gridReady(),
+          stateGridIsNull: state && state.grid === null,
+        });
+      }
       if (isPlanning && planningSnapshotLocked && planningFreezeTypes.has(msg.type)){
         return;
       }
@@ -17504,8 +17593,12 @@ __DAMAGE_TYPE_OPTIONS__
         }
         markClaimMessageSeen("state");
         reconnectRecoveryStateSeen = true;
+        if (state && Object.prototype.hasOwnProperty.call(state, "grid")){
+          reconnectRecoveryGridSeen = true;
+        }
         logClaimMessage("state", lastPcList);
         maybeAutoClaimFromState(msg, lastPcList);
+        logGridStatus("state_received");
         updateWaitingOverlay();
         scheduleUiFlush({hud:true, draw:true, mount:true, turnAlert:true, autoCenter:true});
         
@@ -18008,6 +18101,7 @@ __DAMAGE_TYPE_OPTIONS__
         if ("grid" in msg){
           state.grid = msg.grid;
           invalidateMovementRangeCache();
+          reconnectRecoveryGridSeen = true;
         }
         if (gridReady()){
           const cols = state.grid.cols;
@@ -18017,8 +18111,8 @@ __DAMAGE_TYPE_OPTIONS__
             fittedToGrid = false;
             lastGrid = {cols, rows};
           }
-          reconnectRecoveryGridSeen = true;
         }
+        logGridStatus("grid_update_received");
         updateWaitingOverlay();
         lastGridVersion = msg.version ?? lastGridVersion;
         send({type:"grid_ack", version: msg.version});

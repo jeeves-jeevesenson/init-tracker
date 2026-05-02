@@ -1854,6 +1854,7 @@ class LanController:
 
         self._clients_lock = threading.RLock()
         self._clients: Dict[int, Any] = {}  # id(websocket) -> websocket
+        self._ws_send_locks: Dict[int, asyncio.Lock] = {}  # id(websocket) -> asyncio.Lock
         self._clients_meta: Dict[int, Dict[str, Any]] = {}  # id(websocket) -> {host,port,ua,connected_at}
         self._client_hosts: Dict[int, str] = {}  # id(websocket) -> host
         self._view_only_clients: set[int] = set()
@@ -1912,6 +1913,7 @@ class LanController:
         self._terrain_version: int = 0
         self._terrain_pending: Dict[int, Tuple[int, float]] = {}
         self._terrain_resend_seconds: float = 1.5
+        self._cached_static_payload: Optional[str] = None
         self._ko_round_num: Optional[int] = None
         self._ko_played: bool = False
         self._cached_snapshot: Dict[str, Any] = {
@@ -3333,6 +3335,7 @@ class LanController:
 
             with self._clients_lock:
                 self._clients[ws_id] = ws
+                self._ws_send_locks[ws_id] = asyncio.Lock()
                 self._clients_meta[ws_id] = {
                     "host": host,
                     "port": port,
@@ -3356,20 +3359,39 @@ class LanController:
                 phase = "sending initial state"
                 await self._send_grid_update_async(ws_id, self._cached_snapshot.get("grid", {}))
                 await self._send_terrain_update_async(ws_id, self._terrain_payload())
-                # Send static data first (spell presets, etc.) - only sent once
-                await ws.send_text(
-                    self._json_dumps({"type": "static_data", "data": self._static_data_payload()})
-                )
-                # Then send initial state without static data, with personalized "you" field
-                you_data = self._build_you_payload(ws_id)
-                await ws.send_text(
-                    self._json_dumps({
-                        "type": "state", 
-                        "state": self._dynamic_snapshot_payload(), 
-                        "pcs": self._pcs_payload(),
-                        "you": you_data
-                    })
-                )
+                # Start background task to send heavy initial state (static data, full units)
+                # so the receive loop can start immediately and handle client_hello.
+                async def _send_initial_heavy():
+                    try:
+                        self._ws_debug_log(
+                            "initial_heavy_start",
+                            **self._ws_debug_client_fields(ws_id),
+                        )
+                        # Send static data first (spell presets, etc.) - only sent once
+                        static_payload = self._json_dumps({"type": "static_data", "data": self._static_data_payload()})
+                        await self._send_ws_text_serialized(ws_id, ws, static_payload)
+                        # Then send initial state without static data, with personalized "you" field
+                        you_data = self._build_you_payload(ws_id)
+                        state_payload = self._json_dumps({
+                            "type": "state", 
+                            "state": self._dynamic_snapshot_payload(), 
+                            "pcs": self._pcs_payload(),
+                            "you": you_data
+                        })
+                        await self._send_ws_text_serialized(ws_id, ws, state_payload)
+                        self._ws_debug_log(
+                            "initial_heavy_done",
+                            **self._ws_debug_client_fields(ws_id),
+                        )
+                    except Exception as exc:
+                        # Log but don't crash the main loop
+                        self._ws_debug_log(
+                            "initial_heavy_send_failed",
+                            exception=exc,
+                            **self._ws_debug_client_fields(ws_id),
+                        )
+
+                asyncio.create_task(_send_initial_heavy())
             except (TypeError, ValueError) as exc:
                 loop_exception = exc
                 error_details = traceback.format_exc()
@@ -3431,6 +3453,11 @@ class LanController:
                     typ = str(msg.get("type") or "")
                     if typ == "client_hello":
                         client_id = self._normalize_client_id(msg.get("client_id"))
+                        self._ws_debug_log(
+                            "client_hello_received",
+                            client_id=client_id,
+                            **self._ws_debug_client_fields(ws_id)
+                        )
                         if not client_id:
                             self._spell_debug_log(
                                 {
@@ -3509,7 +3536,7 @@ class LanController:
                     elif typ == "save_preset":
                         preset = msg.get("preset")
                         if preset is not None and not isinstance(preset, dict):
-                            await ws.send_text(self._json_dumps({"type": "preset_error", "error": "Invalid preset payload."}))
+                            await self._send_ws_text_serialized(ws_id, ws, self._json_dumps({"type": "preset_error", "error": "Invalid preset payload."}))
                             continue
                         host_key = self._client_hosts.get(ws_id) or f"ws:{ws_id}"
                         if preset is None:
@@ -3517,18 +3544,30 @@ class LanController:
                         else:
                             self._host_presets[host_key] = preset
                         self._save_host_presets()
-                        await ws.send_text(self._json_dumps({"type": "preset_saved"}))
+                        await self._send_ws_text_serialized(ws_id, ws, self._json_dumps({"type": "preset_saved"}))
                     elif typ == "load_preset":
                         host_key = self._client_hosts.get(ws_id) or f"ws:{ws_id}"
                         preset = self._host_presets.get(host_key)
-                        await ws.send_text(self._json_dumps({"type": "preset", "preset": preset}))
+                        await self._send_ws_text_serialized(ws_id, ws, self._json_dumps({"type": "preset", "preset": preset}))
                     elif typ == "grid_request":
+                        self._ws_debug_log(
+                            "grid_request_received",
+                            **self._ws_debug_client_fields(ws_id)
+                        )
                         phase = "sending recovery/state payload"
                         await self._send_grid_update_async(ws_id, self._cached_snapshot.get("grid", {}))
                     elif typ == "terrain_request":
+                        self._ws_debug_log(
+                            "terrain_request_received",
+                            **self._ws_debug_client_fields(ws_id)
+                        )
                         phase = "sending recovery/state payload"
                         await self._send_terrain_update_async(ws_id, self._terrain_payload())
                     elif typ == "state_request":
+                        self._ws_debug_log(
+                            "state_request_received",
+                            **self._ws_debug_client_fields(ws_id)
+                        )
                         phase = "sending recovery/state payload"
                         await self._send_full_state_async(ws_id)
                     elif typ == "grid_ack":
@@ -3552,7 +3591,7 @@ class LanController:
                             lines = self.app._lan_battle_log_lines(limit=req_limit)
                         except Exception:
                             lines = []
-                        await ws.send_text(self._json_dumps({"type": "battle_log", "lines": lines}))
+                        await self._send_ws_text_serialized(ws_id, ws, self._json_dumps({"type": "battle_log", "lines": lines}))
                     elif typ == "log_subscribe":
                         try:
                             req_limit = int(msg.get("limit") or self._battle_log_limit_default)
@@ -3565,7 +3604,7 @@ class LanController:
                             lines = self.app._lan_battle_log_lines(limit=req_limit)
                         except Exception:
                             lines = []
-                        await ws.send_text(self._json_dumps({"type": "battle_log", "lines": lines}))
+                        await self._send_ws_text_serialized(ws_id, ws, self._json_dumps({"type": "battle_log", "lines": lines}))
                     elif typ == "log_unsubscribe":
                         with self._clients_lock:
                             self._battle_log_subscribers.discard(ws_id)
@@ -3740,6 +3779,7 @@ class LanController:
                 final_phase = "cleanup/finally"
                 with self._clients_lock:
                     self._clients.pop(ws_id, None)
+                    self._ws_send_locks.pop(ws_id, None)
                     self._clients_meta.pop(ws_id, None)
                     self._client_hosts.pop(ws_id, None)
                     self._ws_claim_revs.pop(ws_id, None)
@@ -5887,11 +5927,12 @@ class LanController:
             ws_id = id(ws)
             with self._clients_lock:
                 self._dm_ws_clients[ws_id] = ws
+                self._ws_send_locks[ws_id] = asyncio.Lock()
             # Send initial snapshot immediately on connect
             try:
                 if _dm_service is not None:
                     snap = _dm_console_snapshot()
-                    await ws.send_text(json.dumps({"type": "dm_state", "snapshot": snap}))
+                    await self._send_ws_text_serialized(ws_id, ws, json.dumps({"type": "dm_state", "snapshot": snap}))
             except Exception:
                 pass
             # Hold the connection open; messages from client are ignored
@@ -5903,6 +5944,7 @@ class LanController:
             finally:
                 with self._clients_lock:
                     self._dm_ws_clients.pop(ws_id, None)
+                    self._ws_send_locks.pop(ws_id, None)
 
         # ── End DM Console routes ──────────────────────────────────────────
 
@@ -6491,7 +6533,7 @@ class LanController:
                 to_drop.append(ws_id)
                 continue
             try:
-                await ws.send_text(text)
+                await self._send_ws_text_serialized(ws_id, ws, text)
             except Exception as exc:
                 to_drop.append(ws_id)
                 self._log_lan_exception(f"LAN battle log send failed ws_id={ws_id}", exc)
@@ -6992,7 +7034,7 @@ class LanController:
                     "pcs": pcs_data,
                     "you": you_data
                 })
-                await ws.send_text(payload)
+                await self._send_ws_text_serialized(ws_id, ws, payload)
             except Exception as exc:
                 to_drop.append(ws_id)
                 self._log_lan_exception(f"LAN state broadcast send failed ws_id={ws_id}", exc)
@@ -7017,7 +7059,7 @@ class LanController:
             items = list(self._clients.items())
         for ws_id, ws in items:
             try:
-                await ws.send_text(text)
+                await self._send_ws_text_serialized(ws_id, ws, text)
             except Exception as exc:
                 to_drop.append(ws_id)
                 self._log_lan_exception(f"LAN payload broadcast send failed ws_id={ws_id}", exc)
@@ -7114,7 +7156,7 @@ class LanController:
         to_drop: List[int] = []
         for ws_id, ws in items:
             try:
-                await ws.send_text(payload)
+                await self._send_ws_text_serialized(ws_id, ws, payload)
             except Exception:
                 to_drop.append(ws_id)
         if to_drop:
@@ -7152,7 +7194,7 @@ class LanController:
             items = list(self._clients.items())
         for ws_id, ws in items:
             try:
-                await ws.send_text(payload)
+                await self._send_ws_text_serialized(ws_id, ws, payload)
                 with self._clients_lock:
                     self._grid_pending[ws_id] = (self._grid_version, now)
             except Exception as exc:
@@ -7174,7 +7216,7 @@ class LanController:
             items = list(self._clients.items())
         for ws_id, ws in items:
             try:
-                await ws.send_text(payload)
+                await self._send_ws_text_serialized(ws_id, ws, payload)
                 with self._clients_lock:
                     self._terrain_pending[ws_id] = (self._terrain_version, now)
             except Exception as exc:
@@ -7191,7 +7233,7 @@ class LanController:
         if isinstance(grid, dict):
             self._grid_last_sent = (grid.get("cols"), grid.get("rows"))
         try:
-            await ws.send_text(payload)
+            await self._send_ws_text_serialized(ws_id, ws, payload)
             with self._clients_lock:
                 self._grid_pending[ws_id] = (self._grid_version, time.time())
         except Exception as exc:
@@ -7213,7 +7255,7 @@ class LanController:
         if not ws:
             return
         try:
-            await ws.send_text(payload)
+            await self._send_ws_text_serialized(ws_id, ws, payload)
             with self._clients_lock:
                 self._terrain_pending[ws_id] = (self._terrain_version, time.time())
         except Exception as exc:
@@ -7249,7 +7291,8 @@ class LanController:
                 continue
             payload = {"type": "grid_update", "grid": self._cached_snapshot.get("grid", {}), "version": self._grid_version}
             try:
-                asyncio.run_coroutine_threadsafe(ws.send_text(self._json_dumps(payload)), self._loop)
+                coro = self._send_ws_text_serialized(ws_id, ws, self._json_dumps(payload))
+                asyncio.run_coroutine_threadsafe(coro, self._loop)
                 with self._clients_lock:
                     self._grid_pending[ws_id] = (self._grid_version, now)
             except Exception:
@@ -7277,7 +7320,8 @@ class LanController:
                 continue
             payload = {"type": "terrain_update", "terrain": self._terrain_payload(), "version": self._terrain_version}
             try:
-                asyncio.run_coroutine_threadsafe(ws.send_text(self._json_dumps(payload)), self._loop)
+                coro = self._send_ws_text_serialized(ws_id, ws, self._json_dumps(payload))
+                asyncio.run_coroutine_threadsafe(coro, self._loop)
                 with self._clients_lock:
                     self._terrain_pending[ws_id] = (self._terrain_version, now)
             except Exception:
@@ -7360,18 +7404,40 @@ class LanController:
         if not ws:
             return
         try:
-            await ws.send_text(self._json_dumps({"type": "toast", "text": text}))
+            await self._send_ws_text_serialized(ws_id, ws, self._json_dumps({"type": "toast", "text": text}))
         except Exception:
             pass
+
+    async def _send_ws_text_serialized(self, ws_id: int, ws: Any, text: str) -> None:
+        """Serialize sends to a single WebSocket using a per-socket Lock."""
+        lock = None
+        with self._clients_lock:
+            lock = self._ws_send_locks.get(ws_id)
+        
+        if lock is None:
+            return
+            
+        async with lock:
+            try:
+                with self._clients_lock:
+                    is_current = (self._clients.get(ws_id) is ws or 
+                                  self._dm_ws_clients.get(ws_id) is ws)
+                if is_current:
+                    await ws.send_text(text)
+            except Exception:
+                pass
 
     async def _send_async(self, ws_id: int, payload: Dict[str, Any]) -> None:
         with self._clients_lock:
             ws = self._clients.get(ws_id)
         if not ws:
             return
+
         try:
-            await ws.send_text(self._json_dumps(payload))
+            text = self._json_dumps(payload)
+            await self._send_ws_text_serialized(ws_id, ws, text)
         except Exception as exc:
+
             self._ws_debug_log(
                 "send_failed",
                 phase="sending websocket payload",
@@ -7777,6 +7843,13 @@ class LanController:
 
     def _static_data_payload(self, planning: bool = False) -> Dict[str, Any]:
         """Return static data that only needs to be sent once on connection."""
+        # Check cache first for full payload (not planning)
+        if not planning and self._cached_static_payload is not None:
+            try:
+                return json.loads(self._cached_static_payload)
+            except Exception:
+                pass
+
         spell_presets = self.app._spell_presets_payload() if planning else self._cached_snapshot.get("spell_presets", [])
         if not spell_presets:
             # Cached snapshot may not yet carry static data (e.g. headless startup
@@ -7787,13 +7860,13 @@ class LanController:
             except Exception:
                 spell_presets = []
         monster_choices = self._monster_choices_payload()
-        return {
+        payload = {
             "spell_presets": spell_presets,
             "player_spells": self._cached_snapshot.get("player_spells", {}),
             "player_profiles": self._cached_snapshot.get("player_profiles", {}),
             "resource_pools": self._cached_snapshot.get("resource_pools", {}),
             "consumables_library": self._cached_snapshot.get("consumables_library", []),
-            "monster_choices": monster_choices,
+            "monster_choices": monster_choices if not planning else [],
             "conditions": [
                 "blinded", "charmed", "deafened", "frightened", "grappled", "incapacitated",
                 "invisible", "paralyzed", "petrified", "poisoned", "prone", "restrained", "stunned", "unconscious",
@@ -7801,6 +7874,13 @@ class LanController:
             "dice_types": ["d4", "d6", "d8", "d10", "d12", "d20", "d100"],
             "token_colours": ["#6aa9ff", "#ff6a6a", "#66d17a", "#f1c95f", "#c97dff", "#61d8d8"],
         }
+        # Update cache for full payload
+        if not planning and monster_choices:
+            try:
+                self._cached_static_payload = self._json_dumps(payload)
+            except Exception:
+                pass
+        return payload
 
     def _resolve_planning_auth(self, request: "Request", player_cid: Optional[int] = None) -> Dict[str, Any]:
         from fastapi import HTTPException
@@ -18903,7 +18983,9 @@ class InitiativeTracker(base.InitiativeTracker):
         rows = self._lan_grid_rows
         obstacles = set(self._lan_obstacles)
         positions = dict(self._lan_positions)
-        map_ready = mw is not None
+        # In headless mode, we treat the map as ready if we have valid dimensions,
+        # since there is no desktop window to open.
+        map_ready = mw is not None or self.host_mode == "headless"
         aoes: List[Dict[str, Any]] = []
         aoe_source: Dict[int, Dict[str, Any]] = dict(self.__dict__.get("_lan_aoes", {}) or {})
         rough_terrain: Dict[Tuple[int, int], object] = dict(getattr(self, "_lan_rough_terrain", {}) or {})
@@ -19330,7 +19412,13 @@ class InitiativeTracker(base.InitiativeTracker):
 
         grid_payload = None
         if map_ready:
-            grid_payload = {"cols": int(cols), "rows": int(rows), "feet_per_square": float(feet_per_square)}
+            grid_payload = {
+                "cols": int(cols), 
+                "rows": int(rows), 
+                "feet_per_square": float(feet_per_square),
+                "ready": map_ready and not map_batching,
+                "version": self._grid_version,
+            }
         turn_order: List[int] = []
         try:
             ordered = self._display_order()
