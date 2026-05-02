@@ -68,12 +68,17 @@ capabilities:
   desc: The dragon exhales fire in a 60-foot cone. Each creature in that area must
     make a DC 21 Dexterity saving throw, taking 63 (18d6) fire damage on a failed
     save, or half as much damage on a successful one.
-  action_type: ranged_attack
+  action_type: save_ability
+  recharge: 5
   mechanics:
-    attack_bonus: null
+    save_dc: 21
+    save_ability: dex
+    shape: cone
+    size: 60
     damage:
     - formula: 18d6
       type: fire
+      on_save: half
 - id: detect
   name: Detect
   type: legendary_action
@@ -95,12 +100,19 @@ capabilities:
   desc: The dragon beats its wings. Each creature within 10 ft. of the dragon must
     succeed on a DC 22 Dexterity saving throw or take 15 (2d6 + 8) bludgeoning damage
     and be knocked prone. The dragon can then fly up to half its flying speed.
-  action_type: ranged_attack
+  action_type: save_ability
+  cost: 2
   mechanics:
-    attack_bonus: null
+    save_dc: 22
+    save_ability: dex
+    shape: radius
+    size: 10
     damage:
     - formula: 2d6+8
       type: bludgeoning
+      on_save: none
+    conditions:
+    - type: prone
 - id: legendary-resistance
   name: Legendary Resistance
   type: trait

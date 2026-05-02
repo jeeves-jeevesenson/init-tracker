@@ -110,6 +110,11 @@ class MonsterCapabilityService:
         
         for cap in data.get("capabilities", []):
             ctype = cap.get("type", "special")
+            # Include recharge if present
+            recharge = cap.get("recharge")
+            if recharge:
+                cap["recharge_rule"] = f"{recharge}-6" if isinstance(recharge, int) else str(recharge)
+            
             # Map type to plural groups
             key = ctype + "s" if not ctype.endswith("s") else ctype
             if key in groups:

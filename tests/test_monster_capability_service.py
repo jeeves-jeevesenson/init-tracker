@@ -40,5 +40,25 @@ class TestMonsterCapabilityService(unittest.TestCase):
         self.assertFalse(summary["matched"])
         self.assertEqual(summary["combatant_id"], 99)
 
+    def test_recharge_summarization(self):
+        # Adult Red Dragon has fire-breath with recharge 5
+        combatant = {"monster_slug": "adult-red-dragon", "name": "Dragon"}
+        summary = self.svc.summarize_capabilities_for_ui(1, combatant)
+        self.assertTrue(summary["matched"])
+        
+        actions = summary["groups"]["actions"]
+        fire_breath = next((a for s in summary["groups"].values() for a in s if a["id"] == "fire-breath"), None)
+        self.assertIsNotNone(fire_breath)
+        self.assertEqual(fire_breath["recharge_rule"], "5-6")
+
+    def test_save_ability_summarization(self):
+        combatant = {"monster_slug": "adult-red-dragon", "name": "Dragon"}
+        summary = self.svc.summarize_capabilities_for_ui(1, combatant)
+        
+        fire_breath = next((a for s in summary["groups"].values() for a in s if a["id"] == "fire-breath"), None)
+        self.assertEqual(fire_breath["action_type"], "save_ability")
+        self.assertEqual(fire_breath["mechanics"]["save_dc"], 21)
+        self.assertEqual(fire_breath["mechanics"]["save_ability"], "dex")
+
 if __name__ == "__main__":
     unittest.main()

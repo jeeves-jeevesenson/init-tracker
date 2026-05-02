@@ -5683,22 +5683,44 @@ function renderMonsterCapabilities(summary) {
     for (const cap of list) {
       const isExec = !!cap.executable;
       const actionType = cap.action_type || 'special';
+      const recharge = cap.recharge_rule;
+      const available = cap.recharge_available !== false;
 
       html += `<div class="cap-card ${isExec ? 'executable' : ''}">
         <div class="cap-card-header">
           <span class="cap-name">${escHtml(cap.name)}</span>
+          ${recharge ? `<span class="cap-badge ${available ? 'exec' : 'manual'}">Recharge ${escHtml(recharge)} ${available ? '(Ready)' : '(Used)'}</span>` : ''}
           <span class="cap-badge ${actionType}">${escHtml(actionType.replace('_', ' '))}</span>
           ${isExec ? '<span class="cap-badge exec">Automatic</span>' : '<span class="cap-badge manual">Manual</span>'}
         </div>
         <div class="cap-desc">${escHtml(cap.desc)}</div>`;
 
-      if (isExec) {
-        html += `<div class="cap-actions">
-          <button class="btn-sm" onclick="executeMonsterCapability(${summary.combatant_id}, '${cap.id}')">Execute on Target</button>
-        </div>`;
-      } else {
-         html += `<div class="cap-actions-manual">Manual resolution required.</div>`;
+      if (actionType === 'save_ability' && cap.mechanics) {
+          const m = cap.mechanics;
+          html += `<div class="cap-source" style="margin-bottom:8px">
+            DC ${m.save_dc} ${escHtml(m.save_ability || '')} 
+            ${m.damage ? `· ${m.damage.map(d => `${d.formula} ${d.type}`).join(' + ')}` : ''}
+          </div>`;
       }
+
+      html += `<div class="cap-actions">`;
+      if (isExec) {
+          if (available) {
+            html += `<button class="btn-sm" onclick="executeMonsterCapability(${summary.combatant_id}, '${cap.id}')">Execute on Target</button>`;
+          } else {
+            html += `<button class="btn-sm" disabled title="Ability used">Used</button>`;
+          }
+      } else {
+         html += `<span class="cap-actions-manual">Manual resolution required.</span>`;
+      }
+
+      if (recharge) {
+          if (!available) {
+            html += `<button class="btn-sm btn-warn" onclick="rollMonsterRecharge(${summary.combatant_id}, '${cap.id}')">Roll Recharge</button>`;
+          }
+          html += `<button class="btn-sm" onclick="markMonsterRecharge(${summary.combatant_id}, '${cap.id}', ${!available})">Mark ${available ? 'Used' : 'Ready'}</button>`;
+      }
+      html += `</div>`;
 
       html += `</div>`;
     }
@@ -5706,6 +5728,49 @@ function renderMonsterCapabilities(summary) {
   }
 
   content.innerHTML = html;
+}
+
+async function rollMonsterRecharge(cid, capId) {
+  const res = document.getElementById('monsterCapResult');
+  res.className = 'mut-result';
+  res.style.display = 'inline';
+  res.textContent = 'Rolling...';
+
+  try {
+    const r = await fetch(`${BASE}/api/dm/monster-capabilities/${cid}/recharge`, {
+      method: 'POST',
+      headers: authHeaders(),
+      body: JSON.stringify({ capability_id: capId }),
+    });
+    const data = await r.json();
+    if (r.ok && data.ok) {
+      const s = data.result;
+      res.textContent = `Rolled ${s.roll} (needs ${s.threshold}+): ${s.success ? 'SUCCESS' : 'Failed'}`;
+      if (!s.success) res.classList.add('error');
+      // The summary in the card won't update until next snapshot or manual re-fetch
+      // But we can trigger a re-fetch of capabilities for this monster
+      fetchMonsterCapabilities(cid);
+      if (data.snapshot) applySnapshot(data.snapshot);
+    } else {
+      res.textContent = data.detail || 'Error.';
+      res.classList.add('error');
+    }
+  } catch (e) { res.textContent = 'Request failed.'; res.classList.add('error'); }
+}
+
+async function markMonsterRecharge(cid, capId, available) {
+  try {
+    const r = await fetch(`${BASE}/api/dm/monster-capabilities/${cid}/mark-recharge`, {
+      method: 'POST',
+      headers: authHeaders(),
+      body: JSON.stringify({ capability_id: capId, available: available }),
+    });
+    const data = await r.json();
+    if (r.ok && data.ok) {
+      fetchMonsterCapabilities(cid);
+      if (data.snapshot) applySnapshot(data.snapshot);
+    }
+  } catch (e) { console.error('Mark recharge failed', e); }
 }
 
 async function executeMonsterCapability(cid, capId) {
@@ -5738,10 +5803,19 @@ async function executeMonsterCapability(cid, capId) {
     if (r.ok && data.ok) {
       if (data.result && data.result.resolution === 'automatic') {
          res.textContent = `Executed ${capId}. Check battle log for details.`;
+      } else if (data.result && data.result.resolution === 'assisted') {
+         const s = data.result;
+         let msg = `Assisted: ${s.target_name} vs DC ${s.save_dc} ${s.save_ability.toUpperCase()}. `;
+         msg += `Fail: ${s.total_fail} dmg. Success: ${s.total_success} dmg.`;
+         res.textContent = msg;
+         // We don't auto-apply damage for assisted yet in this pass to keep it safe.
+         // DM sees the values and uses manual damage tool.
       } else {
          res.textContent = `Automatic execution failed: ${data.result ? data.result.reason : 'Unknown error'}`;
          res.classList.add('error');
       }
+      // Re-fetch to update recharge status if it was used
+      fetchMonsterCapabilities(cid);
       if (data.snapshot) applySnapshot(data.snapshot);
     } else {
       res.textContent = data.detail || (data.result && data.result.error) || 'Error.';

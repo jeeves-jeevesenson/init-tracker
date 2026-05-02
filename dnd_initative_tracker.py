@@ -4596,6 +4596,13 @@ class LanController:
                     raise HTTPException(status_code=404, detail="Combatant not found.")
                 svc = self._ensure_monster_capabilities()
                 summary = svc.summarize_capabilities_for_ui(int(cid), combatant)
+                # Inject recharge status
+                for group in summary.get("groups", {}).values():
+                    for cap in group:
+                        cap_id = cap.get("id")
+                        if cap.get("recharge") and cap_id:
+                            status = self.app._monster_recharge_state.get(f"{cid}:{cap_id}", True)
+                            cap["recharge_available"] = status
                 return {
                     "ok": True,
                     "summary": summary,
@@ -4626,6 +4633,47 @@ class LanController:
                 }
             except Exception as exc:
                 raise HTTPException(status_code=500, detail=f"Failed to execute monster capability: {exc}")
+
+        @self._fastapi_app.post("/api/dm/monster-capabilities/{cid}/recharge")
+        async def dm_roll_monster_recharge(cid: int, request: Request, payload: Dict[str, Any] = Body(...)):
+            """Roll to recharge a monster capability."""
+            _check_dm_auth(request)
+            try:
+                cap_id = payload.get("capability_id")
+                if not cap_id:
+                    raise HTTPException(status_code=400, detail="capability_id is required.")
+                
+                result = self.app._dm_monster_capability_roll_recharge(cid=int(cid), capability_id=str(cap_id))
+                return {
+                    "ok": result.get("ok"),
+                    "result": result,
+                    "snapshot": _dm_console_snapshot(),
+                }
+            except Exception as exc:
+                raise HTTPException(status_code=500, detail=f"Failed to roll monster recharge: {exc}")
+
+        @self._fastapi_app.post("/api/dm/monster-capabilities/{cid}/mark-recharge")
+        async def dm_mark_monster_recharge(cid: int, request: Request, payload: Dict[str, Any] = Body(...)):
+            """Manually mark a monster capability as available or used."""
+            _check_dm_auth(request)
+            try:
+                cap_id = payload.get("capability_id")
+                available = bool(payload.get("available", True))
+                if not cap_id:
+                    raise HTTPException(status_code=400, detail="capability_id is required.")
+                
+                key = f"{cid}:{cap_id}"
+                self.app._monster_recharge_state[key] = available
+                self.app._lan_force_state_broadcast()
+                
+                return {
+                    "ok": True,
+                    "capability_id": cap_id,
+                    "available": available,
+                    "snapshot": _dm_console_snapshot(),
+                }
+            except Exception as exc:
+                raise HTTPException(status_code=500, detail=f"Failed to mark monster recharge: {exc}")
 
         @self._fastapi_app.post("/api/dm/combat/combatants/{cid}/spell-target")
         async def dm_monster_spell_target(cid: int, request: Request, payload: Dict[str, Any] = Body(...)):
@@ -8498,6 +8546,7 @@ class InitiativeTracker(base.InitiativeTracker):
         # Monster library (YAML files in ./Monsters)
         self._monster_specs: List[MonsterSpec] = []
         self._monsters_by_name: Dict[str, MonsterSpec] = {}
+        self._monster_recharge_state: Dict[str, bool] = {}
         self._load_monsters_index()
         # Swap the Name entry for a monster dropdown + library button
         if self.host_mode == "desktop":
@@ -43625,6 +43674,13 @@ class InitiativeTracker(base.InitiativeTracker):
         if not cap.get("executable"):
              return {"ok": False, "resolution": "manual", "reason": "Capability not marked as executable.", "capability": cap}
 
+        # Check recharge if present
+        recharge = cap.get("recharge")
+        if recharge:
+            available = self._monster_recharge_state.get(f"{normalized_actor_cid}:{cap_id}", True)
+            if not available:
+                return {"ok": False, "error": f"{cap.get('name')} is not recharged."}
+
         action_type = cap.get("action_type")
         mechanics = cap.get("mechanics", {})
 
@@ -43670,6 +43726,10 @@ class InitiativeTracker(base.InitiativeTracker):
             if not bool(result.get("ok")):
                 return {"ok": False, "error": str(result.get("reason") or "Failed to resolve monster attacks.")}
 
+            # 5. Mark as used if it was a recharge ability
+            if recharge:
+                self._monster_recharge_state[f"{normalized_actor_cid}:{cap_id}"] = False
+
             try:
                 self._rebuild_table(scroll_to_current=True)
                 self._lan_force_state_broadcast()
@@ -43683,11 +43743,111 @@ class InitiativeTracker(base.InitiativeTracker):
             payload_res["resolution"] = "automatic"
             return payload_res
 
+        elif action_type == "save_ability" and target_cid is not None:
+             # Assisted resolution for saves
+             normalized_target_cid = _normalize_cid_value(target_cid, "dm.monster.capability.target")
+             if normalized_target_cid is None:
+                 return {"ok": False, "error": "target_cid must be an integer."}
+             target = self.combatants.get(normalized_target_cid)
+             if not target:
+                 return {"ok": False, "error": "Target not found."}
+
+             # 1. Roll damage
+             damage_rolls = []
+             damage_entries = mechanics.get("damage", [])
+             total_fail = 0
+             total_success = 0
+             
+             for entry in damage_entries:
+                 formula = entry.get("formula")
+                 dtype = entry.get("type", "unspecified")
+                 on_save = entry.get("on_save", "half")
+                 
+                 roll = self._roll_monster_attack_formula(formula)
+                 success_roll = 0
+                 if on_save == "half":
+                     success_roll = roll // 2
+                 elif on_save == "none":
+                     success_roll = 0
+                 
+                 damage_rolls.append({
+                     "formula": formula,
+                     "type": dtype,
+                     "on_save": on_save,
+                     "rolled": roll,
+                     "rolled_success": success_roll
+                 })
+                 total_fail += roll
+                 total_success += success_roll
+
+             # 2. Spend resource (optional for DM)
+             spend_key = self._dm_normalize_turn_spend(spend, default="action", allow_none=True)
+
+             # 3. Mark as used if it was a recharge ability
+             # We only mark it as used if the DM actually executes the assisted resolution request
+             if recharge:
+                self._monster_recharge_state[f"{normalized_actor_cid}:{cap_id}"] = False
+                self._lan_force_state_broadcast()
+
+             return {
+                 "ok": True,
+                 "resolution": "assisted",
+                 "capability": cap,
+                 "actor_name": str(getattr(actor, "name", "Actor")),
+                 "target_id": normalized_target_cid,
+                 "target_name": str(getattr(target, "name", "Target")),
+                 "save_dc": mechanics.get("save_dc"),
+                 "save_ability": mechanics.get("save_ability"),
+                 "damage_rolls": damage_rolls,
+                 "total_fail": total_fail,
+                 "total_success": total_success,
+                 "spend_hint": spend_key,
+                 "recharge_expended": bool(recharge)
+             }
+
         return {
             "ok": False,
             "resolution": "manual",
             "reason": "Complex action or missing target.",
             "capability": cap
+        }
+
+    def _dm_monster_capability_roll_recharge(self, *, cid: int, capability_id: str) -> Dict[str, Any]:
+        """Roll to recharge a monster capability."""
+        actor = self.combatants.get(cid)
+        if not actor:
+            return {"ok": False, "error": "Actor not found."}
+
+        svc = self._ensure_monster_capabilities()
+        data = svc.match_capabilities_for_combatant(actor)
+        if not data:
+            return {"ok": False, "error": "No capability overlay found."}
+
+        cap = next((c for c in data.get("capabilities", []) if c.get("id") == capability_id), None)
+        if not cap:
+            return {"ok": False, "error": f"Capability {capability_id} not found."}
+
+        threshold = cap.get("recharge")
+        if not threshold:
+            return {"ok": False, "error": "Not a recharge capability."}
+
+        roll = random.randint(1, 6)
+        success = roll >= int(threshold)
+        key = f"{cid}:{capability_id}"
+        
+        if success:
+            self._monster_recharge_state[key] = True
+            self._lan_force_state_broadcast()
+
+        self._oplog(f"{getattr(actor, 'name', 'Monster')} rolls {roll} for {cap.get('name')} recharge (needs {threshold}+): {'Success!' if success else 'Failed'}")
+        
+        return {
+            "ok": True,
+            "roll": roll,
+            "threshold": threshold,
+            "success": success,
+            "capability_id": capability_id,
+            "capability_name": cap.get("name")
         }
 
     def _dm_monster_perform_action(self, *, actor_cid: Any, action_name: Any, spend: Any = "action") -> Dict[str, Any]:
