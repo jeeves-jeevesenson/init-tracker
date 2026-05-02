@@ -20,10 +20,11 @@ A new DM API is available:
 - `GET /api/dm/monster-capabilities`: Lists active monsters with capability overlays.
 - `GET /api/dm/monster-capabilities/{cid}`: Returns the grouped capabilities for a specific combatant.
 - `POST /api/dm/monster-capabilities/{cid}/execute`: Executes a simple attack or save capability. For composite (Multiattack) actions, returns an assisted sequence summary.
+- `POST /api/dm/monster-capabilities/{cid}/resolve-targets`: Resolves a save/area capability against DM-selected target rows with explicit per-target outcomes.
 - `POST /api/dm/monster-capabilities/{cid}/apply-effect`: Applies a condition rider (e.g. Prone, Grappled) to a target.
 - `POST /api/dm/monster-capabilities/{cid}/remove-effect`: Removes a condition rider from a target.
 
-The DM UI (`/dm` or `/dm/map`) now displays a "Monster Capabilities" card in the control lane when a supported monster is selected. Composite/Multiattack actions render as a sequence of executable child buttons for assisted sequential resolution. Condition riders (like Prone or Frightened) are displayed as chips with explicit Apply/Remove buttons for DM-controlled assistance.
+The DM UI (`/dm` or `/dm/map`) now displays a "Monster Capabilities" card in the control lane when a supported monster is selected. Composite/Multiattack actions render as a sequence of executable child buttons for assisted sequential resolution. Save/area capabilities such as dragon breath, Frightful Presence, and Wing Attack support manual multi-target selection with per-target fail/success/no-effect/manual outcomes. This is deliberately DM-selected, not map-template or geometry-based auto-targeting. Condition riders (like Prone or Frightened) are displayed as chips with explicit Apply/Remove buttons for DM-controlled assistance.
 
 Limited-use resources (Recharge, Daily Uses, Spell Slots) are tracked in-memory during the session. The DM can manually spend, roll, or restore these resources directly from the capability card.
 

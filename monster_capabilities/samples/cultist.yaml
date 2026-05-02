@@ -21,3 +21,5 @@ capabilities:
   type: trait
   executable: false
   desc: The cultist has advantage on saving throws against being charmed or frightened.
+  action_type: utility
+  mechanics: {}

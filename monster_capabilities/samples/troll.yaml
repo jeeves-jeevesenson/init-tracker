@@ -48,6 +48,8 @@ capabilities:
   type: trait
   executable: false
   desc: The troll has advantage on Wisdom (Perception) checks that rely on smell.
+  action_type: utility
+  mechanics: {}
 - id: regeneration
   name: Regeneration
   type: trait
@@ -56,3 +58,5 @@ capabilities:
     acid or fire damage, this trait doesn't function at the start of the troll's next
     turn. The troll dies only if it starts its turn with 0 hit points and doesn't
     regenerate.
+  action_type: utility
+  mechanics: {}

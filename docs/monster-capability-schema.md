@@ -134,7 +134,20 @@ DM UI provides buttons to spend, roll, or restore these resources. State is rese
 - `self`: The actor itself.
 - `single`: One target combatant.
 - `multiple`: Specific number of targets.
-- `aoe`: Area of effect (cone, line, sphere, etc.).
+- `area_manual`: Area of effect (cone, line, sphere, radius, etc.) resolved by DM-selected target rows.
+
+The current assisted multi-target workflow is manual-selection only. The backend may expose area metadata such as `shape`, `size`, and `range`, but it does not derive targets from map geometry.
+
+## 8.1 Assisted Multi-Target Resolution
+Save/area capabilities can return a reusable resolution packet containing save DC, save ability, area metadata, rolled full damage, computed successful-save damage, and supported condition riders.
+
+DM target rows use explicit outcomes:
+- `fail`: failed save / full failed-save outcome.
+- `success`: successful save / successful-save outcome.
+- `no_effect`: no damage or effects.
+- `manual`: DM notes or externally resolved outcome.
+
+Damage and effects are only applied when the DM explicitly requests `apply_damage` and/or `apply_effects` through the assisted endpoint. The workflow does not roll individual saves, auto-select targets, or consume resources outside the existing execute/resource flow.
 
 ## 9. Condition/Effect Model
 - `conditions`: List of conditions to apply (e.g., `prone`, `poisoned`).

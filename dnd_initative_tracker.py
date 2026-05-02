@@ -4658,6 +4658,23 @@ class LanController:
             except Exception as exc:
                 raise HTTPException(status_code=500, detail=f"Failed to execute monster capability: {exc}")
 
+        @self._fastapi_app.post("/api/dm/monster-capabilities/{cid}/resolve-targets")
+        async def dm_resolve_monster_capability_targets(cid: int, request: Request, payload: Dict[str, Any] = Body(...)):
+            """Resolve a save/area monster capability against DM-selected targets."""
+            _check_dm_auth(request)
+            try:
+                result = self.app._dm_monster_capability_resolve_targets(
+                    actor_cid=int(cid),
+                    payload=payload,
+                )
+                return {
+                    "ok": result.get("ok"),
+                    "result": result,
+                    "snapshot": _dm_console_snapshot(),
+                }
+            except Exception as exc:
+                raise HTTPException(status_code=500, detail=f"Failed to resolve monster capability targets: {exc}")
+
         @self._fastapi_app.post("/api/dm/monster-capabilities/{cid}/recharge")
         async def dm_roll_monster_recharge(cid: int, request: Request, payload: Dict[str, Any] = Body(...)):
             """Roll to recharge a monster capability."""
@@ -43724,6 +43741,121 @@ class InitiativeTracker(base.InitiativeTracker):
             pass
         return result
 
+    @staticmethod
+    def _monster_capability_area_metadata(cap: Dict[str, Any]) -> Dict[str, Any]:
+        mechanics = cap.get("mechanics", {}) if isinstance(cap.get("mechanics"), dict) else {}
+        desc = str(cap.get("desc") or "")
+        area: Dict[str, Any] = {}
+        shape = str(mechanics.get("shape") or "").strip().lower()
+        size = mechanics.get("size")
+        if not shape:
+            match = re.search(r"(\d+)\s*-\s*foot\s+(cone|line|sphere|radius)", desc, flags=re.IGNORECASE)
+            if match:
+                size = int(match.group(1))
+                shape = match.group(2).lower()
+        if not shape:
+            match = re.search(r"within\s+(\d+)\s*ft\.?", desc, flags=re.IGNORECASE)
+            if match:
+                size = int(match.group(1))
+                shape = "radius"
+        if shape:
+            area["shape"] = shape
+        if size is not None:
+            try:
+                area["size"] = int(size)
+            except Exception:
+                area["size"] = size
+        if mechanics.get("range") is not None:
+            try:
+                area["range"] = int(mechanics.get("range"))
+            except Exception:
+                area["range"] = mechanics.get("range")
+        return area
+
+    @staticmethod
+    def _monster_capability_target_mode(cap: Dict[str, Any]) -> str:
+        mechanics = cap.get("mechanics", {}) if isinstance(cap.get("mechanics"), dict) else {}
+        desc = str(cap.get("desc") or "").lower()
+        action_type = str(cap.get("action_type") or "")
+        if "self" in str(mechanics.get("target") or "").lower():
+            return "self"
+        if InitiativeTracker._monster_capability_area_metadata(cap):
+            return "area_manual"
+        if action_type == "save_ability" and (
+            "each creature" in desc or "creatures of" in desc or "creature within" in desc or "creatures within" in desc
+        ):
+            return "multiple"
+        if mechanics.get("targets") not in (None, "", 1, "1"):
+            return "multiple"
+        return "single"
+
+    @staticmethod
+    def _monster_capability_success_damage_amount(on_save: Any, full_amount: int, desc: str) -> int:
+        mode = str(on_save or "").strip().lower()
+        if mode in {"half", "half_damage"}:
+            return int(full_amount) // 2
+        if mode in {"none", "no_damage"}:
+            if "half as much" in str(desc or "").lower():
+                return int(full_amount) // 2
+            return 0
+        return int(full_amount) // 2
+
+    def _monster_capability_damage_roll_packet(self, cap: Dict[str, Any]) -> Dict[str, Any]:
+        mechanics = cap.get("mechanics", {}) if isinstance(cap.get("mechanics"), dict) else {}
+        desc = str(cap.get("desc") or "")
+        damage_rolls: List[Dict[str, Any]] = []
+        total_fail = 0
+        total_success = 0
+        for entry in mechanics.get("damage", []) if isinstance(mechanics.get("damage"), list) else []:
+            if not isinstance(entry, dict):
+                continue
+            formula = entry.get("formula")
+            dtype = str(entry.get("type") or "damage").strip().lower() or "damage"
+            roll = self._roll_monster_attack_formula(formula)
+            success_roll = self._monster_capability_success_damage_amount(entry.get("on_save", mechanics.get("on_save", "half")), int(roll), desc)
+            damage_rolls.append(
+                {
+                    "formula": formula,
+                    "type": dtype,
+                    "on_save": entry.get("on_save", mechanics.get("on_save", "half")),
+                    "rolled": int(roll),
+                    "rolled_success": int(success_roll),
+                }
+            )
+            total_fail += int(roll)
+            total_success += int(success_roll)
+        return {"damage_rolls": damage_rolls, "total_fail": int(total_fail), "total_success": int(total_success)}
+
+    def _monster_capability_resolution_packet(
+        self,
+        *,
+        cap: Dict[str, Any],
+        cap_id: Any,
+        actor_cid: int,
+        damage_packet: Optional[Dict[str, Any]] = None,
+    ) -> Dict[str, Any]:
+        mechanics = cap.get("mechanics", {}) if isinstance(cap.get("mechanics"), dict) else {}
+        packet = dict(damage_packet or self._monster_capability_damage_roll_packet(cap))
+        effects = mechanics.get("effects") if isinstance(mechanics.get("effects"), list) else []
+        resource_key = f"{int(actor_cid)}:cap:{cap_id}"
+        packet.update(
+            {
+                "capability_id": cap_id,
+                "capability_name": cap.get("name"),
+                "save_dc": mechanics.get("save_dc"),
+                "save_ability": mechanics.get("save_ability"),
+                "area": self._monster_capability_area_metadata(cap),
+                "damage": mechanics.get("damage", []) if isinstance(mechanics.get("damage"), list) else [],
+                "effects": effects,
+                "effect_riders": effects,
+                "target_mode": self._monster_capability_target_mode(cap),
+                "multi_target_capable": self._monster_capability_target_mode(cap) in {"multiple", "area_manual"},
+                "resource_ready": self._monster_resource_state.get(resource_key, True),
+                "resource_used": self._monster_resource_state.get(resource_key) is False,
+            }
+        )
+        return packet
+
     def _dm_monster_capability_execute(self, *, actor_cid: Any, payload: Dict[str, Any]) -> Dict[str, Any]:
         """Execute a monster capability by ID, with optional target."""
         actor, error, normalized_actor_cid = self._dm_validate_monster_actor_for_turn(actor_cid)
@@ -43875,33 +44007,13 @@ class InitiativeTracker(base.InitiativeTracker):
              if not target:
                  return {"ok": False, "error": "Target not found."}
 
-             # 1. Roll damage
-             damage_rolls = []
-             damage_entries = mechanics.get("damage", [])
-             total_fail = 0
-             total_success = 0
-
-             for entry in damage_entries:
-                 formula = entry.get("formula")
-                 dtype = entry.get("type", "unspecified")
-                 on_save = entry.get("on_save", "half")
-
-                 roll = self._roll_monster_attack_formula(formula)
-                 success_roll = 0
-                 if on_save == "half":
-                     success_roll = roll // 2
-                 elif on_save == "none":
-                     success_roll = 0
-
-                 damage_rolls.append({
-                     "formula": formula,
-                     "type": dtype,
-                     "on_save": on_save,
-                     "rolled": roll,
-                     "rolled_success": success_roll
-                 })
-                 total_fail += roll
-                 total_success += success_roll
+             damage_packet = self._monster_capability_damage_roll_packet(cap)
+             resolution_packet = self._monster_capability_resolution_packet(
+                 cap=cap,
+                 cap_id=cap_id,
+                 actor_cid=int(normalized_actor_cid),
+                 damage_packet=damage_packet,
+             )
 
              # 2. Spend resource (optional for DM)
              spend_key = self._dm_normalize_turn_spend(spend, default="action", allow_none=True)
@@ -43921,9 +44033,16 @@ class InitiativeTracker(base.InitiativeTracker):
                  "target_name": str(getattr(target, "name", "Target")),
                  "save_dc": mechanics.get("save_dc"),
                  "save_ability": mechanics.get("save_ability"),
-                 "damage_rolls": damage_rolls,
-                 "total_fail": total_fail,
-                 "total_success": total_success,
+                 "damage_rolls": damage_packet["damage_rolls"],
+                 "total_fail": damage_packet["total_fail"],
+                 "total_success": damage_packet["total_success"],
+                 "area": resolution_packet.get("area", {}),
+                 "damage": resolution_packet.get("damage", []),
+                 "effects": resolution_packet.get("effects", []),
+                 "effect_riders": resolution_packet.get("effect_riders", []),
+                 "target_mode": resolution_packet.get("target_mode"),
+                 "multi_target_capable": bool(resolution_packet.get("multi_target_capable")),
+                 "resolution_packet": resolution_packet,
                  "spend_hint": spend_key,
                  "recharge_expended": bool(recharge)
              }
@@ -43933,6 +44052,125 @@ class InitiativeTracker(base.InitiativeTracker):
             "resolution": "manual",
             "reason": "Complex action or missing target.",
             "capability": cap
+        }
+
+    def _dm_monster_capability_resolve_targets(self, *, actor_cid: Any, payload: Dict[str, Any]) -> Dict[str, Any]:
+        actor, error, normalized_actor_cid = self._dm_validate_monster_actor_for_turn(actor_cid)
+        if actor is None:
+            return {"ok": False, "error": error or "Invalid actor."}
+        svc = self._ensure_monster_capabilities()
+        data = svc.match_capabilities_for_combatant(actor)
+        if not data:
+            return {"ok": False, "error": "No capability overlay found for actor."}
+        cap_id = payload.get("capability_id")
+        cap = next((c for c in data.get("capabilities", []) if c.get("id") == cap_id), None)
+        if not cap:
+            return {"ok": False, "error": f"Capability {cap_id} not found."}
+
+        raw_rows = payload.get("targets")
+        if raw_rows is None:
+            target_ids = payload.get("target_ids")
+            outcomes = payload.get("outcomes") if isinstance(payload.get("outcomes"), dict) else {}
+            raw_rows = [
+                {"target_cid": target_id, "outcome": outcomes.get(str(target_id), payload.get("outcome", "manual"))}
+                for target_id in target_ids
+            ] if isinstance(target_ids, list) else []
+        if not isinstance(raw_rows, list) or not raw_rows:
+            return {"ok": False, "error": "targets must be a non-empty array."}
+
+        valid_outcomes = {"fail", "success", "no_effect", "manual"}
+        rows: List[Dict[str, Any]] = []
+        for raw in raw_rows:
+            if not isinstance(raw, dict):
+                return {"ok": False, "error": "Each target row must be an object."}
+            target_cid = _normalize_cid_value(raw.get("target_cid", raw.get("target_id")), "dm.monster.capability.resolve.target")
+            if target_cid is None:
+                return {"ok": False, "error": "target_cid must be an integer."}
+            target = self.combatants.get(int(target_cid))
+            if target is None:
+                return {"ok": False, "error": f"Target combatant {target_cid} not found."}
+            outcome = str(raw.get("outcome") or "manual").strip().lower()
+            if outcome not in valid_outcomes:
+                return {"ok": False, "error": f"Invalid outcome for target {target_cid}: {outcome}."}
+            rows.append({"target_cid": int(target_cid), "target": target, "outcome": outcome, "raw": raw})
+
+        apply_damage = bool(payload.get("apply_damage"))
+        apply_effects = bool(payload.get("apply_effects"))
+        damage_rolls = payload.get("damage_rolls")
+        if not isinstance(damage_rolls, list):
+            damage_rolls = self._monster_capability_damage_roll_packet(cap).get("damage_rolls", [])
+        effects = cap.get("mechanics", {}).get("effects", []) if isinstance(cap.get("mechanics", {}), dict) else []
+        supported_effects = [
+            eff for eff in effects
+            if isinstance(eff, dict) and eff.get("kind") == "condition" and str(eff.get("condition") or "").strip()
+        ]
+
+        results: List[Dict[str, Any]] = []
+        for row in rows:
+            target_cid = row["target_cid"]
+            outcome = row["outcome"]
+            damage_entries: List[Dict[str, Any]] = []
+            if outcome in {"fail", "success"}:
+                for dmg in damage_rolls:
+                    if not isinstance(dmg, dict):
+                        continue
+                    amount_key = "rolled" if outcome == "fail" else "rolled_success"
+                    try:
+                        amount = int(dmg.get(amount_key) or 0)
+                    except Exception:
+                        amount = 0
+                    if amount > 0:
+                        damage_entries.append({"amount": int(amount), "type": str(dmg.get("type") or "damage").strip().lower() or "damage"})
+            if outcome == "manual" and isinstance(row["raw"].get("damage_entries"), list):
+                damage_entries = list(row["raw"].get("damage_entries") or [])
+
+            target_result: Dict[str, Any] = {
+                "target_cid": int(target_cid),
+                "target_name": str(getattr(row["target"], "name", "Target") or "Target"),
+                "outcome": outcome,
+                "damage_entries": list(damage_entries),
+                "damage_applied": False,
+                "effects_applied": [],
+                "notes": str(row["raw"].get("notes") or payload.get("notes") or ""),
+            }
+            if apply_damage and damage_entries:
+                damage_result = self._apply_map_attack_manual_damage(
+                    int(normalized_actor_cid),
+                    int(target_cid),
+                    str(cap.get("name") or "Monster Capability"),
+                    list(damage_entries),
+                )
+                target_result["damage_result"] = damage_result
+                target_result["damage_applied"] = bool(damage_result.get("ok"))
+                if not damage_result.get("ok"):
+                    target_result["error"] = str(damage_result.get("error") or damage_result.get("reason") or "Damage application failed.")
+
+            if apply_effects and outcome == "fail":
+                for effect_index, eff in enumerate(effects if isinstance(effects, list) else []):
+                    if eff not in supported_effects:
+                        continue
+                    effect_result = self._dm_monster_capability_effect_change(
+                        actor_cid=int(normalized_actor_cid),
+                        payload={"capability_id": cap_id, "effect_index": effect_index, "target_cid": int(target_cid)},
+                        action="apply",
+                    )
+                    target_result["effects_applied"].append(effect_result)
+            results.append(target_result)
+
+        if apply_damage or apply_effects:
+            try:
+                self._lan_force_state_broadcast()
+            except Exception:
+                pass
+        return {
+            "ok": True,
+            "resolution": "multi_target_assisted",
+            "capability_id": cap_id,
+            "capability_name": cap.get("name"),
+            "target_count": len(results),
+            "apply_damage": apply_damage,
+            "apply_effects": apply_effects,
+            "results": results,
         }
 
     def _dm_monster_capability_resource_op(self, *, cid: int, payload: Dict[str, Any]) -> Dict[str, Any]:

@@ -142,3 +142,5 @@ capabilities:
   type: trait
   executable: false
   desc: If the dragon fails a saving throw, it can choose to succeed instead.
+  action_type: utility
+  mechanics: {}

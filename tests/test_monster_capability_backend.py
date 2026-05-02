@@ -10,7 +10,8 @@ class TestMonsterCapabilityBackend(unittest.TestCase):
         self.app.__dict__.update({
             "combatants": {
                 1: mock.Mock(cid=1, monster_slug="adult-red-dragon", is_pc=False, hp=256),
-                2: mock.Mock(cid=2, is_pc=True, hp=100, temp_hp=0)
+                2: mock.Mock(cid=2, is_pc=True, hp=100, temp_hp=0),
+                3: mock.Mock(cid=3, is_pc=True, hp=80, temp_hp=0)
             },
             "_name_role_memory": {"Dragon": "enemy", "Hero": "pc"},
             "_monster_resource_state": {},
@@ -19,6 +20,7 @@ class TestMonsterCapabilityBackend(unittest.TestCase):
         })
         self.app.combatants[1].name = "Dragon"
         self.app.combatants[2].name = "Hero"
+        self.app.combatants[3].name = "Rogue"
 
         # Mock methods
         self.app._dm_validate_monster_actor_for_turn = lambda cid: (self.app.combatants.get(cid), None, cid)
@@ -27,8 +29,28 @@ class TestMonsterCapabilityBackend(unittest.TestCase):
         self.app._dm_normalize_turn_spend = lambda s, **kwargs: s
         self.app._lan_force_state_broadcast = lambda: None
         self.app._oplog = lambda m: None
-        self.app._ensure_condition_stack = lambda c, ctype, turns: None
+        self.applied_conditions = []
+        self.removed_conditions = []
+        self.applied_damage = []
+        self.app._ensure_condition_stack = lambda c, ctype, turns: self.applied_conditions.append((getattr(c, "cid", None), ctype, turns))
         self.app._remove_condition_type = lambda c, ctype: None
+        self.app._apply_map_attack_manual_damage = self._apply_damage
+
+    def _apply_damage(self, attacker_cid, target_cid, attack_name, damage_entries):
+        total = sum(int(entry.get("amount") or 0) for entry in damage_entries)
+        target = self.app.combatants[int(target_cid)]
+        target.hp = max(0, int(getattr(target, "hp", 0) or 0) - total)
+        result = {
+            "ok": True,
+            "attacker_cid": int(attacker_cid),
+            "target_cid": int(target_cid),
+            "attack_name": attack_name,
+            "total_damage": total,
+            "target_hp": target.hp,
+            "target_removed": False,
+        }
+        self.applied_damage.append(result)
+        return result
 
     def test_recharge_roll_success(self):
         with mock.patch("random.randint", return_value=6):
@@ -60,8 +82,102 @@ class TestMonsterCapabilityBackend(unittest.TestCase):
         self.assertEqual(result["save_dc"], 21)
         self.assertEqual(result["target_name"], "Hero")
         self.assertIn("damage_rolls", result)
+        self.assertIn("resolution_packet", result)
+        self.assertTrue(result["multi_target_capable"])
+        self.assertEqual(result["area"]["shape"], "cone")
+        self.assertEqual(result["resolution_packet"]["total_success"], 5)
         # Should be marked as used
         self.assertFalse(self.app._monster_resource_state["1:cap:fire-breath"])
+
+    def test_resolve_targets_rejects_missing_capability(self):
+        result = self.app._dm_monster_capability_resolve_targets(
+            actor_cid=1,
+            payload={
+                "capability_id": "missing",
+                "targets": [{"target_cid": 2, "outcome": "fail"}],
+            },
+        )
+        self.assertFalse(result["ok"])
+        self.assertIn("not found", result["error"])
+
+    def test_resolve_targets_rejects_invalid_target(self):
+        result = self.app._dm_monster_capability_resolve_targets(
+            actor_cid=1,
+            payload={
+                "capability_id": "fire-breath",
+                "targets": [{"target_cid": 999, "outcome": "fail"}],
+            },
+        )
+        self.assertFalse(result["ok"])
+        self.assertIn("not found", result["error"])
+
+    def test_resolve_targets_multiple_outcomes_without_implicit_application(self):
+        result = self.app._dm_monster_capability_resolve_targets(
+            actor_cid=1,
+            payload={
+                "capability_id": "fire-breath",
+                "targets": [
+                    {"target_cid": 2, "outcome": "fail"},
+                    {"target_cid": 3, "outcome": "success"},
+                    {"target_cid": 1, "outcome": "no_effect"},
+                ],
+                "damage_rolls": [{"type": "fire", "rolled": 18, "rolled_success": 9}],
+            },
+        )
+        self.assertTrue(result["ok"])
+        self.assertEqual(result["target_count"], 3)
+        self.assertEqual(len(self.applied_damage), 0)
+        self.assertEqual(self.app.combatants[2].hp, 100)
+        self.assertEqual(self.app.combatants[3].hp, 80)
+
+    def test_resolve_targets_apply_damage_explicitly(self):
+        result = self.app._dm_monster_capability_resolve_targets(
+            actor_cid=1,
+            payload={
+                "capability_id": "fire-breath",
+                "targets": [
+                    {"target_cid": 2, "outcome": "fail"},
+                    {"target_cid": 3, "outcome": "success"},
+                    {"target_cid": 1, "outcome": "no_effect"},
+                ],
+                "damage_rolls": [{"type": "fire", "rolled": 18, "rolled_success": 9}],
+                "apply_damage": True,
+            },
+        )
+        self.assertTrue(result["ok"])
+        self.assertEqual(self.app.combatants[2].hp, 82)
+        self.assertEqual(self.app.combatants[3].hp, 71)
+        self.assertEqual(len(self.applied_damage), 2)
+
+    def test_resolve_targets_apply_effects_explicitly(self):
+        result = self.app._dm_monster_capability_resolve_targets(
+            actor_cid=1,
+            payload={
+                "capability_id": "frightful-presence",
+                "targets": [
+                    {"target_cid": 2, "outcome": "fail"},
+                    {"target_cid": 3, "outcome": "success"},
+                ],
+                "apply_effects": True,
+            },
+        )
+        self.assertTrue(result["ok"])
+        self.assertEqual(self.applied_conditions, [(2, "frightened", None)])
+
+    def test_resolve_targets_wing_attack_damage_and_prone(self):
+        result = self.app._dm_monster_capability_resolve_targets(
+            actor_cid=1,
+            payload={
+                "capability_id": "wing-attack-(costs-2-actions)",
+                "targets": [{"target_cid": 2, "outcome": "fail"}],
+                "damage_rolls": [{"type": "bludgeoning", "rolled": 15, "rolled_success": 0}],
+                "apply_damage": True,
+                "apply_effects": True,
+            },
+        )
+        self.assertTrue(result["ok"])
+        self.assertEqual(self.app.combatants[2].hp, 85)
+        self.assertEqual(self.applied_conditions, [(2, "prone", None)])
 
     def test_execute_recharge_not_ready(self):
         payload = {
@@ -166,6 +282,13 @@ class TestMonsterCapabilityBackend(unittest.TestCase):
         self.assertEqual(result["spell_slug"], "lightning-bolt")
         self.assertEqual(result["save_dc"], 17)
         self.assertEqual(result["save_ability"], "dexterity")
+
+    def test_dm_ui_contains_multi_target_hooks(self):
+        with open("assets/web/dm/index.html", "r", encoding="utf-8") as handle:
+            html = handle.read()
+        self.assertIn("monster-cap-target-checkbox", html)
+        self.assertIn("resolve-targets", html)
+        self.assertIn("Apply Damage + Effects", html)
 
 if __name__ == "__main__":
     unittest.main()

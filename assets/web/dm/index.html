@@ -938,7 +938,7 @@
           Actions and traits from normalized YAML overlays.
         </div>
         <div class="form-group">
-          <label>Target (for automatic execution)</label>
+          <label>Primary target / fallback target</label>
           <select id="monsterCapTargetCidSelect"><option value="">— select target —</option></select>
         </div>
         <div id="monsterCapContent">
@@ -5624,6 +5624,41 @@ function escHtml(s) {
 }
 
 // ── Monster Capabilities ──────────────────────────────────────────────
+let monsterCapabilityResolutionPackets = {};
+
+function monsterCapabilityTargetOptions() {
+  const select = document.getElementById('monsterCapTargetCidSelect');
+  if (!select) return [];
+  return Array.from(select.options)
+    .filter(opt => String(opt.value || '').trim())
+    .map(opt => ({ cid: String(opt.value), label: String(opt.textContent || opt.value) }));
+}
+
+function monsterCapabilityTargetCheckboxes(capId) {
+  const options = monsterCapabilityTargetOptions();
+  if (!options.length) return '<div class="cap-source">No live targets available.</div>';
+  return options.map(opt => `
+    <label style="display:inline-flex; align-items:center; gap:4px; margin:2px 8px 2px 0; font-size:12px">
+      <input type="checkbox" class="monster-cap-target-checkbox" data-cap-id="${escHtml(capId)}" value="${escHtml(opt.cid)}" />
+      ${escHtml(opt.label)}
+    </label>
+  `).join('');
+}
+
+function monsterCapabilityCssEscape(value) {
+  if (window.CSS && typeof window.CSS.escape === 'function') return window.CSS.escape(String(value));
+  return String(value).replace(/["\\]/g, '\\$&');
+}
+
+function selectedMonsterCapabilityTargetIds(capId) {
+  const checked = Array.from(document.querySelectorAll(`.monster-cap-target-checkbox[data-cap-id="${monsterCapabilityCssEscape(capId)}"]:checked`))
+    .map(el => String(el.value || '').trim())
+    .filter(Boolean);
+  if (checked.length) return checked;
+  const fallback = String(document.getElementById('monsterCapTargetCidSelect')?.value || '').trim();
+  return fallback ? [fallback] : [];
+}
+
 async function fetchMonsterCapabilities(cid) {
   const content = document.getElementById('monsterCapContent');
   const res = document.getElementById('monsterCapResult');
@@ -5703,10 +5738,19 @@ function renderMonsterCapabilities(summary) {
 
       if (actionType === 'save_ability' && cap.mechanics) {
           const m = cap.mechanics;
+          const area = cap.area || {};
+          const areaText = area.shape ? ` · ${escHtml(area.size ? `${area.size} ft ${area.shape}` : area.shape)}` : '';
           html += `<div class="cap-source" style="margin-bottom:8px">
             DC ${m.save_dc} ${escHtml(m.save_ability || '')} 
             ${m.damage ? `· ${m.damage.map(d => `${d.formula} ${d.type}`).join(' + ')}` : ''}
+            ${areaText}
           </div>`;
+          if (cap.multi_target_capable || cap.target_mode === 'area_manual' || cap.target_mode === 'multiple') {
+              html += `<div class="cap-multi-target" data-cap-id="${escHtml(cap.id)}" style="margin:8px 0; padding:8px; border:1px solid #333; border-radius:6px; background:#171717">
+                <div class="cap-source" style="margin-bottom:4px">Manual multi-target selection (${escHtml(cap.target_mode || 'multiple')}; no map geometry auto-targeting)</div>
+                <div class="cap-target-checkboxes">${monsterCapabilityTargetCheckboxes(cap.id)}</div>
+              </div>`;
+          }
       }
 
       if (cap.effects && cap.effects.length > 0) {
@@ -5795,7 +5839,8 @@ function renderMonsterCapabilities(summary) {
       html += `<div class="cap-actions">`;
       if (isExec) {
           if (available) {
-            html += `<button class="btn-sm" onclick="executeMonsterCapability(${summary.combatant_id}, '${cap.id}')">Execute on Target</button>`;
+            const execLabel = (actionType === 'save_ability' && (cap.multi_target_capable || cap.target_mode === 'area_manual' || cap.target_mode === 'multiple')) ? 'Assist Selected Targets' : 'Execute on Target';
+            html += `<button class="btn-sm" onclick="executeMonsterCapability(${summary.combatant_id}, '${cap.id}')">${execLabel}</button>`;
           } else {
             html += `<button class="btn-sm" disabled title="Ability used">Used</button>`;
           }
@@ -5822,6 +5867,98 @@ function renderMonsterCapabilities(summary) {
   }
 
   content.innerHTML = html;
+}
+
+function renderMonsterCapabilityResolution(cid, capId, packet) {
+  const res = document.getElementById('monsterCapResult');
+  const targets = selectedMonsterCapabilityTargetIds(capId);
+  if (!targets.length) {
+    res.textContent = 'Select at least one target.';
+    res.classList.add('error');
+    return;
+  }
+  monsterCapabilityResolutionPackets[`${cid}:${capId}`] = packet || {};
+  const full = Number(packet && packet.total_fail);
+  const half = Number(packet && packet.total_success);
+  const damageText = Number.isFinite(full)
+    ? `Full ${Math.max(0, Math.floor(full))}; success ${Number.isFinite(half) ? Math.max(0, Math.floor(half)) : 0}`
+    : 'Manual damage';
+  const rows = targets.map(tid => {
+    const opt = monsterCapabilityTargetOptions().find(o => String(o.cid) === String(tid));
+    const label = opt ? opt.label : `Combatant ${tid}`;
+    return `<div class="cap-target-row" data-cap-id="${escHtml(capId)}" data-target-cid="${escHtml(tid)}" style="display:flex; gap:8px; align-items:center; margin:4px 0; flex-wrap:wrap">
+      <span style="min-width:180px">${escHtml(label)}</span>
+      <select class="monster-cap-outcome" data-cap-id="${escHtml(capId)}" data-target-cid="${escHtml(tid)}">
+        <option value="fail">fail</option>
+        <option value="success">success</option>
+        <option value="no_effect">no effect</option>
+        <option value="manual">manual</option>
+      </select>
+    </div>`;
+  }).join('');
+  const area = packet && packet.area && packet.area.shape
+    ? ` · ${escHtml(packet.area.size ? `${packet.area.size} ft ${packet.area.shape}` : packet.area.shape)}`
+    : '';
+  res.className = 'mut-result';
+  res.style.display = 'block';
+  res.innerHTML = `<div><strong>${escHtml(packet.capability_name || capId)}</strong>: DC ${escHtml(packet.save_dc || '?')} ${escHtml(String(packet.save_ability || '').toUpperCase())}${area}. ${escHtml(damageText)}</div>
+    <div style="margin-top:8px">${rows}</div>
+    <div style="display:flex; gap:6px; flex-wrap:wrap; margin-top:8px">
+      <button class="btn-sm" onclick="resolveMonsterCapabilityTargets(${cid}, '${capId}', true, false)">Apply Damage</button>
+      <button class="btn-sm" onclick="resolveMonsterCapabilityTargets(${cid}, '${capId}', false, true)">Apply Effects</button>
+      <button class="btn-sm" onclick="resolveMonsterCapabilityTargets(${cid}, '${capId}', true, true)">Apply Damage + Effects</button>
+      <button class="btn-sm" onclick="resolveMonsterCapabilityTargets(${cid}, '${capId}', false, false)">Show Manual Result</button>
+    </div>`;
+}
+
+async function resolveMonsterCapabilityTargets(cid, capId, applyDamage, applyEffects) {
+  const res = document.getElementById('monsterCapResult');
+  const packet = monsterCapabilityResolutionPackets[`${cid}:${capId}`] || {};
+  const targets = Array.from(document.querySelectorAll(`.monster-cap-outcome[data-cap-id="${monsterCapabilityCssEscape(capId)}"]`))
+    .map(el => ({
+      target_cid: String(el.getAttribute('data-target-cid') || '').trim(),
+      outcome: String(el.value || 'manual').trim()
+    }))
+    .filter(row => row.target_cid);
+  if (!targets.length) {
+    res.textContent = 'No target rows to resolve.';
+    res.classList.add('error');
+    return;
+  }
+  res.className = 'mut-result';
+  res.style.display = 'inline';
+  res.textContent = 'Resolving selected targets...';
+  try {
+    const r = await fetch(`${BASE}/api/dm/monster-capabilities/${cid}/resolve-targets`, {
+      method: 'POST',
+      headers: authHeaders(),
+      body: JSON.stringify({
+        capability_id: capId,
+        targets,
+        damage_rolls: packet.damage_rolls || [],
+        apply_damage: !!applyDamage,
+        apply_effects: !!applyEffects
+      }),
+    });
+    const data = await r.json();
+    if (r.ok && data.ok) {
+      const result = data.result || {};
+      const applied = (result.results || []).map(row => {
+        const bits = [`${row.target_name || row.target_cid}: ${row.outcome}`];
+        if (row.damage_applied) bits.push('damage');
+        if ((row.effects_applied || []).length) bits.push('effects');
+        return bits.join(' ');
+      }).join('; ');
+      res.textContent = applied || 'Manual result prepared.';
+      if (data.snapshot) applySnapshot(data.snapshot);
+    } else {
+      res.textContent = data.detail || (data.result && data.result.error) || 'Error.';
+      res.classList.add('error');
+    }
+  } catch (e) {
+    res.textContent = 'Request failed.';
+    res.classList.add('error');
+  }
 }
 
 async function rollMonsterRecharge(cid, capId) {
@@ -5887,6 +6024,9 @@ async function executeMonsterCapability(cid, capId) {
          let msg = `Assisted: ${s.target_name} vs DC ${s.save_dc} ${s.save_ability.toUpperCase()}. `;
          msg += `Fail: ${s.total_fail} dmg. Success: ${s.total_success} dmg.`;
          res.textContent = msg;
+         if (s.multi_target_capable || (s.resolution_packet && s.resolution_packet.multi_target_capable)) {
+           renderMonsterCapabilityResolution(cid, capId, s.resolution_packet || s);
+         }
       } else if (data.result && data.result.resolution === 'assisted_sequence') {
          res.textContent = `Sequence: ${data.result.name}. Use links above to execute steps.`;
       } else {
@@ -5961,70 +6101,82 @@ async function updateMonsterResource(cid, capId, operation, extra = {}) {
 }
 
 async function applyMonsterEffect(cid, capId, effectIdx) {
-  const targetCid = document.getElementById('monsterCapTargetCidSelect').value;
+  const targetIds = selectedMonsterCapabilityTargetIds(capId);
   const res = document.getElementById('monsterCapResult');
   res.className = 'mut-result';
   res.style.display = 'inline';
   res.textContent = 'Applying...';
 
-  if (!targetCid) {
-    res.textContent = 'Select a target combatant.';
+  if (!targetIds.length) {
+    res.textContent = 'Select at least one target combatant.';
     res.classList.add('error');
     return;
   }
 
   try {
-    const r = await fetch(`${BASE}/api/dm/monster-capabilities/${cid}/apply-effect`, {
-      method: 'POST',
-      headers: authHeaders(),
-      body: JSON.stringify({
-        capability_id: capId,
-        effect_index: effectIdx,
-        target_cid: targetCid
-      }),
-    });
-    const data = await r.json();
-    if (r.ok && data.ok) {
-      res.textContent = `Applied effect ${effectIdx} of ${capId} to target.`;
-      if (data.snapshot) applySnapshot(data.snapshot);
-    } else {
-      res.textContent = data.detail || (data.result && data.result.error) || 'Error.';
-      res.classList.add('error');
+    let lastSnapshot = null;
+    let applied = 0;
+    for (const targetCid of targetIds) {
+      const r = await fetch(`${BASE}/api/dm/monster-capabilities/${cid}/apply-effect`, {
+        method: 'POST',
+        headers: authHeaders(),
+        body: JSON.stringify({
+          capability_id: capId,
+          effect_index: effectIdx,
+          target_cid: targetCid
+        }),
+      });
+      const data = await r.json();
+      if (!(r.ok && data.ok)) {
+        res.textContent = data.detail || (data.result && data.result.error) || 'Error.';
+        res.classList.add('error');
+        return;
+      }
+      applied += 1;
+      lastSnapshot = data.snapshot || lastSnapshot;
     }
+    res.textContent = `Applied effect ${effectIdx} of ${capId} to ${applied} target(s).`;
+    if (lastSnapshot) applySnapshot(lastSnapshot);
   } catch (e) { res.textContent = 'Request failed.'; res.classList.add('error'); }
 }
 
 async function removeMonsterEffect(cid, capId, effectIdx) {
-  const targetCid = document.getElementById('monsterCapTargetCidSelect').value;
+  const targetIds = selectedMonsterCapabilityTargetIds(capId);
   const res = document.getElementById('monsterCapResult');
   res.className = 'mut-result';
   res.style.display = 'inline';
   res.textContent = 'Removing...';
 
-  if (!targetCid) {
-    res.textContent = 'Select a target combatant.';
+  if (!targetIds.length) {
+    res.textContent = 'Select at least one target combatant.';
     res.classList.add('error');
     return;
   }
 
   try {
-    const r = await fetch(`${BASE}/api/dm/monster-capabilities/${cid}/remove-effect`, {
-      method: 'POST',
-      headers: authHeaders(),
-      body: JSON.stringify({
-        capability_id: capId,
-        effect_index: effectIdx,
-        target_cid: targetCid
-      }),
-    });
-    const data = await r.json();
-    if (r.ok && data.ok) {
-      res.textContent = `Removed effect ${effectIdx} of ${capId} from target.`;
-      if (data.snapshot) applySnapshot(data.snapshot);
-    } else {
-      res.textContent = data.detail || (data.result && data.result.error) || 'Error.';
-      res.classList.add('error');
+    let lastSnapshot = null;
+    let removed = 0;
+    for (const targetCid of targetIds) {
+      const r = await fetch(`${BASE}/api/dm/monster-capabilities/${cid}/remove-effect`, {
+        method: 'POST',
+        headers: authHeaders(),
+        body: JSON.stringify({
+          capability_id: capId,
+          effect_index: effectIdx,
+          target_cid: targetCid
+        }),
+      });
+      const data = await r.json();
+      if (!(r.ok && data.ok)) {
+        res.textContent = data.detail || (data.result && data.result.error) || 'Error.';
+        res.classList.add('error');
+        return;
+      }
+      removed += 1;
+      lastSnapshot = data.snapshot || lastSnapshot;
     }
+    res.textContent = `Removed effect ${effectIdx} of ${capId} from ${removed} target(s).`;
+    if (lastSnapshot) applySnapshot(lastSnapshot);
   } catch (e) { res.textContent = 'Request failed.'; res.classList.add('error'); }
 }
 

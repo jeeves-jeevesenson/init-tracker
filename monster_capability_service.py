@@ -1,6 +1,7 @@
 import os
 import yaml
 import glob
+import re
 from typing import Dict, List, Any, Optional
 
 class MonsterCapabilityService:
@@ -105,6 +106,104 @@ class MonsterCapabilityService:
 
         return self.get_capability_by_slug(slug)
 
+    @staticmethod
+    def _area_metadata_for_capability(cap: Dict[str, Any]) -> Dict[str, Any]:
+        mechanics = cap.get("mechanics", {}) if isinstance(cap.get("mechanics"), dict) else {}
+        desc = str(cap.get("desc") or "")
+        area: Dict[str, Any] = {}
+        shape = str(mechanics.get("shape") or "").strip().lower()
+        size = mechanics.get("size")
+        if not shape:
+            match = re.search(r"(\d+)\s*-\s*foot\s+(cone|line|sphere|radius)", desc, flags=re.IGNORECASE)
+            if match:
+                size = int(match.group(1))
+                shape = match.group(2).lower()
+        if not shape:
+            match = re.search(r"within\s+(\d+)\s*ft\.?", desc, flags=re.IGNORECASE)
+            if match:
+                size = int(match.group(1))
+                shape = "radius"
+        if shape:
+            area["shape"] = shape
+        if size is not None:
+            try:
+                area["size"] = int(size)
+            except Exception:
+                area["size"] = size
+        range_value = mechanics.get("range")
+        if range_value is not None:
+            try:
+                area["range"] = int(range_value)
+            except Exception:
+                area["range"] = range_value
+        return area
+
+    @classmethod
+    def _target_mode_for_capability(cls, cap: Dict[str, Any]) -> str:
+        mechanics = cap.get("mechanics", {}) if isinstance(cap.get("mechanics"), dict) else {}
+        desc = str(cap.get("desc") or "").lower()
+        action_type = str(cap.get("action_type") or "")
+        if "self" in str(mechanics.get("target") or "").lower():
+            return "self"
+        if cls._area_metadata_for_capability(cap):
+            return "area_manual"
+        if action_type == "save_ability" and (
+            "each creature" in desc or "creatures of" in desc or "creature within" in desc or "creatures within" in desc
+        ):
+            return "multiple"
+        if mechanics.get("targets") not in (None, "", 1, "1"):
+            return "multiple"
+        return "single"
+
+    @classmethod
+    def _outcome_options_for_capability(cls, cap: Dict[str, Any]) -> List[Dict[str, Any]]:
+        mechanics = cap.get("mechanics", {}) if isinstance(cap.get("mechanics"), dict) else {}
+        action_type = str(cap.get("action_type") or "")
+        options: List[Dict[str, Any]] = []
+        damage = mechanics.get("damage") if isinstance(mechanics.get("damage"), list) else []
+        effects = mechanics.get("effects") if isinstance(mechanics.get("effects"), list) else []
+        if action_type == "save_ability":
+            if damage:
+                options.append({"outcome": "fail", "label": "Failed save damage", "damage": "full"})
+                options.append({"outcome": "success", "label": "Successful save damage", "damage": "half_or_none"})
+            if effects:
+                options.append(
+                    {
+                        "outcome": "fail",
+                        "label": "Failed save effects",
+                        "effects": [
+                            {
+                                "kind": eff.get("kind"),
+                                "condition": eff.get("condition"),
+                                "trigger": eff.get("trigger"),
+                                "text": eff.get("text"),
+                            }
+                            for eff in effects
+                            if isinstance(eff, dict)
+                        ],
+                    }
+                )
+            options.append({"outcome": "no_effect", "label": "No effect"})
+            options.append({"outcome": "manual", "label": "Manual notes"})
+        elif effects:
+            options.append(
+                {
+                    "outcome": "manual",
+                    "label": "Manual effect",
+                    "effects": [
+                        {
+                            "kind": eff.get("kind"),
+                            "condition": eff.get("condition"),
+                            "trigger": eff.get("trigger"),
+                            "text": eff.get("text"),
+                        }
+                        for eff in effects
+                        if isinstance(eff, dict)
+                    ],
+                }
+            )
+        return options
+
     def summarize_capabilities_for_ui(self, combatant_id: int, combatant: Any) -> Dict[str, Any]:
         """Produce a UI-friendly summary of capabilities for a specific combatant."""
         data = self.match_capabilities_for_combatant(combatant)
@@ -143,6 +242,15 @@ class MonsterCapabilityService:
             effects = mechanics.get("effects")
             if effects:
                 cap["effects"] = effects
+
+            cap["target_mode"] = self._target_mode_for_capability(cap)
+            area = self._area_metadata_for_capability(cap)
+            if area:
+                cap["area"] = area
+            outcome_options = self._outcome_options_for_capability(cap)
+            if outcome_options:
+                cap["outcome_options"] = outcome_options
+            cap["multi_target_capable"] = cap["target_mode"] in {"multiple", "area_manual"} or bool(area)
 
             # Resolve spellcasting
             if action_type == "spellcasting" and "spellcasting" in mechanics:

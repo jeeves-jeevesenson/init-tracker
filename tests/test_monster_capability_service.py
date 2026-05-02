@@ -63,6 +63,34 @@ class TestMonsterCapabilityService(unittest.TestCase):
         self.assertEqual(fire_breath["action_type"], "save_ability")
         self.assertEqual(fire_breath["mechanics"]["save_dc"], 21)
         self.assertEqual(fire_breath["mechanics"]["save_ability"], "dex")
+        self.assertEqual(fire_breath["target_mode"], "area_manual")
+        self.assertTrue(fire_breath["multi_target_capable"])
+        self.assertEqual(fire_breath["area"]["shape"], "cone")
+        self.assertEqual(fire_breath["area"]["size"], 60)
+        outcomes = {entry["outcome"] for entry in fire_breath["outcome_options"]}
+        self.assertIn("fail", outcomes)
+        self.assertIn("success", outcomes)
+
+    def test_frightful_presence_multi_target_condition_summary(self):
+        combatant = {"monster_slug": "adult-red-dragon", "name": "Dragon"}
+        summary = self.svc.summarize_capabilities_for_ui(1, combatant)
+
+        frightful = next((a for s in summary["groups"].values() for a in s if a["id"] == "frightful-presence"), None)
+        self.assertEqual(frightful["target_mode"], "area_manual")
+        self.assertTrue(frightful["multi_target_capable"])
+        self.assertEqual(frightful["area"]["shape"], "radius")
+        self.assertEqual(frightful["area"]["size"], 120)
+        self.assertEqual(frightful["effects"][0]["condition"], "frightened")
+
+    def test_wing_attack_area_condition_summary(self):
+        combatant = {"monster_slug": "adult-red-dragon", "name": "Dragon"}
+        summary = self.svc.summarize_capabilities_for_ui(1, combatant)
+
+        wing = next((a for s in summary["groups"].values() for a in s if a["id"] == "wing-attack-(costs-2-actions)"), None)
+        self.assertEqual(wing["target_mode"], "area_manual")
+        self.assertEqual(wing["area"]["shape"], "radius")
+        self.assertEqual(wing["area"]["size"], 10)
+        self.assertEqual(wing["effects"][0]["condition"], "prone")
 
     def test_composite_summarization(self):
         # Adult Red Dragon has multiattack

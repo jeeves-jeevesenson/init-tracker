@@ -30,9 +30,13 @@ capabilities:
   executable: false
   desc: The wolf has advantage on Wisdom (Perception) checks that rely on hearing
     or smell.
+  action_type: utility
+  mechanics: {}
 - id: pack-tactics
   name: Pack Tactics
   type: trait
   executable: false
   desc: The wolf has advantage on an attack roll against a creature if at least one
     of the wolf's allies is within 5 ft. of the creature and the ally isn't incapacitated.
+  action_type: utility
+  mechanics: {}

@@ -37,3 +37,5 @@ capabilities:
   executable: false
   desc: As a bonus action, the orc can move up to its speed toward a hostile creature
     that it can see.
+  action_type: utility
+  mechanics: {}
