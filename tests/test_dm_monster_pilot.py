@@ -4,7 +4,7 @@ from unittest import mock
 import dnd_initative_tracker as tracker_mod
 
 
-def _make_app(positions=None, grid=(20, 20), obstacles=None):
+def _make_app(positions=None, grid=(20, 20), obstacles=None, feet_per_square=5.0):
     app = object.__new__(tracker_mod.InitiativeTracker)
     dragon = mock.Mock(cid=1, is_pc=False, ally=False, hp=180, max_hp=256, ac=19, speed=40,
                        swim_speed=0, fly_speed=80)
@@ -25,6 +25,7 @@ def _make_app(positions=None, grid=(20, 20), obstacles=None):
     cols, rows = int(grid[0]), int(grid[1])
     obs = set(obstacles or set())
     app._lan_live_map_data = lambda: (cols, rows, obs, {}, dict(app._lan_positions))
+    app._lan_feet_per_square = lambda: float(feet_per_square)
     app.broadcast_calls = 0
 
     def _set_pos(cid, col, row):
@@ -82,29 +83,65 @@ class TestDmMonsterPilotMove(unittest.TestCase):
         self.assertFalse(result["ok"])
         self.assertIn("non-PC", result["error"])
 
-    def test_force_moves_monster_and_broadcasts(self):
+    def test_normal_move_succeeds_on_clear_cell(self):
         app = _make_app(positions={1: (5, 6)})
-        result = app._dm_monster_pilot_move(cid=1, payload={"x": 8, "y": 9})
+        result = app._dm_monster_pilot_move(cid=1, payload={"x": 6, "y": 6})
         self.assertTrue(result["ok"])
+        self.assertEqual(result["mode"], "normal")
         self.assertEqual(result["previous_position"], {"x": 5, "y": 6})
-        self.assertEqual(result["new_position"], {"x": 8, "y": 9})
-        self.assertEqual(result["mode"], "force")
-        self.assertEqual(app._lan_positions[1], (8, 9))
+        self.assertEqual(result["new_position"], {"x": 6, "y": 6})
+        self.assertEqual(app._lan_positions[1], (6, 6))
         self.assertEqual(app.broadcast_calls, 1)
+        self.assertEqual(result["warnings"], [])
 
-    def test_warns_on_obstacle_destination(self):
+    def test_normal_move_rejects_obstacle(self):
         app = _make_app(positions={1: (5, 6)}, obstacles={(8, 9)})
         result = app._dm_monster_pilot_move(cid=1, payload={"x": 8, "y": 9})
-        self.assertTrue(result["ok"])
-        self.assertTrue(any("obstacle" in w.lower() for w in result["warnings"]))
-        # Force-move still completes the move.
-        self.assertEqual(app._lan_positions[1], (8, 9))
+        self.assertFalse(result["ok"])
+        self.assertEqual(result.get("blocked"), "obstacle")
+        # Position is unchanged.
+        self.assertEqual(app._lan_positions[1], (5, 6))
+        self.assertEqual(app.broadcast_calls, 0)
 
-    def test_warns_on_occupied_destination(self):
+    def test_normal_move_rejects_occupied(self):
         app = _make_app(positions={1: (5, 6), 3: (8, 9)})
         result = app._dm_monster_pilot_move(cid=1, payload={"x": 8, "y": 9})
+        self.assertFalse(result["ok"])
+        self.assertEqual(result.get("blocked"), "occupied")
+        self.assertIn("Goblin", result["error"])
+        self.assertEqual(app._lan_positions[1], (5, 6))
+
+    def test_force_move_allows_obstacle_with_warning(self):
+        app = _make_app(positions={1: (5, 6)}, obstacles={(8, 9)})
+        result = app._dm_monster_pilot_move(cid=1, payload={"x": 8, "y": 9, "mode": "force"})
+        self.assertTrue(result["ok"])
+        self.assertEqual(result["mode"], "force")
+        self.assertTrue(any("obstacle" in w.lower() for w in result["warnings"]))
+        self.assertEqual(app._lan_positions[1], (8, 9))
+
+    def test_force_move_allows_occupied_with_warning(self):
+        app = _make_app(positions={1: (5, 6), 3: (8, 9)})
+        result = app._dm_monster_pilot_move(cid=1, payload={"x": 8, "y": 9, "mode": "force"})
         self.assertTrue(result["ok"])
         self.assertTrue(any("occup" in w.lower() for w in result["warnings"]))
+        self.assertEqual(app._lan_positions[1], (8, 9))
+
+    def test_long_move_returns_speed_warning(self):
+        # Dragon speed 40, 5ft/sq → max 8 squares (chebyshev). 15-square move = 75ft.
+        app = _make_app(positions={1: (0, 0)})
+        result = app._dm_monster_pilot_move(cid=1, payload={"x": 15, "y": 0})
+        self.assertTrue(result["ok"])
+        self.assertEqual(result["speed_ft"], 40)
+        self.assertEqual(result["distance_ft"], 75.0)
+        self.assertTrue(any("exceeds_speed" in w for w in result["warnings"]))
+
+    def test_short_move_no_speed_warning(self):
+        app = _make_app(positions={1: (0, 0)})
+        # Dragon speed 40 → 8 squares max. Move 8 squares chebyshev = 40ft, OK.
+        result = app._dm_monster_pilot_move(cid=1, payload={"x": 8, "y": 5})
+        self.assertTrue(result["ok"])
+        self.assertEqual(result["distance_ft"], 40.0)
+        self.assertFalse(any("exceeds_speed" in w for w in result["warnings"]))
 
 
 class TestDmMonsterPilotAssetHooks(unittest.TestCase):
@@ -115,6 +152,33 @@ class TestDmMonsterPilotAssetHooks(unittest.TestCase):
         self.assertIn("monsterPilotCidSelect", html)
         self.assertIn("monsterPilotMoveBtn", html)
         self.assertIn("/api/dm/monster-pilot/", html)
+        # Hardening surface: UI offers a force-mode toggle/checkbox.
+        self.assertIn("monsterPilotForceModeInput", html)
+    
+    def test_dm_index_html_contains_map_cell_integration(self):
+        """Verify map-to-pilot movement integration hooks exist."""
+        from pathlib import Path
+        html = Path("assets/web/dm/index.html").read_text(encoding="utf-8")
+        # "Use map cell" button should be present
+        self.assertIn("monsterPilotUseSelectedCellBtn", html)
+        self.assertIn("Use map cell", html)
+        # "Move selected cell" button for faster flow
+        self.assertIn("monsterPilotMoveSelectedCellBtn", html)
+        self.assertIn("Move selected cell", html)
+        # Canvas click handler should set tacticalSelection
+        self.assertIn("tacticalSelection", html)
+        self.assertIn("handleTacticalCanvasClick", html)
+    
+    def test_dm_index_html_endpoint_correct(self):
+        """Verify the Monster Pilot endpoint string is correct."""
+        from pathlib import Path
+        html = Path("assets/web/dm/index.html").read_text(encoding="utf-8")
+        # The JS should call the correct endpoint
+        self.assertIn("/api/dm/monster-pilot/", html)
+        self.assertIn("monsterPilotMoveAction", html)
+        # Should handle both direct and map-based moves
+        self.assertIn("tacticalSelection.col", html)
+        self.assertIn("tacticalSelection.row", html)
 
 
 if __name__ == "__main__":

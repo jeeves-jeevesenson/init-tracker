@@ -933,10 +933,10 @@
     <section class="live-group" data-live-group="monster-pilot" aria-labelledby="liveMonsterPilotGroupTitle">
       <div class="live-group-label" id="liveMonsterPilotGroupTitle">Monster Pilot</div>
       <div class="mut-card" id="monsterPilotCard">
-        <h3>Monster Pilot (DM Force-Move)</h3>
+        <h3>Monster Pilot (DM Movement)</h3>
         <div class="tactical-status" style="margin-bottom:10px">
-          Pilot a monster like a player. Select a monster to see its key stats and force-move it on the grid.
-          Movement here is DM authority — full path/range validation is not enforced.
+          DM movement control. Normal mode rejects obstacles and occupied cells. Force mode overrides
+          and reports warnings (including over-speed). Path/range validation is not enforced.
         </div>
         <div class="form-group">
           <label>Pilot monster</label>
@@ -954,10 +954,15 @@
           </div>
           <div class="form-group" style="justify-content:flex-end;flex-direction:row;align-items:center;gap:6px;padding-top:18px">
             <button class="btn-sm" id="monsterPilotUseSelectedCellBtn" title="Copy currently selected map cell">Use map cell</button>
+            <button class="btn-sm" id="monsterPilotMoveSelectedCellBtn" title="Move to selected cell (requires map cell + monster selected)">Move selected cell</button>
           </div>
         </div>
+        <label style="display:inline-flex;align-items:center;gap:6px;margin:6px 0;font-size:12px;color:var(--muted)">
+          <input type="checkbox" id="monsterPilotForceModeInput" style="width:auto" />
+          Force mode (DM override — allow obstacles / occupied cells)
+        </label>
         <div style="display:flex;gap:6px">
-          <button class="btn-action" id="monsterPilotMoveBtn" style="flex:1">Force Move Monster</button>
+          <button class="btn-action" id="monsterPilotMoveBtn" style="flex:1">Move Monster (DM)</button>
           <button class="btn-sm" id="monsterPilotRefreshBtn">Refresh</button>
         </div>
         <div class="mut-result" id="monsterPilotResult"></div>
@@ -5777,14 +5782,55 @@ async function refreshMonsterPilot() {
   } catch (e) { /* ignore */ }
 }
 
+let _monsterPilotSyncing = false;
+
 function syncMonsterPilotSelectionToOtherPanels(cid) {
+  if (_monsterPilotSyncing) return;
   const cidStr = String(cid || '').trim();
   if (!cidStr) return;
   const actorSelect = document.getElementById('monsterActorCidSelect');
-  if (actorSelect && Array.from(actorSelect.options).some(opt => opt.value === cidStr) && actorSelect.value !== cidStr) {
+  if (!actorSelect) return;
+  const hasOption = Array.from(actorSelect.options).some(opt => opt.value === cidStr);
+  if (!hasOption || actorSelect.value === cidStr) return;
+  _monsterPilotSyncing = true;
+  try {
     actorSelect.value = cidStr;
     actorSelect.dispatchEvent(new Event('change'));
+  } finally {
+    _monsterPilotSyncing = false;
   }
+}
+
+function syncMonsterActorSelectionToPilot(cid) {
+  if (_monsterPilotSyncing) return;
+  const cidStr = String(cid || '').trim();
+  if (!cidStr) return;
+  const pilotSelect = document.getElementById('monsterPilotCidSelect');
+  if (!pilotSelect) return;
+  const hasOption = Array.from(pilotSelect.options).some(opt => opt.value === cidStr);
+  if (!hasOption || pilotSelect.value === cidStr) return;
+  _monsterPilotSyncing = true;
+  try {
+    pilotSelect.value = cidStr;
+    const xInput = document.getElementById('monsterPilotXInput');
+    const yInput = document.getElementById('monsterPilotYInput');
+    if (xInput) delete xInput.dataset.userEdited;
+    if (yInput) delete yInput.dataset.userEdited;
+    renderMonsterPilotSummary();
+  } finally {
+    _monsterPilotSyncing = false;
+  }
+}
+
+function monsterPilotForceModeEnabled() {
+  const el = document.getElementById('monsterPilotForceModeInput');
+  return !!(el && el.checked);
+}
+
+function updateMonsterPilotMoveButtonLabel() {
+  const btn = document.getElementById('monsterPilotMoveBtn');
+  if (!btn) return;
+  btn.textContent = monsterPilotForceModeEnabled() ? 'Force Move (DM Override)' : 'Move Monster (DM)';
 }
 
 async function monsterPilotMoveAction() {
@@ -5808,17 +5854,22 @@ async function monsterPilotMoveAction() {
     result.style.display = 'inline';
     return;
   }
+  const mode = monsterPilotForceModeEnabled() ? 'force' : 'normal';
   const btn = document.getElementById('monsterPilotMoveBtn');
   btn.disabled = true;
   try {
     const r = await fetch(`${BASE}/api/dm/monster-pilot/${encodeURIComponent(cidStr)}/move`, {
       method: 'POST',
       headers: { ...authHeaders(), 'Content-Type': 'application/json' },
-      body: JSON.stringify({ x: Math.floor(x), y: Math.floor(y), mode: 'force' }),
+      body: JSON.stringify({ x: Math.floor(x), y: Math.floor(y), mode }),
     });
     const data = await r.json();
     if (!r.ok) {
-      result.textContent = data && data.detail ? String(data.detail) : 'Move failed.';
+      const detail = (data && data.detail) ? String(data.detail) : 'Move failed.';
+      const hint = mode === 'normal' && /override|obstacle|occupied/i.test(detail)
+        ? ' Tip: enable Force mode to override.'
+        : '';
+      result.innerHTML = `${escHtml(detail)}${escHtml(hint)}`;
       result.className = 'mut-result error';
       result.style.display = 'inline';
       return;
@@ -5828,7 +5879,13 @@ async function monsterPilotMoveAction() {
     const next = moveResult.new_position || { x, y };
     const prevText = prev ? `(${prev.x}, ${prev.y})` : '—';
     const warnings = Array.isArray(moveResult.warnings) ? moveResult.warnings : [];
-    let msg = `DM force-moved ${escHtml(moveResult.name || '')} ${prevText} → (${next.x}, ${next.y}).`;
+    const verb = (moveResult.mode === 'force') ? 'force-moved' : 'moved';
+    let msg = `DM ${verb} ${escHtml(moveResult.name || '')} ${prevText} → (${next.x}, ${next.y}).`;
+    if (Number.isFinite(Number(moveResult.distance_ft))) {
+      msg += ` ${Math.round(Number(moveResult.distance_ft))} ft`;
+      if (Number(moveResult.speed_ft) > 0) msg += ` / speed ${Number(moveResult.speed_ft)} ft`;
+      msg += '.';
+    }
     if (warnings.length) msg += ` ⚠ ${warnings.map(w => escHtml(w)).join(' ')}`;
     result.innerHTML = msg;
     result.className = warnings.length ? 'mut-result warning' : 'mut-result success';
@@ -5852,6 +5909,17 @@ document.getElementById('monsterPilotCidSelect').addEventListener('change', (ev)
   renderMonsterPilotSummary();
   syncMonsterPilotSelectionToOtherPanels(ev.target.value);
 });
+const _monsterActorSelectForSync = document.getElementById('monsterActorCidSelect');
+if (_monsterActorSelectForSync) {
+  _monsterActorSelectForSync.addEventListener('change', (ev) => {
+    syncMonsterActorSelectionToPilot(ev.target.value);
+  });
+}
+const _monsterPilotForceModeInput = document.getElementById('monsterPilotForceModeInput');
+if (_monsterPilotForceModeInput) {
+  _monsterPilotForceModeInput.addEventListener('change', updateMonsterPilotMoveButtonLabel);
+}
+updateMonsterPilotMoveButtonLabel();
 ['monsterPilotXInput', 'monsterPilotYInput'].forEach(id => {
   const el = document.getElementById(id);
   if (el) el.addEventListener('input', () => { el.dataset.userEdited = '1'; });
@@ -5868,6 +5936,40 @@ document.getElementById('monsterPilotUseSelectedCellBtn').addEventListener('clic
     xInput.dataset.userEdited = '1';
     yInput.dataset.userEdited = '1';
   }
+});
+document.getElementById('monsterPilotMoveSelectedCellBtn').addEventListener('click', () => {
+  const result = document.getElementById('monsterPilotResult');
+  result.className = 'mut-result';
+  result.style.display = 'none';
+  
+  // Validate monster is selected
+  const cidStr = String(document.getElementById('monsterPilotCidSelect').value || '').trim();
+  if (!cidStr) {
+    result.textContent = 'Select a monster first.';
+    result.className = 'mut-result error';
+    result.style.display = 'inline';
+    return;
+  }
+  
+  // Validate map cell is selected
+  if (!typeof tacticalSelection === 'object' || !tacticalSelection ||
+      !Number.isFinite(Number(tacticalSelection.col)) || !Number.isFinite(Number(tacticalSelection.row))) {
+    result.textContent = 'Click a destination cell on the map first.';
+    result.className = 'mut-result error';
+    result.style.display = 'inline';
+    return;
+  }
+  
+  // Use "Use map cell" to populate the inputs, then call move action
+  const xInput = document.getElementById('monsterPilotXInput');
+  const yInput = document.getElementById('monsterPilotYInput');
+  xInput.value = String(Number(tacticalSelection.col));
+  yInput.value = String(Number(tacticalSelection.row));
+  xInput.dataset.userEdited = '1';
+  yInput.dataset.userEdited = '1';
+  
+  // Call the move action
+  monsterPilotMoveAction();
 });
 
 // ── Monster Capabilities ──────────────────────────────────────────────

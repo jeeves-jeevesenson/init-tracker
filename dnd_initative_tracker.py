@@ -44506,13 +44506,22 @@ class InitiativeTracker(base.InitiativeTracker):
         }
 
     def _dm_monster_pilot_move(self, *, cid: Any, payload: Dict[str, Any]) -> Dict[str, Any]:
-        """Force-move a non-PC combatant to grid (x, y). Bypasses full movement validation."""
+        """Move a non-PC combatant to grid (x, y).
+
+        mode = "normal" (default): reject obstacles / occupied cells.
+        mode = "force": allow blocked destinations but return warnings.
+        Out-of-bounds and invalid coordinates always reject.
+        Speed is not enforced; over-speed moves produce an "exceeds_speed" warning.
+        """
         try:
             target_cid = int(cid)
         except Exception:
             return {"ok": False, "error": "cid must be an integer."}
         if not isinstance(payload, dict):
             return {"ok": False, "error": "Invalid payload."}
+        mode = str(payload.get("mode") or "normal").strip().lower()
+        if mode not in ("normal", "force"):
+            mode = "normal"
         x_raw = payload.get("x", payload.get("col"))
         y_raw = payload.get("y", payload.get("row"))
         try:
@@ -44535,9 +44544,10 @@ class InitiativeTracker(base.InitiativeTracker):
             positions = dict(getattr(self, "_lan_positions", {}) or {})
         if x < 0 or y < 0 or x >= int(cols) or y >= int(rows):
             return {"ok": False, "error": f"Coordinates out of bounds (grid {cols}x{rows})."}
+
         warnings: List[str] = []
-        if (x, y) in (obstacles or set()):
-            warnings.append("Destination cell is marked as an obstacle.")
+        is_obstacle = (x, y) in (obstacles or set())
+        occupant_name: Optional[str] = None
         for other_cid, other_pos in dict(positions or {}).items():
             try:
                 if int(other_cid) == int(target_cid):
@@ -44545,13 +44555,59 @@ class InitiativeTracker(base.InitiativeTracker):
             except Exception:
                 continue
             if isinstance(other_pos, tuple) and len(other_pos) == 2 and (int(other_pos[0]), int(other_pos[1])) == (x, y):
-                warnings.append("Destination cell is already occupied.")
+                other = (getattr(self, "combatants", {}) or {}).get(int(other_cid))
+                occupant_name = str(getattr(other, "name", "") or f"cid {int(other_cid)}")
                 break
+
+        if mode == "normal":
+            if is_obstacle:
+                return {
+                    "ok": False,
+                    "error": "Destination cell is marked as an obstacle. Use Force Move to override.",
+                    "blocked": "obstacle",
+                }
+            if occupant_name is not None:
+                return {
+                    "ok": False,
+                    "error": f"Destination cell is already occupied by {occupant_name}. Use Force Move to override.",
+                    "blocked": "occupied",
+                }
+        else:
+            if is_obstacle:
+                warnings.append("Destination cell is marked as an obstacle.")
+            if occupant_name is not None:
+                warnings.append(f"Destination cell is already occupied by {occupant_name}.")
+
         previous = positions.get(target_cid) if isinstance(positions, dict) else None
         previous_payload = (
             {"x": int(previous[0]), "y": int(previous[1])}
             if isinstance(previous, tuple) and len(previous) == 2 else None
         )
+
+        # Speed-warning: only when current position and a positive speed are known.
+        speed = 0
+        try:
+            speed = max(0, int(getattr(combatant, "speed", 0) or 0))
+        except Exception:
+            speed = 0
+        try:
+            feet_per_square = float(self._lan_feet_per_square())
+        except Exception:
+            feet_per_square = 5.0
+        if feet_per_square <= 0:
+            feet_per_square = 5.0
+        distance_ft: Optional[float] = None
+        if previous_payload is not None and speed > 0:
+            dx = abs(int(x) - int(previous_payload["x"]))
+            dy = abs(int(y) - int(previous_payload["y"]))
+            chebyshev = max(dx, dy)
+            distance_ft = float(chebyshev) * feet_per_square
+            if distance_ft - float(speed) > 1e-6:
+                warnings.append(
+                    f"Move covers ~{int(distance_ft)} ft, exceeding {combatant.name if hasattr(combatant, 'name') else 'monster'}'s "
+                    f"speed of {int(speed)} ft (exceeds_speed)."
+                )
+
         try:
             self._lan_set_token_position(int(target_cid), int(x), int(y))
         except Exception as exc:
@@ -44567,7 +44623,9 @@ class InitiativeTracker(base.InitiativeTracker):
             "previous_position": previous_payload,
             "new_position": {"x": int(x), "y": int(y)},
             "grid": {"cols": int(cols), "rows": int(rows)},
-            "mode": "force",
+            "mode": mode,
+            "distance_ft": distance_ft,
+            "speed_ft": int(speed),
             "warnings": warnings,
         }
 
