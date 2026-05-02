@@ -9,6 +9,71 @@ SAMPLE_DATA_DIR = "docs/reports/monster-source-samples"
 OUTPUT_DIR = "monster_capabilities/samples"
 LEGACY_DIR = "Monsters"
 
+def extract_riders(desc: str) -> List[Dict[str, Any]]:
+    """Extract common condition riders from description text."""
+    if not desc:
+        return []
+    
+    effects = []
+    desc_lower = desc.lower()
+    import re
+
+    # 1. Prone
+    if "knocked prone" in desc_lower or "is prone" in desc_lower:
+        effect = {"kind": "condition", "condition": "prone", "text": "The target is knocked prone."}
+        # Check for save
+        m = re.search(r"dc (\d+) (strength|dexterity) saving throw (?:or|and) (?:be|become) knocked prone", desc_lower)
+        if m:
+            effect["trigger"] = "on_failed_save"
+            effect["save_dc"] = int(m.group(1))
+            effect["save_ability"] = m.group(2)[:3]
+        elif "must succeed on a dc" in desc_lower and "saving throw" in desc_lower and "prone" in desc_lower:
+            # Try more generic
+            m = re.search(r"dc (\d+) ([a-z]+) saving throw", desc_lower)
+            if m:
+                effect["trigger"] = "on_failed_save"
+                effect["save_dc"] = int(m.group(1))
+                effect["save_ability"] = m.group(2)[:3]
+        else:
+            effect["trigger"] = "on_hit"
+        effects.append(effect)
+
+    # 2. Frightened
+    if "become frightened" in desc_lower or "is frightened" in desc_lower:
+        effect = {"kind": "condition", "condition": "frightened", "text": "The target is frightened."}
+        m = re.search(r"dc (\d+) (wisdom|charisma) saving throw or become frightened", desc_lower)
+        if m:
+            effect["trigger"] = "on_failed_save"
+            effect["save_dc"] = int(m.group(1))
+            effect["save_ability"] = m.group(2)[:3]
+        else:
+            effect["trigger"] = "on_failed_save"
+        effects.append(effect)
+
+    # 3. Poisoned
+    if "is poisoned" in desc_lower or "become poisoned" in desc_lower:
+        effect = {"kind": "condition", "condition": "poisoned", "text": "The target is poisoned."}
+        m = re.search(r"dc (\d+) constitution saving throw or be poisoned", desc_lower)
+        if m:
+            effect["trigger"] = "on_failed_save"
+            effect["save_dc"] = int(m.group(1))
+            effect["save_ability"] = "con"
+        else:
+            effect["trigger"] = "on_failed_save"
+        effects.append(effect)
+
+    # 4. Grappled / Restrained
+    if "target is grappled" in desc_lower or "target is restrained" in desc_lower:
+        cond = "restrained" if "restrained" in desc_lower else "grappled"
+        effect = {"kind": "condition", "condition": cond, "text": f"The target is {cond}."}
+        effect["trigger"] = "on_hit"
+        m = re.search(r"escape dc (\d+)", desc_lower)
+        if m:
+            effect["escape_dc"] = int(m.group(1))
+        effects.append(effect)
+
+    return effects
+
 def normalize_o5e_action(action: Dict[str, Any], monster_slug: str) -> Dict[str, Any]:
     """Normalize an Open5e V2 action object."""
     cap = {
@@ -21,7 +86,8 @@ def normalize_o5e_action(action: Dict[str, Any], monster_slug: str) -> Dict[str,
         "mechanics": {}
     }
 
-    # Determine type
+    # ... (type and attack detection remains the same) ...
+    # (re-pasting part of it to ensure context is correct for replace)
     o5e_type = action.get("action_type", "ACTION")
     if o5e_type == "LEGENDARY_ACTION":
         cap["type"] = "legendary_action"
@@ -53,7 +119,13 @@ def normalize_o5e_action(action: Dict[str, Any], monster_slug: str) -> Dict[str,
                 "type": damage_type
             })
 
+    # Riders
+    riders = extract_riders(cap["desc"])
+    if riders:
+        cap["mechanics"]["effects"] = riders
+
     # Multiattack detection
+    # ...
     if "multiattack" in cap["name"].lower():
         cap["action_type"] = "composite"
         cap["executable"] = False 
@@ -173,6 +245,11 @@ def normalize_dnd5eapi_action(action: Dict[str, Any], monster_slug: str) -> Dict
             if range_match:
                 cap["mechanics"]["range"] = int(range_match.group(1))
                 cap["mechanics"]["long_range"] = int(range_match.group(2))
+
+    # Riders
+    riders = extract_riders(cap["desc"])
+    if riders:
+        cap["mechanics"]["effects"] = riders
 
     # Multiattack detection
     if "multiattack" in cap["name"].lower():

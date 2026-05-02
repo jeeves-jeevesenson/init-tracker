@@ -70,21 +70,43 @@ mechanics:
       count: 3
 ```
 
-## 7. Target Model
+#### Effects / Riders
+```yaml
+mechanics:
+  effects:
+    - kind: "condition"
+      condition: "prone"
+      trigger: "on_failed_save"
+      save_ability: "str"
+      save_dc: 11
+      text: "The target is knocked prone."
+```
+
+## 7. Effect Trigger Types
+- `on_hit`: Applied when an attack hits.
+- `on_failed_save`: Applied when a target fails a saving throw.
+- `on_failed_escape`: Applied when a target fails to escape a grapple.
+- `on_start_turn`: Applied at the start of a target's turn.
+- `on_end_turn`: Applied at the end of a target's turn.
+- `manual`: Applied explicitly by the DM.
+
+## 8. Target Model
 - `self`: The actor itself.
 - `single`: One target combatant.
 - `multiple`: Specific number of targets.
 - `aoe`: Area of effect (cone, line, sphere, etc.).
 
-## 8. Condition/Effect Model
+## 9. Condition/Effect Model
 - `conditions`: List of conditions to apply (e.g., `prone`, `poisoned`).
 - `duration`: Duration in rounds or until a specific event (e.g., `end_of_next_turn`).
+- `escape_dc`: DC for escaping a grapple/restraint.
 
-## 9. Compatibility & Overlay
+## 10. Compatibility & Overlay
 - If a monster in the tracker matches a `slug` in the capability store, the capabilities are loaded.
 - The UI renders these as actionable buttons/cards.
 
-## 10. Non-Goals for this Pass
+## 11. Non-Goals for this Pass
 - Full implementation of the DM UI.
 - Automation of complex "If X then Y" logic in descriptions.
 - Modification of player characters.
+- Full spellcasting automation.

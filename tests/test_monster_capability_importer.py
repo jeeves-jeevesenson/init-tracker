@@ -49,5 +49,34 @@ class TestMonsterCapabilityImporter(unittest.TestCase):
         self.assertEqual(cap["mechanics"]["composite"][0]["action_id"], "scimitar")
         self.assertEqual(cap["mechanics"]["composite"][0]["count"], 2)
 
+    def test_rider_extraction_prone(self):
+        desc = "Hit: 7 (2d4 + 2) piercing damage. If the target is a creature, it must succeed on a DC 11 Strength saving throw or be knocked prone."
+        from scripts.importers.monster_capability_import import extract_riders
+        riders = extract_riders(desc)
+        self.assertEqual(len(riders), 1)
+        self.assertEqual(riders[0]["condition"], "prone")
+        self.assertEqual(riders[0]["trigger"], "on_failed_save")
+        self.assertEqual(riders[0]["save_dc"], 11)
+        self.assertEqual(riders[0]["save_ability"], "str")
+
+    def test_rider_extraction_frightened(self):
+        desc = "must succeed on a DC 19 Wisdom saving throw or become frightened for 1 minute"
+        from scripts.importers.monster_capability_import import extract_riders
+        riders = extract_riders(desc)
+        self.assertEqual(len(riders), 1)
+        self.assertEqual(riders[0]["condition"], "frightened")
+        self.assertEqual(riders[0]["trigger"], "on_failed_save")
+        self.assertEqual(riders[0]["save_dc"], 19)
+        self.assertEqual(riders[0]["save_ability"], "wis")
+
+    def test_rider_extraction_grappled(self):
+        desc = "the target is grappled (escape DC 14)"
+        from scripts.importers.monster_capability_import import extract_riders
+        riders = extract_riders(desc)
+        self.assertEqual(len(riders), 1)
+        self.assertEqual(riders[0]["condition"], "grappled")
+        self.assertEqual(riders[0]["trigger"], "on_hit")
+        self.assertEqual(riders[0]["escape_dc"], 14)
+
 if __name__ == "__main__":
     unittest.main()

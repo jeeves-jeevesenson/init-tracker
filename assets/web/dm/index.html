@@ -5698,12 +5698,28 @@ function renderMonsterCapabilities(summary) {
       if (actionType === 'save_ability' && cap.mechanics) {
           const m = cap.mechanics;
           html += `<div class="cap-source" style="margin-bottom:8px">
-            DC ${m.save_dc} ${escHtml(m.save_ability || '')}
+            DC ${m.save_dc} ${escHtml(m.save_ability || '')} 
             ${m.damage ? `· ${m.damage.map(d => `${d.formula} ${d.type}`).join(' + ')}` : ''}
           </div>`;
       }
 
+      if (cap.effects && cap.effects.length > 0) {
+          html += `<div class="cap-effects" style="margin: 8px 0; display: flex; flex-wrap: wrap; gap: 4px;">`;
+          cap.effects.forEach((eff, idx) => {
+              const label = eff.condition ? `${eff.condition}${eff.trigger === 'on_failed_save' ? ' (save)' : ''}` : 'Effect';
+              html += `<div class="cap-badge ${eff.condition || 'special'}" title="${escHtml(eff.text)}">
+                ${escHtml(label)}
+              </div>`;
+              if (eff.kind === 'condition' && eff.condition) {
+                  html += `<button class="btn-xs" onclick="applyMonsterEffect(${summary.combatant_id}, '${cap.id}', ${idx})">Apply</button>`;
+                  html += `<button class="btn-xs" onclick="removeMonsterEffect(${summary.combatant_id}, '${cap.id}', ${idx})">Rem</button>`;
+              }
+          });
+          html += `</div>`;
+      }
+
       if (actionType === 'composite' && cap.mechanics && cap.mechanics.resolved_composite) {
+
           html += `<div class="cap-composite-steps" style="margin: 8px 0; border-left: 2px solid #555; padding-left: 8px;">`;
           for (const step of cap.mechanics.resolved_composite) {
               html += `<div class="cap-composite-step" style="margin-bottom:4px">
@@ -5830,11 +5846,10 @@ async function executeMonsterCapability(cid, capId) {
          let msg = `Assisted: ${s.target_name} vs DC ${s.save_dc} ${s.save_ability.toUpperCase()}. `;
          msg += `Fail: ${s.total_fail} dmg. Success: ${s.total_success} dmg.`;
          res.textContent = msg;
-         // We don't auto-apply damage for assisted yet in this pass to keep it safe.
-         // DM sees the values and uses manual damage tool.
+      } else if (data.result && data.result.resolution === 'assisted_sequence') {
+         res.textContent = `Sequence: ${data.result.name}. Use links above to execute steps.`;
       } else {
-         res.textContent = `Automatic execution failed: ${data.result ? data.result.reason : 'Unknown error'}`;
-         res.classList.add('error');
+         res.textContent = `Executed ${capId}.`;
       }
       // Re-fetch to update recharge status if it was used
       fetchMonsterCapabilities(cid);
@@ -5847,6 +5862,74 @@ async function executeMonsterCapability(cid, capId) {
     res.textContent = 'Request failed.';
     res.classList.add('error');
   }
+}
+
+async function applyMonsterEffect(cid, capId, effectIdx) {
+  const targetCid = document.getElementById('monsterCapTargetCidSelect').value;
+  const res = document.getElementById('monsterCapResult');
+  res.className = 'mut-result';
+  res.style.display = 'inline';
+  res.textContent = 'Applying...';
+
+  if (!targetCid) {
+    res.textContent = 'Select a target combatant.';
+    res.classList.add('error');
+    return;
+  }
+
+  try {
+    const r = await fetch(`${BASE}/api/dm/monster-capabilities/${cid}/apply-effect`, {
+      method: 'POST',
+      headers: authHeaders(),
+      body: JSON.stringify({
+        capability_id: capId,
+        effect_index: effectIdx,
+        target_cid: targetCid
+      }),
+    });
+    const data = await r.json();
+    if (r.ok && data.ok) {
+      res.textContent = `Applied effect ${effectIdx} of ${capId} to target.`;
+      if (data.snapshot) applySnapshot(data.snapshot);
+    } else {
+      res.textContent = data.detail || (data.result && data.result.error) || 'Error.';
+      res.classList.add('error');
+    }
+  } catch (e) { res.textContent = 'Request failed.'; res.classList.add('error'); }
+}
+
+async function removeMonsterEffect(cid, capId, effectIdx) {
+  const targetCid = document.getElementById('monsterCapTargetCidSelect').value;
+  const res = document.getElementById('monsterCapResult');
+  res.className = 'mut-result';
+  res.style.display = 'inline';
+  res.textContent = 'Removing...';
+
+  if (!targetCid) {
+    res.textContent = 'Select a target combatant.';
+    res.classList.add('error');
+    return;
+  }
+
+  try {
+    const r = await fetch(`${BASE}/api/dm/monster-capabilities/${cid}/remove-effect`, {
+      method: 'POST',
+      headers: authHeaders(),
+      body: JSON.stringify({
+        capability_id: capId,
+        effect_index: effectIdx,
+        target_cid: targetCid
+      }),
+    });
+    const data = await r.json();
+    if (r.ok && data.ok) {
+      res.textContent = `Removed effect ${effectIdx} of ${capId} from target.`;
+      if (data.snapshot) applySnapshot(data.snapshot);
+    } else {
+      res.textContent = data.detail || (data.result && data.result.error) || 'Error.';
+      res.classList.add('error');
+    }
+  } catch (e) { res.textContent = 'Request failed.'; res.classList.add('error'); }
 }
 
 // ── Boot ──────────────────────────────────────────────────────────────

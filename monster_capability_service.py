@@ -111,9 +111,15 @@ class MonsterCapabilityService:
         for cap in data.get("capabilities", []):
             ctype = cap.get("type", "special")
             action_type = cap.get("action_type")
+            mechanics = cap.get("mechanics", {})
+
+            # Include effects
+            effects = mechanics.get("effects")
+            if effects:
+                cap["effects"] = effects
 
             # Resolve composite children
-            if action_type == "composite" and "composite" in cap.get("mechanics", {}):
+            if action_type == "composite" and "composite" in mechanics:
                 resolved_children = []
                 for child in cap["mechanics"]["composite"]:
                     child_id = child.get("action_id")

@@ -17,6 +17,13 @@ capabilities:
     - formula: 2d4+2
       type: piercing
     reach: 5
+    effects:
+    - kind: condition
+      condition: prone
+      text: The target is knocked prone.
+      trigger: on_failed_save
+      save_dc: 11
+      save_ability: str
 - id: keen-hearing-and-smell
   name: Keen Hearing and Smell
   type: trait

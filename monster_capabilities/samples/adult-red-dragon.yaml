@@ -78,6 +78,13 @@ capabilities:
     save_ability: wis
     damage: []
     on_save: none
+    effects:
+    - kind: condition
+      condition: frightened
+      text: The target is frightened.
+      trigger: on_failed_save
+      save_dc: 19
+      save_ability: wis
 - id: fire-breath
   name: Fire Breath
   type: action
@@ -123,6 +130,13 @@ capabilities:
     - formula: 2d6+8
       type: bludgeoning
     on_save: none
+    effects:
+    - kind: condition
+      condition: prone
+      text: The target is knocked prone.
+      trigger: on_failed_save
+      save_dc: 22
+      save_ability: dex
 - id: legendary-resistance
   name: Legendary Resistance
   type: trait

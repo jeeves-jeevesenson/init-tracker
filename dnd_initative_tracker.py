@@ -4675,6 +4675,42 @@ class LanController:
             except Exception as exc:
                 raise HTTPException(status_code=500, detail=f"Failed to mark monster recharge: {exc}")
 
+        @self._fastapi_app.post("/api/dm/monster-capabilities/{cid}/apply-effect")
+        async def dm_apply_monster_capability_effect(cid: int, request: Request, payload: Dict[str, Any] = Body(...)):
+            """Apply a condition effect from a monster capability to a target."""
+            _check_dm_auth(request)
+            try:
+                result = self.app._dm_monster_capability_effect_change(
+                    actor_cid=int(cid),
+                    payload=payload,
+                    action="apply"
+                )
+                return {
+                    "ok": result.get("ok"),
+                    "result": result,
+                    "snapshot": _dm_console_snapshot(),
+                }
+            except Exception as exc:
+                raise HTTPException(status_code=500, detail=f"Failed to apply monster effect: {exc}")
+
+        @self._fastapi_app.post("/api/dm/monster-capabilities/{cid}/remove-effect")
+        async def dm_remove_monster_capability_effect(cid: int, request: Request, payload: Dict[str, Any] = Body(...)):
+            """Remove a condition effect from a monster capability from a target."""
+            _check_dm_auth(request)
+            try:
+                result = self.app._dm_monster_capability_effect_change(
+                    actor_cid=int(cid),
+                    payload=payload,
+                    action="remove"
+                )
+                return {
+                    "ok": result.get("ok"),
+                    "result": result,
+                    "snapshot": _dm_console_snapshot(),
+                }
+            except Exception as exc:
+                raise HTTPException(status_code=500, detail=f"Failed to remove monster effect: {exc}")
+
         @self._fastapi_app.post("/api/dm/combat/combatants/{cid}/spell-target")
         async def dm_monster_spell_target(cid: int, request: Request, payload: Dict[str, Any] = Body(...)):
             """Resolve a single-target spell for a non-PC combatant via existing adjudication."""
@@ -43873,6 +43909,75 @@ class InitiativeTracker(base.InitiativeTracker):
             "success": success,
             "capability_id": capability_id,
             "capability_name": cap.get("name")
+        }
+
+    def _dm_monster_capability_effect_change(self, *, actor_cid: int, payload: Dict[str, Any], action: str) -> Dict[str, Any]:
+        """Apply or remove a condition effect from a monster capability."""
+        actor = self.combatants.get(actor_cid)
+        if not actor:
+            return {"ok": False, "error": "Actor not found."}
+
+        target_cid = _normalize_cid_value(payload.get("target_cid"), "dm.monster.capability.effect.target")
+        if target_cid is None:
+            return {"ok": False, "error": "target_cid is required and must be an integer."}
+        
+        target = self.combatants.get(target_cid)
+        if not target:
+            return {"ok": False, "error": "Target combatant not found."}
+
+        svc = self._ensure_monster_capabilities()
+        data = svc.match_capabilities_for_combatant(actor)
+        if not data:
+            return {"ok": False, "error": "No capability overlay found for actor."}
+
+        cap_id = payload.get("capability_id")
+        cap = next((c for c in data.get("capabilities", []) if c.get("id") == cap_id), None)
+        if not cap:
+            return {"ok": False, "error": f"Capability {cap_id} not found."}
+
+        effect_idx = payload.get("effect_index")
+        if effect_idx is None:
+            return {"ok": False, "error": "effect_index is required."}
+
+        effects = cap.get("mechanics", {}).get("effects", [])
+        if not (0 <= int(effect_idx) < len(effects)):
+            return {"ok": False, "error": f"Effect index {effect_idx} out of range."}
+
+        eff = effects[int(effect_idx)]
+        kind = eff.get("kind")
+        if kind != "condition":
+            return {"ok": False, "error": f"Unsupported effect kind: {kind}"}
+
+        condition = eff.get("condition")
+        if not condition:
+            return {"ok": False, "error": "Effect missing condition name."}
+
+        # Validate condition exists in CONDITIONS_META
+        base = getattr(self, "CONDITIONS_META", {})
+        if not base:
+            # Fallback to importing from helper_script if not attached
+            import helper_script
+            base = getattr(helper_script, "CONDITIONS_META", {})
+        
+        if condition not in base:
+            return {"ok": False, "error": f"Unknown condition: {condition}"}
+
+        if action == "apply":
+            # Indefinite duration for now unless schema evolves
+            self._ensure_condition_stack(target, condition, None)
+            self._lan_force_state_broadcast()
+            self._oplog(f"{getattr(actor, 'name', 'Monster')} applied {condition} to {getattr(target, 'name', 'Target')} via {cap.get('name')}.")
+        elif action == "remove":
+            self._remove_condition_type(target, condition)
+            self._lan_force_state_broadcast()
+            self._oplog(f"{getattr(actor, 'name', 'Monster')} removed {condition} from {getattr(target, 'name', 'Target')} via {cap.get('name')}.")
+
+        return {
+            "ok": True,
+            "action": action,
+            "condition": condition,
+            "target_cid": target_cid,
+            "capability_id": cap_id
         }
 
     def _dm_monster_perform_action(self, *, actor_cid: Any, action_name: Any, spend: Any = "action") -> Dict[str, Any]:

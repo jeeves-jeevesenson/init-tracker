@@ -20,8 +20,10 @@ A new DM API is available:
 - `GET /api/dm/monster-capabilities`: Lists active monsters with capability overlays.
 - `GET /api/dm/monster-capabilities/{cid}`: Returns the grouped capabilities for a specific combatant.
 - `POST /api/dm/monster-capabilities/{cid}/execute`: Executes a simple attack or save capability. For composite (Multiattack) actions, returns an assisted sequence summary.
+- `POST /api/dm/monster-capabilities/{cid}/apply-effect`: Applies a condition rider (e.g. Prone, Grappled) to a target.
+- `POST /api/dm/monster-capabilities/{cid}/remove-effect`: Removes a condition rider from a target.
 
-The DM UI (`/dm` or `/dm/map`) now displays a "Monster Capabilities" card in the control lane when a supported monster is selected. Composite/Multiattack actions render as a sequence of executable child buttons for assisted sequential resolution.
+The DM UI (`/dm` or `/dm/map`) now displays a "Monster Capabilities" card in the control lane when a supported monster is selected. Composite/Multiattack actions render as a sequence of executable child buttons for assisted sequential resolution. Condition riders (like Prone or Frightened) are displayed as chips with explicit Apply/Remove buttons for DM-controlled assistance.
 
 ## Generating Overlays
 You can regenerate the capability files using the import script:
