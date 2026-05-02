@@ -115,6 +115,14 @@ travel with the request.
 - `/init:handoff-report` — produce a paste-ready report for a downstream
   Claude or Codex prompt.
 
+## Runtime Debugging
+
+For complex bugs or performance issues, use the live runtime-debug workflow
+before attempting a fix pass. This allows Gemini to observe the application
+while you connect from a real browser.
+
+See [docs/ai-workflows/runtime-debugging.md](runtime-debugging.md) for details.
+
 ## How to run a measured bug pass
 
 1. Start with `/init:bug-pass`. Paste the user's symptom verbatim.

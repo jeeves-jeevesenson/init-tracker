@@ -1,0 +1,15 @@
+prompt = """
+Switch to the `runtime-observer` subagent and begin a short interactive live debugging session.
+
+1. **Check Environment**: Run `git status --short`, check for listeners on port 8787, and identify any stale `serve_headless.py` or `uvicorn` processes.
+2. **Clean Slate**: If requested or if logs are stale, rotate/truncate `logs/websocket_debug.jsonl`, `logs/client_errors.log`, and `logs/lan_server.log`.
+3. **Launch Server**: Start the server with:
+   `INIT_TRACKER_HEADLESS=1 INITTRACKER_WS_DEBUG=1 LAN_PERF_DEBUG=1 ./.venv/bin/python3 serve_headless.py --host 0.0.0.0 --port 8787`
+4. **Verify HTTP**: Confirm `http://127.0.0.1:8787/`, `/dm`, and `/lan` are reachable.
+5. **User Instruction**: Tell the user to connect from their real LAN browser to:
+   `http://192.168.1.235:8787/` (or the confirmed LAN IP).
+6. **Monitor**: Tail the logs and stdout. Correlate browser actions with server events.
+7. **Report**: Produce an evidence-backed diagnosis of the reported issue.
+
+Do NOT edit code in this pass. Focus on observation.
+"""

@@ -1,0 +1,22 @@
+prompt = """
+Switch to the `runtime-observer` subagent and begin a long-running live soak session.
+
+The goal is to monitor stability and performance while the user performs normal DM/LAN workflows in a real browser.
+
+1. **Watch for**:
+   - WebSocket reconnects/disconnects or `AssertionError` in logs.
+   - Recovery loops or stuck map/render state.
+   - Slow snapshots, slow "Add Players/Monsters", or slow turn changes.
+   - Repeated YAML cache spikes.
+2. **Monitor**:
+   - `logs/websocket_debug.jsonl`
+   - `logs/client_errors.log`
+   - `logs/lan_server.log`
+   - Server stdout.
+3. **Report**:
+   - Produce a stability timeline.
+   - List proven, likely, and unproven findings.
+   - Record findings in `docs/runtime-notes/live-debug-findings.md` or update `majorTODO.md`.
+
+Do NOT edit code. This is an observation and recording pass.
+"""

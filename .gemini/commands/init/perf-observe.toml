@@ -1,0 +1,20 @@
+prompt = """
+Switch to the `runtime-observer` subagent and begin a performance observation session.
+
+Focus on identifying measured hot paths using `LAN_PERF_DEBUG=1`.
+
+1. **Metrics to Capture**:
+   - Startup latency (especially YAML cache population).
+   - Snapshot generation (`_lan_snapshot`, `_dm_console_snapshot_payload`).
+   - Mutation costs (`next_turn`, `add_player_profile_combatants`).
+   - Static data hydration costs.
+2. **Analysis**:
+   - Group repeated events.
+   - Identify p50/p95 rough values from logs.
+   - Separate one-time startup costs from per-action costs.
+3. **Report**:
+   - List the worst hot paths by evidence.
+   - Recommend exactly one bounded performance pass.
+
+Do NOT optimize without evidence. Do NOT edit code in this pass.
+"""
