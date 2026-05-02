@@ -930,6 +930,40 @@
       </div>
     </section>
 
+    <section class="live-group" data-live-group="monster-pilot" aria-labelledby="liveMonsterPilotGroupTitle">
+      <div class="live-group-label" id="liveMonsterPilotGroupTitle">Monster Pilot</div>
+      <div class="mut-card" id="monsterPilotCard">
+        <h3>Monster Pilot (DM Force-Move)</h3>
+        <div class="tactical-status" style="margin-bottom:10px">
+          Pilot a monster like a player. Select a monster to see its key stats and force-move it on the grid.
+          Movement here is DM authority — full path/range validation is not enforced.
+        </div>
+        <div class="form-group">
+          <label>Pilot monster</label>
+          <select id="monsterPilotCidSelect"><option value="">— select monster —</option></select>
+        </div>
+        <div id="monsterPilotSummary" class="empty-state">Select a monster above to see its summary.</div>
+        <div class="tactical-inline" style="margin-top:8px">
+          <div class="form-group">
+            <label>Target X (col)</label>
+            <input type="number" id="monsterPilotXInput" min="0" />
+          </div>
+          <div class="form-group">
+            <label>Target Y (row)</label>
+            <input type="number" id="monsterPilotYInput" min="0" />
+          </div>
+          <div class="form-group" style="justify-content:flex-end;flex-direction:row;align-items:center;gap:6px;padding-top:18px">
+            <button class="btn-sm" id="monsterPilotUseSelectedCellBtn" title="Copy currently selected map cell">Use map cell</button>
+          </div>
+        </div>
+        <div style="display:flex;gap:6px">
+          <button class="btn-action" id="monsterPilotMoveBtn" style="flex:1">Force Move Monster</button>
+          <button class="btn-sm" id="monsterPilotRefreshBtn">Refresh</button>
+        </div>
+        <div class="mut-result" id="monsterPilotResult"></div>
+      </div>
+    </section>
+
     <section class="live-group" data-live-group="monster-capability" aria-labelledby="liveMonsterCapGroupTitle">
       <div class="live-group-label" id="liveMonsterCapGroupTitle">Monster Capabilities (Overlay)</div>
       <div class="mut-card" id="monsterCapCard">
@@ -3810,6 +3844,7 @@ function applySnapshot(snap) {
   populateCidSelect('removeCidSelect', combatants);
   populateCidSelect('mapCidSelect', combatants);
   populateMonsterTurnSelectors(snap);
+  populateMonsterPilotSelector(snap);
 
   // Render list
   renderCombatants(snap);
@@ -5622,6 +5657,218 @@ document.getElementById('quickLoadBtn').addEventListener('click', async () => {
 function escHtml(s) {
   return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
 }
+
+// ── Monster Pilot ─────────────────────────────────────────────────────
+let monsterPilotData = { monsters: [], grid: { cols: 0, rows: 0 } };
+
+function isMonsterPilotEntry(entry) {
+  if (!entry || typeof entry !== 'object') return false;
+  const role = String(entry.role || '').trim().toLowerCase();
+  if (entry.is_pc === true || role === 'pc') return false;
+  return true;
+}
+
+function populateMonsterPilotSelector(snap) {
+  const select = document.getElementById('monsterPilotCidSelect');
+  if (!select) return;
+  const previous = String(select.value || '').trim();
+  const combatants = Array.isArray(snap && snap.combatants) ? snap.combatants : [];
+  select.innerHTML = '<option value="">— select monster —</option>';
+  for (const c of combatants) {
+    const cid = Number(c && c.cid);
+    if (!Number.isFinite(cid)) continue;
+    if (!isMonsterPilotEntry(c)) continue;
+    const opt = document.createElement('option');
+    opt.value = String(cid);
+    const role = String(c.role || '').trim().toLowerCase();
+    const tag = role ? ` · ${role}` : '';
+    const hpDisplay = Number.isFinite(Number(c.hp)) ? ` · HP ${Math.max(0, Math.floor(Number(c.hp)))}` : '';
+    opt.textContent = `${String(c.name || `Combatant ${cid}`)}${tag}${hpDisplay}`;
+    select.appendChild(opt);
+  }
+  if (previous && Array.from(select.options).some(opt => opt.value === previous)) {
+    select.value = previous;
+  } else {
+    const actor = String(document.getElementById('monsterActorCidSelect')?.value || '').trim();
+    if (actor && Array.from(select.options).some(opt => opt.value === actor)) {
+      select.value = actor;
+    }
+  }
+  renderMonsterPilotSummary();
+}
+
+function selectedMonsterPilotEntry() {
+  const cidStr = String(document.getElementById('monsterPilotCidSelect')?.value || '').trim();
+  if (!cidStr) return null;
+  const cid = Number(cidStr);
+  if (!Number.isFinite(cid)) return null;
+  const fromCache = (monsterPilotData.monsters || []).find(m => Number(m.cid) === cid);
+  if (fromCache) return fromCache;
+  const combatants = Array.isArray(currentSnapshot && currentSnapshot.combatants) ? currentSnapshot.combatants : [];
+  const fromSnap = combatants.find(c => Number(c && c.cid) === cid);
+  if (!fromSnap) return null;
+  const tactical = currentTacticalMap();
+  const unit = findTacticalUnit(cid, tactical) || null;
+  const pos = unit && unit.pos && typeof unit.pos === 'object' ? unit.pos : null;
+  return {
+    cid,
+    name: String(fromSnap.name || ''),
+    role: String(fromSnap.role || '').toLowerCase(),
+    ally: !!fromSnap.ally,
+    hp: Number(fromSnap.hp),
+    max_hp: Number(fromSnap.max_hp),
+    ac: Number(fromSnap.ac),
+    speed: Number(fromSnap.speed || 0),
+    position: pos ? { x: Number(pos.col), y: Number(pos.row) } : null,
+    conditions: String(fromSnap.marks || '').split(',').map(s => s.trim()).filter(Boolean),
+  };
+}
+
+function renderMonsterPilotSummary() {
+  const summary = document.getElementById('monsterPilotSummary');
+  if (!summary) return;
+  const entry = selectedMonsterPilotEntry();
+  if (!entry) {
+    summary.className = 'empty-state';
+    summary.innerHTML = 'Select a monster above to see its summary.';
+    return;
+  }
+  summary.className = 'cap-card';
+  const hp = Number.isFinite(entry.hp) ? entry.hp : '—';
+  const maxHp = Number.isFinite(entry.max_hp) && entry.max_hp > 0 ? entry.max_hp : null;
+  const hpDisplay = maxHp ? `${hp} / ${maxHp}` : `${hp}`;
+  const ac = Number.isFinite(entry.ac) ? entry.ac : '—';
+  const speed = Number.isFinite(entry.speed) ? `${entry.speed} ft` : '—';
+  const pos = entry.position;
+  const posDisplay = pos ? `(${pos.x}, ${pos.y})` : 'unknown';
+  const conditions = Array.isArray(entry.conditions) && entry.conditions.length
+    ? entry.conditions.map(c => escHtml(c)).join(', ')
+    : '—';
+  summary.innerHTML = `
+    <div style="display:grid; grid-template-columns:repeat(auto-fit, minmax(120px, 1fr)); gap:6px; padding:6px 0">
+      <div><div style="font-size:10px;color:var(--muted)">Name</div><div>${escHtml(entry.name || '—')}</div></div>
+      <div><div style="font-size:10px;color:var(--muted)">HP</div><div>${escHtml(String(hpDisplay))}</div></div>
+      <div><div style="font-size:10px;color:var(--muted)">AC</div><div>${escHtml(String(ac))}</div></div>
+      <div><div style="font-size:10px;color:var(--muted)">Speed</div><div>${escHtml(speed)}</div></div>
+      <div><div style="font-size:10px;color:var(--muted)">Position</div><div>${escHtml(posDisplay)}</div></div>
+      <div><div style="font-size:10px;color:var(--muted)">Conditions</div><div>${conditions}</div></div>
+    </div>
+  `;
+  if (pos && Number.isFinite(pos.x) && Number.isFinite(pos.y)) {
+    const xInput = document.getElementById('monsterPilotXInput');
+    const yInput = document.getElementById('monsterPilotYInput');
+    if (xInput && !xInput.dataset.userEdited) xInput.value = String(pos.x);
+    if (yInput && !yInput.dataset.userEdited) yInput.value = String(pos.y);
+  }
+}
+
+async function refreshMonsterPilot() {
+  try {
+    const r = await fetch(`${BASE}/api/dm/monster-pilot`, { headers: authHeaders() });
+    const data = await r.json();
+    if (r.ok && data.ok) {
+      monsterPilotData = {
+        monsters: Array.isArray(data.monsters) ? data.monsters : [],
+        grid: data.grid && typeof data.grid === 'object' ? data.grid : { cols: 0, rows: 0 },
+      };
+      if (data.snapshot) applySnapshot(data.snapshot);
+      else renderMonsterPilotSummary();
+    }
+  } catch (e) { /* ignore */ }
+}
+
+function syncMonsterPilotSelectionToOtherPanels(cid) {
+  const cidStr = String(cid || '').trim();
+  if (!cidStr) return;
+  const actorSelect = document.getElementById('monsterActorCidSelect');
+  if (actorSelect && Array.from(actorSelect.options).some(opt => opt.value === cidStr) && actorSelect.value !== cidStr) {
+    actorSelect.value = cidStr;
+    actorSelect.dispatchEvent(new Event('change'));
+  }
+}
+
+async function monsterPilotMoveAction() {
+  const result = document.getElementById('monsterPilotResult');
+  result.className = 'mut-result';
+  result.style.display = 'none';
+  const cidStr = String(document.getElementById('monsterPilotCidSelect').value || '').trim();
+  if (!cidStr) {
+    result.textContent = 'Select a monster first.';
+    result.className = 'mut-result error';
+    result.style.display = 'inline';
+    return;
+  }
+  const xRaw = document.getElementById('monsterPilotXInput').value;
+  const yRaw = document.getElementById('monsterPilotYInput').value;
+  const x = Number(xRaw);
+  const y = Number(yRaw);
+  if (!Number.isFinite(x) || !Number.isFinite(y)) {
+    result.textContent = 'Enter integer x and y.';
+    result.className = 'mut-result error';
+    result.style.display = 'inline';
+    return;
+  }
+  const btn = document.getElementById('monsterPilotMoveBtn');
+  btn.disabled = true;
+  try {
+    const r = await fetch(`${BASE}/api/dm/monster-pilot/${encodeURIComponent(cidStr)}/move`, {
+      method: 'POST',
+      headers: { ...authHeaders(), 'Content-Type': 'application/json' },
+      body: JSON.stringify({ x: Math.floor(x), y: Math.floor(y), mode: 'force' }),
+    });
+    const data = await r.json();
+    if (!r.ok) {
+      result.textContent = data && data.detail ? String(data.detail) : 'Move failed.';
+      result.className = 'mut-result error';
+      result.style.display = 'inline';
+      return;
+    }
+    const moveResult = (data && data.result) || {};
+    const prev = moveResult.previous_position;
+    const next = moveResult.new_position || { x, y };
+    const prevText = prev ? `(${prev.x}, ${prev.y})` : '—';
+    const warnings = Array.isArray(moveResult.warnings) ? moveResult.warnings : [];
+    let msg = `DM force-moved ${escHtml(moveResult.name || '')} ${prevText} → (${next.x}, ${next.y}).`;
+    if (warnings.length) msg += ` ⚠ ${warnings.map(w => escHtml(w)).join(' ')}`;
+    result.innerHTML = msg;
+    result.className = warnings.length ? 'mut-result warning' : 'mut-result success';
+    result.style.display = 'inline';
+    if (data.snapshot) applySnapshot(data.snapshot);
+    refreshMonsterPilot();
+  } catch (e) {
+    result.textContent = 'Request failed.';
+    result.className = 'mut-result error';
+    result.style.display = 'inline';
+  } finally {
+    btn.disabled = false;
+  }
+}
+
+document.getElementById('monsterPilotCidSelect').addEventListener('change', (ev) => {
+  const xInput = document.getElementById('monsterPilotXInput');
+  const yInput = document.getElementById('monsterPilotYInput');
+  if (xInput) delete xInput.dataset.userEdited;
+  if (yInput) delete yInput.dataset.userEdited;
+  renderMonsterPilotSummary();
+  syncMonsterPilotSelectionToOtherPanels(ev.target.value);
+});
+['monsterPilotXInput', 'monsterPilotYInput'].forEach(id => {
+  const el = document.getElementById(id);
+  if (el) el.addEventListener('input', () => { el.dataset.userEdited = '1'; });
+});
+document.getElementById('monsterPilotMoveBtn').addEventListener('click', monsterPilotMoveAction);
+document.getElementById('monsterPilotRefreshBtn').addEventListener('click', refreshMonsterPilot);
+document.getElementById('monsterPilotUseSelectedCellBtn').addEventListener('click', () => {
+  if (typeof tacticalSelection === 'object' && tacticalSelection &&
+      Number.isFinite(Number(tacticalSelection.col)) && Number.isFinite(Number(tacticalSelection.row))) {
+    const xInput = document.getElementById('monsterPilotXInput');
+    const yInput = document.getElementById('monsterPilotYInput');
+    xInput.value = String(Number(tacticalSelection.col));
+    yInput.value = String(Number(tacticalSelection.row));
+    xInput.dataset.userEdited = '1';
+    yInput.dataset.userEdited = '1';
+  }
+});
 
 // ── Monster Capabilities ──────────────────────────────────────────────
 let monsterCapabilityResolutionPackets = {};

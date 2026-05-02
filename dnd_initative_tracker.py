@@ -4790,6 +4790,37 @@ class LanController:
                 "snapshot": _dm_console_snapshot(),
             }
 
+        @self._fastapi_app.get("/api/dm/monster-pilot")
+        async def dm_monster_pilot_summary(request: Request):
+            """Return active monster/NPC combatant summaries for the Monster Pilot panel."""
+            _check_dm_auth(request)
+            try:
+                result = self.app._dm_monster_pilot_summary()
+            except Exception as exc:
+                raise HTTPException(status_code=500, detail=f"Failed to load monster pilot summary: {exc}")
+            return {
+                "ok": True,
+                "monsters": result.get("monsters", []),
+                "grid": result.get("grid", {}),
+                "snapshot": _dm_console_snapshot(),
+            }
+
+        @self._fastapi_app.post("/api/dm/monster-pilot/{cid}/move")
+        async def dm_monster_pilot_move(cid: int, request: Request, payload: Dict[str, Any] = Body(...)):
+            """Force-move a non-PC combatant on the tactical grid. DM authority, no path validation."""
+            _check_dm_auth(request)
+            try:
+                result = self.app._dm_monster_pilot_move(cid=int(cid), payload=payload)
+            except Exception as exc:
+                raise HTTPException(status_code=500, detail=f"Failed to move monster: {exc}")
+            if not result.get("ok"):
+                raise HTTPException(status_code=400, detail=result.get("error", "Cannot move monster."))
+            return {
+                "ok": True,
+                "result": result,
+                "snapshot": _dm_console_snapshot(),
+            }
+
         @self._fastapi_app.get("/api/dm/map/tactical-presets")
         async def dm_tactical_presets(request: Request):
             """List tactical presets for DM battlefield/map controls."""
@@ -44415,6 +44446,129 @@ class InitiativeTracker(base.InitiativeTracker):
             "spend": spend_key,
             "action": action_text,
             "dispatch": dispatch,
+        }
+
+    def _dm_monster_pilot_summary(self) -> Dict[str, Any]:
+        """Return active monster/NPC combatant summaries for the Monster Pilot panel."""
+        try:
+            cols, rows, _obstacles, _rough, positions = self._lan_live_map_data()
+        except Exception:
+            cols = int(self.__dict__.get("_lan_grid_cols", 20) or 20)
+            rows = int(self.__dict__.get("_lan_grid_rows", 20) or 20)
+            positions = dict(getattr(self, "_lan_positions", {}) or {})
+        role_memory = self.__dict__.get("_name_role_memory", {}) or {}
+        combatants = getattr(self, "combatants", {}) or {}
+        monsters: List[Dict[str, Any]] = []
+        for cid, c in combatants.items():
+            try:
+                cid_int = int(cid)
+            except Exception:
+                continue
+            name = str(getattr(c, "name", "") or "")
+            is_pc = bool(getattr(c, "is_pc", False))
+            ally = bool(getattr(c, "ally", False))
+            role = str(role_memory.get(name, "") or "").strip().lower()
+            if not role:
+                role = "pc" if is_pc else ("ally" if ally else "enemy")
+            if is_pc or role == "pc":
+                continue
+            hp = int(getattr(c, "hp", 0) or 0)
+            max_hp = int(getattr(c, "max_hp", hp) or hp)
+            ac = int(getattr(c, "ac", 0) or 0)
+            speed = int(getattr(c, "speed", 0) or 0)
+            pos = positions.get(cid_int) if isinstance(positions, dict) else None
+            try:
+                marks = self._lan_marks_for(c) or ""
+            except Exception:
+                marks = ""
+            conditions = [part.strip() for part in str(marks).split(",") if part and part.strip()]
+            entry = {
+                "cid": cid_int,
+                "name": name,
+                "role": role,
+                "ally": ally,
+                "hp": hp,
+                "max_hp": max_hp,
+                "ac": ac,
+                "speed": speed,
+                "swim_speed": int(getattr(c, "swim_speed", 0) or 0),
+                "fly_speed": int(getattr(c, "fly_speed", 0) or 0),
+                "position": ({"x": int(pos[0]), "y": int(pos[1])}
+                             if isinstance(pos, tuple) and len(pos) == 2 else None),
+                "conditions": conditions,
+            }
+            monsters.append(entry)
+        monsters.sort(key=lambda e: (0 if e.get("role") == "enemy" else 1, str(e.get("name", "")).lower()))
+        return {
+            "ok": True,
+            "monsters": monsters,
+            "grid": {"cols": int(cols), "rows": int(rows)},
+        }
+
+    def _dm_monster_pilot_move(self, *, cid: Any, payload: Dict[str, Any]) -> Dict[str, Any]:
+        """Force-move a non-PC combatant to grid (x, y). Bypasses full movement validation."""
+        try:
+            target_cid = int(cid)
+        except Exception:
+            return {"ok": False, "error": "cid must be an integer."}
+        if not isinstance(payload, dict):
+            return {"ok": False, "error": "Invalid payload."}
+        x_raw = payload.get("x", payload.get("col"))
+        y_raw = payload.get("y", payload.get("row"))
+        try:
+            x = int(x_raw)
+            y = int(y_raw)
+        except Exception:
+            return {"ok": False, "error": "x and y must be integers."}
+        combatant = (getattr(self, "combatants", {}) or {}).get(target_cid)
+        if combatant is None:
+            return {"ok": False, "error": f"Combatant {target_cid} not found."}
+        is_pc = bool(getattr(combatant, "is_pc", False))
+        if is_pc:
+            return {"ok": False, "error": "Monster Pilot only controls non-PC combatants."}
+        try:
+            cols, rows, obstacles, _rough, positions = self._lan_live_map_data()
+        except Exception:
+            cols = int(self.__dict__.get("_lan_grid_cols", 20) or 20)
+            rows = int(self.__dict__.get("_lan_grid_rows", 20) or 20)
+            obstacles = set()
+            positions = dict(getattr(self, "_lan_positions", {}) or {})
+        if x < 0 or y < 0 or x >= int(cols) or y >= int(rows):
+            return {"ok": False, "error": f"Coordinates out of bounds (grid {cols}x{rows})."}
+        warnings: List[str] = []
+        if (x, y) in (obstacles or set()):
+            warnings.append("Destination cell is marked as an obstacle.")
+        for other_cid, other_pos in dict(positions or {}).items():
+            try:
+                if int(other_cid) == int(target_cid):
+                    continue
+            except Exception:
+                continue
+            if isinstance(other_pos, tuple) and len(other_pos) == 2 and (int(other_pos[0]), int(other_pos[1])) == (x, y):
+                warnings.append("Destination cell is already occupied.")
+                break
+        previous = positions.get(target_cid) if isinstance(positions, dict) else None
+        previous_payload = (
+            {"x": int(previous[0]), "y": int(previous[1])}
+            if isinstance(previous, tuple) and len(previous) == 2 else None
+        )
+        try:
+            self._lan_set_token_position(int(target_cid), int(x), int(y))
+        except Exception as exc:
+            return {"ok": False, "error": f"Failed to update position: {exc}"}
+        try:
+            self._lan_force_state_broadcast()
+        except Exception:
+            pass
+        return {
+            "ok": True,
+            "cid": int(target_cid),
+            "name": str(getattr(combatant, "name", "") or ""),
+            "previous_position": previous_payload,
+            "new_position": {"x": int(x), "y": int(y)},
+            "grid": {"cols": int(cols), "rows": int(rows)},
+            "mode": "force",
+            "warnings": warnings,
         }
 
     def _dm_monster_spell_target(self, *, actor_cid: Any, payload: Dict[str, Any]) -> Dict[str, Any]:
