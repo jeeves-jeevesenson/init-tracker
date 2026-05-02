@@ -25,6 +25,8 @@ A new DM API is available:
 
 The DM UI (`/dm` or `/dm/map`) now displays a "Monster Capabilities" card in the control lane when a supported monster is selected. Composite/Multiattack actions render as a sequence of executable child buttons for assisted sequential resolution. Condition riders (like Prone or Frightened) are displayed as chips with explicit Apply/Remove buttons for DM-controlled assistance.
 
+Limited-use resources (Recharge, Daily Uses, Spell Slots) are tracked in-memory during the session. The DM can manually spend, roll, or restore these resources directly from the capability card.
+
 ## Generating Overlays
 You can regenerate the capability files using the import script:
 ```bash

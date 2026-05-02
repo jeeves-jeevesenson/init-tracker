@@ -105,8 +105,24 @@ mechanics:
         spells: ["magic-missile", "shield"]
 ```
 
-  ## 7. Effect Trigger Types
+#### Limited Uses (Generic)
+```yaml
+mechanics:
+  uses:
+    max: 3
+    per: "day" # or "long_rest", "short_rest"
+```
 
+## 7. Resource Tracking (In-Memory)
+The backend tracks the current state of limited-use resources in-memory during the session.
+- **Recharge**: Tracks `ready` or `used`.
+- **Uses**: Tracks `remaining` vs `max`.
+- **Spell Slots**: Tracks `remaining` slots per level.
+- **Daily Spells**: Tracks `remaining` uses per spell list group.
+
+DM UI provides buttons to spend, roll, or restore these resources. State is reset on server restart.
+
+## 8. Effect Trigger Types
 - `on_hit`: Applied when an attack hits.
 - `on_failed_save`: Applied when a target fails a saving throw.
 - `on_failed_escape`: Applied when a target fails to escape a grapple.

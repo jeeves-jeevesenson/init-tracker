@@ -202,6 +202,12 @@ class MonsterCapabilityService:
             if recharge:
                 cap["recharge_rule"] = f"{recharge}-6" if isinstance(recharge, int) else str(recharge)
 
+            # Include generic uses if present
+            uses = mechanics.get("uses")
+            if uses:
+                cap["uses_max"] = uses.get("max")
+                cap["uses_per"] = uses.get("per")
+
             # Map type to plural groups
             key = ctype + "s" if not ctype.endswith("s") else ctype
             if key in groups:

@@ -4596,13 +4596,37 @@ class LanController:
                     raise HTTPException(status_code=404, detail="Combatant not found.")
                 svc = self._ensure_monster_capabilities()
                 summary = svc.summarize_capabilities_for_ui(int(cid), combatant)
-                # Inject recharge status
+                # Inject resource status
                 for group in summary.get("groups", {}).values():
                     for cap in group:
                         cap_id = cap.get("id")
-                        if cap.get("recharge") and cap_id:
-                            status = self.app._monster_recharge_state.get(f"{cid}:{cap_id}", True)
+                        if not cap_id:
+                            continue
+                        
+                        # Recharge
+                        if cap.get("recharge"):
+                            status = self.app._monster_resource_state.get(f"{cid}:cap:{cap_id}", True)
                             cap["recharge_available"] = status
+
+                        # Generic uses
+                        if cap.get("uses_max") is not None:
+                            remaining = self.app._monster_resource_state.get(f"{cid}:cap:{cap_id}", cap["uses_max"])
+                            cap["uses_remaining"] = remaining
+
+                        # Spellcasting
+                        if cap.get("action_type") == "spellcasting":
+                            mechanics = cap.get("mechanics", {})
+                            for idx, lst in enumerate(mechanics.get("resolved_lists", [])):
+                                freq = lst.get("frequency")
+                                if freq == "slot":
+                                    lvl = lst.get("level")
+                                    max_slots = lst.get("slots", 0)
+                                    remaining = self.app._monster_resource_state.get(f"{cid}:slot:{lvl}", max_slots)
+                                    lst["slots_remaining"] = remaining
+                                elif freq == "daily":
+                                    max_uses = lst.get("uses", 1)
+                                    remaining = self.app._monster_resource_state.get(f"{cid}:daily:{cap_id}:{idx}", max_uses)
+                                    lst["uses_remaining"] = remaining
                 return {
                     "ok": True,
                     "summary": summary,
@@ -4662,8 +4686,8 @@ class LanController:
                 if not cap_id:
                     raise HTTPException(status_code=400, detail="capability_id is required.")
 
-                key = f"{cid}:{cap_id}"
-                self.app._monster_recharge_state[key] = available
+                key = f"{cid}:cap:{cap_id}"
+                self.app._monster_resource_state[key] = available
                 self.app._lan_force_state_broadcast()
 
                 return {
@@ -4674,6 +4698,23 @@ class LanController:
                 }
             except Exception as exc:
                 raise HTTPException(status_code=500, detail=f"Failed to mark monster recharge: {exc}")
+
+        @self._fastapi_app.post("/api/dm/monster-capabilities/{cid}/resource")
+        async def dm_monster_capability_resource_op(cid: int, request: Request, payload: Dict[str, Any] = Body(...)):
+            """Perform a generic resource operation (mark used, restore, etc)."""
+            _check_dm_auth(request)
+            try:
+                result = self.app._dm_monster_capability_resource_op(
+                    cid=int(cid),
+                    payload=payload
+                )
+                return {
+                    "ok": result.get("ok"),
+                    "result": result,
+                    "snapshot": _dm_console_snapshot(),
+                }
+            except Exception as exc:
+                raise HTTPException(status_code=500, detail=f"Failed to update monster resource: {exc}")
 
         @self._fastapi_app.post("/api/dm/monster-capabilities/{cid}/apply-effect")
         async def dm_apply_monster_capability_effect(cid: int, request: Request, payload: Dict[str, Any] = Body(...)):
@@ -8582,7 +8623,7 @@ class InitiativeTracker(base.InitiativeTracker):
         # Monster library (YAML files in ./Monsters)
         self._monster_specs: List[MonsterSpec] = []
         self._monsters_by_name: Dict[str, MonsterSpec] = {}
-        self._monster_recharge_state: Dict[str, bool] = {}
+        self._monster_resource_state: Dict[str, Any] = {}
         self._load_monsters_index()
         # Swap the Name entry for a monster dropdown + library button
         if self.host_mode == "desktop":
@@ -43762,7 +43803,7 @@ class InitiativeTracker(base.InitiativeTracker):
         # Check recharge if present
         recharge = cap.get("recharge")
         if recharge:
-            available = self._monster_recharge_state.get(f"{normalized_actor_cid}:{cap_id}", True)
+            available = self._monster_resource_state.get(f"{normalized_actor_cid}:cap:{cap_id}", True)
             if not available:
                 return {"ok": False, "error": f"{cap.get('name')} is not recharged."}
 
@@ -43810,7 +43851,7 @@ class InitiativeTracker(base.InitiativeTracker):
 
             # 5. Mark as used if it was a recharge ability
             if recharge:
-                self._monster_recharge_state[f"{normalized_actor_cid}:{cap_id}"] = False
+                self._monster_resource_state[f"{normalized_actor_cid}:cap:{cap_id}"] = False
 
             try:
                 self._rebuild_table(scroll_to_current=True)
@@ -43868,7 +43909,7 @@ class InitiativeTracker(base.InitiativeTracker):
              # 3. Mark as used if it was a recharge ability
              # We only mark it as used if the DM actually executes the assisted resolution request
              if recharge:
-                self._monster_recharge_state[f"{normalized_actor_cid}:{cap_id}"] = False
+                self._monster_resource_state[f"{normalized_actor_cid}:cap:{cap_id}"] = False
                 self._lan_force_state_broadcast()
 
              return {
@@ -43894,6 +43935,102 @@ class InitiativeTracker(base.InitiativeTracker):
             "capability": cap
         }
 
+    def _dm_monster_capability_resource_op(self, *, cid: int, payload: Dict[str, Any]) -> Dict[str, Any]:
+        """Perform a generic resource operation (mark used, restore, etc)."""
+        actor = self.combatants.get(cid)
+        if not actor:
+            return {"ok": False, "error": "Actor not found."}
+
+        cap_id = payload.get("capability_id")
+        op = payload.get("operation") # "mark_used", "mark_available", "set_remaining", "restore_all"
+        
+        if op == "restore_all":
+            # Clear all resource state for this CID
+            prefix = f"{cid}:"
+            keys_to_del = [k for k in self._monster_resource_state.keys() if k.startswith(prefix)]
+            for k in keys_to_del:
+                del self._monster_resource_state[k]
+            self._lan_force_state_broadcast()
+            return {"ok": True, "action": "restore_all"}
+
+        if not cap_id:
+            return {"ok": False, "error": "capability_id is required."}
+
+        svc = self._ensure_monster_capabilities()
+        data = svc.match_capabilities_for_combatant(actor)
+        if not data:
+            return {"ok": False, "error": "No capability overlay found."}
+
+        cap = next((c for c in data.get("capabilities", []) if c.get("id") == cap_id), None)
+        if not cap:
+            return {"ok": False, "error": f"Capability {cap_id} not found."}
+
+        # Resolve the specific resource key
+        res_key = f"cap:{cap_id}"
+        slot_level = payload.get("slot_level")
+        daily_index = payload.get("daily_index")
+        
+        if slot_level is not None:
+            res_key = f"slot:{slot_level}"
+        elif daily_index is not None:
+            res_key = f"daily:{cap_id}:{daily_index}"
+        
+        full_key = f"{cid}:{res_key}"
+
+        if op == "mark_used":
+            if slot_level is not None or daily_index is not None:
+                # Need to know max to calculate remaining
+                current = self._monster_resource_state.get(full_key)
+                if current is None:
+                    # Initialize from schema
+                    if slot_level is not None:
+                        # Find slot count in mechanics
+                        m = cap.get("mechanics", {}).get("spellcasting", {})
+                        lsts = m.get("lists", [])
+                        matching = next((l for l in lsts if l.get("frequency") == "slot" and l.get("level") == int(slot_level)), None)
+                        current = int(matching.get("slots", 0)) if matching else 0
+                    elif daily_index is not None:
+                        m = cap.get("mechanics", {}).get("spellcasting", {})
+                        lsts = m.get("lists", [])
+                        if 0 <= int(daily_index) < len(lsts):
+                             current = int(lsts[int(daily_index)].get("uses", 1))
+                        else:
+                             current = 1
+                self._monster_resource_state[full_key] = max(0, int(current) - 1)
+            else:
+                # Simple boolean (recharge)
+                self._monster_resource_state[full_key] = False
+        
+        elif op == "mark_available":
+            if slot_level is not None or daily_index is not None:
+                # Restore to max (or increment?) - restore to max is safer for DM UI "Restore" button
+                if slot_level is not None:
+                    m = cap.get("mechanics", {}).get("spellcasting", {})
+                    lsts = m.get("lists", [])
+                    matching = next((l for l in lsts if l.get("frequency") == "slot" and l.get("level") == int(slot_level)), None)
+                    self._monster_resource_state[full_key] = int(matching.get("slots", 0)) if matching else 0
+                elif daily_index is not None:
+                    m = cap.get("mechanics", {}).get("spellcasting", {})
+                    lsts = m.get("lists", [])
+                    if 0 <= int(daily_index) < len(lsts):
+                         self._monster_resource_state[full_key] = int(lsts[int(daily_index)].get("uses", 1))
+            else:
+                self._monster_resource_state[full_key] = True
+
+        elif op == "set_remaining":
+            val = payload.get("value")
+            if val is not None:
+                self._monster_resource_state[full_key] = int(val)
+
+        self._lan_force_state_broadcast()
+        return {
+            "ok": True,
+            "action": op,
+            "capability_id": cap_id,
+            "resource_key": res_key,
+            "new_value": self._monster_resource_state.get(full_key)
+        }
+
     def _dm_monster_capability_roll_recharge(self, *, cid: int, capability_id: str) -> Dict[str, Any]:
         """Roll to recharge a monster capability."""
         actor = self.combatants.get(cid)
@@ -43915,10 +44052,10 @@ class InitiativeTracker(base.InitiativeTracker):
 
         roll = random.randint(1, 6)
         success = roll >= int(threshold)
-        key = f"{cid}:{capability_id}"
+        key = f"{cid}:cap:{capability_id}"
 
         if success:
-            self._monster_recharge_state[key] = True
+            self._monster_resource_state[key] = True
             self._lan_force_state_broadcast()
 
         self._oplog(f"{getattr(actor, 'name', 'Monster')} rolls {roll} for {cap.get('name')} recharge (needs {threshold}+): {'Success!' if success else 'Failed'}")

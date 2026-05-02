@@ -13,7 +13,7 @@ class TestMonsterCapabilityBackend(unittest.TestCase):
                 2: mock.Mock(cid=2, is_pc=True, hp=100, temp_hp=0)
             },
             "_name_role_memory": {"Dragon": "enemy", "Hero": "pc"},
-            "_monster_recharge_state": {},
+            "_monster_resource_state": {},
             "active_cid": 1,
             "CONDITIONS_META": {"frightened": {"label": "Frightened"}, "prone": {"label": "Prone"}}
         })
@@ -36,14 +36,14 @@ class TestMonsterCapabilityBackend(unittest.TestCase):
             self.assertTrue(result["ok"])
             self.assertTrue(result["success"])
             self.assertEqual(result["roll"], 6)
-            self.assertTrue(self.app._monster_recharge_state.get("1:fire-breath"))
+            self.assertTrue(self.app._monster_resource_state.get("1:cap:fire-breath"))
 
     def test_recharge_roll_failure(self):
         with mock.patch("random.randint", return_value=1):
             result = self.app._dm_monster_capability_roll_recharge(cid=1, capability_id="fire-breath")
             self.assertTrue(result["ok"])
             self.assertFalse(result["success"])
-            self.assertFalse(self.app._monster_recharge_state.get("1:fire-breath", False))
+            self.assertFalse(self.app._monster_resource_state.get("1:cap:fire-breath", False))
 
     def test_execute_save_ability_assisted(self):
         payload = {
@@ -52,7 +52,7 @@ class TestMonsterCapabilityBackend(unittest.TestCase):
             "spend": "action"
         }
         # Fire breath is recharge 5
-        self.app._monster_recharge_state["1:fire-breath"] = True
+        self.app._monster_resource_state["1:cap:fire-breath"] = True
 
         result = self.app._dm_monster_capability_execute(actor_cid=1, payload=payload)
         self.assertTrue(result["ok"])
@@ -61,18 +61,47 @@ class TestMonsterCapabilityBackend(unittest.TestCase):
         self.assertEqual(result["target_name"], "Hero")
         self.assertIn("damage_rolls", result)
         # Should be marked as used
-        self.assertFalse(self.app._monster_recharge_state["1:fire-breath"])
+        self.assertFalse(self.app._monster_resource_state["1:cap:fire-breath"])
 
     def test_execute_recharge_not_ready(self):
         payload = {
             "capability_id": "fire-breath",
             "target_cid": 2
         }
-        self.app._monster_recharge_state["1:fire-breath"] = False
+        self.app._monster_resource_state["1:cap:fire-breath"] = False
 
         result = self.app._dm_monster_capability_execute(actor_cid=1, payload=payload)
         self.assertFalse(result["ok"])
         self.assertIn("not recharged", result["error"])
+
+    def test_resource_op_mark_used_recharge(self):
+        self.app._monster_resource_state["1:cap:fire-breath"] = True
+        payload = {"capability_id": "fire-breath", "operation": "mark_used"}
+        result = self.app._dm_monster_capability_resource_op(cid=1, payload=payload)
+        self.assertTrue(result["ok"])
+        self.assertFalse(self.app._monster_resource_state["1:cap:fire-breath"])
+
+    def test_resource_op_mark_used_slots(self):
+        # Archmage has 3 slots at level 3
+        self.app.combatants[1].monster_slug = "archmage"
+        payload = {
+            "capability_id": "spellcasting",
+            "operation": "mark_used",
+            "slot_level": 3
+        }
+        # Initialize
+        self.app._monster_resource_state["1:slot:3"] = 3
+        result = self.app._dm_monster_capability_resource_op(cid=1, payload=payload)
+        self.assertTrue(result["ok"])
+        self.assertEqual(self.app._monster_resource_state["1:slot:3"], 2)
+
+    def test_resource_op_restore_all(self):
+        self.app._monster_resource_state["1:cap:fire-breath"] = False
+        self.app._monster_resource_state["1:slot:3"] = 0
+        payload = {"operation": "restore_all"}
+        result = self.app._dm_monster_capability_resource_op(cid=1, payload=payload)
+        self.assertTrue(result["ok"])
+        self.assertNotIn("1:cap:fire-breath", self.app._monster_resource_state)
 
     def test_execute_composite_assisted_sequence(self):
         payload = {

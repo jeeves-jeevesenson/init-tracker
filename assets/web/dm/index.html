@@ -5658,8 +5658,13 @@ function renderMonsterCapabilities(summary) {
   }
 
   let html = `<div class="cap-header">
-    <div class="cap-monster-name">${escHtml(summary.monster_name)}</div>
-    <div class="cap-source">Source: ${escHtml(summary.source)} (${escHtml(summary.license)})</div>
+    <div style="display:flex; justify-content:space-between; align-items:flex-start">
+      <div>
+        <div class="cap-monster-name">${escHtml(summary.monster_name)}</div>
+        <div class="cap-source">Source: ${escHtml(summary.source)} (${escHtml(summary.license)})</div>
+      </div>
+      <button class="btn-sm" onclick="updateMonsterResource(${summary.combatant_id}, null, 'restore_all')">Restore All</button>
+    </div>
   </div>`;
 
   const groupOrder = ['actions', 'bonus_actions', 'reactions', 'legendary_actions', 'traits', 'lair_actions', 'special'];
@@ -5684,14 +5689,15 @@ function renderMonsterCapabilities(summary) {
       const isExec = !!cap.executable;
       const actionType = cap.action_type || 'special';
       const recharge = cap.recharge_rule;
-      const available = cap.recharge_available !== false;
+      const available = cap.recharge ? (cap.recharge_available !== false) : 
+                        (cap.uses_remaining !== undefined ? cap.uses_remaining > 0 : true);
 
-      html += `<div class="cap-card ${isExec ? 'executable' : ''}">
+      html += `<div class="cap-card ${available ? '' : 'unavailable'} ${isExec ? 'executable' : ''}">
         <div class="cap-card-header">
           <span class="cap-name">${escHtml(cap.name)}</span>
           ${recharge ? `<span class="cap-badge ${available ? 'exec' : 'manual'}">Recharge ${escHtml(recharge)} ${available ? '(Ready)' : '(Used)'}</span>` : ''}
+          ${cap.uses_max ? `<span class="cap-badge ${available ? 'exec' : 'manual'}">${cap.uses_remaining}/${cap.uses_max} Uses</span>` : ''}
           <span class="cap-badge ${actionType}">${escHtml(actionType.replace('_', ' '))}</span>
-          ${isExec ? '<span class="cap-badge exec">Automatic</span>' : '<span class="cap-badge manual">Manual</span>'}
         </div>
         <div class="cap-desc">${escHtml(cap.desc)}</div>`;
 
@@ -5724,13 +5730,29 @@ function renderMonsterCapabilities(summary) {
             ${escHtml(s.ability?.toUpperCase() || '')} DC ${s.save_dc} · +${s.attack_bonus} to hit
           </div>`;
           
-          for (const list of cap.mechanics.resolved_lists) {
+          for (let i=0; i < cap.mechanics.resolved_lists.length; i++) {
+              const list = cap.mechanics.resolved_lists[i];
               let freqLabel = list.frequency.replace('_', ' ');
-              if (list.frequency === 'slot') freqLabel = `Level ${list.level} (${list.slots} slots)`;
-              else if (list.frequency === 'daily') freqLabel = `${list.uses}/Day`;
+              let resControls = '';
+              
+              if (list.frequency === 'slot') {
+                  const rem = list.slots_remaining;
+                  const max = list.slots;
+                  freqLabel = `Level ${list.level} (${rem}/${max} slots)`;
+                  resControls = `<button class="btn-xs" style="margin-left:8px" onclick="updateMonsterResource(${summary.combatant_id}, '${cap.id}', 'mark_used', {slot_level:${list.level}})">Spend</button>
+                                 <button class="btn-xs" onclick="updateMonsterResource(${summary.combatant_id}, '${cap.id}', 'mark_available', {slot_level:${list.level}})">Restore</button>`;
+              } else if (list.frequency === 'daily') {
+                  const rem = list.uses_remaining;
+                  const max = list.uses;
+                  freqLabel = `${rem}/${max} Per Day`;
+                  resControls = `<button class="btn-xs" style="margin-left:8px" onclick="updateMonsterResource(${summary.combatant_id}, '${cap.id}', 'mark_used', {daily_index:${i}})">Spend</button>
+                                 <button class="btn-xs" onclick="updateMonsterResource(${summary.combatant_id}, '${cap.id}', 'mark_available', {daily_index:${i}})">Restore</button>`;
+              }
 
               html += `<div class="cap-spell-list" style="margin-bottom:8px">
-                <div style="font-size:11px; color:#aaa; text-transform:uppercase; margin-bottom:2px">${escHtml(freqLabel)}</div>
+                <div style="font-size:11px; color:#aaa; text-transform:uppercase; margin-bottom:2px; display:flex; align-items:center;">
+                    ${escHtml(freqLabel)} ${resControls}
+                </div>
                 <div style="display:flex; flex-wrap:wrap; gap:4px">`;
               
               for (const spell of list.resolved_spells) {
@@ -5778,14 +5800,19 @@ function renderMonsterCapabilities(summary) {
             html += `<button class="btn-sm" disabled title="Ability used">Used</button>`;
           }
       } else {
-         html += `<span class="cap-actions-manual">Manual resolution required.</span>`;
+         html += `<span class="cap-actions-manual" style="font-size:11px; color:#888; margin-right:8px">Manual resolution required.</span>`;
       }
 
-      if (recharge) {
+      if (cap.recharge) {
           if (!available) {
             html += `<button class="btn-sm btn-warn" onclick="rollMonsterRecharge(${summary.combatant_id}, '${cap.id}')">Roll Recharge</button>`;
           }
-          html += `<button class="btn-sm" onclick="markMonsterRecharge(${summary.combatant_id}, '${cap.id}', ${!available})">Mark ${available ? 'Used' : 'Ready'}</button>`;
+          html += `<button class="btn-sm" onclick="updateMonsterResource(${summary.combatant_id}, '${cap.id}', '${available ? 'mark_used' : 'mark_available'}')">Mark ${available ? 'Used' : 'Ready'}</button>`;
+      }
+      
+      if (cap.uses_max) {
+           html += `<button class="btn-sm" onclick="updateMonsterResource(${summary.combatant_id}, '${cap.id}', 'mark_used')">Spend Use</button>`;
+           html += `<button class="btn-sm" onclick="updateMonsterResource(${summary.combatant_id}, '${cap.id}', 'mark_available')">Restore</button>`;
       }
       html += `</div>`;
 
@@ -5823,21 +5850,6 @@ async function rollMonsterRecharge(cid, capId) {
       res.classList.add('error');
     }
   } catch (e) { res.textContent = 'Request failed.'; res.classList.add('error'); }
-}
-
-async function markMonsterRecharge(cid, capId, available) {
-  try {
-    const r = await fetch(`${BASE}/api/dm/monster-capabilities/${cid}/mark-recharge`, {
-      method: 'POST',
-      headers: authHeaders(),
-      body: JSON.stringify({ capability_id: capId, available: available }),
-    });
-    const data = await r.json();
-    if (r.ok && data.ok) {
-      fetchMonsterCapabilities(cid);
-      if (data.snapshot) applySnapshot(data.snapshot);
-    }
-  } catch (e) { console.error('Mark recharge failed', e); }
 }
 
 async function executeMonsterCapability(cid, capId) {
@@ -5930,6 +5942,22 @@ async function executeMonsterSpell(cid, capId, spellSlug) {
       res.classList.add('error');
     }
   } catch (e) { res.textContent = 'Request failed.'; res.classList.add('error'); }
+}
+
+async function updateMonsterResource(cid, capId, operation, extra = {}) {
+  try {
+    const payload = { capability_id: capId, operation: operation, ...extra };
+    const r = await fetch(`${BASE}/api/dm/monster-capabilities/${cid}/resource`, {
+      method: 'POST',
+      headers: authHeaders(),
+      body: JSON.stringify(payload),
+    });
+    const data = await r.json();
+    if (r.ok && data.ok) {
+      fetchMonsterCapabilities(cid);
+      if (data.snapshot) applySnapshot(data.snapshot);
+    }
+  } catch (e) { console.error('Update resource failed', e); }
 }
 
 async function applyMonsterEffect(cid, capId, effectIdx) {
