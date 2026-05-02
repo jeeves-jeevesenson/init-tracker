@@ -1,0 +1,45 @@
+name: Kobold
+slug: kobold
+source: dnd5eapi
+license: CC-BY-4.0
+capabilities:
+- id: dagger
+  name: Dagger
+  type: action
+  executable: true
+  desc: 'Melee Weapon Attack: +4 to hit, reach 5 ft., one target. Hit: 4 (1d4 + 2)
+    piercing damage.'
+  action_type: melee_attack
+  mechanics:
+    attack_bonus: 4
+    damage:
+    - formula: 1d4+2
+      type: piercing
+    reach: 5
+- id: sling
+  name: Sling
+  type: action
+  executable: true
+  desc: 'Ranged Weapon Attack: +4 to hit, range 30/120 ft., one target. Hit: 4 (1d4
+    + 2) bludgeoning damage.'
+  action_type: ranged_attack
+  mechanics:
+    attack_bonus: 4
+    damage:
+    - formula: 1d4+2
+      type: bludgeoning
+    range: 30
+    long_range: 120
+- id: sunlight-sensitivity
+  name: Sunlight Sensitivity
+  type: trait
+  executable: false
+  desc: While in sunlight, the kobold has disadvantage on attack rolls, as well as
+    on Wisdom (Perception) checks that rely on sight.
+- id: pack-tactics
+  name: Pack Tactics
+  type: trait
+  executable: false
+  desc: The kobold has advantage on an attack roll against a creature if at least
+    one of the kobold's allies is within 5 ft. of the creature and the ally isn't
+    incapacitated.

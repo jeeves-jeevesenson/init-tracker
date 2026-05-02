@@ -25,6 +25,7 @@ capabilities:
       type: piercing
     - formula: 2d6
       type: fire
+    reach: 10
 - id: claw
   name: Claw
   type: action
@@ -37,6 +38,7 @@ capabilities:
     damage:
     - formula: 2d6+8
       type: slashing
+    reach: 5
 - id: tail
   name: Tail
   type: action
@@ -49,18 +51,23 @@ capabilities:
     damage:
     - formula: 2d8+8
       type: bludgeoning
+    reach: 15
 - id: frightful-presence
   name: Frightful Presence
   type: action
-  executable: false
+  executable: true
   desc: Each creature of the dragon's choice that is within 120 ft. of the dragon
     and aware of it must succeed on a DC 19 Wisdom saving throw or become frightened
     for 1 minute. A creature can repeat the saving throw at the end of each of its
     turns, ending the effect on itself on a success. If a creature's saving throw
     is successful or the effect ends for it, the creature is immune to the dragon's
     Frightful Presence for the next 24 hours.
-  action_type: utility
-  mechanics: {}
+  action_type: save_ability
+  mechanics:
+    save_dc: 19
+    save_ability: wis
+    damage: []
+    on_save: none
 - id: fire-breath
   name: Fire Breath
   type: action
@@ -69,16 +76,14 @@ capabilities:
     make a DC 21 Dexterity saving throw, taking 63 (18d6) fire damage on a failed
     save, or half as much damage on a successful one.
   action_type: save_ability
-  recharge: 5
   mechanics:
     save_dc: 21
     save_ability: dex
-    shape: cone
-    size: 60
     damage:
     - formula: 18d6
       type: fire
-      on_save: half
+    on_save: none
+  recharge: 5
 - id: detect
   name: Detect
   type: legendary_action
@@ -101,18 +106,13 @@ capabilities:
     succeed on a DC 22 Dexterity saving throw or take 15 (2d6 + 8) bludgeoning damage
     and be knocked prone. The dragon can then fly up to half its flying speed.
   action_type: save_ability
-  cost: 2
   mechanics:
     save_dc: 22
     save_ability: dex
-    shape: radius
-    size: 10
     damage:
     - formula: 2d6+8
       type: bludgeoning
-      on_save: none
-    conditions:
-    - type: prone
+    on_save: none
 - id: legendary-resistance
   name: Legendary Resistance
   type: trait

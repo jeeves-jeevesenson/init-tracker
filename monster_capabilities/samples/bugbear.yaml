@@ -1,0 +1,46 @@
+name: Bugbear
+slug: bugbear
+source: dnd5eapi
+license: CC-BY-4.0
+capabilities:
+- id: morningstar
+  name: Morningstar
+  type: action
+  executable: true
+  desc: 'Melee Weapon Attack: +4 to hit, reach 5 ft., one target. Hit: 11 (2d8 + 2)
+    piercing damage.'
+  action_type: melee_attack
+  mechanics:
+    attack_bonus: 4
+    damage:
+    - formula: 2d8+2
+      type: piercing
+    reach: 5
+- id: javelin
+  name: Javelin
+  type: action
+  executable: true
+  desc: 'Melee or Ranged Weapon Attack: +4 to hit, reach 5 ft. or range 30/120 ft.,
+    one target. Hit: 9 (2d6 + 2) piercing damage in melee or 5 (1d6 + 2) piercing
+    damage at range.'
+  action_type: melee_attack
+  mechanics:
+    attack_bonus: 4
+    damage:
+    - formula: 2d6+2
+      type: piercing
+    reach: 5
+    range: 30
+    long_range: 120
+- id: brute
+  name: Brute
+  type: trait
+  executable: false
+  desc: A melee weapon deals one extra die of its damage when the bugbear hits with
+    it (included in the attack).
+- id: surprise-attack
+  name: Surprise Attack
+  type: trait
+  executable: false
+  desc: If the bugbear surprises a creature and hits it with an attack during the
+    first round of combat, the target takes an extra 7 (2d6) damage from the attack.

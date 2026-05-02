@@ -15,6 +15,7 @@ capabilities:
     damage:
     - formula: 1d6+2
       type: slashing
+    reach: 5
 - id: shortbow
   name: Shortbow
   type: action
@@ -27,6 +28,8 @@ capabilities:
     damage:
     - formula: 1d6+2
       type: piercing
+    range: 80
+    long_range: 320
 - id: nimble-escape
   name: Nimble Escape
   type: trait

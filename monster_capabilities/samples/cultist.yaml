@@ -1,0 +1,23 @@
+name: Cultist
+slug: cultist
+source: dnd5eapi
+license: CC-BY-4.0
+capabilities:
+- id: scimitar
+  name: Scimitar
+  type: action
+  executable: true
+  desc: 'Melee Weapon Attack: +3 to hit, reach 5 ft., one creature. Hit: 4 (1d6 +
+    1) slashing damage.'
+  action_type: melee_attack
+  mechanics:
+    attack_bonus: 3
+    damage:
+    - formula: 1d6+1
+      type: slashing
+    reach: 5
+- id: dark-devotion
+  name: Dark Devotion
+  type: trait
+  executable: false
+  desc: The cultist has advantage on saving throws against being charmed or frightened.

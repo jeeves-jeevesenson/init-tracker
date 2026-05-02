@@ -1,20 +1,20 @@
-name: Skeleton
-slug: skeleton
+name: Goblin
+slug: goblin-warrior
 source: dnd5eapi
 license: CC-BY-4.0
 capabilities:
-- id: shortsword
-  name: Shortsword
+- id: scimitar
+  name: Scimitar
   type: action
   executable: true
   desc: 'Melee Weapon Attack: +4 to hit, reach 5 ft., one target. Hit: 5 (1d6 + 2)
-    piercing damage.'
+    slashing damage.'
   action_type: melee_attack
   mechanics:
     attack_bonus: 4
     damage:
     - formula: 1d6+2
-      type: piercing
+      type: slashing
     reach: 5
 - id: shortbow
   name: Shortbow
@@ -30,3 +30,9 @@ capabilities:
       type: piercing
     range: 80
     long_range: 320
+- id: nimble-escape
+  name: Nimble Escape
+  type: trait
+  executable: false
+  desc: The goblin can take the Disengage or Hide action as a bonus action on each
+    of its turns.

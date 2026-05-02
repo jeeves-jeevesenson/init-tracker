@@ -11,6 +11,10 @@ class TestMonsterCapabilityService(unittest.TestCase):
     def test_load_samples(self):
         self.assertIn("skeleton", self.svc.capabilities_by_slug)
         self.assertIn("goblin", self.svc.capabilities_by_slug)
+        self.assertIn("goblin-warrior", self.svc.capabilities_by_slug)
+        self.assertIn("zombie", self.svc.capabilities_by_slug)
+        self.assertIn("wolf", self.svc.capabilities_by_slug)
+        self.assertIn("orc", self.svc.capabilities_by_slug)
         self.assertIn("adult-red-dragon", self.svc.capabilities_by_slug)
         self.assertIn("archmage", self.svc.capabilities_by_slug)
 

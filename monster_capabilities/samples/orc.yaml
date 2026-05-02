@@ -1,0 +1,39 @@
+name: Orc
+slug: orc
+source: dnd5eapi
+license: CC-BY-4.0
+capabilities:
+- id: greataxe
+  name: Greataxe
+  type: action
+  executable: true
+  desc: 'Melee Weapon Attack: +5 to hit, reach 5 ft., one target. Hit: 9 (1d12 + 3)
+    slashing damage.'
+  action_type: melee_attack
+  mechanics:
+    attack_bonus: 5
+    damage:
+    - formula: 1d12+3
+      type: slashing
+    reach: 5
+- id: javelin
+  name: Javelin
+  type: action
+  executable: true
+  desc: 'Melee or Ranged Weapon Attack: +5 to hit, reach 5 ft. or range 30/120 ft.,
+    one target. Hit: 6 (1d6 + 3) piercing damage.'
+  action_type: melee_attack
+  mechanics:
+    attack_bonus: 5
+    damage:
+    - formula: 1d6+3
+      type: piercing
+    reach: 5
+    range: 30
+    long_range: 120
+- id: aggressive
+  name: Aggressive
+  type: trait
+  executable: false
+  desc: As a bonus action, the orc can move up to its speed toward a hostile creature
+    that it can see.

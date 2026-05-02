@@ -1,0 +1,51 @@
+name: Troll
+slug: troll
+source: dnd5eapi
+license: CC-BY-4.0
+capabilities:
+- id: multiattack
+  name: Multiattack
+  type: action
+  executable: false
+  desc: 'The troll makes three attacks: one with its bite and two with its claws.'
+  action_type: composite
+  mechanics: {}
+- id: bite
+  name: Bite
+  type: action
+  executable: true
+  desc: 'Melee Weapon Attack: +7 to hit, reach 5 ft., one target. Hit: 7 (1d6 + 4)
+    piercing damage.'
+  action_type: melee_attack
+  mechanics:
+    attack_bonus: 7
+    damage:
+    - formula: 1d6+4
+      type: piercing
+    reach: 5
+- id: claw
+  name: Claw
+  type: action
+  executable: true
+  desc: 'Melee Weapon Attack: +7 to hit, reach 5 ft., one target. Hit: 11 (2d6 + 4)
+    slashing damage.'
+  action_type: melee_attack
+  mechanics:
+    attack_bonus: 7
+    damage:
+    - formula: 2d6+4
+      type: slashing
+    reach: 5
+- id: keen-smell
+  name: Keen Smell
+  type: trait
+  executable: false
+  desc: The troll has advantage on Wisdom (Perception) checks that rely on smell.
+- id: regeneration
+  name: Regeneration
+  type: trait
+  executable: false
+  desc: The troll regains 10 hit points at the start of its turn. If the troll takes
+    acid or fire damage, this trait doesn't function at the start of the troll's next
+    turn. The troll dies only if it starts its turn with 0 hit points and doesn't
+    regenerate.

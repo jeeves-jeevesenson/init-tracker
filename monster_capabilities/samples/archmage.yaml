@@ -15,6 +15,9 @@ capabilities:
     damage:
     - formula: 1d4+2
       type: piercing
+    reach: 5
+    range: 20
+    long_range: 60
 - id: magic-resistance
   name: Magic Resistance
   type: trait

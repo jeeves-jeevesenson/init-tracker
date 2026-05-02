@@ -1,0 +1,25 @@
+name: Zombie
+slug: zombie
+source: dnd5eapi
+license: CC-BY-4.0
+capabilities:
+- id: slam
+  name: Slam
+  type: action
+  executable: true
+  desc: 'Melee Weapon Attack: +3 to hit, reach 5 ft., one target. Hit: 4 (1d6 + 1)
+    bludgeoning damage.'
+  action_type: melee_attack
+  mechanics:
+    attack_bonus: 3
+    damage:
+    - formula: 1d6+1
+      type: bludgeoning
+    reach: 5
+- id: undead-fortitude
+  name: Undead Fortitude
+  type: trait
+  executable: false
+  desc: If damage reduces the zombie to 0 hit points, it must make a Constitution
+    saving throw with a DC of 5+the damage taken, unless the damage is radiant or
+    from a critical hit. On a success, the zombie drops to 1 hit point instead.

@@ -23,18 +23,20 @@ A new DM API is available:
 
 The DM UI (`/dm` or `/dm/map`) now displays a "Monster Capabilities" card in the control lane when a supported monster is selected.
 
-## Generating Samples
-You can regenerate the sample files using the import script:
+## Generating Overlays
+You can regenerate the capability files using the import script:
 ```bash
-.venv/bin/python3 scripts/import/monster_capability_import.py
+./.venv/bin/python3 scripts/import/monster_capability_import.py
 ```
 
-## Auditing Legacy Data
-To see the current state of the legacy monster library, run the audit script:
+## Inventory Audit
+To see a summary of available capability overlays:
 ```bash
-.venv/bin/python3 scripts/audit/monster_capability_audit.py
+./.venv/bin/python3 scripts/audit/monster_capability_inventory.py
 ```
-A report will be generated at `docs/reports/monster-capability-audit.md`.
+
+## Coverage Report
+A detailed coverage report is available at `docs/reports/monster-capability-coverage.md`.
 
 ## Probing External Sources
 To fetch fresh sample data from external APIs, run the probe script:
