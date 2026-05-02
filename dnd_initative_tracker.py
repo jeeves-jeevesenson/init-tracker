@@ -1948,6 +1948,9 @@ class LanController:
     def app(self, _value: "InitiativeTracker") -> None:
         raise AttributeError("LanController.app is read-only.")
 
+    def _ensure_monster_capabilities(self) -> Any:
+        return self._tracker._ensure_monster_capabilities()
+
     def _ensure_player_commands(self) -> PlayerCommandService:
         return self._tracker._ensure_player_commands()
 
@@ -4540,6 +4543,73 @@ class LanController:
                 "result": result,
                 "snapshot": _dm_console_snapshot(),
             }
+
+        @self._fastapi_app.get("/api/dm/monster-capabilities")
+        async def dm_list_monster_capabilities(request: Request):
+            """List all matched monster capabilities for active combatants."""
+            _check_dm_auth(request)
+            try:
+                combatants = self.app.combatants or {}
+                svc = self._ensure_monster_capabilities()
+                results = []
+                # Use name_role_memory to identify enemies
+                role_memory = self.app.__dict__.get("_name_role_memory", {})
+                for cid, c in combatants.items():
+                    name = str(getattr(c, "name", ""))
+                    is_pc = bool(getattr(c, "is_pc", False))
+                    role = str(role_memory.get(name, "enemy") or "enemy").strip().lower()
+                    if not is_pc and role == "enemy":
+                        summary = svc.summarize_capabilities_for_ui(int(cid), c)
+                        if summary.get("matched"):
+                            results.append(summary)
+                return {
+                    "ok": True,
+                    "combatant_capabilities": results,
+                    "snapshot": _dm_console_snapshot(),
+                }
+            except Exception as exc:
+                raise HTTPException(status_code=500, detail=f"Failed to list monster capabilities: {exc}")
+
+        @self._fastapi_app.get("/api/dm/monster-capabilities/{cid}")
+        async def dm_get_monster_capabilities(cid: int, request: Request):
+            """Get matched monster capability overlay for a specific combatant."""
+            _check_dm_auth(request)
+            try:
+                combatant = self.app.combatants.get(int(cid))
+                if not combatant:
+                    raise HTTPException(status_code=404, detail="Combatant not found.")
+                svc = self._ensure_monster_capabilities()
+                summary = svc.summarize_capabilities_for_ui(int(cid), combatant)
+                return {
+                    "ok": True,
+                    "summary": summary,
+                    "snapshot": _dm_console_snapshot(),
+                }
+            except HTTPException:
+                raise
+            except Exception as exc:
+                raise HTTPException(status_code=500, detail=f"Failed to get monster capabilities: {exc}")
+
+        @self._fastapi_app.post("/api/dm/monster-capabilities/{cid}/execute")
+        async def dm_execute_monster_capability(cid: int, request: Request, payload: Dict[str, Any] = Body(...)):
+            """Execute a monster capability by ID, with optional target."""
+            _check_dm_auth(request)
+            try:
+                result = self.app._dm_monster_capability_execute(
+                    actor_cid=int(cid),
+                    payload=payload
+                )
+                if not result.get("ok"):
+                    # We still return 200 but with ok:False for business logic failures
+                    # unless it's a real error.
+                    pass
+                return {
+                    "ok": result.get("ok"),
+                    "result": result,
+                    "snapshot": _dm_console_snapshot(),
+                }
+            except Exception as exc:
+                raise HTTPException(status_code=500, detail=f"Failed to execute monster capability: {exc}")
 
         @self._fastapi_app.post("/api/dm/combat/combatants/{cid}/spell-target")
         async def dm_monster_spell_target(cid: int, request: Request, payload: Dict[str, Any] = Body(...)):
@@ -34240,6 +34310,15 @@ class InitiativeTracker(base.InitiativeTracker):
             removed = 1
         return bool(removed)
 
+    def _ensure_monster_capabilities(self) -> Any:
+        """Return the backend monster-capability service, constructing on first use."""
+        svc = self.__dict__.get("_monster_capabilities")
+        if svc is None:
+            from monster_capability_service import MonsterCapabilityService
+            svc = MonsterCapabilityService()
+            self.__dict__["_monster_capabilities"] = svc
+        return svc
+
     def _ensure_player_commands(self) -> PlayerCommandService:
         """Return the backend player-command service, constructing on first use.
 
@@ -43502,6 +43581,98 @@ class InitiativeTracker(base.InitiativeTracker):
         except Exception:
             pass
         return result
+
+    def _dm_monster_capability_execute(self, *, actor_cid: Any, payload: Dict[str, Any]) -> Dict[str, Any]:
+        """Execute a monster capability by ID, with optional target."""
+        actor, error, normalized_actor_cid = self._dm_validate_monster_actor_for_turn(actor_cid)
+        if actor is None:
+            return {"ok": False, "error": error or "Invalid actor."}
+
+        svc = self._ensure_monster_capabilities()
+        data = svc.match_capabilities_for_combatant(actor)
+        if not data:
+            return {"ok": False, "error": "No capability overlay found for this combatant."}
+
+        cap_id = payload.get("capability_id")
+        target_cid = payload.get("target_cid")
+        spend = payload.get("spend", "action")
+        roll_mode = str(payload.get("roll_mode", "normal")).strip().lower()
+        if roll_mode not in ("normal", "advantage", "disadvantage"):
+            roll_mode = "normal"
+
+        # Find the capability
+        cap = next((c for c in data.get("capabilities", []) if c.get("id") == cap_id), None)
+        if not cap:
+            return {"ok": False, "error": f"Capability {cap_id} not found."}
+
+        # Check if executable
+        if not cap.get("executable"):
+             return {"ok": False, "resolution": "manual", "reason": "Capability not marked as executable.", "capability": cap}
+
+        action_type = cap.get("action_type")
+        mechanics = cap.get("mechanics", {})
+
+        if action_type in ("melee_attack", "ranged_attack") and target_cid is not None:
+            # 1. Target validation
+            normalized_target_cid = _normalize_cid_value(target_cid, "dm.monster.capability.target")
+            if normalized_target_cid is None:
+                 return {"ok": False, "error": "target_cid must be an integer."}
+            target = self.combatants.get(normalized_target_cid)
+            if not target:
+                 return {"ok": False, "error": "Target not found."}
+
+            # 2. Mechanics validation
+            damage_entries = mechanics.get("damage", [])
+            if not damage_entries:
+                 return {"ok": False, "resolution": "manual", "reason": "No damage entries found.", "capability": cap}
+
+            # 3. Spend resource
+            spend_key = self._dm_normalize_turn_spend(spend, default="action", allow_none=True)
+            if spend_key is None:
+                 return {"ok": False, "error": "spend must be action, bonus, reaction, or none."}
+            if spend_key != "none":
+                spent_ok, spend_error = self._dm_spend_combatant_turn_resource(actor, spend_key)
+                if not spent_ok:
+                    return {"ok": False, "error": spend_error or "No turn resource available."}
+
+            # 4. Resolve attack sequence
+            normalized_blocks = [{
+                "attack_key": cap_id,
+                "name": cap.get("name"),
+                "to_hit": mechanics.get("attack_bonus"),
+                "count": 1,
+                "roll_mode": roll_mode,
+                "damage_entries": damage_entries
+            }]
+
+            result = self._resolve_map_attack_sequence(
+                int(normalized_actor_cid),
+                int(normalized_target_cid),
+                normalized_blocks
+            )
+
+            if not bool(result.get("ok")):
+                return {"ok": False, "error": str(result.get("reason") or "Failed to resolve monster attacks.")}
+
+            try:
+                self._rebuild_table(scroll_to_current=True)
+                self._lan_force_state_broadcast()
+            except Exception:
+                pass
+
+            payload_res = dict(result)
+            payload_res["spend"] = spend_key
+            payload_res["attacker_name"] = str(getattr(actor, "name", "Attacker") or "Attacker")
+            payload_res["target_name"] = str(getattr(target, "name", "Target") or "Target")
+            payload_res["resolution"] = "automatic"
+            return payload_res
+
+        return {
+            "ok": False,
+            "resolution": "manual",
+            "reason": "Complex action or missing target.",
+            "capability": cap
+        }
 
     def _dm_monster_perform_action(self, *, actor_cid: Any, action_name: Any, spend: Any = "action") -> Dict[str, Any]:
         actor, error, normalized_actor_cid = self._dm_validate_monster_actor_for_turn(actor_cid)

@@ -668,6 +668,25 @@
     }
     .loading-pulse { animation: pulse 1.2s ease-in-out infinite; }
     @keyframes pulse { 0%,100%{opacity:.5} 50%{opacity:1} }
+    /* ── Monster Capabilities ───────────────────────────────────── */
+    .cap-header { margin-bottom: 12px; padding-bottom: 8px; border-bottom: 1px solid var(--border); }
+    .cap-monster-name { font-weight: bold; font-size: 1.1em; color: var(--gold); }
+    .cap-source { font-size: 11px; color: var(--muted); margin-top: 2px; }
+    .cap-group { margin-top: 16px; }
+    .cap-group:first-child { margin-top: 0; }
+    .cap-group-title { font-size: 11px; font-weight: bold; text-transform: uppercase; color: var(--muted); letter-spacing: .05em; margin-bottom: 8px; }
+    .cap-card { background: rgba(255,255,255,0.03); border: 1px solid var(--border); border-radius: 6px; padding: 10px; margin-bottom: 8px; }
+    .cap-card.executable { border-left: 3px solid var(--heal); }
+    .cap-card-header { display: flex; align-items: center; gap: 8px; margin-bottom: 6px; flex-wrap: wrap; }
+    .cap-name { font-weight: bold; flex: 1; }
+    .cap-badge { font-size: 10px; padding: 2px 6px; border-radius: 4px; background: rgba(255,255,255,0.1); color: var(--muted); text-transform: capitalize; }
+    .cap-badge.exec { background: rgba(76,175,130,0.15); color: var(--heal); border: 1px solid rgba(76,175,130,0.3); }
+    .cap-badge.manual { background: rgba(245,166,35,0.1); color: var(--warn); border: 1px solid rgba(245,166,35,0.3); }
+    .cap-badge.melee_attack, .cap-badge.ranged_attack { color: var(--accent); }
+    .cap-desc { font-size: 12px; color: var(--text); line-height: 1.4; white-space: pre-wrap; }
+    .cap-actions { margin-top: 8px; display: flex; gap: 6px; }
+    .cap-actions-manual { margin-top: 8px; font-size: 11px; font-style: italic; color: var(--muted); }
+
   </style>
 </head>
 <body data-dm-workspace="__DM_WORKSPACE__">
@@ -908,6 +927,24 @@
         </div>
         <button class="btn-action" id="castMonsterSpellBtn">Cast Monster Spell (Targeted)</button>
         <div class="mut-result" id="monsterTurnResult"></div>
+      </div>
+    </section>
+
+    <section class="live-group" data-live-group="monster-capability" aria-labelledby="liveMonsterCapGroupTitle">
+      <div class="live-group-label" id="liveMonsterCapGroupTitle">Monster Capabilities (Overlay)</div>
+      <div class="mut-card" id="monsterCapCard">
+        <h3>Normalized Capabilities</h3>
+        <div class="tactical-status" style="margin-bottom:10px">
+          Actions and traits from normalized YAML overlays.
+        </div>
+        <div class="form-group">
+          <label>Target (for automatic execution)</label>
+          <select id="monsterCapTargetCidSelect"><option value="">— select target —</option></select>
+        </div>
+        <div id="monsterCapContent">
+          <div class="empty-state">Select an acting monster above to load overlays.</div>
+        </div>
+        <div class="mut-result" id="monsterCapResult"></div>
       </div>
     </section>
 
@@ -2348,8 +2385,10 @@ function populateMonsterTurnSelectors(snap) {
   const combatants = Array.isArray(snap && snap.combatants) ? snap.combatants : [];
   const actorSelect = document.getElementById('monsterActorCidSelect');
   const targetSelect = document.getElementById('monsterTargetCidSelect');
+  const capTargetSelect = document.getElementById('monsterCapTargetCidSelect');
   const previousActor = String(actorSelect.value || '').trim();
   const previousTarget = String(targetSelect.value || '').trim();
+  const previousCapTarget = String(capTargetSelect ? capTargetSelect.value : '').trim();
 
   actorSelect.innerHTML = '<option value="">— select enemy —</option>';
   for (const c of combatants) {
@@ -2364,6 +2403,7 @@ function populateMonsterTurnSelectors(snap) {
   }
 
   targetSelect.innerHTML = '<option value="">— select target —</option>';
+  if (capTargetSelect) capTargetSelect.innerHTML = '<option value="">— select target —</option>';
   for (const c of combatants) {
     const cid = Number(c && c.cid);
     if (!Number.isFinite(cid)) continue;
@@ -2374,6 +2414,7 @@ function populateMonsterTurnSelectors(snap) {
     const roleTag = role ? ` · ${role}` : '';
     opt.textContent = `${String(c.name || `Combatant ${cid}`)}${roleTag} · HP ${Math.max(0, Math.floor(Number(c.hp) || 0))}`;
     targetSelect.appendChild(opt);
+    if (capTargetSelect) capTargetSelect.appendChild(opt.cloneNode(true));
   }
 
   if (previousActor && Array.from(actorSelect.options).some(opt => opt.value === previousActor)) {
@@ -2381,6 +2422,9 @@ function populateMonsterTurnSelectors(snap) {
   }
   if (previousTarget && Array.from(targetSelect.options).some(opt => opt.value === previousTarget)) {
     targetSelect.value = previousTarget;
+  }
+  if (capTargetSelect && previousCapTarget && Array.from(capTargetSelect.options).some(opt => opt.value === previousCapTarget)) {
+    capTargetSelect.value = previousCapTarget;
   }
 
   if (!actorSelect.value) {
@@ -2404,11 +2448,17 @@ function populateMonsterTurnSelectors(snap) {
     }
   }
 
-  if (String(actorSelect.value || '') !== previousActor) {
-    monsterAttackCatalog = [];
-    monsterAttackDefaults = {};
-    lastMonsterAttackResolution = null;
-    document.getElementById('monsterDamageEntriesInput').value = '';
+  if (capTargetSelect && !capTargetSelect.value) {
+    capTargetSelect.value = targetSelect.value;
+  }
+if (String(actorSelect.value || '') !== previousActor) {
+  monsterAttackCatalog = [];
+  monsterAttackDefaults = {};
+  lastMonsterAttackResolution = null;
+  document.getElementById('monsterDamageEntriesInput').value = '';
+  fetchMonsterCapabilities(actorSelect.value);
+}
+
     populateMonsterAttackSelect([], {});
   }
 }
@@ -5036,11 +5086,13 @@ document.getElementById('moveAoeBtn').addEventListener('click', moveSelectedAoeT
 document.getElementById('removeAoeBtn').addEventListener('click', removeSelectedAoe);
 document.getElementById('applyOverlayBtn').addEventListener('click', applyAurasOverlaySetting);
 document.getElementById('monsterActorCidSelect').addEventListener('change', () => {
+  const cid = document.getElementById('monsterActorCidSelect').value;
   monsterAttackCatalog = [];
   monsterAttackDefaults = {};
   lastMonsterAttackResolution = null;
   populateMonsterAttackSelect([], {});
   document.getElementById('monsterDamageEntriesInput').value = '';
+  fetchMonsterCapabilities(cid);
 });
 document.getElementById('monsterAttackSelect').addEventListener('change', syncMonsterAttackCountFromSelection);
 document.getElementById('loadMonsterAttacksBtn').addEventListener('click', loadMonsterAttackOptions);
@@ -5569,6 +5621,136 @@ document.getElementById('quickLoadBtn').addEventListener('click', async () => {
 // ── Helpers ───────────────────────────────────────────────────────────
 function escHtml(s) {
   return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+}
+
+// ── Monster Capabilities ──────────────────────────────────────────────
+async function fetchMonsterCapabilities(cid) {
+  const content = document.getElementById('monsterCapContent');
+  const res = document.getElementById('monsterCapResult');
+  res.className = 'mut-result';
+  res.style.display = 'none';
+
+  if (!cid) {
+    content.innerHTML = '<div class="empty-state">Select a monster combatant to view capabilities.</div>';
+    return;
+  }
+
+  content.innerHTML = '<div class="empty-state loading-pulse">Fetching capabilities...</div>';
+
+  try {
+    const r = await fetch(`${BASE}/api/dm/monster-capabilities/${cid}`, { headers: authHeaders() });
+    const data = await r.json();
+    if (r.ok && data.ok) {
+      renderMonsterCapabilities(data.summary);
+    } else {
+      content.innerHTML = `<div class="empty-state">No capability overlay matched for this monster.</div>`;
+    }
+  } catch (e) {
+    content.innerHTML = `<div class="empty-state error">Failed to fetch capabilities.</div>`;
+  }
+}
+
+function renderMonsterCapabilities(summary) {
+  const content = document.getElementById('monsterCapContent');
+  if (!summary || !summary.matched) {
+    content.innerHTML = `<div class="empty-state">No normalized capabilities matched for ${escHtml(summary.name || 'this monster')}.</div>`;
+    return;
+  }
+
+  let html = `<div class="cap-header">
+    <div class="cap-monster-name">${escHtml(summary.monster_name)}</div>
+    <div class="cap-source">Source: ${escHtml(summary.source)} (${escHtml(summary.license)})</div>
+  </div>`;
+
+  const groupOrder = ['actions', 'bonus_actions', 'reactions', 'legendary_actions', 'traits', 'lair_actions', 'special'];
+  const groupLabels = {
+    'actions': 'Actions',
+    'bonus_actions': 'Bonus Actions',
+    'reactions': 'Reactions',
+    'legendary_actions': 'Legendary Actions',
+    'traits': 'Traits / Special Abilities',
+    'lair_actions': 'Lair Actions',
+    'special': 'Other'
+  };
+
+  for (const g of groupOrder) {
+    const list = summary.groups[g] || [];
+    if (!list.length) continue;
+
+    html += `<div class="cap-group">
+      <div class="cap-group-title">${groupLabels[g]}</div>`;
+
+    for (const cap of list) {
+      const isExec = !!cap.executable;
+      const actionType = cap.action_type || 'special';
+
+      html += `<div class="cap-card ${isExec ? 'executable' : ''}">
+        <div class="cap-card-header">
+          <span class="cap-name">${escHtml(cap.name)}</span>
+          <span class="cap-badge ${actionType}">${escHtml(actionType.replace('_', ' '))}</span>
+          ${isExec ? '<span class="cap-badge exec">Automatic</span>' : '<span class="cap-badge manual">Manual</span>'}
+        </div>
+        <div class="cap-desc">${escHtml(cap.desc)}</div>`;
+
+      if (isExec) {
+        html += `<div class="cap-actions">
+          <button class="btn-sm" onclick="executeMonsterCapability(${summary.combatant_id}, '${cap.id}')">Execute on Target</button>
+        </div>`;
+      } else {
+         html += `<div class="cap-actions-manual">Manual resolution required.</div>`;
+      }
+
+      html += `</div>`;
+    }
+    html += `</div>`;
+  }
+
+  content.innerHTML = html;
+}
+
+async function executeMonsterCapability(cid, capId) {
+  const targetCid = document.getElementById('monsterCapTargetCidSelect').value;
+  const res = document.getElementById('monsterCapResult');
+  const spend = document.getElementById('monsterSpendSelect').value || 'action';
+
+  res.className = 'mut-result';
+  res.style.display = 'inline';
+  res.textContent = 'Executing...';
+
+  if (!targetCid) {
+    res.textContent = 'Select a target combatant.';
+    res.classList.add('error');
+    return;
+  }
+
+  try {
+    const r = await fetch(`${BASE}/api/dm/monster-capabilities/${cid}/execute`, {
+      method: 'POST',
+      headers: authHeaders(),
+      body: JSON.stringify({
+        capability_id: capId,
+        target_cid: targetCid,
+        spend: spend,
+        roll_mode: document.getElementById('monsterRollModeSelect').value || 'normal'
+      }),
+    });
+    const data = await r.json();
+    if (r.ok && data.ok) {
+      if (data.result && data.result.resolution === 'automatic') {
+         res.textContent = `Executed ${capId}. Check battle log for details.`;
+      } else {
+         res.textContent = `Automatic execution failed: ${data.result ? data.result.reason : 'Unknown error'}`;
+         res.classList.add('error');
+      }
+      if (data.snapshot) applySnapshot(data.snapshot);
+    } else {
+      res.textContent = data.detail || (data.result && data.result.error) || 'Error.';
+      res.classList.add('error');
+    }
+  } catch (e) {
+    res.textContent = 'Request failed.';
+    res.classList.add('error');
+  }
 }
 
 // ── Boot ──────────────────────────────────────────────────────────────

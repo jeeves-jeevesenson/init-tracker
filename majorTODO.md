@@ -223,7 +223,7 @@ These remain important but are **not** current top-of-stack while stabilization 
 3. Advanced cleanup of legacy desktop/editor surfaces not required for current stabilization or migration exploration
 4. Broad release/packaging pushes before real-play stability is proven
 5. Detailed runtime migration RFC / implementation planning docs before the exploration track is intentionally promoted
-6. **DM monster-control surface and monster capability backend** — durable plan in `docs/dm-monster-control-surface.md`. Phased initiative covering a normalized monster capability schema, unified actor command API, dedicated DM monster surface (`/dm/monster`), DM cockpit integration, and YAML audit/cleanup. Recommended next pass is the read-only Phase 0 audit (script + report), not implementation. Not active while live-session stabilization is the priority.
+6. **DM monster-control surface and monster capability backend** — Phase 0 (Audit) and Phase 1 (UI/Backend Vertical Slice) landed. Durable plan in `docs/dm-monster-control-surface.md`. System includes a normalized monster capability schema, `MonsterCapabilityService` loader, `/api/dm/monster-capabilities` endpoints, and a new DM UI card for actionable monster capabilities. Next pass: broaden coverage and automate multiattack/save-DC actions.
 
 ### 6.1 Level-11 player follow-up (2026-04-22) — landed
 

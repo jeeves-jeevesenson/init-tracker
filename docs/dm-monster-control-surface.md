@@ -1187,21 +1187,17 @@ Validation:
   five known monsters across tiers (skeleton, goblin-warrior,
   adult-red-dragon, beholder, archmage).
 
-### Phase 1 — Normalized monster capability contract
+### Phase 1 — Normalized monster capability contract (LANDED)
 
 **Goal:** define and ship the §6 schema as additive overlays + a
 runtime hydration layer.
 
-Likely changes:
-- new `monster_capability_contracts.py` for canonical record shapes
-  + builders
-- new `monster_capability_loader.py` that hydrates `MonsterSpec` into
-  the normalized record using the existing parsers + new overlay
-  files
-- new `Monsters/_overlays/` (or equivalent) carrying overlay YAMLs;
-  initially empty
-- update `MonsterSpec` to expose `capabilities()` lazily
-- focused tests: schema round-trip, overlay precedence, parser fallback
+Completed:
+- `monster_capability_service.py` (loader and matcher)
+- `monster_capabilities/samples/*.yaml` (prototype overlays)
+- `/api/dm/monster-capabilities` endpoints
+- DM UI "Monster Capabilities" card with simple execution support
+- Unit tests in `tests/test_monster_capability_service.py`
 
 Risks:
 - contract churn if rolled out before §7 is sketched in code; mitigate

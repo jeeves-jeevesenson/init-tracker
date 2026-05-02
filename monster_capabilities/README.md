@@ -14,6 +14,15 @@ The current `Monsters/*.yaml` files are primarily display-oriented. The capabili
 ## How to use
 In the future, the backend will look up capabilities by monster `slug` in this directory. If a match is found, the DM UI will render these as actionable buttons.
 
+## Backend & UI Integration
+The backend now includes a `MonsterCapabilityService` that loads these YAMLs.
+A new DM API is available:
+- `GET /api/dm/monster-capabilities`: Lists active monsters with capability overlays.
+- `GET /api/dm/monster-capabilities/{cid}`: Returns the grouped capabilities for a specific combatant.
+- `POST /api/dm/monster-capabilities/{cid}/execute`: Executes a simple attack capability.
+
+The DM UI (`/dm` or `/dm/map`) now displays a "Monster Capabilities" card in the control lane when a supported monster is selected.
+
 ## Generating Samples
 You can regenerate the sample files using the import script:
 ```bash
