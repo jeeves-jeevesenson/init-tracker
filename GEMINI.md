@@ -56,8 +56,8 @@ Required before suggesting a code change for a bug/perf issue:
 - relevant logs, timings, or captured payloads (or a plan to capture them)
 - a confirmed or strongly-narrowed root cause hypothesis
 
-For complex issues, use the **runtime-observer** workflow (see 
-`docs/ai-workflows/runtime-debugging.md`) to capture evidence from 
+For complex issues, use the **runtime-observer** workflow (see
+`docs/ai-workflows/runtime-debugging.md`) to capture evidence from
 a real browser session before starting a fix pass.
 
 If the issue is unmeasured, the pass should be about **adding
