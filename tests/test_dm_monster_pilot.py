@@ -179,6 +179,36 @@ class TestDmMonsterPilotAssetHooks(unittest.TestCase):
         # Should handle both direct and map-based moves
         self.assertIn("tacticalSelection.col", html)
         self.assertIn("tacticalSelection.row", html)
+    
+    def test_dm_index_html_contains_drag_drop_hooks(self):
+        """Verify drag-and-drop Monster Pilot hooks exist in HTML."""
+        from pathlib import Path
+        html = Path("assets/web/dm/index.html").read_text(encoding="utf-8")
+        # Drag state management
+        self.assertIn("monsterPilotDragState", html)
+        self.assertIn("dragging", html)
+        self.assertIn("sourceCid", html)
+        # Drag functions
+        self.assertIn("startMonsterPilotDrag", html)
+        self.assertIn("onMonsterPilotDragMove", html)
+        self.assertIn("endMonsterPilotDrag", html)
+        self.assertIn("executeMonsterPilotDragMove", html)
+        # Event listeners
+        self.assertIn("addEventListener('mousedown'", html)
+        self.assertIn("addEventListener('mousemove'", html)
+        self.assertIn("addEventListener('mouseup'", html)
+        # Endpoint is reused
+        self.assertIn("api/dm/monster-pilot/", html)
+    
+    def test_dm_index_html_drag_respects_force_mode(self):
+        """Verify drag-and-drop uses force mode checkbox."""
+        from pathlib import Path
+        html = Path("assets/web/dm/index.html").read_text(encoding="utf-8")
+        # Drag move should call monsterPilotForceModeEnabled()
+        self.assertIn("monsterPilotForceModeEnabled", html)
+        # Should pass mode to endpoint
+        self.assertIn("mode", html)
+        self.assertIn("'force'", html)
 
 
 if __name__ == "__main__":

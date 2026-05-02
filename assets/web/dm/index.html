@@ -1624,6 +1624,13 @@ let adminTokenRefreshTimer = null;
 let dmWs = null;
 let wsReconnectTimer = null;
 let tacticalSelection = { col: null, row: null };
+let monsterPilotDragState = {
+  dragging: false,
+  sourceCid: null,
+  sourcePos: null,
+  destCol: null,
+  destRow: null,
+};
 let tacticalPresetsByCategory = { hazard: [], feature: [], structure: [] };
 let tacticalBackgroundAssets = [];
 let tacticalShipBlueprints = [];
@@ -3703,6 +3710,17 @@ function renderTacticalMap(tactical) {
     ctx.strokeRect(x + 1, y + 1, Math.max(1, geometry.cell - 2), Math.max(1, geometry.cell - 2));
   }
 
+  // Show drag destination feedback
+  if (monsterPilotDragState.dragging && monsterPilotDragState.destCol != null && monsterPilotDragState.destRow != null) {
+    const x = geometry.originX + monsterPilotDragState.destCol * geometry.cell;
+    const y = geometry.originY + monsterPilotDragState.destRow * geometry.cell;
+    ctx.strokeStyle = 'rgba(255,200,0,0.8)';
+    ctx.lineWidth = 3;
+    ctx.strokeRect(x, y, geometry.cell, geometry.cell);
+    ctx.fillStyle = 'rgba(255,200,0,0.12)';
+    ctx.fillRect(x + 1, y + 1, Math.max(1, geometry.cell - 2), Math.max(1, geometry.cell - 2));
+  }
+
   const selectedCid = selectedMapCid();
   const selectedUnit = findTacticalUnit(selectedCid, tactical);
   const activeCid = Number(tactical.active_cid);
@@ -5072,7 +5090,151 @@ async function ramShipTargetAction() {
   }
 }
 
+// Monster Pilot Drag-and-Drop
+function findUnitAtCell(col, row, tactical) {
+  return tacticalUnits(tactical).find(entry => {
+    const pos = entry && entry.pos && typeof entry.pos === 'object' ? entry.pos : {};
+    return Number(pos.col) === Number(col) && Number(pos.row) === Number(row);
+  }) || null;
+}
+
+function startMonsterPilotDrag(evt) {
+  if (evt.button !== 0) return; // Only left-click drag
+  
+  const cell = tacticalCellFromPointerEvent(evt);
+  if (!cell) return;
+  
+  // Get the selected Monster Pilot cid
+  const pilotCid = String(document.getElementById('monsterPilotCidSelect')?.value || '').trim();
+  if (!pilotCid) return;
+  
+  const pilotCidNum = Number(pilotCid);
+  if (!Number.isFinite(pilotCidNum)) return;
+  
+  // Find unit at this cell
+  const unit = findUnitAtCell(cell.col, cell.row, cell.tactical);
+  if (!unit) return;
+  
+  // Only allow dragging if it matches the selected Monster Pilot cid
+  if (Number(unit.cid) !== pilotCidNum) return;
+  
+  // Start drag
+  monsterPilotDragState.dragging = true;
+  monsterPilotDragState.sourceCid = pilotCidNum;
+  const pos = unit.pos || {};
+  monsterPilotDragState.sourcePos = { col: Number(pos.col), row: Number(pos.row) };
+  monsterPilotDragState.destCol = cell.col;
+  monsterPilotDragState.destRow = cell.row;
+  
+  evt.preventDefault();
+}
+
+function onMonsterPilotDragMove(evt) {
+  if (!monsterPilotDragState.dragging) return;
+  
+  const tactical = currentTacticalMap();
+  if (!tactical || !tactical.grid) return;
+  
+  const canvas = document.getElementById('tacticalMapCanvas');
+  const rect = canvas.getBoundingClientRect();
+  const geometry = tacticalGeometry(tactical, rect.width, rect.height);
+  if (!geometry) return;
+  
+  const x = evt.clientX - rect.left;
+  const y = evt.clientY - rect.top;
+  const col = Math.floor((x - geometry.originX) / geometry.cell);
+  const row = Math.floor((y - geometry.originY) / geometry.cell);
+  
+  // Update destination on valid cells
+  if (col >= 0 && row >= 0 && col < geometry.cols && row < geometry.rows) {
+    monsterPilotDragState.destCol = col;
+    monsterPilotDragState.destRow = row;
+    renderTacticalMap(tactical);
+  }
+}
+
+function endMonsterPilotDrag(evt) {
+  if (!monsterPilotDragState.dragging) return;
+  
+  monsterPilotDragState.dragging = false;
+  const cid = monsterPilotDragState.sourceCid;
+  const destCol = monsterPilotDragState.destCol;
+  const destRow = monsterPilotDragState.destRow;
+  
+  // Reset drag state
+  monsterPilotDragState.sourceCid = null;
+  monsterPilotDragState.sourcePos = null;
+  monsterPilotDragState.destCol = null;
+  monsterPilotDragState.destRow = null;
+  
+  // Perform the move
+  if (Number.isFinite(cid) && Number.isFinite(destCol) && Number.isFinite(destRow)) {
+    executeMonsterPilotDragMove(cid, destCol, destRow);
+  }
+  
+  renderTacticalMap(currentTacticalMap());
+  evt.preventDefault();
+}
+
+async function executeMonsterPilotDragMove(cid, destCol, destRow) {
+  const result = document.getElementById('monsterPilotResult');
+  if (!result) return;
+  
+  result.className = 'mut-result';
+  result.style.display = 'none';
+  
+  const mode = monsterPilotForceModeEnabled() ? 'force' : 'normal';
+  const btn = document.getElementById('monsterPilotMoveBtn');
+  if (btn) btn.disabled = true;
+  
+  try {
+    const r = await fetch(`${BASE}/api/dm/monster-pilot/${encodeURIComponent(String(cid))}/move`, {
+      method: 'POST',
+      headers: { ...authHeaders(), 'Content-Type': 'application/json' },
+      body: JSON.stringify({ x: Math.floor(destCol), y: Math.floor(destRow), mode }),
+    });
+    const data = await r.json();
+    if (!r.ok) {
+      const detail = (data && data.detail) ? String(data.detail) : 'Move failed.';
+      const hint = mode === 'normal' && /override|obstacle|occupied/i.test(detail)
+        ? ' Tip: enable Force mode to override.'
+        : '';
+      result.innerHTML = `${escHtml(detail)}${escHtml(hint)}`;
+      result.className = 'mut-result error';
+      result.style.display = 'inline';
+      return;
+    }
+    const moveResult = (data && data.result) || {};
+    const prev = moveResult.previous_position;
+    const next = moveResult.new_position || { x: destCol, y: destRow };
+    const prevText = prev ? `(${prev.x}, ${prev.y})` : '—';
+    const warnings = Array.isArray(moveResult.warnings) ? moveResult.warnings : [];
+    const verb = (moveResult.mode === 'force') ? 'force-moved' : 'moved';
+    let msg = `DM ${verb} ${escHtml(moveResult.name || '')} ${prevText} → (${next.x}, ${next.y}).`;
+    if (Number.isFinite(Number(moveResult.distance_ft))) {
+      msg += ` ${Math.round(Number(moveResult.distance_ft))} ft`;
+      if (Number(moveResult.speed_ft) > 0) msg += ` / speed ${Number(moveResult.speed_ft)} ft`;
+      msg += '.';
+    }
+    if (warnings.length) msg += ` ⚠ ${warnings.map(w => escHtml(w)).join(' ')}`;
+    result.innerHTML = msg;
+    result.className = warnings.length ? 'mut-result warning' : 'mut-result success';
+    result.style.display = 'inline';
+    if (data.snapshot) applySnapshot(data.snapshot);
+    refreshMonsterPilot();
+  } catch (e) {
+    result.textContent = 'Request failed.';
+    result.className = 'mut-result error';
+    result.style.display = 'inline';
+  } finally {
+    if (btn) btn.disabled = false;
+  }
+}
+
 document.getElementById('tacticalMapCanvas').addEventListener('click', handleTacticalCanvasClick);
+document.getElementById('tacticalMapCanvas').addEventListener('mousedown', startMonsterPilotDrag);
+document.addEventListener('mousemove', onMonsterPilotDragMove);
+document.addEventListener('mouseup', endMonsterPilotDrag);
 document.getElementById('mapActionModeSelect').addEventListener('change', () => {
   updateTacticalActionLabel();
   renderTacticalMap(currentTacticalMap());
