@@ -188,15 +188,18 @@ class TestDmMonsterPilotAssetHooks(unittest.TestCase):
         self.assertIn("monsterPilotDragState", html)
         self.assertIn("dragging", html)
         self.assertIn("sourceCid", html)
+        self.assertIn("cancelled", html)
         # Drag functions
         self.assertIn("startMonsterPilotDrag", html)
         self.assertIn("onMonsterPilotDragMove", html)
         self.assertIn("endMonsterPilotDrag", html)
+        self.assertIn("cancelMonsterPilotDrag", html)
         self.assertIn("executeMonsterPilotDragMove", html)
         # Event listeners
         self.assertIn("addEventListener('mousedown'", html)
         self.assertIn("addEventListener('mousemove'", html)
         self.assertIn("addEventListener('mouseup'", html)
+        self.assertIn("addEventListener('keydown'", html)
         # Endpoint is reused
         self.assertIn("api/dm/monster-pilot/", html)
     
@@ -204,9 +207,10 @@ class TestDmMonsterPilotAssetHooks(unittest.TestCase):
         """Verify drag-and-drop uses force mode checkbox."""
         from pathlib import Path
         html = Path("assets/web/dm/index.html").read_text(encoding="utf-8")
-        # Drag move should call monsterPilotForceModeEnabled()
+        # Drag move delegates through the existing move action path.
+        self.assertIn("await monsterPilotMoveAction()", html)
+        # The shared move path should still read force mode and pass mode.
         self.assertIn("monsterPilotForceModeEnabled", html)
-        # Should pass mode to endpoint
         self.assertIn("mode", html)
         self.assertIn("'force'", html)
 
