@@ -689,10 +689,10 @@
 
   </style>
 </head>
-<body data-dm-workspace="__DM_WORKSPACE__">
+<body data-dm-workspace="__DM_WORKSPACE__" data-dm-auth-required="__DM_AUTH_REQUIRED__">
 
 <!-- ── Auth overlay ──────────────────────────────────────────────── -->
-<div id="authOverlay">
+<div id="authOverlay" class="__DM_AUTH_OVERLAY_CLASS__">
   <div class="auth-card">
     <h2>🎲 DM Console</h2>
     <p>Enter the admin password to access the DM console.
@@ -1614,6 +1614,7 @@ const BASE = '';  // same origin
 const rawDmWorkspace = String(document.body.dataset.dmWorkspace || 'dashboard').trim().toLowerCase();
 const DM_WORKSPACE = rawDmWorkspace === 'map' ? 'map' : 'dashboard';
 const IS_DM_MAP_WORKSPACE = DM_WORKSPACE === 'map';
+const DM_AUTH_REQUIRED = document.body.dataset.dmAuthRequired === 'true';
 
 let adminToken = null;      // null → no auth required (or not yet obtained)
 let currentSnapshot = null;
@@ -2088,7 +2089,7 @@ async function refreshAdminToken() {
 
 async function tryAutoLogin() {
   // First attempt: try to load snapshot without auth.
-  // If 403 → admin password is configured → show login overlay.
+  // If 401/403 → admin password is configured → show login overlay.
   try {
     const r = await fetch(`${BASE}/api/dm/combat`, { headers: authHeaders() });
     if (r.ok) {
@@ -2109,6 +2110,23 @@ async function tryAutoLogin() {
     // Server not reachable yet; retry
     setTimeout(tryAutoLogin, 2000);
   }
+}
+
+async function bootstrapPasswordlessDmConsole() {
+  const overlay = document.getElementById('authOverlay');
+  const errEl = document.getElementById('authError');
+  overlay.classList.add('hidden');
+  errEl.style.display = 'none';
+  await fetchSnapshot();
+  if (overlay.classList.contains('hidden')) startAutoRefresh();
+}
+
+async function bootDmConsole() {
+  if (!DM_AUTH_REQUIRED) {
+    await bootstrapPasswordlessDmConsole();
+    return;
+  }
+  await tryAutoLogin();
 }
 
 document.getElementById('loginBtn').addEventListener('click', async () => {
@@ -6689,7 +6707,7 @@ async function removeMonsterEffect(cid, capId, effectIdx) {
 }
 
 // ── Boot ──────────────────────────────────────────────────────────────
-tryAutoLogin();
+bootDmConsole();
 </script>
 </body>
 </html>

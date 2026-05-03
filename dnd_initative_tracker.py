@@ -3883,7 +3883,12 @@ class LanController:
             if workspace_key != "map":
                 workspace_key = "dashboard"
             html = _inject_asset_version(dm_entrypoint.read_text(encoding="utf-8"))
-            return html.replace("__DM_WORKSPACE__", workspace_key)
+            auth_required = bool(self._admin_password_hash)
+            return (
+                html.replace("__DM_WORKSPACE__", workspace_key)
+                .replace("__DM_AUTH_REQUIRED__", "true" if auth_required else "false")
+                .replace("__DM_AUTH_OVERLAY_CLASS__", "" if auth_required else "hidden")
+            )
 
         @self._fastapi_app.get("/dm")
         async def dm_console(request: Request):
