@@ -2518,14 +2518,12 @@ function populateMonsterTurnSelectors(snap) {
   if (capTargetSelect && !capTargetSelect.value) {
     capTargetSelect.value = targetSelect.value;
   }
-if (String(actorSelect.value || '') !== previousActor) {
-  monsterAttackCatalog = [];
-  monsterAttackDefaults = {};
-  lastMonsterAttackResolution = null;
-  document.getElementById('monsterDamageEntriesInput').value = '';
-  fetchMonsterCapabilities(actorSelect.value);
-}
-
+  if (String(actorSelect.value || '') !== previousActor) {
+    monsterAttackCatalog = [];
+    monsterAttackDefaults = {};
+    lastMonsterAttackResolution = null;
+    document.getElementById('monsterDamageEntriesInput').value = '';
+    fetchMonsterCapabilities(actorSelect.value);
     populateMonsterAttackSelect([], {});
   }
 }
