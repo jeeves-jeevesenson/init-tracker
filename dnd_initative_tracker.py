@@ -25541,6 +25541,10 @@ class InitiativeTracker(base.InitiativeTracker):
                     save_dc = 0
                 weapon["id"] = str(weapon.get("id") or "").strip()
                 weapon["name"] = str(weapon.get("name") or "").strip()
+                weapon["instance_id"] = str(player_weapon_entry.get("instance_id") or "").strip()
+                weapon["ammo_current"] = player_weapon_entry.get("ammo_current")
+                weapon["ammo_max"] = player_weapon_entry.get("ammo_max")
+                weapon["ammo_type"] = player_weapon_entry.get("ammo_type")
                 weapon["proficient"] = bool(player_weapon_entry.get("proficient", True))
                 to_hit_normalized = normalize_attack_int(weapon.get("to_hit"))
                 weapon["to_hit"] = to_hit_normalized if to_hit_normalized is not None else 0
@@ -25850,6 +25854,31 @@ class InitiativeTracker(base.InitiativeTracker):
 
         if "magic_bonus" not in weapon and "item_bonus" not in weapon and "attack_bonus" in item:
             weapon["magic_bonus"] = item.get("attack_bonus")
+
+        # Firearms / Ammunition support
+        if "ammo_max" not in weapon or weapon.get("ammo_max") is None:
+            ammo_max = item.get("ammo_max")
+            if ammo_max is None:
+                # Try to parse from properties (e.g. magazine_8)
+                properties = weapon.get("properties") or item.get("properties") or []
+                for prop in properties:
+                    prop_str = ""
+                    if isinstance(prop, dict):
+                        prop_str = str(prop.get("id") or prop.get("name") or "").strip().lower()
+                    else:
+                        prop_str = str(prop or "").strip().lower()
+                    if "magazine_" in prop_str:
+                        try:
+                            ammo_max = int(prop_str.split("_")[-1])
+                            break
+                        except (ValueError, IndexError):
+                            continue
+            if ammo_max is not None:
+                weapon["ammo_max"] = ammo_max
+
+        if "ammo_type" not in weapon or not weapon.get("ammo_type"):
+            if item.get("ammo_type"):
+                weapon["ammo_type"] = item.get("ammo_type")
 
         one_handed = dict(weapon.get("one_handed")) if isinstance(weapon.get("one_handed"), dict) else {}
         two_handed = dict(weapon.get("two_handed")) if isinstance(weapon.get("two_handed"), dict) else {}
@@ -36245,6 +36274,36 @@ class InitiativeTracker(base.InitiativeTracker):
             self._lan.toast(ws_id, "Pick one of yer configured weapons first, matey.")
             return
         selected_weapon = self._resolve_weapon_from_items(dict(selected_weapon))
+
+        # Firearm ammo check and Loud event logging
+        weapon_instance_id = str(selected_weapon.get("instance_id") or "").strip()
+        ammo_current = _parse_int(selected_weapon.get("ammo_current"))
+        if weapon_instance_id and ammo_current is None:
+            # Try to look up current ammo from inventory instance if not already resolved
+            inv_entry, _, _ = self._find_owned_inventory_item_by_instance_id(profile, weapon_instance_id)
+            if isinstance(inv_entry, dict):
+                ammo_current = _parse_int(inv_entry.get("ammo_current"))
+
+        if ammo_current is not None and ammo_current <= 0:
+            self._lan.toast(ws_id, f"The {selected_weapon.get('name') or 'weapon'} is empty! Reload, matey.")
+            return
+
+        if ammo_current is not None:
+            new_ammo = max(0, int(ammo_current) - 1)
+            selected_weapon["ammo_current"] = new_ammo
+            # Persist to inventory if we have an instance_id and valid player profile
+            if weapon_instance_id and player_name:
+                char_path = self._resolve_character_path(player_name)
+                if char_path:
+                    raw_p = self._load_character_raw(char_path)
+                    entry_p, _, _ = self._find_owned_inventory_item_by_instance_id(raw_p, weapon_instance_id)
+                    if isinstance(entry_p, dict):
+                        entry_p["ammo_current"] = new_ammo
+                        self._store_character_yaml(char_path, raw_p)
+
+        if _weapon_has_property(selected_weapon, "loud"):
+            self._oplog(f"Loud firearm discharge: {c.name} fired {selected_weapon.get('name') or 'a weapon'}.", level="info")
+
         selected_mode = str(selected_weapon.get("selected_mode") or "").strip().lower()
         inline_selected_mode = str(inline_weapon.get("selected_mode") or "").strip().lower()
         if inline_selected_mode in ("one", "two"):

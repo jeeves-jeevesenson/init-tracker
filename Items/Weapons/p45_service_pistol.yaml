@@ -1,0 +1,17 @@
+id: p45_service_pistol
+name: .45 Service Pistol
+category: simple_ranged
+weapon_group: Firearms
+range: 40/120
+to_hit: 0
+one_handed:
+  damage_formula: 1d10 + dex_mod
+  damage_type: piercing
+properties:
+- ammunition
+- magazine
+- reload
+- sidearm
+- loud
+- magazine_8
+mastery: vex

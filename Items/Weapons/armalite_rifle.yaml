@@ -1,0 +1,19 @@
+id: armalite_rifle
+name: Armalite Rifle
+category: martial_ranged
+weapon_group: Firearms
+range: 120/360
+to_hit: 0
+one_handed:
+  damage_formula: 1d12 + dex_mod
+  damage_type: piercing
+properties:
+- ammunition
+- magazine
+- reload
+- two_handed
+- burst
+- auto
+- loud
+- magazine_20
+mastery: vex
