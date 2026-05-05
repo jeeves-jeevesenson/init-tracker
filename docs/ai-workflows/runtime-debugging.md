@@ -33,6 +33,30 @@ Once the command is running:
 *   `logs/client_errors.log`: Errors reported by the browser client.
 *   `logs/lan_server.log`: General application and server logs.
 
+## DM Webdev Debug Tool
+
+When debugging `/dm` console issues (blank screens, JavaScript syntax errors, 400 API errors), use the `dm_webdev_debug.py` tool to capture a fact-bundle from a running server.
+
+### Usage
+
+1.  **Launch the server** (e.g., via `./scripts/dev/lan-live-debug.sh`).
+2.  **Run the debug tool**:
+    ```bash
+    ./.venv/bin/python3 scripts/dev/dm_webdev_debug.py --url http://127.0.0.1:8787/dm
+    ```
+3.  **To get context for a specific line** (if Chrome DevTools reports an error at `dm:N`):
+    ```bash
+    ./.venv/bin/python3 scripts/dev/dm_webdev_debug.py --line 2531
+    ```
+
+### What it Captures
+
+The tool saves a bundle to `logs/webdev-debug/latest/`:
+- `dm.html`: The exact served HTML (useful for finding line numbers from browser errors).
+- `dm_combat.json`: The state of the `/api/dm/combat` endpoint.
+- `dm_monster_pilot.json`: The state of the `/api/dm/monster-pilot` endpoint.
+- `summary.md`: A Markdown report summarizing auth attributes, missing functions, and API status.
+
 ## Findings and Next Steps
 
 At the end of the session, Gemini will produce a report classifying findings as **Proven**, **Likely**, or **Unproven**. 
