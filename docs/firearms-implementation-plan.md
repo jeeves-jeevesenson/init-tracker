@@ -158,13 +158,19 @@ actions:
   - Conditional display: only weapons with ammo metadata show the status/reload UI.
 - **Tests:** `tests/test_lan_firearm_ui.py` verifies the presence of UI elements and helper logic.
 
-### Pass D: Black and Tan Constable/Rifleman content
-- **Files to change:** `Monsters/black_and_tan_constable.yaml`, `Monsters/black_and_tan_rifleman.yaml`.
-- **Tasks:**
-  - Create the YAML files for the new enemies.
-  - Verify they load and their attacks work.
+### Pass D: Black and Tan Constable/Rifleman content (LANDED)
+- **Files changed:** `Monsters/black-and-tan-constable.yaml`, `Monsters/black-and-tan-rifleman.yaml`, `monster_capabilities/vandergraff/black-and-tan-constable.yaml`, `monster_capabilities/vandergraff/black-and-tan-rifleman.yaml`.
+- **Status:** Initial Vandergraff enemy content implemented with capability overlays.
+- **Implemented Content:**
+  - **Black and Tan Constable (CR 3):** .45 Pistol (ranged), Baton (melee), Rough Arrest (assisted).
+  - **Black and Tan Rifleman (CR 4):** Armalite Rifle (ranged), .45 Pistol (ranged), Knife (melee), Controlled Burst (assisted).
+  - Capability overlays enable executable attacks for primary firearms and melee weapons.
+  - Tactical traits included: Vandergraff Drill, Baton and Boot, Fire Discipline.
+- **Limitations:** Monster ammo tracking and advanced fire modes (Burst/Sweep) remain manual/assisted in v1.
+- **Tests:** `tests/test_vandergraff_content.py` verifies stat block loading and capability matching.
 
 ### Pass E: Live browser smoke and bugfixes
+
 - **Tasks:**
   - Full end-to-end test in a browser.
   - Fix any UI/backend sync issues.

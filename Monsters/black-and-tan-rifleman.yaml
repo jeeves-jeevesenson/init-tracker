@@ -1,0 +1,44 @@
+name: Black and Tan Rifleman
+size: Medium
+type: Humanoid
+alignment: Lawful Evil
+initiative: '+4'
+ac: '16'
+hp: 68
+speed:
+  Normal: 30 ft.
+challenge_rating: '4'
+abilities:
+  Str: 13
+  Dex: 18
+  Con: 14
+  Int: 11
+  Wis: 12
+  Cha: 10
+saving_throws:
+  Dex: 6
+  Wis: 3
+skills:
+  Perception: 3
+  Stealth: 6
+senses: Passive Perception 13
+languages:
+- Common
+actions:
+- name: Multiattack
+  desc: "The Rifleman makes two Armalite Rifle attacks."
+- name: Armalite Rifle
+  desc: "{@atk rw} {@hit 6} to hit, range 120/360 ft., one target. {@h}10 ({@damage 1d12 + 4}) piercing damage. Loud. Magazine 20."
+- name: .45 Pistol
+  desc: "{@atk rw} {@hit 6} to hit, range 40/120 ft., one target. {@h}9 ({@damage 1d10 + 4}) piercing damage. Loud. Magazine 8."
+- name: Knife
+  desc: "{@atk mw,rw} {@hit 6} to hit, reach 5 ft. or range 20/60 ft., one target. {@h}6 ({@damage 1d4 + 4}) piercing damage."
+- name: Controlled Burst
+  desc: "Manual/Assisted: Spends 3 ammo, adds one extra weapon die on hit. Can be used once per turn."
+traits:
+- name: Vandergraff Drill
+  desc: "If this creature starts its turn within 30 feet of an allied Black and Tan officer it can see or hear, it gains +1 to attack rolls until the start of its next turn."
+- name: Baton and Boot
+  desc: "This creature has Advantage on attack rolls against a Prone creature within 5 feet of it."
+- name: Fire Discipline
+  desc: "This creature does not expend extra ammunition on a missed attack unless it used Controlled Burst, Automatic Sweep, or Suppressive Fire."

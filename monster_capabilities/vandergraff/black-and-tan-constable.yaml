@@ -1,0 +1,37 @@
+name: Black and Tan Constable
+slug: black-and-tan-constable
+source: repo-local
+license: CC-BY-4.0
+capabilities:
+- id: pistol
+  name: .45 Pistol
+  type: action
+  executable: true
+  desc: "Ranged Weapon Attack: +5 to hit, range 40/120 ft., one target. Hit: 8 (1d10 + 3) piercing damage. Loud. Magazine 8."
+  action_type: ranged_attack
+  mechanics:
+    attack_bonus: 5
+    damage:
+    - formula: 1d10+3
+      type: piercing
+    range: 40
+    long_range: 120
+- id: baton
+  name: Baton
+  type: action
+  executable: true
+  desc: "Melee Weapon Attack: +4 to hit, reach 5 ft., one target. Hit: 4 (1d4 + 2) bludgeoning damage."
+  action_type: melee_attack
+  mechanics:
+    attack_bonus: 4
+    damage:
+    - formula: 1d4+2
+      type: bludgeoning
+    reach: 5
+- id: rough-arrest
+  name: Rough Arrest
+  type: action
+  executable: false
+  desc: "When the Constable hits a creature with a Baton attack, it can attempt to grapple the target as a bonus action."
+  action_type: utility
+  warning: "Manual/Assisted grapple action."

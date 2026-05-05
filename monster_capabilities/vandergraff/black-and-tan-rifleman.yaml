@@ -1,0 +1,50 @@
+name: Black and Tan Rifleman
+slug: black-and-tan-rifleman
+source: repo-local
+license: CC-BY-4.0
+capabilities:
+- id: armalite-rifle
+  name: Armalite Rifle
+  type: action
+  executable: true
+  desc: "Ranged Weapon Attack: +6 to hit, range 120/360 ft., one target. Hit: 10 (1d12 + 4) piercing damage. Loud. Magazine 20."
+  action_type: ranged_attack
+  mechanics:
+    attack_bonus: 6
+    damage:
+    - formula: 1d12+4
+      type: piercing
+    range: 120
+    long_range: 360
+- id: pistol
+  name: .45 Pistol
+  type: action
+  executable: true
+  desc: "Ranged Weapon Attack: +6 to hit, range 40/120 ft., one target. Hit: 9 (1d10 + 4) piercing damage. Loud. Magazine 8."
+  action_type: ranged_attack
+  mechanics:
+    attack_bonus: 6
+    damage:
+    - formula: 1d10+4
+      type: piercing
+    range: 40
+    long_range: 120
+- id: knife
+  name: Knife
+  type: action
+  executable: true
+  desc: "Melee or Ranged Weapon Attack: +6 to hit, reach 5 ft. or range 20/60 ft., one target. Hit: 6 (1d4 + 4) piercing damage."
+  action_type: melee_attack
+  mechanics:
+    attack_bonus: 6
+    damage:
+    - formula: 1d4+4
+      type: piercing
+    reach: 5
+- id: controlled-burst
+  name: Controlled Burst
+  type: action
+  executable: false
+  desc: "Spends 3 ammo, adds one extra weapon die on hit. Can be used once per turn."
+  action_type: utility
+  warning: "Manual/Assisted: Spends 3 ammo, +1 die damage."
