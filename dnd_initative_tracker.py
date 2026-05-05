@@ -8662,6 +8662,7 @@ class InitiativeTracker(base.InitiativeTracker):
         _archive_startup_time_log()
         _archive_startup_logs()
         super().__init__()
+        self._map_window = None
         if self.host_mode == "desktop":
             self.title(f"DnD Initiative Tracker — v{APP_VERSION}")
 
@@ -18317,7 +18318,7 @@ class InitiativeTracker(base.InitiativeTracker):
         facing = float(self._normalize_facing_degrees(facing_deg))
         changed = False
         mw = getattr(self, "_map_window", None)
-        map_ready = mw is not None and mw.winfo_exists()
+        map_ready = mw is not None and hasattr(mw, "winfo_exists") and mw.winfo_exists()
         store = getattr(mw, "aoes", None) if map_ready else None
         if not isinstance(store, dict):
             store = getattr(self, "_lan_aoes", {}) or {}
