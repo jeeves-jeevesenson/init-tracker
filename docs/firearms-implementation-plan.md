@@ -148,13 +148,15 @@ actions:
     ```
 - **Tests:** `tests/test_firearm_reload.py` verifies reload logic and service dispatch.
 
-### Pass C: Player/DM UI ammo display and controls
-- **Files to inspect:** `assets/web/dm_page.html` (or relevant web surfaces).
-- **Files to change:** Web UI files.
-- **Tasks:**
-  - Display `ammo_current / ammo_max` in the weapon card.
-  - Add a `Reload` button.
-- **Acceptance Criteria:** Ammo is visible and updates correctly in the browser.
+### Pass C: Player/DM UI ammo display and controls (PARTIAL - LAN landed)
+- **Files changed:** `assets/web/lan/index.html`.
+- **Status:** LAN UI now shows ammo status and provides a Reload button for firearms.
+- **Implemented Functionality (LAN):**
+  - Ammo status display (`Ammo: current/max`) below Main Hand and Off-Hand selectors.
+  - "Reload" buttons that dispatch the `reload_weapon` command.
+  - Automatic UI refresh via state broadcast after reload or attack.
+  - Conditional display: only weapons with ammo metadata show the status/reload UI.
+- **Tests:** `tests/test_lan_firearm_ui.py` verifies the presence of UI elements and helper logic.
 
 ### Pass D: Black and Tan Constable/Rifleman content
 - **Files to change:** `Monsters/black_and_tan_constable.yaml`, `Monsters/black_and_tan_rifleman.yaml`.

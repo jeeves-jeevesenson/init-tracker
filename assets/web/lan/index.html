@@ -3256,12 +3256,20 @@
                       <select id="mainhandWeaponSelect">
                         <option value="">Auto (first configured)</option>
                       </select>
+                      <div id="mainhandAmmoStatus" style="font-size: 0.85em; margin-top: 4px; display: none; color: #ccc;">
+                        Ammo: <span id="mainhandAmmoValue">0/0</span>
+                        <button id="mainhandReloadBtn" class="ghost small" style="margin-left: 8px; padding: 2px 6px;">Reload</button>
+                      </div>
                     </div>
                     <div class="form-field">
                       <label for="offhandWeaponSelect">Off-Hand</label>
                       <select id="offhandWeaponSelect">
                         <option value="">None</option>
                       </select>
+                      <div id="offhandAmmoStatus" style="font-size: 0.85em; margin-top: 4px; display: none; color: #ccc;">
+                        Ammo: <span id="offhandAmmoValue">0/0</span>
+                        <button id="offhandReloadBtn" class="ghost small" style="margin-left: 8px; padding: 2px 6px;">Reload</button>
+                      </div>
                     </div>
                   </div>
                 </div>
@@ -4873,6 +4881,12 @@ __DAMAGE_TYPE_OPTIONS__
   const bonusActionSelectEl = document.getElementById("bonusActionSelect");
   const mainhandWeaponSelectEl = document.getElementById("mainhandWeaponSelect");
   const offhandWeaponSelectEl = document.getElementById("offhandWeaponSelect");
+  const mainhandAmmoStatusEl = document.getElementById("mainhandAmmoStatus");
+  const mainhandAmmoValueEl = document.getElementById("mainhandAmmoValue");
+  const mainhandReloadBtnEl = document.getElementById("mainhandReloadBtn");
+  const offhandAmmoStatusEl = document.getElementById("offhandAmmoStatus");
+  const offhandAmmoValueEl = document.getElementById("offhandAmmoValue");
+  const offhandReloadBtnEl = document.getElementById("offhandReloadBtn");
   const inventoryHeadSelectEl = document.getElementById("inventoryHeadSelect");
   const inventoryCloakSelectEl = document.getElementById("inventoryCloakSelect");
   const inventoryArmourSelectEl = document.getElementById("inventoryArmourSelect");
@@ -7129,6 +7143,12 @@ __DAMAGE_TYPE_OPTIONS__
     };
   }
 
+  function getSelectedMainhandOption(){
+    const options = buildMainhandOptions(getOwnedInventoryWeaponEntries());
+    const selectedValue = String(selectedMainhandWeaponValue || "").trim();
+    return options.find((entry) => entry.value === selectedValue) || options.find((entry) => entry.value === getDefaultMainhandValue(options)) || options[0] || null;
+  }
+
   function isMainhandSelectionTwoHanded(){
     const selectedValue = String(selectedMainhandWeaponValue || "").trim();
     return selectedValue.endsWith("|two");
@@ -7142,6 +7162,32 @@ __DAMAGE_TYPE_OPTIONS__
       instanceId: String(instanceId || "").trim(),
       mode: String(mode || "").trim().toLowerCase() === "two" ? "two" : "one",
     };
+  }
+
+  function updateWeaponAmmoStatus(){
+    const mainhandOption = getSelectedMainhandOption();
+    const offhandOption = getSelectedOffhandOption();
+
+    function updateStatus(option, statusEl, valueEl, reloadBtn){
+      if (!statusEl || !valueEl || !reloadBtn) return;
+      const weapon = option?.weapon;
+      const item = option?.item;
+      // Prefer weapon (attack data) then item (inventory data)
+      const ammo_current = weapon?.ammo_current ?? item?.ammo_current;
+      const ammo_max = weapon?.ammo_max ?? item?.ammo_max;
+      const hasAmmo = ammo_max != null && ammo_max > 0;
+
+      if (hasAmmo){
+        statusEl.style.display = "block";
+        valueEl.textContent = `${ammo_current ?? 0}/${ammo_max}`;
+        reloadBtn.disabled = (ammo_current != null && ammo_current >= ammo_max);
+      } else {
+        statusEl.style.display = "none";
+      }
+    }
+
+    updateStatus(mainhandOption, mainhandAmmoStatusEl, mainhandAmmoValueEl, mainhandReloadBtnEl);
+    updateStatus(offhandOption, offhandAmmoStatusEl, offhandAmmoValueEl, offhandReloadBtnEl);
   }
 
   function refreshWeaponSelectors(){
@@ -7197,6 +7243,7 @@ __DAMAGE_TYPE_OPTIONS__
     }
     saveCurrentWeaponSelections();
     refreshInventorySlotSelectors();
+    updateWeaponAmmoStatus();
   }
 
   async function mutateInventoryWeaponAssignment(instanceId, action, extra=null){
@@ -25471,6 +25518,24 @@ __DAMAGE_TYPE_OPTIONS__
       }
     });
   });
+
+  if (mainhandReloadBtnEl){
+    mainhandReloadBtnEl.addEventListener("click", () => {
+      const option = getSelectedMainhandOption();
+      const instanceId = option?.instance_id;
+      if (!instanceId) return;
+      send({type: "reload_weapon", cid: claimedCid, item_instance_id: instanceId});
+    });
+  }
+  if (offhandReloadBtnEl){
+    offhandReloadBtnEl.addEventListener("click", () => {
+      const option = getSelectedOffhandOption();
+      const instanceId = option?.instance_id;
+      if (!instanceId) return;
+      send({type: "reload_weapon", cid: claimedCid, item_instance_id: instanceId});
+    });
+  }
+
   if (inventoryConsumableAddBtn){
     inventoryConsumableAddBtn.addEventListener("click", () => {
       if (claimedCid === null || claimedCid === undefined){
