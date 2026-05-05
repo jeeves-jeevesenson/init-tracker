@@ -16640,7 +16640,7 @@ class InitiativeTracker(base.InitiativeTracker):
         except Exception as exc:
             self._log(f"Quick save auto-load failed ({path}): {exc}")
 
-    def _reset_map_state(self) -> None:
+    def _reset_map_state(self, include_static: bool = True) -> None:
         """Clear map layout, token placements, overlays, and backgrounds."""
         self._lan_positions = {}
         self._lan_obstacles = set()
@@ -16690,7 +16690,7 @@ class InitiativeTracker(base.InitiativeTracker):
         except Exception:
             pass
 
-        self._lan_force_state_broadcast()
+        self._lan_force_state_broadcast(include_static=include_static)
         self._log("Map reset.")
 
     def _open_map_mode(self) -> None:
@@ -17513,7 +17513,7 @@ class InitiativeTracker(base.InitiativeTracker):
         self._concentration_save_state = {}
         self._session_has_saved = False
 
-        self._reset_map_state()
+        self._reset_map_state(include_static=False)
 
         history_path = self._history_file_path()
         history_path.parent.mkdir(parents=True, exist_ok=True)
@@ -17522,7 +17522,7 @@ class InitiativeTracker(base.InitiativeTracker):
 
         self._update_turn_ui()
         self._rebuild_table(scroll_to_current=True)
-        self._lan_force_state_broadcast()
+        self._lan_force_state_broadcast(include_static=False)
         self._log("New blank session started.")
         return True
 

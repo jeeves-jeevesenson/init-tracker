@@ -621,16 +621,16 @@ class SessionSaveLoadTests(unittest.TestCase):
 
             reset_calls = []
             original_reset = tracker_mod.InitiativeTracker._reset_map_state
-            def _reset():
+            def _reset(*args, **kwargs):
                 reset_calls.append(True)
-                original_reset(app)
+                original_reset(app, *args, **kwargs)
             app._reset_map_state = _reset
 
             history_reload_calls = []
             app._load_history_into_log = lambda max_lines=2000: history_reload_calls.append(max_lines)
 
             broadcasts = []
-            app._lan_force_state_broadcast = lambda: broadcasts.append(True)
+            app._lan_force_state_broadcast = lambda **kwargs: broadcasts.append(True)
 
             result = app._new_session_apply_blank_state(confirm=False)
 
@@ -715,7 +715,7 @@ class SessionSaveLoadTests(unittest.TestCase):
             app._lan_aoes = {1: {"kind": "circle"}}
             app._session_bg_images = [{"bid": 1, "path": "x"}]
             app._session_next_bg_id = 3
-            app._lan_force_state_broadcast = lambda: None
+            app._lan_force_state_broadcast = lambda *args, **kwargs: None
 
             deleted_items = []
 
