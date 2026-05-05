@@ -2451,6 +2451,8 @@ function populateMonsterTurnSelectors(snap) {
   const actorSelect = document.getElementById('monsterActorCidSelect');
   const targetSelect = document.getElementById('monsterTargetCidSelect');
   const capTargetSelect = document.getElementById('monsterCapTargetCidSelect');
+  if (!actorSelect || !targetSelect) return;
+
   const previousActor = String(actorSelect.value || '').trim();
   const previousTarget = String(targetSelect.value || '').trim();
   const previousCapTarget = String(capTargetSelect ? capTargetSelect.value : '').trim();
@@ -3355,26 +3357,29 @@ function updateTacticalEntitySelectors(tactical) {
   const boardingTargetSel = document.getElementById('boardingTargetStructureSelect');
   const shipEngagementSourceSel = document.getElementById('shipEngagementSourceStructureSelect');
   const shipEngagementTargetSel = document.getElementById('shipEngagementTargetStructureSelect');
+  if (!hazardSel || !featureSel || !structureSel || !aoeSel || !bgSel) return;
+
   const hazardPrev = hazardSel.value;
   const featurePrev = featureSel.value;
   const structurePrev = structureSel.value;
   const aoePrev = aoeSel.value;
   const bgPrev = bgSel.value;
-  const boardingLinkPrev = boardingLinkSel.value;
-  const boardingSourcePrev = boardingSourceSel.value;
-  const boardingTargetPrev = boardingTargetSel.value;
-  const shipEngagementSourcePrev = shipEngagementSourceSel.value;
-  const shipEngagementTargetPrev = shipEngagementTargetSel.value;
+  const boardingLinkPrev = boardingLinkSel ? boardingLinkSel.value : '';
+  const boardingSourcePrev = boardingSourceSel ? boardingSourceSel.value : '';
+  const boardingTargetPrev = boardingTargetSel ? boardingTargetSel.value : '';
+  const shipEngagementSourcePrev = shipEngagementSourceSel ? shipEngagementSourceSel.value : '';
+  const shipEngagementTargetPrev = shipEngagementTargetSel ? shipEngagementTargetSel.value : '';
+
   hazardSel.innerHTML = '<option value="">— select hazard —</option>';
   featureSel.innerHTML = '<option value="">— select feature —</option>';
   structureSel.innerHTML = '<option value="">— select structure —</option>';
   aoeSel.innerHTML = '<option value="">— select AoE —</option>';
   bgSel.innerHTML = '<option value="">— new layer —</option>';
-  boardingLinkSel.innerHTML = '<option value="">— select boarding link —</option>';
-  boardingSourceSel.innerHTML = '<option value="">— source —</option>';
-  boardingTargetSel.innerHTML = '<option value="">— target —</option>';
-  shipEngagementSourceSel.innerHTML = '<option value="">— source ship —</option>';
-  shipEngagementTargetSel.innerHTML = '<option value="">— target ship —</option>';
+  if (boardingLinkSel) boardingLinkSel.innerHTML = '<option value="">— select boarding link —</option>';
+  if (boardingSourceSel) boardingSourceSel.innerHTML = '<option value="">— source —</option>';
+  if (boardingTargetSel) boardingTargetSel.innerHTML = '<option value="">— target —</option>';
+  if (shipEngagementSourceSel) shipEngagementSourceSel.innerHTML = '<option value="">— source ship —</option>';
+  if (shipEngagementTargetSel) shipEngagementTargetSel.innerHTML = '<option value="">— target ship —</option>';
 
   for (const hazard of tacticalHazards(tactical)) {
     const hid = String(hazard && hazard.id || '').trim();
@@ -3551,12 +3556,15 @@ function updateTacticalTargetCell(col, row) {
   };
   const colInput = document.getElementById('mapColInput');
   const rowInput = document.getElementById('mapRowInput');
-  if (tacticalSelection.col != null) colInput.value = String(tacticalSelection.col);
-  if (tacticalSelection.row != null) rowInput.value = String(tacticalSelection.row);
-  document.getElementById('tacticalSelectedCell').textContent =
-    tacticalSelection.col == null || tacticalSelection.row == null
-      ? 'Target cell: —'
-      : `Target cell: (${tacticalSelection.col}, ${tacticalSelection.row})`;
+  if (colInput && tacticalSelection.col != null) colInput.value = String(tacticalSelection.col);
+  if (rowInput && tacticalSelection.row != null) rowInput.value = String(tacticalSelection.row);
+  const selectedEl = document.getElementById('tacticalSelectedCell');
+  if (selectedEl) {
+    selectedEl.textContent =
+      tacticalSelection.col == null || tacticalSelection.row == null
+        ? 'Target cell: —'
+        : `Target cell: (${tacticalSelection.col}, ${tacticalSelection.row})`;
+  }
 }
 
 function syncTacticalFieldsFromSelection(options = {}) {
@@ -3568,7 +3576,8 @@ function syncTacticalFieldsFromSelection(options = {}) {
     const pos = unit.pos || {};
     updateTacticalTargetCell(Number(pos.col), Number(pos.row));
   }
-  document.getElementById('mapFacingInput').value = String(Number(unit.facing_deg || 0));
+  const facingInput = document.getElementById('mapFacingInput');
+  if (facingInput) facingInput.value = String(Number(unit.facing_deg || 0));
 }
 
 function resizeCanvasToDisplaySize(canvas) {
@@ -3885,8 +3894,17 @@ function applySnapshot(snap) {
   populateCidSelect('initCidSelect', combatants);
   populateCidSelect('removeCidSelect', combatants);
   populateCidSelect('mapCidSelect', combatants);
-  populateMonsterTurnSelectors(snap);
-  populateMonsterPilotSelector(snap);
+
+  try {
+    populateMonsterTurnSelectors(snap);
+  } catch (e) {
+    console.error('Failed to populate monster turn selectors', e);
+  }
+  try {
+    populateMonsterPilotSelector(snap);
+  } catch (e) {
+    console.error('Failed to populate monster pilot selector', e);
+  }
 
   // Render list
   renderCombatants(snap);
@@ -3907,6 +3925,7 @@ function applySnapshot(snap) {
 
 function populateCidSelect(selectId, combatants) {
   const sel = document.getElementById(selectId);
+  if (!sel) return;
   const prev = sel.value;
   sel.innerHTML = '<option value="">— select —</option>';
   for (const c of combatants) {
@@ -6012,28 +6031,38 @@ function updateMonsterPilotMoveButtonLabel() {
 
 async function monsterPilotMoveAction() {
   const result = document.getElementById('monsterPilotResult');
-  result.className = 'mut-result';
-  result.style.display = 'none';
-  const cidStr = String(document.getElementById('monsterPilotCidSelect').value || '').trim();
+  if (result) {
+    result.className = 'mut-result';
+    result.style.display = 'none';
+  }
+  const cidSelect = document.getElementById('monsterPilotCidSelect');
+  const xInput = document.getElementById('monsterPilotXInput');
+  const yInput = document.getElementById('monsterPilotYInput');
+  const btn = document.getElementById('monsterPilotMoveBtn');
+
+  const cidStr = String(cidSelect ? cidSelect.value : '').trim();
   if (!cidStr) {
-    result.textContent = 'Select a monster first.';
-    result.className = 'mut-result error';
-    result.style.display = 'inline';
+    if (result) {
+      result.textContent = 'Select a monster first.';
+      result.className = 'mut-result error';
+      result.style.display = 'inline';
+    }
     return;
   }
-  const xRaw = document.getElementById('monsterPilotXInput').value;
-  const yRaw = document.getElementById('monsterPilotYInput').value;
+  const xRaw = xInput ? xInput.value : '';
+  const yRaw = yInput ? yInput.value : '';
   const x = Number(xRaw);
   const y = Number(yRaw);
   if (!Number.isFinite(x) || !Number.isFinite(y)) {
-    result.textContent = 'Enter integer x and y.';
-    result.className = 'mut-result error';
-    result.style.display = 'inline';
+    if (result) {
+      result.textContent = 'Enter integer x and y.';
+      result.className = 'mut-result error';
+      result.style.display = 'inline';
+    }
     return;
   }
   const mode = monsterPilotForceModeEnabled() ? 'force' : 'normal';
-  const btn = document.getElementById('monsterPilotMoveBtn');
-  btn.disabled = true;
+  if (btn) btn.disabled = true;
   try {
     const r = await fetch(`${BASE}/api/dm/monster-pilot/${encodeURIComponent(cidStr)}/move`, {
       method: 'POST',
@@ -6046,9 +6075,11 @@ async function monsterPilotMoveAction() {
       const hint = mode === 'normal' && /override|obstacle|occupied/i.test(detail)
         ? ' Tip: enable Force mode to override.'
         : '';
-      result.innerHTML = `${escHtml(detail)}${escHtml(hint)}`;
-      result.className = 'mut-result error';
-      result.style.display = 'inline';
+      if (result) {
+        result.innerHTML = `${escHtml(detail)}${escHtml(hint)}`;
+        result.className = 'mut-result error';
+        result.style.display = 'inline';
+      }
       return;
     }
     const moveResult = (data && data.result) || {};
@@ -6064,28 +6095,36 @@ async function monsterPilotMoveAction() {
       msg += '.';
     }
     if (warnings.length) msg += ` ⚠ ${warnings.map(w => escHtml(w)).join(' ')}`;
-    result.innerHTML = msg;
-    result.className = warnings.length ? 'mut-result warning' : 'mut-result success';
-    result.style.display = 'inline';
+    if (result) {
+      result.innerHTML = msg;
+      result.className = warnings.length ? 'mut-result warning' : 'mut-result success';
+      result.style.display = 'inline';
+    }
     if (data.snapshot) applySnapshot(data.snapshot);
     refreshMonsterPilot();
   } catch (e) {
-    result.textContent = 'Request failed.';
-    result.className = 'mut-result error';
-    result.style.display = 'inline';
+    if (result) {
+      result.textContent = 'Request failed.';
+      result.className = 'mut-result error';
+      result.style.display = 'inline';
+    }
   } finally {
-    btn.disabled = false;
+    if (btn) btn.disabled = false;
   }
 }
 
-document.getElementById('monsterPilotCidSelect').addEventListener('change', (ev) => {
-  const xInput = document.getElementById('monsterPilotXInput');
-  const yInput = document.getElementById('monsterPilotYInput');
-  if (xInput) delete xInput.dataset.userEdited;
-  if (yInput) delete yInput.dataset.userEdited;
-  renderMonsterPilotSummary();
-  syncMonsterPilotSelectionToOtherPanels(ev.target.value);
-});
+const _monsterPilotCidSelect = document.getElementById('monsterPilotCidSelect');
+if (_monsterPilotCidSelect) {
+  _monsterPilotCidSelect.addEventListener('change', (ev) => {
+    const xInput = document.getElementById('monsterPilotXInput');
+    const yInput = document.getElementById('monsterPilotYInput');
+    if (xInput) delete xInput.dataset.userEdited;
+    if (yInput) delete yInput.dataset.userEdited;
+    renderMonsterPilotSummary();
+    syncMonsterPilotSelectionToOtherPanels(ev.target.value);
+  });
+}
+
 const _monsterActorSelectForSync = document.getElementById('monsterActorCidSelect');
 if (_monsterActorSelectForSync) {
   _monsterActorSelectForSync.addEventListener('change', (ev) => {
@@ -6101,53 +6140,68 @@ updateMonsterPilotMoveButtonLabel();
   const el = document.getElementById(id);
   if (el) el.addEventListener('input', () => { el.dataset.userEdited = '1'; });
 });
-document.getElementById('monsterPilotMoveBtn').addEventListener('click', monsterPilotMoveAction);
-document.getElementById('monsterPilotRefreshBtn').addEventListener('click', refreshMonsterPilot);
-document.getElementById('monsterPilotUseSelectedCellBtn').addEventListener('click', () => {
-  if (typeof tacticalSelection === 'object' && tacticalSelection &&
-      Number.isFinite(Number(tacticalSelection.col)) && Number.isFinite(Number(tacticalSelection.row))) {
+const _monsterPilotMoveBtn = document.getElementById('monsterPilotMoveBtn');
+if (_monsterPilotMoveBtn) _monsterPilotMoveBtn.addEventListener('click', monsterPilotMoveAction);
+const _monsterPilotRefreshBtn = document.getElementById('monsterPilotRefreshBtn');
+if (_monsterPilotRefreshBtn) _monsterPilotRefreshBtn.addEventListener('click', refreshMonsterPilot);
+const _monsterPilotUseSelectedCellBtn = document.getElementById('monsterPilotUseSelectedCellBtn');
+if (_monsterPilotUseSelectedCellBtn) {
+  _monsterPilotUseSelectedCellBtn.addEventListener('click', () => {
+    if (typeof tacticalSelection === 'object' && tacticalSelection &&
+        Number.isFinite(Number(tacticalSelection.col)) && Number.isFinite(Number(tacticalSelection.row))) {
+      const xInput = document.getElementById('monsterPilotXInput');
+      const yInput = document.getElementById('monsterPilotYInput');
+      if (xInput) xInput.value = String(Number(tacticalSelection.col));
+      if (yInput) yInput.value = String(Number(tacticalSelection.row));
+      if (xInput) xInput.dataset.userEdited = '1';
+      if (yInput) yInput.dataset.userEdited = '1';
+    }
+  });
+}
+const _monsterPilotMoveSelectedCellBtn = document.getElementById('monsterPilotMoveSelectedCellBtn');
+if (_monsterPilotMoveSelectedCellBtn) {
+  _monsterPilotMoveSelectedCellBtn.addEventListener('click', () => {
+    const result = document.getElementById('monsterPilotResult');
+    if (result) {
+      result.className = 'mut-result';
+      result.style.display = 'none';
+    }
+    
+    // Validate monster is selected
+    const cidSelect = document.getElementById('monsterPilotCidSelect');
+    const cidStr = String(cidSelect ? cidSelect.value : '').trim();
+    if (!cidStr) {
+      if (result) {
+        result.textContent = 'Select a monster first.';
+        result.className = 'mut-result error';
+        result.style.display = 'inline';
+      }
+      return;
+    }
+    
+    // Validate map cell is selected
+    if (typeof tacticalSelection !== 'object' || !tacticalSelection ||
+        !Number.isFinite(Number(tacticalSelection.col)) || !Number.isFinite(Number(tacticalSelection.row))) {
+      if (result) {
+        result.textContent = 'Click a destination cell on the map first.';
+        result.className = 'mut-result error';
+        result.style.display = 'inline';
+      }
+      return;
+    }
+    
+    // Use "Use map cell" to populate the inputs, then call move action
     const xInput = document.getElementById('monsterPilotXInput');
     const yInput = document.getElementById('monsterPilotYInput');
-    xInput.value = String(Number(tacticalSelection.col));
-    yInput.value = String(Number(tacticalSelection.row));
-    xInput.dataset.userEdited = '1';
-    yInput.dataset.userEdited = '1';
-  }
-});
-document.getElementById('monsterPilotMoveSelectedCellBtn').addEventListener('click', () => {
-  const result = document.getElementById('monsterPilotResult');
-  result.className = 'mut-result';
-  result.style.display = 'none';
-  
-  // Validate monster is selected
-  const cidStr = String(document.getElementById('monsterPilotCidSelect').value || '').trim();
-  if (!cidStr) {
-    result.textContent = 'Select a monster first.';
-    result.className = 'mut-result error';
-    result.style.display = 'inline';
-    return;
-  }
-  
-  // Validate map cell is selected
-  if (typeof tacticalSelection !== 'object' || !tacticalSelection ||
-      !Number.isFinite(Number(tacticalSelection.col)) || !Number.isFinite(Number(tacticalSelection.row))) {
-    result.textContent = 'Click a destination cell on the map first.';
-    result.className = 'mut-result error';
-    result.style.display = 'inline';
-    return;
-  }
-  
-  // Use "Use map cell" to populate the inputs, then call move action
-  const xInput = document.getElementById('monsterPilotXInput');
-  const yInput = document.getElementById('monsterPilotYInput');
-  xInput.value = String(Number(tacticalSelection.col));
-  yInput.value = String(Number(tacticalSelection.row));
-  xInput.dataset.userEdited = '1';
-  yInput.dataset.userEdited = '1';
-  
-  // Call the move action
-  monsterPilotMoveAction();
-});
+    if (xInput) xInput.value = String(Number(tacticalSelection.col));
+    if (yInput) yInput.value = String(Number(tacticalSelection.row));
+    if (xInput) xInput.dataset.userEdited = '1';
+    if (yInput) yInput.dataset.userEdited = '1';
+    
+    // Call the move action
+    monsterPilotMoveAction();
+  });
+}
 
 // ── Monster Capabilities ──────────────────────────────────────────────
 let monsterCapabilityResolutionPackets = {};
