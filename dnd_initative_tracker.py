@@ -24696,6 +24696,74 @@ class InitiativeTracker(base.InitiativeTracker):
             "player": profile,
         }
 
+    def _mutate_owned_inventory_weapon_reload(
+        self,
+        name: str,
+        instance_id: str,
+    ) -> Dict[str, Any]:
+        """Reset ammo_current to ammo_max for a player's firearm item.
+
+        Returns a result dict with 'ok', 'weapon_name', 'ammo_before', 'ammo_after',
+        and 'ammo_max'.
+        """
+        player_name = str(name or "").strip()
+        if not player_name:
+            return {"ok": False, "reason": "Character name missing."}
+        path = self._resolve_character_path(player_name)
+        if path is None:
+            return {"ok": False, "reason": "Character file not found."}
+
+        target_instance_id = str(instance_id or "").strip()
+        if not target_instance_id:
+            return {"ok": False, "reason": "Weapon instance ID missing."}
+
+        raw = self._load_character_raw(path)
+        if not raw:
+            return {"ok": False, "reason": "Character data could not be loaded."}
+
+        entry, items, index = self._find_owned_inventory_item_by_instance_id(raw, target_instance_id)
+        if not isinstance(entry, dict) or not isinstance(items, list) or index is None:
+            return {"ok": False, "reason": "Weapon not found in inventory."}
+
+        ammo_max = self._parse_int_value(entry.get("ammo_max"))
+        if ammo_max is None or ammo_max <= 0:
+            # Check if it has a magazine_X property to infer ammo_max if missing
+            props = entry.get("properties") if isinstance(entry.get("properties"), list) else []
+            for p in props:
+                if str(p).startswith("magazine_"):
+                    try:
+                        ammo_max = int(str(p).split("_")[1])
+                        entry["ammo_max"] = ammo_max
+                        break
+                    except (IndexError, ValueError):
+                        pass
+
+        if ammo_max is None or ammo_max <= 0:
+            return {"ok": False, "reason": "This item does not have ammunition capacity."}
+
+        ammo_before = self._parse_int_value(entry.get("ammo_current"), 0)
+        ammo_after = ammo_max
+        entry["ammo_current"] = ammo_after
+
+        # Also sync to attacks/weapons if it's there
+        attacks = raw.get("attacks") if isinstance(raw.get("attacks"), dict) else {}
+        weapons = attacks.get("weapons") if isinstance(attacks.get("weapons"), list) else []
+        for w in weapons:
+            if str(w.get("instance_id")).strip() == target_instance_id:
+                w["ammo_current"] = ammo_after
+                if "ammo_max" not in w:
+                    w["ammo_max"] = ammo_max
+
+        self._store_character_yaml(path, raw)
+
+        return {
+            "ok": True,
+            "weapon_name": entry.get("name") or "Weapon",
+            "ammo_before": ammo_before,
+            "ammo_after": ammo_after,
+            "ammo_max": ammo_max,
+        }
+
     def _mutate_owned_inventory_weapon_assignment(
         self,
         name: str,

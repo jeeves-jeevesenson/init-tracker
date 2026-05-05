@@ -132,14 +132,21 @@ actions:
   - `loud`: Property that triggers an info log message on firing.
 - **Tests:** `tests/test_firearm_ammo_v1.py` verifies decrementing, blocking empty weapons, and Loud logging.
 
-### Pass B: Single Shot + Reload backend
-- **Files to inspect:** `dnd_initative_tracker.py` (`_adjudicate_attack_request`), `player_command_service.py`.
-- **Files to change:** `dnd_initative_tracker.py`, `player_command_service.py`, `player_command_contracts.py`.
-- **Tasks:**
-  - Update `_adjudicate_attack_request` to decrement `ammo_current` when a firearm is fired.
-  - Implement `_mutate_owned_inventory_weapon_reload` to reset `ammo_current` to `ammo_max`.
-  - Add "Loud" log marker to `_adjudicate_attack_request`.
-- **Tests:** Verify ammo decrement on attack and reset on reload.
+### Pass B: Single Shot + Reload backend (COMPLETED)
+- **Files changed:** `dnd_initative_tracker.py`, `player_command_service.py`, `player_command_contracts.py`.
+- **Status:** Backend support for reloading and ammo decrement on attack implemented.
+- **Implemented Functionality:**
+  - `_adjudicate_attack_request` decrements `ammo_current` on firearm discharge.
+  - `InitiativeTracker._mutate_owned_inventory_weapon_reload` resets `ammo_current` to `ammo_max`.
+  - `PlayerCommandService.reload_weapon` provides the authoritative entry point.
+  - Command Shape:
+    ```json
+    {
+      "type": "reload_weapon",
+      "item_instance_id": "<instance_id>"
+    }
+    ```
+- **Tests:** `tests/test_firearm_reload.py` verifies reload logic and service dispatch.
 
 ### Pass C: Player/DM UI ammo display and controls
 - **Files to inspect:** `assets/web/dm_page.html` (or relevant web surfaces).

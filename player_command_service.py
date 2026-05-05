@@ -150,6 +150,7 @@ from player_command_contracts import (
     build_reaction_prefs_update_contract,
     build_reaction_response_contract,
     build_reappear_persistent_summon_contract,
+    build_reload_weapon_contract,
     build_reset_player_characters_contract,
     build_reset_turn_contract,
     build_resume_dispatch,
@@ -4526,6 +4527,114 @@ class PlayerCommandService:
             except Exception:
                 pass
         return build_dispatch_result("reset_turn", True, request=request_contract)
+
+    # ------------------------------------------------------------------
+    # reload_weapon
+    # ------------------------------------------------------------------
+
+    def reload_weapon(
+        self,
+        msg: Dict[str, Any],
+        *,
+        cid: Optional[int],
+        ws_id: Any,
+        is_admin: bool,
+    ) -> Dict[str, Any]:
+        """Backend authority for the player "reload_weapon" command.
+
+        Identifies the actor and firearm item instance, validates it is a
+        reloadable firearm, and resets ammo_current to ammo_max via the
+        tracker's inventory mutation path.
+        """
+        t = self._tracker
+        request_contract = build_reload_weapon_contract(
+            msg,
+            cid=cid,
+            ws_id=ws_id,
+            is_admin=is_admin,
+        )
+        if cid is None:
+            return build_dispatch_result("reload_weapon", False, reason="missing_cid", request=request_contract)
+        try:
+            cid_int = int(cid)
+        except Exception:
+            return build_dispatch_result("reload_weapon", False, reason="invalid_cid", request=request_contract)
+
+        combatants = getattr(t, "combatants", {}) or {}
+        c = combatants.get(cid_int)
+        if c is None:
+            return build_dispatch_result(
+                "reload_weapon",
+                False,
+                reason="combatant_missing",
+                request=request_contract,
+            )
+
+        item_instance_id = str(msg.get("item_instance_id") or "").strip()
+        if not item_instance_id:
+            return build_dispatch_result(
+                "reload_weapon",
+                False,
+                reason="missing_item_instance_id",
+                request=request_contract,
+            )
+
+        player_name = t._pc_name_for(cid_int)
+        if not player_name:
+            return build_dispatch_result(
+                "reload_weapon",
+                False,
+                reason="player_name_missing",
+                request=request_contract,
+            )
+
+        # Call the tracker-side mutation helper
+        res = t._mutate_owned_inventory_weapon_reload(player_name, item_instance_id)
+
+        if not res.get("ok"):
+            self._toast(ws_id, res.get("reason", "Reload failed."))
+            return build_dispatch_result(
+                "reload_weapon",
+                False,
+                reason=res.get("reason"),
+                request=request_contract,
+            )
+
+        weapon_name = str(res.get("weapon_name") or "Weapon")
+        ammo_before = res.get("ammo_before")
+        ammo_after = res.get("ammo_after")
+
+        if ammo_before == ammo_after:
+            self._toast(ws_id, f"{weapon_name} is already full.")
+        else:
+            self._toast(ws_id, f"Reloaded {weapon_name} ({ammo_after}/{res.get('ammo_max')}).")
+
+        # UI Rebuild / Broadcast
+        rebuild = getattr(t, "_rebuild_table", None)
+        if callable(rebuild):
+            try:
+                rebuild(scroll_to_current=True)
+            except Exception:
+                pass
+        broadcast = getattr(t, "_lan_force_state_broadcast", None)
+        if callable(broadcast):
+            try:
+                broadcast()
+            except Exception:
+                pass
+
+        return build_dispatch_result(
+            "reload_weapon",
+            True,
+            request=request_contract,
+            actor_name=player_name,
+            weapon_name=weapon_name,
+            item_instance_id=item_instance_id,
+            ammo_before=ammo_before,
+            ammo_after=ammo_after,
+            ammo_max=res.get("ammo_max"),
+            action_cost_note="Bonus Action reminder",
+        )
 
     # ------------------------------------------------------------------
     # end_turn

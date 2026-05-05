@@ -133,6 +133,8 @@ SET_FACING_FIELDS: Sequence[str] = ("type", "facing_deg")
 SET_AURAS_ENABLED_FIELDS: Sequence[str] = ("type", "enabled")
 RESET_PLAYER_CHARACTERS_FIELDS: Sequence[str] = ("type",)
 
+RELOAD_WEAPON_FIELDS: Sequence[str] = ("type", "item_instance_id")
+
 END_TURN_FIELDS: Sequence[str] = ("type",)
 MOUNT_REQUEST_FIELDS: Sequence[str] = ("type", "rider_cid", "mount_cid")
 MOUNT_RESPONSE_FIELDS: Sequence[str] = ("type", "request_id", "accept")
@@ -245,6 +247,7 @@ TURN_LOCAL_COMMAND_TYPES = frozenset(
         "use_bonus_action",
         "stand_up",
         "reset_turn",
+        "reload_weapon",
     }
 )
 
@@ -546,6 +549,22 @@ def build_reset_player_characters_contract(
     return build_command_request_contract(
         "reset_player_characters",
         _project_payload(msg, RESET_PLAYER_CHARACTERS_FIELDS, "reset_player_characters"),
+        cid=cid,
+        ws_id=ws_id,
+        is_admin=is_admin,
+    )
+
+
+def build_reload_weapon_contract(
+    msg: Dict[str, Any],
+    *,
+    cid: Optional[int],
+    ws_id: Any,
+    is_admin: bool,
+) -> Dict[str, Any]:
+    return build_command_request_contract(
+        "reload_weapon",
+        _project_payload(msg, RELOAD_WEAPON_FIELDS, "reload_weapon"),
         cid=cid,
         ws_id=ws_id,
         is_admin=is_admin,
