@@ -460,7 +460,7 @@ Update the status column after each pass.
 | M4 | Encounter Builder / Monster Library | In progress | Complete Encounter Builder (mixed groups/staging) |
 | M5 | Initiative flow | In progress | Reroll all enemy/NPC initiative in Toolbox |
 | M6 | Focused actor panel prototype | Completed | Static/prototype actor panel using current actor |
-| M7 | Monster Actions / action cards | In progress | Resolution Tray Hardening completed; Next: multiattack planning |
+| M7 | Monster Actions / action cards | In progress | Multiattack sequencing planning completed |
 | M8 | Current-turn movement model | Not started | Reuse LAN movement path for DM current actor |
 | M9 | Tactical map inspection | Not started | Token click inspection / empty cell info |
 | M10 | Automation settings | Not started | Roll-path and persistence inspection |
@@ -804,6 +804,19 @@ Outcome:
 - Mandatory JS syntax check passed.
 - All relevant tests (348) passed.
 
+### 2026-05-06 — Monster Actions: Multiattack Sequencing Planning (M7 extension)
+
+Agent/model: Gemini CLI (Autonomous Mode)
+Scope:
+- Repo-grounded planning for Multiattack / Composite action sequencing in the Focused Actor Panel.
+- Inspected `MonsterCapabilityService` and YAML overlays for composite representation.
+- Reviewed backend support for `assisted_sequence` resolution type.
+- Analyzed standalone panel behavior for child attacks.
+- Defined a "Sequence Tray" UI model for step-by-step assisted resolution.
+Outcome:
+- Detailed implementation plan added to the living doc.
+- Ready for first implementation slice: Sequence Tray UI and child-action execution wiring.
+
 ### 2026-05-06 — Monster Actions: Resolution Tray Hardening (M7 extension)
 
 Agent/model: Gemini CLI (Autonomous Mode)
@@ -895,6 +908,50 @@ The Focused Actor Panel should reuse the **Standalone Monster Actions** backend 
 
 ### Next Implementation Task
 **M7 — Monster Actions: Resolution Tray (Trigger execution from Target Tray).**
+
+## Multiattack Assisted Sequence Plan
+
+### Existing Multiattack/Composite Representation
+- **YAML Overlay:** Defined as `action_type: "composite"` with a `mechanics.composite` list of child actions (`action_id`, `name`, `count`).
+- **Summarization:** `MonsterCapabilityService` resolves these children and adds `resolved_composite` to the UI summary, marking each as `executable` if a matching sub-capability exists.
+- **Backend:** `POST /api/dm/monster-capabilities/${cid}/execute` on a parent composite action returns `resolution: "assisted_sequence"` and a `steps` array.
+
+### Recommended Assisted Sequence Model
+- **State:** Captured `assisted_sequence` results are stored in `focusedActorResolutionPacket`.
+- **UI:** A **Sequence Tray** appears in the Focused Actor Panel when a sequence is active.
+- **Execution Flow:**
+    1. DM selects parent "Multiattack" and clicks "Execute / Prepare".
+    2. Backend returns `assisted_sequence` packet; Sequence Tray appears.
+    3. DM clicks a child button (e.g., "Execute Bite 1/1").
+    4. UI switches focus to child `action_id` and enables "Target Preview".
+    5. DM resolves child attack using standard flow.
+    6. Upon resolution/cancel, UI returns to parent Sequence Tray.
+- **Tracking:** Completion of child steps is tracked in local frontend state.
+
+### First Implementation Slice
+- **Sequence Tray UI:** Render `steps` from an `assisted_sequence` packet.
+- **Child Wiring:** Buttons to trigger "Target Preview" for specific child sub-capabilities.
+- **Flow Reset:** Ensure resolving a child returns the DM to the parent sequence tray if one is active.
+- **End Sequence:** Explicit button to clear the sequence state.
+
+### Explicitly Deferred
+- Automated target distribution (DM still picks for each child).
+- Enforced same-target/different-target constraints.
+- Resource/recharge automation for the sequence itself.
+- Persistence of sequence state across refreshes or actor switches.
+
+### Required Tests
+- `executeFocusedActorAction` captures `assisted_sequence`.
+- Sequence Tray renders child steps and "End Sequence" button.
+- Child buttons trigger target preview for the correct child ID.
+- Resolution of child action returns focus to the parent sequence.
+
+### Risks / Blockers
+- **Action ID switching:** Need to ensure the UI knows it's "inside" a sequence so it doesn't just clear everything after the first child resolution.
+- **Cleanup:** Clear sequence state if the DM explicitly picks a different (non-child) action.
+- **Legacy Compatibility:** Ensure existing standalone panel logic remains unaffected.
+
+Next implementation task: **M7 — Implement Focused Actor Sequence Tray and child-action wiring.**
 
 ### 2026-05-06 — Monster Actions: Range / AoE Validation Hints (M7 extension)
 
