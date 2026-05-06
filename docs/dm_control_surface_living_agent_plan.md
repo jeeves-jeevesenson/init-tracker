@@ -1,8 +1,8 @@
 # DM Control Surface Redesign — Living Agent Plan
 
-Version: 2026-05-06  
-Status: Living planning and execution document  
-Recommended repo path: `docs/dm-control-surface-living-plan.md`  
+Version: 2026-05-06
+Status: Living planning and execution document
+Recommended repo path: `docs/dm_control_surface_living_agent_plan.md`
 Source plan: `docs/dm-control-surface-master-plan.md`
 
 ## How to use this document
@@ -11,11 +11,18 @@ This is the working document agents should use when planning, implementing, and 
 
 The master design direction is stable:
 
+- **The tactical map is not the primary combat-control surface.** Do not build workflows that require map clicks to run monster turns, select targets, or execute actions. Panel-first controls are required.
 - Build a new actor-centered DM combat control surface.
+- Focused Actor Panel is the monster/NPC control surface.
+- Target selection must be available primarily from the Focused Actor Panel.
+- Tactical map is reference / inspection / visual feedback only.
+- Tactical map may highlight source/targets/range/AoE and allow token inspection.
+- Tactical map must not be required as the primary way to select targets or run monster actions.
+- Map-click target selection, if retained, is optional assistive behavior only and must not be the main workflow.
+- DM Toolbox is setup / overrides / admin / debug.
+- Legacy Monster Turn Controls and Monster Pilot must be removed/demoted from the main active cockpit area.
 - Do not polish the current dropdown-heavy Monster Turn Controls / Monster Pilot as the target UI.
 - Use LAN player flow as the local interaction reference.
-- Keep the tactical map primarily as a reference/inspection surface with spatial movement/targeting visualization.
-- Move rare, destructive, override, setup, and debugging tools into DM Toolbox.
 - Preserve backend authority and avoid DM-only parallel state.
 
 Agents should update this document after meaningful passes.
@@ -42,6 +49,8 @@ Do not claim browser readiness after editing `assets/web/dm/index.html` or `asse
 
 ### UI direction
 
+- **Panel-first controls are mandatory.** The tactical map is for reference and inspection.
+- Target selection must be available from the Focused Actor Panel.
 - The current `/dm` right-side dropdown control stack is not the target UI.
 - Monster Turn Controls and Monster Pilot are legacy/current fallback surfaces.
 - Do not build new active-combat workflows from dropdown stacks.
@@ -93,10 +102,12 @@ Update this section after each pass.
 |---|---|---|
 | `/dm` bootstrap/render | Verified | Recent parse/stale reset bugs were fixed; HP/Temp HP/Remove Combatant/Set Initiative migrated to Toolbox |
 | `/` LAN client | Useful local model | LAN has targeting, movement range, attack resolution, spell target selection, and remaining movement concepts |
-| Monster Turn Controls | Legacy/fallback | Do not polish as target UI |
-| Monster Pilot | Legacy/fallback | Do not use as foundation for future current-turn movement |
+| Monster Turn Controls | Legacy/fallback | **Must be removed/demoted from main cockpit.** Do not polish as target UI. |
+| Monster Pilot | Legacy/fallback | **Must be removed/demoted from main cockpit.** Do not use as foundation for future current-turn movement. |
 | Monster capability backend | Useful | Labels renamed to 'Monster Actions' in DM UI |
 | Focused actor panel | Prototype | Current actor focused automatically; token click inspects; stats and actions (with selection/expansion) display |
+| Target Selection | Provisional / needs correction | Current implementation depends too much on map-click. |
+| Panel-based target picker | **Required next correction** | Target selection must be moved to Focused Actor Panel. |
 | DM Toolbox | In progress | Tabbed modal with Session, Encounter, Overrides tabs partially populated |
 | Encounter Builder | In progress | Monster Library search and Add Monster workflow migrated to Encounter tab |
 | Duplicate monster names | Completed | Backend auto-numbering implemented via CombatantNameService |
@@ -114,19 +125,22 @@ Update this section after each pass.
 1. Initiative advances.
 2. Current actor is automatically focused.
 3. Focused actor panel shows stats, conditions, movement, resources, and actions.
-4. Legal movement range appears.
+4. Legal movement range appears on tactical map.
 5. DM may move before acting.
-6. DM selects an action card.
+6. DM selects an action card in Focused Actor Panel.
 7. Action enters target mode.
-8. Valid targets/range/area appear.
-9. DM selects target or targets.
-10. Resolution handles hit, save, damage, effects, riders, and resources.
-11. DM may continue moving or acting if valid.
-12. DM ends turn.
+8. DM selects targets from a panel-based target picker/list in the Focused Actor Panel.
+9. Target Tray shows selected targets.
+10. Tactical map visualizes selected targets/range/AoE for feedback only.
+11. Resolution handles hit, save, damage, effects, riders, and resources.
+12. DM may continue moving or acting if valid.
+13. DM ends turn.
 
 Movement is not a single fixed phase. The UI must support split movement such as move, attack, move, bonus action, move, end.
 
 ### Focused actor panel
+
+The Focused Actor Panel is the primary monster/NPC control surface.
 
 Default actor:
 
@@ -155,6 +169,7 @@ Visible data should include:
 - remaining movement
 - resources/recharge/limited uses
 - grouped action cards
+- **Target selection list/picker**
 
 ### Action cards
 
@@ -186,9 +201,12 @@ Action grouping defaults still need prototype work against complex monster data.
 
 ### Targeting and resolution
 
+- **Focused Actor Panel owns target selection.**
+- Panel target picker/list is required.
 - Selecting an attack/action enters target mode.
 - Escape cancels target mode without consuming resources.
-- Valid targets should be highlighted.
+- Valid targets should be highlighted on the map for feedback.
+- Map-click targeting is optional/passive assist only.
 - AoE and multi-target selections should display selected targets before resolution.
 - Damage can be automatic after the relevant result is determined.
 - AoE/mass effects may require review/confirmation.
@@ -252,9 +270,11 @@ Future WIP:
 
 ### Tactical map
 
+**The tactical map is for reference, inspection, and visual feedback only.**
+
 Default display:
 
-- current initiative actor
+- current initiative actor / inspected actor
 
 Left-click token:
 
@@ -262,11 +282,11 @@ Left-click token:
 
 Left-click empty cell:
 
-- show detailed cell information
+- show detailed cell information (inspect cell)
 
-Drag current-turn token:
+No primary target selection from map. No primary action execution from map.
 
-- current actor movement
+Movement/drag controls are deferred and must be explicitly workshopped before implementation.
 
 Right-click token:
 
@@ -506,7 +526,7 @@ Next recommended pass:
 ### 2026-05-06 — Rename Normalized Capabilities to Monster Actions (Q3)
 
 Agent/model: Gemini CLI (Autonomous Mode)
-Scope: 
+Scope:
 - Rename user-facing labels and descriptions in the DM UI.
 - Improve no-match messaging for monsters without structured action cards.
 Files changed:
@@ -523,7 +543,7 @@ Next recommended pass:
 ### 2026-05-06 — Auto-number duplicate monster spawns (Q1)
 
 Agent/model: Gemini CLI (Autonomous Mode)
-Scope: 
+Scope:
 - Implement backend auto-numbering for duplicate monster names.
 - Ensure unique suffixes (e.g., "Goblin 1", "Goblin 2") even for single spawns.
 Files changed:
@@ -536,7 +556,7 @@ Outcome:
 ### 2026-05-06 — Auto-roll enemy/NPC initiative (Q2)
 
 Agent/model: Gemini CLI (Autonomous Mode)
-Scope: 
+Scope:
 - Implement auto-rolling of initiative for monsters spawned via the DM encounter route.
 - Each monster in a multi-count spawn gets an independent roll.
 Files changed:
@@ -550,7 +570,7 @@ Outcome:
 ### 2026-05-06 — DM Toolbox shell (Q5)
 
 Agent/model: Gemini CLI (Autonomous Mode)
-Scope: 
+Scope:
 - Create accessible modal shell with tabs in /dm.
 - Add DM Toolbox button to topbar.
 - Implement tab switching and basic open/close logic.
@@ -567,7 +587,7 @@ Outcome:
 ### 2026-05-06 — Move Session tools to Toolbox (M3)
 
 Agent/model: Gemini CLI (Autonomous Mode)
-Scope: 
+Scope:
 - Migrate New Blank Session, Save/Load Session, and Quick Save/Load into DM Toolbox -> Session tab.
 - Remove redundant session persistence block from main cockpit.
 - Update UI tests to verify placement and accessibility.
@@ -584,7 +604,7 @@ Outcome:
 ### 2026-05-06 — Move Add Player Profiles to Toolbox (M3 extension)
 
 Agent/model: Gemini CLI (Autonomous Mode)
-Scope: 
+Scope:
 - Migrate "Add Player Profiles" controls into DM Toolbox -> Session tab.
 - Group with Session Persistence under "Roster & Players" section.
 - Remove redundant roster setup block from main cockpit.
@@ -604,7 +624,7 @@ Next recommended pass:
 ### 2026-05-06 — Move HP / Temp HP controls into Toolbox Overrides tab (M2/M12 partial)
 
 Agent/model: Gemini CLI (Autonomous Mode)
-Scope: 
+Scope:
 - Migrate HP Adjustment and Temp HP controls into DM Toolbox -> Overrides tab.
 - Remove redundant Health block from main cockpit.
 - Preserve all element IDs and JS behavior.
@@ -623,7 +643,7 @@ Next recommended pass:
 ### 2026-05-06 — Move Remove Combatant into Toolbox Encounter tab (M3/M4 partial)
 
 Agent/model: Gemini CLI (Autonomous Mode)
-Scope: 
+Scope:
 - Migrate Remove Combatant controls into DM Toolbox -> Encounter tab.
 - Remove redundant Remove Combatant card from main cockpit.
 - Preserve all element IDs and JS behavior.
@@ -642,7 +662,7 @@ Next recommended pass:
 ### 2026-05-06 — Move Set Initiative into Toolbox Overrides tab (M2/M5 partial)
 
 Agent/model: Gemini CLI (Autonomous Mode)
-Scope: 
+Scope:
 - Migrate Set Initiative controls into DM Toolbox -> Overrides tab.
 - Remove redundant Combat Setup block from main cockpit.
 - Preserve all element IDs and JS behavior.
@@ -661,7 +681,7 @@ Next recommended pass:
 ### 2026-05-06 — Monster Library / Encounter Builder shell (M4 partial)
 
 Agent/model: Gemini CLI (Autonomous Mode)
-Scope: 
+Scope:
 - Create Monster Library shell in DM Toolbox -> Encounter tab.
 - Implement search input and results container.
 - Add logic to filter and render monster cards from existing data.
@@ -682,7 +702,7 @@ Next recommended pass:
 ### 2026-05-06 — Self-contained Add Monster Specs spawning (M4 extension)
 
 Agent/model: Gemini CLI (Autonomous Mode)
-Scope: 
+Scope:
 - Migrate Add Monster Specs controls into DM Toolbox -> Encounter tab.
 - Position below Monster Library shell for self-contained workflow.
 - Remove redundant Add Monster Specs block from main cockpit.
@@ -702,7 +722,7 @@ Next recommended pass:
 ### 2026-05-06 — Move Add Combatant into Toolbox Encounter tab (M4 partial)
 
 Agent/model: Gemini CLI (Autonomous Mode)
-Scope: 
+Scope:
 - Migrate Add Combatant controls into DM Toolbox -> Encounter tab as "Advanced / Custom Combatant".
 - Remove redundant roster setup section from main cockpit.
 - Update UI tests to verify placement and removal.
@@ -721,7 +741,7 @@ Next recommended pass:
 ### 2026-05-06 — Focused Actor Panel prototype (M6)
 
 Agent/model: Gemini CLI (Autonomous Mode)
-Scope: 
+Scope:
 - Create first Focused Actor Panel prototype on /dm.
 - Display current initiative actor stats (HP, AC, Speed, Init, Conditions).
 - Handle PC view-only state.
@@ -741,7 +761,7 @@ Next recommended pass:
 ### 2026-05-06 — Focused Actor Panel - Monster Actions Detail/Selection (M7)
 
 Agent/model: Gemini CLI (Autonomous Mode)
-Scope: 
+Scope:
 - Add display-only card expansion/details and selected-action state to Monster Actions in the Focused Actor Panel.
 - Implement click handlers for selection and toggle expansion.
 - Render detailed mechanics (Description, Reach, Range, Target Mode) in expanded view.
@@ -762,7 +782,7 @@ Next recommended pass:
 ### 2026-05-06 — Focused Actor Panel - Monster Actions Display Integration (M7)
 
 Agent/model: Gemini CLI (Autonomous Mode)
-Scope: 
+Scope:
 - Implement display-only "Monster Actions" integration in the Focused Actor Panel.
 - Add CSS for compact action cards.
 - Introduce `monsterCapabilitiesByCid` cache to optimize capability fetching.
@@ -801,6 +821,7 @@ Files changed:
 Outcome:
 - DM can now select targets on the map and trigger a real backend execution/resolution flow directly from the Focused Actor Panel.
 - Full parity with the manual adjudication logic of the standalone panel, but integrated into the new cockpit.
+- **Correction Note:** This implementation currently depends too much on map-click target selection. Future passes must refactor this to panel-first target selection.
 - Mandatory JS syntax check passed.
 - All relevant tests (348) passed.
 
@@ -816,6 +837,7 @@ Scope:
 Outcome:
 - Detailed implementation plan added to the living doc.
 - Ready for first implementation slice: Sequence Tray UI and child-action execution wiring.
+- **Correction Note:** Plan relies on map-click targeting for child steps; needs refactoring to panel-first.
 
 ### 2026-05-06 — Monster Actions: Sequence Tray Hardening (M7 extension)
 
@@ -837,8 +859,6 @@ Outcome:
 - All relevant tests (364) passed.
 Decision Log:
 - **Actor Focus change:** Inspected tokens/actors now reliably clear the active sequence state. This prevents "floating" sequence context from an previous actor leaking into a new inspection focus.
-Next recommended pass:
-- M7 — Complex multiattack browser smoke and battle-log/result UX polish.
 
 ### 2026-05-06 — Monster Actions: Focused Actor Sequence Tray (M7 extension)
 
@@ -859,10 +879,9 @@ Outcome:
 - DMs can now execute complex Multiattack sequences step-by-step from the Focused Actor Panel.
 - Each child attack uses the standard target selection and resolution flow.
 - Progress is tracked visually within the sequence tray.
+- **Correction Note:** Feature currently depends on map-click target selection; must be refactored to panel-first.
 - Mandatory JS syntax check passed.
 - All relevant tests (360) passed.
-Next recommended pass:
-- M7 — Sequence Tray hardening or complex multiattack browser smoke.
 
 ### 2026-05-06 — Monster Actions: Resolution Tray Hardening (M7 extension)
 
@@ -885,8 +904,6 @@ Outcome:
 - Clear visual and functional feedback for in-flight operations.
 - Mandatory JS syntax check passed.
 - All relevant tests (354) passed.
-Next recommended pass:
-- M7 — Multiattack sequencing / assisted flow planning.
 
 ### 2026-05-06 — Monster Actions: Resolution Planning / Target-Resolution Review (M7 extension)
 
@@ -901,109 +918,12 @@ Outcome:
 - Planning complete. Recommended path is to reuse the existing `/api/dm/monster-capabilities/${cid}/execute` and `/api/dm/monster-capabilities/${cid}/resolve-targets` endpoints.
 - First executable slice identified as "Manual adjudication for selected targets."
 - Resolution Tray design defined: an integrated panel replacing the Target Tray after execution is triggered.
-
-## Monster Actions Execution & Resolution Plan
-
-### Existing Flows Found
-
-1. **Standalone Monster Actions Panel (Legacy)**:
-   - **Endpoint**: `POST /api/dm/monster-capabilities/${cid}/execute`
-   - **Payload**: `{ capability_id, target_cid, spend, roll_mode }`
-   - **Resolution**: Results can be `automatic` (broadcast) or `assisted`.
-   - **Assisted resolution UI**: `renderMonsterCapabilityResolution` shows target rows with outcome dropdowns (hit/miss/save).
-   - **Final Application**: Calls `POST /api/dm/monster-capabilities/${cid}/resolve-targets`.
-
-2. **LAN Attack/Target Resolution**:
-   - **Command**: `attack_request` or `spell_target_request`.
-   - **UI**: Modal-based hit/miss and damage entry.
-   - **Automation**: High level of automation for player-owned stats and resources.
-
-### Recommended Reuse Path
-
-The Focused Actor Panel should reuse the **Standalone Monster Actions** backend logic. These endpoints are purpose-built for the DM to adjudicate complex monster capabilities (recharge, saves, area effects) and already handle the transition from "Intent to Execute" to "Adjudicated Result."
-
-### First Executable Slice
-
-**Intent**: "Execute Action for Selected Targets" with manual adjudication.
-
-1. **Trigger**: Add an "Execute" button to the **Target Tray**.
-2. **Phase 1 (Execute)**: Send execution intent to the backend. Use the first selected target for single-target actions or the full list for multi-target actions.
-3. **Phase 2 (Resolve)**: The UI transitions from a **Target Tray** to a **Resolution Tray**.
-4. **Adjudication**: The DM reviews hit/miss or pass/fail for each target (pre-populated by the backend if rolls are automated, otherwise manual).
-5. **Phase 3 (Apply)**: "Apply Results" button finalizes the change (damage/conditions/resource spend).
-
-### Explicitly Deferred
-- **Multiattack sequence tracking**: Execute individual components manually first.
-- **Full automation settings**: Use the backend's current roll-mode defaults.
-- **Resource/Spell slot enforcement**: Allow manual spend first.
-- **Diagonal distance rules**: Stick to the current advisory (Chebyshev) distance.
-
-### Resolution Tray Design
-- **Location**: Replaces the Target Tray inside the Focused Actor Panel.
-- **Appearance**: Distinct "Adjudication Mode" border (e.g., gold or blue).
-- **Target Rows**: One row per target with name, HP status, and outcome dropdown.
-- **Summary**: Action name, DC/Attack bonus, and rolled/manual damage.
-- **Controls**: "Apply Results" (Confirm) and "Cancel" (Rollback intent).
-
-### Required Tests
-- **Backend Verification**: Ensure `/execute` and `/resolve-targets` handle CIDs from the new tray correctly.
-- **UI State Safety**: Confirm that switching actors or actions during resolution rolls back or clears the tray safely.
-- **No-Regression**: Ensure the standalone Monster Actions panel still works perfectly.
-
-### Risks / Blockers
-- **Multi-target Execution**: Existing legacy `/execute` might need minor adjustment if it expects exactly one `target_cid` but the tray has multiple; however, `resolve-targets` is already multi-target capable.
-
-### Next Implementation Task
-**M7 — Monster Actions: Resolution Tray (Trigger execution from Target Tray).**
-
-## Multiattack Assisted Sequence Plan
-
-### Existing Multiattack/Composite Representation
-- **YAML Overlay:** Defined as `action_type: "composite"` with a `mechanics.composite` list of child actions (`action_id`, `name`, `count`).
-- **Summarization:** `MonsterCapabilityService` resolves these children and adds `resolved_composite` to the UI summary, marking each as `executable` if a matching sub-capability exists.
-- **Backend:** `POST /api/dm/monster-capabilities/${cid}/execute` on a parent composite action returns `resolution: "assisted_sequence"` and a `steps` array.
-
-### Recommended Assisted Sequence Model
-- **State:** Captured `assisted_sequence` results are stored in `focusedActorResolutionPacket`.
-- **UI:** A **Sequence Tray** appears in the Focused Actor Panel when a sequence is active.
-- **Execution Flow:**
-    1. DM selects parent "Multiattack" and clicks "Execute / Prepare".
-    2. Backend returns `assisted_sequence` packet; Sequence Tray appears.
-    3. DM clicks a child button (e.g., "Execute Bite 1/1").
-    4. UI switches focus to child `action_id` and enables "Target Preview".
-    5. DM resolves child attack using standard flow.
-    6. Upon resolution/cancel, UI returns to parent Sequence Tray.
-- **Tracking:** Completion of child steps is tracked in local frontend state.
-
-### First Implementation Slice
-- **Sequence Tray UI:** Render `steps` from an `assisted_sequence` packet.
-- **Child Wiring:** Buttons to trigger "Target Preview" for specific child sub-capabilities.
-- **Flow Reset:** Ensure resolving a child returns the DM to the parent sequence tray if one is active.
-- **End Sequence:** Explicit button to clear the sequence state.
-
-### Explicitly Deferred
-- Automated target distribution (DM still picks for each child).
-- Enforced same-target/different-target constraints.
-- Resource/recharge automation for the sequence itself.
-- Persistence of sequence state across refreshes or actor switches.
-
-### Required Tests
-- `executeFocusedActorAction` captures `assisted_sequence`.
-- Sequence Tray renders child steps and "End Sequence" button.
-- Child buttons trigger target preview for the correct child ID.
-- Resolution of child action returns focus to the parent sequence.
-
-### Risks / Blockers
-- **Action ID switching:** Need to ensure the UI knows it's "inside" a sequence so it doesn't just clear everything after the first child resolution.
-- **Cleanup:** Clear sequence state if the DM explicitly picks a different (non-child) action.
-- **Legacy Compatibility:** Ensure existing standalone panel logic remains unaffected.
-
-Next implementation task: **M7 — Implement Focused Actor Sequence Tray and child-action wiring.**
+- **Correction Note:** Planning normalized map-click targeting; must be refactored to panel-first.
 
 ### 2026-05-06 — Monster Actions: Range / AoE Validation Hints (M7 extension)
 
 Agent/model: Gemini CLI (Autonomous Mode)
-Scope: 
+Scope:
 - Implement advisory validation hints for Monster Actions in target preview mode.
 - Add `getFocusedActorTargetAdvisory` helper to compute target status based on Chebyshev distance.
 - Target Tray now shows color-coded validity status for each selected target (Likely in range, Likely out of range, AoE advisory).
@@ -1019,13 +939,14 @@ Files changed:
 Outcome:
 - DM receives immediate spatial and textual feedback on target validity without being constrained by automated rules.
 - Clear distinction between "direct range" actions and "AoE" actions in the validation UI.
+- **Correction Note:** Highlights and hints currently support map-click targeting; must be refactored to panel-first.
 - Mandatory JS syntax check passed.
 - All relevant tests (347) passed.
 
 ### 2026-05-06 — Monster Actions: Selected-Target Highlighting (M7 extension)
 
 Agent/model: Gemini CLI (Autonomous Mode)
-Scope: 
+Scope:
 - Implement visual highlighting for the source actor and selected targets on the tactical map during Monster Actions target preview.
 - Source actor is marked with a dashed orange ring and "SOURCE" label.
 - Selected targets are marked with a solid yellow ring and "TARGET" label.
@@ -1040,13 +961,14 @@ Files changed:
 Outcome:
 - Clear visual feedback on the map confirms which token is the source and which tokens are selected as targets.
 - Map and tray remain in sync as targets are toggled.
+- **Correction Note:** Highlighting currently visualizes map-click selections; must be refactored to panel-first.
 - Mandatory JS syntax check passed.
 - All relevant tests (346) passed.
 
 ### 2026-05-06 — Monster Actions: Target Selection Tray Prototype (M7 extension)
 
 Agent/model: Gemini CLI (Autonomous Mode)
-Scope: 
+Scope:
 - Implement a visual target selection tray prototype for Monster Actions in the Focused Actor Panel.
 - Clicking a token on the tactical map while target preview is active toggles that token as a selected target.
 - Selected targets appear in a visible Target Tray in the Focused Actor Panel with name, role, and HP.
@@ -1063,13 +985,14 @@ Outcome:
 - DM can interactively select multiple targets on the map while in target preview mode.
 - Selected targets are summarized in a tray within the Focused Actor Panel.
 - Visual state is correctly maintained across snapshot updates and actor changes.
+- **Correction Note:** This feature currently relies on map-click target selection; must be refactored to panel-first.
 - Mandatory JS syntax check passed.
 - All relevant tests (345) passed.
 
 ### 2026-05-06 — Monster Actions: Target Mode Prototype (M7 extension)
 
 Agent/model: Gemini CLI (Autonomous Mode)
-Scope: 
+Scope:
 - Implement a visual-only target mode prototype for Monster Actions in the Focused Actor Panel.
 - Add "Target Preview" button to expanded action cards.
 - Implement tactical map overlay for range circles and AoE hints.
@@ -1084,13 +1007,14 @@ Outcome:
 - Tactical map displays a dashed range circle and AoE shape label based on capability mechanics.
 - Focused Actor Panel shows a prominent "Targeting Preview Active" status with a cancel button.
 - Escape key cancels the preview mode.
+- **Correction Note:** Feature currently normalizes map-click targeting; must be refactored to panel-first.
 - Mandatory JS syntax check passed.
 - All relevant tests (343) passed.
 
 ### 2026-05-06 — Tactical-map token-click inspection (M9 partial)
 
 Agent/model: Gemini CLI (Autonomous Mode)
-Scope: 
+Scope:
 - Implement token-click inspection for the Focused Actor Panel.
 - Use global `focusedActorInspectCid` to track inspected actor.
 - Show "Inspecting" vs "Active Turn" badges.
@@ -1195,6 +1119,17 @@ Need to inspect monster HP/hit-dice data availability and decide modes:
 ## Immediate implementation queue
 
 These are safe before major UI replacement.
+
+### First implementation after doc correction
+
+Goal:
+- Fix Monster Library duplicate entries.
+- Fix repeated single-spawn numbering regression.
+- Resize/improve DM Toolbox modal.
+- Demote legacy Monster Turn Controls / Monster Pilot from the main cockpit.
+
+Then:
+- Add panel-based target picker and demote map-click target selection to optional assist.
 
 ### Q1 — Auto-number duplicate monster spawns
 
@@ -1484,7 +1419,7 @@ Single best next pass:
 
 Use this block in future agent prompts when relevant.
 
-Do not treat current Monster Turn Controls or Monster Pilot as the target UI. Do not build new active-combat workflows from dropdown stacks. Use LAN player flow as the local interaction reference. Inspect exact named functions before editing large browser assets. Avoid broad wandering in `assets/web/lan/index.html` or `assets/web/dm/index.html` unless this is explicitly a discovery pass. Preserve backend source-of-truth. Do not introduce DM-only parallel state. If editing `assets/web/dm/index.html` or `assets/web/lan/index.html`, run the browser asset JavaScript syntax check and report the exact command/result. Separate confirmed findings from hypotheses. Use measured runtime evidence for bug/performance fixes.
+Do not treat current Monster Turn Controls or Monster Pilot as the target UI. Do not build new active-combat workflows from dropdown stacks. Use LAN player flow as the local interaction reference. Inspect exact named functions before editing large browser assets. Avoid broad wandering in `assets/web/lan/index.html` or `assets/web/dm/index.html` unless this is explicitly a discovery pass. Preserve backend source-of-truth. Do not introduce DM-only parallel state. If editing `assets/web/dm/index.html` or `assets/web/lan/index.html`, run the browser asset JavaScript syntax check and report the exact command/result. Separate confirmed findings from hypotheses. Use measured runtime evidence for bug/performance fixes. Do not make the tactical map the primary combat-control or target-selection surface. Target selection must be available from the Focused Actor Panel. Map clicks may only be optional assistive shortcuts or inspection.
 
 ## Final acceptance vision
 
@@ -1500,7 +1435,7 @@ A successful turn should feel like:
 6. The DM clicks an action card.
 7. Target mode begins.
 8. Valid targets or AoE preview appear.
-9. The DM selects target(s).
+9. The DM selects target(s) from a panel-based list.
 10. Resolution guides hit/save/damage/effects.
 11. Movement remaining and resources update.
 12. Combat log records important events.
