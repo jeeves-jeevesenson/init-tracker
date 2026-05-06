@@ -91,7 +91,7 @@ Update this section after each pass.
 
 | Area | Current status | Notes |
 |---|---|---|
-| `/dm` bootstrap/render | Verified | Recent parse/stale reset bugs were fixed; HP/Temp HP migrated to Toolbox |
+| `/dm` bootstrap/render | Verified | Recent parse/stale reset bugs were fixed; HP/Temp HP/Remove Combatant migrated to Toolbox |
 | `/` LAN client | Useful local model | LAN has targeting, movement range, attack resolution, spell target selection, and remaining movement concepts |
 | Monster Turn Controls | Legacy/fallback | Do not polish as target UI |
 | Monster Pilot | Legacy/fallback | Do not use as foundation for future current-turn movement |
@@ -616,7 +616,26 @@ Outcome:
 - All JS handlers (HP adjustment, Temp HP set) preserved and functional.
 - Mandatory JS syntax check passed.
 Next recommended pass:
-- M4 — Encounter Builder / Monster Library (Remove Combatant into DM Toolbox or Encounter Builder).
+- M4 — Encounter Builder / Monster Library (or Overrides tab migration for Set Initiative).
+
+### 2026-05-06 — Move Remove Combatant into Toolbox Encounter tab (M3/M4 partial)
+
+Agent/model: Gemini CLI (Autonomous Mode)
+Scope: 
+- Migrate Remove Combatant controls into DM Toolbox -> Encounter tab.
+- Remove redundant Remove Combatant card from main cockpit.
+- Preserve all element IDs and JS behavior.
+Files changed:
+- assets/web/dm/index.html
+- tests/test_dm_toolbox_ui.py
+- docs/dm_control_surface_living_agent_plan.md
+Outcome:
+- Remove Combatant controls moved to Toolbox.
+- Cockpit clutter reduced.
+- All JS handlers (remove combatant) preserved and functional.
+- Mandatory JS syntax check passed.
+Next recommended pass:
+- M4/M5 — Encounter Builder / Monster Library (or Overrides tab migration for Set Initiative).
 
 ## Decision log
 

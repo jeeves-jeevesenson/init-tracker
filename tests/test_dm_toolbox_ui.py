@@ -60,6 +60,31 @@ class TestDmToolboxUi(unittest.TestCase):
             roster_content = roster_match.group(1)
             self.assertNotIn('Add Player Profiles', roster_content)
 
+    def test_encounter_controls_in_toolbox(self):
+        html = _DM_HTML_PATH.read_text(encoding="utf-8")
+        # Check that Remove Combatant controls are moved to panel-encounter
+        self.assertIn('id="panel-encounter"', html)
+        
+        import re
+        encounter_match = re.search(r'id="panel-encounter".*?>(.*?)<!-- Overrides Tab -->', html, re.DOTALL)
+        self.assertTrue(encounter_match, "panel-encounter not found in HTML")
+        encounter_content = encounter_match.group(1)
+        
+        self.assertIn('Remove Combatant', encounter_content)
+        self.assertIn('id="removeCidSelect"', encounter_content)
+        self.assertIn('id="removeCombatantBtn"', encounter_content)
+        self.assertIn('id="removeCombatantResult"', encounter_content)
+        
+        # Verify placeholder text (updated)
+        self.assertIn('Monster Library, Add Monsters, and Custom Combatants will live here.', encounter_content)
+        
+        # Verify old block is gone from main cockpit
+        # It was inside combat-setup section
+        combat_setup_match = re.search(r'data-setup-group="combat-setup".*?>(.*?)<\/section>', html, re.DOTALL)
+        if combat_setup_match:
+            combat_setup_content = combat_setup_match.group(1)
+            self.assertNotIn('Remove Combatant', combat_setup_content)
+
     def test_overrides_controls_in_toolbox(self):
         html = _DM_HTML_PATH.read_text(encoding="utf-8")
         # Check that HP/Temp HP controls are moved to panel-overrides

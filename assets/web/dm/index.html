@@ -822,9 +822,20 @@
       <div class="toolbox-tab-panel" id="panel-encounter" role="tabpanel" aria-labelledby="tab-encounter">
         <div class="toolbox-section">
           <h3>Encounter Authoring</h3>
-          <div class="toolbox-placeholder">
-            <div class="icon">👾</div>
-            <p>Monster Library, Add Monsters, and Roster management will live here.<br>
+
+          <!-- Encounter setup: remove combatant -->
+          <div class="mut-card">
+            <h3>Remove Combatant</h3>
+            <div class="form-group">
+              <label>Combatant</label>
+              <select id="removeCidSelect"><option value="">— select —</option></select>
+            </div>
+            <button class="btn-action remove" id="removeCombatantBtn">Remove from Encounter</button>
+            <div class="mut-result" id="removeCombatantResult"></div>
+          </div>
+
+          <div class="toolbox-placeholder" style="margin-top:12px">
+            <p>Monster Library, Add Monsters, and Custom Combatants will live here.<br>
                <em>Preserved in 'Controls' panel for now.</em></p>
           </div>
         </div>
@@ -1238,17 +1249,6 @@
           <button class="btn-sm" id="rollInitBtn" style="flex:1">🎲 Roll</button>
         </div>
         <div class="mut-result" id="initResult"></div>
-      </div>
-
-      <!-- Encounter setup: remove combatant -->
-      <div class="mut-card" data-dm-card="setup">
-        <h3>Remove Combatant</h3>
-        <div class="form-group">
-          <label>Combatant</label>
-          <select id="removeCidSelect"><option value="">— select —</option></select>
-        </div>
-        <button class="btn-action remove" id="removeCombatantBtn">Remove from Encounter</button>
-        <div class="mut-result" id="removeCombatantResult"></div>
       </div>
     </section>
 
