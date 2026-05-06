@@ -882,6 +882,35 @@
             </div>
           </div>
 
+          <!-- Encounter setup: add monster specs -->
+          <div class="mut-card" id="addMonsterSpecsCard" style="margin-top:16px">
+            <h3>Add Monster Specs</h3>
+            <div class="form-group">
+              <label>Monster</label>
+              <select id="monsterSlugSelect"><option value="">— select monster —</option></select>
+            </div>
+            <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px">
+              <div class="form-group">
+                <label>Count</label>
+                <input type="number" id="monsterCount" value="1" min="1" />
+              </div>
+              <div class="form-group">
+                <label>Initiative (0=auto)</label>
+                <input type="number" id="monsterInit" value="0" />
+              </div>
+              <div class="form-group">
+                <label>Name prefix (optional)</label>
+                <input type="text" id="monsterNamePrefix" placeholder="e.g. Minion" />
+              </div>
+              <div class="form-group" style="justify-content:flex-end;flex-direction:row;align-items:center;gap:8px;padding-top:18px">
+                <label style="font-size:11px;color:var(--muted)">Ally</label>
+                <input type="checkbox" id="monsterAlly" style="width:auto" />
+              </div>
+            </div>
+            <button class="btn-action" id="addMonsterBtn">+ Add Monster Group</button>
+            <div class="mut-result" id="addMonsterResult"></div>
+          </div>
+
           <!-- Encounter setup: remove combatant -->
           <div class="mut-card" style="margin-top:20px">
             <h3>Remove Combatant</h3>
@@ -894,8 +923,8 @@
           </div>
 
           <div class="toolbox-placeholder" style="margin-top:12px">
-            <p>Advanced encounter tools and custom combatants will live here.<br>
-               <em>Preserved in 'Controls' panel for now.</em></p>
+            <p>Mixed encounter groups, HP randomization, and advanced staging will live here.<br>
+               <em>Custom combatants preserved in 'Controls' panel for now.</em></p>
           </div>
         </div>
       </div>
@@ -1239,35 +1268,6 @@
 
     <section class="setup-group" data-dm-card="setup" data-setup-group="roster" aria-labelledby="setupRosterGroupTitle">
       <div class="setup-group-label" id="setupRosterGroupTitle">Roster</div>
-
-      <!-- Encounter setup: add monster specs -->
-      <div class="mut-card" data-dm-card="setup">
-        <h3>Add Monster Specs</h3>
-        <div class="form-group">
-          <label>Monster</label>
-          <select id="monsterSlugSelect"><option value="">— select monster —</option></select>
-        </div>
-        <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px">
-          <div class="form-group">
-            <label>Count</label>
-            <input type="number" id="monsterCount" value="1" min="1" />
-          </div>
-          <div class="form-group">
-            <label>Initiative</label>
-            <input type="number" id="monsterInit" value="0" />
-          </div>
-          <div class="form-group">
-            <label>Name prefix (optional)</label>
-            <input type="text" id="monsterNamePrefix" placeholder="defaults to monster name" />
-          </div>
-          <div class="form-group" style="justify-content:flex-end;flex-direction:row;align-items:center;gap:8px;padding-top:18px">
-            <label style="font-size:11px;color:var(--muted)">Ally</label>
-            <input type="checkbox" id="monsterAlly" style="width:auto" />
-          </div>
-        </div>
-        <button class="btn-action" id="addMonsterBtn">+ Add Monster Group</button>
-        <div class="mut-result" id="addMonsterResult"></div>
-      </div>
 
       <!-- Encounter setup: add combatant -->
       <div class="mut-card" data-dm-card="setup">

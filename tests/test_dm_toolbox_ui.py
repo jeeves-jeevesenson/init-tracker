@@ -76,7 +76,7 @@ class TestDmToolboxUi(unittest.TestCase):
         self.assertIn('id="removeCombatantResult"', encounter_content)
         
         # Verify placeholder text (updated)
-        self.assertIn('Advanced encounter tools and custom combatants will live here.', encounter_content)
+        self.assertIn('Mixed encounter groups, HP randomization, and advanced staging will live here.', encounter_content)
         
         # Verify Monster Library shell
         self.assertIn('class="monster-library-shell"', encounter_content)
@@ -84,13 +84,23 @@ class TestDmToolboxUi(unittest.TestCase):
         self.assertIn('id="monsterLibraryResults"', encounter_content)
         self.assertIn('Search monsters', encounter_content)
         self.assertIn('Monster Library', encounter_content)
+        
+        # Verify Add Monster Specs is in panel-encounter
+        self.assertIn('Add Monster Specs', encounter_content)
+        self.assertIn('id="monsterSlugSelect"', encounter_content)
+        self.assertIn('id="monsterCount"', encounter_content)
+        self.assertIn('id="monsterInit"', encounter_content)
+        self.assertIn('id="monsterNamePrefix"', encounter_content)
+        self.assertIn('id="monsterAlly"', encounter_content)
+        self.assertIn('id="addMonsterBtn"', encounter_content)
+        self.assertIn('id="addMonsterResult"', encounter_content)
 
         # Verify old block is gone from main cockpit
-        # It was inside combat-setup section
-        combat_setup_match = re.search(r'data-setup-group="combat-setup".*?>(.*?)<\/section>', html, re.DOTALL)
-        if combat_setup_match:
-            combat_setup_content = combat_setup_match.group(1)
-            self.assertNotIn('Remove Combatant', combat_setup_content)
+        # It was inside roster section
+        roster_match = re.search(r'data-setup-group="roster".*?>(.*?)<\/section>', html, re.DOTALL)
+        if roster_match:
+            roster_content = roster_match.group(1)
+            self.assertNotIn('Add Monster Specs', roster_content)
 
     def test_overrides_controls_in_toolbox(self):
         html = _DM_HTML_PATH.read_text(encoding="utf-8")
