@@ -1927,6 +1927,7 @@ let focusedActorSelectedActionId = null;
 let focusedActorExpandedActionId = null;
 let focusedActorTargetModeEnabled = false;
 let focusedActorTargetActionId = null;
+let focusedActorSelectedTargetCids = [];
 let tacticalPresetsByCategory = { hazard: [], feature: [], structure: [] };
 let tacticalBackgroundAssets = [];
 let tacticalShipBlueprints = [];
@@ -4298,6 +4299,12 @@ function handleTacticalCanvasClick(evt) {
     const pos = entry && entry.pos && typeof entry.pos === 'object' ? entry.pos : {};
     return Number(pos.col) === Number(cell.col) && Number(pos.row) === Number(cell.row);
   });
+
+  if (unit && focusedActorTargetModeEnabled) {
+    toggleFocusedActorSelectedTarget(unit.cid);
+    return;
+  }
+
   if (unit) {
     document.getElementById('mapCidSelect').value = String(unit.cid);
     syncTacticalFieldsFromSelection({ keepTargetCell: true });
@@ -4501,8 +4508,14 @@ function renderFocusedActorPanel(snap) {
     lastFocusedActorCid = null;
     focusedActorSelectedActionId = null;
     focusedActorExpandedActionId = null;
+    focusedActorSelectedTargetCids = [];
     return;
   }
+
+  // Cleanup stale targets
+  focusedActorSelectedTargetCids = focusedActorSelectedTargetCids.filter(tid => 
+    snap.combatants.some(c => c.cid === tid)
+  );
 
   // Reset selection if actor changed
   if (lastFocusedActorCid !== actor.cid) {
@@ -4511,6 +4524,7 @@ function renderFocusedActorPanel(snap) {
     focusedActorExpandedActionId = null;
     focusedActorTargetModeEnabled = false;
     focusedActorTargetActionId = null;
+    focusedActorSelectedTargetCids = [];
   }
 
   const isActiveTurn = snap.in_combat && snap.active_cid && Number(actor.cid) === Number(snap.active_cid);
@@ -4565,6 +4579,34 @@ function renderFocusedActorPanel(snap) {
           <span style="font-size:11px; font-weight:bold; color:var(--accent); text-transform:uppercase">Targeting Preview Active</span>
           <button class="btn-sm remove" onclick="toggleFocusedActorTargetPreview(null)">Cancel</button>
         </div>
+      </div>
+
+      <div class="actor-placeholder-section" style="border-top: 1px solid var(--border); margin-top: 0">
+        <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:8px">
+          <h4>Target Tray</h4>
+          ${focusedActorSelectedTargetCids.length > 0 ? `<button class="btn-xs" onclick="clearFocusedActorSelectedTargets()">Clear targets</button>` : ''}
+        </div>
+        <div class="target-tray-list">
+          ${focusedActorSelectedTargetCids.length === 0 ? 
+            '<div class="actor-placeholder-content" style="font-style:italic">Click tokens on the map to select targets.</div>' :
+            focusedActorSelectedTargetCids.map(tid => {
+              const target = snap.combatants.find(c => c.cid === tid);
+              if (!target) return '';
+              return `
+                <div class="target-tray-item" style="display:flex; align-items:center; gap:8px; background:rgba(255,255,255,0.05); padding:4px 8px; border-radius:4px; margin-bottom:4px">
+                  <div style="flex:1; min-width:0">
+                    <div style="font-weight:bold; white-space:nowrap; overflow:hidden; text-overflow:ellipsis">${escHtml(target.name)}</div>
+                    <div style="font-size:10px; color:var(--muted)">${escHtml(target.side || 'Neutral')} · HP ${target.hp}/${target.max_hp}</div>
+                  </div>
+                  <button class="btn-sm remove" onclick="toggleFocusedActorSelectedTarget(${target.cid})" style="padding:2px 6px">×</button>
+                </div>
+              `;
+            }).join('')
+          }
+        </div>
+        ${focusedActorSelectedTargetCids.length > 0 ? 
+          '<div style="margin-top:8px; font-size:11px; color:var(--muted); text-align:center; padding:4px; border:1px dashed var(--border); border-radius:4px">Resolution coming later.</div>' : ''
+        }
       </div>
       ` : ''}
 
@@ -7022,14 +7064,17 @@ function toggleFocusedActorTargetPreview(capId, evt) {
   if (!capId) {
     focusedActorTargetModeEnabled = false;
     focusedActorTargetActionId = null;
+    focusedActorSelectedTargetCids = [];
   } else if (focusedActorTargetActionId === capId && focusedActorTargetModeEnabled) {
     focusedActorTargetModeEnabled = false;
     focusedActorTargetActionId = null;
+    focusedActorSelectedTargetCids = [];
   } else {
     focusedActorTargetModeEnabled = true;
     focusedActorTargetActionId = capId;
     focusedActorSelectedActionId = capId;
     focusedActorExpandedActionId = capId;
+    focusedActorSelectedTargetCids = [];
   }
 
   // Update UI
@@ -7037,6 +7082,24 @@ function toggleFocusedActorTargetPreview(capId, evt) {
   if (actor) {
     renderFocusedActorPanel(currentSnapshot);
   }
+  renderTacticalMap(currentTacticalMap());
+}
+
+function toggleFocusedActorSelectedTarget(cid) {
+  if (!cid) return;
+  const idx = focusedActorSelectedTargetCids.indexOf(cid);
+  if (idx === -1) {
+    focusedActorSelectedTargetCids.push(cid);
+  } else {
+    focusedActorSelectedTargetCids.splice(idx, 1);
+  }
+  renderFocusedActorPanel(currentSnapshot);
+  renderTacticalMap(currentTacticalMap());
+}
+
+function clearFocusedActorSelectedTargets() {
+  focusedActorSelectedTargetCids = [];
+  renderFocusedActorPanel(currentSnapshot);
   renderTacticalMap(currentTacticalMap());
 }
 

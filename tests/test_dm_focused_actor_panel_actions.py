@@ -28,10 +28,13 @@ class TestDmFocusedActorPanelActions(unittest.TestCase):
         self.assertIn('let focusedActorExpandedActionId = null;', html)
         self.assertIn('let focusedActorTargetModeEnabled = false;', html)
         self.assertIn('let focusedActorTargetActionId = null;', html)
+        self.assertIn('let focusedActorSelectedTargetCids = [];', html)
         self.assertIn('function updateMonsterCapabilityUis', html)
         self.assertIn('function renderCompactMonsterActions', html)
         self.assertIn('function selectFocusedActorAction', html)
         self.assertIn('function toggleFocusedActorTargetPreview', html)
+        self.assertIn('function toggleFocusedActorSelectedTarget', html)
+        self.assertIn('function clearFocusedActorSelectedTargets', html)
         self.assertIn('fetchMonsterCapabilities(cid)', html)
 
     def test_selection_expansion_rendering(self):
@@ -44,6 +47,15 @@ class TestDmFocusedActorPanelActions(unittest.TestCase):
         self.assertIn('Target Preview', html)
         self.assertIn('Cancel Preview', html)
 
+    def test_target_tray_rendering(self):
+        html = _DM_HTML_PATH.read_text(encoding="utf-8")
+        self.assertIn('<h4>Target Tray</h4>', html)
+        self.assertIn('Click tokens on the map to select targets.', html)
+        self.assertIn('clearFocusedActorSelectedTargets()', html)
+        self.assertIn('class="target-tray-list"', html)
+        self.assertIn('class="target-tray-item"', html)
+        self.assertIn('Resolution coming later.', html)
+
     def test_target_preview_rendering_logic(self):
         html = _DM_HTML_PATH.read_text(encoding="utf-8")
         self.assertIn('function renderFocusedActorTargetPreviewOverlay', html)
@@ -51,6 +63,11 @@ class TestDmFocusedActorPanelActions(unittest.TestCase):
         self.assertIn('Targeting Preview Active', html)
         self.assertIn('focusedActorTargetModeEnabled ?', html)
         self.assertIn('evt.key === \'Escape\' && focusedActorTargetModeEnabled', html)
+
+    def test_tactical_click_targeting(self):
+        html = _DM_HTML_PATH.read_text(encoding="utf-8")
+        self.assertIn('if (unit && focusedActorTargetModeEnabled) {', html)
+        self.assertIn('toggleFocusedActorSelectedTarget(unit.cid);', html)
 
     def test_pc_behavior(self):
         html = _DM_HTML_PATH.read_text(encoding="utf-8")

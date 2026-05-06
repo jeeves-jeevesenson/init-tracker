@@ -460,7 +460,7 @@ Update the status column after each pass.
 | M4 | Encounter Builder / Monster Library | In progress | Complete Encounter Builder (mixed groups/staging) |
 | M5 | Initiative flow | In progress | Reroll all enemy/NPC initiative in Toolbox |
 | M6 | Focused actor panel prototype | Completed | Static/prototype actor panel using current actor |
-| M7 | Monster Actions / action cards | In progress | Action target mode prototype (visualizing range/AoE) |
+| M7 | Monster Actions / action cards | In progress | Action target selection tray prototype |
 | M8 | Current-turn movement model | Not started | Reuse LAN movement path for DM current actor |
 | M9 | Tactical map inspection | Not started | Token click inspection / empty cell info |
 | M10 | Automation settings | Not started | Roll-path and persistence inspection |
@@ -780,7 +780,30 @@ Outcome:
 - Mandatory JS syntax check passed.
 - All relevant tests (339) passed, including new focused tests.
 Next recommended pass:
-- M7 — Monster Actions: Action execution from Focused Actor Panel.
+- M7 — Monster Actions: Target validation / range highlighting.
+
+### 2026-05-06 — Monster Actions: Target Selection Tray Prototype (M7 extension)
+
+Agent/model: Gemini CLI (Autonomous Mode)
+Scope: 
+- Implement a visual target selection tray prototype for Monster Actions in the Focused Actor Panel.
+- Clicking a token on the tactical map while target preview is active toggles that token as a selected target.
+- Selected targets appear in a visible Target Tray in the Focused Actor Panel with name, role, and HP.
+- Toggling a target or clicking a "remove" button in the tray removes the target.
+- "Clear targets" button added to the tray.
+- Target list is cleared when target preview is closed, focused actor changes, or action changes.
+- Stale targets (missing from snapshot) are automatically cleaned up.
+- Normal token inspection is preserved when target preview is inactive.
+Files changed:
+- assets/web/dm/index.html
+- tests/test_dm_focused_actor_panel_actions.py
+- docs/dm_control_surface_living_agent_plan.md
+Outcome:
+- DM can interactively select multiple targets on the map while in target preview mode.
+- Selected targets are summarized in a tray within the Focused Actor Panel.
+- Visual state is correctly maintained across snapshot updates and actor changes.
+- Mandatory JS syntax check passed.
+- All relevant tests (345) passed.
 
 ### 2026-05-06 — Monster Actions: Target Mode Prototype (M7 extension)
 
