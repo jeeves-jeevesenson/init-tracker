@@ -454,15 +454,16 @@ Update the status column after each pass.
 | M0 | Stabilize `/dm` and `/` before redesign | In progress / verify | Browser smoke after current fixes |
 | M1 | Low-risk correctness cleanup | Completed | Q5 - DM Toolbox shell |
 | M2 | DM Toolbox shell | Completed | Modal shell + tabs |
-| M3 | Encounter Builder / Monster Library | Not started | Search/browse shell after spawn cleanup |
-| M4 | Initiative flow | Not started | Auto-roll enemy/NPC initiative when added |
-| M5 | Focused actor panel prototype | Not started | Static/prototype actor panel using current actor |
-| M6 | Monster Actions / action cards | Not started | Rename and no-match message first |
-| M7 | Current-turn movement model | Not started | Reuse LAN movement path for DM current actor |
-| M8 | Tactical map inspection | Not started | Token click inspection / empty cell info |
-| M9 | Automation settings | Not started | Roll-path and persistence inspection |
-| M10 | Battle log refinement | Not started | Gameplay-vs-debug log split review |
-| M11 | Map tools / map editor separation | Deferred | Move advanced map controls later |
+| M3 | Move Session tools to Toolbox | Completed | Migrated New/Save/Load/Quick |
+| M4 | Encounter Builder / Monster Library | Not started | Search/browse shell after spawn cleanup |
+| M5 | Initiative flow | Not started | Auto-roll enemy/NPC initiative when added |
+| M6 | Focused actor panel prototype | Not started | Static/prototype actor panel using current actor |
+| M7 | Monster Actions / action cards | Not started | Rename and no-match message first |
+| M8 | Current-turn movement model | Not started | Reuse LAN movement path for DM current actor |
+| M9 | Tactical map inspection | Not started | Token click inspection / empty cell info |
+| M10 | Automation settings | Not started | Roll-path and persistence inspection |
+| M11 | Battle log refinement | Not started | Gameplay-vs-debug log split review |
+| M12 | Map tools / map editor separation | Deferred | Move advanced map controls later |
 
 ## Work log
 
@@ -560,8 +561,43 @@ Outcome:
 - Tabbed modal (Session, Encounter, Overrides, Map Tools, Debug) implemented with ARIA roles.
 - Close on background click and Escape key supported.
 - Mandatory JS syntax check passed.
+
+### 2026-05-06 — Move Session tools to Toolbox (M3)
+
+Agent/model: Gemini CLI (Autonomous Mode)
+Scope: 
+- Migrate New Blank Session, Save/Load Session, and Quick Save/Load into DM Toolbox -> Session tab.
+- Remove redundant session persistence block from main cockpit.
+- Update UI tests to verify placement and accessibility.
+Files changed:
+- assets/web/dm/index.html
+- tests/test_dm_toolbox_ui.py
+- docs/dm_control_surface_living_agent_plan.md
+Outcome:
+- Session controls moved to Toolbox.
+- All JS handlers (Save, Load, Quick, New) preserved and functional.
+- Old main-cockpit session card removed.
+- Mandatory JS syntax check passed.
+
+### 2026-05-06 — Move Add Player Profiles to Toolbox (M3 extension)
+
+Agent/model: Gemini CLI (Autonomous Mode)
+Scope: 
+- Migrate "Add Player Profiles" controls into DM Toolbox -> Session tab.
+- Group with Session Persistence under "Roster & Players" section.
+- Remove redundant roster setup block from main cockpit.
+- Update UI tests to verify placement and removal.
+Files changed:
+- assets/web/dm/index.html
+- tests/test_dm_toolbox_ui.py
+- docs/dm_control_surface_living_agent_plan.md
+Outcome:
+- Player profile controls moved to Toolbox.
+- JS handlers for selecting/adding players preserved and functional.
+- Old main-cockpit "Add Player Profiles" card removed.
+- Mandatory JS syntax check passed.
 Next recommended pass:
-- M3 — Encounter Builder / Monster Library (or moving Session/Roster tools into Toolbox).
+- M4 — Encounter Builder / Monster Library (or Overrides tab migration for HP/temp HP).
 
 ## Decision log
 

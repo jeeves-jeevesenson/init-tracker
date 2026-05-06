@@ -779,11 +779,41 @@
       <!-- Session Tab -->
       <div class="toolbox-tab-panel is-active" id="panel-session" role="tabpanel" aria-labelledby="tab-session">
         <div class="toolbox-section">
-          <h3>Session Management</h3>
-          <div class="toolbox-placeholder">
-            <div class="icon">💾</div>
-            <p>New Blank Session, Save/Load Session, and Player Profiles will live here.<br>
-               <em>Preserved in 'Controls' panel for now.</em></p>
+          <h3>Session Persistence</h3>
+          <div style="display:flex;gap:6px;margin-bottom:8px">
+            <button class="btn-action heal" id="quickSaveBtn" style="flex:1">⚡ Quick Save</button>
+            <button class="btn-action" id="quickLoadBtn" style="flex:1">⟲ Quick Load</button>
+          </div>
+          <button class="btn-action remove" id="newBlankSessionBtn" style="margin-bottom:10px">🧹 New Blank Session</button>
+          <div class="form-group">
+            <label>Save filename (optional — defaults to timestamped)</label>
+            <input type="text" id="sessionSaveName" placeholder="e.g. boss_fight.json" />
+          </div>
+          <button class="btn-action" id="sessionSaveBtn">💾 Save Session</button>
+          <div class="form-group" style="margin-top:10px">
+            <label>Load from existing snapshot</label>
+            <select id="sessionLoadSelect"><option value="">— select a snapshot —</option></select>
+          </div>
+          <div style="display:flex;gap:6px">
+            <button class="btn-action" id="sessionLoadBtn" style="flex:1">📂 Load Selected</button>
+            <button class="btn-sm" id="sessionRefreshBtn" style="flex:0 0 auto">↺ Refresh</button>
+          </div>
+          <div class="mut-result" id="sessionResult"></div>
+        </div>
+
+        <div class="toolbox-section">
+          <h3>Roster & Players</h3>
+          <div class="mut-card" data-dm-card="setup">
+            <h3>Add Player Profiles</h3>
+            <div style="display:flex;gap:6px;margin-bottom:8px">
+              <button class="btn-sm" id="selectAllPlayersBtn" style="flex:1">Select Available</button>
+              <button class="btn-sm" id="clearPlayerSelectionBtn" style="flex:1">Clear</button>
+            </div>
+            <div id="encounterPlayerList" class="choice-list">
+              <div class="empty-state loading-pulse" style="padding:12px 8px">Loading player roster…</div>
+            </div>
+            <button class="btn-action" id="addPlayersBtn" style="margin-top:8px">+ Add Selected Players</button>
+            <div class="mut-result" id="addPlayersResult"></div>
           </div>
         </div>
       </div>
@@ -1126,20 +1156,6 @@
     <section class="setup-group" data-dm-card="setup" data-setup-group="roster" aria-labelledby="setupRosterGroupTitle">
       <div class="setup-group-label" id="setupRosterGroupTitle">Roster</div>
 
-      <!-- Encounter setup: add player profiles -->
-      <div class="mut-card" data-dm-card="setup">
-        <h3>Add Player Profiles</h3>
-        <div style="display:flex;gap:6px;margin-bottom:8px">
-          <button class="btn-sm" id="selectAllPlayersBtn" style="flex:1">Select Available</button>
-          <button class="btn-sm" id="clearPlayerSelectionBtn" style="flex:1">Clear</button>
-        </div>
-        <div id="encounterPlayerList" class="choice-list">
-          <div class="empty-state loading-pulse" style="padding:12px 8px">Loading player roster…</div>
-        </div>
-        <button class="btn-action" id="addPlayersBtn" style="margin-top:8px">+ Add Selected Players</button>
-        <div class="mut-result" id="addPlayersResult"></div>
-      </div>
-
       <!-- Encounter setup: add monster specs -->
       <div class="mut-card" data-dm-card="setup">
         <h3>Add Monster Specs</h3>
@@ -1264,34 +1280,6 @@
           <button class="btn-action" id="applyMapSettingsBtn" style="flex:1">Apply Grid Settings</button>
         </div>
         <div class="mut-result" id="mapSetupResult"></div>
-      </div>
-    </section>
-
-    <section class="setup-group" data-dm-card="setup" data-setup-group="session" aria-labelledby="setupSessionGroupTitle">
-      <div class="setup-group-label" id="setupSessionGroupTitle">Session</div>
-
-      <!-- Session persistence -->
-      <div class="mut-card" data-dm-card="setup">
-        <h3>Session Persistence</h3>
-        <div style="display:flex;gap:6px;margin-bottom:8px">
-          <button class="btn-action heal" id="quickSaveBtn" style="flex:1">⚡ Quick Save</button>
-          <button class="btn-action" id="quickLoadBtn" style="flex:1">⟲ Quick Load</button>
-        </div>
-        <button class="btn-action remove" id="newBlankSessionBtn" style="margin-bottom:10px">🧹 New Blank Session</button>
-        <div class="form-group">
-          <label>Save filename (optional — defaults to timestamped)</label>
-          <input type="text" id="sessionSaveName" placeholder="e.g. boss_fight.json" />
-        </div>
-        <button class="btn-action" id="sessionSaveBtn">💾 Save Session</button>
-        <div class="form-group" style="margin-top:10px">
-          <label>Load from existing snapshot</label>
-          <select id="sessionLoadSelect"><option value="">— select a snapshot —</option></select>
-        </div>
-        <div style="display:flex;gap:6px">
-          <button class="btn-action" id="sessionLoadBtn" style="flex:1">📂 Load Selected</button>
-          <button class="btn-sm" id="sessionRefreshBtn" style="flex:0 0 auto">↺ Refresh</button>
-        </div>
-        <div class="mut-result" id="sessionResult"></div>
       </div>
     </section>
 
