@@ -970,11 +970,11 @@
     </section>
 
     <section class="live-group" data-live-group="monster-capability" aria-labelledby="liveMonsterCapGroupTitle">
-      <div class="live-group-label" id="liveMonsterCapGroupTitle">Monster Capabilities (Overlay)</div>
+      <div class="live-group-label" id="liveMonsterCapGroupTitle">Monster Actions</div>
       <div class="mut-card" id="monsterCapCard">
-        <h3>Normalized Capabilities</h3>
+        <h3>Monster Actions</h3>
         <div class="tactical-status" style="margin-bottom:10px">
-          Actions and traits from normalized YAML overlays.
+          Structured actions and traits from YAML overlays.
         </div>
         <div class="form-group">
           <label>Primary target / fallback target</label>
@@ -6331,7 +6331,7 @@ async function fetchMonsterCapabilities(cid) {
     if (r.ok && data.ok) {
       renderMonsterCapabilities(data.summary);
     } else {
-      content.innerHTML = `<div class="empty-state">No capability overlay matched for this monster.</div>`;
+      content.innerHTML = `<div class="empty-state">No structured action cards for this monster yet. Use the stat block/manual controls.</div>`;
     }
   } catch (e) {
     content.innerHTML = `<div class="empty-state error">Failed to fetch capabilities.</div>`;
@@ -6341,7 +6341,7 @@ async function fetchMonsterCapabilities(cid) {
 function renderMonsterCapabilities(summary) {
   const content = document.getElementById('monsterCapContent');
   if (!summary || !summary.matched) {
-    content.innerHTML = `<div class="empty-state">No normalized capabilities matched for ${escHtml(summary.name || 'this monster')}.</div>`;
+    content.innerHTML = `<div class="empty-state">No structured action cards for ${escHtml(summary.name || 'this monster')} yet. Use the stat block/manual controls.</div>`;
     return;
   }
 

@@ -95,7 +95,7 @@ Update this section after each pass.
 | `/` LAN client | Useful local model | LAN has targeting, movement range, attack resolution, spell target selection, and remaining movement concepts |
 | Monster Turn Controls | Legacy/fallback | Do not polish as target UI |
 | Monster Pilot | Legacy/fallback | Do not use as foundation for future current-turn movement |
-| Monster capability backend | Useful | Frontend label/presentation should become Monster Actions |
+| Monster capability backend | Useful | Labels renamed to 'Monster Actions' in DM UI |
 | DM Toolbox | Planned | Tabbed modal for session, encounter, overrides, map tools, debug |
 | Encounter Builder | Planned | Search/browse monster library, spawn count, auto-numbering, mixed groups later |
 | Duplicate monster names | Completed | Backend auto-numbering implemented via CombatantNameService |
@@ -452,7 +452,7 @@ Update the status column after each pass.
 | ID | Milestone | Status | Next concrete pass |
 |---|---|---|---|
 | M0 | Stabilize `/dm` and `/` before redesign | In progress / verify | Browser smoke after current fixes |
-| M1 | Low-risk correctness cleanup | In progress | Q3 - Rename Normalized Capabilities to Monster Actions |
+| M1 | Low-risk correctness cleanup | Completed | Q5 - DM Toolbox shell |
 | M2 | DM Toolbox shell | Not started | Modal shell + tabs |
 | M3 | Encounter Builder / Monster Library | Not started | Search/browse shell after spawn cleanup |
 | M4 | Initiative flow | Not started | Auto-roll enemy/NPC initiative when added |
@@ -499,6 +499,23 @@ Outcome:
 
 Next recommended pass:
 - Q3 — Rename Normalized Capabilities to Monster Actions.
+
+### 2026-05-06 — Rename Normalized Capabilities to Monster Actions (Q3)
+
+Agent/model: Gemini CLI (Autonomous Mode)
+Scope: 
+- Rename user-facing labels and descriptions in the DM UI.
+- Improve no-match messaging for monsters without structured action cards.
+Files changed:
+- assets/web/dm/index.html
+- dnd_initative_tracker.py
+- docs/dm_control_surface_living_agent_plan.md
+Outcome:
+- DM UI now uses "Monster Actions" instead of "Normalized Capabilities".
+- No-match message is more helpful and less jargon-heavy.
+- Mandatory JS syntax check passed.
+Next recommended pass:
+- Q5 — DM Toolbox shell.
 
 ### 2026-05-06 — Auto-number duplicate monster spawns (Q1)
 

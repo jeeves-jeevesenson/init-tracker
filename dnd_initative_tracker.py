@@ -113,6 +113,7 @@ from player_command_contracts import (
     finalize_attack_result_payload,
     finalize_spell_target_result_payload,
 )
+from combatant_name_service import CombatantNameService
 from player_command_service import PlayerCommandService
 
 
@@ -44301,7 +44302,7 @@ class InitiativeTracker(base.InitiativeTracker):
                 damage_result = self._apply_map_attack_manual_damage(
                     int(normalized_actor_cid),
                     int(target_cid),
-                    str(cap.get("name") or "Monster Capability"),
+                    str(cap.get("name") or "Monster Action"),
                     list(damage_entries),
                 )
                 target_result["damage_result"] = damage_result
