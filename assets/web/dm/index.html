@@ -687,6 +687,62 @@
     .cap-actions { margin-top: 8px; display: flex; gap: 6px; }
     .cap-actions-manual { margin-top: 8px; font-size: 11px; font-style: italic; color: var(--muted); }
 
+    /* ── DM Toolbox Modal ───────────────────────────────────────── */
+    .toolbox-overlay {
+      position: fixed; inset: 0; background: rgba(0,0,0,.75);
+      display: flex; align-items: center; justify-content: center; z-index: 200;
+      backdrop-filter: blur(3px);
+    }
+    .toolbox-overlay.hidden { display: none; }
+    .toolbox-modal {
+      background: var(--panel); border: 1px solid var(--border); border-radius: 12px;
+      width: min(900px, 94vw); height: min(720px, 88vh);
+      display: flex; flex-direction: column; overflow: hidden;
+      box-shadow: 0 20px 50px rgba(0,0,0,.5);
+    }
+    .toolbox-header {
+      padding: 16px 20px; border-bottom: 1px solid var(--border);
+      display: flex; align-items: center; justify-content: space-between;
+      background: rgba(255,255,255,.02);
+    }
+    .toolbox-header h2 { font-size: 16px; color: var(--gold); letter-spacing: .04em; }
+    .toolbox-close-btn {
+      background: none; border: none; color: var(--muted); font-size: 24px;
+      cursor: pointer; padding: 4px; line-height: 1;
+    }
+    .toolbox-close-btn:hover { color: var(--danger); }
+    
+    .toolbox-tabs {
+      display: flex; gap: 2px; padding: 0 10px; background: rgba(0,0,0,.2);
+      border-bottom: 1px solid var(--border);
+    }
+    .toolbox-tab-btn {
+      background: none; border: none; border-bottom: 2px solid transparent;
+      color: var(--muted); padding: 12px 16px; font-size: 13px; font-weight: 600;
+      cursor: pointer; transition: all .15s;
+    }
+    .toolbox-tab-btn:hover { color: var(--text); background: rgba(255,255,255,.04); }
+    .toolbox-tab-btn.is-active {
+      color: var(--accent); border-bottom-color: var(--accent); background: rgba(106,169,255,.08);
+    }
+
+    .toolbox-body { flex: 1; overflow-y: auto; padding: 20px; }
+    .toolbox-tab-panel { display: none; }
+    .toolbox-tab-panel.is-active { display: block; }
+    
+    .toolbox-section { margin-bottom: 24px; }
+    .toolbox-section h3 {
+      font-size: 12px; color: var(--gold); text-transform: uppercase;
+      letter-spacing: .08em; border-bottom: 1px solid var(--border);
+      padding-bottom: 6px; margin-bottom: 12px;
+    }
+    .toolbox-placeholder {
+      padding: 40px 20px; text-align: center; border: 1px dashed var(--border);
+      border-radius: var(--radius); background: rgba(255,255,255,.01);
+    }
+    .toolbox-placeholder p { color: var(--muted); margin-top: 8px; font-size: 13px; line-height: 1.5; }
+    .toolbox-placeholder .icon { font-size: 32px; opacity: .5; }
+
   </style>
 </head>
 <body data-dm-workspace="__DM_WORKSPACE__" data-dm-auth-required="__DM_AUTH_REQUIRED__">
@@ -703,6 +759,85 @@
   </div>
 </div>
 
+<!-- ── DM Toolbox Modal ─────────────────────────────────────────── -->
+<div id="toolboxOverlay" class="toolbox-overlay hidden" role="dialog" aria-modal="true" aria-labelledby="toolboxTitle">
+  <div class="toolbox-modal">
+    <div class="toolbox-header">
+      <h2 id="toolboxTitle">🛠 DM Toolbox</h2>
+      <button class="toolbox-close-btn" id="closeToolboxBtn" aria-label="Close toolbox">&times;</button>
+    </div>
+    
+    <div class="toolbox-tabs" role="tablist">
+      <button class="toolbox-tab-btn is-active" role="tab" aria-selected="true" aria-controls="panel-session" id="tab-session">Session</button>
+      <button class="toolbox-tab-btn" role="tab" aria-selected="false" aria-controls="panel-encounter" id="tab-encounter">Encounter</button>
+      <button class="toolbox-tab-btn" role="tab" aria-selected="false" aria-controls="panel-overrides" id="tab-overrides">Overrides</button>
+      <button class="toolbox-tab-btn" role="tab" aria-selected="false" aria-controls="panel-maptools" id="tab-maptools">Map Tools</button>
+      <button class="toolbox-tab-btn" role="tab" aria-selected="false" aria-controls="panel-debug" id="tab-debug">Debug</button>
+    </div>
+    
+    <div class="toolbox-body">
+      <!-- Session Tab -->
+      <div class="toolbox-tab-panel is-active" id="panel-session" role="tabpanel" aria-labelledby="tab-session">
+        <div class="toolbox-section">
+          <h3>Session Management</h3>
+          <div class="toolbox-placeholder">
+            <div class="icon">💾</div>
+            <p>New Blank Session, Save/Load Session, and Player Profiles will live here.<br>
+               <em>Preserved in 'Controls' panel for now.</em></p>
+          </div>
+        </div>
+      </div>
+      
+      <!-- Encounter Tab -->
+      <div class="toolbox-tab-panel" id="panel-encounter" role="tabpanel" aria-labelledby="tab-encounter">
+        <div class="toolbox-section">
+          <h3>Encounter Authoring</h3>
+          <div class="toolbox-placeholder">
+            <div class="icon">👾</div>
+            <p>Monster Library, Add Monsters, and Roster management will live here.<br>
+               <em>Preserved in 'Controls' panel for now.</em></p>
+          </div>
+        </div>
+      </div>
+      
+      <!-- Overrides Tab -->
+      <div class="toolbox-tab-panel" id="panel-overrides" role="tabpanel" aria-labelledby="tab-overrides">
+        <div class="toolbox-section">
+          <h3>Manual Overrides</h3>
+          <div class="toolbox-placeholder">
+            <div class="icon">⚖️</div>
+            <p>HP/Temp HP overrides, manual initiative, and forced movement will live here.<br>
+               <em>Preserved in 'Controls' panel for now.</em></p>
+          </div>
+        </div>
+      </div>
+      
+      <!-- Map Tools Tab -->
+      <div class="toolbox-tab-panel" id="panel-maptools" role="tabpanel" aria-labelledby="tab-maptools">
+        <div class="toolbox-section">
+          <h3>Map & Terrain Tools</h3>
+          <div class="toolbox-placeholder">
+            <div class="icon">🗺️</div>
+            <p>Map setup, grid settings, hazards, structures, and overlays will live here.<br>
+               <em>Preserved in 'Controls' panel for now.</em></p>
+          </div>
+        </div>
+      </div>
+      
+      <!-- Debug Tab -->
+      <div class="toolbox-tab-panel" id="panel-debug" role="tabpanel" aria-labelledby="tab-debug">
+        <div class="toolbox-section">
+          <h3>System Debug</h3>
+          <div class="toolbox-placeholder">
+            <div class="icon">⚙️</div>
+            <p>Endpoint health, runtime status, and debug workflows will live here.</p>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
 <!-- ── Topbar ─────────────────────────────────────────────────────── -->
 <div class="topbar">
   <h1>⚔️ DM Console</h1>
@@ -715,6 +850,7 @@
     <button class="panel-toggle-btn is-active" id="toggleToolsBtn" type="button" data-panel-toggle="tools" aria-pressed="true">Controls</button>
     <button class="panel-toggle-btn is-active" id="toggleLogBtn" type="button" data-panel-toggle="log" aria-pressed="true">Log</button>
   </div>
+  <button id="openToolboxBtn" title="Open DM Toolbox (Advanced / Rare controls)" style="margin-left: 8px">🛠 DM Toolbox</button>
   <a class="workspace-link" id="workspaceNavLink" href="/dm/map">🗺 Map Workspace</a>
   <button id="refreshBtn">↺ Refresh</button>
 </div>
@@ -2111,6 +2247,56 @@ async function tryAutoLogin() {
     setTimeout(tryAutoLogin, 2000);
   }
 }
+
+// ── DM Toolbox ───────────────────────────────────────────────────────
+const toolboxOverlay = document.getElementById('toolboxOverlay');
+const openToolboxBtn = document.getElementById('openToolboxBtn');
+const closeToolboxBtn = document.getElementById('closeToolboxBtn');
+const toolboxTabs = document.querySelectorAll('.toolbox-tab-btn');
+const toolboxPanels = document.querySelectorAll('.toolbox-tab-panel');
+
+function openToolbox() {
+  toolboxOverlay.classList.remove('hidden');
+  document.body.style.overflow = 'hidden'; // prevent background scroll
+}
+
+function closeToolbox() {
+  toolboxOverlay.classList.add('hidden');
+  document.body.style.overflow = '';
+}
+
+function switchToolboxTab(tabId) {
+  const targetPanelId = document.getElementById(tabId).getAttribute('aria-controls');
+  
+  toolboxTabs.forEach(t => {
+    const active = t.id === tabId;
+    t.classList.toggle('is-active', active);
+    t.setAttribute('aria-selected', active);
+  });
+  
+  toolboxPanels.forEach(p => {
+    p.classList.toggle('is-active', p.id === targetPanelId);
+  });
+}
+
+if (openToolboxBtn) openToolboxBtn.addEventListener('click', openToolbox);
+if (closeToolboxBtn) closeToolboxBtn.addEventListener('click', closeToolbox);
+
+toolboxTabs.forEach(tab => {
+  tab.addEventListener('click', () => switchToolboxTab(tab.id));
+});
+
+// Close on background click
+toolboxOverlay.addEventListener('click', (e) => {
+  if (e.target === toolboxOverlay) closeToolbox();
+});
+
+// Close on Escape
+window.addEventListener('keydown', (e) => {
+  if (e.key === 'Escape' && !toolboxOverlay.classList.contains('hidden')) {
+    closeToolbox();
+  }
+});
 
 async function bootstrapPasswordlessDmConsole() {
   const overlay = document.getElementById('authOverlay');

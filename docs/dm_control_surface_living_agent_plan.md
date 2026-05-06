@@ -453,7 +453,7 @@ Update the status column after each pass.
 |---|---|---|---|
 | M0 | Stabilize `/dm` and `/` before redesign | In progress / verify | Browser smoke after current fixes |
 | M1 | Low-risk correctness cleanup | Completed | Q5 - DM Toolbox shell |
-| M2 | DM Toolbox shell | Not started | Modal shell + tabs |
+| M2 | DM Toolbox shell | Completed | Modal shell + tabs |
 | M3 | Encounter Builder / Monster Library | Not started | Search/browse shell after spawn cleanup |
 | M4 | Initiative flow | Not started | Auto-roll enemy/NPC initiative when added |
 | M5 | Focused actor panel prototype | Not started | Static/prototype actor panel using current actor |
@@ -543,6 +543,25 @@ Files changed:
 Outcome:
 - Monsters automatically roll initiative when added if the initiative is 0.
 - Multi-count spawns have independent initiative values.
+
+### 2026-05-06 — DM Toolbox shell (Q5)
+
+Agent/model: Gemini CLI (Autonomous Mode)
+Scope: 
+- Create accessible modal shell with tabs in /dm.
+- Add DM Toolbox button to topbar.
+- Implement tab switching and basic open/close logic.
+Files changed:
+- assets/web/dm/index.html
+- tests/test_dm_toolbox_ui.py (New)
+- docs/dm_control_surface_living_agent_plan.md
+Outcome:
+- DM Toolbox button added to the DM cockpit topbar.
+- Tabbed modal (Session, Encounter, Overrides, Map Tools, Debug) implemented with ARIA roles.
+- Close on background click and Escape key supported.
+- Mandatory JS syntax check passed.
+Next recommended pass:
+- M3 — Encounter Builder / Monster Library (or moving Session/Roster tools into Toolbox).
 
 ## Decision log
 
