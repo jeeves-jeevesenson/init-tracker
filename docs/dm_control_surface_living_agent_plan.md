@@ -91,7 +91,7 @@ Update this section after each pass.
 
 | Area | Current status | Notes |
 |---|---|---|
-| `/dm` bootstrap/render | Verified | Recent parse/stale reset bugs were fixed; HP/Temp HP/Remove Combatant migrated to Toolbox |
+| `/dm` bootstrap/render | Verified | Recent parse/stale reset bugs were fixed; HP/Temp HP/Remove Combatant/Set Initiative migrated to Toolbox |
 | `/` LAN client | Useful local model | LAN has targeting, movement range, attack resolution, spell target selection, and remaining movement concepts |
 | Monster Turn Controls | Legacy/fallback | Do not polish as target UI |
 | Monster Pilot | Legacy/fallback | Do not use as foundation for future current-turn movement |
@@ -636,6 +636,25 @@ Outcome:
 - Mandatory JS syntax check passed.
 Next recommended pass:
 - M4/M5 — Encounter Builder / Monster Library (or Overrides tab migration for Set Initiative).
+
+### 2026-05-06 — Move Set Initiative into Toolbox Overrides tab (M2/M5 partial)
+
+Agent/model: Gemini CLI (Autonomous Mode)
+Scope: 
+- Migrate Set Initiative controls into DM Toolbox -> Overrides tab.
+- Remove redundant Combat Setup block from main cockpit.
+- Preserve all element IDs and JS behavior.
+Files changed:
+- assets/web/dm/index.html
+- tests/test_dm_toolbox_ui.py
+- docs/dm_control_surface_living_agent_plan.md
+Outcome:
+- Set Initiative controls moved to Toolbox.
+- Cockpit clutter reduced; Combat Setup group removed from cockpit.
+- All JS handlers (set/roll initiative) preserved and functional.
+- Mandatory JS syntax check passed.
+Next recommended pass:
+- M4/M5 — Encounter Builder / Monster Library (Search/Browse monster library).
 
 ## Decision log
 

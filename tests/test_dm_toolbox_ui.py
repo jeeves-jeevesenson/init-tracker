@@ -109,12 +109,24 @@ class TestDmToolboxUi(unittest.TestCase):
         self.assertIn('id="applyTempHpBtn"', overrides_content)
         self.assertIn('id="tempHpResult"', overrides_content)
         
-        # Verify placeholder text
-        self.assertIn('Manual initiative and forced movement (Move Any Token) will live here.', overrides_content)
+        # Verify Set Initiative is in panel-overrides
+        self.assertIn('Set Initiative', overrides_content)
+        self.assertIn('id="initCidSelect"', overrides_content)
+        self.assertIn('id="initValue"', overrides_content)
+        self.assertIn('id="setInitBtn"', overrides_content)
+        self.assertIn('id="rollInitBtn"', overrides_content)
+        self.assertIn('id="initResult"', overrides_content)
+        
+        # Verify placeholder text (updated)
+        self.assertIn('Forced movement (Move Any Token) and other DM overrides will live here.', overrides_content)
         
         # Verify old health group is gone from cockpit
         self.assertNotIn('data-live-group="health"', html)
         self.assertNotIn('id="liveHealthGroupTitle"', html)
+        
+        # Verify old combat-setup group is gone from cockpit
+        self.assertNotIn('data-setup-group="combat-setup"', html)
+        self.assertNotIn('id="setupCombatGroupTitle"', html)
 
     def test_monster_actions_text_preserved(self):
         html = _DM_HTML_PATH.read_text(encoding="utf-8")
