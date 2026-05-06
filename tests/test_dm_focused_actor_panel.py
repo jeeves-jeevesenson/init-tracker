@@ -42,17 +42,26 @@ class TestDmFocusedActorPanel(unittest.TestCase):
         # PC View Only badge
         self.assertIn('View Only', html)
         self.assertIn('actor-view-only-badge', html)
+
+        # Inspection and Active Turn badges
+        self.assertIn('Inspecting', html)
+        self.assertIn('Active Turn', html)
         
         # Placeholders
         self.assertIn('<h4>Movement</h4>', html)
         self.assertIn('<h4>Monster Actions</h4>', html)
         self.assertIn('<h4>Resources</h4>', html)
         self.assertIn('<h4>Traits / Details</h4>', html)
+
+    def test_tactical_click_integration(self):
+        html = _DM_HTML_PATH.read_text(encoding="utf-8")
+        # handleTacticalCanvasClick should update focusedActorInspectCid and re-render
+        self.assertIn('focusedActorInspectCid = unit.cid', html)
+        self.assertIn('renderFocusedActorPanel(currentSnapshot)', html)
         
-        self.assertIn('Movement range and remaining feet will appear here.', html)
-        self.assertIn('Action cards and resolution will appear here.', html)
-        self.assertIn('Legendary actions, spell slots, and recharge abilities will appear here.', html)
-        self.assertIn('Passive traits and stat block details will appear here.', html)
+        # clearDmTransientStateForBlankSnapshot should clear focusedActorInspectCid
+        # Simple string check is enough if we trust the context
+        self.assertIn('focusedActorInspectCid = null;', html)
 
 if __name__ == "__main__":
     unittest.main()

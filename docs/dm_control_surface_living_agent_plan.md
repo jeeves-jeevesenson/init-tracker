@@ -96,11 +96,12 @@ Update this section after each pass.
 | Monster Turn Controls | Legacy/fallback | Do not polish as target UI |
 | Monster Pilot | Legacy/fallback | Do not use as foundation for future current-turn movement |
 | Monster capability backend | Useful | Labels renamed to 'Monster Actions' in DM UI |
-| Focused actor panel | Prototype | Current actor focused automatically; stats display and placeholders added |
+| Focused actor panel | Prototype | Current actor focused automatically; token click inspects; stats display |
 | DM Toolbox | In progress | Tabbed modal with Session, Encounter, Overrides tabs partially populated |
 | Encounter Builder | In progress | Monster Library search and Add Monster workflow migrated to Encounter tab |
 | Duplicate monster names | Completed | Backend auto-numbering implemented via CombatantNameService |
 | Enemy/NPC initiative | Completed | Auto-roll individually when added via monster spawn path |
+| Tactical map inspection | In progress | Token click focuses actor in panel without changing initiative turn |
 | Movement model | Planned | Reuse/expose LAN canonical movement path where possible |
 | Battle log | Planned refinement | Gameplay-focused, detailed, visible by default; technical logs separate |
 | Automation settings | Planned | Support app rolls and manual/physical dice per roll or roll type |
@@ -733,6 +734,26 @@ Outcome:
 - Focused Actor Panel added to initiative cockpit.
 - Panel updates automatically when turn changes.
 - PC actors labeled as "View Only".
+- Mandatory JS syntax check passed.
+Next recommended pass:
+- M7 — Monster Actions / action cards integration (first slice).
+
+### 2026-05-06 — Tactical-map token-click inspection (M9 partial)
+
+Agent/model: Gemini CLI (Autonomous Mode)
+Scope: 
+- Implement token-click inspection for the Focused Actor Panel.
+- Use global `focusedActorInspectCid` to track inspected actor.
+- Show "Inspecting" vs "Active Turn" badges.
+- Clear inspection state on blank snapshot or actor removal.
+Files changed:
+- assets/web/dm/index.html
+- tests/test_dm_focused_actor_panel.py
+- docs/dm_control_surface_living_agent_plan.md
+Outcome:
+- DM can click tokens on the map to inspect them in the Focused Actor Panel.
+- Inspection does not change active combatant or turn.
+- Visual feedback (badge) indicates current state.
 - Mandatory JS syntax check passed.
 Next recommended pass:
 - M7 — Monster Actions / action cards integration (first slice).

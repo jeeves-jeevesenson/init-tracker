@@ -1899,6 +1899,7 @@ let monsterPilotDragState = {
   destRow: null,
   cancelled: false,
 };
+let focusedActorInspectCid = null;
 let tacticalPresetsByCategory = { hazard: [], feature: [], structure: [] };
 let tacticalBackgroundAssets = [];
 let tacticalShipBlueprints = [];
@@ -4223,6 +4224,8 @@ function handleTacticalCanvasClick(evt) {
   if (unit) {
     document.getElementById('mapCidSelect').value = String(unit.cid);
     syncTacticalFieldsFromSelection({ keepTargetCell: true });
+    focusedActorInspectCid = unit.cid;
+    renderFocusedActorPanel(currentSnapshot);
   }
   renderTacticalMap(cell.tactical);
 }
@@ -4274,6 +4277,7 @@ function clearDmTransientStateForBlankSnapshot() {
 
   // Tactical selection
   tacticalSelection = { col: null, row: null };
+  focusedActorInspectCid = null;
   const targetCellEl = document.getElementById('tacticalSelectedCell');
   if (targetCellEl) targetCellEl.textContent = 'Target cell: —';
 
@@ -4390,11 +4394,20 @@ function applySnapshot(snap) {
 
 function findFocusedActorFromSnapshot(snap) {
   if (!snap || !snap.combatants) return null;
-  // Use active_cid if in combat
+
+  // 1. Try inspected CID if valid
+  if (focusedActorInspectCid) {
+    const inspected = snap.combatants.find(c => Number(c.cid) === Number(focusedActorInspectCid));
+    if (inspected) return inspected;
+    // If not found in this snapshot, clear it
+    focusedActorInspectCid = null;
+  }
+
+  // 2. Fall back to active_cid if in combat
   if (snap.in_combat && snap.active_cid) {
     return snap.combatants.find(c => c.cid === snap.active_cid) || null;
   }
-  // Fallback: if not in combat but active_cid is set (manual focus?)
+  // 3. Last fallback: active_cid even if not in combat (manual focus)
   if (snap.active_cid) {
     return snap.combatants.find(c => c.cid === snap.active_cid) || null;
   }
@@ -4411,6 +4424,8 @@ function renderFocusedActorPanel(snap) {
     return;
   }
 
+  const isActiveTurn = snap.in_combat && snap.active_cid && Number(actor.cid) === Number(snap.active_cid);
+
   // Build the panel
   let html = `
     <div class="actor-prototype-card">
@@ -4418,7 +4433,10 @@ function renderFocusedActorPanel(snap) {
         <div class="actor-name-wrap">
           <div class="actor-name" title="${escAttr(actor.name)}">${escAttr(actor.name)}</div>
           <div class="actor-meta">${escAttr(actor.role || '')} ${actor.role === 'enemy' ? 'Enemy' : (actor.role === 'pc' ? 'Player Character' : 'Ally')}</div>
-          ${actor.is_pc ? '<div class="actor-view-only-badge">View Only</div>' : ''}
+          <div style="display:flex; gap:6px; flex-wrap:wrap; margin-top:4px">
+            ${isActiveTurn ? '<div class="actor-view-only-badge" style="background:var(--ally-soft); color:var(--heal); border-color:var(--ally-soft)">Active Turn</div>' : '<div class="actor-view-only-badge" style="background:var(--pc-soft); color:var(--accent); border-color:var(--pc-soft)">Inspecting</div>'}
+            ${actor.is_pc ? '<div class="actor-view-only-badge">View Only</div>' : ''}
+          </div>
         </div>
       </div>
 
