@@ -3828,9 +3828,76 @@ function handleTacticalCanvasClick(evt) {
   renderTacticalMap(cell.tactical);
 }
 
+function clearDmTransientStateForBlankSnapshot() {
+  // Monster Turn Controls
+  monsterAttackCatalog = [];
+  monsterAttackDefaults = {};
+  lastMonsterAttackResolution = null;
+  populateMonsterAttackSelect([], {});
+  const mTurnRes = document.getElementById('monsterTurnResult');
+  if (mTurnRes) {
+    mTurnRes.textContent = '';
+    mTurnRes.className = 'mut-result';
+  }
+  const mDmgInput = document.getElementById('monsterDamageEntriesInput');
+  if (mDmgInput) mDmgInput.value = '';
+  const mActionNameInput = document.getElementById('monsterActionNameInput');
+  if (mActionNameInput) mActionNameInput.value = '';
+  const mSpellNameInput = document.getElementById('monsterSpellNameInput');
+  if (mSpellNameInput) mSpellNameInput.value = '';
+  const mSpellSlugInput = document.getElementById('monsterSpellSlugInput');
+  if (mSpellSlugInput) mSpellSlugInput.value = '';
+  const mSpellIdInput = document.getElementById('monsterSpellIdInput');
+  if (mSpellIdInput) mSpellIdInput.value = '';
+
+  // Monster Pilot
+  const mPilotSummary = document.getElementById('monsterPilotSummary');
+  if (mPilotSummary) mPilotSummary.innerHTML = '<div class="empty-state">Select a monster above to see its summary.</div>';
+  const mPilotRes = document.getElementById('monsterPilotResult');
+  if (mPilotRes) {
+    mPilotRes.textContent = '';
+    mPilotRes.className = 'mut-result';
+  }
+  ['monsterPilotXInput', 'monsterPilotYInput'].forEach(id => {
+    const el = document.getElementById(id);
+    if (el) el.value = '';
+  });
+
+  // Monster Capabilities
+  const mCapContent = document.getElementById('monsterCapContent');
+  if (mCapContent) mCapContent.innerHTML = '<div class="empty-state">Select an acting monster above to load overlays.</div>';
+  const mCapRes = document.getElementById('monsterCapResult');
+  if (mCapRes) {
+    mCapRes.textContent = '';
+    mCapRes.className = 'mut-result';
+    mCapRes.style.display = 'none';
+  }
+
+  // Tactical selection
+  tacticalSelection = { col: null, row: null };
+  const targetCellEl = document.getElementById('tacticalSelectedCell');
+  if (targetCellEl) targetCellEl.textContent = 'Target cell: —';
+
+  // HP/TempHP/Cond results (selective clearing)
+  ['hpResult', 'tempHpResult', 'condResult', 'initResult', 'removeResult', 'addPlayersResult', 'addMonsterResult', 'addCombatantResult', 'mapSetupResult', 'tacticalResult'].forEach(id => {
+    const el = document.getElementById(id);
+    if (el) {
+       el.textContent = '';
+       el.className = 'mut-result';
+    }
+  });
+}
+
 // ── Render snapshot ───────────────────────────────────────────────────
 function applySnapshot(snap) {
   currentSnapshot = snap;
+  const combatants = snap.combatants || [];
+  const isBlank = combatants.length === 0;
+
+  if (isBlank) {
+    clearDmTransientStateForBlankSnapshot();
+  }
+
   const membershipKey = currentEncounterMembershipKey(snap);
   const membershipChanged = membershipKey !== encounterMembershipSignature;
   encounterMembershipSignature = membershipKey;
@@ -3924,15 +3991,19 @@ function applySnapshot(snap) {
 function populateCidSelect(selectId, combatants) {
   const sel = document.getElementById(selectId);
   if (!sel) return;
-  const prev = sel.value;
+  const prev = String(sel.value || '').trim();
   sel.innerHTML = '<option value="">— select —</option>';
   for (const c of combatants) {
     const opt = document.createElement('option');
-    opt.value = c.cid;
+    opt.value = String(c.cid);
     opt.textContent = c.name;
     sel.appendChild(opt);
   }
-  if (prev) sel.value = prev;
+  if (prev && Array.from(sel.options).some(opt => opt.value === prev)) {
+    sel.value = prev;
+  } else {
+    sel.value = "";
+  }
 }
 
 function escAttr(s) {
@@ -5805,6 +5876,12 @@ document.getElementById('newBlankSessionBtn').addEventListener('click', async ()
     if (r.ok && data.ok) {
       res.textContent = 'New blank session started.';
       if (data.snapshot) applySnapshot(data.snapshot);
+      await fetchSnapshot();
+      try {
+        refreshEncounterOptions();
+      } catch (e) {
+        console.warn('Failed to refresh encounter options after reset', e);
+      }
     } else {
       res.textContent = data.detail || data.error || 'Error.';
       res.classList.add('error');
