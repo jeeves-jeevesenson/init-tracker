@@ -460,7 +460,7 @@ Update the status column after each pass.
 | M4 | Encounter Builder / Monster Library | In progress | Complete Encounter Builder (mixed groups/staging) |
 | M5 | Initiative flow | In progress | Reroll all enemy/NPC initiative in Toolbox |
 | M6 | Focused actor panel prototype | Completed | Static/prototype actor panel using current actor |
-| M7 | Monster Actions / action cards | In progress | Action target selection tray prototype |
+| M7 | Monster Actions / action cards | In progress | Action target selection highlighting |
 | M8 | Current-turn movement model | Not started | Reuse LAN movement path for DM current actor |
 | M9 | Tactical map inspection | Not started | Token click inspection / empty cell info |
 | M10 | Automation settings | Not started | Roll-path and persistence inspection |
@@ -780,7 +780,28 @@ Outcome:
 - Mandatory JS syntax check passed.
 - All relevant tests (339) passed, including new focused tests.
 Next recommended pass:
-- M7 — Monster Actions: Target validation / range highlighting.
+- M7 — Monster Actions: Range / AoE validation hints.
+
+### 2026-05-06 — Monster Actions: Selected-Target Highlighting (M7 extension)
+
+Agent/model: Gemini CLI (Autonomous Mode)
+Scope: 
+- Implement visual highlighting for the source actor and selected targets on the tactical map during Monster Actions target preview.
+- Source actor is marked with a dashed orange ring and "SOURCE" label.
+- Selected targets are marked with a solid yellow ring and "TARGET" label.
+- Highlighting is visual-only and synchronized with the target tray state.
+- Target count added to the preview status banner in the Focused Actor Panel.
+- Highlighting is automatically cleared when target preview is disabled or cancelled.
+- Normal token inspection and map interactions are preserved.
+Files changed:
+- assets/web/dm/index.html
+- tests/test_dm_focused_actor_panel_actions.py
+- docs/dm_control_surface_living_agent_plan.md
+Outcome:
+- Clear visual feedback on the map confirms which token is the source and which tokens are selected as targets.
+- Map and tray remain in sync as targets are toggled.
+- Mandatory JS syntax check passed.
+- All relevant tests (346) passed.
 
 ### 2026-05-06 — Monster Actions: Target Selection Tray Prototype (M7 extension)
 

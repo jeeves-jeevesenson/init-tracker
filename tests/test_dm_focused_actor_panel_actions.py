@@ -63,6 +63,18 @@ class TestDmFocusedActorPanelActions(unittest.TestCase):
         self.assertIn('Targeting Preview Active', html)
         self.assertIn('focusedActorTargetModeEnabled ?', html)
         self.assertIn('evt.key === \'Escape\' && focusedActorTargetModeEnabled', html)
+        self.assertIn('focusedActorSelectedTargetCids.length > 0', html)
+        self.assertIn('selected)</span>', html)
+
+    def test_highlighting_logic(self):
+        html = _DM_HTML_PATH.read_text(encoding="utf-8")
+        # Source highlighting
+        self.assertIn('Highlight Source Actor', html)
+        self.assertIn('SOURCE', html)
+        # Target highlighting
+        self.assertIn('Highlight Selected Targets', html)
+        self.assertIn('TARGET', html)
+        self.assertIn('focusedActorSelectedTargetCids.forEach', html)
 
     def test_tactical_click_targeting(self):
         html = _DM_HTML_PATH.read_text(encoding="utf-8")
