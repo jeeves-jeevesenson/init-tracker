@@ -96,6 +96,7 @@ Update this section after each pass.
 | Monster Turn Controls | Legacy/fallback | Do not polish as target UI |
 | Monster Pilot | Legacy/fallback | Do not use as foundation for future current-turn movement |
 | Monster capability backend | Useful | Labels renamed to 'Monster Actions' in DM UI |
+| Focused actor panel | Prototype | Current actor focused automatically; stats display and placeholders added |
 | DM Toolbox | In progress | Tabbed modal with Session, Encounter, Overrides tabs partially populated |
 | Encounter Builder | In progress | Monster Library search and Add Monster workflow migrated to Encounter tab |
 | Duplicate monster names | Completed | Backend auto-numbering implemented via CombatantNameService |
@@ -457,7 +458,7 @@ Update the status column after each pass.
 | M3 | Move Session tools to Toolbox | Completed | Migrated New/Save/Load/Quick |
 | M4 | Encounter Builder / Monster Library | In progress | Complete Encounter Builder (mixed groups/staging) |
 | M5 | Initiative flow | In progress | Reroll all enemy/NPC initiative in Toolbox |
-| M6 | Focused actor panel prototype | Not started | Static/prototype actor panel using current actor |
+| M6 | Focused actor panel prototype | Completed | Static/prototype actor panel using current actor |
 | M7 | Monster Actions / action cards | Not started | Rename and no-match message first |
 | M8 | Current-turn movement model | Not started | Reuse LAN movement path for DM current actor |
 | M9 | Tactical map inspection | Not started | Token click inspection / empty cell info |
@@ -715,6 +716,26 @@ Outcome:
 - Mandatory JS syntax check passed.
 Next recommended pass:
 - M6 — Focused actor panel prototype.
+
+### 2026-05-06 — Focused Actor Panel prototype (M6)
+
+Agent/model: Gemini CLI (Autonomous Mode)
+Scope: 
+- Create first Focused Actor Panel prototype on /dm.
+- Display current initiative actor stats (HP, AC, Speed, Init, Conditions).
+- Handle PC view-only state.
+- Add placeholders for future features (Movement, Actions, Resources, Traits).
+Files changed:
+- assets/web/dm/index.html
+- tests/test_dm_focused_actor_panel.py (New)
+- docs/dm_control_surface_living_agent_plan.md
+Outcome:
+- Focused Actor Panel added to initiative cockpit.
+- Panel updates automatically when turn changes.
+- PC actors labeled as "View Only".
+- Mandatory JS syntax check passed.
+Next recommended pass:
+- M7 — Monster Actions / action cards integration (first slice).
 
 ## Decision log
 
@@ -1116,28 +1137,3 @@ A successful turn should feel like:
 13. The DM ends turn.
 
 The old Monster Turn Controls and Monster Pilot should no longer be the primary way to run combat.
-at.
-t command/result. Separate confirmed findings from hypotheses. Use measured runtime evidence for bug/performance fixes.
-
-## Final acceptance vision
-
-The redesign is successful when the DM can run a complex monster turn without using the old dropdown stacks.
-
-A successful turn should feel like:
-
-1. The monster’s turn comes up.
-2. The actor panel updates automatically.
-3. The map shows the monster and legal movement range.
-4. The DM sees the monster’s relevant actions without opening a stat block.
-5. The DM drags movement if desired.
-6. The DM clicks an action card.
-7. Target mode begins.
-8. Valid targets or AoE preview appear.
-9. The DM selects target(s).
-10. Resolution guides hit/save/damage/effects.
-11. Movement remaining and resources update.
-12. Combat log records important events.
-13. The DM ends turn.
-
-The old Monster Turn Controls and Monster Pilot should no longer be the primary way to run combat.
-at.
