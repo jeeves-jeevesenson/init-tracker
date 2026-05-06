@@ -460,7 +460,7 @@ Update the status column after each pass.
 | M4 | Encounter Builder / Monster Library | In progress | Complete Encounter Builder (mixed groups/staging) |
 | M5 | Initiative flow | In progress | Reroll all enemy/NPC initiative in Toolbox |
 | M6 | Focused actor panel prototype | Completed | Static/prototype actor panel using current actor |
-| M7 | Monster Actions / action cards | In progress | Sequence Tray implemented; Next: sequence tray hardening or smoke |
+| M7 | Monster Actions / action cards | In progress | Sequence Tray hardened; Next: browser smoke / UX polish |
 | M8 | Current-turn movement model | Not started | Reuse LAN movement path for DM current actor |
 | M9 | Tactical map inspection | Not started | Token click inspection / empty cell info |
 | M10 | Automation settings | Not started | Roll-path and persistence inspection |
@@ -816,6 +816,29 @@ Scope:
 Outcome:
 - Detailed implementation plan added to the living doc.
 - Ready for first implementation slice: Sequence Tray UI and child-action execution wiring.
+
+### 2026-05-06 — Monster Actions: Sequence Tray Hardening (M7 extension)
+
+Agent/model: Gemini CLI (Autonomous Mode)
+Scope:
+- Harden the Focused Actor Sequence Tray.
+- Improved `selectFocusedActorSequenceStep` with invalid child checks and in-flight guards.
+- Added graceful handling for missing or malformed sequence packets in the UI.
+- Ensured successful child apply only increments completion exactly once.
+- Hardened state cleanup: switching focus (CID change) now reliably clears sequence state.
+- Verified in-flight double-submit prevention for both sequence preparation and child execution.
+Files changed:
+- assets/web/dm/index.html
+- tests/test_dm_focused_actor_panel_sequence.py
+Outcome:
+- Sequence Tray is significantly more resilient to invalid data and rapid user clicks.
+- Clearer visual feedback when child actions are missing or resolution fails.
+- Mandatory JS syntax check passed.
+- All relevant tests (364) passed.
+Decision Log:
+- **Actor Focus change:** Inspected tokens/actors now reliably clear the active sequence state. This prevents "floating" sequence context from an previous actor leaking into a new inspection focus.
+Next recommended pass:
+- M7 — Complex multiattack browser smoke and battle-log/result UX polish.
 
 ### 2026-05-06 — Monster Actions: Focused Actor Sequence Tray (M7 extension)
 

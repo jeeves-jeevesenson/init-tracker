@@ -4664,7 +4664,7 @@ function renderFocusedActorPanel(snap) {
           <button class="btn-xs remove" onclick="endFocusedActorSequence()">End Sequence</button>
         </div>
         <div style="padding:8px">
-          ${focusedActorSequencePacket.steps.map(step => {
+          ${focusedActorSequencePacket.steps && focusedActorSequencePacket.steps.length > 0 ? focusedActorSequencePacket.steps.map(step => {
             const completed = focusedActorSequenceCompletedSteps[step.action_id] || 0;
             const isDone = completed >= step.count;
             const isSelected = focusedActorTargetActionId === step.action_id;
@@ -4681,7 +4681,7 @@ function renderFocusedActorPanel(snap) {
                 ` : '<div style="font-size:10px; color:var(--heal); font-weight:bold; font-size:9px; text-transform:uppercase">Complete</div>'}
               </div>
             `;
-          }).join('')}
+          }).join('') : '<div class="actor-placeholder-content">No steps defined in this sequence.</div>'}
         </div>
       </div>
       ` : ''}
@@ -7460,6 +7460,30 @@ function cancelFocusedActorActionResolution() {
 }
 
 function selectFocusedActorSequenceStep(actionId) {
+  if (focusedActorResolutionInFlight) return;
+  const actor = findFocusedActorFromSnapshot(currentSnapshot);
+  if (!actor) return;
+  const summary = monsterCapabilitiesByCid[actor.cid];
+  if (!summary) {
+    focusedActorResolutionError = 'Monster actions not loaded.';
+    renderFocusedActorPanel(currentSnapshot);
+    return;
+  }
+  
+  let exists = false;
+  for (const g in summary.groups) {
+    if (summary.groups[g].some(c => c.id === actionId)) {
+      exists = true;
+      break;
+    }
+  }
+
+  if (!exists) {
+    focusedActorResolutionError = `Child action "${actionId}" not found for this monster.`;
+    renderFocusedActorPanel(currentSnapshot);
+    return;
+  }
+
   focusedActorTargetActionId = actionId;
   focusedActorTargetModeEnabled = true;
   focusedActorSelectedTargetCids = [];
