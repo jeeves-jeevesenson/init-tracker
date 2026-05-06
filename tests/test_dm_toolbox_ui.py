@@ -60,6 +60,37 @@ class TestDmToolboxUi(unittest.TestCase):
             roster_content = roster_match.group(1)
             self.assertNotIn('Add Player Profiles', roster_content)
 
+    def test_overrides_controls_in_toolbox(self):
+        html = _DM_HTML_PATH.read_text(encoding="utf-8")
+        # Check that HP/Temp HP controls are moved to panel-overrides
+        self.assertIn('id="panel-overrides"', html)
+        
+        # Verify HP Adjustment is in panel-overrides
+        # Use regex to find panel-overrides content
+        import re
+        overrides_match = re.search(r'id="panel-overrides".*?>(.*?)<!-- Map Tools Tab -->', html, re.DOTALL)
+        self.assertTrue(overrides_match, "panel-overrides not found in HTML")
+        overrides_content = overrides_match.group(1)
+        
+        self.assertIn('HP Adjustment', overrides_content)
+        self.assertIn('id="hpCidSelect"', overrides_content)
+        self.assertIn('id="hpDelta"', overrides_content)
+        self.assertIn('id="applyHpBtn"', overrides_content)
+        self.assertIn('id="hpResult"', overrides_content)
+        
+        self.assertIn('Temp HP', overrides_content)
+        self.assertIn('id="tempHpCidSelect"', overrides_content)
+        self.assertIn('id="tempHpAmount"', overrides_content)
+        self.assertIn('id="applyTempHpBtn"', overrides_content)
+        self.assertIn('id="tempHpResult"', overrides_content)
+        
+        # Verify placeholder text
+        self.assertIn('Manual initiative and forced movement (Move Any Token) will live here.', overrides_content)
+        
+        # Verify old health group is gone from cockpit
+        self.assertNotIn('data-live-group="health"', html)
+        self.assertNotIn('id="liveHealthGroupTitle"', html)
+
     def test_monster_actions_text_preserved(self):
         html = _DM_HTML_PATH.read_text(encoding="utf-8")
         self.assertIn('Monster Actions', html)

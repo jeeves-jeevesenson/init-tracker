@@ -91,12 +91,12 @@ Update this section after each pass.
 
 | Area | Current status | Notes |
 |---|---|---|
-| `/dm` bootstrap/render | Needs current verification | Recent parse/stale reset bugs were fixed, but browser smoke should remain mandatory after DM asset edits |
+| `/dm` bootstrap/render | Verified | Recent parse/stale reset bugs were fixed; HP/Temp HP migrated to Toolbox |
 | `/` LAN client | Useful local model | LAN has targeting, movement range, attack resolution, spell target selection, and remaining movement concepts |
 | Monster Turn Controls | Legacy/fallback | Do not polish as target UI |
 | Monster Pilot | Legacy/fallback | Do not use as foundation for future current-turn movement |
 | Monster capability backend | Useful | Labels renamed to 'Monster Actions' in DM UI |
-| DM Toolbox | Planned | Tabbed modal for session, encounter, overrides, map tools, debug |
+| DM Toolbox | In progress | Tabbed modal with Session, Encounter, Overrides tabs partially populated |
 | Encounter Builder | Planned | Search/browse monster library, spawn count, auto-numbering, mixed groups later |
 | Duplicate monster names | Completed | Backend auto-numbering implemented via CombatantNameService |
 | Enemy/NPC initiative | Completed | Auto-roll individually when added via monster spawn path |
@@ -598,6 +598,25 @@ Outcome:
 - Mandatory JS syntax check passed.
 Next recommended pass:
 - M4 — Encounter Builder / Monster Library (or Overrides tab migration for HP/temp HP).
+
+### 2026-05-06 — Move HP / Temp HP controls into Toolbox Overrides tab (M2/M12 partial)
+
+Agent/model: Gemini CLI (Autonomous Mode)
+Scope: 
+- Migrate HP Adjustment and Temp HP controls into DM Toolbox -> Overrides tab.
+- Remove redundant Health block from main cockpit.
+- Preserve all element IDs and JS behavior.
+Files changed:
+- assets/web/dm/index.html
+- tests/test_dm_toolbox_ui.py
+- docs/dm_control_surface_living_agent_plan.md
+Outcome:
+- HP and Temp HP controls moved to Toolbox.
+- Cockpit clutter reduced.
+- All JS handlers (HP adjustment, Temp HP set) preserved and functional.
+- Mandatory JS syntax check passed.
+Next recommended pass:
+- M4 — Encounter Builder / Monster Library (Remove Combatant into DM Toolbox or Encounter Builder).
 
 ## Decision log
 
