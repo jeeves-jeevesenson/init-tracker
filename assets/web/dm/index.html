@@ -3952,14 +3952,12 @@ function applySnapshot(snap) {
   }
 
   // Populate combatant selects
-  const combatants = snap.combatants || [];
   populateCidSelect('hpCidSelect', combatants);
   populateCidSelect('condCidSelect', combatants);
   populateCidSelect('tempHpCidSelect', combatants);
   populateCidSelect('initCidSelect', combatants);
   populateCidSelect('removeCidSelect', combatants);
   populateCidSelect('mapCidSelect', combatants);
-
   try {
     populateMonsterTurnSelectors(snap);
   } catch (e) {
