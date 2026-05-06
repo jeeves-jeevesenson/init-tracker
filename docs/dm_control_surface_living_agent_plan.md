@@ -455,8 +455,8 @@ Update the status column after each pass.
 | M1 | Low-risk correctness cleanup | Completed | Q5 - DM Toolbox shell |
 | M2 | DM Toolbox shell | Completed | Modal shell + tabs |
 | M3 | Move Session tools to Toolbox | Completed | Migrated New/Save/Load/Quick |
-| M4 | Encounter Builder / Monster Library | Not started | Search/browse shell after spawn cleanup |
-| M5 | Initiative flow | Not started | Auto-roll enemy/NPC initiative when added |
+| M4 | Encounter Builder / Monster Library | In progress | Complete Encounter Builder (mixed groups/staging) |
+| M5 | Initiative flow | In progress | Reroll all enemy/NPC initiative in Toolbox |
 | M6 | Focused actor panel prototype | Not started | Static/prototype actor panel using current actor |
 | M7 | Monster Actions / action cards | Not started | Rename and no-match message first |
 | M8 | Current-turn movement model | Not started | Reuse LAN movement path for DM current actor |
@@ -696,6 +696,25 @@ Outcome:
 - Mandatory JS syntax check passed.
 Next recommended pass:
 - M4 — Complete Encounter Builder (Migrate Add Combatant into Toolbox).
+
+### 2026-05-06 — Move Add Combatant into Toolbox Encounter tab (M4 partial)
+
+Agent/model: Gemini CLI (Autonomous Mode)
+Scope: 
+- Migrate Add Combatant controls into DM Toolbox -> Encounter tab as "Advanced / Custom Combatant".
+- Remove redundant roster setup section from main cockpit.
+- Update UI tests to verify placement and removal.
+Files changed:
+- assets/web/dm/index.html
+- tests/test_dm_toolbox_ui.py
+- docs/dm_control_surface_living_agent_plan.md
+Outcome:
+- Add Combatant controls moved to Toolbox Encounter tab.
+- Roster setup group removed from cockpit.
+- All JS handlers (add custom combatant) preserved and functional.
+- Mandatory JS syntax check passed.
+Next recommended pass:
+- M6 — Focused actor panel prototype.
 
 ## Decision log
 

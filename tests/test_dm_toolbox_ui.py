@@ -74,9 +74,19 @@ class TestDmToolboxUi(unittest.TestCase):
         self.assertIn('id="removeCidSelect"', encounter_content)
         self.assertIn('id="removeCombatantBtn"', encounter_content)
         self.assertIn('id="removeCombatantResult"', encounter_content)
+
+        # Verify Advanced / Custom Combatant is in panel-encounter
+        self.assertIn('Advanced / Custom Combatant', encounter_content)
+        self.assertIn('id="newCombatantName"', encounter_content)
+        self.assertIn('id="newCombatantHp"', encounter_content)
+        self.assertIn('id="newCombatantInit"', encounter_content)
+        self.assertIn('id="newCombatantAc"', encounter_content)
+        self.assertIn('id="addCombatantBtn"', encounter_content)
+        self.assertIn('id="addCombatantResult"', encounter_content)
         
         # Verify placeholder text (updated)
         self.assertIn('Mixed encounter groups, HP randomization, and advanced staging will live here.', encounter_content)
+        self.assertNotIn('Custom combatants preserved in \'Controls\' panel for now.', encounter_content)
         
         # Verify Monster Library shell
         self.assertIn('class="monster-library-shell"', encounter_content)
@@ -96,11 +106,10 @@ class TestDmToolboxUi(unittest.TestCase):
         self.assertIn('id="addMonsterResult"', encounter_content)
 
         # Verify old block is gone from main cockpit
-        # It was inside roster section
-        roster_match = re.search(r'data-setup-group="roster".*?>(.*?)<\/section>', html, re.DOTALL)
-        if roster_match:
-            roster_content = roster_match.group(1)
-            self.assertNotIn('Add Monster Specs', roster_content)
+        # Roster group should be gone entirely since it only had Add Combatant
+        self.assertNotIn('data-setup-group="roster"', html)
+        self.assertNotIn('id="setupRosterGroupTitle"', html)
+        self.assertNotIn('Add Combatant</h3>', html) # The old H3 was plain "Add Combatant"
 
     def test_overrides_controls_in_toolbox(self):
         html = _DM_HTML_PATH.read_text(encoding="utf-8")

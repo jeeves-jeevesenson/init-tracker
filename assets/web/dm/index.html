@@ -922,9 +922,48 @@
             <div class="mut-result" id="removeCombatantResult"></div>
           </div>
 
+          <!-- Advanced / Custom Combatant -->
+          <div class="mut-card" style="margin-top:20px">
+            <h3>Advanced / Custom Combatant</h3>
+            <div class="tactical-status" style="margin-bottom:10px; font-size: 11px;">
+              Manual entry for unique NPCs or quick custom additions. For best results with standard monsters, use the <strong>Monster Library</strong> above.
+            </div>
+            <div class="form-group">
+              <label>Name</label>
+              <input type="text" id="newCombatantName" placeholder="e.g. Goblin A" />
+            </div>
+            <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px">
+              <div class="form-group">
+                <label>HP</label>
+                <input type="number" id="newCombatantHp" placeholder="e.g. 15" min="0" />
+              </div>
+              <div class="form-group">
+                <label>Max HP (blank = HP)</label>
+                <input type="number" id="newCombatantMaxHp" placeholder="same as HP" min="0" />
+              </div>
+              <div class="form-group">
+                <label>Initiative</label>
+                <input type="number" id="newCombatantInit" placeholder="e.g. 14" />
+              </div>
+              <div class="form-group">
+                <label>AC</label>
+                <input type="number" id="newCombatantAc" placeholder="e.g. 13" min="0" />
+              </div>
+              <div class="form-group">
+                <label>Speed (ft)</label>
+                <input type="number" id="newCombatantSpeed" placeholder="30" min="0" />
+              </div>
+              <div class="form-group" style="justify-content:flex-end;flex-direction:row;align-items:center;gap:8px;padding-top:18px">
+                <label style="font-size:11px;color:var(--muted)">Ally</label>
+                <input type="checkbox" id="newCombatantAlly" style="width:auto" />
+              </div>
+            </div>
+            <button class="btn-action" id="addCombatantBtn">+ Add to Encounter</button>
+            <div class="mut-result" id="addCombatantResult"></div>
+          </div>
+
           <div class="toolbox-placeholder" style="margin-top:12px">
-            <p>Mixed encounter groups, HP randomization, and advanced staging will live here.<br>
-               <em>Custom combatants preserved in 'Controls' panel for now.</em></p>
+            <p>Mixed encounter groups, HP randomization, and advanced staging will live here.</p>
           </div>
         </div>
       </div>
@@ -1263,47 +1302,6 @@
           <div class="empty-state">Select an acting monster above to load overlays.</div>
         </div>
         <div class="mut-result" id="monsterCapResult"></div>
-      </div>
-    </section>
-
-    <section class="setup-group" data-dm-card="setup" data-setup-group="roster" aria-labelledby="setupRosterGroupTitle">
-      <div class="setup-group-label" id="setupRosterGroupTitle">Roster</div>
-
-      <!-- Encounter setup: add combatant -->
-      <div class="mut-card" data-dm-card="setup">
-        <h3>Add Combatant</h3>
-        <div class="form-group">
-          <label>Name</label>
-          <input type="text" id="newCombatantName" placeholder="e.g. Goblin A" />
-        </div>
-        <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px">
-          <div class="form-group">
-            <label>HP</label>
-            <input type="number" id="newCombatantHp" placeholder="e.g. 15" min="0" />
-          </div>
-          <div class="form-group">
-            <label>Max HP (blank = HP)</label>
-            <input type="number" id="newCombatantMaxHp" placeholder="same as HP" min="0" />
-          </div>
-          <div class="form-group">
-            <label>Initiative</label>
-            <input type="number" id="newCombatantInit" placeholder="e.g. 14" />
-          </div>
-          <div class="form-group">
-            <label>AC</label>
-            <input type="number" id="newCombatantAc" placeholder="e.g. 13" min="0" />
-          </div>
-          <div class="form-group">
-            <label>Speed (ft)</label>
-            <input type="number" id="newCombatantSpeed" placeholder="30" min="0" />
-          </div>
-          <div class="form-group" style="justify-content:flex-end;flex-direction:row;align-items:center;gap:8px;padding-top:18px">
-            <label style="font-size:11px;color:var(--muted)">Ally</label>
-            <input type="checkbox" id="newCombatantAlly" style="width:auto" />
-          </div>
-        </div>
-        <button class="btn-action" id="addCombatantBtn">+ Add to Encounter</button>
-        <div class="mut-result" id="addCombatantResult"></div>
       </div>
     </section>
 
