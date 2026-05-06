@@ -76,8 +76,15 @@ class TestDmToolboxUi(unittest.TestCase):
         self.assertIn('id="removeCombatantResult"', encounter_content)
         
         # Verify placeholder text (updated)
-        self.assertIn('Monster Library, Add Monsters, and Custom Combatants will live here.', encounter_content)
+        self.assertIn('Advanced encounter tools and custom combatants will live here.', encounter_content)
         
+        # Verify Monster Library shell
+        self.assertIn('class="monster-library-shell"', encounter_content)
+        self.assertIn('id="monsterLibrarySearch"', encounter_content)
+        self.assertIn('id="monsterLibraryResults"', encounter_content)
+        self.assertIn('Search monsters', encounter_content)
+        self.assertIn('Monster Library', encounter_content)
+
         # Verify old block is gone from main cockpit
         # It was inside combat-setup section
         combat_setup_match = re.search(r'data-setup-group="combat-setup".*?>(.*?)<\/section>', html, re.DOTALL)

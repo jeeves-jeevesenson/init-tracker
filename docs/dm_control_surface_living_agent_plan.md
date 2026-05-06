@@ -97,7 +97,7 @@ Update this section after each pass.
 | Monster Pilot | Legacy/fallback | Do not use as foundation for future current-turn movement |
 | Monster capability backend | Useful | Labels renamed to 'Monster Actions' in DM UI |
 | DM Toolbox | In progress | Tabbed modal with Session, Encounter, Overrides tabs partially populated |
-| Encounter Builder | Planned | Search/browse monster library, spawn count, auto-numbering, mixed groups later |
+| Encounter Builder | In progress | Monster Library search/browse shell added to Encounter tab |
 | Duplicate monster names | Completed | Backend auto-numbering implemented via CombatantNameService |
 | Enemy/NPC initiative | Completed | Auto-roll individually when added via monster spawn path |
 | Movement model | Planned | Reuse/expose LAN canonical movement path where possible |
@@ -655,6 +655,27 @@ Outcome:
 - Mandatory JS syntax check passed.
 Next recommended pass:
 - M4/M5 — Encounter Builder / Monster Library (Search/Browse monster library).
+
+### 2026-05-06 — Monster Library / Encounter Builder shell (M4 partial)
+
+Agent/model: Gemini CLI (Autonomous Mode)
+Scope: 
+- Create Monster Library shell in DM Toolbox -> Encounter tab.
+- Implement search input and results container.
+- Add logic to filter and render monster cards from existing data.
+- Wire card click to populate existing "Add Monster Specs" dropdown.
+Files changed:
+- assets/web/dm/index.html
+- tests/test_dm_toolbox_ui.py
+- docs/dm_control_surface_living_agent_plan.md
+Outcome:
+- Searchable Monster Library added to Toolbox.
+- Real monster data (name, CR, type, HP, AC) displayed in result cards.
+- Search/filter works client-side.
+- Clicking a monster card pre-selects it in the existing add-monster workflow.
+- Mandatory JS syntax check passed.
+Next recommended pass:
+- M4 — Complete Encounter Builder (Wire Monster Library results to spawn monsters directly and migrate Add Monster Specs into Toolbox).
 
 ## Decision log
 

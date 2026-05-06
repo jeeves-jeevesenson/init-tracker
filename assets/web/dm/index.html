@@ -743,6 +743,51 @@
     .toolbox-placeholder p { color: var(--muted); margin-top: 8px; font-size: 13px; line-height: 1.5; }
     .toolbox-placeholder .icon { font-size: 32px; opacity: .5; }
 
+    /* Monster Library */
+    .monster-library-results {
+      background: var(--bg-secondary, #222);
+      border: 1px solid var(--border-color, #444);
+      border-radius: 4px;
+      max-height: 400px;
+      overflow-y: auto;
+      margin-top: 8px;
+    }
+    .monster-library-item {
+      display: flex;
+      flex-direction: column;
+      padding: 10px;
+      border-bottom: 1px solid var(--border-color, #333);
+      cursor: pointer;
+      transition: background 0.1s ease;
+    }
+    .monster-library-item:last-child {
+      border-bottom: none;
+    }
+    .monster-library-item:hover {
+      background: var(--bg-hover, #333);
+    }
+    .monster-library-item .monster-head {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-bottom: 4px;
+    }
+    .monster-library-item .monster-name {
+      font-weight: 600;
+      color: var(--accent-primary, #fff);
+    }
+    .monster-library-item .monster-meta {
+      font-size: 12px;
+      color: var(--muted, #aaa);
+      display: flex;
+      gap: 8px;
+      flex-wrap: wrap;
+    }
+    .monster-library-item .monster-meta span {
+      background: var(--bg-tertiary, #111);
+      padding: 2px 6px;
+      border-radius: 3px;
+    }
   </style>
 </head>
 <body data-dm-workspace="__DM_WORKSPACE__" data-dm-auth-required="__DM_AUTH_REQUIRED__">
@@ -823,8 +868,22 @@
         <div class="toolbox-section">
           <h3>Encounter Authoring</h3>
 
+          <div class="monster-library-shell">
+            <div class="form-group">
+              <label for="monsterLibrarySearch">Search monsters</label>
+              <input type="text" id="monsterLibrarySearch" placeholder="e.g. Goblin, Dragon, CR 5..." autocomplete="off" />
+            </div>
+            
+            <div class="monster-library-results-wrap">
+              <div class="section-subtitle">Monster Library</div>
+              <div id="monsterLibraryResults" class="monster-library-results">
+                <div class="empty-state">Search or browse monsters to add them to the encounter.</div>
+              </div>
+            </div>
+          </div>
+
           <!-- Encounter setup: remove combatant -->
-          <div class="mut-card">
+          <div class="mut-card" style="margin-top:20px">
             <h3>Remove Combatant</h3>
             <div class="form-group">
               <label>Combatant</label>
@@ -835,7 +894,7 @@
           </div>
 
           <div class="toolbox-placeholder" style="margin-top:12px">
-            <p>Monster Library, Add Monsters, and Custom Combatants will live here.<br>
+            <p>Advanced encounter tools and custom combatants will live here.<br>
                <em>Preserved in 'Controls' panel for now.</em></p>
           </div>
         </div>
@@ -2461,6 +2520,88 @@ function renderMonsterChoices(monsters) {
   }
 }
 
+function renderMonsterLibrary(monsters, filter = '') {
+  const container = document.getElementById('monsterLibraryResults');
+  if (!container) return;
+  
+  const query = String(filter || '').toLowerCase().trim();
+  const entries = (Array.isArray(monsters) ? monsters : [])
+    .filter(m => {
+      if (!query) return true;
+      const name = String(m.name || m.slug || '').toLowerCase();
+      const type = String(m.type || '').toLowerCase();
+      const cr = String(m.cr || '').toLowerCase();
+      return name.includes(query) || type.includes(query) || cr.includes(query);
+    });
+
+  if (!entries.length) {
+    container.innerHTML = `<div class="empty-state">${query ? 'No monsters match this search.' : 'Search or browse monsters to add them to the encounter.'}</div>`;
+    return;
+  }
+
+  container.innerHTML = '';
+  entries.forEach(monster => {
+    const item = document.createElement('div');
+    item.className = 'monster-library-item';
+    
+    const head = document.createElement('div');
+    head.className = 'monster-head';
+    const name = document.createElement('span');
+    name.className = 'monster-name';
+    name.textContent = monster.name || monster.slug;
+    head.appendChild(name);
+    
+    const cr = document.createElement('span');
+    cr.className = 'monster-cr';
+    cr.textContent = monster.cr ? `CR ${monster.cr}` : '';
+    head.appendChild(cr);
+    item.appendChild(head);
+    
+    const meta = document.createElement('div');
+    meta.className = 'monster-meta';
+    
+    if (monster.type) {
+      const type = document.createElement('span');
+      type.textContent = monster.type;
+      meta.appendChild(type);
+    }
+    if (monster.hp != null) {
+      const hp = document.createElement('span');
+      hp.textContent = `HP ${monster.hp}`;
+      meta.appendChild(hp);
+    }
+    if (monster.ac != null) {
+      const ac = document.createElement('span');
+      ac.textContent = `AC ${monster.ac}`;
+      meta.appendChild(ac);
+    }
+    item.appendChild(meta);
+    
+    item.addEventListener('click', () => {
+      // For now, just populate the existing "Add Monster Specs" dropdown
+      const sel = document.getElementById('monsterSlugSelect');
+      if (sel) {
+        sel.value = monster.slug;
+        // Optionally flash the dropdown or the card to show it was selected
+        const card = sel.closest('.mut-card');
+        if (card) {
+          card.style.borderColor = 'var(--accent-primary)';
+          setTimeout(() => card.style.borderColor = '', 500);
+        }
+        // If we want to stay in the toolbox, we don't close it.
+        // But the user might want to see the main controls.
+        // For now, keep it simple.
+      }
+    });
+    
+    container.appendChild(item);
+  });
+}
+
+document.getElementById('monsterLibrarySearch')?.addEventListener('input', (e) => {
+  renderMonsterLibrary(encounterOptions.monsters, e.target.value);
+});
+
 async function refreshEncounterOptions() {
   try {
     const r = await fetch(`${BASE}/api/dm/encounter/options`, { headers: authHeaders() });
@@ -2476,6 +2617,7 @@ async function refreshEncounterOptions() {
     };
     renderEncounterPlayers(encounterOptions.players);
     renderMonsterChoices(encounterOptions.monsters);
+    renderMonsterLibrary(encounterOptions.monsters);
   } catch (_) { /* ignore */ }
 }
 
