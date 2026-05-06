@@ -96,12 +96,12 @@ Update this section after each pass.
 | Monster Turn Controls | Legacy/fallback | Do not polish as target UI |
 | Monster Pilot | Legacy/fallback | Do not use as foundation for future current-turn movement |
 | Monster capability backend | Useful | Labels renamed to 'Monster Actions' in DM UI |
-| Focused actor panel | Prototype | Current actor focused automatically; token click inspects; stats display |
+| Focused actor panel | Prototype | Current actor focused automatically; token click inspects; stats and actions display |
 | DM Toolbox | In progress | Tabbed modal with Session, Encounter, Overrides tabs partially populated |
 | Encounter Builder | In progress | Monster Library search and Add Monster workflow migrated to Encounter tab |
 | Duplicate monster names | Completed | Backend auto-numbering implemented via CombatantNameService |
 | Enemy/NPC initiative | Completed | Auto-roll individually when added via monster spawn path |
-| Tactical map inspection | In progress | Token click focuses actor in panel without changing initiative turn |
+| Tactical map inspection | Completed | Token click focuses actor in panel without changing initiative turn |
 | Movement model | Planned | Reuse/expose LAN canonical movement path where possible |
 | Battle log | Planned refinement | Gameplay-focused, detailed, visible by default; technical logs separate |
 | Automation settings | Planned | Support app rolls and manual/physical dice per roll or roll type |
@@ -460,7 +460,7 @@ Update the status column after each pass.
 | M4 | Encounter Builder / Monster Library | In progress | Complete Encounter Builder (mixed groups/staging) |
 | M5 | Initiative flow | In progress | Reroll all enemy/NPC initiative in Toolbox |
 | M6 | Focused actor panel prototype | Completed | Static/prototype actor panel using current actor |
-| M7 | Monster Actions / action cards | Not started | Rename and no-match message first |
+| M7 | Monster Actions / action cards | In progress | Display-only integration in Focused Actor Panel |
 | M8 | Current-turn movement model | Not started | Reuse LAN movement path for DM current actor |
 | M9 | Tactical map inspection | Not started | Token click inspection / empty cell info |
 | M10 | Automation settings | Not started | Roll-path and persistence inspection |
@@ -737,6 +737,29 @@ Outcome:
 - Mandatory JS syntax check passed.
 Next recommended pass:
 - M7 — Monster Actions / action cards integration (first slice).
+
+### 2026-05-06 — Focused Actor Panel - Monster Actions Display Integration (M7)
+
+Agent/model: Gemini CLI (Autonomous Mode)
+Scope: 
+- Implement display-only "Monster Actions" integration in the Focused Actor Panel.
+- Add CSS for compact action cards.
+- Introduce `monsterCapabilitiesByCid` cache to optimize capability fetching.
+- Update `fetchMonsterCapabilities` to handle multi-panel updates.
+- Implement `renderCompactMonsterActions` for display-only mechanics summaries.
+- Handle PC view-only and monster no-match messaging.
+Files changed:
+- assets/web/dm/index.html
+- tests/test_dm_focused_actor_panel_actions.py (New)
+- docs/dm_control_surface_living_agent_plan.md
+Outcome:
+- Focused Actor Panel now displays compact, display-only action cards for the focused monster.
+- PC actors show appropriate "View Only" message.
+- "No structured action cards" message shown for monsters without overlays.
+- Mandatory JS syntax check passed.
+- All relevant tests (339) passed, including new focused tests.
+Next recommended pass:
+- M7 — Monster Actions: Action execution from Focused Actor Panel.
 
 ### 2026-05-06 — Tactical-map token-click inspection (M9 partial)
 

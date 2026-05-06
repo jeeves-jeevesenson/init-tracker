@@ -772,6 +772,20 @@
     .cap-actions { margin-top: 8px; display: flex; gap: 6px; }
     .cap-actions-manual { margin-top: 8px; font-size: 11px; font-style: italic; color: var(--muted); }
 
+    /* ── Focused Actor Panel Actions ────────────────────────────── */
+    .focused-actor-actions-list { display: flex; flex-direction: column; gap: 10px; margin-top: 8px; }
+    .focused-action-group { margin-top: 4px; }
+    .focused-action-group-title { font-size: 10px; font-weight: bold; text-transform: uppercase; color: var(--muted); margin-bottom: 6px; letter-spacing: .05em; border-bottom: 1px solid rgba(255,255,255,0.05); padding-bottom: 2px; }
+    .focused-action-card { background: rgba(255,255,255,0.02); border: 1px solid var(--border); border-radius: 6px; padding: 8px; margin-bottom: 6px; }
+    .focused-action-card.exec { border-left: 2px solid var(--heal); }
+    .focused-action-card.manual { border-left: 2px solid var(--warn); }
+    .focused-action-card.unavailable { opacity: 0.5; }
+    .focused-action-header { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-bottom: 4px; }
+    .focused-action-name { font-weight: bold; font-size: 13px; color: var(--text); flex: 1; }
+    .focused-action-badges { display: flex; gap: 4px; flex-shrink: 0; }
+    .focused-action-summary { font-size: 11px; color: var(--gold); margin-bottom: 2px; }
+    .focused-action-manual-warning { font-size: 10px; font-style: italic; color: var(--muted); margin-top: 4px; border-top: 1px solid rgba(255,255,255,0.05); padding-top: 4px; }
+
     /* ── DM Toolbox Modal ───────────────────────────────────────── */
     .toolbox-overlay {
       position: fixed; inset: 0; background: rgba(0,0,0,.75);
@@ -4484,7 +4498,23 @@ function renderFocusedActorPanel(snap) {
 
       <div class="actor-placeholder-section">
         <h4>Monster Actions</h4>
-        <div class="actor-placeholder-content">Action cards and resolution will appear here.</div>
+        <div id="focusedMonsterActions">
+          ${(() => {
+            const cid = actor.cid;
+            const isPc = actor.is_pc || actor.role === 'pc';
+            if (isPc) {
+              return '<div class="actor-placeholder-content">Player character actions are managed by the player.</div>';
+            }
+            const summary = monsterCapabilitiesByCid[cid];
+            if (summary) {
+              return renderCompactMonsterActions(summary);
+            } else {
+              // Trigger background fetch
+              fetchMonsterCapabilities(cid);
+              return '<div class="actor-placeholder-content loading-pulse">Fetching actions...</div>';
+            }
+          })()}
+        </div>
       </div>
 
       <div class="actor-placeholder-section">
@@ -6792,6 +6822,7 @@ if (_monsterPilotMoveSelectedCellBtn) {
 }
 
 // ── Monster Capabilities ──────────────────────────────────────────────
+let monsterCapabilitiesByCid = {};
 let monsterCapabilityResolutionPackets = {};
 
 function monsterCapabilityTargetOptions() {
@@ -6828,29 +6859,144 @@ function selectedMonsterCapabilityTargetIds(capId) {
 }
 
 async function fetchMonsterCapabilities(cid) {
-  const content = document.getElementById('monsterCapContent');
-  const res = document.getElementById('monsterCapResult');
-  res.className = 'mut-result';
-  res.style.display = 'none';
+  if (!cid) return;
 
-  if (!cid) {
-    content.innerHTML = '<div class="empty-state">Select a monster combatant to view capabilities.</div>';
+  // Use cache if available
+  if (monsterCapabilitiesByCid[cid]) {
+    updateMonsterCapabilityUis(cid, monsterCapabilitiesByCid[cid]);
     return;
   }
 
-  content.innerHTML = '<div class="empty-state loading-pulse">Fetching capabilities...</div>';
+  const legacyContent = document.getElementById('monsterCapContent');
+  const activeLegacyCid = document.getElementById('monsterActorCidSelect')?.value;
+  const focusedActor = findFocusedActorFromSnapshot(currentSnapshot);
+  const isFocused = focusedActor && String(cid) === String(focusedActor.cid);
+
+  if (legacyContent && String(cid) === String(activeLegacyCid)) {
+    legacyContent.innerHTML = '<div class="empty-state loading-pulse">Fetching capabilities...</div>';
+  }
+  if (isFocused) {
+    const focusedActionsEl = document.getElementById('focusedMonsterActions');
+    if (focusedActionsEl) focusedActionsEl.innerHTML = '<div class="actor-placeholder-content loading-pulse">Fetching actions...</div>';
+  }
 
   try {
     const r = await fetch(`${BASE}/api/dm/monster-capabilities/${cid}`, { headers: authHeaders() });
     const data = await r.json();
     if (r.ok && data.ok) {
-      renderMonsterCapabilities(data.summary);
+      monsterCapabilitiesByCid[cid] = data.summary;
+      updateMonsterCapabilityUis(cid, data.summary);
     } else {
-      content.innerHTML = `<div class="empty-state">No structured action cards for this monster yet. Use the stat block/manual controls.</div>`;
+      const noMatch = { matched: false, name: 'Unknown', combatant_id: cid };
+      monsterCapabilitiesByCid[cid] = noMatch;
+      updateMonsterCapabilityUis(cid, noMatch);
     }
   } catch (e) {
-    content.innerHTML = `<div class="empty-state error">Failed to fetch capabilities.</div>`;
+    if (legacyContent && String(cid) === String(activeLegacyCid)) {
+      legacyContent.innerHTML = `<div class="empty-state error">Failed to fetch capabilities.</div>`;
+    }
+    if (isFocused) {
+      const focusedActionsEl = document.getElementById('focusedMonsterActions');
+      if (focusedActionsEl) focusedActionsEl.innerHTML = '<div class="actor-placeholder-content error">Failed to fetch actions.</div>';
+    }
   }
+}
+
+function updateMonsterCapabilityUis(cid, summary) {
+  // 1. Update legacy panel if it's the active one
+  const legacyContent = document.getElementById('monsterCapContent');
+  const activeLegacyCid = document.getElementById('monsterActorCidSelect')?.value;
+  if (legacyContent && String(cid) === String(activeLegacyCid)) {
+    renderMonsterCapabilities(summary);
+  }
+
+  // 2. Update Focused Actor Panel if it's the focused one
+  const focusedActor = findFocusedActorFromSnapshot(currentSnapshot);
+  if (focusedActor && String(cid) === String(focusedActor.cid)) {
+    // We don't want to re-render the whole panel as it might reset scroll or other state
+    // but for now, we'll just update the actions div
+    const actionsEl = document.getElementById('focusedMonsterActions');
+    if (actionsEl) {
+      actionsEl.innerHTML = renderCompactMonsterActions(summary);
+    }
+  }
+}
+
+function renderCompactMonsterActions(summary) {
+  if (!summary || !summary.matched) {
+    return '<div class="actor-placeholder-content">No structured action cards for this monster yet. Use the stat block/manual controls.</div>';
+  }
+
+  const groupOrder = ['actions', 'bonus_actions', 'reactions', 'legendary_actions', 'traits', 'lair_actions', 'special'];
+  const groupLabels = {
+    'actions': 'Actions',
+    'bonus_actions': 'Bonus Actions',
+    'reactions': 'Reactions',
+    'legendary_actions': 'Legendary Actions',
+    'traits': 'Traits / Special Abilities',
+    'lair_actions': 'Lair Actions',
+    'special': 'Other'
+  };
+
+  let html = '<div class="focused-actor-actions-list">';
+  let hasAny = false;
+
+  for (const g of groupOrder) {
+    const list = summary.groups[g] || [];
+    if (!list.length) continue;
+    hasAny = true;
+
+    html += `<div class="focused-action-group">
+      <div class="focused-action-group-title">${escHtml(groupLabels[g])}</div>`;
+
+    for (const cap of list) {
+      const isExec = !!cap.executable;
+      const actionType = cap.action_type || 'special';
+      const recharge = cap.recharge_rule;
+      const available = cap.recharge ? (cap.recharge_available !== false) : 
+                        (cap.uses_remaining !== undefined ? cap.uses_remaining > 0 : true);
+
+      let mechanicsSummary = [];
+      if (cap.mechanics) {
+        const m = cap.mechanics;
+        if (m.attack_bonus !== undefined) {
+          mechanicsSummary.push(`+${m.attack_bonus} to hit`);
+        }
+        if (m.save_dc !== undefined) {
+          mechanicsSummary.push(`DC ${m.save_dc} ${escHtml(m.save_ability || '')}`);
+        }
+        if (m.damage && m.damage.length > 0) {
+          mechanicsSummary.push(m.damage.map(d => `${d.formula} ${d.type}`).join(' + '));
+        }
+        if (cap.area && cap.area.shape) {
+          mechanicsSummary.push(`${cap.area.size} ft ${cap.area.shape}`);
+        }
+      }
+
+      html += `
+        <div class="focused-action-card ${available ? '' : 'unavailable'} ${isExec ? 'exec' : 'manual'}">
+          <div class="focused-action-header">
+            <span class="focused-action-name">${escHtml(cap.name)}</span>
+            <div class="focused-action-badges">
+              ${recharge ? `<span class="cap-badge ${available ? 'exec' : 'manual'}">Recharge ${escHtml(recharge)}</span>` : ''}
+              ${cap.uses_max ? `<span class="cap-badge ${available ? 'exec' : 'manual'}">${cap.uses_remaining}/${cap.uses_max}</span>` : ''}
+              <span class="cap-badge ${actionType}">${escHtml(actionType.replace(/_/g, ' '))}</span>
+            </div>
+          </div>
+          ${mechanicsSummary.length > 0 ? `<div class="focused-action-summary">${escHtml(mechanicsSummary.join(' · '))}</div>` : ''}
+          ${!isExec ? '<div class="focused-action-manual-warning">Manual / assisted resolution required.</div>' : ''}
+        </div>
+      `;
+    }
+    html += '</div>';
+  }
+
+  if (!hasAny) {
+    return '<div class="actor-placeholder-content">No structured action cards for this monster yet.</div>';
+  }
+
+  html += '</div>';
+  return html;
 }
 
 function renderMonsterCapabilities(summary) {
