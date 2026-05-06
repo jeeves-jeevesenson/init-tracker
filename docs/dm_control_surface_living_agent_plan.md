@@ -460,7 +460,7 @@ Update the status column after each pass.
 | M4 | Encounter Builder / Monster Library | In progress | Complete Encounter Builder (mixed groups/staging) |
 | M5 | Initiative flow | In progress | Reroll all enemy/NPC initiative in Toolbox |
 | M6 | Focused actor panel prototype | Completed | Static/prototype actor panel using current actor |
-| M7 | Monster Actions / action cards | In progress | Action target range / AoE advisory hints |
+| M7 | Monster Actions / action cards | In progress | Action execution planning / resolution review |
 | M8 | Current-turn movement model | Not started | Reuse LAN movement path for DM current actor |
 | M9 | Tactical map inspection | Not started | Token click inspection / empty cell info |
 | M10 | Automation settings | Not started | Roll-path and persistence inspection |
@@ -780,7 +780,75 @@ Outcome:
 - Mandatory JS syntax check passed.
 - All relevant tests (339) passed, including new focused tests.
 Next recommended pass:
-- M7 — Monster Actions: Action execution planning / target-resolution review.
+- M7 — Monster Actions: Resolution Tray (Trigger execution from Target Tray).
+
+### 2026-05-06 — Monster Actions: Resolution Planning / Target-Resolution Review (M7 extension)
+
+Agent/model: Gemini CLI (Autonomous Mode)
+Scope:
+- Perform a repo-grounded planning pass for wiring Monster Actions execution from the Focused Actor Panel.
+- Identify existing execution flows (standalone panel vs LAN client).
+- Define the Resolution Tray model and the first executable slice.
+Files changed:
+- docs/dm_control_surface_living_agent_plan.md
+Outcome:
+- Planning complete. Recommended path is to reuse the existing `/api/dm/monster-capabilities/${cid}/execute` and `/api/dm/monster-capabilities/${cid}/resolve-targets` endpoints.
+- First executable slice identified as "Manual adjudication for selected targets."
+- Resolution Tray design defined: an integrated panel replacing the Target Tray after execution is triggered.
+
+## Monster Actions Execution & Resolution Plan
+
+### Existing Flows Found
+
+1. **Standalone Monster Actions Panel (Legacy)**:
+   - **Endpoint**: `POST /api/dm/monster-capabilities/${cid}/execute`
+   - **Payload**: `{ capability_id, target_cid, spend, roll_mode }`
+   - **Resolution**: Results can be `automatic` (broadcast) or `assisted`.
+   - **Assisted resolution UI**: `renderMonsterCapabilityResolution` shows target rows with outcome dropdowns (hit/miss/save).
+   - **Final Application**: Calls `POST /api/dm/monster-capabilities/${cid}/resolve-targets`.
+
+2. **LAN Attack/Target Resolution**:
+   - **Command**: `attack_request` or `spell_target_request`.
+   - **UI**: Modal-based hit/miss and damage entry.
+   - **Automation**: High level of automation for player-owned stats and resources.
+
+### Recommended Reuse Path
+
+The Focused Actor Panel should reuse the **Standalone Monster Actions** backend logic. These endpoints are purpose-built for the DM to adjudicate complex monster capabilities (recharge, saves, area effects) and already handle the transition from "Intent to Execute" to "Adjudicated Result."
+
+### First Executable Slice
+
+**Intent**: "Execute Action for Selected Targets" with manual adjudication.
+
+1. **Trigger**: Add an "Execute" button to the **Target Tray**.
+2. **Phase 1 (Execute)**: Send execution intent to the backend. Use the first selected target for single-target actions or the full list for multi-target actions.
+3. **Phase 2 (Resolve)**: The UI transitions from a **Target Tray** to a **Resolution Tray**.
+4. **Adjudication**: The DM reviews hit/miss or pass/fail for each target (pre-populated by the backend if rolls are automated, otherwise manual).
+5. **Phase 3 (Apply)**: "Apply Results" button finalizes the change (damage/conditions/resource spend).
+
+### Explicitly Deferred
+- **Multiattack sequence tracking**: Execute individual components manually first.
+- **Full automation settings**: Use the backend's current roll-mode defaults.
+- **Resource/Spell slot enforcement**: Allow manual spend first.
+- **Diagonal distance rules**: Stick to the current advisory (Chebyshev) distance.
+
+### Resolution Tray Design
+- **Location**: Replaces the Target Tray inside the Focused Actor Panel.
+- **Appearance**: Distinct "Adjudication Mode" border (e.g., gold or blue).
+- **Target Rows**: One row per target with name, HP status, and outcome dropdown.
+- **Summary**: Action name, DC/Attack bonus, and rolled/manual damage.
+- **Controls**: "Apply Results" (Confirm) and "Cancel" (Rollback intent).
+
+### Required Tests
+- **Backend Verification**: Ensure `/execute` and `/resolve-targets` handle CIDs from the new tray correctly.
+- **UI State Safety**: Confirm that switching actors or actions during resolution rolls back or clears the tray safely.
+- **No-Regression**: Ensure the standalone Monster Actions panel still works perfectly.
+
+### Risks / Blockers
+- **Multi-target Execution**: Existing legacy `/execute` might need minor adjustment if it expects exactly one `target_cid` but the tray has multiple; however, `resolve-targets` is already multi-target capable.
+
+### Next Implementation Task
+**M7 — Monster Actions: Resolution Tray (Trigger execution from Target Tray).**
 
 ### 2026-05-06 — Monster Actions: Range / AoE Validation Hints (M7 extension)
 
