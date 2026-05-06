@@ -1930,6 +1930,7 @@ let focusedActorTargetActionId = null;
 let focusedActorSelectedTargetCids = [];
 let focusedActorResolutionPacket = null;
 let focusedActorResolutionError = null;
+let focusedActorResolutionInFlight = false;
 let tacticalPresetsByCategory = { hazard: [], feature: [], structure: [] };
 let tacticalBackgroundAssets = [];
 let tacticalShipBlueprints = [];
@@ -4703,15 +4704,16 @@ function renderFocusedActorPanel(snap) {
           </div>
 
           <div style="display:flex; gap:6px; margin-top:12px">
-            <button class="btn-sm" style="flex:1" onclick="resolveFocusedActorAction(true, true)">Apply Results</button>
+            <button class="btn-sm" style="flex:1" onclick="resolveFocusedActorAction(true, true)" ${focusedActorResolutionInFlight ? 'disabled' : ''}>Apply Results</button>
           </div>
+          <div style="font-size:10px; color:var(--muted); text-align:center; margin-top:6px; font-style:italic">Apply Results will update combat state.</div>
         </div>
       </div>
       ` : `
       <div class="actor-placeholder-section" style="border-top: 1px solid var(--border); margin-top: 0">
         <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:8px">
           <h4>Target Tray</h4>
-          ${focusedActorSelectedTargetCids.length > 0 ? `<button class="btn-xs" onclick="clearFocusedActorSelectedTargets()">Clear targets</button>` : ''}
+          ${focusedActorSelectedTargetCids.length > 0 ? `<button class="btn-xs" onclick="clearFocusedActorSelectedTargets()" ${focusedActorResolutionInFlight ? 'disabled' : ''}>Clear targets</button>` : ''}
         </div>
         <div class="target-tray-list">
           ${(() => {
@@ -4747,7 +4749,7 @@ function renderFocusedActorPanel(snap) {
                     <div style="font-size:10px; color:var(--muted)">${escHtml(target.side || 'Neutral')} · HP ${target.hp}/${target.max_hp}</div>
                     ${showAdvisory ? `<div style="font-size:10px; color:${advisoryColor}; font-weight:bold; margin-top:2px">${escHtml(advisory.text)}</div>` : ''}
                   </div>
-                  <button class="btn-sm remove" onclick="toggleFocusedActorSelectedTarget(${target.cid})" style="padding:2px 6px">×</button>
+                  <button class="btn-sm remove" onclick="toggleFocusedActorSelectedTarget(${target.cid})" style="padding:2px 6px" ${focusedActorResolutionInFlight ? 'disabled' : ''}>×</button>
                 </div>
               `;
             }).join('');
@@ -4755,7 +4757,7 @@ function renderFocusedActorPanel(snap) {
         </div>
         ${focusedActorSelectedTargetCids.length > 0 ? `
           <div style="margin-top:12px; display:flex; flex-direction:column; gap:8px">
-            <button class="btn-action" style="width:100%" onclick="executeFocusedActorAction()">Execute / Prepare Resolution</button>
+            <button class="btn-action" style="width:100%" onclick="executeFocusedActorAction()" ${focusedActorResolutionInFlight ? 'disabled' : ''}>Execute / Prepare Resolution</button>
             <div style="font-size:10px; color:var(--muted); text-align:center; padding:4px; border:1px dashed var(--border); border-radius:4px">Selection is not blocked; DM decides.</div>
           </div>
         ` : ''}
@@ -7195,9 +7197,17 @@ function selectFocusedActorAction(capId) {
     if (focusedActorTargetActionId === capId) {
       focusedActorTargetModeEnabled = false;
       focusedActorTargetActionId = null;
+      focusedActorSelectedTargetCids = [];
+      focusedActorResolutionPacket = null;
+      focusedActorResolutionError = null;
     }
   } else {
     focusedActorExpandedActionId = capId;
+    // If we were in the middle of a different resolution, clear it
+    if (focusedActorResolutionPacket && focusedActorTargetActionId !== capId) {
+      focusedActorResolutionPacket = null;
+      focusedActorResolutionError = null;
+    }
   }
 
   // Re-render only the actions list to preserve selection if possible,
@@ -7208,6 +7218,8 @@ function selectFocusedActorAction(capId) {
     if (actionsEl) {
       actionsEl.innerHTML = renderCompactMonsterActions(monsterCapabilitiesByCid[actor.cid]);
     }
+    // Also re-render the whole panel to update target tray/resolution tray visibility
+    renderFocusedActorPanel(currentSnapshot);
   }
 }
 
@@ -7218,16 +7230,22 @@ function toggleFocusedActorTargetPreview(capId, evt) {
     focusedActorTargetModeEnabled = false;
     focusedActorTargetActionId = null;
     focusedActorSelectedTargetCids = [];
+    focusedActorResolutionPacket = null;
+    focusedActorResolutionError = null;
   } else if (focusedActorTargetActionId === capId && focusedActorTargetModeEnabled) {
     focusedActorTargetModeEnabled = false;
     focusedActorTargetActionId = null;
     focusedActorSelectedTargetCids = [];
+    focusedActorResolutionPacket = null;
+    focusedActorResolutionError = null;
   } else {
     focusedActorTargetModeEnabled = true;
     focusedActorTargetActionId = capId;
     focusedActorSelectedActionId = capId;
     focusedActorExpandedActionId = capId;
     focusedActorSelectedTargetCids = [];
+    focusedActorResolutionPacket = null;
+    focusedActorResolutionError = null;
   }
 
   // Update UI
@@ -7258,9 +7276,10 @@ function clearFocusedActorSelectedTargets() {
 
 async function executeFocusedActorAction() {
   const actor = findFocusedActorFromSnapshot(currentSnapshot);
-  if (!actor || !focusedActorTargetActionId) return;
+  if (!actor || !focusedActorTargetActionId || focusedActorResolutionInFlight) return;
 
   focusedActorResolutionError = null;
+  focusedActorResolutionInFlight = true;
   renderFocusedActorPanel(currentSnapshot);
 
   try {
@@ -7290,21 +7309,21 @@ async function executeFocusedActorAction() {
         focusedActorResolutionPacket = null;
       }
       if (data.snapshot) applySnapshot(data.snapshot);
-      renderFocusedActorPanel(currentSnapshot);
-      renderTacticalMap(currentTacticalMap());
     } else {
       focusedActorResolutionError = data.detail || (data.result && data.result.error) || 'Execution failed.';
-      renderFocusedActorPanel(currentSnapshot);
     }
   } catch (e) {
     focusedActorResolutionError = 'Request failed.';
+  } finally {
+    focusedActorResolutionInFlight = false;
     renderFocusedActorPanel(currentSnapshot);
+    renderTacticalMap(currentTacticalMap());
   }
 }
 
 async function resolveFocusedActorAction(applyDamage, applyEffects) {
   const actor = findFocusedActorFromSnapshot(currentSnapshot);
-  if (!actor || !focusedActorTargetActionId || !focusedActorResolutionPacket) return;
+  if (!actor || !focusedActorTargetActionId || !focusedActorResolutionPacket || focusedActorResolutionInFlight) return;
 
   const targets = Array.from(document.querySelectorAll(`.focused-resolution-outcome`))
     .map(el => ({
@@ -7318,6 +7337,10 @@ async function resolveFocusedActorAction(applyDamage, applyEffects) {
     renderFocusedActorPanel(currentSnapshot);
     return;
   }
+
+  focusedActorResolutionInFlight = true;
+  focusedActorResolutionError = null;
+  renderFocusedActorPanel(currentSnapshot);
 
   try {
     const r = await fetch(`${BASE}/api/dm/monster-capabilities/${actor.cid}/resolve-targets`, {
@@ -7339,15 +7362,15 @@ async function resolveFocusedActorAction(applyDamage, applyEffects) {
       focusedActorResolutionPacket = null;
       focusedActorResolutionError = null;
       if (data.snapshot) applySnapshot(data.snapshot);
-      renderFocusedActorPanel(currentSnapshot);
-      renderTacticalMap(currentTacticalMap());
     } else {
       focusedActorResolutionError = data.detail || (data.result && data.result.error) || 'Resolution failed.';
-      renderFocusedActorPanel(currentSnapshot);
     }
   } catch (e) {
     focusedActorResolutionError = 'Request failed.';
+  } finally {
+    focusedActorResolutionInFlight = false;
     renderFocusedActorPanel(currentSnapshot);
+    renderTacticalMap(currentTacticalMap());
   }
 }
 
@@ -7454,7 +7477,6 @@ function renderCompactMonsterActions(summary) {
             </div>
             ${isSelected ? `
               <div style="margin-top:10px; display:flex; gap:8px; align-items:center; justify-content:flex-end">
-                <span style="font-size:10px; color:var(--muted); flex:1">Execution and resolution coming later.</span>
                 <button class="btn-action ${focusedActorTargetModeEnabled && focusedActorTargetActionId === cap.id ? 'remove' : ''}"
                         onclick="toggleFocusedActorTargetPreview('${escAttr(cap.id)}', event)"
                         style="padding: 4px 8px; font-size: 11px">

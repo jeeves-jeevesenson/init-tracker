@@ -48,7 +48,6 @@ class TestDmFocusedActorPanelActions(unittest.TestCase):
         self.assertIn('class="focused-action-details"', html)
         self.assertIn('class="focused-action-desc"', html)
         self.assertIn('class="focused-action-meta-grid"', html)
-        self.assertIn('Execution and resolution coming later.', html)
         self.assertIn('Target Preview', html)
         self.assertIn('Cancel Preview', html)
 

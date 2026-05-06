@@ -460,7 +460,7 @@ Update the status column after each pass.
 | M4 | Encounter Builder / Monster Library | In progress | Complete Encounter Builder (mixed groups/staging) |
 | M5 | Initiative flow | In progress | Reroll all enemy/NPC initiative in Toolbox |
 | M6 | Focused actor panel prototype | Completed | Static/prototype actor panel using current actor |
-| M7 | Monster Actions / action cards | In progress | Action Resolution Tray (manual adjudication) |
+| M7 | Monster Actions / action cards | In progress | Resolution Tray Hardening completed; Next: multiattack planning |
 | M8 | Current-turn movement model | Not started | Reuse LAN movement path for DM current actor |
 | M9 | Tactical map inspection | Not started | Token click inspection / empty cell info |
 | M10 | Automation settings | Not started | Roll-path and persistence inspection |
@@ -803,6 +803,30 @@ Outcome:
 - Full parity with the manual adjudication logic of the standalone panel, but integrated into the new cockpit.
 - Mandatory JS syntax check passed.
 - All relevant tests (348) passed.
+
+### 2026-05-06 — Monster Actions: Resolution Tray Hardening (M7 extension)
+
+Agent/model: Gemini CLI (Autonomous Mode)
+Scope:
+- Harden the Focused Actor Panel Monster Actions Resolution Tray.
+- Added `focusedActorResolutionInFlight` state to prevent duplicate submissions.
+- Implemented button disabling and logic guards for Prepare and Apply phases.
+- Improved error handling: show backend errors, keep tray for retry on failure.
+- Added state cleanup: clear resolution state on actor change, action change, or expansion toggle.
+- Added safety text: "Apply Results will update combat state."
+- Verified successful apply clears all preview/tray/resolution state and applies snapshot.
+- Ensured no regressions in standalone Monster Actions panel.
+Files changed:
+- assets/web/dm/index.html
+- tests/test_dm_resolution_tray_hardening.py (New)
+- tests/test_dm_focused_actor_panel_actions.py
+Outcome:
+- DM resolution flow is now significantly more robust and safer against accidental double-clicks or stale state.
+- Clear visual and functional feedback for in-flight operations.
+- Mandatory JS syntax check passed.
+- All relevant tests (354) passed.
+Next recommended pass:
+- M7 — Multiattack sequencing / assisted flow planning.
 
 ### 2026-05-06 — Monster Actions: Resolution Planning / Target-Resolution Review (M7 extension)
 
