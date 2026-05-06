@@ -126,3 +126,13 @@ Do not claim a phase is complete unless code and focused validation support that
 - Keep reconnect, claims/auth, hidden-information handling, and persistence safety intact.
 - Do not rewrite the map/tactical layer first unless the task explicitly requires it.
 - Do not preserve desktop-first behavior as an end-state goal.
+
+## Mandatory browser-asset JavaScript syntax check
+
+Any pass that edits `assets/web/dm/index.html` or `assets/web/lan/index.html` must run an inline JavaScript parse/syntax check before reporting success.
+
+Python tests are not enough for these files. Browser parse failures such as `Unexpected token '}'` or `Identifier '<name>' has already been declared` are blockers.
+
+The end-of-pass report must include the exact JS syntax-check command and result. Do not claim browser readiness if the check was skipped, unavailable, or failed.
+
+Preferred check: extract inline `<script>` blocks from the edited HTML file(s) and run `node --check` against the extracted JavaScript.

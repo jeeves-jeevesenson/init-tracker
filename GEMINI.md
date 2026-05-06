@@ -224,3 +224,87 @@ support that claim.
 - Repo-local Gemini infrastructure: `.gemini/agents/`,
   `.gemini/commands/init/`, `.gemini/settings.example.json`
 - Workflow guide: `docs/ai-workflows/gemini.md`
+
+## Mandatory browser-asset JavaScript syntax check
+
+Any pass that edits either of these files MUST run an inline JavaScript parse/syntax check before reporting success:
+
+- `assets/web/dm/index.html`
+- `assets/web/lan/index.html`
+
+This is required even if Python tests pass. Python tests do not reliably catch inline browser JavaScript parse failures.
+
+Required behavior:
+- If `assets/web/dm/index.html` is edited, check the DM page inline scripts.
+- If `assets/web/lan/index.html` is edited, check the LAN page inline scripts.
+- If both are edited, check both.
+- Report the exact syntax-check command and result in the end-of-pass report.
+- Do not claim browser readiness if the syntax check was skipped, unavailable, or failed.
+- Browser console parse errors such as `Unexpected token '}'` or `Identifier '<name>' has already been declared` are blockers.
+
+Recommended syntax check:
+
+```bash
+./.venv/bin/python3 - <<'PY'
+from html.parser import HTMLParser
+from pathlib import Path
+import subprocess
+import tempfile
+import shutil
+import sys
+
+FILES = [
+    Path("assets/web/dm/index.html"),
+    Path("assets/web/lan/index.html"),
+]
+
+class ScriptExtractor(HTMLParser):
+    def __init__(self):
+        super().__init__()
+        self.in_script = False
+        self.scripts = []
+        self._buf = []
+
+    def handle_starttag(self, tag, attrs):
+        if tag.lower() == "script":
+            attrs = dict(attrs)
+            if attrs.get("src"):
+                return
+            self.in_script = True
+            self._buf = []
+
+    def handle_endtag(self, tag):
+        if tag.lower() == "script" and self.in_script:
+            self.in_script = False
+            self.scripts.append("".join(self._buf))
+            self._buf = []
+
+    def handle_data(self, data):
+        if self.in_script:
+            self._buf.append(data)
+
+node = shutil.which("node")
+if not node:
+    print("ERROR: node is not available; cannot run browser JS syntax check.", file=sys.stderr)
+    sys.exit(1)
+
+for path in FILES:
+    if not path.exists():
+        continue
+    parser = ScriptExtractor()
+    parser.feed(path.read_text(encoding="utf-8"))
+    combined = "\n;\n".join(parser.scripts)
+    with tempfile.NamedTemporaryFile("w", suffix=f".{path.stem}.js", delete=False, encoding="utf-8") as tmp:
+        tmp.write(combined)
+        tmp_path = tmp.name
+    result = subprocess.run([node, "--check", tmp_path], text=True, capture_output=True)
+    if result.returncode != 0:
+        print(f"JS syntax check failed for {path}", file=sys.stderr)
+        print(result.stdout, file=sys.stderr)
+        print(result.stderr, file=sys.stderr)
+        sys.exit(result.returncode)
+    print(f"JS syntax check passed for {path}")
+PY
+```
+
+If a pass changes browser JavaScript and node --check fails, fix that before running broader validation or manual browser smoke.
