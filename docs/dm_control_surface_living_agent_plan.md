@@ -460,7 +460,7 @@ Update the status column after each pass.
 | M4 | Encounter Builder / Monster Library | In progress | Complete Encounter Builder (mixed groups/staging) |
 | M5 | Initiative flow | In progress | Reroll all enemy/NPC initiative in Toolbox |
 | M6 | Focused actor panel prototype | Completed | Static/prototype actor panel using current actor |
-| M7 | Monster Actions / action cards | In progress | Action execution planning / resolution review |
+| M7 | Monster Actions / action cards | In progress | Action Resolution Tray (manual adjudication) |
 | M8 | Current-turn movement model | Not started | Reuse LAN movement path for DM current actor |
 | M9 | Tactical map inspection | Not started | Token click inspection / empty cell info |
 | M10 | Automation settings | Not started | Roll-path and persistence inspection |
@@ -780,7 +780,29 @@ Outcome:
 - Mandatory JS syntax check passed.
 - All relevant tests (339) passed, including new focused tests.
 Next recommended pass:
-- M7 — Monster Actions: Resolution Tray (Trigger execution from Target Tray).
+- M7 — Monster Actions: Action execution hardening / error handling.
+
+### 2026-05-06 — Monster Actions: Resolution Tray (M7 extension)
+
+Agent/model: Gemini CLI (Autonomous Mode)
+Scope:
+- Implement the first executable slice from Focused Actor Panel Target Tray to a backend-backed Resolution Tray.
+- Reuse existing standalone Monster Actions backend endpoints: `/execute` and `/resolve-targets`.
+- Added "Execute / Prepare Resolution" button to the Target Tray.
+- Added `Resolution Tray` UI that appears after execution intent is sent.
+- Manual outcome adjudication (fail/hit, success/miss, etc.) per target.
+- "Apply Results" finalizing damage/effects via the existing backend flow.
+- "Cancel" controls for both execution and resolution phases.
+- State management ensuring resolution state is cleared on actor/action changes.
+Files changed:
+- assets/web/dm/index.html
+- tests/test_dm_focused_actor_panel_actions.py
+- docs/dm_control_surface_living_agent_plan.md
+Outcome:
+- DM can now select targets on the map and trigger a real backend execution/resolution flow directly from the Focused Actor Panel.
+- Full parity with the manual adjudication logic of the standalone panel, but integrated into the new cockpit.
+- Mandatory JS syntax check passed.
+- All relevant tests (348) passed.
 
 ### 2026-05-06 — Monster Actions: Resolution Planning / Target-Resolution Review (M7 extension)
 

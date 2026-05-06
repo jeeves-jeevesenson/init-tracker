@@ -29,12 +29,17 @@ class TestDmFocusedActorPanelActions(unittest.TestCase):
         self.assertIn('let focusedActorTargetModeEnabled = false;', html)
         self.assertIn('let focusedActorTargetActionId = null;', html)
         self.assertIn('let focusedActorSelectedTargetCids = [];', html)
+        self.assertIn('let focusedActorResolutionPacket = null;', html)
+        self.assertIn('let focusedActorResolutionError = null;', html)
         self.assertIn('function updateMonsterCapabilityUis', html)
         self.assertIn('function renderCompactMonsterActions', html)
         self.assertIn('function selectFocusedActorAction', html)
         self.assertIn('function toggleFocusedActorTargetPreview', html)
         self.assertIn('function toggleFocusedActorSelectedTarget', html)
         self.assertIn('function clearFocusedActorSelectedTargets', html)
+        self.assertIn('function executeFocusedActorAction', html)
+        self.assertIn('function resolveFocusedActorAction', html)
+        self.assertIn('function cancelFocusedActorActionResolution', html)
         self.assertIn('fetchMonsterCapabilities(cid)', html)
 
     def test_selection_expansion_rendering(self):
@@ -54,7 +59,18 @@ class TestDmFocusedActorPanelActions(unittest.TestCase):
         self.assertIn('clearFocusedActorSelectedTargets()', html)
         self.assertIn('class="target-tray-list"', html)
         self.assertIn('class="target-tray-item"', html)
-        self.assertIn('Resolution coming later.', html)
+        self.assertIn('executeFocusedActorAction()', html)
+        self.assertIn('Execute / Prepare Resolution', html)
+
+    def test_resolution_tray_rendering(self):
+        html = _DM_HTML_PATH.read_text(encoding="utf-8")
+        self.assertIn('Resolution Tray</h4>', html)
+        self.assertIn('cancelFocusedActorActionResolution()', html)
+        self.assertIn('class="target-resolution-list"', html)
+        self.assertIn('class="focused-resolution-outcome"', html)
+        self.assertIn('resolveFocusedActorAction(true, true)', html)
+        self.assertIn('Apply Results', html)
+        self.assertIn('focusedActorResolutionError', html)
 
     def test_target_preview_rendering_logic(self):
         html = _DM_HTML_PATH.read_text(encoding="utf-8")

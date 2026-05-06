@@ -424,7 +424,7 @@
     .actor-name-wrap { min-width: 0; }
     .actor-name { font-size: 18px; font-weight: 700; color: var(--gold); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
     .actor-meta { font-size: 11px; color: var(--muted); text-transform: uppercase; letter-spacing: .04em; }
-    
+
     .actor-stats-grid {
       display: grid;
       grid-template-columns: repeat(auto-fit, minmax(70px, 1fr));
@@ -818,7 +818,7 @@
       cursor: pointer; padding: 4px; line-height: 1;
     }
     .toolbox-close-btn:hover { color: var(--danger); }
-    
+
     .toolbox-tabs {
       display: flex; gap: 2px; padding: 0 10px; background: rgba(0,0,0,.2);
       border-bottom: 1px solid var(--border);
@@ -836,7 +836,7 @@
     .toolbox-body { flex: 1; overflow-y: auto; padding: 20px; }
     .toolbox-tab-panel { display: none; }
     .toolbox-tab-panel.is-active { display: block; }
-    
+
     .toolbox-section { margin-bottom: 24px; }
     .toolbox-section h3 {
       font-size: 12px; color: var(--gold); text-transform: uppercase;
@@ -918,7 +918,7 @@
       <h2 id="toolboxTitle">🛠 DM Toolbox</h2>
       <button class="toolbox-close-btn" id="closeToolboxBtn" aria-label="Close toolbox">&times;</button>
     </div>
-    
+
     <div class="toolbox-tabs" role="tablist">
       <button class="toolbox-tab-btn is-active" role="tab" aria-selected="true" aria-controls="panel-session" id="tab-session">Session</button>
       <button class="toolbox-tab-btn" role="tab" aria-selected="false" aria-controls="panel-encounter" id="tab-encounter">Encounter</button>
@@ -926,7 +926,7 @@
       <button class="toolbox-tab-btn" role="tab" aria-selected="false" aria-controls="panel-maptools" id="tab-maptools">Map Tools</button>
       <button class="toolbox-tab-btn" role="tab" aria-selected="false" aria-controls="panel-debug" id="tab-debug">Debug</button>
     </div>
-    
+
     <div class="toolbox-body">
       <!-- Session Tab -->
       <div class="toolbox-tab-panel is-active" id="panel-session" role="tabpanel" aria-labelledby="tab-session">
@@ -969,7 +969,7 @@
           </div>
         </div>
       </div>
-      
+
       <!-- Encounter Tab -->
       <div class="toolbox-tab-panel" id="panel-encounter" role="tabpanel" aria-labelledby="tab-encounter">
         <div class="toolbox-section">
@@ -980,7 +980,7 @@
               <label for="monsterLibrarySearch">Search monsters</label>
               <input type="text" id="monsterLibrarySearch" placeholder="e.g. Goblin, Dragon, CR 5..." autocomplete="off" />
             </div>
-            
+
             <div class="monster-library-results-wrap">
               <div class="section-subtitle">Monster Library</div>
               <div id="monsterLibraryResults" class="monster-library-results">
@@ -1074,12 +1074,12 @@
           </div>
         </div>
       </div>
-      
+
       <!-- Overrides Tab -->
       <div class="toolbox-tab-panel" id="panel-overrides" role="tabpanel" aria-labelledby="tab-overrides">
         <div class="toolbox-section">
           <h3>Manual Overrides</h3>
-          
+
           <!-- HP adjustment -->
           <div class="mut-card">
             <h3>HP Adjustment</h3>
@@ -1134,7 +1134,7 @@
           </div>
         </div>
       </div>
-      
+
       <!-- Map Tools Tab -->
       <div class="toolbox-tab-panel" id="panel-maptools" role="tabpanel" aria-labelledby="tab-maptools">
         <div class="toolbox-section">
@@ -1146,7 +1146,7 @@
           </div>
         </div>
       </div>
-      
+
       <!-- Debug Tab -->
       <div class="toolbox-tab-panel" id="panel-debug" role="tabpanel" aria-labelledby="tab-debug">
         <div class="toolbox-section">
@@ -1928,6 +1928,8 @@ let focusedActorExpandedActionId = null;
 let focusedActorTargetModeEnabled = false;
 let focusedActorTargetActionId = null;
 let focusedActorSelectedTargetCids = [];
+let focusedActorResolutionPacket = null;
+let focusedActorResolutionError = null;
 let tacticalPresetsByCategory = { hazard: [], feature: [], structure: [] };
 let tacticalBackgroundAssets = [];
 let tacticalShipBlueprints = [];
@@ -2426,13 +2428,13 @@ function closeToolbox() {
 
 function switchToolboxTab(tabId) {
   const targetPanelId = document.getElementById(tabId).getAttribute('aria-controls');
-  
+
   toolboxTabs.forEach(t => {
     const active = t.id === tabId;
     t.classList.toggle('is-active', active);
     t.setAttribute('aria-selected', active);
   });
-  
+
   toolboxPanels.forEach(p => {
     p.classList.toggle('is-active', p.id === targetPanelId);
   });
@@ -2643,7 +2645,7 @@ function renderMonsterChoices(monsters) {
 function renderMonsterLibrary(monsters, filter = '') {
   const container = document.getElementById('monsterLibraryResults');
   if (!container) return;
-  
+
   const query = String(filter || '').toLowerCase().trim();
   const entries = (Array.isArray(monsters) ? monsters : [])
     .filter(m => {
@@ -2663,23 +2665,23 @@ function renderMonsterLibrary(monsters, filter = '') {
   entries.forEach(monster => {
     const item = document.createElement('div');
     item.className = 'monster-library-item';
-    
+
     const head = document.createElement('div');
     head.className = 'monster-head';
     const name = document.createElement('span');
     name.className = 'monster-name';
     name.textContent = monster.name || monster.slug;
     head.appendChild(name);
-    
+
     const cr = document.createElement('span');
     cr.className = 'monster-cr';
     cr.textContent = monster.cr ? `CR ${monster.cr}` : '';
     head.appendChild(cr);
     item.appendChild(head);
-    
+
     const meta = document.createElement('div');
     meta.className = 'monster-meta';
-    
+
     if (monster.type) {
       const type = document.createElement('span');
       type.textContent = monster.type;
@@ -2696,7 +2698,7 @@ function renderMonsterLibrary(monsters, filter = '') {
       meta.appendChild(ac);
     }
     item.appendChild(meta);
-    
+
     item.addEventListener('click', () => {
       // For now, just populate the existing "Add Monster Specs" dropdown
       const sel = document.getElementById('monsterSlugSelect');
@@ -2713,7 +2715,7 @@ function renderMonsterLibrary(monsters, filter = '') {
         // For now, keep it simple.
       }
     });
-    
+
     container.appendChild(item);
   });
 }
@@ -4125,7 +4127,7 @@ function renderFocusedActorTargetPreviewOverlay(ctx, geometry, tactical) {
   const center = tacticalCellCenter(geometry, unit.pos.col, unit.pos.row);
   const reach = cap.mechanics?.reach || 5;
   const range = cap.mechanics?.range || reach;
-  
+
   // 1. Draw range circle
   if (range > 0) {
     const rangePx = (range / 5) * geometry.cell;
@@ -4136,7 +4138,7 @@ function renderFocusedActorTargetPreviewOverlay(ctx, geometry, tactical) {
     ctx.arc(center.x, center.y, rangePx, 0, Math.PI * 2);
     ctx.stroke();
     ctx.setLineDash([]);
-    
+
     ctx.fillStyle = 'rgba(255, 160, 0, 0.05)';
     ctx.fill();
   }
@@ -4160,11 +4162,11 @@ function renderFocusedActorTargetPreviewOverlay(ctx, geometry, tactical) {
   focusedActorSelectedTargetCids.forEach(tid => {
     const targetUnit = findTacticalUnit(tid, tactical);
     if (!targetUnit || !targetUnit.pos) return;
-    
+
     const advisory = getFocusedActorTargetAdvisory(tid, cap, unit, targetUnit, tactical);
     const isInvalid = advisory.status === 'invalid';
     const isAoe = advisory.status === 'aoe_advisory';
-    
+
     const tCenter = tacticalCellCenter(geometry, targetUnit.pos.col, targetUnit.pos.row);
     const tRadius = Math.max(5, geometry.cell * 0.28);
 
@@ -4180,7 +4182,7 @@ function renderFocusedActorTargetPreviewOverlay(ctx, geometry, tactical) {
     ctx.font = 'bold 10px system-ui';
     ctx.textAlign = 'center';
     ctx.fillText('TARGET', tCenter.x, tCenter.y + tRadius + 20);
-    
+
     if (isInvalid) {
       ctx.font = '9px system-ui';
       ctx.fillText('OUT OF RANGE', tCenter.x, tCenter.y + tRadius + 30);
@@ -4582,11 +4584,13 @@ function renderFocusedActorPanel(snap) {
     focusedActorSelectedActionId = null;
     focusedActorExpandedActionId = null;
     focusedActorSelectedTargetCids = [];
+    focusedActorResolutionPacket = null;
+    focusedActorResolutionError = null;
     return;
   }
 
   // Cleanup stale targets
-  focusedActorSelectedTargetCids = focusedActorSelectedTargetCids.filter(tid => 
+  focusedActorSelectedTargetCids = focusedActorSelectedTargetCids.filter(tid =>
     snap.combatants.some(c => c.cid === tid)
   );
 
@@ -4598,6 +4602,8 @@ function renderFocusedActorPanel(snap) {
     focusedActorTargetModeEnabled = false;
     focusedActorTargetActionId = null;
     focusedActorSelectedTargetCids = [];
+    focusedActorResolutionPacket = null;
+    focusedActorResolutionError = null;
   }
 
   const isActiveTurn = snap.in_combat && snap.active_cid && Number(actor.cid) === Number(snap.active_cid);
@@ -4655,8 +4661,53 @@ function renderFocusedActorPanel(snap) {
           </div>
           <button class="btn-sm remove" onclick="toggleFocusedActorTargetPreview(null)">Cancel</button>
         </div>
+        ${focusedActorResolutionError ? `
+          <div style="padding: 0 8px 8px 8px; color: var(--danger); font-size: 11px; font-weight: bold">
+            Error: ${escHtml(focusedActorResolutionError)}
+          </div>
+        ` : ''}
       </div>
 
+      ${focusedActorResolutionPacket ? `
+      <div class="actor-placeholder-section" style="border:1px solid var(--gold); background:rgba(214,186,126,0.05); margin: 0 12px 12px 12px; border-radius:4px">
+        <div style="display:flex; justify-content:space-between; align-items:center; padding:8px; border-bottom:1px solid rgba(214,186,126,0.2)">
+          <h4 style="color:var(--gold); margin:0">Resolution Tray</h4>
+          <button class="btn-xs remove" onclick="cancelFocusedActorActionResolution()">Cancel</button>
+        </div>
+        <div style="padding:8px">
+          <div style="font-size:12px; margin-bottom:8px">
+            <strong>${escHtml(focusedActorResolutionPacket.capability_name || 'Action')}</strong>:
+            DC ${escHtml(focusedActorResolutionPacket.save_dc || '?')} ${escHtml(String(focusedActorResolutionPacket.save_ability || '').toUpperCase())}
+            ${focusedActorResolutionPacket.total_fail ? ` · Damage: ${focusedActorResolutionPacket.total_fail}` : ''}
+          </div>
+
+          <div class="target-resolution-list">
+            ${focusedActorResolutionPacket.targets?.map(tid => {
+              const target = snap.combatants.find(c => c.cid === tid);
+              if (!target) return '';
+              return `
+                <div style="display:flex; align-items:center; gap:8px; margin-bottom:6px; background:rgba(255,255,255,0.03); padding:4px; border-radius:4px">
+                  <div style="flex:1; min-width:0; font-size:11px">
+                    <div style="font-weight:bold; white-space:nowrap; overflow:hidden; text-overflow:ellipsis">${escHtml(target.name)}</div>
+                    <div style="font-size:10px; color:var(--muted)">HP ${target.hp}/${target.max_hp}</div>
+                  </div>
+                  <select class="focused-resolution-outcome" data-target-cid="${escHtml(tid)}" style="font-size:10px; padding:2px; background:var(--bg); color:var(--text); border:1px solid var(--border); border-radius:3px">
+                    <option value="fail">fail / hit</option>
+                    <option value="success">success / miss</option>
+                    <option value="no_effect">no effect</option>
+                    <option value="manual">manual</option>
+                  </select>
+                </div>
+              `;
+            }).join('') || '<div class="actor-placeholder-content">No targets for resolution.</div>'}
+          </div>
+
+          <div style="display:flex; gap:6px; margin-top:12px">
+            <button class="btn-sm" style="flex:1" onclick="resolveFocusedActorAction(true, true)">Apply Results</button>
+          </div>
+        </div>
+      </div>
+      ` : `
       <div class="actor-placeholder-section" style="border-top: 1px solid var(--border); margin-top: 0">
         <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:8px">
           <h4>Target Tray</h4>
@@ -4683,7 +4734,7 @@ function renderFocusedActorPanel(snap) {
             return focusedActorSelectedTargetCids.map(tid => {
               const target = snap.combatants.find(c => c.cid === tid);
               if (!target) return '';
-              
+
               const targetUnit = findTacticalUnit(tid, tactical);
               const advisory = getFocusedActorTargetAdvisory(tid, cap, sourceUnit, targetUnit, tactical);
               const advisoryColor = advisory.status === 'invalid' ? 'var(--danger)' : (advisory.status === 'valid' ? 'var(--heal)' : 'var(--warn)');
@@ -4702,10 +4753,14 @@ function renderFocusedActorPanel(snap) {
             }).join('');
           })()}
         </div>
-        ${focusedActorSelectedTargetCids.length > 0 ? 
-          '<div style="margin-top:8px; font-size:11px; color:var(--muted); text-align:center; padding:4px; border:1px dashed var(--border); border-radius:4px">Selection is not blocked; DM decides. Resolution coming later.</div>' : ''
-        }
+        ${focusedActorSelectedTargetCids.length > 0 ? `
+          <div style="margin-top:12px; display:flex; flex-direction:column; gap:8px">
+            <button class="btn-action" style="width:100%" onclick="executeFocusedActorAction()">Execute / Prepare Resolution</button>
+            <div style="font-size:10px; color:var(--muted); text-align:center; padding:4px; border:1px dashed var(--border); border-radius:4px">Selection is not blocked; DM decides.</div>
+          </div>
+        ` : ''}
       </div>
+      `}
       ` : ''}
 
       ${actor.conditions && actor.conditions.length > 0 ? `
@@ -6002,24 +6057,24 @@ function syncMonsterPilotInputsToCell(col, row) {
 
 function startMonsterPilotDrag(evt) {
   if (evt.button !== 0) return; // Only left-click drag
-  
+
   const cell = tacticalCellFromPointerEvent(evt);
   if (!cell) return;
-  
+
   // Get the selected Monster Pilot cid
   const pilotCid = String(document.getElementById('monsterPilotCidSelect')?.value || '').trim();
   if (!pilotCid) return;
-  
+
   const pilotCidNum = Number(pilotCid);
   if (!Number.isFinite(pilotCidNum)) return;
-  
+
   // Find unit at this cell
   const unit = findUnitAtCell(cell.col, cell.row, cell.tactical);
   if (!unit) return;
-  
+
   // Only allow dragging if it matches the selected Monster Pilot cid
   if (Number(unit.cid) !== pilotCidNum) return;
-  
+
   // Start drag
   monsterPilotDragState.dragging = true;
   monsterPilotDragState.sourceCid = pilotCidNum;
@@ -6031,13 +6086,13 @@ function startMonsterPilotDrag(evt) {
   syncMonsterPilotInputsToCell(cell.col, cell.row);
   setMonsterPilotDragResult(`Dragging ${String(unit.name || 'monster')}… destination (${cell.col}, ${cell.row})`);
   renderTacticalMap(cell.tactical);
-  
+
   evt.preventDefault();
 }
 
 function onMonsterPilotDragMove(evt) {
   if (!monsterPilotDragState.dragging) return;
-  
+
   const cell = tacticalCellFromPointerEvent(evt);
   if (!cell) {
     monsterPilotDragState.destCol = null;
@@ -6062,7 +6117,7 @@ function cancelMonsterPilotDrag(reason = 'Monster drag cancelled.') {
 
 function endMonsterPilotDrag(evt) {
   if (!monsterPilotDragState.dragging) return;
-  
+
   const cid = monsterPilotDragState.sourceCid;
   const destCol = monsterPilotDragState.destCol;
   const destRow = monsterPilotDragState.destRow;
@@ -6081,7 +6136,7 @@ function endMonsterPilotDrag(evt) {
     if (evt) evt.preventDefault();
     return;
   }
-  
+
   executeMonsterPilotDragMove(cid, destCol, destRow);
   renderTacticalMap(currentTacticalMap());
   if (evt) evt.preventDefault();
@@ -7013,7 +7068,7 @@ if (_monsterPilotMoveSelectedCellBtn) {
       result.className = 'mut-result';
       result.style.display = 'none';
     }
-    
+
     // Validate monster is selected
     const cidSelect = document.getElementById('monsterPilotCidSelect');
     const cidStr = String(cidSelect ? cidSelect.value : '').trim();
@@ -7025,7 +7080,7 @@ if (_monsterPilotMoveSelectedCellBtn) {
       }
       return;
     }
-    
+
     // Validate map cell is selected
     if (typeof tacticalSelection !== 'object' || !tacticalSelection ||
         !Number.isFinite(Number(tacticalSelection.col)) || !Number.isFinite(Number(tacticalSelection.row))) {
@@ -7036,7 +7091,7 @@ if (_monsterPilotMoveSelectedCellBtn) {
       }
       return;
     }
-    
+
     // Use "Use map cell" to populate the inputs, then call move action
     const xInput = document.getElementById('monsterPilotXInput');
     const yInput = document.getElementById('monsterPilotYInput');
@@ -7044,7 +7099,7 @@ if (_monsterPilotMoveSelectedCellBtn) {
     if (yInput) yInput.value = String(Number(tacticalSelection.row));
     if (xInput) xInput.dataset.userEdited = '1';
     if (yInput) yInput.dataset.userEdited = '1';
-    
+
     // Call the move action
     monsterPilotMoveAction();
   });
@@ -7144,8 +7199,8 @@ function selectFocusedActorAction(capId) {
   } else {
     focusedActorExpandedActionId = capId;
   }
-  
-  // Re-render only the actions list to preserve selection if possible, 
+
+  // Re-render only the actions list to preserve selection if possible,
   // but for now we'll just update the actions div
   const actor = findFocusedActorFromSnapshot(currentSnapshot);
   if (actor && monsterCapabilitiesByCid[actor.cid]) {
@@ -7158,7 +7213,7 @@ function selectFocusedActorAction(capId) {
 
 function toggleFocusedActorTargetPreview(capId, evt) {
   if (evt) evt.stopPropagation();
-  
+
   if (!capId) {
     focusedActorTargetModeEnabled = false;
     focusedActorTargetActionId = null;
@@ -7199,6 +7254,107 @@ function clearFocusedActorSelectedTargets() {
   focusedActorSelectedTargetCids = [];
   renderFocusedActorPanel(currentSnapshot);
   renderTacticalMap(currentTacticalMap());
+}
+
+async function executeFocusedActorAction() {
+  const actor = findFocusedActorFromSnapshot(currentSnapshot);
+  if (!actor || !focusedActorTargetActionId) return;
+
+  focusedActorResolutionError = null;
+  renderFocusedActorPanel(currentSnapshot);
+
+  try {
+    const r = await fetch(`${BASE}/api/dm/monster-capabilities/${actor.cid}/execute`, {
+      method: 'POST',
+      headers: authHeaders(),
+      body: JSON.stringify({
+        capability_id: focusedActorTargetActionId,
+        target_cid: focusedActorSelectedTargetCids[0] || null, // Satisfy single-target expectations
+        spend: 'action', // Default
+        roll_mode: 'normal'
+      }),
+    });
+    const data = await r.json();
+    if (r.ok && data.ok) {
+      if (data.result && data.result.resolution === 'automatic') {
+        focusedActorTargetModeEnabled = false;
+        focusedActorTargetActionId = null;
+        focusedActorSelectedTargetCids = [];
+        focusedActorResolutionPacket = null;
+      } else if (data.result && data.result.resolution === 'assisted') {
+        focusedActorResolutionPacket = data.result.resolution_packet || data.result;
+      } else {
+        focusedActorTargetModeEnabled = false;
+        focusedActorTargetActionId = null;
+        focusedActorSelectedTargetCids = [];
+        focusedActorResolutionPacket = null;
+      }
+      if (data.snapshot) applySnapshot(data.snapshot);
+      renderFocusedActorPanel(currentSnapshot);
+      renderTacticalMap(currentTacticalMap());
+    } else {
+      focusedActorResolutionError = data.detail || (data.result && data.result.error) || 'Execution failed.';
+      renderFocusedActorPanel(currentSnapshot);
+    }
+  } catch (e) {
+    focusedActorResolutionError = 'Request failed.';
+    renderFocusedActorPanel(currentSnapshot);
+  }
+}
+
+async function resolveFocusedActorAction(applyDamage, applyEffects) {
+  const actor = findFocusedActorFromSnapshot(currentSnapshot);
+  if (!actor || !focusedActorTargetActionId || !focusedActorResolutionPacket) return;
+
+  const targets = Array.from(document.querySelectorAll(`.focused-resolution-outcome`))
+    .map(el => ({
+      target_cid: String(el.getAttribute('data-target-cid') || '').trim(),
+      outcome: String(el.value || 'manual').trim()
+    }))
+    .filter(row => row.target_cid);
+
+  if (!targets.length && focusedActorSelectedTargetCids.length > 0) {
+    focusedActorResolutionError = 'No target outcomes to resolve.';
+    renderFocusedActorPanel(currentSnapshot);
+    return;
+  }
+
+  try {
+    const r = await fetch(`${BASE}/api/dm/monster-capabilities/${actor.cid}/resolve-targets`, {
+      method: 'POST',
+      headers: authHeaders(),
+      body: JSON.stringify({
+        capability_id: focusedActorTargetActionId,
+        targets,
+        damage_rolls: focusedActorResolutionPacket.damage_rolls || [],
+        apply_damage: !!applyDamage,
+        apply_effects: !!applyEffects
+      }),
+    });
+    const data = await r.json();
+    if (r.ok && data.ok) {
+      focusedActorTargetModeEnabled = false;
+      focusedActorTargetActionId = null;
+      focusedActorSelectedTargetCids = [];
+      focusedActorResolutionPacket = null;
+      focusedActorResolutionError = null;
+      if (data.snapshot) applySnapshot(data.snapshot);
+      renderFocusedActorPanel(currentSnapshot);
+      renderTacticalMap(currentTacticalMap());
+    } else {
+      focusedActorResolutionError = data.detail || (data.result && data.result.error) || 'Resolution failed.';
+      renderFocusedActorPanel(currentSnapshot);
+    }
+  } catch (e) {
+    focusedActorResolutionError = 'Request failed.';
+    renderFocusedActorPanel(currentSnapshot);
+  }
+}
+
+function cancelFocusedActorActionResolution() {
+  focusedActorResolutionPacket = null;
+  focusedActorResolutionError = null;
+  renderFocusedActorPanel(currentSnapshot);
 }
 
 function updateMonsterCapabilityUis(cid, summary) {
@@ -7252,7 +7408,7 @@ function renderCompactMonsterActions(summary) {
       const isExec = !!cap.executable;
       const actionType = cap.action_type || 'special';
       const recharge = cap.recharge_rule;
-      const available = cap.recharge ? (cap.recharge_available !== false) : 
+      const available = cap.recharge ? (cap.recharge_available !== false) :
                         (cap.uses_remaining !== undefined ? cap.uses_remaining > 0 : true);
       const isSelected = focusedActorSelectedActionId === cap.id;
       const isExpanded = focusedActorExpandedActionId === cap.id;
@@ -7275,7 +7431,7 @@ function renderCompactMonsterActions(summary) {
       }
 
       html += `
-        <div class="focused-action-card ${available ? '' : 'unavailable'} ${isExec ? 'exec' : 'manual'} ${isSelected ? 'is-selected' : ''} ${isExpanded ? 'is-expanded' : ''}" 
+        <div class="focused-action-card ${available ? '' : 'unavailable'} ${isExec ? 'exec' : 'manual'} ${isSelected ? 'is-selected' : ''} ${isExpanded ? 'is-expanded' : ''}"
              onclick="selectFocusedActorAction('${escAttr(cap.id)}')">
           <div class="focused-action-header">
             <span class="focused-action-name">${escHtml(cap.name)}</span>
@@ -7287,7 +7443,7 @@ function renderCompactMonsterActions(summary) {
           </div>
           ${mechanicsSummary.length > 0 ? `<div class="focused-action-summary">${escHtml(mechanicsSummary.join(' · '))}</div>` : ''}
           ${!isExec ? '<div class="focused-action-manual-warning">Manual / assisted resolution required.</div>' : ''}
-          
+
           <div class="focused-action-details">
             <div class="focused-action-desc">${escHtml(cap.desc || 'No description available.')}</div>
             <div class="focused-action-meta-grid">
@@ -7299,7 +7455,7 @@ function renderCompactMonsterActions(summary) {
             ${isSelected ? `
               <div style="margin-top:10px; display:flex; gap:8px; align-items:center; justify-content:flex-end">
                 <span style="font-size:10px; color:var(--muted); flex:1">Execution and resolution coming later.</span>
-                <button class="btn-action ${focusedActorTargetModeEnabled && focusedActorTargetActionId === cap.id ? 'remove' : ''}" 
+                <button class="btn-action ${focusedActorTargetModeEnabled && focusedActorTargetActionId === cap.id ? 'remove' : ''}"
                         onclick="toggleFocusedActorTargetPreview('${escAttr(cap.id)}', event)"
                         style="padding: 4px 8px; font-size: 11px">
                   ${focusedActorTargetModeEnabled && focusedActorTargetActionId === cap.id ? 'Cancel Preview' : 'Target Preview'}
@@ -7360,7 +7516,7 @@ function renderMonsterCapabilities(summary) {
       const isExec = !!cap.executable;
       const actionType = cap.action_type || 'special';
       const recharge = cap.recharge_rule;
-      const available = cap.recharge ? (cap.recharge_available !== false) : 
+      const available = cap.recharge ? (cap.recharge_available !== false) :
                         (cap.uses_remaining !== undefined ? cap.uses_remaining > 0 : true);
 
       html += `<div class="cap-card ${available ? '' : 'unavailable'} ${isExec ? 'executable' : ''}">
@@ -7377,7 +7533,7 @@ function renderMonsterCapabilities(summary) {
           const area = cap.area || {};
           const areaText = area.shape ? ` · ${escHtml(area.size ? `${area.size} ft ${area.shape}` : area.shape)}` : '';
           html += `<div class="cap-source" style="margin-bottom:8px">
-            DC ${m.save_dc} ${escHtml(m.save_ability || '')} 
+            DC ${m.save_dc} ${escHtml(m.save_ability || '')}
             ${m.damage ? `· ${m.damage.map(d => `${d.formula} ${d.type}`).join(' + ')}` : ''}
             ${areaText}
           </div>`;
@@ -7409,12 +7565,12 @@ function renderMonsterCapabilities(summary) {
           html += `<div class="cap-source" style="margin-bottom:8px">
             ${escHtml(s.ability?.toUpperCase() || '')} DC ${s.save_dc} · +${s.attack_bonus} to hit
           </div>`;
-          
+
           for (let i=0; i < cap.mechanics.resolved_lists.length; i++) {
               const list = cap.mechanics.resolved_lists[i];
               let freqLabel = list.frequency.replace('_', ' ');
               let resControls = '';
-              
+
               if (list.frequency === 'slot') {
                   const rem = list.slots_remaining;
                   const max = list.slots;
@@ -7434,7 +7590,7 @@ function renderMonsterCapabilities(summary) {
                     ${escHtml(freqLabel)} ${resControls}
                 </div>
                 <div style="display:flex; flex-wrap:wrap; gap:4px">`;
-              
+
               for (const spell of list.resolved_spells) {
                   html += `<div class="cap-spell-item" style="background:#222; border:1px solid #444; border-radius:4px; padding:2px 6px; font-size:12px; display:flex; align-items:center; gap:6px">
                     <span style="${spell.matched ? '' : 'color:#888'}" title="${spell.matched ? 'Matched to local Spells/' : 'No local spell file found'}">
@@ -7490,7 +7646,7 @@ function renderMonsterCapabilities(summary) {
           }
           html += `<button class="btn-sm" onclick="updateMonsterResource(${summary.combatant_id}, '${cap.id}', '${available ? 'mark_used' : 'mark_available'}')">Mark ${available ? 'Used' : 'Ready'}</button>`;
       }
-      
+
       if (cap.uses_max) {
            html += `<button class="btn-sm" onclick="updateMonsterResource(${summary.combatant_id}, '${cap.id}', 'mark_used')">Spend Use</button>`;
            html += `<button class="btn-sm" onclick="updateMonsterResource(${summary.combatant_id}, '${cap.id}', 'mark_available')">Restore</button>`;
