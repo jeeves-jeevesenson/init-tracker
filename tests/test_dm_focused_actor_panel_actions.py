@@ -26,9 +26,12 @@ class TestDmFocusedActorPanelActions(unittest.TestCase):
         self.assertIn('let monsterCapabilitiesByCid = {};', html)
         self.assertIn('let focusedActorSelectedActionId = null;', html)
         self.assertIn('let focusedActorExpandedActionId = null;', html)
+        self.assertIn('let focusedActorTargetModeEnabled = false;', html)
+        self.assertIn('let focusedActorTargetActionId = null;', html)
         self.assertIn('function updateMonsterCapabilityUis', html)
         self.assertIn('function renderCompactMonsterActions', html)
         self.assertIn('function selectFocusedActorAction', html)
+        self.assertIn('function toggleFocusedActorTargetPreview', html)
         self.assertIn('fetchMonsterCapabilities(cid)', html)
 
     def test_selection_expansion_rendering(self):
@@ -37,7 +40,17 @@ class TestDmFocusedActorPanelActions(unittest.TestCase):
         self.assertIn('class="focused-action-details"', html)
         self.assertIn('class="focused-action-desc"', html)
         self.assertIn('class="focused-action-meta-grid"', html)
-        self.assertIn('Targeting coming later.', html)
+        self.assertIn('Execution and resolution coming later.', html)
+        self.assertIn('Target Preview', html)
+        self.assertIn('Cancel Preview', html)
+
+    def test_target_preview_rendering_logic(self):
+        html = _DM_HTML_PATH.read_text(encoding="utf-8")
+        self.assertIn('function renderFocusedActorTargetPreviewOverlay', html)
+        self.assertIn('renderFocusedActorTargetPreviewOverlay(ctx, geometry, tactical)', html)
+        self.assertIn('Targeting Preview Active', html)
+        self.assertIn('focusedActorTargetModeEnabled ?', html)
+        self.assertIn('evt.key === \'Escape\' && focusedActorTargetModeEnabled', html)
 
     def test_pc_behavior(self):
         html = _DM_HTML_PATH.read_text(encoding="utf-8")

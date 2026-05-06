@@ -1925,6 +1925,8 @@ let focusedActorInspectCid = null;
 let lastFocusedActorCid = null;
 let focusedActorSelectedActionId = null;
 let focusedActorExpandedActionId = null;
+let focusedActorTargetModeEnabled = false;
+let focusedActorTargetActionId = null;
 let tacticalPresetsByCategory = { hazard: [], feature: [], structure: [] };
 let tacticalBackgroundAssets = [];
 let tacticalShipBlueprints = [];
@@ -4078,6 +4080,51 @@ function drawCellBlock(ctx, geometry, cells, fillStyle, strokeStyle = '') {
   }
 }
 
+function renderFocusedActorTargetPreviewOverlay(ctx, geometry, tactical) {
+  const actor = findFocusedActorFromSnapshot(currentSnapshot);
+  if (!actor) return;
+  const unit = findTacticalUnit(actor.cid, tactical);
+  if (!unit || !unit.pos) return;
+
+  const summary = monsterCapabilitiesByCid[actor.cid];
+  if (!summary) return;
+
+  // Find the action
+  let cap = null;
+  for (const g in summary.groups) {
+    cap = summary.groups[g].find(c => c.id === focusedActorTargetActionId);
+    if (cap) break;
+  }
+  if (!cap) return;
+
+  const center = tacticalCellCenter(geometry, unit.pos.col, unit.pos.row);
+  const reach = cap.mechanics?.reach || 5;
+  const range = cap.mechanics?.range || reach;
+  
+  // Draw range circle
+  if (range > 0) {
+    const rangePx = (range / 5) * geometry.cell;
+    ctx.beginPath();
+    ctx.setLineDash([5, 5]);
+    ctx.strokeStyle = 'rgba(255, 160, 0, 0.6)';
+    ctx.lineWidth = 2;
+    ctx.arc(center.x, center.y, rangePx, 0, Math.PI * 2);
+    ctx.stroke();
+    ctx.setLineDash([]);
+    
+    ctx.fillStyle = 'rgba(255, 160, 0, 0.05)';
+    ctx.fill();
+  }
+
+  // Draw AoE hint if applicable
+  if (cap.area && cap.area.shape && cap.area.size) {
+    ctx.fillStyle = 'rgba(255, 160, 0, 0.9)';
+    ctx.font = 'bold 11px system-ui';
+    ctx.textAlign = 'center';
+    ctx.fillText(`${cap.area.size}ft ${cap.area.shape.toUpperCase()} PREVIEW`, center.x, center.y - 20);
+  }
+}
+
 function renderTacticalMap(tactical) {
   const canvas = document.getElementById('tacticalMapCanvas');
   const gridMeta = document.getElementById('tacticalGridMeta');
@@ -4211,6 +4258,11 @@ function renderTacticalMap(tactical) {
     ctx.lineTo(center.x + Math.cos(angle) * lineLen, center.y + Math.sin(angle) * lineLen);
     ctx.stroke();
   });
+
+  // Target Preview Overlay
+  if (focusedActorTargetModeEnabled && focusedActorTargetActionId) {
+    renderFocusedActorTargetPreviewOverlay(ctx, geometry, tactical);
+  }
 
   const selectedName = selectedUnit ? String(selectedUnit.name || '') : '';
   const activeUnit = findTacticalUnit(activeCid, tactical);
@@ -4457,6 +4509,8 @@ function renderFocusedActorPanel(snap) {
     lastFocusedActorCid = actor.cid;
     focusedActorSelectedActionId = null;
     focusedActorExpandedActionId = null;
+    focusedActorTargetModeEnabled = false;
+    focusedActorTargetActionId = null;
   }
 
   const isActiveTurn = snap.in_combat && snap.active_cid && Number(actor.cid) === Number(snap.active_cid);
@@ -4471,6 +4525,7 @@ function renderFocusedActorPanel(snap) {
           <div style="display:flex; gap:6px; flex-wrap:wrap; margin-top:4px">
             ${isActiveTurn ? '<div class="actor-view-only-badge" style="background:var(--ally-soft); color:var(--heal); border-color:var(--ally-soft)">Active Turn</div>' : '<div class="actor-view-only-badge" style="background:var(--pc-soft); color:var(--accent); border-color:var(--pc-soft)">Inspecting</div>'}
             ${actor.is_pc ? '<div class="actor-view-only-badge">View Only</div>' : ''}
+            ${focusedActorTargetModeEnabled ? '<div class="actor-view-only-badge" style="background:rgba(255,160,0,0.1); color:var(--accent); border-color:var(--accent)">Target Preview</div>' : ''}
           </div>
         </div>
       </div>
@@ -4503,6 +4558,15 @@ function renderFocusedActorPanel(snap) {
           <div class="value">${actor.passive_perception}</div>
         </div>` : ''}
       </div>
+
+      ${focusedActorTargetModeEnabled ? `
+      <div class="actor-placeholder-section" style="background:rgba(255,160,0,0.05); border:1px solid var(--accent); margin: 0 12px 12px 12px; border-radius:4px">
+        <div style="display:flex; align-items:center; justify-content:space-between; padding:8px">
+          <span style="font-size:11px; font-weight:bold; color:var(--accent); text-transform:uppercase">Targeting Preview Active</span>
+          <button class="btn-sm remove" onclick="toggleFocusedActorTargetPreview(null)">Cancel</button>
+        </div>
+      </div>
+      ` : ''}
 
       ${actor.conditions && actor.conditions.length > 0 ? `
       <div class="actor-placeholder-section" style="border-top:none; padding-top:0">
@@ -5898,6 +5962,10 @@ document.getElementById('tacticalMapCanvas').addEventListener('mousedown', start
 document.addEventListener('mousemove', onMonsterPilotDragMove);
 document.addEventListener('mouseup', endMonsterPilotDrag);
 document.addEventListener('keydown', (evt) => {
+  if (evt.key === 'Escape' && focusedActorTargetModeEnabled) {
+    toggleFocusedActorTargetPreview(null);
+    evt.preventDefault();
+  }
   if (evt.key === 'Escape' && monsterPilotDragState.dragging) {
     cancelMonsterPilotDrag('Monster drag cancelled.');
   }
@@ -6928,6 +6996,11 @@ function selectFocusedActorAction(capId) {
   // Toggle expansion
   if (focusedActorExpandedActionId === capId) {
     focusedActorExpandedActionId = null;
+    // Cancel target mode if we collapse the card
+    if (focusedActorTargetActionId === capId) {
+      focusedActorTargetModeEnabled = false;
+      focusedActorTargetActionId = null;
+    }
   } else {
     focusedActorExpandedActionId = capId;
   }
@@ -6941,6 +7014,30 @@ function selectFocusedActorAction(capId) {
       actionsEl.innerHTML = renderCompactMonsterActions(monsterCapabilitiesByCid[actor.cid]);
     }
   }
+}
+
+function toggleFocusedActorTargetPreview(capId, evt) {
+  if (evt) evt.stopPropagation();
+  
+  if (!capId) {
+    focusedActorTargetModeEnabled = false;
+    focusedActorTargetActionId = null;
+  } else if (focusedActorTargetActionId === capId && focusedActorTargetModeEnabled) {
+    focusedActorTargetModeEnabled = false;
+    focusedActorTargetActionId = null;
+  } else {
+    focusedActorTargetModeEnabled = true;
+    focusedActorTargetActionId = capId;
+    focusedActorSelectedActionId = capId;
+    focusedActorExpandedActionId = capId;
+  }
+
+  // Update UI
+  const actor = findFocusedActorFromSnapshot(currentSnapshot);
+  if (actor) {
+    renderFocusedActorPanel(currentSnapshot);
+  }
+  renderTacticalMap(currentTacticalMap());
 }
 
 function updateMonsterCapabilityUis(cid, summary) {
@@ -7038,7 +7135,16 @@ function renderCompactMonsterActions(summary) {
               ${cap.target_mode ? `<div class="focused-action-meta-item"><span class="lbl">Target Mode</span><span class="val">${escHtml(cap.target_mode.replace(/_/g, ' '))}</span></div>` : ''}
               ${cap.effects?.length ? `<div class="focused-action-meta-item"><span class="lbl">Effects</span><span class="val">${cap.effects.length} active</span></div>` : ''}
             </div>
-            ${isSelected ? '<div style="margin-top:10px; font-size:10px; color:var(--muted); text-align:right">Targeting coming later.</div>' : ''}
+            ${isSelected ? `
+              <div style="margin-top:10px; display:flex; gap:8px; align-items:center; justify-content:flex-end">
+                <span style="font-size:10px; color:var(--muted); flex:1">Execution and resolution coming later.</span>
+                <button class="btn-action ${focusedActorTargetModeEnabled && focusedActorTargetActionId === cap.id ? 'remove' : ''}" 
+                        onclick="toggleFocusedActorTargetPreview('${escAttr(cap.id)}', event)"
+                        style="padding: 4px 8px; font-size: 11px">
+                  ${focusedActorTargetModeEnabled && focusedActorTargetActionId === cap.id ? 'Cancel Preview' : 'Target Preview'}
+                </button>
+              </div>
+            ` : ''}
           </div>
         </div>
       `;

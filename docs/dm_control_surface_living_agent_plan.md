@@ -460,7 +460,7 @@ Update the status column after each pass.
 | M4 | Encounter Builder / Monster Library | In progress | Complete Encounter Builder (mixed groups/staging) |
 | M5 | Initiative flow | In progress | Reroll all enemy/NPC initiative in Toolbox |
 | M6 | Focused actor panel prototype | Completed | Static/prototype actor panel using current actor |
-| M7 | Monster Actions / action cards | In progress | Display-only integration in Focused Actor Panel |
+| M7 | Monster Actions / action cards | In progress | Action target mode prototype (visualizing range/AoE) |
 | M8 | Current-turn movement model | Not started | Reuse LAN movement path for DM current actor |
 | M9 | Tactical map inspection | Not started | Token click inspection / empty cell info |
 | M10 | Automation settings | Not started | Roll-path and persistence inspection |
@@ -781,6 +781,27 @@ Outcome:
 - All relevant tests (339) passed, including new focused tests.
 Next recommended pass:
 - M7 — Monster Actions: Action execution from Focused Actor Panel.
+
+### 2026-05-06 — Monster Actions: Target Mode Prototype (M7 extension)
+
+Agent/model: Gemini CLI (Autonomous Mode)
+Scope: 
+- Implement a visual-only target mode prototype for Monster Actions in the Focused Actor Panel.
+- Add "Target Preview" button to expanded action cards.
+- Implement tactical map overlay for range circles and AoE hints.
+- Support Escape key and manual UI controls for cancelling target preview.
+- Ensure no backend execution or state changes occur during preview.
+Files changed:
+- assets/web/dm/index.html
+- tests/test_dm_focused_actor_panel_actions.py
+- docs/dm_control_surface_living_agent_plan.md
+Outcome:
+- DM can enter a visual-only targeting preview mode for any structured monster action.
+- Tactical map displays a dashed range circle and AoE shape label based on capability mechanics.
+- Focused Actor Panel shows a prominent "Targeting Preview Active" status with a cancel button.
+- Escape key cancels the preview mode.
+- Mandatory JS syntax check passed.
+- All relevant tests (343) passed.
 
 ### 2026-05-06 — Tactical-map token-click inspection (M9 partial)
 
