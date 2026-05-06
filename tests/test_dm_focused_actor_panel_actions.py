@@ -15,18 +15,29 @@ class TestDmFocusedActorPanelActions(unittest.TestCase):
         self.assertIn('.focused-action-group', html)
         self.assertIn('.focused-action-group-title', html)
         self.assertIn('.focused-action-card', html)
-        self.assertIn('.focused-action-header', html)
-        self.assertIn('.focused-action-name', html)
-        self.assertIn('.focused-action-badges', html)
-        self.assertIn('.focused-action-summary', html)
-        self.assertIn('.focused-action-manual-warning', html)
+        self.assertIn('.focused-action-card.is-selected', html)
+        self.assertIn('.focused-action-card.is-expanded', html)
+        self.assertIn('.focused-action-details', html)
+        self.assertIn('.focused-action-desc', html)
+        self.assertIn('.focused-action-meta-grid', html)
 
     def test_js_logic_exists(self):
         html = _DM_HTML_PATH.read_text(encoding="utf-8")
         self.assertIn('let monsterCapabilitiesByCid = {};', html)
+        self.assertIn('let focusedActorSelectedActionId = null;', html)
+        self.assertIn('let focusedActorExpandedActionId = null;', html)
         self.assertIn('function updateMonsterCapabilityUis', html)
         self.assertIn('function renderCompactMonsterActions', html)
+        self.assertIn('function selectFocusedActorAction', html)
         self.assertIn('fetchMonsterCapabilities(cid)', html)
+
+    def test_selection_expansion_rendering(self):
+        html = _DM_HTML_PATH.read_text(encoding="utf-8")
+        self.assertIn('onclick="selectFocusedActorAction(', html)
+        self.assertIn('class="focused-action-details"', html)
+        self.assertIn('class="focused-action-desc"', html)
+        self.assertIn('class="focused-action-meta-grid"', html)
+        self.assertIn('Targeting coming later.', html)
 
     def test_pc_behavior(self):
         html = _DM_HTML_PATH.read_text(encoding="utf-8")

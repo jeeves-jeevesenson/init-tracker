@@ -96,7 +96,7 @@ Update this section after each pass.
 | Monster Turn Controls | Legacy/fallback | Do not polish as target UI |
 | Monster Pilot | Legacy/fallback | Do not use as foundation for future current-turn movement |
 | Monster capability backend | Useful | Labels renamed to 'Monster Actions' in DM UI |
-| Focused actor panel | Prototype | Current actor focused automatically; token click inspects; stats and actions display |
+| Focused actor panel | Prototype | Current actor focused automatically; token click inspects; stats and actions (with selection/expansion) display |
 | DM Toolbox | In progress | Tabbed modal with Session, Encounter, Overrides tabs partially populated |
 | Encounter Builder | In progress | Monster Library search and Add Monster workflow migrated to Encounter tab |
 | Duplicate monster names | Completed | Backend auto-numbering implemented via CombatantNameService |
@@ -737,6 +737,27 @@ Outcome:
 - Mandatory JS syntax check passed.
 Next recommended pass:
 - M7 — Monster Actions / action cards integration (first slice).
+
+### 2026-05-06 — Focused Actor Panel - Monster Actions Detail/Selection (M7)
+
+Agent/model: Gemini CLI (Autonomous Mode)
+Scope: 
+- Add display-only card expansion/details and selected-action state to Monster Actions in the Focused Actor Panel.
+- Implement click handlers for selection and toggle expansion.
+- Render detailed mechanics (Description, Reach, Range, Target Mode) in expanded view.
+- Ensure selection state is cleared on focused actor change.
+Files changed:
+- assets/web/dm/index.html
+- tests/test_dm_focused_actor_panel_actions.py
+- docs/dm_control_surface_living_agent_plan.md
+Outcome:
+- DM can click action cards to select and expand them for detailed inspection.
+- Visual highlighting indicates the selected action.
+- Expanded cards show full descriptions and structured metadata from existing capability summaries.
+- Mandatory JS syntax check passed.
+- All relevant tests (340) passed.
+Next recommended pass:
+- M7 — Monster Actions: Action target mode prototype (visualizing range/AoE).
 
 ### 2026-05-06 — Focused Actor Panel - Monster Actions Display Integration (M7)
 

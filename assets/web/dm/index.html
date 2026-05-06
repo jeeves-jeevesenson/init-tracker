@@ -780,11 +780,19 @@
     .focused-action-card.exec { border-left: 2px solid var(--heal); }
     .focused-action-card.manual { border-left: 2px solid var(--warn); }
     .focused-action-card.unavailable { opacity: 0.5; }
+    .focused-action-card.is-selected { border-color: var(--accent); background: rgba(106,169,255,0.08); box-shadow: 0 0 0 1px var(--accent); }
+    .focused-action-card:hover { border-color: var(--gold); cursor: pointer; }
     .focused-action-header { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-bottom: 4px; }
     .focused-action-name { font-weight: bold; font-size: 13px; color: var(--text); flex: 1; }
     .focused-action-badges { display: flex; gap: 4px; flex-shrink: 0; }
     .focused-action-summary { font-size: 11px; color: var(--gold); margin-bottom: 2px; }
     .focused-action-manual-warning { font-size: 10px; font-style: italic; color: var(--muted); margin-top: 4px; border-top: 1px solid rgba(255,255,255,0.05); padding-top: 4px; }
+    .focused-action-details { margin-top: 8px; border-top: 1px solid rgba(255,255,255,0.05); padding-top: 8px; display: none; }
+    .focused-action-card.is-expanded .focused-action-details { display: block; }
+    .focused-action-desc { font-size: 11px; color: var(--text); line-height: 1.5; white-space: pre-wrap; margin-bottom: 8px; }
+    .focused-action-meta-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 4px 8px; font-size: 10px; }
+    .focused-action-meta-item { display: flex; flex-direction: column; color: var(--muted); }
+    .focused-action-meta-item .val { color: var(--gold); font-weight: 600; }
 
     /* ── DM Toolbox Modal ───────────────────────────────────────── */
     .toolbox-overlay {
@@ -1914,6 +1922,9 @@ let monsterPilotDragState = {
   cancelled: false,
 };
 let focusedActorInspectCid = null;
+let lastFocusedActorCid = null;
+let focusedActorSelectedActionId = null;
+let focusedActorExpandedActionId = null;
 let tacticalPresetsByCategory = { hazard: [], feature: [], structure: [] };
 let tacticalBackgroundAssets = [];
 let tacticalShipBlueprints = [];
@@ -4435,7 +4446,17 @@ function renderFocusedActorPanel(snap) {
   const actor = findFocusedActorFromSnapshot(snap);
   if (!actor) {
     container.innerHTML = '<div class="empty-state" style="padding: 20px 0">No active combatant. Start combat or set turn to focus an actor.</div>';
+    lastFocusedActorCid = null;
+    focusedActorSelectedActionId = null;
+    focusedActorExpandedActionId = null;
     return;
+  }
+
+  // Reset selection if actor changed
+  if (lastFocusedActorCid !== actor.cid) {
+    lastFocusedActorCid = actor.cid;
+    focusedActorSelectedActionId = null;
+    focusedActorExpandedActionId = null;
   }
 
   const isActiveTurn = snap.in_combat && snap.active_cid && Number(actor.cid) === Number(snap.active_cid);
@@ -6902,6 +6923,26 @@ async function fetchMonsterCapabilities(cid) {
   }
 }
 
+function selectFocusedActorAction(capId) {
+  focusedActorSelectedActionId = capId;
+  // Toggle expansion
+  if (focusedActorExpandedActionId === capId) {
+    focusedActorExpandedActionId = null;
+  } else {
+    focusedActorExpandedActionId = capId;
+  }
+  
+  // Re-render only the actions list to preserve selection if possible, 
+  // but for now we'll just update the actions div
+  const actor = findFocusedActorFromSnapshot(currentSnapshot);
+  if (actor && monsterCapabilitiesByCid[actor.cid]) {
+    const actionsEl = document.getElementById('focusedMonsterActions');
+    if (actionsEl) {
+      actionsEl.innerHTML = renderCompactMonsterActions(monsterCapabilitiesByCid[actor.cid]);
+    }
+  }
+}
+
 function updateMonsterCapabilityUis(cid, summary) {
   // 1. Update legacy panel if it's the active one
   const legacyContent = document.getElementById('monsterCapContent');
@@ -6955,6 +6996,8 @@ function renderCompactMonsterActions(summary) {
       const recharge = cap.recharge_rule;
       const available = cap.recharge ? (cap.recharge_available !== false) : 
                         (cap.uses_remaining !== undefined ? cap.uses_remaining > 0 : true);
+      const isSelected = focusedActorSelectedActionId === cap.id;
+      const isExpanded = focusedActorExpandedActionId === cap.id;
 
       let mechanicsSummary = [];
       if (cap.mechanics) {
@@ -6974,7 +7017,8 @@ function renderCompactMonsterActions(summary) {
       }
 
       html += `
-        <div class="focused-action-card ${available ? '' : 'unavailable'} ${isExec ? 'exec' : 'manual'}">
+        <div class="focused-action-card ${available ? '' : 'unavailable'} ${isExec ? 'exec' : 'manual'} ${isSelected ? 'is-selected' : ''} ${isExpanded ? 'is-expanded' : ''}" 
+             onclick="selectFocusedActorAction('${escAttr(cap.id)}')">
           <div class="focused-action-header">
             <span class="focused-action-name">${escHtml(cap.name)}</span>
             <div class="focused-action-badges">
@@ -6985,6 +7029,17 @@ function renderCompactMonsterActions(summary) {
           </div>
           ${mechanicsSummary.length > 0 ? `<div class="focused-action-summary">${escHtml(mechanicsSummary.join(' · '))}</div>` : ''}
           ${!isExec ? '<div class="focused-action-manual-warning">Manual / assisted resolution required.</div>' : ''}
+          
+          <div class="focused-action-details">
+            <div class="focused-action-desc">${escHtml(cap.desc || 'No description available.')}</div>
+            <div class="focused-action-meta-grid">
+              ${cap.mechanics?.reach ? `<div class="focused-action-meta-item"><span class="lbl">Reach</span><span class="val">${cap.mechanics.reach} ft</span></div>` : ''}
+              ${cap.mechanics?.range ? `<div class="focused-action-meta-item"><span class="lbl">Range</span><span class="val">${cap.mechanics.range} ft</span></div>` : ''}
+              ${cap.target_mode ? `<div class="focused-action-meta-item"><span class="lbl">Target Mode</span><span class="val">${escHtml(cap.target_mode.replace(/_/g, ' '))}</span></div>` : ''}
+              ${cap.effects?.length ? `<div class="focused-action-meta-item"><span class="lbl">Effects</span><span class="val">${cap.effects.length} active</span></div>` : ''}
+            </div>
+            ${isSelected ? '<div style="margin-top:10px; font-size:10px; color:var(--muted); text-align:right">Targeting coming later.</div>' : ''}
+          </div>
         </div>
       `;
     }
