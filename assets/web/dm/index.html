@@ -1931,6 +1931,8 @@ let focusedActorSelectedTargetCids = [];
 let focusedActorResolutionPacket = null;
 let focusedActorResolutionError = null;
 let focusedActorResolutionInFlight = false;
+let focusedActorSequencePacket = null;
+let focusedActorSequenceCompletedSteps = {}; // actionId: count
 let tacticalPresetsByCategory = { hazard: [], feature: [], structure: [] };
 let tacticalBackgroundAssets = [];
 let tacticalShipBlueprints = [];
@@ -4605,6 +4607,8 @@ function renderFocusedActorPanel(snap) {
     focusedActorSelectedTargetCids = [];
     focusedActorResolutionPacket = null;
     focusedActorResolutionError = null;
+    focusedActorSequencePacket = null;
+    focusedActorSequenceCompletedSteps = {};
   }
 
   const isActiveTurn = snap.in_combat && snap.active_cid && Number(actor.cid) === Number(snap.active_cid);
@@ -4652,6 +4656,35 @@ function renderFocusedActorPanel(snap) {
           <div class="value">${actor.passive_perception}</div>
         </div>` : ''}
       </div>
+
+      ${focusedActorSequencePacket ? `
+      <div class="actor-placeholder-section" style="border:1px solid var(--accent); background:rgba(106,169,255,0.05); margin: 0 12px 12px 12px; border-radius:4px">
+        <div style="display:flex; justify-content:space-between; align-items:center; padding:8px; border-bottom:1px solid rgba(106,169,255,0.2)">
+          <h4 style="color:var(--accent); margin:0">Sequence: ${escHtml(focusedActorSequencePacket.name)}</h4>
+          <button class="btn-xs remove" onclick="endFocusedActorSequence()">End Sequence</button>
+        </div>
+        <div style="padding:8px">
+          ${focusedActorSequencePacket.steps.map(step => {
+            const completed = focusedActorSequenceCompletedSteps[step.action_id] || 0;
+            const isDone = completed >= step.count;
+            const isSelected = focusedActorTargetActionId === step.action_id;
+            return `
+              <div style="display:flex; align-items:center; gap:8px; margin-bottom:6px; background:rgba(255,255,255,0.03); padding:4px 8px; border-radius:4px; border-left: 3px solid ${isDone ? 'var(--heal)' : (isSelected ? 'var(--accent)' : 'var(--muted)')}">
+                <div style="flex:1; font-size:11px">
+                  <div style="font-weight:bold">${escHtml(step.name)}</div>
+                  <div style="font-size:10px; color:var(--muted)">${completed} / ${step.count} completed</div>
+                </div>
+                ${!isDone ? `
+                  <button class="btn-xs ${isSelected ? 'is-active' : ''}" onclick="selectFocusedActorSequenceStep('${escAttr(step.action_id)}')" ${focusedActorResolutionInFlight ? 'disabled' : ''}>
+                    ${isSelected ? 'Selected' : 'Select'}
+                  </button>
+                ` : '<div style="font-size:10px; color:var(--heal); font-weight:bold; font-size:9px; text-transform:uppercase">Complete</div>'}
+              </div>
+            `;
+          }).join('')}
+        </div>
+      </div>
+      ` : ''}
 
       ${focusedActorTargetModeEnabled ? `
       <div class="actor-placeholder-section" style="background:rgba(255,160,0,0.05); border:1px solid var(--accent); margin: 0 12px 12px 12px; border-radius:4px">
@@ -7190,6 +7223,16 @@ async function fetchMonsterCapabilities(cid) {
 
 function selectFocusedActorAction(capId) {
   focusedActorSelectedActionId = capId;
+  
+  // Clear sequence if we click a different top-level action that isn't part of the sequence
+  if (focusedActorSequencePacket && capId !== focusedActorSequencePacket.capability_id) {
+    const isChild = focusedActorSequencePacket.steps.some(s => s.action_id === capId);
+    if (!isChild) {
+      focusedActorSequencePacket = null;
+      focusedActorSequenceCompletedSteps = {};
+    }
+  }
+
   // Toggle expansion
   if (focusedActorExpandedActionId === capId) {
     focusedActorExpandedActionId = null;
@@ -7225,6 +7268,15 @@ function selectFocusedActorAction(capId) {
 
 function toggleFocusedActorTargetPreview(capId, evt) {
   if (evt) evt.stopPropagation();
+
+  // Clear sequence if we toggle a different action that isn't part of the sequence
+  if (focusedActorSequencePacket && capId && capId !== focusedActorSequencePacket.capability_id) {
+    const isChild = focusedActorSequencePacket.steps.some(s => s.action_id === capId);
+    if (!isChild) {
+      focusedActorSequencePacket = null;
+      focusedActorSequenceCompletedSteps = {};
+    }
+  }
 
   if (!capId) {
     focusedActorTargetModeEnabled = false;
@@ -7302,6 +7354,14 @@ async function executeFocusedActorAction() {
         focusedActorResolutionPacket = null;
       } else if (data.result && data.result.resolution === 'assisted') {
         focusedActorResolutionPacket = data.result.resolution_packet || data.result;
+      } else if (data.result && data.result.resolution === 'assisted_sequence') {
+        focusedActorSequencePacket = data.result;
+        focusedActorSequenceCompletedSteps = {};
+        // Clear child targeting state just in case
+        focusedActorTargetActionId = null;
+        focusedActorTargetModeEnabled = false;
+        focusedActorSelectedTargetCids = [];
+        focusedActorResolutionPacket = null;
       } else {
         focusedActorTargetModeEnabled = false;
         focusedActorTargetActionId = null;
@@ -7356,11 +7416,24 @@ async function resolveFocusedActorAction(applyDamage, applyEffects) {
     });
     const data = await r.json();
     if (r.ok && data.ok) {
-      focusedActorTargetModeEnabled = false;
-      focusedActorTargetActionId = null;
-      focusedActorSelectedTargetCids = [];
-      focusedActorResolutionPacket = null;
-      focusedActorResolutionError = null;
+      if (focusedActorSequencePacket) {
+          // Increment completed steps for this child
+          const actionId = focusedActorTargetActionId;
+          focusedActorSequenceCompletedSteps[actionId] = (focusedActorSequenceCompletedSteps[actionId] || 0) + 1;
+          
+          // Clear child state but keep sequence
+          focusedActorTargetModeEnabled = false;
+          focusedActorTargetActionId = null;
+          focusedActorSelectedTargetCids = [];
+          focusedActorResolutionPacket = null;
+          focusedActorResolutionError = null;
+      } else {
+          focusedActorTargetModeEnabled = false;
+          focusedActorTargetActionId = null;
+          focusedActorSelectedTargetCids = [];
+          focusedActorResolutionPacket = null;
+          focusedActorResolutionError = null;
+      }
       if (data.snapshot) applySnapshot(data.snapshot);
     } else {
       focusedActorResolutionError = data.detail || (data.result && data.result.error) || 'Resolution failed.';
@@ -7375,6 +7448,33 @@ async function resolveFocusedActorAction(applyDamage, applyEffects) {
 }
 
 function cancelFocusedActorActionResolution() {
+  focusedActorResolutionPacket = null;
+  focusedActorResolutionError = null;
+  // If we're in a sequence, return to sequence tray by clearing child targeting
+  if (focusedActorSequencePacket) {
+    focusedActorTargetModeEnabled = false;
+    focusedActorTargetActionId = null;
+    focusedActorSelectedTargetCids = [];
+  }
+  renderFocusedActorPanel(currentSnapshot);
+}
+
+function selectFocusedActorSequenceStep(actionId) {
+  focusedActorTargetActionId = actionId;
+  focusedActorTargetModeEnabled = true;
+  focusedActorSelectedTargetCids = [];
+  focusedActorResolutionPacket = null;
+  focusedActorResolutionError = null;
+  renderFocusedActorPanel(currentSnapshot);
+  renderTacticalMap(currentTacticalMap());
+}
+
+function endFocusedActorSequence() {
+  focusedActorSequencePacket = null;
+  focusedActorSequenceCompletedSteps = {};
+  focusedActorTargetModeEnabled = false;
+  focusedActorTargetActionId = null;
+  focusedActorSelectedTargetCids = [];
   focusedActorResolutionPacket = null;
   focusedActorResolutionError = null;
   renderFocusedActorPanel(currentSnapshot);

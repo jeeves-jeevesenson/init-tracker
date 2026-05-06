@@ -460,7 +460,7 @@ Update the status column after each pass.
 | M4 | Encounter Builder / Monster Library | In progress | Complete Encounter Builder (mixed groups/staging) |
 | M5 | Initiative flow | In progress | Reroll all enemy/NPC initiative in Toolbox |
 | M6 | Focused actor panel prototype | Completed | Static/prototype actor panel using current actor |
-| M7 | Monster Actions / action cards | In progress | Multiattack sequencing planning completed |
+| M7 | Monster Actions / action cards | In progress | Sequence Tray implemented; Next: sequence tray hardening or smoke |
 | M8 | Current-turn movement model | Not started | Reuse LAN movement path for DM current actor |
 | M9 | Tactical map inspection | Not started | Token click inspection / empty cell info |
 | M10 | Automation settings | Not started | Roll-path and persistence inspection |
@@ -816,6 +816,30 @@ Scope:
 Outcome:
 - Detailed implementation plan added to the living doc.
 - Ready for first implementation slice: Sequence Tray UI and child-action execution wiring.
+
+### 2026-05-06 — Monster Actions: Focused Actor Sequence Tray (M7 extension)
+
+Agent/model: Gemini CLI (Autonomous Mode)
+Scope:
+- Implement the Focused Actor Sequence Tray for composite / Multiattack actions.
+- Added `focusedActorSequencePacket` and `focusedActorSequenceCompletedSteps` frontend state.
+- Updated `executeFocusedActorAction` to detect and capture `assisted_sequence` resolution.
+- Rendered Sequence Tray UI in the Focused Actor Panel with child steps and completion counters.
+- Wired child buttons to trigger target preview for specific child sub-capabilities.
+- Updated `resolveFocusedActorAction` and `cancelFocusedActorActionResolution` to return focus to the sequence tray.
+- Added sequence state cleanup on actor change or non-child action selection.
+Files changed:
+- assets/web/dm/index.html
+- tests/test_dm_focused_actor_panel_sequence.py (New)
+- docs/dm_control_surface_living_agent_plan.md
+Outcome:
+- DMs can now execute complex Multiattack sequences step-by-step from the Focused Actor Panel.
+- Each child attack uses the standard target selection and resolution flow.
+- Progress is tracked visually within the sequence tray.
+- Mandatory JS syntax check passed.
+- All relevant tests (360) passed.
+Next recommended pass:
+- M7 — Sequence Tray hardening or complex multiattack browser smoke.
 
 ### 2026-05-06 — Monster Actions: Resolution Tray Hardening (M7 extension)
 
