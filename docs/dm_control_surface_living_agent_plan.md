@@ -98,8 +98,8 @@ Update this section after each pass.
 | Monster capability backend | Useful | Frontend label/presentation should become Monster Actions |
 | DM Toolbox | Planned | Tabbed modal for session, encounter, overrides, map tools, debug |
 | Encounter Builder | Planned | Search/browse monster library, spawn count, auto-numbering, mixed groups later |
-| Duplicate monster names | Known issue | Backend auto-numbering is first low-risk cleanup |
-| Enemy/NPC initiative | Known issue | Auto-roll individually when added |
+| Duplicate monster names | Completed | Backend auto-numbering implemented via CombatantNameService |
+| Enemy/NPC initiative | Completed | Auto-roll individually when added via monster spawn path |
 | Movement model | Planned | Reuse/expose LAN canonical movement path where possible |
 | Battle log | Planned refinement | Gameplay-focused, detailed, visible by default; technical logs separate |
 | Automation settings | Planned | Support app rolls and manual/physical dice per roll or roll type |
@@ -452,7 +452,7 @@ Update the status column after each pass.
 | ID | Milestone | Status | Next concrete pass |
 |---|---|---|---|
 | M0 | Stabilize `/dm` and `/` before redesign | In progress / verify | Browser smoke after current fixes |
-| M1 | Low-risk correctness cleanup | Not started | Auto-number duplicate monster spawns |
+| M1 | Low-risk correctness cleanup | In progress | Q3 - Rename Normalized Capabilities to Monster Actions |
 | M2 | DM Toolbox shell | Not started | Modal shell + tabs |
 | M3 | Encounter Builder / Monster Library | Not started | Search/browse shell after spawn cleanup |
 | M4 | Initiative flow | Not started | Auto-roll enemy/NPC initiative when added |
@@ -498,8 +498,34 @@ Outcome:
 - First implementation candidates identified.
 
 Next recommended pass:
+- Q3 — Rename Normalized Capabilities to Monster Actions.
 
-- Auto-number duplicate monster spawns, after verifying current repo is stable and latest docs are committed.
+### 2026-05-06 — Auto-number duplicate monster spawns (Q1)
+
+Agent/model: Gemini CLI (Autonomous Mode)
+Scope: 
+- Implement backend auto-numbering for duplicate monster names.
+- Ensure unique suffixes (e.g., "Goblin 1", "Goblin 2") even for single spawns.
+Files changed:
+- combatant_name_service.py (New)
+- dnd_initative_tracker.py
+- tests/test_combatant_name_service.py (New)
+Outcome:
+- Monsters receive unique numeric suffixes upon spawning.
+
+### 2026-05-06 — Auto-roll enemy/NPC initiative (Q2)
+
+Agent/model: Gemini CLI (Autonomous Mode)
+Scope: 
+- Implement auto-rolling of initiative for monsters spawned via the DM encounter route.
+- Each monster in a multi-count spawn gets an independent roll.
+Files changed:
+- combat_service.py
+- helper_script.py
+- tests/test_monster_init_auto_roll.py (New)
+Outcome:
+- Monsters automatically roll initiative when added if the initiative is 0.
+- Multi-count spawns have independent initiative values.
 
 ## Decision log
 
@@ -512,8 +538,8 @@ Agents should append or update durable decisions here.
 | 2026-05-06 | Initiative owns normal DM control actor | DM should not select active monster from dropdown when initiative already defines whose turn it is | Accepted |
 | 2026-05-06 | Tactical map is reference/inspection first | Map should not become generic command surface; it should inspect tokens/cells and visualize spatial context | Accepted |
 | 2026-05-06 | DM Toolbox holds rare/power/admin/debug controls | Keeps active cockpit focused and avoids clutter | Accepted |
-| 2026-05-06 | Every spawned monster should be numbered | Duplicate names are confusing during combat | Accepted |
-| 2026-05-06 | Enemies/NPCs auto-roll initiative individually when added | Table rule; only PCs use LAN initiative prompts | Accepted |
+| 2026-05-06 | Every spawned monster should be numbered | Duplicate names are confusing during combat | Completed |
+| 2026-05-06 | Enemies/NPCs auto-roll initiative individually when added | Table rule; only PCs use LAN initiative prompts | Completed |
 | 2026-05-06 | Browser asset JS syntax check required for DM/LAN HTML edits | Recent parse errors broke `/dm` despite Python tests passing | Accepted |
 
 ## Open decisions and research needs
@@ -901,3 +927,28 @@ A successful turn should feel like:
 13. The DM ends turn.
 
 The old Monster Turn Controls and Monster Pilot should no longer be the primary way to run combat.
+at.
+t command/result. Separate confirmed findings from hypotheses. Use measured runtime evidence for bug/performance fixes.
+
+## Final acceptance vision
+
+The redesign is successful when the DM can run a complex monster turn without using the old dropdown stacks.
+
+A successful turn should feel like:
+
+1. The monster’s turn comes up.
+2. The actor panel updates automatically.
+3. The map shows the monster and legal movement range.
+4. The DM sees the monster’s relevant actions without opening a stat block.
+5. The DM drags movement if desired.
+6. The DM clicks an action card.
+7. Target mode begins.
+8. Valid targets or AoE preview appear.
+9. The DM selects target(s).
+10. Resolution guides hit/save/damage/effects.
+11. Movement remaining and resources update.
+12. Combat log records important events.
+13. The DM ends turn.
+
+The old Monster Turn Controls and Monster Pilot should no longer be the primary way to run combat.
+at.

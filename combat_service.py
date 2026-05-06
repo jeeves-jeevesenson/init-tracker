@@ -1403,7 +1403,7 @@ class CombatService:
                         continue
 
                     try:
-                        initiative = int(entry.get("initiative"))
+                        initiative = int(entry.get("initiative") or 0)
                     except Exception:
                         skipped.append(
                             {
@@ -1425,6 +1425,24 @@ class CombatService:
                         )
                         continue
 
+                    roll = entry.get("roll")
+                    nat20 = entry.get("nat20")
+
+                    # Auto-roll initiative for monsters if not provided (or 0)
+                    if initiative == 0:
+                        init_mod = getattr(spec, "init_mod", None)
+                        if init_mod is None:
+                            dex_score = getattr(spec, "dex", 10)
+                            try:
+                                init_mod = (int(dex_score) - 10) // 2
+                            except Exception:
+                                init_mod = 0
+                        
+                        r = random.randint(1, 20)
+                        initiative = r + int(init_mod or 0)
+                        roll = r
+                        nat20 = (r == 20)
+
                     try:
                         cid = create_monster(
                             name=name,
@@ -1444,8 +1462,8 @@ class CombatService:
                             actions=entry.get("actions"),
                             bonus_actions=entry.get("bonus_actions"),
                             reactions=entry.get("reactions"),
-                            roll=entry.get("roll"),
-                            nat20=entry.get("nat20"),
+                            roll=roll,
+                            nat20=nat20,
                         )
                     except Exception:
                         cid = None

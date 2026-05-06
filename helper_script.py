@@ -2519,7 +2519,7 @@ class InitiativeTracker(tk.Tk):
                 )
                 continue
             try:
-                initiative = int(entry.get("initiative"))
+                initiative = int(entry.get("initiative") or 0)
             except Exception:
                 skipped.append(
                     {
@@ -2539,6 +2539,25 @@ class InitiativeTracker(tk.Tk):
                     }
                 )
                 continue
+
+            roll = entry.get("roll")
+            nat20 = entry.get("nat20")
+
+            # Auto-roll initiative for monsters if not provided (or 0)
+            if initiative == 0:
+                init_mod = getattr(spec, "init_mod", None)
+                if init_mod is None:
+                    dex_score = getattr(spec, "dex", 10)
+                    try:
+                        init_mod = (int(dex_score) - 10) // 2
+                    except Exception:
+                        init_mod = 0
+                
+                r = random.randint(1, 20)
+                initiative = r + int(init_mod or 0)
+                roll = r
+                nat20 = (r == 20)
+
             cid = self._create_monster_spec_combatant(
                 name=name,
                 monster_spec=spec,
@@ -2557,8 +2576,8 @@ class InitiativeTracker(tk.Tk):
                 actions=entry.get("actions"),
                 bonus_actions=entry.get("bonus_actions"),
                 reactions=entry.get("reactions"),
-                roll=entry.get("roll"),
-                nat20=entry.get("nat20"),
+                roll=roll,
+                nat20=nat20,
             )
             if isinstance(cid, int):
                 added.append({"cid": cid, "name": name, "monster_slug": monster_slug})
