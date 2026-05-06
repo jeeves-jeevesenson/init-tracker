@@ -75,6 +75,18 @@ class TestDmFocusedActorPanelActions(unittest.TestCase):
         self.assertIn('Highlight Selected Targets', html)
         self.assertIn('TARGET', html)
         self.assertIn('focusedActorSelectedTargetCids.forEach', html)
+        self.assertIn('getFocusedActorTargetAdvisory', html)
+        self.assertIn('OUT OF RANGE', html)
+        self.assertIn('AOE ADVISORY', html)
+
+    def test_advisory_validation_rendering(self):
+        html = _DM_HTML_PATH.read_text(encoding="utf-8")
+        self.assertIn('getFocusedActorTargetAdvisory(tid, cap, sourceUnit, targetUnit, tactical)', html)
+        self.assertIn('advisory.text', html)
+        self.assertIn('Selection is not blocked; DM decides.', html)
+        self.assertIn('Likely in range', html)
+        self.assertIn('Likely out of range', html)
+        self.assertIn('AoE validation advisory only', html)
 
     def test_tactical_click_targeting(self):
         html = _DM_HTML_PATH.read_text(encoding="utf-8")

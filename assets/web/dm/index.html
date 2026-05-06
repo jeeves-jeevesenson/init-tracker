@@ -4081,6 +4081,30 @@ function drawCellBlock(ctx, geometry, cells, fillStyle, strokeStyle = '') {
   }
 }
 
+function getFocusedActorTargetAdvisory(tid, cap, sourceUnit, targetUnit, tactical) {
+  if (!cap || !sourceUnit || !targetUnit || !sourceUnit.pos || !targetUnit.pos) {
+    return { status: 'unknown', text: 'Validation unavailable' };
+  }
+
+  const dx = Math.abs(Number(sourceUnit.pos.col) - Number(targetUnit.pos.col));
+  const dy = Math.abs(Number(sourceUnit.pos.row) - Number(targetUnit.pos.row));
+  const feetPerSquare = tacticalGridSpec(tactical)?.feet_per_square || 5.0;
+  const distFt = Math.max(dx, dy) * feetPerSquare;
+
+  const reach = cap.mechanics?.reach || 5;
+  const range = cap.mechanics?.range || reach;
+
+  if (cap.area && cap.area.shape) {
+      return { status: 'aoe_advisory', text: 'AoE validation advisory only' };
+  }
+
+  if (distFt <= range) {
+    return { status: 'valid', text: 'Likely in range' };
+  } else {
+    return { status: 'invalid', text: `Likely out of range (${distFt}ft > ${range}ft)` };
+  }
+}
+
 function renderFocusedActorTargetPreviewOverlay(ctx, geometry, tactical) {
   const actor = findFocusedActorFromSnapshot(currentSnapshot);
   if (!actor) return;
@@ -4136,19 +4160,34 @@ function renderFocusedActorTargetPreviewOverlay(ctx, geometry, tactical) {
   focusedActorSelectedTargetCids.forEach(tid => {
     const targetUnit = findTacticalUnit(tid, tactical);
     if (!targetUnit || !targetUnit.pos) return;
+    
+    const advisory = getFocusedActorTargetAdvisory(tid, cap, unit, targetUnit, tactical);
+    const isInvalid = advisory.status === 'invalid';
+    const isAoe = advisory.status === 'aoe_advisory';
+    
     const tCenter = tacticalCellCenter(geometry, targetUnit.pos.col, targetUnit.pos.row);
     const tRadius = Math.max(5, geometry.cell * 0.28);
 
     ctx.beginPath();
-    ctx.strokeStyle = 'rgba(255, 255, 0, 0.9)';
+    ctx.strokeStyle = isInvalid ? 'rgba(255, 91, 91, 0.9)' : 'rgba(255, 255, 0, 0.9)';
     ctx.lineWidth = 4;
+    if (isAoe) ctx.setLineDash([4, 4]);
     ctx.arc(tCenter.x, tCenter.y, tRadius + 8, 0, Math.PI * 2);
     ctx.stroke();
+    ctx.setLineDash([]);
 
-    ctx.fillStyle = 'rgba(255, 255, 0, 1)';
+    ctx.fillStyle = isInvalid ? 'rgba(255, 91, 91, 1)' : 'rgba(255, 255, 0, 1)';
     ctx.font = 'bold 10px system-ui';
     ctx.textAlign = 'center';
     ctx.fillText('TARGET', tCenter.x, tCenter.y + tRadius + 20);
+    
+    if (isInvalid) {
+      ctx.font = '9px system-ui';
+      ctx.fillText('OUT OF RANGE', tCenter.x, tCenter.y + tRadius + 30);
+    } else if (isAoe) {
+      ctx.font = '9px system-ui';
+      ctx.fillText('AOE ADVISORY', tCenter.x, tCenter.y + tRadius + 30);
+    }
   });
 
   // 4. Draw AoE hint if applicable
@@ -4624,25 +4663,47 @@ function renderFocusedActorPanel(snap) {
           ${focusedActorSelectedTargetCids.length > 0 ? `<button class="btn-xs" onclick="clearFocusedActorSelectedTargets()">Clear targets</button>` : ''}
         </div>
         <div class="target-tray-list">
-          ${focusedActorSelectedTargetCids.length === 0 ? 
-            '<div class="actor-placeholder-content" style="font-style:italic">Click tokens on the map to select targets.</div>' :
-            focusedActorSelectedTargetCids.map(tid => {
+          ${(() => {
+            if (focusedActorSelectedTargetCids.length === 0) {
+              return '<div class="actor-placeholder-content" style="font-style:italic">Click tokens on the map to select targets.</div>';
+            }
+
+            const summary = monsterCapabilitiesByCid[actor.cid];
+            let cap = null;
+            if (summary && focusedActorTargetActionId) {
+              for (const g in summary.groups) {
+                cap = summary.groups[g].find(c => c.id === focusedActorTargetActionId);
+                if (cap) break;
+              }
+            }
+
+            const tactical = currentTacticalMap();
+            const sourceUnit = findTacticalUnit(actor.cid, tactical);
+
+            return focusedActorSelectedTargetCids.map(tid => {
               const target = snap.combatants.find(c => c.cid === tid);
               if (!target) return '';
+              
+              const targetUnit = findTacticalUnit(tid, tactical);
+              const advisory = getFocusedActorTargetAdvisory(tid, cap, sourceUnit, targetUnit, tactical);
+              const advisoryColor = advisory.status === 'invalid' ? 'var(--danger)' : (advisory.status === 'valid' ? 'var(--heal)' : 'var(--warn)');
+              const showAdvisory = advisory.status !== 'unknown';
+
               return `
-                <div class="target-tray-item" style="display:flex; align-items:center; gap:8px; background:rgba(255,255,255,0.05); padding:4px 8px; border-radius:4px; margin-bottom:4px">
+                <div class="target-tray-item" style="display:flex; align-items:center; gap:8px; background:rgba(255,255,255,0.05); padding:4px 8px; border-radius:4px; margin-bottom:4px; border-left: 3px solid ${advisoryColor}">
                   <div style="flex:1; min-width:0">
                     <div style="font-weight:bold; white-space:nowrap; overflow:hidden; text-overflow:ellipsis">${escHtml(target.name)}</div>
                     <div style="font-size:10px; color:var(--muted)">${escHtml(target.side || 'Neutral')} · HP ${target.hp}/${target.max_hp}</div>
+                    ${showAdvisory ? `<div style="font-size:10px; color:${advisoryColor}; font-weight:bold; margin-top:2px">${escHtml(advisory.text)}</div>` : ''}
                   </div>
                   <button class="btn-sm remove" onclick="toggleFocusedActorSelectedTarget(${target.cid})" style="padding:2px 6px">×</button>
                 </div>
               `;
-            }).join('')
-          }
+            }).join('');
+          })()}
         </div>
         ${focusedActorSelectedTargetCids.length > 0 ? 
-          '<div style="margin-top:8px; font-size:11px; color:var(--muted); text-align:center; padding:4px; border:1px dashed var(--border); border-radius:4px">Resolution coming later.</div>' : ''
+          '<div style="margin-top:8px; font-size:11px; color:var(--muted); text-align:center; padding:4px; border:1px dashed var(--border); border-radius:4px">Selection is not blocked; DM decides. Resolution coming later.</div>' : ''
         }
       </div>
       ` : ''}

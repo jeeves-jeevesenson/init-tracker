@@ -460,7 +460,7 @@ Update the status column after each pass.
 | M4 | Encounter Builder / Monster Library | In progress | Complete Encounter Builder (mixed groups/staging) |
 | M5 | Initiative flow | In progress | Reroll all enemy/NPC initiative in Toolbox |
 | M6 | Focused actor panel prototype | Completed | Static/prototype actor panel using current actor |
-| M7 | Monster Actions / action cards | In progress | Action target selection highlighting |
+| M7 | Monster Actions / action cards | In progress | Action target range / AoE advisory hints |
 | M8 | Current-turn movement model | Not started | Reuse LAN movement path for DM current actor |
 | M9 | Tactical map inspection | Not started | Token click inspection / empty cell info |
 | M10 | Automation settings | Not started | Roll-path and persistence inspection |
@@ -780,7 +780,29 @@ Outcome:
 - Mandatory JS syntax check passed.
 - All relevant tests (339) passed, including new focused tests.
 Next recommended pass:
-- M7 — Monster Actions: Range / AoE validation hints.
+- M7 — Monster Actions: Action execution planning / target-resolution review.
+
+### 2026-05-06 — Monster Actions: Range / AoE Validation Hints (M7 extension)
+
+Agent/model: Gemini CLI (Autonomous Mode)
+Scope: 
+- Implement advisory validation hints for Monster Actions in target preview mode.
+- Add `getFocusedActorTargetAdvisory` helper to compute target status based on Chebyshev distance.
+- Target Tray now shows color-coded validity status for each selected target (Likely in range, Likely out of range, AoE advisory).
+- Tactical-map highlights are color-coded: yellow for likely valid/AoE, red for likely out-of-range.
+- Map highlights for invalid targets include an "OUT OF RANGE" text label.
+- Map highlights for AoE actions use a dashed yellow ring and "AOE ADVISORY" label.
+- Target Tray includes a footer reminding the DM that selection is not blocked and they have final authority.
+- No backend state changes, resource spending, or execution logic added.
+Files changed:
+- assets/web/dm/index.html
+- tests/test_dm_focused_actor_panel_actions.py
+- docs/dm_control_surface_living_agent_plan.md
+Outcome:
+- DM receives immediate spatial and textual feedback on target validity without being constrained by automated rules.
+- Clear distinction between "direct range" actions and "AoE" actions in the validation UI.
+- Mandatory JS syntax check passed.
+- All relevant tests (347) passed.
 
 ### 2026-05-06 — Monster Actions: Selected-Target Highlighting (M7 extension)
 
