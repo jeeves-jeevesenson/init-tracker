@@ -4,6 +4,7 @@ Version: 2026-05-06
 Status: Living planning and execution document
 Recommended repo path: `docs/dm_control_surface_living_agent_plan.md`
 Source plan: `docs/dm-control-surface-master-plan.md`
+Research source: `docs/dmcontrol_research_living_notes.md`
 
 ## How to use this document
 
@@ -11,18 +12,19 @@ This is the working document agents should use when planning, implementing, and 
 
 The master design direction is stable:
 
-- **The tactical map is not the primary combat-control surface.** Do not build workflows that require map clicks to run monster turns, select targets, or execute actions. Panel-first controls are required.
-- Build a new actor-centered DM combat control surface.
-- Focused Actor Panel is the monster/NPC control surface.
-- Target selection must be available primarily from the Focused Actor Panel.
-- Tactical map is reference / inspection / visual feedback only.
-- Tactical map may highlight source/targets/range/AoE and allow token inspection.
-- Tactical map must not be required as the primary way to select targets or run monster actions.
-- Map-click target selection, if retained, is optional assistive behavior only and must not be the main workflow.
-- DM Toolbox is setup / overrides / admin / debug.
-- Legacy Monster Turn Controls and Monster Pilot must be removed/demoted from the main active cockpit area.
+- **The active monster/NPC control surface is a dedicated `/dmcontrol` page, not the `/dm` cockpit.**
+- **`/dmcontrol` must be based on LAN client interaction patterns, not `/dm` UI.**
+- **The tactical map is not the primary combat-control surface for `/dm`.** Do not build workflows that require map clicks to run monster turns, select targets, or execute actions on the `/dm` cockpit. Panel-first controls are required there.
+- **`/dmcontrol` uses a map-first active play surface modeled after the LAN client.** It uses the same backend-authority model and combat state snapshots.
+- Build a new actor-centered DM combat control surface on `/dmcontrol`.
+- Focused Actor Panel work on `/dm` is transitional/reusable prototype work, not the final target layout.
+- Target selection on `/dmcontrol` should match LAN targeting: action-first, then map-click or panel-based picker.
+- Tactical map on `/dm` is reference / inspection / visual feedback only.
+- Tactical map on `/dmcontrol` is the active play surface: movement, targeting, AoE placement.
+- DM Toolbox on `/dm` is setup / overrides / admin / debug.
+- Legacy Monster Turn Controls and Monster Pilot must be removed/demoted from the main active cockpit area on `/dm`.
 - Do not polish the current dropdown-heavy Monster Turn Controls / Monster Pilot as the target UI.
-- Use LAN player flow as the local interaction reference.
+- Use LAN player flow as the local interaction reference for `/dmcontrol`.
 - Preserve backend authority and avoid DM-only parallel state.
 
 Agents should update this document after meaningful passes.
@@ -45,26 +47,110 @@ Do not mark a milestone complete unless tests and, where relevant, browser/runti
 
 Do not claim browser readiness after editing `assets/web/dm/index.html` or `assets/web/lan/index.html` unless the inline JavaScript syntax check passed.
 
+## Critical Architecture Correction: /dm vs /dmcontrol
+
+| Feature / Surface | `/dm` (Cockpit / Reference) | `/dmcontrol` (Active Play Surface) |
+|---|---|---|
+| **Role** | Command Center, Prep, Admin, Debug | Active monster/NPC/enemy play page |
+| **Interaction Model** | Panel-first, administrative, overview | Map-first, LAN-like, high-speed resolution |
+| **Main Surface** | Multi-panel dashboard | Tactical map + bottom control bar |
+| **Tactical Map Role** | Reference, inspection, visual context | Active movement, targeting, AoE placement |
+| **Initiative** | Full overview, all combatants | Current turn/round status, actor focus |
+| **Actor Focus** | Full stat-sheet reference, inspection | Turn-critical state, active action controls |
+| **Monster Library** | Search, browse, encounter building | N/A |
+| **Toolbox** | Global overrides, session, setup | Soft DM override if explicit |
+| **Battle Log** | Full historical/technical log | Compact recent-result feed |
+| **Movement** | Visualization / setup (if any) | Active drag/drop movement, range overlays |
+
+## Dedicated /dmcontrol Page Architecture
+
+### Purpose
+The `/dmcontrol` page is the dedicated active combat cockpit for the DM to run monster, NPC, and enemy turns. It is optimized for high-speed interaction and D&D action resolution, modeled after the LAN player client (`assets/web/lan/index.html`).
+
+### Relationship to /dm
+- `/dm` remains the "Command Center" for session management, encounter building, map editing, and global overrides.
+- `/dmcontrol` is the "Action Surface" focused on the current initiative actor.
+- Navigation should allow quick switching between the two.
+
+### Relationship to LAN client
+- `/dmcontrol` should feel familiar to users of the LAN client.
+- It uses the same backend-authority model and combat state snapshots.
+- Interaction style (action cards, target selection, resolution modals) should be shared or mirrored.
+- Page structure: Map-first surface + bottom control bar/sheet.
+
+### Final /dmcontrol interaction model
+
+1. Initiative advances to monster/NPC/enemy.
+2. `/dm` shows that actor’s sheet/reference information.
+3. `/dmcontrol` automatically focuses the current actor.
+4. Movement range appears automatically on the `/dmcontrol` map.
+5. DM can move the token by drag/drop at any point during the turn using remaining movement.
+6. DM chooses action/spell/Multiattack from LAN-style controls in the bottom bar.
+7. `/dmcontrol` map enters action-specific target/template mode (range/reach/AoE previews).
+8. DM selects target(s) from the map (or panel-based picker fallback).
+9. Selected/affected targets are previewed on the map.
+10. Resolution modal opens (reusing LAN resolution logic).
+11. DM manually/app-assisted resolves results (hit/save/damage/effects).
+12. "Apply Results" mutates backend combat state.
+13. Multiattack returns to guided child-sequence tray until ended.
+14. DM ends turn.
+
+**PC Turn Behavior:** When initiative is on a PC, `/dmcontrol` idles/disables normal controls, similar to a LAN client when it is not that actor’s turn.
+
+## Final /dmcontrol Design Principles
+
+- **Build from `assets/web/lan/index.html`**, not from `assets/web/dm/index.html`.
+- **Map-first and active:** Keep the tactical map as the primary interaction surface for play.
+- **Bottom/control bar:** Use a LAN-like bottom bar for main monster controls.
+- **Minimum state:** Only duplicate turn-critical state on `/dmcontrol` (name, HP, conditions, movement, round/turn).
+- **Movement is always available:** Range appears automatically; drag/drop is the normal input; movement can be split around actions.
+- **Action-first targeting:** Choose action -> enter map target mode -> click target.
+- **Avoid redundant click chains:**
+    - Avoid: click action -> click target -> click attack again -> reselect target -> click resolve.
+    - Preferred: click action -> map enters target mode -> click target -> resolution modal opens.
+- **Guided Multiattack:** Multiattack is a child-step flow (select child -> map target mode -> click target -> resolution modal).
+- **Automation assists, does not trap:** Double-submit guards and manual override are mandatory.
+- **Graceful degradation:** If no structured monster overlay exists, fall back to simple manual/assisted controls without "dropdown hell".
+
+## Reusable work from /dm prototype
+The following logic/features implemented on `/dm` should be ported/reused:
+- Monster Action card rendering and mechanics summaries.
+- Selected/expanded action state management.
+- Target Tray state model (for panel-based selection/preview).
+- Range/AoE advisory wording and validation hints.
+- Resolution Tray backend wiring and manual adjudication logic.
+- Sequence Tray model and child completion tracking for Multiattack.
+- Error/in-flight hardening and double-submit prevention.
+
+### What should not be ported
+- UI placement within the `/dm` cockpit (must move to dedicated `/dmcontrol` page).
+- Dependency on `/dm` right-side panel layout.
+- Tactical map as the active play surface on `/dm`.
+- Old Monster Turn Controls / Monster Pilot dependencies.
+
 ## Non-negotiable guardrails
 
 ### UI direction
 
-- **Panel-first controls are mandatory.** The tactical map is for reference and inspection.
-- Target selection must be available from the Focused Actor Panel.
+- **Panel-first controls are mandatory for `/dm`.** The tactical map on `/dm` is for reference and inspection.
+- **`/dmcontrol` is the active combat surface.** Modeled after the LAN client.
+- **Tactical map on `/dmcontrol` is the active play surface.**
+- **Avoid redundant click chains.**
+- Target selection on `/dmcontrol` uses map-first interaction with panel-based fallback.
 - The current `/dm` right-side dropdown control stack is not the target UI.
 - Monster Turn Controls and Monster Pilot are legacy/current fallback surfaces.
 - Do not build new active-combat workflows from dropdown stacks.
-- Do not let agents invent major interaction models without user approval.
-- Use LAN player flow as the local interaction reference.
 - Design for complex monsters first: dragons, spellcasters, legendary creatures, AoEs, multiattack, riders, and spellcasting.
 
 ### Runtime and state direction
 
 - Preserve backend authority.
 - Do not introduce a DM-only parallel source of truth.
+- Use existing monster capability backend paths where practical.
+- Do not create a third parallel combat-resolution backend unless proven necessary.
+- No state mutation without explicit Apply/Confirm.
+- Double-submit guards are mandatory for Apply/End/Override.
 - Treat stale UI as frontend state/DOM bugs unless endpoint evidence proves backend divergence.
-- Use measured evidence for bug/performance fixes.
-- Separate confirmed findings from hypotheses.
 
 ### Browser asset safety
 
@@ -82,390 +168,47 @@ Required report item:
 
 Browser parse errors such as `Unexpected token '}'` or `Identifier '<name>' has already been declared` are blockers.
 
-### Large-file discipline
-
-The browser files are large. Do not wander.
-
-Known size context from repo inspection:
-
-- `assets/web/lan/index.html` is about 26k lines.
-- `assets/web/dm/index.html` is about 6.8k lines.
-- `dnd_initative_tracker.py` is about 47k lines.
-
-For implementation tasks, agents should use exact anchors. Broad file-wide exploration is allowed only in explicit discovery/research passes.
-
 ## Current status snapshot
 
 Update this section after each pass.
 
 | Area | Current status | Notes |
 |---|---|---|
-| `/dm` bootstrap/render | Verified | Recent parse/stale reset bugs were fixed; HP/Temp HP/Remove Combatant/Set Initiative migrated to Toolbox |
+| `/dm` cockpit | Admin/reference/setup | Not final active monster-control page. |
+| `/dmcontrol` | Planned | Dedicated LAN-style monster/NPC control page. |
 | `/` LAN client | Useful local model | LAN has targeting, movement range, attack resolution, spell target selection, and remaining movement concepts |
 | Monster Turn Controls | Legacy/fallback | **Must be removed/demoted from main cockpit.** Do not polish as target UI. |
 | Monster Pilot | Legacy/fallback | **Must be removed/demoted from main cockpit.** Do not use as foundation for future current-turn movement. |
-| Monster capability backend | Useful | Labels renamed to 'Monster Actions' in DM UI |
-| Focused actor panel | Prototype | Current actor focused automatically; token click inspects; stats and actions (with selection/expansion) display |
-| Target Selection | Provisional / needs correction | Current implementation depends too much on map-click. |
-| Panel-based target picker | **Required next correction** | Target selection must be moved to Focused Actor Panel. |
+| Focused actor panel | Transitional Prototype | Current implementation on `/dm` is for reusable learning, not final target location. |
 | DM Toolbox | In progress | Tabbed modal with Session, Encounter, Overrides tabs partially populated |
 | Encounter Builder | In progress | Monster Library search and Add Monster workflow migrated to Encounter tab |
+| Monster Library | Regressed / Gaps | Duplicate entries and repeated single-spawn numbering regression confirmed. |
 | Duplicate monster names | Completed | Backend auto-numbering implemented via CombatantNameService |
 | Enemy/NPC initiative | Completed | Auto-roll individually when added via monster spawn path |
 | Tactical map inspection | Completed | Token click focuses actor in panel without changing initiative turn |
-| Movement model | Planned | Reuse/expose LAN canonical movement path where possible |
-| Battle log | Planned refinement | Gameplay-focused, detailed, visible by default; technical logs separate |
-| Automation settings | Planned | Support app rolls and manual/physical dice per roll or roll type |
-| Map editor | Deferred | Separate tool/mode; do not bolt onto combat cockpit |
-
-## Final target interaction model
-
-### Normal monster/NPC turn
-
-1. Initiative advances.
-2. Current actor is automatically focused.
-3. Focused actor panel shows stats, conditions, movement, resources, and actions.
-4. Legal movement range appears on tactical map.
-5. DM may move before acting.
-6. DM selects an action card in Focused Actor Panel.
-7. Action enters target mode.
-8. DM selects targets from a panel-based target picker/list in the Focused Actor Panel.
-9. Target Tray shows selected targets.
-10. Tactical map visualizes selected targets/range/AoE for feedback only.
-11. Resolution handles hit, save, damage, effects, riders, and resources.
-12. DM may continue moving or acting if valid.
-13. DM ends turn.
-
-Movement is not a single fixed phase. The UI must support split movement such as move, attack, move, bonus action, move, end.
-
-### Focused actor panel
-
-The Focused Actor Panel is the primary monster/NPC control surface.
-
-Default actor:
-
-- current initiative actor
-
-Inspection actor:
-
-- clicked token, or current actor by default
-
-PC behavior:
-
-- player characters are view-only by default
-- DM control of PCs requires Toolbox override
-
-Visible data should include:
-
-- name
-- side/type
-- HP and temp HP
-- AC
-- speed
-- passive perception
-- initiative
-- conditions
-- position/facing if useful
-- remaining movement
-- resources/recharge/limited uses
-- grouped action cards
-- **Target selection list/picker**
-
-### Action cards
-
-Collapsed cards show mechanics summary:
-
-- name
-- attack bonus or save DC
-- damage
-- damage type
-- range/reach/area
-- recharge/resource marker
-- key rider summary
-
-Expanded cards show full description/rules text.
-
-Unsupported/manual cards are collapsed by default and clearly labeled Manual / Assisted.
-
-Candidate groups:
-
-- Actions
-- Bonus Actions
-- Reactions
-- Legendary Actions
-- Spellcasting
-- Traits / Passive Rules
-- Manual / Unsupported
-
-Action grouping defaults still need prototype work against complex monster data.
-
-### Targeting and resolution
-
-- **Focused Actor Panel owns target selection.**
-- Panel target picker/list is required.
-- Selecting an attack/action enters target mode.
-- Escape cancels target mode without consuming resources.
-- Valid targets should be highlighted on the map for feedback.
-- Map-click targeting is optional/passive assist only.
-- AoE and multi-target selections should display selected targets before resolution.
-- Damage can be automatic after the relevant result is determined.
-- AoE/mass effects may require review/confirmation.
-
-The system must support both app rolls and physical dice/manual entry.
-
-Automation settings should eventually support app/manual toggles for:
-
-- attack rolls
-- damage rolls
-- saving throws
-- initiative
-- recharge rolls
-
-### Multiattack
-
-Preferred flow:
-
-- guided assisted sequence
-- child attacks tracked
-- different targets allowed when legal
-- app warns/assists but does not over-enforce
-- DM remains authoritative
-
-Example:
-
-- Multiattack starts Bite, Claw, Claw.
-- The sequence tracks Bite 0/1 and Claw 0/2.
-- DM may choose same target or choose per child attack if legal.
-
-### Movement
-
-Movement range should:
-
-- appear automatically at the start of every monster/NPC turn
-- remain visible because movement can be split
-- track remaining movement
-- reject invalid drags
-- snap token back on invalid drag
-- not consume movement on invalid drag
-
-Diagonal movement remains unresolved. Do not change diagonal logic until current repo behavior and table rule are confirmed.
-
-### Force / override movement
-
-Force/override is not normal movement.
-
-Initial model:
-
-- lives in DM Toolbox
-- requires confirmation
-- may allow moving any token, out-of-turn movement, or forced illegal movement
-- should log visibly when used
-
-Future WIP:
-
-- crates/objects
-- physics-like interactions
-- pushed/shoved movement
-- terrain/object interactions
-
-### Tactical map
-
-**The tactical map is for reference, inspection, and visual feedback only.**
-
-Default display:
-
-- current initiative actor / inspected actor
-
-Left-click token:
-
-- inspect/focus that token
-
-Left-click empty cell:
-
-- show detailed cell information (inspect cell)
-
-No primary target selection from map. No primary action execution from map.
-
-Movement/drag controls are deferred and must be explicitly workshopped before implementation.
-
-Right-click token:
-
-- possible future contextual actions
-
-Right-click empty cell:
-
-- map tools only in explicit map-edit mode
-
-Map editing should be a separate mode/tool, not bolted onto combat controls.
-
-### DM Toolbox
-
-One modal with tabs.
-
-Accessible from cockpit and map.
-
-All actions require confirmation.
-
-Planned tabs:
-
-- Session
-- Encounter
-- Overrides
-- Map Tools
-- Debug
-
-Session tab:
-
-- New Blank Session
-- Save Session
-- Load Session
-- Add Player Profiles
-
-Encounter tab:
-
-- Monster Library / Add Monsters
-- Encounter group tools
-- Remove Combatant
-- possibly Add Custom Combatant if retained
-
-Overrides tab:
-
-- HP adjustment
-- Temp HP adjustment
-- manual initiative
-- DM-side PC control override
-- move any token / force movement
-- reroll all enemy/NPC initiative
-
-Map Tools tab:
-
-- map setup
-- hazards
-- structures
-- terrain
-- elevation
-- background layers
-- overlays
-- manual AoE placement
-
-Debug tab:
-
-- endpoint health
-- runtime status
-- debug command reminders
-- log/status summaries
-- webdev debug workflow reminder
-
-### Encounter Builder / Monster Library
-
-Desired behavior:
-
-- search
-- browse
-- visible name, CR, AC, HP, type
-- spawn count
-- automatic numbering
-- mixed monster groups later
-- HP randomization later
-
-Current Add Combatant should move to Advanced/Debug for now.
-
-### Initiative
-
-Confirmed rule:
-
-- all enemies/NPCs auto-roll initiative individually when added
-- PCs use LAN initiative prompts when appropriate
-- no shared initiative by default unless a specific summon/feature says so
-- reroll all enemy/NPC initiative belongs in DM Toolbox
-
-### Battle log
-
-Battle log should:
-
-- default visible
-- remain toggleable
-- log D&D gameplay events in useful detail
-- exclude technical/debug logs
-
-Gameplay log should include:
-
-- turn changes
-- attacks
-- saves
-- damage
-- healing
-- conditions
-- resources
-- meaningful movement
-- important state changes
-
-## Repo inspection anchors
-
-Agents should use these anchors when implementing or researching related work.
-
-### LAN player interaction anchors
-
-- `assets/web/lan/index.html`
-- `getClaimedWeapons()`
-- `getClaimedInventoryItems()`
-- `resolveOwnedInventoryWeaponForSelector()`
-- `getSelectedMainhandWeapon()`
-- `refreshWeaponSelectors()`
-- `setAttackOverlayMode(enabled)`
-- `openAttackResolveModal(target, weapon)`
-- `runSpellTargetingAgainstTarget(target)`
-- `renderSpellTargetSelectionUi()`
-- `effectiveAttackRangeFeetForWeapon(weapon, unit)`
-- `activeControlledUnitCid()`
-- `draw()`
-
-### LAN movement anchors
-
-- `getMovementRangeCostMap(unit, cols, rows, feetPerSquare)`
-- `movementCostMap(...)`
-- `move_remaining`
-- `_lan_try_move(cid, col, row)`
-
-### DM legacy controls to avoid treating as target
-
-- `monsterActorCidSelect`
-- `monsterCapabilitySelect`
-- `monsterPilotCidSelect`
-- `mapCidSelect`
-- `initCidSelect`
-- `removeCidSelect`
-- Monster Turn Controls
-- Monster Pilot
-- Normalized Capabilities
-
-### Backend/state anchors
-
-- `combat_service.py`
-- `CombatService`
-- `_dm_console_snapshot_payload()`
-- `_lan_snapshot()`
-- `_dm_tactical_snapshot_from_lan_snapshot()`
-- `/api/dm/combat`
-- `/api/dm/sessions/new`
-
-### Monster action anchors
-
-- `monster_capability_service.py`
-- `monster_capabilities/samples/adult-red-dragon.yaml`
-- `_dm_monster_attack_options()`
-- `_dm_resolve_monster_attack_sequence()`
-- `_dm_monster_capability_execute()`
-- `_dm_monster_capability_resolve_targets()`
-- `_dm_monster_capability_resource_op()`
-- `_dm_monster_capability_effect_change()`
-- `_dm_monster_spell_target()`
-
-### Known backend cleanup anchors
-
-- `/api/dm/encounter/monsters/add`
-- `CombatService.add_monster_spec_combatants()`
-- `CombatService.roll_initiative()`
+| Movement model | Gaps | LAN movement works; monster/NPC-specific movement on `/dmcontrol` planned. |
+
+## Repo Realities (Foundations & Gaps)
+
+### Strong foundations
+- LAN map-first page (`assets/web/lan/index.html`).
+- LAN bottom control sheet and attack resolution modals.
+- Movement range/cost overlays and drag/drop movement.
+- Spell/AoE targeting primitives and preview panels.
+- Backend movement validation and `resolve-targets` endpoint.
+- `MonsterCapabilityService` summaries and structured action overlays.
+- Composite Multiattack model and `assisted_sequence` backend packets.
+
+### Gaps
+- No `/dmcontrol` route or page exists yet.
+- Normalized monster coverage is shallow (only 18 overlays).
+- Many raw monster YAML actions are text, not structured/executable.
+- Monster spellcasting and Bonus Actions/Reactions are not broadly normalized.
+- Black and Tan firearm content remains beta/untested.
+- Monster Library contains duplicate entries.
+- Repeated single-spawn numbering has regressed.
+- DM Toolbox modal is cramped on desktop.
+- Legacy controls remain visible in `/dm` cockpit.
 
 ## Milestone board
 
@@ -473,37 +216,70 @@ Update the status column after each pass.
 
 | ID | Milestone | Status | Next concrete pass |
 |---|---|---|---|
-| M0 | Stabilize `/dm` and `/` before redesign | In progress / verify | Browser smoke after current fixes |
-| M1 | Low-risk correctness cleanup | Completed | Q5 - DM Toolbox shell |
-| M2 | DM Toolbox shell | Completed | Modal shell + tabs |
-| M3 | Move Session tools to Toolbox | Completed | Migrated New/Save/Load/Quick |
-| M4 | Encounter Builder / Monster Library | In progress | Complete Encounter Builder (mixed groups/staging) |
-| M5 | Initiative flow | In progress | Reroll all enemy/NPC initiative in Toolbox |
-| M6 | Focused actor panel prototype | Completed | Static/prototype actor panel using current actor |
-| M7 | Monster Actions / action cards | In progress | Sequence Tray hardened; Next: browser smoke / UX polish |
-| M8 | Current-turn movement model | Not started | Reuse LAN movement path for DM current actor |
-| M9 | Tactical map inspection | Not started | Token click inspection / empty cell info |
-| M10 | Automation settings | Not started | Roll-path and persistence inspection |
-| M11 | Battle log refinement | Not started | Gameplay-vs-debug log split review |
-| M12 | Map tools / map editor separation | Deferred | Move advanced map controls later |
+| M0 | Phase 0 — Clean `/dm` regressions | In progress | Q1 - Fix Library Duplicates |
+| M1 | Phase 1 — `/dmcontrol` shell | Not started | Route/page shell + status |
+| M2 | Phase 2 — LAN-like map & movement | Not started | Port LAN movement to `/dmcontrol` |
+| M3 | Phase 3 — Basic attack flow | Not started | Action cards + normal attacks |
+| M4 | Phase 4 — Multiattack guided flow | Not started | Sequence tray + resolution reuse |
+| M5 | Phase 5 — AoE/save action flow | Not started | AoE template placement |
+| M6 | Phase 6 — Monster spellcasting | Not started | Spell list integration |
+| M7 | Phase 7 — Content expansion | Not started | Normalize more monsters |
+| M10 | DM Toolbox shell | Completed | Resize modal |
+| M11 | Demote legacy controls from `/dm` | Not started | Remove/hide Monster Turn Controls / Monster Pilot |
+
+## Immediate implementation queue (Phase 0)
+
+These are safe cleanup tasks before construction begins.
+
+### Q1 — Fix Monster Library duplicate entries
+- Dedupe `encounterOptions.monsters` by `slug` before rendering.
+- Likely file: `assets/web/dm/index.html` (around `renderMonsterLibrary`).
+
+### Q2 — Fix repeated single-spawn numbering regression
+- Ensure `CombatantNameService` is used in `/api/dm/encounter/monsters/add`.
+- Likely file: `dnd_initative_tracker.py`.
+
+### Q3 — Resize/improve DM Toolbox modal
+- Increase default desktop width/height (e.g., `1400px` x `950px`).
+- Support resize.
+- Likely file: `assets/web/dm/index.html`.
+
+### Q4 — Demote legacy controls from `/dm`
+- Remove or move Monster Turn Controls and Monster Pilot to a "Legacy" or "Debug" tab in the Toolbox.
+- Clear space in the main `/dm` cockpit.
 
 ## Work log
 
 Agents should append concise entries here.
 
-Template:
-
-Date:
-Agent/model:
-Branch/commit:
+### 2026-05-06 — Architecture Realignment & Research Integration
+Agent/model: Gemini CLI
 Scope:
-Files inspected:
+- Formalized `/dmcontrol` as the dedicated active monster play surface (LAN-like).
+- Updated design principles based on VTT and D&D 2024 research.
+- Redefined `/dm` as cockpit/reference only.
+- Mapped current repo foundations and gaps.
+- Defined Phase 0 cleanup and Phase 1-7 implementation roadmap.
 Files changed:
-Validation:
-Manual/browser result:
+- docs/dm_control_surface_living_agent_plan.md
 Outcome:
-Next recommended pass:
-Notes/risks:
+- Roadmap pivot confirmed.
+- Implementation queue redirected to Phase 0 cleanup.
+- Reusable prototype work identified.
+
+### 2026-05-06 — Architecture Correction: Dedicated Control Page
+Agent/model: Gemini CLI
+Scope:
+- Formalized `/dmcontrol` as the dedicated active monster/NPC control page.
+- Redefined `/dm` as the admin/cockpit/reference surface.
+- Marked current `/dm` Focused Actor Panel work as a transitional prototype.
+- Defined reusable components for porting to `/dmcontrol`.
+Files changed:
+- docs/dm_control_surface_living_agent_plan.md
+Outcome:
+- Clearer separation of concerns.
+- Roadmap updated to pivot toward `/dmcontrol`.
+- Map-click dependency marked as provisional/wrong-direction for primary workflow.
 
 ### 2026-05-06 — Planning consolidation
 
@@ -854,7 +630,7 @@ Files changed:
 - tests/test_dm_focused_actor_panel_sequence.py
 Outcome:
 - Sequence Tray is significantly more resilient to invalid data and rapid user clicks.
-- Clearer visual feedback when child actions are missing or resolution fails.
+- Clearer visual feedback when child attacks are missing or resolution fails.
 - Mandatory JS syntax check passed.
 - All relevant tests (364) passed.
 Decision Log:
@@ -879,7 +655,7 @@ Outcome:
 - DMs can now execute complex Multiattack sequences step-by-step from the Focused Actor Panel.
 - Each child attack uses the standard target selection and resolution flow.
 - Progress is tracked visually within the sequence tray.
-- **Correction Note:** Feature currently depends on map-click target selection; must be refactored to panel-first.
+- **Correction Note:** Feature currently depends on map-click target selection; must be refactor to panel-first.
 - Mandatory JS syntax check passed.
 - All relevant tests (360) passed.
 
@@ -1045,400 +821,4 @@ Agents should append or update durable decisions here.
 | 2026-05-06 | Every spawned monster should be numbered | Duplicate names are confusing during combat | Completed |
 | 2026-05-06 | Enemies/NPCs auto-roll initiative individually when added | Table rule; only PCs use LAN initiative prompts | Completed |
 | 2026-05-06 | Browser asset JS syntax check required for DM/LAN HTML edits | Recent parse errors broke `/dm` despite Python tests passing | Accepted |
-
-## Open decisions and research needs
-
-Do not implement these until resolved.
-
-### OD1 — Exact action grouping defaults
-
-Need prototype against complex local monster data.
-
-Questions:
-
-- Which sections are open by default?
-- How should spellcasting be grouped?
-- Should legendary actions show outside the monster’s turn?
-- How do dragons and archmages look without scrolling?
-
-### OD2 — Diagonal movement
-
-Need repo/table decision.
-
-Options:
-
-- current repo behavior
-- simple 5-foot diagonals
-- alternating 5/10 diagonal rule
-- configurable setting
-
-### OD3 — Target tray behavior
-
-Need focused repo pass against LAN spell target selection UI.
-
-Questions:
-
-- How much of LAN multi-target UI can be reused?
-- How should selected AoE targets be edited before resolution?
-- How should allies/enemies be distinguished visually?
-
-### OD4 — Automation settings shape
-
-Need roll-path and persistence inspection.
-
-Questions:
-
-- Which rolls can be app/manual today?
-- Where should settings persist?
-- Are settings per-session, per-campaign, per-DM, or global?
-- How are app rolls represented in battle log?
-
-### OD5 — Combat log display design
-
-Need later UI decision.
-
-Options:
-
-- docked panel
-- collapsible drawer
-- filter chips
-- grouped events
-- DM-only vs player-visible events
-
-### OD6 — HP randomization
-
-Desired later.
-
-Need to inspect monster HP/hit-dice data availability and decide modes:
-
-- average
-- roll
-- roll per group
-- manual
-
-## Immediate implementation queue
-
-These are safe before major UI replacement.
-
-### First implementation after doc correction
-
-Goal:
-- Fix Monster Library duplicate entries.
-- Fix repeated single-spawn numbering regression.
-- Resize/improve DM Toolbox modal.
-- Demote legacy Monster Turn Controls / Monster Pilot from the main cockpit.
-
-Then:
-- Add panel-based target picker and demote map-click target selection to optional assist.
-
-### Q1 — Auto-number duplicate monster spawns
-
-Goal:
-
-- Every spawned monster receives unambiguous numbering.
-
-Expected behavior:
-
-- repeated single spawns continue numbering existing monsters
-- grouped spawns number all members
-- mixed future groups should also number correctly
-
-Likely files:
-
-- `dnd_initative_tracker.py`
-- `combat_service.py`
-- relevant DM encounter tests
-
-Validation:
-
-- focused backend tests
-- snapshot/API tests
-- no browser UI changes unless scoped
-
-### Q2 — Auto-roll enemy/NPC initiative individually when added
-
-Goal:
-
-- Enemies/NPCs do not default to initiative 0.
-- Each enemy/NPC rolls independently when added.
-- PCs retain LAN initiative prompt behavior.
-
-Likely files:
-
-- `dnd_initative_tracker.py`
-- `combat_service.py`
-- session/DM encounter tests
-
-Validation:
-
-- initiative value is rolled
-- modifier source is correct
-- player initiative prompt behavior unaffected
-
-### Q3 — Rename Normalized Capabilities to Monster Actions
-
-Goal:
-
-- Replace implementation jargon with user-facing language.
-- Improve no-match message.
-
-Likely files:
-
-- `assets/web/dm/index.html`
-- DM asset tests
-
-Validation:
-
-- JS syntax check
-- asset tests
-- browser smoke if practical
-
-### Q4 — Improve no-match and fallback messaging
-
-Goal:
-
-- Missing overlays feel like missing enhanced cards, not broken monsters.
-
-Suggested message:
-
-- “No structured action cards for this monster yet. Use the stat block/manual controls.”
-
-Validation:
-
-- asset tests
-- visual/browser confirmation
-
-### Q5 — DM Toolbox shell
-
-Goal:
-
-- Create accessible modal shell and tabs.
-- Do not move every control at once.
-
-Likely tabs:
-
-- Session
-- Encounter
-- Overrides
-- Map Tools
-- Debug
-
-Validation:
-
-- JS syntax check
-- accessibility sanity checks
-- asset tests
-- browser smoke
-
-## Milestone acceptance details
-
-### M0 — Stabilize before redesign
-
-Complete when:
-
-- `/dm` opens without parse errors.
-- `/` opens and claim flow works.
-- New Blank Session clears DM and LAN.
-- No current blocker prevents short manual combat smoke.
-- Browser asset syntax guard is committed.
-
-### M1 — Low-risk correctness cleanup
-
-Complete when:
-
-- monster spawns are auto-numbered
-- enemy/NPC initiative auto-rolls individually when added
-- Normalized Capabilities label is gone from user-facing UI
-- no-match message is clear
-
-### M2 — DM Toolbox shell
-
-Complete when:
-
-- Toolbox modal exists
-- tabs exist
-- confirmation wrapper exists
-- no major control migration breaks active combat
-- accessibility basics are present
-
-### M3 — Encounter Builder / Monster Library
-
-Complete when:
-
-- monster library supports search/browse
-- result rows/cards show name, CR, AC, HP, type
-- spawn count works
-- auto-numbering integrated
-- shallow Add Combatant is no longer primary
-
-### M4 — Initiative flow
-
-Complete when:
-
-- adding enemy/NPC auto-rolls initiative
-- active combat additions also roll
-- PCs still use LAN prompts
-- reroll enemy/NPC initiative exists in Toolbox
-
-### M5 — Focused actor panel prototype
-
-Complete when:
-
-- current initiative actor appears by default
-- clicked token can inspect another actor
-- PCs are view-only by default
-- complex monster can be displayed without using dropdown primary controls
-- panel is approved before full replacement
-
-### M6 — Monster Actions / action cards
-
-Complete when:
-
-- action cards render in focused actor panel
-- collapsed summaries show core mechanics
-- expansion shows full text
-- action target mode connects to resolution
-- multiattack sequence has first usable assisted flow
-
-### M7 — Current-turn movement model
-
-Complete when:
-
-- movement range appears for monster/NPC turns
-- drag current actor works through canonical movement validation
-- movement remaining updates
-- invalid moves snap/reject without spending movement
-- override movement remains in Toolbox
-
-### M8 — Tactical map inspection
-
-Complete when:
-
-- default inspection shows current actor
-- token click inspects token
-- empty cell click shows useful cell info
-- advanced map controls are not in active cockpit
-
-### M9 — Automation settings
-
-Complete when:
-
-- roll settings exist for major roll types
-- app/manual modes are both supported intentionally
-- behavior is reflected in resolution UI and battle log
-
-### M10 — Battle log refinement
-
-Complete when:
-
-- gameplay log is detailed enough to reconstruct combat
-- technical/debug logs are separated
-- visibility toggle remains
-- log noise is manageable
-
-### M11 — Map tools / map editor separation
-
-Complete when:
-
-- advanced map controls live outside active cockpit
-- map editing is explicitly separate from combat operation
-
-## Validation expectations by task type
-
-### Browser asset task
-
-Required:
-
-- inline JS syntax check for edited DM/LAN HTML
-- focused asset tests
-- relevant browser smoke if behavior is user-visible
-
-### Backend spawn/initiative task
-
-Required:
-
-- focused backend tests
-- snapshot/API tests
-- no browser UI changes unless explicitly scoped
-
-### Movement task
-
-Required:
-
-- movement cost/path/blocking tests
-- movement remaining tests
-- invalid movement no-spend test
-- LAN movement regression tests
-
-### Monster action task
-
-Required:
-
-- capability service tests
-- target resolution tests
-- backend endpoint tests
-- action-card asset tests if UI changes
-
-### Session/reset task
-
-Required:
-
-- `/api/dm/combat` empty-state verification
-- `/api/dm/monster-pilot` empty-state verification if relevant
-- LAN client clear behavior
-- DM stale UI clear behavior
-- no heavy static rebroadcast regression
-
-## End-of-pass report template
-
-Agents should use this structure for non-trivial passes.
-
-Summary:
-
-Files inspected:
-
-Files changed:
-
-Confirmed evidence / root cause / design reason:
-
-Implementation details:
-
-Tests added or changed:
-
-Validation commands and results:
-
-Browser/manual smoke result, if applicable:
-
-Updated sections in this document:
-
-Known limitations / risks:
-
-Single best next pass:
-
-## Prompt guardrail block
-
-Use this block in future agent prompts when relevant.
-
-Do not treat current Monster Turn Controls or Monster Pilot as the target UI. Do not build new active-combat workflows from dropdown stacks. Use LAN player flow as the local interaction reference. Inspect exact named functions before editing large browser assets. Avoid broad wandering in `assets/web/lan/index.html` or `assets/web/dm/index.html` unless this is explicitly a discovery pass. Preserve backend source-of-truth. Do not introduce DM-only parallel state. If editing `assets/web/dm/index.html` or `assets/web/lan/index.html`, run the browser asset JavaScript syntax check and report the exact command/result. Separate confirmed findings from hypotheses. Use measured runtime evidence for bug/performance fixes. Do not make the tactical map the primary combat-control or target-selection surface. Target selection must be available from the Focused Actor Panel. Map clicks may only be optional assistive shortcuts or inspection.
-
-## Final acceptance vision
-
-The redesign is successful when the DM can run a complex monster turn without using the old dropdown stacks.
-
-A successful turn should feel like:
-
-1. The monster’s turn comes up.
-2. The actor panel updates automatically.
-3. The map shows the monster and legal movement range.
-4. The DM sees the monster’s relevant actions without opening a stat block.
-5. The DM drags movement if desired.
-6. The DM clicks an action card.
-7. Target mode begins.
-8. Valid targets or AoE preview appear.
-9. The DM selects target(s) from a panel-based list.
-10. Resolution guides hit/save/damage/effects.
-11. Movement remaining and resources update.
-12. Combat log records important events.
-13. The DM ends turn.
-
-The old Monster Turn Controls and Monster Pilot should no longer be the primary way to run combat.
+| 2026-05-06 | Separate /dm (cockpit) from /dmcontrol (active control) | Functional separation of concerns; high-intensity combat resolution needs a dedicated, focused surface | Accepted |
