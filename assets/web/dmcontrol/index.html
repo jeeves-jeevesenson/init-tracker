@@ -63,12 +63,13 @@
       background: var(--panel2);
       border-top: 1px solid var(--border);
       padding: 12px 16px;
-      min-height: 80px;
+      min-height: 120px;
       display: flex;
       flex-direction: column;
-      gap: 8px;
+      gap: 12px;
       flex-shrink: 0;
       z-index: 10;
+      overflow-y: auto;
     }
     .actor-info {
       display: flex;
@@ -77,22 +78,94 @@
     }
     .actor-name { font-size: 18px; font-weight: bold; color: var(--text); }
     .actor-meta { font-size: 12px; color: var(--muted); }
-    .status-idle { color: var(--muted); font-style: italic; }
+    .status-idle { color: var(--muted); font-style: italic; font-size: 13px; }
 
-    .placeholder-controls {
+    /* ── Action Panel ───────────────────────────────────────────── */
+    .action-panel {
       display: flex;
-      gap: 10px;
-      margin-top: 4px;
+      flex-direction: column;
+      gap: 12px;
     }
-    .placeholder-btn {
-      background: rgba(255,255,255,0.05);
-      border: 1px dashed var(--border);
+    .action-group {
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+    }
+    .group-label {
+      font-size: 11px;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+      color: var(--gold);
+      opacity: 0.8;
+      border-bottom: 1px solid rgba(214,186,126,0.15);
+      padding-bottom: 2px;
+      margin-bottom: 2px;
+    }
+    .action-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+      gap: 8px;
+    }
+    .action-card {
+      background: rgba(255,255,255,0.03);
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      padding: 8px 10px;
+      cursor: pointer;
+      transition: all 0.15s ease;
+      display: flex;
+      flex-direction: column;
+      gap: 4px;
+    }
+    .action-card:hover {
+      background: rgba(255,255,255,0.06);
+      border-color: rgba(214,186,126,0.4);
+    }
+    .action-card.selected {
+      background: rgba(106,169,255,0.12);
+      border-color: var(--accent);
+      box-shadow: 0 0 8px rgba(106,169,255,0.2);
+    }
+    .action-card .card-header {
+      display: flex;
+      align-items: flex-start;
+      justify-content: space-between;
+      gap: 8px;
+    }
+    .action-card .card-name {
+      font-size: 13px;
+      font-weight: 600;
+      color: var(--text);
+    }
+    .action-card .card-badge {
+      font-size: 9px;
+      padding: 2px 5px;
+      border-radius: 3px;
+      background: rgba(255,255,255,0.1);
       color: var(--muted);
-      padding: 6px 12px;
-      border-radius: 4px;
-      font-size: 12px;
-      cursor: not-allowed;
+      text-transform: uppercase;
+      white-space: nowrap;
     }
+    .action-card .card-meta {
+      font-size: 11px;
+      color: var(--muted);
+      line-height: 1.3;
+    }
+    .action-card.trait {
+      background: none;
+      border-style: dashed;
+      opacity: 0.8;
+    }
+
+    .selected-summary {
+      background: rgba(106,169,255,0.1);
+      border-left: 3px solid var(--accent);
+      padding: 8px 12px;
+      border-radius: 4px;
+      margin-bottom: 8px;
+    }
+    .selected-summary h4 { font-size: 13px; color: var(--accent); margin-bottom: 4px; }
+    .selected-summary p { font-size: 12px; color: var(--text); opacity: 0.9; line-height: 1.4; }
 
     /* ── Status Overlay ─────────────────────────────────────────── */
     .status-overlay {
@@ -120,24 +193,28 @@
       <div id="activeActorPanel">
         <div class="status-idle">Waiting for combat data...</div>
       </div>
-      <div class="placeholder-controls">
-        <div class="placeholder-btn">Movement (Placeholder)</div>
-        <div class="placeholder-btn">Actions (Placeholder)</div>
-        <div class="placeholder-btn">End Turn (Placeholder)</div>
+      <div id="activeActionsPanel" class="action-panel">
+        <!-- Actions rendered here -->
       </div>
     </footer>
   </div>
 
   <script>
     /**
-     * DM Control Phase 2C — Backend-validated drag/drop movement.
+     * DM Control Phase 3A1 — Action panel scaffold and read-only capability fetch.
      * /dmcontrol has map rendering, movement range visualization, and backend-validated drag/drop movement.
+     * Now includes read-only monster/NPC action cards and local selection state.
      * Deferred: targeting, attacks, AoE, resolution, and Multiattack.
      */
 
     const API_COMBAT = '/api/dm/combat';
     let pollInterval = null;
     let state = null;
+
+    // Phase 3A1 state
+    let capabilitySummary = null;
+    let capabilityActorCid = null;
+    let selectedCapabilityId = null;
 
     // Map state
     const canvas = document.getElementById('mapCanvas');
@@ -278,6 +355,143 @@
       }
     }
 
+    async function fetchCapabilitiesForActiveActor(actor) {
+      if (!actor || actor.is_pc) {
+        capabilitySummary = null;
+        capabilityActorCid = null;
+        selectedCapabilityId = null;
+        renderActionPanel(actor, null);
+        return;
+      }
+
+      if (capabilityActorCid === actor.cid) {
+        // Already have it, just re-render in case local state (selection) changed
+        renderActionPanel(actor, capabilitySummary);
+        return;
+      }
+
+      try {
+        const resp = await fetch(`/api/dm/monster-capabilities/${actor.cid}`);
+        if (!resp.ok) {
+          if (resp.status === 404) {
+            capabilitySummary = { matched: false };
+          } else {
+            throw new Error(`HTTP ${resp.status}`);
+          }
+        } else {
+          capabilitySummary = await resp.json();
+        }
+        capabilityActorCid = actor.cid;
+        selectedCapabilityId = null;
+        renderActionPanel(actor, capabilitySummary);
+      } catch (err) {
+        console.error('Capabilities fetch error:', err);
+        renderActionPanel(actor, null);
+      }
+    }
+
+    function renderActionPanel(actor, summary) {
+      const panel = document.getElementById('activeActionsPanel');
+      if (!panel) return;
+
+      if (!state || !state.in_combat || !actor) {
+        panel.innerHTML = '<div class="status-idle">No active monster/NPC actions.</div>';
+        return;
+      }
+
+      if (actor.is_pc) {
+        panel.innerHTML = '<div class="status-idle">Actions disabled: waiting for player action.</div>';
+        return;
+      }
+
+      if (!summary) {
+        panel.innerHTML = '<div class="status-idle">Loading actions...</div>';
+        return;
+      }
+
+      if (summary.matched === false) {
+        panel.innerHTML = '<div class="status-idle">No structured actions available yet; use /dm reference or Legacy toolbox if needed.</div>';
+        return;
+      }
+
+      // Render grouped actions
+      let html = '';
+
+      // Selection summary
+      if (selectedCapabilityId) {
+        const allItems = (summary.actions || [])
+          .concat(summary.bonus_actions || [])
+          .concat(summary.reactions || [])
+          .concat(summary.legendary_actions || [])
+          .concat(summary.traits || [])
+          .concat(summary.special || []);
+
+        const selected = allItems.find(a => String(a.id) === String(selectedCapabilityId));
+
+        if (selected) {
+          html += `
+            <div class="selected-summary">
+              <h4>${selected.name} Selected</h4>
+              <p>${selected.description || 'No description available.'}</p>
+              <div class="actor-meta" style="margin-top:4px; font-style:italic;">
+                Targeting and execution are deferred in this pass.
+              </div>
+            </div>
+          `;
+        }
+      }
+
+      const groups = [
+        { key: 'actions', label: 'Actions' },
+        { key: 'bonus_actions', label: 'Bonus Actions' },
+        { key: 'reactions', label: 'Reactions' },
+        { key: 'legendary_actions', label: 'Legendary Actions' },
+        { key: 'traits', label: 'Traits' },
+        { key: 'special', label: 'Special' }
+      ];
+
+      groups.forEach(group => {
+        const items = summary[group.key];
+        if (items && items.length > 0) {
+          html += `<div class="action-group">`;
+          html += `<div class="group-label">${group.label}</div>`;
+          html += `<div class="action-grid">`;
+          items.forEach(item => {
+            const isSelected = String(item.id) === String(selectedCapabilityId);
+            const isTrait = group.key === 'traits';
+            const badges = [];
+            if (item.action_type) badges.push(item.action_type);
+            if (item.target_mode) badges.push(item.target_mode);
+            if (item.recharge_rule) badges.push(item.recharge_rule);
+            if (item.uses_remaining !== undefined && item.uses_total !== undefined) {
+              badges.push(`${item.uses_remaining}/${item.uses_total} Uses`);
+            }
+            if (item.executable === false) badges.push('Manual');
+
+            html += `
+              <div class="action-card ${isSelected ? 'selected' : ''} ${isTrait ? 'trait' : ''}"
+                   onclick="selectCapability('${item.id}')">
+                <div class="card-header">
+                  <span class="card-name">${item.name}</span>
+                  ${badges.map(b => `<span class="card-badge">${b}</span>`).join('')}
+                </div>
+                ${item.mechanics ? `<div class="card-meta">${item.mechanics}</div>` : ''}
+              </div>
+            `;
+          });
+          html += `</div></div>`;
+        }
+      });
+
+      panel.innerHTML = html || '<div class="status-idle">No actions found for this creature.</div>';
+    }
+
+    function selectCapability(id) {
+      selectedCapabilityId = (String(selectedCapabilityId) === String(id)) ? null : id;
+      const actor = state.combatants.find(c => c.cid === state.active_cid);
+      renderActionPanel(actor, capabilitySummary);
+    }
+
     function renderState(data) {
       const statusEl = document.getElementById('combatStatus');
       const actorPanel = document.getElementById('activeActorPanel');
@@ -288,6 +502,7 @@
         statusEl.style.color = 'var(--muted)';
         actorPanel.innerHTML = '<div class="status-idle">No active combat</div>';
         overlay.style.display = 'none';
+        fetchCapabilitiesForActiveActor(null);
         return;
       }
 
@@ -300,6 +515,7 @@
       if (!actor) {
         actorPanel.innerHTML = '<div class="status-idle">No active actor focus</div>';
         overlay.style.display = 'none';
+        fetchCapabilitiesForActiveActor(null);
         return;
       }
 
@@ -336,6 +552,8 @@
         overlay.style.display = 'block';
         overlay.style.borderColor = 'var(--accent)';
       }
+
+      fetchCapabilitiesForActiveActor(actor);
     }
 
     function gridToScreen(col, row) {

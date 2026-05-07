@@ -252,6 +252,27 @@ These are safe cleanup tasks before construction begins.
 
 Agents should append concise entries here.
 
+### 2026-05-07 — Phase 3A1: action panel scaffold/read-only capability fetch
+Agent/model: Gemini CLI
+Scope:
+- Implemented `/dmcontrol` action panel scaffold using existing `GET /api/dm/monster-capabilities/{cid}`.
+- Added grouped action cards (Actions, Bonus Actions, Reactions, Legendary Actions, Traits, Special).
+- Implemented read-only capability summaries with mechanics, action types, and uses.
+- Added local-only selection state with compact selected-action summary.
+- Implemented appropriate idle handling for PC turns and missing monster overlays.
+- Ensured Phase 2C drag/drop movement remains functional.
+Files changed:
+- assets/web/dmcontrol/index.html
+- tests/test_dm_control_route.py
+- docs/dm_control_surface_living_agent_plan.md
+Outcome:
+- Monster/NPC actions are now visible on `/dmcontrol` for the active actor.
+- Non-mutating pass: no execution, targeting, or resolution logic added.
+- Phase 2C movement preserved and verified.
+- All Python tests and JS syntax checks passed.
+Next recommended pass:
+- Phase 3A2 — Simple melee/ranged target preview only for /dmcontrol.
+
 ### 2026-05-07 — Phase 1: /dmcontrol route and shell
 Agent/model: Gemini CLI
 Scope:

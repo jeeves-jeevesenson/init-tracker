@@ -57,16 +57,36 @@ class TestDMControlRoute(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertIn(b"id=\"mapCanvas\"", response.content)
 
-    def test_dm_control_has_no_legacy_controls(self):
-        """Verify /dmcontrol does not include legacy monster controls."""
+    def test_dm_control_has_action_panel_scaffold(self):
+        """Verify /dmcontrol includes the action panel scaffold."""
         from fastapi.testclient import TestClient
         client = TestClient(self.client)
         response = client.get("/dmcontrol")
         self.assertEqual(response.status_code, 200)
-        # Legacy controls usually have these IDs or classes
-        self.assertNotIn(b"id=\"monsterTurnControls\"", response.content)
-        self.assertNotIn(b"id=\"monsterPilotPanel\"", response.content)
-        self.assertNotIn(b"DM Toolbox", response.content)
+        self.assertIn(b"id=\"activeActionsPanel\"", response.content)
+        self.assertIn(b"capabilitySummary", response.content)
+        self.assertIn(b"selectedCapabilityId", response.content)
+        self.assertIn(b"function renderActionPanel", response.content)
+        self.assertIn(b"/api/dm/monster-capabilities/", response.content)
+
+    def test_dm_control_has_no_mutation_endpoints(self):
+        """Verify /dmcontrol does not include action execution or resolution endpoints."""
+        from fastapi.testclient import TestClient
+        client = TestClient(self.client)
+        response = client.get("/dmcontrol")
+        self.assertEqual(response.status_code, 200)
+        self.assertNotIn(b"/execute", response.content)
+        self.assertNotIn(b"/resolve-targets", response.content)
+
+    def test_dm_control_has_no_toolbox(self):
+        """Verify /dmcontrol does not include DM Toolbox or legacy components."""
+        from fastapi.testclient import TestClient
+        client = TestClient(self.client)
+        response = client.get("/dmcontrol")
+        self.assertEqual(response.status_code, 200)
+        self.assertNotIn(b"id=\"dmToolbox\"", response.content)
+        self.assertNotIn(b"Monster Turn Controls", response.content)
+        self.assertNotIn(b"Monster Pilot", response.content)
 
     def test_dm_control_has_movement_visualization(self):
         """Verify /dmcontrol includes movement range logic and UI."""
