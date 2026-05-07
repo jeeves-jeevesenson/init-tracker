@@ -67,5 +67,15 @@ class TestDMControlRoute(unittest.TestCase):
         self.assertNotIn(b"id=\"monsterPilotPanel\"", response.content)
         self.assertNotIn(b"DM Toolbox", response.content)
 
+    def test_dm_control_has_movement_visualization(self):
+        """Verify /dmcontrol includes movement range logic and UI."""
+        from fastapi.testclient import TestClient
+        client = TestClient(self.client)
+        # We check for the script content that indicates movement range logic
+        response = client.get("/dmcontrol")
+        self.assertEqual(response.status_code, 200)
+        self.assertIn(b"function movementCostMap", response.content)
+        self.assertIn(b"Movement Remaining", response.content)
+
 if __name__ == "__main__":
     unittest.main()

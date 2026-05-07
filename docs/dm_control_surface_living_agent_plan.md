@@ -272,6 +272,26 @@ Outcome:
 Next recommended pass:
 - Phase 2B — Movement range visualization or drag-and-drop movement.
 
+### 2026-05-07 — Phase 2B: Movement Range Visualization
+Agent/model: Gemini CLI
+Scope:
+- Implemented `movementCostMap` (simplified Dijkstra) for reachable cell calculation on `/dmcontrol`.
+- Integrated movement visualization into `/dmcontrol` map surface.
+- Movement range automatically appears for the active monster/NPC actor.
+- Added "Movement Remaining" and speed stats to the active actor panel.
+- Verified visualization-only scope (no drag/drop or mutation yet).
+- Cleaned up unused/buggy heap code ported from LAN but not used in the simplified pass.
+Files changed:
+- assets/web/dmcontrol/index.html
+- tests/test_dm_control_route.py
+- docs/dm_control_surface_living_agent_plan.md
+Outcome:
+- `/dmcontrol` now visualizes reachable movement cells for the active combatant.
+- Graceful handling of PC turns and missing map/position states.
+- All Python tests and JS syntax checks passed.
+Next recommended pass:
+- Phase 2C — Drag-and-drop movement mutation for `/dmcontrol`.
+
 ### 2026-05-07 — Phase 1: /dmcontrol route and shell
 Agent/model: Gemini CLI
 Scope:

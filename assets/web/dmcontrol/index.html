@@ -21,7 +21,7 @@
     *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
     html, body { height: 100%; background: var(--bg); color: var(--text);
       font-family: system-ui,-apple-system,Segoe UI,Roboto,sans-serif; overflow: hidden; }
-    
+
     .app { height: 100vh; display: flex; flex-direction: column; }
 
     /* ── Topbar ─────────────────────────────────────────────────── */
@@ -78,7 +78,7 @@
     .actor-name { font-size: 18px; font-weight: bold; color: var(--text); }
     .actor-meta { font-size: 12px; color: var(--muted); }
     .status-idle { color: var(--muted); font-style: italic; }
-    
+
     .placeholder-controls {
       display: flex;
       gap: 10px;
@@ -130,8 +130,8 @@
 
   <script>
     /**
-     * DM Control Phase 2A — Read-only LAN-like map surface.
-     * Deferred: movement mutation, targeting, active resolution.
+     * DM Control Phase 2B — Movement range visualization.
+     * Deferred: drag/drop movement, backend mutation.
      */
 
     const API_COMBAT = '/api/dm/combat';
@@ -213,7 +213,10 @@
       }
 
       const isMonster = !actor.is_pc;
-      
+      const units = data.tactical_map?.units || [];
+      const unit = units.find(u => String(u.cid) === String(activeCid));
+      const moveRemaining = unit ? (unit.move_remaining ?? unit.speed ?? 0) : 0;
+
       if (isMonster) {
         actorPanel.innerHTML = `
           <div class="actor-info">
@@ -221,7 +224,7 @@
             <span class="actor-meta">${actor.role || actor.type || 'Monster/NPC'} • HP: ${actor.hp}/${actor.max_hp}</span>
           </div>
           <div class="actor-meta">
-            Speed: ${actor.speed || '—'} • AC: ${actor.ac || '—'} • Conditions: ${actor.conditions?.join(', ') || 'None'}
+            Speed: ${actor.speed || '—'} • Movement Remaining: ${moveRemaining} ft • AC: ${actor.ac || '—'} • Conditions: ${actor.conditions?.join(', ') || 'None'}
           </div>
         `;
         overlay.textContent = `Focus: ${actor.name} (Active)`;
@@ -244,6 +247,125 @@
     function gridToScreen(col, row) {
       return { x: panX + col * zoom + zoom / 2, y: panY + row * zoom + zoom / 2 };
     }
+
+    // --- Movement Range Helpers (Ported from LAN) ---
+
+    function cellKey(col, row) {
+      return `${Math.trunc(col)},${Math.trunc(row)}`;
+    }
+
+    function normalizeMovementMode(value) {
+      const v = String(value || "").toLowerCase();
+      if (v === "fly" || v === "swim" || v === "climb") return v;
+      return "normal";
+    }
+
+    function getRoughTerrainMap() {
+      const map = new Map();
+      if (!state || !state.tactical_map || !Array.isArray(state.tactical_map.rough_terrain)) return map;
+      state.tactical_map.rough_terrain.forEach(cell => {
+        if (!cell) return;
+        map.set(cellKey(cell.col, cell.row), cell);
+      });
+      return map;
+    }
+
+    function getObstacleSet() {
+      const set = new Set();
+      if (!state || !state.tactical_map || !Array.isArray(state.tactical_map.obstacles)) return set;
+      state.tactical_map.obstacles.forEach(o => {
+        if (!o) return;
+        set.add(cellKey(o.col, o.row));
+      });
+      return set;
+    }
+
+    function entityCellsForEntry(entry) {
+      if (!entry || typeof entry !== "object") return [];
+      if (Array.isArray(entry.cells)) return entry.cells;
+      const col = Number(entry.col);
+      const row = Number(entry.row);
+      if (Number.isFinite(col) && Number.isFinite(row)) return [{col, row}];
+      return [];
+    }
+
+    function movementCostMap(startCol, startRow, maxFt, unit, roughMap, obstacles, features, hazards, structures, elevationCells, cols, rows, feetPerSquare) {
+      const step = Number(feetPerSquare) || 5;
+      const diag5 = step;
+      const diag10 = step * 2;
+      const mode = normalizeMovementMode(unit?.movement_mode);
+      const landSpeed = Math.max(0, Number(unit?.speed || 0));
+      let swimSpeed = Math.max(0, Number(unit?.swim_speed || 0));
+      if (swimSpeed <= 0) swimSpeed = Math.max(1, Math.floor(landSpeed / 2));
+
+      const blockedCells = new Set();
+      const hazardMultiplierByCell = new Map();
+
+      const addEntityCells = (entry, callback) => {
+        if (!entry || typeof entry !== "object") return;
+        const payload = (entry.payload && typeof entry.payload === "object") ? entry.payload : {};
+        const cells = entityCellsForEntry(entry);
+        cells.forEach(cell => callback(Math.trunc(cell.col), Math.trunc(cell.row), payload));
+      };
+
+      (features || []).forEach(f => addEntityCells(f, (c, r, p) => { if (p.blocks_movement) blockedCells.add(cellKey(c, r)); }));
+      (structures || []).forEach(s => addEntityCells(s, (c, r, p) => { if (p.blocks_movement !== false) blockedCells.add(cellKey(c, r)); }));
+      (hazards || []).forEach(h => addEntityCells(h, (c, r, p) => {
+        if (p.blocks_movement) blockedCells.add(cellKey(c, r));
+        const mult = Number(p.movement_multiplier ?? 1);
+        if (Number.isFinite(mult) && mult > 0 && mult !== 1) {
+          const key = cellKey(c, r);
+          hazardMultiplierByCell.set(key, (hazardMultiplierByCell.get(key) || 1) * mult);
+        }
+      }));
+
+      function inBounds(c, r) { return c >= 0 && r >= 0 && c < cols && r < rows; }
+
+      // Dijkstra logic simplified for this pass
+      const results = new Map();
+      results.set(cellKey(startCol, startRow), 0);
+
+      const queue = [{col: startCol, row: startRow, cost: 0, parity: 0}];
+      while(queue.length > 0) {
+          const current = queue.shift();
+          if (current.cost > maxFt) continue;
+
+          for(let dc = -1; dc <= 1; dc++) {
+              for(let dr = -1; dr <= 1; dr++) {
+                  if (dc === 0 && dr === 0) continue;
+                  const nc = current.col + dc;
+                  const nr = current.row + dr;
+                  if (!inBounds(nc, nr)) continue;
+                  const key = cellKey(nc, nr);
+                  if (obstacles.has(key) || blockedCells.has(key)) continue;
+
+                  const isDiag = dc !== 0 && dr !== 0;
+                  let moveCost = step;
+                  let nextParity = current.parity;
+                  if (isDiag) {
+                      nextParity = (current.parity + 1) % 2;
+                      moveCost = (nextParity === 0) ? diag10 : diag5;
+                  }
+
+                  const rough = roughMap.get(key);
+                  if (rough && rough.is_rough) moveCost *= 2;
+                  const hazardMult = hazardMultiplierByCell.get(key) || 1;
+                  moveCost *= hazardMult;
+
+                  const nextCost = current.cost + moveCost;
+                  if (nextCost <= maxFt) {
+                      if (!results.has(key) || results.get(key) > nextCost) {
+                          results.set(key, nextCost);
+                          queue.push({col: nc, row: nr, cost: nextCost, parity: nextParity});
+                      }
+                  }
+              }
+          }
+      }
+      return results;
+    }
+
+    // --- End Movement Range Helpers ---
 
     function draw() {
       if (!state || !state.tactical_map) {
@@ -296,10 +418,41 @@
         ctx.beginPath(); ctx.moveTo(panX, y); ctx.lineTo(panX + cols * zoom, y); ctx.stroke();
       }
 
-      // Render tokens (combatants with positions)
       const units = state.tactical_map.units || [];
       const activeCid = state.active_cid;
+      const activeUnit = units.find(u => String(u.cid) === String(activeCid));
 
+      // Movement Range Visualization
+      if (activeUnit && activeUnit.pos) {
+        const actor = state.combatants.find(c => String(c.cid) === String(activeCid));
+        const isMonster = actor && !actor.is_pc;
+
+        if (isMonster) {
+          const feetPerSquare = grid.feet_per_square || 5;
+          const moveRemaining = activeUnit.move_remaining ?? activeUnit.speed ?? 0;
+
+          if (moveRemaining > 0) {
+            const costMap = movementCostMap(
+              activeUnit.pos.col, activeUnit.pos.row,
+              moveRemaining, activeUnit,
+              getRoughTerrainMap(), getObstacleSet(),
+              state.tactical_map.features, state.tactical_map.hazards,
+              state.tactical_map.structures, state.tactical_map.elevation_cells,
+              cols, rows, feetPerSquare
+            );
+
+            costMap.forEach((cost, key) => {
+              const [col, row] = key.split(",").map(Number);
+              const x = panX + col * zoom;
+              const y = panY + row * zoom;
+              ctx.fillStyle = "rgba(106,169,255,0.18)";
+              ctx.fillRect(x + 1, y + 1, zoom - 2, zoom - 2);
+            });
+          }
+        }
+      }
+
+      // Render tokens
       units.forEach(u => {
         if (!u.pos) return;
         const { x, y } = gridToScreen(u.pos.col, u.pos.row);
@@ -309,7 +462,6 @@
         ctx.beginPath();
         ctx.arc(x, y, r, 0, Math.PI * 2);
 
-        // Basic coloring based on role
         if (u.role === "enemy") {
           ctx.fillStyle = "rgba(255,91,91,0.28)";
         } else if (u.role === "pc") {
@@ -319,12 +471,10 @@
         }
         ctx.fill();
 
-        // Border / Active highlight
         ctx.lineWidth = active ? 3 : 2;
         ctx.strokeStyle = active ? "rgba(255,255,255,0.85)" : "rgba(255,255,255,0.25)";
         ctx.stroke();
 
-        // Label (First letter or short name)
         const label = (u.name || "?").charAt(0).toUpperCase();
         ctx.font = `bold ${Math.max(10, Math.floor(zoom * 0.35))}px system-ui`;
         ctx.textAlign = "center";
