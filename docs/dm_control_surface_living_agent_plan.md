@@ -175,7 +175,7 @@ Update this section after each pass.
 | Area | Current status | Notes |
 |---|---|---|
 | `/dm` cockpit | Admin/reference/setup | Cleaned up; legacy controls demoted. Link to `/dmcontrol` added. |
-| `/dmcontrol` | Map shell added | Dedicated LAN-style monster/NPC control page. Read-only map surface with grid and tokens implemented. |
+| `/dmcontrol` | Map & Movement completed | Dedicated LAN-style monster/NPC control page with map, tokens, movement range, and backend-validated active-actor drag/drop movement. |
 | `/` LAN client | Useful local model | LAN has targeting, movement range, attack resolution, spell target selection, and remaining movement concepts |
 | Monster Turn Controls | Demoted | **Moved to Legacy tab in DM Toolbox.** |
 | Monster Pilot | Demoted | **Moved to Legacy tab in DM Toolbox.** |
@@ -186,7 +186,7 @@ Update this section after each pass.
 | Duplicate monster names | Completed | Backend auto-numbering fixed for single-spawns via CombatantNameService |
 | Enemy/NPC initiative | Completed | Auto-roll individually when added via monster spawn path |
 | Tactical map inspection | Completed | Token click focuses actor in panel without changing initiative turn |
-| Movement model | Gaps | LAN movement works; monster/NPC-specific movement on `/dmcontrol` planned. |
+| Movement model | Completed | LAN movement works; monster/NPC-specific movement on `/dmcontrol` implemented and backend-validated. |
 
 ## Repo Realities (Foundations & Gaps)
 
@@ -200,7 +200,6 @@ Update this section after each pass.
 - Composite Multiattack model and `assisted_sequence` backend packets.
 
 ### Gaps
-- No `/dmcontrol` route or page exists yet.
 - Normalized monster coverage is shallow (only 18 overlays).
 - Many raw monster YAML actions are text, not structured/executable.
 - Monster spellcasting and Bonus Actions/Reactions are not broadly normalized.
@@ -219,8 +218,8 @@ Update the status column after each pass.
 |---|---|---|---|
 | M0 | Phase 0 — Clean `/dm` regressions | Completed | M1 - /dmcontrol shell |
 | M1 | Phase 1 — `/dmcontrol` shell | Completed | Route/page shell + status |
-| M2 | Phase 2 — LAN-like map & movement | In progress | Phase 2A (Read-only map) completed |
-| M3 | Phase 3 — Basic attack flow | Not started | Action cards + normal attacks |
+| M2 | Phase 2 — LAN-like map & movement | Completed | Map, movement range, and drag/drop |
+| M3 | Phase 3 — Basic attack flow | In progress | Phase 3A (Action panel scaffold) |
 | M4 | Phase 4 — Multiattack guided flow | Not started | Sequence tray + resolution reuse |
 | M5 | Phase 5 — AoE/save action flow | Not started | AoE template placement |
 | M6 | Phase 6 — Monster spellcasting | Not started | Spell list integration |
@@ -253,66 +252,6 @@ These are safe cleanup tasks before construction begins.
 
 Agents should append concise entries here.
 
-### 2026-05-07 — Phase 2A: Read-only LAN-like map surface
-Agent/model: Gemini CLI
-Scope:
-- Implemented read-only tactical map surface on `/dmcontrol` using HTML5 Canvas.
-- Grid rendering with auto-fit, zoom, and pan logic ported from LAN client.
-- Token rendering for combatants with positions, using role-based coloring.
-- Active actor highlighting based on `active_cid`.
-- Resize handling for map responsiveness.
-Files changed:
-- assets/web/dmcontrol/index.html
-- tests/test_dm_control_route.py
-- docs/dm_control_surface_living_agent_plan.md
-Outcome:
-- `/dmcontrol` now has a functional, read-only tactical map synchronized with backend state.
-- JS syntax check passed.
-- Route and element verification tests passed.
-Next recommended pass:
-- Phase 2B — Movement range visualization or drag-and-drop movement.
-
-### 2026-05-07 — Phase 2C: Drag-and-drop movement
-Agent/model: Gemini CLI
-Scope:
-- Implemented drag-and-drop movement for the active monster/NPC actor on `/dmcontrol`.
-- Uses rules-aware `POST /api/dm/map/combatants/{cid}/move` backend endpoint.
-- Movement validation (obstacles, costs, speed) enforced by backend via `_lan_try_move`.
-- Drag preview shows destination and validity (blue for valid, red for invalid).
-- Movement range overlay remains visible and updates after successful move.
-- Added UI hints: "Drag token on map to move • Movement is backend-validated".
-- Restricted movement to active non-PC actors only.
-Files changed:
-- assets/web/dmcontrol/index.html
-- tests/test_dm_control_route.py
-- docs/dm_control_surface_living_agent_plan.md
-Outcome:
-- DM can now move the active monster directly on the `/dmcontrol` map.
-- Invalid moves are rejected by the backend and tokens snap back.
-- All Python tests and JS syntax checks passed.
-Next recommended pass:
-- Phase 3A — Basic attack action display and selection on `/dmcontrol`.
-
-### 2026-05-07 — Phase 2B: Movement Range Visualization
-Agent/model: Gemini CLI
-Scope:
-- Implemented `movementCostMap` (simplified Dijkstra) for reachable cell calculation on `/dmcontrol`.
-- Integrated movement visualization into `/dmcontrol` map surface.
-- Movement range automatically appears for the active monster/NPC actor.
-- Added "Movement Remaining" and speed stats to the active actor panel.
-- Verified visualization-only scope (no drag/drop or mutation yet).
-- Cleaned up unused/buggy heap code ported from LAN but not used in the simplified pass.
-Files changed:
-- assets/web/dmcontrol/index.html
-- tests/test_dm_control_route.py
-- docs/dm_control_surface_living_agent_plan.md
-Outcome:
-- `/dmcontrol` now visualizes reachable movement cells for the active combatant.
-- Graceful handling of PC turns and missing map/position states.
-- All Python tests and JS syntax checks passed.
-Next recommended pass:
-- Phase 2C — Drag-and-drop movement mutation for `/dmcontrol`.
-
 ### 2026-05-07 — Phase 1: /dmcontrol route and shell
 Agent/model: Gemini CLI
 Scope:
@@ -334,6 +273,66 @@ Outcome:
 - Route verification tests passed.
 Next recommended pass:
 - Phase 2 — Port LAN tactical map surface and movement range/drag-drop to `/dmcontrol`.
+
+### 2026-05-07 — Phase 2A: Read-only LAN-like map surface
+Agent/model: Gemini CLI
+Scope:
+- Implemented read-only tactical map surface on `/dmcontrol` using HTML5 Canvas.
+- Grid rendering with auto-fit, zoom, and pan logic ported from LAN client.
+- Token rendering for combatants with positions, using role-based coloring.
+- Active actor highlighting based on `active_cid`.
+- Resize handling for map responsiveness.
+Files changed:
+- assets/web/dmcontrol/index.html
+- tests/test_dm_control_route.py
+- docs/dm_control_surface_living_agent_plan.md
+Outcome:
+- `/dmcontrol` now has a functional, read-only tactical map synchronized with backend state.
+- JS syntax check passed.
+- Route and element verification tests passed.
+Next recommended pass:
+- Phase 2B — Movement range visualization or drag-and-drop movement.
+
+### 2026-05-07 — Phase 2B: Movement Range Visualization
+Agent/model: Gemini CLI
+Scope:
+- Implemented `movementCostMap` (simplified Dijkstra) for reachable cell calculation on `/dmcontrol`.
+- Integrated movement visualization into `/dmcontrol` map surface.
+- Movement range automatically appears for the active monster/NPC actor.
+- Added "Movement Remaining" and speed stats to the active actor panel.
+- Verified visualization-only scope (no drag/drop or mutation yet).
+- Cleaned up unused/buggy heap code ported from LAN but not used in the simplified pass.
+Files changed:
+- assets/web/dmcontrol/index.html
+- tests/test_dm_control_route.py
+- docs/dm_control_surface_living_agent_plan.md
+Outcome:
+- `/dmcontrol` now visualizes reachable movement cells for the active combatant.
+- Graceful handling of PC turns and missing map/position states.
+- All Python tests and JS syntax checks passed.
+Next recommended pass:
+- Phase 2C — Drag-and-drop movement mutation for `/dmcontrol`.
+
+### 2026-05-07 — Phase 2C: Drag-and-drop movement
+Agent/model: Gemini CLI
+Scope:
+- Implemented drag-and-drop movement for the active monster/NPC actor on `/dmcontrol`.
+- Uses rules-aware `POST /api/dm/map/combatants/{cid}/move` backend endpoint.
+- Movement validation (obstacles, costs, speed) enforced by backend via `_lan_try_move`.
+- Drag preview shows destination and validity (blue for valid, red for invalid).
+- Movement range overlay remains visible and updates after successful move.
+- Added UI hints: "Drag token on map to move • Movement is backend-validated".
+- Restricted movement to active non-PC actors only.
+Files changed:
+- assets/web/dmcontrol/index.html
+- tests/test_dm_control_route.py
+- docs/dm_control_surface_living_agent_plan.md
+Outcome:
+- DM can now move the active monster directly on the `/dmcontrol` map.
+- Invalid moves are rejected by the backend and tokens snap back.
+- All Python tests and JS syntax checks passed.
+Next recommended pass:
+- Phase 3A1 — /dmcontrol action panel scaffold and read-only capability fetch.
 
 ### 2026-05-06 — Phase 0 Cleanup: Dedupe, Numbering, Sizing, and Demotion
 Agent/model: Gemini CLI
