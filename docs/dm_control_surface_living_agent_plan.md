@@ -272,6 +272,27 @@ Outcome:
 Next recommended pass:
 - Phase 2B — Movement range visualization or drag-and-drop movement.
 
+### 2026-05-07 — Phase 2C: Drag-and-drop movement
+Agent/model: Gemini CLI
+Scope:
+- Implemented drag-and-drop movement for the active monster/NPC actor on `/dmcontrol`.
+- Uses rules-aware `POST /api/dm/map/combatants/{cid}/move` backend endpoint.
+- Movement validation (obstacles, costs, speed) enforced by backend via `_lan_try_move`.
+- Drag preview shows destination and validity (blue for valid, red for invalid).
+- Movement range overlay remains visible and updates after successful move.
+- Added UI hints: "Drag token on map to move • Movement is backend-validated".
+- Restricted movement to active non-PC actors only.
+Files changed:
+- assets/web/dmcontrol/index.html
+- tests/test_dm_control_route.py
+- docs/dm_control_surface_living_agent_plan.md
+Outcome:
+- DM can now move the active monster directly on the `/dmcontrol` map.
+- Invalid moves are rejected by the backend and tokens snap back.
+- All Python tests and JS syntax checks passed.
+Next recommended pass:
+- Phase 3A — Basic attack action display and selection on `/dmcontrol`.
+
 ### 2026-05-07 — Phase 2B: Movement Range Visualization
 Agent/model: Gemini CLI
 Scope:

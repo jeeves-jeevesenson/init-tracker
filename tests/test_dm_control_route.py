@@ -1,4 +1,5 @@
 import unittest
+from unittest import mock
 from pathlib import Path
 import os
 import sys
@@ -76,6 +77,55 @@ class TestDMControlRoute(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertIn(b"function movementCostMap", response.content)
         self.assertIn(b"Movement Remaining", response.content)
+
+    def test_dm_control_has_drag_drop_logic(self):
+        """Verify /dmcontrol includes drag-and-drop movement logic."""
+        from fastapi.testclient import TestClient
+        client = TestClient(self.client)
+        response = client.get("/dmcontrol")
+        self.assertEqual(response.status_code, 200)
+        self.assertIn(b"pointerdown", response.content)
+        self.assertIn(b"pointermove", response.content)
+        self.assertIn(b"pointerup", response.content)
+        self.assertIn(b"async function executeMove", response.content)
+        self.assertIn(b"/api/dm/map/combatants/", response.content)
+        self.assertIn(b"/move", response.content)
+
+    def test_dm_control_has_movement_hints(self):
+        """Verify /dmcontrol includes UI hints for movement."""
+        from fastapi.testclient import TestClient
+        client = TestClient(self.client)
+        response = client.get("/dmcontrol")
+        self.assertEqual(response.status_code, 200)
+        self.assertIn(b"Drag token on map to move", response.content)
+        self.assertIn(b"Movement is backend-validated", response.content)
+
+    def test_dm_move_combatant_on_map_functional(self):
+        """Verify backend move endpoint works for a monster."""
+        from fastapi.testclient import TestClient
+        client = TestClient(self.client)
+        
+        # 1. Setup combat with a monster on map
+        self.app._lan_try_move = lambda cid, col, row: (True, "", 10) # Mock successful move
+        
+        # We need a real combatant and a map position for the service/tracker to work
+        # but for this test we can just check if the endpoint calls the tracker method.
+        # Actually, let's use the real tracker if possible or mock the underlying _dm_move_combatant_on_map
+        
+        with mock.patch.object(self.app, '_dm_move_combatant_on_map') as mock_move:
+            mock_move.return_value = {"ok": True, "cid": 1, "col": 2, "row": 3, "spent_ft": 10}
+            
+            response = client.post("/api/dm/map/combatants/1/move", json={"col": 2, "row": 3})
+            self.assertEqual(response.status_code, 200)
+            payload = response.json()
+            self.assertTrue(payload["ok"])
+            self.assertEqual(payload["cid"], 1)
+            self.assertEqual(payload["col"], 2)
+            self.assertEqual(payload["row"], 3)
+            self.assertEqual(payload["spent_ft"], 10)
+            self.assertIn("snapshot", payload)
+            
+            mock_move.assert_called_once_with(1, 2, 3)
 
 if __name__ == "__main__":
     unittest.main()

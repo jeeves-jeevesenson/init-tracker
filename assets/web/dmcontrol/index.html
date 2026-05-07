@@ -146,6 +146,8 @@
     let panY = 0;
     let fittedToGrid = false;
     let lastGrid = {cols: 0, rows: 0};
+    let dragging = null; // {cid, col, row, curCol, curRow, startX, startY}
+    let isMoving = false; // Guard against duplicate moves
 
     function resize() {
       const dpr = window.devicePixelRatio || 1;
@@ -158,6 +160,94 @@
 
     window.addEventListener('resize', resize);
     resize();
+
+    function screenToGrid(x, y) {
+      return {
+        col: Math.floor((x - panX) / zoom),
+        row: Math.floor((y - panY) / zoom)
+      };
+    }
+
+    canvas.addEventListener('pointerdown', (e) => {
+      if (!state || !state.tactical_map || isMoving) return;
+      const rect = canvas.getBoundingClientRect();
+      const x = e.clientX - rect.left;
+      const y = e.clientY - rect.top;
+      const { col, row } = screenToGrid(x, y);
+
+      const activeCid = state.active_cid;
+      const activeUnit = (state.tactical_map.units || []).find(u => String(u.cid) === String(activeCid));
+      const actor = state.combatants.find(c => String(c.cid) === String(activeCid));
+      
+      if (!activeUnit || !activeUnit.pos || !actor || actor.is_pc) return;
+
+      if (activeUnit.pos.col === col && activeUnit.pos.row === row) {
+        dragging = {
+          cid: activeCid,
+          col: col,
+          row: row,
+          curCol: col,
+          curRow: row,
+          startX: x,
+          startY: y
+        };
+        canvas.setPointerCapture(e.pointerId);
+        draw();
+      }
+    });
+
+    canvas.addEventListener('pointermove', (e) => {
+      if (!dragging) return;
+      const rect = canvas.getBoundingClientRect();
+      const x = e.clientX - rect.left;
+      const y = e.clientY - rect.top;
+      const { col, row } = screenToGrid(x, y);
+
+      if (col !== dragging.curCol || row !== dragging.curRow) {
+        dragging.curCol = col;
+        dragging.curRow = row;
+        draw();
+      }
+    });
+
+    canvas.addEventListener('pointerup', async (e) => {
+      if (!dragging) return;
+      const finalCol = dragging.curCol;
+      const finalRow = dragging.curRow;
+      const dragCid = dragging.cid;
+      dragging = null;
+      canvas.releasePointerCapture(e.pointerId);
+
+      const activeUnit = (state.tactical_map.units || []).find(u => String(u.cid) === String(dragCid));
+      if (activeUnit && (activeUnit.pos.col !== finalCol || activeUnit.pos.row !== finalRow)) {
+        await executeMove(dragCid, finalCol, finalRow);
+      } else {
+        draw();
+      }
+    });
+
+    async function executeMove(cid, col, row) {
+      isMoving = true;
+      renderError('Moving...');
+      try {
+        const resp = await fetch(`/api/dm/map/combatants/${cid}/move`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ col, row })
+        });
+        if (!resp.ok) {
+          const errData = await resp.json();
+          throw new Error(errData.detail || `HTTP ${resp.status}`);
+        }
+        await fetchState();
+      } catch (err) {
+        console.error('Move error:', err);
+        renderError(err.message);
+      } finally {
+        isMoving = false;
+        draw();
+      }
+    }
 
     async function fetchState() {
       try {
@@ -225,6 +315,9 @@
           </div>
           <div class="actor-meta">
             Speed: ${actor.speed || '—'} • Movement Remaining: ${moveRemaining} ft • AC: ${actor.ac || '—'} • Conditions: ${actor.conditions?.join(', ') || 'None'}
+          </div>
+          <div class="actor-meta" style="margin-top:4px; color:var(--accent); font-style:italic;">
+            Drag token on map to move • Movement is backend-validated
           </div>
         `;
         overlay.textContent = `Focus: ${actor.name} (Active)`;
@@ -422,6 +515,8 @@
       const activeCid = state.active_cid;
       const activeUnit = units.find(u => String(u.cid) === String(activeCid));
 
+      let currentCostMap = null;
+
       // Movement Range Visualization
       if (activeUnit && activeUnit.pos) {
         const actor = state.combatants.find(c => String(c.cid) === String(activeCid));
@@ -432,7 +527,7 @@
           const moveRemaining = activeUnit.move_remaining ?? activeUnit.speed ?? 0;
 
           if (moveRemaining > 0) {
-            const costMap = movementCostMap(
+            currentCostMap = movementCostMap(
               activeUnit.pos.col, activeUnit.pos.row,
               moveRemaining, activeUnit,
               getRoughTerrainMap(), getObstacleSet(),
@@ -441,7 +536,7 @@
               cols, rows, feetPerSquare
             );
 
-            costMap.forEach((cost, key) => {
+            currentCostMap.forEach((cost, key) => {
               const [col, row] = key.split(",").map(Number);
               const x = panX + col * zoom;
               const y = panY + row * zoom;
@@ -482,6 +577,32 @@
         ctx.fillStyle = "rgba(255,255,255,0.95)";
         ctx.fillText(label, x, y);
       });
+
+      // Drag Preview
+      if (dragging && activeUnit) {
+        const { x, y } = gridToScreen(dragging.curCol, dragging.curRow);
+        const r = Math.max(10, zoom * 0.35);
+        const key = cellKey(dragging.curCol, dragging.curRow);
+        const isValid = currentCostMap && currentCostMap.has(key);
+
+        ctx.save();
+        ctx.globalAlpha = 0.6;
+        ctx.beginPath();
+        ctx.arc(x, y, r, 0, Math.PI * 2);
+        ctx.fillStyle = isValid ? "rgba(106,169,255,0.4)" : "rgba(255,91,91,0.4)";
+        ctx.fill();
+        ctx.setLineDash([5, 3]);
+        ctx.strokeStyle = isValid ? "rgba(255,255,255,0.8)" : "rgba(255,91,91,0.8)";
+        ctx.stroke();
+
+        const label = (activeUnit.name || "?").charAt(0).toUpperCase();
+        ctx.font = `bold ${Math.max(10, Math.floor(zoom * 0.35))}px system-ui`;
+        ctx.textAlign = "center";
+        ctx.textBaseline = "middle";
+        ctx.fillStyle = "rgba(255,255,255,0.95)";
+        ctx.fillText(label, x, y);
+        ctx.restore();
+      }
     }
 
     // Initial fetch and start polling
