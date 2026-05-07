@@ -201,20 +201,22 @@
 
   <script>
     /**
-     * DM Control Phase 3A1 — Action panel scaffold and read-only capability fetch.
+     * DM Control Phase 3A2a — Target-preview mode scaffold.
      * /dmcontrol has map rendering, movement range visualization, and backend-validated drag/drop movement.
-     * Now includes read-only monster/NPC action cards and local selection state.
-     * Deferred: targeting, attacks, AoE, resolution, and Multiattack.
+     * Includes read-only monster/NPC action cards and local selection state.
+     * Now includes local-only target-preview mode scaffold for simple attacks.
+     * Deferred: target click selection, resolution, AoE, and Multiattack.
      */
 
     const API_COMBAT = '/api/dm/combat';
     let pollInterval = null;
     let state = null;
 
-    // Phase 3A1 state
+    // Phase 3A1/3A2a state
     let capabilitySummary = null;
     let capabilityActorCid = null;
     let selectedCapabilityId = null;
+    let targetPreviewMode = null; // { capabilityId, capabilityName, actorCid, actionType }
 
     function esc(str) {
       if (!str) return '';
@@ -257,7 +259,7 @@
     }
 
     canvas.addEventListener('pointerdown', (e) => {
-      if (!state || !state.tactical_map || isMoving) return;
+      if (!state || !state.tactical_map || isMoving || targetPreviewMode) return;
       const rect = canvas.getBoundingClientRect();
       const x = e.clientX - rect.left;
       const y = e.clientY - rect.top;
@@ -311,6 +313,15 @@
         await executeMove(dragCid, finalCol, finalRow);
       } else {
         draw();
+      }
+    });
+
+    window.addEventListener('keydown', (e) => {
+      if (e.key === 'Escape') {
+        if (targetPreviewMode) {
+          cancelTargetPreviewMode();
+          e.preventDefault();
+        }
       }
     });
 
@@ -370,6 +381,7 @@
         capabilitySummary = null;
         capabilityActorCid = null;
         selectedCapabilityId = null;
+        cancelTargetPreviewMode();
         renderActionPanel(actor, null);
         return;
       }
@@ -398,11 +410,50 @@
         }
         capabilityActorCid = actor.cid;
         selectedCapabilityId = null;
+        cancelTargetPreviewMode();
         renderActionPanel(actor, capabilitySummary);
       } catch (err) {
         console.error('Capabilities fetch error:', err);
         renderActionPanel(actor, null);
       }
+    }
+
+    function findCapabilityById(id) {
+      if (!capabilitySummary || !capabilitySummary.groups) return null;
+      for (const list of Object.values(capabilitySummary.groups)) {
+        if (!Array.isArray(list)) continue;
+        const found = list.find(a => String(a.id) === String(id));
+        if (found) return found;
+      }
+      return null;
+    }
+
+    function isPreviewableTargetAction(cap) {
+      if (!cap) return false;
+      const type = (cap.action_type || "").toLowerCase();
+      if (type.includes("attack") || type.includes("melee") || type.includes("ranged")) return true;
+      const mode = (cap.target_mode || "").toLowerCase();
+      if (mode.includes("creature") || mode.includes("target")) return true;
+      return false;
+    }
+
+    function enterTargetPreviewMode(cap) {
+      if (!cap || !state) return;
+      targetPreviewMode = {
+        capabilityId: cap.id,
+        capabilityName: cap.name,
+        actorCid: state.active_cid,
+        actionType: cap.action_type
+      };
+      draw();
+    }
+
+    function cancelTargetPreviewMode() {
+      if (!targetPreviewMode) return;
+      targetPreviewMode = null;
+      draw();
+      const actor = (state?.combatants || []).find(c => String(c.cid) === String(state?.active_cid));
+      renderActionPanel(actor, capabilitySummary);
     }
 
     function renderActionPanel(actor, summary) {
@@ -435,21 +486,23 @@
 
       // Selection summary
       if (selectedCapabilityId) {
-        const allItems = [];
-        Object.values(groups).forEach(list => {
-          if (Array.isArray(list)) allItems.push(...list);
-        });
-
-        const selected = allItems.find(a => String(a.id) === String(selectedCapabilityId));
+        const selected = findCapabilityById(selectedCapabilityId);
 
         if (selected) {
+          const isPreviewActive = targetPreviewMode && String(targetPreviewMode.capabilityId) === String(selected.id);
           html += `
             <div class="selected-summary">
               <h4>${esc(selected.name)} Selected</h4>
               <p>${esc(selected.description || 'No description available.')}</p>
-              <div class="actor-meta" style="margin-top:4px; font-style:italic;">
-                Targeting and execution are deferred in this pass.
-              </div>
+              ${isPreviewActive ? `
+                <div class="actor-meta" style="margin-top:8px; color:var(--accent); font-weight:bold;">
+                  PREVIEWING TARGETS. Press Escape to cancel.
+                </div>
+              ` : `
+                <div class="actor-meta" style="margin-top:4px; font-style:italic;">
+                  ${isPreviewableTargetAction(selected) ? 'Targeting mode available.' : 'Targeting and execution are deferred in this pass.'}
+                </div>
+              `}
             </div>
           `;
         }
@@ -502,7 +555,16 @@
     }
 
     function selectCapability(id) {
-      selectedCapabilityId = (String(selectedCapabilityId) === String(id)) ? null : id;
+      const alreadySelected = String(selectedCapabilityId) === String(id);
+      selectedCapabilityId = alreadySelected ? null : id;
+
+      const cap = findCapabilityById(id);
+      if (!alreadySelected && isPreviewableTargetAction(cap)) {
+        enterTargetPreviewMode(cap);
+      } else {
+        cancelTargetPreviewMode();
+      }
+
       const actor = (state.combatants || []).find(c => String(c.cid) === String(state.active_cid));
       renderActionPanel(actor, capabilitySummary);
     }
@@ -756,7 +818,7 @@
         const actor = state.combatants.find(c => String(c.cid) === String(activeCid));
         const isMonster = actor && !actor.is_pc;
 
-        if (isMonster) {
+        if (isMonster && !targetPreviewMode) {
           const feetPerSquare = grid.feet_per_square || 5;
           const moveRemaining = activeUnit.move_remaining ?? activeUnit.speed ?? 0;
 
@@ -810,7 +872,32 @@
         ctx.textBaseline = "middle";
         ctx.fillStyle = "rgba(255,255,255,0.95)";
         ctx.fillText(label, x, y);
+
+        // Target Preview indicator
+        if (targetPreviewMode && !active) {
+          ctx.beginPath();
+          ctx.arc(x, y, r + 4, 0, Math.PI * 2);
+          ctx.setLineDash([2, 2]);
+          ctx.strokeStyle = "rgba(214,186,126,0.6)";
+          ctx.stroke();
+          ctx.setLineDash([]);
+        }
       });
+
+      // Target Preview Status Overlay
+      if (targetPreviewMode) {
+        ctx.fillStyle = "rgba(0, 0, 0, 0.7)";
+        ctx.fillRect(10, 10, 300, 40);
+        ctx.strokeStyle = "#d6ba7e";
+        ctx.strokeRect(10, 10, 300, 40);
+        ctx.fillStyle = "#d6ba7e";
+        ctx.font = "bold 14px system-ui";
+        ctx.textAlign = "left";
+        ctx.fillText(`Targeting: ${targetPreviewMode.capabilityName}`, 20, 35);
+        ctx.fillStyle = "#e8eef7";
+        ctx.font = "12px system-ui";
+        ctx.fillText("Esc to cancel", 240, 35);
+      }
 
       // Drag Preview
       if (dragging && activeUnit) {

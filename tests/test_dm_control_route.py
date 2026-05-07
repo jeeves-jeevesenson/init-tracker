@@ -122,32 +122,56 @@ class TestDMControlRoute(unittest.TestCase):
         self.assertIn(b"Drag token on map to move", response.content)
         self.assertIn(b"Movement is backend-validated", response.content)
 
-    def test_dm_move_combatant_on_map_functional(self):
-        """Verify backend move endpoint works for a monster."""
+    def test_dm_control_has_target_preview_scaffold(self):
+        """Verify /dmcontrol includes the target-preview mode scaffold."""
         from fastapi.testclient import TestClient
         client = TestClient(self.client)
-        
-        # 1. Setup combat with a monster on map
-        self.app._lan_try_move = lambda cid, col, row: (True, "", 10) # Mock successful move
-        
-        # We need a real combatant and a map position for the service/tracker to work
-        # but for this test we can just check if the endpoint calls the tracker method.
-        # Actually, let's use the real tracker if possible or mock the underlying _dm_move_combatant_on_map
-        
-        with mock.patch.object(self.app, '_dm_move_combatant_on_map') as mock_move:
-            mock_move.return_value = {"ok": True, "cid": 1, "col": 2, "row": 3, "spent_ft": 10}
-            
-            response = client.post("/api/dm/map/combatants/1/move", json={"col": 2, "row": 3})
-            self.assertEqual(response.status_code, 200)
-            payload = response.json()
-            self.assertTrue(payload["ok"])
-            self.assertEqual(payload["cid"], 1)
-            self.assertEqual(payload["col"], 2)
-            self.assertEqual(payload["row"], 3)
-            self.assertEqual(payload["spent_ft"], 10)
-            self.assertIn("snapshot", payload)
-            
-            mock_move.assert_called_once_with(1, 2, 3)
+        response = client.get("/dmcontrol")
+        self.assertEqual(response.status_code, 200)
+        self.assertIn(b"targetPreviewMode", response.content)
+        self.assertIn(b"function enterTargetPreviewMode", response.content)
+        self.assertIn(b"function cancelTargetPreviewMode", response.content)
+        self.assertIn(b"function findCapabilityById", response.content)
+        self.assertIn(b"function isPreviewableTargetAction", response.content)
+        self.assertIn(b"keydown", response.content)
+        self.assertIn(b"Escape", response.content)
+
+    def test_dm_control_target_preview_is_local_only(self):
+        """Verify target-preview logic in /dmcontrol does not use mutation endpoints."""
+        from fastapi.testclient import TestClient
+        client = TestClient(self.client)
+        response = client.get("/dmcontrol")
+        self.assertEqual(response.status_code, 200)
+        # We check that targetPreviewMode assignment doesn't involve fetch POST
+        self.assertNotIn(b"targetPreviewMode = await fetch", response.content)
+        self.assertIn(b"targetPreviewMode = {", response.content)
+
+    def test_dm_move_combatant_on_map_functional(self):
+        """Verify the move endpoint works and updates state."""
+        from fastapi.testclient import TestClient
+        client = TestClient(self.client)
+
+        # 1. Setup a combatant on map via DM service
+        res = self.app._dm_service.add_combatant("Goblin", hp=10, initiative=10, is_pc=False)
+        self.assertTrue(res.get("ok"), f"Failed to add combatant: {res.get('error')}")
+        cid = res.get("cid")
+
+        # Place them at 0,0 so they have a known origin for 'move'
+        self.app._dm_place_combatant_on_map(cid, 0, 0)
+        self.app._dm_service.start_combat()
+
+        # 2. Move them to 1,1
+        response = client.post(f"/api/dm/map/combatants/{cid}/move", json={"col": 1, "row": 1})
+        self.assertEqual(response.status_code, 200, f"Move failed: {response.json()}")
+        self.assertTrue(response.json().get("ok"))
+
+        # 3. Verify they moved
+        tactical = self.app._dm_tactical_snapshot()
+        units = tactical.get("units", [])
+        unit = next((u for u in units if u.get("cid") == cid), None)
+        self.assertIsNotNone(unit)
+        self.assertEqual(unit["pos"]["col"], 1)
+        self.assertEqual(unit["pos"]["row"], 1)
 
 if __name__ == "__main__":
     unittest.main()

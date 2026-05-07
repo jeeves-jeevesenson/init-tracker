@@ -252,6 +252,28 @@ These are safe cleanup tasks before construction begins.
 
 Agents should append concise entries here.
 
+### 2026-05-07 — Phase 3A2a: target-preview mode scaffold
+Agent/model: Gemini CLI
+Scope:
+- Implemented local-only `targetPreviewMode` scaffold on `/dmcontrol`.
+- Added helpers `findCapabilityById` and `isPreviewableTargetAction` for action-context detection.
+- Simple melee/ranged actions now enter target-preview mode when selected.
+- Implemented `Escape` key handler to cancel target-preview mode.
+- Blocked movement drag while target-preview mode is active.
+- Added visual status overlay and dashed target indicators on the map during preview.
+- Non-mutating pass: no execution, resolution, or target-click selection added.
+Files changed:
+- assets/web/dmcontrol/index.html
+- tests/test_dm_control_route.py
+- docs/dm_control_surface_living_agent_plan.md
+Outcome:
+- `/dmcontrol` can now enter a visual target-preview mode for simple attacks.
+- Movement safety preserved.
+- JS syntax check passed.
+- All Python route tests passed.
+Next recommended pass:
+- Phase 3A2b — Valid target highlighting and local clicked-target selection.
+
 ### 2026-05-07 — Phase 3A1: action panel scaffold/read-only capability fetch
 Agent/model: Gemini CLI
 Scope:

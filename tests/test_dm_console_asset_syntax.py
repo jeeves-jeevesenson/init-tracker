@@ -11,6 +11,9 @@ class TestDmConsoleAssetSyntax(unittest.TestCase):
     def test_lan_index_js_syntax(self):
         self._check_html_js_syntax('assets/web/lan/index.html')
 
+    def test_dmcontrol_index_js_syntax(self):
+        self._check_html_js_syntax('assets/web/dmcontrol/index.html')
+
     def _check_html_js_syntax(self, html_path):
         if not os.path.exists(html_path):
             # Skip if file doesn't exist, though for assets we expect them
