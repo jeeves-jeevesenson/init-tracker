@@ -58,12 +58,14 @@ class TestDMControlRoute(unittest.TestCase):
         self.assertIn(b"id=\"mapCanvas\"", response.content)
 
     def test_dm_control_has_action_panel_scaffold(self):
-        """Verify /dmcontrol includes the action panel scaffold."""
+        """Verify /dmcontrol includes the action panel scaffold and correct summary parsing."""
         from fastapi.testclient import TestClient
         client = TestClient(self.client)
         response = client.get("/dmcontrol")
         self.assertEqual(response.status_code, 200)
         self.assertIn(b"id=\"activeActionsPanel\"", response.content)
+        self.assertIn(b"payload.summary", response.content)
+        self.assertIn(b"summary.groups", response.content)
         self.assertIn(b"capabilitySummary", response.content)
         self.assertIn(b"selectedCapabilityId", response.content)
         self.assertIn(b"function renderActionPanel", response.content)

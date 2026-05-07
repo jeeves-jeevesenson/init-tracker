@@ -261,6 +261,7 @@ Scope:
 - Added local-only selection state with compact selected-action summary.
 - Implemented appropriate idle handling for PC turns and missing monster overlays.
 - Ensured Phase 2C drag/drop movement remains functional.
+- **Correction:** Fixed rendering to correctly unwrap `payload.summary` from the backend response and access action lists within `summary.groups`. Added HTML escaping and hardened CID comparisons.
 Files changed:
 - assets/web/dmcontrol/index.html
 - tests/test_dm_control_route.py

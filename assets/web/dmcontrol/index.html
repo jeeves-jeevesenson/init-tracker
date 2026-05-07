@@ -216,6 +216,16 @@
     let capabilityActorCid = null;
     let selectedCapabilityId = null;
 
+    function esc(str) {
+      if (!str) return '';
+      return String(str)
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;')
+        .replace(/'/g, '&#39;');
+    }
+
     // Map state
     const canvas = document.getElementById('mapCanvas');
     const ctx = canvas.getContext('2d');
@@ -364,7 +374,7 @@
         return;
       }
 
-      if (capabilityActorCid === actor.cid) {
+      if (String(capabilityActorCid) === String(actor.cid)) {
         // Already have it, just re-render in case local state (selection) changed
         renderActionPanel(actor, capabilitySummary);
         return;
@@ -379,7 +389,12 @@
             throw new Error(`HTTP ${resp.status}`);
           }
         } else {
-          capabilitySummary = await resp.json();
+          const payload = await resp.json();
+          if (payload.ok && payload.summary) {
+            capabilitySummary = payload.summary;
+          } else {
+            capabilitySummary = { matched: false };
+          }
         }
         capabilityActorCid = actor.cid;
         selectedCapabilityId = null;
@@ -416,23 +431,22 @@
 
       // Render grouped actions
       let html = '';
+      const groups = summary.groups || {};
 
       // Selection summary
       if (selectedCapabilityId) {
-        const allItems = (summary.actions || [])
-          .concat(summary.bonus_actions || [])
-          .concat(summary.reactions || [])
-          .concat(summary.legendary_actions || [])
-          .concat(summary.traits || [])
-          .concat(summary.special || []);
+        const allItems = [];
+        Object.values(groups).forEach(list => {
+          if (Array.isArray(list)) allItems.push(...list);
+        });
 
         const selected = allItems.find(a => String(a.id) === String(selectedCapabilityId));
 
         if (selected) {
           html += `
             <div class="selected-summary">
-              <h4>${selected.name} Selected</h4>
-              <p>${selected.description || 'No description available.'}</p>
+              <h4>${esc(selected.name)} Selected</h4>
+              <p>${esc(selected.description || 'No description available.')}</p>
               <div class="actor-meta" style="margin-top:4px; font-style:italic;">
                 Targeting and execution are deferred in this pass.
               </div>
@@ -441,24 +455,25 @@
         }
       }
 
-      const groups = [
+      const groupConfig = [
         { key: 'actions', label: 'Actions' },
         { key: 'bonus_actions', label: 'Bonus Actions' },
         { key: 'reactions', label: 'Reactions' },
         { key: 'legendary_actions', label: 'Legendary Actions' },
+        { key: 'lair_actions', label: 'Lair Actions' },
         { key: 'traits', label: 'Traits' },
         { key: 'special', label: 'Special' }
       ];
 
-      groups.forEach(group => {
-        const items = summary[group.key];
+      groupConfig.forEach(conf => {
+        const items = groups[conf.key];
         if (items && items.length > 0) {
           html += `<div class="action-group">`;
-          html += `<div class="group-label">${group.label}</div>`;
+          html += `<div class="group-label">${esc(conf.label)}</div>`;
           html += `<div class="action-grid">`;
           items.forEach(item => {
             const isSelected = String(item.id) === String(selectedCapabilityId);
-            const isTrait = group.key === 'traits';
+            const isTrait = conf.key === 'traits' || conf.key === 'lair_actions';
             const badges = [];
             if (item.action_type) badges.push(item.action_type);
             if (item.target_mode) badges.push(item.target_mode);
@@ -470,12 +485,12 @@
 
             html += `
               <div class="action-card ${isSelected ? 'selected' : ''} ${isTrait ? 'trait' : ''}"
-                   onclick="selectCapability('${item.id}')">
+                   onclick="selectCapability('${esc(item.id)}')">
                 <div class="card-header">
-                  <span class="card-name">${item.name}</span>
-                  ${badges.map(b => `<span class="card-badge">${b}</span>`).join('')}
+                  <span class="card-name">${esc(item.name)}</span>
+                  ${badges.map(b => `<span class="card-badge">${esc(b)}</span>`).join('')}
                 </div>
-                ${item.mechanics ? `<div class="card-meta">${item.mechanics}</div>` : ''}
+                ${item.mechanics ? `<div class="card-meta">${esc(item.mechanics)}</div>` : ''}
               </div>
             `;
           });
@@ -488,7 +503,7 @@
 
     function selectCapability(id) {
       selectedCapabilityId = (String(selectedCapabilityId) === String(id)) ? null : id;
-      const actor = state.combatants.find(c => c.cid === state.active_cid);
+      const actor = (state.combatants || []).find(c => String(c.cid) === String(state.active_cid));
       renderActionPanel(actor, capabilitySummary);
     }
 
