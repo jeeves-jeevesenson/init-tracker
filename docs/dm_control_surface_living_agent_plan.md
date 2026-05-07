@@ -252,6 +252,51 @@ These are safe cleanup tasks before construction begins.
 
 Agents should append concise entries here.
 
+### 2026-05-07 — Phase 3A2c: selected-target advisory details
+Agent/model: Gemini CLI
+Scope:
+- Implemented local, non-authoritative advisory details for selected targets on `/dmcontrol`.
+- Added `getSelectedTargetAdvisory` helper to compute Chebyshev distance and compare against structured range/reach.
+- Updated `renderActionPanel` to display target distance and advisory status (Likely in range, Likely out of range, Unknown).
+- Updated `draw()` to color-code the selected target indicator:
+    - Green (`#4caf82`) for likely-in-range.
+    - Red (`#ff5b5b`) for likely-out-of-range.
+    - Gold (`#d6ba7e`) for unknown/advisory.
+- Enhanced target preview status overlay with distance and advisory labels.
+- Maintained non-mutating scope: no backend resolution or execution.
+Files changed:
+- assets/web/dmcontrol/index.html
+- tests/test_dm_control_route.py
+- docs/dm_control_surface_living_agent_plan.md
+Outcome:
+- DM receives immediate spatial feedback on target validity.
+- All Python route tests and JS syntax checks passed.
+Next recommended pass:
+- Phase 3B1: Resolution modal scaffold without backend mutation.
+
+### 2026-05-07 — Phase 3A2b: local clicked-target selection
+Agent/model: Gemini CLI
+Scope:
+- Implemented local clicked-target selection while `targetPreviewMode` is active on `/dmcontrol`.
+- Added `selectedTargetCid` local state.
+- Implemented helpers: `findUnitAtGridCell`, `findCombatantByCid`, `isTargetCandidate`, `selectPreviewTarget`.
+- Updated `pointerdown` to handle target selection (clicking a unit) and block movement drag during target preview.
+- Enhanced `renderActionPanel` to show the selected target name and local selection status.
+- Updated `draw()` to visualize all target candidates with dashed rings and the selected target with a solid ring and fill.
+- Enhanced target preview status overlay to show the selected target name.
+- Non-mutating pass: no backend mutations, execution, or resolution added.
+Files changed:
+- assets/web/dmcontrol/index.html
+- tests/test_dm_control_route.py
+- docs/dm_control_surface_living_agent_plan.md
+Outcome:
+- DM can now click tokens on the map to select a target locally during action preview.
+- Clear visual feedback on map and in action panel for the selected target.
+- Movement drag is safely blocked while in target preview mode.
+- All Python route tests and JS syntax checks passed.
+Next recommended pass:
+- Phase 3A2c: target selection summary and action-specific advisory details (range/AoE validation hints).
+
 ### 2026-05-07 — Phase 3A2a: target-preview mode scaffold
 Agent/model: Gemini CLI
 Scope:

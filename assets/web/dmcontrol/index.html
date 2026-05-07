@@ -212,11 +212,12 @@
     let pollInterval = null;
     let state = null;
 
-    // Phase 3A1/3A2a state
+    // Phase 3A1/3A2a/3A2b state
     let capabilitySummary = null;
     let capabilityActorCid = null;
     let selectedCapabilityId = null;
     let targetPreviewMode = null; // { capabilityId, capabilityName, actorCid, actionType }
+    let selectedTargetCid = null;
 
     function esc(str) {
       if (!str) return '';
@@ -259,11 +260,19 @@
     }
 
     canvas.addEventListener('pointerdown', (e) => {
-      if (!state || !state.tactical_map || isMoving || targetPreviewMode) return;
+      if (!state || !state.tactical_map || isMoving) return;
       const rect = canvas.getBoundingClientRect();
       const x = e.clientX - rect.left;
       const y = e.clientY - rect.top;
       const { col, row } = screenToGrid(x, y);
+
+      if (targetPreviewMode) {
+        const unit = findUnitAtGridCell(col, row);
+        if (isTargetCandidate(unit)) {
+          selectPreviewTarget(unit.cid);
+        }
+        return; // Block movement drag while in target preview
+      }
 
       const activeCid = state.active_cid;
       const activeUnit = (state.tactical_map.units || []).find(u => String(u.cid) === String(activeCid));
@@ -439,6 +448,7 @@
 
     function enterTargetPreviewMode(cap) {
       if (!cap || !state) return;
+      selectedTargetCid = null;
       targetPreviewMode = {
         capabilityId: cap.id,
         capabilityName: cap.name,
@@ -451,9 +461,73 @@
     function cancelTargetPreviewMode() {
       if (!targetPreviewMode) return;
       targetPreviewMode = null;
+      selectedTargetCid = null;
       draw();
       const actor = (state?.combatants || []).find(c => String(c.cid) === String(state?.active_cid));
       renderActionPanel(actor, capabilitySummary);
+    }
+
+    function findUnitAtGridCell(col, row) {
+      if (!state || !state.tactical_map || !state.tactical_map.units) return null;
+      return state.tactical_map.units.find(u => u.pos && u.pos.col === col && u.pos.row === row);
+    }
+
+    function findCombatantByCid(cid) {
+      if (!state || !state.combatants) return null;
+      return state.combatants.find(c => String(c.cid) === String(cid));
+    }
+
+    function isTargetCandidate(unit) {
+      if (!targetPreviewMode || !unit || !unit.cid) return false;
+      // Cannot target the active actor
+      if (String(unit.cid) === String(targetPreviewMode.actorCid)) return false;
+      return true;
+    }
+
+    function selectPreviewTarget(cid) {
+      selectedTargetCid = String(cid);
+      draw();
+      const actor = (state?.combatants || []).find(c => String(c.cid) === String(state?.active_cid));
+      renderActionPanel(actor, capabilitySummary);
+    }
+
+    function getSelectedTargetAdvisory(cap, targetCid) {
+      if (!cap || !targetCid || !state || !state.tactical_map) {
+        return { status: 'unknown', label: 'DM adjudication needed', distanceFt: null, limitFt: null };
+      }
+
+      const activeUnit = (state.tactical_map.units || []).find(u => String(u.cid) === String(state.active_cid));
+      const targetUnit = (state.tactical_map.units || []).find(u => String(u.cid) === String(targetCid));
+
+      if (!activeUnit || !activeUnit.pos || !targetUnit || !targetUnit.pos) {
+        return { status: 'unknown', label: 'Position unknown', distanceFt: null, limitFt: null };
+      }
+
+      const feetPerSquare = state.tactical_map.grid?.feet_per_square || 5;
+      const dx = Math.abs(activeUnit.pos.col - targetUnit.pos.col);
+      const dy = Math.abs(activeUnit.pos.row - targetUnit.pos.row);
+      const distanceFt = Math.max(dx, dy) * feetPerSquare;
+
+      // Extract range/reach
+      let limitFt = null;
+      const actionType = (cap.action_type || "").toLowerCase();
+
+      if (cap.reach_ft !== undefined && cap.reach_ft !== null) limitFt = cap.reach_ft;
+      else if (cap.range_ft !== undefined && cap.range_ft !== null) limitFt = cap.range_ft;
+      else if (cap.range_normal_ft !== undefined && cap.range_normal_ft !== null) limitFt = cap.range_normal_ft;
+      else if (cap.reach !== undefined && cap.reach !== null) limitFt = parseInt(cap.reach);
+      else if (cap.range !== undefined && cap.range !== null) limitFt = parseInt(cap.range);
+      else if (actionType.includes("melee")) limitFt = 5;
+
+      if (limitFt === null || isNaN(limitFt)) {
+        return { status: 'unknown', label: 'Range unknown — DM adjudication needed', distanceFt, limitFt: null };
+      }
+
+      if (distanceFt <= limitFt) {
+        return { status: 'likely-in-range', label: 'Likely in range', distanceFt, limitFt };
+      } else {
+        return { status: 'likely-out-of-range', label: 'Likely out of range', distanceFt, limitFt };
+      }
     }
 
     function renderActionPanel(actor, summary) {
@@ -490,21 +564,47 @@
 
         if (selected) {
           const isPreviewActive = targetPreviewMode && String(targetPreviewMode.capabilityId) === String(selected.id);
-          html += `
+          let summaryHtml = `
             <div class="selected-summary">
               <h4>${esc(selected.name)} Selected</h4>
               <p>${esc(selected.description || 'No description available.')}</p>
-              ${isPreviewActive ? `
-                <div class="actor-meta" style="margin-top:8px; color:var(--accent); font-weight:bold;">
-                  PREVIEWING TARGETS. Press Escape to cancel.
-                </div>
-              ` : `
-                <div class="actor-meta" style="margin-top:4px; font-style:italic;">
-                  ${isPreviewableTargetAction(selected) ? 'Targeting mode available.' : 'Targeting and execution are deferred in this pass.'}
-                </div>
-              `}
-            </div>
           `;
+
+          if (isPreviewActive) {
+            if (!selectedTargetCid) {
+              summaryHtml += `
+                <div class="actor-meta" style="margin-top:8px; color:var(--accent); font-weight:bold;">
+                  Click a highlighted target token. Press Escape to cancel.
+                </div>
+              `;
+            } else {
+              const target = findCombatantByCid(selectedTargetCid);
+              const advisory = getSelectedTargetAdvisory(selected, selectedTargetCid);
+              summaryHtml += `
+                <div class="actor-meta" style="margin-top:8px; color:var(--accent); font-weight:bold;">
+                  Target: ${esc(target ? target.name : 'Unknown')} (Selected Locally)
+                </div>
+                <div class="actor-meta" style="margin-top:4px;">
+                  Distance: ${advisory.distanceFt !== null ? advisory.distanceFt + ' ft' : 'Unknown'} •
+                  <span style="color:${advisory.status === 'likely-in-range' ? 'var(--heal)' : (advisory.status === 'likely-out-of-range' ? 'var(--danger)' : 'var(--gold)')}">
+                    ${esc(advisory.label)}
+                  </span>
+                </div>
+                <div class="actor-meta" style="margin-top:4px; font-style:italic;">
+                  Resolution is deferred. Advisory only; DM adjudication needed.
+                </div>
+              `;
+            }
+          } else {
+            summaryHtml += `
+              <div class="actor-meta" style="margin-top:4px; font-style:italic;">
+                ${isPreviewableTargetAction(selected) ? 'Targeting mode available.' : 'Targeting and execution are deferred in this pass.'}
+              </div>
+            `;
+          }
+
+          summaryHtml += `</div>`;
+          html += summaryHtml;
         }
       }
 
@@ -875,10 +975,33 @@
 
         // Target Preview indicator
         if (targetPreviewMode && !active) {
+          const isSelectedTarget = selectedTargetCid && String(u.cid) === String(selectedTargetCid);
+
           ctx.beginPath();
           ctx.arc(x, y, r + 4, 0, Math.PI * 2);
-          ctx.setLineDash([2, 2]);
-          ctx.strokeStyle = "rgba(214,186,126,0.6)";
+
+          if (isSelectedTarget) {
+            const cap = findCapabilityById(targetPreviewMode.capabilityId);
+            const advisory = getSelectedTargetAdvisory(cap, selectedTargetCid);
+            let color = "#d6ba7e"; // Default gold
+            if (advisory.status === 'likely-in-range') color = "#4caf82";
+            else if (advisory.status === 'likely-out-of-range') color = "#ff5b5b";
+
+            ctx.fillStyle = color.replace(")", ", 0.2)").replace("#", "rgba(") === color ? "rgba(214,186,126,0.2)" : color; // fallback-ish
+            // Actually let's just use literal rgba for fill
+            if (advisory.status === 'likely-in-range') ctx.fillStyle = "rgba(76, 175, 130, 0.2)";
+            else if (advisory.status === 'likely-out-of-range') ctx.fillStyle = "rgba(255, 91, 91, 0.2)";
+            else ctx.fillStyle = "rgba(214, 186, 126, 0.2)";
+
+            ctx.fill();
+            ctx.lineWidth = 3;
+            ctx.strokeStyle = color;
+          } else {
+            ctx.setLineDash([2, 2]);
+            ctx.lineWidth = 1;
+            ctx.strokeStyle = "rgba(214,186,126,0.6)";
+          }
+
           ctx.stroke();
           ctx.setLineDash([]);
         }
@@ -886,17 +1009,38 @@
 
       // Target Preview Status Overlay
       if (targetPreviewMode) {
+        const target = findCombatantByCid(selectedTargetCid);
+        const targetName = target ? target.name : (selectedTargetCid ? "Unknown" : "None selected");
+        const cap = findCapabilityById(targetPreviewMode.capabilityId);
+        const advisory = getSelectedTargetAdvisory(cap, selectedTargetCid);
+
         ctx.fillStyle = "rgba(0, 0, 0, 0.7)";
-        ctx.fillRect(10, 10, 300, 40);
+        ctx.fillRect(10, 10, 320, 60);
         ctx.strokeStyle = "#d6ba7e";
-        ctx.strokeRect(10, 10, 300, 40);
+        ctx.strokeRect(10, 10, 320, 60);
         ctx.fillStyle = "#d6ba7e";
         ctx.font = "bold 14px system-ui";
         ctx.textAlign = "left";
-        ctx.fillText(`Targeting: ${targetPreviewMode.capabilityName}`, 20, 35);
-        ctx.fillStyle = "#e8eef7";
+        ctx.fillText(`Action: ${targetPreviewMode.capabilityName}`, 20, 30);
+
         ctx.font = "12px system-ui";
-        ctx.fillText("Esc to cancel", 240, 35);
+        if (selectedTargetCid) {
+          let advColor = "#d6ba7e";
+          if (advisory.status === 'likely-in-range') advColor = "#4caf82";
+          else if (advisory.status === 'likely-out-of-range') advColor = "#ff5b5b";
+
+          ctx.fillStyle = "#e8eef7";
+          ctx.fillText(`Target: ${targetName}`, 20, 48);
+          ctx.fillStyle = advColor;
+          ctx.fillText(`${advisory.distanceFt || 0} ft • ${advisory.label}`, 20, 64);
+        } else {
+          ctx.fillStyle = "#e8eef7";
+          ctx.fillText("Select a target token", 20, 48);
+        }
+
+        ctx.fillStyle = "#e8eef7";
+        ctx.textAlign = "right";
+        ctx.fillText("Esc to cancel", 320, 30);
       }
 
       // Drag Preview

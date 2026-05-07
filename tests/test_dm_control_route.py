@@ -146,6 +146,33 @@ class TestDMControlRoute(unittest.TestCase):
         self.assertNotIn(b"targetPreviewMode = await fetch", response.content)
         self.assertIn(b"targetPreviewMode = {", response.content)
 
+    def test_dm_control_has_local_target_selection(self):
+        """Verify /dmcontrol includes local target selection logic."""
+        from fastapi.testclient import TestClient
+        client = TestClient(self.client)
+        response = client.get("/dmcontrol")
+        self.assertEqual(response.status_code, 200)
+        self.assertIn(b"selectedTargetCid", response.content)
+        self.assertIn(b"function findUnitAtGridCell", response.content)
+        self.assertIn(b"function findCombatantByCid", response.content)
+        self.assertIn(b"function isTargetCandidate", response.content)
+        self.assertIn(b"function selectPreviewTarget", response.content)
+        self.assertIn(b"Target: ${esc(target ? target.name : 'Unknown')} (Selected Locally)", response.content)
+        self.assertIn(b"Resolution is deferred.", response.content)
+
+    def test_dm_control_has_target_advisory(self):
+        """Verify /dmcontrol includes target advisory logic."""
+        from fastapi.testclient import TestClient
+        client = TestClient(self.client)
+        response = client.get("/dmcontrol")
+        self.assertEqual(response.status_code, 200)
+        self.assertIn(b"function getSelectedTargetAdvisory", response.content)
+        self.assertIn(b"distanceFt", response.content)
+        self.assertIn(b"likely-in-range", response.content)
+        self.assertIn(b"likely-out-of-range", response.content)
+        self.assertIn(b"DM adjudication needed", response.content)
+        self.assertIn(b"Advisory only", response.content)
+
     def test_dm_move_combatant_on_map_functional(self):
         """Verify the move endpoint works and updates state."""
         from fastapi.testclient import TestClient
