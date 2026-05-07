@@ -175,7 +175,7 @@ Update this section after each pass.
 | Area | Current status | Notes |
 |---|---|---|
 | `/dm` cockpit | Admin/reference/setup | Cleaned up; legacy controls demoted. Link to `/dmcontrol` added. |
-| `/dmcontrol` | Shell added | Dedicated LAN-style monster/NPC control page. Route and basic state fetch implemented. |
+| `/dmcontrol` | Map shell added | Dedicated LAN-style monster/NPC control page. Read-only map surface with grid and tokens implemented. |
 | `/` LAN client | Useful local model | LAN has targeting, movement range, attack resolution, spell target selection, and remaining movement concepts |
 | Monster Turn Controls | Demoted | **Moved to Legacy tab in DM Toolbox.** |
 | Monster Pilot | Demoted | **Moved to Legacy tab in DM Toolbox.** |
@@ -219,7 +219,7 @@ Update the status column after each pass.
 |---|---|---|---|
 | M0 | Phase 0 — Clean `/dm` regressions | Completed | M1 - /dmcontrol shell |
 | M1 | Phase 1 — `/dmcontrol` shell | Completed | Route/page shell + status |
-| M2 | Phase 2 — LAN-like map & movement | Not started | Port LAN map surface to `/dmcontrol` |
+| M2 | Phase 2 — LAN-like map & movement | In progress | Phase 2A (Read-only map) completed |
 | M3 | Phase 3 — Basic attack flow | Not started | Action cards + normal attacks |
 | M4 | Phase 4 — Multiattack guided flow | Not started | Sequence tray + resolution reuse |
 | M5 | Phase 5 — AoE/save action flow | Not started | AoE template placement |
@@ -252,6 +252,25 @@ These are safe cleanup tasks before construction begins.
 ## Work log
 
 Agents should append concise entries here.
+
+### 2026-05-07 — Phase 2A: Read-only LAN-like map surface
+Agent/model: Gemini CLI
+Scope:
+- Implemented read-only tactical map surface on `/dmcontrol` using HTML5 Canvas.
+- Grid rendering with auto-fit, zoom, and pan logic ported from LAN client.
+- Token rendering for combatants with positions, using role-based coloring.
+- Active actor highlighting based on `active_cid`.
+- Resize handling for map responsiveness.
+Files changed:
+- assets/web/dmcontrol/index.html
+- tests/test_dm_control_route.py
+- docs/dm_control_surface_living_agent_plan.md
+Outcome:
+- `/dmcontrol` now has a functional, read-only tactical map synchronized with backend state.
+- JS syntax check passed.
+- Route and element verification tests passed.
+Next recommended pass:
+- Phase 2B — Movement range visualization or drag-and-drop movement.
 
 ### 2026-05-07 — Phase 1: /dmcontrol route and shell
 Agent/model: Gemini CLI

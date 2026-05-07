@@ -48,5 +48,24 @@ class TestDMControlRoute(unittest.TestCase):
         self.assertIn(b"href=\"/dm\"", response.content)
         self.assertIn(b"DM Cockpit", response.content)
 
+    def test_dm_control_has_map_canvas(self):
+        """Verify /dmcontrol includes a map canvas."""
+        from fastapi.testclient import TestClient
+        client = TestClient(self.client)
+        response = client.get("/dmcontrol")
+        self.assertEqual(response.status_code, 200)
+        self.assertIn(b"id=\"mapCanvas\"", response.content)
+
+    def test_dm_control_has_no_legacy_controls(self):
+        """Verify /dmcontrol does not include legacy monster controls."""
+        from fastapi.testclient import TestClient
+        client = TestClient(self.client)
+        response = client.get("/dmcontrol")
+        self.assertEqual(response.status_code, 200)
+        # Legacy controls usually have these IDs or classes
+        self.assertNotIn(b"id=\"monsterTurnControls\"", response.content)
+        self.assertNotIn(b"id=\"monsterPilotPanel\"", response.content)
+        self.assertNotIn(b"DM Toolbox", response.content)
+
 if __name__ == "__main__":
     unittest.main()

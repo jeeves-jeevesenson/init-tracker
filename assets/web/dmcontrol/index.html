@@ -47,15 +47,15 @@
     .main-surface {
       flex: 1;
       position: relative;
-      background: #000;
-      display: flex;
-      align-items: center;
-      justify-content: center;
+      background: #0a0c12;
       overflow: hidden;
     }
-    .map-placeholder {
-      color: var(--muted);
-      font-style: italic;
+    canvas {
+      position: absolute;
+      inset: 0;
+      width: 100%;
+      height: 100%;
+      image-rendering: -webkit-optimize-contrast;
     }
 
     /* ── Bottom Control Bar ──────────────────────────────────────── */
@@ -68,6 +68,7 @@
       flex-direction: column;
       gap: 8px;
       flex-shrink: 0;
+      z-index: 10;
     }
     .actor-info {
       display: flex;
@@ -98,6 +99,7 @@
       position: absolute; top: 20px; right: 20px;
       background: rgba(0,0,0,0.6); padding: 8px 12px; border-radius: 6px;
       font-size: 12px; border: 1px solid var(--border);
+      z-index: 5;
     }
   </style>
 </head>
@@ -109,8 +111,8 @@
       <a href="/dm" class="workspace-link">↩ DM Cockpit</a>
     </header>
 
-    <main class="main-surface">
-      <div id="mapPlaceholder" class="map-placeholder">Tactical Map Surface (Placeholder)</div>
+    <main class="main-surface" id="mapWrap">
+      <canvas id="mapCanvas"></canvas>
       <div id="statusOverlay" class="status-overlay" style="display:none;"></div>
     </main>
 
@@ -127,8 +129,35 @@
   </div>
 
   <script>
+    /**
+     * DM Control Phase 2A — Read-only LAN-like map surface.
+     * Deferred: movement mutation, targeting, active resolution.
+     */
+
     const API_COMBAT = '/api/dm/combat';
     let pollInterval = null;
+    let state = null;
+
+    // Map state
+    const canvas = document.getElementById('mapCanvas');
+    const ctx = canvas.getContext('2d');
+    let zoom = 40;
+    let panX = 0;
+    let panY = 0;
+    let fittedToGrid = false;
+    let lastGrid = {cols: 0, rows: 0};
+
+    function resize() {
+      const dpr = window.devicePixelRatio || 1;
+      const rect = canvas.getBoundingClientRect();
+      canvas.width = rect.width * dpr;
+      canvas.height = rect.height * dpr;
+      ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+      draw();
+    }
+
+    window.addEventListener('resize', resize);
+    resize();
 
     async function fetchState() {
       try {
@@ -141,7 +170,9 @@
           throw new Error(`HTTP ${resp.status}`);
         }
         const data = await resp.json();
+        state = data;
         renderState(data);
+        draw();
       } catch (err) {
         console.error('Fetch error:', err);
         renderError('Offline or server error');
@@ -149,8 +180,11 @@
     }
 
     function renderError(msg) {
-      document.getElementById('combatStatus').textContent = msg;
-      document.getElementById('combatStatus').style.color = 'var(--danger)';
+      const statusEl = document.getElementById('combatStatus');
+      if (statusEl) {
+        statusEl.textContent = msg;
+        statusEl.style.color = 'var(--danger)';
+      }
     }
 
     function renderState(data) {
@@ -178,7 +212,6 @@
         return;
       }
 
-      // Identify if monster/NPC or PC
       const isMonster = !actor.is_pc;
       
       if (isMonster) {
@@ -206,6 +239,99 @@
         overlay.style.display = 'block';
         overlay.style.borderColor = 'var(--accent)';
       }
+    }
+
+    function gridToScreen(col, row) {
+      return { x: panX + col * zoom + zoom / 2, y: panY + row * zoom + zoom / 2 };
+    }
+
+    function draw() {
+      if (!state || !state.tactical_map) {
+        ctx.clearRect(0, 0, canvas.width, canvas.height);
+        return;
+      }
+
+      const rect = canvas.getBoundingClientRect();
+      const w = rect.width;
+      const h = rect.height;
+
+      ctx.clearRect(0, 0, w, h);
+
+      // Background
+      ctx.fillStyle = "#0a0c12";
+      ctx.fillRect(0, 0, w, h);
+
+      const grid = state.tactical_map.grid;
+      if (!grid || !grid.cols || !grid.rows) return;
+
+      const cols = grid.cols;
+      const rows = grid.rows;
+
+      if (cols !== lastGrid.cols || rows !== lastGrid.rows) {
+        fittedToGrid = false;
+        lastGrid = { cols, rows };
+      }
+
+      // Auto-fit on first draw
+      if (!fittedToGrid) {
+        const pad = 24;
+        const sx = (w - pad * 2) / (cols * zoom);
+        const sy = (h - pad * 2) / (rows * zoom);
+        const s = Math.min(1.0, Math.max(0.35, Math.min(sx, sy)));
+        zoom = Math.floor(zoom * s);
+        panX = Math.floor((w - cols * zoom) / 2);
+        panY = Math.floor((h - rows * zoom) / 2);
+        fittedToGrid = true;
+      }
+
+      // Grid lines
+      ctx.strokeStyle = "rgba(255,255,255,0.07)";
+      ctx.lineWidth = 1;
+      for (let c = 0; c <= cols; c++) {
+        const x = panX + c * zoom;
+        ctx.beginPath(); ctx.moveTo(x, panY); ctx.lineTo(x, panY + rows * zoom); ctx.stroke();
+      }
+      for (let r = 0; r <= rows; r++) {
+        const y = panY + r * zoom;
+        ctx.beginPath(); ctx.moveTo(panX, y); ctx.lineTo(panX + cols * zoom, y); ctx.stroke();
+      }
+
+      // Render tokens (combatants with positions)
+      const units = state.tactical_map.units || [];
+      const activeCid = state.active_cid;
+
+      units.forEach(u => {
+        if (!u.pos) return;
+        const { x, y } = gridToScreen(u.pos.col, u.pos.row);
+        const r = Math.max(10, zoom * 0.35);
+        const active = (activeCid !== null && String(activeCid) === String(u.cid));
+
+        ctx.beginPath();
+        ctx.arc(x, y, r, 0, Math.PI * 2);
+
+        // Basic coloring based on role
+        if (u.role === "enemy") {
+          ctx.fillStyle = "rgba(255,91,91,0.28)";
+        } else if (u.role === "pc") {
+          ctx.fillStyle = "rgba(106,255,176,0.18)";
+        } else {
+          ctx.fillStyle = "rgba(255,255,255,0.15)";
+        }
+        ctx.fill();
+
+        // Border / Active highlight
+        ctx.lineWidth = active ? 3 : 2;
+        ctx.strokeStyle = active ? "rgba(255,255,255,0.85)" : "rgba(255,255,255,0.25)";
+        ctx.stroke();
+
+        // Label (First letter or short name)
+        const label = (u.name || "?").charAt(0).toUpperCase();
+        ctx.font = `bold ${Math.max(10, Math.floor(zoom * 0.35))}px system-ui`;
+        ctx.textAlign = "center";
+        ctx.textBaseline = "middle";
+        ctx.fillStyle = "rgba(255,255,255,0.95)";
+        ctx.fillText(label, x, y);
+      });
     }
 
     // Initial fetch and start polling
