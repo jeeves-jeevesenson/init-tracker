@@ -174,8 +174,8 @@ Update this section after each pass.
 
 | Area | Current status | Notes |
 |---|---|---|
-| `/dm` cockpit | Admin/reference/setup | Cleaned up; legacy controls demoted. |
-| `/dmcontrol` | Planned | Dedicated LAN-style monster/NPC control page. |
+| `/dm` cockpit | Admin/reference/setup | Cleaned up; legacy controls demoted. Link to `/dmcontrol` added. |
+| `/dmcontrol` | Shell added | Dedicated LAN-style monster/NPC control page. Route and basic state fetch implemented. |
 | `/` LAN client | Useful local model | LAN has targeting, movement range, attack resolution, spell target selection, and remaining movement concepts |
 | Monster Turn Controls | Demoted | **Moved to Legacy tab in DM Toolbox.** |
 | Monster Pilot | Demoted | **Moved to Legacy tab in DM Toolbox.** |
@@ -218,8 +218,8 @@ Update the status column after each pass.
 | ID | Milestone | Status | Next concrete pass |
 |---|---|---|---|
 | M0 | Phase 0 — Clean `/dm` regressions | Completed | M1 - /dmcontrol shell |
-| M1 | Phase 1 — `/dmcontrol` shell | Not started | Route/page shell + status |
-| M2 | Phase 2 — LAN-like map & movement | Not started | Port LAN movement to `/dmcontrol` |
+| M1 | Phase 1 — `/dmcontrol` shell | Completed | Route/page shell + status |
+| M2 | Phase 2 — LAN-like map & movement | Not started | Port LAN map surface to `/dmcontrol` |
 | M3 | Phase 3 — Basic attack flow | Not started | Action cards + normal attacks |
 | M4 | Phase 4 — Multiattack guided flow | Not started | Sequence tray + resolution reuse |
 | M5 | Phase 5 — AoE/save action flow | Not started | AoE template placement |
@@ -252,6 +252,28 @@ These are safe cleanup tasks before construction begins.
 ## Work log
 
 Agents should append concise entries here.
+
+### 2026-05-07 — Phase 1: /dmcontrol route and shell
+Agent/model: Gemini CLI
+Scope:
+- Created dedicated `/dmcontrol` route and page shell (`assets/web/dmcontrol/index.html`).
+- Added "Open DM Control" link to `/dm` cockpit.
+- Added "DM Cockpit" link to `/dmcontrol` page.
+- Implemented basic state fetching and rendering (actor name, HP, meta) on `/dmcontrol`.
+- Added middleware to disable caching for `/dmcontrol`.
+Files changed:
+- dnd_initative_tracker.py
+- assets/web/dm/index.html
+- assets/web/dmcontrol/index.html (New)
+- tests/test_dm_control_route.py (New)
+- docs/dm_control_surface_living_agent_plan.md
+Outcome:
+- Dedicated monster/NPC play surface shell is live.
+- Seamless navigation between cockpit and action surface.
+- JS syntax check passed for all touched assets.
+- Route verification tests passed.
+Next recommended pass:
+- Phase 2 — Port LAN tactical map surface and movement range/drag-drop to `/dmcontrol`.
 
 ### 2026-05-06 — Phase 0 Cleanup: Dedupe, Numbering, Sizing, and Demotion
 Agent/model: Gemini CLI

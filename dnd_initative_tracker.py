@@ -2457,6 +2457,7 @@ class LanController:
         self._fastapi_app.mount("/monsters/images", StaticFiles(directory=monster_images_dir), name="monster-images")
         web_entrypoint = assets_dir / "web" / "new_character" / "index.html"
         edit_entrypoint = assets_dir / "web" / "edit_character" / "index.html"
+        dmcontrol_entrypoint = assets_dir / "web" / "dmcontrol" / "index.html"
         shop_admin_entrypoint = assets_dir / "web" / "shop_admin" / "index.html"
         shop_entrypoint = assets_dir / "web" / "shop" / "index.html"
         required_config_ids = (
@@ -2481,7 +2482,7 @@ class LanController:
             response = await call_next(request)
             path = request.url.path
             # Never cache HTML shells; they decide which JS/CSS to load.
-            if path in ("/", "/planning", "/new_character", "/edit_character", "/shop_admin", "/shop", "/dm", "/dm/map"):
+            if path in ("/", "/planning", "/new_character", "/edit_character", "/shop_admin", "/shop", "/dm", "/dm/map", "/dmcontrol"):
                 response.headers["Cache-Control"] = "no-store"
             # Force revalidation of the web editors so updates show up immediately.
             elif (
@@ -2489,6 +2490,7 @@ class LanController:
                 or path.startswith("/assets/web/edit_character/")
                 or path.startswith("/assets/web/shop_admin/")
                 or path.startswith("/assets/web/shop/")
+                or path.startswith("/assets/web/dmcontrol/")
             ):
                 response.headers["Cache-Control"] = "no-cache, must-revalidate"
             return response
@@ -3891,10 +3893,20 @@ class LanController:
                 .replace("__DM_AUTH_OVERLAY_CLASS__", "" if auth_required else "hidden")
             )
 
+        def _load_dmcontrol_html() -> str:
+            if not dmcontrol_entrypoint.exists():
+                raise HTTPException(status_code=404, detail="DM control page missing.")
+            return _inject_asset_version(dmcontrol_entrypoint.read_text(encoding="utf-8"))
+
         @self._fastapi_app.get("/dm")
         async def dm_console(request: Request):
             """Serve the DM web console."""
             return HTMLResponse(_load_dm_console_html("dashboard"))
+
+        @self._fastapi_app.get("/dmcontrol")
+        async def dm_control(request: Request):
+            """Serve the dedicated DM monster control page."""
+            return HTMLResponse(_load_dmcontrol_html())
 
         @self._fastapi_app.get("/dm/map")
         async def dm_map_workspace(request: Request):
