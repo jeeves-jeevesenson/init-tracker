@@ -4343,8 +4343,18 @@ class LanController:
 
             name_prefix = str(payload.get("name_prefix") or "").strip() or monster_name
             entries: List[Dict[str, Any]] = []
+
+            # Gather existing names to avoid collisions
+            existing_names = [
+                str(getattr(c, "name", "") or "").strip()
+                for c in (getattr(self.app, "combatants", {}) or {}).values()
+            ]
+
             for index in range(count):
-                name = name_prefix if count == 1 else f"{name_prefix} {index + 1}"
+                # Use CombatantNameService to ensure unique name
+                # We use force_number=True because every spawned monster should be numbered.
+                name = CombatantNameService.get_next_available_name(name_prefix, existing_names, force_number=True)
+                existing_names.append(name) # Add to list so next iteration respects it
                 entries.append(
                     {
                         "name": name,

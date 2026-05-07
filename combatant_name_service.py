@@ -5,12 +5,13 @@ class CombatantNameService:
     """Service for managing unambiguous combatant names."""
 
     @staticmethod
-    def get_next_available_name(base_name: str, existing_names: Iterable[str]) -> str:
+    def get_next_available_name(base_name: str, existing_names: Iterable[str], force_number: bool = False) -> str:
         """Find the next available numeric suffix for a base name.
         
         Rules:
-        - If 'Monster' is requested and no 'Monster' or 'Monster N' exists, returns 'Monster 1'.
-        - If 'Monster' (unsuffixed) exists, it counts as 'Monster 1' or just takes the base slot.
+        - Returns 'Monster' if force_number=False and it is available.
+        - Returns 'Monster 1' if force_number=True and it is available.
+        - If 'Monster' (unsuffixed) exists, it counts as 'Monster 1'.
         - Returns 'Monster N' where N is the smallest integer >= 1 such that 
           'Monster N' does not exist in existing_names.
         """
@@ -36,17 +37,15 @@ class CombatantNameService:
                     taken_numbers.add(int(suffix))
                 else:
                     # The unsuffixed base name exists. 
-                    # We treat this as taking a slot. Historically, we might want to 
-                    # treat "Monster" as "Monster 1" if we are transitioning to 
-                    # mandatory numbering.
-                    # For now, let's just mark '1' as taken if it's the base name,
-                    # or if we want to be more flexible, we just note that the 
-                    # base name is present.
+                    # We treat this as taking slot 1.
                     taken_numbers.add(1)
 
         # Find the first available number starting from 1
         candidate = 1
         while candidate in taken_numbers:
             candidate += 1
+            
+        if candidate == 1 and not force_number:
+            return base_name
             
         return f"{base_name} {candidate}"

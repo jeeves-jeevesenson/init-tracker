@@ -25,6 +25,7 @@ class TestDmToolboxUi(unittest.TestCase):
         self.assertIn('id="tab-overrides"', html)
         self.assertIn('id="tab-maptools"', html)
         self.assertIn('id="tab-debug"', html)
+        self.assertIn('id="tab-legacy"', html)
         
         # Panels
         self.assertIn('role="tabpanel"', html)
@@ -33,6 +34,7 @@ class TestDmToolboxUi(unittest.TestCase):
         self.assertIn('id="panel-overrides"', html)
         self.assertIn('id="panel-maptools"', html)
         self.assertIn('id="panel-debug"', html)
+        self.assertIn('id="panel-legacy"', html)
 
     def test_session_controls_in_toolbox(self):
         html = _DM_HTML_PATH.read_text(encoding="utf-8")
@@ -158,6 +160,29 @@ class TestDmToolboxUi(unittest.TestCase):
         html = _DM_HTML_PATH.read_text(encoding="utf-8")
         self.assertIn('Monster Actions', html)
         self.assertNotIn('Normalized Capabilities', html)
+
+    def test_legacy_controls_in_toolbox(self):
+        html = _DM_HTML_PATH.read_text(encoding="utf-8")
+        # Check that legacy sections are moved to panel-legacy
+        self.assertIn('id="panel-legacy"', html)
+        
+        import re
+        # Match until the end of the panel-legacy div
+        legacy_match = re.search(r'id="panel-legacy".*?>(.*?)<\/div>\s*<\/div>\s*<\/div>', html, re.DOTALL)
+        self.assertTrue(legacy_match, "panel-legacy not found in HTML")
+        legacy_content = legacy_match.group(1)
+        
+        self.assertIn('Monster Turn Controls', legacy_content)
+        self.assertIn('id="monsterTurnCard"', legacy_content)
+        self.assertIn('Monster Pilot (DM Movement)', legacy_content)
+        self.assertIn('id="monsterPilotCard"', legacy_content)
+        
+        # Verify they are gone from main cockpit
+        # They were in sections with data-live-group="monster-turn" and "monster-pilot"
+        self.assertNotIn('data-live-group="monster-turn"', html)
+        self.assertNotIn('data-live-group="monster-pilot"', html)
+        self.assertNotIn('id="liveMonsterTurnGroupTitle"', html)
+        self.assertNotIn('id="liveMonsterPilotGroupTitle"', html)
 
 if __name__ == "__main__":
     unittest.main()

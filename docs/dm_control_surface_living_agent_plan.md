@@ -174,16 +174,16 @@ Update this section after each pass.
 
 | Area | Current status | Notes |
 |---|---|---|
-| `/dm` cockpit | Admin/reference/setup | Not final active monster-control page. |
+| `/dm` cockpit | Admin/reference/setup | Cleaned up; legacy controls demoted. |
 | `/dmcontrol` | Planned | Dedicated LAN-style monster/NPC control page. |
 | `/` LAN client | Useful local model | LAN has targeting, movement range, attack resolution, spell target selection, and remaining movement concepts |
-| Monster Turn Controls | Legacy/fallback | **Must be removed/demoted from main cockpit.** Do not polish as target UI. |
-| Monster Pilot | Legacy/fallback | **Must be removed/demoted from main cockpit.** Do not use as foundation for future current-turn movement. |
+| Monster Turn Controls | Demoted | **Moved to Legacy tab in DM Toolbox.** |
+| Monster Pilot | Demoted | **Moved to Legacy tab in DM Toolbox.** |
 | Focused actor panel | Transitional Prototype | Current implementation on `/dm` is for reusable learning, not final target location. |
-| DM Toolbox | In progress | Tabbed modal with Session, Encounter, Overrides tabs partially populated |
+| DM Toolbox | In progress | Tabbed modal with Session, Encounter, Overrides, Map Tools, Debug, and Legacy tabs. Resized for desktop. |
 | Encounter Builder | In progress | Monster Library search and Add Monster workflow migrated to Encounter tab |
-| Monster Library | Regressed / Gaps | Duplicate entries and repeated single-spawn numbering regression confirmed. |
-| Duplicate monster names | Completed | Backend auto-numbering implemented via CombatantNameService |
+| Monster Library | Completed | Deduplication implemented in frontend. |
+| Duplicate monster names | Completed | Backend auto-numbering fixed for single-spawns via CombatantNameService |
 | Enemy/NPC initiative | Completed | Auto-roll individually when added via monster spawn path |
 | Tactical map inspection | Completed | Token click focuses actor in panel without changing initiative turn |
 | Movement model | Gaps | LAN movement works; monster/NPC-specific movement on `/dmcontrol` planned. |
@@ -205,10 +205,11 @@ Update this section after each pass.
 - Many raw monster YAML actions are text, not structured/executable.
 - Monster spellcasting and Bonus Actions/Reactions are not broadly normalized.
 - Black and Tan firearm content remains beta/untested.
-- Monster Library contains duplicate entries.
-- Repeated single-spawn numbering has regressed.
-- DM Toolbox modal is cramped on desktop.
-- Legacy controls remain visible in `/dm` cockpit.
+- Black and Tan Rifleman may be missing composite Multiattack overlay.
+- Monster Library contains duplicate entries. (Fixed in Phase 0)
+- Repeated single-spawn numbering has regressed. (Fixed in Phase 0)
+- DM Toolbox modal is cramped on desktop. (Fixed in Phase 0)
+- Legacy Monster Turn Controls / Monster Pilot remain visible in `/dm` main cockpit. (Fixed in Phase 0)
 
 ## Milestone board
 
@@ -216,7 +217,7 @@ Update the status column after each pass.
 
 | ID | Milestone | Status | Next concrete pass |
 |---|---|---|---|
-| M0 | Phase 0 — Clean `/dm` regressions | In progress | Q1 - Fix Library Duplicates |
+| M0 | Phase 0 — Clean `/dm` regressions | Completed | M1 - /dmcontrol shell |
 | M1 | Phase 1 — `/dmcontrol` shell | Not started | Route/page shell + status |
 | M2 | Phase 2 — LAN-like map & movement | Not started | Port LAN movement to `/dmcontrol` |
 | M3 | Phase 3 — Basic attack flow | Not started | Action cards + normal attacks |
@@ -251,6 +252,26 @@ These are safe cleanup tasks before construction begins.
 ## Work log
 
 Agents should append concise entries here.
+
+### 2026-05-06 — Phase 0 Cleanup: Dedupe, Numbering, Sizing, and Demotion
+Agent/model: Gemini CLI
+Scope:
+- Deduped Monster Library results in frontend.
+- Fixed backend monster numbering regression (single-spawns now numbered uniquely).
+- Resized DM Toolbox modal for better desktop usability (1400px x 950px, resizable).
+- Demoted legacy "Monster Turn Controls" and "Monster Pilot" to a new "Legacy" tab in the Toolbox.
+Files changed:
+- assets/web/dm/index.html
+- dnd_initative_tracker.py
+- docs/dm_control_surface_living_agent_plan.md
+Outcome:
+- Cockpit decluttered.
+- Backend numbering consistency restored.
+- Toolbox usability improved.
+- All tests passed (326).
+- JS syntax check passed.
+Next recommended pass:
+- Phase 1 — /dmcontrol shell and state.
 
 ### 2026-05-06 — Architecture Realignment & Research Integration
 Agent/model: Gemini CLI
