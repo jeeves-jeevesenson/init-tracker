@@ -252,6 +252,29 @@ These are safe cleanup tasks before construction begins.
 
 Agents should append concise entries here.
 
+### 2026-05-07 — Phase 3B2b: /dmcontrol resolution packet rendering hardening
+Agent/model: Gemini CLI
+Scope:
+- Hardened `/dmcontrol` resolution packet rendering and normalization.
+- Added `normalizeLocalExecutionResult(data)` helper for safe execute-preview response handling.
+- Added `renderLocalResolutionPacket(packet, resolution)` for robust, escaped HTML building of packet details.
+- Displayed fields (when present): DC, save ability, attack bonus, damage (with formula/rolls), effects, and conditions.
+- Added compact `<details>` "Packet debug details" section for troubleshooting.
+- Improved deferred resolution handling for "automatic" and "assisted_sequence" types.
+- Hardened state cleanup: resolution state is explicitly cleared when changing actors or actions.
+- Updated UI copy: "Backend packet preview" and "No combat state will be changed from this preview."
+- Maintained non-mutating scope: preserved `spend: "none"`, no `/resolve-targets` or "Apply Results" added.
+Files changed:
+- assets/web/dmcontrol/index.html
+- tests/test_dm_control_route.py
+- docs/dm_control_surface_living_agent_plan.md
+Outcome:
+- DM receives safe, rich, and well-structured previews of resolution packets.
+- Resolution state is robust against actor/action switching.
+- All Python route tests and JS syntax checks passed.
+Next recommended pass:
+- Phase 3B3: Outcome controls and apply flow planning.
+
 ### 2026-05-07 — Phase 3B2a: backend execute packet preview
 Agent/model: Gemini CLI
 Scope:

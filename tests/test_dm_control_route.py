@@ -190,11 +190,26 @@ class TestDMControlRoute(unittest.TestCase):
         self.assertIn(b"Resolution Preview", response.content)
         self.assertIn(b"Prepare Resolution Preview", response.content)
         self.assertIn(b"Preview only. Results are not applied.", response.content)
-        self.assertIn(b"Automatic resolution is deferred on /dmcontrol", response.content)
+        self.assertIn(b"No combat state will be changed from this preview.", response.content)
+        self.assertIn(b"Automatic resolution is deferred on /dmcontrol.", response.content)
+        self.assertIn(b"Sequence resolution is deferred on /dmcontrol.", response.content)
         self.assertIn(b"spend: \"none\"", response.content)
         self.assertIn(b"Back to target selection", response.content)
         self.assertIn(b"Cancel preview", response.content)
         self.assertIn(b"ctx.lineWidth = localResolutionTray ? 5 : 3", response.content)
+
+    def test_dm_control_has_resolution_hardening(self):
+        """Verify /dmcontrol includes resolution normalization and rendering hardening."""
+        from fastapi.testclient import TestClient
+        client = TestClient(self.client)
+        response = client.get("/dmcontrol")
+        self.assertEqual(response.status_code, 200)
+        self.assertIn(b"function normalizeLocalExecutionResult", response.content)
+        self.assertIn(b"function renderLocalResolutionPacket", response.content)
+        self.assertIn(b"Backend packet preview", response.content)
+        self.assertIn(b"Packet debug details", response.content)
+        self.assertIn(b"No structured packet details available yet.", response.content)
+        self.assertIn(b"deferredReason", response.content)
 
     def test_dm_move_combatant_on_map_functional(self):
         """Verify the move endpoint works and updates state."""

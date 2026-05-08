@@ -233,6 +233,77 @@
         .replace(/'/g, '&#39;');
     }
 
+    /**
+     * Normalize the execute response data into a consistent local object.
+     */
+    function normalizeLocalExecutionResult(data) {
+      const result = data?.result || {};
+      const packet = result.resolution_packet || null;
+      const resolution = result.resolution || null;
+      const error = result.error || data?.detail || null;
+
+      return {
+        ok: !!data?.ok && !error,
+        resolution,
+        packet,
+        error,
+        deferredReason: (resolution === 'automatic' || resolution === 'assisted_sequence') ? resolution : null
+      };
+    }
+
+    /**
+     * Build safe escaped HTML for the resolution packet preview.
+     */
+    function renderLocalResolutionPacket(packet, resolution) {
+      if (!packet) return '<div class="actor-meta">No structured packet details available yet.</div>';
+
+      let html = '<div style="display:flex; flex-direction:column; gap:4px;">';
+
+      const name = packet.capability_name || packet.name || 'Action';
+      html += `<div style="font-weight:bold; color:var(--gold);">${esc(name)}</div>`;
+
+      if (packet.save_dc && packet.save_ability) {
+        html += `<div class="actor-meta">DC ${esc(packet.save_dc)} ${esc(String(packet.save_ability).toUpperCase())} Save</div>`;
+      } else if (packet.save_dc) {
+        html += `<div class="actor-meta">DC ${esc(packet.save_dc)} Save</div>`;
+      }
+
+      if (packet.attack_bonus !== undefined || packet.to_hit !== undefined) {
+        const val = packet.attack_bonus ?? packet.to_hit;
+        html += `<div class="actor-meta">Attack Bonus: ${val >= 0 ? '+' : ''}${esc(val)}</div>`;
+      }
+
+      if (packet.damage || packet.total_fail || packet.damage_formula) {
+        const dmg = packet.damage ?? packet.total_fail;
+        const formula = packet.damage_formula;
+        html += `<div class="actor-meta">Damage: <strong>${esc(dmg || '?')}</strong> ${formula ? `(${esc(formula)})` : ''}</div>`;
+      }
+
+      if (packet.damage_rolls && Array.isArray(packet.damage_rolls) && packet.damage_rolls.length > 0) {
+        html += `<div class="actor-meta" style="font-size:10px; opacity:0.8;">Rolls: ${packet.damage_rolls.join(', ')}</div>`;
+      }
+
+      if (packet.effects && Array.isArray(packet.effects) && packet.effects.length > 0) {
+        html += `<div class="actor-meta">Effects: ${packet.effects.map(e => esc(e)).join(', ')}</div>`;
+      }
+
+      if (packet.conditions && Array.isArray(packet.conditions) && packet.conditions.length > 0) {
+        html += `<div class="actor-meta">Conditions: ${packet.conditions.map(c => esc(c)).join(', ')}</div>`;
+      }
+
+      html += '</div>';
+
+      // Debug details
+      html += `
+        <details style="margin-top:8px; font-size:10px; color:var(--muted); border-top:1px dashed var(--border); padding-top:4px;">
+          <summary style="cursor:pointer; opacity:0.6;">Packet debug details</summary>
+          <pre style="margin-top:4px; white-space:pre-wrap; background:rgba(0,0,0,0.2); padding:4px; border-radius:2px;">${esc(JSON.stringify(packet, null, 2))}</pre>
+        </details>
+      `;
+
+      return html;
+    }
+
     // Map state
     const canvas = document.getElementById('mapCanvas');
     const ctx = canvas.getContext('2d');
@@ -527,23 +598,25 @@
           })
         });
 
-        const data = await resp.json();
-        if (!resp.ok || !data.ok) {
-          throw new Error(data.detail || (data.result && data.result.error) || `HTTP ${resp.status}`);
+        const rawData = await resp.json();
+        const data = normalizeLocalExecutionResult(rawData);
+
+        if (!data.ok) {
+          throw new Error(data.error || `HTTP ${resp.status}`);
         }
 
-        if (data.result && data.result.resolution === 'automatic') {
-          localResolutionError = "Automatic resolution is deferred on /dmcontrol";
-        } else if (data.result && data.result.resolution === 'assisted') {
-          localResolutionPacket = data.result.resolution_packet || data.result;
-        } else if (data.result && data.result.resolution === 'assisted_sequence') {
-          localResolutionError = "Sequence resolution is not implemented in this pass.";
+        if (data.deferredReason === 'automatic') {
+          localResolutionError = "Automatic resolution is deferred on /dmcontrol.";
+        } else if (data.deferredReason === 'assisted_sequence') {
+          localResolutionError = "Sequence resolution is deferred on /dmcontrol.";
+        } else if (data.packet) {
+          localResolutionPacket = data.packet;
         } else {
-          localResolutionError = `Unexpected resolution type: ${data.result.resolution}`;
+          localResolutionError = "No structured packet details available yet.";
         }
 
-        if (data.snapshot) {
-           state = data.snapshot;
+        if (rawData.snapshot) {
+           state = rawData.snapshot;
            draw();
         }
       } catch (err) {
@@ -688,16 +761,15 @@
                   </div>
                 ` : ''}
 
-                ${localResolutionPacket ? `
+                ${localResolutionPacket || (!localResolutionPacket && !localResolutionError && !localResolutionInFlight && localResolutionTray?.openedAt) ? `
                   <div style="margin-top:8px; background:rgba(255,255,255,0.03); padding:8px; border-radius:4px; border:1px solid var(--gold)">
-                    <div style="font-size:11px; color:var(--gold); margin-bottom:4px; font-weight:bold; text-transform:uppercase">Backend Preview Packet</div>
-                    <div class="actor-meta" style="font-size:11px">
-                      <strong>${esc(localResolutionPacket.capability_name || 'Action')}</strong>:
-                      DC ${esc(localResolutionPacket.save_dc || '?')} ${esc(String(localResolutionPacket.save_ability || '').toUpperCase())}
-                      ${localResolutionPacket.total_fail ? ` · Damage: ${esc(localResolutionPacket.total_fail)}` : ''}
-                    </div>
+                    <div style="font-size:11px; color:var(--gold); margin-bottom:4px; font-weight:bold; text-transform:uppercase">Backend packet preview</div>
+                    ${renderLocalResolutionPacket(localResolutionPacket)}
                     <p style="margin-top:8px; font-size:11px; color:var(--heal); font-weight:bold;">
                       Preview only. Results are not applied.
+                    </p>
+                    <p style="font-size:10px; color:var(--muted); opacity:0.8;">
+                      No combat state will be changed from this preview.
                     </p>
                   </div>
                 ` : ''}
@@ -805,7 +877,12 @@
     function selectCapability(id) {
       const alreadySelected = String(selectedCapabilityId) === String(id);
       selectedCapabilityId = alreadySelected ? null : id;
+
+      // Clear local resolution state on any capability change
       localResolutionTray = null;
+      localResolutionPacket = null;
+      localResolutionError = null;
+      localResolutionInFlight = false;
 
       const cap = findCapabilityById(id);
       if (!alreadySelected && isPreviewableTargetAction(cap)) {
