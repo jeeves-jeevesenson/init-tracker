@@ -222,6 +222,7 @@
     let localResolutionPacket = null;
     let localResolutionError = null;
     let localResolutionInFlight = false;
+    let localResolutionOutcomes = {}; // Keyed by target CID as string
 
     function esc(str) {
       if (!str) return '';
@@ -231,6 +232,71 @@
         .replace(/>/g, '&gt;')
         .replace(/"/g, '&quot;')
         .replace(/'/g, '&#39;');
+    }
+
+    /**
+     * Outcome helpers for Phase 3C1
+     */
+    function getLocalResolutionOutcome(targetCid) {
+      return localResolutionOutcomes[String(targetCid)] || 'fail';
+    }
+
+    function setLocalResolutionOutcome(targetCid, outcome) {
+      localResolutionOutcomes[String(targetCid)] = outcome;
+      const actor = (state?.combatants || []).find(c => String(c.cid) === String(state?.active_cid));
+      renderActionPanel(actor, capabilitySummary);
+    }
+
+    function getOutcomeLabel(outcome) {
+      switch (outcome) {
+        case 'fail': return 'Fail / Hit';
+        case 'success': return 'Success / Miss';
+        case 'no_effect': return 'No Effect';
+        case 'manual': return 'Manual';
+        default: return 'Unknown';
+      }
+    }
+
+    function getOutcomePreviewDamage(packet, outcome) {
+      if (!packet) return 'Damage unknown';
+      if (outcome === 'no_effect') return 'no effect';
+      if (outcome === 'manual') return 'manual adjudication';
+
+      const val = (outcome === 'success') ? packet.total_success : packet.total_fail;
+      if (val === undefined || val === null) return 'Damage unknown';
+      return `${val} damage`;
+    }
+
+    function renderLocalOutcomeControls(packet, targetCid) {
+      if (!packet) return '';
+      const outcome = getLocalResolutionOutcome(targetCid);
+      const target = findCombatantByCid(targetCid);
+      const previewText = getOutcomePreviewDamage(packet, outcome);
+
+      return `
+        <div style="margin-top:12px; border-top:1px dashed var(--border); padding-top:12px;">
+          <div style="font-size:11px; color:var(--gold); margin-bottom:6px; font-weight:bold; text-transform:uppercase">Local Outcome Selection</div>
+          <div class="actor-meta" style="margin-bottom:8px;">
+            Target: <strong>${esc(target ? target.name : 'Unknown')}</strong>
+          </div>
+          <div style="display:flex; flex-direction:column; gap:8px;">
+            <select class="workspace-link" style="width:100%; padding:6px; background:var(--panel2); color:var(--text);"
+                    onchange="setLocalResolutionOutcome('${esc(targetCid)}', this.value)">
+              <option value="fail" ${outcome === 'fail' ? 'selected' : ''}>${esc(getOutcomeLabel('fail'))}</option>
+              <option value="success" ${outcome === 'success' ? 'selected' : ''}>${esc(getOutcomeLabel('success'))}</option>
+              <option value="no_effect" ${outcome === 'no_effect' ? 'selected' : ''}>${esc(getOutcomeLabel('no_effect'))}</option>
+              <option value="manual" ${outcome === 'manual' ? 'selected' : ''}>${esc(getOutcomeLabel('manual'))}</option>
+            </select>
+            <div class="actor-meta" style="color:var(--accent); font-weight:bold; padding:4px; background:rgba(106,169,255,0.05); border-radius:4px;">
+              Local preview: ${esc(previewText)}
+            </div>
+            <div class="actor-meta" style="font-size:10px; opacity:0.8; font-style:italic;">
+              Outcome selection is local only.<br>
+              Use /dm manual controls for HP changes until Apply Results is implemented.
+            </div>
+          </div>
+        </div>
+      `;
     }
 
     /**
@@ -468,6 +534,7 @@
         capabilitySummary = null;
         capabilityActorCid = null;
         selectedCapabilityId = null;
+        localResolutionOutcomes = {};
         cancelTargetPreviewMode();
         renderActionPanel(actor, null);
         return;
@@ -497,6 +564,7 @@
         }
         capabilityActorCid = actor.cid;
         selectedCapabilityId = null;
+        localResolutionOutcomes = {};
         cancelTargetPreviewMode();
         renderActionPanel(actor, capabilitySummary);
       } catch (err) {
@@ -545,6 +613,7 @@
       localResolutionPacket = null;
       localResolutionError = null;
       localResolutionInFlight = false;
+      localResolutionOutcomes = {};
       draw();
       const actor = (state?.combatants || []).find(c => String(c.cid) === String(state?.active_cid));
       renderActionPanel(actor, capabilitySummary);
@@ -560,6 +629,8 @@
       localResolutionPacket = null;
       localResolutionError = null;
       localResolutionInFlight = false;
+      // Reset outcome for this target specifically when opening the tray
+      localResolutionOutcomes[String(targetCid)] = 'fail';
       draw();
       const actor = (state?.combatants || []).find(c => String(c.cid) === String(state?.active_cid));
       renderActionPanel(actor, capabilitySummary);
@@ -570,6 +641,7 @@
       localResolutionPacket = null;
       localResolutionError = null;
       localResolutionInFlight = false;
+      localResolutionOutcomes = {};
       draw();
       const actor = (state?.combatants || []).find(c => String(c.cid) === String(state?.active_cid));
       renderActionPanel(actor, capabilitySummary);
@@ -579,9 +651,11 @@
       if (!localResolutionTray || localResolutionInFlight || !state) return;
 
       const actorCid = localResolutionTray.actorCid;
+      const targetCid = localResolutionTray.targetCid;
       localResolutionInFlight = true;
       localResolutionError = null;
       localResolutionPacket = null;
+      localResolutionOutcomes[String(targetCid)] = 'fail';
 
       const actor = (state?.combatants || []).find(c => String(c.cid) === String(state?.active_cid));
       renderActionPanel(actor, capabilitySummary);
@@ -771,6 +845,7 @@
                     <p style="font-size:10px; color:var(--muted); opacity:0.8;">
                       No combat state will be changed from this preview.
                     </p>
+                    ${renderLocalOutcomeControls(localResolutionPacket, localResolutionTray.targetCid)}
                   </div>
                 ` : ''}
 
@@ -883,6 +958,7 @@
       localResolutionPacket = null;
       localResolutionError = null;
       localResolutionInFlight = false;
+      localResolutionOutcomes = {};
 
       const cap = findCapabilityById(id);
       if (!alreadySelected && isPreviewableTargetAction(cap)) {

@@ -79,7 +79,10 @@ class TestDMControlRoute(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertIn(b"/execute", response.content)
         self.assertNotIn(b"/resolve-targets", response.content)
-        self.assertNotIn(b"Apply Results", response.content)
+        # Advisory text mentioning Apply Results is OK, but the button/functionality should not be there
+        self.assertNotIn(b">Apply Results</button>", response.content)
+        self.assertNotIn(b"apply_damage", response.content)
+        self.assertNotIn(b"apply_effects", response.content)
 
     def test_dm_control_has_no_toolbox(self):
         """Verify /dmcontrol does not include DM Toolbox or legacy components."""
@@ -210,6 +213,34 @@ class TestDMControlRoute(unittest.TestCase):
         self.assertIn(b"Packet debug details", response.content)
         self.assertIn(b"No structured packet details available yet.", response.content)
         self.assertIn(b"deferredReason", response.content)
+
+    def test_dm_control_has_local_outcome_controls(self):
+        """Verify /dmcontrol includes local-only outcome selection logic."""
+        from fastapi.testclient import TestClient
+        client = TestClient(self.client)
+        response = client.get("/dmcontrol")
+        self.assertEqual(response.status_code, 200)
+        self.assertIn(b"localResolutionOutcomes", response.content)
+        self.assertIn(b"function getLocalResolutionOutcome", response.content)
+        self.assertIn(b"function setLocalResolutionOutcome", response.content)
+        self.assertIn(b"function getOutcomeLabel", response.content)
+        self.assertIn(b"function getOutcomePreviewDamage", response.content)
+        self.assertIn(b"function renderLocalOutcomeControls", response.content)
+        self.assertIn(b"Fail / Hit", response.content)
+        self.assertIn(b"Success / Miss", response.content)
+        self.assertIn(b"No Effect", response.content)
+        self.assertIn(b"Manual", response.content)
+        self.assertIn(b"Outcome selection is local only.", response.content)
+        self.assertIn(b"Use /dm manual controls for HP changes until Apply Results is implemented.", response.content)
+        self.assertIn(b"Local Outcome Selection", response.content)
+        self.assertIn(b"Local preview:", response.content)
+        # Ensure hard constraints remain
+        self.assertIn(b"spend: \"none\"", response.content)
+        self.assertIn(b"/execute", response.content)
+        self.assertNotIn(b"/resolve-targets", response.content)
+        self.assertNotIn(b">Apply Results</button>", response.content)
+        self.assertNotIn(b"apply_damage", response.content)
+        self.assertNotIn(b"apply_effects", response.content)
 
     def test_dm_move_combatant_on_map_functional(self):
         """Verify the move endpoint works and updates state."""

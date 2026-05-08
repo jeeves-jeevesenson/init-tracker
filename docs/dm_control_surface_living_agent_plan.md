@@ -252,6 +252,26 @@ These are safe cleanup tasks before construction begins.
 
 Agents should append concise entries here.
 
+### 2026-05-08 — Phase 3C1: /dmcontrol local-only outcome controls
+Agent/model: Gemini CLI
+Scope:
+- Added local outcome state `localResolutionOutcomes` to `/dmcontrol`.
+- Added helper functions for outcome management: `getLocalResolutionOutcome`, `setLocalResolutionOutcome`, `getOutcomeLabel`.
+- Added `getOutcomePreviewDamage` to calculate local damage previews based on outcome (Fail/Hit, Success/Miss, No Effect, Manual).
+- Updated Resolution Preview UI to include a local outcome dropdown and a prominent local preview damage text.
+- Implemented state cleanup: outcomes are cleared when closing the tray, canceling preview, or changing action/actor.
+- Ensured hard constraints: maintained `spend: "none"`, no `/resolve-targets` or "Apply Results" logic added.
+Files changed:
+- assets/web/dmcontrol/index.html
+- tests/test_dm_control_route.py
+- docs/dm_control_surface_living_agent_plan.md
+Outcome:
+- DM can now choose an intended outcome for a target and see a local-only damage/effect preview.
+- Outcome selection is strictly local and does not mutate backend state.
+- All Python route tests and JS syntax checks passed.
+Next recommended pass:
+- Phase 3C2: Browser readiness hardening or Phase 3D Apply-flow planning.
+
 ### 2026-05-07 — Phase 3B2b: /dmcontrol resolution packet rendering hardening
 Agent/model: Gemini CLI
 Scope:
