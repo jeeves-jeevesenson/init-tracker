@@ -987,8 +987,7 @@
             if (advisory.status === 'likely-in-range') color = "#4caf82";
             else if (advisory.status === 'likely-out-of-range') color = "#ff5b5b";
 
-            ctx.fillStyle = color.replace(")", ", 0.2)").replace("#", "rgba(") === color ? "rgba(214,186,126,0.2)" : color; // fallback-ish
-            // Actually let's just use literal rgba for fill
+            // Use literal rgba for fill
             if (advisory.status === 'likely-in-range') ctx.fillStyle = "rgba(76, 175, 130, 0.2)";
             else if (advisory.status === 'likely-out-of-range') ctx.fillStyle = "rgba(255, 91, 91, 0.2)";
             else ctx.fillStyle = "rgba(214, 186, 126, 0.2)";
