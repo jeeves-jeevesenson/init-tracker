@@ -218,6 +218,7 @@
     let selectedCapabilityId = null;
     let targetPreviewMode = null; // { capabilityId, capabilityName, actorCid, actionType }
     let selectedTargetCid = null;
+    let localResolutionTray = null; // { actorCid, capabilityId, targetCid, openedAt }
 
     function esc(str) {
       if (!str) return '';
@@ -327,7 +328,10 @@
 
     window.addEventListener('keydown', (e) => {
       if (e.key === 'Escape') {
-        if (targetPreviewMode) {
+        if (localResolutionTray) {
+          closeLocalResolutionTray();
+          e.preventDefault();
+        } else if (targetPreviewMode) {
           cancelTargetPreviewMode();
           e.preventDefault();
         }
@@ -449,6 +453,7 @@
     function enterTargetPreviewMode(cap) {
       if (!cap || !state) return;
       selectedTargetCid = null;
+      localResolutionTray = null;
       targetPreviewMode = {
         capabilityId: cap.id,
         capabilityName: cap.name,
@@ -462,9 +467,38 @@
       if (!targetPreviewMode) return;
       targetPreviewMode = null;
       selectedTargetCid = null;
+      localResolutionTray = null;
       draw();
       const actor = (state?.combatants || []).find(c => String(c.cid) === String(state?.active_cid));
       renderActionPanel(actor, capabilitySummary);
+    }
+
+    function openLocalResolutionTray(actorCid, capabilityId, targetCid) {
+      localResolutionTray = {
+        actorCid,
+        capabilityId,
+        targetCid,
+        openedAt: Date.now()
+      };
+      draw();
+      const actor = (state?.combatants || []).find(c => String(c.cid) === String(state?.active_cid));
+      renderActionPanel(actor, capabilitySummary);
+    }
+
+    function closeLocalResolutionTray() {
+      localResolutionTray = null;
+      draw();
+      const actor = (state?.combatants || []).find(c => String(c.cid) === String(state?.active_cid));
+      renderActionPanel(actor, capabilitySummary);
+    }
+
+    function getLocalResolutionContext() {
+      if (!localResolutionTray || !state) return null;
+      const actor = findCombatantByCid(localResolutionTray.actorCid);
+      const cap = findCapabilityById(localResolutionTray.capabilityId);
+      const target = findCombatantByCid(localResolutionTray.targetCid);
+      const advisory = getSelectedTargetAdvisory(cap, localResolutionTray.targetCid);
+      return { actor, cap, target, advisory };
     }
 
     function findUnitAtGridCell(col, row) {
@@ -486,9 +520,7 @@
 
     function selectPreviewTarget(cid) {
       selectedTargetCid = String(cid);
-      draw();
-      const actor = (state?.combatants || []).find(c => String(c.cid) === String(state?.active_cid));
-      renderActionPanel(actor, capabilitySummary);
+      openLocalResolutionTray(state.active_cid, targetPreviewMode.capabilityId, selectedTargetCid);
     }
 
     function getSelectedTargetAdvisory(cap, targetCid) {
@@ -570,7 +602,33 @@
               <p>${esc(selected.description || 'No description available.')}</p>
           `;
 
-          if (isPreviewActive) {
+          if (localResolutionTray && String(localResolutionTray.capabilityId) === String(selected.id)) {
+            const ctx = getLocalResolutionContext();
+            summaryHtml += `
+              <div style="margin-top:12px; border-top:1px solid rgba(214,186,126,0.3); padding-top:8px;">
+                <div style="font-size:12px; color:var(--gold); margin-bottom:4px; text-transform:uppercase; font-weight:bold;">Resolution Preview</div>
+                <div class="actor-meta" style="color:var(--text); font-size:12px;">
+                  Actor: <strong>${esc(ctx.actor ? ctx.actor.name : 'Unknown')}</strong><br>
+                  Action: <strong>${esc(ctx.cap ? ctx.cap.name : 'Unknown')}</strong><br>
+                  Target: <strong>${esc(ctx.target ? ctx.target.name : 'Unknown')}</strong>
+                </div>
+                <div class="actor-meta" style="margin-top:4px;">
+                  Distance: ${ctx.advisory.distanceFt !== null ? ctx.advisory.distanceFt + ' ft' : 'Unknown'} •
+                  <span style="color:${ctx.advisory.status === 'likely-in-range' ? 'var(--heal)' : (ctx.advisory.status === 'likely-out-of-range' ? 'var(--danger)' : 'var(--gold)')}">
+                    ${esc(ctx.advisory.label)}
+                  </span>
+                </div>
+                <p style="margin-top:8px; font-size:11px; color:var(--gold); font-style:italic;">
+                  Resolution is not implemented in this pass.<br>
+                  No combat state will be changed.
+                </p>
+                <div style="margin-top:12px; display:flex; gap:8px;">
+                  <button class="workspace-link" onclick="closeLocalResolutionTray()" style="padding:4px 8px;">Back to target selection</button>
+                  <button class="workspace-link" onclick="cancelTargetPreviewMode()" style="padding:4px 8px; color:var(--danger); border-color:var(--danger);">Cancel preview</button>
+                </div>
+              </div>
+            `;
+          } else if (isPreviewActive) {
             if (!selectedTargetCid) {
               summaryHtml += `
                 <div class="actor-meta" style="margin-top:8px; color:var(--accent); font-weight:bold;">
@@ -657,6 +715,7 @@
     function selectCapability(id) {
       const alreadySelected = String(selectedCapabilityId) === String(id);
       selectedCapabilityId = alreadySelected ? null : id;
+      localResolutionTray = null;
 
       const cap = findCapabilityById(id);
       if (!alreadySelected && isPreviewableTargetAction(cap)) {
@@ -794,7 +853,7 @@
         if (!entry || typeof entry !== "object") return;
         const payload = (entry.payload && typeof entry.payload === "object") ? entry.payload : {};
         const cells = entityCellsForEntry(entry);
-        cells.forEach(cell => callback(Math.trunc(cell.col), Math.trunc(cell.row), payload));
+        cells.forEach(cell => callback(Math.trunc(cell.col), Math.trunc(row), payload));
       };
 
       (features || []).forEach(f => addEntityCells(f, (c, r, p) => { if (p.blocks_movement) blockedCells.add(cellKey(c, r)); }));
@@ -993,7 +1052,8 @@
             else ctx.fillStyle = "rgba(214, 186, 126, 0.2)";
 
             ctx.fill();
-            ctx.lineWidth = 3;
+            // If tray is open, make the ring stronger
+            ctx.lineWidth = localResolutionTray ? 5 : 3;
             ctx.strokeStyle = color;
           } else {
             ctx.setLineDash([2, 2]);

@@ -173,6 +173,23 @@ class TestDMControlRoute(unittest.TestCase):
         self.assertIn(b"DM adjudication needed", response.content)
         self.assertIn(b"Advisory only", response.content)
 
+    def test_dm_control_has_local_resolution_tray_scaffold(self):
+        """Verify /dmcontrol includes the local resolution tray scaffold."""
+        from fastapi.testclient import TestClient
+        client = TestClient(self.client)
+        response = client.get("/dmcontrol")
+        self.assertEqual(response.status_code, 200)
+        self.assertIn(b"localResolutionTray", response.content)
+        self.assertIn(b"function openLocalResolutionTray", response.content)
+        self.assertIn(b"function closeLocalResolutionTray", response.content)
+        self.assertIn(b"function getLocalResolutionContext", response.content)
+        self.assertIn(b"Resolution Preview", response.content)
+        self.assertIn(b"Resolution is not implemented in this pass.", response.content)
+        self.assertIn(b"No combat state will be changed.", response.content)
+        self.assertIn(b"Back to target selection", response.content)
+        self.assertIn(b"Cancel preview", response.content)
+        self.assertIn(b"ctx.lineWidth = localResolutionTray ? 5 : 3", response.content)
+
     def test_dm_move_combatant_on_map_functional(self):
         """Verify the move endpoint works and updates state."""
         from fastapi.testclient import TestClient

@@ -252,6 +252,33 @@ These are safe cleanup tasks before construction begins.
 
 Agents should append concise entries here.
 
+### 2026-05-07 — Phase 3B1: local resolution tray scaffold
+Agent/model: Gemini CLI
+Scope:
+- Implemented local-only resolution tray scaffold on `/dmcontrol`.
+- Added `localResolutionTray` state to capture actor, capability, and target context.
+- Target selection now automatically opens the local resolution tray.
+- Added helpers: `openLocalResolutionTray`, `closeLocalResolutionTray`, and `getLocalResolutionContext`.
+- Updated `Escape` key behavior: first Escape closes the resolution tray; second Escape cancels target preview.
+- Enhanced `renderActionPanel` to display a compact "Resolution Preview" section when the tray is open, showing:
+    - Actor, Action, and Target names.
+    - Distance and advisory status.
+    - Safety text: "Resolution is not implemented in this pass. No combat state will be changed."
+    - Safe local controls: "Back to target selection" and "Cancel preview".
+- Updated `draw()` to strengthen the selected target ring when the resolution tray is open.
+- Ensured state cleanup: tray is cleared when changing actions, actors, or cancelling preview.
+- Maintained non-mutating scope: no execution, resolution, or backend mutation added.
+Files changed:
+- assets/web/dmcontrol/index.html
+- tests/test_dm_control_route.py
+- docs/dm_control_surface_living_agent_plan.md
+Outcome:
+- `/dmcontrol` now has a functional local-only resolution preview flow.
+- Clear separation between targeting and resolution phases in the UI.
+- All Python route tests and JS syntax checks passed.
+Next recommended pass:
+- Phase 3B2: Backend prepare/execute integration planning or resolution packet preview.
+
 ### 2026-05-07 — Phase 3A2c: selected-target advisory details
 Agent/model: Gemini CLI
 Scope:
