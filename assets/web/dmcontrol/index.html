@@ -219,6 +219,9 @@
     let targetPreviewMode = null; // { capabilityId, capabilityName, actorCid, actionType }
     let selectedTargetCid = null;
     let localResolutionTray = null; // { actorCid, capabilityId, targetCid, openedAt }
+    let localResolutionPacket = null;
+    let localResolutionError = null;
+    let localResolutionInFlight = false;
 
     function esc(str) {
       if (!str) return '';
@@ -468,6 +471,9 @@
       targetPreviewMode = null;
       selectedTargetCid = null;
       localResolutionTray = null;
+      localResolutionPacket = null;
+      localResolutionError = null;
+      localResolutionInFlight = false;
       draw();
       const actor = (state?.combatants || []).find(c => String(c.cid) === String(state?.active_cid));
       renderActionPanel(actor, capabilitySummary);
@@ -480,6 +486,9 @@
         targetCid,
         openedAt: Date.now()
       };
+      localResolutionPacket = null;
+      localResolutionError = null;
+      localResolutionInFlight = false;
       draw();
       const actor = (state?.combatants || []).find(c => String(c.cid) === String(state?.active_cid));
       renderActionPanel(actor, capabilitySummary);
@@ -487,9 +496,63 @@
 
     function closeLocalResolutionTray() {
       localResolutionTray = null;
+      localResolutionPacket = null;
+      localResolutionError = null;
+      localResolutionInFlight = false;
       draw();
       const actor = (state?.combatants || []).find(c => String(c.cid) === String(state?.active_cid));
       renderActionPanel(actor, capabilitySummary);
+    }
+
+    async function prepareLocalResolutionPreview() {
+      if (!localResolutionTray || localResolutionInFlight || !state) return;
+
+      const actorCid = localResolutionTray.actorCid;
+      localResolutionInFlight = true;
+      localResolutionError = null;
+      localResolutionPacket = null;
+
+      const actor = (state?.combatants || []).find(c => String(c.cid) === String(state?.active_cid));
+      renderActionPanel(actor, capabilitySummary);
+
+      try {
+        const resp = await fetch(`/api/dm/monster-capabilities/${actorCid}/execute`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            capability_id: localResolutionTray.capabilityId,
+            target_cid: localResolutionTray.targetCid,
+            spend: "none",
+            roll_mode: "normal"
+          })
+        });
+
+        const data = await resp.json();
+        if (!resp.ok || !data.ok) {
+          throw new Error(data.detail || (data.result && data.result.error) || `HTTP ${resp.status}`);
+        }
+
+        if (data.result && data.result.resolution === 'automatic') {
+          localResolutionError = "Automatic resolution is deferred on /dmcontrol";
+        } else if (data.result && data.result.resolution === 'assisted') {
+          localResolutionPacket = data.result.resolution_packet || data.result;
+        } else if (data.result && data.result.resolution === 'assisted_sequence') {
+          localResolutionError = "Sequence resolution is not implemented in this pass.";
+        } else {
+          localResolutionError = `Unexpected resolution type: ${data.result.resolution}`;
+        }
+
+        if (data.snapshot) {
+           state = data.snapshot;
+           draw();
+        }
+      } catch (err) {
+        console.error('Execution preview error:', err);
+        localResolutionError = err.message;
+      } finally {
+        localResolutionInFlight = false;
+        renderActionPanel(actor, capabilitySummary);
+      }
     }
 
     function getLocalResolutionContext() {
@@ -618,10 +681,37 @@
                     ${esc(ctx.advisory.label)}
                   </span>
                 </div>
-                <p style="margin-top:8px; font-size:11px; color:var(--gold); font-style:italic;">
-                  Resolution is not implemented in this pass.<br>
-                  No combat state will be changed.
-                </p>
+
+                ${localResolutionError ? `
+                  <div class="actor-meta" style="margin-top:8px; color:var(--danger); font-weight:bold; border:1px solid var(--danger); padding:4px; border-radius:4px">
+                    Error: ${esc(localResolutionError)}
+                  </div>
+                ` : ''}
+
+                ${localResolutionPacket ? `
+                  <div style="margin-top:8px; background:rgba(255,255,255,0.03); padding:8px; border-radius:4px; border:1px solid var(--gold)">
+                    <div style="font-size:11px; color:var(--gold); margin-bottom:4px; font-weight:bold; text-transform:uppercase">Backend Preview Packet</div>
+                    <div class="actor-meta" style="font-size:11px">
+                      <strong>${esc(localResolutionPacket.capability_name || 'Action')}</strong>:
+                      DC ${esc(localResolutionPacket.save_dc || '?')} ${esc(String(localResolutionPacket.save_ability || '').toUpperCase())}
+                      ${localResolutionPacket.total_fail ? ` · Damage: ${esc(localResolutionPacket.total_fail)}` : ''}
+                    </div>
+                    <p style="margin-top:8px; font-size:11px; color:var(--heal); font-weight:bold;">
+                      Preview only. Results are not applied.
+                    </p>
+                  </div>
+                ` : ''}
+
+                ${!localResolutionPacket && !localResolutionError ? `
+                  <div style="margin-top:12px;">
+                    <button class="workspace-link" onclick="prepareLocalResolutionPreview()"
+                            ${localResolutionInFlight ? 'disabled' : ''}
+                            style="width:100%; justify-content:center; padding:8px; font-weight:bold; border-color:var(--accent); color:var(--accent)">
+                      ${localResolutionInFlight ? 'Preparing...' : 'Prepare Resolution Preview'}
+                    </button>
+                  </div>
+                ` : ''}
+
                 <div style="margin-top:12px; display:flex; gap:8px;">
                   <button class="workspace-link" onclick="closeLocalResolutionTray()" style="padding:4px 8px;">Back to target selection</button>
                   <button class="workspace-link" onclick="cancelTargetPreviewMode()" style="padding:4px 8px; color:var(--danger); border-color:var(--danger);">Cancel preview</button>

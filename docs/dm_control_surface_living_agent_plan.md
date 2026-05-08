@@ -252,6 +252,29 @@ These are safe cleanup tasks before construction begins.
 
 Agents should append concise entries here.
 
+### 2026-05-07 — Phase 3B2a: backend execute packet preview
+Agent/model: Gemini CLI
+Scope:
+- Wired `/dmcontrol` local resolution tray to the backend `/execute` endpoint.
+- Implemented `prepareLocalResolutionPreview` function using `spend: "none"` to fetch resolution packets without mutation.
+- Added local state: `localResolutionPacket`, `localResolutionError`, `localResolutionInFlight`.
+- Updated Resolution Preview UI to include a "Prepare Resolution Preview" button.
+- UI now displays resolution packet details (DC, save ability, damage summary) when available.
+- Added safety warning: "Preview only. Results are not applied."
+- Implemented handling for "automatic" and "assisted_sequence" resolution types (deferred/unimplemented in this pass).
+- Hardened state cleanup: tray, packet, and error state are cleared on Escape, cancel, or actor/action changes.
+- Maintained non-mutating scope: no `/resolve-targets` or "Apply Results" added.
+Files changed:
+- assets/web/dmcontrol/index.html
+- tests/test_dm_control_route.py
+- docs/dm_control_surface_living_agent_plan.md
+Outcome:
+- DM can now preview the backend-calculated resolution packet for a selected action and target.
+- Verification of distance and basic mechanics via real backend execution logic.
+- All Python route tests and JS syntax checks passed.
+Next recommended pass:
+- Phase 3B2b: Outcome controls scaffold or full apply planning.
+
 ### 2026-05-07 — Phase 3B1: local resolution tray scaffold
 Agent/model: Gemini CLI
 Scope:
