@@ -194,7 +194,7 @@ class TestDMControlRoute(unittest.TestCase):
         self.assertIn(b"Preview only. Results are not applied.", response.content)
         self.assertIn(b"No combat state will be changed from this preview (uses spend: \"none\").", response.content)
         self.assertIn(b"Automatic resolution is deferred on /dmcontrol.", response.content)
-        self.assertIn(b"Sequence resolution is deferred on /dmcontrol.", response.content)
+        self.assertIn(b"No structured packet details available yet.", response.content)
         self.assertIn(b"spend: \"none\"", response.content)
         self.assertIn(b"Back to target selection", response.content)
         self.assertIn(b"Cancel preview", response.content)

@@ -75,5 +75,39 @@ class TestBlackAndTanCapabilities(unittest.TestCase):
         self.assertTrue(any(r["action_id"] == "armalite-rifle" for r in resolved))
         self.assertTrue(all(r["matched"] for r in resolved))
 
+    def test_rifleman_ui_summaries(self):
+        combatant = {"monster_slug": "black-and-tan-rifleman", "name": "Rifleman 1"}
+        summary = self.service.summarize_capabilities_for_ui(1, combatant)
+        
+        actions = {a["id"]: a for a in summary["groups"]["actions"]}
+        traits = {t["id"]: t for t in summary["groups"]["traits"]}
+        
+        # Armalite Rifle summary
+        rifle = actions["armalite-rifle"]
+        self.assertIn("+6 to hit", rifle["mechanics_summary"])
+        self.assertIn("1d12+4 piercing", rifle["mechanics_summary"])
+        self.assertIn("Magazine 20", rifle["mechanics_summary"])
+        self.assertIn("Track ammunition manually.", rifle["manual_instructions"])
+        
+        # Controlled Burst summary
+        burst = actions["controlled-burst"]
+        self.assertIn("Manual/Assisted: Spends 3 ammo, +1 die damage.", burst["manual_instructions"])
+        self.assertIn("Track ammunition manually.", burst["manual_instructions"])
+        
+        # Vandergraff Drill
+        drill = traits["vandergraff-drill"]
+        self.assertIn("Reminder: +1 to attack if near another officer.", drill["manual_instructions"])
+
+    def test_constable_ui_summaries(self):
+        combatant = {"monster_slug": "black-and-tan-constable", "name": "Constable 1"}
+        summary = self.service.summarize_capabilities_for_ui(1, combatant)
+        
+        actions = {a["id"]: a for a in summary["groups"]["actions"]}
+        
+        # Rough Arrest
+        arrest = actions["rough-arrest"]
+        self.assertIn("Manual/Assisted grapple action.", arrest["manual_instructions"])
+        self.assertIn("Apply Grappled condition manually in /dm if hit.", arrest["manual_instructions"])
+
 if __name__ == "__main__":
     unittest.main()

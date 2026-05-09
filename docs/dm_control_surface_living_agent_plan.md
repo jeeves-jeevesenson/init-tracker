@@ -1110,6 +1110,29 @@ Outcome:
 - Visual feedback (badge) indicates current state.
 - Mandatory JS syntax check passed.
 
+### 2026-05-09 — Phase 3D3: Black and Tan live-game readiness polish
+Agent/model: Gemini CLI
+Scope:
+- Improved `MonsterCapabilityService` to generate `mechanics_summary` and `manual_instructions` for all capabilities.
+- Updated `/dmcontrol` UI to display `mechanics_summary` in action cards and `manual_instructions` in the selection panel.
+- Surfaced special rules (Controlled Burst, Rough Arrest, Vandergraff Drill) as clear manual instructions.
+- Added explicit ammunition and condition reminders for Black and Tan units.
+- Verified that Multiattack child-sequence apply flow remains functional.
+- Added tests in `tests/test_black_and_tan_capabilities.py` for UI summaries and manual instructions.
+Files changed:
+- monster_capability_service.py
+- assets/web/dmcontrol/index.html
+- monster_capabilities/vandergraff/black-and-tan-rifleman.yaml
+- monster_capabilities/vandergraff/black-and-tan-constable.yaml
+- tests/test_black_and_tan_capabilities.py
+- docs/dm_control_surface_living_agent_plan.md
+Outcome:
+- Remaining Black and Tan live-play gaps closed with clear DM reminders.
+- Improved quick-read support for attack bonus, damage, and range in `/dmcontrol`.
+- Action cards no longer show `[object Object]` for structured mechanics.
+Next recommended pass:
+- Phase 3E — Live game smoke testing and bugfix capture, or Phase 4 — Broader content expansion.
+
 ### 2026-05-09 — Phase 3D2: /dmcontrol Multiattack and assisted-sequence apply support
 Agent/model: Gemini CLI
 Scope:

@@ -53,7 +53,9 @@ capabilities:
   - id: vandergraff-drill
     name: Vandergraff Drill
     type: trait
+    executable: false
     desc: "If this creature starts its turn within 30 feet of an allied Black and Tan officer it can see or hear, it gains +1 to attack rolls until the start of its next turn."
+    warning: "Reminder: +1 to attack if near another officer."
   - id: baton-and-boot
     name: Baton and Boot
     type: trait
@@ -61,4 +63,6 @@ capabilities:
   - id: fire-discipline
     name: Fire Discipline
     type: trait
+    executable: false
     desc: "This creature does not expend extra ammunition on a missed attack unless it used Controlled Burst, Automatic Sweep, or Suppressive Fire."
+    warning: "Ammunition tracking reminder."

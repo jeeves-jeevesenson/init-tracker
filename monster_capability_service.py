@@ -236,7 +236,7 @@ class MonsterCapabilityService:
         for cap in data.get("capabilities", []):
             ctype = cap.get("type", "special")
             action_type = cap.get("action_type")
-            mechanics = cap.get("mechanics", {})
+            mechanics = cap.get("mechanics", {}) if isinstance(cap.get("mechanics"), dict) else {}
 
             # Include effects
             effects = mechanics.get("effects")
@@ -251,6 +251,75 @@ class MonsterCapabilityService:
             if outcome_options:
                 cap["outcome_options"] = outcome_options
             cap["multi_target_capable"] = cap["target_mode"] in {"multiple", "area_manual"} or bool(area)
+
+            # Generate mechanics_summary for UI
+            summary_parts = []
+            if action_type in ["melee_attack", "ranged_attack"]:
+                bonus = mechanics.get("attack_bonus")
+                if bonus is not None:
+                    summary_parts.append(f"+{bonus} to hit")
+                
+                dmg = mechanics.get("damage")
+                if dmg and isinstance(dmg, list):
+                    dmg_parts = []
+                    for d in dmg:
+                        if isinstance(d, dict) and d.get("formula"):
+                            dmg_parts.append(f"{d['formula']} {d.get('type', '')}")
+                    if dmg_parts:
+                        summary_parts.append("/".join(dmg_parts))
+                
+                reach = mechanics.get("reach")
+                if reach:
+                    summary_parts.append(f"reach {reach}ft")
+                
+                rng = mechanics.get("range")
+                if rng:
+                    long_rng = mechanics.get("long_range")
+                    if long_rng:
+                        summary_parts.append(f"range {rng}/{long_rng}ft")
+                    else:
+                        summary_parts.append(f"range {rng}ft")
+            
+            elif action_type == "save_ability":
+                ability = mechanics.get("ability", "STR").upper()
+                dc = mechanics.get("dc")
+                if dc:
+                    summary_parts.append(f"DC {dc} {ability}")
+            
+            # Add reload/ammo note if present in description or mechanics
+            desc = cap.get("desc", "")
+            if "reload" in desc.lower() or "ammo" in desc.lower() or "magazine" in desc.lower():
+                # Extract simple note if possible
+                match = re.search(r"(reload|ammo|magazine)\s*(\d+)", desc, re.I)
+                if match:
+                    summary_parts.append(match.group(0))
+                elif "reload" in desc.lower():
+                    summary_parts.append("Reload required")
+
+            if not summary_parts and desc:
+                # Fallback to a truncated description if no structured mechanics summary
+                summary_parts.append(desc[:60] + ("..." if len(desc) > 60 else ""))
+
+            cap["mechanics_summary"] = " • ".join(summary_parts)
+
+            # Generate manual_instructions if non-executable or special
+            instructions = []
+            if cap.get("executable") is False:
+                warning = cap.get("warning")
+                if warning:
+                    instructions.append(warning)
+                else:
+                    instructions.append("Manual adjudication required.")
+            
+            if "grapple" in desc.lower():
+                instructions.append("Apply Grappled condition manually in /dm if hit.")
+            if "prone" in desc.lower():
+                instructions.append("Apply Prone condition manually in /dm if hit.")
+            if "ammo" in desc.lower() or "magazine" in desc.lower():
+                instructions.append("Track ammunition manually.")
+
+            if instructions:
+                cap["manual_instructions"] = " ".join(instructions)
 
             # Resolve spellcasting
             if action_type == "spellcasting" and "spellcasting" in mechanics:

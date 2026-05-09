@@ -931,6 +931,11 @@
             <div class="selected-summary">
               <h4>${esc(selected.name)} Selected</h4>
               <p>${esc(selected.description || 'No description available.')}</p>
+              ${selected.manual_instructions ? `
+                <div style="margin-top:8px; border:1px solid var(--gold); background:rgba(214,186,126,0.1); padding:8px; border-radius:4px; font-size:12px; color:var(--gold)">
+                  <strong>Manual Instructions:</strong> ${esc(selected.manual_instructions)}
+                </div>
+              ` : ''}
           `;
 
           // Sequence Tray Integration
@@ -1095,7 +1100,7 @@
                   <span class="card-name">${esc(item.name)}</span>
                   ${badges.map(b => `<span class="card-badge">${esc(b)}</span>`).join('')}
                 </div>
-                ${item.mechanics ? `<div class="card-meta">${esc(item.mechanics)}</div>` : ''}
+                ${item.mechanics_summary ? `<div class="card-meta">${esc(item.mechanics_summary)}</div>` : ''}
               </div>
             `;
           });
