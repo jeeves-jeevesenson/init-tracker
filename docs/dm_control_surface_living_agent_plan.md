@@ -1109,8 +1109,31 @@ Outcome:
 - Inspection does not change active combatant or turn.
 - Visual feedback (badge) indicates current state.
 - Mandatory JS syntax check passed.
+
+### 2026-05-09 — Phase 3C3: Black and Tan Readiness
+
+Agent/model: Gemini CLI (Autonomous Mode)
+Scope:
+- Prepare Black and Tan enemies for `/dmcontrol` usage.
+- Update `monster_capabilities/vandergraff/black-and-tan-rifleman.yaml` and `black-and-tan-constable.yaml`.
+- Add structured Multiattack as `composite` actions.
+- Add structured mechanics for firearms (Armalite Rifle, .45 Pistol) and melee (Baton, Knife).
+- Include traits (Vandergraff Drill, Baton and Boot, Fire Discipline) for visibility.
+- Ensure all primary combat actions are marked as `executable: true`.
+- Add focused validation tests in `tests/test_black_and_tan_capabilities.py`.
+Files changed:
+- monster_capabilities/vandergraff/black-and-tan-rifleman.yaml
+- monster_capabilities/vandergraff/black-and-tan-constable.yaml
+- tests/test_black_and_tan_capabilities.py
+- docs/dm_control_surface_living_agent_plan.md
+Outcome:
+- Black and Tan Rifleman and Constable have fully structured capability overlays compatible with `/dmcontrol`.
+- Multiattack resolves to its child actions in the UI.
+- All primary attacks expose structured mechanics (attack bonus, damage, range/reach).
+- Manual fallback notes provided for complex mechanics (Controlled Burst, Rough Arrest).
+- All focused tests and relevant regression tests passed.
 Next recommended pass:
-- M7 — Monster Actions / action cards integration (first slice).
+- Phase 3D Apply Results planning or live-smoke bugfixes.
 
 ## Decision log
 

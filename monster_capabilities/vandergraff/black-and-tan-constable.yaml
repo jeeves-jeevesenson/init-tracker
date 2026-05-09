@@ -3,35 +3,62 @@ slug: black-and-tan-constable
 source: repo-local
 license: CC-BY-4.0
 capabilities:
-- id: pistol
-  name: .45 Pistol
-  type: action
-  executable: true
-  desc: "Ranged Weapon Attack: +5 to hit, range 40/120 ft., one target. Hit: 8 (1d10 + 3) piercing damage. Loud. Magazine 8."
-  action_type: ranged_attack
-  mechanics:
-    attack_bonus: 5
-    damage:
-    - formula: 1d10+3
-      type: piercing
-    range: 40
-    long_range: 120
-- id: baton
-  name: Baton
-  type: action
-  executable: true
-  desc: "Melee Weapon Attack: +4 to hit, reach 5 ft., one target. Hit: 4 (1d4 + 2) bludgeoning damage."
-  action_type: melee_attack
-  mechanics:
-    attack_bonus: 4
-    damage:
-    - formula: 1d4+2
-      type: bludgeoning
-    reach: 5
-- id: rough-arrest
-  name: Rough Arrest
-  type: action
-  executable: false
-  desc: "When the Constable hits a creature with a Baton attack, it can attempt to grapple the target as a bonus action."
-  action_type: utility
-  warning: "Manual/Assisted grapple action."
+  - id: multiattack
+    name: Multiattack
+    type: action
+    executable: false
+    desc: "The Constable makes two attacks, using .45 Pistol or Baton in any combination."
+    action_type: composite
+    mechanics:
+      composite:
+        - action_id: pistol
+          name: .45 Pistol
+          count: 2
+        - action_id: baton
+          name: Baton
+          count: 2
+      warning: "Can be any combination of Pistol or Baton."
+  - id: pistol
+    name: .45 Pistol
+    type: action
+    executable: true
+    desc: "Ranged Weapon Attack: +5 to hit, range 40/120 ft., one target. Hit: 8 (1d10 + 3) piercing damage. Loud. Magazine 8."
+    action_type: ranged_attack
+    mechanics:
+      attack_bonus: 5
+      damage:
+        - formula: 1d10+3
+          type: piercing
+      range: 40
+      long_range: 120
+  - id: baton
+    name: Baton
+    type: action
+    executable: true
+    desc: "Melee Weapon Attack: +4 to hit, reach 5 ft., one target. Hit: 4 (1d4 + 2) bludgeoning damage."
+    action_type: melee_attack
+    mechanics:
+      attack_bonus: 4
+      damage:
+        - formula: 1d4+2
+          type: bludgeoning
+      reach: 5
+  - id: rough-arrest
+    name: Rough Arrest
+    type: action
+    executable: false
+    desc: "When the Constable hits a creature with a Baton attack, it can attempt to grapple the target as a bonus action."
+    action_type: utility
+    warning: "Manual/Assisted grapple action."
+  - id: vandergraff-drill
+    name: Vandergraff Drill
+    type: trait
+    desc: "If this creature starts its turn within 30 feet of an allied Black and Tan officer it can see or hear, it gains +1 to attack rolls until the start of its next turn."
+  - id: baton-and-boot
+    name: Baton and Boot
+    type: trait
+    desc: "This creature has Advantage on attack rolls against a Prone creature within 5 feet of it."
+  - id: fire-discipline
+    name: Fire Discipline
+    type: trait
+    desc: "This creature does not expend extra ammunition on a missed attack unless it used Controlled Burst, Automatic Sweep, or Suppressive Fire."
