@@ -1110,6 +1110,29 @@ Outcome:
 - Visual feedback (badge) indicates current state.
 - Mandatory JS syntax check passed.
 
+### 2026-05-09 — Phase 3D1: /dmcontrol Apply Results first safe slice
+Agent/model: Gemini CLI
+Scope:
+- Implemented "Apply Results" logic in `/dmcontrol` for simple, direct selected-target action packets.
+- Added `applyLocalResolutionResults(applyDamage, applyEffects)` function to call backend `/api/dm/monster-capabilities/{cid}/resolve-targets`.
+- Updated Resolution Preview UI to include "Apply Damage", "Apply Effects", and "Apply Damage + Effects" buttons.
+- Implemented double-submit guards using `localResolutionInFlight` to disable buttons during backend calls.
+- Success path: applies returned snapshot, clears local resolution tray/packet/outcome state, and shows a compact success message.
+- Error path: keeps tray open and displays backend error.
+- Added manual fallback instructions for unsupported `automatic` and `assisted_sequence` packets.
+- Verified Black and Tan Rifleman and Constable simple attacks can reach Apply Results via structured packets.
+Files changed:
+- assets/web/dmcontrol/index.html
+- tests/test_dm_control_route.py
+- tests/test_dm_control_apply_results.py (New)
+- docs/dm_control_surface_living_agent_plan.md
+Outcome:
+- `/dmcontrol` now supports direct combat state mutation for supported monster actions.
+- Safe, validated resolution flow modeled after `/dm` Focused Actor Panel.
+- All Python tests and JS syntax checks passed.
+Next recommended pass:
+- Phase 3D2: Multiattack/sequence apply support OR live-smoke bugfixes.
+
 ### 2026-05-09 — Phase 3C3: Black and Tan Readiness
 
 Agent/model: Gemini CLI (Autonomous Mode)

@@ -296,7 +296,8 @@
           </div>
           <div style="display:flex; flex-direction:column; gap:8px;">
             <select class="workspace-link" style="width:100%; padding:6px; background:var(--panel2); color:var(--text);"
-                    onchange="setLocalResolutionOutcome('${esc(targetCid)}', this.value)">
+                    onchange="setLocalResolutionOutcome('${esc(targetCid)}', this.value)"
+                    ${localResolutionInFlight ? 'disabled' : ''}>
               <option value="fail" ${outcome === 'fail' ? 'selected' : ''}>${esc(getOutcomeLabel('fail'))}</option>
               <option value="success" ${outcome === 'success' ? 'selected' : ''}>${esc(getOutcomeLabel('success'))}</option>
               <option value="no_effect" ${outcome === 'no_effect' ? 'selected' : ''}>${esc(getOutcomeLabel('no_effect'))}</option>
@@ -305,9 +306,26 @@
             <div class="actor-meta" style="color:var(--accent); font-weight:bold; padding:4px; background:rgba(106,169,255,0.05); border-radius:4px;">
               Local preview: ${esc(previewText)}
             </div>
-            <div class="actor-meta" style="font-size:10px; opacity:0.8; font-style:italic;">
-              Outcome selection is local only.<br>
-              Use /dm manual controls for HP changes until Apply Results is implemented.
+            
+            <div style="display:flex; flex-direction:column; gap:6px; margin-top:4px;">
+              <div style="display:flex; gap:6px;">
+                <button class="workspace-link" style="flex:1; justify-content:center; color:var(--accent); border-color:var(--accent);" 
+                        onclick="applyLocalResolutionResults(true, false)" ${localResolutionInFlight ? 'disabled' : ''}>
+                  Apply Damage
+                </button>
+                <button class="workspace-link" style="flex:1; justify-content:center; color:var(--accent); border-color:var(--accent);" 
+                        onclick="applyLocalResolutionResults(false, true)" ${localResolutionInFlight ? 'disabled' : ''}>
+                  Apply Effects
+                </button>
+              </div>
+              <button class="workspace-link" style="width:100%; justify-content:center; font-weight:bold; color:var(--heal); border-color:var(--heal);" 
+                      onclick="applyLocalResolutionResults(true, true)" ${localResolutionInFlight ? 'disabled' : ''}>
+                Apply Damage + Effects
+              </button>
+            </div>
+
+            <div class="actor-meta" style="font-size:10px; opacity:0.8; font-style:italic; margin-top:4px; text-align:center;">
+              Apply Results will mutate combat state.
             </div>
           </div>
         </div>
@@ -696,13 +714,13 @@
         }
 
         if (data.deferredReason === 'automatic') {
-          localResolutionError = "Automatic resolution is deferred on /dmcontrol.";
+          localResolutionError = "Automatic resolution is deferred on /dmcontrol. Manual fallback: apply this result in /dm.";
         } else if (data.deferredReason === 'assisted_sequence') {
-          localResolutionError = "Sequence resolution is deferred on /dmcontrol.";
+          localResolutionError = "Sequence resolution is deferred on /dmcontrol. Manual fallback: apply this result in /dm.";
         } else if (data.packet) {
           localResolutionPacket = data.packet;
         } else {
-          localResolutionError = "No structured packet details available yet.";
+          localResolutionError = "No structured packet details available yet. Manual fallback: apply result in /dm.";
         }
 
         if (rawData.snapshot) {
@@ -715,6 +733,58 @@
       } finally {
         localResolutionInFlight = false;
         renderActionPanel(actor, capabilitySummary);
+      }
+    }
+
+    async function applyLocalResolutionResults(applyDamage, applyEffects) {
+      if (!localResolutionTray || !localResolutionPacket || localResolutionInFlight || !state) return;
+
+      const actorCid = localResolutionTray.actorCid;
+      const capId = localResolutionTray.capabilityId;
+      const targetCid = localResolutionTray.targetCid;
+      const outcome = getLocalResolutionOutcome(targetCid);
+
+      localResolutionInFlight = true;
+      localResolutionError = null;
+      const actor = (state?.combatants || []).find(c => String(c.cid) === String(state?.active_cid));
+      renderActionPanel(actor, capabilitySummary);
+
+      try {
+        const resp = await fetch(`/api/dm/monster-capabilities/${actorCid}/resolve-targets`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            capability_id: capId,
+            targets: [{ target_cid: String(targetCid), outcome: outcome }],
+            damage_rolls: localResolutionPacket.damage_rolls || [],
+            apply_damage: !!applyDamage,
+            apply_effects: !!applyEffects
+          })
+        });
+
+        const data = await resp.json();
+        if (!resp.ok || !data.ok) {
+          throw new Error(data.detail || (data.result && data.result.error) || 'Resolution failed.');
+        }
+
+        // On success, clear local state and apply snapshot
+        if (data.snapshot) {
+           state = data.snapshot;
+        }
+        
+        // Compact success feedback via status bar before closing
+        renderError('Results applied successfully.');
+        setTimeout(() => { if (state) renderState(state); }, 2000);
+
+        closeLocalResolutionTray();
+        renderActionPanel(actor, capabilitySummary);
+        draw();
+      } catch (err) {
+        console.error('Apply results error:', err);
+        localResolutionError = err.message;
+        renderActionPanel(actor, capabilitySummary);
+      } finally {
+        localResolutionInFlight = false;
       }
     }
 
@@ -861,13 +931,16 @@
                   <div style="margin-top:8px; background:rgba(255,255,255,0.03); padding:8px; border-radius:4px; border:1px solid var(--gold)">
                     <div style="font-size:11px; color:var(--gold); margin-bottom:4px; font-weight:bold; text-transform:uppercase">Backend packet preview</div>
                     ${renderLocalResolutionPacket(localResolutionPacket)}
-                    <p style="margin-top:8px; font-size:11px; color:var(--heal); font-weight:bold;">
-                      Preview only. Results are not applied.
-                    </p>
-                    <p style="font-size:10px; color:var(--muted); opacity:0.8;">
-                      No combat state will be changed from this preview (uses spend: "none").
-                    </p>
-                    ${renderLocalOutcomeControls(localResolutionPacket, localResolutionTray.targetCid)}
+                    ${localResolutionPacket ? `
+                      ${renderLocalOutcomeControls(localResolutionPacket, localResolutionTray.targetCid)}
+                    ` : `
+                      <p style="margin-top:8px; font-size:11px; color:var(--heal); font-weight:bold;">
+                        Preview only. Results are not applied.
+                      </p>
+                      <p style="font-size:10px; color:var(--muted); opacity:0.8;">
+                        No combat state will be changed from this preview (uses spend: "none").
+                      </p>
+                    `}
                   </div>
                 ` : ''}
 
