@@ -145,7 +145,8 @@ class MonsterCapabilityService:
         action_type = str(cap.get("action_type") or "")
         if "self" in str(mechanics.get("target") or "").lower():
             return "self"
-        if cls._area_metadata_for_capability(cap):
+        area = cls._area_metadata_for_capability(cap)
+        if area and (area.get("shape") or area.get("size")):
             return "area_manual"
         if action_type == "save_ability" and (
             "each creature" in desc or "creatures of" in desc or "creature within" in desc or "creatures within" in desc

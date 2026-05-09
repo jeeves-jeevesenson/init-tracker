@@ -156,6 +156,11 @@
       border-style: dashed;
       opacity: 0.8;
     }
+    .action-card.manual {
+      border-color: rgba(214,186,126,0.3);
+      background: rgba(214,186,126,0.05);
+      opacity: 0.85;
+    }
 
     .selected-summary {
       background: rgba(106,169,255,0.1);
@@ -623,7 +628,7 @@
     }
 
     function isPreviewableTargetAction(cap) {
-      if (!cap) return false;
+      if (!cap || cap.executable === false) return false;
       const type = (cap.action_type || "").toLowerCase();
       if (type.includes("attack") || type.includes("melee") || type.includes("ranged")) return true;
       const mode = (cap.target_mode || "").toLowerCase();
@@ -930,7 +935,7 @@
           let summaryHtml = `
             <div class="selected-summary">
               <h4>${esc(selected.name)} Selected</h4>
-              <p>${esc(selected.description || 'No description available.')}</p>
+              <p>${esc(selected.description || selected.desc || 'No description available.')}</p>
               ${selected.manual_instructions ? `
                 <div style="margin-top:8px; border:1px solid var(--gold); background:rgba(214,186,126,0.1); padding:8px; border-radius:4px; font-size:12px; color:var(--gold)">
                   <strong>Manual Instructions:</strong> ${esc(selected.manual_instructions)}
@@ -1091,10 +1096,11 @@
             if (item.uses_remaining !== undefined && item.uses_total !== undefined) {
               badges.push(`${item.uses_remaining}/${item.uses_total} Uses`);
             }
-            if (item.executable === false) badges.push('Manual');
+            const isExecutable = item.executable !== false;
+            if (!isExecutable) badges.push('Manual');
 
             html += `
-              <div class="action-card ${isSelected ? 'selected' : ''} ${isTrait ? 'trait' : ''}"
+              <div class="action-card ${isSelected ? 'selected' : ''} ${isTrait ? 'trait' : ''} ${!isExecutable ? 'manual' : ''}"
                    onclick="selectCapability('${esc(item.id)}')">
                 <div class="card-header">
                   <span class="card-name">${esc(item.name)}</span>

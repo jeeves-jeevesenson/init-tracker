@@ -43934,7 +43934,8 @@ class InitiativeTracker(base.InitiativeTracker):
         action_type = str(cap.get("action_type") or "")
         if "self" in str(mechanics.get("target") or "").lower():
             return "self"
-        if InitiativeTracker._monster_capability_area_metadata(cap):
+        area = InitiativeTracker._monster_capability_area_metadata(cap)
+        if area and (area.get("shape") or area.get("size")):
             return "area_manual"
         if action_type == "save_ability" and (
             "each creature" in desc or "creatures of" in desc or "creature within" in desc or "creatures within" in desc
@@ -44118,6 +44119,36 @@ class InitiativeTracker(base.InitiativeTracker):
                     return {"ok": False, "error": spend_error or "No turn resource available."}
 
             # 4. Resolve attack sequence
+            if spend_key == "none":
+                 # Return assisted resolution packet for preview
+                 damage_packet = self._monster_capability_damage_roll_packet(cap)
+                 resolution_packet = self._monster_capability_resolution_packet(
+                     cap=cap,
+                     cap_id=cap_id,
+                     actor_cid=int(normalized_actor_cid),
+                     damage_packet=damage_packet,
+                 )
+                 return {
+                     "ok": True,
+                     "resolution": "assisted",
+                     "capability": cap,
+                     "actor_name": str(getattr(actor, "name", "Actor")),
+                     "target_id": normalized_target_cid,
+                     "target_name": str(getattr(target, "name", "Target")),
+                     "damage_rolls": damage_packet["damage_rolls"],
+                     "total_fail": damage_packet["total_fail"],
+                     "total_success": damage_packet["total_success"],
+                     "area": resolution_packet.get("area", {}),
+                     "damage": resolution_packet.get("damage", []),
+                     "effects": resolution_packet.get("effects", []),
+                     "effect_riders": resolution_packet.get("effect_riders", []),
+                     "target_mode": resolution_packet.get("target_mode"),
+                     "multi_target_capable": bool(resolution_packet.get("multi_target_capable")),
+                     "resolution_packet": resolution_packet,
+                     "spend_hint": spend_key,
+                     "recharge_expended": False
+                 }
+
             normalized_blocks = [{
                 "attack_key": cap_id,
                 "name": cap.get("name"),

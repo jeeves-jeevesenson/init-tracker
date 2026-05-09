@@ -1110,6 +1110,29 @@ Outcome:
 - Visual feedback (badge) indicates current state.
 - Mandatory JS syntax check passed.
 
+### 2026-05-09 — Phase 3E1: live-smoke bugfix for Black and Tan /dmcontrol actions
+Agent/model: Gemini CLI
+Scope:
+- Fixed `/dmcontrol` selected action description display to fallback to `desc` if `description` is missing.
+- Fixed `target_mode` classification in `MonsterCapabilityService` and `InitiativeTracker`: range alone no longer triggers `area_manual`.
+- Improved manual-only action UX: non-executable actions now render with a 'Manual' badge and unique styling; targeting mode is disabled for them.
+- Fixed simple attack preview mismatch: backend `execute` with `spend: "none"` now returns a non-mutating `assisted` resolution packet for melee/ranged attacks.
+- Surveillance check: Verified Multiattack child-sequence tray remains functional and correctly uses corrected attack flow.
+- Added focused tests for `target_mode` and `executable` logic in `tests/test_black_and_tan_capabilities.py`.
+Files changed:
+- monster_capability_service.py
+- dnd_initative_tracker.py
+- assets/web/dmcontrol/index.html
+- tests/test_black_and_tan_capabilities.py
+- docs/dm_control_surface_living_agent_plan.md
+Outcome:
+- Black and Tan firearm and melee attacks are now correctly classified as single-target and previewable.
+- Utility actions like Controlled Burst are clearly identified as manual assistance tasks.
+- All primary attacks support the "Preview -> Apply" flow without premature mutation or "No description" errors.
+- All Python tests and JS syntax checks passed.
+Next recommended pass:
+- Live game smoke testing only. No more feature passes unless a reproduced bug appears.
+
 ### 2026-05-09 — Phase 3D3: Black and Tan live-game readiness polish
 Agent/model: Gemini CLI
 Scope:
