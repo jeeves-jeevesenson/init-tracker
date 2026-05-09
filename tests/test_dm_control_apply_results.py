@@ -55,5 +55,39 @@ class TestDMControlApplyResults(unittest.TestCase):
         self.assertIn(b"onclick=\"applyLocalResolutionResults(false, true)\" ${localResolutionInFlight ? 'disabled' : ''}", response.content)
         self.assertIn(b"onclick=\"applyLocalResolutionResults(true, true)\" ${localResolutionInFlight ? 'disabled' : ''}", response.content)
 
+    def test_dm_control_has_sequence_tray_logic(self):
+        """Verify /dmcontrol includes Sequence Tray logic and UI."""
+        from fastapi.testclient import TestClient
+        client = TestClient(self.client)
+        response = client.get("/dmcontrol")
+        self.assertEqual(response.status_code, 200)
+        
+        # Verify state variables
+        self.assertIn(b"localSequencePacket", response.content)
+        self.assertIn(b"localSequenceCompletedSteps", response.content)
+        
+        # Verify functions
+        self.assertIn(b"function selectLocalSequenceStep", response.content)
+        self.assertIn(b"function cancelLocalSequence", response.content)
+        
+        # Verify UI markers
+        self.assertIn(b"Sequence:", response.content)
+        self.assertIn(b"localSequenceCompletedSteps", response.content)
+        self.assertIn(b"selectLocalSequenceStep", response.content)
+        
+        # Verify sequence detection in execution preview
+        self.assertIn(b"assisted_sequence", response.content)
+        self.assertIn(b"localSequencePacket = rawData.result", response.content)
+
+    def test_dm_control_apply_increments_sequence(self):
+        """Verify that applying results increments sequence completion if active."""
+        from fastapi.testclient import TestClient
+        client = TestClient(self.client)
+        response = client.get("/dmcontrol")
+        self.assertEqual(response.status_code, 200)
+        
+        self.assertIn(b"if (localSequencePacket)", response.content)
+        self.assertIn(b"localSequenceCompletedSteps[String(capId)] =", response.content)
+
 if __name__ == "__main__":
     unittest.main()

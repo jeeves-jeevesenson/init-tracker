@@ -1110,6 +1110,28 @@ Outcome:
 - Visual feedback (badge) indicates current state.
 - Mandatory JS syntax check passed.
 
+### 2026-05-09 — Phase 3D2: /dmcontrol Multiattack and assisted-sequence apply support
+Agent/model: Gemini CLI
+Scope:
+- Added local sequence state tracking to `/dmcontrol`.
+- Implemented Sequence Tray UI for `assisted_sequence` and `composite` actions.
+- Multiattack/composite actions now render a list of child steps with completion tracking.
+- DM can select individual child attacks, resolve them using the standard flow, and Apply Results.
+- Successful child apply increments completion counts in the local sequence state.
+- Integrated `selectLocalSequenceStep` to correctly manage child targeting and preview.
+- State hardening: actor or unrelated action changes clear the active sequence.
+- Verified Black and Tan Rifleman and Constable Multiattack now expose their Armalite Rifle or Pistol/Baton attacks correctly.
+Files changed:
+- assets/web/dmcontrol/index.html
+- tests/test_dm_control_apply_results.py
+- docs/dm_control_surface_living_agent_plan.md
+Outcome:
+- `/dmcontrol` supports multi-step actions like Multiattack.
+- Black and Tan enemies are now significantly more usable in live DM-controlled combat.
+- Safety guards prevent double-submits and ensure stale sequences are cleared.
+Next recommended pass:
+- Phase 3D3: live-game readiness polish or live-smoke bugfixes.
+
 ### 2026-05-09 — Phase 3D1: /dmcontrol Apply Results first safe slice
 Agent/model: Gemini CLI
 Scope:

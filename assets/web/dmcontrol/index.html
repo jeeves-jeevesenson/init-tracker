@@ -225,6 +225,10 @@
     let localResolutionInFlight = false;
     let localResolutionOutcomes = {}; // Keyed by target CID as string
 
+    // Phase 3D2 sequence state
+    let localSequencePacket = null;
+    let localSequenceCompletedSteps = {}; // action_id -> count
+
     function esc(str) {
       if (!str) return '';
       return String(str)
@@ -247,6 +251,8 @@
       localResolutionInFlight = false;
       localResolutionOutcomes = {};
       selectedCapabilityId = null;
+      localSequencePacket = null;
+      localSequenceCompletedSteps = {};
     }
 
     /**
@@ -716,7 +722,10 @@
         if (data.deferredReason === 'automatic') {
           localResolutionError = "Automatic resolution is deferred on /dmcontrol. Manual fallback: apply this result in /dm.";
         } else if (data.deferredReason === 'assisted_sequence') {
-          localResolutionError = "Sequence resolution is deferred on /dmcontrol. Manual fallback: apply this result in /dm.";
+          localSequencePacket = rawData.result;
+          localSequenceCompletedSteps = {};
+          localResolutionPacket = null;
+          localResolutionTray = null; // Close the immediate tray to show sequence tray
         } else if (data.packet) {
           localResolutionPacket = data.packet;
         } else {
@@ -776,6 +785,11 @@
         renderError('Results applied successfully.');
         setTimeout(() => { if (state) renderState(state); }, 2000);
 
+        // If in sequence, increment completion
+        if (localSequencePacket) {
+          localSequenceCompletedSteps[String(capId)] = (localSequenceCompletedSteps[String(capId)] || 0) + 1;
+        }
+
         closeLocalResolutionTray();
         renderActionPanel(actor, capabilitySummary);
         draw();
@@ -786,6 +800,21 @@
       } finally {
         localResolutionInFlight = false;
       }
+    }
+
+    function selectLocalSequenceStep(stepActionId) {
+      const cap = findCapabilityById(stepActionId);
+      if (!cap) return;
+      selectedCapabilityId = stepActionId;
+      enterTargetPreviewMode(cap);
+      const actor = (state?.combatants || []).find(c => String(c.cid) === String(state?.active_cid));
+      renderActionPanel(actor, capabilitySummary);
+    }
+
+    function cancelLocalSequence() {
+      localSequencePacket = null;
+      localSequenceCompletedSteps = {};
+      cancelTargetPreviewMode();
     }
 
     function getLocalResolutionContext() {
@@ -903,6 +932,39 @@
               <h4>${esc(selected.name)} Selected</h4>
               <p>${esc(selected.description || 'No description available.')}</p>
           `;
+
+          // Sequence Tray Integration
+          if (localSequencePacket && (String(localSequencePacket.capability_id) === String(selected.id) || localSequencePacket.steps.some(s => String(s.action_id) === String(selected.id)))) {
+            summaryHtml += `
+              <div style="margin-top:12px; border:1px solid var(--accent); background:rgba(106,169,255,0.05); padding:8px; border-radius:4px">
+                <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:8px; border-bottom:1px solid rgba(106,169,255,0.2); padding-bottom:4px">
+                  <h5 style="color:var(--accent); margin:0; font-size:12px">Sequence: ${esc(localSequencePacket.name)}</h5>
+                  <button class="workspace-link" onclick="cancelLocalSequence()" style="font-size:10px; padding:2px 6px; color:var(--danger); border-color:var(--danger)">End</button>
+                </div>
+                <div style="display:flex; flex-direction:column; gap:6px">
+                  ${localSequencePacket.steps.map(step => {
+                    const completed = localSequenceCompletedSteps[String(step.action_id)] || 0;
+                    const isDone = completed >= step.count;
+                    const isStepSelected = String(selectedCapabilityId) === String(step.action_id);
+                    return `
+                      <div style="display:flex; align-items:center; gap:8px; background:rgba(255,255,255,0.03); padding:4px 8px; border-radius:4px; border-left: 3px solid ${isDone ? 'var(--heal)' : (isStepSelected ? 'var(--accent)' : 'var(--muted)')}">
+                        <div style="flex:1; font-size:11px">
+                          <div style="font-weight:bold">${esc(step.name)}</div>
+                          <div style="font-size:10px; color:var(--muted)">${completed} / ${step.count} completed</div>
+                        </div>
+                        ${!isDone ? `
+                          <button class="workspace-link" style="font-size:10px; padding:2px 6px; ${isStepSelected ? 'background:var(--accent); color:var(--bg)' : ''}" 
+                                  onclick="selectLocalSequenceStep('${esc(step.action_id)}')" ${localResolutionInFlight ? 'disabled' : ''}>
+                            ${isStepSelected ? 'Active' : 'Select'}
+                          </button>
+                        ` : '<div style="font-size:9px; color:var(--heal); font-weight:bold; text-transform:uppercase">Done</div>'}
+                      </div>
+                    `;
+                  }).join('')}
+                </div>
+              </div>
+            `;
+          }
 
           if (localResolutionTray && String(localResolutionTray.capabilityId) === String(selected.id)) {
             const ctx = getLocalResolutionContext();
@@ -1046,6 +1108,16 @@
 
     function selectCapability(id) {
       const alreadySelected = String(selectedCapabilityId) === String(id);
+      
+      // Clear sequence if we select something NOT in the sequence
+      if (localSequencePacket && String(id) !== String(localSequencePacket.capability_id)) {
+        const isChild = localSequencePacket.steps.some(s => String(s.action_id) === String(id));
+        if (!isChild) {
+          localSequencePacket = null;
+          localSequenceCompletedSteps = {};
+        }
+      }
+
       selectedCapabilityId = alreadySelected ? null : id;
 
       // Clear local resolution state on any capability change
