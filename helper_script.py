@@ -58,6 +58,8 @@ from map_state import (
     tactical_preset_catalog,
 )
 
+from runtime_config import config as runtime_cfg
+
 PIL_IMAGE_IMPORT_ERROR: Optional[str] = None
 PIL_IMAGETK_IMPORT_ERROR: Optional[str] = None
 USER_YAML_DIRNAME = "Dnd-Init-Yamls"
@@ -77,33 +79,17 @@ except Exception as e:  # pragma: no cover
 
 
 def _app_base_dir() -> Path:
-    try:
-        if getattr(sys, "frozen", False):
-            return Path(sys.executable).parent
-    except Exception:
-        pass
-    try:
-        return Path(__file__).resolve().parent
-    except Exception:
-        try:
-            return Path.cwd()
-        except Exception:
-            return Path(".")
+    return runtime_cfg.app_dir
 
 
 def _app_data_dir() -> Path:
-    override = os.getenv("INITTRACKER_DATA_DIR")
-    if override:
-        try:
-            return Path(override).expanduser()
-        except Exception:
-            pass
-    try:
-        docs_dir = Path.home() / "Documents"
-        return docs_dir / USER_YAML_DIRNAME
-    except Exception:
-        pass
-    return _app_base_dir()
+    """Returns the directory where data (Monsters, Spells, etc.) is located.
+    In production/server mode, we keep canonical content in the app tree.
+    In development, we prefer the user's Documents folder for convenience.
+    """
+    if runtime_cfg.is_production():
+        return runtime_cfg.app_dir
+    return runtime_cfg.data_dir
 
 
 def _normalize_facing_degrees(angle_deg: float) -> float:
@@ -4437,8 +4423,7 @@ class InitiativeTracker(tk.Tk):
 
     # --------------------- Index cache helpers ---------------------
     def _logs_dir_path(self) -> Path:
-        base_dir = _app_data_dir()
-        logs = base_dir / "logs"
+        logs = runtime_cfg.log_dir
         try:
             logs.mkdir(parents=True, exist_ok=True)
         except Exception:

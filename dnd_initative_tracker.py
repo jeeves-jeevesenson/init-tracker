@@ -44,6 +44,8 @@ from collections import deque
 import sys
 import tempfile
 
+from runtime_config import config as runtime_cfg
+
 # Monster YAML loader (PyYAML)
 try:
     import yaml  # type: ignore
@@ -370,33 +372,25 @@ def _normalize_monster_phases_config(raw_phases: object) -> Optional[Dict[str, A
 
 
 def _app_base_dir() -> Path:
-    try:
-        if getattr(sys, "frozen", False):
-            return Path(sys.executable).parent
-    except Exception:
-        pass
-    try:
-        return Path(__file__).resolve().parent
-    except Exception:
-        try:
-            return Path.cwd()
-        except Exception:
-            return Path(".")
+    return runtime_cfg.app_dir
 
 
 def _app_data_dir() -> Path:
-    override = os.getenv("INITTRACKER_DATA_DIR")
-    if override:
-        try:
-            return Path(override).expanduser()
-        except Exception:
-            pass
-    try:
-        docs_dir = Path.home() / "Documents"
-        return docs_dir / USER_YAML_DIRNAME
-    except Exception:
-        pass
-    return _app_base_dir()
+    """Returns the directory where data (Monsters, Spells, etc.) is located.
+    In production/server mode, we keep canonical content in the app tree.
+    In development, we prefer the user's Documents folder for convenience.
+    """
+    if runtime_cfg.is_production():
+        return runtime_cfg.app_dir
+    return runtime_cfg.data_dir
+
+
+def _runtime_data_dir() -> Path:
+    return runtime_cfg.data_dir
+
+
+def _runtime_log_dir() -> Path:
+    return runtime_cfg.log_dir
 
 
 def _normalize_public_url(raw_value: Any, *, required_scheme: Optional[str] = None) -> Optional[str]:
@@ -545,7 +539,7 @@ def _seed_user_players_dir() -> None:
 
 
 def _profile_picture_source_dir() -> Path:
-    return _app_data_dir() / "profile_pictures" / "source"
+    return _runtime_data_dir() / "profile_pictures" / "source"
 
 
 def _profile_picture_cache_dir() -> Path:
@@ -831,10 +825,7 @@ _CHARACTER_BASE_TEMPLATE, _CHARACTER_MERGE_DEFAULTS, _CHARACTER_SLUGIFY = _load_
 
 
 def _character_schema_path() -> Path:
-    try:
-        return Path(__file__).resolve().parent / "assets" / "web" / "new_character" / "schema.json"
-    except Exception:
-        return Path("assets") / "web" / "new_character" / "schema.json"
+    return runtime_cfg.get_assets_dir() / "web" / "new_character" / "schema.json"
 
 
 def _schema_type_name(value: Any) -> str:
@@ -1041,7 +1032,7 @@ def _readme_section_headings(readme_path: Path) -> List[str]:
 
 
 def _character_schema_readme_map(config: Dict[str, Any]) -> Dict[str, Any]:
-    readme_path = Path(__file__).resolve().parent / config.get("readme_path", "players/README.md")
+    readme_path = runtime_cfg.app_dir / config.get("readme_path", "players/README.md")
     headings = _readme_section_headings(readme_path)
     schema_headings = [
         section.get("readme_heading")
@@ -1089,34 +1080,13 @@ class ShopCatalogConflictError(Exception):
 
 
 def _ensure_logs_dir() -> Path:
-    """Create logs/ in the app data directory (best effort)."""
-    override_log = str(os.getenv("INITTRACKER_LOG_DIR") or "").strip()
-    if override_log:
-        try:
-            logs = Path(override_log).expanduser()
-            if not logs.is_absolute():
-                logs = _app_base_dir() / logs
-            logs.mkdir(parents=True, exist_ok=True)
-            return logs
-        except Exception:
-            pass
-
-    override_data = str(os.getenv("INITTRACKER_DATA_DIR") or "").strip()
-    if override_data:
-        try:
-            logs = Path(override_data).expanduser() / "logs"
-            logs.mkdir(parents=True, exist_ok=True)
-            return logs
-        except Exception:
-            pass
-
-    # Fallback to default data dir
+    """Create logs/ in the app log directory (best effort)."""
+    logs = runtime_cfg.log_dir
     try:
-        logs = _app_data_dir() / "logs"
         logs.mkdir(parents=True, exist_ok=True)
-        return logs
     except Exception:
-        return Path("logs")
+        pass
+    return logs
 
 
 def _env_flag_enabled(name: str) -> bool:
@@ -1125,18 +1095,7 @@ def _env_flag_enabled(name: str) -> bool:
 
 
 def _ws_debug_log_dir() -> Path:
-    raw = str(os.getenv("INITTRACKER_LOG_DIR") or "logs").strip() or "logs"
-    try:
-        path = Path(raw).expanduser()
-    except Exception:
-        path = Path("logs")
-    if not path.is_absolute():
-        path = _app_base_dir() / path
-    try:
-        path.mkdir(parents=True, exist_ok=True)
-    except Exception:
-        pass
-    return path
+    return runtime_cfg.log_dir
 
 
 def _ws_debug_log_path() -> Path:
@@ -1793,6 +1752,15 @@ class LanUrlSettings:
     url_mode: str = "http"
     public_https_url: Optional[str] = None
     public_http_url: Optional[str] = None
+
+    def __post_init__(self) -> None:
+        if runtime_cfg.public_base_url:
+            if runtime_cfg.public_base_url.startswith("https:"):
+                self.public_https_url = runtime_cfg.public_base_url
+                self.url_mode = "https"
+            else:
+                self.public_http_url = runtime_cfg.public_base_url
+                self.url_mode = "http"
 
 
 class LanController:
@@ -12095,7 +12063,7 @@ class InitiativeTracker(base.InitiativeTracker):
             pass
 
     def _lan_url_settings_path(self) -> Path:
-        return _app_data_dir() / "settings" / "lan_url.json"
+        return _runtime_data_dir() / "settings" / "lan_url.json"
 
     def _load_lan_url_settings(self) -> None:
         path = self._lan_url_settings_path()
@@ -12155,7 +12123,7 @@ class InitiativeTracker(base.InitiativeTracker):
         self._save_lan_url_settings()
 
     def _session_saves_dir(self) -> Path:
-        path = _app_data_dir() / "sessions"
+        path = _runtime_data_dir() / "sessions"
         try:
             path.mkdir(parents=True, exist_ok=True)
         except Exception:
@@ -29516,7 +29484,7 @@ class InitiativeTracker(base.InitiativeTracker):
             pass
 
     def _ensure_monster_sources_5etools_dir(self) -> Path:
-        path = _app_data_dir() / "monster_sources" / "5etools"
+        path = _runtime_data_dir() / "monster_sources" / "5etools"
         try:
             path.mkdir(parents=True, exist_ok=True)
         except Exception:

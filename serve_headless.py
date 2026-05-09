@@ -26,6 +26,8 @@ import signal
 import sys
 from typing import Optional, Sequence
 
+from runtime_config import config as runtime_cfg
+
 
 def _force_headless_env() -> None:
     os.environ["INIT_TRACKER_HEADLESS"] = "1"
@@ -62,8 +64,8 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     parser = argparse.ArgumentParser(
         description="Run the DnD Initiative Tracker as a headless backend + DM web host.",
     )
-    parser.add_argument("--host", default=None, help="Override LAN bind host (default 0.0.0.0).")
-    parser.add_argument("--port", type=int, default=None, help="Override LAN bind port (default 8787).")
+    parser.add_argument("--host", default=None, help=f"Override LAN bind host (default {runtime_cfg.host}).")
+    parser.add_argument("--port", type=int, default=None, help=f"Override LAN bind port (default {runtime_cfg.port}).")
     parser.add_argument(
         "--no-auto-lan",
         action="store_true",
@@ -72,6 +74,9 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     args = parser.parse_args(argv)
 
     _force_headless_env()
+
+    # If we are in production mode, ensure directories exist
+    runtime_cfg.ensure_dirs()
 
     # Import tracker AFTER setting INIT_TRACKER_HEADLESS so tk_compat returns
     # the dummy/headless modules and InitiativeTracker inherits HeadlessRoot.
