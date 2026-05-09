@@ -216,6 +216,7 @@
     let capabilitySummary = null;
     let capabilityActorCid = null;
     let selectedCapabilityId = null;
+    let lastActiveCid = null;
     let targetPreviewMode = null; // { capabilityId, capabilityName, actorCid, actionType }
     let selectedTargetCid = null;
     let localResolutionTray = null; // { actorCid, capabilityId, targetCid, openedAt }
@@ -232,6 +233,20 @@
         .replace(/>/g, '&gt;')
         .replace(/"/g, '&quot;')
         .replace(/'/g, '&#39;');
+    }
+
+    /**
+     * Reset all local UI state (targeting, preview, resolution).
+     */
+    function fullResetLocalState() {
+      targetPreviewMode = null;
+      selectedTargetCid = null;
+      localResolutionTray = null;
+      localResolutionPacket = null;
+      localResolutionError = null;
+      localResolutionInFlight = false;
+      localResolutionOutcomes = {};
+      selectedCapabilityId = null;
     }
 
     /**
@@ -638,6 +653,7 @@
 
     function closeLocalResolutionTray() {
       localResolutionTray = null;
+      selectedTargetCid = null; // Clear target selection when closing tray to allow re-selection
       localResolutionPacket = null;
       localResolutionError = null;
       localResolutionInFlight = false;
@@ -800,6 +816,12 @@
       let html = '';
       const groups = summary.groups || {};
 
+      // Hardening: verify selected capability still exists
+      if (selectedCapabilityId && !findCapabilityById(selectedCapabilityId)) {
+        selectedCapabilityId = null;
+        cancelTargetPreviewMode();
+      }
+
       // Selection summary
       if (selectedCapabilityId) {
         const selected = findCapabilityById(selectedCapabilityId);
@@ -843,7 +865,7 @@
                       Preview only. Results are not applied.
                     </p>
                     <p style="font-size:10px; color:var(--muted); opacity:0.8;">
-                      No combat state will be changed from this preview.
+                      No combat state will be changed from this preview (uses spend: "none").
                     </p>
                     ${renderLocalOutcomeControls(localResolutionPacket, localResolutionTray.targetCid)}
                   </div>
@@ -981,6 +1003,8 @@
         statusEl.style.color = 'var(--muted)';
         actorPanel.innerHTML = '<div class="status-idle">No active combat</div>';
         overlay.style.display = 'none';
+        fullResetLocalState();
+        lastActiveCid = null;
         fetchCapabilitiesForActiveActor(null);
         return;
       }
@@ -989,7 +1013,23 @@
       statusEl.style.color = 'var(--gold)';
 
       const activeCid = data.active_cid;
-      const actor = data.combatants.find(c => c.cid === activeCid);
+
+      // Hardening: If active actor changes, clear all local state
+      if (lastActiveCid !== null && String(lastActiveCid) !== String(activeCid)) {
+        fullResetLocalState();
+      }
+      lastActiveCid = activeCid;
+
+      // Hardening: If selected target no longer exists, clear it
+      if (selectedTargetCid && !findCombatantByCid(selectedTargetCid)) {
+        selectedTargetCid = null;
+        localResolutionTray = null;
+        localResolutionPacket = null;
+        localResolutionError = null;
+        localResolutionOutcomes = {};
+      }
+
+      const actor = data.combatants.find(c => String(c.cid) === String(activeCid));
 
       if (!actor) {
         actorPanel.innerHTML = '<div class="status-idle">No active actor focus</div>';

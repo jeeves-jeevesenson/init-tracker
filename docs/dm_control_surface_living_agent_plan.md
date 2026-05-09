@@ -252,6 +252,27 @@ These are safe cleanup tasks before construction begins.
 
 Agents should append concise entries here.
 
+### 2026-05-08 — Phase 3C2: /dmcontrol browser readiness hardening
+Agent/model: Gemini CLI
+Scope:
+- Hardened `/dmcontrol` state management for live browser use.
+- Implemented `fullResetLocalState()` helper and `lastActiveCid` tracking to clear state on active actor change.
+- Added defensive checks for stale target (`selectedTargetCid`) and capability (`selectedCapabilityId`) in polling loops.
+- Refined `closeLocalResolutionTray` to clear `selectedTargetCid`, allowing a clean return to target selection phase.
+- Improved UI copy to clarify `spend: "none"`, local-only outcomes, and manual HP workflow in `/dm`.
+- Added defensive tests for hardening logic in `tests/test_dm_control_route.py`.
+- Mandatory JS syntax check passed.
+Files changed:
+- assets/web/dmcontrol/index.html
+- tests/test_dm_control_route.py
+- docs/dm_control_surface_living_agent_plan.md
+Outcome:
+- `/dmcontrol` is stable and ready for live game DMing with robust state cleanup.
+- Manual HP application in `/dm` remains the safe, recommended workflow.
+- All Python route tests and JS syntax checks passed.
+Next recommended pass:
+- Phase 3D: Apply Results planning or encounter-specific enemy readiness.
+
 ### 2026-05-08 — Phase 3C1: /dmcontrol local-only outcome controls
 Agent/model: Gemini CLI
 Scope:

@@ -193,7 +193,7 @@ class TestDMControlRoute(unittest.TestCase):
         self.assertIn(b"Resolution Preview", response.content)
         self.assertIn(b"Prepare Resolution Preview", response.content)
         self.assertIn(b"Preview only. Results are not applied.", response.content)
-        self.assertIn(b"No combat state will be changed from this preview.", response.content)
+        self.assertIn(b"No combat state will be changed from this preview (uses spend: \"none\").", response.content)
         self.assertIn(b"Automatic resolution is deferred on /dmcontrol.", response.content)
         self.assertIn(b"Sequence resolution is deferred on /dmcontrol.", response.content)
         self.assertIn(b"spend: \"none\"", response.content)
@@ -213,6 +213,18 @@ class TestDMControlRoute(unittest.TestCase):
         self.assertIn(b"Packet debug details", response.content)
         self.assertIn(b"No structured packet details available yet.", response.content)
         self.assertIn(b"deferredReason", response.content)
+
+    def test_dm_control_has_hardening_logic(self):
+        """Verify /dmcontrol includes state cleanup and hardening logic."""
+        from fastapi.testclient import TestClient
+        client = TestClient(self.client)
+        response = client.get("/dmcontrol")
+        self.assertEqual(response.status_code, 200)
+        # Check for state cleanup markers I intend to add
+        self.assertIn(b"lastActiveCid", response.content)
+        self.assertIn(b"function fullResetLocalState", response.content)
+        self.assertIn(b"if (selectedTargetCid &&", response.content)
+        self.assertIn(b"findCombatantByCid(selectedTargetCid)", response.content)
 
     def test_dm_control_has_local_outcome_controls(self):
         """Verify /dmcontrol includes local-only outcome selection logic."""
