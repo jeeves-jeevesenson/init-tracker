@@ -251,6 +251,97 @@ class TestDMControlRoute(unittest.TestCase):
         self.assertIn(b"Apply Damage + Effects", response.content)
         self.assertIn(b"Apply Results will mutate combat state.", response.content)
 
+    def test_dm_control_has_resizable_split_handle(self):
+        """Verify /dmcontrol exposes a draggable map/control split with persistence and bounds."""
+        from fastapi.testclient import TestClient
+        client = TestClient(self.client)
+        response = client.get("/dmcontrol")
+        self.assertEqual(response.status_code, 200)
+        # Visible handle element + JS plumbing.
+        self.assertIn(b'id="splitHandle"', response.content)
+        self.assertIn(b'class="split-handle"', response.content)
+        self.assertIn(b"SPLIT_STORAGE_KEY", response.content)
+        self.assertIn(b"function clampControlHeight", response.content)
+        self.assertIn(b"function applyControlBarHeight", response.content)
+        self.assertIn(b"function loadControlBarHeight", response.content)
+        # Drag wiring.
+        self.assertIn(b"splitHandle.addEventListener('pointerdown'", response.content)
+        self.assertIn(b"splitHandle.addEventListener('pointermove'", response.content)
+        self.assertIn(b"splitHandle.addEventListener('pointerup'", response.content)
+        # Persistence + reset behavior.
+        self.assertIn(b"localStorage.setItem(SPLIT_STORAGE_KEY", response.content)
+        self.assertIn(b"localStorage.getItem(SPLIT_STORAGE_KEY", response.content)
+        self.assertIn(b"applyControlBarHeight(320, true)", response.content)
+
+    def test_dm_control_has_active_token_hit_test(self):
+        """Verify /dmcontrol uses token hit-testing rather than exact-cell drag start."""
+        from fastapi.testclient import TestClient
+        client = TestClient(self.client)
+        response = client.get("/dmcontrol")
+        self.assertEqual(response.status_code, 200)
+        self.assertIn(b"function getTokenAtScreen", response.content)
+        # Hit-test must consider the active actor first and use a radius check.
+        self.assertIn(b"Math.hypot(x - tx, y - ty)", response.content)
+        self.assertIn(b"isActiveHit", response.content)
+        # The old exact-cell-equality drag-start should no longer be the gating condition.
+        self.assertNotIn(b"if (activeUnit.pos.col === col && activeUnit.pos.row === row) {", response.content)
+
+    def test_dm_control_has_mode_banner(self):
+        """Verify /dmcontrol shows a prominent mode banner with Move/Target/Resolve/Sequence states."""
+        from fastapi.testclient import TestClient
+        client = TestClient(self.client)
+        response = client.get("/dmcontrol")
+        self.assertEqual(response.status_code, 200)
+        self.assertIn(b'id="modeBanner"', response.content)
+        self.assertIn(b"function updateModeBanner", response.content)
+        self.assertIn(b"target-mode", response.content)
+        self.assertIn(b"resolve-mode", response.content)
+        self.assertIn(b"sequence-mode", response.content)
+        self.assertIn(b"Cancel Targeting", response.content)
+        # Resolution-mode banner should explicitly name action and target.
+        self.assertIn(b"Resolving ", response.content)
+        # Sequence-mode banner should mention multiattack and movement-blocked context.
+        self.assertIn(b"Multiattack sequence active", response.content)
+
+    def test_dm_control_movement_blocked_during_targeting(self):
+        """Verify movement drag is blocked while targeting/resolution is active and surfaces a status."""
+        from fastapi.testclient import TestClient
+        client = TestClient(self.client)
+        response = client.get("/dmcontrol")
+        self.assertEqual(response.status_code, 200)
+        # The pointerdown handler returns early in target mode (no drag) and surfaces a clear status when the resolution tray is open.
+        self.assertIn(b"// Movement drag is intentionally blocked while targeting.", response.content)
+        self.assertIn(b"Cancel resolution to move.", response.content)
+        # Banner messaging tells the DM that movement is blocked while targeting.
+        self.assertIn(b"Movement is blocked while targeting", response.content)
+
+    def test_dm_control_has_manual_assist_labeling(self):
+        """Verify manual-only actions are visually distinct as Manual Assist or Reminder."""
+        from fastapi.testclient import TestClient
+        client = TestClient(self.client)
+        response = client.get("/dmcontrol")
+        self.assertEqual(response.status_code, 200)
+        self.assertIn(b"Manual Assist", response.content)
+        self.assertIn(b"Reminder", response.content)
+        # The selected-summary panel for a manual capability should not show an Apply button.
+        self.assertIn(b"Manual Assist \xe2\x80\x94 DM resolves this action by hand.", response.content)
+        # Executable cards remain attack-tagged so they stay obviously targetable.
+        self.assertIn(b"cls: 'exec'", response.content)
+        self.assertIn(b'card-badge', response.content)
+
+    def test_dm_control_target_visibility(self):
+        """Verify candidate tokens get a visible highlight and the selected target stands out."""
+        from fastapi.testclient import TestClient
+        client = TestClient(self.client)
+        response = client.get("/dmcontrol")
+        self.assertEqual(response.status_code, 200)
+        # Candidate ring is now solid (not dashed) and uses a soft fill to read clearly.
+        self.assertIn(b"Unselected candidate", response.content)
+        # Selected target retains a stronger ring + inner accent.
+        self.assertIn(b"Outer glow ring.", response.content)
+        # Hit-test must guard against selecting the active actor as a target (existing isTargetCandidate).
+        self.assertIn(b"isTargetCandidate(unit)", response.content)
+
     def test_dm_move_combatant_on_map_functional(self):
         """Verify the move endpoint works and updates state."""
         from fastapi.testclient import TestClient

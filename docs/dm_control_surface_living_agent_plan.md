@@ -252,6 +252,37 @@ These are safe cleanup tasks before construction begins.
 
 Agents should append concise entries here.
 
+### 2026-05-09 — Phase 3E2: /dmcontrol live UX and interaction stabilization
+Agent/model: Claude Opus 4.7
+Scope:
+- Stabilized `/dmcontrol` for live Black and Tan combat without changing backend rules.
+- Added a draggable horizontal split between map and control bar (`#splitHandle`) with localStorage persistence (`dmcontrol.controlBarHeightPx`), safe min/max clamping, double-click reset, and re-clamp on viewport resize. Canvas is re-fit and redrawn after split changes.
+- Replaced exact-cell drag start with token hit-testing (`getTokenAtScreen`). Click within the active token's visible radius now starts a drag; multi-token overlaps prefer the active initiative actor. Drag remains blocked for PCs and during target/resolution mode.
+- Added a prominent mode banner (`#modeBanner`) above the map covering Move / Target / Resolve / Sequence states, with an inline "Cancel Targeting" / "Cancel" / "End Sequence" button. Banner stays in sync with local state via `updateModeBanner()` called from `renderActionPanel` and `renderState`.
+- Surfaced a transient status when movement is attempted during resolution ("Cancel resolution to move."). Targeting clicks also use token hit-testing so clicks near a token edge select correctly.
+- Cleaned up the action panel: HP/AC/Movement/Conditions are stat pills; action cards have larger hit areas and a clear "Attack" vs "Manual Assist" / "Reminder" badge with a coloured left border. Traits and special items collapse under a single `<details>` so primary actions stay prominent.
+- Manual-only capabilities now render a "Manual Assist — DM resolves this action by hand." note in the selected-summary, never enter target mode, and show no Apply button. Executable attacks remain previewable and reach Apply via the existing flow.
+- Improved canvas target visibility: candidate tokens get a soft fill + solid amber ring; the selected target gets a stronger ring plus an inner white accent. Active actor is excluded from candidates.
+Files changed:
+- assets/web/dmcontrol/index.html
+- tests/test_dm_control_route.py
+- docs/dm_control_surface_living_agent_plan.md
+Outcome:
+- Map and control bar are user-resizable and persist across reloads.
+- Token drag is reliable across click positions; target mode no longer accidentally moves the actor.
+- Mode is unambiguous from a glance via banner and inline cancel button.
+- Manual assists vs executable attacks are visually unmistakable.
+- Apply Results and Multiattack sequence flows verified preserved by the route + apply-results tests.
+Validation:
+- `python3 -m unittest tests.test_dm_control_route tests.test_dm_control_apply_results tests.test_black_and_tan_capabilities tests.test_dm_console_asset_syntax` — all passed.
+- Mandatory JS syntax check passed (Node `--check` over inline `<script>` blocks of `assets/web/dmcontrol/index.html`).
+Remaining rough edges:
+- No live-server smoke yet against an actual browser this pass; UX validated only via static UI assertions.
+- Split drag uses pointer capture on the handle; very fast cross-window pointer-up events may need a stray `mouseleave` recovery if real-world testing surfaces stuck dragging.
+- Action card layout is tuned for desktop widths; narrow viewports will still stack but were not regressed-tested live.
+Next recommended pass:
+- Live game smoke testing only. Do not start a new feature pass unless a specific reproduced bug appears.
+
 ### 2026-05-08 — Phase 3C2: /dmcontrol browser readiness hardening
 Agent/model: Gemini CLI
 Scope:

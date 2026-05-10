@@ -43,12 +43,52 @@
     }
     .workspace-link:hover { border-color: var(--accent); color: var(--accent); }
 
+    /* ── Mode Banner ─────────────────────────────────────────────── */
+    .mode-banner {
+      flex-shrink: 0;
+      padding: 8px 16px;
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      font-size: 13px;
+      border-bottom: 1px solid var(--border);
+      background: var(--panel);
+      z-index: 10;
+    }
+    .mode-banner .mode-icon {
+      font-size: 14px;
+      font-weight: bold;
+      letter-spacing: 0.05em;
+      text-transform: uppercase;
+      padding: 3px 8px;
+      border-radius: 4px;
+      flex-shrink: 0;
+    }
+    .mode-banner .mode-text { flex: 1; line-height: 1.3; }
+    .mode-banner.move-mode { border-bottom-color: rgba(106,169,255,0.4); }
+    .mode-banner.move-mode .mode-icon { background: rgba(106,169,255,0.18); color: var(--accent); }
+    .mode-banner.target-mode { border-bottom-color: rgba(214,186,126,0.6); background: rgba(214,186,126,0.08); }
+    .mode-banner.target-mode .mode-icon { background: var(--gold); color: var(--bg); }
+    .mode-banner.resolve-mode { border-bottom-color: rgba(76,175,130,0.5); background: rgba(76,175,130,0.08); }
+    .mode-banner.resolve-mode .mode-icon { background: var(--heal); color: var(--bg); }
+    .mode-banner.sequence-mode { border-bottom-color: rgba(106,169,255,0.6); background: rgba(106,169,255,0.08); }
+    .mode-banner.sequence-mode .mode-icon { background: var(--accent); color: var(--bg); }
+    .mode-banner.blocked-mode { border-bottom-color: var(--danger); background: rgba(255,91,91,0.08); }
+    .mode-banner.blocked-mode .mode-icon { background: var(--danger); color: var(--bg); }
+    .mode-banner .cancel-target-btn {
+      background: var(--danger); color: var(--bg); border: none;
+      border-radius: 4px; padding: 5px 12px; cursor: pointer;
+      font-size: 12px; font-weight: bold; flex-shrink: 0;
+    }
+    .mode-banner .cancel-target-btn:hover { filter: brightness(1.15); }
+
     /* ── Main Map Surface ────────────────────────────────────────── */
     .main-surface {
-      flex: 1;
       position: relative;
       background: #0a0c12;
       overflow: hidden;
+      flex: 1 1 auto;
+      min-height: 120px;
     }
     canvas {
       position: absolute;
@@ -58,16 +98,39 @@
       image-rendering: -webkit-optimize-contrast;
     }
 
+    /* ── Split Handle ────────────────────────────────────────────── */
+    .split-handle {
+      flex: 0 0 8px;
+      cursor: row-resize;
+      background: var(--panel);
+      border-top: 1px solid var(--border);
+      border-bottom: 1px solid var(--border);
+      position: relative;
+      z-index: 11;
+      transition: background 0.15s ease;
+    }
+    .split-handle:hover, .split-handle.dragging { background: var(--accent); }
+    .split-handle::before {
+      content: '';
+      position: absolute;
+      left: 50%; top: 50%;
+      transform: translate(-50%, -50%);
+      width: 36px; height: 3px;
+      background: var(--muted);
+      border-radius: 2px;
+      opacity: 0.5;
+    }
+    .split-handle:hover::before, .split-handle.dragging::before { background: var(--bg); opacity: 0.9; }
+
     /* ── Bottom Control Bar ──────────────────────────────────────── */
     .control-bar {
       background: var(--panel2);
-      border-top: 1px solid var(--border);
-      padding: 12px 16px;
-      min-height: 120px;
+      padding: 10px 16px 14px 16px;
       display: flex;
       flex-direction: column;
-      gap: 12px;
-      flex-shrink: 0;
+      gap: 10px;
+      flex: 0 0 320px;
+      min-height: 160px;
       z-index: 10;
       overflow-y: auto;
     }
@@ -75,9 +138,21 @@
       display: flex;
       align-items: center;
       gap: 12px;
+      flex-wrap: wrap;
     }
     .actor-name { font-size: 18px; font-weight: bold; color: var(--text); }
     .actor-meta { font-size: 12px; color: var(--muted); }
+    .actor-stat-row {
+      display: flex; gap: 14px; flex-wrap: wrap;
+      font-size: 12px; color: var(--text);
+    }
+    .actor-stat-row .stat-pill {
+      background: rgba(255,255,255,0.05);
+      border: 1px solid var(--border);
+      border-radius: 4px;
+      padding: 3px 8px;
+    }
+    .actor-stat-row .stat-pill strong { color: var(--gold); }
     .status-idle { color: var(--muted); font-style: italic; font-size: 13px; }
 
     /* ── Action Panel ───────────────────────────────────────────── */
@@ -103,39 +178,45 @@
     }
     .action-grid {
       display: grid;
-      grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
-      gap: 8px;
+      grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));
+      gap: 10px;
     }
     .action-card {
-      background: rgba(255,255,255,0.03);
+      background: rgba(255,255,255,0.04);
       border: 1px solid var(--border);
       border-radius: 6px;
-      padding: 8px 10px;
+      padding: 10px 12px;
+      min-height: 64px;
       cursor: pointer;
       transition: all 0.15s ease;
       display: flex;
       flex-direction: column;
-      gap: 4px;
+      gap: 5px;
     }
     .action-card:hover {
-      background: rgba(255,255,255,0.06);
-      border-color: rgba(214,186,126,0.4);
+      background: rgba(255,255,255,0.07);
+      border-color: rgba(214,186,126,0.45);
     }
     .action-card.selected {
-      background: rgba(106,169,255,0.12);
+      background: rgba(106,169,255,0.14);
       border-color: var(--accent);
-      box-shadow: 0 0 8px rgba(106,169,255,0.2);
+      box-shadow: 0 0 10px rgba(106,169,255,0.28);
     }
     .action-card .card-header {
       display: flex;
       align-items: flex-start;
       justify-content: space-between;
       gap: 8px;
+      flex-wrap: wrap;
     }
     .action-card .card-name {
-      font-size: 13px;
+      font-size: 14px;
       font-weight: 600;
       color: var(--text);
+      flex: 1;
+    }
+    .action-card .card-badges {
+      display: flex; gap: 4px; flex-wrap: wrap;
     }
     .action-card .card-badge {
       font-size: 9px;
@@ -146,21 +227,34 @@
       text-transform: uppercase;
       white-space: nowrap;
     }
+    .action-card .card-badge.exec {
+      background: rgba(106,169,255,0.18); color: var(--accent);
+    }
+    .action-card .card-badge.manual-tag {
+      background: var(--gold); color: var(--bg); font-weight: bold;
+    }
     .action-card .card-meta {
-      font-size: 11px;
-      color: var(--muted);
-      line-height: 1.3;
+      font-size: 12px;
+      color: var(--text);
+      opacity: 0.85;
+      line-height: 1.35;
+    }
+    .action-card.executable {
+      border-left: 3px solid var(--accent);
     }
     .action-card.trait {
-      background: none;
+      background: rgba(255,255,255,0.015);
       border-style: dashed;
-      opacity: 0.8;
+      opacity: 0.7;
+      min-height: 48px;
+      padding: 7px 10px;
     }
+    .action-card.trait .card-name { font-size: 12px; font-weight: 500; }
     .action-card.manual {
-      border-color: rgba(214,186,126,0.3);
-      background: rgba(214,186,126,0.05);
-      opacity: 0.85;
+      border-left: 3px dashed var(--gold);
+      background: rgba(214,186,126,0.06);
     }
+    .action-card.manual .card-meta { color: var(--gold); opacity: 0.95; }
 
     .selected-summary {
       background: rgba(106,169,255,0.1);
@@ -189,12 +283,19 @@
       <a href="/dm" class="workspace-link">↩ DM Cockpit</a>
     </header>
 
+    <div id="modeBanner" class="mode-banner move-mode">
+      <span class="mode-icon">Move</span>
+      <span class="mode-text">Drag token on map to move. Movement is backend-validated.</span>
+    </div>
+
     <main class="main-surface" id="mapWrap">
       <canvas id="mapCanvas"></canvas>
       <div id="statusOverlay" class="status-overlay" style="display:none;"></div>
     </main>
 
-    <footer class="control-bar">
+    <div id="splitHandle" class="split-handle" role="separator" aria-orientation="horizontal" title="Drag to resize map / control split"></div>
+
+    <footer class="control-bar" id="controlBar">
       <div id="activeActorPanel">
         <div class="status-idle">Waiting for combat data...</div>
       </div>
@@ -242,6 +343,60 @@
         .replace(/>/g, '&gt;')
         .replace(/"/g, '&quot;')
         .replace(/'/g, '&#39;');
+    }
+
+    /**
+     * Update the prominent mode banner (Move / Target / Resolve / Sequence).
+     * Should be called from renderActionPanel and renderState so it stays in sync with local state.
+     */
+    function updateModeBanner() {
+      const banner = document.getElementById('modeBanner');
+      if (!banner) return;
+      banner.classList.remove('move-mode', 'target-mode', 'resolve-mode', 'sequence-mode', 'blocked-mode');
+
+      let icon = 'Move', text = 'Drag token on map to move. Movement is backend-validated.', cls = 'move-mode', cancelHtml = '';
+
+      if (!state || !state.in_combat) {
+        icon = 'Idle';
+        text = 'Out of combat.';
+        cls = 'move-mode';
+      } else {
+        const actor = (state.combatants || []).find(c => String(c.cid) === String(state.active_cid));
+        if (actor && actor.is_pc) {
+          icon = 'PC Turn';
+          text = `Waiting for ${esc(actor.name)} (player). DM movement is disabled.`;
+          cls = 'blocked-mode';
+        } else if (localResolutionTray) {
+          const cap = findCapabilityById(localResolutionTray.capabilityId);
+          const target = findCombatantByCid(localResolutionTray.targetCid);
+          const capName = cap ? cap.name : 'Action';
+          const targetName = target ? target.name : 'target';
+          icon = 'Resolve';
+          text = `Resolving ${esc(capName)} vs ${esc(targetName)}. Choose Apply or Cancel.`;
+          cls = 'resolve-mode';
+          cancelHtml = `<button class="cancel-target-btn" onclick="cancelTargetPreviewMode()">Cancel</button>`;
+        } else if (localSequencePacket) {
+          icon = 'Sequence';
+          text = `Multiattack sequence active: ${esc(localSequencePacket.name || 'Multiattack')}. Pick the next step from the panel below. Movement is blocked.`;
+          cls = 'sequence-mode';
+          cancelHtml = `<button class="cancel-target-btn" onclick="cancelLocalSequence()">End Sequence</button>`;
+        } else if (targetPreviewMode) {
+          icon = 'Target';
+          text = `Targeting ${esc(targetPreviewMode.capabilityName || 'action')}. Click an enemy token to select. Movement is blocked while targeting.`;
+          cls = 'target-mode';
+          cancelHtml = `<button class="cancel-target-btn" onclick="cancelTargetPreviewMode()">Cancel Targeting</button>`;
+        } else if (actor && !actor.is_pc) {
+          icon = 'Move';
+          const units = state.tactical_map?.units || [];
+          const unit = units.find(u => String(u.cid) === String(state.active_cid));
+          const moveRemaining = unit ? (unit.move_remaining ?? unit.speed ?? 0) : 0;
+          text = `Drag token on map to move (${esc(actor.name)}, ${moveRemaining} ft remaining). Movement is backend-validated.`;
+          cls = 'move-mode';
+        }
+      }
+
+      banner.classList.add(cls);
+      banner.innerHTML = `<span class="mode-icon">${esc(icon)}</span><span class="mode-text">${text}</span>${cancelHtml}`;
     }
 
     /**
@@ -431,11 +586,83 @@
       canvas.width = rect.width * dpr;
       canvas.height = rect.height * dpr;
       ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+      // Re-fit the grid view when the surface dimensions change so the map redraws cleanly.
+      fittedToGrid = false;
       draw();
     }
 
     window.addEventListener('resize', resize);
     resize();
+
+    // ── Resizable map / control split ─────────────────────────────
+    const SPLIT_STORAGE_KEY = 'dmcontrol.controlBarHeightPx';
+    const SPLIT_MIN_PX = 140;
+    const SPLIT_MAX_PADDING = 200; // keep at least this much map height
+    const splitHandle = document.getElementById('splitHandle');
+    const controlBarEl = document.getElementById('controlBar');
+
+    function clampControlHeight(px) {
+      if (!Number.isFinite(px)) return 320;
+      const h = window.innerHeight || 800;
+      const max = Math.max(SPLIT_MIN_PX, h - SPLIT_MAX_PADDING);
+      return Math.min(Math.max(px, SPLIT_MIN_PX), max);
+    }
+
+    function applyControlBarHeight(px, persist) {
+      const target = clampControlHeight(px);
+      controlBarEl.style.flex = `0 0 ${target}px`;
+      if (persist) {
+        try { localStorage.setItem(SPLIT_STORAGE_KEY, String(target)); } catch (e) {}
+      }
+      // Defer canvas resize until layout settles.
+      requestAnimationFrame(resize);
+    }
+
+    function loadControlBarHeight() {
+      let saved = null;
+      try { saved = localStorage.getItem(SPLIT_STORAGE_KEY); } catch (e) {}
+      const px = parseInt(saved, 10);
+      if (!Number.isFinite(px)) {
+        applyControlBarHeight(320, false);
+      } else {
+        applyControlBarHeight(px, false);
+      }
+    }
+    loadControlBarHeight();
+
+    let splitDrag = null;
+    splitHandle.addEventListener('pointerdown', (e) => {
+      e.preventDefault();
+      const rect = controlBarEl.getBoundingClientRect();
+      splitDrag = { startY: e.clientY, startHeight: rect.height, pointerId: e.pointerId };
+      splitHandle.classList.add('dragging');
+      splitHandle.setPointerCapture(e.pointerId);
+    });
+    splitHandle.addEventListener('pointermove', (e) => {
+      if (!splitDrag) return;
+      const dy = e.clientY - splitDrag.startY;
+      // Dragging handle down shrinks control bar (more map); dragging up grows it.
+      applyControlBarHeight(splitDrag.startHeight - dy, false);
+    });
+    function endSplitDrag(e) {
+      if (!splitDrag) return;
+      try { splitHandle.releasePointerCapture(splitDrag.pointerId); } catch (err) {}
+      splitHandle.classList.remove('dragging');
+      const rect = controlBarEl.getBoundingClientRect();
+      applyControlBarHeight(rect.height, true);
+      splitDrag = null;
+    }
+    splitHandle.addEventListener('pointerup', endSplitDrag);
+    splitHandle.addEventListener('pointercancel', endSplitDrag);
+    splitHandle.addEventListener('dblclick', () => {
+      // Reset to default split.
+      applyControlBarHeight(320, true);
+    });
+    window.addEventListener('resize', () => {
+      // Re-clamp on viewport changes so saved value can never push elements off-screen.
+      const rect = controlBarEl.getBoundingClientRect();
+      applyControlBarHeight(rect.height, false);
+    });
 
     function screenToGrid(x, y) {
       return {
@@ -444,34 +671,96 @@
       };
     }
 
+    /**
+     * Hit-test screen coordinates against rendered tokens.
+     * Prefers the active actor when multiple tokens overlap or when the click
+     * is anywhere within the active token's visible radius.
+     */
+    function getTokenAtScreen(x, y) {
+      if (!state || !state.tactical_map) return null;
+      const units = state.tactical_map.units || [];
+      const r = Math.max(10, zoom * 0.35);
+      const activeCid = state.active_cid;
+
+      // Pass 1: prefer active actor token.
+      const activeUnit = units.find(u => u.pos && String(u.cid) === String(activeCid));
+      if (activeUnit) {
+        const tx = panX + activeUnit.pos.col * zoom + zoom / 2;
+        const ty = panY + activeUnit.pos.row * zoom + zoom / 2;
+        const d = Math.hypot(x - tx, y - ty);
+        if (d <= r + 4) return activeUnit;
+      }
+
+      // Pass 2: any other token whose drawn circle contains (x, y).
+      for (const u of units) {
+        if (!u.pos) continue;
+        const tx = panX + u.pos.col * zoom + zoom / 2;
+        const ty = panY + u.pos.row * zoom + zoom / 2;
+        const d = Math.hypot(x - tx, y - ty);
+        if (d <= r) return u;
+      }
+      return null;
+    }
+
+    function showTransientStatus(msg, color) {
+      const statusEl = document.getElementById('combatStatus');
+      if (!statusEl) return;
+      statusEl.textContent = msg;
+      statusEl.style.color = color || 'var(--gold)';
+      // Reset after a short delay so the round/turn label returns.
+      clearTimeout(showTransientStatus._t);
+      showTransientStatus._t = setTimeout(() => {
+        if (state && state.in_combat) {
+          statusEl.textContent = `Round ${state.round}, Turn ${state.turn}`;
+          statusEl.style.color = 'var(--gold)';
+        }
+      }, 1800);
+    }
+
     canvas.addEventListener('pointerdown', (e) => {
       if (!state || !state.tactical_map || isMoving) return;
       const rect = canvas.getBoundingClientRect();
       const x = e.clientX - rect.left;
       const y = e.clientY - rect.top;
-      const { col, row } = screenToGrid(x, y);
 
       if (targetPreviewMode) {
-        const unit = findUnitAtGridCell(col, row);
-        if (isTargetCandidate(unit)) {
-          selectPreviewTarget(unit.cid);
+        // In target mode the click selects a target token if it's a candidate.
+        const hit = getTokenAtScreen(x, y);
+        if (hit && isTargetCandidate(hit)) {
+          selectPreviewTarget(hit.cid);
+        } else {
+          // Fallback to grid-cell lookup so clicking near a token still works.
+          const { col, row } = screenToGrid(x, y);
+          const cellUnit = findUnitAtGridCell(col, row);
+          if (cellUnit && isTargetCandidate(cellUnit)) {
+            selectPreviewTarget(cellUnit.cid);
+          }
         }
-        return; // Block movement drag while in target preview
+        return; // Movement drag is intentionally blocked while targeting.
+      }
+
+      if (localResolutionTray) {
+        showTransientStatus('Cancel resolution to move.', 'var(--danger)');
+        return;
       }
 
       const activeCid = state.active_cid;
       const activeUnit = (state.tactical_map.units || []).find(u => String(u.cid) === String(activeCid));
       const actor = state.combatants.find(c => String(c.cid) === String(activeCid));
-      
+
       if (!activeUnit || !activeUnit.pos || !actor || actor.is_pc) return;
 
-      if (activeUnit.pos.col === col && activeUnit.pos.row === row) {
+      // Hit-test against the active token rather than requiring exact cell equality.
+      const hit = getTokenAtScreen(x, y);
+      const isActiveHit = hit && String(hit.cid) === String(activeCid);
+
+      if (isActiveHit) {
         dragging = {
           cid: activeCid,
-          col: col,
-          row: row,
-          curCol: col,
-          curRow: row,
+          col: activeUnit.pos.col,
+          row: activeUnit.pos.row,
+          curCol: activeUnit.pos.col,
+          curRow: activeUnit.pos.row,
           startX: x,
           startY: y
         };
@@ -895,6 +1184,8 @@
     function renderActionPanel(actor, summary) {
       const panel = document.getElementById('activeActionsPanel');
       if (!panel) return;
+      // Keep the mode banner in sync with current local state on every render.
+      updateModeBanner();
 
       if (!state || !state.in_combat || !actor) {
         panel.innerHTML = '<div class="status-idle">No active monster/NPC actions.</div>';
@@ -1058,11 +1349,30 @@
               `;
             }
           } else {
-            summaryHtml += `
-              <div class="actor-meta" style="margin-top:4px; font-style:italic;">
-                ${isPreviewableTargetAction(selected) ? 'Targeting mode available.' : 'Targeting and execution are deferred in this pass.'}
-              </div>
-            `;
+            const isManual = selected.executable === false;
+            const previewable = isPreviewableTargetAction(selected);
+            if (isManual) {
+              summaryHtml += `
+                <div class="actor-meta" style="margin-top:6px; color:var(--gold); font-weight:bold;">
+                  Manual Assist — DM resolves this action by hand.
+                </div>
+                <div class="actor-meta" style="margin-top:4px; font-size:11px; opacity:0.85;">
+                  No target click and no Apply button. Use the manual instructions above (or /dm) to adjudicate the result.
+                </div>
+              `;
+            } else if (previewable) {
+              summaryHtml += `
+                <div class="actor-meta" style="margin-top:6px; color:var(--accent); font-weight:bold;">
+                  Targeting mode active — click an enemy token on the map.
+                </div>
+              `;
+            } else {
+              summaryHtml += `
+                <div class="actor-meta" style="margin-top:4px; font-style:italic;">
+                  Targeting and execution are deferred in this pass.
+                </div>
+              `;
+            }
           }
 
           summaryHtml += `</div>`;
@@ -1080,39 +1390,82 @@
         { key: 'special', label: 'Special' }
       ];
 
+      // Render Actions/Bonus/Reactions/Legendary first as the prominent groups; collapse traits behind a <details>.
+      const primaryKeys = new Set(['actions', 'bonus_actions', 'reactions', 'legendary_actions']);
+      const collapsedKeys = new Set(['traits', 'lair_actions', 'special']);
+
+      const renderItem = (item, conf) => {
+        const isSelected = String(item.id) === String(selectedCapabilityId);
+        const isTrait = conf.key === 'traits' || conf.key === 'lair_actions';
+        const isExecutable = item.executable !== false && !isTrait;
+        const badges = [];
+        // Highlight primary classification first.
+        if (isExecutable) {
+          badges.push({ text: 'Attack', cls: 'exec' });
+        } else if (isTrait) {
+          badges.push({ text: 'Reminder', cls: 'manual-tag' });
+        } else {
+          badges.push({ text: 'Manual Assist', cls: 'manual-tag' });
+        }
+        if (item.action_type) badges.push({ text: item.action_type, cls: '' });
+        if (item.target_mode) badges.push({ text: item.target_mode, cls: '' });
+        if (item.recharge_rule) badges.push({ text: item.recharge_rule, cls: '' });
+        if (item.uses_remaining !== undefined && item.uses_total !== undefined) {
+          badges.push({ text: `${item.uses_remaining}/${item.uses_total} Uses`, cls: '' });
+        }
+
+        const cardCls = ['action-card'];
+        if (isSelected) cardCls.push('selected');
+        if (isTrait) cardCls.push('trait');
+        if (!isExecutable && !isTrait) cardCls.push('manual');
+        if (isExecutable) cardCls.push('executable');
+
+        const badgeHtml = badges.map(b => `<span class="card-badge ${b.cls}">${esc(b.text)}</span>`).join('');
+
+        return `
+          <div class="${cardCls.join(' ')}" onclick="selectCapability('${esc(item.id)}')">
+            <div class="card-header">
+              <span class="card-name">${esc(item.name)}</span>
+              <span class="card-badges">${badgeHtml}</span>
+            </div>
+            ${item.mechanics_summary ? `<div class="card-meta">${esc(item.mechanics_summary)}</div>` : ''}
+          </div>
+        `;
+      };
+
+      // Pass 1: prominent groups.
       groupConfig.forEach(conf => {
+        if (!primaryKeys.has(conf.key)) return;
         const items = groups[conf.key];
-        if (items && items.length > 0) {
-          html += `<div class="action-group">`;
+        if (!items || items.length === 0) return;
+        html += `<div class="action-group">`;
+        html += `<div class="group-label">${esc(conf.label)}</div>`;
+        html += `<div class="action-grid">`;
+        items.forEach(item => { html += renderItem(item, conf); });
+        html += `</div></div>`;
+      });
+
+      // Pass 2: collapsed/secondary groups under a single <details> so the active cockpit stays compact.
+      const secondaryItems = [];
+      groupConfig.forEach(conf => {
+        if (!collapsedKeys.has(conf.key)) return;
+        const items = groups[conf.key];
+        if (!items || items.length === 0) return;
+        secondaryItems.push({ conf, items });
+      });
+      if (secondaryItems.length) {
+        const total = secondaryItems.reduce((n, g) => n + g.items.length, 0);
+        html += `<details class="action-group secondary-group" style="margin-top:6px;">`;
+        html += `<summary style="font-size:11px; color:var(--muted); cursor:pointer; padding:4px 0; text-transform:uppercase; letter-spacing:0.05em;">Traits & Reminders (${total})</summary>`;
+        secondaryItems.forEach(({ conf, items }) => {
+          html += `<div class="action-group" style="margin-top:6px;">`;
           html += `<div class="group-label">${esc(conf.label)}</div>`;
           html += `<div class="action-grid">`;
-          items.forEach(item => {
-            const isSelected = String(item.id) === String(selectedCapabilityId);
-            const isTrait = conf.key === 'traits' || conf.key === 'lair_actions';
-            const badges = [];
-            if (item.action_type) badges.push(item.action_type);
-            if (item.target_mode) badges.push(item.target_mode);
-            if (item.recharge_rule) badges.push(item.recharge_rule);
-            if (item.uses_remaining !== undefined && item.uses_total !== undefined) {
-              badges.push(`${item.uses_remaining}/${item.uses_total} Uses`);
-            }
-            const isExecutable = item.executable !== false;
-            if (!isExecutable) badges.push('Manual');
-
-            html += `
-              <div class="action-card ${isSelected ? 'selected' : ''} ${isTrait ? 'trait' : ''} ${!isExecutable ? 'manual' : ''}"
-                   onclick="selectCapability('${esc(item.id)}')">
-                <div class="card-header">
-                  <span class="card-name">${esc(item.name)}</span>
-                  ${badges.map(b => `<span class="card-badge">${esc(b)}</span>`).join('')}
-                </div>
-                ${item.mechanics_summary ? `<div class="card-meta">${esc(item.mechanics_summary)}</div>` : ''}
-              </div>
-            `;
-          });
+          items.forEach(item => { html += renderItem(item, conf); });
           html += `</div></div>`;
-        }
-      });
+        });
+        html += `</details>`;
+      }
 
       panel.innerHTML = html || '<div class="status-idle">No actions found for this creature.</div>';
     }
@@ -1162,6 +1515,7 @@
         fullResetLocalState();
         lastActiveCid = null;
         fetchCapabilitiesForActiveActor(null);
+        updateModeBanner();
         return;
       }
 
@@ -1200,16 +1554,17 @@
       const moveRemaining = unit ? (unit.move_remaining ?? unit.speed ?? 0) : 0;
 
       if (isMonster) {
+        const conditions = (actor.conditions && actor.conditions.length) ? actor.conditions.join(', ') : 'None';
         actorPanel.innerHTML = `
           <div class="actor-info">
-            <span class="actor-name">${actor.name}</span>
-            <span class="actor-meta">${actor.role || actor.type || 'Monster/NPC'} • HP: ${actor.hp}/${actor.max_hp}</span>
+            <span class="actor-name">${esc(actor.name)}</span>
+            <span class="actor-meta">${esc(actor.role || actor.type || 'Monster/NPC')}</span>
           </div>
-          <div class="actor-meta">
-            Speed: ${actor.speed || '—'} • Movement Remaining: ${moveRemaining} ft • AC: ${actor.ac || '—'} • Conditions: ${actor.conditions?.join(', ') || 'None'}
-          </div>
-          <div class="actor-meta" style="margin-top:4px; color:var(--accent); font-style:italic;">
-            Drag token on map to move • Movement is backend-validated
+          <div class="actor-stat-row">
+            <span class="stat-pill"><strong>HP</strong> ${esc(actor.hp)}/${esc(actor.max_hp)}</span>
+            <span class="stat-pill"><strong>AC</strong> ${esc(actor.ac || '—')}</span>
+            <span class="stat-pill" title="Movement Remaining"><strong>Movement Remaining</strong> ${esc(moveRemaining)} / ${esc(actor.speed || '—')} ft</span>
+            <span class="stat-pill"><strong>Conditions</strong> ${esc(conditions)}</span>
           </div>
         `;
         overlay.textContent = `Focus: ${actor.name} (Active)`;
@@ -1218,7 +1573,7 @@
       } else {
         actorPanel.innerHTML = `
           <div class="actor-info">
-            <span class="actor-name">${actor.name}</span>
+            <span class="actor-name">${esc(actor.name)}</span>
             <span class="actor-meta">Player Character • Turn in progress</span>
           </div>
           <div class="status-idle">Waiting for player action...</div>
@@ -1229,6 +1584,7 @@
       }
 
       fetchCapabilitiesForActiveActor(actor);
+      updateModeBanner();
     }
 
     function gridToScreen(col, row) {
@@ -1471,37 +1827,44 @@
         ctx.fillStyle = "rgba(255,255,255,0.95)";
         ctx.fillText(label, x, y);
 
-        // Target Preview indicator
-        if (targetPreviewMode && !active) {
+        // Target Preview indicator — make candidates clearly highlighted, and the
+        // selected target much more obvious than unselected candidates.
+        if (targetPreviewMode && !active && isTargetCandidate(u)) {
           const isSelectedTarget = selectedTargetCid && String(u.cid) === String(selectedTargetCid);
-
-          ctx.beginPath();
-          ctx.arc(x, y, r + 4, 0, Math.PI * 2);
 
           if (isSelectedTarget) {
             const cap = findCapabilityById(targetPreviewMode.capabilityId);
             const advisory = getSelectedTargetAdvisory(cap, selectedTargetCid);
-            let color = "#d6ba7e"; // Default gold
-            if (advisory.status === 'likely-in-range') color = "#4caf82";
-            else if (advisory.status === 'likely-out-of-range') color = "#ff5b5b";
+            let color = "#d6ba7e";
+            let fillCol = "rgba(214, 186, 126, 0.28)";
+            if (advisory.status === 'likely-in-range') { color = "#4caf82"; fillCol = "rgba(76, 175, 130, 0.32)"; }
+            else if (advisory.status === 'likely-out-of-range') { color = "#ff5b5b"; fillCol = "rgba(255, 91, 91, 0.28)"; }
 
-            // Use literal rgba for fill
-            if (advisory.status === 'likely-in-range') ctx.fillStyle = "rgba(76, 175, 130, 0.2)";
-            else if (advisory.status === 'likely-out-of-range') ctx.fillStyle = "rgba(255, 91, 91, 0.2)";
-            else ctx.fillStyle = "rgba(214, 186, 126, 0.2)";
-
+            // Outer glow ring.
+            ctx.beginPath();
+            ctx.arc(x, y, r + 8, 0, Math.PI * 2);
+            ctx.fillStyle = fillCol;
             ctx.fill();
-            // If tray is open, make the ring stronger
             ctx.lineWidth = localResolutionTray ? 5 : 3;
             ctx.strokeStyle = color;
-          } else {
-            ctx.setLineDash([2, 2]);
-            ctx.lineWidth = 1;
-            ctx.strokeStyle = "rgba(214,186,126,0.6)";
-          }
+            ctx.stroke();
 
-          ctx.stroke();
-          ctx.setLineDash([]);
+            // Inner crosshair-ish accent so the selected target stands out clearly.
+            ctx.beginPath();
+            ctx.arc(x, y, r + 2, 0, Math.PI * 2);
+            ctx.lineWidth = 1.5;
+            ctx.strokeStyle = "rgba(255,255,255,0.85)";
+            ctx.stroke();
+          } else {
+            // Unselected candidate — soft fill plus solid (not dashed) ring so candidates read clearly.
+            ctx.beginPath();
+            ctx.arc(x, y, r + 5, 0, Math.PI * 2);
+            ctx.fillStyle = "rgba(214,186,126,0.10)";
+            ctx.fill();
+            ctx.lineWidth = 2;
+            ctx.strokeStyle = "rgba(214,186,126,0.65)";
+            ctx.stroke();
+          }
         }
       });
 
