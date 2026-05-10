@@ -43920,11 +43920,9 @@ class InitiativeTracker(base.InitiativeTracker):
                 area["size"] = int(size)
             except Exception:
                 area["size"] = size
-        if mechanics.get("range") is not None:
-            try:
-                area["range"] = int(mechanics.get("range"))
-            except Exception:
-                area["range"] = mechanics.get("range")
+        # Weapon range/long_range describe single-target reach; they are not AoE
+        # and must not populate area metadata. Only true AoE shape/size makes
+        # this an area capability.
         return area
 
     @staticmethod
@@ -43998,6 +43996,7 @@ class InitiativeTracker(base.InitiativeTracker):
             {
                 "capability_id": cap_id,
                 "capability_name": cap.get("name"),
+                "action_type": cap.get("action_type"),
                 "save_dc": mechanics.get("save_dc"),
                 "save_ability": mechanics.get("save_ability"),
                 "area": self._monster_capability_area_metadata(cap),
@@ -44291,22 +44290,37 @@ class InitiativeTracker(base.InitiativeTracker):
             if isinstance(eff, dict) and eff.get("kind") == "condition" and str(eff.get("condition") or "").strip()
         ]
 
+        action_type = str(cap.get("action_type") or "").strip().lower()
+        is_attack_action = action_type in {"melee_attack", "ranged_attack"}
+
         results: List[Dict[str, Any]] = []
         for row in rows:
             target_cid = row["target_cid"]
             outcome = row["outcome"]
             damage_entries: List[Dict[str, Any]] = []
-            if outcome in {"fail", "success"}:
+            if outcome == "fail":
                 for dmg in damage_rolls:
                     if not isinstance(dmg, dict):
                         continue
-                    amount_key = "rolled" if outcome == "fail" else "rolled_success"
                     try:
-                        amount = int(dmg.get(amount_key) or 0)
+                        amount = int(dmg.get("rolled") or 0)
                     except Exception:
                         amount = 0
                     if amount > 0:
                         damage_entries.append({"amount": int(amount), "type": str(dmg.get("type") or "damage").strip().lower() or "damage"})
+            elif outcome == "success" and not is_attack_action:
+                # Save-style "successful save" — half (or as configured) damage.
+                for dmg in damage_rolls:
+                    if not isinstance(dmg, dict):
+                        continue
+                    try:
+                        amount = int(dmg.get("rolled_success") or 0)
+                    except Exception:
+                        amount = 0
+                    if amount > 0:
+                        damage_entries.append({"amount": int(amount), "type": str(dmg.get("type") or "damage").strip().lower() or "damage"})
+            # Attack "success" is a MISS — no damage entries.
+            # "no_effect" is no damage by definition.
             if outcome == "manual" and isinstance(row["raw"].get("damage_entries"), list):
                 damage_entries = list(row["raw"].get("damage_entries") or [])
 

@@ -130,12 +130,9 @@ class MonsterCapabilityService:
                 area["size"] = int(size)
             except Exception:
                 area["size"] = size
-        range_value = mechanics.get("range")
-        if range_value is not None:
-            try:
-                area["range"] = int(range_value)
-            except Exception:
-                area["range"] = range_value
+        # Weapon range/long_range describe single-target reach; they are not AoE
+        # and must not populate area metadata. Only true AoE shape/size makes
+        # this an area capability.
         return area
 
     @classmethod
@@ -248,6 +245,25 @@ class MonsterCapabilityService:
             area = self._area_metadata_for_capability(cap)
             if area:
                 cap["area"] = area
+
+            # Expose weapon range/reach as flat fields so target-advisory UIs
+            # can read them without inferring from area metadata. These are
+            # never area metadata; they are single-target distance limits.
+            try:
+                if mechanics.get("range") is not None:
+                    cap["range_ft"] = int(mechanics.get("range"))
+            except Exception:
+                pass
+            try:
+                if mechanics.get("long_range") is not None:
+                    cap["long_range_ft"] = int(mechanics.get("long_range"))
+            except Exception:
+                pass
+            try:
+                if mechanics.get("reach") is not None:
+                    cap["reach_ft"] = int(mechanics.get("reach"))
+            except Exception:
+                pass
             outcome_options = self._outcome_options_for_capability(cap)
             if outcome_options:
                 cap["outcome_options"] = outcome_options

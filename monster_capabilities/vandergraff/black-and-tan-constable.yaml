@@ -8,16 +8,8 @@ capabilities:
     type: action
     executable: false
     desc: "The Constable makes two attacks, using .45 Pistol or Baton in any combination."
-    action_type: composite
-    mechanics:
-      composite:
-        - action_id: pistol
-          name: .45 Pistol
-          count: 2
-        - action_id: baton
-          name: Baton
-          count: 2
-      warning: "Can be any combination of Pistol or Baton."
+    action_type: utility
+    warning: "Manual/Assisted: Make two attacks total, using .45 Pistol or Baton in any combination. Apply each attack via the individual .45 Pistol or Baton entries."
   - id: pistol
     name: .45 Pistol
     type: action

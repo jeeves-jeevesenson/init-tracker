@@ -443,6 +443,11 @@
       if (outcome === 'no_effect') return 'no effect';
       if (outcome === 'manual') return 'manual adjudication';
 
+      // Attack actions: success means MISS, which deals 0 damage.
+      const actionType = String(packet.action_type || '').toLowerCase();
+      const isAttack = actionType === 'melee_attack' || actionType === 'ranged_attack';
+      if (outcome === 'success' && isAttack) return 'miss — no damage';
+
       const val = (outcome === 'success') ? packet.total_success : packet.total_fail;
       if (val === undefined || val === null) return 'Damage unknown';
       return `${val} damage`;
@@ -517,6 +522,42 @@
     }
 
     /**
+     * Format a single packet entry (damage roll, effect, condition) into a
+     * short readable string. Prevents [object Object] when arrays of objects
+     * are joined directly.
+     */
+    function formatPacketValue(value) {
+      if (value === null || value === undefined) return '';
+      if (typeof value === 'string' || typeof value === 'number' || typeof value === 'boolean') {
+        return String(value);
+      }
+      if (Array.isArray(value)) {
+        return value.map(formatPacketValue).filter(s => s).join(', ');
+      }
+      if (typeof value === 'object') {
+        // Damage-roll-like: prefer rolled total + type, else formula.
+        if (value.rolled !== undefined || value.formula || value.type) {
+          const parts = [];
+          if (value.rolled !== undefined && value.rolled !== null) parts.push(String(value.rolled));
+          if (value.formula) parts.push(`(${value.formula})`);
+          if (value.type) parts.push(String(value.type));
+          if (parts.length) return parts.join(' ');
+        }
+        // Effect/condition-like: prefer name/condition/label/text.
+        const label = value.name || value.condition || value.label || value.text || value.kind;
+        if (label) return String(label);
+        // Last resort: compact JSON, never raw [object Object].
+        try { return JSON.stringify(value); } catch (e) { return ''; }
+      }
+      return '';
+    }
+
+    function formatPacketEntries(arr) {
+      if (!Array.isArray(arr) || arr.length === 0) return '';
+      return arr.map(v => esc(formatPacketValue(v))).filter(s => s).join(', ');
+    }
+
+    /**
      * Build safe escaped HTML for the resolution packet preview.
      */
     function renderLocalResolutionPacket(packet, resolution) {
@@ -538,22 +579,25 @@
         html += `<div class="actor-meta">Attack Bonus: ${val >= 0 ? '+' : ''}${esc(val)}</div>`;
       }
 
-      if (packet.damage || packet.total_fail || packet.damage_formula) {
-        const dmg = packet.damage ?? packet.total_fail;
+      if (packet.total_fail !== undefined || packet.damage_formula) {
+        const dmg = packet.total_fail;
         const formula = packet.damage_formula;
-        html += `<div class="actor-meta">Damage: <strong>${esc(dmg || '?')}</strong> ${formula ? `(${esc(formula)})` : ''}</div>`;
+        html += `<div class="actor-meta">Damage: <strong>${esc(dmg !== undefined ? dmg : '?')}</strong> ${formula ? `(${esc(formula)})` : ''}</div>`;
       }
 
-      if (packet.damage_rolls && Array.isArray(packet.damage_rolls) && packet.damage_rolls.length > 0) {
-        html += `<div class="actor-meta" style="font-size:10px; opacity:0.8;">Rolls: ${packet.damage_rolls.join(', ')}</div>`;
+      const rollsText = formatPacketEntries(packet.damage_rolls);
+      if (rollsText) {
+        html += `<div class="actor-meta" style="font-size:10px; opacity:0.8;">Rolls: ${rollsText}</div>`;
       }
 
-      if (packet.effects && Array.isArray(packet.effects) && packet.effects.length > 0) {
-        html += `<div class="actor-meta">Effects: ${packet.effects.map(e => esc(e)).join(', ')}</div>`;
+      const effectsText = formatPacketEntries(packet.effects);
+      if (effectsText) {
+        html += `<div class="actor-meta">Effects: ${effectsText}</div>`;
       }
 
-      if (packet.conditions && Array.isArray(packet.conditions) && packet.conditions.length > 0) {
-        html += `<div class="actor-meta">Conditions: ${packet.conditions.map(c => esc(c)).join(', ')}</div>`;
+      const conditionsText = formatPacketEntries(packet.conditions);
+      if (conditionsText) {
+        html += `<div class="actor-meta">Conditions: ${conditionsText}</div>`;
       }
 
       html += '</div>';
@@ -1042,6 +1086,14 @@
     async function applyLocalResolutionResults(applyDamage, applyEffects) {
       if (!localResolutionTray || !localResolutionPacket || localResolutionInFlight || !state) return;
 
+      // Friendly-fire confirmation: even if a same-side selection has slipped
+      // past isTargetCandidate, require explicit confirm before applying damage/effects.
+      if ((applyDamage || applyEffects) && isFriendlyFireSelection()) {
+        const target = findCombatantByCid(localResolutionTray.targetCid);
+        const ok = window.confirm(`Friendly target: ${target ? target.name : 'this unit'} is on the same side as the active actor. Apply anyway?`);
+        if (!ok) return;
+      }
+
       const actorCid = localResolutionTray.actorCid;
       const capId = localResolutionTray.capabilityId;
       const targetCid = localResolutionTray.targetCid;
@@ -1074,17 +1126,50 @@
         if (data.snapshot) {
            state = data.snapshot;
         }
-        
+
         // Compact success feedback via status bar before closing
         renderError('Results applied successfully.');
         setTimeout(() => { if (state) renderState(state); }, 2000);
 
-        // If in sequence, increment completion
+        // If in sequence, increment completion exactly once for this child
+        // apply, then check whether the sequence as a whole is now complete.
+        let sequenceWasActive = false;
+        let sequenceComplete = false;
         if (localSequencePacket) {
-          localSequenceCompletedSteps[String(capId)] = (localSequenceCompletedSteps[String(capId)] || 0) + 1;
+          sequenceWasActive = true;
+          const prev = Number(localSequenceCompletedSteps[String(capId)] || 0);
+          localSequenceCompletedSteps[String(capId)] = prev + 1;
+
+          const steps = Array.isArray(localSequencePacket.steps) ? localSequencePacket.steps : [];
+          sequenceComplete = steps.length > 0 && steps.every(s => {
+            const done = Number(localSequenceCompletedSteps[String(s.action_id)] || 0);
+            return done >= Number(s.count || 1);
+          });
         }
 
+        // Always close the immediate tray and clear stale targeting state so
+        // the DM is not silently still able to click another target on the
+        // map without explicitly choosing the next step.
         closeLocalResolutionTray();
+        targetPreviewMode = null;
+        selectedTargetCid = null;
+        if (sequenceWasActive && sequenceComplete) {
+          // Sequence finished — clear the sequence tray and selection so the
+          // panel shows a clean post-sequence state instead of prompting again.
+          renderError('Multiattack sequence complete.');
+          localSequencePacket = null;
+          localSequenceCompletedSteps = {};
+          selectedCapabilityId = null;
+        } else if (sequenceWasActive) {
+          // Sequence still has steps remaining — pop selection back up to the
+          // parent multiattack so the sequence tray re-renders cleanly and
+          // the DM has to explicitly Select the next step.
+          if (localSequencePacket && localSequencePacket.capability_id) {
+            selectedCapabilityId = String(localSequencePacket.capability_id);
+          } else {
+            selectedCapabilityId = null;
+          }
+        }
         renderActionPanel(actor, capabilitySummary);
         draw();
       } catch (err) {
@@ -1132,9 +1217,48 @@
 
     function isTargetCandidate(unit) {
       if (!targetPreviewMode || !unit || !unit.cid) return false;
-      // Cannot target the active actor
+      // Cannot target the active actor.
       if (String(unit.cid) === String(targetPreviewMode.actorCid)) return false;
+      // Friendly-fire guard: by default, exclude same-side units from candidates.
+      // This prevents Black and Tan enemies from being trivially clickable when
+      // a Black and Tan is the active actor. DM override is documented as a
+      // future toggle; for now same-side selection requires an explicit confirm.
+      if (isSameSideAsActor(unit)) return false;
       return true;
+    }
+
+    /**
+     * Same-side detection. Uses `ally` boolean (preferred), then falls back to
+     * `role` equality. PCs/allies share a side; enemies share a side.
+     */
+    function isSameSideAsActor(unit) {
+      if (!targetPreviewMode || !state) return false;
+      const units = state.tactical_map?.units || [];
+      const actorUnit = units.find(u => String(u.cid) === String(targetPreviewMode.actorCid));
+      if (!actorUnit || !unit) return false;
+      if (typeof actorUnit.ally === 'boolean' && typeof unit.ally === 'boolean') {
+        return actorUnit.ally === unit.ally;
+      }
+      if (actorUnit.role && unit.role) {
+        const allies = new Set(['pc', 'ally']);
+        const aIsAlly = allies.has(String(actorUnit.role).toLowerCase());
+        const bIsAlly = allies.has(String(unit.role).toLowerCase());
+        return aIsAlly === bIsAlly;
+      }
+      return false;
+    }
+
+    /**
+     * Friendly-fire warning hook. Currently used to surface a confirm() before
+     * resolution if the DM has somehow selected a same-side target.
+     */
+    function isFriendlyFireSelection() {
+      if (!localResolutionTray) return false;
+      const target = findCombatantByCid(localResolutionTray.targetCid);
+      if (!target) return false;
+      const units = state?.tactical_map?.units || [];
+      const targetUnit = units.find(u => String(u.cid) === String(target.cid));
+      return targetUnit ? isSameSideAsActor(targetUnit) : false;
     }
 
     function selectPreviewTarget(cid) {

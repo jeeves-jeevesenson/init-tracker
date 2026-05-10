@@ -42,22 +42,97 @@ class TestBlackAndTanCapabilities(unittest.TestCase):
         overlay = self.service.get_capability_by_slug("black-and-tan-constable")
         self.assertIsNotNone(overlay, "Black and Tan Constable overlay should exist")
         self.assertEqual(overlay["name"], "Black and Tan Constable")
-        
+
         caps = {c["id"]: c for c in overlay["capabilities"]}
-        
-        # Multiattack
+
+        # Multiattack — must NOT be a 4-attack composite. Phase 3E3 reduces this
+        # to a manual/assisted entry so engine cannot interpret it as Pistol x2 + Baton x2.
         self.assertIn("multiattack", caps)
-        self.assertEqual(caps["multiattack"]["action_type"], "composite")
-        
+        self.assertNotEqual(caps["multiattack"]["action_type"], "composite")
+        self.assertFalse(caps["multiattack"].get("executable", False))
+        self.assertNotIn("composite", caps["multiattack"].get("mechanics", {}) or {})
+
         # Pistol
         self.assertIn("pistol", caps)
         self.assertEqual(caps["pistol"]["action_type"], "ranged_attack")
         self.assertTrue(caps["pistol"]["executable"])
         self.assertEqual(caps["pistol"]["mechanics"]["attack_bonus"], 5)
-        
+
         # Baton
         self.assertIn("baton", caps)
         self.assertEqual(caps["baton"]["action_type"], "melee_attack")
+        self.assertTrue(caps["baton"]["executable"])
+
+    def test_constable_multiattack_no_four_child_completions(self):
+        """Phase 3E3 fix: Constable Multiattack must not expose four child completions."""
+        combatant = {"monster_slug": "black-and-tan-constable", "name": "Constable 1"}
+        summary = self.service.summarize_capabilities_for_ui(1, combatant)
+
+        actions = {a["id"]: a for a in summary["groups"]["actions"]}
+        multi = actions["multiattack"]
+        # No composite resolution should be exposed for Constable Multiattack.
+        self.assertNotIn("resolved_composite", multi.get("mechanics", {}) or {})
+        # Should carry a clear manual instruction so the DM knows what to do.
+        self.assertIn("two attacks", str(multi.get("manual_instructions") or "").lower())
+
+    def test_constable_multiattack_is_manual_assist(self):
+        combatant = {"monster_slug": "black-and-tan-constable", "name": "Constable 1"}
+        summary = self.service.summarize_capabilities_for_ui(1, combatant)
+        actions = {a["id"]: a for a in summary["groups"]["actions"]}
+        multi = actions["multiattack"]
+        self.assertFalse(multi.get("executable", False))
+
+    def test_rifleman_multiattack_remains_two_armalite(self):
+        """Phase 3E3 regression: Rifleman Multiattack remains two Armalite Rifle attacks."""
+        combatant = {"monster_slug": "black-and-tan-rifleman", "name": "Rifleman 1"}
+        summary = self.service.summarize_capabilities_for_ui(1, combatant)
+        actions = {a["id"]: a for a in summary["groups"]["actions"]}
+        multi = actions["multiattack"]
+        self.assertEqual(multi["action_type"], "composite")
+        resolved = multi["mechanics"].get("resolved_composite") or []
+        self.assertEqual(len(resolved), 1)
+        self.assertEqual(resolved[0]["action_id"], "armalite-rifle")
+        self.assertEqual(resolved[0]["count"], 2)
+
+    def test_firearm_target_mode_is_single_not_area(self):
+        """Phase 3E3 fix: weapon range no longer leaks into area metadata."""
+        combatant = {"monster_slug": "black-and-tan-rifleman", "name": "Rifleman 1"}
+        summary = self.service.summarize_capabilities_for_ui(1, combatant)
+        actions = {a["id"]: a for a in summary["groups"]["actions"]}
+
+        rifle = actions["armalite-rifle"]
+        self.assertEqual(rifle["target_mode"], "single")
+        # Area metadata (if present at all) must not have been populated
+        # solely by mechanics.range / long_range.
+        area = rifle.get("area")
+        if area is not None:
+            self.assertNotIn("range", area)
+            self.assertFalse(area.get("shape"))
+            self.assertFalse(area.get("size"))
+
+        pistol = actions["pistol"]
+        self.assertEqual(pistol["target_mode"], "single")
+        area = pistol.get("area")
+        if area is not None:
+            self.assertNotIn("range", area)
+            self.assertFalse(area.get("shape"))
+            self.assertFalse(area.get("size"))
+
+    def test_firearm_range_exposed_for_advisory(self):
+        """Weapon range remains available for range/advisory text via flat fields."""
+        combatant = {"monster_slug": "black-and-tan-rifleman", "name": "Rifleman 1"}
+        summary = self.service.summarize_capabilities_for_ui(1, combatant)
+        actions = {a["id"]: a for a in summary["groups"]["actions"]}
+        rifle = actions["armalite-rifle"]
+        self.assertEqual(rifle.get("range_ft"), 120)
+        self.assertEqual(rifle.get("long_range_ft"), 360)
+
+    def test_controlled_burst_remains_manual(self):
+        combatant = {"monster_slug": "black-and-tan-rifleman", "name": "Rifleman 1"}
+        summary = self.service.summarize_capabilities_for_ui(1, combatant)
+        actions = {a["id"]: a for a in summary["groups"]["actions"]}
+        burst = actions["controlled-burst"]
+        self.assertFalse(burst.get("executable", True))
 
     def test_multiattack_composite_resolution(self):
         # We need to simulate a combatant to test summarize_capabilities_for_ui

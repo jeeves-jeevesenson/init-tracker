@@ -252,6 +252,57 @@ These are safe cleanup tasks before construction begins.
 
 Agents should append concise entries here.
 
+### 2026-05-09 — Phase 3E3: live combat correctness bugfix for Black and Tan /dmcontrol
+Agent/model: Claude Opus 4.7
+Scope:
+- Live testing exposed several combat-correctness issues in `/dmcontrol` for Black and Tan enemies. This pass fixes them with the smallest safe changes; no new features and no architecture moves.
+- Attack miss correctness: `_dm_monster_capability_resolve_targets` now branches on `action_type`. For `melee_attack` / `ranged_attack`, only `outcome=fail` (hit) produces damage entries; `success` (miss), `no_effect`, and unset outcomes produce zero damage. Save-style half damage (`rolled_success`) is preserved for save-based actions only. Resolution packets now include `action_type` so the UI can label outcome previews correctly.
+- Friendly-fire guard: `isTargetCandidate` now consults a new `isSameSideAsActor` helper that uses `unit.ally` / `unit.role` to exclude same-side units from candidate highlights. The Apply path also calls `isFriendlyFireSelection` and surfaces a `confirm()` warning before applying damage/effects to a same-side target. This prevents accidental Black-and-Tan-on-Black-and-Tan damage. DM override is documented as a future toggle (an explicit confirm acts as the override today).
+- Constable Multiattack semantics: `monster_capabilities/vandergraff/black-and-tan-constable.yaml` Multiattack changed from `action_type: composite` (with a misleading Pistol×2 + Baton×2 expansion that read as four attacks) to `action_type: utility` with a clear manual instruction "Make two attacks total, using .45 Pistol or Baton in any combination." Pistol and Baton remain individually executable. Constable Multiattack no longer exposes `resolved_composite`.
+- Weapon range no longer leaks into area metadata: `MonsterCapabilityService._area_metadata_for_capability` and `InitiativeTracker._monster_capability_area_metadata` no longer copy `mechanics.range` / `mechanics.long_range` into the `area` dict. AoE shape/size still populates area. Range/reach is now exposed as flat fields (`cap.range_ft`, `cap.long_range_ft`, `cap.reach_ft`) so target-advisory text in `/dmcontrol` continues to work.
+- Packet preview hardening: added `formatPacketValue` / `formatPacketEntries` helpers in `assets/web/dmcontrol/index.html`. `renderLocalResolutionPacket` now formats arrays of damage/effect/condition objects into readable summaries (rolled total + type, condition/name/label) instead of `[object Object]`. The fragile `.join(', ')` on object arrays is gone.
+- Sequence cleanup after a child apply: `applyLocalResolutionResults` now clears `targetPreviewMode` and `selectedTargetCid` after every successful child apply. Sequence completion is checked: when every step has hit its required count, `localSequencePacket` and the completed-step counter are cleared, the status bar reads "Multiattack sequence complete.", and `selectedCapabilityId` is cleared so the panel returns to a clean state. While the sequence still has remaining steps, `selectedCapabilityId` is popped back to the parent multiattack so the sequence tray re-renders cleanly and the DM must explicitly Select the next step.
+Files inspected:
+- GEMINI.md, AGENTS.md, docs/dm_control_surface_living_agent_plan.md
+- assets/web/dmcontrol/index.html
+- dnd_initative_tracker.py (resolve-targets, area metadata, resolution packet)
+- monster_capability_service.py (area metadata, summary)
+- monster_capabilities/vandergraff/black-and-tan-rifleman.yaml
+- monster_capabilities/vandergraff/black-and-tan-constable.yaml
+- tests/test_black_and_tan_capabilities.py, tests/test_dm_control_apply_results.py, tests/test_dm_control_route.py
+Files changed:
+- assets/web/dmcontrol/index.html
+- dnd_initative_tracker.py
+- monster_capability_service.py
+- monster_capabilities/vandergraff/black-and-tan-constable.yaml
+- tests/test_black_and_tan_capabilities.py
+- tests/test_dm_control_apply_results.py
+- docs/dm_control_surface_living_agent_plan.md
+Validation:
+- `./.venv/bin/python3 -m unittest -v tests.test_black_and_tan_capabilities` → 11 passed.
+- `./.venv/bin/python3 -m unittest -v tests.test_dm_control_apply_results` → 11 passed.
+- `./.venv/bin/python3 -m unittest -v tests.test_dm_control_route` → 25 passed.
+- `./.venv/bin/python3 -m unittest -v tests.test_dm_console_asset_syntax` → 3 passed (Node `--check` over inline `<script>` blocks of the three browser asset HTML files, including `assets/web/dmcontrol/index.html`).
+- `git diff --check` → clean.
+Outcome:
+- Attack misses (`success` outcome on a `melee_attack` / `ranged_attack`) now apply zero damage; hits still apply full damage; save-style half damage still works for save-based actions.
+- Black and Tan target candidates default to opposing-side combatants. Same-side selection requires an explicit confirm.
+- Constable Multiattack is now an unambiguous Manual Assist that cannot be misread as four attacks.
+- Firearm `target_mode` is `single`, never `area_manual`. AoE actions still route to `area_manual` correctly.
+- Packet preview never renders `[object Object]`.
+- Rifleman Multiattack stops prompting after exactly two Armalite Rifle child applies.
+Remaining manual fallbacks (unchanged this pass):
+- Ammo / reload tracking is still manual; Fire Discipline note remains a reminder.
+- Controlled Burst stays manual-assist (extra die / 3-ammo spend handled by DM).
+- Rough Arrest / grapple is manual.
+- Vandergraff Drill +1 attack bonus is a reminder; no automatic modifier is applied.
+Remaining live risks:
+- Friendly-fire guard relies on `unit.ally` / `unit.role` being populated for both actor and target. If the snapshot drops these fields, the guard falls back to "no same-side known" and behaves as before.
+- Confirm dialog is a `window.confirm`; if a future browser harness suppresses dialogs we may need an inline confirm UI.
+- No live-server smoke this pass; verified via static UI assertions and focused backend unit tests.
+Next recommended pass:
+- Live game smoke testing only. Do not start a new feature pass unless a specific reproduced bug appears.
+
 ### 2026-05-09 — Phase 3E2: /dmcontrol live UX and interaction stabilization
 Agent/model: Claude Opus 4.7
 Scope:
