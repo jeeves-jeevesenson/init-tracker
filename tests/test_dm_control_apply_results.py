@@ -17,7 +17,7 @@ class TestDMControlApplyResults(unittest.TestCase):
         self.app = tracker_mod.InitiativeTracker()
         self.app._lan.start(quiet=True)
         self.client = self.app._lan._fastapi_app
-    
+
     def tearDown(self):
         self.app._lan.stop()
 
@@ -27,21 +27,25 @@ class TestDMControlApplyResults(unittest.TestCase):
         client = TestClient(self.client)
         response = client.get("/dmcontrol")
         self.assertEqual(response.status_code, 200)
-        
+
         # Verify functions exist
         self.assertIn(b"async function applyLocalResolutionResults", response.content)
+        self.assertIn(b"applyLocalResolutionResultsFromModal", response.content)
         self.assertIn(b"/api/dm/monster-capabilities/", response.content)
         self.assertIn(b"/resolve-targets", response.content)
-        
-        # Verify UI components
-        self.assertIn(b"Apply Damage", response.content)
-        self.assertIn(b"Apply Effects", response.content)
-        self.assertIn(b"Apply Damage + Effects", response.content)
-        self.assertIn(b"Apply Results will mutate combat state.", response.content)
-        
+
+        # Verify UI components (now in modal)
+        self.assertIn(b"Apply Result", response.content)
+        self.assertIn(b"resolutionModal", response.content)
+        self.assertIn(b"modalDamageInput", response.content)
+
+        # Verify outcome labels
+        self.assertIn(b">Hit</button>", response.content)
+        self.assertIn(b">Miss</button>", response.content)
+        self.assertIn(b">No Effect</button>", response.content)
+
         # Verify safety/hardening
         self.assertIn(b"localResolutionInFlight", response.content)
-        self.assertIn(b"Manual fallback: apply result in /dm.", response.content)
 
     def test_dm_control_has_double_submit_protection(self):
         """Verify Apply buttons are disabled while in flight."""
@@ -49,11 +53,9 @@ class TestDMControlApplyResults(unittest.TestCase):
         client = TestClient(self.client)
         response = client.get("/dmcontrol")
         self.assertEqual(response.status_code, 200)
-        
-        # Check that buttons use localResolutionInFlight to disable
-        self.assertIn(b"onclick=\"applyLocalResolutionResults(true, false)\" ${localResolutionInFlight ? 'disabled' : ''}", response.content)
-        self.assertIn(b"onclick=\"applyLocalResolutionResults(false, true)\" ${localResolutionInFlight ? 'disabled' : ''}", response.content)
-        self.assertIn(b"onclick=\"applyLocalResolutionResults(true, true)\" ${localResolutionInFlight ? 'disabled' : ''}", response.content)
+
+        # Check that buttons use localResolutionApplying to disable
+        self.assertIn(b"applyBtn.disabled = localResolutionApplying", response.content)
 
     def test_dm_control_has_sequence_tray_logic(self):
         """Verify /dmcontrol includes Sequence Tray logic and UI."""
@@ -61,20 +63,20 @@ class TestDMControlApplyResults(unittest.TestCase):
         client = TestClient(self.client)
         response = client.get("/dmcontrol")
         self.assertEqual(response.status_code, 200)
-        
+
         # Verify state variables
         self.assertIn(b"localSequencePacket", response.content)
         self.assertIn(b"localSequenceCompletedSteps", response.content)
-        
+
         # Verify functions
         self.assertIn(b"function selectLocalSequenceStep", response.content)
         self.assertIn(b"function cancelLocalSequence", response.content)
-        
+
         # Verify UI markers
         self.assertIn(b"Sequence:", response.content)
         self.assertIn(b"localSequenceCompletedSteps", response.content)
         self.assertIn(b"selectLocalSequenceStep", response.content)
-        
+
         # Verify sequence detection in execution preview
         self.assertIn(b"assisted_sequence", response.content)
         self.assertIn(b"localSequencePacket = rawData.result", response.content)
@@ -131,7 +133,8 @@ class TestDMControlApplyResults(unittest.TestCase):
         client = TestClient(self.client)
         response = client.get("/dmcontrol")
         self.assertEqual(response.status_code, 200)
-        self.assertIn(b"miss \xe2\x80\x94 no damage", response.content)
+        # Outcome success is now labeled as Miss in the modal
+        self.assertIn(b"Miss", response.content)
 
 
 class TestDMControlResolveTargetsAttackMiss(unittest.TestCase):
@@ -146,7 +149,15 @@ class TestDMControlResolveTargetsAttackMiss(unittest.TestCase):
         c.name = name
         c.hp = hp
         c.max_hp = max_hp
+        c.temp_hp = 0
         c.is_pc = True
+        c.ongoing_spell_effects = []
+        c.conditions = []
+        c.inventory = []
+        c.attunements = []
+        c.resistance_overrides = {}
+        c.vulnerability_overrides = {}
+        c.immunity_overrides = {}
         return c
 
     def _make_attacker(self, cid: int, slug: str = "black-and-tan-rifleman", name: str = "Rifleman 1"):
@@ -155,8 +166,13 @@ class TestDMControlResolveTargetsAttackMiss(unittest.TestCase):
         c.name = name
         c.hp = 20
         c.max_hp = 20
+        c.temp_hp = 0
         c.is_pc = False
         c.monster_slug = slug
+        c.ongoing_spell_effects = []
+        c.conditions = []
+        c.inventory = []
+        c.attunements = []
         return c
 
     def test_attack_miss_applies_zero_damage(self):
@@ -251,6 +267,52 @@ class TestDMControlResolveTargetsAttackMiss(unittest.TestCase):
         self.assertTrue(result.get("ok"), result)
         rows = result.get("results") or []
         self.assertEqual(rows[0]["damage_entries"], [])
+
+    def test_dm_control_range_validation(self):
+        """Pass 1C: verify backend range validation for simple attacks."""
+        attacker = self._make_attacker(101, slug="test-monster")
+        target = self._make_target(202, name="Dorian")
+        self.app.combatants = {101: attacker, 202: target}
+        self.app.in_combat = False
+
+        # Mock positions: Actor at (0,0), Target at (5,0) -> 25ft distance (assuming 5ft per square)
+        self.app._lan_positions = {
+            101: (0, 0),
+            202: (5, 0)
+        }
+        self.app._lan_feet_per_square = lambda: 5.0
+        self.app._apply_map_attack_manual_damage = lambda *a, **kw: {"ok": True}
+        self.app._lan_force_state_broadcast = lambda: None
+
+        # Capability with reach 5ft (Baton)
+        cap = {
+            "id": "baton",
+            "name": "Baton",
+            "action_type": "melee_attack",
+            "mechanics": {"reach": 5, "attack_bonus": 4, "damage": [{"formula": "1d4+2", "type": "bludgeoning"}]}
+        }
+
+        # Mock the service to return this capability
+        svc = self.app._ensure_monster_capabilities()
+        svc.capabilities_by_slug["test-monster"] = {"slug": "test-monster", "capabilities": [cap]}
+
+        # 1. Attempt resolve without override -> should fail
+        payload = {
+            "capability_id": "baton",
+            "targets": [{"target_cid": 202, "outcome": "fail"}],
+            "apply_damage": True,
+            "override_range": False
+        }
+        result = self.app._dm_monster_capability_resolve_targets(actor_cid=101, payload=payload)
+        self.assertFalse(result["ok"])
+        self.assertIn("out of range", result["error"])
+
+        # 2. Attempt resolve with override -> should succeed
+        payload["override_range"] = True
+        result = self.app._dm_monster_capability_resolve_targets(actor_cid=101, payload=payload)
+        self.assertTrue(result["ok"])
+
+
 
 
 if __name__ == "__main__":

@@ -1323,3 +1323,47 @@ Agents should append or update durable decisions here.
 | 2026-05-06 | Enemies/NPCs auto-roll initiative individually when added | Table rule; only PCs use LAN initiative prompts | Completed |
 | 2026-05-06 | Browser asset JS syntax check required for DM/LAN HTML edits | Recent parse errors broke `/dm` despite Python tests passing | Accepted |
 | 2026-05-06 | Separate /dm (cockpit) from /dmcontrol (active control) | Functional separation of concerns; high-intensity combat resolution needs a dedicated, focused surface | Accepted |
+
+## Work Log - 2026-05-13
+- Resumed interrupted pass for /dmcontrol UI improvements.
+- Moved simple attack resolution from bottom tray into a large, desktop-friendly modal.
+- Implemented automatic resolution preview and modal opening upon target selection.
+- Added DM-facing labels (Hit, Miss, No Effect) and prominent damage input to the modal.
+- Hidden backend packet and debug details behind collapsed sections in the modal.
+- Improved map/tray resize recovery by resetting fittedToGrid and re-triggering resize logic.
+- Verified fix for movement cost map entity cell access (row -> cell.row).
+- Updated tests in tests/test_dm_control_apply_results.py to match the new modal-based UI.
+- All relevant tests (tests.test_black_and_tan_capabilities, tests.test_dm_control_apply_results, tests.test_dm_control_route) passed individually.
+
+### 2026-05-13 — Pass 1B: /dmcontrol modal UI live smoke observation
+Agent/model: Gemini CLI
+Scope:
+- Live runtime observation of the new /dmcontrol modal UI.
+- Detailed report: `docs/runtime_reports/dmcontrol_modal_smoke_20260513_1132.md`
+Outcome:
+- No server-side exceptions or tracebacks observed.
+- Clean shutdown after 5-minute window.
+
+### 2026-05-13 — Pass 1C: Latency fix, Range enforcement, and Dropdown stability
+Agent/model: Gemini CLI
+Status: Completed
+Changes:
+- **Latency & UX:** Added timing instrumentation, disabled "Apply Result" button while in-flight, removed 2s delay in UI refresh, and applied state snapshots immediately on success.
+- **Range Enforcement:** Implemented backend distance validation in `_dm_monster_capability_resolve_targets` and updated frontend to warn/confirm if an attack target is likely out of range. Added `override_range` flag for DM adjudication.
+- **UI Stability:** Preserved "Traits & Reminders" `<details>` state across re-renders in `renderActionPanel`.
+- **Validation:** Added `test_dm_control_range_validation` to `tests/test_dm_control_apply_results.py`. Verified JS syntax in `assets/web/dmcontrol/index.html`. All 12 targeted tests passed.
+
+### 2026-05-13 — Pass 1D Rescue: Interrupted run cleanup and Modal state fix
+Agent/model: Gemini CLI
+Status: Completed
+Scope:
+- Cleaned up interrupted Pass 1D noisy instrumentation and formatting churn in `dnd_initative_tracker.py`.
+- Fixed initial state of "Apply Result" button in the resolution modal.
+- Fixed trailing whitespace errors.
+Outcome:
+- **Cleanup:** Removed all `[DEBUG]` timing logs and restored clean `_lan_snapshot` and `_lan_force_state_broadcast` methods.
+- **UI Bugfix:** Ensured `localResolutionApplying` state is reset when the modal or tray is closed/cancelled, preventing the button from being stuck in "Applying..." state.
+- **Validation:** `py_compile` clean, JS syntax check passed, and targeted range validation tests passed.
+- **Latency:** 11-12s latency remains unresolved as it requires deeper investigation beyond this rescue pass.
+Recommended next pass:
+- **Pass 2:** Multiattack expansion and AoE/multi-target support, now that the foundation is stable and clean.

@@ -266,6 +266,84 @@
     .selected-summary h4 { font-size: 13px; color: var(--accent); margin-bottom: 4px; }
     .selected-summary p { font-size: 12px; color: var(--text); opacity: 0.9; line-height: 1.4; }
 
+    /* ── Resolution Modal ────────────────────────────────────────── */
+    .modal-overlay {
+      position: fixed; inset: 0; background: rgba(0,0,0,0.8);
+      display: flex; align-items: center; justify-content: center;
+      z-index: 100; opacity: 0; pointer-events: none;
+      transition: opacity 0.2s ease;
+      backdrop-filter: blur(4px);
+    }
+    .modal-overlay.active { opacity: 1; pointer-events: auto; }
+    .modal-content {
+      background: var(--panel);
+      border: 1px solid var(--gold);
+      border-radius: 12px;
+      width: min(92vw, 900px);
+      max-height: 90vh;
+      display: flex; flex-direction: column;
+      box-shadow: 0 10px 40px rgba(0,0,0,0.6);
+      overflow: hidden;
+    }
+    .modal-header {
+      padding: 16px 20px;
+      border-bottom: 1px solid var(--border);
+      background: rgba(255,255,255,0.03);
+      display: flex; align-items: center; justify-content: space-between;
+    }
+    .modal-header h2 { font-size: 18px; color: var(--gold); }
+    .modal-body {
+      padding: 20px;
+      overflow-y: auto;
+      display: flex; flex-direction: column; gap: 16px;
+    }
+    .modal-footer {
+      padding: 16px 20px;
+      border-top: 1px solid var(--border);
+      background: rgba(255,255,255,0.03);
+      display: flex; gap: 12px;
+    }
+    .modal-field { display: flex; flex-direction: column; gap: 6px; }
+    .modal-label { font-size: 11px; text-transform: uppercase; color: var(--muted); font-weight: bold; }
+    .modal-value { font-size: 14px; color: var(--text); }
+
+    .outcome-btn-group { display: flex; gap: 8px; flex-wrap: wrap; }
+    .outcome-btn {
+      flex: 1; min-width: 80px; padding: 10px; border: 1px solid var(--border);
+      background: rgba(255,255,255,0.05); color: var(--text); border-radius: 6px;
+      cursor: pointer; font-size: 13px; font-weight: 600; text-align: center;
+      transition: all 0.15s ease;
+    }
+    .outcome-btn:hover { background: rgba(255,255,255,0.1); border-color: var(--muted); }
+    .outcome-btn.active[data-outcome="fail"] { background: var(--danger); color: #fff; border-color: var(--danger); }
+    .outcome-btn.active[data-outcome="success"] { background: var(--accent); color: #fff; border-color: var(--accent); }
+    .outcome-btn.active[data-outcome="no_effect"] { background: var(--muted); color: #fff; border-color: var(--muted); }
+
+    .damage-input-wrap {
+      display: flex; align-items: center; gap: 12px;
+      background: rgba(255,255,255,0.04); border: 1px solid var(--border);
+      padding: 8px 12px; border-radius: 6px;
+    }
+    .damage-input-wrap input {
+      background: none; border: none; color: var(--text); font-size: 20px;
+      font-weight: bold; width: 60px; text-align: center; outline: none;
+    }
+    .damage-input-wrap .damage-label { font-size: 12px; color: var(--muted); flex: 1; }
+
+    .apply-btn {
+      flex: 2; background: var(--heal); color: var(--bg); border: none;
+      padding: 12px; border-radius: 6px; font-weight: bold; cursor: pointer;
+      font-size: 15px; transition: filter 0.15s ease;
+    }
+    .apply-btn:hover { filter: brightness(1.1); }
+    .apply-btn:disabled { opacity: 0.5; cursor: not-allowed; filter: grayscale(1); }
+
+    .cancel-btn {
+      flex: 1; background: none; border: 1px solid var(--border); color: var(--muted);
+      padding: 12px; border-radius: 6px; font-weight: 500; cursor: pointer;
+    }
+    .cancel-btn:hover { border-color: var(--danger); color: var(--danger); }
+
     /* ── Status Overlay ─────────────────────────────────────────── */
     .status-overlay {
       position: absolute; top: 20px; right: 20px;
@@ -305,6 +383,22 @@
     </footer>
   </div>
 
+  <div id="resolutionModal" class="modal-overlay">
+    <div class="modal-content">
+      <div class="modal-header">
+        <h2 id="modalTitle">Resolve Action</h2>
+        <button class="workspace-link" onclick="closeLocalResolutionTray()" style="padding:4px 8px; font-size:11px;">✕</button>
+      </div>
+      <div class="modal-body" id="modalBody">
+        <!-- Modal content rendered here -->
+      </div>
+      <div class="modal-footer" id="modalFooter">
+        <button class="cancel-btn" onclick="closeLocalResolutionTray()">Cancel</button>
+        <button class="apply-btn" id="modalApplyBtn" onclick="applyLocalResolutionResultsFromModal()">Apply Result</button>
+      </div>
+    </div>
+  </div>
+
   <script>
     /**
      * DM Control Phase 3A2a — Target-preview mode scaffold.
@@ -329,7 +423,9 @@
     let localResolutionPacket = null;
     let localResolutionError = null;
     let localResolutionInFlight = false;
+    let localResolutionApplying = false;
     let localResolutionOutcomes = {}; // Keyed by target CID as string
+    let localResolutionOverrideRange = false;
 
     // Phase 3D2 sequence state
     let localSequencePacket = null;
@@ -409,10 +505,14 @@
       localResolutionPacket = null;
       localResolutionError = null;
       localResolutionInFlight = false;
+      localResolutionApplying = false;
       localResolutionOutcomes = {};
       selectedCapabilityId = null;
       localSequencePacket = null;
       localSequenceCompletedSteps = {};
+
+      const modal = document.getElementById('resolutionModal');
+      if (modal) modal.classList.remove('active');
     }
 
     /**
@@ -420,87 +520,6 @@
      */
     function getLocalResolutionOutcome(targetCid) {
       return localResolutionOutcomes[String(targetCid)] || 'fail';
-    }
-
-    function setLocalResolutionOutcome(targetCid, outcome) {
-      localResolutionOutcomes[String(targetCid)] = outcome;
-      const actor = (state?.combatants || []).find(c => String(c.cid) === String(state?.active_cid));
-      renderActionPanel(actor, capabilitySummary);
-    }
-
-    function getOutcomeLabel(outcome) {
-      switch (outcome) {
-        case 'fail': return 'Fail / Hit';
-        case 'success': return 'Success / Miss';
-        case 'no_effect': return 'No Effect';
-        case 'manual': return 'Manual';
-        default: return 'Unknown';
-      }
-    }
-
-    function getOutcomePreviewDamage(packet, outcome) {
-      if (!packet) return 'Damage unknown';
-      if (outcome === 'no_effect') return 'no effect';
-      if (outcome === 'manual') return 'manual adjudication';
-
-      // Attack actions: success means MISS, which deals 0 damage.
-      const actionType = String(packet.action_type || '').toLowerCase();
-      const isAttack = actionType === 'melee_attack' || actionType === 'ranged_attack';
-      if (outcome === 'success' && isAttack) return 'miss — no damage';
-
-      const val = (outcome === 'success') ? packet.total_success : packet.total_fail;
-      if (val === undefined || val === null) return 'Damage unknown';
-      return `${val} damage`;
-    }
-
-    function renderLocalOutcomeControls(packet, targetCid) {
-      if (!packet) return '';
-      const outcome = getLocalResolutionOutcome(targetCid);
-      const target = findCombatantByCid(targetCid);
-      const previewText = getOutcomePreviewDamage(packet, outcome);
-
-      return `
-        <div style="margin-top:12px; border-top:1px dashed var(--border); padding-top:12px;">
-          <div style="font-size:11px; color:var(--gold); margin-bottom:6px; font-weight:bold; text-transform:uppercase">Local Outcome Selection</div>
-          <div class="actor-meta" style="margin-bottom:8px;">
-            Target: <strong>${esc(target ? target.name : 'Unknown')}</strong>
-          </div>
-          <div style="display:flex; flex-direction:column; gap:8px;">
-            <select class="workspace-link" style="width:100%; padding:6px; background:var(--panel2); color:var(--text);"
-                    onchange="setLocalResolutionOutcome('${esc(targetCid)}', this.value)"
-                    ${localResolutionInFlight ? 'disabled' : ''}>
-              <option value="fail" ${outcome === 'fail' ? 'selected' : ''}>${esc(getOutcomeLabel('fail'))}</option>
-              <option value="success" ${outcome === 'success' ? 'selected' : ''}>${esc(getOutcomeLabel('success'))}</option>
-              <option value="no_effect" ${outcome === 'no_effect' ? 'selected' : ''}>${esc(getOutcomeLabel('no_effect'))}</option>
-              <option value="manual" ${outcome === 'manual' ? 'selected' : ''}>${esc(getOutcomeLabel('manual'))}</option>
-            </select>
-            <div class="actor-meta" style="color:var(--accent); font-weight:bold; padding:4px; background:rgba(106,169,255,0.05); border-radius:4px;">
-              Local preview: ${esc(previewText)}
-            </div>
-            
-            <div style="display:flex; flex-direction:column; gap:6px; margin-top:4px;">
-              <div style="display:flex; gap:6px;">
-                <button class="workspace-link" style="flex:1; justify-content:center; color:var(--accent); border-color:var(--accent);" 
-                        onclick="applyLocalResolutionResults(true, false)" ${localResolutionInFlight ? 'disabled' : ''}>
-                  Apply Damage
-                </button>
-                <button class="workspace-link" style="flex:1; justify-content:center; color:var(--accent); border-color:var(--accent);" 
-                        onclick="applyLocalResolutionResults(false, true)" ${localResolutionInFlight ? 'disabled' : ''}>
-                  Apply Effects
-                </button>
-              </div>
-              <button class="workspace-link" style="width:100%; justify-content:center; font-weight:bold; color:var(--heal); border-color:var(--heal);" 
-                      onclick="applyLocalResolutionResults(true, true)" ${localResolutionInFlight ? 'disabled' : ''}>
-                Apply Damage + Effects
-              </button>
-            </div>
-
-            <div class="actor-meta" style="font-size:10px; opacity:0.8; font-style:italic; margin-top:4px; text-align:center;">
-              Apply Results will mutate combat state.
-            </div>
-          </div>
-        </div>
-      `;
     }
 
     /**
@@ -659,7 +678,10 @@
         try { localStorage.setItem(SPLIT_STORAGE_KEY, String(target)); } catch (e) {}
       }
       // Defer canvas resize until layout settles.
+      // Call multiple times to ensure we catch the final layout state after CSS transitions/flex settling.
       requestAnimationFrame(resize);
+      setTimeout(resize, 50);
+      setTimeout(resize, 150);
     }
 
     function loadControlBarHeight() {
@@ -990,7 +1012,12 @@
       localResolutionPacket = null;
       localResolutionError = null;
       localResolutionInFlight = false;
+      localResolutionApplying = false;
       localResolutionOutcomes = {};
+
+      const modal = document.getElementById('resolutionModal');
+      if (modal) modal.classList.remove('active');
+
       draw();
       const actor = (state?.combatants || []).find(c => String(c.cid) === String(state?.active_cid));
       renderActionPanel(actor, capabilitySummary);
@@ -1019,7 +1046,12 @@
       localResolutionPacket = null;
       localResolutionError = null;
       localResolutionInFlight = false;
+      localResolutionApplying = false;
       localResolutionOutcomes = {};
+
+      const modal = document.getElementById('resolutionModal');
+      if (modal) modal.classList.remove('active');
+
       draw();
       const actor = (state?.combatants || []).find(c => String(c.cid) === String(state?.active_cid));
       renderActionPanel(actor, capabilitySummary);
@@ -1066,6 +1098,7 @@
           localResolutionTray = null; // Close the immediate tray to show sequence tray
         } else if (data.packet) {
           localResolutionPacket = data.packet;
+          openResolutionModal();
         } else {
           localResolutionError = "No structured packet details available yet. Manual fallback: apply result in /dm.";
         }
@@ -1084,7 +1117,10 @@
     }
 
     async function applyLocalResolutionResults(applyDamage, applyEffects) {
-      if (!localResolutionTray || !localResolutionPacket || localResolutionInFlight || !state) return;
+      if (!localResolutionTray || !localResolutionPacket || localResolutionInFlight || localResolutionApplying || !state) return;
+
+      const startTime = performance.now();
+      console.log(`[Apply] Starting resolution apply... damage=${applyDamage}, effects=${applyEffects}`);
 
       // Friendly-fire confirmation: even if a same-side selection has slipped
       // past isTargetCandidate, require explicit confirm before applying damage/effects.
@@ -1099,10 +1135,13 @@
       const targetCid = localResolutionTray.targetCid;
       const outcome = getLocalResolutionOutcome(targetCid);
 
-      localResolutionInFlight = true;
+      localResolutionApplying = true;
       localResolutionError = null;
       const actor = (state?.combatants || []).find(c => String(c.cid) === String(state?.active_cid));
+
+      // Provide immediate feedback by re-rendering the panel/modal
       renderActionPanel(actor, capabilitySummary);
+      if (localResolutionPacket) renderResolutionModal();
 
       try {
         const resp = await fetch(`/api/dm/monster-capabilities/${actorCid}/resolve-targets`, {
@@ -1113,23 +1152,27 @@
             targets: [{ target_cid: String(targetCid), outcome: outcome }],
             damage_rolls: localResolutionPacket.damage_rolls || [],
             apply_damage: !!applyDamage,
-            apply_effects: !!applyEffects
+            apply_effects: !!applyEffects,
+            override_range: !!localResolutionOverrideRange
           })
         });
 
         const data = await resp.json();
+        const endTime = performance.now();
+        console.log(`[Apply] Resolution request took ${(endTime - startTime).toFixed(1)}ms`);
+
         if (!resp.ok || !data.ok) {
           throw new Error(data.detail || (data.result && data.result.error) || 'Resolution failed.');
         }
 
-        // On success, clear local state and apply snapshot
+        // On success, apply snapshot immediately
         if (data.snapshot) {
            state = data.snapshot;
+           renderState(state);
         }
 
-        // Compact success feedback via status bar before closing
-        renderError('Results applied successfully.');
-        setTimeout(() => { if (state) renderState(state); }, 2000);
+        // Compact success feedback via status bar
+        showTransientStatus('Results applied successfully.', 'var(--heal)');
 
         // If in sequence, increment completion exactly once for this child
         // apply, then check whether the sequence as a whole is now complete.
@@ -1147,23 +1190,16 @@
           });
         }
 
-        // Always close the immediate tray and clear stale targeting state so
-        // the DM is not silently still able to click another target on the
-        // map without explicitly choosing the next step.
+        // Always close the immediate tray and clear stale targeting state
         closeLocalResolutionTray();
         targetPreviewMode = null;
         selectedTargetCid = null;
         if (sequenceWasActive && sequenceComplete) {
-          // Sequence finished — clear the sequence tray and selection so the
-          // panel shows a clean post-sequence state instead of prompting again.
-          renderError('Multiattack sequence complete.');
+          showTransientStatus('Multiattack sequence complete.', 'var(--heal)');
           localSequencePacket = null;
           localSequenceCompletedSteps = {};
           selectedCapabilityId = null;
         } else if (sequenceWasActive) {
-          // Sequence still has steps remaining — pop selection back up to the
-          // parent multiattack so the sequence tray re-renders cleanly and
-          // the DM has to explicitly Select the next step.
           if (localSequencePacket && localSequencePacket.capability_id) {
             selectedCapabilityId = String(localSequencePacket.capability_id);
           } else {
@@ -1176,8 +1212,11 @@
         console.error('Apply results error:', err);
         localResolutionError = err.message;
         renderActionPanel(actor, capabilitySummary);
+        if (localResolutionPacket) renderResolutionModal();
       } finally {
-        localResolutionInFlight = false;
+        localResolutionApplying = false;
+        // Final re-render to ensure buttons are re-enabled if needed
+        renderActionPanel(actor, capabilitySummary);
       }
     }
 
@@ -1261,9 +1300,11 @@
       return targetUnit ? isSameSideAsActor(targetUnit) : false;
     }
 
-    function selectPreviewTarget(cid) {
+    async function selectPreviewTarget(cid) {
       selectedTargetCid = String(cid);
       openLocalResolutionTray(state.active_cid, targetPreviewMode.capabilityId, selectedTargetCid);
+      // Automatically trigger preparation for a smoother UX.
+      await prepareLocalResolutionPreview();
     }
 
     function getSelectedTargetAdvisory(cap, targetCid) {
@@ -1305,9 +1346,162 @@
       }
     }
 
+    function openResolutionModal() {
+      const modal = document.getElementById('resolutionModal');
+      if (!modal) return;
+      renderResolutionModal();
+      modal.classList.add('active');
+    }
+
+    function renderResolutionModal() {
+      const body = document.getElementById('modalBody');
+      const title = document.getElementById('modalTitle');
+      const applyBtn = document.getElementById('modalApplyBtn');
+      if (!body || !localResolutionTray || !localResolutionPacket) return;
+
+      const ctx = getLocalResolutionContext();
+      const packet = localResolutionPacket;
+      const targetCid = localResolutionTray.targetCid;
+      const outcome = getLocalResolutionOutcome(targetCid);
+
+      title.textContent = `Resolve: ${packet.capability_name || packet.name || 'Action'}`;
+      applyBtn.disabled = localResolutionApplying;
+      applyBtn.textContent = localResolutionApplying ? 'Applying...' : 'Apply Result';
+
+      let html = `
+        <div style="display:grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 16px; background: rgba(255,255,255,0.03); padding: 16px; border-radius: 8px; border: 1px solid var(--border);">
+          <div class="modal-field">
+            <span class="modal-label">Actor</span>
+            <span class="modal-value" style="font-size: 16px; font-weight: bold; color: var(--gold);">${esc(ctx.actor ? ctx.actor.name : 'Unknown')}</span>
+          </div>
+          <div class="modal-field">
+            <span class="modal-label">Target</span>
+            <span class="modal-value" style="font-size: 16px; font-weight: bold; color: var(--text);">${esc(ctx.target ? ctx.target.name : 'Unknown')}</span>
+          </div>
+          <div class="modal-field">
+            <span class="modal-label">Action</span>
+            <span class="modal-value" style="font-size: 14px;">${esc(ctx.cap ? ctx.cap.name : 'Unknown')}</span>
+          </div>
+          <div class="modal-field">
+            <span class="modal-label">Advisory</span>
+            <span class="modal-value" style="font-weight: 500; color:${ctx.advisory.status === 'likely-in-range' ? 'var(--heal)' : (ctx.advisory.status === 'likely-out-of-range' ? 'var(--danger)' : 'var(--gold)')}">
+              ${ctx.advisory.distanceFt !== null ? ctx.advisory.distanceFt + 'ft - ' : ''}${esc(ctx.advisory.label)}
+            </span>
+          </div>
+        </div>
+
+        <div class="modal-field" style="margin-top: 8px;">
+          <span class="modal-label" style="margin-bottom: 8px;">Resolution Outcome</span>
+          <div class="outcome-btn-group" style="display: flex; gap: 12px;">
+            <button class="outcome-btn ${outcome === 'fail' ? 'active' : ''}" data-outcome="fail" onclick="setModalOutcome('fail')" style="height: 60px; font-size: 16px;">Hit</button>
+            <button class="outcome-btn ${outcome === 'success' ? 'active' : ''}" data-outcome="success" onclick="setModalOutcome('success')" style="height: 60px; font-size: 16px;">Miss</button>
+            <button class="outcome-btn ${outcome === 'no_effect' ? 'active' : ''}" data-outcome="no_effect" onclick="setModalOutcome('no_effect')" style="height: 60px; font-size: 16px;">No Effect</button>
+          </div>
+        </div>
+
+        <div class="modal-field" style="margin-top: 8px;">
+          <span class="modal-label">Final Damage</span>
+          <div class="damage-input-wrap" style="padding: 12px 20px; border-radius: 8px; background: rgba(0,0,0,0.2);">
+            <input type="number" id="modalDamageInput" value="${outcome === 'success' ? 0 : (packet.total_fail ?? 0)}"
+                   style="font-size: 32px; width: 100px; color: var(--gold);"
+                   oninput="updateModalDamage(this.value)">
+            <div style="flex: 1; display: flex; flex-direction: column; gap: 2px;">
+              <span style="font-size: 13px; font-weight: 600; color: var(--text);">Points of damage</span>
+              <span style="font-size: 11px; color: var(--muted);">Formula: ${esc(packet.damage_formula || 'none')}</span>
+            </div>
+          </div>
+        </div>
+
+        <details style="margin-top:16px; font-size:11px; color:var(--muted); border-top:1px solid var(--border); padding-top:12px;">
+          <summary style="cursor:pointer; opacity:0.7; padding: 4px 0;">Advanced / Debug details</summary>
+          <div style="margin-top:12px; display:flex; flex-direction:column; gap:8px;">
+            <div style="background:rgba(0,0,0,0.3); padding:12px; border-radius:6px; border:1px solid var(--border); font-family: monospace;">
+              <div style="font-weight:bold; color:var(--gold); font-size:10px; text-transform:uppercase; margin-bottom:8px; border-bottom: 1px solid rgba(214,186,126,0.2); padding-bottom: 4px;">Backend Execution Packet</div>
+              ${renderLocalResolutionPacket(packet)}
+            </div>
+            <div class="actor-meta" style="font-size:10px; padding: 0 4px;">
+              Target CID: ${esc(targetCid)} | Internal Outcome: ${esc(outcome)} | Action Type: ${esc(packet.action_type)}
+            </div>
+          </div>
+        </details>
+      `;
+
+      body.innerHTML = html;
+    }
+
+    function setModalOutcome(outcome) {
+      if (localResolutionInFlight) return;
+      const targetCid = localResolutionTray?.targetCid;
+      if (!targetCid) return;
+
+      localResolutionOutcomes[String(targetCid)] = outcome;
+
+      // Auto-update damage input based on outcome if it matches simple attack logic
+      const packet = localResolutionPacket;
+      if (packet) {
+        const input = document.getElementById('modalDamageInput');
+        if (input) {
+          if (outcome === 'success' || outcome === 'no_effect') {
+            input.value = 0;
+          } else {
+            input.value = packet.total_fail ?? 0;
+          }
+        }
+      }
+
+      renderResolutionModal();
+    }
+
+    function updateModalDamage(val) {
+      // We don't necessarily need to store this in localResolutionOutcomes yet
+      // as we'll read it from the input on Apply.
+    }
+
+    async function applyLocalResolutionResultsFromModal() {
+      if (!localResolutionTray || !localResolutionPacket || localResolutionInFlight) return;
+
+      // Range check: for simple attacks, warn/block if out of range
+      const ctx = getLocalResolutionContext();
+      localResolutionOverrideRange = false;
+      if (ctx && ctx.advisory && ctx.advisory.status === 'likely-out-of-range') {
+        const msg = `Target is LIKELY OUT OF RANGE (${ctx.advisory.distanceFt}ft > ${ctx.advisory.limitFt}ft).\n\nAre you sure you want to apply this result?`;
+        if (!window.confirm(msg)) return;
+        localResolutionOverrideRange = true;
+      }
+
+      const damageInput = document.getElementById('modalDamageInput');
+      const enteredDamage = (damageInput && damageInput.value !== '') ? parseInt(damageInput.value) : 0;
+
+      // Support manual damage override by updating the packet rolls.
+      const rolls = localResolutionPacket.damage_rolls || [];
+      const defaultTotal = localResolutionPacket.total_fail || 0;
+
+      if (enteredDamage !== defaultTotal) {
+        if (rolls.length === 1) {
+          rolls[0].rolled = enteredDamage;
+        } else if (rolls.length > 1) {
+          // If multiple rolls exist, attribute all damage to the first roll and zero out others.
+          rolls[0].rolled = enteredDamage;
+          for (let i = 1; i < rolls.length; i++) rolls[i].rolled = 0;
+        } else if (enteredDamage > 0) {
+          localResolutionPacket.damage_rolls = [{ rolled: enteredDamage, type: 'damage' }];
+        }
+      }
+
+      await applyLocalResolutionResults(true, true);
+    }
+
     function renderActionPanel(actor, summary) {
       const panel = document.getElementById('activeActionsPanel');
       if (!panel) return;
+
+      // Preserve "Traits & Reminders" dropdown state before re-rendering
+      let secondaryGroupOpen = false;
+      const oldSecondary = panel.querySelector('.secondary-group');
+      if (oldSecondary) {
+        secondaryGroupOpen = oldSecondary.open;
+      }
+
       // Keep the mode banner in sync with current local state on every render.
       updateModeBanner();
 
@@ -1378,7 +1572,7 @@
                           <div style="font-size:10px; color:var(--muted)">${completed} / ${step.count} completed</div>
                         </div>
                         ${!isDone ? `
-                          <button class="workspace-link" style="font-size:10px; padding:2px 6px; ${isStepSelected ? 'background:var(--accent); color:var(--bg)' : ''}" 
+                          <button class="workspace-link" style="font-size:10px; padding:2px 6px; ${isStepSelected ? 'background:var(--accent); color:var(--bg)' : ''}"
                                   onclick="selectLocalSequenceStep('${esc(step.action_id)}')" ${localResolutionInFlight ? 'disabled' : ''}>
                             ${isStepSelected ? 'Active' : 'Select'}
                           </button>
@@ -1414,29 +1608,21 @@
                   </div>
                 ` : ''}
 
-                ${localResolutionPacket || (!localResolutionPacket && !localResolutionError && !localResolutionInFlight && localResolutionTray?.openedAt) ? `
-                  <div style="margin-top:8px; background:rgba(255,255,255,0.03); padding:8px; border-radius:4px; border:1px solid var(--gold)">
-                    <div style="font-size:11px; color:var(--gold); margin-bottom:4px; font-weight:bold; text-transform:uppercase">Backend packet preview</div>
-                    ${renderLocalResolutionPacket(localResolutionPacket)}
-                    ${localResolutionPacket ? `
-                      ${renderLocalOutcomeControls(localResolutionPacket, localResolutionTray.targetCid)}
-                    ` : `
-                      <p style="margin-top:8px; font-size:11px; color:var(--heal); font-weight:bold;">
-                        Preview only. Results are not applied.
-                      </p>
-                      <p style="font-size:10px; color:var(--muted); opacity:0.8;">
-                        No combat state will be changed from this preview (uses spend: "none").
-                      </p>
-                    `}
-                  </div>
-                ` : ''}
-
                 ${!localResolutionPacket && !localResolutionError ? `
                   <div style="margin-top:12px;">
                     <button class="workspace-link" onclick="prepareLocalResolutionPreview()"
                             ${localResolutionInFlight ? 'disabled' : ''}
                             style="width:100%; justify-content:center; padding:8px; font-weight:bold; border-color:var(--accent); color:var(--accent)">
                       ${localResolutionInFlight ? 'Preparing...' : 'Prepare Resolution Preview'}
+                    </button>
+                  </div>
+                ` : ''}
+
+                ${localResolutionPacket ? `
+                  <div style="margin-top:12px;">
+                    <button class="workspace-link" onclick="openResolutionModal()"
+                            style="width:100%; justify-content:center; padding:8px; font-weight:bold; border-color:var(--heal); color:var(--heal)">
+                      Open Resolution Modal
                     </button>
                   </div>
                 ` : ''}
@@ -1579,7 +1765,7 @@
       });
       if (secondaryItems.length) {
         const total = secondaryItems.reduce((n, g) => n + g.items.length, 0);
-        html += `<details class="action-group secondary-group" style="margin-top:6px;">`;
+        html += `<details class="action-group secondary-group" style="margin-top:6px;" ${secondaryGroupOpen ? 'open' : ''}>`;
         html += `<summary style="font-size:11px; color:var(--muted); cursor:pointer; padding:4px 0; text-transform:uppercase; letter-spacing:0.05em;">Traits & Reminders (${total})</summary>`;
         secondaryItems.forEach(({ conf, items }) => {
           html += `<div class="action-group" style="margin-top:6px;">`;
@@ -1596,7 +1782,7 @@
 
     function selectCapability(id) {
       const alreadySelected = String(selectedCapabilityId) === String(id);
-      
+
       // Clear sequence if we select something NOT in the sequence
       if (localSequencePacket && String(id) !== String(localSequencePacket.capability_id)) {
         const isChild = localSequencePacket.steps.some(s => String(s.action_id) === String(id));
@@ -1772,7 +1958,7 @@
         if (!entry || typeof entry !== "object") return;
         const payload = (entry.payload && typeof entry.payload === "object") ? entry.payload : {};
         const cells = entityCellsForEntry(entry);
-        cells.forEach(cell => callback(Math.trunc(cell.col), Math.trunc(row), payload));
+        cells.forEach(cell => callback(Math.trunc(cell.col), Math.trunc(cell.row), payload));
       };
 
       (features || []).forEach(f => addEntityCells(f, (c, r, p) => { if (p.blocks_movement) blockedCells.add(cellKey(c, r)); }));
