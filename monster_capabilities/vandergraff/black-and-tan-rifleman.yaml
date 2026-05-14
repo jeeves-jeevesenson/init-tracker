@@ -56,10 +56,22 @@ capabilities:
   - id: controlled-burst
     name: Controlled Burst
     type: action
-    executable: false
-    desc: "Spends 3 ammo, adds one extra weapon die on hit. Can be used once per turn."
-    action_type: utility
-    warning: "Manual/Assisted: Spends 3 ammo, +1 die damage."
+    executable: true
+    desc: "When you make a firearm attack with a weapon that has the Burst property, you can spend 3 ammo before the attack roll. On a hit, the attack deals one extra weapon damage die. You can benefit from Controlled Burst only once per turn."
+    action_type: modifier
+    mechanics:
+      modifier:
+        kind: next_attack
+        eligible_action_ids:
+          - armalite-rifle
+        ammo_cost: 3
+        damage_bonus:
+          mode: extra_weapon_die
+          count: 1
+        consume_on: attack_resolution
+        clears_on: next_eligible_attack
+        jam_risk: natural_1
+        limit: once_per_turn
   - id: vandergraff-drill
     name: Vandergraff Drill
     type: trait

@@ -242,6 +242,10 @@
     .action-card.executable {
       border-left: 3px solid var(--accent);
     }
+    .action-card.jammed {
+      border-left: 3px dashed var(--danger);
+      opacity: 0.6;
+    }
     .action-card.trait {
       background: rgba(255,255,255,0.015);
       border-style: dashed;
@@ -1833,14 +1837,24 @@
         if (item.uses_remaining !== undefined && item.uses_total !== undefined) {
           badges.push({ text: `${item.uses_remaining}/${item.uses_total} Uses`, cls: '' });
         }
+        if (item.modifier_active) {
+          badges.push({ text: 'Active', cls: 'exec' });
+        }
+        if (item.jammed) {
+          badges.push({ text: 'Jammed', cls: 'manual-tag', style: 'background:var(--danger)' });
+        }
 
         const cardCls = ['action-card'];
         if (isSelected) cardCls.push('selected');
         if (isTrait) cardCls.push('trait');
         if (!isExecutable && !isTrait) cardCls.push('manual');
         if (isExecutable) cardCls.push('executable');
+        if (item.jammed) cardCls.push('jammed');
 
-        const badgeHtml = badges.map(b => `<span class="card-badge ${b.cls}">${esc(b.text)}</span>`).join('');
+        const badgeHtml = badges.map(b => {
+          const style = b.style ? `style="${b.style}"` : '';
+          return `<span class="card-badge ${b.cls}" ${style}>${esc(b.text)}</span>`;
+        }).join('');
 
         return `
           <div class="${cardCls.join(' ')}" onclick="selectCapability('${esc(item.id)}')">

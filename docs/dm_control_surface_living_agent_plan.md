@@ -1464,6 +1464,36 @@ Changes:
 - **UI Stability:** Preserved "Traits & Reminders" `<details>` state across re-renders in `renderActionPanel`.
 - **Validation:** Added `test_dm_control_range_validation` to `tests/test_dm_control_apply_results.py`. Verified JS syntax in `assets/web/dmcontrol/index.html`. All 12 targeted tests passed.
 
+### 2026-05-14 — Pass 2G: Controlled Burst stateful firearm modifier implementation
+Agent/model: Gemini CLI
+Scope:
+- Implemented `Controlled Burst` as a structured, stateful modifier action for Black and Tan Rifleman.
+- Added `action_type: modifier` support to `MonsterCapabilityService` with automated mechanics summaries.
+- Implemented backend state for pending modifiers (`_monster_modifier_state`) in `InitiativeTracker`.
+- Updated `_dm_monster_capability_execute` to arm modifiers, respecting `once_per_turn` limits and checking for `Jammed` weapons.
+- Enhanced `_resolve_map_attack_sequence` to detect and apply pending modifiers during attack resolution.
+- Added `Jammed` state on natural 1 if a modifier requires it (Jam Risk).
+- Injected extra base weapon damage dice into resolution results for modified hits.
+- Updated `/dmcontrol` UI to display `Active` and `Jammed` badges on action cards.
+- Verified end-to-end functionality with a new test suite: `tests/test_black_and_tan_controlled_burst.py`.
+Files changed:
+- monster_capabilities/vandergraff/black-and-tan-rifleman.yaml
+- monster_capability_service.py
+- dnd_initative_tracker.py
+- assets/web/dmcontrol/index.html
+- tests/test_black_and_tan_controlled_burst.py (New)
+- tests/test_black_and_tan_capabilities.py
+- docs/dm_control_surface_living_agent_plan.md
+Validation:
+- `./.venv/bin/python3 -m unittest tests.test_black_and_tan_controlled_burst tests.test_black_and_tan_capabilities` → 16 tests passed.
+- JS syntax check passed for `assets/web/dmcontrol/index.html`.
+Outcome:
+- Controlled Burst is now a fully automated, stateful modifier that correctly interacts with firearm resolution.
+- Weapons can now become Jammed on a natural 1 after a Controlled Burst, blocking further use until cleared (manual clear for now).
+- UI provides clear visual feedback for armed modifiers and jammed equipment.
+Next recommended pass:
+- Pass 2H: AOE/Multi-target support (Automation for SAM-7 or similar area effects).
+
 ### 2026-05-13 — Pass 2F: Black and Tan Multiattack conversion and manual tray cleanup
 Agent/model: Gemini CLI
 Scope:

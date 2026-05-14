@@ -303,6 +303,20 @@ class MonsterCapabilityService:
                 if dc:
                     summary_parts.append(f"DC {dc} {ability}")
             
+            elif action_type == "modifier":
+                mod = mechanics.get("modifier", {})
+                ammo = mod.get("ammo_cost")
+                if ammo:
+                    summary_parts.append(f"{ammo} ammo")
+                db = mod.get("damage_bonus", {})
+                if db.get("mode") == "extra_weapon_die":
+                    count = db.get("count", 1)
+                    summary_parts.append(f"+{count} weapon die" if count == 1 else f"+{count} weapon dice")
+                if mod.get("jam_risk") == "natural_1":
+                    summary_parts.append("Jam risk (1)")
+                if mod.get("limit") == "once_per_turn":
+                    summary_parts.append("1/turn")
+
             # Add reload/ammo note if present in description or mechanics
             desc = cap.get("desc", "")
             if "reload" in desc.lower() or "ammo" in desc.lower() or "magazine" in desc.lower():

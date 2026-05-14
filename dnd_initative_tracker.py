@@ -4604,6 +4604,15 @@ class LanController:
                             status = self.app._monster_resource_state.get(f"{cid}:cap:{cap_id}", True)
                             cap["recharge_available"] = status
 
+                        # Modifier active status
+                        if cap.get("action_type") == "modifier":
+                             active_mods = self.app._monster_modifier_state.get(int(cid), [])
+                             cap["modifier_active"] = any(m["capability_id"] == cap_id for m in active_mods)
+
+                        # Jammed status
+                        if self.app._monster_resource_state.get(f"{cid}:jammed:{cap_id}"):
+                            cap["jammed"] = True
+
                         # Generic uses
                         if cap.get("uses_max") is not None:
                             remaining = self.app._monster_resource_state.get(f"{cid}:cap:{cap_id}", cap["uses_max"])
@@ -8670,6 +8679,7 @@ class InitiativeTracker(base.InitiativeTracker):
         self._monsters_by_name: Dict[str, MonsterSpec] = {}
         self._monster_resource_state: Dict[str, Any] = {}
         self._monster_sequence_state: Dict[int, Dict[str, Any]] = {}
+        self._monster_modifier_state: Dict[int, List[Dict[str, Any]]] = {}
         self._load_monsters_index()
         # Swap the Name entry for a monster dropdown + library button
         if self.host_mode == "desktop":
@@ -11271,6 +11281,7 @@ class InitiativeTracker(base.InitiativeTracker):
 
     def _next_turn(self) -> None:
         self._monster_sequence_state.clear()
+        self._monster_modifier_state.clear()
         self._normalize_summons_shared_turn_state()
         ordered = self._display_order()
         if not ordered:
@@ -29905,6 +29916,12 @@ class InitiativeTracker(base.InitiativeTracker):
                 return [{"attack_key": str(first.get("key") or ""), "count": 1, "roll_mode": "normal"}]
         return []
 
+    def _extract_extra_weapon_die(self, formula: str) -> Optional[str]:
+        """Extract the dice part from a formula, e.g., '1d12+4' -> '1d12'."""
+        import re
+        match = re.search(r"(\d+d\d+)", formula)
+        return match.group(1) if match else None
+
     def _resolve_map_attack_sequence(
         self,
         attacker_cid: int,
@@ -29959,6 +29976,10 @@ class InitiativeTracker(base.InitiativeTracker):
         total_crits = 0
         total_misses = 0
         target_removed = False
+
+        # Retrieve pending modifiers for the attacker
+        pending_mods = self._monster_modifier_state.get(int(attacker_cid), [])
+
         for block in normalized_blocks:
             if int(target_cid) not in self.combatants:
                 target_removed = True
@@ -29975,6 +29996,11 @@ class InitiativeTracker(base.InitiativeTracker):
             block_hits = 0
             block_crits = 0
             block_misses = 0
+
+            # Modifier tracking for this block
+            hits_modified = 0
+            crits_modified = 0
+
             for attack_index in range(int(block["count"])):
                 if int(target_cid) not in self.combatants:
                     target_removed = True
@@ -29983,6 +30009,16 @@ class InitiativeTracker(base.InitiativeTracker):
                 if int(getattr(target, "hp", 0) or 0) <= 0:
                     target_removed = True
                     break
+                
+                # Identify if any active modifier applies to this attack
+                active_mod = None
+                for mod in list(pending_mods):
+                    m_mech = mod.get("mechanics", {})
+                    eligible = m_mech.get("eligible_action_ids", [])
+                    if not eligible or block["attack_key"] in eligible:
+                        active_mod = mod
+                        break
+
                 roll_one = random.randint(1, 20)
                 kept_roll = int(roll_one)
                 dice_text = f"d20 {int(roll_one)}"
@@ -29997,29 +30033,50 @@ class InitiativeTracker(base.InitiativeTracker):
                 auto_miss = kept_roll == 1
                 total_to_hit = int(kept_roll) + int(block["to_hit"])
                 hit = bool(not auto_miss and (critical or total_to_hit >= int(target_ac)))
-                attack_prefix = f"{attacker.name} {block['name']} attack {attack_index + 1}/{int(block['count'])}"
+                
+                mod_note = f" ({active_mod.get('name')})" if active_mod else ""
+                attack_prefix = f"{attacker.name} {block['name']}{mod_note} attack {attack_index + 1}/{int(block['count'])}"
+                
                 if not hit:
                     block_misses += 1
                     if hide_enemy_details:
-                        self._log(f"{attacker.name} {block['name']}: misses {target_name}.", cid=int(target_cid))
+                        self._log(f"{attacker.name} {block['name']}{mod_note}: misses {target_name}.", cid=int(target_cid))
                     else:
                         nat_note = " (nat 1 auto-miss)" if auto_miss else ""
                         self._log(
                             f"{attack_prefix}: misses {target_name}{nat_note} ({dice_text} + {int(block['to_hit'])} = {total_to_hit} vs AC {target_ac}).",
                             cid=int(target_cid),
                         )
-                    continue
-                block_hits += 1
-                crit_note = " (CRIT)" if critical else ""
-                if critical:
-                    block_crits += 1
-                if hide_enemy_details:
-                    self._log(f"{attacker.name} {block['name']}: hits {target_name}{crit_note}.", cid=int(target_cid))
+                    
+                    # Handle Jam Risk even on a miss
+                    if auto_miss and active_mod and active_mod.get("mechanics", {}).get("jam_risk") == "natural_1":
+                        self._log(f"*** JAMMED! *** {attacker.name}'s weapon jammed on a natural 1.", cid=int(attacker_cid))
+                        self._monster_resource_state[f"{attacker_cid}:jammed:{block['attack_key']}"] = True
+
                 else:
-                    self._log(
-                        f"{attack_prefix}: hits {target_name}{crit_note} ({dice_text} + {int(block['to_hit'])} = {total_to_hit} vs AC {target_ac}).",
-                        cid=int(target_cid),
-                    )
+                    block_hits += 1
+                    crit_note = " (CRIT)" if critical else ""
+                    if critical:
+                        block_crits += 1
+                    if hide_enemy_details:
+                        self._log(f"{attacker.name} {block['name']}{mod_note}: hits {target_name}{crit_note}.", cid=int(target_cid))
+                    else:
+                        self._log(
+                            f"{attack_prefix}: hits {target_name}{crit_note} ({dice_text} + {int(block['to_hit'])} = {total_to_hit} vs AC {target_ac}).",
+                            cid=int(target_cid),
+                        )
+                    
+                    if active_mod:
+                        if critical:
+                            crits_modified += 1
+                        else:
+                            hits_modified += 1
+                
+                # Clear modifier if it's "next_eligible_attack"
+                if active_mod and active_mod.get("mechanics", {}).get("clears_on") == "next_eligible_attack":
+                    if mod in pending_mods:
+                        pending_mods.remove(mod)
+
             normal_hits = max(0, int(block_hits) - int(block_crits))
             damage_rolls_normal: List[Dict[str, Any]] = []
             damage_rolls_crit: List[Dict[str, Any]] = []
@@ -30035,8 +30092,29 @@ class InitiativeTracker(base.InitiativeTracker):
                         damage_rolls_normal.append({"formula": formula, "type": dtype, "count": int(normal_hits)})
                     if int(block_crits) > 0:
                         damage_rolls_crit.append({"formula": formula, "type": dtype, "count": int(block_crits)})
+                    
+                    # Apply modifier damage bonus (extra dice)
+                    if hits_modified > 0 or crits_modified > 0:
+                        extra_die = self._extract_extra_weapon_die(formula)
+                        if extra_die:
+                            if hits_modified > 0:
+                                damage_rolls_normal.append({
+                                    "formula": extra_die,
+                                    "type": dtype,
+                                    "count": int(hits_modified),
+                                    "modifier": True
+                                })
+                            if crits_modified > 0:
+                                damage_rolls_crit.append({
+                                    "formula": extra_die,
+                                    "type": dtype,
+                                    "count": int(crits_modified),
+                                    "modifier": True
+                                })
+
                     if dtype not in damage_types:
                         damage_types.append(dtype)
+
             block_results.append(
                 {
                     "attack_key": str(block["attack_key"]),
@@ -43870,6 +43948,10 @@ class InitiativeTracker(base.InitiativeTracker):
         if not cap:
             return {"ok": False, "error": f"Capability {cap_id} not found."}
 
+        # Check if jammed
+        if self._monster_resource_state.get(f"{normalized_actor_cid}:jammed:{cap_id}"):
+            return {"ok": False, "error": f"{cap.get('name')} is jammed."}
+
         action_type = cap.get("action_type")
         mechanics = cap.get("mechanics", {})
 
@@ -44066,6 +44148,41 @@ class InitiativeTracker(base.InitiativeTracker):
             payload_res["target_name"] = str(getattr(target, "name", "Target") or "Target")
             payload_res["resolution"] = "automatic"
             return payload_res
+
+        elif action_type == "modifier":
+             # Stateful modifier activation
+             mod_data = mechanics.get("modifier", {})
+             if not mod_data:
+                 return {"ok": False, "error": "Invalid modifier mechanics."}
+
+             # Check limit
+             limit = mod_data.get("limit")
+             if limit == "once_per_turn":
+                 # Check if this actor already used this specific modifier this turn
+                 existing = self._monster_modifier_state.get(int(normalized_actor_cid), [])
+                 if any(m["capability_id"] == cap_id for m in existing):
+                     return {"ok": False, "error": f"{cap.get('name')} already used this turn."}
+
+             # Store pending modifier
+             pending = {
+                 "capability_id": cap_id,
+                 "name": cap.get("name"),
+                 "mechanics": mod_data,
+                 "turn_marker": (self.round_num, self.turn_num)
+             }
+
+             if int(normalized_actor_cid) not in self._monster_modifier_state:
+                 self._monster_modifier_state[int(normalized_actor_cid)] = []
+             self._monster_modifier_state[int(normalized_actor_cid)].append(pending)
+
+             return {
+                 "ok": True,
+                 "resolution": "modifier_activated",
+                 "capability_id": cap_id,
+                 "name": cap.get("name"),
+                 "desc": cap.get("desc"),
+                 "status": f"{cap.get('name')} active for next eligible attack."
+             }
 
         elif action_type == "save_ability" and target_cid is not None:
              # Assisted resolution for saves

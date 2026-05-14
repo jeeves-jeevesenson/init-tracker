@@ -134,12 +134,15 @@ class TestBlackAndTanCapabilities(unittest.TestCase):
         self.assertEqual(rifle.get("range_ft"), 120)
         self.assertEqual(rifle.get("long_range_ft"), 360)
 
-    def test_controlled_burst_remains_manual(self):
+    def test_controlled_burst_is_structured_modifier(self):
         combatant = {"monster_slug": "black-and-tan-rifleman", "name": "Rifleman 1"}
         summary = self.service.summarize_capabilities_for_ui(1, combatant)
         actions = {a["id"]: a for a in summary["groups"]["actions"]}
         burst = actions["controlled-burst"]
-        self.assertFalse(burst.get("executable", True))
+        self.assertTrue(burst.get("executable"))
+        self.assertEqual(burst.get("action_type"), "modifier")
+        self.assertIn("3 ammo", burst["mechanics_summary"])
+        self.assertIn("+1 weapon die", burst["mechanics_summary"])
 
     def test_multiattack_composite_resolution(self):
         # We need to simulate a combatant to test summarize_capabilities_for_ui
@@ -173,7 +176,10 @@ class TestBlackAndTanCapabilities(unittest.TestCase):
 
         # Controlled Burst summary
         burst = actions["controlled-burst"]
-        self.assertIn("Manual/Assisted: Spends 3 ammo, +1 die damage.", burst["manual_instructions"])
+        self.assertIn("3 ammo", burst["mechanics_summary"])
+        self.assertIn("+1 weapon die", burst["mechanics_summary"])
+        self.assertIn("Jam risk (1)", burst["mechanics_summary"])
+        self.assertIn("1/turn", burst["mechanics_summary"])
         self.assertIn("Track ammunition manually.", burst["manual_instructions"])
 
         # Vandergraff Drill
