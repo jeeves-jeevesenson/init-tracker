@@ -374,15 +374,41 @@ class MonsterCapabilityService:
 
             # Resolve composite children
             if action_type == "composite" and "composite" in mechanics:
+                comp_data = mechanics["composite"]
+                
+                # Default values for sequence
+                sequence_kind = mechanics.get("sequence_kind", "fixed_children")
+                choose_n = mechanics.get("choose_n")
+                children = []
+
+                if isinstance(comp_data, list):
+                    children = comp_data
+                elif isinstance(comp_data, dict):
+                    children = comp_data.get("children", [])
+                    sequence_kind = comp_data.get("sequence_kind", sequence_kind)
+                    choose_n = comp_data.get("choose_n", choose_n)
+                
+                # Ensure sequence_kind is one of the supported values or default to fixed_children
+                if sequence_kind not in ["fixed_children", "choose_n"]:
+                    # Normalize unknown to fixed_children for now
+                    sequence_kind = "fixed_children"
+
+                # Expose sequence metadata at top level of mechanics for easier UI access
+                cap["mechanics"]["sequence_kind"] = sequence_kind
+                if choose_n is not None:
+                    cap["mechanics"]["choose_n"] = choose_n
+
                 resolved_children = []
-                for child in cap["mechanics"]["composite"]:
+                for child in children:
+                    if not isinstance(child, dict):
+                        continue
                     child_id = child.get("action_id")
                     # Find matching capability in the same monster
                     matched_child = next((c for c in data.get("capabilities", []) if c.get("id") == child_id), None)
 
                     resolved = {
                         "action_id": child_id,
-                        "name": child.get("name"),
+                        "name": child.get("name") or (matched_child.get("name") if matched_child else child_id),
                         "count": child.get("count", 1),
                         "matched": matched_child is not None,
                         "executable": matched_child.get("executable", False) if matched_child else False

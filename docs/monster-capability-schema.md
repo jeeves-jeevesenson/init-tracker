@@ -64,11 +64,57 @@ mechanics:
 ```
 
 #### Multiattack (Composite)
+Multiattack is a parent action that guides a sequence of child actions.
+
 ```yaml
 mechanics:
   composite:
     - action_id: "tentacle-attack"
       count: 3
+    # sequence_kind defaults to "fixed_children" when composite is a list
+```
+
+**Choose-N sequence:**
+```yaml
+mechanics:
+  composite:
+    sequence_kind: "choose_n"
+    choose_n: 2 # Total budget of selections from the list
+    children:
+      - action_id: "pistol"
+        count: 2 # Max allowed of this type
+      - action_id: "baton"
+        count: 2
+```
+
+**Object-based fixed sequence (alternative):**
+```yaml
+mechanics:
+  composite:
+    sequence_kind: "fixed_children"
+    children:
+      - action_id: "bite"
+        count: 1
+      - action_id: "claw"
+        count: 2
+```
+
+#### Modifier Actions
+Modifier actions do not resolve an attack themselves but apply a state or bonus to the next relevant action.
+
+```yaml
+id: "controlled-burst"
+name: "Controlled Burst"
+type: "action"
+action_type: "modifier"
+mechanics:
+  modifier:
+    kind: "next_attack"
+    ammo_cost: 3
+    damage_bonus:
+      extra_weapon_dice: 1 # adds one base weapon die
+    limit: "once_per_turn"
+    jam_risk: true # natural 1 on the modified attack jams the weapon
 ```
 
 #### Effects / Riders
@@ -129,8 +175,9 @@ The backend tracks the current state of limited-use resources in-memory during t
 - **Uses**: Tracks `remaining` vs `max`.
 - **Spell Slots**: Tracks `remaining` slots per level.
 - **Daily Spells**: Tracks `remaining` uses per spell list group.
+- **Multiattack Sequences**: Tracks `total_completed`, `choose_n` budget, and per-child `completed` vs `max` counts. Enforcement occurs during `/resolve-targets` (Apply Results).
 
-DM UI provides buttons to spend, roll, or restore these resources. State is reset on server restart.
+DM UI provides buttons to spend, roll, or restore these resources. State is reset on server restart. Sequence state is cleared on turn advance or actor change.
 
 ## 8. Effect Trigger Types
 - `on_hit`: Applied when an attack hits.

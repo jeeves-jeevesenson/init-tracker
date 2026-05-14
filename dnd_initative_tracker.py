@@ -8669,6 +8669,7 @@ class InitiativeTracker(base.InitiativeTracker):
         self._monster_specs: List[MonsterSpec] = []
         self._monsters_by_name: Dict[str, MonsterSpec] = {}
         self._monster_resource_state: Dict[str, Any] = {}
+        self._monster_sequence_state: Dict[int, Dict[str, Any]] = {}
         self._load_monsters_index()
         # Swap the Name entry for a monster dropdown + library button
         if self.host_mode == "desktop":
@@ -11269,6 +11270,7 @@ class InitiativeTracker(base.InitiativeTracker):
             setattr(caster, "summon_anchor_seq", int(len(summon_cids)))
 
     def _next_turn(self) -> None:
+        self._monster_sequence_state.clear()
         self._normalize_summons_shared_turn_state()
         ordered = self._display_order()
         if not ordered:
@@ -43875,26 +43877,66 @@ class InitiativeTracker(base.InitiativeTracker):
         if action_type == "composite":
              # Assisted sequence
              resolved_children = []
-             composite_mechanics = mechanics.get("composite", [])
-             for child in composite_mechanics:
+             comp_data = mechanics.get("composite", [])
+             
+             # Default values for sequence
+             sequence_kind = mechanics.get("sequence_kind", "fixed_children")
+             choose_n = mechanics.get("choose_n")
+             children = []
+
+             if isinstance(comp_data, list):
+                 children = comp_data
+             elif isinstance(comp_data, dict):
+                 children = comp_data.get("children", [])
+                 sequence_kind = comp_data.get("sequence_kind", sequence_kind)
+                 choose_n = comp_data.get("choose_n", choose_n)
+             
+             if sequence_kind not in ["fixed_children", "choose_n"]:
+                 sequence_kind = "fixed_children"
+
+             for child in children:
+                 if not isinstance(child, dict):
+                     continue
                  child_id = child.get("action_id")
                  matched_child = next((c for c in data.get("capabilities", []) if c.get("id") == child_id), None)
                  resolved_children.append({
                      "action_id": child_id,
-                     "name": child.get("name"),
+                     "name": child.get("name") or (matched_child.get("name") if matched_child else child_id),
                      "count": child.get("count", 1),
                      "executable": matched_child.get("executable", False) if matched_child else False,
                      "matched": matched_child is not None
                  })
 
-             return {
+             # Initialize/Update backend sequence state
+             sequence_state = {
+                 "actor_cid": int(normalized_actor_cid),
+                 "parent_capability_id": cap_id,
+                 "sequence_kind": sequence_kind,
+                 "choose_n": choose_n,
+                 "total_completed": 0,
+                 "children": {
+                     c["action_id"]: {"completed": 0, "max": c["count"]}
+                     for c in resolved_children
+                 },
+                 "turn_marker": (self.round_num, self.turn_num)
+             }
+             self._monster_sequence_state[int(normalized_actor_cid)] = sequence_state
+
+             res = {
                  "ok": True,
                  "resolution": "assisted_sequence",
                  "capability_id": cap_id,
                  "name": cap.get("name"),
                  "desc": cap.get("desc"),
-                 "steps": resolved_children
+                 "steps": resolved_children,
+                 "sequence_kind": sequence_kind,
+                 "completed_count": 0,
+                 "total_budget": choose_n
              }
+             if choose_n is not None:
+                 res["choose_n"] = choose_n
+                 res["remaining_budget"] = choose_n
+             return res
 
         elif action_type == "spellcasting":
              spell_slug = payload.get("spell_slug")
@@ -43961,7 +44003,7 @@ class InitiativeTracker(base.InitiativeTracker):
                      actor_cid=int(normalized_actor_cid),
                      damage_packet=damage_packet,
                  )
-                 return {
+                 res = {
                      "ok": True,
                      "resolution": "assisted",
                      "capability": cap,
@@ -43981,6 +44023,14 @@ class InitiativeTracker(base.InitiativeTracker):
                      "spend_hint": spend_key,
                      "recharge_expended": False
                  }
+                 active_seq = self._monster_sequence_state.get(int(normalized_actor_cid))
+                 if active_seq and active_seq.get("turn_marker") == (self.round_num, self.turn_num):
+                     res["sequence_kind"] = active_seq["sequence_kind"]
+                     res["completed_count"] = active_seq["total_completed"]
+                     if active_seq.get("choose_n") is not None:
+                         res["choose_n"] = active_seq["choose_n"]
+                         res["remaining_budget"] = active_seq["choose_n"] - active_seq["total_completed"]
+                 return res
 
             normalized_blocks = [{
                 "attack_key": cap_id,
@@ -44155,6 +44205,20 @@ class InitiativeTracker(base.InitiativeTracker):
                         if distance_ft > limit_ft + 0.1:
                             return {"ok": False, "error": f"Target {getattr(row['target'], 'name', 'Target')} is out of range ({int(distance_ft)}ft > {int(limit_ft)}ft)."}
 
+        # Sequence budget validation
+        active_seq = self._monster_sequence_state.get(int(normalized_actor_cid))
+        if active_seq and active_seq.get("turn_marker") == (self.round_num, self.turn_num):
+            if cap_id in active_seq.get("children", {}):
+                child_state = active_seq["children"][cap_id]
+                if active_seq.get("sequence_kind") == "choose_n":
+                    budget = active_seq.get("choose_n")
+                    if budget is not None and active_seq.get("total_completed", 0) >= budget:
+                        return {"ok": False, "error": f"Multiattack budget exhausted ({active_seq.get('total_completed')}/{budget})."}
+                
+                # Check per-child max
+                if child_state["completed"] >= child_state["max"]:
+                    return {"ok": False, "error": f"Max attacks for {cap.get('name', cap_id)} reached ({child_state['completed']}/{child_state['max']})."}
+
         results: List[Dict[str, Any]] = []
         for row in rows:
             target_cid = row["target_cid"]
@@ -44219,13 +44283,20 @@ class InitiativeTracker(base.InitiativeTracker):
                     target_result["effects_applied"].append(effect_result)
             results.append(target_result)
 
+        if (apply_damage or apply_effects) and active_seq and active_seq.get("turn_marker") == (self.round_num, self.turn_num):
+            # Only increment if NO errors occurred in results
+            if not any(r.get("error") for r in results):
+                if cap_id in active_seq.get("children", {}):
+                    active_seq["children"][cap_id]["completed"] += 1
+                    active_seq["total_completed"] += 1
+
         if apply_damage or apply_effects:
             try:
                 self._lan_force_state_broadcast()
             except Exception:
                 pass
 
-        return {
+        res = {
             "ok": True,
             "resolution": "multi_target_assisted",
             "capability_id": cap_id,
@@ -44235,6 +44306,14 @@ class InitiativeTracker(base.InitiativeTracker):
             "apply_effects": apply_effects,
             "results": results,
         }
+        if active_seq and active_seq.get("turn_marker") == (self.round_num, self.turn_num):
+             # Include sequence progress
+             res["sequence_kind"] = active_seq["sequence_kind"]
+             res["completed_count"] = active_seq["total_completed"]
+             if active_seq.get("choose_n") is not None:
+                 res["choose_n"] = active_seq["choose_n"]
+                 res["remaining_budget"] = active_seq["choose_n"] - active_seq["total_completed"]
+        return res
 
     def _dm_monster_capability_resource_op(self, *, cid: int, payload: Dict[str, Any]) -> Dict[str, Any]:
         """Perform a generic resource operation (mark used, restore, etc)."""

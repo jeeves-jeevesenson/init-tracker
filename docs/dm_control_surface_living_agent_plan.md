@@ -168,6 +168,117 @@ Required report item:
 
 Browser parse errors such as `Unexpected token '}'` or `Identifier '<name>' has already been declared` are blockers.
 
+## Monster Action Backend Contract (Pass 2B)
+
+### A. Multiattack Sequence Model
+
+Multiattack is handled as an `assisted_sequence` resolution flow.
+
+#### 1. `sequence_kind`
+- **`fixed_children` (Default):** The DM must complete the specific counts for all listed child actions.
+    - *Example:* Troll (Bite x1, Claw x2).
+- **`choose_n`:** The DM has a total budget of $N$ selections from a provided list of valid child actions.
+    - *Example:* Constable (Choose 2 from .45 Pistol or Baton).
+- **`variant` (Reserved):** Monsters that make $N$ attacks and can replace one with a special action (e.g., Grapple/Shove or a specific trait).
+
+#### 2. Completion Rules
+- **Increment:** Completion for a child step increments exactly **once** per successful "Apply Results".
+- **Outcome Neutrality:** Hit, Miss, and "No Effect" all count as a completed attack/action once applied.
+- **Cancellation:** Cancelling a resolution modal or targeting mode does **not** increment completion.
+- **Failures:** A failed backend apply (e.g., network error) does not increment completion.
+- **Authority:** Sequence state is **turn-scoped** and **actor-scoped**.
+- **Persistence:** Initially frontend-assistive; backend state broadcast should clear it on actor/turn change. Reconnect/Refresh clears active sequence progress (resetting the turn's attacks).
+
+#### 3. Interaction Contract
+- Each child uses the standard LAN-like `target -> modal -> apply` flow.
+- Each child performs its own range/reach validation.
+- Movement remains allowed between child attacks.
+- Sequence Tray stays visible or minimized until the total budget/fixed-steps are met or the DM clicks "End Sequence".
+
+---
+
+### B. Controlled Burst & Firearm Modifiers
+
+Controlled Burst is modeled as a **Stateful Modifier Action**.
+
+#### 1. Mechanics
+- **Action Type:** `modifier`
+- **State:** `next_attack` modifier.
+- **Ammo Cost:** 3 (consumed hit or miss).
+- **Damage Bonus:** +1 base weapon damage die on hit (no extra modifier).
+- **Limit:** Once per turn.
+- **Jam Risk:** Natural 1 on the modified attack roll triggers the `Jammed` state on the weapon.
+- **Resolution:**
+    1. DM clicks "Controlled Burst" action card.
+    2. Backend `/execute` verifies ammo (>= 3) and `once_per_turn` limit.
+    3. Backend sets `actor_cid:controlled_burst = True` in turn-local resource state.
+    4. Next `melee_attack` or `ranged_attack` resolution checks this flag.
+    5. If set, the resolution packet includes the extra die and increases ammo spend to 3.
+    6. Flag clears after resolution.
+
+#### 2. Unresolved / Questions
+- **Jamming UI:** Does "Jammed" need a new backend condition or just a weapon-state flag? (Proposal: use a weapon-specific resource/flag).
+- **Multiple Weapons:** If a monster has two guns, does Controlled Burst apply to the *next* attack with *either* or only the one used? (Design: applies to the next attack with a `burst` weapon).
+
+---
+
+### C. Black and Tan Manual Tray Cleanup
+
+| Item | Classification | Notes |
+|---|---|---|
+| **Armalite Rifle** | Executable | Ranged Attack |
+| **.45 Pistol** | Executable | Ranged Attack |
+| **Baton / Knife** | Executable | Melee Attack |
+| **Multiattack (Rifleman)** | `fixed_children` | Armalite x2 |
+| **Multiattack (Constable)** | `choose_n` | Choose 2 (Pistol/Baton) |
+| **Controlled Burst** | `modifier` | Stateful resource/damage bonus |
+| **Vandergraff Drill** | Passive Reminder | Demote to Traits/Collapsed |
+| **Fire Discipline** | Passive Reminder | Demote to Traits/Collapsed |
+| **Baton and Boot** | Passive Reminder | Demote to Traits/Collapsed |
+| **Rough Arrest** | Rider / Prompt | Future: Prompt on Baton hit |
+
+---
+
+### D. Testing Strategy
+
+1. **Schema/Service Tests:**
+    - Verify `MonsterCapabilityService` correctly parses `sequence_kind` and `choose_n`.
+    - Verify modifier actions are correctly summarized for UI.
+2. **Backend Logic Tests:**
+    - `test_monster_sequence_budget`: Prove `choose_n` enforcement.
+    - `test_controlled_burst_modifier`: Verify flag sets on execute and consumes on resolution.
+3. **Regression Tests:**
+    - Ensure fixed multiattack (Troll/Rifleman) still works.
+    - Ensure range validation remains per-child attack.
+
+---
+
+### E. Implementation Pass Breakdown
+
+#### Pass 2C: Multiattack Schema & Service Support
+- Add `sequence_kind` and `choose_n` to schema.
+- Update `MonsterCapabilityService` to expose these in UI summaries.
+- Add unit tests for parsing.
+
+#### Pass 2D: Backend Sequence Authority
+- Implement `choose_n` budget tracking in `dnd_initative_tracker.py`.
+- Update `/execute` to respect multiattack kind.
+
+#### Pass 2E: /dmcontrol Sequence UI
+- Update sequence tray to support "Choose N" display.
+- Improved "End Sequence" and "Next Step" flow.
+
+#### Pass 2F: Black and Tan Conversion
+- Update Rifleman/Constable overlays to use the new contracts.
+- Demote passive reminders to a collapsed Traits section.
+
+#### Pass 2G: Controlled Burst & Jamming
+- Implement stateful modifier backend logic.
+- Implement ammo cost (3) and extra damage die.
+- Implement Natural 1 jamming.
+
+---
+
 ## Current status snapshot
 
 Update this section after each pass.
@@ -1352,6 +1463,48 @@ Changes:
 - **Range Enforcement:** Implemented backend distance validation in `_dm_monster_capability_resolve_targets` and updated frontend to warn/confirm if an attack target is likely out of range. Added `override_range` flag for DM adjudication.
 - **UI Stability:** Preserved "Traits & Reminders" `<details>` state across re-renders in `renderActionPanel`.
 - **Validation:** Added `test_dm_control_range_validation` to `tests/test_dm_control_apply_results.py`. Verified JS syntax in `assets/web/dmcontrol/index.html`. All 12 targeted tests passed.
+
+### 2026-05-13 — Pass 2D: Backend Sequence Authority
+Agent/model: Gemini CLI
+Scope:
+- Implemented `self._monster_sequence_state` in `InitiativeTracker` to authoritatively track Multiattack progress.
+- Sequences are initialized in `/api/dm/monster-capabilities/{cid}/execute` for composite actions.
+- Progress (Hit/Miss/No Effect) is incremented in `/api/dm/monster-capabilities/{cid}/resolve-targets` (Apply Results).
+- Budget enforcement: Rejects child actions that exceed `choose_n` total budget or per-child `max` counts.
+- State is turn-scoped and actor-scoped; cleared in `_next_turn`.
+- Metadata (completed count, remaining budget) is returned in both `/execute` and `/resolve-targets` responses.
+- Added targeted tests in `tests/test_monster_sequence_state.py`.
+Files changed:
+- dnd_initative_tracker.py
+- docs/monster-capability-schema.md
+- docs/dm_control_surface_living_agent_plan.md
+- tests/test_monster_sequence_state.py (New)
+Outcome:
+- Backend now authoritatively enforces Multiattack rules.
+- Existing Rifleman/Troll fixed sequences remain compatible and are now enforced.
+- All targeted tests passed.
+Next recommended pass:
+- Pass 2E: UI Sequence Tray (visualize budget and progress in DM control panel).
+
+### 2026-05-13 — Pass 2C: Multiattack Schema & Service Support
+Agent/model: Gemini CLI
+Scope:
+- Added `sequence_kind` and `choose_n` support to `MonsterCapabilityService` and `/execute` backend.
+- Supported both legacy list-based `composite` actions and new object-based `composite` with `children`, `sequence_kind`, and `choose_n`.
+- Metadata is exposed in UI summaries and `/execute` responses for `assisted_sequence` resolution.
+- Added targeted tests in `tests/test_monster_sequence_schema.py` for varied schema shapes.
+- Updated `docs/monster-capability-schema.md` with valid YAML examples for choose-N sequences.
+Files changed:
+- monster_capability_service.py
+- dnd_initative_tracker.py
+- docs/monster-capability-schema.md
+- tests/test_monster_sequence_schema.py (New)
+Outcome:
+- Backend correctly parses and surfaces Multiattack sequence metadata.
+- Backward compatibility for existing Troll/Rifleman-style fixed sequences is preserved.
+- All targeted tests passed.
+Next recommended pass:
+- Pass 2D: Backend Sequence Authority (tracking `choose_n` budget in combat state).
 
 ### 2026-05-13 — Pass 1D Rescue: Interrupted run cleanup and Modal state fix
 Agent/model: Gemini CLI
