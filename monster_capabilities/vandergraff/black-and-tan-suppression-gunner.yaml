@@ -50,7 +50,7 @@ capabilities:
   - id: suppressive-fire
     name: Suppressive Fire
     type: action
-    executable: true
+    executable: false
     desc: "The Gunner spends 10 ammo and chooses a 10-foot cube within 120 feet. Until the start of the Gunner’s next turn, hostile creatures that start their turn in the cube or enter it must make a DC 14 Wisdom saving throw or be Suppressed until the end of their turn."
     action_type: save_ability
     mechanics:
@@ -64,10 +64,11 @@ capabilities:
           condition: suppressed
           trigger: failed_save
           text: "Suppressed until end of target turn."
+    warning: "Manual area/save resolution required."
   - id: automatic-sweep
     name: Automatic Sweep
     type: action
-    executable: true
+    executable: false
     desc: "The Gunner spends 10 ammo and chooses a 15-foot cone or 30-foot line within 120 feet. Each creature in the area makes a DC 14 Dexterity saving throw. On a failed save, a creature takes 10 (2d6 + 3) piercing damage. On a successful save, it takes no damage."
     action_type: save_ability
     mechanics:
@@ -79,6 +80,7 @@ capabilities:
       damage:
         - formula: 2d6+3
           type: piercing
+    warning: "Manual area/save resolution required."
   - id: pistol
     name: .45 Pistol
     type: action

@@ -62,7 +62,9 @@ capabilities:
   - id: keep-officer-breathing
     name: Keep the Officer Breathing
     type: reaction
+    executable: false
     desc: "When an allied Black and Tan officer within 5 feet would drop to 0 HP, the Medic can cause that ally to drop to 1 HP instead."
+    warning: "Manual HP adjustment required."
   - id: vandergraff-drill
     name: Vandergraff Drill
     type: trait

@@ -1604,4 +1604,45 @@ Outcome:
 - Complex fire modes (Suppressive Fire, Automatic Sweep) are surfaced with correct DC/ability/shape metadata for the DM.
 - Multiattack flexibility for officers and specialists is enforced by the backend via `choose_n`.
 Next recommended pass:
-- Pass 2J: DM console Black and Tan live-play polish and final all-enemy manual smoke checklist.
+- Pass 2J: Black and Tan expansion audit and remaining high-CR officer overlays.
+
+### 2026-05-14 — Pass 2J: Black and Tan expansion audit and high-CR officers
+Agent/model: Gemini CLI
+Scope:
+- Audited all 8 Black and Tan overlays for `/dmcontrol` live-play readiness.
+- Cleaned primary tray by marking unsupported mechanics (AOE/Save, Reactions, Commands) as `executable: false` (demoted to Traits & Reminders).
+- Added High-CR Officers: **Captain** (CR 8) and **Major** (CR 9) with full weapon/Multiattack automation.
+- Added `Brace` and `Reload` simple executable utility actions.
+Files created:
+- monster_capabilities/vandergraff/black-and-tan-captain.yaml
+- monster_capabilities/vandergraff/black-and-tan-major.yaml
+Files changed:
+- monster_capabilities/vandergraff/black-and-tan-suppression-gunner.yaml
+- monster_capabilities/vandergraff/black-and-tan-shield-trooper.yaml
+- monster_capabilities/vandergraff/black-and-tan-field-medic.yaml
+- monster_capabilities/vandergraff/black-and-tan-lieutenant.yaml
+- docs/dm_control_surface_living_agent_plan.md
+Validation:
+- `./.venv/bin/python3 -m unittest -v tests.test_black_and_tan_expansion` → 6 tests passed (including new Captain/Major).
+- All 8 overlays load and summarize correctly in `MonsterCapabilityService`.
+- JS syntax check passed for `assets/web/dmcontrol/index.html`.
+Outcome:
+- The Black and Tan roster is production-ready for the DM console.
+- Primary tray is clean: only resolution-modal compatible actions are prominently displayed.
+- Manual assists for AOE and commands are correctly demoted to the secondary tray.
+Next recommended pass:
+- Pass 2K: DM console Black and Tan live-play polish and final all-enemy manual smoke checklist.
+
+## Black and Tan Live-Play Readiness (Pass 2J)
+
+| Enemy Type | Primary Tray (Automated) | Secondary Tray (Reminders) |
+|---|---|---|
+| **Rifleman** | Rifle, Controlled Burst, Multiattack | Vandergraff Drill, Fire Discipline |
+| **Constable** | Pistol, Baton, Multiattack | Rough Arrest, Vandergraff Drill |
+| **Shield Trooper** | Pistol, Baton, Shield Bash, Multiattack | Interpose Shield, Shield Wall |
+| **Suppression Gunner** | Armalite, Brace, Multiattack | Suppressive Fire, Automatic Sweep |
+| **Field Medic** | Pistol, Multiattack | Field Treatment, Smoke, Stimulant |
+| **Lieutenant** | Rifle, Pistol, Saber, Burst, Brace, Reload, Multiattack | Get Down!, Direct Fire |
+| **Captain** | Rifle, Pistol, Saber, Burst, Brace, Reload, Multiattack | Condemn, Coordinated Volley, Not Yet |
+| **Major** | Rifle, Engraved Pistol, Saber, Burst, Brace, Reload, Multiattack | Make an Example, Command Fire, Reactions |
+

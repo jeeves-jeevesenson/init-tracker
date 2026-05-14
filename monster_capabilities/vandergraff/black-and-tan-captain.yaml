@@ -1,5 +1,5 @@
-name: Black and Tan Lieutenant
-slug: black-and-tan-lieutenant
+name: Black and Tan Captain
+slug: black-and-tan-captain
 source: repo-local
 license: CC-BY-4.0
 capabilities:
@@ -7,7 +7,7 @@ capabilities:
     name: Multiattack
     type: action
     executable: true
-    desc: "The Lieutenant makes three attacks, using Armalite Rifle, .45 Pistol, or Officer Saber in any combination."
+    desc: "The Captain makes three attacks, using Armalite Rifle, .45 Pistol, or Officer Saber in any combination."
     action_type: composite
     mechanics:
       composite:
@@ -37,7 +37,7 @@ capabilities:
     name: Controlled Burst
     type: action
     executable: true
-    desc: "Before making one Armalite Rifle attack, the Lieutenant spends 3 ammo. On a hit, the attack deals 17 (2d12 + 4) piercing damage. Once per turn."
+    desc: "Before making one Armalite Rifle attack, the Captain spends 3 ammo. On a hit, the attack deals 17 (2d12 + 4) piercing damage. Once per turn."
     action_type: modifier
     mechanics:
       modifier:
@@ -77,37 +77,43 @@ capabilities:
         - formula: 1d8+4
           type: slashing
       reach: 5
-  - id: direct-fire
-    name: Direct Fire
+  - id: condemn-target
+    name: Condemn the Target
+    type: action
+    executable: false
+    desc: "The Captain chooses one creature it can see within 90 feet. Until the start of the Captain’s next turn, the first allied Black and Tan to hit that target deals an extra 10 (3d6) damage."
+    warning: "Manual damage tracking required."
+  - id: coordinated-volley
+    name: Coordinated Volley
     type: bonus_action
     executable: false
-    desc: "Choose one allied Black and Tan within 60 feet who can hear the Lieutenant. That ally can use its Reaction to make one firearm attack."
-    warning: "Manual reaction/attack resolution required."
-  - id: command-presence
-    name: Command Presence
-    type: trait
-    desc: "Allied Black and Tans within 30 feet who can see or hear the Lieutenant gain +1 to Wisdom saving throws and morale checks."
-  - id: officer-priority
-    name: Officer Priority
-    type: trait
-    desc: "If the Lieutenant is Bloodied, one allied Black and Tan within 30 feet can use its Reaction to move up to half its Speed toward cover."
-  - id: brace
-    name: Brace
-    type: bonus_action
-    executable: true
-    desc: "The Lieutenant gains the Braced condition until the start of its next turn."
-    action_type: utility
+    desc: "Choose up to two allied Black and Tans within 60 feet who can hear the Captain. Each chosen ally can move up to 10 feet or Brace."
+    warning: "Manual ally movement/brace required."
   - id: reload
     name: Reload
     type: bonus_action
     executable: true
-    desc: "The Lieutenant reloads one firearm."
+    desc: "The Captain reloads one firearm."
     action_type: utility
-  - id: get-down
-    name: Get Down!
+  - id: brace
+    name: Brace
+    type: bonus_action
+    executable: true
+    desc: "The Captain gains the Braced condition until the start of its next turn."
+    action_type: utility
+  - id: command-net
+    name: Command Net
+    type: trait
+    desc: "While the Captain is conscious and holding or wearing a command radio, Black and Tans within 120 feet ignore the first failed morale check they make."
+  - id: hard-target
+    name: Hard Target
+    type: trait
+    desc: "If the Captain is behind Half Cover or better, ranged attacks against the Captain do not gain Advantage unless the attacker is within 30 feet."
+  - id: not-yet
+    name: Not Yet
     type: reaction
     executable: false
-    desc: "When an allied Black and Tan within 30 feet fails a Dexterity saving throw, the Lieutenant can grant that ally a +3 bonus to the save."
+    desc: "When the Captain fails a saving throw, it can add 1d6 to the roll (3/day)."
     warning: "Manual save bonus required."
   - id: vandergraff-drill
     name: Vandergraff Drill

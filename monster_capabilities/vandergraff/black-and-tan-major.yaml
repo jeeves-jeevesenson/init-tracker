@@ -1,0 +1,152 @@
+name: Black and Tan Major
+slug: black-and-tan-major
+source: repo-local
+license: CC-BY-4.0
+capabilities:
+  - id: multiattack
+    name: Multiattack
+    type: action
+    executable: true
+    desc: "The Major makes three attacks, using Armalite Rifle, Engraved .45 Pistol, or Officer Saber in any combination."
+    action_type: composite
+    mechanics:
+      composite:
+        sequence_kind: choose_n
+        choose_n: 3
+        children:
+          - action_id: armalite-rifle
+            count: 3
+          - action_id: engraved-pistol
+            count: 3
+          - action_id: saber
+            count: 3
+  - id: armalite-rifle
+    name: Armalite Rifle
+    type: action
+    executable: true
+    desc: "Ranged Weapon Attack: +8 to hit, range 120/360 ft., one target. Hit: 11 (1d12 + 4) piercing damage. Loud. Magazine 20."
+    action_type: ranged_attack
+    mechanics:
+      attack_bonus: 8
+      damage:
+        - formula: 1d12+4
+          type: piercing
+      range: 120
+      long_range: 360
+  - id: controlled-burst
+    name: Controlled Burst
+    type: action
+    executable: true
+    desc: "Before making one Armalite Rifle attack, the Major spends 3 ammo. On a hit, the attack deals 17 (2d12 + 4) piercing damage. Once per turn."
+    action_type: modifier
+    mechanics:
+      modifier:
+        kind: next_attack
+        eligible_action_ids:
+          - armalite-rifle
+        ammo_cost: 3
+        damage_bonus:
+          mode: extra_weapon_die
+          count: 1
+        consume_on: attack_resolution
+        clears_on: next_eligible_attack
+        jam_risk: natural_1
+        limit: once_per_turn
+  - id: engraved-pistol
+    name: Engraved .45 Pistol
+    type: action
+    executable: true
+    desc: "Ranged Weapon Attack: +8 to hit, range 40/120 ft., one target. Hit: 10 (1d10 + 4) piercing damage. Loud. Magazine 8."
+    action_type: ranged_attack
+    mechanics:
+      attack_bonus: 8
+      damage:
+        - formula: 1d10+4
+          type: piercing
+      range: 40
+      long_range: 120
+  - id: saber
+    name: Officer Saber
+    type: action
+    executable: true
+    desc: "Melee Weapon Attack: +8 to hit, reach 5 ft., one target. Hit: 9 (1d10 + 4) slashing damage."
+    action_type: melee_attack
+    mechanics:
+      attack_bonus: 8
+      damage:
+        - formula: 1d10+4
+          type: slashing
+      reach: 5
+  - id: make-an-example
+    name: Make an Example
+    type: action
+    executable: false
+    desc: "One creature within 90 feet that can hear the Major must make a DC 16 Wisdom saving throw. On a failed save, the target is Frightened of the Major until the end of its next turn."
+    action_type: save_ability
+    mechanics:
+      ability: wis
+      dc: 16
+      effects:
+        - kind: condition
+          condition: frightened
+          trigger: failed_save
+          text: "Frightened until end of target turn."
+    warning: "Manual save resolution required."
+  - id: command-fire
+    name: Command Fire
+    type: bonus_action
+    executable: false
+    desc: "Choose one allied Black and Tan within 60 feet. That ally can use its Reaction to make one firearm attack or move up to half its Speed."
+    warning: "Manual ally reaction required."
+  - id: reload
+    name: Reload
+    type: bonus_action
+    executable: true
+    desc: "The Major reloads one firearm."
+    action_type: utility
+  - id: brace
+    name: Brace
+    type: bonus_action
+    executable: true
+    desc: "The Major gains the Braced condition until the start of its next turn."
+    action_type: utility
+  - id: occupation-commander
+    name: Occupation Commander
+    type: trait
+    desc: "Allied Black and Tans within 60 feet who can see or hear the Major gain +2 to morale checks and Wisdom saving throws against being Frightened."
+  - id: protected-by-rank
+    name: Protected by Rank
+    type: trait
+    desc: "The first time each round that the Major is hit by an attack while within 5 feet of an allied Black and Tan, the ally can choose to take half the damage instead."
+  - id: no-loose-ends
+    name: No Loose Ends
+    type: trait
+    desc: "When the Major becomes Bloodied, it immediately orders a fallback, execution, fire, alarm, or evidence purge (narrative pressure)."
+  - id: countermand
+    name: Countermand
+    type: reaction
+    executable: false
+    desc: "When an allied Black and Tan within 60 feet fails a saving throw, the Major can allow that ally to reroll the save."
+    warning: "Manual reroll required."
+  - id: duck-behind-them
+    name: Duck Behind Them
+    type: reaction
+    executable: false
+    desc: "When the Major is hit by a ranged attack and has an allied Black and Tan within 5 feet, the Major gains +3 AC against that attack. If the attack misses because of this, the adjacent ally takes 7 piercing damage."
+    warning: "Manual AC bonus/damage required."
+  - id: vandergraff-drill
+    name: Vandergraff Drill
+    type: trait
+    executable: false
+    desc: "If this creature starts its turn within 30 feet of an allied Black and Tan officer it can see or hear, it gains +1 to attack rolls until the start of its next turn."
+    warning: "Reminder: +1 to attack if near another officer."
+  - id: baton-and-boot
+    name: Baton and Boot
+    type: trait
+    desc: "This creature has Advantage on attack rolls against a Prone creature within 5 feet of it."
+  - id: fire-discipline
+    name: Fire Discipline
+    type: trait
+    executable: false
+    desc: "This creature does not expend extra ammunition on a missed attack unless it used Controlled Burst, Automatic Sweep, or Suppressive Fire."
+    warning: "Ammunition tracking reminder."
