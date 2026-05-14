@@ -1,0 +1,92 @@
+name: Black and Tan Shield Trooper
+slug: black-and-tan-shield-trooper
+source: repo-local
+license: CC-BY-4.0
+capabilities:
+  - id: multiattack
+    name: Multiattack
+    type: action
+    executable: true
+    desc: "The Shield Trooper makes two attacks, using .45 Pistol, Baton, or Shield Bash in any combination."
+    action_type: composite
+    mechanics:
+      composite:
+        sequence_kind: choose_n
+        choose_n: 2
+        children:
+          - action_id: pistol
+            count: 2
+          - action_id: baton
+            count: 2
+          - action_id: shield-bash
+            count: 2
+  - id: pistol
+    name: .45 Pistol
+    type: action
+    executable: true
+    desc: "Ranged Weapon Attack: +5 to hit, range 40/120 ft., one target. Hit: 8 (1d10 + 2) piercing damage. Loud. Magazine 8."
+    action_type: ranged_attack
+    mechanics:
+      attack_bonus: 5
+      damage:
+        - formula: 1d10+2
+          type: piercing
+      range: 40
+      long_range: 120
+  - id: baton
+    name: Baton
+    type: action
+    executable: true
+    desc: "Melee Weapon Attack: +7 to hit, reach 5 ft., one target. Hit: 8 (1d8 + 4) bludgeoning damage."
+    action_type: melee_attack
+    mechanics:
+      attack_bonus: 7
+      damage:
+        - formula: 1d8+4
+          type: bludgeoning
+      reach: 5
+  - id: shield-bash
+    name: Shield Bash
+    type: action
+    executable: true
+    desc: "Melee Weapon Attack: +7 to hit, reach 5 ft., one target. Hit: 7 (1d6 + 4) bludgeoning damage, and the target must succeed on a DC 15 Strength saving throw or be pushed 10 feet or knocked Prone."
+    action_type: melee_attack
+    mechanics:
+      attack_bonus: 7
+      damage:
+        - formula: 1d6+4
+          type: bludgeoning
+      reach: 5
+      riders:
+        - id: shield-bash-rider
+          name: Shield Bash Save
+          trigger: hit
+          desc: "DC 15 Str save or pushed 10ft/prone."
+  - id: shield-wall
+    name: Shield Wall
+    type: trait
+    desc: "The Shield Trooper counts as Half Cover for one allied creature directly behind it."
+  - id: heavy-shield
+    name: Heavy Shield
+    type: trait
+    desc: "The Shield Trooper has Disadvantage on Dexterity (Stealth) checks."
+  - id: interpose-shield
+    name: Interpose Shield
+    type: reaction
+    desc: "When an allied Black and Tan within 5 feet is hit by an attack, the Shield Trooper can reduce the damage by 10 if the attack came from a direction the shield could plausibly block."
+  - id: vandergraff-drill
+    name: Vandergraff Drill
+    type: trait
+    executable: false
+    desc: "If this creature starts its turn within 30 feet of an allied Black and Tan officer it can see or hear, it gains +1 to attack rolls until the start of its next turn."
+    warning: "Reminder: +1 to attack if near another officer."
+  - id: baton-and-boot
+    name: Baton and Boot
+    type: trait
+    desc: "This creature has Advantage on attack rolls against a Prone creature within 5 feet of it."
+  - id: fire-discipline
+    name: Fire Discipline
+    type: trait
+    executable: false
+    desc: "This creature does not expend extra ammunition on a missed attack unless it used Controlled Burst, Automatic Sweep, or Suppressive Fire."
+    warning: "Ammunition tracking reminder."

@@ -1,0 +1,137 @@
+name: Black and Tan Suppression Gunner
+slug: black-and-tan-suppression-gunner
+source: repo-local
+license: CC-BY-4.0
+capabilities:
+  - id: multiattack
+    name: Multiattack
+    type: action
+    executable: true
+    desc: "The Gunner makes two Armalite attacks."
+    action_type: composite
+    mechanics:
+      composite:
+        sequence_kind: fixed_children
+        children:
+          - action_id: armalite-rifle
+            count: 2
+  - id: armalite-rifle
+    name: Armalite Rifle
+    type: action
+    executable: true
+    desc: "Ranged Weapon Attack: +6 to hit, range 120/360 ft., one target. Hit: 10 (2d6 + 3) piercing damage. Loud. Magazine 30."
+    action_type: ranged_attack
+    mechanics:
+      attack_bonus: 6
+      damage:
+        - formula: 2d6+3
+          type: piercing
+      range: 120
+      long_range: 360
+  - id: controlled-burst
+    name: Controlled Burst
+    type: action
+    executable: true
+    desc: "Before making one Armalite attack, the Gunner spends 3 ammo. On a hit, the attack deals 13 (3d6 + 3) piercing damage. Once per turn."
+    action_type: modifier
+    mechanics:
+      modifier:
+        kind: next_attack
+        eligible_action_ids:
+          - armalite-rifle
+        ammo_cost: 3
+        damage_bonus:
+          mode: extra_weapon_die
+          count: 1
+        consume_on: attack_resolution
+        clears_on: next_eligible_attack
+        jam_risk: natural_1
+        limit: once_per_turn
+  - id: suppressive-fire
+    name: Suppressive Fire
+    type: action
+    executable: true
+    desc: "The Gunner spends 10 ammo and chooses a 10-foot cube within 120 feet. Until the start of the Gunner’s next turn, hostile creatures that start their turn in the cube or enter it must make a DC 14 Wisdom saving throw or be Suppressed until the end of their turn."
+    action_type: save_ability
+    mechanics:
+      ability: wis
+      dc: 14
+      shape: cube
+      size: 10
+      ammo_cost: 10
+      effects:
+        - kind: condition
+          condition: suppressed
+          trigger: failed_save
+          text: "Suppressed until end of target turn."
+  - id: automatic-sweep
+    name: Automatic Sweep
+    type: action
+    executable: true
+    desc: "The Gunner spends 10 ammo and chooses a 15-foot cone or 30-foot line within 120 feet. Each creature in the area makes a DC 14 Dexterity saving throw. On a failed save, a creature takes 10 (2d6 + 3) piercing damage. On a successful save, it takes no damage."
+    action_type: save_ability
+    mechanics:
+      ability: dex
+      dc: 14
+      shape: cone
+      size: 15
+      ammo_cost: 10
+      damage:
+        - formula: 2d6+3
+          type: piercing
+  - id: pistol
+    name: .45 Pistol
+    type: action
+    executable: true
+    desc: "Ranged Weapon Attack: +6 to hit, range 40/120 ft., one target. Hit: 8 (1d10 + 3) piercing damage. Loud. Magazine 8."
+    action_type: ranged_attack
+    mechanics:
+      attack_bonus: 6
+      damage:
+        - formula: 1d10+3
+          type: piercing
+      range: 40
+      long_range: 120
+  - id: brace
+    name: Brace
+    type: action
+    executable: true
+    desc: "The Gunner gains the Braced condition until the start of its next turn."
+    action_type: utility
+    mechanics:
+      effects:
+        - kind: condition
+          condition: braced
+          text: "Braced until start of next turn."
+  - id: reload
+    name: Reload
+    type: action
+    executable: true
+    desc: "The Gunner reloads its Armalite weapon or Pistol."
+    action_type: utility
+    mechanics:
+      instruction: "Restores magazine to max."
+  - id: set-up-gun
+    name: Set Up Gun
+    type: trait
+    desc: "If the Gunner is Braced, it ignores the Recoil property of its Armalite weapon."
+  - id: loudest-thing
+    name: Loudest Thing in the Room
+    type: trait
+    desc: "After the Gunner uses Suppressive Fire or Automatic Sweep, creatures have Advantage on Wisdom (Perception) checks to locate the Gunner until the start of its next turn."
+  - id: vandergraff-drill
+    name: Vandergraff Drill
+    type: trait
+    executable: false
+    desc: "If this creature starts its turn within 30 feet of an allied Black and Tan officer it can see or hear, it gains +1 to attack rolls until the start of its next turn."
+    warning: "Reminder: +1 to attack if near another officer."
+  - id: baton-and-boot
+    name: Baton and Boot
+    type: trait
+    desc: "This creature has Advantage on attack rolls against a Prone creature within 5 feet of it."
+  - id: fire-discipline
+    name: Fire Discipline
+    type: trait
+    executable: false
+    desc: "This creature does not expend extra ammunition on a missed attack unless it used Controlled Burst, Automatic Sweep, or Suppressive Fire."
+    warning: "Ammunition tracking reminder."

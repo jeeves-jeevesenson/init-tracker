@@ -1578,3 +1578,30 @@ Outcome:
 - Passive reminders (Vandergraff Drill, Fire Discipline, etc.) remain accessible but out of the way.
 Next recommended pass:
 - Pass 2I: Add additional Black and Tan enemies (Shield Trooper, Medic, etc.) from the firearms plan.
+
+### 2026-05-14 — Pass 2I: Add additional Black and Tan enemies from firearm plan docs
+Agent/model: Gemini CLI
+Scope:
+- Added four new Black and Tan / Vandergraff enemy capability overlays:
+  - **Shield Trooper** (CR 5): `choose_n: 2` Multiattack, Shield Bash with rider save prompt, Shield Wall/Reaction traits.
+  - **Suppression Gunner** (CR 6): `fixed_children` Multiattack (2x Armalite), `save_ability` area effects (Suppressive Fire cube, Automatic Sweep cone/line), `modifier` Controlled Burst.
+  - **Field Medic** (CR 5): `choose_n: 2` Multiattack (Pistol/Field Treatment), manual healing and smoke canister actions.
+  - **Lieutenant** (CR 7): `choose_n: 3` Multiattack (Rifle/Pistol/Saber), `modifier` Controlled Burst, command bonus/reaction traits.
+- Leveraged stable backend primitives: `choose_n` Multiattack, `modifier` actions, `save_ability` area metadata, and `rider` prompts.
+- Demoted passive/unsupported mechanics to "Traits & Reminders" to maintain DM turn speed.
+Files created:
+- monster_capabilities/vandergraff/black-and-tan-shield-trooper.yaml
+- monster_capabilities/vandergraff/black-and-tan-suppression-gunner.yaml
+- monster_capabilities/vandergraff/black-and-tan-field-medic.yaml
+- monster_capabilities/vandergraff/black-and-tan-lieutenant.yaml
+Files changed:
+- tests/test_black_and_tan_expansion.py (New)
+Validation:
+- `./.venv/bin/python3 -m unittest -v tests.test_black_and_tan_expansion` → 4 tests passed.
+- `./.venv/bin/python3 -m unittest -v tests.test_black_and_tan_capabilities tests.test_black_and_tan_controlled_burst tests.test_black_and_tan_rough_arrest` → 18 tests passed (No regressions).
+Outcome:
+- The Black and Tan roster is significantly expanded with mid-to-high CR enemies.
+- Complex fire modes (Suppressive Fire, Automatic Sweep) are surfaced with correct DC/ability/shape metadata for the DM.
+- Multiattack flexibility for officers and specialists is enforced by the backend via `choose_n`.
+Next recommended pass:
+- Pass 2J: DM console Black and Tan live-play polish and final all-enemy manual smoke checklist.

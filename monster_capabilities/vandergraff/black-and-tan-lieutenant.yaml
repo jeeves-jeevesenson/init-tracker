@@ -1,0 +1,113 @@
+name: Black and Tan Lieutenant
+slug: black-and-tan-lieutenant
+source: repo-local
+license: CC-BY-4.0
+capabilities:
+  - id: multiattack
+    name: Multiattack
+    type: action
+    executable: true
+    desc: "The Lieutenant makes three attacks, using Armalite Rifle, .45 Pistol, or Officer Saber in any combination."
+    action_type: composite
+    mechanics:
+      composite:
+        sequence_kind: choose_n
+        choose_n: 3
+        children:
+          - action_id: armalite-rifle
+            count: 3
+          - action_id: pistol
+            count: 3
+          - action_id: saber
+            count: 3
+  - id: armalite-rifle
+    name: Armalite Rifle
+    type: action
+    executable: true
+    desc: "Ranged Weapon Attack: +7 to hit, range 120/360 ft., one target. Hit: 11 (1d12 + 4) piercing damage. Loud. Magazine 20."
+    action_type: ranged_attack
+    mechanics:
+      attack_bonus: 7
+      damage:
+        - formula: 1d12+4
+          type: piercing
+      range: 120
+      long_range: 360
+  - id: controlled-burst
+    name: Controlled Burst
+    type: action
+    executable: true
+    desc: "Before making one Armalite Rifle attack, the Lieutenant spends 3 ammo. On a hit, the attack deals 17 (2d12 + 4) piercing damage. Once per turn."
+    action_type: modifier
+    mechanics:
+      modifier:
+        kind: next_attack
+        eligible_action_ids:
+          - armalite-rifle
+        ammo_cost: 3
+        damage_bonus:
+          mode: extra_weapon_die
+          count: 1
+        consume_on: attack_resolution
+        clears_on: next_eligible_attack
+        jam_risk: natural_1
+        limit: once_per_turn
+  - id: pistol
+    name: .45 Pistol
+    type: action
+    executable: true
+    desc: "Ranged Weapon Attack: +7 to hit, range 40/120 ft., one target. Hit: 10 (1d10 + 4) piercing damage. Loud. Magazine 8."
+    action_type: ranged_attack
+    mechanics:
+      attack_bonus: 7
+      damage:
+        - formula: 1d10+4
+          type: piercing
+      range: 40
+      long_range: 120
+  - id: saber
+    name: Officer Saber
+    type: action
+    executable: true
+    desc: "Melee Weapon Attack: +7 to hit, reach 5 ft., one target. Hit: 8 (1d8 + 4) slashing damage."
+    action_type: melee_attack
+    mechanics:
+      attack_bonus: 7
+      damage:
+        - formula: 1d8+4
+          type: slashing
+      reach: 5
+  - id: direct-fire
+    name: Direct Fire
+    type: bonus_action
+    executable: false
+    desc: "Choose one allied Black and Tan within 60 feet who can hear the Lieutenant. That ally can use its Reaction to make one firearm attack."
+    warning: "Manual reaction/attack resolution required."
+  - id: command-presence
+    name: Command Presence
+    type: trait
+    desc: "Allied Black and Tans within 30 feet who can see or hear the Lieutenant gain +1 to Wisdom saving throws and morale checks."
+  - id: officer-priority
+    name: Officer Priority
+    type: trait
+    desc: "If the Lieutenant is Bloodied, one allied Black and Tan within 30 feet can use its Reaction to move up to half its Speed toward cover."
+  - id: get-down
+    name: Get Down!
+    type: reaction
+    desc: "When an allied Black and Tan within 30 feet fails a Dexterity saving throw, the Lieutenant can grant that ally a +3 bonus to the save."
+  - id: vandergraff-drill
+    name: Vandergraff Drill
+    type: trait
+    executable: false
+    desc: "If this creature starts its turn within 30 feet of an allied Black and Tan officer it can see or hear, it gains +1 to attack rolls until the start of its next turn."
+    warning: "Reminder: +1 to attack if near another officer."
+  - id: baton-and-boot
+    name: Baton and Boot
+    type: trait
+    desc: "This creature has Advantage on attack rolls against a Prone creature within 5 feet of it."
+  - id: fire-discipline
+    name: Fire Discipline
+    type: trait
+    executable: false
+    desc: "This creature does not expend extra ammunition on a missed attack unless it used Controlled Burst, Automatic Sweep, or Suppressive Fire."
+    warning: "Ammunition tracking reminder."

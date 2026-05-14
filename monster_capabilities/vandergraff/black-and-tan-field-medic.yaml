@@ -1,0 +1,81 @@
+name: Black and Tan Field Medic
+slug: black-and-tan-field-medic
+source: repo-local
+license: CC-BY-4.0
+capabilities:
+  - id: multiattack
+    name: Multiattack
+    type: action
+    executable: true
+    desc: "The Medic makes two .45 Pistol attacks, or makes one .45 Pistol attack and uses Field Treatment."
+    action_type: composite
+    mechanics:
+      composite:
+        sequence_kind: choose_n
+        choose_n: 2
+        children:
+          - action_id: pistol
+            count: 2
+          - action_id: field-treatment
+            count: 1
+  - id: pistol
+    name: .45 Pistol
+    type: action
+    executable: true
+    desc: "Ranged Weapon Attack: +6 to hit, range 40/120 ft., one target. Hit: 9 (1d10 + 3) piercing damage. Loud. Magazine 8."
+    action_type: ranged_attack
+    mechanics:
+      attack_bonus: 6
+      damage:
+        - formula: 1d10+3
+          type: piercing
+      range: 40
+      long_range: 120
+  - id: field-treatment
+    name: Field Treatment
+    type: action
+    executable: false
+    desc: "One allied Black and Tan within 5 feet regains 14 (2d8 + 5) HP. A creature can benefit from this action only once per encounter."
+    action_type: utility
+    mechanics:
+      uses:
+        max: 1
+        per: encounter
+    warning: "Manual healing application required."
+  - id: smoke-canister
+    name: Smoke Canister
+    type: action
+    executable: false
+    desc: "The Medic throws a smoke canister to a point within 30 feet. A 10-foot-radius area becomes Heavily Obscured until the end of the Medic’s next turn."
+    action_type: utility
+    mechanics:
+      shape: radius
+      size: 10
+    warning: "Manual smoke/obscurity application required."
+  - id: stimulant-ampoule
+    name: Stimulant Ampoule
+    type: bonus_action
+    executable: false
+    desc: "One allied Black and Tan within 5 feet gains 10 temporary HP and can move up to half its Speed without provoking Opportunity Attacks."
+    action_type: utility
+    warning: "Manual temp HP / move application required."
+  - id: keep-officer-breathing
+    name: Keep the Officer Breathing
+    type: reaction
+    desc: "When an allied Black and Tan officer within 5 feet would drop to 0 HP, the Medic can cause that ally to drop to 1 HP instead."
+  - id: vandergraff-drill
+    name: Vandergraff Drill
+    type: trait
+    executable: false
+    desc: "If this creature starts its turn within 30 feet of an allied Black and Tan officer it can see or hear, it gains +1 to attack rolls until the start of its next turn."
+    warning: "Reminder: +1 to attack if near another officer."
+  - id: baton-and-boot
+    name: Baton and Boot
+    type: trait
+    desc: "This creature has Advantage on attack rolls against a Prone creature within 5 feet of it."
+  - id: fire-discipline
+    name: Fire Discipline
+    type: trait
+    executable: false
+    desc: "This creature does not expend extra ammunition on a missed attack unless it used Controlled Burst, Automatic Sweep, or Suppressive Fire."
+    warning: "Ammunition tracking reminder."
