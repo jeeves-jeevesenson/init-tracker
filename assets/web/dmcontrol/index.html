@@ -472,8 +472,10 @@
           cls = 'resolve-mode';
           cancelHtml = `<button class="cancel-target-btn" onclick="cancelTargetPreviewMode()">Cancel</button>`;
         } else if (localSequencePacket) {
+          const isChooseN = localSequencePacket.sequence_kind === 'choose_n';
+          const budgetLabel = isChooseN ? ` (${localSequencePacket.remaining_budget} / ${localSequencePacket.total_budget || localSequencePacket.choose_n} left)` : '';
           icon = 'Sequence';
-          text = `Multiattack sequence active: ${esc(localSequencePacket.name || 'Multiattack')}. Pick the next step from the panel below. Movement is blocked.`;
+          text = `Multiattack sequence active: ${esc(localSequencePacket.name || 'Multiattack')}${budgetLabel}. Pick the next step from the panel below. Movement is blocked.`;
           cls = 'sequence-mode';
           cancelHtml = `<button class="cancel-target-btn" onclick="cancelLocalSequence()">End Sequence</button>`;
         } else if (targetPreviewMode) {
@@ -1092,8 +1094,19 @@
         if (data.deferredReason === 'automatic') {
           localResolutionError = "Automatic resolution is deferred on /dmcontrol. Manual fallback: apply this result in /dm.";
         } else if (data.deferredReason === 'assisted_sequence') {
+          // Backend returned a sequence packet.
           localSequencePacket = rawData.result;
           localSequenceCompletedSteps = {};
+
+          // If backend provided completion metadata, prioritize it
+          if (localSequencePacket.steps) {
+            localSequencePacket.steps.forEach(s => {
+               if (s.completed !== undefined) {
+                 localSequenceCompletedSteps[String(s.action_id)] = s.completed;
+               }
+            });
+          }
+
           localResolutionPacket = null;
           localResolutionTray = null; // Close the immediate tray to show sequence tray
         } else if (data.packet) {
@@ -1112,6 +1125,48 @@
         localResolutionError = err.message;
       } finally {
         localResolutionInFlight = false;
+        renderActionPanel(actor, capabilitySummary);
+      }
+    }
+
+    async function startSequence(id) {
+      if (localResolutionInFlight || !state) return;
+      const actorCid = state.active_cid;
+      localResolutionInFlight = true;
+      draw();
+      try {
+        const resp = await fetch(`/api/dm/monster-capabilities/${actorCid}/execute`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            capability_id: id,
+            spend: "action"
+          })
+        });
+        const rawData = await resp.json();
+        if (!rawData.ok) throw new Error(rawData.error || "Failed to start sequence.");
+
+        if (rawData.resolution === 'assisted_sequence') {
+          localSequencePacket = rawData;
+          localSequenceCompletedSteps = {};
+          if (rawData.steps) {
+            rawData.steps.forEach(s => {
+              if (s.completed !== undefined) {
+                localSequenceCompletedSteps[String(s.action_id)] = s.completed;
+              }
+            });
+          }
+        }
+        if (rawData.snapshot) {
+          state = rawData.snapshot;
+          draw();
+        }
+      } catch (err) {
+        console.error('Start sequence error:', err);
+        showTransientStatus(err.message, 'var(--danger)');
+      } finally {
+        localResolutionInFlight = false;
+        const actor = (state?.combatants || []).find(c => String(c.cid) === String(state?.active_cid));
         renderActionPanel(actor, capabilitySummary);
       }
     }
@@ -1162,7 +1217,14 @@
         console.log(`[Apply] Resolution request took ${(endTime - startTime).toFixed(1)}ms`);
 
         if (!resp.ok || !data.ok) {
-          throw new Error(data.detail || (data.result && data.result.error) || 'Resolution failed.');
+          // Check for sequence-specific rejections
+          const errorMsg = data.detail || (data.result && data.result.error) || 'Resolution failed.';
+          if (errorMsg.includes("Max attacks") || errorMsg.includes("budget exhausted") || errorMsg.includes("active sequence")) {
+             localResolutionError = `Sequence Error: ${errorMsg}`;
+          } else {
+             localResolutionError = errorMsg;
+          }
+          throw new Error(localResolutionError);
         }
 
         // On success, apply snapshot immediately
@@ -1174,12 +1236,29 @@
         // Compact success feedback via status bar
         showTransientStatus('Results applied successfully.', 'var(--heal)');
 
-        // If in sequence, increment completion exactly once for this child
-        // apply, then check whether the sequence as a whole is now complete.
-        let sequenceWasActive = false;
+        // Consume backend-authored sequence state if returned
+        let sequenceWasActive = !!localSequencePacket;
         let sequenceComplete = false;
-        if (localSequencePacket) {
-          sequenceWasActive = true;
+
+        if (data.active_sequence_parent_id) {
+           // Backend says a sequence is still active or was just updated.
+           // Refresh our local state from backend metadata.
+           localSequencePacket = localSequencePacket || {};
+           localSequencePacket.capability_id = data.active_sequence_parent_id;
+           localSequencePacket.sequence_kind = data.sequence_kind;
+           localSequencePacket.choose_n = data.choose_n;
+           localSequencePacket.remaining_budget = data.remaining_budget;
+           localSequencePacket.completed_count = data.completed_count;
+
+           if (data.steps) {
+             localSequencePacket.steps = data.steps;
+             data.steps.forEach(s => {
+               localSequenceCompletedSteps[String(s.action_id)] = s.completed;
+             });
+           }
+           sequenceWasActive = true;
+        } else if (sequenceWasActive) {
+          // Fallback to local increment if backend didn't return metadata
           const prev = Number(localSequenceCompletedSteps[String(capId)] || 0);
           localSequenceCompletedSteps[String(capId)] = prev + 1;
 
@@ -1188,13 +1267,19 @@
             const done = Number(localSequenceCompletedSteps[String(s.action_id)] || 0);
             return done >= Number(s.count || 1);
           });
+
+          if (localSequencePacket.sequence_kind === 'choose_n' && localSequencePacket.remaining_budget !== undefined) {
+             localSequencePacket.remaining_budget--;
+             if (localSequencePacket.remaining_budget <= 0) sequenceComplete = true;
+          }
         }
 
         // Always close the immediate tray and clear stale targeting state
         closeLocalResolutionTray();
         targetPreviewMode = null;
         selectedTargetCid = null;
-        if (sequenceWasActive && sequenceComplete) {
+
+        if (sequenceWasActive && (sequenceComplete || data.active_sequence_complete)) {
           showTransientStatus('Multiattack sequence complete.', 'var(--heal)');
           localSequencePacket = null;
           localSequenceCompletedSteps = {};
@@ -1554,28 +1639,42 @@
 
           // Sequence Tray Integration
           if (localSequencePacket && (String(localSequencePacket.capability_id) === String(selected.id) || localSequencePacket.steps.some(s => String(s.action_id) === String(selected.id)))) {
+            const isChooseN = localSequencePacket.sequence_kind === 'choose_n';
+            const budgetLabel = isChooseN ? `Budget: ${localSequencePacket.remaining_budget} / ${localSequencePacket.total_budget || localSequencePacket.choose_n} choices left` : '';
+
             summaryHtml += `
               <div style="margin-top:12px; border:1px solid var(--accent); background:rgba(106,169,255,0.05); padding:8px; border-radius:4px">
                 <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:8px; border-bottom:1px solid rgba(106,169,255,0.2); padding-bottom:4px">
-                  <h5 style="color:var(--accent); margin:0; font-size:12px">Sequence: ${esc(localSequencePacket.name)}</h5>
+                  <div>
+                    <h5 style="color:var(--accent); margin:0; font-size:12px">Sequence: ${esc(localSequencePacket.name)}</h5>
+                    ${isChooseN ? `<div style="font-size:10px; color:var(--accent); opacity:0.8">${esc(budgetLabel)}</div>` : ''}
+                  </div>
                   <button class="workspace-link" onclick="cancelLocalSequence()" style="font-size:10px; padding:2px 6px; color:var(--danger); border-color:var(--danger)">End</button>
                 </div>
                 <div style="display:flex; flex-direction:column; gap:6px">
                   ${localSequencePacket.steps.map(step => {
                     const completed = localSequenceCompletedSteps[String(step.action_id)] || 0;
-                    const isDone = completed >= step.count;
+                    const max = step.count || step.max || 1;
+                    const isDone = completed >= max;
                     const isStepSelected = String(selectedCapabilityId) === String(step.action_id);
+
+                    // In choose_n, if budget is exhausted, disable all incomplete choices
+                    const budgetExhausted = isChooseN && localSequencePacket.remaining_budget <= 0;
+                    const canSelect = !isDone && !budgetExhausted;
+
                     return `
-                      <div style="display:flex; align-items:center; gap:8px; background:rgba(255,255,255,0.03); padding:4px 8px; border-radius:4px; border-left: 3px solid ${isDone ? 'var(--heal)' : (isStepSelected ? 'var(--accent)' : 'var(--muted)')}">
+                      <div style="display:flex; align-items:center; gap:8px; background:rgba(255,255,255,0.03); padding:4px 8px; border-radius:4px; border-left: 3px solid ${isDone ? 'var(--heal)' : (isStepSelected ? 'var(--accent)' : 'var(--muted)')}; opacity: ${budgetExhausted && !isDone && !isStepSelected ? '0.5' : '1'}">
                         <div style="flex:1; font-size:11px">
                           <div style="font-weight:bold">${esc(step.name)}</div>
-                          <div style="font-size:10px; color:var(--muted)">${completed} / ${step.count} completed</div>
+                          <div style="font-size:10px; color:var(--muted)">${completed} / ${max} completed</div>
                         </div>
                         ${!isDone ? `
-                          <button class="workspace-link" style="font-size:10px; padding:2px 6px; ${isStepSelected ? 'background:var(--accent); color:var(--bg)' : ''}"
-                                  onclick="selectLocalSequenceStep('${esc(step.action_id)}')" ${localResolutionInFlight ? 'disabled' : ''}>
-                            ${isStepSelected ? 'Active' : 'Select'}
-                          </button>
+                          ${canSelect || isStepSelected ? `
+                            <button class="workspace-link" style="font-size:10px; padding:2px 6px; ${isStepSelected ? 'background:var(--accent); color:var(--bg)' : ''}"
+                                    onclick="selectLocalSequenceStep('${esc(step.action_id)}')" ${localResolutionInFlight ? 'disabled' : ''}>
+                              ${isStepSelected ? 'Active' : 'Select'}
+                            </button>
+                          ` : `<div style="font-size:9px; color:var(--muted); font-weight:bold; text-transform:uppercase">Exhausted</div>`}
                         ` : '<div style="font-size:9px; color:var(--heal); font-weight:bold; text-transform:uppercase">Done</div>'}
                       </div>
                     `;
@@ -1661,7 +1760,18 @@
           } else {
             const isManual = selected.executable === false;
             const previewable = isPreviewableTargetAction(selected);
-            if (isManual) {
+            const isComposite = selected.action_type === 'composite';
+
+            if (isComposite && !localSequencePacket) {
+              summaryHtml += `
+                <div style="margin-top:12px; border-top:1px solid rgba(106,169,255,0.3); padding-top:8px;">
+                  <button class="workspace-link" style="width:100%; padding:8px; font-weight:bold; background:var(--accent); color:var(--bg)"
+                          onclick="startSequence('${esc(selected.id)}')" ${localResolutionInFlight ? 'disabled' : ''}>
+                    Start ${esc(selected.name)} Sequence
+                  </button>
+                </div>
+              `;
+            } else if (isManual) {
               summaryHtml += `
                 <div class="actor-meta" style="margin-top:6px; color:var(--gold); font-weight:bold;">
                   Manual Assist — DM resolves this action by hand.

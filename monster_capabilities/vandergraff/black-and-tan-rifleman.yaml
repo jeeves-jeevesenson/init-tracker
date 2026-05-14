@@ -6,14 +6,15 @@ capabilities:
   - id: multiattack
     name: Multiattack
     type: action
-    executable: false
+    executable: true
     desc: "The Rifleman makes two Armalite Rifle attacks."
     action_type: composite
     mechanics:
       composite:
-        - action_id: armalite-rifle
-          name: Armalite Rifle
-          count: 2
+        sequence_kind: fixed_children
+        children:
+          - action_id: armalite-rifle
+            count: 2
   - id: armalite-rifle
     name: Armalite Rifle
     type: action

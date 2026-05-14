@@ -1464,27 +1464,30 @@ Changes:
 - **UI Stability:** Preserved "Traits & Reminders" `<details>` state across re-renders in `renderActionPanel`.
 - **Validation:** Added `test_dm_control_range_validation` to `tests/test_dm_control_apply_results.py`. Verified JS syntax in `assets/web/dmcontrol/index.html`. All 12 targeted tests passed.
 
-### 2026-05-13 — Pass 2D: Backend Sequence Authority
+### 2026-05-13 — Pass 2F: Black and Tan Multiattack conversion and manual tray cleanup
 Agent/model: Gemini CLI
 Scope:
-- Implemented `self._monster_sequence_state` in `InitiativeTracker` to authoritatively track Multiattack progress.
-- Sequences are initialized in `/api/dm/monster-capabilities/{cid}/execute` for composite actions.
-- Progress (Hit/Miss/No Effect) is incremented in `/api/dm/monster-capabilities/{cid}/resolve-targets` (Apply Results).
-- Budget enforcement: Rejects child actions that exceed `choose_n` total budget or per-child `max` counts.
-- State is turn-scoped and actor-scoped; cleared in `_next_turn`.
-- Metadata (completed count, remaining budget) is returned in both `/execute` and `/resolve-targets` responses.
-- Added targeted tests in `tests/test_monster_sequence_state.py`.
+- Converted Constable Multiattack from a manual-assist utility to a structured `choose_n: 2` composite action.
+- Updated Rifleman Multiattack to use explicit `fixed_children` sequence and marked it `executable: true`.
+- Added "Start Sequence" button to `/dmcontrol` for composite actions to initiate the multiattack flow.
+- Cleaned up manual tray clutter by removing redundant Multiattack warnings in Black and Tan overlays.
+- Verified that traits and reminders correctly collapse into the "Traits & Reminders" section.
+- Ensured `Controlled Burst` and `Rough Arrest` remain as manual-assist entries (deferred automation).
 Files changed:
-- dnd_initative_tracker.py
-- docs/monster-capability-schema.md
+- monster_capabilities/vandergraff/black-and-tan-rifleman.yaml
+- monster_capabilities/vandergraff/black-and-tan-constable.yaml
+- assets/web/dmcontrol/index.html
 - docs/dm_control_surface_living_agent_plan.md
-- tests/test_monster_sequence_state.py (New)
+- tests/test_black_and_tan_capabilities.py
+Validation:
+- `python3 -m unittest tests.test_black_and_tan_capabilities tests.test_monster_sequence_schema tests.test_monster_sequence_state` → 22 tests passed.
+- JS syntax check passed for `assets/web/dmcontrol/index.html`.
 Outcome:
-- Backend now authoritatively enforces Multiattack rules.
-- Existing Rifleman/Troll fixed sequences remain compatible and are now enforced.
-- All targeted tests passed.
+- Black and Tan enemies now have fully structured, executable Multiattack sequences in `/dmcontrol`.
+- The DM can initiate these sequences via a single button click, followed by child action targeting.
+- Sequence budgets and progress are authoritatively tracked and enforced by the backend.
 Next recommended pass:
-- Pass 2E: UI Sequence Tray (visualize budget and progress in DM control panel).
+- Pass 2G: AOE/Multi-target support (Automation for SAM-7 or similar area effects).
 
 ### 2026-05-13 — Pass 2C: Multiattack Schema & Service Support
 Agent/model: Gemini CLI

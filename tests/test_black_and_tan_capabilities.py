@@ -16,24 +16,24 @@ class TestBlackAndTanCapabilities(unittest.TestCase):
         overlay = self.service.get_capability_by_slug("black-and-tan-rifleman")
         self.assertIsNotNone(overlay, "Black and Tan Rifleman overlay should exist")
         self.assertEqual(overlay["name"], "Black and Tan Rifleman")
-        
+
         caps = {c["id"]: c for c in overlay["capabilities"]}
-        
+
         # Multiattack
         self.assertIn("multiattack", caps)
         self.assertEqual(caps["multiattack"]["action_type"], "composite")
         self.assertIn("composite", caps["multiattack"]["mechanics"])
-        
+
         # Armalite Rifle
         self.assertIn("armalite-rifle", caps)
         self.assertEqual(caps["armalite-rifle"]["action_type"], "ranged_attack")
         self.assertTrue(caps["armalite-rifle"]["executable"])
         self.assertEqual(caps["armalite-rifle"]["mechanics"]["attack_bonus"], 6)
-        
+
         # Pistol
         self.assertIn("pistol", caps)
         self.assertEqual(caps["pistol"]["action_type"], "ranged_attack")
-        
+
         # Traits
         self.assertIn("vandergraff-drill", caps)
         self.assertEqual(caps["vandergraff-drill"]["type"], "trait")
@@ -45,12 +45,13 @@ class TestBlackAndTanCapabilities(unittest.TestCase):
 
         caps = {c["id"]: c for c in overlay["capabilities"]}
 
-        # Multiattack — must NOT be a 4-attack composite. Phase 3E3 reduces this
-        # to a manual/assisted entry so engine cannot interpret it as Pistol x2 + Baton x2.
+        # Multiattack — now a choose_n composite
         self.assertIn("multiattack", caps)
-        self.assertNotEqual(caps["multiattack"]["action_type"], "composite")
-        self.assertFalse(caps["multiattack"].get("executable", False))
-        self.assertNotIn("composite", caps["multiattack"].get("mechanics", {}) or {})
+        self.assertEqual(caps["multiattack"]["action_type"], "composite")
+        self.assertTrue(caps["multiattack"].get("executable", False))
+        comp = caps["multiattack"]["mechanics"]["composite"]
+        self.assertEqual(comp["sequence_kind"], "choose_n")
+        self.assertEqual(comp["choose_n"], 2)
 
         # Pistol
         self.assertIn("pistol", caps)
@@ -63,33 +64,39 @@ class TestBlackAndTanCapabilities(unittest.TestCase):
         self.assertEqual(caps["baton"]["action_type"], "melee_attack")
         self.assertTrue(caps["baton"]["executable"])
 
-    def test_constable_multiattack_no_four_child_completions(self):
-        """Phase 3E3 fix: Constable Multiattack must not expose four child completions."""
+    def test_constable_multiattack_is_structured_composite(self):
+        """Phase 2F: Constable Multiattack is now a structured choose_n composite."""
         combatant = {"monster_slug": "black-and-tan-constable", "name": "Constable 1"}
         summary = self.service.summarize_capabilities_for_ui(1, combatant)
 
         actions = {a["id"]: a for a in summary["groups"]["actions"]}
         multi = actions["multiattack"]
-        # No composite resolution should be exposed for Constable Multiattack.
-        self.assertNotIn("resolved_composite", multi.get("mechanics", {}) or {})
-        # Should carry a clear manual instruction so the DM knows what to do.
-        self.assertIn("two attacks", str(multi.get("manual_instructions") or "").lower())
+        self.assertEqual(multi["action_type"], "composite")
+        self.assertTrue(multi["executable"])
 
-    def test_constable_multiattack_is_manual_assist(self):
-        combatant = {"monster_slug": "black-and-tan-constable", "name": "Constable 1"}
-        summary = self.service.summarize_capabilities_for_ui(1, combatant)
-        actions = {a["id"]: a for a in summary["groups"]["actions"]}
-        multi = actions["multiattack"]
-        self.assertFalse(multi.get("executable", False))
+        mech = multi.get("mechanics", {})
+        self.assertEqual(mech.get("sequence_kind"), "choose_n")
+        self.assertEqual(mech.get("choose_n"), 2)
+
+        resolved = mech.get("resolved_composite") or []
+        self.assertEqual(len(resolved), 2)
+        action_ids = {r["action_id"] for r in resolved}
+        self.assertIn("pistol", action_ids)
+        self.assertIn("baton", action_ids)
 
     def test_rifleman_multiattack_remains_two_armalite(self):
-        """Phase 3E3 regression: Rifleman Multiattack remains two Armalite Rifle attacks."""
+        """Phase 2F: Rifleman Multiattack remains two Armalite Rifle attacks but uses explicit fixed_children."""
         combatant = {"monster_slug": "black-and-tan-rifleman", "name": "Rifleman 1"}
         summary = self.service.summarize_capabilities_for_ui(1, combatant)
         actions = {a["id"]: a for a in summary["groups"]["actions"]}
         multi = actions["multiattack"]
         self.assertEqual(multi["action_type"], "composite")
-        resolved = multi["mechanics"].get("resolved_composite") or []
+        self.assertTrue(multi["executable"])
+
+        mech = multi.get("mechanics", {})
+        self.assertEqual(mech.get("sequence_kind"), "fixed_children")
+
+        resolved = mech.get("resolved_composite") or []
         self.assertEqual(len(resolved), 1)
         self.assertEqual(resolved[0]["action_id"], "armalite-rifle")
         self.assertEqual(resolved[0]["count"], 2)
@@ -138,12 +145,12 @@ class TestBlackAndTanCapabilities(unittest.TestCase):
         # We need to simulate a combatant to test summarize_capabilities_for_ui
         combatant = {"monster_slug": "black-and-tan-rifleman", "name": "Rifleman 1"}
         summary = self.service.summarize_capabilities_for_ui(1, combatant)
-        
+
         self.assertTrue(summary["matched"])
         actions = summary["groups"]["actions"]
         multiattack = next((a for a in actions if a["id"] == "multiattack"), None)
         self.assertIsNotNone(multiattack)
-        
+
         # Check resolved composite
         resolved = multiattack["mechanics"].get("resolved_composite")
         self.assertIsNotNone(resolved)
@@ -153,22 +160,22 @@ class TestBlackAndTanCapabilities(unittest.TestCase):
     def test_rifleman_ui_summaries(self):
         combatant = {"monster_slug": "black-and-tan-rifleman", "name": "Rifleman 1"}
         summary = self.service.summarize_capabilities_for_ui(1, combatant)
-        
+
         actions = {a["id"]: a for a in summary["groups"]["actions"]}
         traits = {t["id"]: t for t in summary["groups"]["traits"]}
-        
+
         # Armalite Rifle summary
         rifle = actions["armalite-rifle"]
         self.assertIn("+6 to hit", rifle["mechanics_summary"])
         self.assertIn("1d12+4 piercing", rifle["mechanics_summary"])
         self.assertIn("Magazine 20", rifle["mechanics_summary"])
         self.assertIn("Track ammunition manually.", rifle["manual_instructions"])
-        
+
         # Controlled Burst summary
         burst = actions["controlled-burst"]
         self.assertIn("Manual/Assisted: Spends 3 ammo, +1 die damage.", burst["manual_instructions"])
         self.assertIn("Track ammunition manually.", burst["manual_instructions"])
-        
+
         # Vandergraff Drill
         drill = traits["vandergraff-drill"]
         self.assertIn("Reminder: +1 to attack if near another officer.", drill["manual_instructions"])
@@ -176,9 +183,9 @@ class TestBlackAndTanCapabilities(unittest.TestCase):
     def test_constable_ui_summaries(self):
         combatant = {"monster_slug": "black-and-tan-constable", "name": "Constable 1"}
         summary = self.service.summarize_capabilities_for_ui(1, combatant)
-        
+
         actions = {a["id"]: a for a in summary["groups"]["actions"]}
-        
+
         # Rough Arrest
         arrest = actions["rough-arrest"]
         self.assertIn("Manual/Assisted grapple action.", arrest["manual_instructions"])
