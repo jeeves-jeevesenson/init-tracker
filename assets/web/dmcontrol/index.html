@@ -1515,6 +1515,21 @@
         </details>
       `;
 
+      if (outcome === 'fail' && packet.riders && packet.riders.length > 0) {
+        html += `
+          <div class="modal-field" style="margin-top: 16px; border-top: 1px solid var(--border); padding-top: 16px;">
+            <span class="modal-label" style="color: var(--gold); font-weight: bold; margin-bottom: 8px;">Rider Prompts</span>
+            <div style="display: flex; flex-direction: column; gap: 8px;">
+              ${packet.riders.map(r => `
+                <div style="background: rgba(214,186,126,0.1); border: 1px solid var(--gold); padding: 8px 12px; border-radius: 4px; font-size: 13px;">
+                  <strong style="color: var(--gold);">${esc(r.name)}:</strong> ${esc(r.desc)}
+                </div>
+              `).join('')}
+            </div>
+          </div>
+        `;
+      }
+
       body.innerHTML = html;
     }
 
@@ -1870,22 +1885,36 @@
       // Pass 1: prominent groups.
       groupConfig.forEach(conf => {
         if (!primaryKeys.has(conf.key)) return;
-        const items = groups[conf.key];
-        if (!items || items.length === 0) return;
+        const allItems = groups[conf.key];
+        if (!allItems || allItems.length === 0) return;
+        
+        // Only show truly executable items in the primary tray.
+        const execItems = allItems.filter(item => item.executable !== false);
+        if (execItems.length === 0) return;
+
         html += `<div class="action-group">`;
         html += `<div class="group-label">${esc(conf.label)}</div>`;
         html += `<div class="action-grid">`;
-        items.forEach(item => { html += renderItem(item, conf); });
+        execItems.forEach(item => { html += renderItem(item, conf); });
         html += `</div></div>`;
       });
 
       // Pass 2: collapsed/secondary groups under a single <details> so the active cockpit stays compact.
       const secondaryItems = [];
       groupConfig.forEach(conf => {
-        if (!collapsedKeys.has(conf.key)) return;
-        const items = groups[conf.key];
-        if (!items || items.length === 0) return;
-        secondaryItems.push({ conf, items });
+        const allItems = groups[conf.key] || [];
+        let subItems = [];
+
+        if (collapsedKeys.has(conf.key)) {
+          // Traits/Special etc. are always secondary
+          subItems = allItems;
+        } else if (primaryKeys.has(conf.key)) {
+          // Non-executable items from primary groups (Manual Assist) are demoted to secondary
+          subItems = allItems.filter(item => item.executable === false);
+        }
+
+        if (subItems.length === 0) return;
+        secondaryItems.push({ conf, items: subItems });
       });
       if (secondaryItems.length) {
         const total = secondaryItems.reduce((n, g) => n + g.items.length, 0);

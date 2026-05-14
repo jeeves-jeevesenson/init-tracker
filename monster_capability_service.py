@@ -296,6 +296,12 @@ class MonsterCapabilityService:
                         summary_parts.append(f"range {rng}/{long_rng}ft")
                     else:
                         summary_parts.append(f"range {rng}ft")
+                
+                riders = mechanics.get("riders")
+                if riders and isinstance(riders, list):
+                    for r in riders:
+                        if isinstance(r, dict) and r.get("name"):
+                            summary_parts.append(f"Rider: {r['name']}")
             
             elif action_type == "save_ability":
                 ability = mechanics.get("ability", "STR").upper()

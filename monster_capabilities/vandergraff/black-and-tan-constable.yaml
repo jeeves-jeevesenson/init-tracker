@@ -43,12 +43,16 @@ capabilities:
         - formula: 1d4+2
           type: bludgeoning
       reach: 5
+      riders:
+        - id: rough-arrest
+          name: Rough Arrest
+          trigger: hit
+          desc: "Spend bonus action to attempt grapple?"
   - id: rough-arrest
     name: Rough Arrest
-    type: action
+    type: trait
     executable: false
     desc: "When the Constable hits a creature with a Baton attack, it can attempt to grapple the target as a bonus action."
-    action_type: utility
     warning: "Manual/Assisted grapple action."
   - id: vandergraff-drill
     name: Vandergraff Drill

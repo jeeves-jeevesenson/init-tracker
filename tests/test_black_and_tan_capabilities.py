@@ -191,11 +191,17 @@ class TestBlackAndTanCapabilities(unittest.TestCase):
         summary = self.service.summarize_capabilities_for_ui(1, combatant)
 
         actions = {a["id"]: a for a in summary["groups"]["actions"]}
+        traits = {t["id"]: t for t in summary["groups"]["traits"]}
 
-        # Rough Arrest
-        arrest = actions["rough-arrest"]
+        # Rough Arrest is now a trait/reminder
+        arrest = traits["rough-arrest"]
         self.assertIn("Manual/Assisted grapple action.", arrest["manual_instructions"])
         self.assertIn("Apply Grappled condition manually in /dm if hit.", arrest["manual_instructions"])
+
+        # Baton has Rough Arrest rider
+        baton = actions["baton"]
+        riders = baton["mechanics"].get("riders", [])
+        self.assertTrue(any(r["id"] == "rough-arrest" for r in riders))
 
 if __name__ == "__main__":
     unittest.main()

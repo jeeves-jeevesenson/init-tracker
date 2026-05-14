@@ -43905,6 +43905,7 @@ class InitiativeTracker(base.InitiativeTracker):
         mechanics = cap.get("mechanics", {}) if isinstance(cap.get("mechanics"), dict) else {}
         packet = dict(damage_packet or self._monster_capability_damage_roll_packet(cap))
         effects = mechanics.get("effects") if isinstance(mechanics.get("effects"), list) else []
+        riders = mechanics.get("riders") if isinstance(mechanics.get("riders"), list) else []
         resource_key = f"{int(actor_cid)}:cap:{cap_id}"
         packet.update(
             {
@@ -43917,6 +43918,7 @@ class InitiativeTracker(base.InitiativeTracker):
                 "damage": mechanics.get("damage", []) if isinstance(mechanics.get("damage"), list) else [],
                 "effects": effects,
                 "effect_riders": effects,
+                "riders": riders,
                 "target_mode": self._monster_capability_target_mode(cap),
                 "multi_target_capable": self._monster_capability_target_mode(cap) in {"multiple", "area_manual"},
                 "resource_ready": self._monster_resource_state.get(resource_key, True),
@@ -44099,6 +44101,7 @@ class InitiativeTracker(base.InitiativeTracker):
                      "damage": resolution_packet.get("damage", []),
                      "effects": resolution_packet.get("effects", []),
                      "effect_riders": resolution_packet.get("effect_riders", []),
+                     "riders": resolution_packet.get("riders", []),
                      "target_mode": resolution_packet.get("target_mode"),
                      "multi_target_capable": bool(resolution_packet.get("multi_target_capable")),
                      "resolution_packet": resolution_packet,

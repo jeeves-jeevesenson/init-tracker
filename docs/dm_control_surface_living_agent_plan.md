@@ -1553,3 +1553,28 @@ Outcome:
 - **Latency:** 11-12s latency remains unresolved as it requires deeper investigation beyond this rescue pass.
 Recommended next pass:
 - **Pass 2:** Multiattack expansion and AoE/multi-target support, now that the foundation is stable and clean.
+
+### 2026-05-14 — Pass 2H: Black and Tan remaining manual combat cleanup
+Agent/model: Gemini CLI
+Scope:
+- Implemented **Rough Arrest** as a structured rider prompt for Black and Tan Constable.
+- Updated `dnd_initative_tracker.py` and `assets/web/dmcontrol/index.html` to support **Rider Prompts** in the resolution modal.
+- Cleaned up the `/dmcontrol` action tray by demoting `executable: false` items (Manual Assist) to the collapsed "Traits & Reminders" section.
+- Updated `MonsterCapabilityService` to include rider names in action summaries.
+- Resolved manual combat friction by clearly separating actionable cards from passive rules.
+Files changed:
+- monster_capabilities/vandergraff/black-and-tan-constable.yaml
+- monster_capability_service.py
+- dnd_initative_tracker.py
+- assets/web/dmcontrol/index.html
+- tests/test_black_and_tan_capabilities.py
+- tests/test_black_and_tan_rough_arrest.py (New)
+Validation:
+- `./.venv/bin/python3 -m unittest tests.test_black_and_tan_capabilities tests.test_black_and_tan_rough_arrest` → All tests passed.
+- JS syntax check passed for `assets/web/dmcontrol/index.html`.
+Outcome:
+- Rough Arrest now appears as a clear DM-facing prompt after a successful Baton hit, reducing mental load.
+- Tray clutter is significantly reduced; DM only sees clickable actions in the primary area.
+- Passive reminders (Vandergraff Drill, Fire Discipline, etc.) remain accessible but out of the way.
+Next recommended pass:
+- Pass 2I: Add additional Black and Tan enemies (Shield Trooper, Medic, etc.) from the firearms plan.
