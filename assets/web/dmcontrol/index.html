@@ -1482,8 +1482,12 @@
         <div class="modal-field" style="margin-top: 8px;">
           <span class="modal-label" style="margin-bottom: 8px;">Resolution Outcome</span>
           <div class="outcome-btn-group" style="display: flex; gap: 12px;">
-            <button class="outcome-btn ${outcome === 'fail' ? 'active' : ''}" data-outcome="fail" onclick="setModalOutcome('fail')" style="height: 60px; font-size: 16px;">Hit</button>
-            <button class="outcome-btn ${outcome === 'success' ? 'active' : ''}" data-outcome="success" onclick="setModalOutcome('success')" style="height: 60px; font-size: 16px;">Miss</button>
+            <button class="outcome-btn ${outcome === 'fail' ? 'active' : ''}" data-outcome="fail" onclick="setModalOutcome('fail')" style="height: 60px; font-size: 16px;">
+              ${packet.save_dc ? 'Failed Save' : 'Hit'}
+            </button>
+            <button class="outcome-btn ${outcome === 'success' ? 'active' : ''}" data-outcome="success" onclick="setModalOutcome('success')" style="height: 60px; font-size: 16px;">
+              ${packet.save_dc ? 'Successful Save' : 'Miss'}
+            </button>
             <button class="outcome-btn ${outcome === 'no_effect' ? 'active' : ''}" data-outcome="no_effect" onclick="setModalOutcome('no_effect')" style="height: 60px; font-size: 16px;">No Effect</button>
           </div>
         </div>
@@ -1650,8 +1654,12 @@
               <h4>${esc(selected.name)} Selected</h4>
               <p>${esc(selected.description || selected.desc || 'No description available.')}</p>
               ${selected.manual_instructions ? `
-                <div style="margin-top:8px; border:1px solid var(--gold); background:rgba(214,186,126,0.1); padding:8px; border-radius:4px; font-size:12px; color:var(--gold)">
-                  <strong>Manual Instructions:</strong> ${esc(selected.manual_instructions)}
+                <div style="margin-top:12px; border:1px solid var(--gold); background:rgba(214,186,126,0.15); padding:10px 14px; border-radius:4px; font-size:13px; color:var(--gold); display:flex; gap:8px; align-items:start;">
+                  <span style="font-size:16px;">⚠️</span>
+                  <div>
+                    <strong style="text-transform:uppercase; font-size:11px; letter-spacing:0.5px;">Manual Instructions</strong><br/>
+                    ${esc(selected.manual_instructions)}
+                  </div>
                 </div>
               ` : ''}
           `;

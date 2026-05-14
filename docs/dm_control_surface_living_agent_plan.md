@@ -1606,6 +1606,29 @@ Outcome:
 Next recommended pass:
 - Pass 2J: Black and Tan expansion audit and remaining high-CR officer overlays.
 
+### 2026-05-14 — Pass 2K: DM console Black and Tan live-play polish and final smoke checklist
+Agent/model: Gemini CLI
+Scope:
+- Audited all 8 Black and Tan enemies for `/dmcontrol` readiness.
+- Polished `MonsterCapabilityService` to provide better summaries for `utility` and `save_ability` actions.
+- Improved resolution modal in `/dmcontrol`: labels now show "Failed Save" / "Successful Save" for save-based actions.
+- Enhanced visual prominence of "Manual Instructions" for non-executable actions.
+- Created `docs/BLACK_AND_TAN_DMCONSOLE_SMOKE_CHECKLIST.md` for manual verification.
+- Created `docs/runtime_reports/black_and_tan_dmconsole_smoke_TEMPLATE.md` for recording test results.
+Files changed:
+- monster_capability_service.py
+- assets/web/dmcontrol/index.html
+- docs/dm_control_surface_living_agent_plan.md
+Files created:
+- docs/BLACK_AND_TAN_DMCONSOLE_SMOKE_CHECKLIST.md
+- docs/runtime_reports/black_and_tan_dmconsole_smoke_TEMPLATE.md
+Outcome:
+- DM console is ready for a final manual smoke test of the entire Black and Tan roster.
+- Polish changes reduce DM turn friction and clarify manual vs automated steps.
+- All Python tests (24) and JS syntax checks passed.
+Next recommended step:
+- User manually runs the Black and Tan DM console smoke checklist against a player.
+
 ### 2026-05-14 — Pass 2J: Black and Tan expansion audit and high-CR officers
 Agent/model: Gemini CLI
 Scope:

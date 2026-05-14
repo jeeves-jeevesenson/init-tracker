@@ -296,18 +296,22 @@ class MonsterCapabilityService:
                         summary_parts.append(f"range {rng}/{long_rng}ft")
                     else:
                         summary_parts.append(f"range {rng}ft")
-                
-                riders = mechanics.get("riders")
-                if riders and isinstance(riders, list):
-                    for r in riders:
-                        if isinstance(r, dict) and r.get("name"):
-                            summary_parts.append(f"Rider: {r['name']}")
             
             elif action_type == "save_ability":
                 ability = mechanics.get("ability", "STR").upper()
                 dc = mechanics.get("dc")
                 if dc:
                     summary_parts.append(f"DC {dc} {ability}")
+                
+                # Show damage for save abilities (e.g. area effects)
+                dmg = mechanics.get("damage")
+                if dmg and isinstance(dmg, list):
+                    dmg_parts = []
+                    for d in dmg:
+                        if isinstance(d, dict) and d.get("formula"):
+                            dmg_parts.append(f"{d['formula']} {d.get('type', '')}")
+                    if dmg_parts:
+                        summary_parts.append("/".join(dmg_parts))
             
             elif action_type == "modifier":
                 mod = mechanics.get("modifier", {})
@@ -322,6 +326,28 @@ class MonsterCapabilityService:
                     summary_parts.append("Jam risk (1)")
                 if mod.get("limit") == "once_per_turn":
                     summary_parts.append("1/turn")
+
+            elif action_type == "utility":
+                # Show conditions or healing for utility actions
+                effects = mechanics.get("effects")
+                if effects and isinstance(effects, list):
+                    for eff in effects:
+                        if isinstance(eff, dict) and eff.get("condition"):
+                            summary_parts.append(f"Effect: {eff['condition']}")
+                
+                uses = mechanics.get("uses")
+                if uses and isinstance(uses, dict):
+                    max_uses = uses.get("max")
+                    per = uses.get("per")
+                    if max_uses:
+                        summary_parts.append(f"{max_uses}/{per or 'encounter'}")
+
+            # Include riders for any action type if present
+            riders = mechanics.get("riders")
+            if riders and isinstance(riders, list):
+                for r in riders:
+                    if isinstance(r, dict) and r.get("name"):
+                        summary_parts.append(f"Rider: {r['name']}")
 
             # Add reload/ammo note if present in description or mechanics
             desc = cap.get("desc", "")
