@@ -170,7 +170,7 @@ class TestBlackAndTanCapabilities(unittest.TestCase):
         # Armalite Rifle summary
         rifle = actions["armalite-rifle"]
         self.assertIn("+6 to hit", rifle["mechanics_summary"])
-        self.assertIn("1d12+4 piercing", rifle["mechanics_summary"])
+        self.assertIn("1d12+4 force", rifle["mechanics_summary"])
         self.assertIn("Magazine 20", rifle["mechanics_summary"])
         self.assertIn("Track ammunition manually.", rifle["manual_instructions"])
 
@@ -185,6 +185,71 @@ class TestBlackAndTanCapabilities(unittest.TestCase):
         # Vandergraff Drill
         drill = traits["vandergraff-drill"]
         self.assertIn("Reminder: +1 to attack if near another officer.", drill["manual_instructions"])
+
+    def test_black_and_tan_damage_types_force_for_guns_only(self):
+        # 1. Verify force for guns
+        combatant_rifleman = {"monster_slug": "black-and-tan-rifleman", "name": "Rifleman 1"}
+        rifleman = self.service.summarize_capabilities_for_ui(1, combatant_rifleman)
+        actions_rifleman = {a["id"]: a for a in rifleman["groups"]["actions"]}
+        armalite = actions_rifleman["armalite-rifle"]
+        self.assertEqual(armalite["mechanics"]["damage"][0]["type"], "force")
+        self.assertIn("force damage", armalite["desc"])
+
+        combatant_constable = {"monster_slug": "black-and-tan-constable", "name": "Constable 1"}
+        constable = self.service.summarize_capabilities_for_ui(2, combatant_constable)
+        actions_constable = {a["id"]: a for a in constable["groups"]["actions"]}
+        pistol = actions_constable["pistol"]
+        self.assertEqual(pistol["mechanics"]["damage"][0]["type"], "force")
+        self.assertIn("force damage", pistol["desc"])
+
+        # 2. Verify correct type for melee
+        baton = actions_constable["baton"]
+        self.assertEqual(baton["mechanics"]["damage"][0]["type"], "bludgeoning")
+        self.assertIn("bludgeoning damage", baton["desc"])
+
+        combatant_lt = {"monster_slug": "black-and-tan-lieutenant", "name": "Lt 1"}
+        lt = self.service.summarize_capabilities_for_ui(3, combatant_lt)
+        actions_lt = {a["id"]: a for a in lt["groups"]["actions"]}
+        saber = actions_lt["saber"]
+        self.assertEqual(saber["mechanics"]["damage"][0]["type"], "slashing")
+        self.assertIn("slashing damage", saber["desc"])
+
+    def test_black_and_tan_combat_log_force_damage(self):
+        from dnd_initative_tracker import InitiativeTracker
+        app = object.__new__(InitiativeTracker)
+        logs = []
+        app._log = lambda msg, cid=None: logs.append(msg)
+        app._name_role_memory = {"Rifleman": "enemy", "Hero": "pc"}
+        app._apply_damage_via_service = lambda target, amt: {"hp_after": 10}
+        app._queue_concentration_save = lambda t, s: None
+        app._death_flavor_line = lambda a, am, d, t: "died"
+        app._rebuild_table = lambda **kw: None
+        app._monster_modifier_state = {}
+        app._monster_sequence_state = {}
+        app._monster_resource_state = {}
+
+        attacker = type("C", (), {"name": "Rifleman", "cid": 1})()
+        target = type("C", (), {"name": "Hero", "cid": 2, "hp": 20})()
+        app.combatants = {1: attacker, 2: target}
+
+        # Case: Armalite Rifle (Force)
+        app._apply_map_attack_manual_damage(
+            attacker_cid=1,
+            target_cid=2,
+            attack_name="Armalite Rifle",
+            damage_entries=[{"amount": 10, "type": "force"}]
+        )
+        self.assertTrue(any("applies 10 force damage to Hero." in m for m in logs))
+
+        # Case: Baton (Bludgeoning)
+        logs.clear()
+        app._apply_map_attack_manual_damage(
+            attacker_cid=1,
+            target_cid=2,
+            attack_name="Baton",
+            damage_entries=[{"amount": 5, "type": "bludgeoning"}]
+        )
+        self.assertTrue(any("applies 5 bludgeoning damage to Hero." in m for m in logs))
 
     def test_constable_ui_summaries(self):
         combatant = {"monster_slug": "black-and-tan-constable", "name": "Constable 1"}

@@ -22,13 +22,13 @@ capabilities:
     name: .45 Pistol
     type: action
     executable: true
-    desc: "Ranged Weapon Attack: +5 to hit, range 40/120 ft., one target. Hit: 8 (1d10 + 3) piercing damage. Loud. Magazine 8."
+    desc: "Ranged Weapon Attack: +5 to hit, range 40/120 ft., one target. Hit: 8 (1d10 + 3) force damage. Loud. Magazine 8."
     action_type: ranged_attack
     mechanics:
       attack_bonus: 5
       damage:
         - formula: 1d10+3
-          type: piercing
+          type: force
       range: 40
       long_range: 120
   - id: baton

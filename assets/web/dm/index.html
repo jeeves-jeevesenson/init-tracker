@@ -992,6 +992,18 @@
             </div>
           </div>
 
+          <div class="staged-monsters-shell" id="stagedMonstersShell" style="margin-top:16px; display:none">
+            <div class="mut-card">
+              <h3 style="margin-bottom:12px">Staged Monsters (Bulk Add)</h3>
+              <div id="stagedMonstersList" style="display:flex; flex-direction:column; gap:6px; margin-bottom:12px"></div>
+              <div style="display:flex; gap:12px; align-items:center">
+                <button class="mut-btn primary" id="bulkAddMonstersBtn">Add All Staged</button>
+                <button class="mut-btn" id="clearStagedMonstersBtn">Clear All</button>
+              </div>
+              <div id="bulkAddResult" class="mut-result" style="margin-top:8px"></div>
+            </div>
+          </div>
+
           <!-- Encounter setup: add monster specs -->
           <div class="mut-card" id="addMonsterSpecsCard" style="margin-top:16px">
             <h3>Add Monster Specs</h3>
@@ -1917,6 +1929,7 @@ const DM_AUTH_REQUIRED = document.body.dataset.dmAuthRequired === 'true';
 let adminToken = null;      // null → no auth required (or not yet obtained)
 let currentSnapshot = null;
 let encounterOptions = { players: [], monsters: [] };
+let stagedMonsters = [];
 let encounterMembershipSignature = '';
 let autoRefreshTimer = null;
 let adminTokenRefreshTimer = null;
@@ -2712,6 +2725,24 @@ function renderMonsterLibrary(monsters, filter = '') {
     }
     item.appendChild(meta);
 
+    const controls = document.createElement('div');
+    controls.className = 'monster-item-controls';
+    controls.style.display = 'flex';
+    controls.style.gap = '8px';
+    controls.style.marginTop = '4px';
+
+    const stageBtn = document.createElement('button');
+    stageBtn.className = 'mut-btn small';
+    stageBtn.textContent = 'Stage';
+    stageBtn.style.padding = '2px 8px';
+    stageBtn.style.fontSize = '11px';
+    stageBtn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      stageMonster(monster);
+    });
+    controls.appendChild(stageBtn);
+    item.appendChild(controls);
+
     item.addEventListener('click', () => {
       // For now, just populate the existing "Add Monster Specs" dropdown
       const sel = document.getElementById('monsterSlugSelect');
@@ -2761,9 +2792,167 @@ async function refreshEncounterOptions() {
     };
     renderEncounterPlayers(encounterOptions.players);
     renderMonsterChoices(encounterOptions.monsters);
-    renderMonsterLibrary(encounterOptions.monsters);
+    const filter = document.getElementById('monsterLibrarySearch')?.value || '';
+    renderMonsterLibrary(encounterOptions.monsters, filter);
   } catch (_) { /* ignore */ }
 }
+
+function stageMonster(monster) {
+  const existing = stagedMonsters.find(m => m.slug === monster.slug);
+  if (existing) {
+    existing.count++;
+  } else {
+    stagedMonsters.push({
+      slug: monster.slug,
+      name: monster.name || monster.slug,
+      count: 1,
+      init: 0,
+      ally: false
+    });
+  }
+  renderStagedMonsters();
+}
+
+function renderStagedMonsters() {
+  const shell = document.getElementById('stagedMonstersShell');
+  const list = document.getElementById('stagedMonstersList');
+  if (!shell || !list) return;
+
+  if (stagedMonsters.length === 0) {
+    shell.style.display = 'none';
+    return;
+  }
+
+  shell.style.display = 'block';
+  list.innerHTML = '';
+
+  stagedMonsters.forEach((m, idx) => {
+    const row = document.createElement('div');
+    row.className = 'staged-monster-row';
+    row.style.display = 'flex';
+    row.style.alignItems = 'center';
+    row.style.gap = '8px';
+    row.style.padding = '6px';
+    row.style.background = 'rgba(255,255,255,0.03)';
+    row.style.borderRadius = '4px';
+    row.style.fontSize = '12px';
+
+    const name = document.createElement('span');
+    name.style.flex = '1';
+    name.style.fontWeight = 'bold';
+    name.textContent = m.name;
+    row.appendChild(name);
+
+    const countLabel = document.createElement('span');
+    countLabel.textContent = 'Qty:';
+    countLabel.style.opacity = '0.7';
+    row.appendChild(countLabel);
+
+    const countInp = document.createElement('input');
+    countInp.type = 'number';
+    countInp.value = m.count;
+    countInp.style.width = '45px';
+    countInp.addEventListener('change', (e) => {
+      m.count = parseInt(e.target.value, 10) || 1;
+    });
+    row.appendChild(countInp);
+
+    const initLabel = document.createElement('span');
+    initLabel.textContent = 'Init:';
+    initLabel.style.opacity = '0.7';
+    row.appendChild(initLabel);
+
+    const initInp = document.createElement('input');
+    initInp.type = 'number';
+    initInp.value = m.init;
+    initInp.style.width = '45px';
+    initInp.addEventListener('change', (e) => {
+      m.init = parseInt(e.target.value, 10) || 0;
+    });
+    row.appendChild(initInp);
+
+    const allyWrap = document.createElement('label');
+    allyWrap.style.display = 'flex';
+    allyWrap.style.alignItems = 'center';
+    allyWrap.style.gap = '4px';
+    allyWrap.style.cursor = 'pointer';
+    const allyInp = document.createElement('input');
+    allyInp.type = 'checkbox';
+    allyInp.checked = m.ally;
+    allyInp.addEventListener('change', (e) => {
+      m.ally = e.target.checked;
+    });
+    allyWrap.appendChild(allyInp);
+    allyWrap.appendChild(document.createTextNode('Ally'));
+    row.appendChild(allyWrap);
+
+    const removeBtn = document.createElement('button');
+    removeBtn.className = 'mut-btn small';
+    removeBtn.textContent = '✕';
+    removeBtn.style.padding = '2px 6px';
+    removeBtn.addEventListener('click', () => {
+      stagedMonsters.splice(idx, 1);
+      renderStagedMonsters();
+    });
+    row.appendChild(removeBtn);
+
+    list.appendChild(row);
+  });
+}
+
+document.getElementById('clearStagedMonstersBtn')?.addEventListener('click', () => {
+  stagedMonsters = [];
+  renderStagedMonsters();
+  const res = document.getElementById('bulkAddResult');
+  if (res) res.textContent = '';
+});
+
+document.getElementById('bulkAddMonstersBtn')?.addEventListener('click', async () => {
+  if (stagedMonsters.length === 0) return;
+  const btn = document.getElementById('bulkAddMonstersBtn');
+  const res = document.getElementById('bulkAddResult');
+  btn.disabled = true;
+  res.className = 'mut-result';
+  res.textContent = 'Adding monsters...';
+
+  let successCount = 0;
+  let totalToSpawn = stagedMonsters.length;
+
+  try {
+    for (const m of stagedMonsters) {
+      const body = {
+        monster_slug: m.slug,
+        count: m.count,
+        initiative: m.init,
+        ally: m.ally
+      };
+      const r = await fetch(`${BASE}/api/dm/encounter/monsters/add`, {
+        method: 'POST',
+        headers: authHeaders(),
+        body: JSON.stringify(body),
+      });
+      if (r.ok) {
+        const data = await r.json();
+        if (data.ok) successCount++;
+      }
+    }
+
+    if (successCount === totalToSpawn) {
+      res.textContent = `Successfully added all ${totalToSpawn} groups.`;
+      stagedMonsters = [];
+      renderStagedMonsters();
+      fetchSnapshot();
+    } else {
+      res.textContent = `Added ${successCount} of ${totalToSpawn} groups. Some failed.`;
+      res.classList.add('error');
+    }
+  } catch (e) {
+    res.textContent = 'Bulk add failed.';
+    res.classList.add('error');
+  } finally {
+    btn.disabled = false;
+  }
+});
 
 async function fetchSnapshot() {
   try {

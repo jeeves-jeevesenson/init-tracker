@@ -19,39 +19,39 @@ capabilities:
     name: Armalite Rifle
     type: action
     executable: true
-    desc: "Ranged Weapon Attack: +6 to hit, range 120/360 ft., one target. Hit: 10 (1d12 + 4) piercing damage. Loud. Magazine 20."
+    desc: "Ranged Weapon Attack: +6 to hit, range 120/360 ft., one target. Hit: 10 (1d12 + 4) force damage. Loud. Magazine 20."
     action_type: ranged_attack
     mechanics:
       attack_bonus: 6
       damage:
         - formula: 1d12+4
-          type: piercing
+          type: force
       range: 120
       long_range: 360
   - id: pistol
     name: .45 Pistol
     type: action
     executable: true
-    desc: "Ranged Weapon Attack: +6 to hit, range 40/120 ft., one target. Hit: 9 (1d10 + 4) piercing damage. Loud. Magazine 8."
+    desc: "Ranged Weapon Attack: +6 to hit, range 40/120 ft., one target. Hit: 9 (1d10 + 4) force damage. Loud. Magazine 8."
     action_type: ranged_attack
     mechanics:
       attack_bonus: 6
       damage:
         - formula: 1d10+4
-          type: piercing
+          type: force
       range: 40
       long_range: 120
   - id: knife
     name: Knife
     type: action
     executable: true
-    desc: "Melee or Ranged Weapon Attack: +6 to hit, reach 5 ft. or range 20/60 ft., one target. Hit: 6 (1d4 + 4) piercing damage."
+    desc: "Melee or Ranged Weapon Attack: +6 to hit, reach 5 ft. or range 20/60 ft., one target. Hit: 6 (1d4 + 4) force damage."
     action_type: melee_attack
     mechanics:
       attack_bonus: 6
       damage:
         - formula: 1d4+4
-          type: piercing
+          type: force
       reach: 5
   - id: controlled-burst
     name: Controlled Burst

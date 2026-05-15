@@ -24,20 +24,20 @@ capabilities:
     name: Armalite Rifle
     type: action
     executable: true
-    desc: "Ranged Weapon Attack: +8 to hit, range 120/360 ft., one target. Hit: 11 (1d12 + 4) piercing damage. Loud. Magazine 20."
+    desc: "Ranged Weapon Attack: +8 to hit, range 120/360 ft., one target. Hit: 11 (1d12 + 4) force damage. Loud. Magazine 20."
     action_type: ranged_attack
     mechanics:
       attack_bonus: 8
       damage:
         - formula: 1d12+4
-          type: piercing
+          type: force
       range: 120
       long_range: 360
   - id: controlled-burst
     name: Controlled Burst
     type: action
     executable: true
-    desc: "Before making one Armalite Rifle attack, the Major spends 3 ammo. On a hit, the attack deals 17 (2d12 + 4) piercing damage. Once per turn."
+    desc: "Before making one Armalite Rifle attack, the Major spends 3 ammo. On a hit, the attack deals 17 (2d12 + 4) force damage. Once per turn."
     action_type: modifier
     mechanics:
       modifier:
@@ -56,13 +56,13 @@ capabilities:
     name: Engraved .45 Pistol
     type: action
     executable: true
-    desc: "Ranged Weapon Attack: +8 to hit, range 40/120 ft., one target. Hit: 10 (1d10 + 4) piercing damage. Loud. Magazine 8."
+    desc: "Ranged Weapon Attack: +8 to hit, range 40/120 ft., one target. Hit: 10 (1d10 + 4) force damage. Loud. Magazine 8."
     action_type: ranged_attack
     mechanics:
       attack_bonus: 8
       damage:
         - formula: 1d10+4
-          type: piercing
+          type: force
       range: 40
       long_range: 120
   - id: saber
@@ -132,7 +132,7 @@ capabilities:
     name: Duck Behind Them
     type: reaction
     executable: false
-    desc: "When the Major is hit by a ranged attack and has an allied Black and Tan within 5 feet, the Major gains +3 AC against that attack. If the attack misses because of this, the adjacent ally takes 7 piercing damage."
+    desc: "When the Major is hit by a ranged attack and has an allied Black and Tan within 5 feet, the Major gains +3 AC against that attack. If the attack misses because of this, the adjacent ally takes 7 force damage."
     warning: "Manual AC bonus/damage required."
   - id: vandergraff-drill
     name: Vandergraff Drill

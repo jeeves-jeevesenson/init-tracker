@@ -287,27 +287,57 @@ Controlled Burst is modeled as a **Stateful Modifier Action**.
 
 ---
 
+### 2026-05-15 — Pass 2L: DM toolbox and /dmcontrol live-use polish
+Agent/model: Gemini CLI
+Scope:
+- Preserved DM toolbox monster search query/results after adding a monster.
+- Implemented a "Staged Monsters" bulk-add flow in the DM toolbox Encounter tab.
+- Added a "Start Combat / Next Turn" button to the `/dmcontrol` topbar.
+- Enhanced combat logs to include damage types (e.g., "4 force damage").
+- Updated all Vandergraff/Black-and-Tan firearm capabilities to use `force` damage for current campaign rules.
+- Verified fix with targeted tests and JS syntax checks.
+Files changed:
+- dnd_initative_tracker.py
+- assets/web/dm/index.html
+- assets/web/dmcontrol/index.html
+- monster_capabilities/vandergraff/*.yaml
+- tests/test_dm_map_attack_automation.py
+- tests/test_black_and_tan_capabilities.py
+Outcome:
+- DM toolbox search is no longer reset by membership changes.
+- Bulk adding monster groups is faster and more intuitive.
+- `/dmcontrol` has basic combat lifecycle controls.
+- Combat logs are more informative.
+- All Black and Tan guns now correctly deal force damage.
+Validation:
+- `python3 -m unittest tests/test_dm_map_attack_automation.py tests/test_black_and_tan_capabilities.py` → all passed.
+- JS syntax check: `assets/web/dm/index.html` and `assets/web/dmcontrol/index.html` verified via node --check script.
+Manual Resolution Tracking (Live-Smoke Feedback):
+- Manual test after Reality Rescue passed enough to continue.
+- All Black and Tans tested; Multiattack confirmed functional.
+- Vandergraff/Black-and-Tan firearms are custom force-damage guns for current campaign rules.
+- Remaining manual-resolution areas (acceptable for now):
+  - Ammo tracking / Magazines
+  - Jamming / Malfunctions
+  - AOE / Multi-target automation (e.g., SAM-7)
+  - Reactions / Opportunity attacks
+  - Complex command/aura features
+  - Healing/Smoke manual resolution
+Next recommended pass:
+- Pass 2M — Generic firearm ammo/magazine/bandolier architecture for monsters and players.
+
 ## Current status snapshot
 
 Update this section after each pass.
 
 | Area | Current status | Notes |
 |---|---|---|
-| `/dm` cockpit | Admin/reference/setup | Cleaned up; legacy controls demoted. Link to `/dmcontrol` added. |
-| `/dmcontrol` | Map & Movement completed | Dedicated LAN-style monster/NPC control page with map, tokens, movement range, and backend-validated active-actor drag/drop movement. |
-| `/` LAN client | Useful local model | LAN has targeting, movement range, attack resolution, spell target selection, and remaining movement concepts |
-| Monster Turn Controls | Demoted | **Moved to Legacy tab in DM Toolbox.** |
-| Monster Pilot | Demoted | **Moved to Legacy tab in DM Toolbox.** |
-| Focused actor panel | Transitional Prototype | Current implementation on `/dm` is for reusable learning, not final target location. |
-| DM Toolbox | In progress | Tabbed modal with Session, Encounter, Overrides, Map Tools, Debug, and Legacy tabs. Resized for desktop. |
-| Encounter Builder | In progress | Monster Library search and Add Monster workflow migrated to Encounter tab |
-| Monster Library | Completed | Deduplication implemented in frontend. |
-| Duplicate monster names | Completed | Backend auto-numbering fixed for single-spawns via CombatantNameService |
-| Enemy/NPC initiative | Completed | Auto-roll individually when added via monster spawn path |
-| Tactical map inspection | Completed | Token click focuses actor in panel without changing initiative turn |
-| Movement model | Completed | LAN movement works; monster/NPC-specific movement on `/dmcontrol` implemented and backend-validated. |
+| `/dm` cockpit | Admin/reference/setup | DM toolbox search preservation and bulk-add staging implemented. |
+| `/dmcontrol` | Action Surface | Added Start Combat / Next Turn button. |
+| `/` LAN client | Useful local model | |
+| Combat Logs | Improved | Damage types now included in logs. |
 
-## Repo Realities (Foundations & Gaps)
+## Milestone board
 
 ### Strong foundations
 - LAN map-first page (`assets/web/lan/index.html`).

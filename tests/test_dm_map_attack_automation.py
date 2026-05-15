@@ -31,9 +31,13 @@ class DmMapAttackAutomationTests(unittest.TestCase):
         self.app._retarget_current_after_removal = lambda removed, pre_order=None: None
         self.app._rebuild_table = lambda scroll_to_current=True: None
         self.app._death_flavor_line = lambda attacker, amount, dtype, target: f"{attacker} downs {target} with {amount} {dtype}".strip()
+        self.app._apply_damage_via_service = lambda target, raw_damage: {"temp_absorbed": 0, "hp_damage": raw_damage, "hp_after": getattr(target, "hp", 100) - raw_damage}
         self.app._lan = None
         self.app.start_cid = None
         self.app._name_role_memory = {"Death Slaad": "pc", "Knight": "enemy"}
+        self.app._monster_modifier_state = {}
+        self.app._monster_sequence_state = {}
+        self.app._monster_resource_state = {}
 
     def test_monster_attack_options_parse_slaad_actions_and_multiattack_counts(self):
         attacker = type(
@@ -694,6 +698,43 @@ class DmMapAttackAutomationTests(unittest.TestCase):
         self.assertEqual(result.get("total_damage"), 14)
         self.assertTrue(any("applies 14 damage to Knight." in message for _cid, message in self.logs))
         self.assertFalse(any("slashing" in message or "necrotic" in message for _cid, message in self.logs))
+
+    def test_enemy_map_attack_logs_include_damage_type(self):
+        attacker = type("Combatant", (), {"cid": 1, "name": "Death Slaad"})()
+        target = type("Combatant", (), {"cid": 2, "name": "Knight", "ac": 30, "hp": 30})()
+        self.app.combatants = {1: attacker, 2: target}
+
+        # Case 1: Enemy Attacker, Single damage type
+        self.app._name_role_memory = {"Death Slaad": "enemy", "Knight": "pc"}
+        self.logs = []
+        self.app._apply_map_attack_manual_damage(
+            1, 2, "Force Blast", [{"amount": 10, "type": "force"}]
+        )
+        self.assertTrue(any("applies 10 force damage to Knight." in message for _cid, message in self.logs))
+
+        # Case 2: PC Attacker, Multiple damage types
+        self.app._name_role_memory = {"Death Slaad": "pc", "Knight": "enemy"}
+        self.logs = []
+        self.app._apply_map_attack_manual_damage(
+            1, 2, "Chaos Bolt", [
+                {"amount": 6, "type": "fire"},
+                {"amount": 4, "type": "cold"}
+            ]
+        )
+        # Should show total and then details in parens
+        self.assertTrue(any("applies 10 damage to Knight (6 fire, 4 cold)." in message for _cid, message in self.logs))
+
+        # Case 3: Enemy Attacker, Multiple damage types (should hide details breakdown but show total)
+        self.app._name_role_memory = {"Death Slaad": "enemy", "Knight": "pc"}
+        self.logs = []
+        self.app._apply_map_attack_manual_damage(
+            1, 2, "Chaos Bolt", [
+                {"amount": 6, "type": "fire"},
+                {"amount": 4, "type": "cold"}
+            ]
+        )
+        self.assertTrue(any("applies 10 damage to Knight." in message for _cid, message in self.logs))
+        self.assertFalse(any("fire" in message or "cold" in message for _cid, message in self.logs))
 
     def test_resolve_map_attack_sequence_advantage_and_disadvantage_keep_correct_die(self):
         attacker = type("Combatant", (), {"cid": 1, "name": "Death Slaad"})()

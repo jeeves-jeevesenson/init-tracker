@@ -30320,17 +30320,29 @@ class InitiativeTracker(base.InitiativeTracker):
             removed_target = True
         else:
             attack_label = str(attack_name or "Attack").strip() or "Attack"
+            dtype = ""
+            if len(adjusted_entries) == 1:
+                dtype = str(adjusted_entries[0].get("type") or "").strip()
+            type_str = f" {dtype}" if dtype and dtype != "damage" else ""
+
             if hide_enemy_details:
-                self._log(f"{attacker.name} {attack_label}: applies {total_damage} damage to {target_name}.", cid=int(target_cid))
+                self._log(f"{attacker.name} {attack_label}: applies {total_damage}{type_str} damage to {target_name}.", cid=int(target_cid))
             else:
                 damage_desc = ", ".join(
                     f"{int(entry.get('amount', 0) or 0)} {str(entry.get('type') or '').strip() or 'damage'}"
                     for entry in adjusted_entries
                 )
-                self._log(
-                    f"{attacker.name} {attack_label}: applies {total_damage} damage to {target_name}{f' ({damage_desc})' if damage_desc else ''}.",
-                    cid=int(target_cid),
-                )
+                if len(adjusted_entries) == 1 and dtype and dtype != "damage":
+                    # For single type, the primary log already has it. Don't repeat in parens.
+                    self._log(
+                        f"{attacker.name} {attack_label}: applies {total_damage}{type_str} damage to {target_name}.",
+                        cid=int(target_cid),
+                    )
+                else:
+                    self._log(
+                        f"{attacker.name} {attack_label}: applies {total_damage} damage to {target_name}{f' ({damage_desc})' if damage_desc else ''}.",
+                        cid=int(target_cid),
+                    )
         try:
             self._rebuild_table(scroll_to_current=True)
         except Exception:

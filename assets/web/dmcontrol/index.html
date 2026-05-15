@@ -362,6 +362,7 @@
     <header class="topbar">
       <h1>DM Control</h1>
       <div id="combatStatus" class="actor-meta">Loading state...</div>
+      <button id="combatControlBtn" class="workspace-link" style="background:var(--accent-primary); color:white; font-weight:bold; border-color:var(--accent-primary); margin-left: auto; display:none"></button>
       <a href="/dm" class="workspace-link">↩ DM Cockpit</a>
     </header>
 
@@ -2029,6 +2030,18 @@
       const statusEl = document.getElementById('combatStatus');
       const actorPanel = document.getElementById('activeActorPanel');
       const overlay = document.getElementById('statusOverlay');
+      const controlBtn = document.getElementById('combatControlBtn');
+
+      if (controlBtn) {
+        const hasCombatants = data.combatants && data.combatants.length > 0;
+        if (data.in_combat) {
+          controlBtn.textContent = '▶ Next Turn';
+          controlBtn.style.display = '';
+        } else {
+          controlBtn.textContent = '⚔ Start Combat';
+          controlBtn.style.display = hasCombatants ? '' : 'none';
+        }
+      }
 
       if (!data.in_combat) {
         statusEl.textContent = 'Out of Combat';
@@ -2453,6 +2466,24 @@
         ctx.restore();
       }
     }
+
+    async function handleCombatControl() {
+      if (!state) return;
+      const isStart = !state.in_combat;
+      const endpoint = isStart ? '/api/dm/combat/start' : '/api/dm/combat/next-turn';
+      try {
+        const resp = await fetch(endpoint, { method: 'POST' });
+        const data = await resp.json();
+        if (data.ok) {
+           await fetchState();
+        } else {
+           console.error('Combat control failed:', data.error);
+        }
+      } catch (err) {
+        console.error('Network error during combat control:', err);
+      }
+    }
+    document.getElementById('combatControlBtn')?.addEventListener('click', handleCombatControl);
 
     // Initial fetch and start polling
     fetchState();
