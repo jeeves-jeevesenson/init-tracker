@@ -186,6 +186,24 @@ class TestBlackAndTanCapabilities(unittest.TestCase):
         drill = traits["vandergraff-drill"]
         self.assertIn("Reminder: +1 to attack if near another officer.", drill["manual_instructions"])
 
+    def test_rifleman_manual_ammo_suppression(self):
+        combatant = {"monster_slug": "black-and-tan-rifleman", "name": "Rifleman 1"}
+        # Provide resource state with ammo info
+        resource_state = {
+            "1:ammo:armalite-rifle:current": 20,
+            "1:ammo:armalite-rifle:max": 20
+        }
+        summary = self.service.summarize_capabilities_for_ui(1, combatant, resource_state=resource_state)
+
+        actions = {a["id"]: a for a in summary["groups"]["actions"]}
+        rifle = actions["armalite-rifle"]
+
+        # Should NOT contain manual ammo instruction
+        self.assertNotIn("Track ammunition manually.", rifle.get("manual_instructions", ""))
+        # Should contain structured ammo info
+        self.assertIn("ammo", rifle)
+        self.assertEqual(rifle["ammo"]["current"], 20)
+
     def test_black_and_tan_damage_types_force_for_guns_only(self):
         # 1. Verify force for guns
         combatant_rifleman = {"monster_slug": "black-and-tan-rifleman", "name": "Rifleman 1"}

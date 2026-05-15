@@ -1337,6 +1337,9 @@
           } else {
             selectedCapabilityId = null;
           }
+        } else {
+          // Outside Multiattack, after Apply Result, standalone targeting should end cleanly.
+          selectedCapabilityId = null;
         }
         renderActionPanel(actor, capabilitySummary);
         draw();
@@ -1696,6 +1699,30 @@
             <div class="selected-summary">
               <h4>${esc(selected.name)} Selected</h4>
               <p>${esc(selected.description || selected.desc || 'No description available.')}</p>
+
+              ${selected.ammo ? `
+                <div style="margin-top:12px; border:1px solid var(--accent); background:rgba(106,169,255,0.1); padding:10px; border-radius:4px; font-size:12px;">
+                  <div style="font-weight:bold; color:var(--accent); text-transform:uppercase; font-size:11px; margin-bottom:4px; letter-spacing:0.5px;">Ammunition Status</div>
+                  <div style="display:flex; gap:16px;">
+                    <div>Loaded: <strong style="font-size:14px; color:var(--text);">${selected.ammo.current} / ${selected.ammo.max}</strong></div>
+                    ${selected.ammo.reserve_mags !== undefined ? `
+                      <div>Reserves: <strong style="font-size:14px; color:var(--text);">${selected.ammo.reserve_mags} mags</strong></div>
+                    ` : `
+                      <div style="color:var(--muted); font-style:italic;">Reserves: deferred/unknown</div>
+                    `}
+                  </div>
+                  ${selected.mechanics && selected.mechanics.reload_cost ? `
+                    <div style="margin-top:4px; font-size:11px; color:var(--accent); opacity:0.9;">Reload: ${esc(selected.mechanics.reload_cost)}</div>
+                  ` : ''}
+                </div>
+              ` : ''}
+
+              ${selected.ammo_cost ? `
+                <div style="margin-top:8px; border:1px solid var(--danger); background:rgba(255,91,91,0.1); padding:8px; border-radius:4px; font-size:12px; color:var(--danger); font-weight:bold;">
+                  ⚠️ Requires ${selected.ammo_cost} loaded rounds to use.
+                </div>
+              ` : ''}
+
               ${selected.manual_instructions ? `
                 <div style="margin-top:12px; border:1px solid var(--gold); background:rgba(214,186,126,0.15); padding:10px 14px; border-radius:4px; font-size:13px; color:var(--gold); display:flex; gap:8px; align-items:start;">
                   <span style="font-size:16px;">⚠️</span>
@@ -1860,10 +1887,16 @@
                   No target click and no Apply button. Use the manual instructions above (or /dm) to adjudicate the result.
                 </div>
               `;
-            } else if (previewable) {
+            } else if (previewable && isPreviewActive) {
               summaryHtml += `
                 <div class="actor-meta" style="margin-top:6px; color:var(--accent); font-weight:bold;">
                   Targeting mode active — click an enemy token on the map.
+                </div>
+              `;
+            } else if (previewable) {
+              summaryHtml += `
+                <div class="actor-meta" style="margin-top:6px; color:var(--muted); font-style:italic;">
+                  Select this action again to re-enter targeting mode.
                 </div>
               `;
             } else {
