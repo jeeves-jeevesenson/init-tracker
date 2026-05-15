@@ -56,8 +56,20 @@ The LAN client (`assets/web/lan/index.html`) is a feature-rich but architectural
     - Add explicit `TARGETING` and `RESOLVING` states.
     - Integrate `node --check` into standard dev workflow.
 
-### Pass 3C: State Sync Refactor
-- **Goal**: Stabilize WebSocket snapshot ingestion.
+### Pass 3B: LAN Combat Unblock (Current)
+- **Goal**: Resolve P0 blockers preventing basic combat actions in LAN.
+- **Root Causes Identified**:
+    - `_lan_snapshot` in `dnd_initative_tracker.py` was missing `player_profiles`, `player_spells`, and `resource_pools`, causing blank UI sections and missing action data.
+    - Lack of Unarmed Strike fallback for weaponless characters.
+- **Fixed**:
+    - Restored missing player data fields to `_lan_snapshot`.
+    - Added 1.0s throttle for resource pool calculation to maintain performance.
+    - Added Unarmed Strike fallback to player profile generation.
+    - Fixed `LanController` AttributeErrors and test stability.
+- **Impact**: Resource Pools should now render, spellcasters should see their spells, and all characters should have at least one attack action (Unarmed Strike) available even without weapons.
+
+### Pass 3C: State Sync Refactor (Next)
+- **Goal**: Stabilize WebSocket snapshot ingestion and handle Mode Banners (deferred from 3B).
 - **Tasks**:
     - Audit `ws.onmessage` for every field in `state`.
     - Ensure `static_data` doesn't get stomped by partial updates.

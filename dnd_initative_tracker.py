@@ -19748,6 +19748,59 @@ class InitiativeTracker(base.InitiativeTracker):
                 structure_entry["ship_state"] = ship_summary.get("summary")
             snap["structures"].append(structure_entry)
         snap["ships"] = ships_payload
+
+        # Populate static fields if requested or available in cache
+        # Use 'or {}' and 'or []' to handle cases where cached values might be None
+        if include_static:
+            try:
+                snap["spell_presets"] = self._spell_presets_payload()
+            except Exception:
+                snap["spell_presets"] = []
+            try:
+                snap["player_spells"] = self._player_spell_config_payload()
+            except Exception:
+                snap["player_spells"] = {}
+            try:
+                snap["player_profiles"] = self._player_profiles_payload()
+            except Exception:
+                snap["player_profiles"] = {}
+            try:
+                snap["beast_forms"] = self._load_beast_forms()
+            except Exception:
+                snap["beast_forms"] = []
+        elif hydrate_static:
+            cached = (self._lan._cached_snapshot if hasattr(self, "_lan") else {}) or {}
+            snap["spell_presets"] = cached.get("spell_presets") or []
+            snap["player_spells"] = cached.get("player_spells") or {}
+            snap["player_profiles"] = cached.get("player_profiles") or {}
+            snap["beast_forms"] = cached.get("beast_forms") or []
+        else:
+            snap["spell_presets"] = []
+            snap["player_spells"] = {}
+            snap["player_profiles"] = {}
+            snap["beast_forms"] = []
+
+        # Resource pools are slightly more dynamic and throttled to 1.0s
+        resource_pools = {}
+        now = time.monotonic()
+        # Be defensive about the type of _lan_resource_pools_last_build
+        last_build_raw = getattr(self, "_lan_resource_pools_last_build", 0.0)
+        last_build = last_build_raw if isinstance(last_build_raw, (int, float)) else 0.0
+        
+        if include_static or (now - last_build) >= 1.0:
+            try:
+                resource_pools = self._player_resource_pools_payload()
+                self._lan_resource_pools_last_build = now
+            except Exception:
+                if hydrate_static:
+                    cached = (self._lan._cached_snapshot if hasattr(self, "_lan") else {}) or {}
+                    resource_pools = cached.get("resource_pools") or {}
+        elif hydrate_static:
+            cached = (self._lan._cached_snapshot if hasattr(self, "_lan") else {}) or {}
+            resource_pools = cached.get("resource_pools") or {}
+
+        snap["resource_pools"] = resource_pools
+
         return snap
     def _broadcast_tactical_state_update(self) -> None:
         broadcaster = getattr(self, "_lan_force_state_broadcast", None)
@@ -27532,6 +27585,33 @@ class InitiativeTracker(base.InitiativeTracker):
             profile_payload["prepared_wild_shapes"] = list(chosen_known)
             profile_payload["wild_shape_known_limit"] = int(known_limit)
             profile_payload["wild_shape_available_forms"] = available
+
+            # Ensure at least an Unarmed Strike fallback if no weapons are present
+            attacks = profile_payload.get("attacks")
+            if not isinstance(attacks, dict):
+                attacks = {"weapons": []}
+                profile_payload["attacks"] = attacks
+            weapons = attacks.get("weapons")
+            if not isinstance(weapons, list):
+                weapons = []
+                attacks["weapons"] = weapons
+
+            has_unarmed = any(str(w.get("id") or "").strip().lower() == "unarmed_strike" for w in weapons if isinstance(w, dict))
+            if not has_unarmed:
+                # Basic 5e unarmed strike fallback
+                weapons.append({
+                    "id": "unarmed_strike",
+                    "name": "Unarmed Strike",
+                    "proficient": True,
+                    "equipped": True,
+                    "main_hand": True,
+                    "range": "5",
+                    "one_handed": {
+                        "damage_formula": "1 + str_mod",
+                        "damage_type": "bludgeoning"
+                    }
+                })
+
             payload[name] = profile_payload
         return payload
 

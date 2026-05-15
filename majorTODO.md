@@ -529,8 +529,8 @@ If code/tests and this file disagree, fix this file promptly.
 - [x] **Pass 3A: LAN client audit and repair plan (2026-05-15)**
   - Audit completed; identified P0/P1 issues in state sync and targeting.
   - Plan documented in `docs/lan_client_audit_and_repair_plan.md`.
-- [ ] **Pass 3B: LAN safety/static validation and layout triage**
-- [ ] **Pass 3C: LAN state sync refactor**
+- [x] **Pass 3B: LAN combat unblock (Resource Pools, Spells, Unarmed fallback)**
+- [ ] **Pass 3C: LAN state sync refactor and Mode Banners**
 - [ ] **Pass 3D: LAN map and targeting polish**
 - [ ] **Pass 3E: LAN action and inventory cards**
 - [ ] **Pass 3F: LAN firearm UI**

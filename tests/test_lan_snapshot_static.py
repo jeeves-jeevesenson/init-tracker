@@ -73,6 +73,7 @@ class LanSnapshotStaticTests(unittest.TestCase):
         lan._cached_snapshot = {}
         lan._monster_choices_cache = []
         lan._monster_choices_cache_key = None
+        lan._cached_static_payload = None
 
         live_presets = [{"name": "Aid", "slug": "aid", "level": 2}]
 
@@ -92,6 +93,7 @@ class LanSnapshotStaticTests(unittest.TestCase):
         lan._cached_snapshot = {"spell_presets": cached}
         lan._monster_choices_cache = []
         lan._monster_choices_cache_key = None
+        lan._cached_static_payload = None
 
         class AppStub:
             _monster_specs = []
@@ -305,6 +307,40 @@ class LanSnapshotStaticTests(unittest.TestCase):
 
         snap = app._lan_snapshot(include_static=False)
         self.assertIs(snap["resource_pools"], cached_resource_pools)
+
+    def test_player_profiles_payload_includes_unarmed_strike_fallback(self):
+        app = object.__new__(tracker_mod.InitiativeTracker)
+        app._player_yaml_data_by_name = {
+            "Alice": {"attacks": {"weapons": []}},
+            "Bob": {"attacks": {"weapons": [{"id": "dagger", "name": "Dagger"}]}},
+            "Charlie": {}, # missing attacks section
+        }
+        app._player_yaml_name_map = {}
+        app._player_yaml_cache_by_path = {}
+        app._load_player_yaml_cache = lambda: None
+        app._compute_spell_save_dc = lambda _profile: 15
+        app._apply_pact_magic_runtime_slots = lambda profile: profile
+        app._normalized_prepared_wild_shapes_from_profile = lambda _profile: []
+        app._normalize_prepared_wild_shapes = lambda _raw, **_kw: []
+        app._druid_level_from_profile = lambda _profile: 0
+        app._wild_shape_known_limit = lambda _level: 0
+        app._wild_shape_available_forms = lambda _level: []
+        
+        # Call the method under test
+        payload = tracker_mod.InitiativeTracker._player_profiles_payload(app)
+        
+        # Alice should have unarmed strike
+        alice_weapons = payload["Alice"]["attacks"]["weapons"]
+        self.assertTrue(any(w["id"] == "unarmed_strike" for w in alice_weapons))
+        
+        # Bob already has a weapon, but no unarmed_strike in his list, so it should be added
+        bob_weapons = payload["Bob"]["attacks"]["weapons"]
+        self.assertTrue(any(w["id"] == "dagger" for w in bob_weapons))
+        self.assertTrue(any(w["id"] == "unarmed_strike" for w in bob_weapons))
+        
+        # Charlie missing attacks section should get unarmed strike
+        charlie_weapons = payload["Charlie"]["attacks"]["weapons"]
+        self.assertTrue(any(w["id"] == "unarmed_strike" for w in charlie_weapons))
 
     def test_view_only_state_payload_includes_grid_and_terrain(self):
         lan = object.__new__(tracker_mod.LanController)
