@@ -324,7 +324,26 @@ Manual Resolution Tracking (Live-Smoke Feedback):
   - Complex command/aura features
   - Healing/Smoke manual resolution
 Next recommended pass:
-- Pass 2M — Generic firearm ammo/magazine/bandolier architecture for monsters and players.
+- Pass 2O — DM-side firearm ammo smoke and stabilization
+
+### 2026-05-15 — Pass 2N: DM control map pan/drag parity with LAN map
+Agent/model: Gemini CLI
+Scope:
+- Implemented map panning by dragging empty space on the DM control map.
+- Added mouse wheel zoom support to the DM control map.
+- Preserved token targeting and active-unit movement while allowing panning.
+- Updated mode banners to indicate panning/zooming availability.
+- LAN map behavior used as a reference for parity.
+- Verified with JS syntax checks and existing DM control regression tests.
+Files changed:
+- assets/web/dmcontrol/index.html
+- docs/dm_control_surface_living_agent_plan.md
+Outcome:
+- /dmcontrol map is now as interactive as the LAN map, allowing easy navigation without losing turn context.
+- UI explicitly mentions panning/zooming in relevant modes.
+- All Python tests and JS syntax checks passed.
+Next recommended pass:
+- Pass 2O — DM-side firearm ammo smoke and stabilization
 
 ## Current status snapshot
 
@@ -367,7 +386,7 @@ Update the status column after each pass.
 |---|---|---|---|
 | M0 | Phase 0 — Clean `/dm` regressions | Completed | M1 - /dmcontrol shell |
 | M1 | Phase 1 — `/dmcontrol` shell | Completed | Route/page shell + status |
-| M2 | Phase 2 — LAN-like map & movement | Completed | Map, movement range, and drag/drop |
+| M2 | Phase 2 — LAN-like map & movement | Completed | Map, movement range, drag/drop, and pan/zoom |
 | M3 | Phase 3 — Basic attack flow | In progress | Phase 3A (Action panel scaffold) |
 | M4 | Phase 4 — Multiattack guided flow | Not started | Sequence tray + resolution reuse |
 | M5 | Phase 5 — AoE/save action flow | Not started | AoE template placement |

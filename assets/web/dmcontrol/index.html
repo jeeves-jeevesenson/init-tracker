@@ -455,17 +455,17 @@
       if (!banner) return;
       banner.classList.remove('move-mode', 'target-mode', 'resolve-mode', 'sequence-mode', 'blocked-mode');
 
-      let icon = 'Move', text = 'Drag token on map to move. Movement is backend-validated.', cls = 'move-mode', cancelHtml = '';
+      let icon = 'Move', text = 'Drag token to move. Drag map to pan. Wheel to zoom.', cls = 'move-mode', cancelHtml = '';
 
       if (!state || !state.in_combat) {
         icon = 'Idle';
-        text = 'Out of combat.';
+        text = 'Out of combat. Drag map to pan. Wheel to zoom.';
         cls = 'move-mode';
       } else {
         const actor = (state.combatants || []).find(c => String(c.cid) === String(state.active_cid));
         if (actor && actor.is_pc) {
           icon = 'PC Turn';
-          text = `Waiting for ${esc(actor.name)} (player). DM movement is disabled.`;
+          text = `Waiting for ${esc(actor.name)}. Drag map to pan. Wheel to zoom.`;
           cls = 'blocked-mode';
         } else if (localResolutionTray) {
           const cap = findCapabilityById(localResolutionTray.capabilityId);
@@ -485,7 +485,7 @@
           cancelHtml = `<button class="cancel-target-btn" onclick="cancelLocalSequence()">End Sequence</button>`;
         } else if (targetPreviewMode) {
           icon = 'Target';
-          text = `Targeting ${esc(targetPreviewMode.capabilityName || 'action')}. Click an enemy token to select. Movement is blocked while targeting.`;
+          text = `Targeting ${esc(targetPreviewMode.capabilityName || 'action')}. Click an enemy token to select. Drag map to pan.`;
           cls = 'target-mode';
           cancelHtml = `<button class="cancel-target-btn" onclick="cancelTargetPreviewMode()">Cancel Targeting</button>`;
         } else if (actor && !actor.is_pc) {
@@ -493,7 +493,7 @@
           const units = state.tactical_map?.units || [];
           const unit = units.find(u => String(u.cid) === String(state.active_cid));
           const moveRemaining = unit ? (unit.move_remaining ?? unit.speed ?? 0) : 0;
-          text = `Drag token on map to move (${esc(actor.name)}, ${moveRemaining} ft remaining). Movement is backend-validated.`;
+          text = `Drag token to move (${esc(actor.name)}, ${moveRemaining} ft remaining). Drag map to pan. Wheel to zoom.`;
           cls = 'move-mode';
         }
       }
@@ -649,6 +649,7 @@
     let lastGrid = {cols: 0, rows: 0};
     let dragging = null; // {cid, col, row, curCol, curRow, startX, startY}
     let isMoving = false; // Guard against duplicate moves
+    let panning = null; // {x, y, panX, panY}
 
     function resize() {
       const dpr = window.devicePixelRatio || 1;
@@ -797,37 +798,29 @@
       const y = e.clientY - rect.top;
 
       if (targetPreviewMode) {
-        // In target mode the click selects a target token if it's a candidate.
         const hit = getTokenAtScreen(x, y);
         if (hit && isTargetCandidate(hit)) {
           selectPreviewTarget(hit.cid);
+          return;
         } else {
-          // Fallback to grid-cell lookup so clicking near a token still works.
           const { col, row } = screenToGrid(x, y);
           const cellUnit = findUnitAtGridCell(col, row);
           if (cellUnit && isTargetCandidate(cellUnit)) {
             selectPreviewTarget(cellUnit.cid);
+            return;
           }
         }
-        return; // Movement drag is intentionally blocked while targeting.
-      }
-
-      if (localResolutionTray) {
-        showTransientStatus('Cancel resolution to move.', 'var(--danger)');
-        return;
+        // No target hit; allow panning instead of returning.
       }
 
       const activeCid = state.active_cid;
       const activeUnit = (state.tactical_map.units || []).find(u => String(u.cid) === String(activeCid));
       const actor = state.combatants.find(c => String(c.cid) === String(activeCid));
 
-      if (!activeUnit || !activeUnit.pos || !actor || actor.is_pc) return;
-
-      // Hit-test against the active token rather than requiring exact cell equality.
       const hit = getTokenAtScreen(x, y);
-      const isActiveHit = hit && String(hit.cid) === String(activeCid);
+      const isActiveHit = hit && activeUnit && actor && !actor.is_pc && String(hit.cid) === String(activeCid);
 
-      if (isActiveHit) {
+      if (isActiveHit && !targetPreviewMode && !localResolutionTray) {
         dragging = {
           cid: activeCid,
           col: activeUnit.pos.col,
@@ -839,36 +832,49 @@
         };
         canvas.setPointerCapture(e.pointerId);
         draw();
+      } else {
+        // Start pan
+        panning = { x, y, panX, panY };
+        canvas.setPointerCapture(e.pointerId);
       }
     });
 
     canvas.addEventListener('pointermove', (e) => {
-      if (!dragging) return;
       const rect = canvas.getBoundingClientRect();
       const x = e.clientX - rect.left;
       const y = e.clientY - rect.top;
-      const { col, row } = screenToGrid(x, y);
 
-      if (col !== dragging.curCol || row !== dragging.curRow) {
-        dragging.curCol = col;
-        dragging.curRow = row;
+      if (dragging) {
+        const { col, row } = screenToGrid(x, y);
+        if (col !== dragging.curCol || row !== dragging.curRow) {
+          dragging.curCol = col;
+          dragging.curRow = row;
+          draw();
+        }
+      } else if (panning) {
+        panX = panning.panX + (x - panning.x);
+        panY = panning.panY + (y - panning.y);
+        fittedToGrid = true;
         draw();
       }
     });
 
     canvas.addEventListener('pointerup', async (e) => {
-      if (!dragging) return;
-      const finalCol = dragging.curCol;
-      const finalRow = dragging.curRow;
-      const dragCid = dragging.cid;
-      dragging = null;
       canvas.releasePointerCapture(e.pointerId);
+      if (dragging) {
+        const finalCol = dragging.curCol;
+        const finalRow = dragging.curRow;
+        const dragCid = dragging.cid;
+        dragging = null;
 
-      const activeUnit = (state.tactical_map.units || []).find(u => String(u.cid) === String(dragCid));
-      if (activeUnit && (activeUnit.pos.col !== finalCol || activeUnit.pos.row !== finalRow)) {
-        await executeMove(dragCid, finalCol, finalRow);
-      } else {
-        draw();
+        const activeUnit = (state.tactical_map.units || []).find(u => String(u.cid) === String(dragCid));
+        if (activeUnit && (activeUnit.pos.col !== finalCol || activeUnit.pos.row !== finalRow)) {
+          await executeMove(dragCid, finalCol, finalRow);
+        } else {
+          draw();
+        }
+      } else if (panning) {
+        panning = null;
       }
     });
 
@@ -906,6 +912,27 @@
         draw();
       }
     }
+
+    function zoomAt(newZoom, focusX, focusY) {
+      const preZoom = zoom;
+      zoom = Math.max(10, Math.min(200, newZoom));
+      const col = (focusX - panX) / preZoom;
+      const row = (focusY - panY) / preZoom;
+      panX = focusX - col * zoom;
+      panY = focusY - row * zoom;
+      fittedToGrid = true;
+      draw();
+    }
+
+    canvas.addEventListener('wheel', (e) => {
+      e.preventDefault();
+      const rect = canvas.getBoundingClientRect();
+      const x = e.clientX - rect.left;
+      const y = e.clientY - rect.top;
+      const delta = e.deltaY || 0;
+      const factor = delta > 0 ? 0.9 : 1.1;
+      zoomAt(zoom * factor, x, y);
+    }, { passive: false });
 
     async function fetchState() {
       try {
