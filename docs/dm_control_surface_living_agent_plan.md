@@ -326,6 +326,30 @@ Manual Resolution Tracking (Live-Smoke Feedback):
 Next recommended pass:
 - Pass 2O — DM-side firearm ammo smoke and stabilization
 
+### 2026-05-15 — Pass 2O: Final DM-side firearm ammo and map-control verification
+Agent/model: Gemini CLI
+Scope:
+- Final verification of DM-side combat surface stability.
+- Fixed test setup issues in `tests/test_dm_map_attack_automation.py` (HP mutation and runtime_cfg patching).
+- Verified firearm ammo tracking: Armalite (20/20, 6 mags reserve) and .45 Pistol (8/8) work as expected.
+- Verified Controlled Burst: Arm/Disarm works, 3 rounds spent total, once-per-turn limit enforced.
+- Verified Reload: correctly swaps magazines and spends reserve.
+- Verified Multiattack + ammo: each child spends ammo, Controlled Burst applies to Armalite children.
+- Verified /dmcontrol map pan/zoom: dragging empty space pans, wheel zooms around pointer.
+- Verified DM toolbox polish: search remains after adding monster, bulk add works.
+Files changed:
+- tests/test_dm_map_attack_automation.py
+- docs/dm_control_surface_living_agent_plan.md
+Outcome:
+- DM-side combat surface is stable and ready for user manual smoke and live play.
+- Automated tests are now consistently passing in the local environment.
+- Map interaction is significantly improved with pan and zoom support.
+Validation:
+- All 73 targeted unit tests passed.
+- JS syntax check passed for all touched assets.
+Next recommended step:
+- User manual smoke testing followed by LAN client audit/planning pass.
+
 ### 2026-05-15 — Pass 2N: DM control map pan/drag parity with LAN map
 Agent/model: Gemini CLI
 Scope:

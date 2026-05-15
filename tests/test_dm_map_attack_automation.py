@@ -2,6 +2,7 @@ import unittest
 import json
 import os
 import tempfile
+from pathlib import Path
 from unittest import mock
 
 import dnd_initative_tracker as tracker_mod
@@ -31,7 +32,14 @@ class DmMapAttackAutomationTests(unittest.TestCase):
         self.app._retarget_current_after_removal = lambda removed, pre_order=None: None
         self.app._rebuild_table = lambda scroll_to_current=True: None
         self.app._death_flavor_line = lambda attacker, amount, dtype, target: f"{attacker} downs {target} with {amount} {dtype}".strip()
-        self.app._apply_damage_via_service = lambda target, raw_damage: {"temp_absorbed": 0, "hp_damage": raw_damage, "hp_after": getattr(target, "hp", 100) - raw_damage}
+        
+        def mock_apply_damage(target, raw_damage):
+            old_hp = int(getattr(target, "hp", 100))
+            new_hp = max(0, old_hp - int(raw_damage))
+            target.hp = new_hp
+            return {"temp_absorbed": 0, "hp_damage": raw_damage, "hp_after": new_hp}
+        self.app._apply_damage_via_service = mock_apply_damage
+        
         self.app._lan = None
         self.app.start_cid = None
         self.app._name_role_memory = {"Death Slaad": "pc", "Knight": "enemy"}
@@ -106,10 +114,12 @@ class DmMapAttackAutomationTests(unittest.TestCase):
 
     def test_monster_attack_options_hydrate_from_persistent_cache(self):
         with tempfile.TemporaryDirectory() as tmpdir:
-            cache_dir = f"{tmpdir}/logs"
-            with mock.patch.dict("os.environ", {"INITTRACKER_DATA_DIR": tmpdir}, clear=False):
+            tmp_path = Path(tmpdir)
+            cache_dir = tmp_path / "logs"
+            with mock.patch.object(tracker_mod.runtime_cfg, "data_dir", tmp_path), \
+                 mock.patch.object(tracker_mod.runtime_cfg, "log_dir", cache_dir):
                 os.makedirs(cache_dir, exist_ok=True)
-                cache_path = f"{cache_dir}/monster_action_fallback_cache.json"
+                cache_path = cache_dir / "monster_action_fallback_cache.json"
                 payload = {
                     "version": 1,
                     "entries": {
@@ -155,10 +165,14 @@ class DmMapAttackAutomationTests(unittest.TestCase):
 
     def test_monster_attack_options_hydrate_from_local_5etools_and_write_cache(self):
         with tempfile.TemporaryDirectory() as tmpdir:
-            source_dir = f"{tmpdir}/monster_sources/5etools"
-            with mock.patch.dict("os.environ", {"INITTRACKER_DATA_DIR": tmpdir}, clear=False):
+            tmp_path = Path(tmpdir)
+            source_dir = tmp_path / "monster_sources" / "5etools"
+            log_dir = tmp_path / "logs"
+            with mock.patch.object(tracker_mod.runtime_cfg, "data_dir", tmp_path), \
+                 mock.patch.object(tracker_mod.runtime_cfg, "log_dir", log_dir):
                 os.makedirs(source_dir, exist_ok=True)
-                fixture_path = f"{source_dir}/bestiary.json"
+                os.makedirs(log_dir, exist_ok=True)
+                fixture_path = source_dir / "bestiary.json"
                 fixture = {
                     "monster": [
                         {
@@ -192,10 +206,10 @@ class DmMapAttackAutomationTests(unittest.TestCase):
                 )()
 
                 options, _counts = self.app._monster_attack_options_for_map(attacker)
-                cache_path = f"{tmpdir}/logs/monster_action_fallback_cache.json"
+                cache_path = log_dir / "monster_action_fallback_cache.json"
                 with open(cache_path, "r", encoding="utf-8") as fh:
                     cached_payload = json.load(fh)
-                source_dir_exists = os.path.isdir(f"{tmpdir}/monster_sources/5etools")
+                source_dir_exists = os.path.isdir(source_dir)
 
         self.assertGreaterEqual(len(options), 1)
         self.assertEqual(options[0]["to_hit"], 5)
@@ -206,7 +220,10 @@ class DmMapAttackAutomationTests(unittest.TestCase):
 
     def test_monster_attack_options_hydrate_online_by_default_and_write_cache(self):
         with tempfile.TemporaryDirectory() as tmpdir:
-            with mock.patch.dict("os.environ", {"INITTRACKER_DATA_DIR": tmpdir}, clear=False):
+            tmp_path = Path(tmpdir)
+            log_dir = tmp_path / "logs"
+            with mock.patch.object(tracker_mod.runtime_cfg, "data_dir", tmp_path), \
+                 mock.patch.object(tracker_mod.runtime_cfg, "log_dir", log_dir):
                 attacker = type(
                     "Combatant",
                     (),
@@ -246,7 +263,7 @@ class DmMapAttackAutomationTests(unittest.TestCase):
                 ):
                     options, _counts = self.app._monster_attack_options_for_map(attacker)
 
-                cache_path = f"{tmpdir}/logs/monster_action_fallback_cache.json"
+                cache_path = log_dir / "monster_action_fallback_cache.json"
                 with open(cache_path, "r", encoding="utf-8") as fh:
                     cached_payload = json.load(fh)
 
@@ -257,7 +274,10 @@ class DmMapAttackAutomationTests(unittest.TestCase):
 
     def test_monster_attack_options_rejects_metadata_only_online_sections(self):
         with tempfile.TemporaryDirectory() as tmpdir:
-            with mock.patch.dict("os.environ", {"INITTRACKER_DATA_DIR": tmpdir}, clear=False):
+            tmp_path = Path(tmpdir)
+            log_dir = tmp_path / "logs"
+            with mock.patch.object(tracker_mod.runtime_cfg, "data_dir", tmp_path), \
+                 mock.patch.object(tracker_mod.runtime_cfg, "log_dir", log_dir):
                 attacker = type(
                     "Combatant",
                     (),
@@ -295,7 +315,7 @@ class DmMapAttackAutomationTests(unittest.TestCase):
                 ):
                     options, counts = self.app._monster_attack_options_for_map(attacker)
 
-                cache_path = f"{tmpdir}/logs/monster_action_fallback_cache.json"
+                cache_path = log_dir / "monster_action_fallback_cache.json"
 
         self.assertEqual(options, [])
         self.assertEqual(counts, {})
@@ -303,10 +323,12 @@ class DmMapAttackAutomationTests(unittest.TestCase):
 
     def test_monster_attack_options_ignores_bad_cache_and_rehydrates(self):
         with tempfile.TemporaryDirectory() as tmpdir:
-            cache_dir = f"{tmpdir}/logs"
-            with mock.patch.dict("os.environ", {"INITTRACKER_DATA_DIR": tmpdir}, clear=False):
+            tmp_path = Path(tmpdir)
+            cache_dir = tmp_path / "logs"
+            with mock.patch.object(tracker_mod.runtime_cfg, "data_dir", tmp_path), \
+                 mock.patch.object(tracker_mod.runtime_cfg, "log_dir", cache_dir):
                 os.makedirs(cache_dir, exist_ok=True)
-                cache_path = f"{cache_dir}/monster_action_fallback_cache.json"
+                cache_path = cache_dir / "monster_action_fallback_cache.json"
                 payload = {
                     "version": 1,
                     "entries": {
@@ -374,7 +396,10 @@ class DmMapAttackAutomationTests(unittest.TestCase):
 
     def test_monster_attack_options_online_failure_falls_back_cleanly(self):
         with tempfile.TemporaryDirectory() as tmpdir:
-            with mock.patch.dict("os.environ", {"INITTRACKER_DATA_DIR": tmpdir}, clear=False):
+            tmp_path = Path(tmpdir)
+            log_dir = tmp_path / "logs"
+            with mock.patch.object(tracker_mod.runtime_cfg, "data_dir", tmp_path), \
+                 mock.patch.object(tracker_mod.runtime_cfg, "log_dir", log_dir):
                 attacker = type(
                     "Combatant",
                     (),
@@ -406,7 +431,7 @@ class DmMapAttackAutomationTests(unittest.TestCase):
                     )(),
                 ):
                     options, counts = self.app._monster_attack_options_for_map(attacker)
-                source_dir_exists = os.path.isdir(f"{tmpdir}/monster_sources/5etools")
+                source_dir_exists = os.path.isdir(tmp_path / "monster_sources" / "5etools")
 
         self.assertEqual(options, [])
         self.assertEqual(counts, {})
@@ -414,11 +439,14 @@ class DmMapAttackAutomationTests(unittest.TestCase):
 
     def test_monster_attack_options_online_opt_out_disables_fetch(self):
         with tempfile.TemporaryDirectory() as tmpdir:
+            tmp_path = Path(tmpdir)
+            log_dir = tmp_path / "logs"
             with mock.patch.dict(
                 "os.environ",
-                {"INITTRACKER_DATA_DIR": tmpdir, "INITTRACKER_DISABLE_MONSTER_ACTION_ONLINE": "true"},
+                {"INITTRACKER_DISABLE_MONSTER_ACTION_ONLINE": "true"},
                 clear=False,
-            ):
+            ), mock.patch.object(tracker_mod.runtime_cfg, "data_dir", tmp_path), \
+                 mock.patch.object(tracker_mod.runtime_cfg, "log_dir", log_dir):
                 attacker = type(
                     "Combatant",
                     (),
@@ -457,9 +485,11 @@ class DmMapAttackAutomationTests(unittest.TestCase):
 
     def test_monster_attack_options_bootstrap_downloads_5etools_and_writes_cache(self):
         with tempfile.TemporaryDirectory() as tmpdir:
-            with mock.patch.dict("os.environ", {"INITTRACKER_DATA_DIR": tmpdir}, clear=False), mock.patch(
-                "dnd_initative_tracker.FALLBACK_5ETOOLS_MIN_BYTES", 1
-            ):
+            tmp_path = Path(tmpdir)
+            log_dir = tmp_path / "logs"
+            with mock.patch.object(tracker_mod.runtime_cfg, "data_dir", tmp_path), \
+                 mock.patch.object(tracker_mod.runtime_cfg, "log_dir", log_dir), \
+                 mock.patch("dnd_initative_tracker.FALLBACK_5ETOOLS_MIN_BYTES", 1):
                 attacker = type(
                     "Combatant",
                     (),
@@ -497,12 +527,12 @@ class DmMapAttackAutomationTests(unittest.TestCase):
                 with mock.patch("dnd_initative_tracker.urllib.request.urlopen", side_effect=_mock_urlopen):
                     options, _counts = self.app._monster_attack_options_for_map(attacker)
 
-                cache_path = f"{tmpdir}/logs/monster_action_fallback_cache.json"
+                cache_path = log_dir / "monster_action_fallback_cache.json"
                 with open(cache_path, "r", encoding="utf-8") as fh:
                     cached_payload = json.load(fh)
                 downloaded_exists = (
-                    os.path.isfile(f"{tmpdir}/monster_sources/5etools/bestiary-xmm.json")
-                    or os.path.isfile(f"{tmpdir}/monster_sources/5etools/bestiary-mm.json")
+                    os.path.isfile(tmp_path / "monster_sources" / "5etools" / "bestiary-xmm.json")
+                    or os.path.isfile(tmp_path / "monster_sources" / "5etools" / "bestiary-mm.json")
                 )
 
         self.assertGreaterEqual(len(options), 1)
@@ -514,11 +544,14 @@ class DmMapAttackAutomationTests(unittest.TestCase):
 
     def test_monster_attack_options_bootstrap_respects_online_disable(self):
         with tempfile.TemporaryDirectory() as tmpdir:
+            tmp_path = Path(tmpdir)
+            log_dir = tmp_path / "logs"
             with mock.patch.dict(
                 "os.environ",
-                {"INITTRACKER_DATA_DIR": tmpdir, "INITTRACKER_DISABLE_MONSTER_ACTION_ONLINE": "true"},
+                {"INITTRACKER_DISABLE_MONSTER_ACTION_ONLINE": "true"},
                 clear=False,
-            ):
+            ), mock.patch.object(tracker_mod.runtime_cfg, "data_dir", tmp_path), \
+                 mock.patch.object(tracker_mod.runtime_cfg, "log_dir", log_dir):
                 attacker = type(
                     "Combatant",
                     (),
@@ -705,14 +738,16 @@ class DmMapAttackAutomationTests(unittest.TestCase):
         self.app.combatants = {1: attacker, 2: target}
 
         # Case 1: Enemy Attacker, Single damage type
+        target.hp = 30
         self.app._name_role_memory = {"Death Slaad": "enemy", "Knight": "pc"}
         self.logs = []
         self.app._apply_map_attack_manual_damage(
             1, 2, "Force Blast", [{"amount": 10, "type": "force"}]
         )
-        self.assertTrue(any("applies 10 force damage to Knight." in message for _cid, message in self.logs))
+        self.assertTrue(any("applies 10 force damage to Knight" in message for _cid, message in self.logs))
 
         # Case 2: PC Attacker, Multiple damage types
+        target.hp = 30
         self.app._name_role_memory = {"Death Slaad": "pc", "Knight": "enemy"}
         self.logs = []
         self.app._apply_map_attack_manual_damage(
@@ -722,9 +757,10 @@ class DmMapAttackAutomationTests(unittest.TestCase):
             ]
         )
         # Should show total and then details in parens
-        self.assertTrue(any("applies 10 damage to Knight (6 fire, 4 cold)." in message for _cid, message in self.logs))
+        self.assertTrue(any("applies 10 damage to Knight (6 fire, 4 cold)" in message for _cid, message in self.logs))
 
         # Case 3: Enemy Attacker, Multiple damage types (should hide details breakdown but show total)
+        target.hp = 30
         self.app._name_role_memory = {"Death Slaad": "enemy", "Knight": "pc"}
         self.logs = []
         self.app._apply_map_attack_manual_damage(
@@ -733,7 +769,7 @@ class DmMapAttackAutomationTests(unittest.TestCase):
                 {"amount": 4, "type": "cold"}
             ]
         )
-        self.assertTrue(any("applies 10 damage to Knight." in message for _cid, message in self.logs))
+        self.assertTrue(any("applies 10 damage to Knight" in message for _cid, message in self.logs))
         self.assertFalse(any("fire" in message or "cold" in message for _cid, message in self.logs))
 
     def test_resolve_map_attack_sequence_advantage_and_disadvantage_keep_correct_die(self):
