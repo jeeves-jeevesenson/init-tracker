@@ -43868,13 +43868,17 @@ class InitiativeTracker(base.InitiativeTracker):
             return 0
         return int(full_amount) // 2
 
-    def _monster_capability_damage_roll_packet(self, cap: Dict[str, Any]) -> Dict[str, Any]:
+    def _monster_capability_damage_roll_packet(self, cap: Dict[str, Any], actor_cid: Optional[int] = None) -> Dict[str, Any]:
         mechanics = cap.get("mechanics", {}) if isinstance(cap.get("mechanics"), dict) else {}
         desc = str(cap.get("desc") or "")
+        cap_id = cap.get("id")
         damage_rolls: List[Dict[str, Any]] = []
         total_fail = 0
         total_success = 0
-        for entry in mechanics.get("damage", []) if isinstance(mechanics.get("damage"), list) else []:
+
+        # Base damage entries
+        entries = mechanics.get("damage", []) if isinstance(mechanics.get("damage"), list) else []
+        for entry in entries:
             if not isinstance(entry, dict):
                 continue
             formula = entry.get("formula")
@@ -43892,8 +43896,46 @@ class InitiativeTracker(base.InitiativeTracker):
             )
             total_fail += int(roll)
             total_success += int(success_roll)
-        return {"damage_rolls": damage_rolls, "total_fail": int(total_fail), "total_success": int(total_success)}
 
+        # Apply modifiers if actor_cid is provided
+        if actor_cid is not None:
+            pending_mods = self._monster_modifier_state.get(int(actor_cid), [])
+            for mod in list(pending_mods):
+                m_mech = mod.get("mechanics", {})
+                eligible = m_mech.get("eligible_action_ids", [])
+                # If cap_id is known and not in eligible list, skip this mod
+                if cap_id and eligible and cap_id not in eligible:
+                    continue
+
+                db = m_mech.get("damage_bonus", {})
+                if db.get("mode") == "extra_weapon_die":
+                    count = int(db.get("count", 1))
+                    # Apply to first damage entry that looks like a weapon die
+                    applied = False
+                    for roll_entry in damage_rolls:
+                        extra_die = self._extract_extra_weapon_die(roll_entry["formula"])
+                        if extra_die:
+                            for _ in range(count):
+                                mod_roll = self._roll_monster_attack_formula(extra_die)
+                                mod_success = self._monster_capability_success_damage_amount(roll_entry.get("on_save", "half"), int(mod_roll), desc)
+                                damage_rolls.append({
+                                    "formula": extra_die,
+                                    "type": roll_entry["type"],
+                                    "on_save": roll_entry["on_save"],
+                                    "rolled": int(mod_roll),
+                                    "rolled_success": int(mod_success),
+                                    "modifier": True,
+                                    "modifier_name": mod.get("name")
+                                })
+                                total_fail += int(mod_roll)
+                                total_success += int(mod_success)
+                            applied = True
+                            break
+                    if not applied and damage_rolls:
+                        # Fallback: add to first entry anyway if we can't find a die
+                        pass
+
+        return {"damage_rolls": damage_rolls, "total_fail": int(total_fail), "total_success": int(total_success)}
     def _monster_capability_resolution_packet(
         self,
         *,
@@ -43903,7 +43945,7 @@ class InitiativeTracker(base.InitiativeTracker):
         damage_packet: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
         mechanics = cap.get("mechanics", {}) if isinstance(cap.get("mechanics"), dict) else {}
-        packet = dict(damage_packet or self._monster_capability_damage_roll_packet(cap))
+        packet = dict(damage_packet or self._monster_capability_damage_roll_packet(cap, actor_cid=int(actor_cid)))
         effects = mechanics.get("effects") if isinstance(mechanics.get("effects"), list) else []
         riders = mechanics.get("riders") if isinstance(mechanics.get("riders"), list) else []
         resource_key = f"{int(actor_cid)}:cap:{cap_id}"
@@ -44080,7 +44122,7 @@ class InitiativeTracker(base.InitiativeTracker):
             # 4. Resolve attack sequence
             if spend_key == "none":
                  # Return assisted resolution packet for preview
-                 damage_packet = self._monster_capability_damage_roll_packet(cap)
+                 damage_packet = self._monster_capability_damage_roll_packet(cap, actor_cid=int(normalized_actor_cid))
                  resolution_packet = self._monster_capability_resolution_packet(
                      cap=cap,
                      cap_id=cap_id,
@@ -44288,7 +44330,7 @@ class InitiativeTracker(base.InitiativeTracker):
         apply_effects = bool(payload.get("apply_effects"))
         damage_rolls = payload.get("damage_rolls")
         if not isinstance(damage_rolls, list):
-            damage_rolls = self._monster_capability_damage_roll_packet(cap).get("damage_rolls", [])
+            damage_rolls = self._monster_capability_damage_roll_packet(cap, actor_cid=int(normalized_actor_cid)).get("damage_rolls", [])
         effects = cap.get("mechanics", {}).get("effects", []) if isinstance(cap.get("mechanics", {}), dict) else []
         supported_effects = [
             eff for eff in effects
@@ -44338,6 +44380,15 @@ class InitiativeTracker(base.InitiativeTracker):
                 # Check per-child max
                 if child_state["completed"] >= child_state["max"]:
                     return {"ok": False, "error": f"Max attacks for {cap.get('name', cap_id)} reached ({child_state['completed']}/{child_state['max']})."}
+
+        # Clear modifiers if they apply to this action
+        pending_mods = self._monster_modifier_state.get(int(normalized_actor_cid), [])
+        for mod in list(pending_mods):
+            m_mech = mod.get("mechanics", {})
+            eligible = m_mech.get("eligible_action_ids", [])
+            if not eligible or cap_id in eligible:
+                if m_mech.get("clears_on") == "attack_resolution" or m_mech.get("consume_on") == "attack_resolution" or m_mech.get("clears_on") == "next_eligible_attack":
+                    pending_mods.remove(mod)
 
         results: List[Dict[str, Any]] = []
         for row in rows:

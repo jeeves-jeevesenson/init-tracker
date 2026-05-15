@@ -991,6 +991,8 @@
     function isPreviewableTargetAction(cap) {
       if (!cap || cap.executable === false) return false;
       const type = (cap.action_type || "").toLowerCase();
+      // Modifiers are executable but not target-previewable on map
+      if (type === "modifier") return false;
       if (type.includes("attack") || type.includes("melee") || type.includes("ranged")) return true;
       const mode = (cap.target_mode || "").toLowerCase();
       if (mode.includes("creature") || mode.includes("target")) return true;
@@ -1061,6 +1063,45 @@
       draw();
       const actor = (state?.combatants || []).find(c => String(c.cid) === String(state?.active_cid));
       renderActionPanel(actor, capabilitySummary);
+    }
+
+    async function activateModifier(id) {
+      if (localResolutionInFlight || !state) return;
+      const actorCid = state.active_cid;
+      localResolutionInFlight = true;
+      draw();
+      try {
+        const resp = await fetch(`/api/dm/monster-capabilities/${actorCid}/execute`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            capability_id: id
+          })
+        });
+        const rawData = await resp.json();
+        const data = normalizeLocalExecutionResult(rawData);
+        if (!data.ok) throw new Error(data.error || "Failed to activate modifier.");
+
+        showTransientStatus(data.status || "Modifier activated.", 'var(--heal)');
+
+        if (rawData.snapshot) {
+          state = rawData.snapshot;
+          draw();
+        }
+
+        // Refresh capabilities to show "Active" badge
+        capabilityActorCid = null; // Force refresh
+        const actor = (state.combatants || []).find(c => String(c.cid) === String(state.active_cid));
+        await fetchCapabilitiesForActiveActor(actor);
+
+      } catch (err) {
+        console.error('Activate modifier error:', err);
+        showTransientStatus(err.message, 'var(--danger)');
+      } finally {
+        localResolutionInFlight = false;
+        const actor = (state?.combatants || []).find(c => String(c.cid) === String(state?.active_cid));
+        renderActionPanel(actor, capabilitySummary);
+      }
     }
 
     async function prepareLocalResolutionPreview() {
@@ -1148,13 +1189,14 @@
           })
         });
         const rawData = await resp.json();
-        if (!rawData.ok) throw new Error(rawData.error || "Failed to start sequence.");
+        const data = normalizeLocalExecutionResult(rawData);
+        if (!data.ok) throw new Error(data.error || "Failed to start sequence.");
 
-        if (rawData.resolution === 'assisted_sequence') {
-          localSequencePacket = rawData;
+        if (data.resolution === 'assisted_sequence') {
+          localSequencePacket = rawData.result;
           localSequenceCompletedSteps = {};
-          if (rawData.steps) {
-            rawData.steps.forEach(s => {
+          if (localSequencePacket.steps) {
+            localSequencePacket.steps.forEach(s => {
               if (s.completed !== undefined) {
                 localSequenceCompletedSteps[String(s.action_id)] = s.completed;
               }
@@ -1788,6 +1830,7 @@
             const isManual = selected.executable === false;
             const previewable = isPreviewableTargetAction(selected);
             const isComposite = selected.action_type === 'composite';
+            const isModifier = selected.action_type === 'modifier';
 
             if (isComposite && !localSequencePacket) {
               summaryHtml += `
@@ -1795,6 +1838,15 @@
                   <button class="workspace-link" style="width:100%; padding:8px; font-weight:bold; background:var(--accent); color:var(--bg)"
                           onclick="startSequence('${esc(selected.id)}')" ${localResolutionInFlight ? 'disabled' : ''}>
                     Start ${esc(selected.name)} Sequence
+                  </button>
+                </div>
+              `;
+            } else if (isModifier) {
+              summaryHtml += `
+                <div style="margin-top:12px; border-top:1px solid rgba(106,169,255,0.3); padding-top:8px;">
+                  <button class="workspace-link" style="width:100%; padding:8px; font-weight:bold; background:var(--accent); color:var(--bg)"
+                          onclick="activateModifier('${esc(selected.id)}')" ${localResolutionInFlight ? 'disabled' : ''}>
+                    ${selected.modifier_active ? 'Re-Arm Modifier' : 'Arm Modifier'}
                   </button>
                 </div>
               `;
@@ -1816,7 +1868,7 @@
             } else {
               summaryHtml += `
                 <div class="actor-meta" style="margin-top:4px; font-style:italic;">
-                  Targeting and execution are deferred in this pass.
+                  Select a valid target or action.
                 </div>
               `;
             }
@@ -1895,7 +1947,7 @@
         if (!primaryKeys.has(conf.key)) return;
         const allItems = groups[conf.key];
         if (!allItems || allItems.length === 0) return;
-        
+
         // Only show truly executable items in the primary tray.
         const execItems = allItems.filter(item => item.executable !== false);
         if (execItems.length === 0) return;

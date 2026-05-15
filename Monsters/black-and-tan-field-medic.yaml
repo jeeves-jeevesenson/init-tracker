@@ -1,0 +1,44 @@
+name: Black and Tan Field Medic
+size: Medium
+type: Humanoid
+alignment: Lawful Evil
+initiative: '+3'
+ac: '15'
+hp: 78
+speed:
+  Normal: 30 ft.
+challenge_rating: '5'
+abilities:
+  Str: 10
+  Dex: 16
+  Con: 14
+  Int: 16
+  Wis: 16
+  Cha: 12
+saving_throws:
+  Dex: 6
+  Int: 6
+  Wis: 6
+skills:
+  Medicine: 9
+  Perception: 6
+  Investigation: 6
+senses: Passive Perception 16
+languages:
+- Common
+actions:
+- name: Multiattack
+  desc: "The Medic makes two .45 Pistol attacks, or makes one .45 Pistol attack and uses Field Treatment."
+- name: .45 Pistol
+  desc: "{@atk rw} {@hit 6} to hit, range 40/120 ft., one target. {@h}9 ({@damage 1d10 + 3}) piercing damage. Loud. Magazine 8."
+- name: Field Treatment
+  desc: "One allied Black and Tan within 5 feet regains 14 (2d8 + 5) HP. A creature can benefit from this action only once per encounter."
+- name: Smoke Canister
+  desc: "The Medic throws a smoke canister to a point within 30 feet. A 10-foot-radius area becomes Heavily Obscured until the end of the Medic’s next turn."
+traits:
+- name: Vandergraff Drill
+  desc: "If this creature starts its turn within 30 feet of an allied Black and Tan officer it can see or hear, it gains +1 to attack rolls until the start of its next turn."
+- name: Baton and Boot
+  desc: "This creature has Advantage on attack rolls against a Prone creature within 5 feet of it."
+- name: Fire Discipline
+  desc: "This creature does not expend extra ammunition on a missed attack unless it used Controlled Burst, Automatic Sweep, or Suppressive Fire."

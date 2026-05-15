@@ -1,0 +1,55 @@
+name: Black and Tan Major
+size: Medium
+type: Humanoid
+alignment: Lawful Evil
+initiative: '+4'
+ac: '18'
+hp: 165
+speed:
+  Normal: 30 ft.
+challenge_rating: '9'
+abilities:
+  Str: 16
+  Dex: 18
+  Con: 18
+  Int: 17
+  Wis: 16
+  Cha: 19
+saving_throws:
+  Str: 7
+  Dex: 8
+  Con: 8
+  Wis: 7
+  Cha: 8
+skills:
+  Intimidation: 12
+  Insight: 7
+  Perception: 7
+  Persuasion: 8
+senses: Passive Perception 17
+languages:
+- Common
+actions:
+- name: Multiattack
+  desc: "The Major makes three attacks, using Armalite Rifle, Engraved .45 Pistol, or Officer Saber in any combination."
+- name: Armalite Rifle
+  desc: "{@atk rw} {@hit 8} to hit, range 120/360 ft., one target. {@h}11 ({@damage 1d12 + 4}) piercing damage. Loud. Magazine 20."
+- name: Engraved .45 Pistol
+  desc: "{@atk rw} {@hit 8} to hit, range 40/120 ft., one target. {@h}10 ({@damage 1d10 + 4}) piercing damage. Loud. Magazine 8."
+- name: Officer Saber
+  desc: "{@atk mw} {@hit 8} to hit, reach 5 ft., one target. {@h}9 ({@damage 1d10 + 4}) slashing damage."
+- name: Controlled Burst
+  desc: "Manual/Assisted: Spends 3 ammo, adds one extra weapon die on hit. Can be used once per turn."
+- name: Make an Example
+  desc: "One creature within 90 feet that can hear the Major must make a DC 16 Wisdom saving throw. On a failed save, the target is Frightened of the Major until the end of its next turn."
+traits:
+- name: Occupation Commander
+  desc: "Allied Black and Tans within 60 feet who can see or hear the Major gain +2 to morale checks and Wisdom saving throws against being Frightened."
+- name: Protected by Rank
+  desc: "The first time each round that the Major is hit by an attack while within 5 feet of an allied Black and Tan, the ally can choose to take half the damage instead."
+- name: Vandergraff Drill
+  desc: "If this creature starts its turn within 30 feet of an allied Black and Tan officer it can see or hear, it gains +1 to attack rolls until the start of its next turn."
+- name: Baton and Boot
+  desc: "This creature has Advantage on attack rolls against a Prone creature within 5 feet of it."
+- name: Fire Discipline
+  desc: "This creature does not expend extra ammunition on a missed attack unless it used Controlled Burst, Automatic Sweep, or Suppressive Fire."

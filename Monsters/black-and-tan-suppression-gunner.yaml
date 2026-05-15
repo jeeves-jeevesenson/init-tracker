@@ -1,0 +1,49 @@
+name: Black and Tan Suppression Gunner
+size: Medium
+type: Humanoid
+alignment: Lawful Evil
+initiative: '+3'
+ac: '16'
+hp: 105
+speed:
+  Normal: 25 ft.
+challenge_rating: '6'
+abilities:
+  Str: 16
+  Dex: 16
+  Con: 18
+  Int: 10
+  Wis: 13
+  Cha: 9
+saving_throws:
+  Dex: 6
+  Con: 7
+  Wis: 4
+skills:
+  Athletics: 6
+  Perception: 4
+senses: Passive Perception 14
+languages:
+- Common
+actions:
+- name: Multiattack
+  desc: "The Gunner makes two Armalite attacks."
+- name: Armalite Rifle
+  desc: "{@atk rw} {@hit 6} to hit, range 120/360 ft., one target. {@h}10 ({@damage 2d6 + 3}) piercing damage. Loud. Magazine 20."
+- name: Controlled Burst
+  desc: "Manual/Assisted: Spends 3 ammo, adds one extra weapon die on hit. Can be used once per turn."
+- name: Suppressive Fire
+  desc: "The Gunner spends 10 ammo and chooses a 10-foot cube within 120 feet. Until the start of the Gunner’s next turn, hostile creatures that start their turn in the cube or enter it must make a DC 14 Wisdom saving throw. On a failed save, the creature is Suppressed until the end of its turn."
+- name: Automatic Sweep
+  desc: "The Gunner spends 10 ammo and chooses a 15-foot cone or 30-foot line within 120 feet. Each creature in the area makes a DC 14 Dexterity saving throw. On a failed save, a creature takes 10 (2d6 + 3) piercing damage."
+traits:
+- name: Set Up Gun
+  desc: "If the Gunner is Braced, it ignores the Recoil property of its Armalite weapon."
+- name: Loudest Thing in the Room
+  desc: "After the Gunner uses Suppressive Fire or Automatic Sweep, creatures have Advantage on Wisdom (Perception) checks to locate the Gunner until the start of its next turn."
+- name: Vandergraff Drill
+  desc: "If this creature starts its turn within 30 feet of an allied Black and Tan officer it can see or hear, it gains +1 to attack rolls until the start of its next turn."
+- name: Baton and Boot
+  desc: "This creature has Advantage on attack rolls against a Prone creature within 5 feet of it."
+- name: Fire Discipline
+  desc: "This creature does not expend extra ammunition on a missed attack unless it used Controlled Burst, Automatic Sweep, or Suppressive Fire."

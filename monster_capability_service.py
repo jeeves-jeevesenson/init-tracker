@@ -41,10 +41,10 @@ class MonsterCapabilityService:
         self.spells_by_slug = {}
         if not os.path.exists(self.spells_dir):
             return
-            
+
         pattern = os.path.join(self.spells_dir, "**", "*.yaml")
         files = glob.glob(pattern, recursive=True)
-        
+
         for f in sorted(files):
             try:
                 with open(f, "r", encoding="utf-8") as stream:
@@ -275,7 +275,7 @@ class MonsterCapabilityService:
                 bonus = mechanics.get("attack_bonus")
                 if bonus is not None:
                     summary_parts.append(f"+{bonus} to hit")
-                
+
                 dmg = mechanics.get("damage")
                 if dmg and isinstance(dmg, list):
                     dmg_parts = []
@@ -284,11 +284,11 @@ class MonsterCapabilityService:
                             dmg_parts.append(f"{d['formula']} {d.get('type', '')}")
                     if dmg_parts:
                         summary_parts.append("/".join(dmg_parts))
-                
+
                 reach = mechanics.get("reach")
                 if reach:
                     summary_parts.append(f"reach {reach}ft")
-                
+
                 rng = mechanics.get("range")
                 if rng:
                     long_rng = mechanics.get("long_range")
@@ -296,13 +296,13 @@ class MonsterCapabilityService:
                         summary_parts.append(f"range {rng}/{long_rng}ft")
                     else:
                         summary_parts.append(f"range {rng}ft")
-            
+
             elif action_type == "save_ability":
                 ability = mechanics.get("ability", "STR").upper()
                 dc = mechanics.get("dc")
                 if dc:
                     summary_parts.append(f"DC {dc} {ability}")
-                
+
                 # Show damage for save abilities (e.g. area effects)
                 dmg = mechanics.get("damage")
                 if dmg and isinstance(dmg, list):
@@ -312,7 +312,7 @@ class MonsterCapabilityService:
                             dmg_parts.append(f"{d['formula']} {d.get('type', '')}")
                     if dmg_parts:
                         summary_parts.append("/".join(dmg_parts))
-            
+
             elif action_type == "modifier":
                 mod = mechanics.get("modifier", {})
                 ammo = mod.get("ammo_cost")
@@ -334,7 +334,7 @@ class MonsterCapabilityService:
                     for eff in effects:
                         if isinstance(eff, dict) and eff.get("condition"):
                             summary_parts.append(f"Effect: {eff['condition']}")
-                
+
                 uses = mechanics.get("uses")
                 if uses and isinstance(uses, dict):
                     max_uses = uses.get("max")
@@ -373,7 +373,7 @@ class MonsterCapabilityService:
                     instructions.append(warning)
                 else:
                     instructions.append("Manual adjudication required.")
-            
+
             if "grapple" in desc.lower():
                 instructions.append("Apply Grappled condition manually in /dm if hit.")
             if "prone" in desc.lower():
@@ -412,7 +412,7 @@ class MonsterCapabilityService:
                                         # Very basic extraction for UI
                                         resolved["has_damage"] = True
                         resolved_spells.append(resolved)
-                    
+
                     resolved_lst = dict(lst)
                     resolved_lst["resolved_spells"] = resolved_spells
                     resolved_lists.append(resolved_lst)
@@ -421,7 +421,7 @@ class MonsterCapabilityService:
             # Resolve composite children
             if action_type == "composite" and "composite" in mechanics:
                 comp_data = mechanics["composite"]
-                
+
                 # Default values for sequence
                 sequence_kind = mechanics.get("sequence_kind", "fixed_children")
                 choose_n = mechanics.get("choose_n")
@@ -433,7 +433,7 @@ class MonsterCapabilityService:
                     children = comp_data.get("children", [])
                     sequence_kind = comp_data.get("sequence_kind", sequence_kind)
                     choose_n = comp_data.get("choose_n", choose_n)
-                
+
                 # Ensure sequence_kind is one of the supported values or default to fixed_children
                 if sequence_kind not in ["fixed_children", "choose_n"]:
                     # Normalize unknown to fixed_children for now

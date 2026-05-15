@@ -1,0 +1,54 @@
+name: Black and Tan Captain
+size: Medium
+type: Humanoid
+alignment: Lawful Evil
+initiative: '+4'
+ac: '18'
+hp: 145
+speed:
+  Normal: 30 ft.
+challenge_rating: '8'
+abilities:
+  Str: 15
+  Dex: 18
+  Con: 18
+  Int: 16
+  Wis: 15
+  Cha: 18
+saving_throws:
+  Dex: 7
+  Con: 7
+  Wis: 5
+  Cha: 7
+skills:
+  Intimidation: 10
+  Insight: 5
+  Perception: 5
+  Persuasion: 7
+senses: Passive Perception 15
+languages:
+- Common
+actions:
+- name: Multiattack
+  desc: "The Captain makes three attacks, using Armalite Rifle, .45 Pistol, or Officer Saber in any combination."
+- name: Armalite Rifle
+  desc: "{@atk rw} {@hit 7} to hit, range 120/360 ft., one target. {@h}11 ({@damage 1d12 + 4}) piercing damage. Loud. Magazine 20."
+- name: .45 Pistol
+  desc: "{@atk rw} {@hit 7} to hit, range 40/120 ft., one target. {@h}10 ({@damage 1d10 + 4}) piercing damage. Loud. Magazine 8."
+- name: Officer Saber
+  desc: "{@atk mw} {@hit 7} to hit, reach 5 ft., one target. {@h}8 ({@damage 1d8 + 4}) slashing damage."
+- name: Controlled Burst
+  desc: "Manual/Assisted: Spends 3 ammo, adds one extra weapon die on hit. Can be used once per turn."
+- name: Condemn the Target
+  desc: "The Captain chooses one creature it can see within 90 feet. Until the start of the Captain’s next turn, the first allied Black and Tan to hit that target deals an extra 10 (3d6) damage."
+traits:
+- name: Command Net
+  desc: "While the Captain is conscious and holding or wearing a command radio, Black and Tans within 120 feet ignore the first failed morale check they make."
+- name: Hard Target
+  desc: "If the Captain is behind Half Cover or better, ranged attacks against the Captain do not gain Advantage unless the attacker is within 30 feet."
+- name: Vandergraff Drill
+  desc: "If this creature starts its turn within 30 feet of an allied Black and Tan officer it can see or hear, it gains +1 to attack rolls until the start of its next turn."
+- name: Baton and Boot
+  desc: "This creature has Advantage on attack rolls against a Prone creature within 5 feet of it."
+- name: Fire Discipline
+  desc: "This creature does not expend extra ammunition on a missed attack unless it used Controlled Burst, Automatic Sweep, or Suppressive Fire."

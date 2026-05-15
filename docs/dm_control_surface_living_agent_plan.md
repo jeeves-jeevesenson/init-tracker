@@ -1,5 +1,13 @@
 # DM Control Surface Redesign — Living Agent Plan
 
+> **Rescue Note (2026-05-14):**
+> Previous pass reports (Pass 3D/3E) were found to be misaligned with actual live behavior in `/dmcontrol`.
+> Specific critical paths have been rescued:
+> - Multiattack Start Sequence response wrapper fixed (was non-functional in UI).
+> - Controlled Burst modifier now has an "Arm" UI path and correctly integrates with the resolution modal/apply logic.
+> - Full Black and Tan roster (Captain, Lieutenant, Major, Shield Trooper, Suppression Gunner, Field Medic) added to `Monsters/` to enable matching with capability overlays.
+> - Ammo/Jam tracking remains "Assisted/Manual" in `/dmcontrol` (manual tracking reminder shown).
+
 Version: 2026-05-06
 Status: Living planning and execution document
 Recommended repo path: `docs/dm_control_surface_living_agent_plan.md`

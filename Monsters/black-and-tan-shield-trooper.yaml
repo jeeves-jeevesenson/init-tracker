@@ -1,0 +1,48 @@
+name: Black and Tan Shield Trooper
+size: Medium
+type: Humanoid
+alignment: Lawful Evil
+initiative: '+2'
+ac: '19'
+hp: 88
+speed:
+  Normal: 25 ft.
+challenge_rating: '5'
+abilities:
+  Str: 18
+  Dex: 14
+  Con: 16
+  Int: 10
+  Wis: 12
+  Cha: 11
+saving_throws:
+  Str: 7
+  Con: 6
+  Wis: 4
+skills:
+  Athletics: 7
+  Intimidation: 3
+  Perception: 4
+senses: Passive Perception 14
+languages:
+- Common
+actions:
+- name: Multiattack
+  desc: "The Shield Trooper makes two attacks, using .45 Pistol, Baton, or Shield Bash in any combination."
+- name: .45 Pistol
+  desc: "{@atk rw} {@hit 5} to hit, range 40/120 ft., one target. {@h}8 ({@damage 1d10 + 2}) piercing damage. Loud. Magazine 8."
+- name: Baton
+  desc: "{@atk mw} {@hit 7} to hit, reach 5 ft., one target. {@h}8 ({@damage 1d8 + 4}) bludgeoning damage."
+- name: Shield Bash
+  desc: "{@atk mw} {@hit 7} to hit, reach 5 ft., one target. {@h}7 ({@damage 1d6 + 4}) bludgeoning damage, and the target must succeed on a DC 15 Strength saving throw or be pushed 10 feet or knocked Prone."
+traits:
+- name: Shield Wall
+  desc: "The Shield Trooper counts as Half Cover for one allied creature directly behind it."
+- name: Heavy Shield
+  desc: "The Shield Trooper has Disadvantage on Dexterity (Stealth) checks."
+- name: Vandergraff Drill
+  desc: "If this creature starts its turn within 30 feet of an allied Black and Tan officer it can see or hear, it gains +1 to attack rolls until the start of its next turn."
+- name: Baton and Boot
+  desc: "This creature has Advantage on attack rolls against a Prone creature within 5 feet of it."
+- name: Fire Discipline
+  desc: "This creature does not expend extra ammunition on a missed attack unless it used Controlled Burst, Automatic Sweep, or Suppressive Fire."
