@@ -4571,7 +4571,12 @@ class LanController:
                     is_pc = bool(getattr(c, "is_pc", False))
                     role = str(role_memory.get(name, "enemy") or "enemy").strip().lower()
                     if not is_pc and role == "enemy":
-                        summary = svc.summarize_capabilities_for_ui(int(cid), c)
+                        summary = svc.summarize_capabilities_for_ui(
+                            int(cid),
+                            c,
+                            resource_state=self.app._monster_resource_state,
+                            pending_modifiers=self.app._monster_modifier_state.get(int(cid))
+                        )
                         if summary.get("matched"):
                             results.append(summary)
                 return {
@@ -4591,7 +4596,12 @@ class LanController:
                 if not combatant:
                     raise HTTPException(status_code=404, detail="Combatant not found.")
                 svc = self._ensure_monster_capabilities()
-                summary = svc.summarize_capabilities_for_ui(int(cid), combatant)
+                summary = svc.summarize_capabilities_for_ui(
+                    int(cid),
+                    combatant,
+                    resource_state=self.app._monster_resource_state,
+                    pending_modifiers=self.app._monster_modifier_state.get(int(cid))
+                )
                 # Inject resource status
                 for group in summary.get("groups", {}).values():
                     for cap in group:
@@ -11282,6 +11292,10 @@ class InitiativeTracker(base.InitiativeTracker):
     def _next_turn(self) -> None:
         self._monster_sequence_state.clear()
         self._monster_modifier_state.clear()
+        # Clear mod_used resource state
+        keys_to_del = [k for k in self._monster_resource_state.keys() if ":mod_used:" in k]
+        for k in keys_to_del:
+            del self._monster_resource_state[k]
         self._normalize_summons_shared_turn_state()
         ordered = self._display_order()
         if not ordered:
@@ -30009,7 +30023,7 @@ class InitiativeTracker(base.InitiativeTracker):
                 if int(getattr(target, "hp", 0) or 0) <= 0:
                     target_removed = True
                     break
-                
+
                 # Identify if any active modifier applies to this attack
                 active_mod = None
                 for mod in list(pending_mods):
@@ -30033,10 +30047,10 @@ class InitiativeTracker(base.InitiativeTracker):
                 auto_miss = kept_roll == 1
                 total_to_hit = int(kept_roll) + int(block["to_hit"])
                 hit = bool(not auto_miss and (critical or total_to_hit >= int(target_ac)))
-                
+
                 mod_note = f" ({active_mod.get('name')})" if active_mod else ""
                 attack_prefix = f"{attacker.name} {block['name']}{mod_note} attack {attack_index + 1}/{int(block['count'])}"
-                
+
                 if not hit:
                     block_misses += 1
                     if hide_enemy_details:
@@ -30047,7 +30061,7 @@ class InitiativeTracker(base.InitiativeTracker):
                             f"{attack_prefix}: misses {target_name}{nat_note} ({dice_text} + {int(block['to_hit'])} = {total_to_hit} vs AC {target_ac}).",
                             cid=int(target_cid),
                         )
-                    
+
                     # Handle Jam Risk even on a miss
                     if auto_miss and active_mod and active_mod.get("mechanics", {}).get("jam_risk") == "natural_1":
                         self._log(f"*** JAMMED! *** {attacker.name}'s weapon jammed on a natural 1.", cid=int(attacker_cid))
@@ -30065,13 +30079,13 @@ class InitiativeTracker(base.InitiativeTracker):
                             f"{attack_prefix}: hits {target_name}{crit_note} ({dice_text} + {int(block['to_hit'])} = {total_to_hit} vs AC {target_ac}).",
                             cid=int(target_cid),
                         )
-                    
+
                     if active_mod:
                         if critical:
                             crits_modified += 1
                         else:
                             hits_modified += 1
-                
+
                 # Clear modifier if it's "next_eligible_attack"
                 if active_mod and active_mod.get("mechanics", {}).get("clears_on") == "next_eligible_attack":
                     if mod in pending_mods:
@@ -30092,7 +30106,7 @@ class InitiativeTracker(base.InitiativeTracker):
                         damage_rolls_normal.append({"formula": formula, "type": dtype, "count": int(normal_hits)})
                     if int(block_crits) > 0:
                         damage_rolls_crit.append({"formula": formula, "type": dtype, "count": int(block_crits)})
-                    
+
                     # Apply modifier damage bonus (extra dice)
                     if hits_modified > 0 or crits_modified > 0:
                         extra_die = self._extract_extra_weapon_die(formula)
@@ -43981,6 +43995,33 @@ class InitiativeTracker(base.InitiativeTracker):
         )
         return packet
 
+    def _monster_capability_ensure_ammo_state(self, actor_cid: int, cap: Dict[str, Any]) -> None:
+        """Ensure ammo state exists for a firearm capability."""
+        cap_id = cap.get("id")
+        mechanics = cap.get("mechanics", {})
+        mag_capacity = mechanics.get("magazine_capacity")
+        if mag_capacity is None:
+            return
+
+        current_key = f"{actor_cid}:ammo:{cap_id}:current"
+        if current_key not in self._monster_resource_state:
+            self._monster_resource_state[current_key] = mag_capacity
+            self._monster_resource_state[f"{actor_cid}:ammo:{cap_id}:max"] = mag_capacity
+
+            # Seed reserve if not present
+            ammo_type = mechanics.get("ammo_type")
+            if ammo_type:
+                reserve_key = f"{actor_cid}:ammo:{ammo_type}:reserve_mags"
+                if reserve_key not in self._monster_resource_state:
+                    # Default reserve based on type/monster
+                    actor = self.combatants.get(actor_cid)
+                    slug = str(getattr(actor, "monster_slug", "") or "").lower()
+
+                    if ammo_type == "5.56":
+                        # Bandolier: 6 mags
+                        self._monster_resource_state[reserve_key] = 6
+                    # .45 pistol reserves are deferred/unknown unless explicitly defined
+
     def _dm_monster_capability_execute(self, *, actor_cid: Any, payload: Dict[str, Any]) -> Dict[str, Any]:
         """Execute a monster capability by ID, with optional target."""
         actor, error, normalized_actor_cid = self._dm_validate_monster_actor_for_turn(actor_cid)
@@ -44004,6 +44045,9 @@ class InitiativeTracker(base.InitiativeTracker):
         if not cap:
             return {"ok": False, "error": f"Capability {cap_id} not found."}
 
+        # Ensure ammo state if needed
+        self._monster_capability_ensure_ammo_state(int(normalized_actor_cid), cap)
+
         # Check if jammed
         if self._monster_resource_state.get(f"{normalized_actor_cid}:jammed:{cap_id}"):
             return {"ok": False, "error": f"{cap.get('name')} is jammed."}
@@ -44011,12 +44055,29 @@ class InitiativeTracker(base.InitiativeTracker):
         action_type = cap.get("action_type")
         mechanics = cap.get("mechanics", {})
 
+        # Check ammo for firearm attacks
+        if action_type in ("melee_attack", "ranged_attack"):
+             ammo_current = self._monster_resource_state.get(f"{normalized_actor_cid}:ammo:{cap_id}:current")
+             # Calculate required ammo (including modifiers)
+             required_ammo = 1
+             pending_mods = self._monster_modifier_state.get(int(normalized_actor_cid), [])
+             for mod in pending_mods:
+                 m_mech = mod.get("mechanics", {})
+                 eligible = m_mech.get("eligible_action_ids", [])
+                 if not eligible or cap_id in eligible:
+                     mod_ammo = int(m_mech.get("ammo_cost") or 0)
+                     if mod_ammo > required_ammo:
+                         required_ammo = mod_ammo
+
+             if ammo_current is not None and int(ammo_current) < required_ammo:
+                 return {"ok": False, "error": f"{cap.get('name')} needs {required_ammo} ammo (have {ammo_current}). Reload, matey."}
+
         # Check if composite first to allow assisted_sequence even if executable=false
         if action_type == "composite":
              # Assisted sequence
              resolved_children = []
              comp_data = mechanics.get("composite", [])
-             
+
              # Default values for sequence
              sequence_kind = mechanics.get("sequence_kind", "fixed_children")
              choose_n = mechanics.get("choose_n")
@@ -44028,7 +44089,7 @@ class InitiativeTracker(base.InitiativeTracker):
                  children = comp_data.get("children", [])
                  sequence_kind = comp_data.get("sequence_kind", sequence_kind)
                  choose_n = comp_data.get("choose_n", choose_n)
-             
+
              if sequence_kind not in ["fixed_children", "choose_n"]:
                  sequence_kind = "fixed_children"
 
@@ -44132,6 +44193,53 @@ class InitiativeTracker(base.InitiativeTracker):
                     return {"ok": False, "error": spend_error or "No turn resource available."}
 
             # 4. Resolve attack sequence
+            # Calculate ammo cost and mark once_per_turn modifiers
+            ammo_spent = 1
+            mods_to_clear = []
+            pending_mods = self._monster_modifier_state.get(int(normalized_actor_cid), [])
+            for mod in pending_mods:
+                m_mech = mod.get("mechanics", {})
+                eligible = m_mech.get("eligible_action_ids", [])
+                if not eligible or cap_id in eligible:
+                    mod_ammo = int(m_mech.get("ammo_cost") or 0)
+                    if mod_ammo > ammo_spent:
+                        ammo_spent = mod_ammo
+
+                    if m_mech.get("limit") == "once_per_turn":
+                        self._monster_resource_state[f"{normalized_actor_cid}:mod_used:{mod['capability_id']}"] = True
+
+                    if m_mech.get("clears_on") == "attack_resolution" or m_mech.get("consume_on") == "attack_resolution" or m_mech.get("clears_on") == "next_eligible_attack":
+                        mods_to_clear.append(mod)
+
+            normalized_blocks = [{
+                "attack_key": cap_id,
+                "name": cap.get("name"),
+                "to_hit": mechanics.get("attack_bonus"),
+                "count": 1,
+                "roll_mode": roll_mode,
+                "damage_entries": damage_entries
+            }]
+
+            result = self._resolve_map_attack_sequence(
+                int(normalized_actor_cid),
+                int(normalized_target_cid),
+                normalized_blocks
+            )
+
+            if not bool(result.get("ok")):
+                return {"ok": False, "error": str(result.get("reason") or "Failed to resolve monster attacks.")}
+
+            # Spend the ammo
+            ammo_current_key = f"{normalized_actor_cid}:ammo:{cap_id}:current"
+            if ammo_current_key in self._monster_resource_state:
+                current = self._monster_resource_state[ammo_current_key]
+                self._monster_resource_state[ammo_current_key] = max(0, current - ammo_spent)
+
+            # Clear consumed modifiers
+            for mod in mods_to_clear:
+                if mod in pending_mods:
+                    pending_mods.remove(mod)
+
             if spend_key == "none":
                  # Return assisted resolution packet for preview
                  damage_packet = self._monster_capability_damage_roll_packet(cap, actor_cid=int(normalized_actor_cid))
@@ -44171,24 +44279,6 @@ class InitiativeTracker(base.InitiativeTracker):
                          res["remaining_budget"] = active_seq["choose_n"] - active_seq["total_completed"]
                  return res
 
-            normalized_blocks = [{
-                "attack_key": cap_id,
-                "name": cap.get("name"),
-                "to_hit": mechanics.get("attack_bonus"),
-                "count": 1,
-                "roll_mode": roll_mode,
-                "damage_entries": damage_entries
-            }]
-
-            result = self._resolve_map_attack_sequence(
-                int(normalized_actor_cid),
-                int(normalized_target_cid),
-                normalized_blocks
-            )
-
-            if not bool(result.get("ok")):
-                return {"ok": False, "error": str(result.get("reason") or "Failed to resolve monster attacks.")}
-
             # 5. Mark as used if it was a recharge ability
             if recharge:
                 self._monster_resource_state[f"{normalized_actor_cid}:cap:{cap_id}"] = False
@@ -44212,13 +44302,41 @@ class InitiativeTracker(base.InitiativeTracker):
              if not mod_data:
                  return {"ok": False, "error": "Invalid modifier mechanics."}
 
+             # Check if already active (allow disarm/toggle)
+             existing = self._monster_modifier_state.get(int(normalized_actor_cid), [])
+             for m in list(existing):
+                 if m["capability_id"] == cap_id:
+                     existing.remove(m)
+                     return {
+                         "ok": True,
+                         "resolution": "modifier_deactivated",
+                         "capability_id": cap_id,
+                         "status": f"{cap.get('name')} disarmed."
+                     }
+
              # Check limit
              limit = mod_data.get("limit")
              if limit == "once_per_turn":
                  # Check if this actor already used this specific modifier this turn
-                 existing = self._monster_modifier_state.get(int(normalized_actor_cid), [])
-                 if any(m["capability_id"] == cap_id for m in existing):
+                 # (This assumes we track usage elsewhere; for now, we just check if it's already pending)
+                 # Wait, once_per_turn usually means it can't be RE-ARMED if it was already CONSUMED.
+                 if self._monster_resource_state.get(f"{normalized_actor_cid}:mod_used:{cap_id}"):
                      return {"ok": False, "error": f"{cap.get('name')} already used this turn."}
+
+             # Check ammo for arming if applicable
+             ammo_cost = int(mod_data.get("ammo_cost") or 0)
+             if ammo_cost > 0:
+                 eligible = mod_data.get("eligible_action_ids", [])
+                 if eligible:
+                     target_weapon_id = eligible[0]
+                     # Ensure we have ammo state for the target weapon
+                     target_cap = next((c for c in data.get("capabilities", []) if c.get("id") == target_weapon_id), None)
+                     if target_cap:
+                         self._monster_capability_ensure_ammo_state(int(normalized_actor_cid), target_cap)
+
+                     ammo_current = self._monster_resource_state.get(f"{normalized_actor_cid}:ammo:{target_weapon_id}:current")
+                     if ammo_current is not None and int(ammo_current) < ammo_cost:
+                         return {"ok": False, "error": f"Not enough ammo for {cap.get('name')} (need {ammo_cost}, have {ammo_current})."}
 
              # Store pending modifier
              pending = {
@@ -44238,7 +44356,49 @@ class InitiativeTracker(base.InitiativeTracker):
                  "capability_id": cap_id,
                  "name": cap.get("name"),
                  "desc": cap.get("desc"),
-                 "status": f"{cap.get('name')} active for next eligible attack."
+                 "status": f"{cap.get('name')} armed for next eligible attack."
+             }
+
+        elif action_type == "firearm_reload":
+             # 1. Spend resource
+             spend_key = self._dm_normalize_turn_spend(spend, default="bonus", allow_none=True)
+             if spend_key != "none":
+                 spent_ok, spend_error = self._dm_spend_combatant_turn_resource(actor, spend_key)
+                 if not spent_ok:
+                     return {"ok": False, "error": spend_error or "No turn resource available."}
+
+             # 2. Logic to reload
+             target_cap_id = payload.get("reload_capability_id")
+             reloaded = []
+             for c_overlay in data.get("capabilities", []):
+                 if target_cap_id and c_overlay.get("id") != target_cap_id:
+                     continue
+
+                 m_overlay = c_overlay.get("mechanics", {})
+                 mag_cap = m_overlay.get("magazine_capacity")
+                 if mag_cap:
+                     c_id = c_overlay.get("id")
+                     ammo_type = m_overlay.get("ammo_type")
+                     if ammo_type:
+                         reserve_key = f"{normalized_actor_cid}:ammo:{ammo_type}:reserve_mags"
+                         reserves = self._monster_resource_state.get(reserve_key, 0)
+                         if reserves > 0:
+                             # Swap magazine
+                             self._monster_resource_state[reserve_key] = reserves - 1
+                             self._monster_resource_state[f"{normalized_actor_cid}:ammo:{c_id}:current"] = mag_cap
+                             reloaded.append(c_overlay.get("name"))
+                         else:
+                             # Try loose ammo if supported (not yet in schema)
+                             pass
+
+             if not reloaded:
+                 return {"ok": False, "error": "No ammo/magazines available to reload."}
+
+             self._lan_force_state_broadcast()
+             return {
+                 "ok": True,
+                 "resolution": "reloaded",
+                 "status": f"Reloaded: {', '.join(reloaded)}."
              }
 
         elif action_type == "save_ability" and target_cid is not None:
@@ -44388,19 +44548,38 @@ class InitiativeTracker(base.InitiativeTracker):
                     budget = active_seq.get("choose_n")
                     if budget is not None and active_seq.get("total_completed", 0) >= budget:
                         return {"ok": False, "error": f"Multiattack budget exhausted ({active_seq.get('total_completed')}/{budget})."}
-                
+
                 # Check per-child max
                 if child_state["completed"] >= child_state["max"]:
                     return {"ok": False, "error": f"Max attacks for {cap.get('name', cap_id)} reached ({child_state['completed']}/{child_state['max']})."}
 
         # Clear modifiers if they apply to this action
+        ammo_spent = 0
+        if apply_damage or apply_effects:
+             ammo_spent = 1
+
         pending_mods = self._monster_modifier_state.get(int(normalized_actor_cid), [])
         for mod in list(pending_mods):
             m_mech = mod.get("mechanics", {})
             eligible = m_mech.get("eligible_action_ids", [])
             if not eligible or cap_id in eligible:
+                if apply_damage or apply_effects:
+                    mod_ammo = int(m_mech.get("ammo_cost") or 0)
+                    if mod_ammo > ammo_spent:
+                        ammo_spent = mod_ammo
+
+                    if m_mech.get("limit") == "once_per_turn":
+                        self._monster_resource_state[f"{normalized_actor_cid}:mod_used:{mod['capability_id']}"] = True
+
                 if m_mech.get("clears_on") == "attack_resolution" or m_mech.get("consume_on") == "attack_resolution" or m_mech.get("clears_on") == "next_eligible_attack":
                     pending_mods.remove(mod)
+
+        # Spend the ammo
+        if ammo_spent > 0:
+            ammo_current_key = f"{normalized_actor_cid}:ammo:{cap_id}:current"
+            if ammo_current_key in self._monster_resource_state:
+                current = self._monster_resource_state[ammo_current_key]
+                self._monster_resource_state[ammo_current_key] = max(0, current - ammo_spent)
 
         results: List[Dict[str, Any]] = []
         for row in rows:

@@ -22,15 +22,17 @@ capabilities:
     name: .45 Pistol
     type: action
     executable: true
-    desc: "Ranged Weapon Attack: +5 to hit, range 40/120 ft., one target. Hit: 8 (1d10 + 3) force damage. Loud. Magazine 8."
+    desc: "Ranged Weapon Attack: +5 to hit, range 40/120 ft., one target. Hit: 8 (1d8 + 4) force damage. Loud. Magazine 8."
     action_type: ranged_attack
     mechanics:
       attack_bonus: 5
       damage:
-        - formula: 1d10+3
+        - formula: 1d8+4
           type: force
       range: 40
       long_range: 120
+      magazine_capacity: 8
+      ammo_type: ".45"
   - id: baton
     name: Baton
     type: action
@@ -48,6 +50,14 @@ capabilities:
           name: Rough Arrest
           trigger: hit
           desc: "Spend bonus action to attempt grapple?"
+  - id: reload
+    name: Reload
+    type: bonus_action
+    executable: true
+    desc: "The Constable reloads its pistol."
+    action_type: firearm_reload
+    mechanics:
+      firearm_reload: true
   - id: rough-arrest
     name: Rough Arrest
     type: trait

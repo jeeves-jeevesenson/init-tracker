@@ -28,6 +28,8 @@ capabilities:
           type: force
       range: 120
       long_range: 360
+      magazine_capacity: 30
+      ammo_type: "5.56"
   - id: controlled-burst
     name: Controlled Burst
     type: action
@@ -94,6 +96,8 @@ capabilities:
           type: force
       range: 40
       long_range: 120
+      magazine_capacity: 8
+      ammo_type: ".45"
   - id: brace
     name: Brace
     type: action
@@ -110,9 +114,9 @@ capabilities:
     type: action
     executable: true
     desc: "The Gunner reloads its Armalite weapon or Pistol."
-    action_type: utility
+    action_type: firearm_reload
     mechanics:
-      instruction: "Restores magazine to max."
+      firearm_reload: true
   - id: set-up-gun
     name: Set Up Gun
     type: trait

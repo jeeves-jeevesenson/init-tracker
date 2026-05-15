@@ -33,7 +33,7 @@ Each capability object includes:
 - `type`: Category (`action`, `bonus_action`, `reaction`, `legendary_action`, `trait`, `lair_action`, `special`).
 - `executable`: Boolean (true if the backend can automate this).
 - `desc`: Display description (preserving markup).
-- `action_type`: `melee_attack`, `ranged_attack`, `save_ability`, `utility`, `composite` (multiattack).
+- `action_type`: `melee_attack`, `ranged_attack`, `save_ability`, `utility`, `composite`, `modifier`, `firearm_reload`.
 - `recharge`: Optional (e.g., `5` for 5-6, `short_rest`, `long_rest`).
 - `cost`: Action cost (default 1).
 - `mechanics`: Structured data for the backend (see below).
@@ -111,10 +111,34 @@ mechanics:
   modifier:
     kind: "next_attack"
     ammo_cost: 3
+    eligible_action_ids: ["armalite-rifle"]
     damage_bonus:
-      extra_weapon_dice: 1 # adds one base weapon die
+      mode: "extra_weapon_die"
+      count: 1
     limit: "once_per_turn"
-    jam_risk: true # natural 1 on the modified attack jams the weapon
+    clears_on: "next_eligible_attack"
+    jam_risk: "natural_1"
+```
+
+#### Firearm Mechanics
+Firearms use magazines and track ammunition.
+
+```yaml
+mechanics:
+  magazine_capacity: 20
+  ammo_type: "5.56"
+  reload_cost: "bonus_action" # or "action"
+```
+
+#### Firearm Reload
+Reloads one or more firearms.
+
+```yaml
+id: "reload"
+name: "Reload"
+action_type: "firearm_reload"
+mechanics:
+  firearm_reload: true
 ```
 
 #### Effects / Riders
@@ -179,7 +203,15 @@ The backend tracks the current state of limited-use resources in-memory during t
 
 DM UI provides buttons to spend, roll, or restore these resources. State is reset on server restart. Sequence state is cleared on turn advance or actor change.
 
-## 8. Effect Trigger Types
+### 7.1 Resource State Keys (InitiativeTracker._monster_resource_state)
+The backend tracks monster-specific resources using keys in `_monster_resource_state`:
+- `{cid}:ammo:{cap_id}:current`: (Integer) Current loaded rounds for a weapon.
+- `{cid}:ammo:{cap_id}:max`: (Integer) Magazine capacity for a weapon.
+- `{cid}:ammo:{ammo_type}:reserve_mags`: (Integer) Number of spare magazines for an ammo type.
+- `{cid}:mod_used:{cap_id}`: (Boolean) True if a once-per-turn modifier has been consumed.
+- `{cid}:jammed:{cap_id}`: (Boolean) True if a weapon is jammed.
+
+### 8. Effect Trigger Types
 - `on_hit`: Applied when an attack hits.
 - `on_failed_save`: Applied when a target fails a saving throw.
 - `on_failed_escape`: Applied when a target fails to escape a grapple.

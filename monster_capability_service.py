@@ -202,7 +202,7 @@ class MonsterCapabilityService:
             )
         return options
 
-    def summarize_capabilities_for_ui(self, combatant_id: int, combatant: Any) -> Dict[str, Any]:
+    def summarize_capabilities_for_ui(self, combatant_id: int, combatant: Any, resource_state: Dict[str, Any] = None, pending_modifiers: List[Dict[str, Any]] = None) -> Dict[str, Any]:
         """Produce a UI-friendly summary of capabilities for a specific combatant."""
         data = self.match_capabilities_for_combatant(combatant)
 
@@ -233,6 +233,7 @@ class MonsterCapabilityService:
 
         for cap in data.get("capabilities", []):
             ctype = cap.get("type", "special")
+            cap_id = cap.get("id")
             action_type = cap.get("action_type")
             mechanics = cap.get("mechanics", {}) if isinstance(cap.get("mechanics"), dict) else {}
 
@@ -271,6 +272,29 @@ class MonsterCapabilityService:
 
             # Generate mechanics_summary for UI
             summary_parts = []
+
+            # Add ammo info if present in resource_state
+            if resource_state:
+                ammo_current = resource_state.get(f"{combatant_id}:ammo:{cap_id}:current")
+                ammo_max = resource_state.get(f"{combatant_id}:ammo:{cap_id}:max")
+                if ammo_current is not None:
+                    summary_parts.append(f"Loaded: {ammo_current}/{ammo_max}")
+                    # Add structured ammo info for prominent display in detail panels
+                    cap["ammo"] = {
+                        "current": ammo_current,
+                        "max": ammo_max
+                    }
+
+                # Reserve mags
+                ammo_type = mechanics.get("ammo_type")
+                if ammo_type:
+                    reserve_mags = resource_state.get(f"{combatant_id}:ammo:{ammo_type}:reserve_mags")
+                    if reserve_mags is not None:
+                        summary_parts.append(f"Reserves: {reserve_mags} mags")
+                        if "ammo" not in cap: cap["ammo"] = {}
+                        cap["ammo"]["reserve_mags"] = reserve_mags
+                        cap["ammo"]["type"] = ammo_type
+
             if action_type in ["melee_attack", "ranged_attack"]:
                 bonus = mechanics.get("attack_bonus")
                 if bonus is not None:
@@ -315,9 +339,27 @@ class MonsterCapabilityService:
 
             elif action_type == "modifier":
                 mod = mechanics.get("modifier", {})
-                ammo = mod.get("ammo_cost")
-                if ammo:
-                    summary_parts.append(f"{ammo} ammo")
+
+                # Status for modifiers
+                is_armed = False
+                if pending_modifiers:
+                    is_armed = any(m.get("capability_id") == cap_id for m in pending_modifiers)
+
+                is_used = False
+                if resource_state:
+                    is_used = bool(resource_state.get(f"{combatant_id}:mod_used:{cap_id}"))
+
+                if is_armed:
+                    summary_parts.append("ARMED")
+                elif is_used:
+                    summary_parts.append("USED")
+                else:
+                    summary_parts.append("Available")
+
+                ammo_cost = mod.get("ammo_cost")
+                if ammo_cost:
+                    summary_parts.append(f"{ammo_cost} ammo")
+                    cap["ammo_cost"] = ammo_cost
                 db = mod.get("damage_bonus", {})
                 if db.get("mode") == "extra_weapon_die":
                     count = db.get("count", 1)
@@ -326,6 +368,9 @@ class MonsterCapabilityService:
                     summary_parts.append("Jam risk (1)")
                 if mod.get("limit") == "once_per_turn":
                     summary_parts.append("1/turn")
+
+            elif action_type == "firearm_reload":
+                summary_parts.append("Reload Firearms")
 
             elif action_type == "utility":
                 # Show conditions or healing for utility actions
@@ -379,7 +424,15 @@ class MonsterCapabilityService:
             if "prone" in desc.lower():
                 instructions.append("Apply Prone condition manually in /dm if hit.")
             if "ammo" in desc.lower() or "magazine" in desc.lower():
-                instructions.append("Track ammunition manually.")
+                # Only show if not already tracked by backend
+                has_backend_ammo = False
+                if resource_state:
+                    ammo_current = resource_state.get(f"{combatant_id}:ammo:{cap_id}:current")
+                    if ammo_current is not None:
+                        has_backend_ammo = True
+
+                if not has_backend_ammo:
+                    instructions.append("Track ammunition manually.")
 
             if instructions:
                 cap["manual_instructions"] = " ".join(instructions)

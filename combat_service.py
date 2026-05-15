@@ -392,6 +392,14 @@ class CombatService:
                     }
                 )
 
+            # Monster resources (ammo, etc.)
+            prefix = f"{cid}:"
+            resources = {
+                k[len(prefix):]: v
+                for k, v in getattr(t, "_monster_resource_state", {}).items()
+                if k.startswith(prefix)
+            }
+
             combatant_rows.append(
                 {
                     "cid": int(cid),
@@ -417,6 +425,7 @@ class CombatService:
                     "is_pc": is_pc,
                     "role": role,
                     "conditions": conditions,
+                    "monster_resources": resources,
                     "is_current": current_cid is not None and int(cid) == int(current_cid),
                 }
             )
@@ -1437,7 +1446,7 @@ class CombatService:
                                 init_mod = (int(dex_score) - 10) // 2
                             except Exception:
                                 init_mod = 0
-                        
+
                         r = random.randint(1, 20)
                         initiative = r + int(init_mod or 0)
                         roll = r

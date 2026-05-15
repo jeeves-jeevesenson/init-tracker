@@ -1694,6 +1694,60 @@ Outcome:
 Next recommended pass:
 - Pass 2K: DM console Black and Tan live-play polish and final all-enemy manual smoke checklist.
 
+### 2026-05-15 — Pass 2M: Firearm ammo foundation and Controlled Burst toggle
+Agent/model: Gemini CLI
+Scope:
+- Implemented generic ammo state model in `InitiativeTracker._monster_resource_state`.
+- Added structured `magazine_capacity` and `ammo_type` to monster capabilities.
+- Automated ammo spend for normal (1 round) and Controlled Burst (3 rounds total) attacks.
+- Improved Controlled Burst to be a toggle (arm/disarm) with once-per-turn enforcement on resolution.
+- Added `firearm_reload` action type with Bonus Action cost support for bandoliers.
+- Seeded Black and Tan loadouts: 5.56 Armalite (20/20) + Bandolier (6 mags), .45 Pistol (8/8) + Belt (2 mags).
+- Integrated ammo and modifier status into `/dmcontrol` capability summaries.
+Files changed:
+- dnd_initative_tracker.py
+- monster_capability_service.py
+- combat_service.py
+- monster_capabilities/vandergraff/*.yaml
+- tests/test_firearm_ammo_state.py (New)
+- tests/test_black_and_tan_controlled_burst.py
+- docs/monster-capability-schema.md
+- docs/dm_control_surface_living_agent_plan.md
+Outcome:
+- Firearm ammo tracking is now backend-authoritative for monsters.
+- Controlled Burst has improved UX (can be disarmed) and correct resource consumption.
+- Reloading is now a functional backend action with correct costs for specialist gear.
+- All Python tests (Pass 2M and regressions) passed.
+Next recommended pass:
+- Manual smoke of firearm ammo and Controlled Burst in /dmcontrol.
+
+## Firearm Ammo Architecture (Pass 2M)
+
+### State Model
+Ammo is tracked in the backend using `_monster_resource_state` keys:
+- `{cid}:ammo:{cap_id}:current`: Loaded rounds for a specific weapon capability.
+- `{cid}:ammo:{cap_id}:max`: Magazine capacity.
+- `{cid}:ammo:{ammo_type}:reserve_mags`: Number of spare magazines (e.g., in a bandolier).
+- `{cid}:mod_used:{cap_id}`: Tracks once-per-turn modifier consumption.
+
+### Loadouts (Black and Tan)
+- **5.56 Armalite Rifle**: Magazine 20. Starts with 6 reserve mags in a worn bandolier (total 120 rounds reserve).
+- **.45 Pistol**: Magazine 8. Starts with 2 reserve mags in a worn belt (total 16 rounds reserve).
+
+### Action Costs
+- **Reload from Bandolier/Belt**: Bonus Action (if configured in mechanics).
+- **Normal Reload**: Action (default for `firearm_reload` actions).
+
+### Consumption
+- **Normal Attack**: 1 round spent on successful resolution (automatic or Apply Results).
+- **Controlled Burst**: 3 rounds total spent on resolution.
+- **Arming/Disarming**: 0 rounds spent; arming is blocked if loaded ammo < required.
+
+### Deferred Work
+- LAN client player ammo UI.
+- Loose rounds / partial top-off in combat.
+- Custom ammo types.
+
 ## Black and Tan Live-Play Readiness (Pass 2J)
 
 | Enemy Type | Primary Tray (Automated) | Secondary Tray (Reminders) |

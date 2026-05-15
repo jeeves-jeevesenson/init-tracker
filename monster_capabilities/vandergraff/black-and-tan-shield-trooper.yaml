@@ -33,6 +33,16 @@ capabilities:
           type: force
       range: 40
       long_range: 120
+      magazine_capacity: 8
+      ammo_type: ".45"
+  - id: reload
+    name: Reload
+    type: bonus_action
+    executable: true
+    desc: "The Shield Trooper reloads its pistol."
+    action_type: firearm_reload
+    mechanics:
+      firearm_reload: true
   - id: baton
     name: Baton
     type: action
