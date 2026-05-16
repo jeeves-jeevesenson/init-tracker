@@ -23,6 +23,7 @@ concentration: false
 lists:
   classes:
   - paladin
+  - cleric
   subclasses: []
 import:
   source: aidedd

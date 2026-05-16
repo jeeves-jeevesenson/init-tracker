@@ -530,8 +530,8 @@ If code/tests and this file disagree, fix this file promptly.
   - Audit completed; identified P0/P1 issues in state sync and targeting.
   - Plan documented in `docs/lan_client_audit_and_repair_plan.md`.
 - [x] **Pass 3B: LAN combat unblock (Resource Pools, Spells, Unarmed fallback)**
-- [ ] **Pass 3C: LAN state sync refactor and Mode Banners**
-- [ ] **Pass 3D: LAN map and targeting polish**
+- [x] **Pass 3C: LAN Spell/Action Audit & Critical Fixes (Audit Doc, Unarmed Fallback, Performance, Target Toasts)**
+- [ ] **Pass 3D: LAN map and targeting polish (Mode Banners, click vs drag priority)**
 - [ ] **Pass 3E: LAN action and inventory cards**
 - [ ] **Pass 3F: LAN firearm UI**
 

@@ -11658,7 +11658,7 @@ class InitiativeTracker(base.InitiativeTracker):
             pass
         return True
 
-    def _apply_damage_via_service(self, target: Any, raw_damage: int) -> Dict[str, int]:
+    def _apply_damage_via_service(self, target: Any, raw_damage: int, *, _broadcast: bool = True) -> Dict[str, int]:
         """Apply damage with temp HP absorption, routing through CombatService when available.
 
         This is the canonical desktop-side wrapper that delegates to
@@ -11676,7 +11676,7 @@ class InitiativeTracker(base.InitiativeTracker):
         dm_svc = self.__dict__.get("_dm_service")
         if dm_svc is not None and cid > 0:
             try:
-                result = dm_svc.apply_damage(cid=cid, raw_damage=int(raw_damage), _broadcast=False)
+                result = dm_svc.apply_damage(cid=cid, raw_damage=int(raw_damage), _broadcast=_broadcast)
                 if result.get("ok"):
                     return {
                         "temp_absorbed": int(result.get("temp_absorbed", 0)),
@@ -23167,7 +23167,7 @@ class InitiativeTracker(base.InitiativeTracker):
                 except Exception:
                     pass
             if total_damage > 0:
-                damage_state = self._apply_damage_via_service(target, int(total_damage))
+                damage_state = self._apply_damage_via_service(target, int(total_damage), _broadcast=False)
                 after = int(damage_state.get("hp_after", before))
                 self._queue_concentration_save(target, "aoe")
             else:
@@ -30385,7 +30385,7 @@ class InitiativeTracker(base.InitiativeTracker):
             }
 
         old_hp = int(getattr(target, "hp", 0) or 0)
-        damage_state = self._apply_damage_via_service(target, int(total_damage))
+        damage_state = self._apply_damage_via_service(target, int(total_damage), _broadcast=False)
         new_hp = int(damage_state.get("hp_after", old_hp))
         if new_hp < old_hp:
             self._queue_concentration_save(target, "damage")
@@ -35826,7 +35826,7 @@ class InitiativeTracker(base.InitiativeTracker):
 
         if hit and total_damage > 0:
             before_hp = _parse_int(getattr(target, "hp", None), None)
-            damage_state = self._apply_damage_via_service(target, int(total_damage))
+            damage_state = self._apply_damage_via_service(target, int(total_damage), _broadcast=False)
             self._apply_bhall_post_damage_effects(
                 attacker=c,
                 target=target,
@@ -37138,7 +37138,7 @@ class InitiativeTracker(base.InitiativeTracker):
             setattr(target, "_rage_took_damage_this_turn", True)
             before_hp = _parse_int(getattr(target, "hp", None), None)
             if before_hp is not None:
-                damage_state = self._apply_damage_via_service(target, int(total_damage))
+                damage_state = self._apply_damage_via_service(target, int(total_damage), _broadcast=False)
                 bhall_post_damage_state = self._apply_bhall_post_damage_effects(
                     attacker=resource_c,
                     target=target,
@@ -40147,7 +40147,7 @@ class InitiativeTracker(base.InitiativeTracker):
         total_damage = int(math.floor(rolled / 2.0)) if save_passed else int(rolled)
         before_hp = int(getattr(target, "hp", 0) or 0)
         if total_damage > 0:
-            damage_state = self._apply_damage_via_service(target, int(total_damage))
+            damage_state = self._apply_damage_via_service(target, int(total_damage), _broadcast=False)
             after_hp = int(damage_state.get("hp_after", before_hp))
         else:
             after_hp = before_hp

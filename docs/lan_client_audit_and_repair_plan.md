@@ -68,14 +68,24 @@ The LAN client (`assets/web/lan/index.html`) is a feature-rich but architectural
     - Fixed `LanController` AttributeErrors and test stability.
 - **Impact**: Resource Pools should now render, spellcasters should see their spells, and all characters should have at least one attack action (Unarmed Strike) available even without weapons.
 
-### Pass 3C: State Sync Refactor (Next)
-- **Goal**: Stabilize WebSocket snapshot ingestion and handle Mode Banners (deferred from 3B).
-- **Tasks**:
-    - Audit `ws.onmessage` for every field in `state`.
-    - Ensure `static_data` doesn't get stomped by partial updates.
-    - Simplify `reconnectRecovery` timers.
+### Pass 3C: LAN Spell/Action Audit & Critical Fixes (CURRENT)
+- [x] **Spell Automation Audit:** Created `docs/lan_player_spell_automation_audit.md` to track status of player spells.
+- [x] **Unarmed Strike Fallback:** Ensured all characters have Unarmed Strike in LAN attack options, even if no weapon is configured/inventory is empty.
+- [x] **Targeting Toast Fix:** Bypass token ownership checks ("Arrr, that token ain't yers") when in spell/attack targeting mode.
+- [x] **Resource/Concentration Desync:** Trigger HUD update on `static_data` arrival and show "Active" concentration status if spell name is missing.
+- [x] **Performance Optimization:** Consolidated redundant UI rebuilds and state broadcasts during AOE/spell resolution.
+- [x] **Data Correction:** Added Cleric (Tempest) to `Destructive Wave` class list.
 
-### Pass 3D: Map and Targeting Polish
+#### User Live Test Notes (May 16, 2026)
+- Old Man weapon issue confirmed (missing Unarmed fallback).
+- Spell targeting toasts were intrusive/wrong context.
+- Resource pools were desynced (reappeared only after action).
+- AOE latency was significant (traced to redundant broadcasts per target).
+- Concentration panel was sometimes empty for active spells.
+- Destructive Wave was missing for Stihiya.
+- Vicnor's pistol was missing (likely due to inventory/attacks mapping).
+
+### Pass 3D: Map and Targeting Polish (Next)
 - **Goal**: Align map interaction with `/dmcontrol`.
 - **Tasks**:
     - Port stabilized pan/zoom logic.

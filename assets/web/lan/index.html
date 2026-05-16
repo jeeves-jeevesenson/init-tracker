@@ -7035,10 +7035,41 @@ __DAMAGE_TYPE_OPTIONS__
   }
 
   function getOwnedInventoryWeaponEntries(){
+    const me = getClaimedUnit();
+    if (!me) return [];
     const attackById = getClaimedAttackWeaponByIdMap();
-    return getClaimedInventoryItems()
+    const items = getClaimedInventoryItems();
+    const entries = items
       .map((item) => resolveOwnedInventoryWeaponForSelector(item, attackById))
       .filter((entry) => !!entry);
+    
+    // Also include any weapons from me.attacks.weapons that aren't tied to an inventory item
+    // (e.g. Unarmed Strike, natural weapons, etc.)
+    const weapons = Array.isArray(me.attacks?.weapons) ? me.attacks.weapons : [];
+    weapons.forEach(w => {
+      const id = String(w?.id || "").trim().toLowerCase();
+      // If no entry in our list yet has this weapon id, add it
+      if (id && !entries.some(e => String(e.weapon?.id || "").trim().toLowerCase() === id)) {
+        entries.push({ weapon: w, instance_id: `attack_only_${id}` });
+      }
+    });
+
+    // Fallback: If still no weapons, add a basic Unarmed Strike
+    if (entries.length === 0) {
+      entries.push({
+        weapon: {
+          id: "unarmed_strike",
+          name: "Unarmed Strike",
+          one_handed: { damage_formula: "1d4 + str_mod", damage_type: "bludgeoning" },
+          to_hit: Number(me.proficiency_bonus || 2) + Math.max(Number(me.abilities?.str_mod || 0), Number(me.abilities?.dex_mod || 0)),
+          range: "5",
+          equipped: true,
+        },
+        instance_id: "fallback_unarmed"
+      });
+    }
+    
+    return entries;
   }
 
   function buildMainhandOptions(weaponEntries){
@@ -9929,8 +9960,8 @@ __DAMAGE_TYPE_OPTIONS__
   function selectCastSpellModalPreset(value){
     castSpellModalSelection = String(value || "");
     if (castSpellPresetSummary){
-      const label = castSpellModalSelection === "" ? "None" : (castSpellModalSelection === "__custom__" ? "Custom" : castSpellModalSelection);
-      castSpellPresetSummary.textContent = `Spells & Presets (${label})`;
+      const label = castSpellModalSelection === "" ? "" : (castSpellModalSelection === "__custom__" ? "Custom" : castSpellModalSelection);
+      castSpellPresetSummary.textContent = label ? `Spells & Presets (${label})` : "Spells & Presets";
     }
     if (castPresetInput){
       castPresetInput.value = castSpellModalSelection === "__custom__" ? "" : castSpellModalSelection;
@@ -15903,12 +15934,10 @@ __DAMAGE_TYPE_OPTIONS__
       return "Concentration: —";
     }
     const concentrationSpell = normalizeTextValue(unit?.concentration_spell || unit?.concentrationSpell || "");
-    if (!concentrationSpell){
-      return "Concentration: —";
-    }
+    const concentrationLabel = concentrationSpell || "Active";
     const totalRoundsRaw = Number(unit?.concentration_total_rounds);
     if (!Number.isFinite(totalRoundsRaw) || totalRoundsRaw <= 0){
-      return `Concentration: ${concentrationSpell} · duration unknown`;
+      return `Concentration: ${concentrationLabel} · duration unknown`;
     }
     const totalRounds = Math.max(0, Math.floor(totalRoundsRaw));
     let remainingRounds = totalRounds;
@@ -17541,8 +17570,9 @@ __DAMAGE_TYPE_OPTIONS__
           if (Array.isArray(msg.data.monster_choices)){
             state.monster_choices = msg.data.monster_choices;
           }
-          }
+        }
         updateClaimOverlay();
+        updateHud();
       } else if (msg.type === "preset"){
         if (msg.preset && typeof msg.preset === "object"){
           applyGuiPreset(msg.preset, {persist: true});
@@ -18679,6 +18709,7 @@ __DAMAGE_TYPE_OPTIONS__
     }
     const hit = hitTestToken(p);
     if (hit){
+      if (attackOverlayMode) return; // Targeting mode handles pointerup; do not start drag or show ownership error
       const controlledCid = activeControlledUnitCid();
       const mountMoveCid = getMountMovementCid();
       const canDragMount = mountMoveCid !== null && cidMatches(hit.cid, mountMoveCid, "dragToken.mountCid");
