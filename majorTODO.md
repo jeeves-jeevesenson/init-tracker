@@ -531,7 +531,7 @@ If code/tests and this file disagree, fix this file promptly.
   - Plan documented in `docs/lan_client_audit_and_repair_plan.md`.
 - [x] **Pass 3B: LAN combat unblock (Resource Pools, Spells, Unarmed fallback)**
 - [x] **Pass 3C: LAN Spell/Action Audit & Critical Fixes (Audit Doc, Unarmed Fallback, Performance, Target Toasts)**
-- [ ] **Pass 3D: LAN map and targeting polish (Mode Banners, click vs drag priority)**
+- [x] **Pass 3D: LAN live-game readiness smoke and critical polish (Ship semantics fix, spell audit updates)**
 - [ ] **Pass 3E: LAN action and inventory cards**
 - [ ] **Pass 3F: LAN firearm UI**
 

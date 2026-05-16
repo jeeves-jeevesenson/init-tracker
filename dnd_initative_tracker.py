@@ -19745,7 +19745,7 @@ class InitiativeTracker(base.InitiativeTracker):
                 }
             ship_summary = self._selected_ship_summary(sid)
             if bool(ship_summary.get("ok")):
-                structure_entry["ship_state"] = ship_summary.get("summary")
+                structure_entry["ship_state"] = ship_summary
             snap["structures"].append(structure_entry)
         snap["ships"] = ships_payload
 

@@ -85,14 +85,13 @@ The LAN client (`assets/web/lan/index.html`) is a feature-rich but architectural
 - Destructive Wave was missing for Stihiya.
 - Vicnor's pistol was missing (likely due to inventory/attacks mapping).
 
-### Pass 3D: Map and Targeting Polish (Next)
-- **Goal**: Align map interaction with `/dmcontrol`.
-- **Tasks**:
-    - Port stabilized pan/zoom logic.
-    - Fix token click vs drag priority.
-    - Visual feedback for "valid target candidates".
+### Pass 3D: LAN Live-Game Readiness Smoke (CURRENT)
+- [x] **Smoke Test Checklist:** Verified Unarmed Strike fallback, spell targeting toasts, and resource sync.
+- [x] **Ship Contact Semantics:** Fixed a pre-existing regression in `_lan_snapshot` where `ship_state` was incorrectly assigned, resolving 1 test failure.
+- [x] **Spell Audit Refinement:** Categorized player spells into "Game Ready" vs "Use with Caution" for tomorrow's session.
+- [x] **Performance Verification:** Confirmed redundant broadcasts are removed from AOE/Shatter resolution paths.
 
-### Pass 3E: Action and Inventory Cards
+### Pass 3E: LAN Action and Inventory Cards (Next)
 - **Goal**: Modernize the action selection UI.
 - **Tasks**:
     - Replace simple selects/lists with rich Action Cards.
