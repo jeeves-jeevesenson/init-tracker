@@ -416,6 +416,26 @@
     const API_COMBAT = '/api/dm/combat';
     let pollInterval = null;
     let state = null;
+    // DMPERF: lightweight, opt-in frontend timing (?perf=1 to enable).
+    const DM_PERF = (() => {
+      try { return new URLSearchParams(window.location.search).get('perf') === '1'; }
+      catch (_) { return false; }
+    })();
+    function dmPerfMark(label, ms, extra) {
+      if (!DM_PERF) return;
+      try {
+        const tail = extra ? ` ${extra}` : '';
+        console.log(`[DMPERF] ${label} elapsed_ms=${ms.toFixed(1)}${tail}`);
+      } catch (_) {}
+    }
+    // Idle-poll dedup: if /api/dm/combat returns the same payload as last
+    // poll, skip the full renderState/draw to avoid the every-2s UI churn
+    // that masks real user actions behind layout/canvas work.
+    let lastPolledStateJson = null;
+    // Dijkstra memoization key — recompute only when actor/pos/move-budget
+    // or grid signature actually changed.
+    let lastMoveCostKey = null;
+    let lastMoveCostMap = null;
 
     // Phase 3A1/3A2a/3A2b state
     let capabilitySummary = null;
@@ -893,6 +913,7 @@
     async function executeMove(cid, col, row) {
       isMoving = true;
       renderError('Moving...');
+      const tMoveStart = DM_PERF ? performance.now() : 0;
       try {
         const resp = await fetch(`/api/dm/map/combatants/${cid}/move`, {
           method: 'POST',
@@ -903,13 +924,22 @@
           const errData = await resp.json();
           throw new Error(errData.detail || `HTTP ${resp.status}`);
         }
-        await fetchState();
+        // The move route already returns a fresh DM snapshot built from
+        // the broadcast it just issued — consume it directly instead of
+        // a second /api/dm/combat round-trip + repaint.
+        const data = await resp.json();
+        if (data && data.snapshot && typeof data.snapshot === 'object') {
+          applyAuthoritativeSnapshot(data.snapshot);
+        } else {
+          await fetchState();
+        }
       } catch (err) {
         console.error('Move error:', err);
         renderError(err.message);
       } finally {
         isMoving = false;
         draw();
+        dmPerfMark('executeMove', performance.now() - tMoveStart);
       }
     }
 
@@ -935,6 +965,7 @@
     }, { passive: false });
 
     async function fetchState() {
+      const tFetchStart = DM_PERF ? performance.now() : 0;
       try {
         const resp = await fetch(API_COMBAT);
         if (!resp.ok) {
@@ -944,14 +975,44 @@
           }
           throw new Error(`HTTP ${resp.status}`);
         }
-        const data = await resp.json();
+        const text = await resp.text();
+        // Skip render+draw when the poll returns an identical payload — this
+        // is the common idle case and was forcing full renderState+Dijkstra
+        // every 2s, masking real interactivity behind UI churn.
+        if (text === lastPolledStateJson && state) {
+          dmPerfMark('fetchState(skip-unchanged)', performance.now() - tFetchStart);
+          return;
+        }
+        lastPolledStateJson = text;
+        const data = JSON.parse(text);
         state = data;
+        const tRenderStart = DM_PERF ? performance.now() : 0;
         renderState(data);
+        const tRenderEnd = DM_PERF ? performance.now() : 0;
         draw();
+        const tDrawEnd = DM_PERF ? performance.now() : 0;
+        if (DM_PERF) {
+          dmPerfMark('renderState', tRenderEnd - tRenderStart);
+          dmPerfMark('draw', tDrawEnd - tRenderEnd);
+          dmPerfMark('fetchState(full)', tDrawEnd - tFetchStart);
+        }
       } catch (err) {
         console.error('Fetch error:', err);
         renderError('Offline or server error');
       }
+    }
+
+    // Apply an authoritative snapshot returned in-line by a mutating
+    // endpoint (resolve-targets, next-turn, etc.) instead of waiting for
+    // the next poll cycle. Updates the dedup hash so the next idle poll
+    // can short-circuit.
+    function applyAuthoritativeSnapshot(snapshot) {
+      if (!snapshot || typeof snapshot !== 'object') return;
+      try { lastPolledStateJson = JSON.stringify(snapshot); }
+      catch (_) { lastPolledStateJson = null; }
+      state = snapshot;
+      renderState(snapshot);
+      draw();
     }
 
     function renderError(msg) {
@@ -1269,24 +1330,35 @@
       const actor = (state?.combatants || []).find(c => String(c.cid) === String(state?.active_cid));
 
       // Provide immediate feedback by re-rendering the panel/modal
+      const tPanelStart = DM_PERF ? performance.now() : 0;
       renderActionPanel(actor, capabilitySummary);
       if (localResolutionPacket) renderResolutionModal();
+      if (DM_PERF) dmPerfMark('applyResults.feedbackRender', performance.now() - tPanelStart);
 
       try {
+        const tBuildStart = DM_PERF ? performance.now() : 0;
+        const requestBody = JSON.stringify({
+          capability_id: capId,
+          targets: [{ target_cid: String(targetCid), outcome: outcome }],
+          damage_rolls: localResolutionPacket.damage_rolls || [],
+          apply_damage: !!applyDamage,
+          apply_effects: !!applyEffects,
+          override_range: !!localResolutionOverrideRange
+        });
+        if (DM_PERF) dmPerfMark('applyResults.requestBuild', performance.now() - tBuildStart);
+
+        const tFetchStart = DM_PERF ? performance.now() : 0;
         const resp = await fetch(`/api/dm/monster-capabilities/${actorCid}/resolve-targets`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            capability_id: capId,
-            targets: [{ target_cid: String(targetCid), outcome: outcome }],
-            damage_rolls: localResolutionPacket.damage_rolls || [],
-            apply_damage: !!applyDamage,
-            apply_effects: !!applyEffects,
-            override_range: !!localResolutionOverrideRange
-          })
+          body: requestBody
         });
+        const tFetchEnd = DM_PERF ? performance.now() : 0;
+        if (DM_PERF) dmPerfMark('applyResults.fetch', tFetchEnd - tFetchStart);
 
+        const tParseStart = DM_PERF ? performance.now() : 0;
         const data = await resp.json();
+        if (DM_PERF) dmPerfMark('applyResults.responseJsonParse', performance.now() - tParseStart);
         const endTime = performance.now();
         console.log(`[Apply] Resolution request took ${(endTime - startTime).toFixed(1)}ms`);
 
@@ -1303,8 +1375,9 @@
 
         // On success, apply snapshot immediately
         if (data.snapshot) {
-           state = data.snapshot;
-           renderState(state);
+           const tSnapStart = DM_PERF ? performance.now() : 0;
+           applyAuthoritativeSnapshot(data.snapshot);
+           if (DM_PERF) dmPerfMark('applyResults.applySnapshot', performance.now() - tSnapStart);
         }
 
         // Compact success feedback via status bar
@@ -1368,13 +1441,20 @@
           // Outside Multiattack, after Apply Result, standalone targeting should end cleanly.
           selectedCapabilityId = null;
         }
+        const tFinalRenderStart = DM_PERF ? performance.now() : 0;
         renderActionPanel(actor, capabilitySummary);
         draw();
+        if (DM_PERF) {
+          dmPerfMark('applyResults.finalRenderAndDraw', performance.now() - tFinalRenderStart);
+          dmPerfMark('applyResultsEndToEnd', performance.now() - startTime,
+            `targets=1 apply_damage=${!!applyDamage} apply_effects=${!!applyEffects}`);
+        }
       } catch (err) {
         console.error('Apply results error:', err);
         localResolutionError = err.message;
         renderActionPanel(actor, capabilitySummary);
         if (localResolutionPacket) renderResolutionModal();
+        if (DM_PERF) dmPerfMark('applyResultsEndToEnd(error)', performance.now() - startTime);
       } finally {
         localResolutionApplying = false;
         // Final re-render to ensure buttons are re-enabled if needed
@@ -2373,14 +2453,36 @@
           const moveRemaining = activeUnit.move_remaining ?? activeUnit.speed ?? 0;
 
           if (moveRemaining > 0) {
-            currentCostMap = movementCostMap(
+            // Dijkstra is the heaviest per-draw work; memoize so idle
+            // redraws (panel toggles, capability clicks) don't re-run it.
+            const tmap = state.tactical_map;
+            const moveKey = [
+              activeUnit.cid,
               activeUnit.pos.col, activeUnit.pos.row,
-              moveRemaining, activeUnit,
-              getRoughTerrainMap(), getObstacleSet(),
-              state.tactical_map.features, state.tactical_map.hazards,
-              state.tactical_map.structures, state.tactical_map.elevation_cells,
-              cols, rows, feetPerSquare
-            );
+              moveRemaining,
+              cols, rows, feetPerSquare,
+              (tmap.obstacles && tmap.obstacles.length) || 0,
+              (tmap.rough_terrain && tmap.rough_terrain.length) || 0,
+              (tmap.features && tmap.features.length) || 0,
+              (tmap.hazards && tmap.hazards.length) || 0,
+              (tmap.structures && tmap.structures.length) || 0,
+              activeUnit.movement_mode || '',
+              activeUnit.swim_speed || 0,
+            ].join('|');
+            if (moveKey === lastMoveCostKey && lastMoveCostMap) {
+              currentCostMap = lastMoveCostMap;
+            } else {
+              currentCostMap = movementCostMap(
+                activeUnit.pos.col, activeUnit.pos.row,
+                moveRemaining, activeUnit,
+                getRoughTerrainMap(), getObstacleSet(),
+                tmap.features, tmap.hazards,
+                tmap.structures, tmap.elevation_cells,
+                cols, rows, feetPerSquare
+              );
+              lastMoveCostKey = moveKey;
+              lastMoveCostMap = currentCostMap;
+            }
 
             currentCostMap.forEach((cost, key) => {
               const [col, row] = key.split(",").map(Number);
@@ -2531,16 +2633,35 @@
       if (!state) return;
       const isStart = !state.in_combat;
       const endpoint = isStart ? '/api/dm/combat/start' : '/api/dm/combat/next-turn';
+      const tStart = DM_PERF ? performance.now() : 0;
+      const btn = document.getElementById('combatControlBtn');
+      const originalLabel = btn ? btn.textContent : null;
+      if (btn) {
+        btn.disabled = true;
+        btn.textContent = isStart ? 'Starting…' : 'Advancing…';
+      }
       try {
         const resp = await fetch(endpoint, { method: 'POST' });
         const data = await resp.json();
         if (data.ok) {
-           await fetchState();
+           // Prefer the snapshot the route already built; falling back to
+           // a second round-trip used to add ~250ms+ per End Turn.
+           if (data.snapshot && typeof data.snapshot === 'object') {
+             applyAuthoritativeSnapshot(data.snapshot);
+           } else {
+             await fetchState();
+           }
         } else {
            console.error('Combat control failed:', data.error);
         }
       } catch (err) {
         console.error('Network error during combat control:', err);
+      } finally {
+        if (btn) {
+          btn.disabled = false;
+          if (originalLabel !== null) btn.textContent = originalLabel;
+        }
+        dmPerfMark(isStart ? 'startCombat' : 'endTurn', performance.now() - tStart);
       }
     }
     document.getElementById('combatControlBtn')?.addEventListener('click', handleCombatControl);

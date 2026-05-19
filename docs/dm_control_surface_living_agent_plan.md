@@ -1804,3 +1804,151 @@ Ammo is tracked in the backend using `_monster_resource_state` keys:
 | **Captain** | Rifle, Pistol, Saber, Burst, Brace, Reload, Multiattack | Condemn, Coordinated Volley, Not Yet |
 | **Major** | Rifle, Engraved Pistol, Saber, Burst, Brace, Reload, Multiattack | Make an Example, Command Fire, Reactions |
 
+
+### 2026-05-16 — Pass 3A: /dmcontrol responsiveness pass (instrumentation + narrow fixes)
+Agent/model: Claude (Opus 4.7)
+Tested commit before work: b2d8ae2
+
+Reported user symptoms (after starting and immediately stopping a live test):
+- Apply Result is slow.
+- Logging / floating popup numbers feel laggy.
+- Response after Apply is laggy.
+- End Turn is sluggish.
+- Modal popups feel sluggish.
+- General interactive UI feels sluggish.
+
+Measured bottlenecks (mix of new reading + existing LAN_PERF logs in
+`logs/manual-combat-smoke-server.log` + pass 1C live-smoke report):
+- Frontend forces full `renderState` + `draw` + Dijkstra every 2 s on
+  the poll, even when the snapshot is unchanged. Primary driver of
+  perceived sluggishness during interaction.
+- End Turn handler makes a redundant `GET /api/dm/combat` after
+  `POST /api/dm/combat/next-turn` even though the response already
+  includes the snapshot.
+- Backend builds the DM snapshot twice per apply / end-turn:
+  once inside `_lan_force_state_broadcast` (push to WS clients),
+  once again in the route handler return.
+- `_lan_snapshot` ~13 ms baseline + ~155 ms spikes when
+  `_load_player_yaml_cache` re-validates the players directory.
+- Frontend `draw()` re-runs Dijkstra `movementCostMap(...)` on every
+  redraw, including idle re-polls.
+
+Fixes made (narrow, evidence-backed; no features, no redesign):
+- `assets/web/dmcontrol/index.html`
+  - Skip `renderState` + `draw` when poll payload is unchanged.
+  - `applyAuthoritativeSnapshot` helper used by End Turn / Start Combat /
+    Apply Result to consume the in-line snapshot and seed the dedup hash.
+  - Memoize Dijkstra per (cid, pos, move_remaining, grid signature).
+  - Immediate `Advancing…` / `Starting…` pending state + disable on the
+    combat-control button.
+  - Opt-in `?perf=1` `[DMPERF]` timing on `renderState`, `draw`,
+    `fetchState`, `endTurn`.
+- `dnd_initative_tracker.py`
+  - `_lan_force_state_broadcast` now stashes the DM snapshot it built
+    on `self._lan._cached_dm_snapshot` with a `perf_counter()` timestamp.
+  - `_dm_console_snapshot()` route helper consumes that cache when fresh
+    (<250 ms, no overrides), single-use, then clears it.
+  - `LAN_PERF dm_resolve_monster_capability_targets total_ms /
+    resolve_ms / snapshot_ms / cid / apply_damage / apply_effects`
+    handler wrap, gated by `LAN_PERF_DEBUG=1`.
+  - `LAN_PERF dm_next_turn total_ms / next_turn_ms / snapshot_ms`
+    handler wrap, gated by `LAN_PERF_DEBUG=1`.
+
+Validation (focused, serial):
+- `py_compile dnd_initative_tracker.py` → OK
+- `tests.test_dm_console_asset_syntax` → 3/3 OK
+- `tests.test_dm_control_route` → 19/25 OK (5 failures + 1 error are
+  PRE-EXISTING asset-drift failures, verified by `git stash` baseline;
+  unrelated to this pass).
+- `tests.test_dm_control_apply_results` → 12/12 OK
+- `tests.test_black_and_tan_capabilities` → 12/13 OK (1 PRE-EXISTING
+  test-stub regression; verified by `git stash` baseline).
+- `git diff --check` → clean.
+
+Outcome:
+- Idle UI churn substantially reduced; click-handler latency no longer
+  competes with a 2-second full-page repaint cycle.
+- End Turn cost cut by one full HTTP round-trip + one full repaint.
+- Backend per-apply / per-end-turn DM snapshot work is cut from 2 to 1
+  rebuild on the hot path.
+- Confirming live impact requires a user-run live window with
+  `LAN_PERF_DEBUG=1` and `?perf=1` — see report
+  `docs/runtime_reports/dmcontrol_latency_pass_20260516_0113.md`.
+
+Remaining risks / unmeasured:
+- `_dm_monster_capability_resolve_targets` total time is still not
+  observed end-to-end at the handler boundary; new perf log will
+  surface it on the next live window.
+- 155 ms `_load_player_yaml_cache` spikes still possible.
+- `renderActionPanel` still rebuilds full `innerHTML` per click.
+
+Next recommended pass:
+- Pass 3B: live 5-minute window with `LAN_PERF_DEBUG=1` and
+  `/dmcontrol?perf=1`. Read off the new perf lines, then attack the
+  single biggest remaining hotspot (probably `resolve_ms` or
+  `renderActionPanel`).
+
+### 2026-05-16 — Pass 3B: /dmcontrol responsiveness validation + corrective patch
+Agent/model: Claude (Sonnet-class; this validation pass)
+
+Reviewed every target listed by the pass-2A brief:
+1. Backend `_dm_console_snapshot` cache → **REGRESSION FOUND**:
+   read site used `self._lan._cached_*` but the closure's `self` IS
+   the `LanController`, so the chain raised `AttributeError` and
+   the surrounding route's broad `except Exception` converted it
+   into HTTP 500 on every route that called
+   `_dm_console_snapshot()` with no overrides (GET `/api/dm/combat`,
+   `POST /api/dm/map/combatants/{cid}/move`,
+   `POST /api/dm/combat/combatants`, etc.). The prior pass had
+   labelled the resulting `test_dm_move_combatant_on_map_functional`
+   error as "pre-existing" without verifying. Verified against
+   `b2d8ae2` baseline that this test passed before the prior pass
+   and 500'd after. Patched the read site to use `self.*` (cache
+   lives on the `LanController`).
+2. Idle-poll dedup: accepted; error/auth/recovery paths bypass
+   dedup correctly. Documented one minor stuck-banner edge case
+   on malformed payloads (out-of-scope tightening).
+3. Dijkstra `movementCostMap` memoization: accepted. Prior
+   `cell.row` bug fix verified in place at
+   `assets/web/dmcontrol/index.html:2297`. Memo key uses
+   `.length` for terrain collections; cell-level mutation within
+   same-length collections is a documented low-risk hole.
+4. Snapshot-consuming POST paths: widened by one —
+   `executeMove` now consumes the move route's returned snapshot
+   instead of doing a redundant `await fetchState()`. Pattern
+   matches the prior pass's End Turn / Start Combat / Apply Result
+   fixes. `activateModifier` and `startSequence` left unchanged
+   (pre-existing partial pattern; out of scope).
+5. Frontend `[DMPERF]` and backend `LAN_PERF` instrumentation:
+   accepted at current granularity. No noisy-by-default emissions.
+6. Live 5-minute browser window: not run; this is a sandboxed
+   shell with no browser. Recommended grep recipe captured in
+   the report for a human-run window.
+
+Files changed:
+- `dnd_initative_tracker.py` — corrected cache read site.
+- `assets/web/dmcontrol/index.html` — `executeMove` consumes
+  returned snapshot; new `[DMPERF] executeMove` label.
+
+Validation (this pass, post-fix):
+- `py_compile` → OK
+- `tests.test_dm_console_asset_syntax` → 3/3 OK
+- `tests.test_dm_control_apply_results` → 12/12 OK
+- `tests.test_dm_control_route.test_dm_move_combatant_on_map_functional`
+  (the regression target) → OK
+- `tests.test_black_and_tan_capabilities` → 12/13 OK
+  (1 baseline-verified pre-existing test-stub error)
+- `git diff --check` → clean
+
+Report: `docs/runtime_reports/dmcontrol_latency_pass_20260516_SECOND.md`
+
+Outcome:
+- Pass 3A is SAFE to commit AFTER the corrective patch in this
+  pass is included. Without the corrective patch, the move
+  endpoint and any unauthenticated DM `/api/dm/combat` poll would
+  500.
+
+Next recommended pass:
+- Human-run live `/dmcontrol?perf=1` + `LAN_PERF_DEBUG=1` window
+  using the grep recipe in the report.
+- If `resolve_ms` dominates, add intra-resolve timing only then.

@@ -3842,6 +3842,27 @@ class LanController:
             combat_snapshot: Optional[Dict[str, Any]] = None,
             tactical_snapshot: Optional[Dict[str, Any]] = None,
         ) -> Dict[str, Any]:
+            # If a recent _lan_force_state_broadcast already built a DM
+            # snapshot for the same request flow, reuse it. This skips a
+            # redundant tactical+combat snapshot rebuild on the apply /
+            # end-turn hot paths. The cache lives on the LanController
+            # itself: this closure is defined inside LanController.start,
+            # so ``self`` IS the LanController. An earlier draft wrote
+            # ``self._lan.*`` here, which 500'd on every route that
+            # called _dm_console_snapshot() after a broadcast (e.g.
+            # /api/dm/map/combatants/{cid}/move).
+            if combat_snapshot is None and tactical_snapshot is None:
+                cached = getattr(self, "_cached_dm_snapshot", None)
+                cached_at = getattr(self, "_cached_dm_snapshot_at", 0.0)
+                if isinstance(cached, dict) and cached_at:
+                    age = time.perf_counter() - cached_at
+                    if age < 0.25:
+                        try:
+                            self._cached_dm_snapshot = None
+                            self._cached_dm_snapshot_at = 0.0
+                        except Exception:
+                            pass
+                        return cached
             return self._dm_console_snapshot_payload(
                 combat_snapshot=combat_snapshot,
                 tactical_snapshot=tactical_snapshot,
@@ -3911,6 +3932,8 @@ class LanController:
             _check_dm_auth(request)
             if _dm_service is None:
                 raise HTTPException(status_code=503, detail="DM combat service unavailable.")
+            perf_debug = os.getenv("LAN_PERF_DEBUG") == "1"
+            t_start = time.perf_counter() if perf_debug else 0.0
             try:
                 result = _dm_service.next_turn()
                 if not result.get("ok"):
@@ -3918,7 +3941,18 @@ class LanController:
                 combat_snapshot = result.get("snapshot")
                 if not isinstance(combat_snapshot, dict):
                     raise HTTPException(status_code=500, detail="Combat service returned an invalid snapshot.")
-                return {"ok": True, "snapshot": _dm_console_snapshot(combat_snapshot=combat_snapshot)}
+                t_next = time.perf_counter() if perf_debug else 0.0
+                snapshot = _dm_console_snapshot(combat_snapshot=combat_snapshot)
+                if perf_debug:
+                    total_ms = (time.perf_counter() - t_start) * 1000.0
+                    next_ms = (t_next - t_start) * 1000.0
+                    snapshot_ms = total_ms - next_ms
+                    self.app._oplog(
+                        f"LAN_PERF dm_next_turn total_ms={total_ms:.2f}"
+                        f" next_turn_ms={next_ms:.2f} snapshot_ms={snapshot_ms:.2f}",
+                        level="info",
+                    )
+                return {"ok": True, "snapshot": snapshot}
             except HTTPException:
                 raise
             except Exception:
@@ -4677,15 +4711,47 @@ class LanController:
         async def dm_resolve_monster_capability_targets(cid: int, request: Request, payload: Dict[str, Any] = Body(...)):
             """Resolve a save/area monster capability against DM-selected targets."""
             _check_dm_auth(request)
+            perf_debug = os.getenv("LAN_PERF_DEBUG") == "1"
+            damage_perf = os.getenv("DMCONTROL_DAMAGE_PERF") == "1"
+            t_start = time.perf_counter() if (perf_debug or damage_perf) else 0.0
             try:
                 result = self.app._dm_monster_capability_resolve_targets(
                     actor_cid=int(cid),
                     payload=payload,
                 )
+                t_resolve = time.perf_counter() if (perf_debug or damage_perf) else 0.0
+                snapshot = _dm_console_snapshot()
+                t_snapshot = time.perf_counter() if (perf_debug or damage_perf) else 0.0
+                if perf_debug:
+                    total_ms = (time.perf_counter() - t_start) * 1000.0
+                    resolve_ms = (t_resolve - t_start) * 1000.0
+                    snapshot_ms = total_ms - resolve_ms
+                    self.app._oplog(
+                        f"LAN_PERF dm_resolve_monster_capability_targets"
+                        f" total_ms={total_ms:.2f} resolve_ms={resolve_ms:.2f}"
+                        f" snapshot_ms={snapshot_ms:.2f} cid={int(cid)}"
+                        f" apply_damage={bool(payload.get('apply_damage'))}"
+                        f" apply_effects={bool(payload.get('apply_effects'))}",
+                        level="info",
+                    )
+                if damage_perf:
+                    try:
+                        self.app._damage_perf_emit({
+                            "route": "route:dm_resolve_monster_capability_targets",
+                            "actor_cid": int(cid),
+                            "apply_damage": bool(payload.get("apply_damage")),
+                            "apply_effects": bool(payload.get("apply_effects")),
+                            "resolve_ms": round((t_resolve - t_start) * 1000.0, 3),
+                            "dm_snapshot_ms": round((t_snapshot - t_resolve) * 1000.0, 3),
+                            "route_total_ms": round((t_snapshot - t_start) * 1000.0, 3),
+                            "ok": bool(result.get("ok")),
+                        })
+                    except Exception:
+                        pass
                 return {
                     "ok": result.get("ok"),
                     "result": result,
-                    "snapshot": _dm_console_snapshot(),
+                    "snapshot": snapshot,
                 }
             except Exception as exc:
                 raise HTTPException(status_code=500, detail=f"Failed to resolve monster capability targets: {exc}")
@@ -19839,6 +19905,44 @@ class InitiativeTracker(base.InitiativeTracker):
             except Exception:
                 pass
 
+    def _damage_perf_enabled(self) -> bool:
+        return os.getenv("DMCONTROL_DAMAGE_PERF") == "1"
+
+    def _damage_perf_emit(self, record: Dict[str, Any]) -> None:
+        """Append one JSONL record to the damage perf log (opt-in via env).
+
+        Gated on DMCONTROL_DAMAGE_PERF=1 to avoid file IO during normal runs.
+        Lazily creates logs/dmcontrol_damage_perf_<UTC-stamp>.jsonl on first
+        record. Silently no-ops on any IO failure so instrumentation never
+        breaks the damage path.
+        """
+        if not self._damage_perf_enabled():
+            return
+        try:
+            path = self.__dict__.get("_damage_perf_path")
+            if path is None:
+                base = Path("logs")
+                try:
+                    base.mkdir(parents=True, exist_ok=True)
+                except Exception:
+                    base = Path(".")
+                stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+                path = base / f"dmcontrol_damage_perf_{stamp}.jsonl"
+                self.__dict__["_damage_perf_path"] = path
+                try:
+                    self._oplog(
+                        f"DMCONTROL_DAMAGE_PERF writing to {path}",
+                        level="info",
+                    )
+                except Exception:
+                    pass
+            payload = dict(record)
+            payload.setdefault("timestamp", datetime.now().isoformat(timespec="milliseconds"))
+            with path.open("a", encoding="utf-8") as f:
+                f.write(json.dumps(payload, default=str) + "\n")
+        except Exception:
+            pass
+
     def _lan_force_state_broadcast(self, include_static: bool = True) -> None:
         perf_debug = os.getenv("LAN_PERF_DEBUG") == "1"
         perf_start = time.perf_counter() if perf_debug else 0.0
@@ -19877,6 +19981,14 @@ class InitiativeTracker(base.InitiativeTracker):
             if dm_svc is not None:
                 tactical_snapshot = self._dm_tactical_snapshot_from_lan_snapshot(snap)
                 dm_snap = self._lan._dm_console_snapshot_payload(tactical_snapshot=tactical_snapshot)
+                # Stash for any route handler that returns a DM snapshot in
+                # the same request: avoids a second _dm_console_snapshot()
+                # build per resolve-targets / next-turn (~36-100ms each).
+                try:
+                    self._lan._cached_dm_snapshot = dm_snap
+                    self._lan._cached_dm_snapshot_at = time.perf_counter()
+                except Exception:
+                    pass
                 self._lan._push_dm_snapshot_to_ws_clients(dm_snap)
         except Exception:
             pass
@@ -22921,8 +23033,16 @@ class InitiativeTracker(base.InitiativeTracker):
             chunks = [f"{int(merged.get(dtype) or 0)} {dtype.title()}" for dtype in order if int(merged.get(dtype) or 0) > 0]
             return f" ({', '.join(chunks)})" if chunks else ""
 
+        perf_on = self._damage_perf_enabled()
+        perf_t0 = time.perf_counter() if perf_on else 0.0
+        perf_targets: List[Dict[str, Any]] = []
+        perf_apply_count = 0
+        perf_log_count = 0
+        perf_sculpt_count = 0
+
         removed: List[int] = []
         for target_cid in included:
+            t_target_start = time.perf_counter() if perf_on else 0.0
             target = self.combatants.get(int(target_cid))
             if target is None:
                 continue
@@ -22961,6 +23081,7 @@ class InitiativeTracker(base.InitiativeTracker):
                 roll = None
                 total = 0
                 passed = bool(sculpt_auto_success)
+            t_save_end = time.perf_counter() if perf_on else 0.0
             outcome_key = "success" if passed else "fail"
             bucket = outcomes.get(outcome_key)
             if not isinstance(bucket, list):
@@ -23150,6 +23271,7 @@ class InitiativeTracker(base.InitiativeTracker):
                 if canonical_fallback and total_damage > 0:
                     damage_breakdown = f" ({total_damage} {canonical_fallback.title()})"
             overflow_note = " (overflow trimmed after target dropped to 0 HP)" if overflow_truncated else ""
+            t_roll_end = time.perf_counter() if perf_on else 0.0
             if total_damage > 0 and getattr(self, "_lan", None) is not None and hasattr(self._lan, "_broadcast_payload"):
                 try:
                     self._lan._broadcast_payload({
@@ -23186,6 +23308,7 @@ class InitiativeTracker(base.InitiativeTracker):
                     )
                     if moved:
                         forced_move_notes.append(str(forced.get("mode") or "push"))
+            t_apply_end = time.perf_counter() if perf_on else 0.0
             if sculpt_auto_success:
                 self._log(
                     f"{spell_name}: {target.name} SCULPT (auto) -> {total_damage} damage{damage_breakdown}{adjustment_note}{overflow_note}",
@@ -23212,6 +23335,27 @@ class InitiativeTracker(base.InitiativeTracker):
             if before > 0 and after == 0:
                 removed.append(int(target_cid))
 
+            if perf_on:
+                t_log_end = time.perf_counter()
+                if total_damage > 0:
+                    perf_apply_count += 1
+                perf_log_count += 1
+                if sculpt_auto_success:
+                    perf_sculpt_count += 1
+                perf_targets.append({
+                    "name": str(getattr(target, "name", "")),
+                    "cid": int(target_cid),
+                    "sculpted": bool(sculpt_auto_success),
+                    "passed": bool(passed),
+                    "damage_total": int(total_damage),
+                    "save_ms": round((t_save_end - t_target_start) * 1000.0, 3),
+                    "damage_roll_ms": round((t_roll_end - t_save_end) * 1000.0, 3),
+                    "apply_damage_ms": round((t_apply_end - t_roll_end) * 1000.0, 3),
+                    "log_ms": round((t_log_end - t_apply_end) * 1000.0, 3),
+                    "total_ms": round((t_log_end - t_target_start) * 1000.0, 3),
+                })
+
+        t_per_target_loop_end = time.perf_counter() if perf_on else 0.0
         if removed:
             pre_order = [x.cid for x in self._display_order()] if hasattr(self, "_display_order") else []
             if hasattr(self, "_remove_combatants_with_lan_cleanup"):
@@ -23222,9 +23366,32 @@ class InitiativeTracker(base.InitiativeTracker):
             if hasattr(self, "_retarget_current_after_removal"):
                 self._retarget_current_after_removal(removed, pre_order=pre_order)
         self._rebuild_table(scroll_to_current=True)
+        t_pre_broadcast = time.perf_counter() if perf_on else 0.0
         self._lan_force_state_broadcast()
+        t_post_broadcast = time.perf_counter() if perf_on else 0.0
         if remove_after_resolve and aoe.get("pinned") is not True and not aoe.get("persistent") and not aoe.get("over_time"):
             self._lan_remove_aoe_by_id(aid)
+        if perf_on:
+            t_end = time.perf_counter()
+            self._damage_perf_emit({
+                "route": "lan_auto_resolve_cast_aoe",
+                "spell_name": spell_name,
+                "spell_slug": str(spell_slug or ""),
+                "spell_id": str(spell_id or ""),
+                "slot_level": int(slot_level) if isinstance(slot_level, int) else slot_level,
+                "actor_cid": int(getattr(caster, "cid", 0) or 0) if caster is not None else None,
+                "actor_name": str(getattr(caster, "name", "") or "") if caster is not None else "",
+                "selected_target_count": len(included),
+                "affected_target_count": len(perf_targets),
+                "sculpt_target_count": int(perf_sculpt_count),
+                "damage_application_count": int(perf_apply_count),
+                "log_line_count": int(perf_log_count),
+                "removed_count": len(removed),
+                "per_target_loop_ms": round((t_per_target_loop_end - perf_t0) * 1000.0, 3),
+                "broadcast_total_ms": round((t_post_broadcast - t_pre_broadcast) * 1000.0, 3),
+                "total_apply_damage_ms": round((t_end - perf_t0) * 1000.0, 3),
+                "per_target": perf_targets,
+            })
         return True
 
     def _lan_remove_aoe_by_id(self, aid: int) -> None:
@@ -44538,6 +44705,8 @@ class InitiativeTracker(base.InitiativeTracker):
         }
 
     def _dm_monster_capability_resolve_targets(self, *, actor_cid: Any, payload: Dict[str, Any]) -> Dict[str, Any]:
+        perf_on = self._damage_perf_enabled()
+        perf_t0 = time.perf_counter() if perf_on else 0.0
         actor, error, normalized_actor_cid = self._dm_validate_monster_actor_for_turn(actor_cid)
         if actor is None:
             return {"ok": False, "error": error or "Invalid actor."}
@@ -44661,8 +44830,10 @@ class InitiativeTracker(base.InitiativeTracker):
                 current = self._monster_resource_state[ammo_current_key]
                 self._monster_resource_state[ammo_current_key] = max(0, current - ammo_spent)
 
+        perf_targets: List[Dict[str, Any]] = []
         results: List[Dict[str, Any]] = []
         for row in rows:
+            t_target_start = time.perf_counter() if perf_on else 0.0
             target_cid = row["target_cid"]
             outcome = row["outcome"]
             damage_entries: List[Dict[str, Any]] = []
@@ -44723,8 +44894,19 @@ class InitiativeTracker(base.InitiativeTracker):
                         action="apply",
                     )
                     target_result["effects_applied"].append(effect_result)
+            if perf_on:
+                t_target_end = time.perf_counter()
+                perf_targets.append({
+                    "name": target_result["target_name"],
+                    "cid": int(target_cid),
+                    "outcome": outcome,
+                    "damage_applied": bool(target_result.get("damage_applied")),
+                    "damage_total": int(sum(int((e or {}).get("amount") or 0) for e in damage_entries)),
+                    "total_ms": round((t_target_end - t_target_start) * 1000.0, 3),
+                })
             results.append(target_result)
 
+        t_per_target_loop_end = time.perf_counter() if perf_on else 0.0
         if (apply_damage or apply_effects) and active_seq and active_seq.get("turn_marker") == (self.round_num, self.turn_num):
             # Only increment if NO errors occurred in results
             if not any(r.get("error") for r in results):
@@ -44732,11 +44914,32 @@ class InitiativeTracker(base.InitiativeTracker):
                     active_seq["children"][cap_id]["completed"] += 1
                     active_seq["total_completed"] += 1
 
+        t_pre_broadcast = time.perf_counter() if perf_on else 0.0
         if apply_damage or apply_effects:
             try:
                 self._lan_force_state_broadcast()
             except Exception:
                 pass
+        t_post_broadcast = time.perf_counter() if perf_on else 0.0
+
+        if perf_on:
+            t_end = time.perf_counter()
+            self._damage_perf_emit({
+                "route": "dm_monster_capability_resolve_targets",
+                "capability_id": str(cap_id or ""),
+                "capability_name": str(cap.get("name") or ""),
+                "actor_cid": int(normalized_actor_cid),
+                "actor_name": str(getattr(actor, "name", "") or ""),
+                "apply_damage": bool(apply_damage),
+                "apply_effects": bool(apply_effects),
+                "selected_target_count": len(rows),
+                "affected_target_count": len(perf_targets),
+                "damage_application_count": sum(1 for r in perf_targets if r.get("damage_applied")),
+                "per_target_loop_ms": round((t_per_target_loop_end - perf_t0) * 1000.0, 3),
+                "broadcast_total_ms": round((t_post_broadcast - t_pre_broadcast) * 1000.0, 3),
+                "total_apply_damage_ms": round((t_end - perf_t0) * 1000.0, 3),
+                "per_target": perf_targets,
+            })
 
         res = {
             "ok": True,
