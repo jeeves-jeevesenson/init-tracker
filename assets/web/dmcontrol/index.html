@@ -363,6 +363,7 @@
       <h1>DM Control</h1>
       <div id="combatStatus" class="actor-meta">Loading state...</div>
       <button id="combatControlBtn" class="workspace-link" style="background:var(--accent-primary); color:white; font-weight:bold; border-color:var(--accent-primary); margin-left: auto; display:none"></button>
+      <button id="toolboxBtn" class="workspace-link" style="margin-left: 8px;">🛠 Toolbox</button>
       <a href="/dm" class="workspace-link">↩ DM Cockpit</a>
     </header>
 
@@ -400,6 +401,28 @@
       <div class="modal-footer" id="modalFooter">
         <button class="cancel-btn" onclick="closeLocalResolutionTray()">Cancel</button>
         <button class="apply-btn" id="modalApplyBtn" onclick="applyLocalResolutionResultsFromModal()">Apply Result</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- DM Toolbox Modal -->
+  <div id="toolboxModal" class="modal-overlay">
+    <div class="modal-content" style="max-width: 400px;">
+      <div class="modal-header">
+        <h2 id="toolboxTitle">DM Toolbox</h2>
+        <button class="workspace-link" onclick="closeToolboxModal()" style="padding:4px 8px; font-size:11px;">✕</button>
+      </div>
+      <div class="modal-body" id="toolboxBody">
+        <div class="modal-field">
+          <span class="modal-label">Rest Controls</span>
+          <button class="apply-btn" onclick="handleLongRest()" id="longRestBtn" style="margin-top: 8px;">Long Rest Players</button>
+          <p style="font-size: 11px; color: var(--muted); margin-top: 8px;">
+            Restores HP, spell slots, and long-rest resource pools for all player characters.
+          </p>
+        </div>
+      </div>
+      <div class="modal-footer">
+        <button class="cancel-btn" onclick="closeToolboxModal()" style="flex: 1;">Close</button>
       </div>
     </div>
   </div>
@@ -1153,6 +1176,58 @@
       const actor = (state?.combatants || []).find(c => String(c.cid) === String(state?.active_cid));
       renderActionPanel(actor, capabilitySummary);
     }
+
+    function openToolboxModal() {
+      const modal = document.getElementById('toolboxModal');
+      if (modal) modal.classList.add('active');
+    }
+
+    function closeToolboxModal() {
+      const modal = document.getElementById('toolboxModal');
+      if (modal) modal.classList.remove('active');
+    }
+
+    async function handleLongRest() {
+      const btn = document.getElementById('longRestBtn');
+      if (!btn || btn.disabled) return;
+      const originalText = btn.textContent;
+      btn.disabled = true;
+      btn.textContent = 'Resting...';
+
+      try {
+        const resp = await fetch('/api/dm/combat/long-rest', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            scope: 'players',
+            restore_hp: true,
+            restore_spell_slots: true,
+            restore_long_rest_resources: true,
+            clear_death_saves: true,
+            clear_turn_state: true,
+            clear_temp_hp: true,
+            end_concentration: true,
+          })
+        });
+        const data = await resp.json();
+        if (data.ok) {
+          showTransientStatus(data.message || 'Long Rest Applied.', 'var(--heal)');
+          if (data.snapshot) {
+            applyAuthoritativeSnapshot(data.snapshot);
+          }
+          closeToolboxModal();
+        } else {
+          showTransientStatus(data.error || 'Long rest failed.', 'var(--danger)');
+        }
+      } catch (err) {
+        console.error('Long rest error:', err);
+        showTransientStatus('Network error during long rest.', 'var(--danger)');
+      } finally {
+        btn.disabled = false;
+        btn.textContent = originalText;
+      }
+    }
+    document.getElementById('toolboxBtn')?.addEventListener('click', openToolboxModal);
 
     async function activateModifier(id) {
       if (localResolutionInFlight || !state) return;

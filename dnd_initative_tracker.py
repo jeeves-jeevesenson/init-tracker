@@ -4217,6 +4217,35 @@ class LanController:
             except Exception:
                 raise HTTPException(status_code=500, detail="Failed to end combat.")
 
+        @self._fastapi_app.post("/api/dm/combat/long-rest")
+        async def dm_long_rest(request: Request, payload: Dict[str, Any] = Body(...)):
+            """Perform an authoritative long rest on a group of combatants."""
+            _check_dm_auth(request)
+            if _dm_service is None:
+                raise HTTPException(status_code=503, detail="DM combat service unavailable.")
+            try:
+                result = _dm_service.long_rest(
+                    scope=payload.get("scope", "players"),
+                    restore_hp=payload.get("restore_hp", True),
+                    restore_spell_slots=payload.get("restore_spell_slots", True),
+                    restore_long_rest_resources=payload.get("restore_long_rest_resources", True),
+                    clear_death_saves=payload.get("clear_death_saves", True),
+                    clear_turn_state=payload.get("clear_turn_state", True),
+                    clear_temp_hp=payload.get("clear_temp_hp", True),
+                    end_concentration=payload.get("end_concentration", True),
+                    remove_concentration_aoes=payload.get("remove_concentration_aoes", True),
+                    include_npc_allies=payload.get("include_npc_allies", False),
+                    include_enemies=payload.get("include_enemies", False),
+                )
+                if not result.get("ok"):
+                    raise HTTPException(status_code=400, detail=result.get("error", "Long rest failed."))
+                result["snapshot"] = _dm_console_snapshot()
+                return result
+            except HTTPException:
+                raise
+            except Exception:
+                raise HTTPException(status_code=500, detail="Failed to apply long rest.")
+
         @self._fastapi_app.get("/api/dm/encounter/options")
         async def dm_encounter_options(request: Request):
             """Return browser-facing encounter setup choices for the DM console.
