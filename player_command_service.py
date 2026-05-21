@@ -6533,11 +6533,39 @@ class PlayerCommandService:
                 choice=choice,
                 ws_id=ws_id,
             )
+
+        # Generic reaction resolution (fallback for unhandled or generic triggers)
+        from player_command_contracts import REACTION_ACCEPTED, REACTION_DECLINED, REACTION_REJECTED
+
         if choice in ("", "decline", "ignore"):
             self.prompts.pop_prompt(request_id)
-            return {"ok": True, "trigger": trigger, "choice": choice, "prompt_state": "declined"}
-        self.prompts.set_lifecycle_state(request_id, "accepted", accepted_choice=choice)
-        return {"ok": True, "trigger": trigger, "choice": choice, "prompt_state": "accepted"}
+            return {
+                "ok": True,
+                "status": REACTION_DECLINED,
+                "message": "Reaction declined.",
+                "trigger": trigger,
+                "choice": choice,
+            }
+
+        # Basic accept: if choice matches 'accept' or any explicitly allowed choice kind
+        allowed_kinds = {str(c.get("kind") or "").strip().lower() for c in (offer.get("allowed_choices") or [])}
+        if choice == "accept" or choice in allowed_kinds:
+            self.prompts.pop_prompt(request_id)
+            return {
+                "ok": True,
+                "status": REACTION_ACCEPTED,
+                "message": "Reaction accepted.",
+                "trigger": trigger,
+                "choice": choice,
+            }
+
+        return {
+            "ok": False,
+            "status": REACTION_REJECTED,
+            "reason": "invalid_choice",
+            "trigger": trigger,
+            "choice": choice,
+        }
 
     def _resolve_shield_reaction(
         self,
@@ -7213,6 +7241,8 @@ class PlayerCommandService:
           - trigger-specific reaction resolution (shield, hellish rebuke,
             absorb elements, interception, generic accept/decline)
         """
+        t = self._tracker
+        self.prompts.expire_offers()
         request_contract = build_reaction_response_contract(msg, cid=cid, ws_id=ws_id)
         request_id = str(msg.get("request_id") or "").strip()
         if not request_id:
@@ -7237,6 +7267,38 @@ class PlayerCommandService:
                 reason="reactor_mismatch",
                 request=request_contract,
             )
+
+        # Basic reaction availability check
+        choice = str(msg.get("choice") or "").strip().lower()
+        if choice not in ("", "decline", "ignore"):
+            reactor = t.combatants.get(reactor_got)
+            if reactor is not None:
+                # If the prompt explicitly says it uses a reaction (default), check it.
+                # Specialized triggers might override this or use other resources.
+                prompt_kind = str(prompt.get("prompt_kind") or "reaction").strip().lower()
+                if prompt_kind == "reaction":
+                    if int(getattr(reactor, "reaction_remaining", 0) or 0) <= 0:
+                        self._toast(ws_id, "No reaction remaining, matey.")
+                        from player_command_contracts import REACTION_REJECTED
+                        # Send rejection result
+                        send_fn = getattr(t, "_send_reaction_result", None)
+                        if callable(send_fn):
+                            send_fn(
+                                ws_id,
+                                False,
+                                REACTION_REJECTED,
+                                request_id=request_id,
+                                reactor_cid=reactor_got,
+                                message="No reaction remaining.",
+                                reason="no_reaction",
+                            )
+                        return build_dispatch_result(
+                            "reaction_response",
+                            False,
+                            reason="no_reaction",
+                            request=request_contract,
+                        )
+
         adjudicate_result = self._resolve_reaction_response(
             msg,
             cid=reactor_got,
@@ -7267,6 +7329,25 @@ class PlayerCommandService:
             result_kwargs["prompt_state"] = adjudicate_result.get("prompt_state")
         if "contest" in adjudicate_result:
             result_kwargs["contest"] = adjudicate_result.get("contest")
+
+        # Send authoritative reaction result
+        send_fn = getattr(t, "_send_reaction_result", None)
+        if callable(send_fn):
+            try:
+                from player_command_contracts import REACTION_ACCEPTED, REACTION_DECLINED, REACTION_REJECTED
+                status = str(adjudicate_result.get("status") or (REACTION_ACCEPTED if resolve_ok else REACTION_REJECTED))
+                send_fn(
+                    ws_id,
+                    resolve_ok,
+                    status,
+                    request_id=request_id,
+                    reactor_cid=reactor_got,
+                    message=str(adjudicate_result.get("message") or ""),
+                    reason=reason if not resolve_ok else None,
+                )
+            except Exception:
+                pass
+
         return build_dispatch_result(
             "reaction_response",
             resolve_ok,

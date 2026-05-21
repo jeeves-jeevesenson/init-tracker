@@ -34896,13 +34896,92 @@ class InitiativeTracker(base.InitiativeTracker):
         """
         svc = self.__dict__.get("_player_commands")
         if svc is None:
+            from player_command_service import PlayerCommandService
             svc = PlayerCommandService(self)
             self.__dict__["_player_commands"] = svc
         return svc
 
+    def _create_pending_reaction(
+        self,
+        *,
+        trigger: str,
+        reactor_cid: int,
+        source_cid: Optional[int] = None,
+        target_cid: Optional[int] = None,
+        prompt: str = "",
+        choices: Optional[List[Dict[str, Any]]] = None,
+        metadata: Optional[Dict[str, Any]] = None,
+        expires_in: float = 15.0,
+    ) -> str:
+        """Create a pending reaction offer and broadcast it to the reactor."""
+        service = self._ensure_player_commands()
+        ws_ids = self._find_ws_for_cid(reactor_cid)
+
+        # Use default choices if none provided
+        if not choices:
+            choices = [
+                {"kind": "accept", "label": "Accept"},
+                {"kind": "decline", "label": "Decline"},
+            ]
+
+        record = service.prompts.create_reaction_offer(
+            reactor_cid=int(reactor_cid),
+            trigger=str(trigger),
+            source_cid=int(source_cid) if source_cid is not None else -1,
+            target_cid=int(target_cid) if target_cid is not None else -1,
+            allowed_choices=choices,
+            ws_ids=ws_ids,
+            extra_payload={"prompt": prompt, **(metadata or {})},
+            expires_in_seconds=expires_in,
+        )
+        request_id = str(record["prompt_id"])
+
+        # Broadcast the offer
+        from player_command_contracts import build_reaction_offer_event
+        offer_msg = build_reaction_offer_event(record)
+        for ws_id in ws_ids:
+            try:
+                import asyncio
+                loop = getattr(getattr(self, "_lan", None), "_loop", None)
+                if loop:
+                    asyncio.run_coroutine_threadsafe(self._lan._send_async(ws_id, offer_msg), loop)
+            except Exception:
+                pass
+
+        return request_id
+
     def _send_spell_target_result(self, ws_id: Any, payload: Dict[str, Any]) -> None:
         """Helper to send spell_target_result payloads to a specific client."""
         loop = getattr(self._lan, "_loop", None)
+        if ws_id is not None and loop:
+            try:
+                import asyncio
+                asyncio.run_coroutine_threadsafe(self._lan._send_async(ws_id, payload), loop)
+            except Exception:
+                pass
+
+    def _send_reaction_result(
+        self,
+        ws_id: Any,
+        ok: bool,
+        status: str,
+        *,
+        request_id: str,
+        reactor_cid: int,
+        message: str = "",
+        reason: Optional[str] = None,
+    ) -> None:
+        """Helper to send reaction_result payloads to a specific client."""
+        from player_command_contracts import build_reaction_result
+        payload = build_reaction_result(
+            ok=ok,
+            status=status,
+            request_id=request_id,
+            reactor_cid=reactor_cid,
+            message=message,
+            reason=reason,
+        )
+        loop = getattr(getattr(self, "_lan", None), "_loop", None)
         if ws_id is not None and loop:
             try:
                 import asyncio
@@ -41029,6 +41108,17 @@ class InitiativeTracker(base.InitiativeTracker):
 
         if typ == "reaction_response":
             self._ensure_player_commands().reaction_response(msg, cid=cid, ws_id=ws_id)
+            return
+
+        if typ == "test_reaction_trigger":
+            target_cid = _normalize_cid_value(msg.get("target_cid"), "test_reaction.target")
+            if target_cid is not None:
+                self._create_pending_reaction(
+                    trigger="test_trigger",
+                    reactor_cid=target_cid,
+                    prompt="This is a test reaction prompt. Accept?",
+                )
+                self._lan.toast(ws_id, "Test reaction triggered.")
             return
 
         if typ in INITIATIVE_REACTION_SPECIALTY_COMMAND_TYPES:

@@ -39,6 +39,12 @@ CAST_SUMMON_CREATED = "CAST_SUMMON_CREATED"
 CAST_UTILITY_LOGGED = "CAST_UTILITY_LOGGED"
 CAST_CANCELLED = "CAST_CANCELLED"
 
+REACTION_PROMPT_CREATED = "REACTION_PROMPT_CREATED"
+REACTION_ACCEPTED = "REACTION_ACCEPTED"
+REACTION_DECLINED = "REACTION_DECLINED"
+REACTION_EXPIRED = "REACTION_EXPIRED"
+REACTION_REJECTED = "REACTION_REJECTED"
+
 
 SPECIAL_REACTION_TRIGGERS = {
     "shield",
@@ -1712,6 +1718,27 @@ def build_hellish_rebuke_resolve_start_payload(
 def prompt_resume_legacy_message(prompt: Dict[str, Any]) -> Dict[str, Any]:
     resume_dispatch = prompt.get("resume") if isinstance(prompt.get("resume"), dict) else None
     return apply_resume_dispatch(resume_dispatch) or {}
+
+
+def build_reaction_result(
+    *,
+    ok: bool,
+    status: str,
+    request_id: str,
+    reactor_cid: int,
+    message: str = "",
+    reason: Optional[str] = None,
+) -> Dict[str, Any]:
+    return {
+        "type": "reaction_result",
+        "contract": _contract("player_command.reaction_result"),
+        "ok": bool(ok),
+        "status": str(status),
+        "request_id": str(request_id),
+        "reactor_cid": int(reactor_cid),
+        "message": str(message),
+        "reason": str(reason) if reason else None,
+    }
 
 
 def build_spell_cast_result(

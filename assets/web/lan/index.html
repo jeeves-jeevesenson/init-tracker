@@ -18003,6 +18003,24 @@ __DAMAGE_TYPE_OPTIONS__
             damage_entries: damageEntries,
           });
         });
+      } else if (msg.type === "reaction_result") {
+        const status = String(msg.status || "");
+        const finished = status === "REACTION_ACCEPTED"
+          || status === "REACTION_DECLINED"
+          || status === "REACTION_EXPIRED"
+          || status === "REACTION_REJECTED";
+        
+        if (finished) {
+           if (reactionOfferModal && String(msg.request_id) === pendingReactionRequestId) {
+             reactionOfferModal.classList.remove("show");
+             reactionOfferModal.setAttribute("aria-hidden", "true");
+             pendingReactionOffer = null;
+             pendingReactionRequestId = "";
+           }
+        }
+        if (msg.message) {
+          localToast(msg.message, msg.ok ? "heal" : "danger");
+        }
       } else if (msg.type === "spell_cast_result") {
         if (msg.ok === false) {
           clearActiveCastInteractionState(msg.message || msg.reason || "Spell rejected.");
