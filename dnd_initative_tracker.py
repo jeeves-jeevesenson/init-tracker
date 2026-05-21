@@ -95,6 +95,7 @@ from map_state import (
     tactical_preset_author_summary,
     tactical_preset_catalog,
 )
+from spell_engine_primitives import AoeSpec, resolve_aoe_cells, is_cell_in_aoe
 from ship_blueprints import load_repo_runtime_ship_blueprints
 from player_command_contracts import (
     AOE_MANIPULATION_COMMAND_TYPES,
@@ -114,6 +115,19 @@ from player_command_contracts import (
     build_spell_target_request_contract,
     finalize_attack_result_payload,
     finalize_spell_target_result_payload,
+    CAST_APPLIED,
+    CAST_CREATED_PERSISTENT_EFFECT,
+    CAST_NEEDS_MANUAL_DAMAGE,
+    CAST_NEEDS_TARGET,
+    CAST_NEEDS_PLACEMENT,
+    CAST_NO_TARGETS,
+    CAST_REJECTED,
+    CAST_COUNTERSPELL_PENDING,
+    CAST_SUMMON_PENDING_DM,
+    CAST_SUMMON_CREATED,
+    CAST_UTILITY_LOGGED,
+    CAST_CANCELLED,
+    build_spell_cast_result,
 )
 from combatant_name_service import CombatantNameService
 from player_command_service import PlayerCommandService
@@ -21004,91 +21018,28 @@ class InitiativeTracker(base.InitiativeTracker):
     def _lan_compute_included_units_for_aoe(self, aoe: Dict[str, Any]) -> List[int]:
         if not isinstance(aoe, dict):
             return []
-        kind = str(aoe.get("kind") or "").strip().lower()
-        if not kind:
+        
+        # Reconstruct a minimal spec from the stored effect dict
+        shape = str(aoe.get("kind") or aoe.get("shape") or "").strip().lower()
+        if not shape:
             return []
-        _cols, _rows, _obstacles, _rough, positions = self._lan_live_map_data()
-        cx = float(aoe.get("cx") or 0.0)
-        cy = float(aoe.get("cy") or 0.0)
-        included: List[int] = []
-        token_half = 0.5
-        if kind in ("circle", "sphere", "cylinder"):
-            r2 = float(aoe.get("radius_sq") or 0.0) ** 2
-            for cid, pos in positions.items():
-                px, py = float(pos[0]), float(pos[1])
-                if (px - cx) ** 2 + (py - cy) ** 2 <= r2:
-                    included.append(int(cid))
-        elif kind in ("line", "wall"):
-            length_sq = float(aoe.get("length_sq") or 0.0)
-            width_sq = float(aoe.get("width_sq") or 0.0)
-            angle_deg = aoe.get("angle_deg")
-            if angle_deg is None:
-                orient = str(aoe.get("orient") or "vertical").strip().lower()
-                angle_deg = 0.0 if orient == "horizontal" else 90.0
-            angle_rad = math.radians(float(angle_deg))
-            cos_a = math.cos(-angle_rad)
-            sin_a = math.sin(-angle_rad)
-            for cid, pos in positions.items():
-                dx = float(pos[0]) - cx
-                dy = float(pos[1]) - cy
-                rx = dx * cos_a - dy * sin_a
-                ry = dx * sin_a + dy * cos_a
-                if abs(rx) <= (length_sq / 2.0) + token_half and abs(ry) <= (width_sq / 2.0):
-                    included.append(int(cid))
-        elif kind == "cone":
-            length_sq = float(aoe.get("length_sq") or 0.0)
-            spread_deg = aoe.get("spread_deg")
-            has_spread = spread_deg is not None
-            if spread_deg is None:
-                spread_deg = aoe.get("angle_deg")
-            if spread_deg is None:
-                spread_deg = 90.0
-            spread_deg = float(spread_deg)
-            orient = str(aoe.get("orient") or "vertical").strip().lower()
-            heading_deg = 0.0 if orient == "horizontal" else -90.0
-            if has_spread and aoe.get("angle_deg") is not None:
-                heading_deg = float(aoe.get("angle_deg"))
-            heading_rad = math.radians(float(heading_deg))
-            half_spread = math.radians(spread_deg / 2.0)
-            for cid, pos in positions.items():
-                dx = float(pos[0]) - cx
-                dy = float(pos[1]) - cy
-                dist = math.hypot(dx, dy)
-                if dist > length_sq + token_half:
-                    continue
-                angle = math.atan2(dy, dx) - heading_rad
-                while angle <= -math.pi:
-                    angle += math.pi * 2
-                while angle > math.pi:
-                    angle -= math.pi * 2
-                if abs(angle) <= half_spread:
-                    included.append(int(cid))
-        else:
-            half = float(aoe.get("side_sq") or 0.0) / 2.0
-            angle = aoe.get("angle_deg") if kind in ("square", "cube") else None
-            if angle is None:
-                x1, y1 = cx - half, cy - half
-                x2, y2 = cx + half, cy + half
-                for cid, pos in positions.items():
-                    px, py = float(pos[0]), float(pos[1])
-                    if x1 <= px <= x2 and y1 <= py <= y2:
-                        included.append(int(cid))
-            else:
-                angle_rad = math.radians(float(angle))
-                cos_a = math.cos(-angle_rad)
-                sin_a = math.sin(-angle_rad)
-                for cid, pos in positions.items():
-                    dx = float(pos[0]) - cx
-                    dy = float(pos[1]) - cy
-                    rx = dx * cos_a - dy * sin_a
-                    ry = dx * sin_a + dy * cos_a
-                    if abs(rx) <= half and abs(ry) <= half:
-                        included.append(int(cid))
-        order = [c.cid for c in self._display_order()] if hasattr(self, "_display_order") else []
-        order_idx = {int(c): i for i, c in enumerate(order)}
-        included.sort(key=lambda item: order_idx.get(int(item), 10**9))
-        return included
-
+            
+        spec = AoeSpec(
+            shape=shape,
+            origin_mode="point" if aoe.get("fixed_to_caster") is not True else "caster",
+            origin_col=float(aoe.get("cx") or 0.0),
+            origin_row=float(aoe.get("cy") or 0.0),
+            target_col=float(aoe.get("ax")) if aoe.get("ax") is not None else None,
+            target_row=float(aoe.get("ay")) if aoe.get("ay") is not None else None,
+            radius_ft=float(aoe.get("radius_ft") or 0.0),
+            length_ft=float(aoe.get("length_ft") or aoe.get("size") or 0.0),
+            width_ft=float(aoe.get("width_ft") or 5.0),
+            spell_id=str(aoe.get("spell_id") or ""),
+            spell_name=str(aoe.get("name") or "")
+        )
+        
+        cells = self._resolve_aoe_cells(spec)
+        return self._resolve_aoe_targets(spec, cells)
     def _lan_current_turn_key(self) -> Tuple[int, int, Optional[int]]:
         round_num = int(getattr(self, "round_num", 0) or 0)
         turn_num = int(getattr(self, "turn_num", 0) or 0)
@@ -21590,6 +21541,88 @@ class InitiativeTracker(base.InitiativeTracker):
         ]
         for aid in target_ids:
             self._clear_map_spell_effect(int(aid), end_concentration_if_bound=False)
+
+    def _normalize_aoe_spec(self, spell_preset: Dict[str, Any], payload: Dict[str, Any], caster: Optional[Combatant]) -> AoeSpec:
+        """
+        Transforms a spell preset and request payload into a normalized AoeSpec.
+        """
+        shape = str(payload.get("shape") or payload.get("kind") or "").strip().lower()
+        
+        origin_mode = "point"
+        cx = float(payload.get("cx") or 0.0)
+        cy = float(payload.get("cy") or 0.0)
+        
+        # Determine origin based on preset and payload
+        targeting = spell_preset.get("mechanics", {}).get("targeting", {})
+        origin_type = str(targeting.get("origin") or "").strip().lower()
+        
+        if origin_type == "self" or payload.get("fixed_to_caster"):
+            origin_mode = "caster"
+            if caster:
+                cx = float(caster.col)
+                cy = float(caster.row)
+        
+        target_col = payload.get("ax") # Often used as 'aim point' for directional AoEs
+        target_row = payload.get("ay")
+        if target_col is not None: target_col = float(target_col)
+        if target_row is not None: target_row = float(target_row)
+        
+        # Dimensions
+        feet_per_square = float(self._lan_feet_per_square())
+        radius_ft = float(payload.get("radius_ft") or 0.0)
+        length_ft = float(payload.get("length_ft") or payload.get("size") or 0.0)
+        width_ft = float(payload.get("width_ft") or 5.0) # Default line width
+        
+        return AoeSpec(
+            shape=shape,
+            origin_mode=origin_mode,
+            origin_col=cx,
+            origin_row=cy,
+            target_col=target_col,
+            target_row=target_row,
+            radius_ft=radius_ft,
+            length_ft=length_ft,
+            width_ft=width_ft,
+            include_origin=True,
+            persistent=bool(payload.get("persistent") or payload.get("over_time")),
+            concentration=bool(payload.get("concentration")),
+            spell_id=str(spell_preset.get("id") or ""),
+            spell_name=str(spell_preset.get("name") or ""),
+            save_type=str(payload.get("save_type") or ""),
+            damage_type=str(payload.get("damage_type") or ""),
+            dc=payload.get("dc")
+        )
+
+    def _resolve_aoe_cells(self, spec: AoeSpec) -> Set[Tuple[int, int]]:
+        """Wraps spell_engine_primitives.resolve_aoe_cells with current map bounds."""
+        cols = int(getattr(self, "_lan_grid_cols", 20))
+        rows = int(getattr(self, "_lan_grid_rows", 20))
+        feet_per_square = float(self._lan_feet_per_square())
+        return resolve_aoe_cells(spec, cols, rows, feet_per_square)
+
+    def _resolve_aoe_targets(self, spec: AoeSpec, cells: Set[Tuple[int, int]]) -> List[int]:
+        """
+        Returns a list of combatant IDs within the affected cells, 
+        respecting line-of-effect.
+        """
+        included: List[int] = []
+        map_query = MapQueryAPI(self._lan_get_map_state())
+        
+        # Get positions of all combatants
+        _cols, _rows, _obstacles, _rough, positions = self._lan_live_map_data()
+        
+        for cid, pos in positions.items():
+            pc, pr = int(pos[0]), int(pos[1])
+            if (pc, pr) in cells:
+                # Check line of effect from origin to target cell
+                if not map_query.blocks_line_of_effect(spec.origin_col, spec.origin_row, pc, pr):
+                    included.append(int(cid))
+        return included
+
+    def _validate_aoe_placement(self, spec: AoeSpec) -> Tuple[bool, str]:
+        """Validates if the AOE placement is legal (e.g. within range)."""
+        # Basic range validation could go here
+        return True, ""
 
     def _map_spell_effect_targets(self, effect: Dict[str, Any]) -> List[int]:
         return self._lan_compute_included_units_for_aoe(effect if isinstance(effect, dict) else {})
@@ -34823,6 +34856,16 @@ class InitiativeTracker(base.InitiativeTracker):
             self.__dict__["_player_commands"] = svc
         return svc
 
+    def _send_spell_target_result(self, ws_id: Any, payload: Dict[str, Any]) -> None:
+        """Helper to send spell_target_result payloads to a specific client."""
+        loop = getattr(self._lan, "_loop", None)
+        if ws_id is not None and loop:
+            try:
+                import asyncio
+                asyncio.run_coroutine_threadsafe(self._lan._send_async(ws_id, payload), loop)
+            except Exception:
+                pass
+
     def _adjudicate_reaction_response(
         self,
         msg: Dict[str, Any],
@@ -34934,35 +34977,39 @@ class InitiativeTracker(base.InitiativeTracker):
                     pass
             return aura_bonus
 
-        target_cid = _normalize_cid_value(msg.get("target_cid"), "spell_target_request.target_cid", log_fn=log_warning)
-        if target_cid is None:
-            target_cid = int(cid)
-        target = self.combatants.get(int(target_cid)) if target_cid is not None else None
-        if target is None:
-            self._lan.toast(ws_id, "Pick a valid target, matey.")
-            return
+        target_cid_val = _normalize_cid_value(msg.get("target_cid"), "spell_target_request.target_cid", log_fn=log_warning)
+        if target_cid_val is None:
+            target_cid_val = int(cid)
+        target = self.combatants.get(int(target_cid_val)) if target_cid_val is not None else None
 
         spell_name = str(msg.get("spell_name") or msg.get("name") or "Spell").strip() or "Spell"
         preset = self._find_spell_preset(msg.get("spell_slug"), msg.get("spell_id"))
-        mechanics = preset.get("mechanics") if isinstance(preset, dict) and isinstance(preset.get("mechanics"), dict) else {}
-        sequence = mechanics.get("sequence") if isinstance(mechanics.get("sequence"), list) else []
         preset_slug = str((preset or {}).get("slug") or "").strip().lower()
         preset_id = str((preset or {}).get("id") or "").strip().lower()
-        request_slot_level = _parse_int(msg.get("slot_level"), None)
-        if request_slot_level is None and isinstance(preset, dict):
-            request_slot_level = _parse_int(preset.get("level"), None)
 
         def _reject_invalid_spell_target(reason: str) -> None:
-            msg["_spell_target_result"] = build_spell_target_rejection_payload(
+            payload = build_spell_target_rejection_payload(
                 attacker_cid=int(cid),
-                target_cid=int(target_cid),
+                target_cid=int(target_cid_val),
                 spell_name=spell_name,
                 spell_slug=preset_slug or None,
                 spell_id=preset_id or None,
                 reason=reason,
             )
+            msg["_spell_target_result"] = payload
+            self._send_spell_target_result(ws_id, payload)
             self._lan.toast(ws_id, reason)
             log_warning(f"spell_target_request rejected: {reason}")
+
+        if target is None:
+            _reject_invalid_spell_target("Pick a valid target, matey.")
+            return
+
+        mechanics = preset.get("mechanics") if isinstance(preset, dict) and isinstance(preset.get("mechanics"), dict) else {}
+        sequence = mechanics.get("sequence") if isinstance(mechanics.get("sequence"), list) else []
+        request_slot_level = _parse_int(msg.get("slot_level"), None)
+        if request_slot_level is None and isinstance(preset, dict):
+            request_slot_level = _parse_int(preset.get("level"), None)
 
         summon_cfg = preset.get("summon") if isinstance(preset, dict) and isinstance(preset.get("summon"), dict) else None
         has_destination = msg.get("destination_col") is not None or msg.get("destination_row") is not None
@@ -37831,6 +37878,58 @@ class InitiativeTracker(base.InitiativeTracker):
                 pass
         self._lan.toast(ws_id, "Attack hits." if hit else "Attack misses.")
 
+    def _send_spell_result(
+        self,
+        ws_id: Any,
+        ok: bool,
+        status: str,
+        *,
+        spell_id: str,
+        spell_name: str,
+        caster_cid: Optional[int] = None,
+        message: str = "",
+        target_cids: Optional[List[int]] = None,
+        aoe_ids_added: Optional[List[str]] = None,
+        aoe_ids_removed: Optional[List[str]] = None,
+        hp_changes: Optional[List[Dict[str, Any]]] = None,
+        conditions_added: Optional[List[Dict[str, Any]]] = None,
+        resources_spent: Optional[List[Dict[str, Any]]] = None,
+        log_entries: Optional[List[str]] = None,
+        reason: Optional[str] = None,
+        needs_manual_damage: bool = False,
+        needs_target: bool = False,
+        needs_placement: bool = False,
+        needs_dm_action: bool = False,
+    ) -> None:
+        from player_command_contracts import build_spell_cast_result
+        result = build_spell_cast_result(
+            ok=ok,
+            status=status,
+            spell_id=spell_id,
+            spell_name=spell_name,
+            caster_cid=caster_cid,
+            message=message,
+            target_cids=target_cids,
+            aoe_ids_added=aoe_ids_added,
+            aoe_ids_removed=aoe_ids_removed,
+            hp_changes=hp_changes,
+            conditions_added=conditions_added,
+            resources_spent=resources_spent,
+            log_entries=log_entries,
+            reason=reason,
+            needs_manual_damage=needs_manual_damage,
+            needs_target=needs_target,
+            needs_placement=needs_placement,
+            needs_dm_action=needs_dm_action,
+        )
+        loop = getattr(self._lan, "_loop", None)
+        if ws_id is not None and loop:
+            try:
+                import asyncio
+                asyncio.run_coroutine_threadsafe(self._lan._send_async(ws_id, result), loop)
+            except Exception:
+                pass
+
     def _handle_cast_aoe_request(
         self,
         msg: Dict[str, Any],
@@ -37840,11 +37939,34 @@ class InitiativeTracker(base.InitiativeTracker):
         is_admin: bool,
         claimed: Optional[int],
     ) -> None:
+        perf_on = os.environ.get("LAN_PERF_DEBUG") == "1"
+        t0 = time.perf_counter() if perf_on else 0.0
+
         payload = msg.get("payload") or {}
-        raw_sculpted_cids = payload.get("sculpted_cids")
+        spell_slug = str(msg.get("spell_slug") or payload.get("spell_slug") or "").strip()
+        spell_id = str(msg.get("spell_id") or payload.get("spell_id") or "").strip()
+        preset_dict = self._find_spell_preset(spell_slug=spell_slug, spell_id=spell_id)
+        spell_name = self._spell_label_from_identifiers(
+            preset_dict.get("name") if isinstance(preset_dict, dict) else "",
+            preset_dict.get("slug") if isinstance(preset_dict, dict) else "",
+            spell_slug,
+            spell_id,
+        )
+
+        def _reject(reason: str, status: str = "CAST_REJECTED") -> None:
+            self._lan.toast(ws_id, reason)
+            self._send_spell_result(
+                ws_id, False, status,
+                spell_id=spell_id,
+                spell_name=spell_name,
+                caster_cid=cid,
+                message=reason,
+                reason=reason
+            )
+
         shape = str(payload.get("shape") or payload.get("kind") or "").strip().lower()
         if shape not in ("circle", "square", "line", "sphere", "cube", "cone", "cylinder", "wall", "summon"):
-            self._lan.toast(ws_id, "Pick a valid spell shape, matey.")
+            _reject("Pick a valid spell shape, matey.")
             return
         spend = self._resolve_spell_spend_type(preset=None, msg=msg, payload=payload)
         slot_level = None
@@ -37881,30 +38003,30 @@ class InitiativeTracker(base.InitiativeTracker):
         c = self.combatants.get(cid) if cid is not None else None
         if shape == "summon":
             if cid is None:
-                self._lan.toast(ws_id, "Pick a valid caster first, matey.")
+                _reject("Pick a valid caster first, matey.")
                 return
             if c is None:
-                self._lan.toast(ws_id, "That scallywag ain’t in combat no more.")
+                _reject("That scallywag ain’t in combat no more.")
                 return
             if not is_admin:
                 if spend == "bonus":
                     if not self._use_bonus_action(c):
-                        self._lan.toast(ws_id, "No bonus actions left, matey.")
+                        _reject("No bonus actions left, matey.")
                         return
                 elif spend == "reaction":
                     if not self._use_reaction(c):
-                        self._lan.toast(ws_id, "No reactions left, matey.")
+                        _reject("No reactions left, matey.")
                         return
                 else:
                     if not self._use_action(c):
-                        self._lan.toast(ws_id, "No actions left, matey.")
+                        _reject("No actions left, matey.")
                         return
             ok_custom, err_custom, spawned_custom = self._spawn_custom_summons_from_payload(
                 caster_cid=int(cid),
                 payload=payload,
             )
             if not ok_custom:
-                self._lan.toast(ws_id, err_custom or "Custom summon failed, matey.")
+                _reject(err_custom or "Custom summon failed, matey.")
                 return
             self._rebuild_table(scroll_to_current=True)
             self._lan_force_state_broadcast()
@@ -37937,7 +38059,7 @@ class InitiativeTracker(base.InitiativeTracker):
             force_fixed_to_caster = False
         summon_cfg = preset.get("summon") if isinstance(preset, dict) and isinstance(preset.get("summon"), dict) else None
         if summon_cfg and not is_admin:
-            self._lan.toast(ws_id, "Summon spawning is DM-only for now, matey.")
+            _reject("Summon spawning is DM-only for now, matey.", status=CAST_SUMMON_PENDING_DM)
             return
 
         # Counterspell offer for the AoE / non-targeted cast path.
@@ -37999,97 +38121,24 @@ class InitiativeTracker(base.InitiativeTracker):
                             level="info",
                         )
                         for caster_ws in self._find_ws_for_cid(int(cid)):
-                            self._lan.toast(int(caster_ws), "Waiting for Counterspell response…")
+                            self._send_spell_result(
+                                int(caster_ws), True, CAST_COUNTERSPELL_PENDING,
+                                spell_id=spell_id,
+                                spell_name=spell_name,
+                                caster_cid=cid,
+                                message="Waiting for Counterspell response…"
+                            )
                         return
 
         if bool(msg.get("_spell_counterspelled")):
-            self._lan.toast(ws_id, "The spell was countered!")
+            _reject("The spell was countered!")
             self._log(
                 f"{getattr(c, 'name', 'Caster')}'s spell was countered!",
                 cid=int(cid) if cid is not None else None,
             )
             return
 
-        if c is not None and not is_admin:
-            preset_level = None
-            try:
-                preset_level = int(preset.get("level")) if isinstance(preset, dict) else None
-            except Exception:
-                preset_level = None
-            if slot_level is None and preset_level is not None and preset_level > 0:
-                slot_level = preset_level
-            player_name = self._pc_name_for(int(cid)) if cid is not None else ""
-            consumes_pool = payload.get("consumes_pool") if isinstance(payload.get("consumes_pool"), dict) else {}
-            pool_id = str(
-                msg.get("consumes_pool_id")
-                or payload.get("consumes_pool_id")
-                or consumes_pool.get("id")
-                or consumes_pool.get("pool")
-                or ""
-            ).strip()
-            try:
-                pool_cost = int(
-                    msg.get("consumes_pool_cost")
-                    if msg.get("consumes_pool_cost") is not None
-                    else payload.get("consumes_pool_cost")
-                    if payload.get("consumes_pool_cost") is not None
-                    else consumes_pool.get("cost", 1)
-                )
-            except Exception:
-                pool_cost = 1
-            pool_cost = max(1, pool_cost)
-            if pool_id:
-                ok_pool, pool_err = self._consume_resource_pool_for_cast(
-                    caster_name=player_name,
-                    pool_id=pool_id,
-                    cost=pool_cost,
-                )
-                if not ok_pool:
-                    self._lan.toast(ws_id, pool_err)
-                    return
-                if str(pool_id or "").strip().lower() == "pact_magic_slots":
-                    beguiling_magic_slot_equivalent_used = True
-            elif slot_level is not None:
-                ok_slot, slot_err, _spent_level = self._consume_spell_slot_for_cast(
-                    caster_name=player_name,
-                    slot_level=slot_level,
-                    minimum_level=preset_level,
-                )
-                if not ok_slot:
-                    self._lan.toast(ws_id, slot_err)
-                    return
-                beguiling_magic_slot_equivalent_used = True
-            if spend != "reaction" and int(getattr(c, "spell_cast_remaining", 0) or 0) <= 0:
-                self._lan.toast(ws_id, "Already cast a spell this turn, matey.")
-                return
-            if not self._combatant_can_cast_spell(c, spend):
-                self._lan.toast(ws_id, "No spellcasting action available, matey.")
-                return
-            blocked, blocked_msg = self._spellcast_blocked_by_environment(c, preset_dict)
-            if blocked:
-                self._lan.toast(ws_id, blocked_msg or "The environment prevents that spell, matey.")
-                return
-            spell_name = self._spell_label_from_identifiers(
-                preset.get("name") if isinstance(preset, dict) else "",
-                preset.get("slug") if isinstance(preset, dict) else "",
-                spell_slug,
-                spell_id,
-            )
-            cast_log = self._spell_cast_log_message(c.name, spell_name, slot_level)
-            if spend == "bonus":
-                if not self._use_bonus_action(c, log_message=cast_log):
-                    self._lan.toast(ws_id, "No bonus actions left, matey.")
-                    return
-            elif spend == "reaction":
-                if not self._use_reaction(c, log_message=cast_log):
-                    self._lan.toast(ws_id, "No reactions left, matey.")
-                    return
-            else:
-                if not self._use_action(c, log_message=cast_log):
-                    self._lan.toast(ws_id, "No actions left, matey.")
-                    return
-            c.spell_cast_remaining = max(0, int(getattr(c, "spell_cast_remaining", 0) or 0) - 1)
-            self._rebuild_table(scroll_to_current=True)
+        # Resource consumption moved down to after placement validation
         def parse_positive_float(value: Any) -> Optional[float]:
             try:
                 num = float(value)
@@ -38421,7 +38470,7 @@ class InitiativeTracker(base.InitiativeTracker):
             aoe["default_damage"] = default_damage
         if shape == "circle":
             if radius_ft is None and size is None:
-                self._lan.toast(ws_id, "Pick a valid spell radius, matey.")
+                _reject("Pick a valid spell radius, matey.")
                 return
             if radius_ft is not None:
                 aoe["radius_sq"] = max(0.5, float(radius_ft) / feet_per_square)
@@ -38430,7 +38479,7 @@ class InitiativeTracker(base.InitiativeTracker):
                 aoe["radius_sq"] = float(size)
         elif shape in ("sphere", "cylinder"):
             if radius_ft is None and size is None:
-                self._lan.toast(ws_id, "Pick a valid spell radius, matey.")
+                _reject("Pick a valid spell radius, matey.")
                 return
             if radius_ft is not None:
                 aoe["radius_sq"] = max(0.5, float(radius_ft) / feet_per_square)
@@ -38441,7 +38490,7 @@ class InitiativeTracker(base.InitiativeTracker):
                 aoe["height_ft"] = float(height_ft)
         elif shape == "square":
             if side_ft is None and size is None:
-                self._lan.toast(ws_id, "Pick a valid spell side length, matey.")
+                _reject("Pick a valid spell side length, matey.")
                 return
             if side_ft is not None:
                 aoe["side_sq"] = max(1.0, float(side_ft) / feet_per_square)
@@ -38451,7 +38500,7 @@ class InitiativeTracker(base.InitiativeTracker):
             aoe["angle_deg"] = float(angle_deg) if angle_deg is not None else 0.0
         elif shape == "cube":
             if side_ft is None and size is None:
-                self._lan.toast(ws_id, "Pick a valid spell side length, matey.")
+                _reject("Pick a valid spell side length, matey.")
                 return
             if side_ft is not None:
                 aoe["side_sq"] = max(1.0, float(side_ft) / feet_per_square)
@@ -38461,13 +38510,13 @@ class InitiativeTracker(base.InitiativeTracker):
             aoe["angle_deg"] = float(angle_deg) if angle_deg is not None else 0.0
         elif shape == "cone":
             if length_ft is None and size is None:
-                self._lan.toast(ws_id, "Pick a valid spell length, matey.")
+                _reject("Pick a valid spell length, matey.")
                 return
             cone_spread = float(spread_deg) if spread_deg is not None else None
             if cone_spread is None:
                 cone_spread = float(angle_deg) if angle_deg is not None else None
             if cone_spread is None or cone_spread <= 0:
-                self._lan.toast(ws_id, "Pick a valid spell cone angle, matey.")
+                _reject("Pick a valid spell cone angle, matey.")
                 return
             if length_ft is not None:
                 aoe["length_sq"] = max(1.0, float(length_ft) / feet_per_square)
@@ -38486,7 +38535,7 @@ class InitiativeTracker(base.InitiativeTracker):
             aoe["cy"] = float(anchor_ay)
         elif shape == "wall":
             if length_ft is None and size is None:
-                self._lan.toast(ws_id, "Pick a valid spell length, matey.")
+                _reject("Pick a valid spell length, matey.")
                 return
             if length_ft is not None:
                 aoe["length_sq"] = max(1.0, float(length_ft) / feet_per_square)
@@ -38503,7 +38552,7 @@ class InitiativeTracker(base.InitiativeTracker):
                 aoe["thickness_ft"] = float(thickness_ft)
                 aoe["height_ft"] = float(height_ft)
             else:
-                self._lan.toast(ws_id, "Pick a valid wall thickness and height, matey.")
+                _reject("Pick a valid wall thickness and height, matey.")
                 return
             aoe["orient"] = str(payload.get("orient") or "vertical")
             aoe["angle_deg"] = float(angle_deg) if angle_deg is not None else 0.0
@@ -38511,7 +38560,7 @@ class InitiativeTracker(base.InitiativeTracker):
             aoe["ay"] = float(anchor_ay)
         else:
             if length_ft is None and size is None:
-                self._lan.toast(ws_id, "Pick a valid spell length, matey.")
+                _reject("Pick a valid spell length, matey.")
                 return
             if length_ft is not None:
                 aoe["length_sq"] = max(1.0, float(length_ft) / feet_per_square)
@@ -38538,6 +38587,7 @@ class InitiativeTracker(base.InitiativeTracker):
                 aoe["cy"] = float(anchor_ay + math.sin(rad) * half_len)
         sculpt_enabled, sculpt_max_protected = self._lan_sculpt_spells_context(c, preset_dict, slot_level=slot_level)
         if sculpt_enabled and c is not None:
+            raw_sculpted_cids = msg.get("sculpted_cids") or payload.get("sculpted_cids")
             caster_cid = int(getattr(c, "cid", 0) or 0)
             caster_friendly = self._lan_is_friendly_unit(caster_cid)
             included_targets = {int(target_cid) for target_cid in self._map_spell_effect_targets(aoe)}
@@ -38562,6 +38612,90 @@ class InitiativeTracker(base.InitiativeTracker):
                     if len(selected) >= int(sculpt_max_protected):
                         break
             aoe["sculpted_cids"] = selected
+
+        # Resource consumption (AFTER placement validation)
+        if c is not None and not is_admin:
+            beguiling_magic_slot_equivalent_used = False
+            preset_level = None
+            try:
+                preset_level = int(preset.get("level")) if isinstance(preset, dict) else None
+            except Exception:
+                preset_level = None
+            if slot_level is None and preset_level is not None and preset_level > 0:
+                slot_level = preset_level
+            player_name = self._pc_name_for(int(cid)) if cid is not None else ""
+            consumes_pool = payload.get("consumes_pool") if isinstance(payload.get("consumes_pool"), dict) else {}
+            pool_id = str(
+                msg.get("consumes_pool_id")
+                or payload.get("consumes_pool_id")
+                or consumes_pool.get("id")
+                or consumes_pool.get("pool")
+                or ""
+            ).strip()
+            try:
+                pool_cost = int(
+                    msg.get("consumes_pool_cost")
+                    if msg.get("consumes_pool_cost") is not None
+                    else payload.get("consumes_pool_cost")
+                    if payload.get("consumes_pool_cost") is not None
+                    else consumes_pool.get("cost", 1)
+                )
+            except Exception:
+                pool_cost = 1
+            pool_cost = max(1, pool_cost)
+            if pool_id:
+                ok_pool, pool_err = self._consume_resource_pool_for_cast(
+                    caster_name=player_name,
+                    pool_id=pool_id,
+                    cost=pool_cost,
+                )
+                if not ok_pool:
+                    _reject(pool_err)
+                    return
+                if str(pool_id or "").strip().lower() == "pact_magic_slots":
+                    beguiling_magic_slot_equivalent_used = True
+            elif slot_level is not None:
+                ok_slot, slot_err, _spent_level = self._consume_spell_slot_for_cast(
+                    caster_name=player_name,
+                    slot_level=slot_level,
+                    minimum_level=preset_level,
+                )
+                if not ok_slot:
+                    _reject(slot_err)
+                    return
+                beguiling_magic_slot_equivalent_used = True
+            if spend != "reaction" and int(getattr(c, "spell_cast_remaining", 0) or 0) <= 0:
+                _reject("Already cast a spell this turn, matey.")
+                return
+            if not self._combatant_can_cast_spell(c, spend):
+                _reject("No spellcasting action available, matey.")
+                return
+            blocked, blocked_msg = self._spellcast_blocked_by_environment(c, preset_dict)
+            if blocked:
+                _reject(blocked_msg or "The environment prevents that spell, matey.")
+                return
+            # Recalculate spell name in case it changed due to slot level
+            spell_name = self._spell_label_from_identifiers(
+                preset.get("name") if isinstance(preset, dict) else "",
+                preset.get("slug") if isinstance(preset, dict) else "",
+                spell_slug,
+                spell_id,
+            )
+            cast_log = self._spell_cast_log_message(c.name, spell_name, slot_level)
+            if spend == "bonus":
+                if not self._use_bonus_action(c, log_message=cast_log):
+                    _reject("No bonus actions left, matey.")
+                    return
+            elif spend == "reaction":
+                if not self._use_reaction(c, log_message=cast_log):
+                    _reject("No reactions left, matey.")
+                    return
+            else:
+                if not self._use_action(c, log_message=cast_log):
+                    _reject("No actions left, matey.")
+                    return
+            c.spell_cast_remaining = max(0, int(getattr(c, "spell_cast_remaining", 0) or 0) - 1)
+            self._rebuild_table(scroll_to_current=True)
         self._register_map_spell_effect(int(aid), aoe)
         self._lan_next_aoe_id = max(int(getattr(self, "_lan_next_aoe_id", 1) or 1), int(aid) + 1)
         if concentration_flag is True and c is not None:
@@ -38594,6 +38728,55 @@ class InitiativeTracker(base.InitiativeTracker):
             preset=preset_dict,
             manual_damage_entries=manual_damage_entries,
         )
+
+        targets_hit = self._map_spell_effect_targets(aoe)
+        has_targets = len(targets_hit) > 0
+
+        status = CAST_APPLIED
+        if persistent_flag:
+            status = CAST_CREATED_PERSISTENT_EFFECT
+        elif not has_targets:
+            status = CAST_NO_TARGETS
+        elif not resolved:
+            status = CAST_NEEDS_MANUAL_DAMAGE
+
+        message = f"Casted {aoe['name']}."
+        if status == CAST_NO_TARGETS:
+            message = f"{spell_name} hit no targets."
+            self._log(message, cid=cid)
+        elif status == CAST_CREATED_PERSISTENT_EFFECT:
+            message = f"Created persistent effect: {aoe['name']}."
+        elif resolved:
+            message += " (auto-resolved)"
+
+        if status == CAST_NEEDS_MANUAL_DAMAGE:
+            self._lan_prompt_manual_aoe_damage(
+                aoe,
+                target_cids=targets_hit,
+                caster=c,
+                spell_slug=spell_slug,
+                spell_id=spell_id,
+                preset=preset_dict,
+            )
+
+        self._send_spell_result(
+            ws_id, True, status,
+            spell_id=spell_id,
+            spell_name=spell_name,
+            caster_cid=cid,
+            target_cids=targets_hit,
+            aoe_ids_added=[str(aid)],
+            message=message,
+            needs_manual_damage=(status == CAST_NEEDS_MANUAL_DAMAGE)
+        )
+
+        if perf_on:
+            t1 = time.perf_counter()
+            self._lan._append_lan_log(
+                f"PERF: _handle_cast_aoe_request took {round((t1 - t0) * 1000.0, 2)}ms",
+                level="info"
+            )
+
         if resolved:
             self._lan.toast(ws_id, f"Casted {aoe['name']} (auto-resolved).")
         else:
@@ -38980,6 +39163,9 @@ class InitiativeTracker(base.InitiativeTracker):
         is_admin: bool,
         claimed: Optional[int],
     ) -> None:
+        perf_on = os.environ.get("LAN_PERF_DEBUG") == "1"
+        t0 = time.perf_counter() if perf_on else 0.0
+
         payload = msg.get("payload") or {}
         spell_slug = str(msg.get("spell_slug") or payload.get("spell_slug") or "").strip()
         spell_id = str(msg.get("spell_id") or payload.get("spell_id") or "").strip()
@@ -39000,11 +39186,30 @@ class InitiativeTracker(base.InitiativeTracker):
                 except Exception:
                     continue
                 summon_positions.append({"col": col, "row": row})
+
         preset = self._find_spell_preset(spell_slug=spell_slug, spell_id=spell_id)
         preset_slug = str((preset or {}).get("slug") or "").strip().lower()
         preset_id = str((preset or {}).get("id") or "").strip().lower()
+        spell_name = self._spell_label_from_identifiers(
+            preset.get("name") if isinstance(preset, dict) else "",
+            preset.get("slug") if isinstance(preset, dict) else "",
+            spell_slug,
+            spell_id,
+        )
+
+        def _reject(reason: str, status: str = CAST_REJECTED) -> None:
+            self._lan.toast(ws_id, reason)
+            self._send_spell_result(
+                ws_id, False, status,
+                spell_id=spell_id,
+                spell_name=spell_name,
+                caster_cid=cid,
+                message=reason,
+                reason=reason
+            )
+
         if not isinstance(preset, dict):
-            self._lan.toast(ws_id, "That spell could not be found, matey.")
+            _reject("That spell could not be found, matey.")
             return
         spend = self._resolve_spell_spend_type(preset=preset, msg=msg, payload=payload)
         summon_cfg = preset.get("summon") if isinstance(preset.get("summon"), dict) else None
@@ -39022,7 +39227,7 @@ class InitiativeTracker(base.InitiativeTracker):
         if preset_level is not None and preset_level > 0 and slot_level is None:
             slot_level = preset_level
         if slot_level is not None and preset_level is not None and slot_level < preset_level:
-            self._lan.toast(ws_id, "Ye can't downcast that spell, matey.")
+            _reject("Ye can't downcast that spell, matey.")
             return
 
         c = self.combatants.get(cid) if cid is not None else None
@@ -39037,19 +39242,19 @@ class InitiativeTracker(base.InitiativeTracker):
                 summon_quantity=summon_quantity,
             )
             if not isinstance(resolved_summon, dict):
-                self._lan.toast(ws_id, summon_err or "Summoning failed, matey.")
+                _reject(summon_err or "Summoning failed, matey.")
                 return
             quantity_from_cfg = max(0, int(resolved_summon.get("quantity") or 0))
             chosen_slug = str(resolved_summon.get("monster_slug") or "").strip().lower() or None
             if not chosen_slug:
-                self._lan.toast(ws_id, "Pick a summon creature first, matey.")
+                _reject("Pick a summon creature first, matey.")
                 return
             if self._find_monster_spec_by_slug(chosen_slug) is None:
-                self._lan.toast(ws_id, "That summon creature does not exist, matey.")
+                _reject("That summon creature does not exist, matey.")
                 return
             summon_variant = resolved_summon.get("variant") if isinstance(resolved_summon.get("variant"), str) else None
             if summon_positions and len(summon_positions) < quantity_from_cfg:
-                self._lan.toast(ws_id, "Pick a valid square for each summon, matey.")
+                _reject("Pick a valid square for each summon, matey.")
                 return
             if summon_positions:
                 cols, rows, obstacles, _rough, positions = self._lan_live_map_data()
@@ -39070,12 +39275,12 @@ class InitiativeTracker(base.InitiativeTracker):
                     col = int(pos.get("col"))
                     row = int(pos.get("row"))
                     if col < 0 or row < 0 or col >= cols or row >= rows or (col, row) in obstacles:
-                        self._lan.toast(ws_id, "That summon square be invalid, matey.")
+                        _reject("That summon square be invalid, matey.")
                         return
                     if caster_pos is not None and max_range_ft is not None:
                         dist_ft = math.hypot(col - caster_pos[0], row - caster_pos[1]) * max(1.0, feet_per_square)
                         if dist_ft - max_range_ft > 1e-6:
-                            self._lan.toast(ws_id, "That square be out of spell range, matey.")
+                            _reject("That square be out of spell range, matey.")
                             return
         records_target_authority = (
             not isinstance(summon_cfg, dict)
@@ -39097,7 +39302,7 @@ class InitiativeTracker(base.InitiativeTracker):
                 allow_compat_passthrough=False,
             )
             if not bool(auth_result.get("ok")):
-                self._lan.toast(ws_id, str(auth_result.get("error") or "Could not cast that spell, matey."))
+                _reject(str(auth_result.get("error") or "Could not cast that spell, matey."))
                 return
             if summon_cfg and cid is not None:
                 spawned_cids = self._spawn_summons_from_cast(
@@ -39111,7 +39316,7 @@ class InitiativeTracker(base.InitiativeTracker):
                     summon_variant=summon_variant,
                 )
                 if not spawned_cids:
-                    self._lan.toast(ws_id, "Summoning failed, matey.")
+                    _reject("Summoning failed, matey.")
                     return
                 if bool(preset.get("concentration")):
                     self._start_concentration(
@@ -39133,7 +39338,7 @@ class InitiativeTracker(base.InitiativeTracker):
                 summon_variant=summon_variant,
             )
             if not spawned_cids:
-                self._lan.toast(ws_id, "Summoning failed, matey.")
+                _reject("Summoning failed, matey.")
                 return
             if bool(preset.get("concentration")) and c is not None:
                 self._start_concentration(
@@ -39300,6 +39505,29 @@ class InitiativeTracker(base.InitiativeTracker):
             duration_turns = int((produce_state or {}).get("remaining_turns") or 100)
             self._log(f"{c.name} kindles Produce Flame for up to {duration_turns} rounds.", cid=int(c.cid))
         self._lan_force_state_broadcast()
+
+        status = CAST_APPLIED
+        if records_target_authority:
+            status = CAST_NEEDS_TARGET
+        elif summon_cfg:
+            status = CAST_SUMMON_PENDING_DM if not is_admin else CAST_APPLIED
+
+        self._send_spell_result(
+            ws_id, True, status,
+            spell_id=spell_id,
+            spell_name=spell_name,
+            caster_cid=cid,
+            message=f"Casted {preset.get('name') or 'spell'}.",
+            needs_target=bool(status == CAST_NEEDS_TARGET)
+        )
+
+        if perf_on:
+            t1 = time.perf_counter()
+            self._lan._append_lan_log(
+                f"PERF: _handle_cast_spell_request took {round((t1 - t0) * 1000.0, 2)}ms",
+                level="info"
+            )
+
         if self._is_produce_flame_spell_key(preset_slug, preset_id, spell_slug, spell_id):
             self._lan.toast(ws_id, "Produce Flame is lit and ready to hurl.")
         else:

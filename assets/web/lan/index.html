@@ -5837,6 +5837,7 @@ __DAMAGE_TYPE_OPTIONS__
     resetReconnectRecoveryState("healthy_baseline_received");
     setConn(true, "Connected");
     updateWaitingOverlay();
+    clearActiveCastInteractionState("");
   }
 
   function beginReconnectRecoveryCycle(){
@@ -11643,6 +11644,7 @@ __DAMAGE_TYPE_OPTIONS__
     if (type === "reset_turn"){
       const unit = getUnitByCid(msg.cid);
       if (!unit) return;
+      clearActiveCastInteractionState("");
       applyUnitUpdates([{
         cid: unit.cid,
         action_remaining: Number(unit.action_total ?? 1),
@@ -17998,6 +18000,27 @@ __DAMAGE_TYPE_OPTIONS__
             damage_entries: damageEntries,
           });
         });
+      } else if (msg.type === "spell_cast_result") {
+        if (msg.ok === false) {
+          clearActiveCastInteractionState(msg.message || msg.reason || "Spell rejected.");
+        } else {
+          const status = String(msg.status || "");
+          const finished = status === "CAST_APPLIED" 
+            || status === "CAST_SUMMON_CREATED" 
+            || status === "CAST_UTILITY_LOGGED" 
+            || status === "CAST_CANCELLED"
+            || status === "CAST_NO_TARGETS"
+            || status === "CAST_CREATED_PERSISTENT_EFFECT"
+            || status === "CAST_NEEDS_MANUAL_DAMAGE";
+          
+          if (finished) {
+            clearActiveCastInteractionState("");
+          }
+          
+          if (msg.message && !finished) {
+            localToast(msg.message);
+          }
+        }
       } else if (msg.type === "attack_result"){
         queueDamagePopupsFromResult(msg);
         const me = getClaimedUnit();
@@ -18022,6 +18045,10 @@ __DAMAGE_TYPE_OPTIONS__
         }
       } else if (msg.type === "spell_target_result"){
         queueDamagePopupsFromResult(msg);
+        if (msg.ok === false) {
+          clearActiveCastInteractionState(msg.reason || msg.message || "Spell target rejected.");
+          return;
+        }
         if (msg.needs_relocation_destination){
           clearActiveCastInteractionState("");
           const actionCid = activeControlledUnitCid();
@@ -22585,11 +22612,13 @@ __DAMAGE_TYPE_OPTIONS__
 
   function clearActiveCastInteractionState(showToastMessage = "", options = {}){
     const clearAttackOverlay = options?.clearAttackOverlay !== false;
+    clearPendingAoePlacement(false);
     clearSummonPlacementState();
     clearRelocationPlacementState();
     clearSpellTargetingSession("");
     clearPendingAoeCastSyncGhost(false);
     setSpellResolveModalOpen(false);
+    setAttackResolveModalOpen(false);
     if (clearAttackOverlay && attackOverlayMode){
       setAttackOverlayMode(false);
     }
@@ -25684,6 +25713,7 @@ __DAMAGE_TYPE_OPTIONS__
       if (isMapView) return;
       if (!claimedCid) return;
       const msg = {type:"reset_turn", cid: claimedCid};
+      clearActiveCastInteractionState("");
       if (isPlanning){
         planningMutate(msg);
         draw();

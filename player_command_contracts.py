@@ -25,6 +25,21 @@ PLAYER_COMMAND_CONTRACT_VERSION = 1
 PROMPT_SCHEMA_VERSION = 1
 
 
+# Spell cast result statuses
+CAST_APPLIED = "CAST_APPLIED"
+CAST_CREATED_PERSISTENT_EFFECT = "CAST_CREATED_PERSISTENT_EFFECT"
+CAST_NEEDS_MANUAL_DAMAGE = "CAST_NEEDS_MANUAL_DAMAGE"
+CAST_NEEDS_TARGET = "CAST_NEEDS_TARGET"
+CAST_NEEDS_PLACEMENT = "CAST_NEEDS_PLACEMENT"
+CAST_NO_TARGETS = "CAST_NO_TARGETS"
+CAST_REJECTED = "CAST_REJECTED"
+CAST_COUNTERSPELL_PENDING = "CAST_COUNTERSPELL_PENDING"
+CAST_SUMMON_PENDING_DM = "CAST_SUMMON_PENDING_DM"
+CAST_SUMMON_CREATED = "CAST_SUMMON_CREATED"
+CAST_UTILITY_LOGGED = "CAST_UTILITY_LOGGED"
+CAST_CANCELLED = "CAST_CANCELLED"
+
+
 SPECIAL_REACTION_TRIGGERS = {
     "shield",
     "hellish_rebuke",
@@ -1642,6 +1657,7 @@ def build_spell_target_rejection_payload(
         {
             "type": "spell_target_result",
             "ok": False,
+            "status": "REJECTED",
             "attacker_cid": int(attacker_cid),
             "target_cid": int(target_cid),
             "spell_name": str(spell_name or ""),
@@ -1676,3 +1692,48 @@ def build_hellish_rebuke_resolve_start_payload(
 def prompt_resume_legacy_message(prompt: Dict[str, Any]) -> Dict[str, Any]:
     resume_dispatch = prompt.get("resume") if isinstance(prompt.get("resume"), dict) else None
     return apply_resume_dispatch(resume_dispatch) or {}
+
+
+def build_spell_cast_result(
+    *,
+    ok: bool,
+    status: str,
+    spell_id: str,
+    spell_name: str,
+    caster_cid: Optional[int] = None,
+    message: str = "",
+    target_cids: Optional[List[int]] = None,
+    aoe_ids_added: Optional[List[str]] = None,
+    aoe_ids_removed: Optional[List[str]] = None,
+    hp_changes: Optional[List[Dict[str, Any]]] = None,
+    conditions_added: Optional[List[Dict[str, Any]]] = None,
+    resources_spent: Optional[List[Dict[str, Any]]] = None,
+    log_entries: Optional[List[str]] = None,
+    reason: Optional[str] = None,
+    needs_manual_damage: bool = False,
+    needs_target: bool = False,
+    needs_placement: bool = False,
+    needs_dm_action: bool = False,
+) -> Dict[str, Any]:
+    return {
+        "type": "spell_cast_result",
+        "contract": _contract("player_command.spell_cast_result"),
+        "ok": bool(ok),
+        "status": str(status),
+        "spell_id": str(spell_id),
+        "spell_name": str(spell_name),
+        "caster_cid": int(caster_cid) if caster_cid is not None else None,
+        "message": str(message),
+        "target_cids": list(target_cids) if target_cids else [],
+        "aoe_ids_added": list(aoe_ids_added) if aoe_ids_added else [],
+        "aoe_ids_removed": list(aoe_ids_removed) if aoe_ids_removed else [],
+        "hp_changes": _copy(hp_changes) if hp_changes else [],
+        "conditions_added": _copy(conditions_added) if conditions_added else [],
+        "resources_spent": _copy(resources_spent) if resources_spent else [],
+        "log_entries": list(log_entries) if log_entries else [],
+        "reason": str(reason) if reason else None,
+        "needs_manual_damage": bool(needs_manual_damage),
+        "needs_target": bool(needs_target),
+        "needs_placement": bool(needs_placement),
+        "needs_dm_action": bool(needs_dm_action),
+    }
