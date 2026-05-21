@@ -1075,6 +1075,173 @@ class CombatService:
                 "skipped": skipped_count,
             }
 
+    def long_rest(
+        self,
+        *,
+        scope: str = "players",
+        restore_hp: bool = True,
+        restore_spell_slots: bool = True,
+        restore_long_rest_resources: bool = True,
+        clear_death_saves: bool = True,
+        clear_turn_state: bool = True,
+        clear_temp_hp: bool = True,
+        end_concentration: bool = True,
+        remove_concentration_aoes: bool = True,
+        include_npc_allies: bool = False,
+        include_enemies: bool = False,
+    ) -> Dict[str, Any]:
+        """Perform an authoritative long rest on a group of combatants.
+
+        Args:
+            scope: Filter for combatants ('players', 'all').
+            restore_hp: Restore HP to max.
+            restore_spell_slots: Restore all spell slots.
+            restore_long_rest_resources: Reset resource pools with 'long_rest' reset.
+            clear_death_saves: Reset death save successes/failures.
+            clear_turn_state: Reset action/bonus/reaction/spell/move counters.
+            clear_temp_hp: Set temp HP to 0.
+            end_concentration: Terminate active concentration.
+            remove_concentration_aoes: Remove AoEs owned by the resting combatant.
+            include_npc_allies: Include friendly NPCs if scope is 'players'.
+            include_enemies: Include hostile NPCs if scope is 'players'.
+
+        Returns:
+            {ok, status, message, rested: [{cid, name, hp_before, hp_after, ...}]}
+        """
+        with self._lock:
+            t = self._tracker
+            combatants = getattr(t, "combatants", {}) or {}
+            targets: List[Any] = []
+
+            for c in combatants.values():
+                role = "enemy"
+                if bool(getattr(c, "is_pc", False)):
+                    role = "pc"
+                elif bool(getattr(c, "ally", False)):
+                    role = "ally"
+                else:
+                    role_for_name = getattr(t, "_role_for_name", None)
+                    if callable(role_for_name):
+                        try:
+                            role = str(role_for_name(str(getattr(c, "name", "") or "")) or "").strip().lower()
+                        except Exception:
+                            role = "enemy"
+
+                is_pc = role == "pc"
+                is_ally = role == "ally"
+                is_enemy = role == "enemy"
+
+                if scope == "all":
+                    targets.append(c)
+                elif is_pc:
+                    targets.append(c)
+                elif is_ally and include_npc_allies:
+                    targets.append(c)
+                elif is_enemy and include_enemies:
+                    targets.append(c)
+
+            rested_summaries = []
+            for c in targets:
+                summary = {
+                    "cid": int(c.cid),
+                    "name": str(c.name),
+                    "hp_before": int(c.hp),
+                    "spell_slots_restored": False,
+                    "resource_pools_restored": [],
+                }
+
+                # 1. HP
+                if restore_hp:
+                    max_hp = int(getattr(c, "max_hp", c.hp) or c.hp)
+                    c.hp = max_hp
+                
+                summary["hp_after"] = int(c.hp)
+
+                # 2. Temp HP
+                if clear_temp_hp:
+                    setattr(c, "temp_hp", 0)
+
+                # 3. Turn state
+                if clear_turn_state:
+                    setattr(c, "action_remaining", int(getattr(c, "action_total", 1) or 1))
+                    setattr(c, "bonus_action_remaining", 1)
+                    setattr(c, "reaction_remaining", 1)
+                    setattr(c, "spell_cast_remaining", 1)
+                    setattr(c, "move_remaining", int(getattr(c, "speed", 0) or 0))
+                    setattr(c, "has_mounted_this_turn", False)
+
+                # 4. Concentration
+                if end_concentration and bool(getattr(c, "concentrating", False)):
+                    end_fn = getattr(t, "_end_concentration", None)
+                    if callable(end_fn):
+                        try:
+                            end_fn(c)
+                        except Exception:
+                            pass
+                    else:
+                        setattr(c, "concentrating", False)
+                        setattr(c, "concentration_spell", None)
+
+                # 5. Player-specific (Spell slots, Resource pools)
+                if bool(getattr(c, "is_pc", False)):
+                    player_name = t._pc_name_for(int(c.cid))
+                    
+                    # Spell Slots
+                    if restore_spell_slots:
+                        try:
+                            # Use InitiativeTracker helpers if possible
+                            _, slots = t._resolve_spell_slot_profile(player_name)
+                            if isinstance(slots, dict):
+                                for lvl_data in slots.values():
+                                    if isinstance(lvl_data, dict) and "max" in lvl_data:
+                                        lvl_data["current"] = lvl_data["max"]
+                                t._save_player_spell_slots(player_name, slots)
+                                summary["spell_slots_restored"] = True
+                        except Exception:
+                            pass
+
+                    # Resource Pools
+                    if restore_long_rest_resources:
+                        try:
+                            profile = t._profile_for_player_name(player_name)
+                            if isinstance(profile, dict):
+                                resources = profile.get("resources", {})
+                                pools = resources.get("pools", [])
+                                if isinstance(pools, list):
+                                    restored_pools = []
+                                    for pool in pools:
+                                        if not isinstance(pool, dict): continue
+                                        reset_type = str(pool.get("reset") or "").strip().lower()
+                                        if reset_type in ("long_rest", "short_rest", "dawn", "dusk"):
+                                            # We need to re-evaluate max if it's a formula
+                                            max_formula = pool.get("max_formula")
+                                            max_val = t._compute_resource_pool_max(profile, max_formula, pool.get("max"))
+                                            pool["current"] = max_val
+                                            restored_pools.append(str(pool.get("label") or pool.get("id")))
+                                    
+                                    if restored_pools:
+                                        t._store_character_yaml(t._find_player_profile_path(player_name), profile)
+                                        summary["resource_pools_restored"] = restored_pools
+                        except Exception:
+                            pass
+
+                rested_summaries.append(summary)
+
+            if targets:
+                t._log(f"Long Rest applied to {len(targets)} combatant(s).")
+                try:
+                    t._rebuild_table(scroll_to_current=True)
+                except Exception:
+                    pass
+                self._broadcast_tracker_state(include_static=True)
+
+            return {
+                "ok": True,
+                "status": "LONG_REST_APPLIED",
+                "message": f"Long Rest applied to {len(targets)} combatant(s).",
+                "rested": rested_summaries,
+            }
+
     def start_combat(self) -> Dict[str, Any]:
         """Start combat by beginning the initiative turn order.
 
