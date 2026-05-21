@@ -92,6 +92,7 @@ import uuid
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Dict, Optional
 
+from runtime_config import trace_timed
 from player_command_contracts import (
     ACTIVE_PROMPT_STATES,
     AOE_MANIPULATION_COMMAND_TYPES,
@@ -553,6 +554,7 @@ class PromptState:
         self._import_legacy_state(store)
         self._sync_legacy_views(store)
 
+    @trace_timed("player_command.create_reaction_offer")
     def create_reaction_offer(
         self,
         *,
@@ -1023,6 +1025,7 @@ class PlayerCommandService:
                     return True
         return False
 
+    @trace_timed("player_command.create_reaction_offer.dispatch")
     def create_reaction_offer(
         self,
         reactor_cid: int,
@@ -3014,6 +3017,7 @@ class PlayerCommandService:
             claimed=claimed,
         )
 
+    @trace_timed("player_command.cast_spell")
     def cast_spell(
         self,
         msg: Dict[str, Any],
@@ -3061,6 +3065,7 @@ class PlayerCommandService:
             request=request_contract,
         )
 
+    @trace_timed("player_command.cast_aoe")
     def cast_aoe(
         self,
         msg: Dict[str, Any],
@@ -3833,6 +3838,7 @@ class PlayerCommandService:
             request=request_contract,
         )
 
+    @trace_timed("player_command.hellish_rebuke_resolve")
     def hellish_rebuke_resolve(
         self,
         msg: Dict[str, Any],
@@ -4622,6 +4628,7 @@ class PlayerCommandService:
             move_remaining=int(getattr(c, "move_remaining", 0) or 0),
         )
 
+    @trace_timed("player_command.reset_turn")
     def reset_turn(
         self,
         msg: Dict[str, Any],
@@ -4774,6 +4781,7 @@ class PlayerCommandService:
     # end_turn
     # ------------------------------------------------------------------
 
+    @trace_timed("player_command.end_turn")
     def end_turn(
         self,
         *,
@@ -4835,6 +4843,7 @@ class PlayerCommandService:
     # manual_override_hp
     # ------------------------------------------------------------------
 
+    @trace_timed("player_command.manual_override_hp")
     def manual_override_hp(
         self,
         *,
@@ -4991,6 +5000,7 @@ class PlayerCommandService:
             is_admin=is_admin,
         )
 
+    @trace_timed("player_command.manual_override_spell_slot")
     def manual_override_spell_slot(
         self,
         msg: Dict[str, Any],
@@ -5196,6 +5206,7 @@ class PlayerCommandService:
             after=new_current,
         )
 
+    @trace_timed("player_command.manual_override_resource_pool")
     def manual_override_resource_pool(
         self,
         msg: Dict[str, Any],
@@ -6424,6 +6435,7 @@ class PlayerCommandService:
     # attack_request
     # ------------------------------------------------------------------
 
+    @trace_timed("player_command.attack_request")
     def attack_request(
         self,
         msg: Dict[str, Any],
@@ -6481,6 +6493,7 @@ class PlayerCommandService:
     # spell_target_request
     # ------------------------------------------------------------------
 
+    @trace_timed("player_command.spell_target_request")
     def spell_target_request(
         self,
         msg: Dict[str, Any],
@@ -6619,6 +6632,7 @@ class PlayerCommandService:
             "choice": choice,
         }
 
+    @trace_timed("player_command.shield_resolve")
     def _resolve_shield_reaction(
         self,
         msg: Dict[str, Any],
@@ -6676,6 +6690,7 @@ class PlayerCommandService:
             }
         return {"ok": True, "trigger": "shield", "choice": choice, "prompt_state": "resolved"}
 
+    @trace_timed("player_command.hellish_rebuke_reaction")
     def _resolve_hellish_rebuke_reaction(
         self,
         msg: Dict[str, Any],
@@ -7279,6 +7294,7 @@ class PlayerCommandService:
             },
         }
 
+    @trace_timed("player_command.reaction_response")
     def reaction_response(
         self,
         msg: Dict[str, Any],
@@ -7421,4 +7437,3 @@ class PlayerCommandService:
             resolve_ok,
             **result_kwargs,
         )
-

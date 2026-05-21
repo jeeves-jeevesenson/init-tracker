@@ -7,6 +7,7 @@ requiring Tk's event loop to keep the process alive.
 
 Usage:
     python3 serve_headless.py [--host HOST] [--port PORT] [--no-auto-lan]
+        [--debugging [true|false] | --no-debugging]
 
 The DM operator surface is reachable at http://HOST:PORT/dm and the
 player LAN surface at http://HOST:PORT/.
@@ -26,7 +27,13 @@ import signal
 import sys
 from typing import Optional, Sequence
 
-from runtime_config import config as runtime_cfg
+from runtime_config import (
+    config as runtime_cfg,
+    configure_debug_trace,
+    debug_trace_path,
+    debugging_env_enabled,
+    parse_bool_value,
+)
 
 
 def _force_headless_env() -> None:
@@ -60,7 +67,14 @@ def _shutdown(app) -> None:
         pass
 
 
-def main(argv: Optional[Sequence[str]] = None) -> int:
+def _parse_debugging_value(raw: str) -> bool:
+    parsed = parse_bool_value(raw, default=None)
+    if parsed is None:
+        raise argparse.ArgumentTypeError("expected true or false")
+    return bool(parsed)
+
+
+def build_arg_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         description="Run the DnD Initiative Tracker as a headless backend + DM web host.",
     )
@@ -71,9 +85,40 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         action="store_true",
         help="Do not auto-start the LAN server (start it via the DM admin surface instead).",
     )
-    args = parser.parse_args(argv)
+    parser.add_argument(
+        "--debugging",
+        nargs="?",
+        const=True,
+        default=None,
+        type=_parse_debugging_value,
+        help="Write opt-in live debug JSONL trace logs. Bare --debugging means true.",
+    )
+    parser.add_argument(
+        "--no-debugging",
+        dest="debugging",
+        action="store_false",
+        help="Disable live debug trace logging even if INIT_TRACKER_DEBUGGING is set.",
+    )
+    return parser
+
+
+def parse_args(argv: Optional[Sequence[str]] = None) -> argparse.Namespace:
+    return build_arg_parser().parse_args(argv)
+
+
+def resolve_debugging_flag(cli_value: Optional[bool]) -> bool:
+    if cli_value is None:
+        return debugging_env_enabled()
+    return bool(cli_value)
+
+
+def main(argv: Optional[Sequence[str]] = None) -> int:
+    args = parse_args(argv)
 
     _force_headless_env()
+    debugging_enabled = resolve_debugging_flag(args.debugging)
+    os.environ["INIT_TRACKER_DEBUGGING"] = "1" if debugging_enabled else "0"
+    configure_debug_trace(debugging_enabled)
 
     # If we are in production mode, ensure directories exist
     runtime_cfg.ensure_dirs()
@@ -102,6 +147,8 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     except Exception:
         url = ""
     sys.stdout.write("Headless tracker started.\n")
+    if debugging_enabled and debug_trace_path() is not None:
+        sys.stdout.write(f"  Debug trace: {debug_trace_path()}\n")
     if url:
         sys.stdout.write(f"  DM operator surface: {url}dm\n")
         sys.stdout.write(f"  Player LAN surface:  {url}\n")

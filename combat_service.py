@@ -92,6 +92,8 @@ import os
 import time
 from typing import TYPE_CHECKING, Any, Dict, List, Optional
 
+from runtime_config import trace_timed
+
 if TYPE_CHECKING:
     # Avoid circular import at runtime; the tracker module imports helper_script
     # which defines ConditionStack / Combatant used below.
@@ -205,6 +207,7 @@ class CombatService:
     # Read: snapshot
     # ------------------------------------------------------------------
 
+    @trace_timed("combat_service.combat_snapshot")
     def combat_snapshot(self) -> Dict[str, Any]:
         """Return a stable, DM-focused snapshot of the current combat state.
 
@@ -790,6 +793,7 @@ class CombatService:
                 "delta": int(delta),
             }
 
+    @trace_timed("combat_service.manual_override")
     def manual_override(
         self, cid: int, hp_delta: int = 0, temp_hp_delta: int = 0
     ) -> Dict[str, Any]:
@@ -862,6 +866,7 @@ class CombatService:
     # Deep combat damage / heal (Slice 9)
     # ------------------------------------------------------------------
 
+    @trace_timed("combat_service.apply_damage")
     def apply_damage(
         self, cid: int, raw_damage: int, *, _broadcast: bool = True
     ) -> Dict[str, Any]:
@@ -1075,6 +1080,7 @@ class CombatService:
                 "skipped": skipped_count,
             }
 
+    @trace_timed("combat_service.long_rest")
     def long_rest(
         self,
         *,

@@ -44,7 +44,18 @@ from collections import deque
 import sys
 import tempfile
 
-from runtime_config import config as runtime_cfg
+from runtime_config import (
+    config as runtime_cfg,
+    current_debug_correlation,
+    debug_context,
+    debug_event,
+    debug_trace_enabled,
+    new_action_id,
+    new_trace_id,
+    timed_span,
+    trace_timed,
+    with_action_correlation,
+)
 
 # Monster YAML loader (PyYAML)
 try:
@@ -2462,8 +2473,49 @@ class LanController:
 
         @self._fastapi_app.middleware("http")
         async def _disable_stale_asset_caching(request: Request, call_next):
-            response = await call_next(request)
             path = request.url.path
+            if not debug_trace_enabled():
+                response = await call_next(request)
+            else:
+                trace_id = new_trace_id()
+                header_action_id = str(request.headers.get("x-init-tracker-action-id") or "").strip()
+                action_id = header_action_id[:160] or new_action_id()
+                query_keys = sorted(str(key) for key in request.query_params.keys())
+                http_fields = {
+                    "route": path,
+                    "method": str(request.method or ""),
+                    "query_keys": query_keys,
+                }
+                started_ns = time.perf_counter_ns()
+                with debug_context(trace_id=trace_id, action_id=action_id):
+                    debug_event("http.request.start", **http_fields)
+                    try:
+                        with timed_span("http.request", **http_fields):
+                            response = await call_next(request)
+                    except Exception as exc:
+                        debug_event(
+                            "http.request.end",
+                            duration_ms=round((time.perf_counter_ns() - started_ns) / 1_000_000.0, 3),
+                            ok=False,
+                            reason=type(exc).__name__,
+                            **http_fields,
+                        )
+                        raise
+                    response_size = response.headers.get("content-length")
+                    try:
+                        response_size = int(response_size) if response_size not in (None, "") else None
+                    except Exception:
+                        response_size = None
+                    response.headers["X-Init-Tracker-Action-Id"] = action_id
+                    response.headers["X-Init-Tracker-Trace-Id"] = trace_id
+                    debug_event(
+                        "http.request.end",
+                        status_code=int(getattr(response, "status_code", 0) or 0),
+                        duration_ms=round((time.perf_counter_ns() - started_ns) / 1_000_000.0, 3),
+                        ok=True,
+                        sizes={"response_bytes": response_size} if response_size is not None else {},
+                        **http_fields,
+                    )
             # Never cache HTML shells; they decide which JS/CSS to load.
             if path in ("/", "/planning", "/new_character", "/edit_character", "/shop_admin", "/shop", "/dm", "/dm/map", "/dmcontrol"):
                 response.headers["Cache-Control"] = "no-store"
@@ -3456,6 +3508,14 @@ class LanController:
                     except Exception:
                         continue
                     typ = str(msg.get("type") or "")
+                    payload_bytes = len(raw.encode("utf-8", errors="replace"))
+                    if typ not in self._ACTION_MESSAGE_TYPES:
+                        debug_event(
+                            "ws.message.received",
+                            command=typ or "unknown",
+                            ws_id=ws_id,
+                            sizes={"payload_bytes": payload_bytes},
+                        )
                     if typ == "client_hello":
                         client_id = self._normalize_client_id(msg.get("client_id"))
                         self._ws_debug_log(
@@ -3752,6 +3812,19 @@ class LanController:
                         # enqueue for Tk thread
                         with self._clients_lock:
                             claimed_cid = self._claims.get(ws_id)
+                        action_id = str(msg.get("action_id") or "").strip()[:160] or new_action_id()
+                        trace_id = str(msg.get("trace_id") or "").strip()[:160] or new_trace_id()
+                        msg["action_id"] = action_id
+                        msg["_trace_id"] = trace_id
+                        with debug_context(trace_id=trace_id, action_id=action_id):
+                            debug_event(
+                                "ws.message.received",
+                                command=typ,
+                                ws_id=ws_id,
+                                player_id=claimed_cid,
+                                cid=msg.get("cid"),
+                                sizes={"payload_bytes": payload_bytes},
+                            )
                         if typ == "move":
                             to = msg.get("to") or {}
                             self._move_debug_log(
@@ -6322,7 +6395,14 @@ class LanController:
             # Hold the connection open; messages from client are ignored
             try:
                 while True:
-                    await ws.receive_text()
+                    raw_dm_message = await ws.receive_text()
+                    debug_event(
+                        "ws.message.received",
+                        command="dm_ws_message",
+                        ws_id=ws_id,
+                        route="/ws/dm",
+                        sizes={"payload_bytes": len(raw_dm_message.encode("utf-8", errors="replace"))},
+                    )
             except Exception:
                 pass
             finally:
@@ -6634,7 +6714,48 @@ class LanController:
                             f"has_pc_name_for={hasattr(self.app, '_pc_name_for')}",
                             level="debug",
                         )
-                    self._tracker._lan_apply_action(msg)
+                    trace_id = str(msg.get("_trace_id") or "").strip()[:160] or new_trace_id()
+                    action_id = str(msg.get("action_id") or "").strip()[:160] or new_action_id()
+                    msg["_trace_id"] = trace_id
+                    msg["action_id"] = action_id
+                    dispatch_fields = {
+                        "command": typ or "unknown",
+                        "ws_id": msg.get("_ws_id"),
+                        "player_id": msg.get("_claimed_cid"),
+                        "cid": msg.get("cid"),
+                        "counts": self._tracker._debug_trace_counts(),
+                    }
+                    dispatch_started_ns = time.perf_counter_ns()
+                    with debug_context(trace_id=trace_id, action_id=action_id):
+                        debug_event("ws.action.dispatch.start", **dispatch_fields)
+                        try:
+                            with timed_span("ws.action.dispatch", **dispatch_fields):
+                                self._tracker._lan_apply_action(msg)
+                        except Exception as exc:
+                            debug_event(
+                                "ws.action.dispatch.end",
+                                duration_ms=round((time.perf_counter_ns() - dispatch_started_ns) / 1_000_000.0, 3),
+                                ok=False,
+                                reason=type(exc).__name__,
+                                **dispatch_fields,
+                            )
+                            raise
+                        else:
+                            result_status = None
+                            for result_key in ("_spell_target_result", "_attack_result"):
+                                result_payload = msg.get(result_key)
+                                if isinstance(result_payload, dict):
+                                    result_status = result_payload.get("status") or result_payload.get("type")
+                                    break
+                            if result_status is None and typ == "move":
+                                result_status = "applied" if msg.get("_move_applied") else msg.get("_move_reject_reason")
+                            debug_event(
+                                "ws.action.dispatch.end",
+                                duration_ms=round((time.perf_counter_ns() - dispatch_started_ns) / 1_000_000.0, 3),
+                                ok=True,
+                                result_status=result_status,
+                                **dispatch_fields,
+                            )
                     if typ == "move":
                         move_debug_entries.append(
                             {
@@ -7374,7 +7495,7 @@ class LanController:
     def _broadcast_state(self, snap: Dict[str, Any]) -> None:
         if not self._loop:
             return
-        coro = self._broadcast_state_async(snap)
+        coro = self._broadcast_state_async(snap, correlation=current_debug_correlation())
         try:
             asyncio.run_coroutine_threadsafe(coro, self._loop)
         except Exception:
@@ -7383,78 +7504,177 @@ class LanController:
     def _broadcast_payload(self, payload: Dict[str, Any]) -> None:
         if not self._loop:
             return
-        coro = self._broadcast_payload_async(payload)
+        coro = self._broadcast_payload_async(payload, correlation=current_debug_correlation())
         try:
             asyncio.run_coroutine_threadsafe(coro, self._loop)
         except Exception as exc:
             self._log_lan_exception("LAN payload broadcast scheduling failed", exc)
 
-    async def _broadcast_state_async(self, snap: Dict[str, Any]) -> None:
-        # Build the base state payload once
-        try:
-            state_data = self._dynamic_snapshot_payload()
-            pcs_data = self._pcs_payload()
-        except Exception as exc:
-            self.app._oplog(f"LAN state broadcast serialization failed: {exc}", level="warning")
-            self._log_lan_exception("LAN state broadcast serialization failed", exc)
-            return
-
-        to_drop: List[int] = []
-        with self._clients_lock:
-            items = list(self._clients.items())
-            view_only_clients = set(self._view_only_clients)
-        view_only_state = None
-        if view_only_clients:
-            view_only_state = self._view_only_state_payload(state_data)
-
-        # Send personalized payload to each client with their own "you" field
-        for ws_id, ws in items:
-            try:
-                you_data = self._build_you_payload(ws_id)
-                payload_state = view_only_state if ws_id in view_only_clients and view_only_state is not None else state_data
-                payload = self._json_dumps({
-                    "type": "state",
-                    "state": payload_state,
-                    "pcs": pcs_data,
-                    "you": you_data
-                })
-                await self._send_ws_text_serialized(ws_id, ws, payload)
-            except Exception as exc:
-                to_drop.append(ws_id)
-                self._log_lan_exception(f"LAN state broadcast send failed ws_id={ws_id}", exc)
-        if to_drop:
+    async def _broadcast_state_async(
+        self,
+        snap: Dict[str, Any],
+        *,
+        correlation: Optional[Dict[str, str]] = None,
+    ) -> None:
+        with debug_context(
+            trace_id=(correlation or {}).get("trace_id"),
+            action_id=(correlation or {}).get("action_id"),
+        ):
+            started_ns = time.perf_counter_ns()
             with self._clients_lock:
-                for ws_id in to_drop:
-                    # cleanup drop
-                    self._drop_claim(ws_id)
-                    self._clients.pop(ws_id, None)
-                    self._clients_meta.pop(ws_id, None)
-                    self._client_hosts.pop(ws_id, None)
-
-    async def _broadcast_payload_async(self, payload: Dict[str, Any]) -> None:
-        try:
-            text = self._json_dumps(payload)
-        except Exception as exc:
-            self.app._oplog(f"LAN payload broadcast serialization failed: {exc}", level="warning")
-            self._log_lan_exception("LAN payload broadcast serialization failed", exc)
-            return
-        to_drop: List[int] = []
-        with self._clients_lock:
-            items = list(self._clients.items())
-        for ws_id, ws in items:
+                items = list(self._clients.items())
+                view_only_clients = set(self._view_only_clients)
+            span_fields = {
+                "command": "state",
+                "counts": {"websocket_client_count": len(items)},
+                "snapshot_cache_hit": True,
+            }
+            debug_event("broadcast.start", span="lan.broadcast.state", **span_fields)
+            to_drop: List[int] = []
+            send_count = 0
+            payload_bytes = 0
             try:
-                await self._send_ws_text_serialized(ws_id, ws, text)
-            except Exception as exc:
-                to_drop.append(ws_id)
-                self._log_lan_exception(f"LAN payload broadcast send failed ws_id={ws_id}", exc)
-        if to_drop:
-            with self._clients_lock:
-                for ws_id in to_drop:
-                    self._drop_claim(ws_id)
-                    self._clients.pop(ws_id, None)
-                    self._clients_meta.pop(ws_id, None)
-                    self._client_hosts.pop(ws_id, None)
+                with timed_span("lan.broadcast.state", **span_fields):
+                    try:
+                        state_data = self._dynamic_snapshot_payload()
+                        pcs_data = self._pcs_payload()
+                    except Exception as exc:
+                        self.app._oplog(f"LAN state broadcast serialization failed: {exc}", level="warning")
+                        self._log_lan_exception("LAN state broadcast serialization failed", exc)
+                        debug_event(
+                            "broadcast.end",
+                            span="lan.broadcast.state",
+                            ok=False,
+                            reason=type(exc).__name__,
+                            duration_ms=round((time.perf_counter_ns() - started_ns) / 1_000_000.0, 3),
+                            **span_fields,
+                        )
+                        return
 
+                    view_only_state = None
+                    if view_only_clients:
+                        view_only_state = self._view_only_state_payload(state_data)
+
+                    # Send personalized payload to each client with their own "you" field.
+                    for ws_id, ws in items:
+                        try:
+                            you_data = self._build_you_payload(ws_id)
+                            payload_state = view_only_state if ws_id in view_only_clients and view_only_state is not None else state_data
+                            payload_obj = with_action_correlation({
+                                "type": "state",
+                                "state": payload_state,
+                                "pcs": pcs_data,
+                                "you": you_data,
+                            })
+                            payload = self._json_dumps(payload_obj)
+                            payload_bytes += len(payload.encode("utf-8", errors="replace"))
+                            await self._send_ws_text_serialized(ws_id, ws, payload)
+                            send_count += 1
+                        except Exception as exc:
+                            to_drop.append(ws_id)
+                            debug_event(
+                                "broadcast.send_failed",
+                                span="lan.broadcast.state",
+                                ws_id=ws_id,
+                                reason=type(exc).__name__,
+                                **span_fields,
+                            )
+                            self._log_lan_exception(f"LAN state broadcast send failed ws_id={ws_id}", exc)
+            finally:
+                if to_drop:
+                    with self._clients_lock:
+                        for ws_id in to_drop:
+                            self._drop_claim(ws_id)
+                            self._clients.pop(ws_id, None)
+                            self._clients_meta.pop(ws_id, None)
+                            self._client_hosts.pop(ws_id, None)
+                debug_event(
+                    "broadcast.end",
+                    span="lan.broadcast.state",
+                    ok=not bool(to_drop),
+                    duration_ms=round((time.perf_counter_ns() - started_ns) / 1_000_000.0, 3),
+                    counts={
+                        "recipient_count": len(items),
+                        "send_count": send_count,
+                        "failed_send_count": len(to_drop),
+                    },
+                    sizes={"payload_bytes": payload_bytes},
+                    snapshot_cache_hit=True,
+                    command="state",
+                )
+
+    async def _broadcast_payload_async(
+        self,
+        payload: Dict[str, Any],
+        *,
+        correlation: Optional[Dict[str, str]] = None,
+    ) -> None:
+        with debug_context(
+            trace_id=(correlation or {}).get("trace_id"),
+            action_id=(correlation or {}).get("action_id"),
+        ):
+            started_ns = time.perf_counter_ns()
+            with self._clients_lock:
+                items = list(self._clients.items())
+            payload_type = str(payload.get("type") or "payload") if isinstance(payload, dict) else "payload"
+            span_fields = {
+                "command": payload_type,
+                "counts": {"websocket_client_count": len(items)},
+            }
+            debug_event("broadcast.start", span="lan.broadcast.payload", **span_fields)
+            to_drop: List[int] = []
+            send_count = 0
+            try:
+                text = self._json_dumps(with_action_correlation(payload))
+            except Exception as exc:
+                self.app._oplog(f"LAN payload broadcast serialization failed: {exc}", level="warning")
+                self._log_lan_exception("LAN payload broadcast serialization failed", exc)
+                debug_event(
+                    "broadcast.end",
+                    span="lan.broadcast.payload",
+                    ok=False,
+                    reason=type(exc).__name__,
+                    duration_ms=round((time.perf_counter_ns() - started_ns) / 1_000_000.0, 3),
+                    **span_fields,
+                )
+                return
+            with timed_span("lan.broadcast.payload", **span_fields):
+                for ws_id, ws in items:
+                    try:
+                        await self._send_ws_text_serialized(ws_id, ws, text)
+                        send_count += 1
+                    except Exception as exc:
+                        to_drop.append(ws_id)
+                        debug_event(
+                            "broadcast.send_failed",
+                            span="lan.broadcast.payload",
+                            ws_id=ws_id,
+                            reason=type(exc).__name__,
+                            **span_fields,
+                        )
+                        self._log_lan_exception(f"LAN payload broadcast send failed ws_id={ws_id}", exc)
+            if to_drop:
+                with self._clients_lock:
+                    for ws_id in to_drop:
+                        self._drop_claim(ws_id)
+                        self._clients.pop(ws_id, None)
+                        self._clients_meta.pop(ws_id, None)
+                        self._client_hosts.pop(ws_id, None)
+            debug_event(
+                "broadcast.end",
+                span="lan.broadcast.payload",
+                ok=not bool(to_drop),
+                duration_ms=round((time.perf_counter_ns() - started_ns) / 1_000_000.0, 3),
+                counts={
+                    "recipient_count": len(items),
+                    "send_count": send_count,
+                    "failed_send_count": len(to_drop),
+                },
+                sizes={"payload_bytes": len(text.encode("utf-8", errors="replace"))},
+                command=payload_type,
+            )
+
+    @trace_timed("_dm_console_snapshot_payload")
     def _dm_console_snapshot_payload(
         self,
         *,
@@ -7524,29 +7744,68 @@ class LanController:
         """Push a DM-specific snapshot to all connected DM WebSocket clients."""
         if not self._loop:
             return
-        coro = self._push_dm_snapshot_async(snapshot)
+        coro = self._push_dm_snapshot_async(snapshot, correlation=current_debug_correlation())
         try:
             asyncio.run_coroutine_threadsafe(coro, self._loop)
         except Exception as exc:
             self._log_lan_exception("DM WS push scheduling failed", exc)
 
-    async def _push_dm_snapshot_async(self, snapshot: Dict[str, Any]) -> None:
-        try:
-            payload = json.dumps({"type": "dm_state", "snapshot": snapshot})
-        except Exception:
-            return
-        with self._clients_lock:
-            items = list(self._dm_ws_clients.items())
-        to_drop: List[int] = []
-        for ws_id, ws in items:
+    async def _push_dm_snapshot_async(
+        self,
+        snapshot: Dict[str, Any],
+        *,
+        correlation: Optional[Dict[str, str]] = None,
+    ) -> None:
+        with debug_context(
+            trace_id=(correlation or {}).get("trace_id"),
+            action_id=(correlation or {}).get("action_id"),
+        ):
+            started_ns = time.perf_counter_ns()
             try:
-                await self._send_ws_text_serialized(ws_id, ws, payload)
-            except Exception:
-                to_drop.append(ws_id)
-        if to_drop:
+                payload = json.dumps(with_action_correlation({"type": "dm_state", "snapshot": snapshot}))
+            except Exception as exc:
+                debug_event("broadcast.end", span="dm.broadcast.snapshot", ok=False, reason=type(exc).__name__)
+                return
             with self._clients_lock:
-                for ws_id in to_drop:
-                    self._dm_ws_clients.pop(ws_id, None)
+                items = list(self._dm_ws_clients.items())
+            span_fields = {
+                "command": "dm_state",
+                "counts": {"websocket_client_count": len(items)},
+            }
+            debug_event("broadcast.start", span="dm.broadcast.snapshot", **span_fields)
+            to_drop: List[int] = []
+            send_count = 0
+            with timed_span("dm.broadcast.snapshot", **span_fields):
+                for ws_id, ws in items:
+                    try:
+                        await self._send_ws_text_serialized(ws_id, ws, payload)
+                        send_count += 1
+                    except Exception as exc:
+                        to_drop.append(ws_id)
+                        debug_event(
+                            "broadcast.send_failed",
+                            span="dm.broadcast.snapshot",
+                            ws_id=ws_id,
+                            reason=type(exc).__name__,
+                            **span_fields,
+                        )
+            if to_drop:
+                with self._clients_lock:
+                    for ws_id in to_drop:
+                        self._dm_ws_clients.pop(ws_id, None)
+            debug_event(
+                "broadcast.end",
+                span="dm.broadcast.snapshot",
+                command="dm_state",
+                ok=not bool(to_drop),
+                duration_ms=round((time.perf_counter_ns() - started_ns) / 1_000_000.0, 3),
+                counts={
+                    "recipient_count": len(items),
+                    "send_count": send_count,
+                    "failed_send_count": len(to_drop),
+                },
+                sizes={"snapshot_bytes": len(payload.encode("utf-8", errors="replace"))},
+            )
 
     def _broadcast_grid_update(self, grid: Dict[str, Any]) -> None:
         if not self._loop:
@@ -7818,6 +8077,7 @@ class LanController:
             return
 
         try:
+            payload = with_action_correlation(payload)
             text = self._json_dumps(payload)
             await self._send_ws_text_serialized(ws_id, ws, text)
         except Exception as exc:
@@ -19364,6 +19624,7 @@ class InitiativeTracker(base.InitiativeTracker):
             self._enforce_johns_echo_tether(int(target_cid))
         return moved
 
+    @trace_timed("_lan_snapshot")
     def _lan_snapshot(self, include_static: bool = True, hydrate_static: bool = True) -> Dict[str, Any]:
         perf_debug = os.getenv("LAN_PERF_DEBUG") == "1"
         perf_start = time.perf_counter() if perf_debug else 0.0
@@ -19990,16 +20251,49 @@ class InitiativeTracker(base.InitiativeTracker):
         except Exception:
             pass
 
+    def _debug_trace_counts(self) -> Dict[str, int]:
+        combatants = getattr(self, "combatants", {}) or {}
+        player_count = 0
+        monster_count = 0
+        for combatant in combatants.values():
+            if bool(getattr(combatant, "is_pc", False)):
+                player_count += 1
+            else:
+                monster_count += 1
+        lan = self.__dict__.get("_lan")
+        try:
+            websocket_client_count = len(getattr(lan, "_clients", {}) or {})
+        except Exception:
+            websocket_client_count = 0
+        pending_prompts = self.__dict__.get("_pending_prompts")
+        pending_reactions = self.__dict__.get("_pending_reaction_offers")
+        return {
+            "combatant_count": len(combatants),
+            "player_count": player_count,
+            "monster_count": monster_count,
+            "map_aoe_count": len(self.__dict__.get("_lan_aoes", {}) or {}),
+            "pending_reaction_count": len(pending_prompts or pending_reactions or {}),
+            "websocket_client_count": websocket_client_count,
+        }
+
+    @trace_timed("_lan_force_state_broadcast")
     def _lan_force_state_broadcast(self, include_static: bool = True) -> None:
         perf_debug = os.getenv("LAN_PERF_DEBUG") == "1"
         perf_start = time.perf_counter() if perf_debug else 0.0
         snap: Dict[str, Any] = {}
         include_static_flag = bool(include_static)
         try:
-            snap = self._lan_snapshot(
-                include_static=include_static_flag,
-                hydrate_static=include_static_flag,
-            )
+            with timed_span(
+                "lan.snapshot.build",
+                function="_lan_snapshot",
+                command="state",
+                counts=self._debug_trace_counts(),
+                snapshot_cache_hit=False,
+            ):
+                snap = self._lan_snapshot(
+                    include_static=include_static_flag,
+                    hydrate_static=include_static_flag,
+                )
             self._lan._cached_snapshot = snap
             try:
                 self._lan._cached_pcs = list(
@@ -20027,7 +20321,13 @@ class InitiativeTracker(base.InitiativeTracker):
             dm_svc = getattr(self._lan, "_dm_service", None)
             if dm_svc is not None:
                 tactical_snapshot = self._dm_tactical_snapshot_from_lan_snapshot(snap)
-                dm_snap = self._lan._dm_console_snapshot_payload(tactical_snapshot=tactical_snapshot)
+                with timed_span(
+                    "dm.console.snapshot.build",
+                    function="_dm_console_snapshot_payload",
+                    counts=self._debug_trace_counts(),
+                    snapshot_cache_hit=False,
+                ):
+                    dm_snap = self._lan._dm_console_snapshot_payload(tactical_snapshot=tactical_snapshot)
                 # Stash for any route handler that returns a DM snapshot in
                 # the same request: avoids a second _dm_console_snapshot()
                 # build per resolve-targets / next-turn (~36-100ms each).
@@ -21658,7 +21958,20 @@ class InitiativeTracker(base.InitiativeTracker):
         return True, ""
 
     def _map_spell_effect_targets(self, effect: Dict[str, Any]) -> List[int]:
-        return self._lan_compute_included_units_for_aoe(effect if isinstance(effect, dict) else {})
+        fields = {
+            "function": "_map_spell_effect_targets",
+            "counts": self._debug_trace_counts(),
+        }
+        with timed_span("_map_spell_effect_targets", **fields):
+            targets = self._lan_compute_included_units_for_aoe(effect if isinstance(effect, dict) else {})
+        if debug_trace_enabled():
+            debug_event(
+                "spell.targets.mapped",
+                span="_map_spell_effect_targets",
+                target_count=len(targets),
+                counts={**fields["counts"], "target_count": len(targets)},
+            )
+        return targets
 
     def _normalize_hazard_trigger_mode(self, value: Any) -> str:
         raw = str(value or "").strip().lower().replace("-", "_").replace("/", "_")
@@ -22839,6 +23152,7 @@ class InitiativeTracker(base.InitiativeTracker):
             self._clear_target_spell_effect(attacker, entry, reason="consumed on hit")
             break
 
+    @trace_timed("_lan_auto_resolve_cast_aoe")
     def _lan_auto_resolve_cast_aoe(
         self,
         aid: int,
@@ -24370,6 +24684,7 @@ class InitiativeTracker(base.InitiativeTracker):
             raise CharacterApiError(status_code=500, detail={"error": "read_failed", "message": str(exc)})
         return raw if isinstance(raw, dict) else {}
 
+    @trace_timed("_store_character_yaml")
     def _store_character_yaml(self, path: Path, payload: Dict[str, Any]) -> Dict[str, Any]:
         self._write_player_yaml_atomic(path, payload)
         meta = _file_stat_metadata(path)
@@ -27574,6 +27889,7 @@ class InitiativeTracker(base.InitiativeTracker):
         """
         return _PlayerYamlCacheHold(self)
 
+    @trace_timed("_load_player_yaml_cache")
     def _load_player_yaml_cache(self, force_refresh: bool = False) -> None:
         perf_debug = os.getenv("LAN_PERF_DEBUG") == "1"
         perf_start = time.perf_counter() if perf_debug else 0.0
@@ -30564,6 +30880,7 @@ class InitiativeTracker(base.InitiativeTracker):
             "sequence_blocks": list(sequence_result.get("sequence_blocks") or []),
         }
 
+    @trace_timed("_apply_map_attack_manual_damage")
     def _apply_map_attack_manual_damage(
         self,
         attacker_cid: int,
@@ -34265,6 +34582,7 @@ class InitiativeTracker(base.InitiativeTracker):
             }
         return spawned
 
+    @trace_timed("_spawn_summons_from_cast")
     def _spawn_summons_from_cast(
         self,
         caster_cid: int,
@@ -34545,6 +34863,7 @@ class InitiativeTracker(base.InitiativeTracker):
             return False, "Failed to write temp monster file.", None
         return True, target.stem, target
 
+    @trace_timed("_spawn_custom_summons_from_payload")
     def _spawn_custom_summons_from_payload(
         self,
         caster_cid: int,
@@ -34957,6 +35276,7 @@ class InitiativeTracker(base.InitiativeTracker):
 
     def _send_spell_target_result(self, ws_id: Any, payload: Dict[str, Any]) -> None:
         """Helper to send spell_target_result payloads to a specific client."""
+        payload = with_action_correlation(payload)
         loop = getattr(self._lan, "_loop", None)
         if ws_id is not None and loop:
             try:
@@ -34986,6 +35306,7 @@ class InitiativeTracker(base.InitiativeTracker):
             message=message,
             reason=reason,
         )
+        payload = with_action_correlation(payload)
         loop = getattr(getattr(self, "_lan", None), "_loop", None)
         if ws_id is not None and loop:
             try:
@@ -36310,6 +36631,7 @@ class InitiativeTracker(base.InitiativeTracker):
         self._log(str(detail.get("log") or f"{spell_name} resolves on {result_payload['target_name']}."), cid=int(target_cid))
         self._lan.toast(ws_id, str(detail.get("toast") or "Spell resolved."))
 
+    @trace_timed("_adjudicate_attack_request")
     def _adjudicate_attack_request(
         self,
         msg: Dict[str, Any],
@@ -37795,6 +38117,7 @@ class InitiativeTracker(base.InitiativeTracker):
             result_payload["guiding_bolt_consumed"] = True
         if consumed_attack_riders.get("vicious_mockery"):
             result_payload["vicious_mockery_consumed"] = True
+        result_payload = with_action_correlation(result_payload)
         msg["_attack_result"] = dict(result_payload)
         shield_active = bool(self._shield_is_active(target))
         was_turned_to_miss = bool(shield_active and not hit and (int(total_to_hit) >= int(target_ac) - 5))
@@ -38064,6 +38387,7 @@ class InitiativeTracker(base.InitiativeTracker):
             needs_placement=needs_placement,
             needs_dm_action=needs_dm_action,
         )
+        result = with_action_correlation(result)
         loop = getattr(self._lan, "_loop", None)
         if ws_id is not None and loop:
             try:
@@ -38072,6 +38396,7 @@ class InitiativeTracker(base.InitiativeTracker):
             except Exception:
                 pass
 
+    @trace_timed("_handle_cast_aoe_request")
     def _handle_cast_aoe_request(
         self,
         msg: Dict[str, Any],
@@ -39304,6 +39629,7 @@ class InitiativeTracker(base.InitiativeTracker):
         self._clear_map_spell_effect(int(aid), end_concentration_if_bound=True)
         return
 
+    @trace_timed("_handle_cast_spell_request")
     def _handle_cast_spell_request(
         self,
         msg: Dict[str, Any],
@@ -40625,6 +40951,7 @@ class InitiativeTracker(base.InitiativeTracker):
         self._lan.toast(ws_id, f"Initiative set to {int(roll_total)}.")
         return
 
+    @trace_timed("_handle_hellish_rebuke_resolve_request")
     def _handle_hellish_rebuke_resolve_request(
         self,
         msg: Dict[str, Any],
@@ -44174,6 +44501,7 @@ class InitiativeTracker(base.InitiativeTracker):
             multiplier = 1.0
         return max(0, int(math.floor((base_speed + bonus) * multiplier)))
 
+    @trace_timed("_lan_try_move")
     def _lan_try_move(self, cid: int, col: int, row: int) -> Tuple[bool, str, int]:
         # Boundaries
         cols, rows, obstacles, rough_terrain, positions = self._lan_live_map_data()
@@ -44288,6 +44616,7 @@ class InitiativeTracker(base.InitiativeTracker):
                 snapshot["grid"] = dict(map_state_payload.get("grid"))
         return snapshot
 
+    @trace_timed("_dm_tactical_snapshot")
     def _dm_tactical_snapshot(self) -> Dict[str, Any]:
         perf_debug = os.getenv("LAN_PERF_DEBUG") == "1"
         perf_start = time.perf_counter() if perf_debug else 0.0
@@ -45190,6 +45519,7 @@ class InitiativeTracker(base.InitiativeTracker):
             "capability": cap
         }
 
+    @trace_timed("_dm_monster_capability_resolve_targets")
     def _dm_monster_capability_resolve_targets(self, *, actor_cid: Any, payload: Dict[str, Any]) -> Dict[str, Any]:
         perf_on = self._damage_perf_enabled()
         perf_t0 = time.perf_counter() if perf_on else 0.0
@@ -47355,6 +47685,7 @@ class InitiativeTracker(base.InitiativeTracker):
             return 1.0
         return float(land_speed) / float(swim_speed)
 
+    @trace_timed("_lan_shortest_cost")
     def _lan_shortest_cost(
         self,
         origin: Tuple[int, int],
