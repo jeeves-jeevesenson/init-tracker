@@ -115,6 +115,7 @@ from player_command_contracts import (
     build_beguiling_magic_use_contract,
     build_cast_aoe_contract,  # noqa: F401 — also used for counterspell AoE resume_dispatch
     build_cast_spell_contract,
+    build_drop_concentration_contract,
     build_command_resolve_contract,
     build_cycle_movement_mode_contract,
     build_dash_contract,
@@ -812,6 +813,26 @@ class PlayerCommandService:
                 toast(ws_id, message)
             except Exception:
                 pass
+
+    def _send_ws_payload(self, ws_id: Any, payload: Dict[str, Any]) -> None:
+        if ws_id is None:
+            return
+        lan = self._tracker.__dict__.get("_lan")
+        loop = getattr(lan, "_loop", None) if lan is not None else None
+        send_async = getattr(lan, "_send_async", None) if lan is not None else None
+        if callable(send_async):
+            try:
+                maybe_coro = send_async(int(ws_id), payload)
+                if asyncio.iscoroutine(maybe_coro):
+                    if isinstance(loop, asyncio.AbstractEventLoop) and loop.is_running():
+                        asyncio.run_coroutine_threadsafe(maybe_coro, loop)
+                    else:
+                        asyncio.run(maybe_coro)
+            except Exception as exc:
+                self._oplog(
+                    f"send_ws_payload failed ws_id={int(ws_id)}: {exc}",
+                    level="warning",
+                )
 
     def _oplog(self, message: str, level: str = "info") -> None:
         oplog = self._tracker.__dict__.get("_oplog")
@@ -3035,6 +3056,67 @@ class PlayerCommandService:
             request=request_contract,
         )
 
+    def drop_concentration(
+        self,
+        msg: Dict[str, Any],
+        *,
+        cid: Optional[int],
+        ws_id: Any,
+        is_admin: bool,
+        claimed: Optional[int] = None,
+    ) -> Dict[str, Any]:
+        t = self._tracker
+        request_contract = build_drop_concentration_contract(
+            msg,
+            cid=cid,
+            ws_id=ws_id,
+            is_admin=is_admin,
+        )
+
+        actor_cid = claimed if claimed is not None else cid
+        if actor_cid is None:
+            return build_dispatch_result(
+                "drop_concentration",
+                False,
+                reason="no_character_context",
+                request=request_contract,
+            )
+
+        c = t.combatants.get(int(actor_cid))
+        if not c:
+            return build_dispatch_result(
+                "drop_concentration",
+                False,
+                reason="character_not_found",
+                request=request_contract,
+            )
+
+        if not getattr(c, "concentrating", False):
+            return build_dispatch_result(
+                "drop_concentration",
+                False,
+                reason="not_concentrating",
+                request=request_contract,
+            )
+
+        try:
+            t._end_concentration(c)
+        except Exception as exc:
+            self._oplog(f"drop_concentration raised: {exc}", level="warning")
+            return build_dispatch_result(
+                "drop_concentration",
+                False,
+                reason="exception",
+                error=str(exc),
+                request=request_contract,
+            )
+
+        return build_dispatch_result(
+            "drop_concentration",
+            True,
+            request=request_contract,
+        )
+
     # ------------------------------------------------------------------
     # bard/glamour specialty commands
     # ------------------------------------------------------------------
@@ -4873,25 +4955,66 @@ class PlayerCommandService:
             is_admin=is_admin,
         )
         if cid is None:
+            self._send_ws_payload(ws_id, {
+                "type": "manual_override_result",
+                "ok": False,
+                "action": "manual_override_spell_slot",
+                "reason": "missing_cid",
+                "message": "Missing character selection."
+            })
             return build_dispatch_result("manual_override_spell_slot", False, reason="missing_cid", request=request_contract)
         try:
             cid_int = int(cid)
         except Exception:
+            self._send_ws_payload(ws_id, {
+                "type": "manual_override_result",
+                "ok": False,
+                "action": "manual_override_spell_slot",
+                "reason": "invalid_cid",
+                "message": "Invalid character ID."
+            })
             return build_dispatch_result("manual_override_spell_slot", False, reason="invalid_cid", request=request_contract)
         try:
             slot_level = int(msg.get("slot_level"))
             slot_delta = int(msg.get("delta"))
         except Exception:
             self._toast(ws_id, "Pick a valid slot level and amount, matey.")
+            self._send_ws_payload(ws_id, {
+                "type": "manual_override_result",
+                "ok": False,
+                "action": "manual_override_spell_slot",
+                "cid": cid_int,
+                "reason": "invalid_slot_args",
+                "message": "Pick a valid slot level and amount, matey."
+            })
             return build_dispatch_result("manual_override_spell_slot", False, reason="invalid_slot_args", request=request_contract)
         if slot_level < 1 or slot_level > 9 or slot_delta == 0:
             self._toast(ws_id, "Pick a valid slot level and amount, matey.")
+            self._send_ws_payload(ws_id, {
+                "type": "manual_override_result",
+                "ok": False,
+                "action": "manual_override_spell_slot",
+                "cid": cid_int,
+                "slot_level": slot_level,
+                "reason": "invalid_slot_args",
+                "message": "Pick a valid slot level and amount, matey."
+            })
             return build_dispatch_result("manual_override_spell_slot", False, reason="invalid_slot_args", request=request_contract)
         try:
             player_name = t._pc_name_for(cid_int)
             _resolved_name, slots = t._resolve_spell_slot_profile(player_name)
         except Exception as exc:
-            self._toast(ws_id, str(exc) or "No spell slots set up for that caster, matey.")
+            msg_str = str(exc) or "No spell slots set up for that caster, matey."
+            self._toast(ws_id, msg_str)
+            self._send_ws_payload(ws_id, {
+                "type": "manual_override_result",
+                "ok": False,
+                "action": "manual_override_spell_slot",
+                "cid": cid_int,
+                "slot_level": slot_level,
+                "reason": "resolve_spell_slots_failed",
+                "message": msg_str
+            })
             return build_dispatch_result(
                 "manual_override_spell_slot",
                 False,
@@ -4902,12 +5025,57 @@ class PlayerCommandService:
         entry = slots.get(str(slot_level))
         if not isinstance(entry, dict):
             self._toast(ws_id, "No spell slots at that level, matey.")
+            self._send_ws_payload(ws_id, {
+                "type": "manual_override_result",
+                "ok": False,
+                "action": "manual_override_spell_slot",
+                "cid": cid_int,
+                "slot_level": slot_level,
+                "reason": "slot_level_missing",
+                "message": "No spell slots at that level, matey."
+            })
             return build_dispatch_result("manual_override_spell_slot", False, reason="slot_level_missing", request=request_contract)
         old_current = int(entry.get("current", 0) or 0)
         max_current = int(entry.get("max", 0) or 0)
         if max_current <= 0:
             self._toast(ws_id, "No spell slots at that level, matey.")
+            self._send_ws_payload(ws_id, {
+                "type": "manual_override_result",
+                "ok": False,
+                "action": "manual_override_spell_slot",
+                "cid": cid_int,
+                "slot_level": slot_level,
+                "reason": "slot_level_missing",
+                "message": "No spell slots at that level, matey."
+            })
             return build_dispatch_result("manual_override_spell_slot", False, reason="slot_level_missing", request=request_contract)
+
+        if slot_delta > 0 and old_current >= max_current:
+            self._toast(ws_id, "Already at max slots, matey.")
+            self._send_ws_payload(ws_id, {
+                "type": "manual_override_result",
+                "ok": False,
+                "action": "manual_override_spell_slot",
+                "cid": cid_int,
+                "slot_level": slot_level,
+                "reason": "already_at_max",
+                "message": "Already at max slots."
+            })
+            return build_dispatch_result("manual_override_spell_slot", False, reason="already_at_max", request=request_contract)
+
+        if slot_delta < 0 and old_current <= 0:
+            self._toast(ws_id, "Already at 0 slots, matey.")
+            self._send_ws_payload(ws_id, {
+                "type": "manual_override_result",
+                "ok": False,
+                "action": "manual_override_spell_slot",
+                "cid": cid_int,
+                "slot_level": slot_level,
+                "reason": "already_at_zero",
+                "message": "Already at 0 slots."
+            })
+            return build_dispatch_result("manual_override_spell_slot", False, reason="already_at_zero", request=request_contract)
+
         new_current = max(0, min(max_current, old_current + slot_delta))
         entry["current"] = int(new_current)
         slots[str(slot_level)] = entry
@@ -4915,6 +5083,15 @@ class PlayerCommandService:
             t._save_player_spell_slots(player_name, slots)
         except Exception as exc:
             self._toast(ws_id, "Could not update spell slots, matey.")
+            self._send_ws_payload(ws_id, {
+                "type": "manual_override_result",
+                "ok": False,
+                "action": "manual_override_spell_slot",
+                "cid": cid_int,
+                "slot_level": slot_level,
+                "reason": "save_spell_slots_failed",
+                "message": "Could not update spell slots, matey."
+            })
             return build_dispatch_result(
                 "manual_override_spell_slot",
                 False,
@@ -4934,6 +5111,17 @@ class PlayerCommandService:
             except Exception:
                 pass
         self._toast(ws_id, f"Level {slot_level} spell slots updated.")
+        self._send_ws_payload(ws_id, {
+            "type": "manual_override_result",
+            "ok": True,
+            "action": "manual_override_spell_slot",
+            "cid": cid_int,
+            "slot_level": slot_level,
+            "before": old_current,
+            "after": new_current,
+            "delta": slot_delta,
+            "message": f"Level {slot_level} spell slots updated."
+        })
         rebuild = getattr(t, "_rebuild_table", None)
         if callable(rebuild):
             try:
@@ -4972,10 +5160,24 @@ class PlayerCommandService:
             is_admin=is_admin,
         )
         if cid is None:
+            self._send_ws_payload(ws_id, {
+                "type": "manual_override_result",
+                "ok": False,
+                "action": "manual_override_resource_pool",
+                "reason": "missing_cid",
+                "message": "Missing character selection."
+            })
             return build_dispatch_result("manual_override_resource_pool", False, reason="missing_cid", request=request_contract)
         try:
             cid_int = int(cid)
         except Exception:
+            self._send_ws_payload(ws_id, {
+                "type": "manual_override_result",
+                "ok": False,
+                "action": "manual_override_resource_pool",
+                "reason": "invalid_cid",
+                "message": "Invalid character ID."
+            })
             return build_dispatch_result("manual_override_resource_pool", False, reason="invalid_cid", request=request_contract)
         player_name = t._pc_name_for(cid_int)
         pool_id = str(msg.get("pool_id") or "").strip()
@@ -4985,15 +5187,42 @@ class PlayerCommandService:
             pool_delta = 0
         if not pool_id or pool_delta == 0:
             self._toast(ws_id, "Pick a valid pool and amount, matey.")
+            self._send_ws_payload(ws_id, {
+                "type": "manual_override_result",
+                "ok": False,
+                "action": "manual_override_resource_pool",
+                "cid": cid_int,
+                "pool_id": pool_id,
+                "reason": "invalid_pool_args",
+                "message": "Pick a valid pool and amount, matey."
+            })
             return build_dispatch_result("manual_override_resource_pool", False, reason="invalid_pool_args", request=request_contract)
         profile = t._profile_for_player_name(player_name)
         pools = t._normalize_player_resource_pools(profile if isinstance(profile, dict) else {})
         pool = next((entry for entry in pools if str(entry.get("id") or "").strip().lower() == pool_id.lower()), None)
         if not isinstance(pool, dict):
             self._toast(ws_id, "That resource pool could not be found, matey.")
+            self._send_ws_payload(ws_id, {
+                "type": "manual_override_result",
+                "ok": False,
+                "action": "manual_override_resource_pool",
+                "cid": cid_int,
+                "pool_id": pool_id,
+                "reason": "pool_missing",
+                "message": "That resource pool could not be found, matey."
+            })
             return build_dispatch_result("manual_override_resource_pool", False, reason="pool_missing", request=request_contract)
         if bool(pool.get("derived_from_inventory")) or str(pool_id).strip().lower().startswith("consumable:"):
             self._toast(ws_id, "Consumable counts come from inventory. Adjust inventory instead, matey.")
+            self._send_ws_payload(ws_id, {
+                "type": "manual_override_result",
+                "ok": False,
+                "action": "manual_override_resource_pool",
+                "cid": cid_int,
+                "pool_id": pool_id,
+                "reason": "pool_derived_from_inventory",
+                "message": "Consumable counts come from inventory. Adjust inventory instead, matey."
+            })
             return build_dispatch_result(
                 "manual_override_resource_pool",
                 False,
@@ -5002,12 +5231,52 @@ class PlayerCommandService:
             )
         old_current = int(pool.get("current", 0) or 0)
         max_current = int(pool.get("max", 0) or 0)
+        pool_label = str(pool.get("label") or pool_id)
+
+        if pool_delta > 0 and max_current > 0 and old_current >= max_current:
+            self._toast(ws_id, f"Already at max {pool_label}, matey.")
+            self._send_ws_payload(ws_id, {
+                "type": "manual_override_result",
+                "ok": False,
+                "action": "manual_override_resource_pool",
+                "cid": cid_int,
+                "pool_id": pool_id,
+                "pool_label": pool_label,
+                "reason": "already_at_max",
+                "message": f"Already at max {pool_label}."
+            })
+            return build_dispatch_result("manual_override_resource_pool", False, reason="already_at_max", request=request_contract)
+
+        if pool_delta < 0 and old_current <= 0:
+            self._toast(ws_id, f"Already at 0 {pool_label}, matey.")
+            self._send_ws_payload(ws_id, {
+                "type": "manual_override_result",
+                "ok": False,
+                "action": "manual_override_resource_pool",
+                "cid": cid_int,
+                "pool_id": pool_id,
+                "pool_label": pool_label,
+                "reason": "already_at_zero",
+                "message": f"Already at 0 {pool_label}."
+            })
+            return build_dispatch_result("manual_override_resource_pool", False, reason="already_at_zero", request=request_contract)
+
         new_current = max(0, old_current + pool_delta)
         if max_current > 0:
             new_current = min(new_current, max_current)
         ok_pool, pool_err = t._set_player_resource_pool_current(player_name, pool_id, int(new_current))
         if not ok_pool:
             self._toast(ws_id, pool_err or "Could not update resource pools, matey.")
+            self._send_ws_payload(ws_id, {
+                "type": "manual_override_result",
+                "ok": False,
+                "action": "manual_override_resource_pool",
+                "cid": cid_int,
+                "pool_id": pool_id,
+                "pool_label": pool_label,
+                "reason": "pool_update_failed",
+                "message": pool_err or "Could not update resource pools, matey."
+            })
             return build_dispatch_result(
                 "manual_override_resource_pool",
                 False,
@@ -5017,7 +5286,6 @@ class PlayerCommandService:
             )
         c = (getattr(t, "combatants", {}) or {}).get(cid_int)
         actor_name = getattr(c, "name", player_name or "Player")
-        pool_label = str(pool.get("label") or pool_id)
         log = getattr(t, "_log", None)
         if callable(log):
             try:
@@ -5028,6 +5296,18 @@ class PlayerCommandService:
             except Exception:
                 pass
         self._toast(ws_id, f"{pool_label} updated.")
+        self._send_ws_payload(ws_id, {
+            "type": "manual_override_result",
+            "ok": True,
+            "action": "manual_override_resource_pool",
+            "cid": cid_int,
+            "pool_id": pool_id,
+            "pool_label": pool_label,
+            "before": old_current,
+            "after": new_current,
+            "delta": pool_delta,
+            "message": f"{pool_label} updated."
+        })
         rebuild = getattr(t, "_rebuild_table", None)
         if callable(rebuild):
             try:

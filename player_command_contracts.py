@@ -209,6 +209,9 @@ CAST_AOE_FIELDS: Sequence[str] = (
     "damage_entries",
     "payload",
 )
+DROP_CONCENTRATION_FIELDS: Sequence[str] = (
+    "type",
+)
 COMMAND_RESOLVE_FIELDS: Sequence[str] = (
     "type",
     "command_option",
@@ -289,6 +292,7 @@ SPELL_LAUNCH_COMMAND_TYPES = frozenset(
     {
         "cast_spell",
         "cast_aoe",
+        "drop_concentration",
     }
 )
 
@@ -1176,6 +1180,22 @@ def build_cast_aoe_contract(
     return build_command_request_contract(
         "cast_aoe",
         _project_payload(msg, CAST_AOE_FIELDS, "cast_aoe"),
+        cid=cid,
+        ws_id=ws_id,
+        is_admin=is_admin,
+    )
+
+
+def build_drop_concentration_contract(
+    msg: Dict[str, Any],
+    *,
+    cid: Optional[int],
+    ws_id: Any,
+    is_admin: bool,
+) -> Dict[str, Any]:
+    return build_command_request_contract(
+        "drop_concentration",
+        _project_payload(msg, DROP_CONCENTRATION_FIELDS, "drop_concentration"),
         cid=cid,
         ws_id=ws_id,
         is_admin=is_admin,

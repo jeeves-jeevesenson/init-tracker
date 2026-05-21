@@ -500,6 +500,18 @@ Finishes the bounded counterspell work from §6.6. Two deferred branches are now
 
 ---
 
+### 6.8 Persistent concentration / active spell lifecycle (2026-05-21)
+
+Establishes authoritative backend-owned lifecycles for active spell effects, area of effects (AoEs), and concentration:
+
+- **Concentration Replacement Interception**: Intercepts `_start_concentration(...)` to determine if a caster is already concentrating. If so, terminates the prior concentration, broadcasts a `"CONCENTRATION_REPLACED"` result payload to the caster's sockets, and automatically cleans up prior concentration-linked AoEs from the map.
+- **Explicit Concentration End**: Intercepts `_end_concentration(...)` to send a `"CONCENTRATION_ENDED"` payload and force a state broadcast (`_lan_force_state_broadcast()`) to synchronise the client without frontend ghosts.
+- **Instant AoE Cleanup**: Updates `_handle_cast_aoe_request` so that when a non-persistent (instant) AoE is cast, the backend immediately sweeps the temporary map spell effect via `_clear_map_spell_effect(..., end_concentration_if_bound=False)` after resolving targets, ensuring zero ghost residues on the map.
+- **Interactive LAN UI**: Connects the HUD's concentration chip in `assets/web/lan/index.html` to prompt a click confirmation and dispatch a `"drop_concentration"` command to the backend. Added `"CONCENTRATION_ENDED"` and `"CONCENTRATION_REPLACED"` handler support in `"spell_cast_result"` client receiver.
+- **Verification Coverage**: Expanded unit tests in `tests/test_spell_casting_primitive.py` to cover start/replace/drop concentration and instant AoE cleanup. Registered `"drop_concentration"` in player contracts tests and resolved a pre-existing contracts test failure regarding `"reload_weapon"`. Run inline JS syntax validation successfully via Node.js check on the LAN asset.
+
+---
+
 
 ## 7. Working guardrails for major passes
 

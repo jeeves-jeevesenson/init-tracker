@@ -21,6 +21,7 @@ from player_command_contracts import (
     build_attack_request_contract,
     build_cast_aoe_contract,
     build_cast_spell_contract,
+    build_drop_concentration_contract,
     build_bardic_inspiration_grant_contract,
     build_bardic_inspiration_use_contract,
     build_beguiling_magic_restore_contract,
@@ -53,6 +54,7 @@ from player_command_contracts import (
     build_reaction_prefs_update_contract,
     build_reappear_persistent_summon_contract,
     build_reset_turn_contract,
+    build_reload_weapon_contract,
     build_reset_player_characters_contract,
     build_resume_dispatch,
     build_set_auras_enabled_contract,
@@ -383,6 +385,10 @@ class TurnLocalCommandContractTests(unittest.TestCase):
                 build_reset_turn_contract,
                 {"type": "reset_turn"},
             ),
+            "reload_weapon": (
+                build_reload_weapon_contract,
+                {"type": "reload_weapon", "weapon_id": "hand-crossbow"},
+            ),
         }
 
         self.assertEqual(set(builders.keys()), set(TURN_LOCAL_COMMAND_TYPES))
@@ -491,6 +497,12 @@ class SpellLaunchCommandContractTests(unittest.TestCase):
                     "spell_id": "fireball",
                     "slot_level": 3,
                     "payload": {"shape": "sphere", "radius_ft": 20},
+                },
+            ),
+            "drop_concentration": (
+                build_drop_concentration_contract,
+                {
+                    "type": "drop_concentration",
                 },
             ),
         }

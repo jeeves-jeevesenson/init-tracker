@@ -8453,13 +8453,11 @@ __DAMAGE_TYPE_OPTIONS__
         dec.type = "button";
         dec.className = "btn";
         dec.textContent = `-${amount}`;
-        dec.disabled = entry.current <= 0;
         dec.addEventListener("click", () => sendOverride({type: "manual_override_spell_slot", slot_level: entry.level, delta: -amount}));
         const inc = document.createElement("button");
         inc.type = "button";
         inc.className = "btn";
         inc.textContent = `+${amount}`;
-        inc.disabled = entry.current >= entry.max;
         inc.addEventListener("click", () => sendOverride({type: "manual_override_spell_slot", slot_level: entry.level, delta: amount}));
         controls.appendChild(dec);
         controls.appendChild(inc);
@@ -8491,13 +8489,11 @@ __DAMAGE_TYPE_OPTIONS__
         dec.type = "button";
         dec.className = "btn";
         dec.textContent = `-${amount}`;
-        dec.disabled = current <= 0;
         dec.addEventListener("click", () => sendOverride({type: "manual_override_resource_pool", pool_id: pool.id, delta: -amount}));
         const inc = document.createElement("button");
         inc.type = "button";
         inc.className = "btn";
         inc.textContent = `+${amount}`;
-        inc.disabled = current >= max;
         inc.addEventListener("click", () => sendOverride({type: "manual_override_resource_pool", pool_id: pool.id, delta: amount}));
         controls.appendChild(dec);
         controls.appendChild(inc);
@@ -17819,6 +17815,13 @@ __DAMAGE_TYPE_OPTIONS__
           localToast(`Bardic Inspiration die rolled ${Math.floor(roll)}.`);
         }
         scheduleUiFlush({hud:true, draw:true, mount:true});
+      } else if (msg.type === "manual_override_result"){
+        if (msg.message){
+          localToast(msg.message);
+        } else if (!msg.ok && msg.reason){
+          localToast(`Failed: ${msg.reason}`);
+        }
+        updateHud();
       } else if (msg.type === "toast"){
         localToast(msg.text || "…");
       } else if (msg.type === "mount_prompt"){
@@ -18011,13 +18014,15 @@ __DAMAGE_TYPE_OPTIONS__
             || status === "CAST_CANCELLED"
             || status === "CAST_NO_TARGETS"
             || status === "CAST_CREATED_PERSISTENT_EFFECT"
-            || status === "CAST_NEEDS_MANUAL_DAMAGE";
+            || status === "CAST_NEEDS_MANUAL_DAMAGE"
+            || status === "CONCENTRATION_ENDED"
+            || status === "CONCENTRATION_REPLACED";
           
           if (finished) {
             clearActiveCastInteractionState("");
           }
           
-          if (msg.message && !finished) {
+          if (msg.message && (!finished || status === "CONCENTRATION_ENDED" || status === "CONCENTRATION_REPLACED")) {
             localToast(msg.message);
           }
         }
@@ -26028,6 +26033,25 @@ __DAMAGE_TYPE_OPTIONS__
         return;
       }
       send({type:"cycle_movement_mode", cid: claimedCid});
+    });
+  }
+  if (concentrationStatusEl){
+    concentrationStatusEl.style.cursor = "pointer";
+    concentrationStatusEl.addEventListener("click", () => {
+      if (isMapView) return;
+      if (!isPlanning && !claimedCid){
+        localToast("Claim a character first, matey.");
+        return;
+      }
+      const me = Array.isArray(state?.units) ? state.units.find(u => cidMatches(u.cid, claimedCid, "dropConcentration.me")) : null;
+      if (!me || !me.concentrating){
+        localToast("Ye are not concentrating on any spell, matey.");
+        return;
+      }
+      const spellName = normalizeTextValue(me.concentration_spell || me.concentrationSpell || "Active");
+      const confirmed = window.confirm(`Drop concentration on ${spellName}?`);
+      if (!confirmed) return;
+      send({type: "drop_concentration", cid: claimedCid});
     });
   }
   if (toggleSheetPanelBtn){

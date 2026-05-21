@@ -23,11 +23,13 @@ class LanManualOverrideTests(unittest.TestCase):
         app.turn_num = 1
         app.start_cid = None
         app._lan_toasts = []
+        app._lan_sent_payloads = []
         app._lan = type(
             "LanStub",
             (),
             {
                 "toast": lambda _self, ws_id, message: app._lan_toasts.append((ws_id, message)),
+                "_send_async": lambda _self, ws_id, payload: app._lan_sent_payloads.append((ws_id, payload)),
                 "_append_lan_log": lambda *args, **kwargs: None,
                 "_loop": None,
             },
@@ -177,6 +179,177 @@ class LanManualOverrideTests(unittest.TestCase):
         self.assertEqual(app._rebuild_calls, 1)
         self.assertIn((20, "Lesser Healing Potion: healed 6 HP."), app._lan_toasts)
         self.assertTrue(any("uses Lesser Healing Potion and heals 6 HP" in message for _cid, message in app._log_messages))
+
+    def test_manual_override_spell_slot_boundaries(self):
+        # 1. Depleted slot increment succeeds and returns before/after
+        app = self._build_app()
+        app.combatants = {
+            1: type("C", (), {"cid": 1, "name": "Alyra"})(),
+        }
+        app._resolve_spell_slot_profile = lambda name: (
+            name,
+            {"1": {"current": 2, "max": 4}},
+        )
+        saved = []
+        app._save_player_spell_slots = lambda name, payload: saved.append((name, payload))
+
+        app._lan_apply_action(
+            {"type": "manual_override_spell_slot", "cid": 1, "_claimed_cid": 1, "_ws_id": 16, "slot_level": 1, "delta": 1}
+        )
+        self.assertEqual(len(app._lan_sent_payloads), 1)
+        ws_id, payload = app._lan_sent_payloads[0]
+        self.assertEqual(ws_id, 16)
+        self.assertEqual(payload["type"], "manual_override_result")
+        self.assertTrue(payload["ok"])
+        self.assertEqual(payload["before"], 2)
+        self.assertEqual(payload["after"], 3)
+        self.assertEqual(payload["delta"], 1)
+
+        # 2. Increment full slot rejects/no-ops with already_at_max
+        app = self._build_app()
+        app.combatants = {
+            1: type("C", (), {"cid": 1, "name": "Alyra"})(),
+        }
+        app._resolve_spell_slot_profile = lambda name: (
+            name,
+            {"1": {"current": 4, "max": 4}},
+        )
+        app._lan_sent_payloads.clear()
+        app._lan_toasts.clear()
+        app._lan_apply_action(
+            {"type": "manual_override_spell_slot", "cid": 1, "_claimed_cid": 1, "_ws_id": 16, "slot_level": 1, "delta": 1}
+        )
+        self.assertEqual(len(app._lan_sent_payloads), 1)
+        ws_id, payload = app._lan_sent_payloads[0]
+        self.assertFalse(payload["ok"])
+        self.assertEqual(payload["reason"], "already_at_max")
+        self.assertEqual(payload["message"], "Already at max slots.")
+        self.assertIn((16, "Already at max slots, matey."), app._lan_toasts)
+
+        # 3. Decrement zero slot rejects/no-ops with already_at_zero
+        app = self._build_app()
+        app.combatants = {
+            1: type("C", (), {"cid": 1, "name": "Alyra"})(),
+        }
+        app._resolve_spell_slot_profile = lambda name: (
+            name,
+            {"1": {"current": 0, "max": 4}},
+        )
+        app._lan_sent_payloads.clear()
+        app._lan_toasts.clear()
+        app._lan_apply_action(
+            {"type": "manual_override_spell_slot", "cid": 1, "_claimed_cid": 1, "_ws_id": 16, "slot_level": 1, "delta": -1}
+        )
+        self.assertEqual(len(app._lan_sent_payloads), 1)
+        ws_id, payload = app._lan_sent_payloads[0]
+        self.assertFalse(payload["ok"])
+        self.assertEqual(payload["reason"], "already_at_zero")
+        self.assertEqual(payload["message"], "Already at 0 slots.")
+        self.assertIn((16, "Already at 0 slots, matey."), app._lan_toasts)
+
+    def test_manual_override_spell_slot_missing_character_and_level(self):
+        app = self._build_app()
+        app.combatants = {}
+        
+        # Missing character (cid is None)
+        app._lan_sent_payloads.clear()
+        app._ensure_player_commands().manual_override_spell_slot(
+            {"type": "manual_override_spell_slot", "slot_level": 1, "delta": 1},
+            cid=None,
+            ws_id=16,
+            is_admin=False
+        )
+        self.assertEqual(len(app._lan_sent_payloads), 1)
+        self.assertEqual(app._lan_sent_payloads[0][1]["reason"], "missing_cid")
+
+        # Invalid slot level
+        app.combatants = {1: type("C", (), {"cid": 1, "name": "Alyra"})()}
+        app._resolve_spell_slot_profile = lambda name: (name, {})
+        app._lan_sent_payloads.clear()
+        app._lan_toasts.clear()
+        app._lan_apply_action(
+            {"type": "manual_override_spell_slot", "cid": 1, "_claimed_cid": 1, "_ws_id": 16, "slot_level": 99, "delta": 1}
+        )
+        self.assertEqual(len(app._lan_sent_payloads), 1)
+        self.assertEqual(app._lan_sent_payloads[0][1]["reason"], "invalid_slot_args")
+
+        # Missing level in profile
+        app._resolve_spell_slot_profile = lambda name: (name, {"1": {"current": 0, "max": 4}})
+        app._lan_sent_payloads.clear()
+        app._lan_toasts.clear()
+        app._lan_apply_action(
+            {"type": "manual_override_spell_slot", "cid": 1, "_claimed_cid": 1, "_ws_id": 16, "slot_level": 2, "delta": 1}
+        )
+        self.assertEqual(len(app._lan_sent_payloads), 1)
+        self.assertEqual(app._lan_sent_payloads[0][1]["reason"], "slot_level_missing")
+        self.assertIn((16, "No spell slots at that level, matey."), app._lan_toasts)
+
+    def test_manual_override_resource_pool_boundaries(self):
+        # 1. Success pool override emits correct WS payload with before/after
+        app = self._build_app()
+        app.combatants = {
+            1: type("C", (), {"cid": 1, "name": "Alyra"})(),
+        }
+        app._profile_for_player_name = lambda name: {"resources": {"pools": [{"id": "focus_points"}]}}
+        app._normalize_player_resource_pools = lambda profile: [
+            {"id": "focus_points", "label": "Focus Points", "current": 2, "max": 4}
+        ]
+        set_calls = []
+        app._set_player_resource_pool_current = lambda name, pool_id, current: (
+            set_calls.append((name, pool_id, current)) or True,
+            "",
+        )
+        app._lan_sent_payloads.clear()
+        app._lan_apply_action(
+            {"type": "manual_override_resource_pool", "cid": 1, "_claimed_cid": 1, "_ws_id": 17, "pool_id": "focus_points", "delta": 1}
+        )
+        self.assertEqual(len(app._lan_sent_payloads), 1)
+        ws_id, payload = app._lan_sent_payloads[0]
+        self.assertEqual(ws_id, 17)
+        self.assertEqual(payload["type"], "manual_override_result")
+        self.assertTrue(payload["ok"])
+        self.assertEqual(payload["before"], 2)
+        self.assertEqual(payload["after"], 3)
+
+        # 2. Pool already at max
+        app = self._build_app()
+        app.combatants = {
+            1: type("C", (), {"cid": 1, "name": "Alyra"})(),
+        }
+        app._profile_for_player_name = lambda name: {"resources": {"pools": [{"id": "focus_points"}]}}
+        app._normalize_player_resource_pools = lambda profile: [
+            {"id": "focus_points", "label": "Focus Points", "current": 4, "max": 4}
+        ]
+        app._lan_sent_payloads.clear()
+        app._lan_toasts.clear()
+        app._lan_apply_action(
+            {"type": "manual_override_resource_pool", "cid": 1, "_claimed_cid": 1, "_ws_id": 17, "pool_id": "focus_points", "delta": 1}
+        )
+        self.assertEqual(len(app._lan_sent_payloads), 1)
+        ws_id, payload = app._lan_sent_payloads[0]
+        self.assertFalse(payload["ok"])
+        self.assertEqual(payload["reason"], "already_at_max")
+        self.assertIn((17, "Already at max Focus Points, matey."), app._lan_toasts)
+
+        # 3. Pool already at zero
+        app = self._build_app()
+        app.combatants = {
+            1: type("C", (), {"cid": 1, "name": "Alyra"})(),
+        }
+        app._profile_for_player_name = lambda name: {"resources": {"pools": [{"id": "focus_points"}]}}
+        app._normalize_player_resource_pools = lambda profile: [
+            {"id": "focus_points", "label": "Focus Points", "current": 0, "max": 4}
+        ]
+        app._lan_sent_payloads.clear()
+        app._lan_toasts.clear()
+        app._lan_apply_action(
+            {"type": "manual_override_resource_pool", "cid": 1, "_claimed_cid": 1, "_ws_id": 17, "pool_id": "focus_points", "delta": -1}
+        )
+        self.assertEqual(len(app._lan_sent_payloads), 1)
+        ws_id, payload = app._lan_sent_payloads[0]
+        self.assertFalse(payload["ok"])
+        self.assertEqual(payload["reason"], "already_at_zero")
+        self.assertIn((17, "Already at 0 Focus Points, matey."), app._lan_toasts)
 
 
 if __name__ == "__main__":

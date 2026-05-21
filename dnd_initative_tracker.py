@@ -38770,6 +38770,9 @@ class InitiativeTracker(base.InitiativeTracker):
             needs_manual_damage=(status == CAST_NEEDS_MANUAL_DAMAGE)
         )
 
+        if not persistent_flag:
+            self._clear_map_spell_effect(int(aid), end_concentration_if_bound=False)
+
         if perf_on:
             t1 = time.perf_counter()
             self._lan._append_lan_log(
@@ -43833,7 +43836,66 @@ class InitiativeTracker(base.InitiativeTracker):
             if caster is not None and bool(getattr(caster, "concentrating", False)) and str(getattr(caster, "concentration_spell", "") or "").strip().lower() == "polymorph":
                 self._end_concentration(caster)
 
+    def _start_concentration(
+        self,
+        caster: base.Combatant,
+        spell_key: str,
+        spell_level: Optional[int] = None,
+        *,
+        targets: Optional[List[int]] = None,
+        aoe_ids: Optional[List[int]] = None,
+    ) -> None:
+        was_concentrating = bool(getattr(caster, "concentrating", False))
+        if was_concentrating:
+            caster._replacing_concentration = True
+
+        super()._start_concentration(
+            caster,
+            spell_key,
+            spell_level=spell_level,
+            targets=targets,
+            aoe_ids=aoe_ids,
+        )
+
+        if was_concentrating:
+            spell_name = str(spell_key or "").replace("-", " ").strip().title() or "a spell"
+            msg_text = f"Concentration replaced: {spell_name}."
+
+            caster_cid = int(getattr(caster, "cid", 0) or 0)
+            ws_targets = self._find_ws_for_cid(caster_cid)
+            loop = getattr(getattr(self, "_lan", None), "_loop", None)
+
+            from player_command_contracts import build_spell_cast_result
+            payload = build_spell_cast_result(
+                ok=True,
+                status="CONCENTRATION_REPLACED",
+                spell_id=spell_key,
+                spell_name=spell_name,
+                caster_cid=caster_cid,
+                message=msg_text,
+            )
+
+            if loop:
+                for ws_id in ws_targets:
+                    try:
+                        import asyncio
+                        asyncio.run_coroutine_threadsafe(self._lan._send_async(int(ws_id), payload), loop)
+                    except Exception:
+                        pass
+
+                if ws_targets:
+                    try:
+                        self._lan.toast(int(ws_targets[0]), msg_text)
+                    except Exception:
+                        pass
+
+            if hasattr(caster, "_replacing_concentration"):
+                delattr(caster, "_replacing_concentration")
+
+        self._lan_force_state_broadcast()
+
     def _end_concentration(self, c: base.Combatant) -> None:
+        was_concentrating = bool(getattr(c, "concentrating", False))
         spell_key = str(getattr(c, "concentration_spell", "") or "").strip().lower()
         targets = list(getattr(c, "concentration_target", []) or [])
         caster_cid = int(getattr(c, "cid", 0) or 0)
@@ -43889,6 +43951,38 @@ class InitiativeTracker(base.InitiativeTracker):
                     if str((rider or {}).get("clear_group") or "").strip().lower() != group
                 ]
                 setattr(target, "start_turn_damage_riders", start_turn_damage_riders)
+        if was_concentrating and not getattr(c, "_replacing_concentration", False):
+            spell_name = str(spell_key or "").replace("-", " ").strip().title() or "a spell"
+            msg_text = f"Concentration ended: {spell_name}."
+
+            ws_targets = self._find_ws_for_cid(caster_cid)
+            loop = getattr(getattr(self, "_lan", None), "_loop", None)
+
+            from player_command_contracts import build_spell_cast_result
+            payload = build_spell_cast_result(
+                ok=True,
+                status="CONCENTRATION_ENDED",
+                spell_id=spell_key,
+                spell_name=spell_name,
+                caster_cid=caster_cid,
+                message=msg_text,
+            )
+
+            if loop:
+                for ws_id in ws_targets:
+                    try:
+                        import asyncio
+                        asyncio.run_coroutine_threadsafe(self._lan._send_async(int(ws_id), payload), loop)
+                    except Exception:
+                        pass
+
+                if ws_targets:
+                    try:
+                        self._lan.toast(int(ws_targets[0]), msg_text)
+                    except Exception:
+                        pass
+
+            self._lan_force_state_broadcast()
 
         if not spell_key:
             return

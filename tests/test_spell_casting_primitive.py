@@ -270,5 +270,110 @@ class SpellCastingPrimitiveTests(unittest.TestCase):
         args, kwargs = self.app._lan_prompt_manual_aoe_damage.call_args
         self.assertEqual(kwargs["target_cids"], [2])
 
+    @mock.patch("asyncio.run_coroutine_threadsafe")
+    def test_concentration_replacement(self, mock_run_coro):
+        self.app.round_num = 1
+        self.app.turn_num = 1
+        self.app._concentration_save_state = {}
+        self.app._start_concentration = tracker_mod.InitiativeTracker._start_concentration.__get__(self.app, tracker_mod.InitiativeTracker)
+        self.app._end_concentration = tracker_mod.InitiativeTracker._end_concentration.__get__(self.app, tracker_mod.InitiativeTracker)
+        self.app._clear_map_spell_effect = tracker_mod.InitiativeTracker._clear_map_spell_effect.__get__(self.app, tracker_mod.InitiativeTracker)
+        self.app._dematerialize_map_spell_effect = tracker_mod.InitiativeTracker._dematerialize_map_spell_effect.__get__(self.app, tracker_mod.InitiativeTracker)
+        self.app._dismiss_summon_group = lambda *args, **kwargs: None
+        self.app._find_ws_for_cid = lambda cid: [123]
+        self.app._lan_force_state_broadcast = mock.Mock()
+
+        caster = self.app.combatants[1]
+        
+        # 1. Start concentrating on a spell
+        self.app._start_concentration(caster, "shield-of-faith", 10, aoe_ids=["99"])
+        self.assertTrue(caster.concentrating)
+        self.assertEqual(caster.concentration_spell, "shield-of-faith")
+        self.assertEqual(caster.concentration_aoe_ids, ["99"])
+        
+        # 2. Start concentrating on another spell to trigger replacement
+        self.send_async_mock.reset_mock()
+        self.app._start_concentration(caster, "bless", 10, aoe_ids=["100"])
+        
+        # Verify concentration is Bless
+        self.assertTrue(caster.concentrating)
+        self.assertEqual(caster.concentration_spell, "bless")
+        self.assertEqual(caster.concentration_aoe_ids, ["100"])
+        
+        # Verify CONCENTRATION_REPLACED was sent via websockets
+        self.assertTrue(self.send_async_mock.called)
+        ws_id, payload = self.send_async_mock.call_args[0]
+        self.assertEqual(payload["status"], "CONCENTRATION_REPLACED")
+        self.assertIn("Bless", payload["message"])
+
+    @mock.patch("asyncio.run_coroutine_threadsafe")
+    def test_drop_concentration_command(self, mock_run_coro):
+        self.app.round_num = 1
+        self.app.turn_num = 1
+        self.app._concentration_save_state = {}
+        self.app._start_concentration = tracker_mod.InitiativeTracker._start_concentration.__get__(self.app, tracker_mod.InitiativeTracker)
+        self.app._end_concentration = tracker_mod.InitiativeTracker._end_concentration.__get__(self.app, tracker_mod.InitiativeTracker)
+        self.app._clear_map_spell_effect = tracker_mod.InitiativeTracker._clear_map_spell_effect.__get__(self.app, tracker_mod.InitiativeTracker)
+        self.app._dematerialize_map_spell_effect = tracker_mod.InitiativeTracker._dematerialize_map_spell_effect.__get__(self.app, tracker_mod.InitiativeTracker)
+        self.app._dismiss_summon_group = lambda *args, **kwargs: None
+        self.app._find_ws_for_cid = lambda cid: [123]
+        self.app._lan_force_state_broadcast = mock.Mock()
+
+        caster = self.app.combatants[1]
+        self.app._start_concentration(caster, "shield-of-faith", 10, aoe_ids=["99"])
+        
+        # Initialize service
+        from player_command_service import PlayerCommandService
+        service = PlayerCommandService(self.app)
+        
+        # Dispatch drop_concentration command
+        msg = {
+            "type": "drop_concentration",
+            "cid": 1,
+        }
+        res = service.dispatch_spell_launch_command(msg, cid=1, ws_id=123, is_admin=False)
+        self.assertTrue(res["ok"])
+        
+        # Verify concentration is dropped
+        self.assertFalse(caster.concentrating)
+        self.assertEqual(caster.concentration_spell, "")
+        self.assertEqual(caster.concentration_aoe_ids, [])
+        
+        # Verify that drop_concentration fails on non-concentrating character
+        res2 = service.dispatch_spell_launch_command(msg, cid=1, ws_id=123, is_admin=False)
+        self.assertFalse(res2["ok"])
+        self.assertEqual(res2["reason"], "not_concentrating")
+
+    @mock.patch("asyncio.run_coroutine_threadsafe")
+    def test_instant_aoe_cleanup(self, mock_run_coro):
+        self.app._start_concentration = tracker_mod.InitiativeTracker._start_concentration.__get__(self.app, tracker_mod.InitiativeTracker)
+        self.app._end_concentration = tracker_mod.InitiativeTracker._end_concentration.__get__(self.app, tracker_mod.InitiativeTracker)
+        self.app._clear_map_spell_effect = tracker_mod.InitiativeTracker._clear_map_spell_effect.__get__(self.app, tracker_mod.InitiativeTracker)
+        self.app._dematerialize_map_spell_effect = tracker_mod.InitiativeTracker._dematerialize_map_spell_effect.__get__(self.app, tracker_mod.InitiativeTracker)
+        self.app._dismiss_summon_group = lambda *args, **kwargs: None
+        self.app._find_ws_for_cid = lambda cid: [123]
+        self.app._lan_force_state_broadcast = mock.Mock()
+        self.app._map_spell_effect_targets = lambda aoe: [2]
+        
+        # Verify that an instant AoE registers on map, then gets immediately cleaned up
+        msg = {
+            "type": "cast_aoe_request",
+            "cid": 1,
+            "_claimed_cid": 1,
+            "_ws_id": 123,
+            "payload": {
+                "shape": "circle",
+                "radius_ft": 20,
+                "persistent": False
+            }
+        }
+        
+        self.app._handle_cast_aoe_request(msg, cid=1, ws_id=123, is_admin=False, claimed=1)
+        
+        # Check that we resolved targets and returned result
+        self.assertTrue(self.send_async_mock.called)
+        ws_id, payload = self.send_async_mock.call_args[0]
+        self.assertEqual(payload["status"], "CAST_APPLIED")
+
 if __name__ == "__main__":
     unittest.main()
