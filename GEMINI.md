@@ -308,3 +308,36 @@ PY
 ```
 
 If a pass changes browser JavaScript and node --check fails, fix that before running broader validation or manual browser smoke.
+
+## Current agent workflow package
+
+This repo has project agent rules and workflows under:
+
+- .agent/rules/
+- .agent/workflows/
+- .agent/skills/init-tracker-spell-engine/
+- scripts/agy/
+- docs/agent_tasks/templates/
+
+Before spell-engine work, read:
+
+- docs/dm_spell_engine_living_plan.md
+- .agent/rules/00-init-tracker-core.md
+- .agent/rules/10-spell-engine-rules.md
+- .agent/rules/20-agent-safety-and-scope.md
+
+Required preflight:
+
+    scripts/agy/preflight.sh
+
+Required validation for spell work:
+
+    scripts/agy/validate_spell_pass.sh
+
+Required audit if spell primitives changed:
+
+    scripts/agy/audit_spell_primitives.sh
+
+Do not push, deploy, restart services, force-push, delete branches, change FQDNs, or touch production topology unless explicitly asked.
+
+Stop if tests emit warnings, context/output limit is hit, the same test fails twice, or files outside the allowed list are needed.
