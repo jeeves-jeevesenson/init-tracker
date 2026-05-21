@@ -46,3 +46,6 @@ logs/*.log
 logs/*.json
 logs/*.jsonl
 logs/old logs/
+
+# Local agent tooling
+.antigravitycli/

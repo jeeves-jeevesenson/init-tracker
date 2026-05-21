@@ -148,6 +148,9 @@ Notes:
 - Live-session foundation landed: LAN Manage Spells no longer exposes a user toggle for known-spell mode, backend spellbook normalization/save now derives known mode from wizard class data when available, and prepared free-spell persistence no longer drops entries when clients omit `prepared_free_list`.
 - Live-session contract pass landed: backend now emits explicit `spellbook_contract` list/mode policy for spell-management, and LAN Manage Spells consumes that contract for tabs plus list ownership/edit gating instead of client-side class/boolean inference.
 - Spellbook first-load/stabilization pass (2026-04-21): headless first-WS client now receives populated `spell_presets` (seed snapshot with static data, with live hydration fallback in `_static_data_payload`); browser-executed wizard and non-wizard smoke flows validated in clean single-character mode; added focused unit coverage for `_static_data_payload` preset hydration and for wizard vs non-wizard `_build_live_spellbook_contract` tab shape. Follow-up smoke reliability pass now runs multi-profile spell-manager coverage in isolated browser contexts (fresh claim/session per profile), removing synthetic cross-player contamination from harness reuse while keeping real one-claim-per-session flow semantics.
+- Spell system primitive standardization (2026-05-19): `_handle_cast_aoe_request` and `_handle_cast_spell_request` in `dnd_initative_tracker.py` now use standardized `_reject` helpers and follow the `SpellCastResult` contract for rejection payloads (`CAST_REJECTED` status). Primitive unit tests in `tests/test_spell_casting_primitive.py` now cover both targeted and AOE cast initiation, including authority gating and contract compliance.
+- Spell AoE Resolution contract pass (2026-05-19): `_handle_cast_aoe_request` now returns explicit `CAST_NO_TARGETS`, `CAST_CREATED_PERSISTENT_EFFECT`, and `CAST_NEEDS_MANUAL_DAMAGE` statuses. Resource consumption was moved after geometric validation to prevent wasting slots/actions on invalid placements. LAN client now clears ghost state for all new contract statuses.
+- Spell Modal and Cleanup pass (Pass 1C) (2026-05-19): LAN client `clearActiveCastInteractionState` is now comprehensive and correctly clears all ghost state (AoE placement, target selection, modals). Integrated cleanup into `reset_turn` and `reconnect/recovery` flows to ensure client never remains stuck in stale targeting states. Backend `_handle_cast_aoe_request` now triggers manual damage prompts and provides `target_cids` in result payloads.
 - Remaining priority in this area is no longer “basic contract cleanup landed” but “keep it stable enough without letting it outrank broader live-session slowness.”
 
 ### 4.2 Adjacent rules/model corrective cleanup
@@ -522,7 +525,17 @@ If code/tests and this file disagree, fix this file promptly.
 
 ---
 
-## 9. Current Pass Tracker
+### Pass 2: Generic AoE target resolver primitives (2026-05-19) - COMPLETE
+- [x] **Pass 2A: Geometry Primitives Extraction**
+  - Extracted sphere, line, and cone logic into `spell_engine_primitives.py`.
+  - Defined `AoeSpec` for structured geometry payloads.
+- [x] **Pass 2B: InitiativeTracker Refactoring**
+  - Replaced ad-hoc geometry math in `_lan_compute_included_units_for_aoe` with primitive delegation.
+  - Unified `cx`, `cy`, `radius_ft`, `length_ft` normalization via `_normalize_aoe_spec`.
+  - Fixed `feet_per_square` retrieval to use `self._lan_feet_per_square()`.
+- [x] **Pass 2C: Validation and Testing**
+  - Added `tests/test_spell_aoe_targeting_primitives.py` with 100% coverage for new geometry paths.
+  - Verified target inclusion (MapQueryAPI) and cell resolution.
 
 ### Pass 3: LAN Client Repair and Firearm Integration
 
