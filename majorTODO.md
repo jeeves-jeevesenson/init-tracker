@@ -512,10 +512,21 @@ Establishes authoritative backend-owned lifecycles for active spell effects, are
 
 ---
 
+## 7. Spell Engine Migration
 
-## 7. Working guardrails for major passes
+### 7.1 Reaction lifecycle stabilization and instrumentation (2026-05-21)
 
-- Prefer stabilization evidence over milestone rhetoric.
+Stabilizes the reaction system (Hellish Rebuke, Shield) and adds instrumentation:
+
+- [x] **Pass 7D: Reaction lifecycle stabilization and live-test instrumentation (Hellish Rebuke/Shield cleanup)**
+  - **Instrumentation**: Added `LAN_PERF` timing and battle-log entries for reaction offer and resolution paths in `player_command_service.py`.
+  - **Lifecycle Cleanup**: Implemented automatic cleanup of pending reaction prompts on turn advancement (`_next_turn`) and combatant death/removal (`_remove_combatants_from_runtime_state`).
+  - **Client Reconciliation**: Updated `assets/web/lan/index.html` to reconcile pending prompts against the server-authoritative snapshot in the `you` field, ensuring stale local prompts are cleared if they no longer exist on the backend.
+  - **Testing**: Added `tests/test_reaction_lifecycle.py` to verify prompt expiration and cleanup. Verified existing reaction flows remain stable.
+
+---
+
+## 8. Working guardrails for major passes
 - Keep backend authority and explicit contracts moving forward, but prioritize reliability in real sessions.
 - Avoid broad roadmap churn that ignores playtest-driven defect reality.
 - Do not re-center planning around desktop-first host concerns.
