@@ -6596,10 +6596,12 @@ class PlayerCommandService:
         if choice in ("shield_never", "never"):
             t._set_reaction_prefs(int(reactor_cid), {"shield": "off"})
         if choice in ("shield_yes", "shield_cast", "shield"):
-            if not t._use_reaction(reactor):
-                self._toast(ws_id, "No reactions left for Shield, matey.")
+            can_shield, shield_reason = t._can_offer_shield_reaction(reactor)
+            if not can_shield:
+                self._toast(ws_id, f"Shield unavailable: {shield_reason}")
                 choice = "shield_no"
             else:
+                t._use_reaction(reactor)
                 ok_cast, err_cast = t._consume_shield_cast(reactor)
                 if not ok_cast:
                     self._toast(ws_id, err_cast or "Could not cast Shield, matey.")

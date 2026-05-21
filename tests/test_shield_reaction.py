@@ -90,6 +90,8 @@ class ShieldReactionTests(unittest.TestCase):
         self.app._lan_apply_action(self._attack_msg(11))  # total 16 vs AC 12
         offers = [payload for _ws, payload in self.sent if isinstance(payload, dict) and payload.get("type") == "reaction_offer" and payload.get("trigger") == "shield"]
         self.assertTrue(offers)
+        self.assertEqual(offers[-1]["attack_total"], 16)
+        self.assertEqual(offers[-1]["target_ac"], 12)
         req_id = offers[-1]["request_id"]
         self.assertIn(req_id, self.app._pending_shield_resolutions)
 
@@ -99,6 +101,24 @@ class ShieldReactionTests(unittest.TestCase):
         self.assertTrue(attack_results)
         self.assertFalse(bool(attack_results[-1].get("hit")))
         self.assertEqual(int(attack_results[-1].get("damage_total") or 0), 0)
+        self.assertTrue(bool(getattr(self.app.combatants[1], "_shield_reaction_active", False)))
+        self.assertIn("(Shield!)", self.logs[-1])
+
+    def test_shield_upcasts_when_first_level_exhausted(self):
+        self.app._resolve_spell_slot_profile = lambda caster_name: (caster_name, {"1": {"current": 0}, "2": {"current": 1}})
+        spent = []
+        def _consume(name, level, min_level):
+            if level == 1: return False, "out", None
+            spent.append(level)
+            return True, "", level
+        self.app._consume_spell_slot_for_cast = _consume
+
+        self.app._lan_apply_action(self._attack_msg(11))
+        offers = [payload for _ws, payload in self.sent if isinstance(payload, dict) and payload.get("trigger") == "shield"]
+        req_id = offers[-1]["request_id"]
+        self.app._lan_apply_action({"type": "reaction_response", "cid": 1, "_claimed_cid": 1, "_ws_id": 101, "request_id": req_id, "choice": "shield_yes"})
+
+        self.assertEqual(spent, [2])
         self.assertTrue(bool(getattr(self.app.combatants[1], "_shield_reaction_active", False)))
 
     def test_magic_missile_shield_negates_damage(self):
@@ -155,7 +175,8 @@ class ShieldReactionTests(unittest.TestCase):
         req_id = offers[-1]["request_id"]
         self.app._lan_apply_action({"type": "reaction_response", "cid": 1, "_claimed_cid": 1, "_ws_id": 101, "request_id": req_id, "choice": "shield_yes"})
 
-        self.assertEqual(self.slot_spend_calls, [("Eldramar", 1, 1)])
+        self.assertEqual(len(self.slot_spend_calls), 9) # Tries 1-9
+        self.assertEqual(self.slot_spend_calls[0], ("Eldramar", 1, 1))
         self.assertEqual(self.pool_spend_calls, [("Eldramar", "lone_gunslingers_poncho_shield", 1)])
         self.assertTrue(bool(getattr(self.app.combatants[1], "_shield_reaction_active", False)))
 
@@ -185,6 +206,22 @@ class ShieldReactionTests(unittest.TestCase):
         offers = [payload for _ws, payload in self.sent if isinstance(payload, dict) and payload.get("type") == "reaction_offer" and payload.get("trigger") == "shield"]
         self.assertEqual(offers, [])
 
+
+    def test_shield_not_offered_if_already_active(self):
+        setattr(self.app.combatants[1], "_shield_reaction_active", True)
+        self.app._lan_apply_action(self._attack_msg(11))
+        offers = [payload for _ws, payload in self.sent if isinstance(payload, dict) and payload.get("type") == "reaction_offer" and payload.get("trigger") == "shield"]
+        self.assertEqual(offers, [])
+
+    def test_shield_expired_prompt_rejection(self):
+        # We need to test PlayerCommandService._resolve_shield_reaction directly or via mock
+        from player_command_service import PlayerCommandService
+        service = PlayerCommandService(self.app)
+        
+        # Manually create an expired prompt or use a missing one
+        result = service.reaction_response({"type": "reaction_response", "request_id": "missing", "choice": "shield_yes"}, cid=1, ws_id=101)
+        self.assertFalse(result["ok"])
+        self.assertEqual(result["reason"], "no_offer")
 
 if __name__ == "__main__":
     unittest.main()

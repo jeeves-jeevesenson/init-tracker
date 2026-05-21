@@ -33512,10 +33512,11 @@ class InitiativeTracker(base.InitiativeTracker):
         prepared = [str(x or "").strip().lower() for x in list(normalized.get("prepared_list") or [])]
         slot_error = ""
         if "shield" in prepared:
-            ok_slot, slot_err, _spent_level = self._consume_spell_slot_for_cast(player_name, 1, 1)
-            if ok_slot:
-                return True, ""
-            slot_error = slot_err or "Could not spend spell slot for Shield, matey."
+            for lvl in range(1, 10):
+                ok_slot, slot_err, _spent_level = self._consume_spell_slot_for_cast(player_name, lvl, 1)
+                if ok_slot:
+                    return True, ""
+            slot_error = "No spell slots remain for Shield, matey."
         pool_grants = normalized.get("pool_granted_spells") if isinstance(normalized.get("pool_granted_spells"), list) else []
         pool_error = ""
         for entry in pool_grants:
@@ -35104,6 +35105,7 @@ class InitiativeTracker(base.InitiativeTracker):
         target_cid_val = _normalize_cid_value(msg.get("target_cid"), "spell_target_request.target_cid", log_fn=log_warning)
         if target_cid_val is None:
             target_cid_val = int(cid)
+        target_cid = target_cid_val
         target = self.combatants.get(int(target_cid_val)) if target_cid_val is not None else None
 
         spell_name = str(msg.get("spell_name") or msg.get("name") or "Spell").strip() or "Spell"
@@ -35191,19 +35193,22 @@ class InitiativeTracker(base.InitiativeTracker):
 
         is_magic_missile = preset_slug in ("magic-missile", "magic_missile") or preset_id in ("magic-missile", "magic_missile")
         if is_magic_missile and not bool(msg.get("_shield_resolution_done")):
-            shield_mode = self._reaction_mode_for(int(target_cid), "shield", default="ask")
+            shield_mode = self._reaction_mode_for(int(target_cid_val), "shield", default="ask")
             can_shield, _shield_reason = self._can_offer_shield_reaction(target)
             if shield_mode != "off" and can_shield:
                 choices = [{"kind": "shield_yes", "label": "Yes", "mode": shield_mode}]
-                ws_targets = self._find_ws_for_cid(int(target_cid))
+                ws_targets = self._find_ws_for_cid(int(target_cid_val))
                 req_id = self._ensure_player_commands().create_reaction_offer(
-                    int(target_cid),
+                    int(target_cid_val),
                     "shield",
                     int(cid),
-                    int(target_cid),
+                    int(target_cid_val),
                     choices,
                     ws_targets,
-                    extra_payload={"prompt_attack": str(spell_name or "Magic Missile")},
+                    extra_payload={
+                        "prompt_attack": str(spell_name or "Magic Missile"),
+                        "is_magic_missile": True,
+                    },
                     resume_dispatch=build_resume_dispatch(
                         "spell_target_request",
                         actor_cid=int(cid),
@@ -37007,7 +37012,11 @@ class InitiativeTracker(base.InitiativeTracker):
                     int(target_cid),
                     choices,
                     ws_targets,
-                    extra_payload={"prompt_attack": str(selected_weapon.get("name") or "Attack")},
+                    extra_payload={
+                        "prompt_attack": str(selected_weapon.get("name") or "Attack"),
+                        "attack_total": int(total_to_hit),
+                        "target_ac": int(target_ac),
+                    },
                     resume_dispatch=build_resume_dispatch(
                         "attack_request",
                         actor_cid=int(cid),
@@ -37784,18 +37793,22 @@ class InitiativeTracker(base.InitiativeTracker):
         if consumed_attack_riders.get("vicious_mockery"):
             result_payload["vicious_mockery_consumed"] = True
         msg["_attack_result"] = dict(result_payload)
+        shield_active = bool(self._shield_is_active(target))
+        was_turned_to_miss = bool(shield_active and not hit and (int(total_to_hit) >= int(target_ac) - 5))
+        shield_suffix = " (Shield!)" if was_turned_to_miss else ""
+
         if attack_roll is not None:
             penalty_text = f" - {int(muddled_attack_penalty)} (muddled thoughts)" if muddled_attack_penalty > 0 else ""
             self._log(
                 f"{c.name} attacks {result_payload['target_name']} with {result_payload['weapon_name']} "
-                f"(roll {attack_roll} + {to_hit}{penalty_text} = {total_to_hit}) and {'hits' if hit else 'misses'}"
+                f"(roll {attack_roll} + {to_hit}{penalty_text} = {total_to_hit}) and {'hits' if hit else 'misses'}{shield_suffix}"
                 f"{' (CRIT)' if is_critical else ''}.",
                 cid=cid,
             )
         else:
             self._log(
                 f"{c.name} attacks {result_payload['target_name']} with {result_payload['weapon_name']} "
-                f"and {'hits' if hit else 'misses'}"
+                f"and {'hits' if hit else 'misses'}{shield_suffix}"
                 f"{' (CRIT)' if is_critical else ''}.",
                 cid=cid,
             )

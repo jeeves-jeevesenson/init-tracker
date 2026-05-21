@@ -17886,7 +17886,13 @@ __DAMAGE_TYPE_OPTIONS__
           const trgName = trg?.name || `#${msg.target_cid}`;
           if (msg.trigger === "shield"){
             const attackName = String(msg.prompt_attack || "attack").trim() || "attack";
-            reactionOfferBody.textContent = `You are being targeted with ${attackName}. React with Shield?`;
+            if (msg.is_magic_missile) {
+              reactionOfferBody.textContent = `You are being targeted with ${attackName}. React with Shield to negate it?`;
+            } else if (msg.attack_total !== undefined && msg.target_ac !== undefined) {
+              reactionOfferBody.textContent = `You are being targeted with ${attackName} (Total ${msg.attack_total} vs AC ${msg.target_ac}). React with Shield?`;
+            } else {
+              reactionOfferBody.textContent = `You are being targeted with ${attackName}. React with Shield?`;
+            }
           } else if (msg.trigger === "hellish_rebuke"){
             reactionOfferBody.textContent = String(msg.prompt || `You took damage from ${srcName}. React with Hellish Rebuke?`);
           } else if (msg.trigger === "absorb_elements"){
