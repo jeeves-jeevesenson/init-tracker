@@ -1303,6 +1303,35 @@ class MapQueryAPI:
                 tags.add(kind)
         return tags
 
+    def is_total_cover(self, col: int, row: int) -> bool:
+        """Returns True if the cell provides total cover (blocks line of effect)."""
+        # For now, we assume anything that blocks movement also blocks line of effect
+        # unless it's specifically a 'hazard' that is transparent.
+        return self.blocks_movement(col, row)
+
+    def blocks_line_of_effect(self, col1: int, row1: int, col2: int, row2: int) -> bool:
+        """
+        Returns True if there is total cover blocking the line between (col1, row1) and (col2, row2).
+        Uses a simple stepping algorithm.
+        """
+        c1 = (int(col1), int(row1))
+        c2 = (int(col2), int(row2))
+        if c1 == c2:
+            return False
+            
+        steps = max(abs(c2[0] - c1[0]), abs(c2[1] - c1[1]))
+        if steps == 0:
+            return False
+            
+        for i in range(1, steps):
+            tc = int(round(c1[0] + (c2[0] - c1[0]) * (i / steps)))
+            tr = int(round(c1[1] + (c2[1] - c1[1]) * (i / steps)))
+            if (tc, tr) == c1 or (tc, tr) == c2:
+                continue
+            if self.is_total_cover(tc, tr):
+                return True
+        return False
+
     def _cell_climb_cap(self, col: int, row: int) -> Optional[float]:
         candidates: List[float] = []
         for item in self.features_at(col, row):
