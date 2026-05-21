@@ -49,3 +49,6 @@ logs/old logs/
 
 # Local agent tooling
 .antigravitycli/
+.agent_bootstrap_backups/
+.agy-local/
+*.tmp-agent-diff
