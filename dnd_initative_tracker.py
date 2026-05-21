@@ -33907,6 +33907,21 @@ class InitiativeTracker(base.InitiativeTracker):
 
         return self._normalize_action_entries(actions, "action")
 
+    def _is_summon_auto_spawn_allowed(self, preset: Dict[str, Any], summon_cfg: Dict[str, Any], is_admin: bool) -> bool:
+        if is_admin:
+            return True
+        # For now, we allow auto-spawn for controlled summons if they are specifically modeled.
+        # Spells like 'Manifest Echo' (echo_knight) are handled by a separate command, 
+        # but if we wanted to allow some spells here, we'd list them.
+        # Default policy: Player-initiated summons for standard spells require DM approval/placement
+        # unless they are explicitly marked for auto-spawn.
+        if bool(summon_cfg.get("auto_spawn")):
+            return True
+        # Mounts are often allowed to auto-spawn if they have positions.
+        if bool(summon_cfg.get("mount")):
+            return True
+        return False
+
     def _spawn_startup_summons_for_pc(self, caster_cid: int, summon_entries: List[Dict[str, Any]]) -> List[int]:
         caster = self.combatants.get(int(caster_cid))
         if caster is None:
@@ -37889,6 +37904,7 @@ class InitiativeTracker(base.InitiativeTracker):
         caster_cid: Optional[int] = None,
         message: str = "",
         target_cids: Optional[List[int]] = None,
+        spawned_cids: Optional[List[int]] = None,
         aoe_ids_added: Optional[List[str]] = None,
         aoe_ids_removed: Optional[List[str]] = None,
         hp_changes: Optional[List[Dict[str, Any]]] = None,
@@ -37910,6 +37926,7 @@ class InitiativeTracker(base.InitiativeTracker):
             caster_cid=caster_cid,
             message=message,
             target_cids=target_cids,
+            spawned_cids=spawned_cids,
             aoe_ids_added=aoe_ids_added,
             aoe_ids_removed=aoe_ids_removed,
             hp_changes=hp_changes,
@@ -37952,6 +37969,7 @@ class InitiativeTracker(base.InitiativeTracker):
             spell_slug,
             spell_id,
         )
+        spawned_cids: List[int] = []
 
         def _reject(reason: str, status: str = "CAST_REJECTED") -> None:
             self._lan.toast(ws_id, reason)
@@ -38058,9 +38076,10 @@ class InitiativeTracker(base.InitiativeTracker):
         if requested_fixed_to_caster and not (preset_self_range and shape in centered_shapes):
             force_fixed_to_caster = False
         summon_cfg = preset.get("summon") if isinstance(preset, dict) and isinstance(preset.get("summon"), dict) else None
-        if summon_cfg and not is_admin:
-            _reject("Summon spawning is DM-only for now, matey.", status=CAST_SUMMON_PENDING_DM)
-            return
+        if summon_cfg:
+            if not self._is_summon_auto_spawn_allowed(preset, summon_cfg, is_admin):
+                _reject("Summon requires DM approval, matey.", status=CAST_SUMMON_PENDING_DM)
+                return
 
         # Counterspell offer for the AoE / non-targeted cast path.
         # Mirrors the targeted-path insertion in ``_adjudicate_spell_target_request``
@@ -38706,7 +38725,6 @@ class InitiativeTracker(base.InitiativeTracker):
                 spell_level=spell_level,
                 aoe_ids=[int(aid)],
             )
-        spawned_cids: List[int] = []
         if summon_cfg and cid is not None:
             spawned_cids = self._spawn_summons_from_cast(
                 caster_cid=cid,
@@ -38759,12 +38777,16 @@ class InitiativeTracker(base.InitiativeTracker):
                 preset=preset_dict,
             )
 
+        if summon_cfg and spawned_cids:
+            status = CAST_SUMMON_CREATED
+
         self._send_spell_result(
             ws_id, True, status,
             spell_id=spell_id,
             spell_name=spell_name,
             caster_cid=cid,
             target_cids=targets_hit,
+            spawned_cids=spawned_cids,
             aoe_ids_added=[str(aid)],
             message=message,
             needs_manual_damage=(status == CAST_NEEDS_MANUAL_DAMAGE)
@@ -39199,6 +39221,7 @@ class InitiativeTracker(base.InitiativeTracker):
             spell_slug,
             spell_id,
         )
+        spawned_cids: List[int] = []
 
         def _reject(reason: str, status: str = CAST_REJECTED) -> None:
             self._lan.toast(ws_id, reason)
@@ -39216,6 +39239,10 @@ class InitiativeTracker(base.InitiativeTracker):
             return
         spend = self._resolve_spell_spend_type(preset=preset, msg=msg, payload=payload)
         summon_cfg = preset.get("summon") if isinstance(preset.get("summon"), dict) else None
+        if summon_cfg:
+            if not self._is_summon_auto_spawn_allowed(preset, summon_cfg, is_admin):
+                _reject("Summon requires DM approval, matey.", status=CAST_SUMMON_PENDING_DM)
+                return
         try:
             slot_level = int(msg.get("slot_level") if msg.get("slot_level") is not None else payload.get("slot_level"))
         except Exception:
@@ -39513,7 +39540,7 @@ class InitiativeTracker(base.InitiativeTracker):
         if records_target_authority:
             status = CAST_NEEDS_TARGET
         elif summon_cfg:
-            status = CAST_SUMMON_PENDING_DM if not is_admin else CAST_APPLIED
+            status = CAST_SUMMON_CREATED
 
         self._send_spell_result(
             ws_id, True, status,
@@ -39521,6 +39548,7 @@ class InitiativeTracker(base.InitiativeTracker):
             spell_name=spell_name,
             caster_cid=cid,
             message=f"Casted {preset.get('name') or 'spell'}.",
+            spawned_cids=spawned_cids,
             needs_target=bool(status == CAST_NEEDS_TARGET)
         )
 

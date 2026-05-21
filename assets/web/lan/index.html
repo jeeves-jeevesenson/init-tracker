@@ -18008,16 +18008,16 @@ __DAMAGE_TYPE_OPTIONS__
           clearActiveCastInteractionState(msg.message || msg.reason || "Spell rejected.");
         } else {
           const status = String(msg.status || "");
-          const finished = status === "CAST_APPLIED" 
-            || status === "CAST_SUMMON_CREATED" 
-            || status === "CAST_UTILITY_LOGGED" 
+          const finished = status === "CAST_APPLIED"
+            || status === "CAST_SUMMON_CREATED"
+            || status === "CAST_SUMMON_PENDING_DM"
+            || status === "CAST_UTILITY_LOGGED"
             || status === "CAST_CANCELLED"
             || status === "CAST_NO_TARGETS"
             || status === "CAST_CREATED_PERSISTENT_EFFECT"
             || status === "CAST_NEEDS_MANUAL_DAMAGE"
             || status === "CONCENTRATION_ENDED"
             || status === "CONCENTRATION_REPLACED";
-          
           if (finished) {
             clearActiveCastInteractionState("");
           }
