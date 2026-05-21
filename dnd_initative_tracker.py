@@ -11400,6 +11400,8 @@ class InitiativeTracker(base.InitiativeTracker):
             setattr(caster, "summon_anchor_seq", int(len(summon_cids)))
 
     def _next_turn(self) -> None:
+        self._expire_reaction_offers(force=True)
+        self._log("Pending reactions expired.")
         self._monster_sequence_state.clear()
         self._monster_modifier_state.clear()
         # Clear mod_used resource state
@@ -18307,6 +18309,7 @@ class InitiativeTracker(base.InitiativeTracker):
             return set()
 
         for cid in removed:
+            self._expire_reaction_offers(reactor_cid=int(cid))
             gone = self.combatants.get(cid)
             if gone is not None:
                 rider_cid = _normalize_cid_value(getattr(gone, "mounted_by_cid", None), "remove.mounted_by")
@@ -32860,8 +32863,8 @@ class InitiativeTracker(base.InitiativeTracker):
             prompt_id=str(prompt_id).strip() if prompt_id else None,
         )
 
-    def _expire_reaction_offers(self) -> None:
-        self._ensure_player_commands().prompts.expire_offers()
+    def _expire_reaction_offers(self, *, force: bool = False, reactor_cid: Optional[int] = None) -> None:
+        self._ensure_player_commands().prompts.expire_offers(force=force, reactor_cid=reactor_cid)
 
     def _build_oa_reaction_choices(self, reactor: Any, include_war_caster: bool = True) -> List[Dict[str, Any]]:
         if reactor is None:

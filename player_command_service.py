@@ -85,6 +85,7 @@ import random
 import asyncio
 import math
 import sys
+import os
 import threading
 import time
 import uuid
@@ -670,25 +671,48 @@ class PromptState:
         self._sync_legacy_views(store)
         return dict(prompt) if isinstance(prompt, dict) else None
 
-    def expire_offers(self) -> None:
+    def expire_offers(self, *, force: bool = False, reactor_cid: Optional[int] = None) -> None:
         store = self._prompt_store()
         now = float(time.time())
         expired_ids = []
         for request_id, prompt in list(store.items()):
             if not isinstance(prompt, dict):
                 continue
+
+            # If force is true, we expire everything (e.g. combat end/reset)
+            if force:
+                expired_ids.append(str(request_id))
+                continue
+
+            # If reactor_cid is specified, we only expire prompts for that reactor (e.g. death)
+            if reactor_cid is not None:
+                try:
+                    p_reactor = int(prompt.get("reactor_cid") or -1)
+                    if p_reactor == int(reactor_cid):
+                        expired_ids.append(str(request_id))
+                        continue
+                except Exception:
+                    pass
+
+            # Otherwise, use time-based expiration
             expires_at = prompt.get("expires_at")
             try:
                 exp_val = float(expires_at) if expires_at is not None else 0.0
             except Exception:
                 exp_val = 0.0
-            if exp_val <= 0 or exp_val > now:
-                continue
-            expired_ids.append(str(request_id))
+            if exp_val > 0 and exp_val <= now:
+                expired_ids.append(str(request_id))
+
         for request_id in expired_ids:
+            # When expiring, we should ideally notify clients that it expired
+            # but for now we just pop it.
             store.pop(str(request_id), None)
+
         if expired_ids:
             self._sync_legacy_views(store)
+            oplog = getattr(self._tracker, "_oplog", None)
+            if callable(oplog):
+                oplog(f"prompts:expired {len(expired_ids)} offers (force={force}, reactor={reactor_cid})")
 
     def has_pending_attacker_gate(self, attacker_cid: int) -> bool:
         """Return True if a reaction trigger is actively blocking this attacker.
@@ -788,6 +812,22 @@ class PlayerCommandService:
     _SPELL_LAUNCH_COMMAND_HANDLERS = {
         command_type: command_type for command_type in SPELL_LAUNCH_COMMAND_TYPES
     }
+
+    @staticmethod
+    def _perf_debug_enabled() -> bool:
+        return os.getenv("LAN_PERF_DEBUG") == "1"
+
+    def _perf_log(self, label: str, started_at: float, **fields: Any) -> None:
+        if started_at <= 0.0:
+            return
+        elapsed_ms = (time.perf_counter() - started_at) * 1000.0
+        extras = " ".join(f"{key}={value}" for key, value in fields.items())
+        message = f"LAN_PERF {label} elapsed_ms={elapsed_ms:.2f}"
+        if extras:
+            message = f"{message} {extras}"
+        oplog = getattr(self._tracker, "_oplog", None)
+        if callable(oplog):
+            oplog(message, level="info")
 
     def __init__(self, tracker: "InitiativeTracker") -> None:
         if tracker is None:
@@ -997,6 +1037,7 @@ class PlayerCommandService:
         resume_dispatch: Optional[Dict[str, Any]] = None,
         prompt_id: Optional[str] = None,
     ) -> Optional[str]:
+        perf_start = time.perf_counter() if self._perf_debug_enabled() else 0.0
         resolved_ws_ids: list[int] = []
         for ws_id in ws_ids or []:
             try:
@@ -1027,6 +1068,9 @@ class PlayerCommandService:
             resume_dispatch=dict(resume_dispatch) if isinstance(resume_dispatch, dict) else None,
             prompt_id=str(prompt_id).strip() if prompt_id else None,
         )
+        reactor = self._tracker.combatants.get(int(reactor_cid))
+        if reactor is not None:
+            self._tracker._log(f"Waiting for {getattr(reactor, 'name', 'Reactor')} to react ({str(trigger)})...", cid=int(reactor_cid))
         payload = build_reaction_offer_event(prompt)
         lan = self._tracker.__dict__.get("_lan")
         loop = getattr(lan, "_loop", None) if lan is not None else None
@@ -1045,6 +1089,8 @@ class PlayerCommandService:
                         f"reaction_offer:send failed ws_id={int(ws_id)} trigger={str(trigger)} ({exc})",
                         level="warning",
                     )
+        if perf_start > 0.0:
+            self._perf_log("create_reaction_offer", perf_start, trigger=trigger, reactor=reactor_cid)
         return str(payload.get("request_id") or "")
 
     def maybe_offer_absorb_elements(
@@ -7249,6 +7295,7 @@ class PlayerCommandService:
           - trigger-specific reaction resolution (shield, hellish rebuke,
             absorb elements, interception, generic accept/decline)
         """
+        perf_start = time.perf_counter() if self._perf_debug_enabled() else 0.0
         t = self._tracker
         self.prompts.expire_offers()
         request_contract = build_reaction_response_contract(msg, cid=cid, ws_id=ws_id)
@@ -7263,6 +7310,8 @@ class PlayerCommandService:
         prompt = self.prompts.get_prompt(request_id)
         if not isinstance(prompt, dict):
             return build_dispatch_result("reaction_response", False, reason="no_offer", request=request_contract)
+        
+        trigger = str(prompt.get("trigger") or "unknown").strip().lower()
         try:
             reactor_expected = int(prompt.get("reactor_cid") or -1)
             reactor_got = int(cid if cid is not None else -1)
@@ -7316,7 +7365,16 @@ class PlayerCommandService:
         )
         if not isinstance(adjudicate_result, dict):
             adjudicate_result = {}
+        
         resolve_ok = bool(adjudicate_result.get("ok", True))
+        reactor = t.combatants.get(reactor_got)
+        if reactor is not None:
+            r_name = getattr(reactor, "name", "Reactor")
+            if resolve_ok:
+                t._log(f"{r_name} chose {choice} for {trigger}.", cid=reactor_got)
+            else:
+                t._log(f"{r_name} reaction ({trigger}) failed: {adjudicate_result.get('reason', 'unknown')}", cid=reactor_got)
+
         reason = str(adjudicate_result.get("reason") or "").strip().lower()
         resume_dispatch = None
         resume_dispatch = adjudicate_result.get("resume_dispatch") or adjudicate_result.get("resume")
@@ -7356,8 +7414,11 @@ class PlayerCommandService:
             except Exception:
                 pass
 
+        if perf_start > 0.0:
+            self._perf_log("reaction_response", perf_start, trigger=trigger, choice=choice, ok=resolve_ok)
         return build_dispatch_result(
             "reaction_response",
             resolve_ok,
             **result_kwargs,
         )
+

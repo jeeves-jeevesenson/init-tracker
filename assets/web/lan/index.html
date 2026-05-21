@@ -17682,6 +17682,17 @@ __DAMAGE_TYPE_OPTIONS__
           applyServerClaim(msg.you.claimed_cid, msg.you.claimed_name, msg.you.claim_rev);
           reconnectRecoveryClaimSeen = true;
           sendReactionPrefsUpdate();
+          
+          // Reconcile pending reaction prompt - if server says none, clear local.
+          // This handles cleanup on turn advance / reset / death if snapshot reflects it.
+          if (pendingReactionRequestId && (!msg.you.pending_prompt || String(msg.you.pending_prompt.request_id) !== pendingReactionRequestId)){
+            if (reactionOfferModal){
+              reactionOfferModal.classList.remove("show");
+              reactionOfferModal.setAttribute("aria-hidden", "true");
+            }
+            pendingReactionRequestId = "";
+            pendingReactionOffer = null;
+          }
         } else {
           // Fallback to old logic if "you" field not present (backwards compatibility)
           const claimsMap = (state && typeof state.claims === "object" && state.claims) ? state.claims : {};
@@ -22650,6 +22661,10 @@ __DAMAGE_TYPE_OPTIONS__
     clearPendingAoeCastSyncGhost(false);
     setSpellResolveModalOpen(false);
     setAttackResolveModalOpen(false);
+    if (reactionOfferModal){
+      reactionOfferModal.classList.remove("show");
+      reactionOfferModal.setAttribute("aria-hidden", "true");
+    }
     if (clearAttackOverlay && attackOverlayMode){
       setAttackOverlayMode(false);
     }
