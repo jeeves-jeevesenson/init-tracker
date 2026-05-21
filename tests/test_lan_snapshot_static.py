@@ -959,6 +959,12 @@ class LanSnapshotStaticTests(unittest.TestCase):
             def after(self, _ms, _fn):
                 return None
 
+            def _debug_trace_counts(self):
+                return {"players": 0, "monsters": 0, "combatants": 0}
+
+            def _oplog(self, *args, **kwargs):
+                pass
+
         lan._tracker = AppStub()
 
         lan._tick()

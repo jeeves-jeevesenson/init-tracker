@@ -9084,6 +9084,11 @@ class InitiativeTracker(base.InitiativeTracker):
         self._player_yaml_refresh_interval_s = 10.0
         self._player_yaml_cache_hold_depth = 0
         self._lan_resource_pools_last_build = 0.0
+        self._lan_static_snapshot_version = 0
+        self._lan_static_snapshot_cache_version = -1
+        self._lan_static_snapshot_cache: Optional[Dict[str, Any]] = None
+        self._lan_static_snapshot_cache_invalidation_reason = "startup"
+        self._lan_combat_snapshot_version = 0
         self._player_yaml_lock = threading.Lock()
         self._spell_yaml_lock = threading.Lock()
         self._player_yaml_refresh_scheduled = False
@@ -9453,6 +9458,7 @@ class InitiativeTracker(base.InitiativeTracker):
     def _yaml_players_refresh_cache(self, rebuild: bool = True) -> None:
         perf_debug = os.getenv("LAN_PERF_DEBUG") == "1"
         perf_start = time.perf_counter() if perf_debug else 0.0
+        self._invalidate_lan_static_snapshot_cache("player_yaml_cache_refresh")
         self._player_yaml_cache_by_path = {}
         self._player_yaml_meta_by_path = {}
         self._player_yaml_data_by_name = {}
@@ -9476,7 +9482,7 @@ class InitiativeTracker(base.InitiativeTracker):
         except Exception:
             pass
         try:
-            self._lan_force_state_broadcast()
+            self._lan_force_state_broadcast(include_static=True)
         except Exception:
             pass
         enabled_count = len(self._player_yaml_data_by_name)
@@ -9508,6 +9514,7 @@ class InitiativeTracker(base.InitiativeTracker):
         self._spell_index_entries = {}
         self._spell_index_loaded = False
         self._spell_dir_signature = None
+        self._invalidate_lan_static_snapshot_cache("spell_catalog_refresh")
 
     def _resolve_items_dir(self) -> Optional[Path]:
         cached = self.__dict__.get("_items_dir_cache")
@@ -19624,6 +19631,72 @@ class InitiativeTracker(base.InitiativeTracker):
             self._enforce_johns_echo_tether(int(target_cid))
         return moved
 
+    def _invalidate_lan_static_snapshot_cache(self, reason: str) -> None:
+        version = int(self.__dict__.get("_lan_static_snapshot_version", 0) or 0) + 1
+        self.__dict__["_lan_static_snapshot_version"] = version
+        self.__dict__["_lan_static_snapshot_cache_version"] = -1
+        self.__dict__["_lan_static_snapshot_cache"] = None
+        self.__dict__["_lan_static_snapshot_cache_invalidation_reason"] = str(reason or "unknown")
+        lan = self.__dict__.get("_lan")
+        if lan is not None:
+            try:
+                lan._cached_static_payload = None
+                lan._last_static_json = None
+            except Exception:
+                pass
+        debug_event(
+            "lan.snapshot.cache.invalidated",
+            snapshot_cache_scope="static",
+            snapshot_cache_invalidation_reason=str(reason or "unknown"),
+            static_version=version,
+        )
+
+    def _lan_static_snapshot_cache_status(self) -> Tuple[bool, str, int]:
+        static_version = int(self.__dict__.get("_lan_static_snapshot_version", 0) or 0)
+        cached_version = int(self.__dict__.get("_lan_static_snapshot_cache_version", -1))
+        cached = self.__dict__.get("_lan_static_snapshot_cache")
+        if isinstance(cached, dict) and cached_version == static_version:
+            return True, "", static_version
+        reason = str(self.__dict__.get("_lan_static_snapshot_cache_invalidation_reason") or "cache_empty")
+        return False, reason, static_version
+
+    def _lan_static_snapshot_component(self) -> Tuple[Dict[str, Any], bool, str]:
+        cache_hit, reason, static_version = self._lan_static_snapshot_cache_status()
+        cached = self.__dict__.get("_lan_static_snapshot_cache")
+        if cache_hit and isinstance(cached, dict):
+            return copy.deepcopy(cached), True, ""
+
+        component: Dict[str, Any] = {}
+        try:
+            component["spell_presets"] = self._spell_presets_payload()
+        except Exception:
+            component["spell_presets"] = []
+        try:
+            component["player_spells"] = self._player_spell_config_payload()
+        except Exception:
+            component["player_spells"] = {}
+        try:
+            component["player_profiles"] = self._player_profiles_payload()
+        except Exception:
+            component["player_profiles"] = {}
+        try:
+            component["beast_forms"] = self._load_beast_forms()
+        except Exception:
+            component["beast_forms"] = []
+
+        self.__dict__["_lan_static_snapshot_cache"] = copy.deepcopy(component)
+        self.__dict__["_lan_static_snapshot_cache_version"] = static_version
+        return copy.deepcopy(component), False, reason
+
+    def _lan_merge_cached_static_snapshot(self, snap: Dict[str, Any]) -> Tuple[Dict[str, Any], bool]:
+        cache_hit, _reason, _static_version = self._lan_static_snapshot_cache_status()
+        cached = self.__dict__.get("_lan_static_snapshot_cache")
+        if not cache_hit or not isinstance(cached, dict):
+            return snap, False
+        merged = dict(snap)
+        merged.update(copy.deepcopy(cached))
+        return merged, True
+
     @trace_timed("_lan_snapshot")
     def _lan_snapshot(self, include_static: bool = True, hydrate_static: bool = True) -> Dict[str, Any]:
         perf_debug = os.getenv("LAN_PERF_DEBUG") == "1"
@@ -20126,22 +20199,14 @@ class InitiativeTracker(base.InitiativeTracker):
         # Populate static fields if requested or available in cache
         # Use 'or {}' and 'or []' to handle cases where cached values might be None
         if include_static:
-            try:
-                snap["spell_presets"] = self._spell_presets_payload()
-            except Exception:
-                snap["spell_presets"] = []
-            try:
-                snap["player_spells"] = self._player_spell_config_payload()
-            except Exception:
-                snap["player_spells"] = {}
-            try:
-                snap["player_profiles"] = self._player_profiles_payload()
-            except Exception:
-                snap["player_profiles"] = {}
-            try:
-                snap["beast_forms"] = self._load_beast_forms()
-            except Exception:
-                snap["beast_forms"] = []
+            static_component, cache_hit, invalidation_reason = self._lan_static_snapshot_component()
+            snap.update(static_component)
+            self.__dict__["_lan_static_snapshot_last_cache_info"] = {
+                "snapshot_cache_hit": bool(cache_hit),
+                "snapshot_cache_scope": "static",
+                "snapshot_cache_invalidation_reason": str(invalidation_reason or ""),
+                "static_version": int(self.__dict__.get("_lan_static_snapshot_version", 0) or 0),
+            }
         elif hydrate_static:
             cached = (self._lan._cached_snapshot if hasattr(self, "_lan") else {}) or {}
             snap["spell_presets"] = cached.get("spell_presets") or []
@@ -20252,7 +20317,8 @@ class InitiativeTracker(base.InitiativeTracker):
             pass
 
     def _debug_trace_counts(self) -> Dict[str, int]:
-        combatants = getattr(self, "combatants", {}) or {}
+        combatants_raw = getattr(self, "combatants", {}) or {}
+        combatants = combatants_raw if isinstance(combatants_raw, dict) else {}
         player_count = 0
         monster_count = 0
         for combatant in combatants.values():
@@ -20277,23 +20343,65 @@ class InitiativeTracker(base.InitiativeTracker):
         }
 
     @trace_timed("_lan_force_state_broadcast")
-    def _lan_force_state_broadcast(self, include_static: bool = True) -> None:
+    def _lan_force_state_broadcast(self, include_static: bool = False) -> None:
         perf_debug = os.getenv("LAN_PERF_DEBUG") == "1"
         perf_start = time.perf_counter() if perf_debug else 0.0
         snap: Dict[str, Any] = {}
         include_static_flag = bool(include_static)
+        lan = self.__dict__.get("_lan")
+        lan_clients = getattr(lan, "_clients", None)
+        dm_clients = getattr(lan, "_dm_ws_clients", None)
+        lan_recipient_count = len(lan_clients) if isinstance(lan_clients, dict) else None
+        dm_recipient_count = len(dm_clients) if isinstance(dm_clients, dict) else None
+        cache_hit, cache_reason, static_version = self._lan_static_snapshot_cache_status()
+        snapshot_cache_scope = "static+dynamic" if include_static_flag else "dynamic+cached_static"
+        if (
+            isinstance(lan_clients, dict)
+            and isinstance(dm_clients, dict)
+            and not lan_clients
+            and not dm_clients
+        ):
+            debug_event(
+                "broadcast.skipped_no_clients",
+                span="lan.force_state",
+                command="state",
+                counts={
+                    "recipient_count": 0,
+                    "websocket_client_count": 0,
+                    "dm_websocket_client_count": 0,
+                },
+                snapshot_cache_hit=bool(cache_hit),
+                snapshot_cache_scope=snapshot_cache_scope,
+                snapshot_cache_invalidation_reason=cache_reason if not cache_hit else None,
+                static_version=static_version,
+            )
+            return
+
+        combat_version = int(self.__dict__.get("_lan_combat_snapshot_version", 0) or 0) + 1
+        self.__dict__["_lan_combat_snapshot_version"] = combat_version
+        span_counts = self._debug_trace_counts()
+        if lan_recipient_count is not None:
+            span_counts["recipient_count"] = int(lan_recipient_count)
+        if dm_recipient_count is not None:
+            span_counts["dm_websocket_client_count"] = int(dm_recipient_count)
         try:
             with timed_span(
                 "lan.snapshot.build",
                 function="_lan_snapshot",
                 command="state",
-                counts=self._debug_trace_counts(),
-                snapshot_cache_hit=False,
+                counts=span_counts,
+                snapshot_cache_hit=bool(cache_hit),
+                snapshot_cache_scope=snapshot_cache_scope,
+                snapshot_cache_invalidation_reason=cache_reason if not cache_hit else None,
+                static_version=static_version,
+                combat_version=combat_version,
             ):
                 snap = self._lan_snapshot(
                     include_static=include_static_flag,
-                    hydrate_static=include_static_flag,
+                    hydrate_static=False,
                 )
+            if not include_static_flag:
+                snap, cache_hit = self._lan_merge_cached_static_snapshot(snap)
             self._lan._cached_snapshot = snap
             try:
                 self._lan._cached_pcs = list(
@@ -20305,7 +20413,8 @@ class InitiativeTracker(base.InitiativeTracker):
                 self._lan._last_snapshot = copy.deepcopy(snap)
             except Exception:
                 pass
-            if include_static_flag:
+            has_lan_recipients = not isinstance(lan_clients, dict) or bool(lan_clients)
+            if include_static_flag and has_lan_recipients:
                 try:
                     static_payload = self._lan._static_data_payload()
                     static_json = json.dumps(static_payload, sort_keys=True, separators=(",", ":"))
@@ -20313,7 +20422,23 @@ class InitiativeTracker(base.InitiativeTracker):
                     self._lan._broadcast_payload({"type": "static_data", "data": static_payload})
                 except Exception:
                     pass
-            self._lan._broadcast_state(snap)
+            if has_lan_recipients:
+                self._lan._broadcast_state(snap)
+            else:
+                debug_event(
+                    "broadcast.skipped_no_clients",
+                    span="lan.broadcast.state",
+                    command="state",
+                    counts={
+                        "recipient_count": 0,
+                        "websocket_client_count": 0,
+                        "dm_websocket_client_count": int(dm_recipient_count or 0),
+                    },
+                    snapshot_cache_hit=bool(cache_hit),
+                    snapshot_cache_scope=snapshot_cache_scope,
+                    static_version=static_version,
+                    combat_version=combat_version,
+                )
         except Exception:
             pass
         # Push DM snapshot to any connected DM WebSocket clients
@@ -24338,6 +24463,7 @@ class InitiativeTracker(base.InitiativeTracker):
             path.parent.mkdir(parents=True, exist_ok=True)
             tmp_path.write_text(yaml_text, encoding="utf-8")
             tmp_path.replace(path)
+        self._invalidate_lan_static_snapshot_cache("player_yaml_write")
 
     @staticmethod
     def _normalize_character_lookup_key(value: Any) -> str:
@@ -24525,7 +24651,7 @@ class InitiativeTracker(base.InitiativeTracker):
             except Exception:
                 return
             try:
-                self._lan._cached_snapshot = self._lan_snapshot()
+                self._lan_force_state_broadcast(include_static=True)
             except Exception:
                 pass
 
@@ -47850,6 +47976,7 @@ class InitiativeTracker(base.InitiativeTracker):
         self._monster_specs = []
         self._monsters_by_name = {}
         self._wild_shape_beast_cache = None
+        self._invalidate_lan_static_snapshot_cache("monster_catalog_refresh")
         try:
             cache = self.__dict__.get("_wild_shape_available_cache")
             if isinstance(cache, dict):
