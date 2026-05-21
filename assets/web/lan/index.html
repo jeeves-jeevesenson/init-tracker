@@ -17983,26 +17983,28 @@ __DAMAGE_TYPE_OPTIONS__
         }
         const target = getUnitByCid(msg.target_cid);
         const targetName = target?.name || "target";
-        openSpellResolveModal({
-          spellName: "Hellish Rebuke",
-          slotLevel: 1,
-          baseLevel: 1,
-          dice: "2d10",
-          damageTypes: ["fire"],
-          resolveKind: "damage",
-          extraHint: `Target defaults to ${targetName}. Enter a slot level and optional manual damage.`
-        }, (damageEntries) => {
-          const slotInput = window.prompt("Hellish Rebuke slot level (1-9)", "1");
-          const slotLevel = Number.isFinite(Number(slotInput)) ? Math.max(1, Math.min(9, Math.floor(Number(slotInput)))) : 1;
-          send({
-            type: "hellish_rebuke_resolve",
-            cid: actionCid,
-            request_id: String(msg.request_id || ""),
-            target_cid: Number(msg.target_cid),
-            slot_level: slotLevel,
-            damage_entries: damageEntries,
-          });
+        
+        const slotInput = window.prompt(`Cast Hellish Rebuke on ${targetName}? Enter slot level (1-9)`, "1");
+        if (slotInput === null) return; // Cancelled
+
+        const slotLevel = Number.isFinite(Number(slotInput)) ? Math.max(1, Math.min(9, Math.floor(Number(slotInput)))) : 1;
+        send({
+          type: "hellish_rebuke_resolve",
+          cid: actionCid,
+          request_id: String(msg.request_id || ""),
+          target_cid: Number(msg.target_cid),
+          slot_level: slotLevel,
         });
+      } else if (msg.type === "hellish_rebuke_result") {
+        if (msg.ok) {
+          const save = msg.save || {};
+          const saveStatus = save.passed ? "passed" : "failed";
+          const saveDetail = `DEX save DC ${save.dc}: ${save.roll} + ${save.modifier} = ${save.total} (${saveStatus}).`;
+          const damageDetail = `Dealt ${msg.damage_total} fire damage.`;
+          localToast(`Hellish Rebuke resolved! ${saveDetail} ${damageDetail}`, "heal");
+        } else {
+          localToast(msg.message || "Hellish Rebuke failed.", "danger");
+        }
       } else if (msg.type === "reaction_result") {
         const status = String(msg.status || "");
         const finished = status === "REACTION_ACCEPTED"

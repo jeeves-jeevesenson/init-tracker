@@ -128,6 +128,7 @@ from player_command_contracts import (
     CAST_UTILITY_LOGGED,
     CAST_CANCELLED,
     build_spell_cast_result,
+    build_hellish_rebuke_result,
 )
 from combatant_name_service import CombatantNameService
 from player_command_service import PlayerCommandService
@@ -40720,14 +40721,14 @@ class InitiativeTracker(base.InitiativeTracker):
                 self._lan.play_ko(int(caster.cid))
             except Exception:
                 pass
-        result_payload = {
-            "type": "hellish_rebuke_result",
-            "ok": True,
-            "request_id": str(request_id),
-            "caster_cid": int(caster.cid),
-            "target_cid": int(target.cid),
-            "slot_level": int(slot_level),
-            "save": {
+
+        result_payload = build_hellish_rebuke_result(
+            ok=True,
+            request_id=str(request_id),
+            caster_cid=int(caster.cid),
+            target_cid=int(target.cid),
+            slot_level=int(slot_level),
+            save={
                 "ability": "dex",
                 "dc": int(dc),
                 "roll": int(save_roll),
@@ -40735,9 +40736,9 @@ class InitiativeTracker(base.InitiativeTracker):
                 "total": int(save_total),
                 "passed": bool(save_passed),
             },
-            "damage_total": int(total_damage),
-            "damage_type": "fire",
-        }
+            damage_total=int(total_damage),
+            damage_type="fire",
+        )
         loop = getattr(self._lan, "_loop", None)
         if ws_id is not None and loop:
             try:

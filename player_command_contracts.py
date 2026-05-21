@@ -149,6 +149,17 @@ HELLISH_REBUKE_RESOLVE_FIELDS: Sequence[str] = (
     "slot_level",
     "target_cid",
 )
+HELLISH_REBUKE_RESULT_FIELDS: Sequence[str] = (
+    "type",
+    "ok",
+    "request_id",
+    "caster_cid",
+    "target_cid",
+    "slot_level",
+    "save",
+    "damage_total",
+    "damage_type",
+)
 SET_COLOR_FIELDS: Sequence[str] = ("type", "color", "border_color")
 SET_FACING_FIELDS: Sequence[str] = ("type", "facing_deg")
 SET_AURAS_ENABLED_FIELDS: Sequence[str] = ("type", "enabled")
@@ -1712,6 +1723,31 @@ def build_hellish_rebuke_resolve_start_payload(
         "spell_slug": "hellish-rebuke",
         "action_type": "reaction",
         "max_range_ft": 60,
+    }
+
+
+def build_hellish_rebuke_result(
+    *,
+    ok: bool,
+    request_id: str,
+    caster_cid: int,
+    target_cid: int,
+    slot_level: int,
+    save: Dict[str, Any],
+    damage_total: int,
+    damage_type: str = "fire",
+) -> Dict[str, Any]:
+    return {
+        "type": "hellish_rebuke_result",
+        "contract": _contract("player_command.hellish_rebuke_result"),
+        "ok": bool(ok),
+        "request_id": str(request_id),
+        "caster_cid": int(caster_cid),
+        "target_cid": int(target_cid),
+        "slot_level": int(slot_level),
+        "save": _copy(save),
+        "damage_total": int(damage_total),
+        "damage_type": str(damage_type),
     }
 
 

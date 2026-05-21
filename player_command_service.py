@@ -1171,6 +1171,12 @@ class PlayerCommandService:
         ) * t._lan_feet_per_square()
         if dist_ft - 60.0 > 1e-6:
             return None
+
+        # Visibility check: caster must see the attacker
+        _cols, _rows, obstacles, _rough, _positions = t._lan_live_map_data()
+        if t._line_of_sight_blocked(victim_pos, attacker_pos, obstacles):
+            return None
+
         ws_targets = t._find_ws_for_cid(int(victim_cid))
         choices = [
             {"kind": "cast_hellish_rebuke", "label": "Hellish Rebuke", "mode": mode},

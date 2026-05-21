@@ -118,6 +118,14 @@ class HellishRebukeReactionTests(unittest.TestCase):
         offers = [payload for _ws, payload in self.sent if isinstance(payload, dict) and payload.get("trigger") == "hellish_rebuke"]
         self.assertFalse(offers)
 
+    def test_visibility_blocks_offer(self):
+        # Set up an obstacle between 1 and 2
+        self.app._lan_live_map_data = lambda: (20, 20, {(5, 5)}, {}, dict(self.app._lan_positions))
+        self.app._lan_positions = {1: (4, 5), 2: (6, 5)}
+        self.app._lan_apply_action(self._attack_msg(7))
+        offers = [payload for _ws, payload in self.sent if isinstance(payload, dict) and payload.get("trigger") == "hellish_rebuke"]
+        self.assertFalse(offers)
+
     def test_pending_hellish_rebuke_blocks_followup_attack_request(self):
         self.app._pending_hellish_rebuke_resolutions["req-1"] = {
             "victim_cid": 1,
