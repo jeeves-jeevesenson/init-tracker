@@ -6389,7 +6389,7 @@ class LanController:
             try:
                 if _dm_service is not None:
                     snap = _dm_console_snapshot()
-                    await self._send_ws_text_serialized(ws_id, ws, json.dumps({"type": "dm_state", "snapshot": snap}))
+                    await self._send_ws_text_serialized(ws_id, ws, self._dm_state_payload_text(snap))
             except Exception:
                 pass
             # Hold the connection open; messages from client are ignored
@@ -7750,6 +7750,14 @@ class LanController:
         except Exception as exc:
             self._log_lan_exception("DM WS push scheduling failed", exc)
 
+    def _dm_state_message(self, snapshot: Dict[str, Any]) -> Dict[str, Any]:
+        """Build the DM websocket message with narrow JSON-safe coercion."""
+        safe_snapshot = self._tracker._json_safe(snapshot if isinstance(snapshot, dict) else {})
+        return with_action_correlation({"type": "dm_state", "snapshot": safe_snapshot})
+
+    def _dm_state_payload_text(self, snapshot: Dict[str, Any]) -> str:
+        return json.dumps(self._dm_state_message(snapshot))
+
     async def _push_dm_snapshot_async(
         self,
         snapshot: Dict[str, Any],
@@ -7762,7 +7770,7 @@ class LanController:
         ):
             started_ns = time.perf_counter_ns()
             try:
-                payload = json.dumps(with_action_correlation({"type": "dm_state", "snapshot": snapshot}))
+                payload = self._dm_state_payload_text(snapshot)
             except Exception as exc:
                 debug_event("broadcast.end", span="dm.broadcast.snapshot", ok=False, reason=type(exc).__name__)
                 return
@@ -23816,17 +23824,17 @@ class InitiativeTracker(base.InitiativeTracker):
             t_apply_end = time.perf_counter() if perf_on else 0.0
             if sculpt_auto_success:
                 self._log(
-                    f"{spell_name}: {target.name} SCULPT (auto) -> {total_damage} damage{damage_breakdown}{adjustment_note}{overflow_note}",
+                    f"{spell_name}: {target.name} SCULPT (auto) -> {total_damage} damage{damage_breakdown}{adjustment_note}",
                     cid=int(target_cid),
                 )
             elif requires_save:
                 status = "PASS" if passed else "FAIL"
                 self._log(
-                    f"{spell_name}: {target.name} save {ability.upper()} {status} ({total} vs DC {dc}) -> {total_damage} damage{damage_breakdown}{adjustment_note}{overflow_note}"
+                    f"{spell_name}: {target.name} save {ability.upper()} {status} ({total} vs DC {dc}) -> {total_damage} damage{damage_breakdown}{adjustment_note}"
                 )
             else:
                 self._log(
-                    f"{spell_name}: {target.name} auto -> {total_damage} damage{damage_breakdown}{adjustment_note}{overflow_note}"
+                    f"{spell_name}: {target.name} auto -> {total_damage} damage{damage_breakdown}{adjustment_note}"
                 )
             if forced_move_notes:
                 self._log(

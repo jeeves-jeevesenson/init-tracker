@@ -5062,29 +5062,32 @@ class PlayerCommandService:
                 "message": "Pick a valid slot level and amount, matey."
             })
             return build_dispatch_result("manual_override_spell_slot", False, reason="invalid_slot_args", request=request_contract)
-        try:
-            player_name = t._pc_name_for(cid_int)
-            _resolved_name, slots = t._resolve_spell_slot_profile(player_name)
-        except Exception as exc:
-            msg_str = str(exc) or "No spell slots set up for that caster, matey."
-            self._toast(ws_id, msg_str)
-            self._send_ws_payload(ws_id, {
-                "type": "manual_override_result",
-                "ok": False,
-                "action": "manual_override_spell_slot",
-                "cid": cid_int,
-                "slot_level": slot_level,
-                "reason": "resolve_spell_slots_failed",
-                "message": msg_str
-            })
-            return build_dispatch_result(
-                "manual_override_spell_slot",
-                False,
-                reason="resolve_spell_slots_failed",
-                error=str(exc),
-                request=request_contract,
-            )
+        player_name = t._pc_name_for(cid_int)
+        profile = t._profile_for_player_name(player_name)
+        spellcasting = profile.get("spellcasting", {}) if isinstance(profile, dict) else {}
+        slots = t._json_safe(spellcasting.get("spell_slots", {}))
+        pact = spellcasting.get("pact_magic_slots", {})
+        
         entry = slots.get(str(slot_level))
+        is_pact_target = False
+        
+        # If no normal slots at this level, check if it matches the warlock's pact slot level
+        if (not isinstance(entry, dict) or int(entry.get("max") or 0) <= 0) and isinstance(pact, dict):
+            if int(pact.get("level") or 0) == slot_level:
+                is_pact_target = True
+                entry = {
+                    "current": int(pact.get("count") or 0), 
+                    "max": int(pact.get("count") or 0)
+                }
+                # Try to find the actual current value in resource pools
+                resources = profile.get("resources", {})
+                pools = resources.get("pools", [])
+                if isinstance(pools, list):
+                    for pool in pools:
+                        if str(pool.get("id") or "").lower() == "pact_magic_slots":
+                            entry["current"] = int(pool.get("current", entry["max"]))
+                            break
+
         if not isinstance(entry, dict):
             self._toast(ws_id, "No spell slots at that level, matey.")
             self._send_ws_payload(ws_id, {
@@ -5097,6 +5100,7 @@ class PlayerCommandService:
                 "message": "No spell slots at that level, matey."
             })
             return build_dispatch_result("manual_override_spell_slot", False, reason="slot_level_missing", request=request_contract)
+
         old_current = int(entry.get("current", 0) or 0)
         max_current = int(entry.get("max", 0) or 0)
         if max_current <= 0:
@@ -5139,28 +5143,56 @@ class PlayerCommandService:
             return build_dispatch_result("manual_override_spell_slot", False, reason="already_at_zero", request=request_contract)
 
         new_current = max(0, min(max_current, old_current + slot_delta))
-        entry["current"] = int(new_current)
-        slots[str(slot_level)] = entry
-        try:
-            t._save_player_spell_slots(player_name, slots)
-        except Exception as exc:
-            self._toast(ws_id, "Could not update spell slots, matey.")
-            self._send_ws_payload(ws_id, {
-                "type": "manual_override_result",
-                "ok": False,
-                "action": "manual_override_spell_slot",
-                "cid": cid_int,
-                "slot_level": slot_level,
-                "reason": "save_spell_slots_failed",
-                "message": "Could not update spell slots, matey."
-            })
-            return build_dispatch_result(
-                "manual_override_spell_slot",
-                False,
-                reason="save_spell_slots_failed",
-                error=str(exc),
-                request=request_contract,
-            )
+        
+        if is_pact_target:
+            # Update pact slots in resource pools
+            resources = profile.get("resources", {})
+            pools = resources.get("pools", [])
+            found_pool = False
+            if isinstance(pools, list):
+                for pool in pools:
+                    if str(pool.get("id") or "").lower() == "pact_magic_slots":
+                        pool["current"] = int(new_current)
+                        found_pool = True
+                        break
+            if not found_pool:
+                if not isinstance(pools, list):
+                    pools = []
+                    resources["pools"] = pools
+                pools.append({
+                    "id": "pact_magic_slots",
+                    "label": f"Pact Magic Slots (Level {slot_level})",
+                    "current": int(new_current),
+                    "max": max_current,
+                    "reset": "short_rest"
+                })
+            try:
+                t._store_character_yaml(t._find_player_profile_path(player_name), profile)
+            except Exception as exc:
+                self._toast(ws_id, "Could not update pact slots, matey.")
+                return build_dispatch_result("manual_override_spell_slot", False, reason="save_pact_slots_failed", request=request_contract)
+        else:
+            entry["current"] = int(new_current)
+            slots[str(slot_level)] = entry
+            try:
+                t._save_player_spell_slots(player_name, slots)
+            except Exception as exc:
+                self._toast(ws_id, "Could not update spell slots, matey.")
+                self._send_ws_payload(ws_id, {
+                    "type": "manual_override_result",
+                    "ok": False,
+                    "action": "manual_override_spell_slot",
+                    "cid": cid_int,
+                    "slot_level": slot_level,
+                    "reason": "save_spell_slots_failed",
+                    "message": "Could not update spell slots, matey."
+                })
+                return build_dispatch_result(
+                    "manual_override_spell_slot",
+                    False,
+                    reason="save_spell_slots_failed",
+                    request=request_contract,
+                )
         c = (getattr(t, "combatants", {}) or {}).get(cid_int)
         actor_name = getattr(c, "name", player_name or "Player")
         log = getattr(t, "_log", None)

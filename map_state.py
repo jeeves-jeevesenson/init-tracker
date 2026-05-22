@@ -1198,8 +1198,15 @@ class MapState:
 
 
 class MapQueryAPI:
-    def __init__(self, state: MapState) -> None:
-        self.state = state.normalized()
+    def __init__(self, state: Optional[MapState]) -> None:
+        if state is None:
+            # Fallback to a minimal safe state to prevent AttributeError in headless/LAN path
+            self.state = MapState(
+                schema_version=MAP_STATE_SCHEMA_VERSION,
+                grid=GridSpec(cols=20, rows=20, feet_per_square=5.0).normalized()
+            ).normalized()
+        else:
+            self.state = state.normalized()
 
     @staticmethod
     def hazard_blocks_structure_movement(payload: Any) -> bool:

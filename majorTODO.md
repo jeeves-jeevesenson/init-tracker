@@ -88,6 +88,18 @@ These specific blockers appear to have been addressed in repo and should be kept
 - Production path hygiene foundation (2026-05-08): Centralized path and environment configuration in `runtime_config.py`. Added support for `INIT_TRACKER_HOME` and structured subdirectories (`data`, `logs`, `releases`) for production/server deployments. This pass separates mutable runtime data (sessions, settings, profile uploads) and logs into the new directories, while keeping canonical content (Monsters, Spells, Items, etc.) within the application source tree for now. Added `docs/production-deployment-dnd.md` for layout guidance. Systemd integration and future layered content/data overlays remain deferred.
 - LAN websocket debug logging precursor (2026-04-25): `INITTRACKER_WS_DEBUG=1` now enables bounded server/client websocket lifecycle diagnostics without changing normal launch behavior. Server JSONL entries capture connect, restored-claim, disconnect, close code/reason when available, host/user-agent, claimed character, exception repr, and the active websocket phase; the LAN client emits opt-in `client-log` lifecycle payloads with `wsGeneration`, URL, close code/reason/`wasClean`, intentional-close state, and reconnect/recovery timer state. This is evidence capture only; the repeating reconnect loop still needs a separate hotfix after logs are collected.
 - LAN snapshot & broadcast optimization (2026-05-21): Implemented a static component cache for `_lan_snapshot` to reduce redundant payload generation. `_lan_force_state_broadcast` now defaults to `include_static=False` and skips work entirely when no clients are connected. Debug instrumentation (`snapshot_cache_hit:true`) confirms the cache is effective during state broadcasts. This addresses a significant part of the hot-path latency and blocking behavior noted in 3.1.a.
+- LAN first-load correctness fix (2026-05-21): Resolved regression where casters had empty Spells/Manage Spells on first load due to cache poisoning from idle snapshots. Implemented static-field carryover on the backend and hardened the frontend state-merge logic to treat `{}` as empty for resource pools and other static-rich fields.
+- LAN AoE map-state crash fix (2026-05-21): Fixed game-breaking `AttributeError` where `MapQueryAPI` received a `None` map state during AoE target resolution (Moonbeam/hazards). Added missing `_lan_get_map_state` method and hardened `MapQueryAPI` to handle missing state gracefully. Optimized AoE target resolution by reusing map query and positions to eliminate expensive redundant `MapState.normalized()` calls during movement and turn advancement.
+- Production-readiness stabilization (2026-05-21):
+    - Resolved P0 `TypeError` in DM snapshot broadcast by using `_json_safe` for serialization, fixing DM console sync.
+    - Optimized `long_rest` with `_PlayerYamlCacheHold` and ensured complete restoration of class resource pools (Lay on Hands, Focus Points, etc.) and auto-restored missing warlock pact slots.
+    - Added support for manual warlock/pact spell-slot overrides in both backend and LAN frontend.
+    - Cleaned up player-facing combat logs by removing internal debug overflow/trim notes.
+    - Fixed missing Tempest Domain cleric spells for Stihiya level 11.
+- DM map blank-session bootstrap correction (2026-05-22):
+    - Confirmed `/dm` and `/dm/map` still share the same DM combat snapshot contract; the visible `/dm/map` blocker was not caused by `_json_safe` or player-cache stripping.
+    - Added a shared DM websocket message builder so both the initial `/ws/dm` snapshot and later DM broadcasts serialize through `_json_safe`.
+    - Corrected `/dm/map` empty-session ergonomics so the map workspace no longer hides `Add Player Profiles` before combatants exist, and the empty roster now points the operator to `DM Toolbox > Session` for quick-load / player bootstrap.
 
 ### 3.2 `/dm/map` validation, responsiveness, and workspace correction
 
@@ -571,4 +583,3 @@ If code/tests and this file disagree, fix this file promptly.
 - [x] **Pass 3D: LAN live-game readiness smoke and critical polish (Ship semantics fix, spell audit updates)**
 - [ ] **Pass 3E: LAN action and inventory cards**
 - [ ] **Pass 3F: LAN firearm UI**
-

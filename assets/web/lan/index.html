@@ -4113,6 +4113,12 @@ __DAMAGE_TYPE_OPTIONS__
 <div class="turn-flash" id="turnFlash" aria-hidden="true"></div>
 
 <script>
+  function isEmptyPlainObject(value){
+    return Boolean(value)
+      && typeof value === "object"
+      && !Array.isArray(value)
+      && Object.keys(value).length === 0;
+  }
 (() => {
   const wsDebugEnabled = (() => {
     if (window.INITTRACKER_WS_DEBUG === true) return true;
@@ -8301,12 +8307,13 @@ __DAMAGE_TYPE_OPTIONS__
     const spellcasting = profile?.spellcasting;
     if (spellcasting && spellcasting.enabled === false) return [];
     const slots = spellcasting?.spell_slots;
-    if (!slots || typeof slots !== "object") return [];
+    const pact = spellcasting?.pact_magic_slots;
+    if ((!slots || typeof slots !== "object") && (!pact || typeof pact !== "object")) return [];
     const levels = [];
     for (let level = 1; level <= 9; level += 1){
       const entry = Array.isArray(slots)
         ? slots[level - 1]
-        : (slots[String(level)] ?? slots[level]);
+        : (slots?.[String(level)] ?? slots?.[level]);
       let maxValue = 0;
       let currentValue = 0;
       if (entry && typeof entry === "object"){
@@ -8316,6 +8323,21 @@ __DAMAGE_TYPE_OPTIONS__
         maxValue = Number(entry ?? 0);
         currentValue = maxValue;
       }
+      
+      // Add pact magic slots if they match this level
+      if (pact && typeof pact === "object" && Number(pact.level) === level){
+        const pactMax = Number(pact.count ?? 0);
+        // Find pact slots in resource pools for current value
+        let pactCurrent = pactMax;
+        const pools = profile?.resources?.pools;
+        if (Array.isArray(pools)){
+          const pool = pools.find(p => String(p?.id).toLowerCase() === "pact_magic_slots");
+          if (pool) pactCurrent = Number(pool.current ?? pactMax);
+        }
+        maxValue += pactMax;
+        currentValue += pactCurrent;
+      }
+
       if (!Number.isFinite(maxValue)) maxValue = 0;
       if (!Number.isFinite(currentValue)) currentValue = maxValue;
       maxValue = Math.max(0, Math.floor(maxValue));
@@ -17599,20 +17621,20 @@ __DAMAGE_TYPE_OPTIONS__
         const oldElevation = state?.elevation_cells;
         state = (msg.state && typeof msg.state === "object") ? msg.state : {};
         // Preserve static data from previous state if not in new message
-        // Only preserve if old values exist and new values are undefined (not just missing)
-        if (!state.spell_presets && Array.isArray(oldSpellPresets)){
+        // Only preserve if old values exist and new values are undefined or empty
+        if ((!state.spell_presets || state.spell_presets.length === 0) && Array.isArray(oldSpellPresets) && oldSpellPresets.length > 0){
           state.spell_presets = oldSpellPresets;
         }
-        if (!state.player_spells && oldPlayerSpells && typeof oldPlayerSpells === "object"){
+        if ((!state.player_spells || isEmptyPlainObject(state.player_spells)) && oldPlayerSpells && typeof oldPlayerSpells === "object" && !isEmptyPlainObject(oldPlayerSpells)){
           state.player_spells = oldPlayerSpells;
         }
-        if (!state.player_profiles && oldPlayerProfiles && typeof oldPlayerProfiles === "object"){
+        if ((!state.player_profiles || isEmptyPlainObject(state.player_profiles)) && oldPlayerProfiles && typeof oldPlayerProfiles === "object" && !isEmptyPlainObject(oldPlayerProfiles)){
           state.player_profiles = oldPlayerProfiles;
         }
-        if (!state.monster_choices && Array.isArray(oldMonsterChoices)){
+        if ((!state.monster_choices || state.monster_choices.length === 0) && Array.isArray(oldMonsterChoices) && oldMonsterChoices.length > 0){
           state.monster_choices = oldMonsterChoices;
         }
-        if (!state.resource_pools && oldResourcePools && typeof oldResourcePools === "object"){
+        if ((!state.resource_pools || isEmptyPlainObject(state.resource_pools)) && oldResourcePools && typeof oldResourcePools === "object" && !isEmptyPlainObject(oldResourcePools)){
           state.resource_pools = oldResourcePools;
         }
         if (!state.grid && oldGrid){

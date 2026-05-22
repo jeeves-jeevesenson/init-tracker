@@ -1147,99 +1147,107 @@ class CombatService:
                     targets.append(c)
 
             rested_summaries = []
-            for c in targets:
-                summary = {
-                    "cid": int(c.cid),
-                    "name": str(c.name),
-                    "hp_before": int(c.hp),
-                    "spell_slots_restored": False,
-                    "resource_pools_restored": [],
-                }
+            from dnd_initative_tracker import _PlayerYamlCacheHold
+            with _PlayerYamlCacheHold(t):
+                for c in targets:
+                    summary = {
+                        "cid": int(c.cid),
+                        "name": str(c.name),
+                        "hp_before": int(c.hp),
+                        "spell_slots_restored": False,
+                        "resource_pools_restored": [],
+                    }
 
-                # 1. HP
-                if restore_hp:
-                    max_hp = int(getattr(c, "max_hp", c.hp) or c.hp)
-                    c.hp = max_hp
-                
-                summary["hp_after"] = int(c.hp)
-
-                # 2. Temp HP
-                if clear_temp_hp:
-                    setattr(c, "temp_hp", 0)
-
-                # 3. Turn state
-                if clear_turn_state:
-                    setattr(c, "action_remaining", int(getattr(c, "action_total", 1) or 1))
-                    setattr(c, "bonus_action_remaining", 1)
-                    setattr(c, "reaction_remaining", 1)
-                    setattr(c, "spell_cast_remaining", 1)
-                    setattr(c, "move_remaining", int(getattr(c, "speed", 0) or 0))
-                    setattr(c, "has_mounted_this_turn", False)
-
-                # 4. Concentration
-                if end_concentration and bool(getattr(c, "concentrating", False)):
-                    end_fn = getattr(t, "_end_concentration", None)
-                    if callable(end_fn):
-                        try:
-                            end_fn(c)
-                        except Exception:
-                            pass
-                    else:
-                        setattr(c, "concentrating", False)
-                        setattr(c, "concentration_spell", None)
-
-                # 5. Player-specific (Spell slots, Resource pools)
-                if bool(getattr(c, "is_pc", False)):
-                    player_name = t._pc_name_for(int(c.cid))
+                    # 1. HP
+                    if restore_hp:
+                        max_hp = int(getattr(c, "max_hp", c.hp) or c.hp)
+                        c.hp = max_hp
                     
-                    # Spell Slots
-                    if restore_spell_slots:
-                        try:
-                            # Use InitiativeTracker helpers if possible
-                            _, slots = t._resolve_spell_slot_profile(player_name)
-                            if isinstance(slots, dict):
-                                for lvl_data in slots.values():
-                                    if isinstance(lvl_data, dict) and "max" in lvl_data:
-                                        lvl_data["current"] = lvl_data["max"]
-                                t._save_player_spell_slots(player_name, slots)
-                                summary["spell_slots_restored"] = True
-                        except Exception:
-                            pass
+                    summary["hp_after"] = int(c.hp)
 
-                    # Resource Pools
-                    if restore_long_rest_resources:
-                        try:
-                            profile = t._profile_for_player_name(player_name)
-                            if isinstance(profile, dict):
-                                resources = profile.get("resources", {})
-                                pools = resources.get("pools", [])
-                                if isinstance(pools, list):
-                                    restored_pools = []
-                                    for pool in pools:
-                                        if not isinstance(pool, dict): continue
-                                        reset_type = str(pool.get("reset") or "").strip().lower()
-                                        if reset_type in ("long_rest", "short_rest", "dawn", "dusk"):
-                                            # We need to re-evaluate max if it's a formula
-                                            max_formula = pool.get("max_formula")
-                                            max_val = t._compute_resource_pool_max(profile, max_formula, pool.get("max"))
-                                            pool["current"] = max_val
-                                            restored_pools.append(str(pool.get("label") or pool.get("id")))
-                                    
-                                    if restored_pools:
-                                        t._store_character_yaml(t._find_player_profile_path(player_name), profile)
-                                        summary["resource_pools_restored"] = restored_pools
-                        except Exception:
-                            pass
+                    # 2. Temp HP
+                    if clear_temp_hp:
+                        setattr(c, "temp_hp", 0)
 
-                rested_summaries.append(summary)
+                    # 3. Turn state
+                    if clear_turn_state:
+                        setattr(c, "action_remaining", int(getattr(c, "action_total", 1) or 1))
+                        setattr(c, "bonus_action_remaining", 1)
+                        setattr(c, "reaction_remaining", 1)
+                        setattr(c, "spell_cast_remaining", 1)
+                        setattr(c, "move_remaining", int(getattr(c, "speed", 0) or 0))
+                        setattr(c, "has_mounted_this_turn", False)
 
-            if targets:
-                t._log(f"Long Rest applied to {len(targets)} combatant(s).")
-                try:
-                    t._rebuild_table(scroll_to_current=True)
-                except Exception:
-                    pass
-                self._broadcast_tracker_state(include_static=True)
+                    # 4. Concentration
+                    if end_concentration and bool(getattr(c, "concentrating", False)):
+                        end_fn = getattr(t, "_end_concentration", None)
+                        if callable(end_fn):
+                            try:
+                                end_fn(c)
+                            except Exception:
+                                pass
+                        else:
+                            setattr(c, "concentrating", False)
+                            setattr(c, "concentration_spell", None)
+
+                    # 5. Player-specific (Spell slots, Resource pools)
+                    if bool(getattr(c, "is_pc", False)):
+                        player_name = t._pc_name_for(int(c.cid))
+                        
+                        # Spell Slots
+                        if restore_spell_slots:
+                            try:
+                                # Use InitiativeTracker helpers if possible
+                                _, slots = t._resolve_spell_slot_profile(player_name)
+                                if isinstance(slots, dict):
+                                    for lvl_data in slots.values():
+                                        if isinstance(lvl_data, dict) and "max" in lvl_data:
+                                            lvl_data["current"] = lvl_data["max"]
+                                    t._save_player_spell_slots(player_name, slots)
+                                    summary["spell_slots_restored"] = True
+                            except Exception:
+                                pass
+
+                        # Resource Pools
+                        if restore_long_rest_resources:
+                            try:
+                                profile = t._profile_for_player_name(player_name)
+                                if isinstance(profile, dict):
+                                    resources = profile.get("resources", {})
+                                    pools = resources.get("pools", [])
+                                    if isinstance(pools, list):
+                                        restored_pools = []
+                                        for pool in pools:
+                                            if not isinstance(pool, dict): continue
+                                            reset_type = str(pool.get("reset") or "").strip().lower()
+                                            # If reset is missing, default to long_rest for known class resources
+                                            if not reset_type:
+                                                pool_id = str(pool.get("id") or "").lower()
+                                                if pool_id in ("lay_on_hands", "channel_divinity", "focus_points", "wild_shape"):
+                                                    reset_type = "long_rest"
+
+                                            if reset_type in ("long_rest", "short_rest", "dawn", "dusk", "turn", "round"):
+                                                # We need to re-evaluate max if it's a formula
+                                                max_formula = pool.get("max_formula")
+                                                max_val = t._compute_resource_pool_max(profile, max_formula, pool.get("max"))
+                                                pool["current"] = max_val
+                                                restored_pools.append(str(pool.get("label") or pool.get("id")))
+                                        
+                                        if restored_pools:
+                                            t._store_character_yaml(t._find_player_profile_path(player_name), profile)
+                                            summary["resource_pools_restored"] = restored_pools
+                            except Exception:
+                                pass
+
+                    rested_summaries.append(summary)
+
+                if targets:
+                    t._log(f"Long Rest applied to {len(targets)} combatant(s).")
+                    try:
+                        t._rebuild_table(scroll_to_current=True)
+                    except Exception:
+                        pass
+                    self._broadcast_tracker_state(include_static=True)
 
             return {
                 "ok": True,

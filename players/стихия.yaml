@@ -259,6 +259,10 @@ features:
     - shatter
     - call-lightning
     - sleet-storm
+    - control-water
+    - ice-storm
+    - destructive-wave
+    - insect-plague
 - id: wrath_of_the_storm
   name: Wrath of the Storm
   category: Cleric Subclass Feature

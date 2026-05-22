@@ -139,6 +139,57 @@ class LanSnapshotCacheTests(unittest.TestCase):
         self.assertTrue(snapshot_end.get("snapshot_cache_hit"))
         self.assertEqual(snapshot_end.get("snapshot_cache_scope"), "dynamic+cached_static")
 
+    def test_lan_controller_carryover_prevents_static_erasure(self):
+        app, _calls = self._snapshot_app()
+        lan = tracker_mod.LanController(app)
+
+        # 1. Seed with full static data
+        full = app._lan_snapshot(include_static=True)
+        lan._cached_snapshot = full
+        self.assertTrue(len(lan._cached_snapshot.get("spell_presets", [])) > 0)
+        self.assertTrue(len(lan._cached_snapshot.get("player_spells", {})) > 0)
+
+        # 2. Perform a cheap "stripped" snapshot
+        stripped = app._lan_snapshot(include_static=False, hydrate_static=False)
+        self.assertEqual(len(stripped.get("spell_presets", [])), 0)
+
+        # 3. Merge carryover
+        merged = lan._merge_cached_snapshot_carryover(stripped)
+
+        # Verify carryover preserved the fields
+        self.assertEqual(merged["spell_presets"], full["spell_presets"])
+        self.assertEqual(merged["player_spells"], full["player_spells"])
+        self.assertEqual(merged["player_profiles"], full["player_profiles"])
+
+    def test_static_data_payload_repairs_missing_cache_fields(self):
+        app, calls = self._snapshot_app()
+        lan = tracker_mod.LanController(app)
+
+        # Poison cache with empty static fields
+        lan._cached_snapshot = {
+            "spell_presets": [],
+            "player_spells": {},
+            "player_profiles": {},
+            "resource_pools": {},
+            "beast_forms": []
+        }
+
+        payload = lan._static_data_payload()
+
+        # Verify it went to the app to repair
+        self.assertEqual(calls["presets"], 1)
+        self.assertEqual(calls["spells"], 1)
+        self.assertEqual(calls["profiles"], 1)
+        self.assertEqual(calls["beasts"], 1)
+
+        # Verify payload is rich
+        self.assertEqual(payload["spell_presets"], [{"slug": "shield"}])
+        self.assertEqual(payload["player_spells"], {"Alice": {"prepared": ["shield"]}})
+
+        # Verify cache was also repaired
+        self.assertEqual(lan._cached_snapshot["spell_presets"], [{"slug": "shield"}])
+        self.assertEqual(lan._cached_snapshot["player_spells"], {"Alice": {"prepared": ["shield"]}})
+
 
 if __name__ == "__main__":
     unittest.main()

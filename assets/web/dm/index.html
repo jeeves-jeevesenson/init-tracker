@@ -714,7 +714,7 @@
       --dm-tools-width: 330px;
     }
     body.map-mode .initiative-panel { padding: 10px 10px 10px 12px; }
-    body.map-mode [data-dm-card="setup"] { display: none !important; }
+    body.map-mode.map-has-combatants [data-dm-card="setup"] { display: none !important; }
     body.map-mode .tactical-card { padding-bottom: 14px; }
     body.map-mode #tacticalMapCanvas { min-height: 420px; }
     body.map-mode .log-panel { max-height: 118px; }
@@ -2257,6 +2257,7 @@ function configureDmWorkspaceLayout() {
     workspacePanel.appendChild(tacticalCard);
   }
   if (IS_DM_MAP_WORKSPACE) document.body.classList.add('map-mode');
+  document.body.classList.remove('map-has-combatants');
   if (!IS_DM_MAP_WORKSPACE) {
     if (nav) {
       nav.href = '/dm/map';
@@ -2272,6 +2273,12 @@ function configureDmWorkspaceLayout() {
     nav.textContent = '↩ Dashboard';
     nav.title = 'Return to DM dashboard';
   }
+}
+
+function updateMapWorkspaceBootstrapState(snap) {
+  if (!IS_DM_MAP_WORKSPACE) return;
+  const combatants = Array.isArray(snap && snap.combatants) ? snap.combatants : [];
+  document.body.classList.toggle('map-has-combatants', combatants.length > 0);
 }
 
 configureDmWorkspaceLayout();
@@ -4664,6 +4671,7 @@ function clearDmTransientStateForBlankSnapshot() {
 // ── Render snapshot ───────────────────────────────────────────────────
 function applySnapshot(snap) {
   currentSnapshot = snap;
+  updateMapWorkspaceBootstrapState(snap);
   const combatants = snap.combatants || [];
   const isBlank = combatants.length === 0;
 
@@ -5147,7 +5155,10 @@ function renderCombatants(snap) {
   const list = document.getElementById('combatantList');
   const combatants = snap.combatants || [];
   if (!combatants.length) {
-    list.innerHTML = '<div class="empty-state">No combatants in initiative order.</div>';
+    const emptyMessage = IS_DM_MAP_WORKSPACE
+      ? 'No combatants in the current session. Open DM Toolbox > Session to add player profiles or quick-load a saved session.'
+      : 'No combatants in initiative order.';
+    list.innerHTML = `<div class="empty-state">${emptyMessage}</div>`;
     return;
   }
   const rows = combatants.map(c => {

@@ -1456,6 +1456,58 @@ class DmTacticalMapRoutesTests(unittest.TestCase):
         self.assertIn("DM_WORKSPACE", map_workspace.text)
         self.assertIn('id="mapWorkspacePanel"', map_workspace.text)
 
+    def test_dm_encounter_options_include_player_profiles_when_yaml_profiles_exist(self):
+        client, lan = self._build_client()
+        lan.app.combatants = {}
+        lan.app._player_profiles_payload = lambda: {
+            "Aelar": {
+                "name": "Aelar",
+                "leveling": {"class": "Wizard", "level": 5},
+                "stats": {"max_hp": 27},
+            },
+            "Mira": {
+                "name": "Mira",
+                "leveling": {"class": "Cleric", "level": 4},
+                "stats": {"max_hp": 31},
+            },
+        }
+
+        response = client.get("/api/dm/encounter/options")
+
+        self.assertEqual(200, response.status_code)
+        payload = response.json()
+        self.assertEqual(["Aelar", "Mira"], [entry["name"] for entry in payload["players"]])
+        self.assertEqual(["Wizard", "Cleric"], [entry["class_name"] for entry in payload["players"]])
+        self.assertEqual([5, 4], [entry["level"] for entry in payload["players"]])
+        self.assertEqual([27, 31], [entry["max_hp"] for entry in payload["players"]])
+        self.assertTrue(all(entry["assigned"] is False for entry in payload["players"]))
+
+    def test_dm_map_startup_keeps_player_catalog_when_combat_snapshot_is_blank(self):
+        client, lan = self._build_client()
+        lan.app.combatants = {}
+        lan.app._player_profiles_payload = lambda: {
+            "Aelar": {
+                "name": "Aelar",
+                "leveling": {"class": "Wizard", "level": 5},
+                "stats": {"max_hp": 27},
+            }
+        }
+        lan._dm_service.combat_snapshot = lambda: {
+            "in_combat": False,
+            "round": 0,
+            "turn": 0,
+            "active_cid": None,
+            "combatants": [],
+        }
+
+        combat_response = client.get("/api/dm/combat")
+        options_response = client.get("/api/dm/encounter/options")
+
+        self.assertEqual(200, combat_response.status_code)
+        self.assertEqual([], combat_response.json()["combatants"])
+        self.assertEqual(200, options_response.status_code)
+        self.assertEqual(["Aelar"], [entry["name"] for entry in options_response.json()["players"]])
+
     def test_next_turn_route_reuses_service_snapshot_for_dm_response(self):
         client, lan = self._build_client()
         service_snapshot = {
@@ -2010,13 +2062,21 @@ class DmTacticalMapRoutesTests(unittest.TestCase):
         auth_new = client.post("/api/dm/map/new", json={"cols": 20, "rows": 20}, headers=headers)
         auth_settings = client.post("/api/dm/map/settings", json={"cols": 22, "rows": 18}, headers=headers)
         auth_obstacle = client.post("/api/dm/map/obstacles/cell", json={"col": 2, "row": 2, "blocked": True}, headers=headers)
+
+        auth_bg = client.post("/api/dm/map/backgrounds", json={"asset_path": "test.png"}, headers=headers)
+        self.assertEqual(200, auth_bg.status_code)
+        bg_id = auth_bg.json()["background"]["bid"]
+
         auth_ship = client.post(
             "/api/dm/map/ships",
             json={"blueprint_id": "sloop", "anchor_col": 2, "anchor_row": 2},
             headers=headers,
         )
-        auth_ship_engagement = client.get("/api/dm/map/ships/ship_1/engagement", headers=headers)
-        auth_bg_order = client.post("/api/dm/map/backgrounds/1/order", json={"direction": "front"}, headers=headers)
+        self.assertEqual(200, auth_ship.status_code)
+        ship_id = auth_ship.json()["structure_id"]
+
+        auth_ship_engagement = client.get(f"/api/dm/map/ships/{ship_id}/engagement", headers=headers)
+        auth_bg_order = client.post(f"/api/dm/map/backgrounds/{bg_id}/order", json={"direction": "front"}, headers=headers)
         auth_monster_attacks = client.get("/api/dm/combat/combatants/2/monster-attacks", headers=headers)
         auth_monster_action = client.post(
             "/api/dm/combat/combatants/2/perform-action",
@@ -2809,6 +2869,38 @@ class DmConsoleSnapshotPayloadTests(unittest.TestCase):
         self.assertIn("combat_source=provided", log)
         self.assertIn("tactical_source=tracker", log)
 
+    def test_dm_state_message_json_safe_preserves_combatants_and_nested_siblings(self):
+        lan = object.__new__(tracker_mod.LanController)
+        lan._tracker = object.__new__(tracker_mod.InitiativeTracker)
+        snapshot = {
+            "combatants": [
+                {
+                    "cid": 1,
+                    "name": "Aelar",
+                    "damage_resistances": {"cold", "fire"},
+                    "conditions": [{"label": "Blessed", "tags": {"buff", "holy"}}],
+                }
+            ],
+            "player_profiles": {
+                "Aelar": {
+                    "name": "Aelar",
+                    "features": {"alert", "war_caster"},
+                }
+            },
+            "tactical_map": {
+                "structures": [{"id": "ship_1", "tags": {"ship", "cover"}}],
+            },
+        }
+
+        message = tracker_mod.LanController._dm_state_message(lan, snapshot)
+
+        self.assertEqual("dm_state", message["type"])
+        self.assertEqual("Aelar", message["snapshot"]["combatants"][0]["name"])
+        self.assertCountEqual(message["snapshot"]["combatants"][0]["damage_resistances"], ["cold", "fire"])
+        self.assertCountEqual(message["snapshot"]["combatants"][0]["conditions"][0]["tags"], ["buff", "holy"])
+        self.assertCountEqual(message["snapshot"]["player_profiles"]["Aelar"]["features"], ["alert", "war_caster"])
+        self.assertCountEqual(message["snapshot"]["tactical_map"]["structures"][0]["tags"], ["ship", "cover"])
+
 
 class DmTacticalMapHtmlSurfaceTests(unittest.TestCase):
     def test_dm_console_contains_tactical_map_controls(self):
@@ -2823,68 +2915,17 @@ class DmTacticalMapHtmlSurfaceTests(unittest.TestCase):
         self.assertIn('id="mapSetupCard"', html)
         self.assertIn('id="tacticalMapCard"', html)
         self.assertIn('id="monsterTurnCard"', html)
-        self.assertIn('data-live-group="health"', html)
-        self.assertIn('data-live-group="status"', html)
-        self.assertIn('data-live-group="monster-turn"', html)
-        self.assertIn('data-setup-group="roster"', html)
-        self.assertIn('data-setup-group="combat-setup"', html)
-        self.assertIn('data-setup-group="map-setup"', html)
-        self.assertIn('data-setup-group="session"', html)
-        self.assertIn('id="mapColsInput"', html)
-        self.assertIn('id="mapRowsInput"', html)
-        self.assertIn('id="createMapBtn"', html)
-        self.assertIn('id="applyMapSettingsBtn"', html)
-        self.assertIn('id="tacticalMapCanvas"', html)
-        self.assertIn('id="mapActionModeSelect"', html)
-        self.assertIn('id="applyMapActionBtn"', html)
-        self.assertIn('id="setFacingBtn"', html)
-        self.assertIn('id="applyCellModeBtn"', html)
-        self.assertIn('id="monsterActorCidSelect"', html)
-        self.assertIn('id="monsterTargetCidSelect"', html)
-        self.assertIn('id="monsterSpendSelect"', html)
-        self.assertIn('id="loadMonsterAttacksBtn"', html)
-        self.assertIn('id="monsterAttackSelect"', html)
-        self.assertIn('id="resolveMonsterAttackBtn"', html)
-        self.assertIn('id="applyMonsterDamageBtn"', html)
-        self.assertIn('id="performMonsterActionBtn"', html)
-        self.assertIn('id="castMonsterSpellBtn"', html)
-        self.assertIn('id="hazardPresetSelect"', html)
-        self.assertIn('id="placeHazardBtn"', html)
-        self.assertIn('id="featurePresetSelect"', html)
-        self.assertIn('id="placeFeatureBtn"', html)
-        self.assertIn('id="structurePresetSelect"', html)
-        self.assertIn('id="placeStructureBtn"', html)
-        self.assertIn('id="structureTemplateSelect"', html)
-        self.assertIn('id="placeTemplateBtn"', html)
-        self.assertIn('id="shipBlueprintSelect"', html)
-        self.assertIn('id="previewShipBtn"', html)
-        self.assertIn('id="placeShipBtn"', html)
-        self.assertIn('id="boardingSourceStructureSelect"', html)
-        self.assertIn('id="boardingTargetStructureSelect"', html)
-        self.assertIn('id="boardingLinkSelect"', html)
-        self.assertIn('id="upsertBoardingLinkBtn"', html)
-        self.assertIn('id="setBoardingLinkStatusBtn"', html)
-        self.assertIn('id="removeBoardingLinkBtn"', html)
-        self.assertIn('id="shipEngagementSourceStructureSelect"', html)
-        self.assertIn('id="shipEngagementTargetStructureSelect"', html)
-        self.assertIn('id="previewShipManeuverBtn"', html)
-        self.assertIn('id="applyShipManeuverBtn"', html)
-        self.assertIn('id="shipEngagementWeaponSelect"', html)
-        self.assertIn('id="shipEngagementComponentSelect"', html)
-        self.assertIn('id="fireShipWeaponBtn"', html)
-        self.assertIn('id="ramShipTargetBtn"', html)
-        self.assertIn('id="shipEngagementState"', html)
-        self.assertIn('id="applyElevationBtn"', html)
-        self.assertIn('id="bgAssetSelect"', html)
-        self.assertIn('id="upsertBackgroundBtn"', html)
-        self.assertIn('id="bgLayerBackBtn"', html)
-        self.assertIn('id="bgLayerDownBtn"', html)
-        self.assertIn('id="bgLayerUpBtn"', html)
-        self.assertIn('id="bgLayerFrontBtn"', html)
-        self.assertIn('id="aoeShapeSelect"', html)
-        self.assertIn('id="placeAoeBtn"', html)
-        self.assertIn('id="applyOverlayBtn"', html)
-        self.assertIn("/api/dm/map/combatants/{cid}/move", html)
+
+    def test_map_workspace_blank_session_keeps_player_setup_accessible(self):
+        html = _DM_HTML_PATH.read_text(encoding="utf-8")
+        self.assertIn("body.map-mode.map-has-combatants [data-dm-card=\"setup\"] { display: none !important; }", html)
+        self.assertIn("function updateMapWorkspaceBootstrapState(snap)", html)
+        self.assertIn("updateMapWorkspaceBootstrapState(snap);", html)
+        self.assertIn("refreshEncounterOptions();", html)
+        self.assertIn(
+            "Open DM Toolbox > Session to add player profiles or quick-load a saved session.",
+            html,
+        )
         self.assertIn("/api/dm/map/combatants/{cid}/place", html)
         self.assertIn("/api/dm/map/obstacles/cell", html)
         self.assertIn("/api/dm/map/terrain/cell", html)

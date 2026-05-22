@@ -88,5 +88,39 @@ class TestSpellAoeTargetingPrimitives(unittest.TestCase):
             self.assertIn(2, targets)
             self.assertNotIn(3, targets)
 
+    def test_map_query_api_none_state(self):
+        """Verify MapQueryAPI handles None state without crashing."""
+        from map_state import MapQueryAPI
+        query = MapQueryAPI(None)
+        self.assertIsNotNone(query.state)
+        self.assertEqual(query.state.grid.cols, 20)
+        # Should not raise
+        self.assertFalse(query.blocks_line_of_effect(0, 0, 5, 5))
+
+    def test_resolve_aoe_targets_no_map_state(self):
+        """Verify _resolve_aoe_targets handles missing _lan_get_map_state safely."""
+        # Ensure it doesn't crash even if _lan_get_map_state returns None
+        spec = AoeSpec(
+            shape="sphere",
+            origin_mode="point",
+            origin_col=5.0,
+            origin_row=5.0,
+            radius_ft=10.0
+        )
+        # Force the dummy getattr behavior or mock it to return None
+        with mock.patch.object(self.tracker, "_lan_get_map_state", return_value=None):
+            # Mock positions to avoid real map data dependency
+            self.tracker._lan_live_map_data = mock.Mock(return_value=(20, 20, set(), {}, {1: (5, 5)}))
+            
+            targets = self.tracker._resolve_aoe_targets(spec, {(5, 5)})
+            self.assertEqual(targets, [1])
+
+    def test_lan_get_map_state_returns_valid_state(self):
+        """Verify _lan_get_map_state returns a valid MapState object."""
+        from map_state import MapState
+        state = self.tracker._lan_get_map_state()
+        self.assertIsInstance(state, MapState)
+        self.assertEqual(state.grid.cols, 20)
+
 if __name__ == "__main__":
     unittest.main()
