@@ -51,6 +51,22 @@ def debugging_env_enabled() -> bool:
     return bool(parse_bool_value(raw, default=False))
 
 
+def tactical_map_enabled() -> bool:
+    """Return whether experimental tactical map projections are enabled."""
+    raw = os.getenv("INIT_TRACKER_ENABLE_TACTICAL_MAP")
+    if raw is None:
+        raw = os.getenv("INITTRACKER_ENABLE_TACTICAL_MAP")
+    return bool(parse_bool_value(raw, default=False))
+
+
+def ship_surfaces_enabled() -> bool:
+    """Return whether experimental ship/surface/structure projections are enabled."""
+    raw = os.getenv("INIT_TRACKER_ENABLE_SHIP_SURFACES")
+    if raw is None:
+        raw = os.getenv("INITTRACKER_ENABLE_SHIP_SURFACES")
+    return bool(parse_bool_value(raw, default=False))
+
+
 def _debug_trace_log_dir(log_dir: Optional[Path] = None) -> Path:
     return Path(log_dir) if log_dir is not None else Path("logs")
 

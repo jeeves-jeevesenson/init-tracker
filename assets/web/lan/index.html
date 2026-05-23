@@ -5677,15 +5677,55 @@ __DAMAGE_TYPE_OPTIONS__
     window.visualViewport.addEventListener("scroll", updateSpellbookViewportHeight);
   }
 
+  let actionPendingCount = 0;
+  const pendingActionIds = new Set();
+
+  function updateActionPending(delta){
+    actionPendingCount = Math.max(0, actionPendingCount + delta);
+    updateConnDisplay();
+  }
+
+  function handleActionAck(msg){
+    if (!msg || !msg.action_id) return;
+    const actionId = msg.action_id;
+    const status = msg.status;
+
+    if (status === "accepted"){
+      if (!pendingActionIds.has(actionId)){
+        pendingActionIds.add(actionId);
+        updateActionPending(1);
+      }
+    } else if (status === "pending"){
+      if (msg.reason === "already_queued"){
+        localToast("Action already queued, hang tight matey.");
+      }
+    } else if (status === "completed"){
+      if (pendingActionIds.has(actionId)){
+        pendingActionIds.delete(actionId);
+        updateActionPending(-1);
+      }
+    }
+  }
+
   function updateConnDisplay(){
-    if (connFullTextEl) connFullTextEl.textContent = connStatusText;
-    if (connEl) connEl.setAttribute("title", connStatusText);
-    if (connCompactLabelEl) connCompactLabelEl.textContent = "C";
+    let text = connStatusText;
+    if (connStatusOk && actionPendingCount > 0){
+      text = "Processing…";
+    }
+    if (connFullTextEl) connFullTextEl.textContent = text;
+    if (connEl) connEl.setAttribute("title", text);
+    if (connCompactLabelEl) connCompactLabelEl.textContent = actionPendingCount > 0 ? "P" : "C";
     if (connDotEl){
-      connDotEl.style.background = connStatusOk ? "var(--accent)" : "var(--danger)";
+      if (!connStatusOk){
+        connDotEl.style.background = "var(--danger)";
+      } else if (actionPendingCount > 0){
+        connDotEl.style.background = "#ffd6a1"; // Warm yellow/orange for processing
+      } else {
+        connDotEl.style.background = "var(--accent)";
+      }
     }
     if (connPopoverStatusEl){
-      connPopoverStatusEl.textContent = connStatusText;
+      connPopoverStatusEl.textContent = text;
     }
   }
 
@@ -5759,7 +5799,7 @@ __DAMAGE_TYPE_OPTIONS__
     const hasGrid = (typeof gridReady !== 'undefined') ? gridReady() : false;
     const currentGridState = (typeof state !== 'undefined' && state) ? state.grid : undefined;
     const gridSeen = (typeof reconnectRecoveryGridSeen !== 'undefined') ? reconnectRecoveryGridSeen : false;
-    
+
     // Recovery is ready if we have the baseline state and claim data,
     // AND we've seen some form of grid response (even if null or not-ready).
     return reconnectRecoveryStateSeen
@@ -7049,7 +7089,7 @@ __DAMAGE_TYPE_OPTIONS__
     const entries = items
       .map((item) => resolveOwnedInventoryWeaponForSelector(item, attackById))
       .filter((entry) => !!entry);
-    
+
     // Also include any weapons from me.attacks.weapons that aren't tied to an inventory item
     // (e.g. Unarmed Strike, natural weapons, etc.)
     const weapons = Array.isArray(me.attacks?.weapons) ? me.attacks.weapons : [];
@@ -7075,7 +7115,7 @@ __DAMAGE_TYPE_OPTIONS__
         instance_id: "fallback_unarmed"
       });
     }
-    
+
     return entries;
   }
 
@@ -8323,7 +8363,7 @@ __DAMAGE_TYPE_OPTIONS__
         maxValue = Number(entry ?? 0);
         currentValue = maxValue;
       }
-      
+
       // Add pact magic slots if they match this level
       if (pact && typeof pact === "object" && Number(pact.level) === level){
         const pactMax = Number(pact.count ?? 0);
@@ -10149,6 +10189,15 @@ __DAMAGE_TYPE_OPTIONS__
     "monk_uncanny_metabolism",
   ]);
 
+  function generateUuid(){
+    try {
+      if (window.crypto && typeof window.crypto.randomUUID === "function"){
+        return window.crypto.randomUUID();
+      }
+    } catch (err) {}
+    return "ax-" + Date.now().toString(36) + "-" + Math.random().toString(36).slice(2, 10);
+  }
+
   function send(msg){
     if (isPlanning){
       const typ = String(msg?.type || "");
@@ -10158,6 +10207,16 @@ __DAMAGE_TYPE_OPTIONS__
       return;
     }
     if (!ws || ws.readyState !== 1) return;
+
+    if (msg && typeof msg === "object"){
+      if (!msg.action_id && (mapViewBlockedTypes.has(msg.type) || msg.type === "planning_chat")){
+        msg.action_id = generateUuid();
+      }
+      if (!msg.trace_id){
+        msg.trace_id = "tr-" + generateUuid();
+      }
+    }
+
     ws.send(JSON.stringify(msg));
   }
 
@@ -13142,7 +13201,7 @@ __DAMAGE_TYPE_OPTIONS__
     return pendingAoeCastSyncGhost.previewAoe || null;
   }
 
-  
+
   function isAimlessSelfCenteredAoePlacement(){
     return pendingAoePlacement?.mode === "aimless_self_centered";
   }
@@ -14324,7 +14383,7 @@ __DAMAGE_TYPE_OPTIONS__
     return bestSq;
   }
 
-  
+
   function saveDmUiPrefs(){ try { localStorage.setItem(dmUiPrefsKey, JSON.stringify(dmUiPrefs)); } catch(_) {} }
   function classifyLogLine(text){ const t=(text||"").toLowerCase(); if (t.includes("heal")) return "heal"; if (t.includes("save")||t.includes("concentration")) return "save"; if (t.includes("hits")||t.includes("miss")) return "attack"; if (t.includes("damage")||t.includes("takes")) return "damage"; if (t.includes("spell")||t.includes("🔮")) return "spell"; return "spell"; }
   function parseBattleLine(line){ const m=String(line||"").match(/^\[([^\]]+)\]\s*	?\s*(.*)$/); return {time:m?m[1]:"", msg:m?m[2]:String(line||"")}; }
@@ -17559,6 +17618,10 @@ __DAMAGE_TYPE_OPTIONS__
       if (isPlanning && planningSnapshotLocked && planningFreezeTypes.has(msg.type)){
         return;
       }
+      if (msg.type === "action_ack"){
+        handleActionAck(msg);
+        return;
+      }
       if (msg.type === "planning_chat") {
         appendPlanningChatMessage(msg);
         return;
@@ -17573,19 +17636,32 @@ __DAMAGE_TYPE_OPTIONS__
         logClaimMessage("static_data", lastPcList);
         if (msg.data && typeof msg.data === "object"){
           if (Array.isArray(msg.data.spell_presets)){
-            state.spell_presets = msg.data.spell_presets;
-            requestAnimationFrame(() => {
-              updateSpellPresetOptions(state?.spell_presets || []);
-            });
+            if (msg.data.spell_presets.length > 0 || !state.spell_presets || state.spell_presets.length === 0){
+              state.spell_presets = msg.data.spell_presets;
+              requestAnimationFrame(() => {
+                updateSpellPresetOptions(state?.spell_presets || []);
+              });
+            }
           }
           if (msg.data.player_spells && typeof msg.data.player_spells === "object"){
-            state.player_spells = msg.data.player_spells;
+            if (!isEmptyPlainObject(msg.data.player_spells) || !state.player_spells || isEmptyPlainObject(state.player_spells)){
+              state.player_spells = msg.data.player_spells;
+            }
           }
           if (msg.data.player_profiles && typeof msg.data.player_profiles === "object"){
-            state.player_profiles = msg.data.player_profiles;
+            if (!isEmptyPlainObject(msg.data.player_profiles) || !state.player_profiles || isEmptyPlainObject(state.player_profiles)){
+              state.player_profiles = msg.data.player_profiles;
+            }
           }
           if (msg.data.resource_pools && typeof msg.data.resource_pools === "object"){
-            state.resource_pools = msg.data.resource_pools;
+            if (!isEmptyPlainObject(msg.data.resource_pools) || !state.resource_pools || isEmptyPlainObject(state.resource_pools)){
+              state.resource_pools = msg.data.resource_pools;
+            }
+          }
+          if (Array.isArray(msg.data.consumables_library)){
+            if (msg.data.consumables_library.length > 0 || !state.consumables_library || state.consumables_library.length === 0){
+              state.consumables_library = msg.data.consumables_library;
+            }
           }
           if (Array.isArray(msg.data.monster_choices)){
             state.monster_choices = msg.data.monster_choices;
@@ -17698,13 +17774,13 @@ __DAMAGE_TYPE_OPTIONS__
         logGridStatus("state_received");
         updateWaitingOverlay();
         scheduleUiFlush({hud:true, draw:true, mount:true, turnAlert:true, autoCenter:true});
-        
+
         // Use server-authoritative claim state from "you" field
         if (msg.you && "claimed_cid" in msg.you){
           applyServerClaim(msg.you.claimed_cid, msg.you.claimed_name, msg.you.claim_rev);
           reconnectRecoveryClaimSeen = true;
           sendReactionPrefsUpdate();
-          
+
           // Reconcile pending reaction prompt - if server says none, clear local.
           // This handles cleanup on turn advance / reset / death if snapshot reflects it.
           if (pendingReactionRequestId && (!msg.you.pending_prompt || String(msg.you.pending_prompt.request_id) !== pendingReactionRequestId)){
@@ -17741,7 +17817,7 @@ __DAMAGE_TYPE_OPTIONS__
           }
           reconnectRecoveryClaimSeen = true;
         }
-        
+
         if (!claimedCid){
           showNoOwnedPcToast(msg.pcs || msg.claimable || []);
         }
@@ -18022,7 +18098,7 @@ __DAMAGE_TYPE_OPTIONS__
         }
         const target = getUnitByCid(msg.target_cid);
         const targetName = target?.name || "target";
-        
+
         const slotInput = window.prompt(`Cast Hellish Rebuke on ${targetName}? Enter slot level (1-9)`, "1");
         if (slotInput === null) return; // Cancelled
 
@@ -18050,7 +18126,7 @@ __DAMAGE_TYPE_OPTIONS__
           || status === "REACTION_DECLINED"
           || status === "REACTION_EXPIRED"
           || status === "REACTION_REJECTED";
-        
+
         if (finished) {
            if (reactionOfferModal && String(msg.request_id) === pendingReactionRequestId) {
              reactionOfferModal.classList.remove("show");
@@ -18080,7 +18156,7 @@ __DAMAGE_TYPE_OPTIONS__
           if (finished) {
             clearActiveCastInteractionState("");
           }
-          
+
           if (msg.message && (!finished || status === "CONCENTRATION_ENDED" || status === "CONCENTRATION_REPLACED")) {
             localToast(msg.message);
           }

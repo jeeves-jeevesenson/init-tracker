@@ -2,6 +2,7 @@ import queue
 import threading
 import types
 import unittest
+from unittest import mock
 
 import dnd_initative_tracker as tracker_mod
 
@@ -272,7 +273,8 @@ class LanSnapshotStaticTests(unittest.TestCase):
 
         app._lan = type("LanStub", (), {"_cached_snapshot": {}})()
 
-        snap = app._lan_snapshot(include_static=False, hydrate_static=False)
+        with mock.patch.dict("os.environ", {"INIT_TRACKER_ENABLE_SHIP_SURFACES": "1"}):
+            snap = app._lan_snapshot(include_static=False, hydrate_static=False)
         self.assertEqual(snap["spell_presets"], [])
         self.assertEqual(snap["player_spells"], {})
         self.assertEqual(snap["player_profiles"], {})
@@ -325,19 +327,19 @@ class LanSnapshotStaticTests(unittest.TestCase):
         app._druid_level_from_profile = lambda _profile: 0
         app._wild_shape_known_limit = lambda _level: 0
         app._wild_shape_available_forms = lambda _level: []
-        
+
         # Call the method under test
         payload = tracker_mod.InitiativeTracker._player_profiles_payload(app)
-        
+
         # Alice should have unarmed strike
         alice_weapons = payload["Alice"]["attacks"]["weapons"]
         self.assertTrue(any(w["id"] == "unarmed_strike" for w in alice_weapons))
-        
+
         # Bob already has a weapon, but no unarmed_strike in his list, so it should be added
         bob_weapons = payload["Bob"]["attacks"]["weapons"]
         self.assertTrue(any(w["id"] == "dagger" for w in bob_weapons))
         self.assertTrue(any(w["id"] == "unarmed_strike" for w in bob_weapons))
-        
+
         # Charlie missing attacks section should get unarmed strike
         charlie_weapons = payload["Charlie"]["attacks"]["weapons"]
         self.assertTrue(any(w["id"] == "unarmed_strike" for w in charlie_weapons))
@@ -433,7 +435,8 @@ class LanSnapshotStaticTests(unittest.TestCase):
         app._capture_canonical_map_state = lambda prefer_window=True: app._map_state.normalized()
         app._apply_canonical_map_state = lambda state, hydrate_window=False: setattr(app, "_map_state", state.normalized())
 
-        snap = app._lan_snapshot(include_static=False, hydrate_static=False)
+        with mock.patch.dict("os.environ", {"INIT_TRACKER_ENABLE_SHIP_SURFACES": "1"}):
+            snap = app._lan_snapshot(include_static=False, hydrate_static=False)
         structure_a = next(item for item in snap["structures"] if item["id"] == "a")
         semantics = structure_a.get("contact_semantics") or {}
         self.assertEqual(semantics.get("boardable_structure_ids"), ["b"])
@@ -531,7 +534,8 @@ class LanSnapshotStaticTests(unittest.TestCase):
         app._capture_canonical_map_state = lambda prefer_window=True: app._map_state.normalized()
         app._apply_canonical_map_state = lambda state, hydrate_window=False: setattr(app, "_map_state", state.normalized())
 
-        snap = app._lan_snapshot(include_static=False, hydrate_static=False)
+        with mock.patch.dict("os.environ", {"INIT_TRACKER_ENABLE_SHIP_SURFACES": "1"}):
+            snap = app._lan_snapshot(include_static=False, hydrate_static=False)
         unit = (snap.get("units") or [])[0]
         self.assertTrue(unit.get("on_ship"))
         self.assertEqual(unit.get("ship_structure_id"), "a")
@@ -624,7 +628,8 @@ class LanSnapshotStaticTests(unittest.TestCase):
             )(),
         }
 
-        snap = app._lan_snapshot(include_static=False, hydrate_static=False)
+        with mock.patch.dict("os.environ", {"INIT_TRACKER_ENABLE_SHIP_SURFACES": "1"}):
+            snap = app._lan_snapshot(include_static=False, hydrate_static=False)
         unit = (snap.get("units") or [])[0]
         self.assertTrue(bool(unit.get("starry_wisp_revealed")))
         self.assertTrue(bool(unit.get("otto_dancing")))
@@ -690,7 +695,8 @@ class LanSnapshotStaticTests(unittest.TestCase):
         app._capture_canonical_map_state = lambda prefer_window=True: app._map_state.normalized()
         app._apply_canonical_map_state = lambda state, hydrate_window=False: setattr(app, "_map_state", state.normalized())
 
-        snap = app._lan_snapshot(include_static=False, hydrate_static=False)
+        with mock.patch.dict("os.environ", {"INIT_TRACKER_ENABLE_SHIP_SURFACES": "1"}):
+            snap = app._lan_snapshot(include_static=False, hydrate_static=False)
         ship_entry = next(item for item in (snap.get("structures") or []) if item.get("id") == "ship_a")
         self.assertEqual(ship_entry.get("occupied_cells"), [{"col": 5, "row": 5}, {"col": 6, "row": 5}])
         self.assertEqual((ship_entry.get("ship_local_space") or {}).get("facing_mode"), "rotate_90")
@@ -974,7 +980,7 @@ class LanSnapshotStaticTests(unittest.TestCase):
 
         lan._actions.put({"type": "noop"})
         lan._tick()
-        self.assertEqual(static_call_count["count"], 2)
+        self.assertEqual(static_call_count["count"], 1)
         self.assertEqual(snapshot_calls, [(False, False), (False, False), (False, False)])
 
     def test_force_state_broadcast_non_static_skips_static_hydration(self):

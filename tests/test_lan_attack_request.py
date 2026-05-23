@@ -530,6 +530,50 @@ class LanAttackRequestTests(unittest.TestCase):
         self.assertEqual(result.get("weapon_name"), "Greatsword")
         self.assertEqual(result.get("to_hit"), 9)
 
+    def test_echo_attack_does_not_fallback_unarmed_when_owner_weapon_exists(self):
+        self.app.combatants[3] = type(
+            "C",
+            (),
+            {
+                "cid": 3,
+                "name": "Johns Echo",
+                "ac": 14,
+                "hp": 1,
+                "condition_stacks": [],
+                "exhaustion_level": 0,
+                "summoned_by_cid": 1,
+                "summon_source_spell": "echo_knight",
+                "summon_shared_turn": True,
+            },
+        )()
+        self.app._summon_can_be_controlled_by = lambda claimed, target: int(claimed) == 1 and int(target) == 3
+        self.app._pc_name_for = lambda cid: "John Twilight" if int(cid) == 1 else "Unknown"
+        self.app._profile_for_player_name = lambda name: {
+            "leveling": {"classes": [{"name": "Fighter", "level": 11, "attacks_per_action": 3}]},
+            "attacks": {
+                "weapon_to_hit": 6,
+                "weapons": [
+                    {"id": "hellfire_battleaxe_plus_2", "name": "Hellfire Battleaxe (+2)", "to_hit": 11, "equipped": True},
+                ],
+            },
+        }
+        msg = {
+            "type": "attack_request",
+            "cid": 3,
+            "_claimed_cid": 1,
+            "_ws_id": 52,
+            "target_cid": 2,
+            "attack_roll": 10,
+            "weapon_id": "unarmed_strike",
+        }
+
+        self.app._lan_apply_action(msg)
+
+        result = msg.get("_attack_result")
+        self.assertIsInstance(result, dict)
+        self.assertEqual(result.get("weapon_id"), "hellfire_battleaxe_plus_2")
+        self.assertEqual(result.get("weapon_name"), "Hellfire Battleaxe (+2)")
+
     def test_echo_attack_consumes_owner_action_and_attack_resources(self):
         self.app.combatants[1].action_remaining = 1
         self.app.combatants[1].attack_resource_remaining = 0
@@ -634,6 +678,59 @@ class LanAttackRequestTests(unittest.TestCase):
         self.assertTrue(result.get("hit"))
         self.assertEqual(result.get("attack_origin_cid"), 3)
         self.assertNotIn((54, "Target be out of attack range."), self.toasts)
+
+    def test_unleash_incarnation_uses_owner_selected_weapon_for_unarmed_request(self):
+        self.app.combatants[1].action_remaining = 1
+        self.app.combatants[1].attack_resource_remaining = 0
+        self.app.combatants[3] = type(
+            "C",
+            (),
+            {
+                "cid": 3,
+                "name": "Johns Echo",
+                "ac": 14,
+                "hp": 1,
+                "condition_stacks": [],
+                "exhaustion_level": 0,
+                "summoned_by_cid": 1,
+                "summon_source_spell": "echo_knight",
+                "summon_shared_turn": True,
+            },
+        )()
+        self.app._lan_positions = {1: (0, 0), 3: (1, 0), 2: (2, 0)}
+        self.app._pc_name_for = lambda cid: "John Twilight" if int(cid) == 1 else "Unknown"
+        self.app._profile_for_player_name = lambda name: {
+            "leveling": {"classes": [{"name": "Fighter", "level": 5, "attacks_per_action": 2}]},
+            "attacks": {
+                "weapon_to_hit": 5,
+                "weapons": [
+                    {"id": "hellfire_battleaxe_plus_2", "name": "Hellfire Battleaxe (+2)", "to_hit": 11, "range": "5 ft", "equipped": True},
+                ],
+            },
+            "resource_pools": [
+                {"id": "unleash_incarnation", "name": "Unleash Incarnation", "max": 3, "current": 3},
+            ],
+        }
+        self.app._consume_resource_pool_for_cast = lambda owner_name, pool_id, cost: (True, "")
+
+        msg = {
+            "type": "attack_request",
+            "cid": 1,
+            "_claimed_cid": 1,
+            "_ws_id": 54,
+            "target_cid": 2,
+            "weapon_id": "unarmed_strike",
+            "hit": True,
+            "damage_entries": [{"amount": 4, "type": "slashing"}],
+            "consumes_pool": {"id": "unleash_incarnation", "cost": 1},
+        }
+
+        self.app._lan_apply_action(msg)
+
+        result = msg.get("_attack_result")
+        self.assertIsInstance(result, dict)
+        self.assertEqual(result.get("weapon_id"), "hellfire_battleaxe_plus_2")
+        self.assertEqual(result.get("weapon_name"), "Hellfire Battleaxe (+2)")
 
 
     def test_attack_request_auto_spends_action_when_no_attack_resource(self):

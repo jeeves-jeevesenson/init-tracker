@@ -52,6 +52,8 @@ from runtime_config import (
     debug_trace_enabled,
     new_action_id,
     new_trace_id,
+    ship_surfaces_enabled,
+    tactical_map_enabled,
     timed_span,
     trace_timed,
     with_action_correlation,
@@ -1910,6 +1912,10 @@ class LanController:
             )
 
         self._actions: "queue.Queue[Dict[str, Any]]" = queue.Queue()
+        self._action_states: Dict[str, Dict[str, Any]] = {}  # action_id -> {status, result, received_at_ns, ...}
+        self._action_states_lock = threading.Lock()
+        self._action_history_limit = 500
+        self._latest_manual_resource_action: Dict[Tuple[Any, ...], str] = {}
         self._last_snapshot: Optional[Dict[str, Any]] = None
         self._last_static_json: Optional[str] = None
         self._monster_choices_cache: List[Dict[str, Any]] = []
@@ -3812,10 +3818,81 @@ class LanController:
                         # enqueue for Tk thread
                         with self._clients_lock:
                             claimed_cid = self._claims.get(ws_id)
+
+                        # Use client-provided action_id if available for idempotency
                         action_id = str(msg.get("action_id") or "").strip()[:160] or new_action_id()
                         trace_id = str(msg.get("trace_id") or "").strip()[:160] or new_trace_id()
                         msg["action_id"] = action_id
                         msg["_trace_id"] = trace_id
+                        msg["_received_at_ns"] = time.perf_counter_ns()
+                        if typ == "reaction_prefs_update":
+                            prefs = msg.get("prefs") if isinstance(msg.get("prefs"), dict) else {}
+                            with debug_context(trace_id=trace_id, action_id=action_id):
+                                debug_event(
+                                    "ws.action.coalesced",
+                                    command=typ,
+                                    ws_id=ws_id,
+                                    player_id=claimed_cid,
+                                    coalesce_strategy="direct_last_write_wins",
+                                )
+                            try:
+                                self.app._set_reaction_prefs(int(claimed_cid), prefs)
+                            except Exception:
+                                await self._send_async(ws_id, {
+                                    "type": "action_ack",
+                                    "action_id": action_id,
+                                    "status": "completed",
+                                    "result": {"status": "error", "reason": "reaction_prefs_update_failed"},
+                                })
+                                continue
+                            await self._send_async(ws_id, {
+                                "type": "action_ack",
+                                "action_id": action_id,
+                                "status": "completed",
+                                "result": {"status": "applied", "coalesced": True},
+                            })
+                            continue
+
+                        # Idempotency check
+                        with self._action_states_lock:
+                            existing = self._action_states.get(action_id)
+                            if existing:
+                                status = existing.get("status")
+                                with debug_context(trace_id=trace_id, action_id=action_id):
+                                    debug_event("ws.action.duplicate_ignored", status=status, command=typ)
+                                if status == "pending":
+                                    await self._send_async(ws_id, {
+                                        "type": "action_ack",
+                                        "action_id": action_id,
+                                        "status": "pending",
+                                        "reason": "already_queued"
+                                    })
+                                    continue
+                                elif status == "completed":
+                                    await self._send_async(ws_id, {
+                                        "type": "action_ack",
+                                        "action_id": action_id,
+                                        "status": "completed",
+                                        "result": existing.get("result")
+                                    })
+                                    continue
+
+                            # Mark as pending
+                            self._action_states[action_id] = {
+                                "status": "pending",
+                                "received_at_ns": msg["_received_at_ns"],
+                                "command": typ,
+                                "ws_id": ws_id,
+                                "cid": claimed_cid
+                            }
+                            # Limit history size
+                            if len(self._action_states) > self._action_history_limit:
+                                try:
+                                    oldest_key = next(iter(self._action_states))
+                                    self._action_states.pop(oldest_key, None)
+                                except Exception:
+                                    pass
+
                         with debug_context(trace_id=trace_id, action_id=action_id):
                             debug_event(
                                 "ws.message.received",
@@ -3825,6 +3902,21 @@ class LanController:
                                 cid=msg.get("cid"),
                                 sizes={"payload_bytes": payload_bytes},
                             )
+                            debug_event(
+                                "ws.action.queued",
+                                command=typ,
+                                ws_id=ws_id,
+                                player_id=claimed_cid,
+                                queue_size=self._actions.qsize()
+                            )
+
+                        # Immediate Acknowledgement
+                        await self._send_async(ws_id, {
+                            "type": "action_ack",
+                            "action_id": action_id,
+                            "status": "accepted"
+                        })
+
                         if typ == "move":
                             to = msg.get("to") or {}
                             self._move_debug_log(
@@ -3841,6 +3933,16 @@ class LanController:
                             )
                         msg["_claimed_cid"] = claimed_cid
                         msg["_ws_id"] = ws_id
+                        if typ == "manual_override_resource_pool":
+                            manual_key = (
+                                "manual_override_resource_pool",
+                                int(claimed_cid) if claimed_cid is not None else None,
+                                str(msg.get("pool_id") or "").strip().lower(),
+                                str(msg.get("delta") or "").strip(),
+                                int(ws_id),
+                            )
+                            self._latest_manual_resource_action[manual_key] = action_id
+                            msg["_coalesce_key"] = manual_key
                         self._actions.put(msg)
                     elif typ == "toast":
                         # Client wants a toast? ignore
@@ -3954,6 +4056,7 @@ class LanController:
             return self._dm_console_snapshot_payload(
                 combat_snapshot=combat_snapshot,
                 tactical_snapshot=tactical_snapshot,
+                include_tactical=True,
             )
 
         def _load_dm_console_html(workspace: str = "dashboard") -> str:
@@ -4005,7 +4108,7 @@ class LanController:
             if _dm_service is None:
                 raise HTTPException(status_code=503, detail="DM combat service unavailable.")
             try:
-                return _dm_console_snapshot()
+                return self._dm_console_snapshot_payload(include_tactical=False)
             except Exception:
                 raise HTTPException(status_code=500, detail="Failed to read combat snapshot.")
 
@@ -6718,20 +6821,64 @@ class LanController:
                     action_id = str(msg.get("action_id") or "").strip()[:160] or new_action_id()
                     msg["_trace_id"] = trace_id
                     msg["action_id"] = action_id
+
+                    received_at_ns = msg.get("_received_at_ns")
+                    dispatch_started_ns = time.perf_counter_ns()
+                    queue_wait_ms = round((dispatch_started_ns - received_at_ns) / 1_000_000.0, 3) if received_at_ns else None
+
                     dispatch_fields = {
                         "command": typ or "unknown",
                         "ws_id": msg.get("_ws_id"),
                         "player_id": msg.get("_claimed_cid"),
                         "cid": msg.get("cid"),
                         "counts": self._tracker._debug_trace_counts(),
+                        "queue_size": self._actions.qsize(),
                     }
-                    dispatch_started_ns = time.perf_counter_ns()
+                    if queue_wait_ms is not None:
+                        dispatch_fields["queue_wait_ms"] = queue_wait_ms
+                        if queue_wait_ms > 5000:
+                            dispatch_fields["slow_queue_wait"] = True
+
                     with debug_context(trace_id=trace_id, action_id=action_id):
                         debug_event("ws.action.dispatch.start", **dispatch_fields)
                         try:
+                            if typ == "manual_override_resource_pool":
+                                coalesce_key = msg.get("_coalesce_key")
+                                latest_action_id = self._latest_manual_resource_action.get(coalesce_key) if coalesce_key is not None else None
+                                if latest_action_id and latest_action_id != action_id:
+                                    debug_event(
+                                        "ws.action.coalesced_stale_skipped",
+                                        command=typ,
+                                        ws_id=msg.get("_ws_id"),
+                                        player_id=msg.get("_claimed_cid"),
+                                        coalesce_strategy="same_ws_cid_pool_delta_last_wins",
+                                    )
+                                    with self._action_states_lock:
+                                        if action_id in self._action_states:
+                                            res = {"status": "skipped", "reason": "stale_coalesced_update"}
+                                            self._action_states[action_id].update({
+                                                "status": "completed",
+                                                "result": res,
+                                                "completed_at_ns": time.perf_counter_ns()
+                                            })
+                                            ws_id = msg.get("_ws_id")
+                                            if ws_id:
+                                                self._send_action_ack_sync(ws_id, action_id, "completed", res)
+                                    continue
                             with timed_span("ws.action.dispatch", **dispatch_fields):
                                 self._tracker._lan_apply_action(msg)
                         except Exception as exc:
+                            with self._action_states_lock:
+                                if action_id in self._action_states:
+                                    res = {"status": "error", "reason": type(exc).__name__}
+                                    self._action_states[action_id].update({
+                                        "status": "completed",
+                                        "result": res,
+                                        "completed_at_ns": time.perf_counter_ns()
+                                    })
+                                    ws_id = msg.get("_ws_id")
+                                    if ws_id:
+                                        self._send_action_ack_sync(ws_id, action_id, "completed", res)
                             debug_event(
                                 "ws.action.dispatch.end",
                                 duration_ms=round((time.perf_counter_ns() - dispatch_started_ns) / 1_000_000.0, 3),
@@ -6749,6 +6896,19 @@ class LanController:
                                     break
                             if result_status is None and typ == "move":
                                 result_status = "applied" if msg.get("_move_applied") else msg.get("_move_reject_reason")
+
+                            with self._action_states_lock:
+                                if action_id in self._action_states:
+                                    res = {"status": result_status}
+                                    self._action_states[action_id].update({
+                                        "status": "completed",
+                                        "result": res,
+                                        "completed_at_ns": time.perf_counter_ns()
+                                    })
+                                    ws_id = msg.get("_ws_id")
+                                    if ws_id:
+                                        self._send_action_ack_sync(ws_id, action_id, "completed", res)
+
                             debug_event(
                                 "ws.action.dispatch.end",
                                 duration_ms=round((time.perf_counter_ns() - dispatch_started_ns) / 1_000_000.0, 3),
@@ -6790,7 +6950,9 @@ class LanController:
                 now = time.monotonic()
                 if now - self._last_idle_cache_refresh >= self._idle_cache_refresh_interval_s:
                     self._last_idle_cache_refresh = now
-                    self._cached_snapshot = self.app._lan_snapshot(include_static=False, hydrate_static=False)
+                    self._cached_snapshot = self._merge_cached_snapshot_carryover(
+                        self.app._lan_snapshot(include_static=False, hydrate_static=False)
+                    )
                     try:
                         self._cached_pcs = list(
                             self.app._lan_pcs() if hasattr(self.app, "_lan_pcs") else self.app._lan_claimable()
@@ -6802,7 +6964,7 @@ class LanController:
 
             # 2) broadcast snapshot if changed (polling-based, avoids wiring every hook)
             snap = self.app._lan_snapshot(include_static=False, hydrate_static=False)
-            self._cached_snapshot = snap
+            self._cached_snapshot = self._merge_cached_snapshot_carryover(snap)
             try:
                 self._cached_pcs = list(
                     self.app._lan_pcs() if hasattr(self.app, "_lan_pcs") else self.app._lan_claimable()
@@ -6885,12 +7047,13 @@ class LanController:
                 self._last_snapshot = copy.deepcopy(snap)
 
             now = time.monotonic()
-            static_check_due = bool(processed_any)
-            if not static_check_due:
-                static_check_due = (
-                    now - float(getattr(self, "_last_static_check_ts", 0.0))
-                    >= float(getattr(self, "_static_check_interval_s", 0.9))
-                )
+            static_check_due = (
+                now - float(getattr(self, "_last_static_check_ts", 0.0))
+                >= float(getattr(self, "_static_check_interval_s", 0.9))
+            )
+            if processed_any:
+                cache_hit, _reason, _static_version = self.app._lan_static_snapshot_cache_status()
+                static_check_due = bool(not cache_hit and getattr(self, "_last_static_json", None) is not None)
             if static_check_due:
                 self._last_static_check_ts = now
                 static_payload: Optional[Dict[str, Any]] = None
@@ -7680,6 +7843,7 @@ class LanController:
         *,
         combat_snapshot: Optional[Dict[str, Any]] = None,
         tactical_snapshot: Optional[Dict[str, Any]] = None,
+        include_tactical: Optional[bool] = None,
     ) -> Dict[str, Any]:
         perf_debug = os.getenv("LAN_PERF_DEBUG") == "1"
         perf_start = time.perf_counter() if perf_debug else 0.0
@@ -7687,6 +7851,7 @@ class LanController:
         tactical_snapshot_ms = 0.0
         combat_source = "provided" if isinstance(combat_snapshot, dict) else "service"
         tactical_source = "provided" if isinstance(tactical_snapshot, dict) else "tracker"
+        include_tactical_flag = tactical_map_enabled() if include_tactical is None else bool(include_tactical)
         snapshot: Dict[str, Any] = {}
         if isinstance(combat_snapshot, dict):
             snapshot = dict(combat_snapshot)
@@ -7709,7 +7874,7 @@ class LanController:
         tactical_started_at = time.perf_counter() if perf_debug else 0.0
         if isinstance(tactical_snapshot, dict):
             tactical_payload = dict(tactical_snapshot)
-        else:
+        elif include_tactical_flag:
             try:
                 tactical_builder = getattr(self.app, "_dm_tactical_snapshot", None)
                 if callable(tactical_builder):
@@ -7718,9 +7883,14 @@ class LanController:
                         tactical_payload = candidate
             except Exception:
                 tactical_payload = {}
+        else:
+            tactical_source = "disabled"
         if tactical_started_at > 0.0:
             tactical_snapshot_ms = (time.perf_counter() - tactical_started_at) * 1000.0
-        snapshot["tactical_map"] = tactical_payload
+        if include_tactical_flag or isinstance(tactical_snapshot, dict):
+            snapshot["tactical_map"] = tactical_payload
+        else:
+            snapshot.pop("tactical_map", None)
         if perf_start > 0.0:
             elapsed_ms = (time.perf_counter() - perf_start) * 1000.0
             combatant_count = len(snapshot.get("combatants")) if isinstance(snapshot.get("combatants"), list) else 0
@@ -7978,6 +8148,21 @@ class LanController:
             except Exception:
                 with self._clients_lock:
                     self._terrain_pending.pop(ws_id, None)
+
+    def _send_action_ack_sync(self, ws_id: int, action_id: str, status: str, result: Optional[Dict[str, Any]] = None) -> None:
+        if not self._loop:
+            return
+        payload = {
+            "type": "action_ack",
+            "action_id": action_id,
+            "status": status,
+        }
+        if result is not None:
+            payload["result"] = result
+        try:
+            asyncio.run_coroutine_threadsafe(self._send_async(ws_id, payload), self._loop)
+        except Exception:
+            pass
 
     def send_echo_tether_prompt(self, ws_id: Optional[int], request_id: str) -> None:
         if ws_id is None or not self._loop:
@@ -8493,6 +8678,35 @@ class LanController:
         self._monster_choices_cache = monster_choices
         return monster_choices
 
+    def _merge_cached_snapshot_carryover(self, new_snap: Dict[str, Any]) -> Dict[str, Any]:
+        """Merge new cheap/state-only snapshot with cached snapshot to protect capability/static fields."""
+        old_snap = self._cached_snapshot if isinstance(self._cached_snapshot, dict) else {}
+        merged = dict(new_snap)
+        protected = [
+            "spell_presets",
+            "player_spells",
+            "player_profiles",
+            "resource_pools",
+            "consumables_library",
+            "beast_forms",
+        ]
+        for field in protected:
+            old_val = old_snap.get(field)
+            new_val = new_snap.get(field)
+            # If the old value exists and is truthy/populated, but the new value is missing/empty, carry over the old value.
+            if old_val:
+                is_empty = False
+                if new_val is None:
+                    is_empty = True
+                elif isinstance(new_val, list) and not new_val:
+                    is_empty = True
+                elif isinstance(new_val, dict) and not new_val:
+                    is_empty = True
+
+                if is_empty:
+                    merged[field] = copy.deepcopy(old_val)
+        return merged
+
     def _static_data_payload(self, planning: bool = False) -> Dict[str, Any]:
         """Return static data that only needs to be sent once on connection."""
         # Check cache first for full payload (not planning)
@@ -8502,22 +8716,106 @@ class LanController:
             except Exception:
                 pass
 
-        spell_presets = self.app._spell_presets_payload() if planning else self._cached_snapshot.get("spell_presets", [])
+        # Helper to retrieve field and backfill/hydrate if missing or empty, repairing self._cached_snapshot
+
+        # 1. spell_presets
+        spell_presets = self._cached_snapshot.get("spell_presets") if not planning else None
         if not spell_presets:
-            # Cached snapshot may not yet carry static data (e.g. headless startup
-            # before the first include_static broadcast). Hydrate live so the
-            # first WS client still receives a populated spell list.
             try:
-                spell_presets = self.app._spell_presets_payload()
-            except Exception:
+                if hasattr(self.app, "_spell_presets_payload"):
+                    spell_presets = self.app._spell_presets_payload()
+                    if not planning:
+                        self._cached_snapshot["spell_presets"] = spell_presets
+                else:
+                    spell_presets = []
+            except Exception as e:
+                if hasattr(self.app, "_oplog"):
+                    self.app._oplog(f"Failed to hydrate spell_presets from authoritative source: {e}", level="warning")
                 spell_presets = []
+
+        # 2. player_spells
+        player_spells = self._cached_snapshot.get("player_spells") if not planning else None
+        if not player_spells:
+            try:
+                if hasattr(self.app, "_player_spell_config_payload"):
+                    player_spells = self.app._player_spell_config_payload()
+                    if not planning:
+                        self._cached_snapshot["player_spells"] = player_spells
+                else:
+                    player_spells = {}
+            except Exception as e:
+                if hasattr(self.app, "_oplog"):
+                    self.app._oplog(f"Failed to hydrate player_spells from authoritative source: {e}", level="warning")
+                player_spells = {}
+
+        # 3. player_profiles
+        player_profiles = self._cached_snapshot.get("player_profiles") if not planning else None
+        if not player_profiles:
+            try:
+                if hasattr(self.app, "_player_profiles_payload"):
+                    player_profiles = self.app._player_profiles_payload()
+                    if not planning:
+                        self._cached_snapshot["player_profiles"] = player_profiles
+                else:
+                    player_profiles = {}
+            except Exception as e:
+                if hasattr(self.app, "_oplog"):
+                    self.app._oplog(f"Failed to hydrate player_profiles from authoritative source: {e}", level="warning")
+                player_profiles = {}
+
+        # 4. resource_pools
+        resource_pools = self._cached_snapshot.get("resource_pools") if not planning else None
+        if not resource_pools:
+            try:
+                if hasattr(self.app, "_player_resource_pools_payload"):
+                    resource_pools = self.app._player_resource_pools_payload()
+                    if not planning:
+                        self._cached_snapshot["resource_pools"] = resource_pools
+                else:
+                    resource_pools = {}
+            except Exception as e:
+                if hasattr(self.app, "_oplog"):
+                    self.app._oplog(f"Failed to hydrate resource_pools from authoritative source: {e}", level="warning")
+                resource_pools = {}
+
+        # 5. beast_forms
+        beast_forms = self._cached_snapshot.get("beast_forms") if not planning else None
+        if not beast_forms:
+            try:
+                if hasattr(self.app, "_load_beast_forms"):
+                    beast_forms = self.app._load_beast_forms()
+                    if not planning:
+                        self._cached_snapshot["beast_forms"] = beast_forms
+                else:
+                    beast_forms = []
+            except Exception as e:
+                if hasattr(self.app, "_oplog"):
+                    self.app._oplog(f"Failed to hydrate beast_forms from authoritative source: {e}", level="warning")
+                beast_forms = []
+
+        # 6. consumables_library
+        consumables_library = self._cached_snapshot.get("consumables_library") if not planning else None
+        if not consumables_library:
+            try:
+                if hasattr(self.app, "_consumables_registry_list_payload"):
+                    consumables_library = self.app._consumables_registry_list_payload()
+                    if not planning:
+                        self._cached_snapshot["consumables_library"] = consumables_library
+                else:
+                    consumables_library = []
+            except Exception as e:
+                if hasattr(self.app, "_oplog"):
+                    self.app._oplog(f"Failed to hydrate consumables_library from authoritative source: {e}", level="warning")
+                consumables_library = []
+
         monster_choices = self._monster_choices_payload()
         payload = {
             "spell_presets": spell_presets,
-            "player_spells": self._cached_snapshot.get("player_spells", {}),
-            "player_profiles": self._cached_snapshot.get("player_profiles", {}),
-            "resource_pools": self._cached_snapshot.get("resource_pools", {}),
-            "consumables_library": self._cached_snapshot.get("consumables_library", []),
+            "player_spells": player_spells,
+            "player_profiles": player_profiles,
+            "resource_pools": resource_pools,
+            "beast_forms": beast_forms,
+            "consumables_library": consumables_library,
             "monster_choices": monster_choices if not planning else [],
             "conditions": [
                 "blinded", "charmed", "deafened", "frightened", "grappled", "incapacitated",
@@ -9079,6 +9377,8 @@ class InitiativeTracker(base.InitiativeTracker):
         self._spell_index_loaded = False
         self._spell_dir_notice: Optional[str] = None
         self._spell_dir_signature: Optional[Tuple[int, int, Tuple[str, ...]]] = None
+        self._spell_preset_lookup_cache: Optional[Tuple[Dict[str, Dict[str, Any]], Dict[str, Dict[str, Any]]]] = None
+        self._spell_preset_lookup_sig: Optional[Tuple[int, int, Tuple[str, ...]]] = None
         self._items_registry_cache: Optional[Dict[str, Dict[str, Dict[str, Any]]]] = None
         self._items_dir_signature: Optional[Tuple[Tuple[int, int, Tuple[str, ...]], Tuple[int, int, Tuple[str, ...]], Tuple[int, int, Tuple[str, ...]], Tuple[Tuple[str, int, int], ...], Tuple[Tuple[str, int, int], ...], Tuple[Tuple[str, int, int], ...]]] = None
         self._items_dir_cache: Optional[Path] = None
@@ -9519,6 +9819,8 @@ class InitiativeTracker(base.InitiativeTracker):
 
     def _invalidate_spell_index_cache(self) -> None:
         self._spell_presets_cache = None
+        self._spell_preset_lookup_cache = None
+        self._spell_preset_lookup_sig = None
         self._spell_index_entries = {}
         self._spell_index_loaded = False
         self._spell_dir_signature = None
@@ -9646,7 +9948,14 @@ class InitiativeTracker(base.InitiativeTracker):
                 continue
 
             item_type = str(parsed.get("type") or "").strip().lower()
-            if item_type == "weapon" and isinstance(parsed.get("damage"), dict):
+            item_category = str(parsed.get("category") or "").strip().lower()
+            is_magic_weapon = bool(
+                item_type == "weapon"
+                or item_category == "weapon"
+                or "weapon" in item_category
+                or isinstance(parsed.get("damage"), dict)
+            )
+            if is_magic_weapon:
                 prior_source = sources["weapons"].get(item_id)
                 if prior_source and prior_source != "magic-item":
                     self._oplog(
@@ -10411,6 +10720,15 @@ class InitiativeTracker(base.InitiativeTracker):
                 if not normalized_item_id:
                     continue
                 equippable_registry[normalized_item_id] = payload if isinstance(payload, dict) else {}
+
+        magic_registry = self._magic_items_registry_payload()
+        if isinstance(magic_registry, dict):
+            for item_id, payload in magic_registry.items():
+                normalized_item_id = str(item_id or "").strip().lower()
+                if not normalized_item_id:
+                    continue
+                equippable_registry[normalized_item_id] = payload if isinstance(payload, dict) else {}
+
         name_to_id: Dict[str, str] = {}
         duplicate_names: set[str] = set()
         for item_id, payload in equippable_registry.items():
@@ -19675,22 +19993,23 @@ class InitiativeTracker(base.InitiativeTracker):
             return copy.deepcopy(cached), True, ""
 
         component: Dict[str, Any] = {}
-        try:
-            component["spell_presets"] = self._spell_presets_payload()
-        except Exception:
-            component["spell_presets"] = []
-        try:
-            component["player_spells"] = self._player_spell_config_payload()
-        except Exception:
-            component["player_spells"] = {}
-        try:
-            component["player_profiles"] = self._player_profiles_payload()
-        except Exception:
-            component["player_profiles"] = {}
-        try:
-            component["beast_forms"] = self._load_beast_forms()
-        except Exception:
-            component["beast_forms"] = []
+        with self._player_yaml_cache_hold():
+            try:
+                component["spell_presets"] = self._spell_presets_payload()
+            except Exception:
+                component["spell_presets"] = []
+            try:
+                component["player_spells"] = self._player_spell_config_payload()
+            except Exception:
+                component["player_spells"] = {}
+            try:
+                component["player_profiles"] = self._player_profiles_payload()
+            except Exception:
+                component["player_profiles"] = {}
+            try:
+                component["beast_forms"] = self._load_beast_forms()
+            except Exception:
+                component["beast_forms"] = []
 
         self.__dict__["_lan_static_snapshot_cache"] = copy.deepcopy(component)
         self.__dict__["_lan_static_snapshot_cache_version"] = static_version
@@ -19709,6 +20028,7 @@ class InitiativeTracker(base.InitiativeTracker):
     def _lan_snapshot(self, include_static: bool = True, hydrate_static: bool = True) -> Dict[str, Any]:
         perf_debug = os.getenv("LAN_PERF_DEBUG") == "1"
         perf_start = time.perf_counter() if perf_debug else 0.0
+        ship_surface_projection_enabled = ship_surfaces_enabled()
         # Prefer map window live state when available
         mw = None
         try:
@@ -19954,7 +20274,11 @@ class InitiativeTracker(base.InitiativeTracker):
         for c in sorted(self.combatants.values(), key=lambda x: int(x.cid)):
             role = self._name_role_memory.get(str(c.name), "enemy")
             pos = positions.get(c.cid, (max(0, cols // 2), max(0, rows // 2)))
-            boarding_context = self._creature_boarding_context(int(c.cid), state=canonical_map_state, query=map_query)
+            boarding_context = (
+                self._creature_boarding_context(int(c.cid), state=canonical_map_state, query=map_query)
+                if ship_surface_projection_enabled
+                else {}
+            )
             invisibility_suppressed = self._has_starry_wisp_reveal(c)
             has_muddled_thoughts = self._has_muddled_thoughts(c)
             has_otto_dancing = self._has_condition(c, "otto_dancing")
@@ -20139,12 +20463,18 @@ class InitiativeTracker(base.InitiativeTracker):
             "turn_order": turn_order,
             "auras_enabled": bool(self.__dict__.get("_lan_auras_enabled", True)),
         }
-        if active is not None:
+        if active is not None and ship_surface_projection_enabled:
             snap["active_creature_boarding"] = self._creature_boarding_context(int(active), state=canonical_map_state, query=map_query)
-        snap["boarding_links"] = map_query.boarding_links()
+        elif active is not None:
+            snap["active_creature_boarding"] = {}
+        snap["boarding_links"] = map_query.boarding_links() if ship_surface_projection_enabled else []
         snap["active_boarding_links"] = [dict(item) for item in snap["boarding_links"] if bool(item.get("traversable"))]
-        structure_entries = [dict(item) for item in (canonical_payload.get("structures") if isinstance(canonical_payload.get("structures"), list) else []) if isinstance(item, dict)]
-        ship_instances = self._ship_instances()
+        structure_entries = (
+            [dict(item) for item in (canonical_payload.get("structures") if isinstance(canonical_payload.get("structures"), list) else []) if isinstance(item, dict)]
+            if ship_surface_projection_enabled
+            else []
+        )
+        ship_instances = self._ship_instances() if ship_surface_projection_enabled else {}
         ships_payload: List[Dict[str, Any]] = []
         for ship in ship_instances.values():
             if not isinstance(ship, dict):
@@ -20233,7 +20563,7 @@ class InitiativeTracker(base.InitiativeTracker):
         # Be defensive about the type of _lan_resource_pools_last_build
         last_build_raw = getattr(self, "_lan_resource_pools_last_build", 0.0)
         last_build = last_build_raw if isinstance(last_build_raw, (int, float)) else 0.0
-        
+
         if include_static or (now - last_build) >= 1.0:
             try:
                 resource_pools = self._player_resource_pools_payload()
@@ -20363,6 +20693,24 @@ class InitiativeTracker(base.InitiativeTracker):
         dm_recipient_count = len(dm_clients) if isinstance(dm_clients, dict) else None
         cache_hit, cache_reason, static_version = self._lan_static_snapshot_cache_status()
         snapshot_cache_scope = "static+dynamic" if include_static_flag else "dynamic+cached_static"
+
+        last_domains = getattr(self, "_last_invalidation_domains", None)
+        broadcast_kind = "static_plus_dynamic" if include_static_flag else "dynamic_only"
+        if cache_reason == "cache_empty" and include_static_flag:
+            broadcast_kind = "first_load_full"
+        elif include_static_flag and cache_hit:
+            broadcast_kind = "static_only"
+
+        trace_kwargs = {
+            "broadcast_kind": broadcast_kind,
+            "invalidation_domains": last_domains,
+            "invalidation_reason": cache_reason,
+            "include_static": include_static_flag,
+            "static_payload_rebuild": include_static_flag and not cache_hit,
+            "dynamic_payload_rebuild": True,
+            "snapshot_cache_hit": bool(cache_hit),
+        }
+
         if (
             isinstance(lan_clients, dict)
             and isinstance(dm_clients, dict)
@@ -20378,10 +20726,9 @@ class InitiativeTracker(base.InitiativeTracker):
                     "websocket_client_count": 0,
                     "dm_websocket_client_count": 0,
                 },
-                snapshot_cache_hit=bool(cache_hit),
                 snapshot_cache_scope=snapshot_cache_scope,
-                snapshot_cache_invalidation_reason=cache_reason if not cache_hit else None,
                 static_version=static_version,
+                **trace_kwargs
             )
             return
 
@@ -20392,17 +20739,18 @@ class InitiativeTracker(base.InitiativeTracker):
             span_counts["recipient_count"] = int(lan_recipient_count)
         if dm_recipient_count is not None:
             span_counts["dm_websocket_client_count"] = int(dm_recipient_count)
+
+        build_start = time.perf_counter()
         try:
             with timed_span(
                 "lan.snapshot.build",
                 function="_lan_snapshot",
                 command="state",
                 counts=span_counts,
-                snapshot_cache_hit=bool(cache_hit),
                 snapshot_cache_scope=snapshot_cache_scope,
-                snapshot_cache_invalidation_reason=cache_reason if not cache_hit else None,
                 static_version=static_version,
                 combat_version=combat_version,
+                **trace_kwargs
             ):
                 snap = self._lan_snapshot(
                     include_static=include_static_flag,
@@ -20421,6 +20769,14 @@ class InitiativeTracker(base.InitiativeTracker):
                 self._lan._last_snapshot = copy.deepcopy(snap)
             except Exception:
                 pass
+
+            build_ms = (time.perf_counter() - build_start) * 1000.0
+            trace_kwargs["snapshot_build_ms"] = round(build_ms, 3)
+            if trace_kwargs["static_payload_rebuild"] and build_ms > 500:
+                trace_kwargs["slow_static_payload_rebuild"] = True
+
+            broadcast_start = time.perf_counter()
+
             has_lan_recipients = not isinstance(lan_clients, dict) or bool(lan_clients)
             if include_static_flag and has_lan_recipients:
                 try:
@@ -20442,25 +20798,35 @@ class InitiativeTracker(base.InitiativeTracker):
                         "websocket_client_count": 0,
                         "dm_websocket_client_count": int(dm_recipient_count or 0),
                     },
-                    snapshot_cache_hit=bool(cache_hit),
                     snapshot_cache_scope=snapshot_cache_scope,
                     static_version=static_version,
                     combat_version=combat_version,
+                    **trace_kwargs
                 )
+
+            broadcast_ms = (time.perf_counter() - broadcast_start) * 1000.0
+            trace_kwargs["broadcast_ms"] = round(broadcast_ms, 3)
+            if broadcast_ms > 1000:
+                trace_kwargs["slow_broadcast"] = True
+
+            debug_event("lan.state.broadcast_completed", **trace_kwargs)
         except Exception:
             pass
         # Push DM snapshot to any connected DM WebSocket clients
         try:
             dm_svc = getattr(self._lan, "_dm_service", None)
             if dm_svc is not None:
-                tactical_snapshot = self._dm_tactical_snapshot_from_lan_snapshot(snap)
+                tactical_snapshot = self._dm_tactical_snapshot_from_lan_snapshot(snap) if tactical_map_enabled() else None
                 with timed_span(
                     "dm.console.snapshot.build",
                     function="_dm_console_snapshot_payload",
                     counts=self._debug_trace_counts(),
                     snapshot_cache_hit=False,
                 ):
-                    dm_snap = self._lan._dm_console_snapshot_payload(tactical_snapshot=tactical_snapshot)
+                    dm_snap = self._lan._dm_console_snapshot_payload(
+                        tactical_snapshot=tactical_snapshot,
+                        include_tactical=tactical_map_enabled(),
+                    )
                 # Stash for any route handler that returns a DM snapshot in
                 # the same request: avoids a second _dm_console_snapshot()
                 # build per resolve-targets / next-turn (~36-100ms each).
@@ -21484,12 +21850,12 @@ class InitiativeTracker(base.InitiativeTracker):
     def _lan_compute_included_units_for_aoe(self, aoe: Dict[str, Any]) -> List[int]:
         if not isinstance(aoe, dict):
             return []
-        
+
         # Reconstruct a minimal spec from the stored effect dict
         shape = str(aoe.get("kind") or aoe.get("shape") or "").strip().lower()
         if not shape:
             return []
-            
+
         spec = AoeSpec(
             shape=shape,
             origin_mode="point" if aoe.get("fixed_to_caster") is not True else "caster",
@@ -21503,7 +21869,7 @@ class InitiativeTracker(base.InitiativeTracker):
             spell_id=str(aoe.get("spell_id") or ""),
             spell_name=str(aoe.get("name") or "")
         )
-        
+
         cells = self._resolve_aoe_cells(spec)
         return self._resolve_aoe_targets(spec, cells)
     def _lan_current_turn_key(self) -> Tuple[int, int, Optional[int]]:
@@ -22013,32 +22379,32 @@ class InitiativeTracker(base.InitiativeTracker):
         Transforms a spell preset and request payload into a normalized AoeSpec.
         """
         shape = str(payload.get("shape") or payload.get("kind") or "").strip().lower()
-        
+
         origin_mode = "point"
         cx = float(payload.get("cx") or 0.0)
         cy = float(payload.get("cy") or 0.0)
-        
+
         # Determine origin based on preset and payload
         targeting = spell_preset.get("mechanics", {}).get("targeting", {})
         origin_type = str(targeting.get("origin") or "").strip().lower()
-        
+
         if origin_type == "self" or payload.get("fixed_to_caster"):
             origin_mode = "caster"
             if caster:
                 cx = float(caster.col)
                 cy = float(caster.row)
-        
+
         target_col = payload.get("ax") # Often used as 'aim point' for directional AoEs
         target_row = payload.get("ay")
         if target_col is not None: target_col = float(target_col)
         if target_row is not None: target_row = float(target_row)
-        
+
         # Dimensions
         feet_per_square = float(self._lan_feet_per_square())
         radius_ft = float(payload.get("radius_ft") or 0.0)
         length_ft = float(payload.get("length_ft") or payload.get("size") or 0.0)
         width_ft = float(payload.get("width_ft") or 5.0) # Default line width
-        
+
         return AoeSpec(
             shape=shape,
             origin_mode=origin_mode,
@@ -22068,15 +22434,15 @@ class InitiativeTracker(base.InitiativeTracker):
 
     def _resolve_aoe_targets(self, spec: AoeSpec, cells: Set[Tuple[int, int]]) -> List[int]:
         """
-        Returns a list of combatant IDs within the affected cells, 
+        Returns a list of combatant IDs within the affected cells,
         respecting line-of-effect.
         """
         included: List[int] = []
         map_query = MapQueryAPI(self._lan_get_map_state())
-        
+
         # Get positions of all combatants
         _cols, _rows, _obstacles, _rough, positions = self._lan_live_map_data()
-        
+
         for cid, pos in positions.items():
             pc, pr = int(pos[0]), int(pos[1])
             if (pc, pr) in cells:
@@ -23926,6 +24292,8 @@ class InitiativeTracker(base.InitiativeTracker):
         ops = _make_ops_logger()
         if not files:
             self._spell_presets_cache = []
+            self._spell_preset_lookup_cache = None
+            self._spell_preset_lookup_sig = None
             self._spell_index_entries = {}
             self._spell_index_loaded = True
             self._spell_dir_signature = dir_signature
@@ -24446,6 +24814,8 @@ class InitiativeTracker(base.InitiativeTracker):
             }
 
         self._spell_presets_cache = presets
+        self._spell_preset_lookup_cache = None
+        self._spell_preset_lookup_sig = None
         self._spell_index_entries = new_entries
         self._spell_index_loaded = True
         self._spell_dir_signature = dir_signature
@@ -24454,11 +24824,21 @@ class InitiativeTracker(base.InitiativeTracker):
 
         return presets
 
+    def _current_spell_dir_signature(self) -> Optional[Tuple[int, int, Tuple[str, ...]]]:
+        spells_dir = self._resolve_spells_dir()
+        if spells_dir is None:
+            return None
+        try:
+            files = sorted(list(spells_dir.glob("*.yaml")) + list(spells_dir.glob("*.yml")))
+        except Exception:
+            files = []
+        return _directory_signature(spells_dir, files)
+
     def _players_dir(self) -> Path:
         _seed_user_players_dir()
         return _app_data_dir() / "players"
 
-    def _write_player_yaml_atomic(self, path: Path, payload: Dict[str, Any]) -> None:
+    def _write_player_yaml_atomic(self, path: Path, payload: Dict[str, Any], invalidation_domains: Optional[List[str]] = None) -> None:
         if yaml is None:
             raise RuntimeError("PyYAML is required for spell persistence.")
         normalized_payload = dict(payload or {})
@@ -24471,7 +24851,19 @@ class InitiativeTracker(base.InitiativeTracker):
             path.parent.mkdir(parents=True, exist_ok=True)
             tmp_path.write_text(yaml_text, encoding="utf-8")
             tmp_path.replace(path)
-        self._invalidate_lan_static_snapshot_cache("player_yaml_write")
+
+        if invalidation_domains is None:
+            # Default safely for unknown writes
+            invalidation_domains = ["static_capabilities", "dynamic_player_values"]
+            self._lan_log_warning(f"player_yaml_write without invalidation_domains. Defaulting to static.")
+            debug_event("ws.warning.unknown_player_yaml_write_domain", path=str(path.name))
+
+        self._last_invalidation_domains = invalidation_domains
+
+        static_domains = {"static_capabilities", "profile_structure", "static_catalogs"}
+        requires_static = any(d in static_domains for d in invalidation_domains)
+        if requires_static:
+            self._invalidate_lan_static_snapshot_cache("player_yaml_write:" + ",".join(invalidation_domains))
 
     @staticmethod
     def _normalize_character_lookup_key(value: Any) -> str:
@@ -24647,19 +25039,31 @@ class InitiativeTracker(base.InitiativeTracker):
             tmp_path.write_text(yaml_text, encoding="utf-8")
             tmp_path.replace(path)
 
-    def _schedule_player_yaml_refresh(self) -> None:
-        if self._player_yaml_refresh_scheduled:
+    def _schedule_player_yaml_refresh(self, include_static: bool = True, force_reload: bool = True) -> None:
+        if getattr(self, "_player_yaml_refresh_scheduled", False):
+            if include_static:
+                self._player_yaml_refresh_scheduled_static = True
+            if force_reload:
+                self._player_yaml_refresh_scheduled_force_reload = True
             return
+
         self._player_yaml_refresh_scheduled = True
+        self._player_yaml_refresh_scheduled_static = include_static
+        self._player_yaml_refresh_scheduled_force_reload = force_reload
 
         def refresh() -> None:
             self._player_yaml_refresh_scheduled = False
+            do_static = getattr(self, "_player_yaml_refresh_scheduled_static", True)
+            do_reload = getattr(self, "_player_yaml_refresh_scheduled_force_reload", True)
+            self._player_yaml_refresh_scheduled_static = False
+            self._player_yaml_refresh_scheduled_force_reload = False
+            if do_reload:
+                try:
+                    self._load_player_yaml_cache(force_refresh=True)
+                except Exception:
+                    return
             try:
-                self._load_player_yaml_cache(force_refresh=True)
-            except Exception:
-                return
-            try:
-                self._lan_force_state_broadcast(include_static=True)
+                self._lan_force_state_broadcast(include_static=do_static)
             except Exception:
                 pass
 
@@ -24819,8 +25223,17 @@ class InitiativeTracker(base.InitiativeTracker):
         return raw if isinstance(raw, dict) else {}
 
     @trace_timed("_store_character_yaml")
-    def _store_character_yaml(self, path: Path, payload: Dict[str, Any]) -> Dict[str, Any]:
-        self._write_player_yaml_atomic(path, payload)
+    def _store_character_yaml(
+        self,
+        path: Path,
+        payload: Dict[str, Any],
+        *,
+        invalidation_domains: Optional[List[str]] = None,
+        include_static_refresh: bool = True,
+        force_player_yaml_reload: bool = True,
+    ) -> Dict[str, Any]:
+        domains = list(invalidation_domains or ["profile_structure", "static_capabilities", "dynamic_player_values"])
+        self._write_player_yaml_atomic(path, payload, invalidation_domains=domains)
         meta = _file_stat_metadata(path)
         self._player_yaml_cache_by_path[path] = payload
         self._player_yaml_meta_by_path[path] = meta
@@ -24829,8 +25242,32 @@ class InitiativeTracker(base.InitiativeTracker):
         self._player_yaml_data_by_name[profile_name] = profile
         self._player_yaml_name_map[self._normalize_character_lookup_key(profile_name)] = path
         self._player_yaml_name_map[self._normalize_character_lookup_key(path.stem)] = path
-        self._schedule_player_yaml_refresh()
+        self._refresh_cached_player_profile_projection(profile_name, profile)
+        self._schedule_player_yaml_refresh(
+            include_static=include_static_refresh,
+            force_reload=force_player_yaml_reload,
+        )
         return profile
+
+    def _refresh_cached_player_profile_projection(self, profile_name: Any, profile: Dict[str, Any]) -> None:
+        """Patch player capability projections after a single-profile mutation."""
+        name = str(profile_name or "").strip()
+        if not name or not isinstance(profile, dict):
+            return
+
+        def patch_snapshot(snapshot: Any) -> None:
+            if not isinstance(snapshot, dict):
+                return
+            profiles = snapshot.get("player_profiles")
+            if not isinstance(profiles, dict):
+                return
+            profiles[name] = copy.deepcopy(profile)
+
+        static_cache = self.__dict__.get("_lan_static_snapshot_cache")
+        patch_snapshot(static_cache)
+        lan = self.__dict__.get("_lan")
+        if lan is not None:
+            patch_snapshot(getattr(lan, "_cached_snapshot", None))
 
     def _normalize_character_filename(self, raw_filename: Optional[str], fallback_name: str) -> str:
         filename = str(raw_filename or "").strip()
@@ -24886,6 +25323,13 @@ class InitiativeTracker(base.InitiativeTracker):
             if str(entry.get("instance_id") or "").strip() == target_instance_id:
                 return entry, items, index
         return None, items, None
+
+    def _inventory_equipment_store_kwargs(self) -> Dict[str, Any]:
+        return {
+            "invalidation_domains": ["inventory_equipment_structure"],
+            "include_static_refresh": False,
+            "force_player_yaml_reload": False,
+        }
 
     def _resolve_inventory_magic_item_definition(self, entry: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         registry = self._magic_items_registry_payload()
@@ -25130,6 +25574,7 @@ class InitiativeTracker(base.InitiativeTracker):
         return normalized
 
     def _mutate_owned_inventory_item_equipped_state(self, name: str, instance_id: str, operation: str) -> Dict[str, Any]:
+        action_started = time.perf_counter()
         player_name = str(name or "").strip()
         if not player_name:
             raise CharacterApiError(status_code=404, detail={"error": "not_found", "message": "Character not found."})
@@ -25151,7 +25596,9 @@ class InitiativeTracker(base.InitiativeTracker):
                 detail={"error": "invalid_operation", "message": f"Unsupported inventory item mutation '{operation}'."},
             )
 
+        load_started = time.perf_counter()
         raw = self._load_character_raw(path)
+        yaml_load_ms = (time.perf_counter() - load_started) * 1000.0
         entry, items, index = self._find_owned_inventory_item_by_instance_id(raw, target_instance_id)
         if not isinstance(entry, dict) or not isinstance(items, list) or index is None:
             raise CharacterApiError(
@@ -25192,7 +25639,27 @@ class InitiativeTracker(base.InitiativeTracker):
                 if str(other_equippable.get("classification") or "") == classification:
                     other_entry["equipped"] = False
 
-        profile = self._store_character_yaml(path, raw)
+        store_started = time.perf_counter()
+        profile = self._store_character_yaml(path, raw, **self._inventory_equipment_store_kwargs())
+        store_yaml_ms = (time.perf_counter() - store_started) * 1000.0
+        debug_event(
+            "inventory.equipment.mutation",
+            profile=player_name,
+            item_id=str(entry.get("id") or "").strip().lower(),
+            instance_id=target_instance_id,
+            item_name=str(entry.get("name") or "").strip(),
+            operation=normalized_operation,
+            route="inventory_item_equipped_state",
+            item_type=str(equippable.get("kind") or ""),
+            category=str(equippable.get("category") or ""),
+            slot=str(entry.get("equipped_slot") or ""),
+            yaml_load_ms=round(yaml_load_ms, 3),
+            store_yaml_ms=round(store_yaml_ms, 3),
+            duration_ms=round((time.perf_counter() - action_started) * 1000.0, 3),
+            invalidation_domains=self._inventory_equipment_store_kwargs()["invalidation_domains"],
+            broadcast_kind="dynamic_only",
+            changed=True,
+        )
         return {
             "ok": True,
             "instance_id": target_instance_id,
@@ -25201,6 +25668,7 @@ class InitiativeTracker(base.InitiativeTracker):
         }
 
     def _mutate_owned_magic_item_state(self, name: str, instance_id: str, operation: str) -> Dict[str, Any]:
+        action_started = time.perf_counter()
         player_name = str(name or "").strip()
         if not player_name:
             raise CharacterApiError(status_code=404, detail={"error": "not_found", "message": "Character not found."})
@@ -25215,7 +25683,9 @@ class InitiativeTracker(base.InitiativeTracker):
                 detail={"error": "not_found", "message": "Owned inventory item not found for instance_id."},
             )
 
+        load_started = time.perf_counter()
         raw = self._load_character_raw(path)
+        yaml_load_ms = (time.perf_counter() - load_started) * 1000.0
         entry, _, _ = self._find_owned_inventory_item_by_instance_id(raw, target_instance_id)
         if not isinstance(entry, dict):
             raise CharacterApiError(
@@ -25274,7 +25744,27 @@ class InitiativeTracker(base.InitiativeTracker):
                 detail={"error": "invalid_operation", "message": f"Unsupported inventory item mutation '{operation}'."},
             )
 
-        profile = self._store_character_yaml(path, raw)
+        store_started = time.perf_counter()
+        profile = self._store_character_yaml(path, raw, **self._inventory_equipment_store_kwargs())
+        store_yaml_ms = (time.perf_counter() - store_started) * 1000.0
+        debug_event(
+            "inventory.equipment.mutation",
+            profile=player_name,
+            item_id=str(entry.get("id") or "").strip().lower(),
+            instance_id=target_instance_id,
+            item_name=str(entry.get("name") or magic_item_def.get("name") or "").strip(),
+            operation=normalized_operation,
+            route="magic_item_state",
+            item_type=str(magic_item_def.get("type") or ""),
+            category=str(magic_item_def.get("category") or ""),
+            slot=str(entry.get("equipped_slot") or ""),
+            yaml_load_ms=round(yaml_load_ms, 3),
+            store_yaml_ms=round(store_yaml_ms, 3),
+            duration_ms=round((time.perf_counter() - action_started) * 1000.0, 3),
+            invalidation_domains=self._inventory_equipment_store_kwargs()["invalidation_domains"],
+            broadcast_kind="dynamic_only",
+            changed=True,
+        )
         return {
             "ok": True,
             "instance_id": target_instance_id,
@@ -25341,7 +25831,7 @@ class InitiativeTracker(base.InitiativeTracker):
                 if "ammo_max" not in w:
                     w["ammo_max"] = ammo_max
 
-        self._store_character_yaml(path, raw)
+        self._store_character_yaml(path, raw, **self._inventory_equipment_store_kwargs())
 
         return {
             "ok": True,
@@ -25358,6 +25848,7 @@ class InitiativeTracker(base.InitiativeTracker):
         operation: str,
         payload: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
+        action_started = time.perf_counter()
         player_name = str(name or "").strip()
         if not player_name:
             raise CharacterApiError(status_code=404, detail={"error": "not_found", "message": "Character not found."})
@@ -25379,7 +25870,9 @@ class InitiativeTracker(base.InitiativeTracker):
                 detail={"error": "invalid_operation", "message": f"Unsupported weapon assignment mutation '{operation}'."},
             )
 
+        load_started = time.perf_counter()
         raw = self._load_character_raw(path)
+        yaml_load_ms = (time.perf_counter() - load_started) * 1000.0
         entry, items, index = self._find_owned_inventory_item_by_instance_id(raw, target_instance_id)
         if not isinstance(entry, dict) or not isinstance(items, list) or index is None:
             raise CharacterApiError(
@@ -25453,6 +25946,11 @@ class InitiativeTracker(base.InitiativeTracker):
                     continue
                 other_equippable = self._resolve_inventory_equippable_definition(other)
                 if not isinstance(other_equippable, dict):
+                    magic_other = self._resolve_inventory_magic_item_definition(other)
+                    if isinstance(magic_other, dict) and str(magic_other.get("category") or "").strip().lower() == "shield":
+                        has_equipped_shield = True
+                        break
+                if not isinstance(other_equippable, dict):
                     continue
                 if str(other_equippable.get("classification") or "").strip().lower() == "shield":
                     has_equipped_shield = True
@@ -25513,7 +26011,28 @@ class InitiativeTracker(base.InitiativeTracker):
             else:
                 entry["selected_mode"] = "one"
 
-        profile = self._store_character_yaml(path, raw)
+        store_started = time.perf_counter()
+        profile = self._store_character_yaml(path, raw, **self._inventory_equipment_store_kwargs())
+        store_yaml_ms = (time.perf_counter() - store_started) * 1000.0
+        definition = resolved_weapon.get("definition") if isinstance(resolved_weapon.get("definition"), dict) else {}
+        debug_event(
+            "inventory.equipment.mutation",
+            profile=player_name,
+            item_id=str(entry.get("id") or resolved_weapon.get("id") or "").strip().lower(),
+            instance_id=target_instance_id,
+            item_name=str(entry.get("name") or definition.get("name") or "").strip(),
+            operation=normalized_operation,
+            route="weapon_assignment",
+            item_type=str(definition.get("type") or resolved_weapon.get("source") or ""),
+            category=str(definition.get("category") or ""),
+            slot=str(entry.get("equipped_slot") or ""),
+            yaml_load_ms=round(yaml_load_ms, 3),
+            store_yaml_ms=round(store_yaml_ms, 3),
+            duration_ms=round((time.perf_counter() - action_started) * 1000.0, 3),
+            invalidation_domains=self._inventory_equipment_store_kwargs()["invalidation_domains"],
+            broadcast_kind="dynamic_only",
+            changed=True,
+        )
         return {
             "ok": True,
             "instance_id": target_instance_id,
@@ -25530,6 +26049,7 @@ class InitiativeTracker(base.InitiativeTracker):
         operation: str,
         payload: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
+        action_started = time.perf_counter()
         player_name = str(name or "").strip()
         if not player_name:
             raise CharacterApiError(status_code=404, detail={"error": "not_found", "message": "Character not found."})
@@ -25551,7 +26071,9 @@ class InitiativeTracker(base.InitiativeTracker):
                 detail={"error": "invalid_operation", "message": f"Unsupported wearable mutation '{operation}'."},
             )
 
+        load_started = time.perf_counter()
         raw = self._load_character_raw(path)
+        yaml_load_ms = (time.perf_counter() - load_started) * 1000.0
         entry, items, index = self._find_owned_inventory_item_by_instance_id(raw, target_instance_id)
         if not isinstance(entry, dict) or not isinstance(items, list) or index is None:
             raise CharacterApiError(
@@ -25594,7 +26116,27 @@ class InitiativeTracker(base.InitiativeTracker):
             entry["equipped"] = False
             entry.pop("equipped_slot", None)
 
-        profile = self._store_character_yaml(path, raw)
+        store_started = time.perf_counter()
+        profile = self._store_character_yaml(path, raw, **self._inventory_equipment_store_kwargs())
+        store_yaml_ms = (time.perf_counter() - store_started) * 1000.0
+        debug_event(
+            "inventory.equipment.mutation",
+            profile=player_name,
+            item_id=str(entry.get("id") or "").strip().lower(),
+            instance_id=target_instance_id,
+            item_name=str(entry.get("name") or "").strip(),
+            operation=normalized_operation,
+            route="wearable_slot",
+            item_type="wearable",
+            category=",".join(eligible_slots),
+            slot=str(entry.get("equipped_slot") or ""),
+            yaml_load_ms=round(yaml_load_ms, 3),
+            store_yaml_ms=round(store_yaml_ms, 3),
+            duration_ms=round((time.perf_counter() - action_started) * 1000.0, 3),
+            invalidation_domains=self._inventory_equipment_store_kwargs()["invalidation_domains"],
+            broadcast_kind="dynamic_only",
+            changed=True,
+        )
         return {
             "ok": True,
             "instance_id": target_instance_id,
@@ -26249,6 +26791,33 @@ class InitiativeTracker(base.InitiativeTracker):
                 }
                 normalized_weapons.append(weapon)
         attacks["weapons"] = normalized_weapons
+
+        # Sync equipped weapons from inventory to attacks.weapons if not already present.
+        # This ensures inventory weapons are available for the attack resolver and LAN UI.
+        inventory_weapons = self._normalize_owned_weapon_inventory_items({"inventory": inventory})
+        for inv_weapon in inventory_weapons:
+            if not inv_weapon.get("equipped"):
+                continue
+            instance_id = inv_weapon.get("instance_id")
+            if not instance_id:
+                continue
+            # Check if already in normalized_weapons
+            already_present = any(w.get("instance_id") == instance_id for w in normalized_weapons)
+            if already_present:
+                continue
+
+            # Not present, add it.
+            # We resolve it into an attack-compatible dict.
+            resolved = self._resolve_weapon_from_items(inv_weapon)
+            # Ensure it has the necessary flags
+            resolved["equipped"] = True
+            resolved["instance_id"] = instance_id
+            if inv_weapon.get("equipped_slot") == "main_hand":
+                resolved["main_hand"] = True
+            elif inv_weapon.get("equipped_slot") == "off_hand":
+                resolved["off_hand"] = True
+
+            normalized_weapons.append(resolved)
 
         raw_spell_slots = None
         if isinstance(spellcasting, dict) and "spell_slots" in spellcasting:
@@ -27073,8 +27642,18 @@ class InitiativeTracker(base.InitiativeTracker):
                 cantrip_free_seen[key] = value
                 cantrips_free_list.append(value)
 
+        spell_level_cache: Dict[str, Optional[int]] = {}
+
+        def spell_level(slug: Any) -> Optional[int]:
+            key = str(slug or "").strip().lower()
+            if not key:
+                return None
+            if key not in spell_level_cache:
+                spell_level_cache[key] = self._spell_preset_level_by_slug(key)
+            return spell_level_cache.get(key)
+
         def is_cantrip(slug: Any) -> bool:
-            return self._spell_preset_level_by_slug(slug) == 0
+            return spell_level(slug) == 0
 
         for slug in known_list_raw:
             if is_cantrip(slug):
@@ -28431,7 +29010,13 @@ class InitiativeTracker(base.InitiativeTracker):
             raw = dict(raw)
             raw["resources"] = resources
         try:
-            self._store_character_yaml(player_path, raw)
+            self._store_character_yaml(
+                player_path,
+                raw,
+                invalidation_domains=["dynamic_player_values", "resource_pools"],
+                include_static_refresh=False,
+                force_player_yaml_reload=False,
+            )
         except Exception:
             return False, "Could not update resource pools, matey."
         return True, ""
@@ -28645,7 +29230,13 @@ class InitiativeTracker(base.InitiativeTracker):
             raw = dict(raw)
             raw["resources"] = resources
         try:
-            self._store_character_yaml(player_path, raw)
+            self._store_character_yaml(
+                player_path,
+                raw,
+                invalidation_domains=["dynamic_player_values", "resource_pools"],
+                include_static_refresh=False,
+                force_player_yaml_reload=False,
+            )
         except Exception:
             return False, "Could not update resource pools, matey."
         return True, ""
@@ -29242,7 +29833,7 @@ class InitiativeTracker(base.InitiativeTracker):
                 spellcasting["prepared_spells"] = existing_prepared
             existing["spellcasting"] = spellcasting
 
-        self._write_player_yaml_atomic(path, existing)
+        self._write_player_yaml_atomic(path, existing, invalidation_domains=["static_capabilities", "dynamic_player_values"])
 
         meta = _file_stat_metadata(path)
         self._player_yaml_cache_by_path[path] = existing
@@ -29252,7 +29843,7 @@ class InitiativeTracker(base.InitiativeTracker):
         self._player_yaml_data_by_name[profile_name] = profile
         self._player_yaml_name_map[self._normalize_character_lookup_key(player_name)] = path
         self._player_yaml_name_map[self._normalize_character_lookup_key(path.stem)] = path
-        self._schedule_player_yaml_refresh()
+        self._schedule_player_yaml_refresh(include_static=True)
 
         return normalized
 
@@ -29299,7 +29890,7 @@ class InitiativeTracker(base.InitiativeTracker):
             spellcasting["spell_slots"] = normalized_slots
             existing["spellcasting"] = spellcasting
 
-        self._write_player_yaml_atomic(path, existing)
+        self._write_player_yaml_atomic(path, existing, invalidation_domains=["dynamic_player_values"])
 
         meta = _file_stat_metadata(path)
         self._player_yaml_cache_by_path[path] = existing
@@ -29309,7 +29900,7 @@ class InitiativeTracker(base.InitiativeTracker):
         self._player_yaml_data_by_name[profile_name] = profile
         self._player_yaml_name_map[self._normalize_character_lookup_key(player_name)] = path
         self._player_yaml_name_map[self._normalize_character_lookup_key(path.stem)] = path
-        self._schedule_player_yaml_refresh()
+        self._schedule_player_yaml_refresh(include_static=False)
 
         return normalized_slots
 
@@ -29479,7 +30070,7 @@ class InitiativeTracker(base.InitiativeTracker):
             identity["name"] = player_name
         existing["identity"] = identity
 
-        self._write_player_yaml_atomic(path, existing)
+        self._write_player_yaml_atomic(path, existing, invalidation_domains=["static_capabilities", "dynamic_player_values"])
         meta = _file_stat_metadata(path)
         self._player_yaml_cache_by_path[path] = existing
         self._player_yaml_meta_by_path[path] = meta
@@ -29488,7 +30079,7 @@ class InitiativeTracker(base.InitiativeTracker):
         self._player_yaml_data_by_name[profile_name] = profile
         self._player_yaml_name_map[self._normalize_character_lookup_key(player_name)] = path
         self._player_yaml_name_map[self._normalize_character_lookup_key(path.stem)] = path
-        self._schedule_player_yaml_refresh()
+        self._schedule_player_yaml_refresh(include_static=True)
 
         return profile
 
@@ -29522,7 +30113,7 @@ class InitiativeTracker(base.InitiativeTracker):
         identity["token_color"] = normalized
         existing["identity"] = identity
 
-        self._write_player_yaml_atomic(path, existing)
+        self._write_player_yaml_atomic(path, existing, invalidation_domains=["static_capabilities"])
 
         meta = _file_stat_metadata(path)
         self._player_yaml_cache_by_path[path] = existing
@@ -29532,7 +30123,7 @@ class InitiativeTracker(base.InitiativeTracker):
         self._player_yaml_data_by_name[profile_name] = profile
         self._player_yaml_name_map[self._normalize_character_lookup_key(player_name)] = path
         self._player_yaml_name_map[self._normalize_character_lookup_key(path.stem)] = path
-        self._schedule_player_yaml_refresh()
+        self._schedule_player_yaml_refresh(include_static=True)
 
         return normalized
 
@@ -29566,7 +30157,7 @@ class InitiativeTracker(base.InitiativeTracker):
         identity["token_border_color"] = normalized
         existing["identity"] = identity
 
-        self._write_player_yaml_atomic(path, existing)
+        self._write_player_yaml_atomic(path, existing, invalidation_domains=["static_capabilities"])
 
         meta = _file_stat_metadata(path)
         self._player_yaml_cache_by_path[path] = existing
@@ -29576,7 +30167,7 @@ class InitiativeTracker(base.InitiativeTracker):
         self._player_yaml_data_by_name[profile_name] = profile
         self._player_yaml_name_map[self._normalize_character_lookup_key(player_name)] = path
         self._player_yaml_name_map[self._normalize_character_lookup_key(path.stem)] = path
-        self._schedule_player_yaml_refresh()
+        self._schedule_player_yaml_refresh(include_static=True)
 
         return normalized
 
@@ -32486,6 +33077,15 @@ class InitiativeTracker(base.InitiativeTracker):
         return ordered
 
     def _spell_preset_lookup(self) -> Tuple[Dict[str, Dict[str, Any]], Dict[str, Dict[str, Any]]]:
+        cached = getattr(self, "_spell_preset_lookup_cache", None)
+        try:
+            sig = self._current_spell_dir_signature()
+        except Exception:
+            sig = getattr(self, "_spell_dir_signature", None)
+        cached_sig = getattr(self, "_spell_preset_lookup_sig", None)
+        if cached is not None and sig == cached_sig and sig is not None:
+            return cached
+
         by_slug: Dict[str, Dict[str, Any]] = {}
         by_id: Dict[str, Dict[str, Any]] = {}
         for preset in self._spell_presets_payload():
@@ -32497,7 +33097,11 @@ class InitiativeTracker(base.InitiativeTracker):
                 by_slug[slug] = preset
             if sid and sid not in by_id:
                 by_id[sid] = preset
-        return by_slug, by_id
+
+        result = (by_slug, by_id)
+        self._spell_preset_lookup_cache = result
+        self._spell_preset_lookup_sig = sig if sig is not None else getattr(self, "_spell_dir_signature", None)
+        return result
 
     @staticmethod
     def _spell_label_from_identifiers(*values: Any) -> str:
@@ -34396,7 +35000,7 @@ class InitiativeTracker(base.InitiativeTracker):
         if is_admin:
             return True
         # For now, we allow auto-spawn for controlled summons if they are specifically modeled.
-        # Spells like 'Manifest Echo' (echo_knight) are handled by a separate command, 
+        # Spells like 'Manifest Echo' (echo_knight) are handled by a separate command,
         # but if we wanted to allow some spells here, we'd list them.
         # Default policy: Player-initiated summons for standard spells require DM approval/placement
         # unless they are explicitly marked for auto-spawn.
@@ -37018,9 +37622,49 @@ class InitiativeTracker(base.InitiativeTracker):
             return
         weapon_id = str(msg.get("weapon_id") or "").strip()
         weapon_name = str(msg.get("weapon_name") or "").strip()
+        requested_weapon_id = weapon_id.strip().lower()
+        requested_weapon_name = weapon_name.strip().lower()
         profile_cid = int(getattr(resource_c, "cid", cid) or cid)
         player_name = self._pc_name_for(int(profile_cid))
         profile = self._profile_for_player_name(player_name)
+        early_consumes_pool_raw = msg.get("consumes_pool") if isinstance(msg.get("consumes_pool"), dict) else {}
+        early_consumes_pool_key = str(
+            msg.get("consumes_pool_id")
+            or early_consumes_pool_raw.get("id")
+            or early_consumes_pool_raw.get("pool")
+            or ""
+        ).strip().lower()
+        is_echo_actor_attack = bool(int(profile_cid) != int(cid))
+        is_unleash_incarnation_request = early_consumes_pool_key == "unleash_incarnation"
+
+        # Trace data for attack resolution (P0-005)
+        trace_data = {
+            "source_actor_cid": int(cid),
+            "owner_cid": int(profile_cid),
+            "echo_cid": int(cid) if is_echo_actor_attack else None,
+            "requested_weapon_id": requested_weapon_id or None,
+            "resolved_owner_weapon_id": None,
+            "final_weapon_id": None,
+            "echo_weapon_inherited": False,
+            "player_id": profile_cid,
+            "cid": profile_cid,
+            "resolver_stage": "initialized",
+            "inventory_item_count": 0,
+            "available_weapon_count": 0,
+            "equipped_weapon_id": None,
+            "configured_weapon_id": None,
+            "selected_weapon_id": None,
+            "selected_weapon_name": None,
+            "fallback_weapon_name": None,
+            "fallback_reason": None,
+        }
+        if isinstance(profile, dict):
+            inv = profile.get("inventory")
+            if isinstance(inv, dict):
+                items = inv.get("items")
+                if isinstance(items, list):
+                    trace_data["inventory_item_count"] = len(items)
+
         configured_attack_count = 1
         leveling = profile.get("leveling") if isinstance(profile, dict) else {}
         classes = leveling.get("classes") if isinstance(leveling, dict) else []
@@ -37107,9 +37751,32 @@ class InitiativeTracker(base.InitiativeTracker):
             if inline_mode in ("one", "two"):
                 merged["selected_mode"] = inline_mode
             return merged
+        def _owner_default_weapon_for_echo(entries: Any) -> Dict[str, Any]:
+            if not isinstance(entries, list):
+                return {}
+            non_unarmed = [entry for entry in entries if isinstance(entry, dict) and not self._is_unarmed_strike_weapon(entry)]
+            for entry in non_unarmed:
+                if _weapon_equipped_flag(entry):
+                    return entry
+            return non_unarmed[0] if non_unarmed else {}
+        requested_unarmed_before_match = bool(
+            requested_weapon_id == "unarmed_strike"
+            or requested_weapon_name == "unarmed strike"
+        )
+        if (is_echo_actor_attack or is_unleash_incarnation_request) and requested_unarmed_before_match:
+            owner_weapon = _owner_default_weapon_for_echo(weapons)
+            if owner_weapon:
+                weapon_id = str(owner_weapon.get("id") or "").strip()
+                weapon_name = str(owner_weapon.get("name") or "").strip()
+                inline_weapon = {}
+                trace_data["resolved_owner_weapon_id"] = weapon_id.strip().lower() or None
+                trace_data["echo_weapon_inherited"] = True
+                trace_data["fallback_reason"] = "Echo/unleash unarmed request overridden with owner configured weapon."
         if isinstance(weapons, list):
+            trace_data["available_weapon_count"] = len(weapons)
             target_weapon_id = weapon_id.lower()
             target_weapon_name = weapon_name.lower()
+            trace_data["resolver_stage"] = "matching_requested"
             for entry in weapons:
                 if not isinstance(entry, dict):
                     continue
@@ -37117,19 +37784,29 @@ class InitiativeTracker(base.InitiativeTracker):
                 entry_name = str(entry.get("name") or "").strip().lower()
                 if target_weapon_id and entry_id == target_weapon_id:
                     selected_weapon = entry
+                    trace_data["selected_weapon_id"] = entry_id
                     break
                 if target_weapon_name and entry_name and entry_name == target_weapon_name:
                     selected_weapon = entry
+                    trace_data["selected_weapon_name"] = entry_name
+
             if not selected_weapon and not target_weapon_id and not target_weapon_name:
+                trace_data["resolver_stage"] = "finding_equipped"
                 for entry in weapons:
                     if isinstance(entry, dict) and _weapon_equipped_flag(entry):
                         selected_weapon = entry
+                        trace_data["equipped_weapon_id"] = str(entry.get("id") or "").strip().lower()
                         break
                 if not selected_weapon:
+                    trace_data["resolver_stage"] = "falling_back_to_first"
                     for entry in weapons:
                         if isinstance(entry, dict):
                             selected_weapon = entry
+                            trace_data["configured_weapon_id"] = str(entry.get("id") or "").strip().lower()
                             break
+            elif not selected_weapon and (target_weapon_id or target_weapon_name):
+                trace_data["fallback_reason"] = f"Requested weapon '{target_weapon_id or target_weapon_name}' not found in {len(weapons)} configured weapons."
+
         target_weapon_id = weapon_id.lower()
         target_weapon_name = weapon_name.lower()
         if _inline_weapon_matches_request(inline_weapon, target_weapon_id, target_weapon_name):
@@ -37150,11 +37827,29 @@ class InitiativeTracker(base.InitiativeTracker):
             and not bool(getattr(c, "is_wild_shaped", False))
             and (requested_unarmed or (not target_weapon_id and not target_weapon_name))
         ):
+            trace_data["resolver_stage"] = "synthesizing_unarmed"
             selected_weapon = _synthesized_unarmed_weapon(profile, attacks)
+            trace_data["fallback_weapon_name"] = "Unarmed Strike"
+            if not requested_unarmed:
+                trace_data["fallback_reason"] = "No weapon selected/matched and not wild-shaped; falling back to basic unarmed strike."
+
         if not selected_weapon:
-            self._lan.toast(ws_id, "Pick one of yer configured weapons first, matey.")
+            trace_data["resolver_stage"] = "failed"
+            error_msg = "Pick one of yer configured weapons first, matey."
+            if trace_data["fallback_reason"]:
+                error_msg += f" ({trace_data['fallback_reason']})"
+            self._lan.toast(ws_id, error_msg)
+            self._oplog(f"Attack resolution failed for {player_name}: {trace_data}", level="warning")
             return
+
+        trace_data["resolver_stage"] = "resolving_from_items"
         selected_weapon = self._resolve_weapon_from_items(dict(selected_weapon))
+        trace_data["final_weapon_id"] = str(selected_weapon.get("id") or "").strip().lower() or None
+        debug_event("attack.weapon.resolved", **trace_data)
+
+        # Log resolution trace for John Twilight or if specifically requested/needed
+        if player_name == "John Twilight" or trace_data.get("fallback_reason"):
+            self._oplog(f"Attack weapon resolved for {player_name}: {trace_data}", level="info")
 
         # Firearm ammo check and Loud event logging
         weapon_instance_id = str(selected_weapon.get("instance_id") or "").strip()

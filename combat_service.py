@@ -1162,7 +1162,7 @@ class CombatService:
                     if restore_hp:
                         max_hp = int(getattr(c, "max_hp", c.hp) or c.hp)
                         c.hp = max_hp
-                    
+
                     summary["hp_after"] = int(c.hp)
 
                     # 2. Temp HP
@@ -1193,7 +1193,7 @@ class CombatService:
                     # 5. Player-specific (Spell slots, Resource pools)
                     if bool(getattr(c, "is_pc", False)):
                         player_name = t._pc_name_for(int(c.cid))
-                        
+
                         # Spell Slots
                         if restore_spell_slots:
                             try:
@@ -1232,9 +1232,15 @@ class CombatService:
                                                 max_val = t._compute_resource_pool_max(profile, max_formula, pool.get("max"))
                                                 pool["current"] = max_val
                                                 restored_pools.append(str(pool.get("label") or pool.get("id")))
-                                        
+
                                         if restored_pools:
-                                            t._store_character_yaml(t._find_player_profile_path(player_name), profile)
+                                            t._store_character_yaml(
+                                                t._find_player_profile_path(player_name),
+                                                profile,
+                                                invalidation_domains=["dynamic_player_values", "resource_pools"],
+                                                include_static_refresh=False,
+                                                force_player_yaml_reload=False,
+                                            )
                                             summary["resource_pools_restored"] = restored_pools
                             except Exception:
                                 pass
@@ -1247,7 +1253,7 @@ class CombatService:
                         t._rebuild_table(scroll_to_current=True)
                     except Exception:
                         pass
-                    self._broadcast_tracker_state(include_static=True)
+                    self._broadcast_tracker_state(include_static=False)
 
             return {
                 "ok": True,

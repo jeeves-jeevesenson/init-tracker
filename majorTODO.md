@@ -68,6 +68,8 @@ These reports now outrank lower-stakes polish work and should drive the next gro
   - `/dm` can also become unresponsive or feel wedged after core mutations
   - current evidence points to broader hot-path / blocking behavior beyond the specific encounter-population wrapper bugs already fixed
 - **Current practical implication**: next stabilization work should focus on hot-path instrumentation, startup/request latency, snapshot/broadcast cost, and blocking mutation flows before returning to lower-priority polish.
+- **P0 responsiveness recovery landed 2026-05-22**: ordinary inventory/equipment writes now use `inventory_equipment_structure`, patch the changed player profile projection, schedule dynamic-only refresh, and avoid global static snapshot invalidation. Spell preset lookup now invalidates by current spell directory signature. Retest live equip/unequip/move/end-turn flow before treating this bucket as closed.
+- **Final playability latency amputation landed 2026-05-22**: tactical map and ship/surface/structure/boarding projections are experimental and default off for playable runtime (`INIT_TRACKER_ENABLE_TACTICAL_MAP=1` / `INIT_TRACKER_ENABLE_SHIP_SURFACES=1` opt in). `/api/dm/combat` is combat-lite by default and must not call `_dm_tactical_snapshot`; normal LAN broadcasts skip ship/surface projection work. Retest with `scripts/trace_latency_summary.py` and treat any ordinary action over 5000ms as release-blocking.
 
 #### 3.1.b Recently fixed but still worth retesting
 
@@ -285,6 +287,7 @@ The focused player-file follow-up is now reflected in repo:
      warlock/other casters work in practice because the UI surfaces both
      slot groups, but there is no backend constraint that forces warlock
      spells to use pact slots.
+- 2026-05-22 responsiveness pass: Throat Goat's `Sword of Wounding` is now verified equip/weapon-assignment eligible from `Items/Magic_Items/sword_of_wounding.yaml`; no durable player YAML patch was required.
 
 ### 6.2 Eldramar wand migration (2026-04-22) — landed
 

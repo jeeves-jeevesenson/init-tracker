@@ -71,6 +71,9 @@ class LanMovementActionDispatchTests(unittest.TestCase):
                 self.calls.append((str(msg.get("type")), cid, ws_id, is_admin))
                 return {"ok": True}
 
+            def allow_prompt_claim_override(self, msg, *, action_type, cid, claimed):
+                return False
+
         service_stub = ServiceStub()
         app._ensure_player_commands = lambda: service_stub
 

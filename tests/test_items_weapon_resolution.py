@@ -323,5 +323,152 @@ class ItemsWeaponResolutionTests(unittest.TestCase):
             self.assertGreater(feet, 0.0, f"{item_id} resolved with non-positive range '{range_text}'")
 
 
+    def test_inventory_payload_non_empty_for_seeded_equipment_user(self):
+        # Verify that weapons equipped in inventory show up in attacks.weapons
+        profile_data = {
+            "name": "John",
+            "inventory": {
+                "items": [
+                    {"id": "longsword", "instance_id": "ls1", "equipped": True, "equipped_slot": "main_hand"}
+                ]
+            },
+            "attacks": {"weapons": []}
+        }
+        weapon_registry = {
+            "longsword": {"id": "longsword", "name": "Longsword", "category": "martial_melee", "damage": {"one_handed": {"formula": "1d8"}}}
+        }
+
+        with mock.patch.object(self.app, "_items_registry_payload", return_value={"weapons": weapon_registry}), \
+             mock.patch.object(self.app, "_magic_items_registry_payload", return_value={}):
+            normalized = self.app._normalize_player_profile(profile_data, "John")
+
+        weapons = normalized.get("attacks", {}).get("weapons", [])
+        self.assertEqual(len(weapons), 1)
+        self.assertEqual(weapons[0]["id"], "longsword")
+        self.assertEqual(weapons[0]["instance_id"], "ls1")
+        self.assertTrue(weapons[0]["equipped"])
+
+    def test_equipped_weapon_selected_for_attack(self):
+        # Verify that if no weapon requested, equipped weapon is used
+        profile_data = {
+            "name": "John",
+            "attacks": {
+                "weapons": [
+                    {"id": "dagger", "name": "Dagger", "equipped": False},
+                    {"id": "longsword", "name": "Longsword", "equipped": True}
+                ]
+            }
+        }
+        c = mock.Mock()
+        c.name = "John"
+        c.cid = 1
+        target = mock.Mock()
+        target.cid = 2
+
+        self.app.combatants = {1: c, 2: target}
+        self.app._lan = mock.Mock()
+
+        msg = {"type": "attack_request", "cid": 1, "target_cid": 2, "attack_roll": 15}
+
+        with mock.patch.object(self.app, "_profile_for_player_name", return_value=profile_data), \
+             mock.patch.object(self.app, "_pc_name_for", return_value="John"), \
+             mock.patch.object(self.app, "_use_action", return_value=True), \
+             mock.patch.object(self.app, "_class_level_from_profile", return_value=0), \
+             mock.patch.object(self.app, "_get_controlled_unit_or_pc", return_value=c):
+            # Capture the weapon passed to resolve_weapon_from_items
+            with mock.patch.object(self.app, "_resolve_weapon_from_items") as mock_resolve:
+                mock_resolve.side_effect = lambda w, **kw: w
+                try:
+                    self.app._adjudicate_attack_request(msg, cid=1, ws_id="ws", is_admin=False)
+                except Exception:
+                    pass # We only care about selection stage
+
+                self.assertTrue(mock_resolve.called)
+                selected = mock_resolve.call_args[0][0]
+                self.assertEqual(selected["id"], "longsword")
+
+    def test_configured_weapon_prevents_unarmed_fallback(self):
+        # Verify that if a weapon exists but none are equipped, it uses the first weapon instead of unarmed
+        profile_data = {
+            "name": "John",
+            "attacks": {
+                "weapons": [
+                    {"id": "longsword", "name": "Longsword", "equipped": False}
+                ]
+            }
+        }
+        c = mock.Mock()
+        c.name = "John"
+        c.cid = 1
+        target = mock.Mock()
+        target.cid = 2
+        self.app.combatants = {1: c, 2: target}
+        self.app._lan = mock.Mock()
+        msg = {"type": "attack_request", "cid": 1, "target_cid": 2, "attack_roll": 15}
+
+        with mock.patch.object(self.app, "_profile_for_player_name", return_value=profile_data), \
+             mock.patch.object(self.app, "_pc_name_for", return_value="John"), \
+             mock.patch.object(self.app, "_get_controlled_unit_or_pc", return_value=c):
+            with mock.patch.object(self.app, "_resolve_weapon_from_items") as mock_resolve:
+                mock_resolve.side_effect = lambda w, **kw: w
+                try:
+                    self.app._adjudicate_attack_request(msg, cid=1, ws_id="ws", is_admin=False)
+                except Exception:
+                    pass
+
+                self.assertTrue(mock_resolve.called)
+                selected = mock_resolve.call_args[0][0]
+                self.assertEqual(selected["id"], "longsword")
+
+    def test_unarmed_fallback_requires_fallback_reason(self):
+        # Verify that if we fall back to unarmed, it's traced with a reason
+        profile_data = {"name": "John", "attacks": {"weapons": []}}
+        c = mock.Mock()
+        c.name = "John"
+        c.cid = 1
+        c.is_wild_shaped = False
+        target = mock.Mock()
+        target.cid = 2
+        self.app.combatants = {1: c, 2: target}
+        self.app._lan = mock.Mock()
+        msg = {"type": "attack_request", "cid": 1, "target_cid": 2, "attack_roll": 15}
+
+        with mock.patch.object(self.app, "_profile_for_player_name", return_value=profile_data), \
+             mock.patch.object(self.app, "_pc_name_for", return_value="John"), \
+             mock.patch.object(self.app, "_get_controlled_unit_or_pc", return_value=c), \
+             mock.patch.object(self.app, "_oplog") as mock_oplog:
+            try:
+                self.app._adjudicate_attack_request(msg, cid=1, ws_id="ws", is_admin=False)
+            except Exception:
+                pass
+
+            # Check if oplog was called with trace containing fallback_reason
+            traces = [str(args[0]) for args, kwargs in mock_oplog.call_args_list if "fallback_reason" in str(args[0])]
+            self.assertTrue(any("falling back to basic unarmed strike" in t for t in traces))
+
+    def test_attack_resolution_traces_inventory_and_fallback_reason(self):
+        # Verify that failed resolution toasts with a reason
+        profile_data = {"name": "John", "attacks": {"weapons": []}}
+        c = mock.Mock()
+        c.name = "John"
+        c.cid = 1
+        c.is_wild_shaped = False
+        target = mock.Mock()
+        target.cid = 2
+        self.app.combatants = {1: c, 2: target}
+        self.app._lan = mock.Mock()
+        # Request a specific weapon that doesn't exist
+        msg = {"type": "attack_request", "cid": 1, "target_cid": 2, "attack_roll": 15, "weapon_id": "missing"}
+
+        with mock.patch.object(self.app, "_profile_for_player_name", return_value=profile_data), \
+             mock.patch.object(self.app, "_pc_name_for", return_value="John"), \
+             mock.patch.object(self.app, "_get_controlled_unit_or_pc", return_value=c):
+            self.app._adjudicate_attack_request(msg, cid=1, ws_id="ws", is_admin=False)
+
+            # Should toast with reason
+            toasts = [str(args[1]) for args, kwargs in self.app._lan.toast.call_args_list]
+            self.assertTrue(any("Requested weapon 'missing' not found" in t for t in toasts))
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -190,6 +190,88 @@ class LanSnapshotCacheTests(unittest.TestCase):
         self.assertEqual(lan._cached_snapshot["spell_presets"], [{"slug": "shield"}])
         self.assertEqual(lan._cached_snapshot["player_spells"], {"Alice": {"prepared": ["shield"]}})
 
+    def test_lan_first_load_spell_catalog_non_empty(self):
+        app, calls = self._snapshot_app()
+        lan = tracker_mod.LanController(app)
+        lan._cached_snapshot = {"spell_presets": []}
+
+        payload = lan._static_data_payload()
+        self.assertEqual(calls["presets"], 1)
+        self.assertEqual(payload["spell_presets"], [{"slug": "shield"}])
+
+    def test_lan_first_load_player_spells_for_seeded_caster(self):
+        app, calls = self._snapshot_app()
+        lan = tracker_mod.LanController(app)
+        lan._cached_snapshot = {"player_spells": {}}
+
+        payload = lan._static_data_payload()
+        self.assertEqual(calls["spells"], 1)
+        self.assertEqual(payload["player_spells"], {"Alice": {"prepared": ["shield"]}})
+
+    def test_lan_first_load_resource_pools_for_seeded_resource_user(self):
+        app, calls = self._snapshot_app()
+        lan = tracker_mod.LanController(app)
+        lan._cached_snapshot = {"resource_pools": {}}
+
+        payload = lan._static_data_payload()
+        self.assertEqual(payload["resource_pools"], {"Alice": [{"id": "slots", "current": 1}]})
+
+    def test_lan_state_delta_does_not_clear_spell_capabilities(self):
+        app, _calls = self._snapshot_app()
+        lan = tracker_mod.LanController(app)
+
+        # Seed cache with rich spell capabilities
+        lan._cached_snapshot = {
+            "spell_presets": [{"slug": "shield"}],
+            "player_spells": {"Alice": {"prepared": ["shield"]}},
+            "player_profiles": {"Alice": {"name": "Alice"}}
+        }
+
+        # Simulate delta/cheap tick that doesn't include static data
+        stripped = {"spell_presets": [], "player_spells": {}, "player_profiles": {}}
+
+        merged = lan._merge_cached_snapshot_carryover(stripped)
+        self.assertEqual(merged["spell_presets"], [{"slug": "shield"}])
+        self.assertEqual(merged["player_spells"], {"Alice": {"prepared": ["shield"]}})
+        self.assertEqual(merged["player_profiles"], {"Alice": {"name": "Alice"}})
+
+    def test_lan_state_delta_does_not_clear_inventory_equipment_capabilities(self):
+        app, _calls = self._snapshot_app()
+        lan = tracker_mod.LanController(app)
+
+        # Seed cache with rich inventory/equipment capabilities
+        lan._cached_snapshot = {
+            "player_profiles": {
+                "John": {
+                    "name": "John",
+                    "inventory": {"items": [{"id": "axe", "equipped": True}]},
+                    "attacks": {"weapons": [{"id": "axe"}]}
+                }
+            }
+        }
+
+        # Simulate delta tick that doesn't include profiles
+        stripped = {"player_profiles": {}}
+
+        merged = lan._merge_cached_snapshot_carryover(stripped)
+        self.assertIn("John", merged["player_profiles"])
+        self.assertEqual(merged["player_profiles"]["John"]["inventory"]["items"][0]["id"], "axe")
+
+    def test_resource_pools_survive_state_delta(self):
+        app, _calls = self._snapshot_app()
+        lan = tracker_mod.LanController(app)
+
+        lan._cached_snapshot = {
+            "resource_pools": {"Alice": [{"id": "slots", "current": 1}]}
+        }
+
+        # Delta tick with empty resource pools
+        stripped = {"resource_pools": {}}
+
+        merged = lan._merge_cached_snapshot_carryover(stripped)
+        self.assertEqual(merged["resource_pools"], {"Alice": [{"id": "slots", "current": 1}]})
+
 
 if __name__ == "__main__":
     unittest.main()
+
