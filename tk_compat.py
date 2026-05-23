@@ -144,9 +144,12 @@ class _DummyTkWidget:
         return None
 
     def __getattr__(self, name: str) -> Any:
+        if name.startswith("__") and name.endswith("__"):
+            raise AttributeError(name)
         if name == "tk":
             return self
         return lambda *args, **kwargs: None
+
 
 
 class _DummyTkVariable(_DummyTkWidget):

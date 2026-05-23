@@ -1527,8 +1527,7 @@ class DmTacticalMapRoutesTests(unittest.TestCase):
         self.assertTrue(payload["ok"])
         self.assertEqual(3, payload["snapshot"]["round"])
         self.assertEqual("Goblin", payload["snapshot"]["combatants"][0]["name"])
-        self.assertIn("tactical_map", payload["snapshot"])
-        self.assertEqual(12, payload["snapshot"]["tactical_map"]["grid"]["cols"])
+        self.assertNotIn("tactical_map", payload["snapshot"])
 
     def test_map_new_route_initializes_blank_map(self):
         client, lan = self._build_client()

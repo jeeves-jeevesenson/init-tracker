@@ -147,6 +147,9 @@ from combatant_name_service import CombatantNameService
 from player_command_service import PlayerCommandService
 
 
+from contextvars import ContextVar
+_CURRENT_REQUEST_PATH: ContextVar[Optional[str]] = ContextVar("current_request_path", default=None)
+
 FAIL_OUTCOME_LABELS = {"fail", "failed", "failure", "failed_save", "fail_save"}
 USER_YAML_DIRNAME = "Dnd-Init-Yamls"
 SESSION_SNAPSHOT_SCHEMA_VERSION = 2
@@ -2447,6 +2450,15 @@ class LanController:
             return
 
         self._fastapi_app = FastAPI()
+
+        @self._fastapi_app.middleware("http")
+        async def set_current_request_path_middleware(request: Request, call_next):
+            token = _CURRENT_REQUEST_PATH.set(request.url.path)
+            try:
+                response = await call_next(request)
+                return response
+            finally:
+                _CURRENT_REQUEST_PATH.reset(token)
         # Used to bust LAN-client caches for JS/CSS without needing a rebuild.
         app_version = str(APP_VERSION)
         _sync_profile_picture_cache()
@@ -4031,6 +4043,7 @@ class LanController:
             *,
             combat_snapshot: Optional[Dict[str, Any]] = None,
             tactical_snapshot: Optional[Dict[str, Any]] = None,
+            include_tactical: Optional[bool] = None,
         ) -> Dict[str, Any]:
             # If a recent _lan_force_state_broadcast already built a DM
             # snapshot for the same request flow, reuse it. This skips a
@@ -4041,6 +4054,12 @@ class LanController:
             # ``self._lan.*`` here, which 500'd on every route that
             # called _dm_console_snapshot() after a broadcast (e.g.
             # /api/dm/map/combatants/{cid}/move).
+            if include_tactical is None:
+                req_path = _CURRENT_REQUEST_PATH.get()
+                if req_path and (req_path.startswith("/api/dm/map") or req_path.startswith("/api/dm/monster-pilot")):
+                    include_tactical = True
+                else:
+                    include_tactical = tactical_map_enabled()
             if combat_snapshot is None and tactical_snapshot is None:
                 cached = getattr(self, "_cached_dm_snapshot", None)
                 cached_at = getattr(self, "_cached_dm_snapshot_at", 0.0)
@@ -4056,7 +4075,7 @@ class LanController:
             return self._dm_console_snapshot_payload(
                 combat_snapshot=combat_snapshot,
                 tactical_snapshot=tactical_snapshot,
-                include_tactical=True,
+                include_tactical=include_tactical,
             )
 
         def _load_dm_console_html(workspace: str = "dashboard") -> str:
@@ -9349,7 +9368,7 @@ class InitiativeTracker(base.InitiativeTracker):
         _archive_startup_logs()
         super().__init__()
         self._map_window = None
-        if self.host_mode == "desktop":
+        if self.__dict__.get("host_mode", "desktop") == "desktop":
             self.title(f"DnD Initiative Tracker — v{APP_VERSION}")
 
         # Operations logger (terminal + ./logs/operations.log)
@@ -9357,7 +9376,7 @@ class InitiativeTracker(base.InitiativeTracker):
 
         self._lan = LanController(self)
         self._load_lan_url_settings()
-        if self.host_mode == "desktop":
+        if self.__dict__.get("host_mode", "desktop") == "desktop":
             self._install_lan_menu()
 
         # Monster library (YAML files in ./Monsters)
@@ -9368,7 +9387,7 @@ class InitiativeTracker(base.InitiativeTracker):
         self._monster_modifier_state: Dict[int, List[Dict[str, Any]]] = {}
         self._load_monsters_index()
         # Swap the Name entry for a monster dropdown + library button
-        if self.host_mode == "desktop":
+        if self.__dict__.get("host_mode", "desktop") == "desktop":
             self.after(0, self._install_monster_dropdown_widget)
 
         # Spell preset cache (YAML files in ./Spells)
@@ -20044,7 +20063,7 @@ class InitiativeTracker(base.InitiativeTracker):
         positions = dict(self._lan_positions)
         # In headless mode, we treat the map as ready if we have valid dimensions,
         # since there is no desktop window to open.
-        map_ready = mw is not None or self.host_mode == "headless"
+        map_ready = mw is not None or self.__dict__.get("host_mode", "desktop") == "headless"
         aoes: List[Dict[str, Any]] = []
         aoe_source: Dict[int, Dict[str, Any]] = dict(self.__dict__.get("_lan_aoes", {}) or {})
         rough_terrain: Dict[Tuple[int, int], object] = dict(getattr(self, "_lan_rough_terrain", {}) or {})
@@ -21450,6 +21469,8 @@ class InitiativeTracker(base.InitiativeTracker):
     ) -> List[Dict[str, Any]]:
         if not bool(self.__dict__.get("_lan_auras_enabled", True)):
             return []
+        if not bool(getattr(self, "combatants", {})):
+            return []
         pos_map = positions if isinstance(positions, dict) else dict(getattr(self, "_lan_positions", {}) or {})
         fps = max(1.0, float(feet_per_square or 5.0))
         if not isinstance(profiles_by_name, dict):
@@ -21471,10 +21492,26 @@ class InitiativeTracker(base.InitiativeTracker):
             norm_name = self._normalize_character_lookup_key(name_key)
             if norm_name:
                 profile_lookup.setdefault(norm_name, raw_profile)
+        cached_profiles_by_name = (
+            self.__dict__.get("_player_yaml_data_by_name")
+            if isinstance(self.__dict__.get("_player_yaml_data_by_name"), dict)
+            else {}
+        )
+        for raw_name, raw_profile in (cached_profiles_by_name or {}).items():
+            if not isinstance(raw_profile, dict):
+                continue
+            name_key = str(raw_name or "").strip()
+            if not name_key:
+                continue
+            profile_lookup.setdefault(name_key, raw_profile)
+            norm_name = self._normalize_character_lookup_key(name_key)
+            if norm_name:
+                profile_lookup.setdefault(norm_name, raw_profile)
         alias_map = self._player_yaml_name_map if isinstance(getattr(self, "_player_yaml_name_map", None), dict) else {}
         profile_by_path = (
             self._player_yaml_cache_by_path if isinstance(getattr(self, "_player_yaml_cache_by_path", None), dict) else {}
         )
+        profile_override = self.__dict__.get("_profile_for_player_name")
         contexts: List[Dict[str, Any]] = []
         for combatant in self.combatants.values():
             cid = _normalize_cid_value(getattr(combatant, "cid", None), "lan.aura.cid")
@@ -21485,6 +21522,13 @@ class InitiativeTracker(base.InitiativeTracker):
             source_name = str(getattr(combatant, "name", "") or "").strip()
             source_profile_key = self._normalize_character_lookup_key(source_name)
             profile = profile_lookup.get(source_name)
+            if callable(profile_override):
+                try:
+                    override_profile = profile_override(source_name)
+                except Exception:
+                    override_profile = None
+                if isinstance(override_profile, dict):
+                    profile = override_profile
             if not isinstance(profile, dict) and source_profile_key:
                 profile = profile_lookup.get(source_profile_key)
             if not isinstance(profile, dict) and source_profile_key:
@@ -24947,11 +24991,17 @@ class InitiativeTracker(base.InitiativeTracker):
         lookup_name = str(player_name or "").strip()
         if not lookup_name:
             return None
-        profile = self._player_yaml_data_by_name.get(lookup_name)
+        profiles_by_name = self.__dict__.get("_player_yaml_data_by_name")
+        if not isinstance(profiles_by_name, dict):
+            profiles_by_name = {}
+        profile = profiles_by_name.get(lookup_name)
         if isinstance(profile, dict):
             return profile
         player_path = self._find_player_profile_path(lookup_name)
-        raw_profile = self._player_yaml_cache_by_path.get(player_path) if isinstance(player_path, Path) else None
+        profiles_by_path = self.__dict__.get("_player_yaml_cache_by_path")
+        if not isinstance(profiles_by_path, dict):
+            profiles_by_path = {}
+        raw_profile = profiles_by_path.get(player_path) if isinstance(player_path, Path) else None
         if isinstance(raw_profile, dict):
             return raw_profile
         return None
@@ -28608,15 +28658,23 @@ class InitiativeTracker(base.InitiativeTracker):
         perf_start = time.perf_counter() if perf_debug else 0.0
         try:
             if not force_refresh:
+                cache_by_path = self.__dict__.get("_player_yaml_cache_by_path")
+                cache_by_name = self.__dict__.get("_player_yaml_data_by_name")
                 if (
                     int(self.__dict__.get("_player_yaml_cache_hold_depth", 0) or 0) > 0
-                    and (self._player_yaml_cache_by_path or self._player_yaml_data_by_name)
+                    and (cache_by_path or cache_by_name)
                 ):
                     return
                 now = time.monotonic()
-                if self._player_yaml_last_refresh and (
-                    now - self._player_yaml_last_refresh < self._player_yaml_refresh_interval_s
-                ):
+                try:
+                    last_refresh = float(self.__dict__.get("_player_yaml_last_refresh", 0.0) or 0.0)
+                except Exception:
+                    last_refresh = 0.0
+                try:
+                    refresh_interval = float(self.__dict__.get("_player_yaml_refresh_interval_s", 10.0) or 10.0)
+                except Exception:
+                    refresh_interval = 10.0
+                if last_refresh and (now - last_refresh < refresh_interval):
                     return
             if yaml is None:
                 self._player_yaml_cache_by_path = {}
@@ -28652,18 +28710,31 @@ class InitiativeTracker(base.InitiativeTracker):
             dir_signature = _directory_signature(players_dir, files)
             enabled_signature = tuple(sorted(path.name for path in enabled_files))
             combined_signature = (dir_signature, enabled_signature)
+            cached_by_path = self.__dict__.get("_player_yaml_cache_by_path")
+            if not isinstance(cached_by_path, dict):
+                cached_by_path = {}
+            cached_meta_by_path = self.__dict__.get("_player_yaml_meta_by_path")
+            if not isinstance(cached_meta_by_path, dict):
+                cached_meta_by_path = {}
+            cached_by_name = self.__dict__.get("_player_yaml_data_by_name")
+            if not isinstance(cached_by_name, dict):
+                cached_by_name = {}
+            cached_name_map = self.__dict__.get("_player_yaml_name_map")
+            if not isinstance(cached_name_map, dict):
+                cached_name_map = {}
+            cached_signature = self.__dict__.get("_player_yaml_dir_signature")
             if (
                 not force_refresh
-                and self._player_yaml_cache_by_path
-                and combined_signature == self._player_yaml_dir_signature
+                and cached_by_path
+                and combined_signature == cached_signature
             ):
                 self._player_yaml_last_refresh = time.monotonic()
                 return
 
-            data_by_path = dict(self._player_yaml_cache_by_path)
-            meta_by_path = dict(self._player_yaml_meta_by_path)
-            data_by_name = dict(self._player_yaml_data_by_name)
-            name_map = dict(self._player_yaml_name_map)
+            data_by_path = dict(cached_by_path)
+            meta_by_path = dict(cached_meta_by_path)
+            data_by_name = dict(cached_by_name)
+            name_map = dict(cached_name_map)
 
             def purge_path_entries(target_path: Path) -> None:
                 keys_to_remove = [key for key, value in name_map.items() if value == target_path]
@@ -32533,6 +32604,23 @@ class InitiativeTracker(base.InitiativeTracker):
             return False, "Pick a valid spell slot level, matey.", None, None
         if minimum_level is not None and slot_level < minimum_level:
             return False, "Ye can't downcast that spell, matey.", None, None
+        legacy_override = self.__dict__.get("_consume_spell_slot_for_cast")
+        if callable(legacy_override):
+            try:
+                ok, err, spent_level = legacy_override(
+                    caster_name=caster_name,
+                    slot_level=slot_level,
+                    minimum_level=minimum_level,
+                )
+            except TypeError:
+                ok, err, spent_level = legacy_override(caster_name, slot_level, minimum_level)
+            provenance = None
+            if ok and spent_level not in (None, 0):
+                try:
+                    provenance = self._spell_resource_spend_provenance("spell_slots", int(spent_level))
+                except Exception:
+                    provenance = None
+            return bool(ok), str(err or ""), spent_level, provenance
         try:
             player_name, slots = self._resolve_spell_slot_profile(caster_name)
         except ValueError as exc:
@@ -37835,10 +37923,9 @@ class InitiativeTracker(base.InitiativeTracker):
 
         if not selected_weapon:
             trace_data["resolver_stage"] = "failed"
-            error_msg = "Pick one of yer configured weapons first, matey."
+            self._lan.toast(ws_id, "Pick one of yer configured weapons first, matey.")
             if trace_data["fallback_reason"]:
-                error_msg += f" ({trace_data['fallback_reason']})"
-            self._lan.toast(ws_id, error_msg)
+                self._lan.toast(ws_id, str(trace_data["fallback_reason"]))
             self._oplog(f"Attack resolution failed for {player_name}: {trace_data}", level="warning")
             return
 
@@ -48676,8 +48763,8 @@ class InitiativeTracker(base.InitiativeTracker):
 
     def _load_monsters_index(self) -> None:
         """Load ./Monsters/**/*.yml|*.yaml and build an index for monster lookups."""
-        self._monster_specs = []
-        self._monsters_by_name = {}
+        local_monster_specs = []
+        local_monsters_by_name = {}
         self._wild_shape_beast_cache = None
         self._invalidate_lan_static_snapshot_cache("monster_catalog_refresh")
         try:
@@ -48717,6 +48804,8 @@ class InitiativeTracker(base.InitiativeTracker):
         yaml_missing_logged = False
 
         if not files:
+            self._monster_specs = []
+            self._monsters_by_name = {}
             _write_index_file(index_path, {"version": 4, "entries": {}})
             return
 
@@ -48750,9 +48839,9 @@ class InitiativeTracker(base.InitiativeTracker):
                             turn_schedule_every_n=summary.get("turn_schedule_every_n"),
                             turn_schedule_counts=summary.get("turn_schedule_counts"),
                         )
-                        if name not in self._monsters_by_name:
-                            self._monsters_by_name[name] = spec
-                        self._monster_specs.append(spec)
+                        if name not in local_monsters_by_name:
+                            local_monsters_by_name[name] = spec
+                        local_monster_specs.append(spec)
 
                         new_entry = dict(entry)
                         new_entry["mtime_ns"] = meta.get("mtime_ns")
@@ -48943,9 +49032,9 @@ class InitiativeTracker(base.InitiativeTracker):
                 turn_schedule_counts=turn_schedule_counts,
             )
 
-            if name not in self._monsters_by_name:
-                self._monsters_by_name[name] = spec
-            self._monster_specs.append(spec)
+            if name not in local_monsters_by_name:
+                local_monsters_by_name[name] = spec
+            local_monster_specs.append(spec)
 
             new_entries[rel_key] = {
                 "mtime_ns": meta.get("mtime_ns"),
@@ -48972,7 +49061,9 @@ class InitiativeTracker(base.InitiativeTracker):
                 },
             }
 
-        self._monster_specs.sort(key=lambda spec: (spec.name.lower(), str(spec.filename).lower()))
+        local_monster_specs.sort(key=lambda spec: (spec.name.lower(), str(spec.filename).lower()))
+        self._monster_specs = local_monster_specs
+        self._monsters_by_name = local_monsters_by_name
         _write_index_file(index_path, {"version": 4, "entries": new_entries})
 
 
