@@ -156,8 +156,14 @@ def _current_request_wants_tactical_map() -> bool:
         return False
     return (
         path == "/dm/map"
+        or path == "/dmcontrol"
+        or path.startswith("/dm/map?")
+        or path.startswith("/dmcontrol?")
         or path.startswith("/api/dm/map")
         or path.startswith("/api/dm/monster-pilot")
+        or "workspace=dmcontrol" in path
+        or "workspace=map" in path
+        or "workspace=map-control" in path
     )
 
 
@@ -2465,7 +2471,10 @@ class LanController:
 
         @self._fastapi_app.middleware("http")
         async def set_current_request_path_middleware(request: Request, call_next):
-            token = _CURRENT_REQUEST_PATH.set(request.url.path)
+            full_path = request.url.path
+            if request.url.query:
+                full_path += f"?{request.url.query}"
+            token = _CURRENT_REQUEST_PATH.set(full_path)
             try:
                 response = await call_next(request)
                 return response
@@ -6515,14 +6524,14 @@ class LanController:
                 await ws.accept()
                 ws_id = id(ws)
                 workspace = ws.query_params.get("workspace", "dashboard")
+                is_map_client = (workspace in ("map", "dmcontrol", "map-control"))
                 with self._clients_lock:
                     self._dm_ws_clients[ws_id] = ws
                     self._ws_send_locks[ws_id] = asyncio.Lock()
-                    self._dm_ws_is_map[ws_id] = (workspace == "map")
+                    self._dm_ws_is_map[ws_id] = is_map_client
                 # Send initial snapshot immediately on connect
                 try:
                     if _dm_service is not None:
-                        is_map_client = (workspace == "map")
                         snap = _dm_console_snapshot(include_tactical=is_map_client)
                         await self._send_ws_text_serialized(ws_id, ws, self._dm_state_payload_text(snap))
                 except Exception:

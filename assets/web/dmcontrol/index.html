@@ -436,7 +436,7 @@
      * Deferred: target click selection, resolution, AoE, and Multiattack.
      */
 
-    const API_COMBAT = '/api/dm/combat';
+    const API_COMBAT = '/api/dm/combat?workspace=dmcontrol';
     let pollInterval = null;
     let state = null;
     // DMPERF: lightweight, opt-in frontend timing (?perf=1 to enable).
@@ -938,7 +938,7 @@
       renderError('Moving...');
       const tMoveStart = DM_PERF ? performance.now() : 0;
       try {
-        const resp = await fetch(`/api/dm/map/combatants/${cid}/move`, {
+        const resp = await fetch(`/api/dm/map/combatants/${cid}/move?workspace=dmcontrol`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ col, row })
@@ -1195,7 +1195,7 @@
       btn.textContent = 'Resting...';
 
       try {
-        const resp = await fetch('/api/dm/combat/long-rest', {
+        const resp = await fetch('/api/dm/combat/long-rest?workspace=dmcontrol', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
@@ -1235,7 +1235,7 @@
       localResolutionInFlight = true;
       draw();
       try {
-        const resp = await fetch(`/api/dm/monster-capabilities/${actorCid}/execute`, {
+        const resp = await fetch(`/api/dm/monster-capabilities/${actorCid}/execute?workspace=dmcontrol`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
@@ -1282,7 +1282,7 @@
       renderActionPanel(actor, capabilitySummary);
 
       try {
-        const resp = await fetch(`/api/dm/monster-capabilities/${actorCid}/execute`, {
+        const resp = await fetch(`/api/dm/monster-capabilities/${actorCid}/execute?workspace=dmcontrol`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
@@ -1344,7 +1344,7 @@
       localResolutionInFlight = true;
       draw();
       try {
-        const resp = await fetch(`/api/dm/monster-capabilities/${actorCid}/execute`, {
+        const resp = await fetch(`/api/dm/monster-capabilities/${actorCid}/execute?workspace=dmcontrol`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
@@ -1423,7 +1423,7 @@
         if (DM_PERF) dmPerfMark('applyResults.requestBuild', performance.now() - tBuildStart);
 
         const tFetchStart = DM_PERF ? performance.now() : 0;
-        const resp = await fetch(`/api/dm/monster-capabilities/${actorCid}/resolve-targets`, {
+        const resp = await fetch(`/api/dm/monster-capabilities/${actorCid}/resolve-targets?workspace=dmcontrol`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: requestBody
@@ -2707,7 +2707,7 @@
     async function handleCombatControl() {
       if (!state) return;
       const isStart = !state.in_combat;
-      const endpoint = isStart ? '/api/dm/combat/start' : '/api/dm/combat/next-turn';
+      const endpoint = isStart ? '/api/dm/combat/start?workspace=dmcontrol' : '/api/dm/combat/next-turn?workspace=dmcontrol';
       const tStart = DM_PERF ? performance.now() : 0;
       const btn = document.getElementById('combatControlBtn');
       const originalLabel = btn ? btn.textContent : null;

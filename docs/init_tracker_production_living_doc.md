@@ -1288,8 +1288,8 @@ Decision:
 
 - Enable tactical map projections in normal combat surfaces only with `INIT_TRACKER_ENABLE_TACTICAL_MAP=1`.
 - Enable ship/surface/structure/boarding projections in normal combat surfaces only with `INIT_TRACKER_ENABLE_SHIP_SURFACES=1`.
-- `/api/dm/combat` is combat-lite by default and must not call `_dm_tactical_snapshot`.
-- Explicit `/dm/map`, `/api/dm/map/*` routes, and `/ws/dm` WebSocket channels force tactical map inclusion to ensure the map workspace operates correctly without global experimental flags, while keeping standard combat loops optimized and combat-lite.
+- `/api/dm/combat` is combat-lite by default and must not call `_dm_tactical_snapshot` unless requested.
+- Explicit `/dm/map`, `/dmcontrol` workspaces, `/api/dm/map/*` routes, `/api/*?workspace=dmcontrol` (or `?workspace=map`), and `/ws/dm` WebSocket channels force tactical map inclusion to ensure map workspaces operate correctly without global experimental flags, while keeping standard combat loops optimized and combat-lite.
 
 John Echo weapon status:
 

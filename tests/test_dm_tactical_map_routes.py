@@ -1399,6 +1399,8 @@ class DmTacticalMapRoutesTests(unittest.TestCase):
         lan._cached_pcs = []
         lan._clients_lock = threading.RLock()
         lan._dm_ws_clients = {}
+        lan._ws_send_locks = {}
+        lan._dm_ws_is_map = {}
         lan._actions = None
         lan._loop = None
         lan._best_lan_url = lambda: "http://127.0.0.1:0"
@@ -3094,6 +3096,36 @@ class DmTacticalMapHotfixTests(DmTacticalMapRoutesTests):
     def test_ws_dm_endpoint_workspace_map_query_param(self):
         client, lan = self._build_client()
         with client.websocket_connect("/ws/dm?workspace=map") as websocket:
+            data = websocket.receive_json()
+            self.assertIn("tactical_map", data.get("snapshot", {}))
+
+    def test_dmcontrol_endpoint_and_workspace_queries_force_tactical_snapshot(self):
+        client, lan = self._build_client()
+        with mock.patch.dict("os.environ", {"INIT_TRACKER_ENABLE_TACTICAL_MAP": "false"}):
+            # 1. /dmcontrol direct route
+            token = tracker_mod._CURRENT_REQUEST_PATH.set("/dmcontrol")
+            try:
+                snap = lan._dm_console_snapshot()
+                self.assertIn("tactical_map", snap)
+            finally:
+                tracker_mod._CURRENT_REQUEST_PATH.reset(token)
+
+            # 2. Polling API with workspace=dmcontrol query parameter
+            response = client.get("/api/dm/combat?workspace=dmcontrol")
+            self.assertEqual(200, response.status_code)
+            payload = response.json()
+            self.assertIn("tactical_map", payload)
+
+            # 3. Next turn action with workspace=dmcontrol
+            response2 = client.post("/api/dm/combat/next-turn?workspace=dmcontrol")
+            self.assertEqual(200, response2.status_code)
+            payload2 = response2.json()
+            self.assertIn("snapshot", payload2)
+            self.assertIn("tactical_map", payload2["snapshot"])
+
+    def test_ws_dm_endpoint_dmcontrol_workspace_query_param(self):
+        client, lan = self._build_client()
+        with client.websocket_connect("/ws/dm?workspace=dmcontrol") as websocket:
             data = websocket.receive_json()
             self.assertIn("tactical_map", data.get("snapshot", {}))
 
