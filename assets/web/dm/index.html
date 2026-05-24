@@ -2560,13 +2560,22 @@ function connectDmWs() {
   if (wsReconnectTimer) { clearTimeout(wsReconnectTimer); wsReconnectTimer = null; }
   try {
     const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
+    const hasParams = !!adminToken;
     const tokenParam = adminToken ? `?token=${encodeURIComponent(adminToken)}` : '';
-    dmWs = new WebSocket(`${proto}//${location.host}/ws/dm${tokenParam}`);
+    const workspaceParam = (hasParams ? '&' : '?') + `workspace=${encodeURIComponent(DM_WORKSPACE)}`;
+    dmWs = new WebSocket(`${proto}//${location.host}/ws/dm${tokenParam}${workspaceParam}`);
     dmWs.onmessage = (evt) => {
       try {
         const msg = JSON.parse(evt.data);
         if (msg.type === 'dm_state' && msg.snapshot) applySnapshot(msg.snapshot);
       } catch (_) {}
+    };
+    dmWs.onopen = () => {
+      if (IS_DM_MAP_WORKSPACE) {
+        try {
+          dmWs.send(JSON.stringify({ action: 'subscribe_map' }));
+        } catch (_) {}
+      }
     };
     dmWs.onclose = () => {
       dmWs = null;

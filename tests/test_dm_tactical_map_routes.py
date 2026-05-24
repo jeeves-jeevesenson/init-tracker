@@ -2978,5 +2978,125 @@ class DmTacticalMapHtmlSurfaceTests(unittest.TestCase):
         self.assertIn("/api/dm/combat/combatants/{cid}/spell-target", html)
 
 
+class DmTacticalMapHotfixTests(DmTacticalMapRoutesTests):
+    def test_dm_map_page_or_startup_payload_includes_tactical_map_when_requested(self):
+        client, lan = self._build_client()
+        token = tracker_mod._CURRENT_REQUEST_PATH.set("/dm/map")
+        try:
+            snap = lan._dm_console_snapshot()
+            self.assertIn("tactical_map", snap)
+        finally:
+            tracker_mod._CURRENT_REQUEST_PATH.reset(token)
+
+    def test_dm_map_api_routes_force_tactical_snapshot_even_when_combat_lite_default(self):
+        client, lan = self._build_client()
+        with mock.patch.dict("os.environ", {"INIT_TRACKER_ENABLE_TACTICAL_MAP": "false"}):
+            response = client.post("/api/dm/map/settings", json={"cols": 25, "rows": 25})
+            self.assertEqual(200, response.status_code)
+            payload = response.json()
+            self.assertIn("snapshot", payload)
+            self.assertIn("tactical_map", payload["snapshot"])
+
+    def test_dm_combat_endpoint_still_excludes_tactical_map_by_default(self):
+        client, lan = self._build_client()
+        with mock.patch.dict("os.environ", {"INIT_TRACKER_ENABLE_TACTICAL_MAP": "false"}):
+            response = client.get("/api/dm/combat")
+            self.assertEqual(200, response.status_code)
+            payload = response.json()
+            self.assertNotIn("tactical_map", payload)
+
+    def test_next_turn_response_still_excludes_tactical_map_by_default(self):
+        client, lan = self._build_client()
+        with mock.patch.dict("os.environ", {"INIT_TRACKER_ENABLE_TACTICAL_MAP": "false"}):
+            response = client.post("/api/dm/combat/next-turn")
+            self.assertEqual(200, response.status_code)
+            payload = response.json()
+            self.assertIn("snapshot", payload)
+            self.assertNotIn("tactical_map", payload["snapshot"])
+
+    def test_map_background_set_returns_or_broadcasts_map_state(self):
+        client, lan = self._build_client()
+        pushed_snapshots = []
+        lan._push_dm_snapshot_to_ws_clients = lambda snap: pushed_snapshots.append(snap)
+        lan._dm_ws_clients = {123: mock.MagicMock()}
+        lan._dm_ws_is_map = {123: True}
+
+        response = client.post(
+            "/api/dm/map/backgrounds",
+            json={
+                "asset_path": "/assets/maps/cavern.png",
+                "x": 8,
+                "y": -4,
+                "scale_pct": 140,
+                "trans_pct": 25,
+                "locked": True,
+            },
+        )
+        self.assertEqual(200, response.status_code)
+        payload = response.json()
+        self.assertIn("tactical_map", payload["snapshot"])
+
+        self.assertTrue(pushed_snapshots)
+        self.assertIn("tactical_map", pushed_snapshots[-1])
+
+    def test_map_set_does_not_reenable_tactical_payload_for_normal_combat_poll(self):
+        client, lan = self._build_client()
+        with mock.patch.dict("os.environ", {"INIT_TRACKER_ENABLE_TACTICAL_MAP": "false"}):
+            response1 = client.post("/api/dm/map/settings", json={"cols": 30, "rows": 30})
+            self.assertEqual(200, response1.status_code)
+            self.assertIn("tactical_map", response1.json()["snapshot"])
+
+            response2 = client.get("/api/dm/combat")
+            self.assertEqual(200, response2.status_code)
+            self.assertNotIn("tactical_map", response2.json())
+
+    def test_normal_combat_websocket_broadcast_does_not_build_tactical_map_if_no_map_clients_or_direct_map_action(self):
+        client, lan = self._build_client()
+        pushed_snapshots = []
+        lan._push_dm_snapshot_to_ws_clients = lambda snap: pushed_snapshots.append(snap)
+
+        ws_mock = mock.MagicMock()
+        ws_id = id(ws_mock)
+        lan._dm_ws_clients[ws_id] = ws_mock
+        lan._dm_ws_is_map[ws_id] = False
+
+        token = tracker_mod._CURRENT_REQUEST_PATH.set("/api/dm/combat/next-turn")
+        try:
+            lan._lan_force_state_broadcast()
+        finally:
+            tracker_mod._CURRENT_REQUEST_PATH.reset(token)
+
+        self.assertTrue(pushed_snapshots)
+        self.assertNotIn("tactical_map", pushed_snapshots[-1])
+
+        lan._dm_ws_is_map[ws_id] = True
+        pushed_snapshots.clear()
+
+        token = tracker_mod._CURRENT_REQUEST_PATH.set("/api/dm/combat/next-turn")
+        try:
+            lan._lan_force_state_broadcast()
+        finally:
+            tracker_mod._CURRENT_REQUEST_PATH.reset(token)
+
+        self.assertTrue(pushed_snapshots)
+        self.assertIn("tactical_map", pushed_snapshots[-1])
+
+    def test_ws_dm_endpoint_workspace_parameter_and_subscription_action(self):
+        client, lan = self._build_client()
+        with client.websocket_connect("/ws/dm?workspace=dashboard") as websocket:
+            data = websocket.receive_json()
+            self.assertNotIn("tactical_map", data.get("snapshot", {}))
+
+            websocket.send_json({"action": "subscribe_map"})
+            data2 = websocket.receive_json()
+            self.assertIn("tactical_map", data2.get("snapshot", {}))
+
+    def test_ws_dm_endpoint_workspace_map_query_param(self):
+        client, lan = self._build_client()
+        with client.websocket_connect("/ws/dm?workspace=map") as websocket:
+            data = websocket.receive_json()
+            self.assertIn("tactical_map", data.get("snapshot", {}))
+
+
 if __name__ == "__main__":
     unittest.main()

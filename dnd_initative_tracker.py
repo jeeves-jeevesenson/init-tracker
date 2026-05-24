@@ -150,6 +150,17 @@ from player_command_service import PlayerCommandService
 from contextvars import ContextVar
 _CURRENT_REQUEST_PATH: ContextVar[Optional[str]] = ContextVar("current_request_path", default=None)
 
+def _current_request_wants_tactical_map() -> bool:
+    path = _CURRENT_REQUEST_PATH.get()
+    if not path:
+        return False
+    return (
+        path == "/dm/map"
+        or path.startswith("/api/dm/map")
+        or path.startswith("/api/dm/monster-pilot")
+    )
+
+
 FAIL_OUTCOME_LABELS = {"fail", "failed", "failure", "failed_save", "fail_save"}
 USER_YAML_DIRNAME = "Dnd-Init-Yamls"
 SESSION_SNAPSHOT_SCHEMA_VERSION = 2
@@ -1888,6 +1899,7 @@ class LanController:
         self._cid_push_subscriptions: Dict[int, List[Dict[str, Any]]] = {}
         self._battle_log_subscribers: set[int] = set()
         self._dm_ws_clients: Dict[int, Any] = {}  # id(websocket) -> websocket for DM console WS
+        self._dm_ws_is_map: Dict[int, bool] = {}  # id(websocket) -> whether WS is on map workspace
         self._dm_service: Any = None  # set by _start_server once CombatService is constructed
         self._battle_log_limit_default: int = 200
         self._battle_log_follow_offset: int = 0
@@ -4055,11 +4067,7 @@ class LanController:
             # called _dm_console_snapshot() after a broadcast (e.g.
             # /api/dm/map/combatants/{cid}/move).
             if include_tactical is None:
-                req_path = _CURRENT_REQUEST_PATH.get()
-                if req_path and (req_path.startswith("/api/dm/map") or req_path.startswith("/api/dm/monster-pilot")):
-                    include_tactical = True
-                else:
-                    include_tactical = tactical_map_enabled()
+                include_tactical = tactical_map_enabled() or _current_request_wants_tactical_map()
             if combat_snapshot is None and tactical_snapshot is None:
                 cached = getattr(self, "_cached_dm_snapshot", None)
                 cached_at = getattr(self, "_cached_dm_snapshot_at", 0.0)
@@ -6497,40 +6505,59 @@ class LanController:
             after each mutation instead of relying solely on polling.
             Auth: pass ?token=<adminToken> query param when a password is configured.
             """
-            if self._admin_password_hash:
-                token = ws.query_params.get("token", "")
-                if not self._is_admin_token_valid(token):
-                    await ws.close(code=1008, reason="Admin authentication required.")
-                    return
-            await ws.accept()
-            ws_id = id(ws)
-            with self._clients_lock:
-                self._dm_ws_clients[ws_id] = ws
-                self._ws_send_locks[ws_id] = asyncio.Lock()
-            # Send initial snapshot immediately on connect
+            token = _CURRENT_REQUEST_PATH.set("/ws/dm")
             try:
-                if _dm_service is not None:
-                    snap = _dm_console_snapshot()
-                    await self._send_ws_text_serialized(ws_id, ws, self._dm_state_payload_text(snap))
-            except Exception:
-                pass
-            # Hold the connection open; messages from client are ignored
-            try:
-                while True:
-                    raw_dm_message = await ws.receive_text()
-                    debug_event(
-                        "ws.message.received",
-                        command="dm_ws_message",
-                        ws_id=ws_id,
-                        route="/ws/dm",
-                        sizes={"payload_bytes": len(raw_dm_message.encode("utf-8", errors="replace"))},
-                    )
-            except Exception:
-                pass
-            finally:
+                if self._admin_password_hash:
+                    token_param = ws.query_params.get("token", "")
+                    if not self._is_admin_token_valid(token_param):
+                        await ws.close(code=1008, reason="Admin authentication required.")
+                        return
+                await ws.accept()
+                ws_id = id(ws)
+                workspace = ws.query_params.get("workspace", "dashboard")
                 with self._clients_lock:
-                    self._dm_ws_clients.pop(ws_id, None)
-                    self._ws_send_locks.pop(ws_id, None)
+                    self._dm_ws_clients[ws_id] = ws
+                    self._ws_send_locks[ws_id] = asyncio.Lock()
+                    self._dm_ws_is_map[ws_id] = (workspace == "map")
+                # Send initial snapshot immediately on connect
+                try:
+                    if _dm_service is not None:
+                        is_map_client = (workspace == "map")
+                        snap = _dm_console_snapshot(include_tactical=is_map_client)
+                        await self._send_ws_text_serialized(ws_id, ws, self._dm_state_payload_text(snap))
+                except Exception:
+                    pass
+                # Hold the connection open; messages from client are processed to handle explicit subscriptions
+                try:
+                    while True:
+                        raw_dm_message = await ws.receive_text()
+                        debug_event(
+                            "ws.message.received",
+                            command="dm_ws_message",
+                            ws_id=ws_id,
+                            route="/ws/dm",
+                            sizes={"payload_bytes": len(raw_dm_message.encode("utf-8", errors="replace"))},
+                        )
+                        try:
+                            import json
+                            msg_data = json.loads(raw_dm_message)
+                            if isinstance(msg_data, dict) and msg_data.get("action") == "subscribe_map":
+                                with self._clients_lock:
+                                    self._dm_ws_is_map[ws_id] = True
+                                if _dm_service is not None:
+                                    snap = _dm_console_snapshot(include_tactical=True)
+                                    await self._send_ws_text_serialized(ws_id, ws, self._dm_state_payload_text(snap))
+                        except Exception:
+                            pass
+                except Exception:
+                    pass
+                finally:
+                    with self._clients_lock:
+                        self._dm_ws_clients.pop(ws_id, None)
+                        self._ws_send_locks.pop(ws_id, None)
+                        self._dm_ws_is_map.pop(ws_id, None)
+            finally:
+                _CURRENT_REQUEST_PATH.reset(token)
 
         # ── End DM Console routes ──────────────────────────────────────────
 
@@ -20835,7 +20862,12 @@ class InitiativeTracker(base.InitiativeTracker):
         try:
             dm_svc = getattr(self._lan, "_dm_service", None)
             if dm_svc is not None:
-                tactical_snapshot = self._dm_tactical_snapshot_from_lan_snapshot(snap) if tactical_map_enabled() else None
+                has_active_map_clients = False
+                dm_ws_is_map = getattr(self._lan, "_dm_ws_is_map", None)
+                if isinstance(dm_ws_is_map, dict) and any(dm_ws_is_map.values()):
+                    has_active_map_clients = True
+                include_tact = tactical_map_enabled() or _current_request_wants_tactical_map() or has_active_map_clients
+                tactical_snapshot = self._dm_tactical_snapshot_from_lan_snapshot(snap) if include_tact else None
                 with timed_span(
                     "dm.console.snapshot.build",
                     function="_dm_console_snapshot_payload",
@@ -20844,7 +20876,7 @@ class InitiativeTracker(base.InitiativeTracker):
                 ):
                     dm_snap = self._lan._dm_console_snapshot_payload(
                         tactical_snapshot=tactical_snapshot,
-                        include_tactical=tactical_map_enabled(),
+                        include_tactical=include_tact,
                     )
                 # Stash for any route handler that returns a DM snapshot in
                 # the same request: avoids a second _dm_console_snapshot()

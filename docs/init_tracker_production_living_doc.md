@@ -1286,11 +1286,10 @@ Release gate:
 
 Decision:
 
-- Tactical map and ship/surface/structure/boarding systems are experimental for playable runtime and default off.
-- Enable tactical map projections only with `INIT_TRACKER_ENABLE_TACTICAL_MAP=1`.
-- Enable ship/surface/structure/boarding projections only with `INIT_TRACKER_ENABLE_SHIP_SURFACES=1`.
+- Enable tactical map projections in normal combat surfaces only with `INIT_TRACKER_ENABLE_TACTICAL_MAP=1`.
+- Enable ship/surface/structure/boarding projections in normal combat surfaces only with `INIT_TRACKER_ENABLE_SHIP_SURFACES=1`.
 - `/api/dm/combat` is combat-lite by default and must not call `_dm_tactical_snapshot`.
-- Explicit `/dm/map` routes remain available for map-authoring workflows.
+- Explicit `/dm/map`, `/api/dm/map/*` routes, and `/ws/dm` WebSocket channels force tactical map inclusion to ensure the map workspace operates correctly without global experimental flags, while keeping standard combat loops optimized and combat-lite.
 
 John Echo weapon status:
 
