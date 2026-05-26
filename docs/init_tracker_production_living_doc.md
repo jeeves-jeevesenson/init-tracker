@@ -1,6 +1,9 @@
 # init-tracker Production Stabilization Living Document
 
-Status: Active stabilization operating manual
+> **SUPERSEDED:** This document is superseded for active recovery work by [docs/production_recovery_living_doc_20260526.md](production_recovery_living_doc_20260526.md).
+> Please refer to the new document for current gates, contradictions, and recovery workstreams.
+
+Status: Archived (Historical Reference)
 Created: 2026-05-22
 Owner: repo maintainers / stabilization agents
 Research baseline: `docs/may22_research_notes.md`
