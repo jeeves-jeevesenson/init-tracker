@@ -67,7 +67,12 @@ An `init-tracker` release is considered production-ready only when:
 
 ### Gate 1: Map Surface Contract Restoration
 - **Goal**: DM can reliably use `/dm/map` and `/dmcontrol`.
-- **Allowed Files**: `dnd_initative_tracker.py`, `assets/web/dmcontrol/index.html`.
+- **Allowed Files**:
+  - `dnd_initative_tracker.py`
+  - `assets/web/dmcontrol/index.html`
+  - `tests/test_dm_tactical_map_routes.py`
+  - `docs/production_recovery_living_doc_20260526.md`
+  - `docs/runtime_reports/gate1_map_surface_contract_*.md`
 - **Forbidden Scope**: No changes to spell engine, combat service, or performance flags.
 - **Required Unit Tests**: Fix `tests/test_dm_tactical_map_routes.py` (replace invalid `_dm_console_snapshot` calls).
 - **Required Browser Smoke**: Move monster in `/dmcontrol`, Verify grid tokens in `/dm/map`.

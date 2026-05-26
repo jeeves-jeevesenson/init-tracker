@@ -1,0 +1,61 @@
+description = "Gate 3 recovery: measured combat responsiveness and latency work only."
+
+prompt = """
+You are running Production Recovery Gate 3 for init-tracker.
+
+Read first:
+- GEMINI.md
+- docs/production_recovery_living_doc_20260526.md
+- docs/agent_ops/gemini_recovery_workflow.md
+
+Gate:
+- Gate 3: Combat Responsiveness
+
+Goal:
+- Hot actions respond in under 5000ms for table use, targeted under 1000ms.
+
+Allowed files from the recovery doc:
+- runtime_config.py
+- combat_service.py
+- scripts/trace_latency_summary.py
+
+Forbidden scope:
+- No UI re-styling.
+- No feature additions.
+- No map contract restoration.
+- No spell/capability contract changes.
+- No Gate 1, Gate 2, Gate 4, or Gate 5 work.
+- No production SSH, deploy, restart, topology change, commit, or push unless
+  explicitly instructed.
+
+Required unit test from the recovery doc:
+- python3 -m unittest tests.test_trace_latency_summary
+
+Required browser smoke from the recovery doc:
+- Rapid sequence of Move -> Attack -> End Turn.
+
+Required trace evidence from the recovery doc:
+- `scripts/trace_latency_summary.py` shows zero `static_plus_dynamic` builds
+  in the hot path.
+
+Validation:
+- Run `scripts/agent_gate_validate.sh gate3-latency`.
+- Do not claim measured latency improvement without trace evidence or user
+  browser smoke notes.
+
+Hard rules:
+- Read the active gate before code changes.
+- Do not mix gates.
+- Do not optimize without evidence.
+- Do not edit files outside the active gate without stopping and reporting.
+
+Final report must include:
+- files inspected
+- files changed
+- chosen hot path and evidence
+- tests run and results
+- trace evidence status
+- browser smoke status and notes
+- remaining risks
+- git status --short
+"""

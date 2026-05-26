@@ -1,5 +1,12 @@
 # Repository guidance for Codex and other autonomous coding agents
 
+## Active production recovery
+
+Active production recovery work is controlled by `docs/production_recovery_living_doc_20260526.md`.
+For recovery gates, that document overrides `majorTODO.md` and older docs when they differ.
+Do not mix gates. Do not commit, push, deploy, SSH, or restart services unless explicitly asked.
+Browser UI readiness requires an inline JavaScript syntax check plus browser smoke; edits to `assets/web/dmcontrol/index.html` require the same inline JS syntax check as other browser HTML assets.
+
 ## Mission
 
 This repository is in a broad migration away from a Tkinter/canvas-heavy desktop host toward a production-ready, web-first, backend-owned system.

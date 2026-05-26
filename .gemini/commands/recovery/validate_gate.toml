@@ -1,0 +1,34 @@
+description = "Run strict recovery gate validation for one named gate."
+
+prompt = """
+Validate exactly one production recovery gate.
+
+Read first:
+- GEMINI.md
+- docs/production_recovery_living_doc_20260526.md
+
+Pick one gate id and run the matching command:
+- gate1-map: `scripts/agent_gate_validate.sh gate1-map`
+- gate2-spells: `scripts/agent_gate_validate.sh gate2-spells`
+- gate3-latency: `scripts/agent_gate_validate.sh gate3-latency`
+- gate4-resources: `scripts/agent_gate_validate.sh gate4-resources`
+- gate5-quarantine: `scripts/agent_gate_validate.sh gate5-quarantine`
+
+Do not start production.
+Do not run browser smoke unless the user explicitly coordinates it.
+Do not commit, push, deploy, SSH, restart services, or change production
+topology.
+Do not validate multiple gates unless the user explicitly asks.
+
+Report:
+- gate id
+- exact command run
+- git status before/after if available
+- git diff --check result
+- py_compile result
+- gate-specific unit test results
+- JS syntax-check result if any tracked browser HTML asset changed
+- browser smoke status, if any
+- failures and whether they look pre-existing
+- git status --short
+"""

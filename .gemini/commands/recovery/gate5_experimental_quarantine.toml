@@ -1,0 +1,58 @@
+description = "Gate 5 recovery: quarantine experimental ship/surface/boarding/object systems."
+
+prompt = """
+You are running Production Recovery Gate 5 for init-tracker.
+
+Read first:
+- GEMINI.md
+- docs/production_recovery_living_doc_20260526.md
+- docs/agent_ops/gemini_recovery_workflow.md
+
+Gate:
+- Gate 5: Experimental Feature Quarantine
+
+Goal:
+- Strict isolation of ships, surfaces, boarding, objects, and legacy
+  monster-pilot leakage from combat-lite hot paths.
+
+Allowed files from the recovery doc:
+- dnd_initative_tracker.py
+- runtime_config.py
+
+Forbidden scope:
+- No Gate 1 map restoration.
+- No Gate 2 spell/capability stabilization.
+- No Gate 3 latency optimization beyond proving quarantine behavior.
+- No Gate 4 resource/rest/pact work.
+- No UI feature additions.
+- No production SSH, deploy, restart, topology change, commit, or push unless
+  explicitly instructed.
+
+Required unit test from the recovery doc:
+- python3 -m unittest tests.test_lan_snapshot_static
+
+Required browser smoke from the recovery doc:
+- None. Experimental systems should be quarantined, not smoke-tested as core
+  play surfaces.
+
+Pass criterion from the recovery doc:
+- Zero `_dm_tactical_snapshot` calls when flags are false.
+
+Validation:
+- Run `scripts/agent_gate_validate.sh gate5-quarantine`.
+
+Hard rules:
+- Read the active gate before code changes.
+- Do not mix gates.
+- Do not edit files outside the active gate without stopping and reporting.
+- Do not turn quarantine into feature work.
+
+Final report must include:
+- files inspected
+- files changed
+- exact quarantine checks changed
+- tests run and results
+- evidence for zero tactical builds when flags are false
+- remaining risks
+- git status --short
+"""

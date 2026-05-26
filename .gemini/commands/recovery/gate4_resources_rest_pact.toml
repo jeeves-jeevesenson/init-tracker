@@ -1,0 +1,55 @@
+description = "Gate 4 recovery: validate resource pools, long rest, and pact mechanics."
+
+prompt = """
+You are running Production Recovery Gate 4 for init-tracker.
+
+Read first:
+- GEMINI.md
+- docs/production_recovery_living_doc_20260526.md
+- docs/agent_ops/gemini_recovery_workflow.md
+
+Gate:
+- Gate 4: Resource / Rest / Pact Mechanics
+
+Goal:
+- Mechanics correctness for long rest and resource pools.
+
+Allowed files from the recovery doc:
+- combat_service.py
+- player_command_service.py
+
+Forbidden scope:
+- No map changes.
+- No networking changes.
+- No spell/capability broad rewrite.
+- No Gate 1, Gate 2, Gate 3, or Gate 5 work.
+- No YAML game data changes unless explicitly scoped.
+- No production SSH, deploy, restart, topology change, commit, or push unless
+  explicitly instructed.
+
+Required unit tests from the recovery doc:
+- python3 -m unittest tests.test_resource_pool_accounting
+- python3 -m unittest tests.test_pact_magic_spell_slots
+
+Required browser smoke from the recovery doc:
+- Perform Long Rest.
+- Verify HP, slots, and pools reset.
+
+Validation:
+- Run `scripts/agent_gate_validate.sh gate4-resources`.
+
+Hard rules:
+- Read the active gate before code changes.
+- Do not mix gates.
+- Do not edit files outside the active gate without stopping and reporting.
+- Do not claim browser readiness from unit tests alone.
+
+Final report must include:
+- files inspected
+- files changed
+- exact resource/rest/pact behavior changed
+- tests run and results
+- browser smoke status and notes
+- remaining risks
+- git status --short
+"""

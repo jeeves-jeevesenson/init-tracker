@@ -11,6 +11,34 @@ code/tracker first and update this file.
 
 ---
 
+## Active recovery controls (2026-05-26)
+
+For production recovery work, read
+`docs/production_recovery_living_doc_20260526.md` before making code
+changes. The active gate in that document controls the recovery plan and
+overrides `majorTODO.md` and older docs when they differ.
+
+Recovery work rules:
+
+- Stay inside the active gate. Do not change code outside the active
+  gate's allowed files unless you stop and report the scope escape.
+- Do not mix gates in a single pass.
+- Do not start the next gate without an explicit user request.
+- Browser UI readiness requires both inline JavaScript syntax checks and
+  real browser smoke notes. Unit tests alone are not enough.
+- Any edit to `assets/web/dm/index.html`,
+  `assets/web/lan/index.html`, or `assets/web/dmcontrol/index.html`
+  requires the mandatory inline JavaScript syntax check below.
+- Do not SSH to production, deploy, restart services, or change runtime
+  topology unless explicitly asked.
+- Do not commit or push unless explicitly asked.
+- Stop and report when the required fix needs files outside the active
+  gate, production access, unprovided host/FQDN details, or manual smoke
+  evidence the agent cannot perform.
+- Final reports for recovery passes must include `git status --short`.
+
+---
+
 ## Mission (permanent direction)
 
 This repository is migrating away from a Tkinter/canvas-heavy desktop
@@ -34,6 +62,9 @@ Before making strong claims:
 
 - inspect the **current repository state**
 - treat current code + `majorTODO.md` as source of truth
+- for production recovery work, treat the active gate in
+  `docs/production_recovery_living_doc_20260526.md` as the gate plan
+  when it differs from `majorTODO.md` or older docs
 - trust code/tests over older docs when they disagree
 - update `majorTODO.md` honestly when repo state has changed
 
@@ -231,13 +262,15 @@ Any pass that edits either of these files MUST run an inline JavaScript parse/sy
 
 - `assets/web/dm/index.html`
 - `assets/web/lan/index.html`
+- `assets/web/dmcontrol/index.html`
 
 This is required even if Python tests pass. Python tests do not reliably catch inline browser JavaScript parse failures.
 
 Required behavior:
 - If `assets/web/dm/index.html` is edited, check the DM page inline scripts.
 - If `assets/web/lan/index.html` is edited, check the LAN page inline scripts.
-- If both are edited, check both.
+- If `assets/web/dmcontrol/index.html` is edited, check the DM Control page inline scripts.
+- If multiple browser assets are edited, check all edited browser assets.
 - Report the exact syntax-check command and result in the end-of-pass report.
 - Do not claim browser readiness if the syntax check was skipped, unavailable, or failed.
 - Browser console parse errors such as `Unexpected token '}'` or `Identifier '<name>' has already been declared` are blockers.
@@ -256,6 +289,7 @@ import sys
 FILES = [
     Path("assets/web/dm/index.html"),
     Path("assets/web/lan/index.html"),
+    Path("assets/web/dmcontrol/index.html"),
 ]
 
 class ScriptExtractor(HTMLParser):

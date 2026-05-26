@@ -1,0 +1,34 @@
+description = "Produce a recovery-gate final report with required status, validation, smoke, and git state."
+
+prompt = """
+Produce the final report for the current recovery session.
+
+Read first:
+- GEMINI.md
+- docs/production_recovery_living_doc_20260526.md
+- docs/agent_ops/gemini_recovery_workflow.md
+
+Do not introduce new findings that were not inspected in this session.
+Do not claim browser readiness unless browser smoke was actually run and
+reported.
+Do not claim production readiness from unit tests alone.
+Do not commit, push, deploy, SSH, restart services, or change production
+topology.
+
+Use this exact order:
+
+1. Active gate and scope
+2. Files inspected
+3. Files changed
+4. Commands/branches/components changed
+5. Tests and validation
+6. Browser smoke status
+7. Remaining risks / rough edges
+8. Tracker/doc updates
+9. Single best next pass
+10. `git status --short`
+
+For tests and validation, include exact commands and results. If a browser
+HTML asset changed, include the exact inline JavaScript syntax-check command
+and result. If smoke was skipped, say skipped and do not claim UI readiness.
+"""

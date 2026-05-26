@@ -1,0 +1,58 @@
+description = "Gate 2 recovery: stabilize spell and capability contracts without map or movement changes."
+
+prompt = """
+You are running Production Recovery Gate 2 for init-tracker.
+
+Read first:
+- GEMINI.md
+- docs/production_recovery_living_doc_20260526.md
+- docs/agent_ops/gemini_recovery_workflow.md
+
+Gate:
+- Gate 2: Spell / Capability Contract Stabilization
+
+Goal:
+- Capability data, including spells and resources, survives all updates.
+
+Allowed files from the recovery doc:
+- monster_capability_service.py
+- spell_engine_primitives.py
+- assets/web/lan/index.html
+
+Forbidden scope:
+- No map grid changes.
+- No movement logic changes.
+- No Gate 1, Gate 3, Gate 4, or Gate 5 work.
+- No YAML game data changes unless the user explicitly scopes them.
+- No production SSH, deploy, restart, topology change, commit, or push unless
+  explicitly instructed.
+
+Required unit tests from the recovery doc:
+- python3 -m unittest tests.test_lan_spellbook_contract_ui
+- python3 -m unittest tests.test_lan_snapshot_cache
+
+Required browser smoke from the recovery doc:
+- Add spell in "Manage Spells".
+- Verify it persists after HP damage update.
+
+Validation:
+- Run `scripts/agent_gate_validate.sh gate2-spells`.
+- If `assets/web/lan/index.html` changed, the inline JavaScript syntax check
+  for that asset is mandatory and must pass before claiming readiness.
+
+Hard rules:
+- Read the active gate before code changes.
+- Do not mix gates.
+- Do not edit files outside the active gate without stopping and reporting.
+- Do not claim browser readiness from unit tests alone.
+
+Final report must include:
+- files inspected
+- files changed
+- exact capability/spell contract behavior changed
+- tests run and results
+- JS syntax-check command/result if `assets/web/lan/index.html` changed
+- browser smoke status and notes
+- remaining risks
+- git status --short
+"""
