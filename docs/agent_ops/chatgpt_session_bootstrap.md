@@ -11,7 +11,15 @@ Do not rely on hidden chat history.
 
 Active recovery doc: `docs/production_recovery_living_doc_20260526.md`
 
-Current source truth:
+## Workflow Stability vs. Current State
+
+- This bootstrap is stable workflow guidance, not current repo state.
+- For current state, ask for `scripts/chatgpt_context_refresher.sh` output or `scripts/agent_context_bundle.sh` output.
+- A fresh session should summarize status first and not immediately write a task.
+- Full repo zip should only be requested when source inspection is truly needed.
+- Default executor is Gemini unless the developer explicitly says Codex.
+
+## Current source truth:
 
 - Gate 0C is committed and pushed at `993a8b6 Harden production recovery operating plan`.
 - Gate A0 agent workflow/docs/scripts comes first.

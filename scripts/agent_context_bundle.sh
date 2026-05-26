@@ -58,6 +58,7 @@ echo ".gemini/commands/recovery/*.toml"
 echo ".gemini/settings.example.json"
 echo "scripts/agent_gate_validate.sh"
 echo "scripts/agent_context_bundle.sh"
+echo "scripts/chatgpt_context_refresher.sh"
 echo "majorTODO.md"
 
 echo
