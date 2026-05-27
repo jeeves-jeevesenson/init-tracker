@@ -67,3 +67,15 @@ Only request/upload a repo zip when source-code inspection is truly needed to un
 1. GPT summarizes what was achieved under the current Task ID.
 2. GPT lists remaining risks or pending smoke tests.
 3. GPT suggests the next Task ID.
+
+## Validation discipline
+
+Agents must not run unbounded tests. Use `scripts/agent_gate_validate.sh <gate-id>` or an explicit `timeout` wrapper for targeted diagnostics.
+
+Required gate validation is enough for an agent report. If required validation passes, stop and report instead of running broad extra suites for more confidence.
+
+Extra tests are allowed only when they are targeted to a specific failure, timeout-bounded, and named in the final report.
+
+Known websocket tests must never be run without a timeout.
+
+Browser smoke is developer-owned and is not replaced by extra Python tests.

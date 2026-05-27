@@ -375,3 +375,15 @@ Required audit if spell primitives changed:
 Do not push, deploy, restart services, force-push, delete branches, change FQDNs, or touch production topology unless explicitly asked.
 
 Stop if tests emit warnings, context/output limit is hit, the same test fails twice, or files outside the allowed list are needed.
+
+## Validation discipline
+
+Agents must not run unbounded tests. Use `scripts/agent_gate_validate.sh <gate-id>` or an explicit `timeout` wrapper for targeted diagnostics.
+
+Required gate validation is enough for an agent report. If required validation passes, stop and report instead of running broad extra suites for more confidence.
+
+Extra tests are allowed only when they are targeted to a specific failure, timeout-bounded, and named in the final report.
+
+Known websocket tests must never be run without a timeout.
+
+Browser smoke is developer-owned and is not replaced by extra Python tests.

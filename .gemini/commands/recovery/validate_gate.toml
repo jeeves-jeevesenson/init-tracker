@@ -31,4 +31,12 @@ Report:
 - browser smoke status, if any
 - failures and whether they look pre-existing
 - git status --short
+
+Validation discipline:
+- Required gate validation is `scripts/agent_gate_validate.sh <gate-id>`.
+- Do not run broad extra unittest classes after required validation passes.
+- Extra tests are allowed only when targeted to a specific failure, timeout-bounded, and named in the final report.
+- Known websocket tests must never be run without timeout.
+- If required validation passes, stop and report; do not keep searching for more confidence.
+- Browser smoke is developer-owned and is not replaced by extra Python tests.
 """

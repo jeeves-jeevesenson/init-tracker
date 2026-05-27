@@ -143,3 +143,15 @@ Python tests are not enough for these files. Browser parse failures such as `Une
 The end-of-pass report must include the exact JS syntax-check command and result. Do not claim browser readiness if the check was skipped, unavailable, or failed.
 
 Preferred check: extract inline `<script>` blocks from the edited HTML file(s) and run `node --check` against the extracted JavaScript.
+
+## Validation discipline
+
+Agents must not run unbounded tests. Use `scripts/agent_gate_validate.sh <gate-id>` or an explicit `timeout` wrapper for targeted diagnostics.
+
+Required gate validation is enough for an agent report. If required validation passes, stop and report instead of running broad extra suites for more confidence.
+
+Extra tests are allowed only when they are targeted to a specific failure, timeout-bounded, and named in the final report.
+
+Known websocket tests must never be run without a timeout.
+
+Browser smoke is developer-owned and is not replaced by extra Python tests.

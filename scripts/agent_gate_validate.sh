@@ -32,10 +32,18 @@ if [ -x "./.venv/bin/python3" ]; then
   PYTHON_BIN="./.venv/bin/python3"
 fi
 
+AGENT_TEST_TIMEOUT_S="${AGENT_TEST_TIMEOUT_S:-180}"
+if ! command -v timeout >/dev/null 2>&1; then
+  echo "ERROR: required command not found: timeout" >&2
+  echo "Install GNU coreutils or run in an environment with timeout available." >&2
+  exit 2
+fi
+
 echo "== recovery gate validation =="
 echo "gate: ${gate}"
 echo "repo: $(pwd)"
 echo "python: $PYTHON_BIN"
+echo "test timeout: ${AGENT_TEST_TIMEOUT_S}s"
 echo "note: no production start, deploy, commit, push, SSH, or restart is performed"
 
 echo
@@ -72,7 +80,7 @@ run_unittest() {
   local module="$1"
   echo
   echo "== unittest ${module} =="
-  $PYTHON_BIN -m unittest "$module"
+  timeout "${AGENT_TEST_TIMEOUT_S}s" "$PYTHON_BIN" -m unittest "$module"
 }
 
 case "$gate" in
