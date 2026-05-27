@@ -20154,9 +20154,8 @@ __DAMAGE_TYPE_OPTIONS__
       if (!Number.isFinite(level)){
         return;
       }
-      if ((classNames.size || subclassNames.size) && !presetMatchesSpellbookProfile(preset, classNames, subclassNames)){
-        return;
-      }
+      // ADR-0003: Class/subclass filters are tags and suggestions only; they must never act as hard blockers.
+      // We no longer return early here, exposing the entire catalog for the castable level.
       if (level === 0){
         appendUnique(eligibleCantrips, eligibleCantripSeen, slug);
         return;
@@ -20184,12 +20183,18 @@ __DAMAGE_TYPE_OPTIONS__
   function getSpellbookEligibleSources(profile){
     const contract = getSpellbookContractPolicy();
     const sourceLists = contract.source_lists && typeof contract.source_lists === "object" ? contract.source_lists : {};
-    const eligibleSpells = normalizePreparedSpellList(sourceLists.eligible_spells);
-    const eligibleCantrips = normalizePreparedSpellList(sourceLists.eligible_cantrips);
-    if (eligibleSpells.length || eligibleCantrips.length){
+    const contractSpells = normalizePreparedSpellList(sourceLists.eligible_spells);
+    const contractCantrips = normalizePreparedSpellList(sourceLists.eligible_cantrips);
+
+    if (contractSpells.length || contractCantrips.length){
+      // ADR-0003: The "Manage Spells" tab must expose the entire spell catalog.
+      // Even if the contract provides a filtered list, we merge it with the full (now un-filtered) catalog.
+      const legacy = buildLegacySpellbookEligibleSources(profile);
+      const combinedSpells = new Set([...contractSpells, ...legacy.eligible_spells]);
+      const combinedCantrips = new Set([...contractCantrips, ...legacy.eligible_cantrips]);
       return {
-        eligible_spells: sortSlugsByName(Array.from(new Set(eligibleSpells.map(normalizeTextValue).filter(Boolean)))),
-        eligible_cantrips: sortSlugsByName(Array.from(new Set(eligibleCantrips.map(normalizeTextValue).filter(Boolean)))),
+        eligible_spells: sortSlugsByName(Array.from(combinedSpells).map(normalizeTextValue).filter(Boolean)),
+        eligible_cantrips: sortSlugsByName(Array.from(combinedCantrips).map(normalizeTextValue).filter(Boolean)),
       };
     }
     return buildLegacySpellbookEligibleSources(profile);
