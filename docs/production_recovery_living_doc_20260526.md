@@ -134,3 +134,40 @@ An `init-tracker` release is considered production-ready only when:
 | **C-005** | Spells are resolved | Recurrent first-load clobber issues. | Brittle UI. | Gate 2: Enforce ADR-0002. |
 | **C-006** | Ships are quarantined | They still leak into `_lan_snapshot` if not strictly gated. | Performance smell. | Harden `if not ship_surfaces_enabled()` checks. |
 | **C-007** | Production is ready | No systemd or verified runbook. | Deployment risk. | Gate 6: Finalize runbook. |
+
+## H. Smoke Findings Added 2026-05-27 — Gate 3 Post-Patch
+
+Source report:
+- `docs/runtime_reports/gate3_postpatch_smoke_20260527.md`
+
+Current Gate 3 decision:
+- Gate 3 remains OPEN.
+- G3-03 should be preserved as a partial latency improvement because post-patch trace showed `static_plus_dynamic builds: 0`.
+- Gate 3 is not ready because Long Rest remains catastrophically slow and combat loop still feels mildly laggy.
+
+Fresh trace:
+- `logs/debug-trace-20260527-102803.jsonl`
+
+Key trace findings:
+- `combat_service.long_rest`: ~31.4s
+- top `http.request`: ~31.6s
+- `_load_player_yaml_cache`: ~10.2s
+- `_lan_snapshot`: ~8.2s
+- `player_command.cast_aoe`: ~3.9s max observed
+- `static_plus_dynamic builds`: 0
+- queue waits over 1000ms: none
+- queue waits over 5000ms: none
+
+Backlog captured from smoke:
+- BUG-20260527-01: Long Rest latency P0.
+- BUG-20260527-02: Free spells can be added but cannot be selected for removal.
+- BUG-20260527-03: Switching characters can temporarily render spell list empty until refresh.
+- BUG-20260527-04: Wild Shape resets movement instead of preserving distance already moved.
+- BUG-20260527-05: Flurry/Fury targeting overlay can trap movement after target death.
+- BUG-20260527-06: Conditions/effects render incorrectly in DM console and prone movement is not enforced.
+- BUG-20260527-07: Lightning Bolt passed-save damage was inconsistent across identical enemies.
+- BUG-20260527-08: Resource pool UI updates slowly after use.
+
+Next recommended task:
+- Gate 3 Long Rest latency root-cause and narrow fix.
+- Do not bundle the unrelated smoke bugs into the Long Rest fix.

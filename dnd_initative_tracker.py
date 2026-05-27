@@ -25325,9 +25325,15 @@ class InitiativeTracker(base.InitiativeTracker):
         *,
         invalidation_domains: Optional[List[str]] = None,
         include_static_refresh: bool = True,
-        force_player_yaml_reload: bool = True,
+        force_player_yaml_reload: bool = False,
     ) -> Dict[str, Any]:
-        domains = list(invalidation_domains or ["profile_structure", "static_capabilities", "dynamic_player_values"])
+        # Optimization: if we are handling the projection ourselves, we can skip triggering
+        # global static cache invalidation in _write_player_yaml_atomic.
+        if invalidation_domains is None:
+            domains = ["dynamic_player_values"]
+        else:
+            domains = list(invalidation_domains)
+
         self._write_player_yaml_atomic(path, payload, invalidation_domains=domains)
         meta = _file_stat_metadata(path)
         self._player_yaml_cache_by_path[path] = payload
@@ -25350,6 +25356,10 @@ class InitiativeTracker(base.InitiativeTracker):
         if not name or not isinstance(profile, dict):
             return
 
+        # Increment global version to signal update to clients without full invalidation
+        new_version = int(self.__dict__.get("_lan_static_snapshot_version", 0) or 0) + 1
+        self.__dict__["_lan_static_snapshot_version"] = new_version
+
         def patch_snapshot(snapshot: Any) -> None:
             if not isinstance(snapshot, dict):
                 return
@@ -25357,12 +25367,20 @@ class InitiativeTracker(base.InitiativeTracker):
             if not isinstance(profiles, dict):
                 return
             profiles[name] = copy.deepcopy(profile)
+            # Update internal version to match global version
+            snapshot["static_version"] = new_version
 
         static_cache = self.__dict__.get("_lan_static_snapshot_cache")
-        patch_snapshot(static_cache)
+        if static_cache is not None:
+            patch_snapshot(static_cache)
+            # Keep cache valid for the new version
+            self.__dict__["_lan_static_snapshot_cache_version"] = new_version
+
         lan = self.__dict__.get("_lan")
         if lan is not None:
             patch_snapshot(getattr(lan, "_cached_snapshot", None))
+            if hasattr(lan, "_cached_static_payload"):
+                patch_snapshot(lan._cached_static_payload)
 
     def _normalize_character_filename(self, raw_filename: Optional[str], fallback_name: str) -> str:
         filename = str(raw_filename or "").strip()
@@ -29949,7 +29967,7 @@ class InitiativeTracker(base.InitiativeTracker):
                 spellcasting["prepared_spells"] = existing_prepared
             existing["spellcasting"] = spellcasting
 
-        self._write_player_yaml_atomic(path, existing, invalidation_domains=["static_capabilities", "dynamic_player_values"])
+        self._write_player_yaml_atomic(path, existing, invalidation_domains=["dynamic_player_values"])
 
         meta = _file_stat_metadata(path)
         self._player_yaml_cache_by_path[path] = existing
@@ -29959,7 +29977,12 @@ class InitiativeTracker(base.InitiativeTracker):
         self._player_yaml_data_by_name[profile_name] = profile
         self._player_yaml_name_map[self._normalize_character_lookup_key(player_name)] = path
         self._player_yaml_name_map[self._normalize_character_lookup_key(path.stem)] = path
-        self._schedule_player_yaml_refresh(include_static=True)
+
+        # Patch the LAN cache in-place instead of invalidating it.
+        self._refresh_cached_player_profile_projection(profile_name, profile)
+
+        # Broadcast with include_static=True but force_reload=False.
+        self._schedule_player_yaml_refresh(include_static=True, force_reload=False)
 
         return normalized
 
@@ -30186,7 +30209,7 @@ class InitiativeTracker(base.InitiativeTracker):
             identity["name"] = player_name
         existing["identity"] = identity
 
-        self._write_player_yaml_atomic(path, existing, invalidation_domains=["static_capabilities", "dynamic_player_values"])
+        self._write_player_yaml_atomic(path, existing, invalidation_domains=["dynamic_player_values"])
         meta = _file_stat_metadata(path)
         self._player_yaml_cache_by_path[path] = existing
         self._player_yaml_meta_by_path[path] = meta
@@ -30195,7 +30218,12 @@ class InitiativeTracker(base.InitiativeTracker):
         self._player_yaml_data_by_name[profile_name] = profile
         self._player_yaml_name_map[self._normalize_character_lookup_key(player_name)] = path
         self._player_yaml_name_map[self._normalize_character_lookup_key(path.stem)] = path
-        self._schedule_player_yaml_refresh(include_static=True)
+
+        # Patch the LAN cache in-place instead of invalidating it.
+        self._refresh_cached_player_profile_projection(profile_name, profile)
+
+        # Broadcast with include_static=True but force_reload=False.
+        self._schedule_player_yaml_refresh(include_static=True, force_reload=False)
 
         return profile
 
@@ -30273,7 +30301,7 @@ class InitiativeTracker(base.InitiativeTracker):
         identity["token_border_color"] = normalized
         existing["identity"] = identity
 
-        self._write_player_yaml_atomic(path, existing, invalidation_domains=["static_capabilities"])
+        self._write_player_yaml_atomic(path, existing, invalidation_domains=["dynamic_player_values"])
 
         meta = _file_stat_metadata(path)
         self._player_yaml_cache_by_path[path] = existing
@@ -30283,7 +30311,12 @@ class InitiativeTracker(base.InitiativeTracker):
         self._player_yaml_data_by_name[profile_name] = profile
         self._player_yaml_name_map[self._normalize_character_lookup_key(player_name)] = path
         self._player_yaml_name_map[self._normalize_character_lookup_key(path.stem)] = path
-        self._schedule_player_yaml_refresh(include_static=True)
+
+        # Patch the LAN cache in-place instead of invalidating it.
+        self._refresh_cached_player_profile_projection(profile_name, profile)
+
+        # Broadcast with include_static=True but force_reload=False.
+        self._schedule_player_yaml_refresh(include_static=True, force_reload=False)
 
         return normalized
 
@@ -32922,8 +32955,8 @@ class InitiativeTracker(base.InitiativeTracker):
         raw = dict(raw)
         raw["resources"] = resources
         try:
+            # _store_character_yaml now defaults to force_reload=False and patches the cache.
             self._store_character_yaml(player_path, raw)
-            self._load_player_yaml_cache(force_refresh=True)
         except Exception:
             return False, "Could not update Wild Shape pool, matey.", None
         return True, "", clamped
