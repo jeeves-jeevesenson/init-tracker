@@ -248,11 +248,29 @@ class _TacticalAppStub:
     def _lan_battle_log_lines(self, limit=30):
         return ["Aelar advances on the goblin."][: max(0, int(limit or 0))]
 
+    def _next_turn(self):
+        """Mock turn advancement."""
+        self.turn_num += 1
+
+    def _rebuild_table(self, **_kwargs):
+        """Mock table rebuild."""
+        pass
+
+    def _broadcast_tracker_state(self, **_kwargs):
+        """Mock state broadcast."""
+        pass
+
     def _oplog(self, *_args, **_kwargs):
         return None
 
-    def _lan_force_state_broadcast(self):
+    def _lan_force_state_broadcast(self, include_static=False):
         self.broadcast_calls += 1
+        if hasattr(self, "_lan") and self._lan:
+            # Simulate the DM push that happens in the real broadcaster.
+            # Real one checks if any client is a map client.
+            has_active_map_clients = any(getattr(self._lan, "_dm_ws_is_map", {}).values())
+            dm_snap = self._lan._dm_console_snapshot(include_tactical=has_active_map_clients)
+            self._lan._push_dm_snapshot_to_ws_clients(dm_snap)
 
     def _lan_pcs(self):
         return []
@@ -1383,7 +1401,9 @@ class _TacticalAppStub:
 class DmTacticalMapRoutesTests(unittest.TestCase):
     def _build_lan_controller(self, admin_password_configured: bool = False):
         lan = object.__new__(tracker_mod.LanController)
-        lan._tracker = _TacticalAppStub()
+        stub = _TacticalAppStub()
+        lan._tracker = stub
+        stub._lan = lan
         lan.cfg = types.SimpleNamespace(
             host="127.0.0.1",
             port=0,
@@ -3064,7 +3084,7 @@ class DmTacticalMapHotfixTests(DmTacticalMapRoutesTests):
 
         token = tracker_mod._CURRENT_REQUEST_PATH.set("/api/dm/combat/next-turn")
         try:
-            lan._lan_force_state_broadcast()
+            lan._tracker._lan_force_state_broadcast()
         finally:
             tracker_mod._CURRENT_REQUEST_PATH.reset(token)
 
@@ -3076,7 +3096,7 @@ class DmTacticalMapHotfixTests(DmTacticalMapRoutesTests):
 
         token = tracker_mod._CURRENT_REQUEST_PATH.set("/api/dm/combat/next-turn")
         try:
-            lan._lan_force_state_broadcast()
+            lan._tracker._lan_force_state_broadcast()
         finally:
             tracker_mod._CURRENT_REQUEST_PATH.reset(token)
 

@@ -4060,40 +4060,9 @@ class LanController:
 
         dm_entrypoint = assets_dir / "web" / "dm" / "index.html"
 
-        def _dm_console_snapshot(
-            *,
-            combat_snapshot: Optional[Dict[str, Any]] = None,
-            tactical_snapshot: Optional[Dict[str, Any]] = None,
-            include_tactical: Optional[bool] = None,
-        ) -> Dict[str, Any]:
-            # If a recent _lan_force_state_broadcast already built a DM
-            # snapshot for the same request flow, reuse it. This skips a
-            # redundant tactical+combat snapshot rebuild on the apply /
-            # end-turn hot paths. The cache lives on the LanController
-            # itself: this closure is defined inside LanController.start,
-            # so ``self`` IS the LanController. An earlier draft wrote
-            # ``self._lan.*`` here, which 500'd on every route that
-            # called _dm_console_snapshot() after a broadcast (e.g.
-            # /api/dm/map/combatants/{cid}/move).
-            if include_tactical is None:
-                include_tactical = tactical_map_enabled() or _current_request_wants_tactical_map()
-            if combat_snapshot is None and tactical_snapshot is None:
-                cached = getattr(self, "_cached_dm_snapshot", None)
-                cached_at = getattr(self, "_cached_dm_snapshot_at", 0.0)
-                if isinstance(cached, dict) and cached_at:
-                    age = time.perf_counter() - cached_at
-                    if age < 0.25:
-                        try:
-                            self._cached_dm_snapshot = None
-                            self._cached_dm_snapshot_at = 0.0
-                        except Exception:
-                            pass
-                        return cached
-            return self._dm_console_snapshot_payload(
-                combat_snapshot=combat_snapshot,
-                tactical_snapshot=tactical_snapshot,
-                include_tactical=include_tactical,
-            )
+        # Formally exposed as self._dm_console_snapshot, but kept as a local name
+        # for all the route-handler closures below.
+        _dm_console_snapshot = self._dm_console_snapshot
 
         def _load_dm_console_html(workspace: str = "dashboard") -> str:
             if not dm_entrypoint.exists():
@@ -4144,7 +4113,7 @@ class LanController:
             if _dm_service is None:
                 raise HTTPException(status_code=503, detail="DM combat service unavailable.")
             try:
-                return self._dm_console_snapshot_payload(include_tactical=False)
+                return _dm_console_snapshot()
             except Exception:
                 raise HTTPException(status_code=500, detail="Failed to read combat snapshot.")
 
@@ -7891,6 +7860,41 @@ class LanController:
                 sizes={"payload_bytes": len(text.encode("utf-8", errors="replace"))},
                 command=payload_type,
             )
+
+    @trace_timed("_dm_console_snapshot")
+    def _dm_console_snapshot(
+        self,
+        *,
+        combat_snapshot: Optional[Dict[str, Any]] = None,
+        tactical_snapshot: Optional[Dict[str, Any]] = None,
+        include_tactical: Optional[bool] = None,
+    ) -> Dict[str, Any]:
+        """Return a DM console snapshot, preferring the recent cache if available.
+
+        If include_tactical is None, it is derived from tactical_map_enabled()
+        or _current_request_wants_tactical_map().
+        """
+        if include_tactical is None:
+            include_tactical = tactical_map_enabled() or _current_request_wants_tactical_map()
+
+        if combat_snapshot is None and tactical_snapshot is None:
+            cached = getattr(self, "_cached_dm_snapshot", None)
+            cached_at = getattr(self, "_cached_dm_snapshot_at", 0.0)
+            if isinstance(cached, dict) and cached_at:
+                age = time.perf_counter() - cached_at
+                if age < 0.25:
+                    try:
+                        self._cached_dm_snapshot = None
+                        self._cached_dm_snapshot_at = 0.0
+                    except Exception:
+                        pass
+                    return cached
+
+        return self._dm_console_snapshot_payload(
+            combat_snapshot=combat_snapshot,
+            tactical_snapshot=tactical_snapshot,
+            include_tactical=include_tactical,
+        )
 
     @trace_timed("_dm_console_snapshot_payload")
     def _dm_console_snapshot_payload(
