@@ -2801,6 +2801,7 @@ class DmConsoleSnapshotPayloadTests(unittest.TestCase):
         self.assertTrue(payload["in_combat"])
         self.assertNotIn("tactical_map", payload)
 
+    @unittest.skipUnless(_HTTP_AVAILABLE, "fastapi/httpx not available in this environment")
     def test_dm_combat_lite_snapshot_excludes_ship_surface_payloads_by_default(self):
         client, _lan = DmTacticalMapRoutesTests()._build_client()
         response = client.get("/api/dm/combat")
@@ -3000,6 +3001,7 @@ class DmTacticalMapHtmlSurfaceTests(unittest.TestCase):
         self.assertIn("/api/dm/combat/combatants/{cid}/spell-target", html)
 
 
+@unittest.skipUnless(_HTTP_AVAILABLE, "fastapi/httpx not available in this environment")
 class DmTacticalMapHotfixTests(DmTacticalMapRoutesTests):
     def test_dm_map_page_or_startup_payload_includes_tactical_map_when_requested(self):
         client, lan = self._build_client()

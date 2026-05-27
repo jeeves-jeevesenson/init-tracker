@@ -26,9 +26,16 @@ fi
 
 gate="$1"
 
+# Prefer repo virtualenv python if it exists
+PYTHON_BIN="python3"
+if [ -x "./.venv/bin/python3" ]; then
+  PYTHON_BIN="./.venv/bin/python3"
+fi
+
 echo "== recovery gate validation =="
 echo "gate: ${gate}"
 echo "repo: $(pwd)"
+echo "python: $PYTHON_BIN"
 echo "note: no production start, deploy, commit, push, SSH, or restart is performed"
 
 echo
@@ -59,13 +66,13 @@ for file in "${core_files[@]}"; do
     existing_core_files+=("$file")
   fi
 done
-python3 -m py_compile "${existing_core_files[@]}"
+$PYTHON_BIN -m py_compile "${existing_core_files[@]}"
 
 run_unittest() {
   local module="$1"
   echo
   echo "== unittest ${module} =="
-  python3 -m unittest "$module"
+  $PYTHON_BIN -m unittest "$module"
 }
 
 case "$gate" in
@@ -128,7 +135,7 @@ else
   printf '%s\n' "${changed_browser_assets[@]}"
   echo
   echo "== inline JS syntax check via node --check =="
-  python3 - "${changed_browser_assets[@]}" <<'PY'
+  $PYTHON_BIN - "${changed_browser_assets[@]}" <<'PY'
 from html.parser import HTMLParser
 from pathlib import Path
 import os
