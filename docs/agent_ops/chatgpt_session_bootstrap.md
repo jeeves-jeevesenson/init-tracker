@@ -6,7 +6,7 @@ Purpose: `init-tracker` is a D&D combat/session tracker being migrated away
 from Tkinter/desktop ownership toward a web-first, backend-owned system.
 
 Workflow: ChatGPT writes exact Gemini/Codex tasks. Agents execute in the repo.
-The user reports agent summaries, logs, and smoke results back to ChatGPT.
+The developer reports agent summaries, logs, and smoke results back to ChatGPT.
 Do not rely on hidden chat history.
 
 Active recovery doc: `docs/production_recovery_living_doc_20260526.md`
@@ -19,14 +19,13 @@ Active recovery doc: `docs/production_recovery_living_doc_20260526.md`
 - Full repo zip should only be requested when source inspection is truly needed.
 - Default executor is Gemini unless the developer explicitly says Codex.
 
-## Current source truth:
+## Source of Truth
 
-- Gate 0C is committed and pushed at `993a8b6 Harden production recovery operating plan`.
-- Gate A0 agent workflow/docs/scripts comes first.
+- Current status, active gate, latest commit, and dirty state must come from the context refresher (`scripts/chatgpt_context_refresher.sh`).
 - For active recovery, `docs/production_recovery_living_doc_20260526.md`
   overrides `majorTODO.md` and older docs when they differ.
 
-Gate order:
+### Example Gate Order (Verify current gate via context refresher)
 
 1. A0 agent workflow and instruction control.
 2. Gate 1 map surface contract restoration.
@@ -36,57 +35,26 @@ Gate order:
 6. Gate 5 experimental feature quarantine.
 7. Gate 6 production deployment runbook.
 
-Known production/server caveats:
+## Hard Rules
 
-- Do not guess FQDNs, hostnames, hardware, LAN IPs, ports, systemd units, or
-  deployment paths. Ask for docs/logs or exact commands instead.
-- Gate 6 is not done; production readiness and server runbook are not verified.
-- Browser smoke is required for UI readiness claims. Unit tests alone do not
-  prove production-ready status.
-- `/dmcontrol` frontend is documented as polling, even though backend supports
-  workspace-aware DM websocket subscriptions.
-- Current recovery status marks `/dm/map` and `/dmcontrol` as contradicted
-  until Gate 1 and manual smoke prove them.
-- Recent latency history includes multi-second to 11s hot-path behavior; Gate 3
-  must use measured evidence, not broad performance guessing.
+- **No Guessing**: Ask for docs/logs instead of guessing hostnames, FQDNs, hardware, runtime paths, production topology, or credentials.
+- **Evidence-Based**: No broad fixes without measured evidence.
+- **Browser Smoke**: Browser smoke is required for UI claims. Unit tests alone do not prove production-ready status.
+- **Gate Discipline**: Do not let agents mix gates.
+- **Safety**: No commit, push, deploy, SSH, service restart, DNS/FQDN change, or production topology change unless the user explicitly asks.
 
-Hard rules:
-
-- Ask for docs/logs instead of guessing hostnames, FQDNs, hardware, runtime
-  paths, production topology, or credentials.
-- No broad fixes without evidence.
-- Browser smoke is required for UI claims.
-- Do not let agents mix gates.
-- Do not claim production-ready from unit tests alone.
-- No commit, push, deploy, SSH, service restart, DNS/FQDN change, or production
-  topology change unless the user explicitly asks.
-
-Current priorities:
-
-- A0 agent workflow first.
-- Gate 1 map.
-- Gate 2 spells.
-- Gate 3 latency.
-
-Key paths:
+## Key Paths
 
 - `GEMINI.md`
 - `AGENTS.md`
 - `CLAUDE.md`
-- `.github/copilot-instructions.md`
-- `.github/instructions/*.instructions.md`
-- `.gemini/commands/init/*.toml`
-- `.gemini/commands/recovery/*.toml`
-- `docs/production_recovery_living_doc_20260526.md`
-- `docs/runtime_reports/production_recovery_docs_audit_20260526.md`
-- `docs/agent_ops/agent_instruction_audit_20260526.md`
-- `docs/agent_ops/gemini_recovery_workflow.md`
-- `docs/agent_ops/codex_recovery_workflow.md`
-- `scripts/agent_gate_validate.sh`
-- `scripts/agent_context_bundle.sh`
 - `majorTODO.md`
+- `docs/production_recovery_living_doc_20260526.md`
+- `scripts/agent_gate_validate.sh`
+- `scripts/chatgpt_context_refresher.sh`
+- `scripts/agent_context_bundle.sh`
 
-Prompt pattern for agents:
+## Prompt Pattern for Agents
 
 ```text
 Repo: ~/src/init-tracker

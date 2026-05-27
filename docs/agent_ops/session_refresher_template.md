@@ -3,7 +3,7 @@
 Use this template as the first message in a fresh ChatGPT session to establish context.
 
 ```text
-I’m continuing init-tracker. Here is the current context refresher. 
+I’m continuing init-tracker. Here is the current context refresher.
 
 [PASTE OUTPUT OF scripts/chatgpt_context_refresher.sh HERE]
 
