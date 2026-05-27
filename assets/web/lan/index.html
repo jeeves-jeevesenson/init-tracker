@@ -20991,14 +20991,14 @@ __DAMAGE_TYPE_OPTIONS__
 
   function getSpellbookSourceSlugs(sourceKey, eligibleSources = {}){
     const normalized = normalizeLowerValue(sourceKey);
+    if (normalized === "eligible_spells" || normalized === "eligible_cantrips"){
+      return Array.isArray(eligibleSources?.[normalized]) ? eligibleSources[normalized].slice() : [];
+    }
     const contract = getSpellbookContractPolicy();
     const sourceLists = contract.source_lists && typeof contract.source_lists === "object" ? contract.source_lists : {};
     const contractSource = sourceLists[normalized];
     if (Array.isArray(contractSource)){
       return normalizePreparedSpellList(contractSource);
-    }
-    if (normalized === "eligible_spells" || normalized === "eligible_cantrips"){
-      return Array.isArray(eligibleSources?.[normalized]) ? eligibleSources[normalized].slice() : [];
     }
     if (normalized === "known"){
       return Array.from(pendingKnownSet);
