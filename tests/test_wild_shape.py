@@ -1152,6 +1152,9 @@ class WildShapeCommandDispatchTests(unittest.TestCase):
             def __init__(self):
                 self.calls = []
 
+            def allow_prompt_claim_override(self, *args, **kwargs):
+                return True
+
             def dispatch_wild_shape_command(self, msg, *, cid, ws_id, is_admin):
                 self.calls.append((str(msg.get("type")), cid, ws_id, is_admin))
                 return {"ok": True}

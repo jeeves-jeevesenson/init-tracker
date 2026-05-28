@@ -33242,8 +33242,15 @@ class InitiativeTracker(base.InitiativeTracker):
         setattr(c, "con", int((form.get("abilities") or {}).get("con") or getattr(c, "con", 10) or 10))
         setattr(c, "movement_mode", "Fly" if int(speed.get("fly") or 0) > 0 else ("Swim" if int(speed.get("swim") or 0) > 0 else "Normal"))
         mode_speed = int(self._mode_speed(c) or 0)
+        old_speed = int(getattr(c, "move_total", 0) or 0)
+        old_remaining = int(getattr(c, "move_remaining", 0) or 0)
+        spent = max(0, old_speed - old_remaining)
+
         setattr(c, "move_total", mode_speed)
-        setattr(c, "move_remaining", mode_speed)
+        if old_remaining <= 0 and old_speed > 0:
+            setattr(c, "move_remaining", 0)
+        else:
+            setattr(c, "move_remaining", max(0, mode_speed - spent))
         setattr(c, "is_spellcaster", False)
         setattr(c, "is_wild_shaped", True)
         setattr(c, "name", f"{base_snapshot['name']} ({str(form.get('name') or '').strip()})")
@@ -33355,9 +33362,22 @@ class InitiativeTracker(base.InitiativeTracker):
         base_snapshot = getattr(c, "wild_shape_base", None)
         if not isinstance(base_snapshot, dict):
             return False, "Could not restore Wild Shape state, matey."
+
+        old_speed = int(getattr(c, "move_total", 0) or 0)
+        old_remaining = int(getattr(c, "move_remaining", 0) or 0)
+        spent = max(0, old_speed - old_remaining)
+
         for key in ("name", "speed", "swim_speed", "fly_speed", "climb_speed", "burrow_speed", "movement_mode", "dex", "con", "str", "is_spellcaster"):
             if key in base_snapshot:
                 setattr(c, key, base_snapshot[key])
+
+        mode_speed = int(self._mode_speed(c) or 0)
+        setattr(c, "move_total", mode_speed)
+        if old_remaining <= 0 and old_speed > 0:
+            setattr(c, "move_remaining", 0)
+        else:
+            setattr(c, "move_remaining", max(0, mode_speed - spent))
+
         setattr(c, "actions", copy.deepcopy(base_snapshot.get("actions") if isinstance(base_snapshot.get("actions"), list) else []))
         setattr(c, "bonus_actions", copy.deepcopy(base_snapshot.get("bonus_actions") if isinstance(base_snapshot.get("bonus_actions"), list) else []))
         should_restore_temp_hp = int(getattr(c, "temp_hp", 0) or 0) == int(getattr(c, "wild_shape_applied_temp_hp", 0) or 0)

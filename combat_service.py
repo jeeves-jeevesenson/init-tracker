@@ -1846,3 +1846,106 @@ class CombatService:
                 pass
             self._broadcast_tracker_state(include_static=False)
             return {"ok": True, "cid": cid, "snapshot": self.combat_snapshot()}
+
+    # ------------------------------------------------------------------
+    # Wild Shape (Gate 4)
+    # ------------------------------------------------------------------
+
+    def wild_shape_apply(self, cid: int, beast_id: str, *, _broadcast: bool = True) -> Dict[str, Any]:
+        """Apply Wild Shape to a combatant, preserving spent movement.
+
+        Delegates to the tracker's ``_apply_wild_shape`` for core state
+        transformation, then corrects the movement accounting to ensure
+        already-moved distance is preserved in the new form.
+
+        Formula: new_remaining = max(new_speed - distance_already_moved, 0)
+        """
+        with self._lock:
+            t = self._tracker
+            combatants = getattr(t, "combatants", {}) or {}
+            c = combatants.get(int(cid))
+            if c is None:
+                return {"ok": False, "error": f"Combatant {cid} not found."}
+
+            # 1. Capture names for logging.
+            name = str(getattr(c, "name", "Combatant"))
+
+            # 2. Apply the beast form (InitiativeTracker now handles movement preservation).
+            try:
+                ok, err = t._apply_wild_shape(int(cid), beast_id)
+            except Exception as exc:
+                return {"ok": False, "error": f"Wild Shape application failed: {exc}"}
+
+            if not ok:
+                return {"ok": False, "error": str(err or "Wild Shape application failed.")}
+
+            try:
+                new_remaining = int(getattr(c, "move_remaining", 0) or 0)
+                t._log(
+                    f"{name} Wild Shaped into {beast_id}; movement preserved ({new_remaining}ft remaining).",
+                    cid=int(cid),
+                )
+            except Exception:
+                pass
+
+            if _broadcast:
+                try:
+                    t._rebuild_table(scroll_to_current=True)
+                except Exception:
+                    pass
+                self._broadcast_tracker_state(include_static=False)
+
+            return {
+                "ok": True,
+                "cid": int(cid),
+                "beast_id": beast_id,
+                "move_remaining": new_remaining,
+                "snapshot": self.combat_snapshot(),
+            }
+
+    def wild_shape_revert(self, cid: int, *, _broadcast: bool = True) -> Dict[str, Any]:
+        """Revert Wild Shape to the base form, preserving spent movement.
+
+        Formula: new_remaining = max(base_speed - distance_already_moved, 0)
+        """
+        with self._lock:
+            t = self._tracker
+            combatants = getattr(t, "combatants", {}) or {}
+            c = combatants.get(int(cid))
+            if c is None:
+                return {"ok": False, "error": f"Combatant {cid} not found."}
+
+            # 1. Capture names for logging.
+            name = str(getattr(c, "name", "Combatant"))
+
+            # 2. Revert to base form (InitiativeTracker now handles movement preservation).
+            try:
+                ok, err = t._revert_wild_shape(int(cid))
+            except Exception as exc:
+                return {"ok": False, "error": f"Wild Shape reversion failed: {exc}"}
+
+            if not ok:
+                return {"ok": False, "error": str(err or "Wild Shape reversion failed.")}
+
+            try:
+                new_remaining = int(getattr(c, "move_remaining", 0) or 0)
+                t._log(
+                    f"{name} reverted from Wild Shape; movement preserved ({new_remaining}ft remaining).",
+                    cid=int(cid),
+                )
+            except Exception:
+                pass
+
+            if _broadcast:
+                try:
+                    t._rebuild_table(scroll_to_current=True)
+                except Exception:
+                    pass
+                self._broadcast_tracker_state(include_static=False)
+
+            return {
+                "ok": True,
+                "cid": int(cid),
+                "move_remaining": new_remaining,
+                "snapshot": self.combat_snapshot(),
+            }

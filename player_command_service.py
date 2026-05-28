@@ -1370,22 +1370,22 @@ class PlayerCommandService:
         reactor = t.combatants.get(int(reactor_cid))
         if reactor is None:
             return None
-        
+
         mode = t._reaction_mode_for(int(reactor_cid), "spell_stopper", default="ask")
         if mode == "off":
             return None
-        
+
         can_offer, _reason = t._can_offer_spell_stopper_reaction(reactor, source_cid)
         if not can_offer:
             return None
-        
+
         ws_targets = t._find_ws_for_cid(int(reactor_cid))
         choices = [
             {"kind": "spell_stopper_yes", "label": "Spell Stopper", "mode": mode},
             {"kind": "spell_stopper_decline", "label": "No", "mode": "ask"},
             {"kind": "spell_stopper_never", "label": "No (don't ask again)", "mode": "ask"},
         ]
-        
+
         resume_dispatch = None
         if isinstance(pending_msg, dict):
             pending_type = str(pending_msg.get("type") or "").strip().lower()
@@ -1402,10 +1402,10 @@ class PlayerCommandService:
                         is_admin=bool(str(pending_msg.get("admin_token") or "").strip()),
                     )["payload"],
                 )
-        
+
         source_name = t._pc_name_for(int(source_cid)) if source_cid is not None else "Caster"
         target_name = t._pc_name_for(int(target_cid)) if target_cid is not None else "Target"
-        
+
         return self.create_reaction_offer(
             int(reactor_cid),
             "spell_stopper",
@@ -2355,6 +2355,52 @@ class PlayerCommandService:
                 request=request_contract,
                 beast_id=beast_id,
             )
+
+        svc = self._combat_service()
+        if svc is not None:
+            # Delegate to CombatService to ensure movement preservation and proper locking.
+            # We pass _broadcast=False so we can handle bonus action spend before final broadcast.
+            res = svc.wild_shape_apply(int(cid_int), beast_id, _broadcast=False)
+            if res.get("ok"):
+                if require_bonus_action:
+                    t._use_bonus_action(c)
+                    setattr(c, "bonus_action_remaining", 0)
+
+                # Final authoritative refresh
+                rebuild = getattr(t, "_rebuild_table", None)
+                if callable(rebuild):
+                    try:
+                        rebuild(scroll_to_current=True)
+                    except Exception:
+                        pass
+                broadcast = getattr(t, "_lan_force_state_broadcast", None)
+                if callable(broadcast):
+                    try:
+                        broadcast()
+                    except Exception:
+                        pass
+
+                self._toast(ws_id, "Wild Shape activated.")
+                return build_dispatch_result(
+                    "wild_shape_apply",
+                    True,
+                    request=request_contract,
+                    beast_id=beast_id,
+                    via="combat_service",
+                    result=res,
+                )
+            else:
+                self._toast(ws_id, res.get("error") or "Could not Wild Shape, matey.")
+                return build_dispatch_result(
+                    "wild_shape_apply",
+                    False,
+                    reason="apply_failed",
+                    error=str(res.get("error") or ""),
+                    request=request_contract,
+                    beast_id=beast_id,
+                )
+
+        # Fallback: CombatService unavailable — direct mutation.
         ok, err = t._apply_wild_shape(int(cid_int), beast_id)
         if not ok:
             self._toast(ws_id, err or "Could not Wild Shape, matey.")
@@ -2509,6 +2555,48 @@ class PlayerCommandService:
                 reason="no_bonus_action",
                 request=request_contract,
             )
+
+        svc = self._combat_service()
+        if svc is not None:
+            res = svc.wild_shape_revert(int(cid_int), _broadcast=False)
+            if res.get("ok"):
+                if require_bonus_action:
+                    t._use_bonus_action(c)
+                    setattr(c, "bonus_action_remaining", 0)
+
+                # Final authoritative refresh
+                rebuild = getattr(t, "_rebuild_table", None)
+                if callable(rebuild):
+                    try:
+                        rebuild(scroll_to_current=True)
+                    except Exception:
+                        pass
+                broadcast = getattr(t, "_lan_force_state_broadcast", None)
+                if callable(broadcast):
+                    try:
+                        broadcast()
+                    except Exception:
+                        pass
+
+                self._toast(ws_id, "Wild Shape reverted.")
+                return build_dispatch_result(
+                    "wild_shape_revert",
+                    True,
+                    request=request_contract,
+                    via="combat_service",
+                    result=res,
+                )
+            else:
+                self._toast(ws_id, res.get("error") or "Could not revert Wild Shape, matey.")
+                return build_dispatch_result(
+                    "wild_shape_revert",
+                    False,
+                    reason="revert_failed",
+                    error=str(res.get("error") or ""),
+                    request=request_contract,
+                )
+
+        # Fallback: CombatService unavailable — direct mutation.
         ok, err = t._revert_wild_shape(int(cid_int))
         if not ok:
             self._toast(ws_id, err or "Could not revert Wild Shape, matey.")
@@ -5067,16 +5155,16 @@ class PlayerCommandService:
         spellcasting = profile.get("spellcasting", {}) if isinstance(profile, dict) else {}
         slots = t._json_safe(spellcasting.get("spell_slots", {}))
         pact = spellcasting.get("pact_magic_slots", {})
-        
+
         entry = slots.get(str(slot_level))
         is_pact_target = False
-        
+
         # If no normal slots at this level, check if it matches the warlock's pact slot level
         if (not isinstance(entry, dict) or int(entry.get("max") or 0) <= 0) and isinstance(pact, dict):
             if int(pact.get("level") or 0) == slot_level:
                 is_pact_target = True
                 entry = {
-                    "current": int(pact.get("count") or 0), 
+                    "current": int(pact.get("count") or 0),
                     "max": int(pact.get("count") or 0)
                 }
                 # Try to find the actual current value in resource pools
@@ -5143,7 +5231,7 @@ class PlayerCommandService:
             return build_dispatch_result("manual_override_spell_slot", False, reason="already_at_zero", request=request_contract)
 
         new_current = max(0, min(max_current, old_current + slot_delta))
-        
+
         if is_pact_target:
             # Update pact slots in resource pools
             resources = profile.get("resources", {})
@@ -7003,7 +7091,7 @@ class PlayerCommandService:
         ws_id: Any,
     ) -> Dict[str, Any]:
         """Resolve Fred's Spell Stopper reaction.
-        
+
         On accept (spell_stopper_yes):
         - Spend the spell_stopper_reaction pool
         - Mark spell as interrupted (canceled, slot preserved)
@@ -7014,23 +7102,23 @@ class PlayerCommandService:
         if not isinstance(pending, dict):
             self._toast(ws_id, "That Spell Stopper offer expired, matey.")
             return {"ok": False, "reason": "expired_offer", "trigger": "spell_stopper", "choice": choice}
-        
+
         reactor_cid = self._normalize_cid(offer.get("reactor_cid"), "reaction_response.spell_stopper.reactor")
         reactor = t.combatants.get(int(reactor_cid)) if reactor_cid is not None else None
         if reactor is None:
             self.prompts.pop_prompt(request_id)
             return {"ok": False, "reason": "reactor_missing", "trigger": "spell_stopper", "choice": choice}
-        
+
         if choice in ("spell_stopper_never", "never"):
             t._set_reaction_prefs(int(reactor_cid), {"spell_stopper": "off"})
-        
+
         flags = dict(
             resume_dispatch.get("flags")
             if isinstance(resume_dispatch, dict) and isinstance(resume_dispatch.get("flags"), dict)
             else {}
         )
         flags["_spell_stopper_resolution_done"] = True
-        
+
         if choice in ("spell_stopper_never", "never", "", "decline", "ignore", "spell_stopper_no", "spell_stopper_decline"):
             self.prompts.pop_prompt(request_id)
             if isinstance(resume_dispatch, dict):
@@ -7043,7 +7131,7 @@ class PlayerCommandService:
                     "resume_dispatch": resume_dispatch,
                 }
             return {"ok": True, "trigger": "spell_stopper", "choice": choice, "prompt_state": "declined"}
-        
+
         if choice not in ("spell_stopper_yes", "spell_stopper"):
             self.prompts.pop_prompt(request_id)
             if isinstance(resume_dispatch, dict):
@@ -7056,7 +7144,7 @@ class PlayerCommandService:
                     "resume_dispatch": resume_dispatch,
                 }
             return {"ok": True, "trigger": "spell_stopper", "choice": choice, "prompt_state": "resolved"}
-        
+
         # spell_stopper_yes: spend reaction + pool
         if not t._use_reaction(reactor):
             self._toast(ws_id, "No reactions left for Spell Stopper, matey.")
@@ -7071,7 +7159,7 @@ class PlayerCommandService:
                     "resume_dispatch": resume_dispatch,
                 }
             return {"ok": False, "reason": "reaction_unavailable", "trigger": "spell_stopper", "choice": choice}
-        
+
         # Spend the spell_stopper_reaction pool
         player_name = self._tracker._pc_name_for(int(reactor_cid))
         pool_ok, pool_msg = t._consume_resource_pool_for_cast(player_name, "spell_stopper_reaction", 1)
@@ -7088,14 +7176,14 @@ class PlayerCommandService:
                     "resume_dispatch": resume_dispatch,
                 }
             return {"ok": False, "reason": "pool_unavailable", "trigger": "spell_stopper", "choice": choice}
-        
+
         # Mark spell as interrupted: set flag to prevent damage/effects
         flags["_spell_stopped_by_spell_stopper"] = True
         t._log(
             f"{getattr(reactor, 'name', 'Reactor')} slashes with Spell Stopper, cutting off the spell!",
             cid=int(getattr(reactor, "cid", 0) or 0),
         )
-        
+
         self.prompts.pop_prompt(request_id)
         if isinstance(resume_dispatch, dict):
             resume_dispatch["flags"] = flags
@@ -7358,7 +7446,7 @@ class PlayerCommandService:
         prompt = self.prompts.get_prompt(request_id)
         if not isinstance(prompt, dict):
             return build_dispatch_result("reaction_response", False, reason="no_offer", request=request_contract)
-        
+
         trigger = str(prompt.get("trigger") or "unknown").strip().lower()
         try:
             reactor_expected = int(prompt.get("reactor_cid") or -1)
@@ -7413,7 +7501,7 @@ class PlayerCommandService:
         )
         if not isinstance(adjudicate_result, dict):
             adjudicate_result = {}
-        
+
         resolve_ok = bool(adjudicate_result.get("ok", True))
         reactor = t.combatants.get(reactor_got)
         if reactor is not None:
