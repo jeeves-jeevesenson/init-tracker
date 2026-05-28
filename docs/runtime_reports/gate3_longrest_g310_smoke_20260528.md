@@ -35,7 +35,7 @@ Known non-blocking/warmup spans in same trace:
 
 Decision:
 - Long Rest latency is now below the Gate 3 hard fail threshold.
-- Commit candidate, pending targeted validation and restart/durability check.
+- Commit candidate based on successful developer smoke and targeted validation. Deferred persistence remains a regression-watch area.
 
 Regression guardrails:
 - Future Long Rest traces must keep `combat_service.long_rest < 5000ms`.
