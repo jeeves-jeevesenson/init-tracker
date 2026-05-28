@@ -62,8 +62,26 @@ from runtime_config import (
 # Monster YAML loader (PyYAML)
 try:
     import yaml  # type: ignore
+    _Y_LOADER = getattr(yaml, "CSafeLoader", yaml.SafeLoader)
+    _Y_DUMPER = getattr(yaml, "CSafeDumper", yaml.SafeDumper)
 except Exception:
     yaml = None  # type: ignore
+    _Y_LOADER = None
+    _Y_DUMPER = None
+
+def _yaml_fast_load(stream: Any) -> Any:
+    if yaml is None or _Y_LOADER is None:
+        return {}
+    return yaml.load(stream, Loader=_Y_LOADER)
+
+def _yaml_fast_dump(data: Any, stream: Any = None, **kwargs: Any) -> Any:
+    if yaml is None or _Y_DUMPER is None:
+        return ""
+    kwargs.setdefault("Dumper", _Y_DUMPER)
+    kwargs.setdefault("sort_keys", False)
+    kwargs.setdefault("allow_unicode", True)
+    return yaml.dump(data, stream, **kwargs)
+
 from tk_compat import load_tk_modules
 
 tk, filedialog, messagebox, scrolledtext, simpledialog, ttk, _tkfont = load_tk_modules()
@@ -1708,7 +1726,7 @@ class LanConfig:
             if yaml_spec is not None:
                 yaml = importlib.import_module("yaml")
                 try:
-                    parsed = yaml.safe_load(content)
+                    parsed = _yaml_fast_load(content)
                 except Exception:
                     parsed = None
         if isinstance(parsed, list):
@@ -2957,7 +2975,7 @@ class LanController:
                 entry: Dict[str, Any] = {"id": spell_id, "raw": text}
                 if not raw and yaml is not None:
                     try:
-                        entry["parsed"] = yaml.safe_load(text)
+                        entry["parsed"] = _yaml_fast_load(text)
                     except Exception as exc:
                         entry["parsed"] = None
                         entry["error"] = f"Failed to parse YAML: {exc}"
@@ -2979,7 +2997,7 @@ class LanController:
             payload: Dict[str, Any] = {"id": spell_id, "raw": text}
             if not raw and yaml is not None:
                 try:
-                    payload["parsed"] = yaml.safe_load(text)
+                    payload["parsed"] = _yaml_fast_load(text)
                 except Exception as exc:
                     payload["parsed"] = None
                     payload["error"] = f"Failed to parse YAML: {exc}"
@@ -3200,7 +3218,7 @@ class LanController:
             if data is None:
                 raise HTTPException(status_code=400, detail="Missing character data.")
             try:
-                text = yaml.safe_dump(data, sort_keys=False, allow_unicode=True)
+                text = _yaml_fast_dump(data, sort_keys=False, allow_unicode=True)
             except Exception as exc:
                 raise HTTPException(status_code=500, detail=f"Unable to export YAML: {exc}")
             return Response(text, media_type="application/x-yaml")
@@ -9294,7 +9312,7 @@ class InitiativeTracker(base.InitiativeTracker):
             if yaml is not None and monsters_dir.is_dir():
                 for path in monsters_dir.glob("*.yaml"):
                     try:
-                        raw = yaml.safe_load(path.read_text(encoding="utf-8"))
+                        raw = _yaml_fast_load(path.read_text(encoding="utf-8"))
                     except Exception:
                         continue
                     if not isinstance(raw, dict):
@@ -9459,6 +9477,8 @@ class InitiativeTracker(base.InitiativeTracker):
         self._player_yaml_lock = threading.Lock()
         self._spell_yaml_lock = threading.Lock()
         self._player_yaml_refresh_scheduled = False
+        self._deferred_yaml_writes = queue.Queue()
+        self._deferred_yaml_thread = None
         self._yaml_players_index_path_cache: Optional[Path] = None
         self._roster_manager_refresh: Optional[Callable[[], None]] = None
         self._yaml_players_refresh_cache(rebuild=True)
@@ -9769,7 +9789,7 @@ class InitiativeTracker(base.InitiativeTracker):
             if yaml is not None:
                 try:
                     raw = path.read_text(encoding="utf-8")
-                    parsed = yaml.safe_load(raw)
+                    parsed = _yaml_fast_load(raw)
                 except Exception:
                     parsed = None
                 if isinstance(parsed, dict):
@@ -9923,7 +9943,7 @@ class InitiativeTracker(base.InitiativeTracker):
 
         def parse_items_from_file(path: Path, bucket_key: str) -> List[Tuple[str, Dict[str, Any], bool]]:
             try:
-                parsed = yaml.safe_load(path.read_text(encoding="utf-8")) if yaml is not None else None
+                parsed = _yaml_fast_load(path.read_text(encoding="utf-8")) if yaml is not None else None
             except Exception as exc:
                 self._oplog(f"Items YAML parse failed for {path}: {exc}", level="warning")
                 return []
@@ -9996,7 +10016,7 @@ class InitiativeTracker(base.InitiativeTracker):
 
         for path in magic_files:
             try:
-                parsed = yaml.safe_load(path.read_text(encoding="utf-8")) if yaml is not None else None
+                parsed = _yaml_fast_load(path.read_text(encoding="utf-8")) if yaml is not None else None
             except Exception as exc:
                 self._oplog(f"Items YAML parse failed for {path}: {exc}", level="warning")
                 continue
@@ -10061,7 +10081,7 @@ class InitiativeTracker(base.InitiativeTracker):
         payload: Dict[str, Dict[str, Any]] = {}
         for path in files:
             try:
-                parsed = yaml.safe_load(path.read_text(encoding="utf-8")) if yaml is not None else None
+                parsed = _yaml_fast_load(path.read_text(encoding="utf-8")) if yaml is not None else None
             except Exception as exc:
                 self._oplog(f"Magic item YAML parse failed for {path}: {exc}", level="warning")
                 continue
@@ -10101,7 +10121,7 @@ class InitiativeTracker(base.InitiativeTracker):
         payload: Dict[str, Dict[str, Any]] = {}
         for path in files:
             try:
-                parsed = yaml.safe_load(path.read_text(encoding="utf-8")) if yaml is not None else None
+                parsed = _yaml_fast_load(path.read_text(encoding="utf-8")) if yaml is not None else None
             except Exception as exc:
                 self._oplog(f"Consumable YAML parse failed for {path}: {exc}", level="warning")
                 continue
@@ -10146,7 +10166,7 @@ class InitiativeTracker(base.InitiativeTracker):
         definitions: Dict[str, Dict[str, Any]] = {}
         for path in files:
             try:
-                parsed = yaml.safe_load(path.read_text(encoding="utf-8")) if yaml is not None else None
+                parsed = _yaml_fast_load(path.read_text(encoding="utf-8")) if yaml is not None else None
             except Exception as exc:
                 raise ValueError(f"Failed to parse {item_bucket} definition YAML at {path}: {exc}") from exc
             if not isinstance(parsed, dict):
@@ -10388,7 +10408,7 @@ class InitiativeTracker(base.InitiativeTracker):
         if lock is None or not hasattr(lock, "acquire"):
             lock = threading.RLock()
             self.__dict__["_shop_catalog_yaml_lock"] = lock
-        yaml_text = yaml.safe_dump(payload, sort_keys=False, allow_unicode=True)
+        yaml_text = _yaml_fast_dump(payload, sort_keys=False, allow_unicode=True)
         tmp_path: Optional[Path] = None
         with lock:
             current_revision = self._shop_catalog_revision_for_path(path)
@@ -10442,7 +10462,7 @@ class InitiativeTracker(base.InitiativeTracker):
         if not catalog_path.exists():
             raise ValueError(f"Shop catalog YAML not found at {catalog_path}.")
         try:
-            parsed = yaml.safe_load(catalog_path.read_text(encoding="utf-8")) if yaml is not None else None
+            parsed = _yaml_fast_load(catalog_path.read_text(encoding="utf-8")) if yaml is not None else None
         except Exception as exc:
             raise ValueError(f"Failed to parse shop catalog YAML at {catalog_path}: {exc}") from exc
         if not isinstance(parsed, dict):
@@ -10680,7 +10700,7 @@ class InitiativeTracker(base.InitiativeTracker):
                     raise CharacterApiError(status_code=500, detail={"error": "catalog_save_failed", "message": "Items directory is unavailable."})
                 catalog_path = items_dir / "Shop" / "catalog.yaml"
                 catalog_revision_before = self._shop_catalog_revision_for_path(catalog_path)
-                parsed = yaml.safe_load(catalog_path.read_text(encoding="utf-8")) if yaml is not None else None
+                parsed = _yaml_fast_load(catalog_path.read_text(encoding="utf-8")) if yaml is not None else None
                 if not isinstance(parsed, dict):
                     raise CharacterApiError(status_code=500, detail={"error": "catalog_save_failed", "message": "Failed to parse catalog before stock update."})
                 entries_payload = parsed.get("entries")
@@ -24484,7 +24504,7 @@ class InitiativeTracker(base.InitiativeTracker):
                 ops.warning("Failed reading spell YAML %s: %s", fp.name, exc)
                 return None
             try:
-                parsed = yaml.safe_load(raw)
+                parsed = _yaml_fast_load(raw)
             except Exception as exc:
                 ops.warning("Failed parsing spell YAML %s: %s", fp.name, exc)
                 return None
@@ -24934,7 +24954,10 @@ class InitiativeTracker(base.InitiativeTracker):
         # Legacy marker was useful during migration but clutters player YAML.
         # Keep read compatibility, but stop persisting it for new writes.
         normalized_payload.pop("format_version", None)
-        yaml_text = yaml.safe_dump(normalized_payload, sort_keys=False, allow_unicode=True)
+
+        # Optimization: use fast YAML dumper
+        yaml_text = _yaml_fast_dump(normalized_payload)
+
         tmp_path = path.with_suffix(path.suffix + ".tmp")
         with self._player_yaml_lock:
             path.parent.mkdir(parents=True, exist_ok=True)
@@ -24953,6 +24976,40 @@ class InitiativeTracker(base.InitiativeTracker):
         requires_static = any(d in static_domains for d in invalidation_domains)
         if requires_static:
             self._invalidate_lan_static_snapshot_cache("player_yaml_write:" + ",".join(invalidation_domains))
+
+    def _schedule_deferred_write(self, path: Path, payload: Dict[str, Any], domains: List[str]) -> None:
+        """Enqueue a player YAML write for background persistence."""
+        # Use a single deepcopy for both the background write and the in-memory update
+        self._deferred_yaml_writes.put((path, payload, domains))
+        if self._deferred_yaml_thread is None or not self._deferred_yaml_thread.is_alive():
+            self._deferred_yaml_thread = threading.Thread(
+                target=self._deferred_yaml_writer_loop,
+                name="DeferredPlayerYamlWriter",
+                daemon=True
+            )
+            self._deferred_yaml_thread.start()
+
+    def _deferred_yaml_writer_loop(self) -> None:
+        """Worker thread for sequential background YAML writes."""
+        while True:
+            try:
+                # Wait for work with a timeout to allow thread to exit if idle
+                path, payload, domains = self._deferred_yaml_writes.get(timeout=30)
+                try:
+                    self._write_player_yaml_atomic(path, payload, invalidation_domains=domains)
+                    # Update metadata cache after successful write to avoid redundant re-loads
+                    new_meta = _file_stat_metadata(path)
+                    self._player_yaml_meta_by_path[path] = new_meta
+                except Exception as e:
+                    self._oplog(f"Deferred YAML write failed for {path.name}: {e}", level="error")
+                finally:
+                    self._deferred_yaml_writes.task_done()
+            except queue.Empty:
+                self._deferred_yaml_thread = None
+                break
+            except Exception as e:
+                self._oplog(f"Deferred YAML writer loop error: {e}", level="error")
+                time.sleep(1) # Avoid tight error loop
 
     @staticmethod
     def _normalize_character_lookup_key(value: Any) -> str:
@@ -25127,7 +25184,7 @@ class InitiativeTracker(base.InitiativeTracker):
     def _write_spell_yaml_atomic(self, path: Path, payload: Dict[str, Any]) -> None:
         if yaml is None:
             raise RuntimeError("PyYAML is required for spell persistence.")
-        yaml_text = yaml.safe_dump(payload, sort_keys=False, allow_unicode=True)
+        yaml_text = _yaml_fast_dump(payload, sort_keys=False, allow_unicode=True)
         tmp_path = path.with_suffix(path.suffix + ".tmp")
         with self._spell_yaml_lock:
             path.parent.mkdir(parents=True, exist_ok=True)
@@ -25146,10 +25203,15 @@ class InitiativeTracker(base.InitiativeTracker):
         self._player_yaml_refresh_scheduled_static = include_static
         self._player_yaml_refresh_scheduled_force_reload = force_reload
 
+        # Strength: if a cache hold is active, we skip scheduling the deferred refresh
+        # because the batch operation is expected to perform a final broadcast itself.
+        if int(self.__dict__.get("_player_yaml_cache_hold_depth", 0) or 0) > 0:
+            return
+
         def refresh() -> None:
             self._player_yaml_refresh_scheduled = False
-            do_static = getattr(self, "_player_yaml_refresh_scheduled_static", True)
-            do_reload = getattr(self, "_player_yaml_refresh_scheduled_force_reload", True)
+            do_static = bool(getattr(self, "_player_yaml_refresh_scheduled_static", True))
+            do_reload = bool(getattr(self, "_player_yaml_refresh_scheduled_force_reload", True))
             self._player_yaml_refresh_scheduled_static = False
             self._player_yaml_refresh_scheduled_force_reload = False
             if do_reload:
@@ -25312,7 +25374,7 @@ class InitiativeTracker(base.InitiativeTracker):
         if yaml is None:
             raise CharacterApiError(status_code=500, detail={"error": "yaml_unavailable"})
         try:
-            raw = yaml.safe_load(path.read_text(encoding="utf-8"))
+            raw = _yaml_fast_load(path.read_text(encoding="utf-8"))
         except Exception as exc:
             raise CharacterApiError(status_code=500, detail={"error": "read_failed", "message": str(exc)})
         return raw if isinstance(raw, dict) else {}
@@ -25326,6 +25388,7 @@ class InitiativeTracker(base.InitiativeTracker):
         invalidation_domains: Optional[List[str]] = None,
         include_static_refresh: bool = True,
         force_player_yaml_reload: bool = False,
+        deferred: bool = False,
     ) -> Dict[str, Any]:
         # Optimization: if we are handling the projection ourselves, we can skip triggering
         # global static cache invalidation in _write_player_yaml_atomic.
@@ -25334,11 +25397,18 @@ class InitiativeTracker(base.InitiativeTracker):
         else:
             domains = list(invalidation_domains)
 
-        self._write_player_yaml_atomic(path, payload, invalidation_domains=domains)
-        meta = _file_stat_metadata(path)
-        self._player_yaml_cache_by_path[path] = payload
-        self._player_yaml_meta_by_path[path] = meta
-        profile = self._normalize_player_profile(payload, path.stem)
+        # Deepcopy once to safely share between in-memory cache and background writer
+        payload_copy = copy.deepcopy(payload)
+
+        if deferred:
+            self._schedule_deferred_write(path, payload_copy, domains)
+        else:
+            self._write_player_yaml_atomic(path, payload_copy, invalidation_domains=domains)
+            # Only update stat meta if we wrote synchronously
+            self._player_yaml_meta_by_path[path] = _file_stat_metadata(path)
+
+        self._player_yaml_cache_by_path[path] = payload_copy
+        profile = self._normalize_player_profile(payload_copy, path.stem)
         profile_name = profile.get("name", path.stem)
         self._player_yaml_data_by_name[profile_name] = profile
         self._player_yaml_name_map[self._normalize_character_lookup_key(profile_name)] = path
@@ -25350,6 +25420,93 @@ class InitiativeTracker(base.InitiativeTracker):
         )
         return profile
 
+    def _bulk_report_character_mutations(
+        self,
+        mutations: List[Dict[str, Any]],
+        *,
+        include_static_refresh: bool = True,
+        force_player_yaml_reload: bool = False,
+        deferred: bool = True,
+    ) -> None:
+        """Efficiently handle multiple character profile updates in a single batch.
+
+        mutations: list of { 'path': Path, 'profile': dict, 'domains': list[str] }
+        """
+        if not mutations:
+            return
+
+        names_to_refresh = []
+
+        with _PlayerYamlCacheHold(self):
+            for m in mutations:
+                path = m["path"]
+                profile = m["profile"]
+                domains = m["domains"]
+
+                # 1. Background persistence
+                # Share a single deepcopy between the writer and the projection
+                payload_snapshot = copy.deepcopy(profile)
+
+                if deferred:
+                    self._schedule_deferred_write(path, payload_snapshot, domains)
+                else:
+                    self._write_player_yaml_atomic(path, payload_snapshot, invalidation_domains=domains)
+                    self._player_yaml_meta_by_path[path] = _file_stat_metadata(path)
+
+                # 2. In-memory cache update
+                # We skip _normalize_player_profile here for speed, assuming
+                # the caller (like long_rest) only changed current values.
+                self._player_yaml_cache_by_path[path] = profile
+                profile_name = profile.get("name", path.stem)
+                self._player_yaml_data_by_name[profile_name] = profile
+                self._player_yaml_name_map[self._normalize_character_lookup_key(profile_name)] = path
+                self._player_yaml_name_map[self._normalize_character_lookup_key(path.stem)] = path
+
+                names_to_refresh.append((profile_name, payload_snapshot))
+
+            # 3. Bulk projection update (using our pre-made snapshots)
+            if names_to_refresh:
+                self._bulk_refresh_cached_player_profile_projections(names_to_refresh)
+
+            # 4. Final refresh schedule
+            self._schedule_player_yaml_refresh(
+                include_static=include_static_refresh,
+                force_reload=force_player_yaml_reload,
+            )
+
+    def _bulk_refresh_cached_player_profile_projections(self, mutations: List[Tuple[str, Dict[str, Any]]]) -> None:
+        """Update multiple player capability projections efficiently.
+
+        mutations: list of (profile_name, profile_snapshot)
+        """
+        if not mutations:
+            return
+
+        # Increment global version once
+        new_version = int(self.__dict__.get("_lan_static_snapshot_version", 0) or 0) + 1
+        self.__dict__["_lan_static_snapshot_version"] = new_version
+
+        def patch_snapshot(snapshot: Any) -> None:
+            if not isinstance(snapshot, dict):
+                return
+            profiles = snapshot.get("player_profiles")
+            if not isinstance(profiles, dict):
+                return
+            for name, profile_snapshot in mutations:
+                profiles[name] = profile_snapshot
+            snapshot["static_version"] = new_version
+
+        static_cache = self.__dict__.get("_lan_static_snapshot_cache")
+        if static_cache is not None:
+            patch_snapshot(static_cache)
+            self.__dict__["_lan_static_snapshot_cache_version"] = new_version
+
+        lan = self.__dict__.get("_lan")
+        if lan is not None:
+            patch_snapshot(getattr(lan, "_cached_snapshot", None))
+            if hasattr(lan, "_cached_static_payload"):
+                patch_snapshot(lan._cached_static_payload)
+
     def _refresh_cached_player_profile_projection(self, profile_name: Any, profile: Dict[str, Any]) -> None:
         """Patch player capability projections after a single-profile mutation."""
         name = str(profile_name or "").strip()
@@ -25360,13 +25517,16 @@ class InitiativeTracker(base.InitiativeTracker):
         new_version = int(self.__dict__.get("_lan_static_snapshot_version", 0) or 0) + 1
         self.__dict__["_lan_static_snapshot_version"] = new_version
 
+        # Optimization: deepcopy once and share across internal caches
+        profile_copy = copy.deepcopy(profile)
+
         def patch_snapshot(snapshot: Any) -> None:
             if not isinstance(snapshot, dict):
                 return
             profiles = snapshot.get("player_profiles")
             if not isinstance(profiles, dict):
                 return
-            profiles[name] = copy.deepcopy(profile)
+            profiles[name] = profile_copy
             # Update internal version to match global version
             snapshot["static_version"] = new_version
 
@@ -26407,7 +26567,7 @@ class InitiativeTracker(base.InitiativeTracker):
                 detail={"error": "validation_error", "message": "YAML file contents are required."},
             )
         try:
-            data = yaml.safe_load(yaml_text)
+            data = _yaml_fast_load(yaml_text)
         except Exception as exc:
             raise CharacterApiError(
                 status_code=400,
@@ -28720,6 +28880,13 @@ class InitiativeTracker(base.InitiativeTracker):
         perf_debug = os.getenv("LAN_PERF_DEBUG") == "1"
         perf_start = time.perf_counter() if perf_debug else 0.0
         try:
+            # Strength: Respect hold even for forced reloads to avoid I/O storms during batch mutations.
+            if int(self.__dict__.get("_player_yaml_cache_hold_depth", 0) or 0) > 0:
+                cache_by_path = self.__dict__.get("_player_yaml_cache_by_path")
+                cache_by_name = self.__dict__.get("_player_yaml_data_by_name")
+                if cache_by_path or cache_by_name:
+                    return
+
             if not force_refresh:
                 cache_by_path = self.__dict__.get("_player_yaml_cache_by_path")
                 cache_by_name = self.__dict__.get("_player_yaml_data_by_name")
@@ -28823,7 +28990,7 @@ class InitiativeTracker(base.InitiativeTracker):
                     continue
                 try:
                     raw = path.read_text(encoding="utf-8")
-                    parsed = yaml.safe_load(raw)
+                    parsed = _yaml_fast_load(raw)
                 except Exception:
                     parsed = None
                 data_by_path[path] = parsed if isinstance(parsed, dict) else None
@@ -30336,7 +30503,7 @@ class InitiativeTracker(base.InitiativeTracker):
         if not path.exists():
             raise FileNotFoundError("Spell not found.")
         try:
-            parsed = yaml.safe_load(path.read_text(encoding="utf-8"))
+            parsed = _yaml_fast_load(path.read_text(encoding="utf-8"))
         except Exception as exc:
             raise RuntimeError(f"Unable to read spell YAML: {exc}") from exc
         if not isinstance(parsed, dict):
@@ -35761,7 +35928,7 @@ class InitiativeTracker(base.InitiativeTracker):
 
         data = {"monster": monster_data}
         try:
-            text = yaml.safe_dump(data, sort_keys=False, allow_unicode=True)
+            text = _yaml_fast_dump(data, sort_keys=False, allow_unicode=True)
             target.write_text(text, encoding="utf-8")
         except Exception:
             return False, "Failed to write temp monster file.", None
@@ -48947,7 +49114,7 @@ class InitiativeTracker(base.InitiativeTracker):
             except Exception:
                 continue
             try:
-                data = yaml.safe_load(raw)
+                data = _yaml_fast_load(raw)
             except Exception:
                 continue
             if not isinstance(data, dict):
@@ -49156,7 +49323,7 @@ class InitiativeTracker(base.InitiativeTracker):
         fp = self._monsters_dir_path() / spec.filename
         try:
             raw = fp.read_text(encoding="utf-8")
-            parsed = yaml.safe_load(raw)
+            parsed = _yaml_fast_load(raw)
         except Exception:
             return spec
         if not isinstance(parsed, dict):

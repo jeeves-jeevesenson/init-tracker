@@ -171,3 +171,26 @@ Backlog captured from smoke:
 Next recommended task:
 - Gate 3 Long Rest latency root-cause and narrow fix.
 - Do not bundle the unrelated smoke bugs into the Long Rest fix.
+
+## I. Smoke Finding Added 2026-05-28 — Gate 3 Long Rest G3-10
+
+Source report:
+- `docs/runtime_reports/gate3_longrest_g310_smoke_20260528.md`
+
+Decision:
+- G3-10 reduced Long Rest from ~31s pre-fix and ~15–16s during failed deferred attempts to ~1.25s in live trace.
+- This clears the Gate 3 hard fail threshold for Long Rest, pending continued regression checks.
+- The fix uses deferred/bulk persistence, so durability after restart is a required smoke condition.
+
+Fresh trace:
+- `logs/debug-trace-20260528-123238.jsonl`
+
+Key trace findings:
+- `combat_service.long_rest`: ~1.25s
+- `/api/dm/combat` max during smoke: ~1.28s
+- `static_plus_dynamic builds`: 0
+- queue waits over 1000ms: none
+- queue waits over 5000ms: none
+
+Regression guardrail:
+- Do not accept future Long Rest changes unless live trace keeps `combat_service.long_rest < 5000ms` and restored state survives restart.

@@ -1149,6 +1149,7 @@ class CombatService:
             rested_summaries = []
             from dnd_initative_tracker import _PlayerYamlCacheHold
             with _PlayerYamlCacheHold(t):
+                mutations = []
                 for c in targets:
                     summary = {
                         "cid": int(c.cid),
@@ -1193,26 +1194,29 @@ class CombatService:
                     # 5. Player-specific (Spell slots, Resource pools)
                     if bool(getattr(c, "is_pc", False)):
                         player_name = t._pc_name_for(int(c.cid))
+                        profile = t._profile_for_player_name(player_name)
+                        if isinstance(profile, dict):
+                            profile_changed = False
 
-                        # Spell Slots
-                        if restore_spell_slots:
-                            try:
-                                # Use InitiativeTracker helpers if possible
-                                _, slots = t._resolve_spell_slot_profile(player_name)
-                                if isinstance(slots, dict):
-                                    for lvl_data in slots.values():
-                                        if isinstance(lvl_data, dict) and "max" in lvl_data:
-                                            lvl_data["current"] = lvl_data["max"]
-                                    t._save_player_spell_slots(player_name, slots)
-                                    summary["spell_slots_restored"] = True
-                            except Exception:
-                                pass
+                            # Spell Slots
+                            if restore_spell_slots:
+                                try:
+                                    spellcasting = profile.get("spellcasting")
+                                    if isinstance(spellcasting, dict):
+                                        slots = spellcasting.get("spell_slots")
+                                        if isinstance(slots, dict):
+                                            # We must ensure current=max for all slot levels
+                                            for lvl_data in slots.values():
+                                                if isinstance(lvl_data, dict) and "max" in lvl_data:
+                                                    lvl_data["current"] = lvl_data["max"]
+                                            summary["spell_slots_restored"] = True
+                                            profile_changed = True
+                                except Exception:
+                                    pass
 
-                        # Resource Pools
-                        if restore_long_rest_resources:
-                            try:
-                                profile = t._profile_for_player_name(player_name)
-                                if isinstance(profile, dict):
+                            # Resource Pools
+                            if restore_long_rest_resources:
+                                try:
                                     resources = profile.get("resources", {})
                                     pools = resources.get("pools", [])
                                     if isinstance(pools, list):
@@ -1234,18 +1238,30 @@ class CombatService:
                                                 restored_pools.append(str(pool.get("label") or pool.get("id")))
 
                                         if restored_pools:
-                                            t._store_character_yaml(
-                                                t._find_player_profile_path(player_name),
-                                                profile,
-                                                invalidation_domains=["dynamic_player_values", "resource_pools"],
-                                                include_static_refresh=False,
-                                                force_player_yaml_reload=False,
-                                            )
                                             summary["resource_pools_restored"] = restored_pools
-                            except Exception:
-                                pass
+                                            profile_changed = True
+                                except Exception:
+                                    pass
+
+                            if profile_changed:
+                                mutations.append({
+                                    "path": t._find_player_profile_path(player_name),
+                                    "profile": profile,
+                                    "domains": ["dynamic_player_values", "resource_pools"],
+                                })
 
                     rested_summaries.append(summary)
+
+                if mutations:
+                    try:
+                        t._bulk_report_character_mutations(
+                            mutations,
+                            include_static_refresh=False,
+                            force_player_yaml_reload=False,
+                            deferred=True,
+                        )
+                    except Exception:
+                        pass
 
                 if targets:
                     t._log(f"Long Rest applied to {len(targets)} combatant(s).")
