@@ -20643,15 +20643,22 @@ class InitiativeTracker(base.InitiativeTracker):
         last_build_raw = getattr(self, "_lan_resource_pools_last_build", 0.0)
         last_build = last_build_raw if isinstance(last_build_raw, (int, float)) else 0.0
 
-        if include_static or (now - last_build) >= 1.0:
+        # Optimization: only rebuild resource pools if requested or throttled.
+        # We also force rebuild if the last mutation touched resource pools.
+        last_domains = getattr(self, "_last_invalidation_domains", None)
+        force_rebuild = include_static or (isinstance(last_domains, list) and "resource_pools" in last_domains)
+
+        if force_rebuild or (now - last_build) >= 1.0:
             try:
                 resource_pools = self._player_resource_pools_payload()
                 self._lan_resource_pools_last_build = now
             except Exception:
-                if hydrate_static:
-                    cached = (self._lan._cached_snapshot if hasattr(self, "_lan") else {}) or {}
-                    resource_pools = cached.get("resource_pools") or {}
-        elif hydrate_static:
+                # Fallback to cache if build fails
+                cached = (self._lan._cached_snapshot if hasattr(self, "_lan") else {}) or {}
+                resource_pools = cached.get("resource_pools") or {}
+        else:
+            # Within throttle window and not forced: use cached value from last snapshot.
+            # This prevents stripping resource_pools from dynamic broadcasts.
             cached = (self._lan._cached_snapshot if hasattr(self, "_lan") else {}) or {}
             resource_pools = cached.get("resource_pools") or {}
 

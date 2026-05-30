@@ -1,8 +1,10 @@
 import copy
 import unittest
 from pathlib import Path
+from unittest import mock
 
 import dnd_initative_tracker as tracker_mod
+import tk_compat
 
 
 class ResourcePoolAccountingRegressionTests(unittest.TestCase):
@@ -12,7 +14,7 @@ class ResourcePoolAccountingRegressionTests(unittest.TestCase):
         self.app._load_player_yaml_cache = lambda force_refresh=False: None
         self.app._player_yaml_name_map = {}
         self.app._player_yaml_cache_by_path = {}
-        self.app._store_character_yaml = lambda _path, payload: self.saved_payloads.append(copy.deepcopy(payload))
+        self.app._store_character_yaml = lambda _path, payload, **_kwargs: self.saved_payloads.append(copy.deepcopy(payload))
         self.app._resolve_active_inventory_item_pool_state = lambda _raw, _pool_id: None
         self.app._normalize_inventory_item_granted_pools = lambda _profile: []
         self.app._derive_consumable_resource_pools_from_inventory = lambda _profile: []
@@ -146,6 +148,42 @@ class ResourcePoolAccountingRegressionTests(unittest.TestCase):
         slots = ((payload.get("Vicnor", {}).get("spellcasting") or {}).get("spell_slots")) or {}
         self.assertEqual(int((slots.get("4") or {}).get("max") or 0), 2)
         self.assertEqual(int((slots.get("4") or {}).get("current") or 0), 1)
+
+    def test_dynamic_snapshot_payload_preserves_resource_pools_but_strips_profiles(self):
+        # Setup a minimal app stub
+        app = object.__new__(tracker_mod.InitiativeTracker)
+        app._player_profiles_payload = lambda: {}
+        app._spell_presets_payload = lambda: []
+        app._player_resource_pools_payload = lambda: {}
+        app._normalize_character_lookup_key = lambda name: name.lower()
+
+        # Setup a minimal LAN controller
+        lan = object.__new__(tracker_mod.LanController)
+        lan._tracker = app
+        lan._clients_lock = mock.Mock()
+        lan._cid_to_host = {}
+        lan._claims = {}
+        lan._claims_payload = lambda: {}
+        lan._cached_snapshot_payload = lambda: copy.deepcopy(lan._cached_snapshot)
+
+        # Inject a snapshot with both dynamic and static fields
+        lan._cached_snapshot = {
+            "resource_pools": {"Vicnor": []},
+            "player_profiles": {"Vicnor": {}},
+            "spell_presets": ["ignore"],
+            "grid": {"cols": 10},
+            "obstacles": [],
+            "rough_terrain": []
+        }
+
+        # Generate the dynamic payload
+        dynamic = lan._dynamic_snapshot_payload()
+
+        # Verify resource_pools survived but static fields were stripped
+        self.assertIn("resource_pools", dynamic, "resource_pools should be preserved in dynamic payload")
+        self.assertNotIn("player_profiles", dynamic, "player_profiles should be stripped from dynamic payload")
+        self.assertNotIn("spell_presets", dynamic, "spell_presets should be stripped from dynamic payload")
+        self.assertNotIn("grid", dynamic, "grid should be stripped from dynamic payload")
 
 
 if __name__ == "__main__":
