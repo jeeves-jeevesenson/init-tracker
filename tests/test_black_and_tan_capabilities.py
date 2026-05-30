@@ -238,7 +238,7 @@ class TestBlackAndTanCapabilities(unittest.TestCase):
         logs = []
         app._log = lambda msg, cid=None: logs.append(msg)
         app._name_role_memory = {"Rifleman": "enemy", "Hero": "pc"}
-        app._apply_damage_via_service = lambda target, amt: {"hp_after": 10}
+        app._apply_damage_via_service = lambda target, amt, **kwargs: {"hp_after": 10}
         app._queue_concentration_save = lambda t, s: None
         app._death_flavor_line = lambda a, am, d, t: "died"
         app._rebuild_table = lambda **kw: None

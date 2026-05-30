@@ -52,12 +52,12 @@ capabilities:
   - id: suppressive-fire
     name: Suppressive Fire
     type: action
-    executable: false
+    executable: true
     desc: "The Gunner spends 10 ammo and chooses a 10-foot cube within 120 feet. Until the start of the Gunner’s next turn, hostile creatures that start their turn in the cube or enter it must make a DC 14 Wisdom saving throw or be Suppressed until the end of their turn."
     action_type: save_ability
     mechanics:
-      ability: wis
-      dc: 14
+      save_ability: wis
+      save_dc: 14
       shape: cube
       size: 10
       ammo_cost: 10
@@ -66,23 +66,26 @@ capabilities:
           condition: suppressed
           trigger: failed_save
           text: "Suppressed until end of target turn."
-    warning: "Manual area/save resolution required."
+          duration:
+            count: 1
+            unit: turn
+            clears_on: end_of_target_turn
   - id: automatic-sweep
     name: Automatic Sweep
     type: action
-    executable: false
+    executable: true
     desc: "The Gunner spends 10 ammo and chooses a 15-foot cone or 30-foot line within 120 feet. Each creature in the area makes a DC 14 Dexterity saving throw. On a failed save, a creature takes 10 (2d6 + 3) force damage. On a successful save, it takes no damage."
     action_type: save_ability
     mechanics:
-      ability: dex
-      dc: 14
+      save_ability: dex
+      save_dc: 14
       shape: cone
       size: 15
       ammo_cost: 10
       damage:
         - formula: 2d6+3
           type: force
-    warning: "Manual area/save resolution required."
+          on_save: none
   - id: pistol
     name: .45 Pistol
     type: action
@@ -130,7 +133,8 @@ capabilities:
     type: trait
     executable: false
     desc: "If this creature starts its turn within 30 feet of an allied Black and Tan officer it can see or hear, it gains +1 to attack rolls until the start of its next turn."
-    warning: "Reminder: +1 to attack if near another officer."
+    warnings:
+      - "Reminder: +1 to attack if near another officer."
   - id: baton-and-boot
     name: Baton and Boot
     type: trait
@@ -140,4 +144,5 @@ capabilities:
     type: trait
     executable: false
     desc: "This creature does not expend extra ammunition on a missed attack unless it used Controlled Burst, Automatic Sweep, or Suppressive Fire."
-    warning: "Ammunition tracking reminder."
+    warnings:
+      - "Ammunition tracking reminder."

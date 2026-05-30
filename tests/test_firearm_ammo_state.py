@@ -51,17 +51,17 @@ class TestFirearmAmmoState(unittest.TestCase):
 
         # Ensure ammo for Rifleman
         cap_rifle = {"id": "armalite-rifle", "mechanics": {"magazine_capacity": 20, "ammo_type": "5.56"}}
-        self.app._monster_capability_ensure_ammo_state(self.rifleman_cid, cap_rifle)
+        self.app._monster_capability_ensure_resource_state(self.rifleman_cid, cap_rifle)
 
         self.assertEqual(self.app._monster_resource_state.get(f"{self.rifleman_cid}:ammo:armalite-rifle:current"), 20)
         self.assertEqual(self.app._monster_resource_state.get(f"{self.rifleman_cid}:ammo:5.56:reserve_mags"), 6)
 
         # Ensure ammo for Constable
         cap_pistol = {"id": "pistol", "mechanics": {"magazine_capacity": 8, "ammo_type": ".45"}}
-        self.app._monster_capability_ensure_ammo_state(self.constable_cid, cap_pistol)
+        self.app._monster_capability_ensure_resource_state(self.constable_cid, cap_pistol)
 
         self.assertEqual(self.app._monster_resource_state.get(f"{self.constable_cid}:ammo:pistol:current"), 8)
-        self.assertIsNone(self.app._monster_resource_state.get(f"{self.constable_cid}:ammo:.45:reserve_mags"))
+        self.assertEqual(self.app._monster_resource_state.get(f"{self.constable_cid}:ammo:.45:reserve_mags"), 4)
     def test_ammo_spend_normal_attack(self):
         # Seed ammo
         self.app._monster_resource_state[f"{self.rifleman_cid}:ammo:armalite-rifle:current"] = 20

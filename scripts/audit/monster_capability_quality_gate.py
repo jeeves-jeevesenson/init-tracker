@@ -32,6 +32,8 @@ SUPPORTED_CONDITIONS = {
     "restrained",
     "stunned",
     "unconscious",
+    "braced",
+    "suppressed",
 }
 
 ATTACK_ACTION_TYPES = {"melee_attack", "ranged_attack"}

@@ -42,6 +42,11 @@
       text-decoration: none; display: inline-flex; align-items: center;
     }
     .workspace-link:hover { border-color: var(--accent); color: var(--accent); }
+    .workspace-link[aria-pressed="true"] {
+      border-color: var(--gold);
+      color: var(--gold);
+      background: rgba(214,186,126,0.14);
+    }
 
     /* ── Mode Banner ─────────────────────────────────────────────── */
     .mode-banner {
@@ -348,6 +353,63 @@
     }
     .cancel-btn:hover { border-color: var(--danger); color: var(--danger); }
 
+    /* ── Prompts ────────────────────────────────────────────────── */
+    .prompt-container {
+      background: rgba(214, 186, 126, 0.15);
+      border-bottom: 1px solid var(--gold);
+      padding: 12px 16px;
+      display: flex;
+      flex-direction: column;
+      gap: 12px;
+    }
+    .prompt-card {
+      background: rgba(0, 0, 0, 0.6);
+      border: 1px solid var(--gold);
+      border-radius: 6px;
+      padding: 12px;
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+    }
+    .prompt-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      border-bottom: 1px solid rgba(214, 186, 126, 0.2);
+      padding-bottom: 6px;
+    }
+    .prompt-title {
+      font-weight: bold;
+      color: var(--gold);
+      font-size: 14px;
+    }
+    .prompt-context {
+      font-size: 13px;
+      color: var(--text);
+    }
+    .prompt-actions {
+      display: flex;
+      gap: 8px;
+      margin-top: 4px;
+    }
+    .prompt-btn {
+      padding: 6px 12px;
+      font-size: 12px;
+      font-weight: bold;
+      cursor: pointer;
+      border-radius: 4px;
+      border: 1px solid var(--gold);
+      background: transparent;
+      color: var(--gold);
+    }
+    .prompt-btn.use {
+      background: var(--gold);
+      color: var(--bg);
+    }
+    .prompt-btn:hover {
+      filter: brightness(1.2);
+    }
+
     /* ── Status Overlay ─────────────────────────────────────────── */
     .status-overlay {
       position: absolute; top: 20px; right: 20px;
@@ -363,10 +425,12 @@
       <h1>DM Control</h1>
       <div id="combatStatus" class="actor-meta">Loading state...</div>
       <button id="combatControlBtn" class="workspace-link" style="background:var(--accent-primary); color:white; font-weight:bold; border-color:var(--accent-primary); margin-left: auto; display:none"></button>
+      <button id="freeMoveBtn" class="workspace-link" style="margin-left: 8px;" aria-pressed="false">Free Move Token</button>
       <button id="toolboxBtn" class="workspace-link" style="margin-left: 8px;">🛠 Toolbox</button>
       <a href="/dm" class="workspace-link">↩ DM Cockpit</a>
     </header>
 
+    <div id="promptContainer" class="prompt-container" style="display:none;"></div>
     <div id="modeBanner" class="mode-banner move-mode">
       <span class="mode-icon">Move</span>
       <span class="mode-text">Drag token on map to move. Movement is backend-validated.</span>
@@ -467,6 +531,7 @@
     let lastActiveCid = null;
     let targetPreviewMode = null; // { capabilityId, capabilityName, actorCid, actionType }
     let selectedTargetCid = null;
+    let freeMoveMode = null; // { selectedCid }
     let localResolutionTray = null; // { actorCid, capabilityId, targetCid, openedAt }
     let localResolutionPacket = null;
     let localResolutionError = null;
@@ -500,7 +565,15 @@
 
       let icon = 'Move', text = 'Drag token to move. Drag map to pan. Wheel to zoom.', cls = 'move-mode', cancelHtml = '';
 
-      if (!state || !state.in_combat) {
+      if (freeMoveMode) {
+        const selected = freeMoveMode.selectedCid ? findCombatantByCid(freeMoveMode.selectedCid) : null;
+        icon = 'DM Move';
+        text = selected
+          ? `Free move: ${esc(selected.name)} selected. Click a destination cell to reposition immediately.`
+          : 'Free move: click any visible token, then click a destination cell. No turn or movement spend.';
+        cls = 'target-mode';
+        cancelHtml = `<button class="cancel-target-btn" onclick="cancelFreeMoveMode(true)">Cancel</button>`;
+      } else if (!state || !state.in_combat) {
         icon = 'Idle';
         text = 'Out of combat. Drag map to pan. Wheel to zoom.';
         cls = 'move-mode';
@@ -543,6 +616,7 @@
 
       banner.classList.add(cls);
       banner.innerHTML = `<span class="mode-icon">${esc(icon)}</span><span class="mode-text">${text}</span>${cancelHtml}`;
+      updateFreeMoveButton();
     }
 
     /**
@@ -834,11 +908,75 @@
       }, 1800);
     }
 
+    function updateFreeMoveButton() {
+      const btn = document.getElementById('freeMoveBtn');
+      if (!btn) return;
+      const active = !!freeMoveMode;
+      btn.setAttribute('aria-pressed', active ? 'true' : 'false');
+      btn.textContent = active ? 'Cancel DM Move' : 'Free Move Token';
+      btn.title = active
+        ? 'Exit DM free-move mode'
+        : 'Select any visible token and reposition it without turn or movement limits.';
+    }
+
+    function enterFreeMoveMode() {
+      fullResetLocalState();
+      freeMoveMode = { selectedCid: null };
+      updateFreeMoveButton();
+      updateModeBanner();
+      draw();
+      showTransientStatus('Free move active. Click a token to select it.', 'var(--gold)');
+    }
+
+    function cancelFreeMoveMode(announce = false) {
+      if (!freeMoveMode) return;
+      freeMoveMode = null;
+      updateFreeMoveButton();
+      updateModeBanner();
+      draw();
+      if (announce) {
+        showTransientStatus('Free move cancelled.', 'var(--muted)');
+      }
+    }
+
+    function toggleFreeMoveMode() {
+      if (freeMoveMode) {
+        cancelFreeMoveMode(true);
+        return;
+      }
+      enterFreeMoveMode();
+    }
+
     canvas.addEventListener('pointerdown', (e) => {
       if (!state || !state.tactical_map || isMoving) return;
       const rect = canvas.getBoundingClientRect();
       const x = e.clientX - rect.left;
       const y = e.clientY - rect.top;
+
+      if (freeMoveMode) {
+        if (!freeMoveMode.selectedCid) {
+          let unit = getTokenAtScreen(x, y);
+          if (!unit) {
+            const { col, row } = screenToGrid(x, y);
+            unit = findUnitAtGridCell(col, row);
+          }
+          if (!unit || unit.cid === undefined || unit.cid === null) {
+            showTransientStatus('Select a visible token to free-move.', 'var(--danger)');
+            return;
+          }
+          freeMoveMode.selectedCid = String(unit.cid);
+          updateFreeMoveButton();
+          updateModeBanner();
+          draw();
+          const combatant = findCombatantByCid(unit.cid);
+          showTransientStatus(`Selected ${combatant ? combatant.name : 'token'}. Click a destination cell.`, 'var(--gold)');
+          return;
+        }
+
+        const { col, row } = screenToGrid(x, y);
+        executeFreeMove(freeMoveMode.selectedCid, col, row);
+        return;
+      }
 
       if (targetPreviewMode) {
         const hit = getTokenAtScreen(x, y);
@@ -923,7 +1061,10 @@
 
     window.addEventListener('keydown', (e) => {
       if (e.key === 'Escape') {
-        if (localResolutionTray) {
+        if (freeMoveMode) {
+          cancelFreeMoveMode(true);
+          e.preventDefault();
+        } else if (localResolutionTray) {
           closeLocalResolutionTray();
           e.preventDefault();
         } else if (targetPreviewMode) {
@@ -963,6 +1104,41 @@
         isMoving = false;
         draw();
         dmPerfMark('executeMove', performance.now() - tMoveStart);
+      }
+    }
+
+    async function executeFreeMove(cid, col, row) {
+      const combatant = findCombatantByCid(cid);
+      isMoving = true;
+      showTransientStatus(`Free-moving ${combatant ? combatant.name : 'token'}...`, 'var(--gold)');
+      try {
+        const resp = await fetch(`/api/dm/map/combatants/${cid}/place?workspace=dmcontrol`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ col, row })
+        });
+        if (!resp.ok) {
+          let detail = `HTTP ${resp.status}`;
+          try {
+            const errData = await resp.json();
+            detail = errData.detail || detail;
+          } catch (_err) {}
+          throw new Error(detail);
+        }
+        const data = await resp.json();
+        if (data && data.snapshot && typeof data.snapshot === 'object') {
+          applyAuthoritativeSnapshot(data.snapshot);
+        } else {
+          await fetchState();
+        }
+        cancelFreeMoveMode(false);
+        showTransientStatus(`Free-moved ${combatant ? combatant.name : 'token'} to (${col}, ${row}).`, 'var(--heal)');
+      } catch (err) {
+        console.error('Free move error:', err);
+        showTransientStatus(err.message || 'Free move failed.', 'var(--danger)');
+      } finally {
+        isMoving = false;
+        draw();
       }
     }
 
@@ -1113,6 +1289,9 @@
 
     function enterTargetPreviewMode(cap) {
       if (!cap || !state) return;
+      if (freeMoveMode) {
+        cancelFreeMoveMode(false);
+      }
       selectedTargetCid = null;
       localResolutionTray = null;
       targetPreviewMode = {
@@ -2212,6 +2391,10 @@
     function selectCapability(id) {
       const alreadySelected = String(selectedCapabilityId) === String(id);
 
+      if (freeMoveMode) {
+        cancelFreeMoveMode(false);
+      }
+
       // Clear sequence if we select something NOT in the sequence
       if (localSequencePacket && String(id) !== String(localSequencePacket.capability_id)) {
         const isChild = localSequencePacket.steps.some(s => String(s.action_id) === String(id));
@@ -2239,6 +2422,52 @@
 
       const actor = (state.combatants || []).find(c => String(c.cid) === String(state.active_cid));
       renderActionPanel(actor, capabilitySummary);
+    }
+
+    async function resolveMonsterPrompt(promptId, choice) {
+      try {
+        const resp = await fetch('/api/dm/combat/resolve-monster-prompt', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ prompt_id: promptId, choice: choice })
+        });
+        const data = await resp.json();
+        if (data.ok && data.snapshot) {
+          applyAuthoritativeSnapshot(data.snapshot);
+        }
+      } catch (err) {
+        console.error('Prompt resolution error:', err);
+      }
+    }
+
+    function renderPrompts(snapshot) {
+      const container = document.getElementById('promptContainer');
+      if (!container) return;
+
+      const prompts = snapshot.pending_prompts || [];
+      const monsterPrompts = prompts.filter(p => p.metadata && p.metadata.monster_reaction);
+
+      if (monsterPrompts.length === 0) {
+        container.style.display = 'none';
+        return;
+      }
+
+      container.style.display = 'flex';
+      container.innerHTML = monsterPrompts.map(p => {
+        return `
+          <div class="prompt-card">
+            <div class="prompt-header">
+              <span class="prompt-title">${esc(p.metadata.capability_name)} Reaction</span>
+              <span style="font-size:10px; color:var(--muted);">${esc(p.reactor_name)}</span>
+            </div>
+            <div class="prompt-context">${esc(p.metadata.context)}</div>
+            <div class="prompt-actions">
+              <button class="prompt-btn use" onclick="resolveMonsterPrompt('${esc(p.prompt_id)}', 'use')">Use Reaction</button>
+              <button class="prompt-btn" onclick="resolveMonsterPrompt('${esc(p.prompt_id)}', 'skip')">Skip</button>
+            </div>
+          </div>
+        `;
+      }).join('');
     }
 
     function renderState(data) {
@@ -2289,6 +2518,9 @@
         localResolutionError = null;
         localResolutionOutcomes = {};
       }
+      if (freeMoveMode && freeMoveMode.selectedCid && !findCombatantByCid(freeMoveMode.selectedCid)) {
+        freeMoveMode.selectedCid = null;
+      }
 
       const actor = data.combatants.find(c => String(c.cid) === String(activeCid));
 
@@ -2335,6 +2567,7 @@
       }
 
       fetchCapabilitiesForActiveActor(actor);
+      renderPrompts(data);
       updateModeBanner();
     }
 
@@ -2523,7 +2756,7 @@
         const actor = state.combatants.find(c => String(c.cid) === String(activeCid));
         const isMonster = actor && !actor.is_pc;
 
-        if (isMonster && !targetPreviewMode) {
+        if (isMonster && !targetPreviewMode && !freeMoveMode) {
           const feetPerSquare = grid.feet_per_square || 5;
           const moveRemaining = activeUnit.move_remaining ?? activeUnit.speed ?? 0;
 
@@ -2639,6 +2872,20 @@
             ctx.stroke();
           }
         }
+
+        if (freeMoveMode && freeMoveMode.selectedCid && String(u.cid) === String(freeMoveMode.selectedCid)) {
+          ctx.beginPath();
+          ctx.arc(x, y, r + 7, 0, Math.PI * 2);
+          ctx.lineWidth = 3;
+          ctx.strokeStyle = "rgba(214,186,126,0.92)";
+          ctx.stroke();
+
+          ctx.beginPath();
+          ctx.arc(x, y, r + 12, 0, Math.PI * 2);
+          ctx.lineWidth = 1.5;
+          ctx.strokeStyle = "rgba(255,255,255,0.85)";
+          ctx.stroke();
+        }
       });
 
       // Target Preview Status Overlay
@@ -2675,6 +2922,30 @@
         ctx.fillStyle = "#e8eef7";
         ctx.textAlign = "right";
         ctx.fillText("Esc to cancel", 320, 30);
+      }
+
+      if (freeMoveMode) {
+        const selected = findCombatantByCid(freeMoveMode.selectedCid);
+        ctx.fillStyle = "rgba(0, 0, 0, 0.72)";
+        ctx.fillRect(10, 10, 360, 60);
+        ctx.strokeStyle = "#d6ba7e";
+        ctx.strokeRect(10, 10, 360, 60);
+        ctx.fillStyle = "#d6ba7e";
+        ctx.font = "bold 14px system-ui";
+        ctx.textAlign = "left";
+        ctx.fillText("DM Free Move", 20, 30);
+
+        ctx.font = "12px system-ui";
+        ctx.fillStyle = "#e8eef7";
+        if (selected) {
+          ctx.fillText(`Token: ${selected.name}`, 20, 48);
+          ctx.fillText("Click a destination cell", 20, 64);
+        } else {
+          ctx.fillText("Click any visible token to select it", 20, 48);
+        }
+
+        ctx.textAlign = "right";
+        ctx.fillText("Esc to cancel", 360, 30);
       }
 
       // Drag Preview
@@ -2740,6 +3011,8 @@
       }
     }
     document.getElementById('combatControlBtn')?.addEventListener('click', handleCombatControl);
+    document.getElementById('freeMoveBtn')?.addEventListener('click', toggleFreeMoveMode);
+    updateFreeMoveButton();
 
     // Initial fetch and start polling
     fetchState();

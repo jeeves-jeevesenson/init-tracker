@@ -88,12 +88,15 @@ capabilities:
     desc: "One creature within 90 feet that can hear the Major must make a DC 16 Wisdom saving throw. On a failed save, the target is Frightened of the Major until the end of its next turn."
     action_type: save_ability
     mechanics:
-      ability: wis
-      dc: 16
+      save_ability: wis
+      save_dc: 16
+      shape: radius
+      size: 90
       effects:
         - kind: condition
           condition: frightened
           trigger: failed_save
+          duration: next_turn_end
           text: "Frightened until end of target turn."
     warning: "Manual save resolution required."
   - id: command-fire
@@ -131,9 +134,13 @@ capabilities:
   - id: countermand
     name: Countermand
     type: reaction
-    executable: false
+    executable: true
     desc: "When an allied Black and Tan within 60 feet fails a saving throw, the Major can allow that ally to reroll the save."
-    warning: "Manual reroll required."
+    mechanics:
+      effects:
+        - kind: reroll
+          trigger: ally_save_failure
+          text: "Ally rerolls failed save."
   - id: duck-behind-them
     name: Duck Behind Them
     type: reaction

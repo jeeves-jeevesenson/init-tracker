@@ -295,6 +295,14 @@ class MonsterCapabilityService:
                         cap["ammo"]["reserve_mags"] = reserve_mags
                         cap["ammo"]["type"] = ammo_type
 
+                # Generic uses
+                uses_current = resource_state.get(f"{combatant_id}:uses:{cap_id}:current")
+                uses_max = resource_state.get(f"{combatant_id}:uses:{cap_id}:max")
+                if uses_current is not None:
+                    cap["uses_current"] = uses_current
+                    cap["uses_max"] = uses_max
+                    summary_parts.append(f"Uses: {uses_current}/{uses_max}")
+
             if action_type in ["melee_attack", "ranged_attack"]:
                 bonus = mechanics.get("attack_bonus")
                 if bonus is not None:
@@ -322,8 +330,8 @@ class MonsterCapabilityService:
                         summary_parts.append(f"range {rng}ft")
 
             elif action_type == "save_ability":
-                ability = mechanics.get("ability", "STR").upper()
-                dc = mechanics.get("dc")
+                ability = str(mechanics.get("save_ability") or mechanics.get("ability") or "STR").upper()
+                dc = mechanics.get("save_dc", mechanics.get("dc"))
                 if dc:
                     summary_parts.append(f"DC {dc} {ability}")
 
@@ -380,6 +388,14 @@ class MonsterCapabilityService:
                         if isinstance(eff, dict) and eff.get("condition"):
                             summary_parts.append(f"Effect: {eff['condition']}")
 
+                healing = mechanics.get("healing")
+                if healing:
+                    summary_parts.append(f"Heal: {healing}")
+
+                temp_hp = mechanics.get("temp_hp")
+                if temp_hp:
+                    summary_parts.append(f"Temp HP: {temp_hp}")
+
                 uses = mechanics.get("uses")
                 if uses and isinstance(uses, dict):
                     max_uses = uses.get("max")
@@ -423,16 +439,17 @@ class MonsterCapabilityService:
                 instructions.append("Apply Grappled condition manually in /dm if hit.")
             if "prone" in desc.lower():
                 instructions.append("Apply Prone condition manually in /dm if hit.")
-            if "ammo" in desc.lower() or "magazine" in desc.lower():
+            if "ammo" in desc.lower() or "magazine" in desc.lower() or (mechanics.get("uses") and mechanics.get("uses", {}).get("max")):
                 # Only show if not already tracked by backend
-                has_backend_ammo = False
+                has_backend_resource = False
                 if resource_state:
                     ammo_current = resource_state.get(f"{combatant_id}:ammo:{cap_id}:current")
-                    if ammo_current is not None:
-                        has_backend_ammo = True
+                    uses_current = resource_state.get(f"{combatant_id}:uses:{cap_id}:current")
+                    if ammo_current is not None or uses_current is not None:
+                        has_backend_resource = True
 
-                if not has_backend_ammo:
-                    instructions.append("Track ammunition manually.")
+                if not has_backend_resource:
+                    instructions.append("Track ammunition manually." if ("ammo" in desc.lower() or "magazine" in desc.lower()) else "Track uses manually.")
 
             if instructions:
                 cap["manual_instructions"] = " ".join(instructions)

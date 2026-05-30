@@ -1,10 +1,10 @@
 # Monster Capability Quality Report
 
 ## Summary
-- Total overlays scanned: 16
-- Total capabilities scanned: 56
+- Total overlays scanned: 24
+- Total capabilities scanned: 153
 - Hard errors: 0
-- Warnings: 12
+- Warnings: 43
 
 ## Per-Monster Summary
 
@@ -13,6 +13,14 @@
 | adult-red-dragon | `monster_capabilities/samples/adult-red-dragon.yaml` | 10 | 0 | 2 |
 | archmage | `monster_capabilities/samples/archmage.yaml` | 3 | 0 | 0 |
 | bandit | `monster_capabilities/samples/bandit.yaml` | 2 | 0 | 0 |
+| black-and-tan-captain | `monster_capabilities/vandergraff/black-and-tan-captain.yaml` | 15 | 0 | 5 |
+| black-and-tan-constable | `monster_capabilities/vandergraff/black-and-tan-constable.yaml` | 8 | 0 | 4 |
+| black-and-tan-field-medic | `monster_capabilities/vandergraff/black-and-tan-field-medic.yaml` | 10 | 0 | 0 |
+| black-and-tan-lieutenant | `monster_capabilities/vandergraff/black-and-tan-lieutenant.yaml` | 14 | 0 | 6 |
+| black-and-tan-major | `monster_capabilities/vandergraff/black-and-tan-major.yaml` | 17 | 0 | 7 |
+| black-and-tan-rifleman | `monster_capabilities/vandergraff/black-and-tan-rifleman.yaml` | 9 | 0 | 3 |
+| black-and-tan-shield-trooper | `monster_capabilities/vandergraff/black-and-tan-shield-trooper.yaml` | 11 | 0 | 4 |
+| black-and-tan-suppression-gunner | `monster_capabilities/vandergraff/black-and-tan-suppression-gunner.yaml` | 13 | 0 | 2 |
 | bugbear | `monster_capabilities/samples/bugbear.yaml` | 4 | 0 | 1 |
 | bugbear-warrior | `monster_capabilities/samples/bugbear-warrior.yaml` | 4 | 0 | 1 |
 | cultist | `monster_capabilities/samples/cultist.yaml` | 2 | 0 | 0 |
@@ -34,6 +42,65 @@
 - File: `monster_capabilities/samples/adult-red-dragon.yaml`
 - WARNING `manual_action_without_warning` `legendary-resistance`: Display-only/manual capability has no warning or reason.
 - WARNING `manual_action_without_warning` `tail-attack`: Display-only/manual capability has no warning or reason.
+
+### black-and-tan-captain
+
+- File: `monster_capabilities/vandergraff/black-and-tan-captain.yaml`
+- WARNING `manual_action_without_warning` `baton-and-boot`: Display-only/manual capability has no warning or reason.
+- WARNING `manual_action_without_warning` `condemn-target`: Display-only/manual capability has no warning or reason.
+- WARNING `manual_action_without_warning` `fire-discipline`: Display-only/manual capability has no warning or reason.
+- WARNING `manual_action_without_warning` `hard-target`: Display-only/manual capability has no warning or reason.
+- WARNING `manual_action_without_warning` `vandergraff-drill`: Display-only/manual capability has no warning or reason.
+
+### black-and-tan-constable
+
+- File: `monster_capabilities/vandergraff/black-and-tan-constable.yaml`
+- WARNING `manual_action_without_warning` `baton-and-boot`: Display-only/manual capability has no warning or reason.
+- WARNING `manual_action_without_warning` `fire-discipline`: Display-only/manual capability has no warning or reason.
+- WARNING `manual_action_without_warning` `rough-arrest`: Display-only/manual capability has no warning or reason.
+- WARNING `manual_action_without_warning` `vandergraff-drill`: Display-only/manual capability has no warning or reason.
+
+### black-and-tan-lieutenant
+
+- File: `monster_capabilities/vandergraff/black-and-tan-lieutenant.yaml`
+- WARNING `manual_action_without_warning` `baton-and-boot`: Display-only/manual capability has no warning or reason.
+- WARNING `manual_action_without_warning` `direct-fire`: Display-only/manual capability has no warning or reason.
+- WARNING `manual_action_without_warning` `fire-discipline`: Display-only/manual capability has no warning or reason.
+- WARNING `manual_action_without_warning` `get-down`: Display-only/manual capability has no warning or reason.
+- WARNING `manual_action_without_warning` `officer-priority`: Display-only/manual capability has no warning or reason.
+- WARNING `manual_action_without_warning` `vandergraff-drill`: Display-only/manual capability has no warning or reason.
+
+### black-and-tan-major
+
+- File: `monster_capabilities/vandergraff/black-and-tan-major.yaml`
+- WARNING `manual_action_without_warning` `baton-and-boot`: Display-only/manual capability has no warning or reason.
+- WARNING `manual_action_without_warning` `command-fire`: Display-only/manual capability has no warning or reason.
+- WARNING `manual_action_without_warning` `duck-behind-them`: Display-only/manual capability has no warning or reason.
+- WARNING `manual_action_without_warning` `fire-discipline`: Display-only/manual capability has no warning or reason.
+- WARNING `manual_action_without_warning` `make-an-example`: Display-only/manual capability has no warning or reason.
+- WARNING `manual_action_without_warning` `protected-by-rank`: Display-only/manual capability has no warning or reason.
+- WARNING `manual_action_without_warning` `vandergraff-drill`: Display-only/manual capability has no warning or reason.
+
+### black-and-tan-rifleman
+
+- File: `monster_capabilities/vandergraff/black-and-tan-rifleman.yaml`
+- WARNING `manual_action_without_warning` `baton-and-boot`: Display-only/manual capability has no warning or reason.
+- WARNING `manual_action_without_warning` `fire-discipline`: Display-only/manual capability has no warning or reason.
+- WARNING `manual_action_without_warning` `vandergraff-drill`: Display-only/manual capability has no warning or reason.
+
+### black-and-tan-shield-trooper
+
+- File: `monster_capabilities/vandergraff/black-and-tan-shield-trooper.yaml`
+- WARNING `manual_action_without_warning` `baton-and-boot`: Display-only/manual capability has no warning or reason.
+- WARNING `manual_action_without_warning` `fire-discipline`: Display-only/manual capability has no warning or reason.
+- WARNING `manual_action_without_warning` `interpose-shield`: Display-only/manual capability has no warning or reason.
+- WARNING `manual_action_without_warning` `vandergraff-drill`: Display-only/manual capability has no warning or reason.
+
+### black-and-tan-suppression-gunner
+
+- File: `monster_capabilities/vandergraff/black-and-tan-suppression-gunner.yaml`
+- WARNING `manual_action_without_warning` `baton-and-boot`: Display-only/manual capability has no warning or reason.
+- WARNING `manual_action_without_warning` `set-up-gun`: Display-only/manual capability has no warning or reason.
 
 ### bugbear
 

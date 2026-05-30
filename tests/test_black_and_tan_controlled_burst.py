@@ -52,7 +52,7 @@ class TestBlackAndTanControlledBurst(unittest.TestCase):
         """Test that Controlled Burst can be activated and sets state."""
         # Ensure ammo state first
         cap_rifle = next(c for c in self.rifleman_caps["capabilities"] if c["id"] == "armalite-rifle")
-        self.app._monster_capability_ensure_ammo_state(self.rifleman_cid, cap_rifle)
+        self.app._monster_capability_ensure_resource_state(self.rifleman_cid, cap_rifle)
 
         payload = {"capability_id": "controlled-burst"}
         result = self.app._dm_monster_capability_execute(actor_cid=self.rifleman_cid, payload=payload)
@@ -69,7 +69,7 @@ class TestBlackAndTanControlledBurst(unittest.TestCase):
         """Test that Controlled Burst can be disarmed (toggle)."""
         # Ensure ammo state first
         cap_rifle = next(c for c in self.rifleman_caps["capabilities"] if c["id"] == "armalite-rifle")
-        self.app._monster_capability_ensure_ammo_state(self.rifleman_cid, cap_rifle)
+        self.app._monster_capability_ensure_resource_state(self.rifleman_cid, cap_rifle)
 
         # Arm
         self.app._dm_monster_capability_execute(actor_cid=self.rifleman_cid, payload={"capability_id": "controlled-burst"})
@@ -85,7 +85,7 @@ class TestBlackAndTanControlledBurst(unittest.TestCase):
         """Test that Controlled Burst can only be used once per turn."""
         # Ensure ammo state first
         cap_rifle = next(c for c in self.rifleman_caps["capabilities"] if c["id"] == "armalite-rifle")
-        self.app._monster_capability_ensure_ammo_state(self.rifleman_cid, cap_rifle)
+        self.app._monster_capability_ensure_resource_state(self.rifleman_cid, cap_rifle)
 
         payload = {"capability_id": "controlled-burst"}
 
@@ -114,7 +114,7 @@ class TestBlackAndTanControlledBurst(unittest.TestCase):
         """Test that Controlled Burst adds damage to Armalite Rifle."""
         # Ensure ammo state first
         cap_rifle = next(c for c in self.rifleman_caps["capabilities"] if c["id"] == "armalite-rifle")
-        self.app._monster_capability_ensure_ammo_state(self.rifleman_cid, cap_rifle)
+        self.app._monster_capability_ensure_resource_state(self.rifleman_cid, cap_rifle)
 
         # Activate CB
         self.app._dm_monster_capability_execute(actor_cid=self.rifleman_cid, payload={"capability_id": "controlled-burst"})
@@ -142,7 +142,7 @@ class TestBlackAndTanControlledBurst(unittest.TestCase):
         """Test that Controlled Burst does not apply to non-firearm attacks."""
         # Ensure ammo state first
         cap_rifle = next(c for c in self.rifleman_caps["capabilities"] if c["id"] == "armalite-rifle")
-        self.app._monster_capability_ensure_ammo_state(self.rifleman_cid, cap_rifle)
+        self.app._monster_capability_ensure_resource_state(self.rifleman_cid, cap_rifle)
 
         # Activate CB
         self.app._dm_monster_capability_execute(actor_cid=self.rifleman_cid, payload={"capability_id": "controlled-burst"})
@@ -166,7 +166,7 @@ class TestBlackAndTanControlledBurst(unittest.TestCase):
         """Test that Controlled Burst jams on a natural 1."""
         # Ensure ammo state first
         cap_rifle = next(c for c in self.rifleman_caps["capabilities"] if c["id"] == "armalite-rifle")
-        self.app._monster_capability_ensure_ammo_state(self.rifleman_cid, cap_rifle)
+        self.app._monster_capability_ensure_resource_state(self.rifleman_cid, cap_rifle)
 
         # Activate CB
         self.app._dm_monster_capability_execute(actor_cid=self.rifleman_cid, payload={"capability_id": "controlled-burst"})

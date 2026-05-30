@@ -4,7 +4,7 @@ import yaml
 from typing import Dict, List, Any
 
 # Paths
-CAPABILITY_DIR = "monster_capabilities/samples"
+CAPABILITY_DIR = "monster_capabilities"
 
 def audit_inventory():
     inventory = []
@@ -13,13 +13,14 @@ def audit_inventory():
         print(f"Error: {CAPABILITY_DIR} not found.")
         return
 
-    files = sorted([f for f in os.listdir(CAPABILITY_DIR) if f.endswith(".yaml")])
+    import glob
+    pattern = os.path.join(CAPABILITY_DIR, "**", "*.yaml")
+    files = sorted(glob.glob(pattern, recursive=True))
     
     print(f"{'Slug':<25} | {'Name':<25} | {'Caps':<5} | {'Exec':<5} | {'Save':<5} | {'Area':<5} | {'Res':<5} | {'Comp':<5} | {'Ride':<5} | {'Spell':<5} | {'Warn':<5}")
     print("-" * 155)
     
-    for f in files:
-        path = os.path.join(CAPABILITY_DIR, f)
+    for path in files:
         with open(path, "r") as stream:
             data = yaml.safe_load(stream)
             

@@ -13,6 +13,7 @@ Supported gate ids:
   gate3-latency
   gate4-resources
   gate5-quarantine
+  A0
 
 This script validates local recovery gate work only. It does not start
 production, deploy, commit, push, SSH, or restart services.
@@ -111,6 +112,24 @@ case "$gate" in
     run_unittest tests.test_lan_snapshot_static
     echo
     echo "Pass criterion from recovery doc: zero _dm_tactical_snapshot calls when flags are false."
+    ;;
+  A0)
+    echo "== A0: Agent Workflow validation =="
+    if [ ! -f "docs/work_items/current_work.md" ]; then
+      echo "ERROR: docs/work_items/current_work.md missing." >&2
+      exit 1
+    fi
+    if [ ! -f "scripts/chatgpt_context_refresher.sh" ]; then
+      echo "ERROR: scripts/chatgpt_context_refresher.sh missing." >&2
+      exit 1
+    fi
+    active_count=$(find docs/work_items/active/ -name "*.md" | wc -l)
+    if [ "$active_count" -ne 0 ]; then
+      echo "WARNING: There are still $active_count active work items."
+      ls docs/work_items/active/
+    else
+      echo "SUCCESS: No active work items. Ready for promotion."
+    fi
     ;;
   *)
     usage >&2

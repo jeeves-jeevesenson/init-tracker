@@ -118,9 +118,17 @@ capabilities:
   - id: not-yet
     name: Not Yet
     type: reaction
-    executable: false
+    executable: true
     desc: "When the Captain fails a saving throw, it can add 1d6 to the roll (3/day)."
-    warning: "Manual save bonus required."
+    mechanics:
+      uses:
+        max: 3
+        per: day
+      effects:
+        - kind: bonus
+          bonus: 1d6
+          trigger: save_failure
+          text: "Add 1d6 to failed save."
   - id: vandergraff-drill
     name: Vandergraff Drill
     type: trait

@@ -139,6 +139,7 @@ from player_command_contracts import (
     TURN_LOCAL_COMMAND_TYPES,
     UTILITY_ADMIN_COMMAND_TYPES,
     WILD_SHAPE_COMMAND_TYPES,
+    apply_resume_dispatch,
     build_attack_request_contract,
     build_cast_aoe_contract,
     build_resume_dispatch,
@@ -4848,6 +4849,12 @@ class LanController:
                     is_pc = bool(getattr(c, "is_pc", False))
                     role = str(role_memory.get(name, "enemy") or "enemy").strip().lower()
                     if not is_pc and role == "enemy":
+                        # Ensure resources are initialized for each capability
+                        matched = svc.match_capabilities_for_combatant(c)
+                        if matched:
+                            for cap in matched.get("capabilities", []):
+                                self.app._monster_capability_ensure_resource_state(int(cid), cap)
+
                         summary = svc.summarize_capabilities_for_ui(
                             int(cid),
                             c,
@@ -4873,6 +4880,13 @@ class LanController:
                 if not combatant:
                     raise HTTPException(status_code=404, detail="Combatant not found.")
                 svc = self._ensure_monster_capabilities()
+
+                # Ensure resources are initialized
+                matched = svc.match_capabilities_for_combatant(combatant)
+                if matched:
+                    for cap in matched.get("capabilities", []):
+                        self.app._monster_capability_ensure_resource_state(int(cid), cap)
+
                 summary = svc.summarize_capabilities_for_ui(
                     int(cid),
                     combatant,
@@ -4998,6 +5012,23 @@ class LanController:
                 }
             except Exception as exc:
                 raise HTTPException(status_code=500, detail=f"Failed to resolve monster capability targets: {exc}")
+
+        @self._fastapi_app.post("/api/dm/combat/resolve-monster-prompt")
+        async def dm_resolve_monster_prompt(request: Request, payload: Dict[str, Any] = Body(...)):
+            """Resolve a monster reaction prompt (Use or Skip)."""
+            _check_dm_auth(request)
+            try:
+                prompt_id = str(payload.get("prompt_id") or "").strip()
+                choice = str(payload.get("choice") or "skip").strip().lower()
+
+                result = self.app._resolve_monster_prompt(prompt_id, choice)
+                return {
+                    "ok": result.get("ok", True),
+                    "result": result,
+                    "snapshot": _dm_console_snapshot(),
+                }
+            except Exception as exc:
+                raise HTTPException(status_code=500, detail=f"Failed to resolve monster prompt: {exc}")
 
         @self._fastapi_app.post("/api/dm/monster-capabilities/{cid}/recharge")
         async def dm_roll_monster_recharge(cid: int, request: Request, payload: Dict[str, Any] = Body(...)):
@@ -7985,6 +8016,10 @@ class LanController:
                 )
             except Exception:
                 pass
+
+        # Merge pending prompts for DM visibility
+        snapshot["pending_prompts"] = self._json_safe(list(self._ensure_player_commands().prompts.all_prompts().values()))
+
         return snapshot
 
     def _push_dm_snapshot_to_ws_clients(self, snapshot: Dict[str, Any]) -> None:
@@ -37294,24 +37329,60 @@ class InitiativeTracker(base.InitiativeTracker):
             return max(0, int(total))
 
         if spell_mode == "save" and save_type and save_dc > 0 and roll_save:
-            save_mode = self._combatant_save_roll_mode(target, save_type)
-            save_roll, _save_alt_roll = self._roll_save_with_mode(
-                target,
-                save_type,
-                disadvantage=save_mode == "disadvantage",
-                advantage=save_mode == "advantage",
+            forced_save_result = self._normalize_monster_save_result(
+                msg.get("_monster_forced_save_result"),
+                ability=save_type,
+                dc=save_dc,
+                default_passed=False,
             )
-            save_mod = _save_mod_for_target(target, save_type)
-            save_total = int(save_roll) + int(save_mod)
-            save_passed = bool(save_roll != 1 and save_total >= int(save_dc))
-            result_payload["save_result"] = {
-                "ability": save_type,
-                "dc": int(save_dc),
-                "roll": int(save_roll),
-                "modifier": int(save_mod),
-                "total": int(save_total),
-                "passed": bool(save_passed),
-            }
+            if forced_save_result:
+                save_result = dict(forced_save_result)
+                save_total = save_result.get("total")
+                save_passed = bool(save_result.get("passed"))
+            else:
+                save_mode = self._combatant_save_roll_mode(target, save_type)
+                save_roll, _save_alt_roll = self._roll_save_with_mode(
+                    target,
+                    save_type,
+                    disadvantage=save_mode == "disadvantage",
+                    advantage=save_mode == "advantage",
+                )
+                save_mod = _save_mod_for_target(target, save_type)
+                save_total = int(save_roll) + int(save_mod)
+                save_passed = bool(save_roll != 1 and save_total >= int(save_dc))
+                save_result = {
+                    "ability": save_type,
+                    "dc": int(save_dc),
+                    "roll": int(save_roll),
+                    "modifier": int(save_mod),
+                    "total": int(save_total),
+                    "passed": bool(save_passed),
+                }
+            result_payload["save_result"] = dict(save_result)
+            if not save_passed:
+                prompt_id = self._trigger_monster_save_reaction_prompts(
+                    target_cid=int(target_cid),
+                    ability=save_type,
+                    dc=int(save_dc),
+                    current_total=int(save_total) if save_total is not None else None,
+                    save_result=save_result,
+                    resume_dispatch=build_resume_dispatch(
+                        "spell_target_request",
+                        actor_cid=int(cid),
+                        ws_id=ws_id,
+                        is_admin=bool(is_admin),
+                        payload=copy.deepcopy(msg),
+                    ),
+                    resolved_capabilities=[
+                        str(value).strip().lower()
+                        for value in (msg.get("_monster_resolved_save_capabilities") or [])
+                        if str(value or "").strip()
+                    ],
+                )
+                if prompt_id:
+                    if ws_id is not None:
+                        self._lan.toast(ws_id, "Waiting for DM save modifier reaction…")
+                    return
             seq_step = next((step for step in sequence if isinstance(step, dict)), None)
             if isinstance(seq_step, dict):
                 outcomes = seq_step.get("outcomes") if isinstance(seq_step.get("outcomes"), dict) else {}
@@ -46261,32 +46332,40 @@ class InitiativeTracker(base.InitiativeTracker):
         )
         return packet
 
-    def _monster_capability_ensure_ammo_state(self, actor_cid: int, cap: Dict[str, Any]) -> None:
-        """Ensure ammo state exists for a firearm capability."""
+    def _monster_capability_ensure_resource_state(self, actor_cid: int, cap: Dict[str, Any]) -> None:
+        """Ensure ammo or usage state exists for a monster capability."""
         cap_id = cap.get("id")
         mechanics = cap.get("mechanics", {})
         mag_capacity = mechanics.get("magazine_capacity")
-        if mag_capacity is None:
-            return
 
-        current_key = f"{actor_cid}:ammo:{cap_id}:current"
-        if current_key not in self._monster_resource_state:
-            self._monster_resource_state[current_key] = mag_capacity
-            self._monster_resource_state[f"{actor_cid}:ammo:{cap_id}:max"] = mag_capacity
+        if mag_capacity is not None:
+            current_key = f"{actor_cid}:ammo:{cap_id}:current"
+            if current_key not in self._monster_resource_state:
+                self._monster_resource_state[current_key] = mag_capacity
+                self._monster_resource_state[f"{actor_cid}:ammo:{cap_id}:max"] = mag_capacity
 
-            # Seed reserve if not present
-            ammo_type = mechanics.get("ammo_type")
-            if ammo_type:
-                reserve_key = f"{actor_cid}:ammo:{ammo_type}:reserve_mags"
-                if reserve_key not in self._monster_resource_state:
-                    # Default reserve based on type/monster
-                    actor = self.combatants.get(actor_cid)
-                    slug = str(getattr(actor, "monster_slug", "") or "").lower()
+                # Seed reserve if not present
+                ammo_type = mechanics.get("ammo_type")
+                if ammo_type:
+                    reserve_key = f"{actor_cid}:ammo:{ammo_type}:reserve_mags"
+                    if reserve_key not in self._monster_resource_state:
+                        # Default reserve based on type/monster
+                        if ammo_type == "5.56":
+                            # Bandolier: 6 mags
+                            self._monster_resource_state[reserve_key] = 6
+                        elif ammo_type == ".45":
+                            # Pouch: 4 mags
+                            self._monster_resource_state[reserve_key] = 4
 
-                    if ammo_type == "5.56":
-                        # Bandolier: 6 mags
-                        self._monster_resource_state[reserve_key] = 6
-                    # .45 pistol reserves are deferred/unknown unless explicitly defined
+        # Handle generic uses
+        uses = mechanics.get("uses")
+        if isinstance(uses, dict):
+            max_uses = uses.get("max")
+            if max_uses is not None:
+                uses_key = f"{actor_cid}:uses:{cap_id}:current"
+                if uses_key not in self._monster_resource_state:
+                    self._monster_resource_state[uses_key] = max_uses
+                    self._monster_resource_state[f"{actor_cid}:uses:{cap_id}:max"] = max_uses
 
     def _dm_monster_capability_execute(self, *, actor_cid: Any, payload: Dict[str, Any]) -> Dict[str, Any]:
         """Execute a monster capability by ID, with optional target."""
@@ -46312,7 +46391,7 @@ class InitiativeTracker(base.InitiativeTracker):
             return {"ok": False, "error": f"Capability {cap_id} not found."}
 
         # Ensure ammo state if needed
-        self._monster_capability_ensure_ammo_state(int(normalized_actor_cid), cap)
+        self._monster_capability_ensure_resource_state(int(normalized_actor_cid), cap)
 
         # Check if jammed
         if self._monster_resource_state.get(f"{normalized_actor_cid}:jammed:{cap_id}"):
@@ -46322,21 +46401,22 @@ class InitiativeTracker(base.InitiativeTracker):
         mechanics = cap.get("mechanics", {})
 
         # Check ammo for firearm attacks
-        if action_type in ("melee_attack", "ranged_attack"):
+        if action_type in ("melee_attack", "ranged_attack", "save_ability"):
              ammo_current = self._monster_resource_state.get(f"{normalized_actor_cid}:ammo:{cap_id}:current")
              # Calculate required ammo (including modifiers)
-             required_ammo = 1
-             pending_mods = self._monster_modifier_state.get(int(normalized_actor_cid), [])
-             for mod in pending_mods:
-                 m_mech = mod.get("mechanics", {})
-                 eligible = m_mech.get("eligible_action_ids", [])
-                 if not eligible or cap_id in eligible:
-                     mod_ammo = int(m_mech.get("ammo_cost") or 0)
-                     if mod_ammo > required_ammo:
-                         required_ammo = mod_ammo
+             required_ammo = int(mechanics.get("ammo_cost") or (1 if action_type in ("melee_attack", "ranged_attack") else 0))
+             if required_ammo > 0:
+                 pending_mods = self._monster_modifier_state.get(int(normalized_actor_cid), [])
+                 for mod in pending_mods:
+                     m_mech = mod.get("mechanics", {})
+                     eligible = m_mech.get("eligible_action_ids", [])
+                     if not eligible or cap_id in eligible:
+                         mod_ammo = int(m_mech.get("ammo_cost") or 0)
+                         if mod_ammo > required_ammo:
+                             required_ammo = mod_ammo
 
-             if ammo_current is not None and int(ammo_current) < required_ammo:
-                 return {"ok": False, "error": f"{cap.get('name')} needs {required_ammo} ammo (have {ammo_current}). Reload, matey."}
+                 if ammo_current is not None and int(ammo_current) < required_ammo:
+                     return {"ok": False, "error": f"{cap.get('name')} needs {required_ammo} ammo (have {ammo_current}). Reload, matey."}
 
         # Check if composite first to allow assisted_sequence even if executable=false
         if action_type == "composite":
@@ -46434,6 +46514,13 @@ class InitiativeTracker(base.InitiativeTracker):
             available = self._monster_resource_state.get(f"{normalized_actor_cid}:cap:{cap_id}", True)
             if not available:
                 return {"ok": False, "error": f"{cap.get('name')} is not recharged."}
+
+        # Check generic uses
+        uses_current_key = f"{normalized_actor_cid}:uses:{cap_id}:current"
+        if uses_current_key in self._monster_resource_state:
+            current = self._monster_resource_state[uses_current_key]
+            if current <= 0:
+                return {"ok": False, "error": f"{cap.get('name')} has no uses remaining."}
 
         if action_type in ("melee_attack", "ranged_attack") and target_cid is not None:
             # 1. Target validation
@@ -46598,7 +46685,7 @@ class InitiativeTracker(base.InitiativeTracker):
                      # Ensure we have ammo state for the target weapon
                      target_cap = next((c for c in data.get("capabilities", []) if c.get("id") == target_weapon_id), None)
                      if target_cap:
-                         self._monster_capability_ensure_ammo_state(int(normalized_actor_cid), target_cap)
+                         self._monster_capability_ensure_resource_state(int(normalized_actor_cid), target_cap)
 
                      ammo_current = self._monster_resource_state.get(f"{normalized_actor_cid}:ammo:{target_weapon_id}:current")
                      if ammo_current is not None and int(ammo_current) < ammo_cost:
@@ -46687,6 +46774,15 @@ class InitiativeTracker(base.InitiativeTracker):
              # 2. Spend resource (optional for DM)
              spend_key = self._dm_normalize_turn_spend(spend, default="action", allow_none=True)
 
+             if spend_key != "none":
+                 # Spend the ammo
+                 ammo_cost = int(mechanics.get("ammo_cost") or 0)
+                 if ammo_cost > 0:
+                     ammo_current_key = f"{normalized_actor_cid}:ammo:{cap_id}:current"
+                     if ammo_current_key in self._monster_resource_state:
+                         current = self._monster_resource_state[ammo_current_key]
+                         self._monster_resource_state[ammo_current_key] = max(0, current - ammo_cost)
+
              # 3. Mark as used if it was a recharge ability
              # We only mark it as used if the DM actually executes the assisted resolution request
              if recharge:
@@ -46714,6 +46810,104 @@ class InitiativeTracker(base.InitiativeTracker):
                  "resolution_packet": resolution_packet,
                  "spend_hint": spend_key,
                  "recharge_expended": bool(recharge)
+             }
+
+        elif action_type == "utility" and target_cid is not None:
+             # target-resolved healing/temp-hp utility
+             normalized_target_cid = _normalize_cid_value(target_cid, "dm.monster.capability.target")
+             if normalized_target_cid is None:
+                 return {"ok": False, "error": "target_cid must be an integer."}
+             target = self.combatants.get(normalized_target_cid)
+             if not target:
+                 return {"ok": False, "error": "Target not found."}
+
+             healing_formula = mechanics.get("healing")
+             temp_hp_amount = mechanics.get("temp_hp")
+
+             if not healing_formula and not temp_hp_amount:
+                 # Check if it's a generic utility like Smoke Canister
+                 if "uses" not in mechanics and "shape" not in mechanics:
+                     return {"ok": False, "resolution": "manual", "reason": "No healing, temp_hp, or use/shape mechanics found for utility.", "capability": cap}
+
+             # 2. Spend resource
+             spend_key = self._dm_normalize_turn_spend(spend, default="action", allow_none=True)
+             if spend_key != "none":
+                 spent_ok, spend_error = self._dm_spend_combatant_turn_resource(actor, spend_key)
+                 if not spent_ok:
+                     return {"ok": False, "error": spend_error or "No turn resource available."}
+
+             # 3. Resolve
+             hp_delta = 0
+             rolled_value = None
+
+             if healing_formula:
+                 rolled_value = self._roll_monster_attack_formula(healing_formula)
+                 hp_delta = int(rolled_value)
+
+             if spend_key == "none":
+                 # Return assisted resolution packet for preview
+                 res = {
+                     "ok": True,
+                     "resolution": "assisted",
+                     "capability": cap,
+                     "actor_name": str(getattr(actor, "name", "Actor")),
+                     "target_id": normalized_target_cid,
+                     "target_name": str(getattr(target, "name", "Target")),
+                     "healing_roll": rolled_value,
+                     "healing_amount": hp_delta,
+                     "temp_hp_amount": temp_hp_amount,
+                     "spend_hint": spend_hint if 'spend_hint' in locals() else spend_key # Fix potential missing spend_hint
+                 }
+                 # Explicitly add spend_hint for clarity
+                 res["spend_hint"] = spend_key
+                 return res
+
+             # Apply
+             status_parts = []
+             if hp_delta > 0:
+                 self._apply_heal_to_combatant(normalized_target_cid, hp_delta)
+                 status_parts.append(f"Healed {hp_delta} HP")
+
+             if temp_hp_amount:
+                 # 5e rule: temp HP does not stack; highest wins
+                 old_temp = int(getattr(target, "temp_hp", 0) or 0)
+                 if int(temp_hp_amount) > old_temp:
+                    setattr(target, "temp_hp", int(temp_hp_amount))
+                    status_parts.append(f"Granted {temp_hp_amount} Temp HP")
+                 else:
+                    status_parts.append(f"Target already has {old_temp} Temp HP (ignored {temp_hp_amount})")
+
+             if not status_parts:
+                 # Generic status
+                 shape = mechanics.get("shape")
+                 size = mechanics.get("size")
+                 if shape and size:
+                     status_parts.append(f"Deployed ({size}-foot {shape})")
+                 else:
+                     status_parts.append("Executed")
+
+             # Mark as used if recharge
+             if recharge:
+                self._monster_resource_state[f"{normalized_actor_cid}:cap:{cap_id}"] = False
+
+             # Mark as used if uses
+             uses_current_key = f"{normalized_actor_cid}:uses:{cap_id}:current"
+             if uses_current_key in self._monster_resource_state:
+                 current = self._monster_resource_state[uses_current_key]
+                 self._monster_resource_state[uses_current_key] = max(0, current - 1)
+
+             try:
+                 self._rebuild_table(scroll_to_current=True)
+                 self._lan_force_state_broadcast()
+             except Exception:
+                 pass
+
+             return {
+                 "ok": True,
+                 "resolution": "automatic",
+                 "status": f"{cap.get('name')} applied to {getattr(target, 'name', 'Target')}: {', '.join(status_parts)}.",
+                 "hp_healed": hp_delta,
+                 "temp_hp_granted": temp_hp_amount
              }
 
         return {
@@ -46782,6 +46976,9 @@ class InitiativeTracker(base.InitiativeTracker):
         action_type = str(cap.get("action_type") or "").strip().lower()
         is_attack_action = action_type in {"melee_attack", "ranged_attack"}
         override_range = bool(payload.get("override_range"))
+        forced_save_results = payload.get("_monster_forced_save_results")
+        if not isinstance(forced_save_results, dict):
+            forced_save_results = {}
 
         if is_attack_action and not override_range:
             attacker_pos = dict(self.__dict__.get("_lan_positions", {}) or {}).get(int(normalized_actor_cid))
@@ -46850,12 +47047,62 @@ class InitiativeTracker(base.InitiativeTracker):
                 current = self._monster_resource_state[ammo_current_key]
                 self._monster_resource_state[ammo_current_key] = max(0, current - ammo_spent)
 
+        if action_type == "save_ability":
+            save_ability_name = str(cap.get("mechanics", {}).get("save_ability", "wis") or "wis").strip().lower()
+            save_dc_val = int(cap.get("mechanics", {}).get("save_dc", 10) or 10)
+            for row in rows:
+                if row["outcome"] != "fail":
+                    continue
+                target_cid = int(row["target_cid"])
+                if str(target_cid) in forced_save_results:
+                    continue
+                resolved_caps = self._resolved_monster_save_capabilities_for_target(payload, target_cid=target_cid)
+                raw_save_result = self._extract_monster_manual_save_result(
+                    row.get("raw") if isinstance(row.get("raw"), dict) else {},
+                    ability=save_ability_name,
+                    dc=save_dc_val,
+                    passed=False,
+                )
+                prompt_id = self._trigger_monster_save_reaction_prompts(
+                    target_cid=target_cid,
+                    ability=save_ability_name,
+                    dc=save_dc_val,
+                    current_total=raw_save_result.get("total"),
+                    save_result=raw_save_result,
+                    resume_dispatch=build_resume_dispatch(
+                        "dm_monster_capability_resolve_targets",
+                        actor_cid=int(normalized_actor_cid),
+                        ws_id=None,
+                        is_admin=True,
+                        payload=copy.deepcopy(payload),
+                    ),
+                    resolved_capabilities=resolved_caps,
+                )
+                if prompt_id:
+                    return {
+                        "ok": True,
+                        "resolution": "pending_prompt",
+                        "pending_prompt_id": str(prompt_id),
+                        "status": f"Waiting for DM reaction prompt before finalizing {cap.get('name', cap_id)}.",
+                        "capability_id": str(cap_id or ""),
+                        "target_cid": int(target_cid),
+                    }
+
         perf_targets: List[Dict[str, Any]] = []
         results: List[Dict[str, Any]] = []
         for row in rows:
             t_target_start = time.perf_counter() if perf_on else 0.0
             target_cid = row["target_cid"]
             outcome = row["outcome"]
+            save_result_override = None
+            if action_type == "save_ability" and isinstance(forced_save_results.get(str(target_cid)), dict):
+                save_result_override = self._normalize_monster_save_result(
+                    forced_save_results.get(str(target_cid)),
+                    ability=cap.get("mechanics", {}).get("save_ability"),
+                    dc=cap.get("mechanics", {}).get("save_dc"),
+                    default_passed=False,
+                )
+                outcome = "success" if bool(save_result_override.get("passed")) else "fail"
             damage_entries: List[Dict[str, Any]] = []
             if outcome == "fail":
                 for dmg in damage_rolls:
@@ -46892,6 +47139,8 @@ class InitiativeTracker(base.InitiativeTracker):
                 "effects_applied": [],
                 "notes": str(row["raw"].get("notes") or payload.get("notes") or ""),
             }
+            if isinstance(save_result_override, dict) and save_result_override:
+                target_result["save_result"] = dict(save_result_override)
             if apply_damage and damage_entries:
                 damage_result = self._apply_map_attack_manual_damage(
                     int(normalized_actor_cid),
@@ -49899,6 +50148,491 @@ class InitiativeTracker(base.InitiativeTracker):
         self._open_monster_library()
 
 
+
+    def _monster_capability_can_react(self, cid: int, cap_id: str) -> bool:
+        """Check if a monster can use a reaction capability."""
+        c = self.combatants.get(int(cid))
+        if not c:
+            return False
+        if int(getattr(c, "reaction_remaining", 0) or 0) <= 0:
+            return False
+
+        # Check uses if applicable
+        uses_key = f"{cid}:uses:{cap_id}:current"
+        if uses_key in self._monster_resource_state:
+            if int(self._monster_resource_state[uses_key]) <= 0:
+                return False
+        return True
+
+    def _normalize_monster_save_result(
+        self,
+        save_result: Optional[Dict[str, Any]],
+        *,
+        ability: Optional[str] = None,
+        dc: Optional[int] = None,
+        default_passed: Optional[bool] = None,
+    ) -> Dict[str, Any]:
+        """Normalize a save result dict used by monster prompt replay."""
+        raw = dict(save_result) if isinstance(save_result, dict) else {}
+        result: Dict[str, Any] = {}
+        ability_key = str(raw.get("ability") or ability or "").strip().lower()
+        if ability_key:
+            result["ability"] = ability_key
+        dc_value = raw.get("dc", dc)
+        if dc_value is not None:
+            try:
+                result["dc"] = int(dc_value)
+            except Exception:
+                pass
+        for key in ("roll", "modifier", "total"):
+            value = raw.get(key)
+            if value is None:
+                continue
+            try:
+                result[key] = int(value)
+            except Exception:
+                continue
+        if "total" not in result and "roll" in result and "modifier" in result:
+            result["total"] = int(result["roll"]) + int(result["modifier"])
+        if "passed" in raw:
+            result["passed"] = bool(raw.get("passed"))
+        elif default_passed is not None:
+            result["passed"] = bool(default_passed)
+        elif "total" in result and "dc" in result:
+            result["passed"] = bool(int(result["total"]) >= int(result["dc"]))
+        return result
+
+    def _extract_monster_manual_save_result(
+        self,
+        raw_row: Dict[str, Any],
+        *,
+        ability: str,
+        dc: int,
+        passed: bool,
+    ) -> Dict[str, Any]:
+        """Extract any DM-provided save details from a resolve-target row."""
+        row = dict(raw_row) if isinstance(raw_row, dict) else {}
+        base = row.get("save_result") if isinstance(row.get("save_result"), dict) else {}
+        merged = dict(base)
+        for source_key, target_key in (
+            ("save_roll", "roll"),
+            ("save_modifier", "modifier"),
+            ("save_total", "total"),
+        ):
+            if row.get(source_key) is not None and merged.get(target_key) is None:
+                merged[target_key] = row.get(source_key)
+        return self._normalize_monster_save_result(merged, ability=ability, dc=dc, default_passed=passed)
+
+    def _resolved_monster_save_capabilities_for_target(
+        self,
+        payload: Dict[str, Any],
+        *,
+        target_cid: int,
+    ) -> List[str]:
+        """Return the ordered list of monster save modifiers already resolved for a target."""
+        caps_by_target = payload.get("_monster_resolved_save_capabilities_by_target")
+        if isinstance(caps_by_target, dict):
+            values = caps_by_target.get(str(int(target_cid)))
+            if isinstance(values, list):
+                return [str(value).strip().lower() for value in values if str(value or "").strip()]
+        values = payload.get("_monster_resolved_save_capabilities")
+        if isinstance(values, list):
+            return [str(value).strip().lower() for value in values if str(value or "").strip()]
+        return []
+
+    def _append_resolved_monster_save_capability(
+        self,
+        payload: Dict[str, Any],
+        *,
+        target_cid: int,
+        capability_id: str,
+    ) -> None:
+        """Record that a monster save modifier was already offered/resolved for a target."""
+        cap_key = str(capability_id or "").strip().lower()
+        if not cap_key:
+            return
+        current = self._resolved_monster_save_capabilities_for_target(payload, target_cid=int(target_cid))
+        if cap_key not in current:
+            current.append(cap_key)
+        caps_by_target = payload.get("_monster_resolved_save_capabilities_by_target")
+        if not isinstance(caps_by_target, dict):
+            caps_by_target = {}
+            payload["_monster_resolved_save_capabilities_by_target"] = caps_by_target
+        caps_by_target[str(int(target_cid))] = list(current)
+
+    def _get_save_modifier(self, combatant: Any, ability: str) -> int:
+        """Get the saving throw modifier for a combatant."""
+        key = str(ability or "").strip().lower()
+        if not key:
+            return 0
+
+        # Aura effects
+        aura_bonus = 0
+        if hasattr(self, "_lan_aura_effects_for_target"):
+            try:
+                aura_bonus = int((self._lan_aura_effects_for_target(combatant) or {}).get("save_bonus") or 0)
+            except Exception:
+                aura_bonus = 0
+
+        saves = getattr(combatant, "saving_throws", None)
+        if isinstance(saves, dict):
+            val = saves.get(key)
+            if val is not None:
+                try:
+                    return int(val) + aura_bonus
+                except Exception:
+                    pass
+
+        mods = getattr(combatant, "ability_mods", None)
+        if isinstance(mods, dict):
+            val = mods.get(key)
+            if val is not None:
+                try:
+                    return int(val) + aura_bonus
+                except Exception:
+                    pass
+
+        return aura_bonus
+
+    def _create_monster_prompt(
+        self,
+        *,
+        reactor_cid: int,
+        capability_id: str,
+        trigger_event: str,
+        context_text: str,
+        target_cid: Optional[int] = None,
+        metadata: Optional[Dict[str, Any]] = None,
+        resume_dispatch: Optional[Dict[str, Any]] = None,
+    ) -> str:
+        """Create a monster reaction prompt for the DM console."""
+        reactor = self.combatants.get(int(reactor_cid))
+        if not reactor:
+            return ""
+
+        svc = self._ensure_monster_capabilities()
+        data = svc.match_capabilities_for_combatant(reactor)
+        cap = next((c for c in data.get("capabilities", []) if c.get("id") == capability_id), None)
+        if not cap:
+            return ""
+
+        prompt_id = f"monster_{uuid.uuid4().hex[:8]}"
+        choices = [
+            {"kind": "use", "label": "Use Reaction"},
+            {"kind": "skip", "label": "Skip"}
+        ]
+
+        extra = {
+            "monster_reaction": True,
+            "capability_id": capability_id,
+            "capability_name": str(cap.get("name")),
+            "context": context_text,
+            **(metadata or {})
+        }
+
+        # Use empty ws_ids as DM console reads from snapshot
+        self._ensure_player_commands().prompts.create_reaction_offer(
+            reactor_cid=int(reactor_cid),
+            trigger=trigger_event,
+            source_cid=-1,
+            target_cid=int(target_cid) if target_cid is not None else -1,
+            allowed_choices=choices,
+            ws_ids=[],
+            extra_payload=extra,
+            prompt_id=prompt_id,
+            expires_in_seconds=300.0,
+            resume_dispatch=dict(resume_dispatch) if isinstance(resume_dispatch, dict) else None,
+        )
+        return prompt_id
+
+    def _trigger_monster_save_reaction_prompts(
+        self,
+        target_cid: int,
+        ability: str,
+        dc: int,
+        current_total: Optional[int],
+        *,
+        save_result: Optional[Dict[str, Any]] = None,
+        resume_dispatch: Optional[Dict[str, Any]] = None,
+        resolved_capabilities: Optional[List[str]] = None,
+    ) -> str:
+        """Create the next eligible monster save-modifier prompt, if any."""
+        target = self.combatants.get(int(target_cid))
+        if not target:
+            return ""
+        resolved = {
+            str(value).strip().lower()
+            for value in (resolved_capabilities or [])
+            if str(value or "").strip()
+        }
+        normalized_save_result = self._normalize_monster_save_result(
+            save_result,
+            ability=ability,
+            dc=dc,
+            default_passed=False,
+        )
+
+        # 1. Not Yet (Captain self-reaction)
+        if (
+            getattr(target, "monster_slug", "") == "black-and-tan-captain"
+            and "not-yet" not in resolved
+            and normalized_save_result.get("total") is not None
+        ):
+            if self._monster_capability_can_react(target_cid, "not-yet"):
+                ctx = f"Captain {target.name} failed {ability.upper()} save (DC {dc})"
+                if current_total is not None:
+                    ctx += f" with {current_total}"
+                return self._create_monster_prompt(
+                    reactor_cid=target_cid,
+                    capability_id="not-yet",
+                    trigger_event="save_failure",
+                    context_text=ctx,
+                    target_cid=target_cid,
+                    metadata={
+                        "ability": ability,
+                        "dc": dc,
+                        "current_total": current_total,
+                        "original_save_result": normalized_save_result,
+                    },
+                    resume_dispatch=resume_dispatch,
+                )
+
+        # 2. Countermand (Major ally-reaction)
+        if "countermand" in resolved:
+            return ""
+        for cid, c in sorted(self.combatants.items(), key=lambda item: int(item[0])):
+            if getattr(c, "monster_slug", "") == "black-and-tan-major" and int(cid) != int(target_cid):
+                if self._monster_capability_can_react(cid, "countermand"):
+                    # Check distance
+                    dist = self._combatant_distance_ft(c, target)
+                    if dist is not None and dist <= 60.0:
+                        # Check if ally
+                        if not self._combatants_are_hostile(c, target):
+                            ctx = f"Ally {target.name} failed {ability.upper()} save (DC {dc})"
+                            if current_total is not None:
+                                ctx += f" with {current_total}"
+                            return self._create_monster_prompt(
+                                reactor_cid=int(cid),
+                                capability_id="countermand",
+                                trigger_event="save_failure",
+                                context_text=ctx,
+                                target_cid=int(target_cid),
+                                metadata={
+                                    "ability": ability,
+                                    "dc": dc,
+                                    "current_total": current_total,
+                                    "original_save_result": normalized_save_result,
+                                },
+                                resume_dispatch=resume_dispatch,
+                            )
+        return ""
+
+    def _build_monster_prompt_save_result(self, capability_id: str, prompt: Dict[str, Any]) -> Dict[str, Any]:
+        """Return the final authoritative save result for a monster prompt Use action."""
+        metadata = prompt.get("metadata") if isinstance(prompt.get("metadata"), dict) else {}
+        original = self._normalize_monster_save_result(
+            metadata.get("original_save_result"),
+            ability=metadata.get("ability"),
+            dc=metadata.get("dc"),
+            default_passed=False,
+        )
+        ability = str(original.get("ability") or metadata.get("ability") or "save").strip().lower()
+        dc = int(original.get("dc") or metadata.get("dc") or 0)
+        target_cid = _normalize_cid_value(prompt.get("target_cid"), "monster.prompt.target")
+        target = self.combatants.get(int(target_cid)) if target_cid is not None else None
+
+        if capability_id == "not-yet":
+            if original.get("total") is None:
+                raise ValueError("Not Yet requires the original failed save total.")
+            bonus = int(random.randint(1, 6))
+            new_total = int(original.get("total")) + int(bonus)
+            result = dict(original)
+            result["bonus"] = int(bonus)
+            result["total"] = int(new_total)
+            result["passed"] = bool(new_total >= dc)
+            return result
+
+        if capability_id == "countermand":
+            if target is None:
+                raise ValueError("Countermand target not found.")
+            save_roll = int(random.randint(1, 20))
+            save_mod = self._get_save_modifier(target, ability)
+            new_total = int(save_roll) + int(save_mod)
+            result = dict(original)
+            result["roll"] = int(save_roll)
+            result["modifier"] = int(save_mod)
+            result["total"] = int(new_total)
+            result["passed"] = bool(save_roll != 1 and new_total >= dc) if dc > 0 else True
+            return result
+
+        raise ValueError(f"Unsupported monster prompt capability: {capability_id}")
+
+    def _resume_monster_prompt_resolution(
+        self,
+        prompt: Dict[str, Any],
+        *,
+        capability_id: str,
+        final_save_result: Dict[str, Any],
+    ) -> Dict[str, Any]:
+        """Resume the blocked resolution flow with an authoritative save override."""
+        resume = prompt.get("resume") if isinstance(prompt.get("resume"), dict) else None
+        if not isinstance(resume, dict):
+            raise ValueError("Prompt missing resume dispatch.")
+        payload = apply_resume_dispatch(resume)
+        if not isinstance(payload, dict):
+            raise ValueError("Prompt resume payload is invalid.")
+
+        command_type = str(resume.get("command_type") or "").strip().lower()
+        actor_cid = _normalize_cid_value(resume.get("actor_cid"), "monster.prompt.resume.actor")
+        target_cid = _normalize_cid_value(prompt.get("target_cid"), "monster.prompt.resume.target")
+        if target_cid is None:
+            raise ValueError("Prompt target is invalid.")
+
+        if command_type == "spell_target_request":
+            payload["_monster_forced_save_result"] = dict(final_save_result)
+            resolved = payload.get("_monster_resolved_save_capabilities")
+            if not isinstance(resolved, list):
+                resolved = []
+                payload["_monster_resolved_save_capabilities"] = resolved
+            if capability_id not in resolved:
+                resolved.append(capability_id)
+            self._adjudicate_spell_target_request(
+                payload,
+                cid=int(actor_cid or 0),
+                ws_id=resume.get("ws_id"),
+                is_admin=bool(resume.get("is_admin")),
+            )
+            return {
+                "ok": True,
+                "resumed": "spell_target_request",
+                "save_result": dict(final_save_result),
+            }
+
+        if command_type == "dm_monster_capability_resolve_targets":
+            forced_results = payload.get("_monster_forced_save_results")
+            if not isinstance(forced_results, dict):
+                forced_results = {}
+                payload["_monster_forced_save_results"] = forced_results
+            forced_results[str(int(target_cid))] = dict(final_save_result)
+            self._append_resolved_monster_save_capability(
+                payload,
+                target_cid=int(target_cid),
+                capability_id=capability_id,
+            )
+            result = self._dm_monster_capability_resolve_targets(
+                actor_cid=int(actor_cid or 0),
+                payload=payload,
+            )
+            return {
+                "ok": True,
+                "resumed": "dm_monster_capability_resolve_targets",
+                "save_result": dict(final_save_result),
+                "result": result,
+            }
+
+        raise ValueError(f"Unsupported monster prompt resume command: {command_type}")
+
+    def _resolve_monster_prompt(self, prompt_id: str, choice: str) -> Dict[str, Any]:
+        """Resolve a pending monster prompt."""
+        prompt = self._ensure_player_commands().prompts.get_prompt(prompt_id)
+        if not prompt:
+            return {"ok": False, "error": "Prompt not found or expired."}
+
+        metadata = prompt.get("metadata", {})
+        reactor_cid = int(prompt.get("reactor_cid", -1))
+        capability_id = str(metadata.get("capability_id") or "")
+
+        if choice == "skip":
+            self._ensure_player_commands().prompts.pop_prompt(prompt_id)
+            final_save_result = self._normalize_monster_save_result(
+                metadata.get("original_save_result"),
+                ability=metadata.get("ability"),
+                dc=metadata.get("dc"),
+                default_passed=False,
+            )
+            self._log(f"{prompt.get('reactor_name')} skips {metadata.get('capability_name')}.", cid=reactor_cid)
+            resumed = self._resume_monster_prompt_resolution(
+                prompt,
+                capability_id=capability_id,
+                final_save_result=final_save_result,
+            )
+            return {"ok": True, "action": "skip", "save_result": final_save_result, **resumed}
+
+        if choice == "use":
+            if not self._monster_capability_can_react(reactor_cid, capability_id):
+                return {"ok": False, "error": f"{prompt.get('reactor_name')} can no longer use {metadata.get('capability_name')}."}
+            try:
+                final_save_result = self._build_monster_prompt_save_result(capability_id, prompt)
+            except Exception as exc:
+                return {"ok": False, "error": str(exc)}
+            self._ensure_player_commands().prompts.pop_prompt(prompt_id)
+            return self._execute_monster_reaction(
+                reactor_cid,
+                capability_id,
+                prompt,
+                final_save_result=final_save_result,
+            )
+
+        return {"ok": False, "error": f"Invalid choice: {choice}"}
+
+    def _execute_monster_reaction(
+        self,
+        reactor_cid: int,
+        capability_id: str,
+        prompt: Dict[str, Any],
+        *,
+        final_save_result: Dict[str, Any],
+    ) -> Dict[str, Any]:
+        """Execute a monster reaction capability from a prompt."""
+        reactor = self.combatants.get(int(reactor_cid))
+        if not reactor:
+            return {"ok": False, "error": "Reactor not found."}
+
+        # 1. Consume reaction
+        reactor.reaction_remaining = 0
+
+        # 2. Consume uses if applicable
+        uses_key = f"{reactor_cid}:uses:{capability_id}:current"
+        if uses_key in self._monster_resource_state:
+            self._monster_resource_state[uses_key] = max(0, int(self._monster_resource_state[uses_key]) - 1)
+
+        # 3. Apply effect
+        metadata = prompt.get("metadata", {})
+        target_cid = prompt.get("target_cid")
+        target = self.combatants.get(int(target_cid)) if target_cid is not None else None
+
+        log_msg = f"{reactor.name} uses {metadata.get('capability_name')}"
+        if target and int(target_cid) != int(reactor_cid):
+            log_msg += f" for {target.name}"
+
+        # CAPTAIN: Not Yet
+        if capability_id == "not-yet":
+            bonus = int(final_save_result.get("bonus") or 0)
+            log_msg += f" (Rolls +{bonus} to save)."
+            new_total = final_save_result.get("total")
+            passed = bool(final_save_result.get("passed"))
+            if new_total is not None:
+                log_msg += f" New total: {int(new_total)} ({'PASS' if passed else 'FAIL'})."
+
+        # MAJOR: Countermand
+        elif capability_id == "countermand":
+            ability = metadata.get("ability", "save")
+            if target:
+                save_roll = int(final_save_result.get("roll") or 0)
+                save_mod = int(final_save_result.get("modifier") or 0)
+                new_total = int(final_save_result.get("total") or 0)
+                passed = bool(final_save_result.get("passed"))
+                log_msg += f" (Rerolls {ability.upper()} save: {save_roll} + {save_mod} = {new_total} -> {'PASS' if passed else 'FAIL'})."
+
+        self._log(log_msg, cid=reactor_cid)
+        resumed = self._resume_monster_prompt_resolution(
+            prompt,
+            capability_id=capability_id,
+            final_save_result=final_save_result,
+        )
+        self._lan_force_state_broadcast()
+
+        return {"ok": True, "log": log_msg, "save_result": dict(final_save_result), **resumed}
 
 def main() -> None:
     app = InitiativeTracker()
