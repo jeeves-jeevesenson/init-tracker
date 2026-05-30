@@ -50,6 +50,7 @@ Active recovery doc: `docs/production_recovery_living_doc_20260526.md`
 - `CLAUDE.md`
 - `majorTODO.md`
 - `docs/production_recovery_living_doc_20260526.md`
+- `docs/bug_reports/README.md` (Bug Reporting Workflow)
 - `scripts/agent_gate_validate.sh`
 - `scripts/chatgpt_context_refresher.sh`
 - `scripts/agent_context_bundle.sh`
