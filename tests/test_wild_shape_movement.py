@@ -29,7 +29,7 @@ class TestWildShapeMovementReal(unittest.TestCase):
                 "resources": {"pools": [{"id": "wild_shape", "current": 2, "max": 2}]},
             }
         }
-        self.app._set_wild_shape_pool_current = lambda _name, value: (True, "", value)
+        self.app._set_wild_shape_pool_current = lambda _name, value, **kwargs: (True, "", value)
         self.app._set_temp_hp_via_service = lambda _cid, _amt: True
         self.app._mode_speed = tracker_mod.InitiativeTracker._mode_speed.__get__(self.app, tracker_mod.InitiativeTracker)
         self.app._apply_wild_shape = tracker_mod.InitiativeTracker._apply_wild_shape.__get__(self.app, tracker_mod.InitiativeTracker)

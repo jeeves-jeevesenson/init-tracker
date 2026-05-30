@@ -1851,7 +1851,7 @@ class CombatService:
     # Wild Shape (Gate 4)
     # ------------------------------------------------------------------
 
-    def wild_shape_apply(self, cid: int, beast_id: str, *, _broadcast: bool = True) -> Dict[str, Any]:
+    def wild_shape_apply(self, cid: int, beast_id: str, *, _broadcast: bool = True, deferred: bool = True) -> Dict[str, Any]:
         """Apply Wild Shape to a combatant, preserving spent movement.
 
         Delegates to the tracker's ``_apply_wild_shape`` for core state
@@ -1872,7 +1872,7 @@ class CombatService:
 
             # 2. Apply the beast form (InitiativeTracker now handles movement preservation).
             try:
-                ok, err = t._apply_wild_shape(int(cid), beast_id)
+                ok, err = t._apply_wild_shape(int(cid), beast_id, deferred=deferred)
             except Exception as exc:
                 return {"ok": False, "error": f"Wild Shape application failed: {exc}"}
 
@@ -1903,7 +1903,7 @@ class CombatService:
                 "snapshot": self.combat_snapshot(),
             }
 
-    def wild_shape_revert(self, cid: int, *, _broadcast: bool = True) -> Dict[str, Any]:
+    def wild_shape_revert(self, cid: int, *, _broadcast: bool = True, deferred: bool = True) -> Dict[str, Any]:
         """Revert Wild Shape to the base form, preserving spent movement.
 
         Formula: new_remaining = max(base_speed - distance_already_moved, 0)
@@ -1920,7 +1920,7 @@ class CombatService:
 
             # 2. Revert to base form (InitiativeTracker now handles movement preservation).
             try:
-                ok, err = t._revert_wild_shape(int(cid))
+                ok, err = t._revert_wild_shape(int(cid), deferred=deferred)
             except Exception as exc:
                 return {"ok": False, "error": f"Wild Shape reversion failed: {exc}"}
 

@@ -226,7 +226,7 @@ class WildShapeTests(unittest.TestCase):
         self.app._pc_name_for = lambda _cid: "Alice"
         self.app._load_player_yaml_cache = lambda force_refresh=False: None
         self.app._player_yaml_data_by_name = {"Alice": self._profile(8)}
-        self.app._set_wild_shape_pool_current = lambda _name, value: (True, "", value)
+        self.app._set_wild_shape_pool_current = lambda _name, value, **kwargs: (True, "", value)
         self.app._wild_shape_beast_cache = [
             {
                 "id": "brown-bear",
@@ -281,7 +281,7 @@ class WildShapeTests(unittest.TestCase):
         self.app._pc_name_for = lambda _cid: "Alice"
         self.app._load_player_yaml_cache = lambda force_refresh=False: None
         self.app._player_yaml_data_by_name = {"Alice": self._profile(8)}
-        self.app._set_wild_shape_pool_current = lambda _name, value: (True, "", value)
+        self.app._set_wild_shape_pool_current = lambda _name, value, **kwargs: (True, "", value)
 
         observed = {}
 
@@ -324,7 +324,7 @@ class WildShapeTests(unittest.TestCase):
         self.app._pc_name_for = lambda _cid: "Alice"
         self.app._load_player_yaml_cache = lambda force_refresh=False: None
         self.app._player_yaml_data_by_name = {"Alice": self._profile(8)}
-        self.app._set_wild_shape_pool_current = lambda _name, value: (True, "", value)
+        self.app._set_wild_shape_pool_current = lambda _name, value, **kwargs: (True, "", value)
 
         ok, err = self.app._apply_wild_shape(1, "brown-bear")
         self.assertTrue(ok, err)
@@ -370,7 +370,7 @@ class WildShapeTests(unittest.TestCase):
         self.app._pc_name_for = lambda _cid: "Alice"
         self.app._load_player_yaml_cache = lambda force_refresh=False: None
         self.app._player_yaml_data_by_name = {"Alice": self._profile(8)}
-        self.app._set_wild_shape_pool_current = lambda _name, value: (True, "", value)
+        self.app._set_wild_shape_pool_current = lambda _name, value, **kwargs: (True, "", value)
 
         ok, err = self.app._apply_wild_shape(1, "wolf")
         self.assertTrue(ok, err)
@@ -404,7 +404,7 @@ class WildShapeTests(unittest.TestCase):
         self.app._pc_name_for = lambda _cid: "Alice"
         self.app._load_player_yaml_cache = lambda force_refresh=False: None
         self.app._player_yaml_data_by_name = {"Alice": self._profile(8)}
-        self.app._set_wild_shape_pool_current = lambda _name, value: (True, "", value)
+        self.app._set_wild_shape_pool_current = lambda _name, value, **kwargs: (True, "", value)
 
         ok, err = self.app._apply_wild_shape(1, "brown-bear")
         self.assertTrue(ok, err)
@@ -448,7 +448,7 @@ class WildShapeTests(unittest.TestCase):
         self.app._pc_name_for = lambda _cid: "Alice"
         self.app._load_player_yaml_cache = lambda force_refresh=False: None
         self.app._player_yaml_data_by_name = {"Alice": self._profile(8)}
-        self.app._set_wild_shape_pool_current = lambda _name, value: (True, "", value)
+        self.app._set_wild_shape_pool_current = lambda _name, value, **kwargs: (True, "", value)
 
         ok, err = self.app._apply_wild_shape(1, "eagle")
         self.assertTrue(ok, err)
@@ -486,7 +486,7 @@ class WildShapeTests(unittest.TestCase):
         self.app._pc_name_for = lambda _cid: "Alice"
         self.app._load_player_yaml_cache = lambda force_refresh=False: None
         self.app._player_yaml_data_by_name = {"Alice": self._profile(8)}
-        self.app._set_wild_shape_pool_current = lambda _name, value: (True, "", value)
+        self.app._set_wild_shape_pool_current = lambda _name, value, **kwargs: (True, "", value)
 
         ok, err = self.app._apply_wild_shape(1, "eagle")
 
@@ -521,7 +521,7 @@ class WildShapeTests(unittest.TestCase):
         self.app._pc_name_for = lambda _cid: "Alice"
         self.app._load_player_yaml_cache = lambda force_refresh=False: None
         self.app._player_yaml_data_by_name = {"Alice": self._profile(8)}
-        self.app._set_wild_shape_pool_current = lambda _name, value: (True, "", value)
+        self.app._set_wild_shape_pool_current = lambda _name, value, **kwargs: (True, "", value)
         self.app._wild_shape_beast_cache = [
             {
                 "id": "brown-bear",
@@ -577,7 +577,7 @@ class WildShapeTests(unittest.TestCase):
         self.app._pc_name_for = lambda _cid: "Alice"
         self.app._load_player_yaml_cache = lambda force_refresh=False: None
         self.app._player_yaml_data_by_name = {"Alice": self._profile(8)}
-        self.app._set_wild_shape_pool_current = lambda _name, value: (True, "", value)
+        self.app._set_wild_shape_pool_current = lambda _name, value, **kwargs: (True, "", value)
 
         ok, err = self.app._apply_wild_shape(1, "brown-bear")
 
@@ -612,7 +612,7 @@ class WildShapeTests(unittest.TestCase):
         self.app._pc_name_for = lambda _cid: "Johnny Morris"
         self.app._load_player_yaml_cache = lambda force_refresh=False: None
         self.app._player_yaml_data_by_name = {"Johnny Morris": self._profile(8)}
-        self.app._set_wild_shape_pool_current = lambda _name, value: (True, "", value)
+        self.app._set_wild_shape_pool_current = lambda _name, value, **kwargs: (True, "", value)
         self.app._wild_shape_beast_cache = [
             {
                 "id": "brown-bear",
@@ -863,7 +863,7 @@ class WildShapeTests(unittest.TestCase):
         }
         app._pc_name_for = lambda _cid: "Johnny Morris"
         app._load_player_yaml_cache = lambda force_refresh=False: None
-        app._set_wild_shape_pool_current = lambda _name, value: (True, "", value)
+        app._set_wild_shape_pool_current = lambda _name, value, **kwargs: (True, "", value)
         app._wild_shape_beast_cache = [
             {
                 "id": "wolf",
@@ -915,7 +915,7 @@ class WildShapeTests(unittest.TestCase):
         }
         app._pc_name_for = lambda _cid: "Johnny Morris"
         app._load_player_yaml_cache = lambda force_refresh=False: None
-        app._set_wild_shape_pool_current = lambda _name, value: (True, "", value)
+        app._set_wild_shape_pool_current = lambda _name, value, **kwargs: (True, "", value)
         app._wild_shape_beast_cache = [
             {
                 "id": "reef-shark",
@@ -952,7 +952,7 @@ class WildShapeTests(unittest.TestCase):
         app._summon_can_be_controlled_by = lambda claimed, cid: False
         app._use_bonus_action = lambda _c: False
         calls = {"apply": 0, "rebuild": 0}
-        app._apply_wild_shape = lambda _cid, _beast_id: (calls.__setitem__("apply", calls["apply"] + 1) or True, "")
+        app._apply_wild_shape = lambda _cid, _beast_id, **kwargs: (calls.__setitem__("apply", calls["apply"] + 1) or True, "")
         app._rebuild_table = lambda scroll_to_current=False: calls.__setitem__("rebuild", calls["rebuild"] + 1)
         toasts = []
         app._lan = type("Lan", (), {"toast": lambda self, ws_id, text: toasts.append(text), "_append_lan_log": lambda self, msg, level='warning': None})()
@@ -975,12 +975,12 @@ class WildShapeTests(unittest.TestCase):
         toasts = []
         app._lan = type("Lan", (), {"toast": lambda self, ws_id, text: toasts.append(text), "_append_lan_log": lambda self, msg, level='warning': None})()
 
-        app._apply_wild_shape = lambda _cid, _beast_id: (False, "bad wolf")
+        app._apply_wild_shape = lambda _cid, _beast_id, **kwargs: (False, "bad wolf")
         app._lan_apply_action({"type": "wild_shape_apply", "cid": 1, "beast_id": "wolf", "_ws_id": 10, "admin_token": "ok"})
         self.assertEqual(use_calls["count"], 0)
         self.assertTrue(any("bad wolf" in msg for msg in toasts))
 
-        app._apply_wild_shape = lambda _cid, _beast_id: (True, "")
+        app._apply_wild_shape = lambda _cid, _beast_id, **kwargs: (True, "")
         app._lan_apply_action({"type": "wild_shape_apply", "cid": 1, "beast_id": "wolf", "_ws_id": 10, "admin_token": "ok"})
         self.assertEqual(use_calls["count"], 1)
         self.assertEqual(getattr(app.combatants[1], "bonus_action_remaining", None), 0)
@@ -994,7 +994,7 @@ class WildShapeTests(unittest.TestCase):
         app._summon_can_be_controlled_by = lambda claimed, cid: False
         app._use_bonus_action = lambda _c: False
         calls = {"apply": 0}
-        app._apply_wild_shape = lambda _cid, _beast_id: (calls.__setitem__("apply", calls["apply"] + 1) or True, "")
+        app._apply_wild_shape = lambda _cid, _beast_id, **kwargs: (calls.__setitem__("apply", calls["apply"] + 1) or True, "")
         app._rebuild_table = lambda scroll_to_current=False: None
         app._lan = type("Lan", (), {"toast": lambda self, ws_id, text: None, "_append_lan_log": lambda self, msg, level='warning': None})()
 
@@ -1011,7 +1011,7 @@ class WildShapeTests(unittest.TestCase):
         }
         app._is_admin_token_valid = lambda _token: True
         app._summon_can_be_controlled_by = lambda claimed, cid: False
-        app._apply_wild_shape = lambda _cid, _beast_id: (True, "")
+        app._apply_wild_shape = lambda _cid, _beast_id, **kwargs: (True, "")
         app._use_bonus_action = lambda c: (setattr(c, "bonus_action_remaining", max(0, int(getattr(c, "bonus_action_remaining", 0)) - 1)) or True)
         app._rebuild_table = lambda scroll_to_current=False: None
         app._lan = type("Lan", (), {"toast": lambda self, ws_id, text: None, "_append_lan_log": lambda self, msg, level='warning': None})()
@@ -1029,7 +1029,7 @@ class WildShapeTests(unittest.TestCase):
         app._is_admin_token_valid = lambda _token: True
         app._summon_can_be_controlled_by = lambda claimed, cid: False
         calls = {"revert": 0}
-        def revert_wild_shape(_cid):
+        def revert_wild_shape(_cid, **kwargs):
             calls["revert"] += 1
             return True, ""
         app._revert_wild_shape = revert_wild_shape
@@ -1050,7 +1050,7 @@ class WildShapeTests(unittest.TestCase):
         app.combatants = {1: type("C", (), {"cid": 1, "temp_hp": 11})()}
         app._is_admin_token_valid = lambda _token: True
         app._summon_can_be_controlled_by = lambda claimed, cid: False
-        app._revert_wild_shape = lambda _cid: (True, "")
+        app._revert_wild_shape = lambda _cid, **kwargs: (True, "")
         app._rebuild_table = lambda scroll_to_current=False: None
         app._lan = type("Lan", (), {"toast": lambda self, ws_id, text: None, "_append_lan_log": lambda self, msg, level='warning': None})()
 
@@ -1066,7 +1066,7 @@ class WildShapeTests(unittest.TestCase):
         app._pc_name_for = lambda _cid: "Leaf"
         app._is_admin_token_valid = lambda _token: True
         app._summon_can_be_controlled_by = lambda claimed, cid: False
-        app._set_wild_shape_pool_current = lambda _name, value: (True, "", max(0, min(2, int(value))))
+        app._set_wild_shape_pool_current = lambda _name, value, **kwargs: (True, "", max(0, min(2, int(value))))
         calls = {"rebuild": 0}
         app._rebuild_table = lambda scroll_to_current=False: calls.__setitem__("rebuild", calls["rebuild"] + 1)
         toasts = []
@@ -1227,7 +1227,7 @@ class WildShapeServiceBehaviorTests(unittest.TestCase):
     def test_wild_shape_regain_use_handler_marks_turn_usage_and_updates_pool(self):
         tracker = self._make_tracker(wild_shape_current=1)
         tracker._consume_spell_slot_for_wild_shape_regain = lambda _name: (True, "", 2)
-        tracker._set_wild_shape_pool_current = lambda _name, value: (True, "", max(0, min(2, int(value))))
+        tracker._set_wild_shape_pool_current = lambda _name, value, **kwargs: (True, "", max(0, min(2, int(value))))
 
         result = PlayerCommandService(tracker).wild_shape_regain_use(
             {"type": "wild_shape_regain_use"},
@@ -1247,7 +1247,7 @@ class WildShapeServiceBehaviorTests(unittest.TestCase):
     def test_wild_shape_regain_spell_handler_marks_long_rest_usage_and_spends_pool(self):
         tracker = self._make_tracker(wild_shape_current=1)
         tracker._regain_first_level_spell_slot = lambda _name: (True, "")
-        tracker._set_wild_shape_pool_current = lambda _name, value: (True, "", max(0, min(2, int(value))))
+        tracker._set_wild_shape_pool_current = lambda _name, value, **kwargs: (True, "", max(0, min(2, int(value))))
 
         result = PlayerCommandService(tracker).wild_shape_regain_spell(
             {"type": "wild_shape_regain_spell"},

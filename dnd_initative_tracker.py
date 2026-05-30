@@ -33077,7 +33077,7 @@ class InitiativeTracker(base.InitiativeTracker):
             return False
         return True
 
-    def _set_wild_shape_pool_current(self, player_name: str, current_value: int) -> Tuple[bool, str, Optional[int]]:
+    def _set_wild_shape_pool_current(self, player_name: str, current_value: int, *, deferred: bool = False) -> Tuple[bool, str, Optional[int]]:
         self._load_player_yaml_cache()
         player_path = self._find_player_profile_path(player_name)
         raw = self._player_yaml_cache_by_path.get(player_path) if player_path else None
@@ -33122,10 +33122,22 @@ class InitiativeTracker(base.InitiativeTracker):
         raw = dict(raw)
         raw["resources"] = resources
         try:
-            # _store_character_yaml now defaults to force_reload=False and patches the cache.
-            self._store_character_yaml(player_path, raw)
-        except Exception:
-            return False, "Could not update Wild Shape pool, matey.", None
+            # Use _bulk_report_character_mutations for truly deferred persistence,
+            # matching the high-performance Long Rest pattern.
+            mutations = [{
+                "path": player_path,
+                "profile": raw,
+                "domains": ["dynamic_player_values", "resource_pools"],
+            }]
+            with _PlayerYamlCacheHold(self):
+                self._bulk_report_character_mutations(
+                    mutations,
+                    deferred=deferred,
+                    include_static_refresh=False,
+                    force_player_yaml_reload=False,
+                )
+        except Exception as exc:
+            return False, f"Could not update Wild Shape pool: {exc}", None
         return True, "", clamped
 
     def _consume_spell_slot_for_wild_shape_regain(self, caster_name: str) -> Tuple[bool, str, Optional[int]]:
@@ -33170,7 +33182,7 @@ class InitiativeTracker(base.InitiativeTracker):
             return False, "Could not update spell slots, matey."
         return True, ""
 
-    def _apply_wild_shape(self, cid: int, beast_id: str) -> Tuple[bool, str]:
+    def _apply_wild_shape(self, cid: int, beast_id: str, *, deferred: bool = False) -> Tuple[bool, str]:
         c = self.combatants.get(int(cid))
         if c is None:
             return False, "That scallywag ain’t in combat no more."
@@ -33201,7 +33213,11 @@ class InitiativeTracker(base.InitiativeTracker):
         current_pool = next((p for p in self._normalize_player_resource_pools(profile) if str(p.get("id") or "").lower() == "wild_shape"), None)
         if not isinstance(current_pool, dict) or int(current_pool.get("current", 0) or 0) <= 0:
             return False, "No Wild Shape uses remain, matey."
-        ok_pool, pool_err, new_cur = self._set_wild_shape_pool_current(player_name, int(current_pool.get("current", 0)) - 1)
+        ok_pool, pool_err, new_cur = self._set_wild_shape_pool_current(
+            player_name,
+            int(current_pool.get("current", 0)) - 1,
+            deferred=deferred,
+        )
         if not ok_pool:
             return False, pool_err or "Could not consume Wild Shape use, matey."
 
@@ -33353,7 +33369,7 @@ class InitiativeTracker(base.InitiativeTracker):
             return False, "Could not apply Wild Shape temp HP, matey."
         return True, ""
 
-    def _revert_wild_shape(self, cid: int) -> Tuple[bool, str]:
+    def _revert_wild_shape(self, cid: int, *, deferred: bool = False) -> Tuple[bool, str]:
         c = self.combatants.get(int(cid))
         if c is None:
             return False, "That scallywag ain’t in combat no more."

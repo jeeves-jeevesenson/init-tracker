@@ -2360,7 +2360,7 @@ class PlayerCommandService:
         if svc is not None:
             # Delegate to CombatService to ensure movement preservation and proper locking.
             # We pass _broadcast=False so we can handle bonus action spend before final broadcast.
-            res = svc.wild_shape_apply(int(cid_int), beast_id, _broadcast=False)
+            res = svc.wild_shape_apply(int(cid_int), beast_id, _broadcast=False, deferred=True)
             if res.get("ok"):
                 if require_bonus_action:
                     t._use_bonus_action(c)
@@ -2401,7 +2401,7 @@ class PlayerCommandService:
                 )
 
         # Fallback: CombatService unavailable — direct mutation.
-        ok, err = t._apply_wild_shape(int(cid_int), beast_id)
+        ok, err = t._apply_wild_shape(int(cid_int), beast_id, deferred=True)
         if not ok:
             self._toast(ws_id, err or "Could not Wild Shape, matey.")
             return build_dispatch_result(
@@ -2486,7 +2486,7 @@ class PlayerCommandService:
                 request=request_contract,
             )
         player_name = t._pc_name_for(int(cid_int))
-        ok_pool, pool_err, new_cur = t._set_wild_shape_pool_current(player_name, desired_current)
+        ok_pool, pool_err, new_cur = t._set_wild_shape_pool_current(player_name, desired_current, deferred=True)
         if not ok_pool:
             self._toast(ws_id, pool_err or "Could not update Wild Shape uses, matey.")
             return build_dispatch_result(
@@ -2558,7 +2558,7 @@ class PlayerCommandService:
 
         svc = self._combat_service()
         if svc is not None:
-            res = svc.wild_shape_revert(int(cid_int), _broadcast=False)
+            res = svc.wild_shape_revert(int(cid_int), _broadcast=False, deferred=True)
             if res.get("ok"):
                 if require_bonus_action:
                     t._use_bonus_action(c)
@@ -2597,7 +2597,7 @@ class PlayerCommandService:
                 )
 
         # Fallback: CombatService unavailable — direct mutation.
-        ok, err = t._revert_wild_shape(int(cid_int))
+        ok, err = t._revert_wild_shape(int(cid_int), deferred=True)
         if not ok:
             self._toast(ws_id, err or "Could not revert Wild Shape, matey.")
             return build_dispatch_result(
