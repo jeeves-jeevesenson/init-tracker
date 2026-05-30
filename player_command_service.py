@@ -1514,15 +1514,28 @@ class PlayerCommandService:
     def _resolve_pc_name(self, cid: Optional[int]) -> str:
         if cid is None:
             return ""
-        resolver = getattr(self._tracker, "_pc_name_for", None)
+        t = self._tracker
+        name = ""
+        resolver = getattr(t, "_pc_name_for", None)
         if callable(resolver):
             try:
-                return str(resolver(int(cid)) or "")
+                name = str(resolver(int(cid)) or "")
             except Exception:
                 pass
-        combatants = getattr(self._tracker, "combatants", {}) or {}
-        combatant = combatants.get(int(cid))
-        return str(getattr(combatant, "name", "") or "")
+        if not name:
+            combatants = getattr(t, "combatants", {}) or {}
+            c = combatants.get(int(cid))
+            name = str(getattr(c, "name", "") or "")
+
+        # Suffix stripping: "John Twilight 1" -> "John Twilight"
+        # This is mandatory for profile and resource pool lookups.
+        stripper = getattr(t, "_strip_combat_name_suffix", None)
+        if name and callable(stripper):
+            try:
+                name = stripper(name)
+            except Exception:
+                pass
+        return name
 
     def _move_log(self, ws_id: Any, event: str, **fields: Any) -> None:
         lan = getattr(self._tracker, "_lan", None)
@@ -5821,7 +5834,7 @@ class PlayerCommandService:
         c = combatants.get(cid_int)
         if c is None:
             return build_dispatch_result("second_wind_use", False, reason="combatant_missing", request=request_contract)
-        player_name = t._pc_name_for(cid_int)
+        player_name = self._resolve_pc_name(cid_int)
         profile = t._profile_for_player_name(player_name)
         if not isinstance(profile, dict):
             self._toast(ws_id, "No player profile found, matey.")
@@ -5876,6 +5889,12 @@ class PlayerCommandService:
                 rebuild(scroll_to_current=True)
             except Exception:
                 pass
+        broadcast = getattr(t, "_lan_force_state_broadcast", None)
+        if callable(broadcast):
+            try:
+                broadcast()
+            except Exception:
+                pass
         return build_dispatch_result(
             "second_wind_use",
             True,
@@ -5910,7 +5929,7 @@ class PlayerCommandService:
         c = combatants.get(cid_int)
         if c is None:
             return build_dispatch_result("action_surge_use", False, reason="combatant_missing", request=request_contract)
-        player_name = t._pc_name_for(cid_int)
+        player_name = self._resolve_pc_name(cid_int)
         profile = t._profile_for_player_name(player_name)
         if not isinstance(profile, dict):
             self._toast(ws_id, "No player profile found, matey.")
@@ -5947,6 +5966,12 @@ class PlayerCommandService:
                 rebuild(scroll_to_current=True)
             except Exception:
                 pass
+        broadcast = getattr(t, "_lan_force_state_broadcast", None)
+        if callable(broadcast):
+            try:
+                broadcast()
+            except Exception:
+                pass
         return build_dispatch_result(
             "action_surge_use",
             True,
@@ -5980,7 +6005,7 @@ class PlayerCommandService:
         c = combatants.get(cid_int)
         if c is None:
             return build_dispatch_result("star_advantage_use", False, reason="combatant_missing", request=request_contract)
-        player_name = t._pc_name_for(cid_int)
+        player_name = self._resolve_pc_name(cid_int)
         ok_pool, pool_err = t._consume_resource_pool_for_cast(player_name, "star_advantage", 1)
         if not ok_pool:
             self._toast(ws_id, pool_err or "No Star Advantage charges remain, matey.")
@@ -6009,6 +6034,12 @@ class PlayerCommandService:
             except Exception:
                 pass
         self._toast(ws_id, "Star Advantage readied.")
+        broadcast = getattr(t, "_lan_force_state_broadcast", None)
+        if callable(broadcast):
+            try:
+                broadcast()
+            except Exception:
+                pass
         return build_dispatch_result("star_advantage_use", True, request=request_contract)
 
     def monk_patient_defense(
@@ -6040,7 +6071,7 @@ class PlayerCommandService:
             self._toast(ws_id, "Only player characters can use Monk Focus actions, matey.")
             return build_dispatch_result("monk_patient_defense", False, reason="not_player_character", request=request_contract)
         try:
-            player_name = t._pc_name_for(cid_int)
+            player_name = self._resolve_pc_name(cid_int)
         except Exception:
             player_name = ""
         profile = t._profile_for_player_name(player_name)
@@ -6108,6 +6139,12 @@ class PlayerCommandService:
                 rebuild(scroll_to_current=True)
             except Exception:
                 pass
+        broadcast = getattr(t, "_lan_force_state_broadcast", None)
+        if callable(broadcast):
+            try:
+                broadcast()
+            except Exception:
+                pass
         return build_dispatch_result(
             "monk_patient_defense",
             True,
@@ -6144,7 +6181,7 @@ class PlayerCommandService:
             self._toast(ws_id, "Only player characters can use Monk Focus actions, matey.")
             return build_dispatch_result("monk_step_of_wind", False, reason="not_player_character", request=request_contract)
         try:
-            player_name = t._pc_name_for(cid_int)
+            player_name = self._resolve_pc_name(cid_int)
         except Exception:
             player_name = ""
         profile = t._profile_for_player_name(player_name)
@@ -6197,6 +6234,12 @@ class PlayerCommandService:
                 rebuild(scroll_to_current=True)
             except Exception:
                 pass
+        broadcast = getattr(t, "_lan_force_state_broadcast", None)
+        if callable(broadcast):
+            try:
+                broadcast()
+            except Exception:
+                pass
         return build_dispatch_result(
             "monk_step_of_wind",
             True,
@@ -6235,7 +6278,7 @@ class PlayerCommandService:
             self._toast(ws_id, "Only player characters can use Monk Focus actions, matey.")
             return build_dispatch_result("monk_elemental_attunement", False, reason="not_player_character", request=request_contract)
         try:
-            player_name = t._pc_name_for(cid_int)
+            player_name = self._resolve_pc_name(cid_int)
         except Exception:
             player_name = ""
         profile = t._profile_for_player_name(player_name)
@@ -6262,6 +6305,12 @@ class PlayerCommandService:
                 if callable(rebuild):
                     try:
                         rebuild(scroll_to_current=True)
+                    except Exception:
+                        pass
+                broadcast = getattr(t, "_lan_force_state_broadcast", None)
+                if callable(broadcast):
+                    try:
+                        broadcast()
                     except Exception:
                         pass
                 return build_dispatch_result("monk_elemental_attunement", True, request=request_contract, mode="deactivate")
@@ -6299,6 +6348,12 @@ class PlayerCommandService:
                 rebuild(scroll_to_current=True)
             except Exception:
                 pass
+        broadcast = getattr(t, "_lan_force_state_broadcast", None)
+        if callable(broadcast):
+            try:
+                broadcast()
+            except Exception:
+                pass
         return build_dispatch_result("monk_elemental_attunement", True, request=request_contract, mode="activate")
 
     def monk_elemental_burst(
@@ -6330,7 +6385,7 @@ class PlayerCommandService:
             self._toast(ws_id, "Only player characters can use Monk Focus actions, matey.")
             return build_dispatch_result("monk_elemental_burst", False, reason="not_player_character", request=request_contract)
         try:
-            player_name = t._pc_name_for(cid_int)
+            player_name = self._resolve_pc_name(cid_int)
         except Exception:
             player_name = ""
         profile = t._profile_for_player_name(player_name)
@@ -6448,6 +6503,12 @@ class PlayerCommandService:
                 rebuild(scroll_to_current=True)
             except Exception:
                 pass
+        broadcast = getattr(t, "_lan_force_state_broadcast", None)
+        if callable(broadcast):
+            try:
+                broadcast()
+            except Exception:
+                pass
         return build_dispatch_result(
             "monk_elemental_burst",
             bool(resolved),
@@ -6487,7 +6548,7 @@ class PlayerCommandService:
             self._toast(ws_id, "Only player characters can use Monk Focus actions, matey.")
             return build_dispatch_result("monk_uncanny_metabolism", False, reason="not_player_character", request=request_contract)
         try:
-            player_name = t._pc_name_for(cid_int)
+            player_name = self._resolve_pc_name(cid_int)
         except Exception:
             player_name = ""
         profile = t._profile_for_player_name(player_name)
@@ -6540,6 +6601,12 @@ class PlayerCommandService:
         if callable(rebuild):
             try:
                 rebuild(scroll_to_current=True)
+            except Exception:
+                pass
+        broadcast = getattr(t, "_lan_force_state_broadcast", None)
+        if callable(broadcast):
+            try:
+                broadcast()
             except Exception:
                 pass
         return build_dispatch_result(

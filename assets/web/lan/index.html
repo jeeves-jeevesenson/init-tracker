@@ -7945,7 +7945,7 @@ __DAMAGE_TYPE_OPTIONS__
           if (!window.confirm("Action Surge?")){
             return;
           }
-          const msg = {type: "action_surge_use", cid};
+          const msg = {type: "action_surge_use", cid: claimedCid};
           if (isPlanning){
             planningMutate(msg);
             draw();
@@ -7969,7 +7969,7 @@ __DAMAGE_TYPE_OPTIONS__
           if (!window.confirm(`Use Star Advantage? (${pool.current}/${pool.max} remaining uses)`)){
             return;
           }
-          const msg = {type: "star_advantage_use", cid};
+          const msg = {type: "star_advantage_use", cid: claimedCid};
           if (isPlanning){
             planningMutate(msg);
             draw();
