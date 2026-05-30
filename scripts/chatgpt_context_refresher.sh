@@ -29,6 +29,13 @@ OUTPUT_PATH="${1:-/tmp/init-tracker-context-refresher.txt}"
     echo "--- RECENT HISTORY (Last 8) ---"
     git log -n 8 --oneline
     echo
+    echo "--- CURRENT WORK LEDGER (docs/work_items/current_work.md) ---"
+    if [ -f "docs/work_items/current_work.md" ]; then
+        head -n 120 "docs/work_items/current_work.md"
+    else
+        echo "LEDGER MISSING: docs/work_items/current_work.md not found."
+    fi
+    echo
     echo "--- ACTIVE DURABLE DOCS ---"
     echo "- GEMINI.md"
     echo "- AGENTS.md"

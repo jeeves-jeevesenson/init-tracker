@@ -21,9 +21,21 @@ Active recovery doc: `docs/production_recovery_living_doc_20260526.md`
 
 ## Source of Truth
 
-- Current status, active gate, latest commit, and dirty state must come from the context refresher (`scripts/chatgpt_context_refresher.sh`).
-- For active recovery, `docs/production_recovery_living_doc_20260526.md`
+- **Current Work Ledger**: Consult `docs/work_items/current_work.md` immediately after the context refresher. This is the only source for active work.
+- **Current State**: Current status, active gate, latest commit, and dirty state must come from the context refresher (`scripts/chatgpt_context_refresher.sh`).
+- **Active Recovery**: For active recovery, `docs/production_recovery_living_doc_20260526.md`
   overrides `majorTODO.md` and older docs when they differ.
+
+## Refuse to Proceed Mandate
+
+- **No Active Work**: If `docs/work_items/current_work.md` has no active work item, or the last item is complete, the Orchestrator MUST NOT invent new work from old bugs or plans.
+- **Action**: Stop and ask the developer what to open next:
+  1. Open a new bug report.
+  2. Start a planning/research pass.
+  3. Continue the next recovery gate.
+  4. Perform smoke testing.
+  5. Commit/Push current changes.
+  6. Deploy to production.
 
 ### Example Gate Order (Verify current gate via context refresher)
 

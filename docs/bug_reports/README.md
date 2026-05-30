@@ -15,8 +15,19 @@ This directory manages the lifecycle of bug reports for the `init-tracker` proje
 2. **Reporting**: The tool generates a markdown report using the `templates/bug_report_template.md`.
 3. **Storage**: The report is saved to `docs/bug_reports/inbox/YYYYMMDD-slug.md`.
 4. **Triage**: The developer or Orchestrator reviews the bug, assigns severity/priority, and moves it to `triaged/`.
-5. **Fixing**: The **init-tracker Orchestrator** consumes bug reports from `triaged/` and decides on the next implementation task.
-6. **Resolution**: Once verified, the report is moved to `resolved/`.
+5. **Promotion**: Bug reports are NOT active work by default. To activate a bug, the Orchestrator or developer MUST run the promotion script:
+   ```bash
+   python3 scripts/promote_bug_report.py docs/bug_reports/inbox/BUG-YYYYMMDD-slug.md
+   ```
+   This creates a formal Work Item in `docs/work_items/active/` and updates the `current_work.md` ledger.
+6. **Fixing**: The **init-tracker Orchestrator** consumes active Work Items (promoted from bug reports or planning docs) and performs the fix.
+7. **Resolution**: Once verified, the Work Item is moved to `completed/` and the bug report is moved to `resolved/`.
+
+## Promotion Rules
+
+- **No Ephemeral Bugs**: Do not start fixing a bug based only on chat memory or raw logs. It must be an official bug report first.
+- **Evidence Required**: Orchestrator should only promote a bug if it has a confirmed reproduction path or sufficient diagnostic evidence.
+- **Developer Priority**: If a bug is outside the current recovery gate, it should only be promoted if the developer explicitly prioritizes it.
 
 ## Guidelines
 
