@@ -1,6 +1,7 @@
 import copy
 import unittest
 from pathlib import Path
+from unittest.mock import MagicMock
 
 import yaml
 
@@ -136,6 +137,112 @@ class PactMagicSpellSlotRegressionTests(unittest.TestCase):
         self.assertTrue(refunded)
         self.assertEqual(int((saved_payloads[-1].get("1") or {}).get("current") or 0), 4)
         self.assertEqual(pool_updates, [])
+
+    def test_manual_override_reconciles_stale_pact_max(self):
+        # P0-007: setup profile with pact count 3 (leveled up)
+        # but resource pool has max 2 (stale)
+        profile = {
+            "name": "Vicnor",
+            "spellcasting": {
+                "pact_magic_slots": {"level": 4, "count": 3} # Authority is 3
+            },
+            "resources": {
+                "pools": [
+                    {
+                        "id": "pact_magic_slots",
+                        "current": 2,
+                        "max": 2,
+                        "max_formula": "2",
+                        "reset": "short_rest"
+                    }
+                ]
+            }
+        }
+
+        self.app.combatants = {
+            1: MagicMock(cid=1, name="Vicnor")
+        }
+        self.app._pc_name_for = lambda cid: "Vicnor"
+        self.app._find_player_profile_path = lambda name: "vicnor.yaml"
+        self.app._json_safe = lambda x: x
+        self.app._send_ws_payload = MagicMock()
+        self.app._toast = MagicMock()
+        self.app._log = MagicMock()
+        self.app._rebuild_table = MagicMock()
+        self.app._lan_force_state_broadcast = MagicMock()
+
+        saved_profiles = []
+        self.app._profile_for_player_name = MagicMock(return_value=profile)
+        self.app._store_character_yaml = lambda path, p, **kwargs: saved_profiles.append(copy.deepcopy(p))
+
+        from player_command_service import PlayerCommandService
+        service = PlayerCommandService(self.app)
+
+        # Override to 3 slots (+1 delta)
+        msg = {"type": "manual_override_spell_slot", "slot_level": 4, "delta": 1}
+        result = service.manual_override_spell_slot(msg, cid=1, ws_id="ws1", is_admin=True)
+
+        self.assertTrue(result["ok"])
+        self.assertEqual(len(saved_profiles), 1)
+        saved = saved_profiles[0]
+        pool = next(p for p in saved["resources"]["pools"] if p["id"] == "pact_magic_slots")
+
+        self.assertEqual(pool["max"], 3, "Max should be reconciled to 3")
+        self.assertEqual(pool["current"], 3, "Current should be 3")
+        self.assertEqual(pool["max_formula"], "3", "Formula should be reconciled")
+
+    def test_long_rest_reconciles_stale_pact_max(self):
+        # P0-007: setup profile with pact count 3 (leveled up)
+        # but resource pool has max 2 (stale)
+        profile = {
+            "name": "Vicnor",
+            "spellcasting": {
+                "pact_magic_slots": {"level": 4, "count": 3} # Authority is 3
+            },
+            "resources": {
+                "pools": [
+                    {
+                        "id": "pact_magic_slots",
+                        "current": 0,
+                        "max": 2,
+                        "max_formula": "2",
+                        "reset": "short_rest"
+                    }
+                ]
+            }
+        }
+
+        self.app.combatants = {
+            1: MagicMock(cid=1, name="Vicnor", is_pc=True, hp=60, max_hp=60)
+        }
+        self.app._profile_for_player_name = MagicMock(return_value=profile)
+        self.app._find_player_profile_path = MagicMock(return_value="vicnor.yaml")
+        self.app._compute_resource_pool_max = MagicMock(side_effect=lambda profile, formula, fallback: int(formula) if str(formula).isdigit() else int(fallback))
+        self.app._log = MagicMock()
+        self.app._rebuild_table = MagicMock()
+        self.app._lan_force_state_broadcast = MagicMock()
+
+        # Mocking the context manager for YAML cache hold
+        tracker_mod._PlayerYamlCacheHold = MagicMock()
+
+        from combat_service import CombatService
+        service = CombatService(self.app)
+
+        stored = []
+        def mock_bulk(mutations, **kwargs):
+            for mut in mutations:
+                stored.append(copy.deepcopy(mut["profile"]))
+        self.app._bulk_report_character_mutations = mock_bulk
+
+        service.long_rest(scope="players")
+
+        self.assertEqual(len(stored), 1)
+        saved = stored[0]
+        pool = next(p for p in saved["resources"]["pools"] if p["id"] == "pact_magic_slots")
+
+        self.assertEqual(pool["max"], 3, "Max should be reconciled to 3 during long rest")
+        self.assertEqual(pool["current"], 3, "Current should be 3 during long rest")
+        self.assertEqual(pool["max_formula"], "3", "Formula should be reconciled during long rest")
 
 
 if __name__ == "__main__":

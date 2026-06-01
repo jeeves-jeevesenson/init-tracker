@@ -5254,6 +5254,9 @@ class PlayerCommandService:
                 for pool in pools:
                     if str(pool.get("id") or "").lower() == "pact_magic_slots":
                         pool["current"] = int(new_current)
+                        # Reconcile stale max/formula from authoritative profile count (P0-007)
+                        pool["max"] = int(max_current)
+                        pool["max_formula"] = str(max_current)
                         found_pool = True
                         break
             if not found_pool:

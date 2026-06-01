@@ -1231,6 +1231,14 @@ class CombatService:
                                                     reset_type = "long_rest"
 
                                             if reset_type in ("long_rest", "short_rest", "dawn", "dusk", "turn", "round"):
+                                                # Reconcile pact slot max from profile authority (P0-007)
+                                                if str(pool.get("id") or "").lower() == "pact_magic_slots":
+                                                    pact_magic = profile.get("spellcasting", {}).get("pact_magic_slots", {})
+                                                    pact_count = int(pact_magic.get("count") or 0)
+                                                    if pact_count > 0:
+                                                        pool["max"] = pact_count
+                                                        pool["max_formula"] = str(pact_count)
+
                                                 # We need to re-evaluate max if it's a formula
                                                 max_formula = pool.get("max_formula")
                                                 max_val = t._compute_resource_pool_max(profile, max_formula, pool.get("max"))
