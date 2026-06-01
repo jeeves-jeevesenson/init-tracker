@@ -83,9 +83,8 @@ capabilities:
   - id: interpose-shield
     name: Interpose Shield
     type: reaction
-    executable: false
+    executable: true
     desc: "When an allied Black and Tan within 5 feet is hit by an attack, the Shield Trooper can reduce the damage by 10 if the attack came from a direction the shield could plausibly block."
-    warning: "Manual damage reduction required."
   - id: vandergraff-drill
     name: Vandergraff Drill
     type: trait

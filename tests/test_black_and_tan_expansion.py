@@ -23,7 +23,7 @@ class TestBlackAndTanExpansion(unittest.TestCase):
         
         reactions = summary["groups"]["reactions"]
         interpose = next(a for a in reactions if a["id"] == "interpose-shield")
-        self.assertFalse(interpose["executable"])
+        self.assertTrue(interpose["executable"])
 
     def test_suppression_gunner_audit(self):
         """Suppression Gunner area effects should be executable after Gate 2C automation."""
@@ -59,7 +59,7 @@ class TestBlackAndTanExpansion(unittest.TestCase):
 
         reactions = summary["groups"]["reactions"]
         keep_breathing = next(a for a in reactions if a["id"] == "keep-officer-breathing")
-        self.assertFalse(keep_breathing["executable"])
+        self.assertTrue(keep_breathing["executable"])
 
     def test_lieutenant_multiattack_and_bonus(self):
         """Lieutenant should have choose_n: 3 Multiattack and correct action status."""

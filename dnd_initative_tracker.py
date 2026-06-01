@@ -38998,6 +38998,64 @@ class InitiativeTracker(base.InitiativeTracker):
                 for attacker_ws in attacker_ws_targets:
                     self._lan.toast(int(attacker_ws), "Waiting for Interception response…")
                 return
+
+        # Black and Tan Reactions: Interpose Shield
+        if damage_applied and total_damage > 0 and not bool(msg.get("_interception_resolution_done")):
+            resolved_caps = msg.get("_monster_resolved_capabilities") or []
+            prompt_id = self._trigger_monster_hit_reaction_prompts(
+                target_cid=int(target_cid),
+                attacker_cid=int(cid),
+                damage_entries=damage_entries,
+                resume_dispatch=build_resume_dispatch(
+                    "attack_request",
+                    actor_cid=int(cid),
+                    ws_id=ws_id,
+                    is_admin=is_admin,
+                    payload=copy.deepcopy(msg),
+                ),
+                resolved_capabilities=resolved_caps,
+            )
+            if prompt_id:
+                attacker_ws_targets = self._find_ws_for_cid(int(cid))
+                for attacker_ws in attacker_ws_targets:
+                    self._lan.toast(int(attacker_ws), "Waiting for monster reaction prompt...")
+                return
+
+        # Handle forced damage entries from Interpose Shield
+        forced_dmgs = msg.get("_monster_forced_damage_entries")
+        if isinstance(forced_dmgs, list):
+            damage_entries = forced_dmgs
+            total_damage = sum(int(d.get("amount") or 0) for d in damage_entries if isinstance(d, dict))
+
+        # Black and Tan Reactions: Keep the Officer Breathing
+        try:
+            target_hp_val = int(getattr(target, "hp", 0) or 0)
+        except (TypeError, ValueError):
+            target_hp_val = 0
+        try:
+            target_temp_val = int(getattr(target, "temp_hp", 0) or 0)
+        except (TypeError, ValueError):
+            target_temp_val = 0
+        if damage_applied and (target_hp_val + target_temp_val - total_damage <= 0) and not bool(msg.get("_keep_officer_breathing_done")):
+             resolved_caps = msg.get("_monster_resolved_capabilities") or []
+             prompt_id = self._trigger_monster_death_reaction_prompts(
+                 target_cid=int(target_cid),
+                 attacker_cid=int(cid),
+                 resume_dispatch=build_resume_dispatch(
+                     "attack_request",
+                     actor_cid=int(cid),
+                     ws_id=ws_id,
+                     is_admin=is_admin,
+                     payload=copy.deepcopy(msg),
+                 ),
+                 resolved_capabilities=resolved_caps,
+             )
+             if prompt_id:
+                 attacker_ws_targets = self._find_ws_for_cid(int(cid))
+                 for attacker_ws in attacker_ws_targets:
+                     self._lan.toast(int(attacker_ws), "Waiting for monster reaction prompt...")
+                 return
+
         interception_reduction = max(0, _parse_int(msg.get("_interception_reduction"), 0) or 0)
         if damage_applied and total_damage > 0 and interception_reduction > 0:
             remaining_reduce = int(interception_reduction)
@@ -39086,6 +39144,12 @@ class InitiativeTracker(base.InitiativeTracker):
             before_hp = _parse_int(getattr(target, "hp", None), None)
             if before_hp is not None:
                 damage_state = self._apply_damage_via_service(target, int(total_damage), _broadcast=False)
+
+                # Apply HP override if requested (Keep the Officer Breathing)
+                hp_override = msg.get("_monster_forced_hp_after")
+                if hp_override is not None:
+                    setattr(target, "hp", int(hp_override))
+                    damage_state["hp_after"] = int(hp_override)
                 bhall_post_damage_state = self._apply_bhall_post_damage_effects(
                     attacker=resource_c,
                     target=target,
@@ -46979,6 +47043,12 @@ class InitiativeTracker(base.InitiativeTracker):
         forced_save_results = payload.get("_monster_forced_save_results")
         if not isinstance(forced_save_results, dict):
             forced_save_results = {}
+        forced_damage_entries = payload.get("_monster_forced_damage_entries")
+        if not isinstance(forced_damage_entries, dict):
+            forced_damage_entries = {}
+        forced_hp_after = payload.get("_monster_forced_hp_after")
+        if not isinstance(forced_hp_after, dict):
+            forced_hp_after = {}
 
         if is_attack_action and not override_range:
             attacker_pos = dict(self.__dict__.get("_lan_positions", {}) or {}).get(int(normalized_actor_cid))
@@ -47141,13 +47211,87 @@ class InitiativeTracker(base.InitiativeTracker):
             }
             if isinstance(save_result_override, dict) and save_result_override:
                 target_result["save_result"] = dict(save_result_override)
+
             if apply_damage and damage_entries:
+                if str(target_cid) in forced_damage_entries:
+                    damage_entries = list(forced_damage_entries[str(target_cid)])
+                    target_result["damage_entries"] = damage_entries
+
+                # Interpose Shield check
+                if outcome == "hit" and str(target_cid) not in forced_damage_entries:
+                     resolved_caps = self._resolved_monster_capabilities_for_target(payload, target_cid=target_cid)
+                     prompt_id = self._trigger_monster_hit_reaction_prompts(
+                         target_cid=target_cid,
+                         attacker_cid=int(normalized_actor_cid),
+                         damage_entries=damage_entries,
+                         resume_dispatch=build_resume_dispatch(
+                             "dm_monster_capability_resolve_targets",
+                             actor_cid=int(normalized_actor_cid),
+                             ws_id=None,
+                             is_admin=True,
+                             payload=copy.deepcopy(payload),
+                         ),
+                         resolved_capabilities=resolved_caps,
+                     )
+                     if prompt_id:
+                         return {
+                             "ok": True,
+                             "resolution": "pending_prompt",
+                             "pending_prompt_id": str(prompt_id),
+                             "status": f"Waiting for Interpose Shield prompt before finalizing {cap.get('name', cap_id)}.",
+                             "capability_id": str(cap_id or ""),
+                             "target_cid": int(target_cid),
+                         }
+
+                # Keep the Officer Breathing check
+                total_dmg = sum(int(d.get("amount") or 0) for d in damage_entries if isinstance(d, dict))
+                try:
+                    target_hp = int(getattr(row["target"], "hp", 0) or 0)
+                except (TypeError, ValueError):
+                    target_hp = 0
+                try:
+                    target_temp = int(getattr(row["target"], "temp_hp", 0) or 0)
+                except (TypeError, ValueError):
+                    target_temp = 0
+                if (target_hp + target_temp - total_dmg <= 0) and str(target_cid) not in forced_hp_after:
+                     resolved_caps = self._resolved_monster_capabilities_for_target(payload, target_cid=target_cid)
+                     prompt_id = self._trigger_monster_death_reaction_prompts(
+                         target_cid=target_cid,
+                         attacker_cid=int(normalized_actor_cid),
+                         resume_dispatch=build_resume_dispatch(
+                             "dm_monster_capability_resolve_targets",
+                             actor_cid=int(normalized_actor_cid),
+                             ws_id=None,
+                             is_admin=True,
+                             payload=copy.deepcopy(payload),
+                         ),
+                         resolved_capabilities=resolved_caps,
+                     )
+                     if prompt_id:
+                         return {
+                             "ok": True,
+                             "resolution": "pending_prompt",
+                             "pending_prompt_id": str(prompt_id),
+                             "status": f"Waiting for Keep the Officer Breathing prompt before finalizing {cap.get('name', cap_id)}.",
+                             "capability_id": str(cap_id or ""),
+                             "target_cid": int(target_cid),
+                         }
+
+                # Force HP if requested
+                hp_override = None
+                if str(target_cid) in forced_hp_after:
+                    hp_override = int(forced_hp_after[str(target_cid)])
+
                 damage_result = self._apply_map_attack_manual_damage(
                     int(normalized_actor_cid),
                     int(target_cid),
                     str(cap.get("name") or "Monster Action"),
                     list(damage_entries),
                 )
+                if hp_override is not None:
+                    setattr(row["target"], "hp", hp_override)
+                    damage_result["hp_after"] = hp_override
+
                 target_result["damage_result"] = damage_result
                 target_result["damage_applied"] = bool(damage_result.get("ok"))
                 if not damage_result.get("ok"):
@@ -50223,6 +50367,22 @@ class InitiativeTracker(base.InitiativeTracker):
                 merged[target_key] = row.get(source_key)
         return self._normalize_monster_save_result(merged, ability=ability, dc=dc, default_passed=passed)
 
+    def _resolved_monster_capabilities_for_target(self, payload: Dict[str, Any], *, target_cid: int) -> List[str]:
+        """Return a list of capability IDs already resolved for this target in this action."""
+        target_cid_str = str(int(target_cid))
+        # Check both save-specific and general resolved maps
+        res_save = payload.get("_monster_resolved_save_capabilities_by_target")
+        if not isinstance(res_save, dict):
+            res_save = {}
+        res_gen = payload.get("_monster_resolved_capabilities_by_target")
+        if not isinstance(res_gen, dict):
+            res_gen = {}
+
+        combined = list(res_save.get(target_cid_str, [])) + list(res_gen.get(target_cid_str, []))
+        # Also check global _monster_resolved_capabilities if present
+        combined += list(payload.get("_monster_resolved_capabilities") or [])
+        return combined
+
     def _resolved_monster_save_capabilities_for_target(
         self,
         payload: Dict[str, Any],
@@ -50239,6 +50399,18 @@ class InitiativeTracker(base.InitiativeTracker):
         if isinstance(values, list):
             return [str(value).strip().lower() for value in values if str(value or "").strip()]
         return []
+
+    def _append_resolved_monster_capability(self, payload: Dict[str, Any], *, target_cid: int, capability_id: str) -> None:
+        """Mark a capability as resolved for a specific target in the payload."""
+        target_cid_str = str(int(target_cid))
+        res_map = payload.get("_monster_resolved_capabilities_by_target")
+        if not isinstance(res_map, dict):
+            res_map = {}
+            payload["_monster_resolved_capabilities_by_target"] = res_map
+        if target_cid_str not in res_map:
+            res_map[target_cid_str] = []
+        if capability_id not in res_map[target_cid_str]:
+            res_map[target_cid_str].append(capability_id)
 
     def _append_resolved_monster_save_capability(
         self,
@@ -50293,6 +50465,16 @@ class InitiativeTracker(base.InitiativeTracker):
                     pass
 
         return aura_bonus
+
+    def _is_black_and_tan(self, c: Any) -> bool:
+        """Return True if the combatant is a Black and Tan monster."""
+        slug = str(getattr(c, "monster_slug", "") or "").strip().lower()
+        return slug.startswith("black-and-tan-")
+
+    def _is_black_and_tan_officer(self, c: Any) -> bool:
+        """Return True if the combatant is a Black and Tan officer."""
+        slug = str(getattr(c, "monster_slug", "") or "").strip().lower()
+        return slug in ("black-and-tan-captain", "black-and-tan-major", "black-and-tan-lieutenant")
 
     def _create_monster_prompt(
         self,
@@ -50427,43 +50609,161 @@ class InitiativeTracker(base.InitiativeTracker):
                             )
         return ""
 
-    def _build_monster_prompt_save_result(self, capability_id: str, prompt: Dict[str, Any]) -> Dict[str, Any]:
-        """Return the final authoritative save result for a monster prompt Use action."""
+    def _trigger_monster_hit_reaction_prompts(
+        self,
+        target_cid: int,
+        attacker_cid: int,
+        damage_entries: List[Dict[str, Any]],
+        *,
+        resume_dispatch: Optional[Dict[str, Any]] = None,
+        resolved_capabilities: Optional[List[str]] = None,
+    ) -> str:
+        """Create the next eligible monster hit-reaction prompt (Interpose Shield)."""
+        target = self.combatants.get(int(target_cid))
+        attacker = self.combatants.get(int(attacker_cid))
+        if not target or not attacker:
+            return ""
+
+        # Only for Black and Tan allies
+        if not self._is_black_and_tan(target):
+            return ""
+
+        resolved = {
+            str(value).strip().lower()
+            for value in (resolved_capabilities or [])
+            if str(value or "").strip()
+        }
+        if "interpose-shield" in resolved:
+            return ""
+
+        for cid, c in sorted(self.combatants.items(), key=lambda item: int(item[0])):
+            if getattr(c, "monster_slug", "") == "black-and-tan-shield-trooper" and int(cid) != int(target_cid):
+                if self._monster_capability_can_react(cid, "interpose-shield"):
+                    # Check distance (5ft)
+                    dist = self._combatant_distance_ft(c, target)
+                    if dist is not None and dist <= 5.1: # 5.1 to handle floating point
+                        # Check if ally
+                        if not self._combatants_are_hostile(c, target):
+                            total_dmg = sum(int(d.get("amount") or 0) for d in damage_entries if isinstance(d, dict))
+                            ctx = f"Ally {target.name} hit by {attacker.name} ({total_dmg} damage)"
+                            return self._create_monster_prompt(
+                                reactor_cid=int(cid),
+                                capability_id="interpose-shield",
+                                trigger_event="hit",
+                                context_text=ctx,
+                                target_cid=int(target_cid),
+                                metadata={
+                                    "attacker_cid": int(attacker_cid),
+                                    "original_damage_entries": damage_entries,
+                                },
+                                resume_dispatch=resume_dispatch,
+                            )
+        return ""
+
+    def _trigger_monster_death_reaction_prompts(
+        self,
+        target_cid: int,
+        attacker_cid: Optional[int],
+        *,
+        resume_dispatch: Optional[Dict[str, Any]] = None,
+        resolved_capabilities: Optional[List[str]] = None,
+    ) -> str:
+        """Create the next eligible monster death-reaction prompt (Keep the Officer Breathing)."""
+        target = self.combatants.get(int(target_cid))
+        if not target:
+            return ""
+
+        # Only for Black and Tan Officers
+        if not self._is_black_and_tan_officer(target):
+            return ""
+
+        resolved = {
+            str(value).strip().lower()
+            for value in (resolved_capabilities or [])
+            if str(value or "").strip()
+        }
+        if "keep-officer-breathing" in resolved:
+            return ""
+
+        for cid, c in sorted(self.combatants.items(), key=lambda item: int(item[0])):
+            if getattr(c, "monster_slug", "") == "black-and-tan-field-medic" and int(cid) != int(target_cid):
+                if self._monster_capability_can_react(cid, "keep-officer-breathing"):
+                    # Check distance (5ft)
+                    dist = self._combatant_distance_ft(c, target)
+                    if dist is not None and dist <= 5.1:
+                        # Check if ally
+                        if not self._combatants_are_hostile(c, target):
+                            ctx = f"Officer {target.name} is dropping to 0 HP!"
+                            return self._create_monster_prompt(
+                                reactor_cid=int(cid),
+                                capability_id="keep-officer-breathing",
+                                trigger_event="death",
+                                context_text=ctx,
+                                target_cid=int(target_cid),
+                                metadata={
+                                    "attacker_cid": int(attacker_cid) if attacker_cid else None,
+                                },
+                                resume_dispatch=resume_dispatch,
+                            )
+        return ""
+
+    def _build_monster_prompt_result(self, capability_id: str, prompt: Dict[str, Any]) -> Dict[str, Any]:
+        """Return the final authoritative result for a monster prompt Use action."""
         metadata = prompt.get("metadata") if isinstance(prompt.get("metadata"), dict) else {}
-        original = self._normalize_monster_save_result(
-            metadata.get("original_save_result"),
-            ability=metadata.get("ability"),
-            dc=metadata.get("dc"),
-            default_passed=False,
-        )
-        ability = str(original.get("ability") or metadata.get("ability") or "save").strip().lower()
-        dc = int(original.get("dc") or metadata.get("dc") or 0)
-        target_cid = _normalize_cid_value(prompt.get("target_cid"), "monster.prompt.target")
-        target = self.combatants.get(int(target_cid)) if target_cid is not None else None
 
-        if capability_id == "not-yet":
-            if original.get("total") is None:
-                raise ValueError("Not Yet requires the original failed save total.")
-            bonus = int(random.randint(1, 6))
-            new_total = int(original.get("total")) + int(bonus)
-            result = dict(original)
-            result["bonus"] = int(bonus)
-            result["total"] = int(new_total)
-            result["passed"] = bool(new_total >= dc)
-            return result
+        if capability_id in ("not-yet", "countermand"):
+            original = self._normalize_monster_save_result(
+                metadata.get("original_save_result"),
+                ability=metadata.get("ability"),
+                dc=metadata.get("dc"),
+                default_passed=False,
+            )
+            ability = str(original.get("ability") or metadata.get("ability") or "save").strip().lower()
+            dc = int(original.get("dc") or metadata.get("dc") or 0)
+            target_cid = _normalize_cid_value(prompt.get("target_cid"), "monster.prompt.target")
+            target = self.combatants.get(int(target_cid)) if target_cid is not None else None
 
-        if capability_id == "countermand":
-            if target is None:
-                raise ValueError("Countermand target not found.")
-            save_roll = int(random.randint(1, 20))
-            save_mod = self._get_save_modifier(target, ability)
-            new_total = int(save_roll) + int(save_mod)
-            result = dict(original)
-            result["roll"] = int(save_roll)
-            result["modifier"] = int(save_mod)
-            result["total"] = int(new_total)
-            result["passed"] = bool(save_roll != 1 and new_total >= dc) if dc > 0 else True
-            return result
+            if capability_id == "not-yet":
+                if original.get("total") is None:
+                    raise ValueError("Not Yet requires the original failed save total.")
+                bonus = int(random.randint(1, 6))
+                new_total = int(original.get("total")) + int(bonus)
+                result = dict(original)
+                result["bonus"] = int(bonus)
+                result["total"] = int(new_total)
+                result["passed"] = bool(new_total >= dc)
+                return result
+
+            if capability_id == "countermand":
+                if target is None:
+                    raise ValueError("Countermand target not found.")
+                save_roll = int(random.randint(1, 20))
+                save_mod = self._get_save_modifier(target, ability)
+                new_total = int(save_roll) + int(save_mod)
+                result = dict(original)
+                result["roll"] = int(save_roll)
+                result["modifier"] = int(save_mod)
+                result["total"] = int(new_total)
+                result["passed"] = bool(save_roll != 1 and new_total >= dc) if dc > 0 else True
+                return result
+
+        if capability_id == "interpose-shield":
+            original = metadata.get("original_damage_entries", [])
+            reduced = []
+            to_reduce = 10
+            for entry in original:
+                if not isinstance(entry, dict):
+                    continue
+                amt = int(entry.get("amount") or 0)
+                if to_reduce > 0:
+                    reduction = min(to_reduce, amt)
+                    amt -= reduction
+                    to_reduce -= reduction
+                reduced.append({"amount": amt, "type": entry.get("type")})
+            return {"damage_entries": reduced, "reduction": 10 - to_reduce}
+
+        if capability_id == "keep-officer-breathing":
+            return {"set_hp_to": 1}
 
         raise ValueError(f"Unsupported monster prompt capability: {capability_id}")
 
@@ -50472,9 +50772,9 @@ class InitiativeTracker(base.InitiativeTracker):
         prompt: Dict[str, Any],
         *,
         capability_id: str,
-        final_save_result: Dict[str, Any],
+        final_result: Dict[str, Any],
     ) -> Dict[str, Any]:
-        """Resume the blocked resolution flow with an authoritative save override."""
+        """Resume the blocked resolution flow with an authoritative override."""
         resume = prompt.get("resume") if isinstance(prompt.get("resume"), dict) else None
         if not isinstance(resume, dict):
             raise ValueError("Prompt missing resume dispatch.")
@@ -50489,7 +50789,7 @@ class InitiativeTracker(base.InitiativeTracker):
             raise ValueError("Prompt target is invalid.")
 
         if command_type == "spell_target_request":
-            payload["_monster_forced_save_result"] = dict(final_save_result)
+            payload["_monster_forced_save_result"] = dict(final_result)
             resolved = payload.get("_monster_resolved_save_capabilities")
             if not isinstance(resolved, list):
                 resolved = []
@@ -50505,15 +50805,29 @@ class InitiativeTracker(base.InitiativeTracker):
             return {
                 "ok": True,
                 "resumed": "spell_target_request",
-                "save_result": dict(final_save_result),
+                "save_result": dict(final_result),
             }
 
         if command_type == "dm_monster_capability_resolve_targets":
-            forced_results = payload.get("_monster_forced_save_results")
-            if not isinstance(forced_results, dict):
-                forced_results = {}
-                payload["_monster_forced_save_results"] = forced_results
-            forced_results[str(int(target_cid))] = dict(final_save_result)
+            if capability_id in ("not-yet", "countermand"):
+                forced_results = payload.get("_monster_forced_save_results")
+                if not isinstance(forced_results, dict):
+                    forced_results = {}
+                    payload["_monster_forced_save_results"] = forced_results
+                forced_results[str(int(target_cid))] = dict(final_result)
+            elif capability_id == "interpose-shield":
+                forced_dmgs = payload.get("_monster_forced_damage_entries")
+                if not isinstance(forced_dmgs, dict):
+                    forced_dmgs = {}
+                    payload["_monster_forced_damage_entries"] = forced_dmgs
+                forced_dmgs[str(int(target_cid))] = final_result.get("damage_entries")
+            elif capability_id == "keep-officer-breathing":
+                forced_hps = payload.get("_monster_forced_hp_after")
+                if not isinstance(forced_hps, dict):
+                    forced_hps = {}
+                    payload["_monster_forced_hp_after"] = forced_hps
+                forced_hps[str(int(target_cid))] = final_result.get("set_hp_to")
+
             self._append_resolved_monster_save_capability(
                 payload,
                 target_cid=int(target_cid),
@@ -50526,8 +50840,35 @@ class InitiativeTracker(base.InitiativeTracker):
             return {
                 "ok": True,
                 "resumed": "dm_monster_capability_resolve_targets",
-                "save_result": dict(final_save_result),
                 "result": result,
+            }
+
+        if command_type == "attack_request":
+            # For player attacks, we update the payload with the forced result
+            if capability_id == "interpose-shield":
+                payload["_monster_forced_damage_entries"] = final_result.get("damage_entries")
+                payload["_interception_resolution_done"] = True
+            elif capability_id == "keep-officer-breathing":
+                payload["_monster_forced_hp_after"] = final_result.get("set_hp_to")
+                payload["_keep_officer_breathing_done"] = True
+
+            resolved = payload.get("_monster_resolved_capabilities")
+            if not isinstance(resolved, list):
+                resolved = []
+                payload["_monster_resolved_capabilities"] = resolved
+            if capability_id not in resolved:
+                resolved.append(capability_id)
+
+            self._adjudicate_attack_request(
+                payload,
+                cid=int(actor_cid or 0),
+                ws_id=resume.get("ws_id"),
+                is_admin=bool(resume.get("is_admin")),
+            )
+            return {
+                "ok": True,
+                "resumed": "attack_request",
+                "final_result": dict(final_result),
             }
 
         raise ValueError(f"Unsupported monster prompt resume command: {command_type}")
@@ -50554,15 +50895,15 @@ class InitiativeTracker(base.InitiativeTracker):
             resumed = self._resume_monster_prompt_resolution(
                 prompt,
                 capability_id=capability_id,
-                final_save_result=final_save_result,
+                final_result=final_save_result if capability_id in ("not-yet", "countermand") else {},
             )
-            return {"ok": True, "action": "skip", "save_result": final_save_result, **resumed}
+            return {"ok": True, "action": "skip", "save_result": final_save_result if capability_id in ("not-yet", "countermand") else None, **resumed}
 
         if choice == "use":
             if not self._monster_capability_can_react(reactor_cid, capability_id):
                 return {"ok": False, "error": f"{prompt.get('reactor_name')} can no longer use {metadata.get('capability_name')}."}
             try:
-                final_save_result = self._build_monster_prompt_save_result(capability_id, prompt)
+                final_result = self._build_monster_prompt_result(capability_id, prompt)
             except Exception as exc:
                 return {"ok": False, "error": str(exc)}
             self._ensure_player_commands().prompts.pop_prompt(prompt_id)
@@ -50570,7 +50911,7 @@ class InitiativeTracker(base.InitiativeTracker):
                 reactor_cid,
                 capability_id,
                 prompt,
-                final_save_result=final_save_result,
+                final_result=final_result,
             )
 
         return {"ok": False, "error": f"Invalid choice: {choice}"}
@@ -50581,7 +50922,7 @@ class InitiativeTracker(base.InitiativeTracker):
         capability_id: str,
         prompt: Dict[str, Any],
         *,
-        final_save_result: Dict[str, Any],
+        final_result: Dict[str, Any],
     ) -> Dict[str, Any]:
         """Execute a monster reaction capability from a prompt."""
         reactor = self.combatants.get(int(reactor_cid))
@@ -50607,10 +50948,10 @@ class InitiativeTracker(base.InitiativeTracker):
 
         # CAPTAIN: Not Yet
         if capability_id == "not-yet":
-            bonus = int(final_save_result.get("bonus") or 0)
+            bonus = int(final_result.get("bonus") or 0)
             log_msg += f" (Rolls +{bonus} to save)."
-            new_total = final_save_result.get("total")
-            passed = bool(final_save_result.get("passed"))
+            new_total = final_result.get("total")
+            passed = bool(final_result.get("passed"))
             if new_total is not None:
                 log_msg += f" New total: {int(new_total)} ({'PASS' if passed else 'FAIL'})."
 
@@ -50618,21 +50959,30 @@ class InitiativeTracker(base.InitiativeTracker):
         elif capability_id == "countermand":
             ability = metadata.get("ability", "save")
             if target:
-                save_roll = int(final_save_result.get("roll") or 0)
-                save_mod = int(final_save_result.get("modifier") or 0)
-                new_total = int(final_save_result.get("total") or 0)
-                passed = bool(final_save_result.get("passed"))
+                save_roll = int(final_result.get("roll") or 0)
+                save_mod = int(final_result.get("modifier") or 0)
+                new_total = int(final_result.get("total") or 0)
+                passed = bool(final_result.get("passed"))
                 log_msg += f" (Rerolls {ability.upper()} save: {save_roll} + {save_mod} = {new_total} -> {'PASS' if passed else 'FAIL'})."
+
+        # SHIELD TROOPER: Interpose Shield
+        elif capability_id == "interpose-shield":
+            reduction = int(final_result.get("reduction") or 0)
+            log_msg += f" (Reduces damage by {reduction})."
+
+        # FIELD MEDIC: Keep the Officer Breathing
+        elif capability_id == "keep-officer-breathing":
+            log_msg += " (Ally drops to 1 HP instead of 0)."
 
         self._log(log_msg, cid=reactor_cid)
         resumed = self._resume_monster_prompt_resolution(
             prompt,
             capability_id=capability_id,
-            final_save_result=final_save_result,
+            final_result=final_result,
         )
         self._lan_force_state_broadcast()
 
-        return {"ok": True, "log": log_msg, "save_result": dict(final_save_result), **resumed}
+        return {"ok": True, "log": log_msg, "final_result": dict(final_result), **resumed}
 
 def main() -> None:
     app = InitiativeTracker()

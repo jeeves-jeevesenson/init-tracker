@@ -10,8 +10,8 @@ If an item is not marked as **Active** here, it is NOT current work.
 <!-- ACTIVE_WORK_STATUS_START -->
 - **Status:** Active
 - **Current Work Item:** WORK-20260530-black-tan-vda-scorcher-automation: Automate Black and Tan monster control and add VDA Scorcher
-- **Active Gate:** Gate 3C: Pending Reaction Prompts (Shield Trooper, Field Medic)
-- **Allowed Next Action:** Implement pending reaction prompts for Interpose Shield and Keep the Officer Breathing.
+- **Active Gate:** Gate 4: VDA Scorcher Stat Block & Lore
+- **Allowed Next Action:** Implement VDA Scorcher stat block and Scorched Earth Protocol.
 <!-- ACTIVE_WORK_STATUS_END -->
 
 ---

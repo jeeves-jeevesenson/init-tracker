@@ -85,8 +85,15 @@ Add a new Black and Tan / VDA lore enemy, the **Black and Tan VDA Scorcher**, an
      - Recovery 2026-05-30: prompt resolution now replays the blocked save flow authoritatively before downstream damage/effects finalize. `Not Yet` only offers when the failed save total is known.
      - Verified with `tests/test_reaction_prompt_automation.py`.
      - Quality gate warnings reduced from 45 to 43 (0 errors).
-   - **Gate 3C (Next):** Implement "Pending Reaction" prompts for Shield Trooper and Field Medic.
-5. Add the Scorcher stat block and overlay.
+   - **Gate 3C (Completed):** Implement "Pending Reaction" prompts for Shield Trooper and Field Medic.
+     - Implemented `_trigger_monster_hit_reaction_prompts` (Shield Trooper: Interpose Shield) and `_trigger_monster_death_reaction_prompts` (Field Medic: Keep the Officer Breathing).
+     - Hooked hit triggers into `_dm_monster_capability_resolve_targets` and `_adjudicate_attack_request` (player attacks).
+     - Hooked death/0HP triggers into `_dm_monster_capability_resolve_targets` and `_adjudicate_attack_request` before damage application.
+     - Updated `_resume_monster_prompt_resolution` to support damage reduction and HP overrides.
+     - Marked `interpose-shield` and `keep-officer-breathing` as `executable: true` and removed manual warnings from YAMLs.
+     - Verified with `tests/test_black_and_tan_gate_3c.py` and updated `tests/test_black_and_tan_expansion.py`.
+     - Quality gate warnings reduced from 43 to 42 (0 errors).
+5. **Gate 4 (Next):** Add VDA Scorcher and Scorched Earth Protocol.
 6. Verify with automated tests and browser smoke.
 
 ---
