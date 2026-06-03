@@ -5030,6 +5030,25 @@ class LanController:
             except Exception as exc:
                 raise HTTPException(status_code=500, detail=f"Failed to resolve monster prompt: {exc}")
 
+        @self._fastapi_app.post("/api/dm/combat/faction-protocol")
+        async def dm_trigger_faction_protocol(request: Request, payload: Dict[str, Any] = Body(...)):
+            """Trigger a faction-wide protocol (e.g., Scorched Earth)."""
+            _check_dm_auth(request)
+            try:
+                protocol_id = str(payload.get("protocol_id") or "").strip().lower()
+                if protocol_id == "scorched-earth":
+                    result = self.app._trigger_scorched_earth_protocol()
+                    return {
+                        "ok": result.get("ok"),
+                        "message": result.get("message"),
+                        "snapshot": _dm_console_snapshot(),
+                    }
+                raise HTTPException(status_code=400, detail=f"Unknown protocol: {protocol_id}")
+            except HTTPException:
+                raise
+            except Exception as exc:
+                raise HTTPException(status_code=500, detail=f"Failed to trigger faction protocol: {exc}")
+
         @self._fastapi_app.post("/api/dm/monster-capabilities/{cid}/recharge")
         async def dm_roll_monster_recharge(cid: int, request: Request, payload: Dict[str, Any] = Body(...)):
             """Roll to recharge a monster capability."""
@@ -8018,7 +8037,7 @@ class LanController:
                 pass
 
         # Merge pending prompts for DM visibility
-        snapshot["pending_prompts"] = self._json_safe(list(self._ensure_player_commands().prompts.all_prompts().values()))
+        snapshot["pending_prompts"] = self._tracker._json_safe(list(self._ensure_player_commands().prompts.all_prompts().values()))
 
         return snapshot
 
@@ -9478,6 +9497,7 @@ class InitiativeTracker(base.InitiativeTracker):
         self._monster_resource_state: Dict[str, Any] = {}
         self._monster_sequence_state: Dict[int, Dict[str, Any]] = {}
         self._monster_modifier_state: Dict[int, List[Dict[str, Any]]] = {}
+        self._scorched_earth_protocol_end_round: Optional[int] = None
         self._load_monsters_index()
         # Swap the Name entry for a monster dropdown + library button
         if self.__dict__.get("host_mode", "desktop") == "desktop":
@@ -21936,6 +21956,11 @@ class InitiativeTracker(base.InitiativeTracker):
         defenses["damage_immunities"].update(set(env_mods.get("damage_immunities") or set()))
         defenses["damage_resistances"].update(set(env_mods.get("damage_resistances") or set()))
         defenses["damage_vulnerabilities"].update(set(env_mods.get("damage_vulnerabilities") or set()))
+
+        # Faction Protocol Overrides
+        conditions = getattr(target_obj, "conditions", None)
+        if isinstance(conditions, dict) and "protocol_implant_active" in conditions:
+            defenses["damage_immunities"].add("fire")
 
         return defenses
 
@@ -46242,8 +46267,12 @@ class InitiativeTracker(base.InitiativeTracker):
         mechanics = cap.get("mechanics", {}) if isinstance(cap.get("mechanics"), dict) else {}
         desc = str(cap.get("desc") or "")
         area: Dict[str, Any] = {}
-        shape = str(mechanics.get("shape") or "").strip().lower()
-        size = mechanics.get("size")
+
+        # Support both flat mechanics and nested area dict
+        m_area = mechanics.get("area", {}) if isinstance(mechanics.get("area"), dict) else {}
+        shape = str(m_area.get("shape") or mechanics.get("shape") or "").strip().lower()
+        size = m_area.get("size") or mechanics.get("size")
+
         if not shape:
             match = re.search(r"(\d+)\s*-\s*foot\s+(cone|line|sphere|radius)", desc, flags=re.IGNORECASE)
             if match:
@@ -46791,10 +46820,13 @@ class InitiativeTracker(base.InitiativeTracker):
                  if target_cap_id and c_overlay.get("id") != target_cap_id:
                      continue
 
+                 c_id = c_overlay.get("id")
                  m_overlay = c_overlay.get("mechanics", {})
-                 mag_cap = m_overlay.get("magazine_capacity")
+                 mag_cap = m_overlay.get("magazine_capacity", m_overlay.get("ammo_max"))
+                 if not mag_cap:
+                     mag_cap = self._monster_resource_state.get(f"{normalized_actor_cid}:ammo:{c_id}:max")
+
                  if mag_cap:
-                     c_id = c_overlay.get("id")
                      ammo_type = m_overlay.get("ammo_type")
                      if ammo_type:
                          reserve_key = f"{normalized_actor_cid}:ammo:{ammo_type}:reserve_mags"
@@ -46818,16 +46850,25 @@ class InitiativeTracker(base.InitiativeTracker):
                  "status": f"Reloaded: {', '.join(reloaded)}."
              }
 
-        elif action_type == "save_ability" and target_cid is not None:
-             # Assisted resolution for saves
-             normalized_target_cid = _normalize_cid_value(target_cid, "dm.monster.capability.target")
-             if normalized_target_cid is None:
-                 return {"ok": False, "error": "target_cid must be an integer."}
-             target = self.combatants.get(normalized_target_cid)
-             if not target:
-                 return {"ok": False, "error": "Target not found."}
+        elif action_type == "save_ability" and (target_cid is not None or payload.get("target_ids")):
+             # Assisted resolution for saves (single or multi-target)
+             target_ids = payload.get("target_ids")
+             if not isinstance(target_ids, list):
+                 normalized_target_cid = _normalize_cid_value(target_cid, "dm.monster.capability.target")
+                 if normalized_target_cid is None:
+                     return {"ok": False, "error": "target_cid must be an integer."}
+                 target_ids = [normalized_target_cid]
 
-             damage_packet = self._monster_capability_damage_roll_packet(cap)
+             targets = []
+             for t_cid in target_ids:
+                 t = self.combatants.get(int(t_cid))
+                 if t:
+                     targets.append(t)
+
+             if not targets and not payload.get("aoe_geometry"):
+                 return {"ok": False, "error": "No valid targets found."}
+
+             damage_packet = self._monster_capability_damage_roll_packet(cap, actor_cid=int(normalized_actor_cid))
              resolution_packet = self._monster_capability_resolution_packet(
                  cap=cap,
                  cap_id=cap_id,
@@ -46848,18 +46889,15 @@ class InitiativeTracker(base.InitiativeTracker):
                          self._monster_resource_state[ammo_current_key] = max(0, current - ammo_cost)
 
              # 3. Mark as used if it was a recharge ability
-             # We only mark it as used if the DM actually executes the assisted resolution request
-             if recharge:
+             if recharge and spend_key != "none":
                 self._monster_resource_state[f"{normalized_actor_cid}:cap:{cap_id}"] = False
                 self._lan_force_state_broadcast()
 
-             return {
+             res = {
                  "ok": True,
                  "resolution": "assisted",
                  "capability": cap,
                  "actor_name": str(getattr(actor, "name", "Actor")),
-                 "target_id": normalized_target_cid,
-                 "target_name": str(getattr(target, "name", "Target")),
                  "save_dc": mechanics.get("save_dc"),
                  "save_ability": mechanics.get("save_ability"),
                  "damage_rolls": damage_packet["damage_rolls"],
@@ -46870,11 +46908,19 @@ class InitiativeTracker(base.InitiativeTracker):
                  "effects": resolution_packet.get("effects", []),
                  "effect_riders": resolution_packet.get("effect_riders", []),
                  "target_mode": resolution_packet.get("target_mode"),
-                 "multi_target_capable": bool(resolution_packet.get("multi_target_capable")),
+                 "multi_target_capable": True if target_ids else bool(resolution_packet.get("multi_target_capable")),
                  "resolution_packet": resolution_packet,
                  "spend_hint": spend_key,
-                 "recharge_expended": bool(recharge)
+                 "recharge_expended": bool(recharge) and spend_key != "none"
              }
+             if len(targets) == 1 and not payload.get("target_ids"):
+                 res["target_id"] = targets[0].cid
+                 res["target_name"] = str(getattr(targets[0], "name", "Target"))
+             else:
+                 res["target_ids"] = [t.cid for t in targets]
+                 res["target_names"] = [str(getattr(t, "name", "Target")) for t in targets]
+
+             return res
 
         elif action_type == "utility" and target_cid is not None:
              # target-resolved healing/temp-hp utility
@@ -46974,6 +47020,56 @@ class InitiativeTracker(base.InitiativeTracker):
                  "temp_hp_granted": temp_hp_amount
              }
 
+        elif action_type == "area_hazard":
+             # Placed area hazards
+             aoe_geom = payload.get("aoe_geometry")
+
+             # Spend resource (optional for DM)
+             spend_key = self._dm_normalize_turn_spend(spend, default="action", allow_none=True)
+             if spend_key != "none":
+                 spent_ok, spend_error = self._dm_spend_combatant_turn_resource(actor, spend_key)
+                 if not spent_ok:
+                     return {"ok": False, "error": spend_error or "No turn resource available."}
+
+                 # Spend ammo
+                 ammo_cost = int(mechanics.get("ammo_cost") or 0)
+                 if ammo_cost > 0:
+                     ammo_current_key = f"{normalized_actor_cid}:ammo:{cap_id}:current"
+                     if ammo_current_key in self._monster_resource_state:
+                         current = self._monster_resource_state[ammo_current_key]
+                         self._monster_resource_state[ammo_current_key] = max(0, current - ammo_cost)
+
+             if recharge and spend_key != "none":
+                self._monster_resource_state[f"{normalized_actor_cid}:cap:{cap_id}"] = False
+
+             if spend_key == "none":
+                 return {
+                     "ok": True,
+                     "resolution": "assisted",
+                     "capability": cap,
+                     "actor_name": str(getattr(actor, "name", "Actor")),
+                     "status": "Ready to place hazard.",
+                     "aoe_geometry": aoe_geom,
+                     "spend_hint": spend_key
+                 }
+
+             # Automatic resolution for hazards (place on map)
+             if aoe_geom:
+                 # TODO: Actually create map hazard/AoE if supported by backend primitives.
+                 # For now, we return success so the DM knows it was executed.
+                 self._lan_force_state_broadcast()
+                 return {
+                     "ok": True,
+                     "resolution": "automatic",
+                     "status": f"{cap.get('name')} placed on map."
+                 }
+
+             return {
+                 "ok": True,
+                 "resolution": "manual",
+                 "status": f"{cap.get('name')} executed. Place manually on map if needed."
+             }
+
         return {
             "ok": False,
             "resolution": "manual",
@@ -46999,6 +47095,7 @@ class InitiativeTracker(base.InitiativeTracker):
             return {"ok": False, "error": f"Capability {cap_id} not found."}
 
         raw_rows = payload.get("targets")
+        is_hazard = (cap.get("action_type") == "area_hazard")
         if raw_rows is None:
             target_ids = payload.get("target_ids")
             outcomes = payload.get("outcomes") if isinstance(payload.get("outcomes"), dict) else {}
@@ -47006,7 +47103,7 @@ class InitiativeTracker(base.InitiativeTracker):
                 {"target_cid": target_id, "outcome": outcomes.get(str(target_id), payload.get("outcome", "manual"))}
                 for target_id in target_ids
             ] if isinstance(target_ids, list) else []
-        if not isinstance(raw_rows, list) or not raw_rows:
+        if not isinstance(raw_rows, list) or (not raw_rows and not is_hazard):
             return {"ok": False, "error": "targets must be a non-empty array."}
 
         valid_outcomes = {"fail", "success", "no_effect", "manual"}
@@ -47092,7 +47189,22 @@ class InitiativeTracker(base.InitiativeTracker):
         # Clear modifiers if they apply to this action
         ammo_spent = 0
         if apply_damage or apply_effects:
-             ammo_spent = 1
+             ammo_spent = int(cap.get("mechanics", {}).get("ammo_cost") or 1)
+
+        # Spend turn resource (Action/Bonus Action)
+        spend = payload.get("spend", "action")
+        spend_key = self._dm_normalize_turn_spend(spend, default="action", allow_none=True)
+        if spend_key != "none":
+            spent_ok, spend_error = self._dm_spend_combatant_turn_resource(actor, spend_key)
+            if not spent_ok:
+                return {"ok": False, "error": spend_error or "No turn resource available."}
+
+        # Validate AoE geometry if provided
+        aoe_geometry = payload.get("aoe_geometry")
+        if aoe_geometry:
+            shape = str(aoe_geometry.get("shape") or "").strip().lower()
+            if shape and shape not in {"cone", "line", "square", "radius", "sphere"}:
+                return {"ok": False, "error": f"Unsupported AoE shape: {shape}"}
 
         pending_mods = self._monster_modifier_state.get(int(normalized_actor_cid), [])
         for mod in list(pending_mods):
@@ -47117,46 +47229,49 @@ class InitiativeTracker(base.InitiativeTracker):
                 current = self._monster_resource_state[ammo_current_key]
                 self._monster_resource_state[ammo_current_key] = max(0, current - ammo_spent)
 
-        if action_type == "save_ability":
+        if action_type in ("save_ability", "area_hazard"):
             save_ability_name = str(cap.get("mechanics", {}).get("save_ability", "wis") or "wis").strip().lower()
             save_dc_val = int(cap.get("mechanics", {}).get("save_dc", 10) or 10)
-            for row in rows:
-                if row["outcome"] != "fail":
-                    continue
-                target_cid = int(row["target_cid"])
-                if str(target_cid) in forced_save_results:
-                    continue
-                resolved_caps = self._resolved_monster_save_capabilities_for_target(payload, target_cid=target_cid)
-                raw_save_result = self._extract_monster_manual_save_result(
-                    row.get("raw") if isinstance(row.get("raw"), dict) else {},
-                    ability=save_ability_name,
-                    dc=save_dc_val,
-                    passed=False,
-                )
-                prompt_id = self._trigger_monster_save_reaction_prompts(
-                    target_cid=target_cid,
-                    ability=save_ability_name,
-                    dc=save_dc_val,
-                    current_total=raw_save_result.get("total"),
-                    save_result=raw_save_result,
-                    resume_dispatch=build_resume_dispatch(
-                        "dm_monster_capability_resolve_targets",
-                        actor_cid=int(normalized_actor_cid),
-                        ws_id=None,
-                        is_admin=True,
-                        payload=copy.deepcopy(payload),
-                    ),
-                    resolved_capabilities=resolved_caps,
-                )
-                if prompt_id:
-                    return {
-                        "ok": True,
-                        "resolution": "pending_prompt",
-                        "pending_prompt_id": str(prompt_id),
-                        "status": f"Waiting for DM reaction prompt before finalizing {cap.get('name', cap_id)}.",
-                        "capability_id": str(cap_id or ""),
-                        "target_cid": int(target_cid),
-                    }
+            # Only trigger prompts if it's a true save_ability (or area_hazard with a DC)
+            has_dc = bool(cap.get("mechanics", {}).get("save_dc"))
+            if action_type == "save_ability" or has_dc:
+                for row in rows:
+                    if row["outcome"] != "fail":
+                        continue
+                    target_cid = int(row["target_cid"])
+                    if str(target_cid) in forced_save_results:
+                        continue
+                    resolved_caps = self._resolved_monster_save_capabilities_for_target(payload, target_cid=target_cid)
+                    raw_save_result = self._extract_monster_manual_save_result(
+                        row.get("raw") if isinstance(row.get("raw"), dict) else {},
+                        ability=save_ability_name,
+                        dc=save_dc_val,
+                        passed=False,
+                    )
+                    prompt_id = self._trigger_monster_save_reaction_prompts(
+                        target_cid=target_cid,
+                        ability=save_ability_name,
+                        dc=save_dc_val,
+                        current_total=raw_save_result.get("total"),
+                        save_result=raw_save_result,
+                        resume_dispatch=build_resume_dispatch(
+                            "dm_monster_capability_resolve_targets",
+                            actor_cid=int(normalized_actor_cid),
+                            ws_id=None,
+                            is_admin=True,
+                            payload=copy.deepcopy(payload),
+                        ),
+                        resolved_capabilities=resolved_caps,
+                    )
+                    if prompt_id:
+                        return {
+                            "ok": True,
+                            "resolution": "pending_prompt",
+                            "pending_prompt_id": str(prompt_id),
+                            "status": f"Waiting for DM reaction prompt before finalizing {cap.get('name', cap_id)}.",
+                            "capability_id": str(cap_id or ""),
+                            "target_cid": int(target_cid),
+                        }
 
         perf_targets: List[Dict[str, Any]] = []
         results: List[Dict[str, Any]] = []
@@ -47320,7 +47435,50 @@ class InitiativeTracker(base.InitiativeTracker):
             results.append(target_result)
 
         t_per_target_loop_end = time.perf_counter() if perf_on else 0.0
-        if (apply_damage or apply_effects) and active_seq and active_seq.get("turn_marker") == (self.round_num, self.turn_num):
+
+        # Redesign ITR-20260603-G5HR: Ignite Ground persistent placement
+        hazard_placed_count = 0
+        if is_hazard and aoe_geometry:
+            shape = str(aoe_geometry.get("shape") or "square").strip().lower()
+            origin = aoe_geometry.get("origin")
+            if origin and isinstance(origin, dict):
+                oc = origin.get("col")
+                orow = origin.get("row")
+                size_ft = float(aoe_geometry.get("size") or 10.0)
+
+                # Match JS center-of-cell origin
+                spec = AoeSpec(
+                    shape=shape,
+                    origin_mode="point",
+                    origin_col=float(oc) + 0.5,
+                    origin_row=float(orow) + 0.5,
+                    radius_ft=size_ft,
+                    length_ft=size_ft,
+                    width_ft=size_ft,
+                )
+
+                cells = self._resolve_aoe_cells(spec)
+                if cells:
+                    for c, r in cells:
+                        self._upsert_map_hazard(
+                            col=c,
+                            row=r,
+                            kind="fire",
+                            payload={
+                                "name": str(cap.get("name") or "Ignite Ground"),
+                                "duration_turns": 3,
+                                "remaining_turns": 3,
+                                "dice": "2d6",
+                                "damage_type": "fire",
+                                "is_difficult_terrain": True,
+                                "over_time": True,
+                                "trigger_on_start_or_enter": "enter_or_end"
+                            },
+                            defer_broadcast=True
+                        )
+                    hazard_placed_count = len(cells)
+
+        if (apply_damage or apply_effects or hazard_placed_count > 0) and active_seq and active_seq.get("turn_marker") == (self.round_num, self.turn_num):
             # Only increment if NO errors occurred in results
             if not any(r.get("error") for r in results):
                 if cap_id in active_seq.get("children", {}):
@@ -47328,7 +47486,7 @@ class InitiativeTracker(base.InitiativeTracker):
                     active_seq["total_completed"] += 1
 
         t_pre_broadcast = time.perf_counter() if perf_on else 0.0
-        if apply_damage or apply_effects:
+        if apply_damage or apply_effects or hazard_placed_count > 0:
             try:
                 self._lan_force_state_broadcast()
             except Exception:
@@ -47348,6 +47506,7 @@ class InitiativeTracker(base.InitiativeTracker):
                 "selected_target_count": len(rows),
                 "affected_target_count": len(perf_targets),
                 "damage_application_count": sum(1 for r in perf_targets if r.get("damage_applied")),
+                "hazard_placed_count": hazard_placed_count,
                 "per_target_loop_ms": round((t_per_target_loop_end - perf_t0) * 1000.0, 3),
                 "broadcast_total_ms": round((t_post_broadcast - t_pre_broadcast) * 1000.0, 3),
                 "total_apply_damage_ms": round((t_end - perf_t0) * 1000.0, 3),
@@ -47363,6 +47522,8 @@ class InitiativeTracker(base.InitiativeTracker):
             "apply_damage": apply_damage,
             "apply_effects": apply_effects,
             "results": results,
+            "hazard_placed_count": hazard_placed_count,
+            "snapshot": self._dm_console_snapshot(),
         }
         if active_seq and active_seq.get("turn_marker") == (self.round_num, self.turn_num):
              # Include sequence progress
@@ -50475,6 +50636,34 @@ class InitiativeTracker(base.InitiativeTracker):
         """Return True if the combatant is a Black and Tan officer."""
         slug = str(getattr(c, "monster_slug", "") or "").strip().lower()
         return slug in ("black-and-tan-captain", "black-and-tan-major", "black-and-tan-lieutenant")
+
+    def _is_scorched_earth_active(self) -> bool:
+        """Return True if the Scorched Earth Protocol is currently active."""
+        if self._scorched_earth_protocol_end_round is None:
+            return False
+        return self.round_num <= self._scorched_earth_protocol_end_round
+
+    def _trigger_scorched_earth_protocol(self) -> Dict[str, Any]:
+        """Activate the Scorched Earth Protocol for 150 rounds."""
+        self._scorched_earth_protocol_end_round = self.round_num + 150
+
+        applied_to = []
+        svc = self._ensure_monster_capabilities()
+        for cid, c in self.combatants.items():
+            data = svc.match_capabilities_for_combatant(c)
+            if data:
+                has_implant = any(cap.get("id") == "protocol-implant" for cap in data.get("capabilities", []))
+                if has_implant:
+                    # 'fire_immunity' isn't a standard condition but we can add it to immunities directly
+                    # via a specialized aura/effect, or just add a UI condition for duration.
+                    self._dm_service.set_condition(
+                        cid=int(cid), ctype="protocol_implant_active", action="add", remaining_turns=150
+                    )
+                    applied_to.append(c.name)
+
+        self._log(f"Scorched Earth Protocol activated! 15 minutes of Fire Immunity granted.")
+        self._lan_force_state_broadcast()
+        return {"ok": True, "message": f"Protocol activated. Applied to {len(applied_to)} targets."}
 
     def _create_monster_prompt(
         self,

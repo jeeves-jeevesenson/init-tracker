@@ -79,23 +79,24 @@ def is_cell_in_aoe(col: int, row: int, spec: AoeSpec, feet_per_square: float) ->
     Checks if a specific cell (center point) is within the AOE.
     """
     cx, cy = spec.origin_col, spec.origin_row
-    px, py = float(col), float(row)
+    px, py = float(col) + 0.5, float(row) + 0.5
     
     dx = px - cx
     dy = py - cy
     dist_sq = dx*dx + dy*dy
     
-    if spec.shape in ("circle", "sphere", "cylinder"):
+    if spec.shape in ("circle", "sphere", "cylinder", "radius"):
         r_sq = spec.radius_ft / feet_per_square
         return dist_sq <= r_sq * r_sq
         
-    elif spec.shape == "cube":
+    elif spec.shape in ("cube", "square"):
         # 5e rules: A cube's point of origin is not its center unless specified.
         # However, for manual placement (point cube), it's often centered or corner-aligned.
         # If origin_mode is 'point', we'll treat origin as center for now or follow the payload.
         # If it's Thunderwave style, it's usually self-origin.
         
-        half_side = (spec.length_ft / feet_per_square) / 2.0
+        dim_ft = spec.length_ft if spec.length_ft > 0 else spec.radius_ft
+        half_side = (dim_ft / feet_per_square) / 2.0
         
         if spec.origin_mode == "caster" and spec.target_col is not None:
             # Thunderwave style: 15ft cube originating from caster.
@@ -103,22 +104,22 @@ def is_cell_in_aoe(col: int, row: int, spec: AoeSpec, feet_per_square: float) ->
             tx, ty = spec.target_col, spec.target_row
             v_dx, v_dy = tx - cx, ty - cy
             
-            # Simple 4-way alignment for now or check angle
-            angle = math.atan2(v_dy, v_dx)
-            # Normalize to 0, 90, 180, 270
-            deg = math.degrees(angle) % 360
-            
             # Center of cube is 1.5 squares (7.5ft) away from caster center in that direction
             # if the side is 3 squares (15ft).
-            side_sq = spec.length_ft / feet_per_square
+            side_sq = dim_ft / feet_per_square
             offset = side_sq / 2.0
+
+            # Simple 4-way alignment for now
+            if abs(v_dx) > abs(v_dy):
+                real_cx = cx + (offset if v_dx > 0 else -offset)
+                real_cy = cy
+            else:
+                real_cx = cx
+                real_cy = cy + (offset if v_dy > 0 else -offset)
             
-            # This is a bit complex to generalize perfectly without knowing exactly 
-            # how the user 'aimed' the cube.
-            # For now, let's use a simpler check: is it within the bounding box?
-            pass # TODO: implement directional cube logic
+            return abs(px - real_cx) <= half_side and abs(py - real_cy) <= half_side
             
-        # Generic centered cube
+        # Generic centered cube/square
         return abs(dx) <= half_side and abs(dy) <= half_side
 
     elif spec.shape == "line":

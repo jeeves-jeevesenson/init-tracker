@@ -111,8 +111,12 @@ class MonsterCapabilityService:
         mechanics = cap.get("mechanics", {}) if isinstance(cap.get("mechanics"), dict) else {}
         desc = str(cap.get("desc") or "")
         area: Dict[str, Any] = {}
-        shape = str(mechanics.get("shape") or "").strip().lower()
-        size = mechanics.get("size")
+
+        # Support both flat mechanics and nested area dict
+        m_area = mechanics.get("area", {}) if isinstance(mechanics.get("area"), dict) else {}
+        shape = str(m_area.get("shape") or mechanics.get("shape") or "").strip().lower()
+        size = m_area.get("size") or mechanics.get("size")
+
         if not shape:
             match = re.search(r"(\d+)\s*-\s*foot\s+(cone|line|sphere|radius)", desc, flags=re.IGNORECASE)
             if match:

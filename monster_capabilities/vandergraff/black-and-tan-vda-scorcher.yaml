@@ -1,0 +1,118 @@
+name: Black and Tan VDA Scorcher
+slug: black-and-tan-vda-scorcher
+source: repo-local
+license: CC-BY-4.0
+capabilities:
+  - id: flamethrower-burst
+    name: Flamethrower Burst
+    type: action
+    executable: true
+    desc: "15-foot cone, DC 15 Dex save, 21 (6d6) fire damage (half on save). Spends 2 fuel."
+    action_type: save_ability
+    mechanics:
+      save_ability: dex
+      save_dc: 15
+      damage:
+        - formula: 6d6
+          type: fire
+          on_save: half
+      area:
+        shape: cone
+        size: 15
+      ammo_type: "fuel"
+      ammo_cost: 2
+  - id: sweeping-burn
+    name: Sweeping Burn
+    type: action
+    executable: true
+    desc: "30-foot line, DC 15 Dex save, 21 (6d6) fire damage (half on save). Spends 3 fuel."
+    action_type: save_ability
+    mechanics:
+      save_ability: dex
+      save_dc: 15
+      damage:
+        - formula: 6d6
+          type: fire
+          on_save: half
+      area:
+        shape: line
+        size: 30
+      ammo_type: "fuel"
+      ammo_cost: 3
+  - id: ignite-ground
+    name: Ignite Ground
+    type: action
+    executable: true
+    desc: "Creates a 10ft burning square. Difficult terrain, 7 (2d6) fire damage on entry/start of turn. Spends 2 fuel."
+    action_type: area_hazard
+    mechanics:
+      damage:
+        - formula: 2d6
+          type: fire
+          on_save: none
+      area:
+        shape: square
+        size: 10
+      duration_rounds: 3
+      ammo_type: "fuel"
+      ammo_cost: 2
+  - id: tank-bash
+    name: Tank Bash
+    type: action
+    executable: true
+    desc: "Melee Weapon Attack: +7 to hit, reach 5 ft., one target. Hit: 8 (1d8 + 4) bludgeoning damage."
+    action_type: melee_attack
+    mechanics:
+      attack_bonus: 7
+      damage:
+        - formula: 1d8+4
+          type: bludgeoning
+      reach: 5
+  - id: brace-hose
+    name: Brace Hose
+    type: bonus_action
+    executable: true
+    desc: "Until the end of the turn, flamethrower DC +2 and range +5ft."
+    action_type: modifier
+    mechanics:
+      modifier:
+        kind: next_action
+        eligible_action_ids:
+          - flamethrower-burst
+          - sweeping-burn
+        save_dc_bonus: 2
+        range_bonus: 5
+        limit: once_per_turn
+  - id: swap-tank
+    name: Swap Tank
+    type: bonus_action
+    executable: true
+    desc: "Restores fuel to maximum by consuming a reserve tank."
+    action_type: firearm_reload
+    mechanics:
+      firearm_reload: true
+      ammo_type: "fuel"
+      reserve_type: "reserve_tank"
+  - id: heavy-protective-rig
+    name: Heavy Protective Rig
+    type: trait
+    desc: "The Scorcher has disadvantage on Dexterity (Stealth) checks and cannot use the Dash action."
+  - id: fireproofed-suit
+    name: Fireproofed Suit
+    type: trait
+    desc: "Resistance to fire damage."
+  - id: protocol-implant
+    name: Protocol Implant
+    type: trait
+    desc: "Eligible for Scorched Earth Protocol."
+  - id: vandergraff-drill
+    name: Vandergraff Drill
+    type: trait
+    executable: false
+    desc: "If this creature starts its turn within 30 feet of an allied Black and Tan officer it can see or hear, it gains +1 to attack rolls until the start of its next turn."
+    warning: "Reminder: +1 to attack if near another officer."
+  - id: fire-discipline
+    name: Fire Discipline
+    type: trait
+    executable: false
+    desc: "This creature does not expend extra fuel on a missed attack."

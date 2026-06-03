@@ -429,6 +429,7 @@ class CombatService:
                     "role": role,
                     "conditions": conditions,
                     "monster_resources": resources,
+                    "monster_slug": str(getattr(c, "monster_slug", "") or "") or None,
                     "is_current": current_cid is not None and int(cid) == int(current_cid),
                 }
             )

@@ -264,6 +264,12 @@
       background: rgba(214,186,126,0.06);
     }
     .action-card.manual .card-meta { color: var(--gold); opacity: 0.95; }
+    .action-card.spent {
+      opacity: 0.5;
+      filter: grayscale(0.8);
+      cursor: not-allowed;
+      border-left-color: var(--muted) !important;
+    }
 
     .selected-summary {
       background: rgba(106,169,255,0.1);
@@ -417,6 +423,12 @@
       font-size: 12px; border: 1px solid var(--border);
       z-index: 5;
     }
+
+    .action-card.lane-used {
+      opacity: 0.6;
+      filter: grayscale(0.5);
+      border-color: var(--muted);
+    }
   </style>
 </head>
 <body>
@@ -426,7 +438,7 @@
       <div id="combatStatus" class="actor-meta">Loading state...</div>
       <button id="combatControlBtn" class="workspace-link" style="background:var(--accent-primary); color:white; font-weight:bold; border-color:var(--accent-primary); margin-left: auto; display:none"></button>
       <button id="freeMoveBtn" class="workspace-link" style="margin-left: 8px;" aria-pressed="false">Free Move Token</button>
-      <button id="toolboxBtn" class="workspace-link" style="margin-left: 8px;">🛠 Toolbox</button>
+      <button id="toolboxBtn" class="workspace-link" style="margin-left: 8px;" onclick="openToolboxModal()">🛠 Toolbox</button>
       <a href="/dm" class="workspace-link">↩ DM Cockpit</a>
     </header>
 
@@ -471,7 +483,7 @@
 
   <!-- DM Toolbox Modal -->
   <div id="toolboxModal" class="modal-overlay">
-    <div class="modal-content" style="max-width: 400px;">
+    <div class="modal-content" style="max-width: 400px; border: 1px solid var(--accent);">
       <div class="modal-header">
         <h2 id="toolboxTitle">DM Toolbox</h2>
         <button class="workspace-link" onclick="closeToolboxModal()" style="padding:4px 8px; font-size:11px;">✕</button>
@@ -482,6 +494,15 @@
           <button class="apply-btn" onclick="handleLongRest()" id="longRestBtn" style="margin-top: 8px;">Long Rest Players</button>
           <p style="font-size: 11px; color: var(--muted); margin-top: 8px;">
             Restores HP, spell slots, and long-rest resource pools for all player characters.
+          </p>
+        </div>
+
+        <!-- Faction Protocols - Redesign ITR-20260602-G5HR -->
+        <div class="modal-field" id="protocolControls" style="display:none; margin-top:16px; border-top:1px solid rgba(255,255,255,0.1); padding-top:12px;">
+          <span class="modal-label">Faction Protocols</span>
+          <button class="apply-btn" onclick="triggerFactionProtocol('scorched-earth')" id="scorchedEarthBtn" style="margin-top: 8px; background:var(--danger); border-color:var(--danger);">Scorched Earth Protocol</button>
+          <p style="font-size: 11px; color: var(--muted); margin-top: 8px;">
+            Grants 15 minutes of Fire Immunity to all eligible Black and Tan units.
           </p>
         </div>
       </div>
@@ -530,15 +551,30 @@
     let selectedCapabilityId = null;
     let lastActiveCid = null;
     let targetPreviewMode = null; // { capabilityId, capabilityName, actorCid, actionType }
+    let aoePlacementMode = null; // { capabilityId, capabilityName, actorCid, shape, size, width, origin }
+    let aoeManualIncluded = new Set();
+    let aoeManualExcluded = new Set();
+    let cursorGridPos = { col: 0, row: 0 };
     let selectedTargetCid = null;
     let freeMoveMode = null; // { selectedCid }
     let localResolutionTray = null; // { actorCid, capabilityId, targetCid, openedAt }
     let localResolutionPacket = null;
     let localResolutionError = null;
     let localResolutionInFlight = false;
+    let aoeResolutionInFlight = false;
     let localResolutionApplying = false;
     let localResolutionOutcomes = {}; // Keyed by target CID as string
     let localResolutionOverrideRange = false;
+
+    // Redesign ITR-20260602-G5HR: Scorcher-specific attack-lane state
+    const LANE_A_IDS = ['flamethrower-burst', 'sweeping-burn'];
+    const LANE_B_IDS = ['ignite-ground', 'tank-bash'];
+    let usedLaneA = false;
+    let usedLaneB = false;
+
+    // Redesign ITR-20260603-G5HR: Visual feedback (floating damage)
+    let damagePopups = [];
+    const DAMAGE_POPUP_DURATION_MS = 1400;
 
     // Phase 3D2 sequence state
     let localSequencePacket = null;
@@ -604,6 +640,34 @@
           text = `Targeting ${esc(targetPreviewMode.capabilityName || 'action')}. Click an enemy token to select. Drag map to pan.`;
           cls = 'target-mode';
           cancelHtml = `<button class="cancel-target-btn" onclick="cancelTargetPreviewMode()">Cancel Targeting</button>`;
+        } else if (aoePlacementMode) {
+          if (aoePlacementMode.aoeConfirmed) {
+            const cap = findCapabilityById(aoePlacementMode.capabilityId);
+            const targets = (state?.tactical_map?.units || []).filter(u => {
+              if (String(u.cid) === String(aoePlacementMode.actorCid)) return false;
+              if (!u.pos) return false;
+              return aoeContainsGridPoint(aoePlacementMode, u.pos);
+            });
+            const targetCount = targets.length;
+            const saveInfo = (cap && cap.mechanics?.save_dc) ? ` (DC ${cap.mechanics.save_dc} ${esc(String(cap.mechanics.save_ability || '').toUpperCase())})` : '';
+
+            icon = 'Locked';
+            text = `AoE Locked: ${targetCount} targets${saveInfo}. Adjudicate outcomes in the resolution modal.`;
+            cls = 'resolve-mode';
+            cancelHtml = `
+              <button class="cancel-target-btn" onclick="openAoeResolutionModal()" style="background:var(--accent); color:white; margin-right:8px;">Open Modal</button>
+              <button class="cancel-target-btn" onclick="unlockAoePlacement()">Back to Aiming</button>
+              <button class="cancel-target-btn" onclick="cancelAoePlacementMode()">Cancel</button>
+            `;
+          } else {
+            icon = 'Aim';
+            text = `Aiming ${esc(aoePlacementMode.capabilityName || 'AoE')}. Move mouse to aim. Click map to lock. Press Escape to cancel.`;
+            cls = 'target-mode';
+            cancelHtml = `
+              <button class="cancel-target-btn" style="background:var(--heal); border-color:var(--heal-border); color:white; margin-right:8px;" onclick="confirmAoePlacement()">Lock Aim</button>
+              <button class="cancel-target-btn" onclick="cancelAoePlacementMode()">Cancel Aiming</button>
+            `;
+          }
         } else if (actor && !actor.is_pc) {
           icon = 'Move';
           const units = state.tactical_map?.units || [];
@@ -624,6 +688,9 @@
      */
     function fullResetLocalState() {
       targetPreviewMode = null;
+      aoePlacementMode = null;
+      aoeManualIncluded = new Set();
+      aoeManualExcluded = new Set();
       selectedTargetCid = null;
       localResolutionTray = null;
       localResolutionPacket = null;
@@ -634,6 +701,8 @@
       selectedCapabilityId = null;
       localSequencePacket = null;
       localSequenceCompletedSteps = {};
+      usedLaneA = false;
+      usedLaneB = false;
 
       const modal = document.getElementById('resolutionModal');
       if (modal) modal.classList.remove('active');
@@ -644,6 +713,41 @@
      */
     function getLocalResolutionOutcome(targetCid) {
       return localResolutionOutcomes[String(targetCid)] || 'fail';
+    }
+
+    // Redesign ITR-20260603-G5HR: Visual feedback helpers
+    function queueDamagePopup(targetCid, amount, damageType) {
+      const parsedAmount = Math.floor(Number(amount));
+      if (!Number.isFinite(parsedAmount) || parsedAmount <= 0) return;
+      damagePopups.push({
+        targetCid: String(targetCid),
+        amount: parsedAmount,
+        damageType: String(damageType || 'physical').trim().toLowerCase(),
+        createdAt: Date.now(),
+        expiresAt: Date.now() + DAMAGE_POPUP_DURATION_MS
+      });
+      if (damagePopups.length > 24) damagePopups = damagePopups.slice(-24);
+      draw();
+    }
+
+    function queueDamagePopupsFromResults(results) {
+      if (!Array.isArray(results)) return;
+      results.forEach(res => {
+        if (!res.damage_applied || !Array.isArray(res.damage_entries)) return;
+        res.damage_entries.forEach(entry => {
+          queueDamagePopup(res.target_cid, entry.amount, entry.type);
+        });
+      });
+    }
+
+    function damagePopupColorForType(rawType) {
+      const colors = {
+        acid: "#7CAC00", cold: "#348CC4", fire: "#EC5400", force: "#C83434",
+        healing: "#30B8B8", lightning: "#3058C0", necrotic: "#40AC50", poison: "#44B800",
+        radiant: "#C8A800", thunder: "#8444B8", psychic: "#AC7094", hellfire: "#A00000",
+        physical: "#888888"
+      };
+      return colors[String(rawType).toLowerCase()] || colors.physical;
     }
 
     /**
@@ -765,6 +869,7 @@
     let fittedToGrid = false;
     let lastGrid = {cols: 0, rows: 0};
     let dragging = null; // {cid, col, row, curCol, curRow, startX, startY}
+    let optimisticPos = null; // { cid, col, row } for AoE origin race fix
     let isMoving = false; // Guard against duplicate moves
     let panning = null; // {x, y, panX, panY}
 
@@ -994,6 +1099,13 @@
         // No target hit; allow panning instead of returning.
       }
 
+      if (aoePlacementMode) {
+        if (!aoePlacementMode.aoeConfirmed) {
+          confirmAoePlacement();
+        }
+        return;
+      }
+
       const activeCid = state.active_cid;
       const activeUnit = (state.tactical_map.units || []).find(u => String(u.cid) === String(activeCid));
       const actor = state.combatants.find(c => String(c.cid) === String(activeCid));
@@ -1001,7 +1113,7 @@
       const hit = getTokenAtScreen(x, y);
       const isActiveHit = hit && activeUnit && actor && !actor.is_pc && String(hit.cid) === String(activeCid);
 
-      if (isActiveHit && !targetPreviewMode && !localResolutionTray) {
+      if (isActiveHit && !targetPreviewMode && !aoePlacementMode && !localResolutionTray) {
         dragging = {
           cid: activeCid,
           col: activeUnit.pos.col,
@@ -1024,6 +1136,12 @@
       const rect = canvas.getBoundingClientRect();
       const x = e.clientX - rect.left;
       const y = e.clientY - rect.top;
+
+      const { col, row } = screenToGrid(x, y);
+      if (col !== cursorGridPos.col || row !== cursorGridPos.row) {
+        cursorGridPos = { col, row };
+        if (aoePlacementMode) draw();
+      }
 
       if (dragging) {
         const { col, row } = screenToGrid(x, y);
@@ -1061,6 +1179,13 @@
 
     window.addEventListener('keydown', (e) => {
       if (e.key === 'Escape') {
+        const modal = document.getElementById('resolutionModal');
+        if (modal && modal.classList.contains('active')) {
+          cancelAoePlacementModeAndCloseModal();
+          e.preventDefault();
+          return;
+        }
+
         if (freeMoveMode) {
           cancelFreeMoveMode(true);
           e.preventDefault();
@@ -1070,12 +1195,16 @@
         } else if (targetPreviewMode) {
           cancelTargetPreviewMode();
           e.preventDefault();
+        } else if (aoePlacementMode) {
+          cancelAoePlacementMode();
+          e.preventDefault();
         }
       }
     });
 
     async function executeMove(cid, col, row) {
       isMoving = true;
+      optimisticPos = { cid, col, row };
       renderError('Moving...');
       const tMoveStart = DM_PERF ? performance.now() : 0;
       try {
@@ -1102,6 +1231,7 @@
         renderError(err.message);
       } finally {
         isMoving = false;
+        optimisticPos = null;
         draw();
         dmPerfMark('executeMove', performance.now() - tMoveStart);
       }
@@ -1110,6 +1240,7 @@
     async function executeFreeMove(cid, col, row) {
       const combatant = findCombatantByCid(cid);
       isMoving = true;
+      optimisticPos = { cid, col, row };
       showTransientStatus(`Free-moving ${combatant ? combatant.name : 'token'}...`, 'var(--gold)');
       try {
         const resp = await fetch(`/api/dm/map/combatants/${cid}/place?workspace=dmcontrol`, {
@@ -1138,6 +1269,7 @@
         showTransientStatus(err.message || 'Free move failed.', 'var(--danger)');
       } finally {
         isMoving = false;
+        optimisticPos = null;
         draw();
       }
     }
@@ -1287,6 +1419,12 @@
       return false;
     }
 
+    function isAoeAction(cap) {
+      if (!cap) return false;
+      const area = cap.area || (cap.mechanics && cap.mechanics.area);
+      return !!(area && area.shape);
+    }
+
     function enterTargetPreviewMode(cap) {
       if (!cap || !state) return;
       if (freeMoveMode) {
@@ -1303,6 +1441,35 @@
       draw();
     }
 
+    function enterAoePlacementMode(cap) {
+      if (!cap || !state) return;
+      fullResetLocalState();
+
+      const activeUnit = (state.tactical_map?.units || []).find(u => String(u.cid) === String(state.active_cid));
+
+      let origin = activeUnit ? { col: activeUnit.pos.col, row: activeUnit.pos.row } : null;
+      if (optimisticPos && String(optimisticPos.cid) === String(state.active_cid)) {
+        origin = { col: optimisticPos.col, row: optimisticPos.row };
+      }
+
+      const area = cap.area || (cap.mechanics && cap.mechanics.area) || {};
+
+      aoeManualIncluded = new Set();
+      aoeManualExcluded = new Set();
+      aoePlacementMode = {
+        capabilityId: cap.id,
+        capabilityName: cap.name,
+        actorCid: state.active_cid,
+        shape: area.shape || 'circle',
+        size: area.size || 10,
+        width: area.width || 5,
+        origin: origin,
+        aoeConfirmed: false,
+        lockedCursorGridPos: null
+      };
+      draw();
+    }
+
     function cancelTargetPreviewMode() {
       if (!targetPreviewMode) return;
       targetPreviewMode = null;
@@ -1313,6 +1480,8 @@
       localResolutionInFlight = false;
       localResolutionApplying = false;
       localResolutionOutcomes = {};
+      aoeManualIncluded = new Set();
+      aoeManualExcluded = new Set();
 
       const modal = document.getElementById('resolutionModal');
       if (modal) modal.classList.remove('active');
@@ -1320,6 +1489,40 @@
       draw();
       const actor = (state?.combatants || []).find(c => String(c.cid) === String(state?.active_cid));
       renderActionPanel(actor, capabilitySummary);
+    }
+
+    function cancelAoePlacementMode() {
+      if (!aoePlacementMode) return;
+      aoePlacementMode = null;
+      aoeManualIncluded = new Set();
+      aoeManualExcluded = new Set();
+      draw();
+      const actor = (state?.combatants || []).find(c => String(c.cid) === String(state?.active_cid));
+      renderActionPanel(actor, capabilitySummary);
+    }
+
+    function confirmAoePlacement() {
+      if (!aoePlacementMode || aoePlacementMode.aoeConfirmed) return;
+      aoePlacementMode.lockedCursorGridPos = { ...cursorGridPos };
+      aoePlacementMode.aoeConfirmed = true;
+
+      // Clear any manual overrides since they are disabled in this gate
+      aoeManualIncluded = new Set();
+      aoeManualExcluded = new Set();
+
+      draw();
+      updateModeBanner();
+
+      // Open the resolution modal immediately on lock
+      openAoeResolutionModal();
+    }
+
+    function unlockAoePlacement() {
+      if (!aoePlacementMode || !aoePlacementMode.aoeConfirmed) return;
+      aoePlacementMode.aoeConfirmed = false;
+      aoePlacementMode.lockedCursorGridPos = null;
+      draw();
+      updateModeBanner();
     }
 
     function openLocalResolutionTray(actorCid, capabilityId, targetCid) {
@@ -1340,6 +1543,10 @@
     }
 
     function closeLocalResolutionTray() {
+      if (aoePlacementMode) {
+        cancelAoePlacementMode();
+      }
+
       localResolutionTray = null;
       selectedTargetCid = null; // Clear target selection when closing tray to allow re-selection
       localResolutionPacket = null;
@@ -1358,12 +1565,42 @@
 
     function openToolboxModal() {
       const modal = document.getElementById('toolboxModal');
-      if (modal) modal.classList.add('active');
+      if (modal) {
+        // Redesign ITR-20260602-G5HR: only show Scorched Earth if Black and Tans are present
+        const hasBlackAndTan = (state?.combatants || []).some(c =>
+          (c.name || '').includes('Black and Tan') || (c.monster_slug || '').startsWith('black-and-tan')
+        );
+        const protocolControls = document.getElementById('protocolControls');
+        if (protocolControls) protocolControls.style.display = hasBlackAndTan ? 'block' : 'none';
+
+        modal.classList.add('active');
+      }
     }
 
     function closeToolboxModal() {
       const modal = document.getElementById('toolboxModal');
       if (modal) modal.classList.remove('active');
+    }
+
+    async function triggerFactionProtocol(protocolId) {
+      try {
+        const resp = await fetch('/api/dm/combat/faction-protocol', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ protocol_id: protocolId })
+        });
+        const data = await resp.json();
+        if (data.ok && data.snapshot) {
+          applyAuthoritativeSnapshot(data.snapshot);
+          showTransientStatus(`Protocol ${protocolId} triggered successfully.`, 'var(--heal)');
+          closeToolboxModal();
+        } else {
+          showTransientStatus(data.error || `Failed to trigger protocol ${protocolId}.`, 'var(--danger)');
+        }
+      } catch (err) {
+        console.error('Faction protocol error:', err);
+        showTransientStatus('Network error triggering protocol.', 'var(--danger)');
+      }
     }
 
     async function handleLongRest() {
@@ -1630,12 +1867,19 @@
         // On success, apply snapshot immediately
         if (data.snapshot) {
            const tSnapStart = DM_PERF ? performance.now() : 0;
+           // Redesign ITR-20260602-G5HR: Scorcher lane usage
+           if (capabilitySummary && capabilitySummary.slug === 'black-and-tan-vda-scorcher') {
+             if (LANE_A_IDS.includes(capId)) usedLaneA = true;
+             if (LANE_B_IDS.includes(capId)) usedLaneB = true;
+           }
            applyAuthoritativeSnapshot(data.snapshot);
            if (DM_PERF) dmPerfMark('applyResults.applySnapshot', performance.now() - tSnapStart);
         }
 
         // Compact success feedback via status bar
         showTransientStatus('Results applied successfully.', 'var(--heal)');
+
+        if (data.results) queueDamagePopupsFromResults(data.results);
 
         // Consume backend-authored sequence state if returned
         let sequenceWasActive = !!localSequencePacket;
@@ -1677,8 +1921,12 @@
 
         // Always close the immediate tray and clear stale targeting state
         closeLocalResolutionTray();
-        targetPreviewMode = null;
-        selectedTargetCid = null;
+        if (!data.active_sequence_parent_id && !sequenceWasActive) {
+            cancelTargetPreviewMode();
+        } else {
+            targetPreviewMode = null;
+            selectedTargetCid = null;
+        }
 
         if (sequenceWasActive && (sequenceComplete || data.active_sequence_complete)) {
           showTransientStatus('Multiattack sequence complete.', 'var(--heal)');
@@ -1849,6 +2097,220 @@
       modal.classList.add('active');
     }
 
+    function openAoeResolutionModal() {
+      const modal = document.getElementById('resolutionModal');
+      if (!modal || !aoePlacementMode) return;
+      if (modal.classList.contains('active')) return;
+
+      const cap = findCapabilityById(aoePlacementMode.capabilityId);
+      if (!cap) return;
+
+      // Derive affected targets
+      const targets = (state?.tactical_map?.units || []).filter(u => {
+        if (String(u.cid) === String(aoePlacementMode.actorCid)) return false;
+        if (!u.pos) return false;
+        return aoeContainsGridPoint(aoePlacementMode, u.pos);
+      });
+
+      // Handle zero targets: allow if hazard, otherwise check if we should block
+      const isHazard = (cap.action_type === 'area_hazard');
+      if (targets.length === 0 && !isHazard) {
+        showTransientStatus('No targets in area.', 'var(--danger)');
+        unlockAoePlacement();
+        return;
+      }
+
+      // Populate outcomes for all derived targets
+      localResolutionOutcomes = {};
+      targets.forEach(t => {
+        // Default to failed save / hit
+        localResolutionOutcomes[String(t.cid)] = 'fail';
+      });
+
+      renderAoeResolutionModal(cap, targets);
+      modal.classList.add('active');
+    }
+
+    function renderAoeResolutionModal(cap, targets) {
+      const body = document.getElementById('modalBody');
+      const footer = document.getElementById('modalFooter');
+      const title = document.getElementById('modalTitle');
+      if (!body || !footer) return;
+
+      title.textContent = `Resolve AoE: ${esc(cap.name)}`;
+
+      const actor = findCombatantByCid(aoePlacementMode.actorCid);
+      const saveDc = cap.mechanics?.save_dc;
+      const saveAbility = cap.mechanics?.save_ability;
+      const shape = aoePlacementMode.shape;
+      const size = aoePlacementMode.size;
+
+      let html = `
+        <div style="display:grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 16px; background: rgba(255,255,255,0.03); padding: 16px; border-radius: 8px; border: 1px solid var(--border);">
+          <div class="modal-field">
+            <span class="modal-label">Actor</span>
+            <span class="modal-value" style="font-size: 16px; font-weight: bold; color: var(--gold);">${esc(actor ? actor.name : 'Unknown')}</span>
+          </div>
+          <div class="modal-field">
+            <span class="modal-label">Action</span>
+            <span class="modal-value" style="font-size: 14px;">${esc(cap.name)}</span>
+          </div>
+          <div class="modal-field">
+            <span class="modal-label">Area</span>
+            <span class="modal-value" style="font-size: 14px; text-transform: capitalize;">${esc(shape)} (${size}ft)</span>
+          </div>
+          <div class="modal-field">
+            <span class="modal-label">Save / DC</span>
+            <span class="modal-value" style="font-size: 14px; font-weight: bold; color: var(--gold);">
+              ${saveDc ? `DC ${saveDc} ${esc(String(saveAbility || '').toUpperCase())}` : 'No Save'}
+            </span>
+          </div>
+        </div>
+
+        <div class="modal-field" style="margin-top: 16px;">
+          <span class="modal-label" style="margin-bottom: 8px;">Affected Creatures (${targets.length})</span>
+          <div style="display: flex; flex-direction: column; gap: 8px;">
+            ${targets.length === 0 ? '<div class="actor-meta" style="padding: 12px; background: rgba(0,0,0,0.2); border-radius: 6px; text-align: center;">No creatures affected in the selected area.</div>' : ''}
+            ${targets.map(t => {
+              const outcome = localResolutionOutcomes[String(t.cid)] || 'fail';
+              const c = findCombatantByCid(t.cid);
+              return `
+                <div style="display: flex; align-items: center; justify-content: space-between; background: rgba(255,255,255,0.04); padding: 8px 12px; border-radius: 6px; border: 1px solid var(--border);">
+                  <div style="display: flex; flex-direction: column; gap: 2px;">
+                    <span style="font-weight: bold; color: var(--text);">${esc(c ? c.name : 'Unknown')}</span>
+                    <span style="font-size: 10px; color: var(--muted); font-family: monospace;">${esc(t.cid)}</span>
+                  </div>
+                  <div class="outcome-btn-group" style="width: auto; gap: 6px;">
+                    <button class="outcome-btn ${outcome === 'fail' ? 'active' : ''}" data-outcome="fail"
+                            onclick="setAoeTargetOutcome('${t.cid}', 'fail')" style="padding: 6px 12px; font-size: 11px; min-width: 90px;">
+                      ${saveDc ? 'Fail Save' : 'Hit'}
+                    </button>
+                    <button class="outcome-btn ${outcome === 'success' ? 'active' : ''}" data-outcome="success"
+                            onclick="setAoeTargetOutcome('${t.cid}', 'success')" style="padding: 6px 12px; font-size: 11px; min-width: 90px;">
+                      ${saveDc ? 'Success' : 'Miss'}
+                    </button>
+                  </div>
+                </div>
+              `;
+            }).join('')}
+          </div>
+        </div>
+      `;
+
+      body.innerHTML = html;
+
+      footer.innerHTML = `
+        <button class="cancel-btn" onclick="unlockAoePlacementAndCloseModal()" style="flex:1;">Back to Aiming</button>
+        <button class="cancel-btn" onclick="cancelAoePlacementModeAndCloseModal()" style="flex:1;">Cancel Action</button>
+        <button class="apply-btn" id="modalApplyBtn" onclick="applyAoeResolutionResultsFromModal()" style="flex:2;">Apply Result</button>
+      `;
+    }
+
+    async function applyAoeResolutionResultsFromModal() {
+      if (!aoePlacementMode || !aoePlacementMode.capabilityId) return;
+      if (aoeResolutionInFlight) return;
+
+      const btn = document.getElementById('modalApplyBtn');
+      if (btn) {
+        btn.disabled = true;
+        btn.textContent = 'Applying...';
+      }
+      aoeResolutionInFlight = true;
+
+      const actorCid = aoePlacementMode.actorCid;
+      const capId = aoePlacementMode.capabilityId;
+
+      // Re-derive targets one last time to be sure
+      const targets = (state?.tactical_map?.units || []).filter(u => {
+        if (String(u.cid) === String(actorCid)) return false;
+        if (!u.pos) return false;
+        return aoeContainsGridPoint(aoePlacementMode, u.pos);
+      });
+
+      const payload = {
+        capability_id: capId,
+        aoe_geometry: {
+          shape: aoePlacementMode.shape,
+          size: aoePlacementMode.size,
+          width: aoePlacementMode.width,
+          origin: aoePlacementMode.origin,
+          direction: aoePlacementMode.direction,
+          range: aoePlacementMode.range
+        },
+        targets: targets.map(t => ({
+          target_cid: t.cid,
+          outcome: localResolutionOutcomes[String(t.cid)] || 'fail'
+        })),
+        apply_damage: true,
+        apply_effects: true,
+        spend: 'action'
+      };
+
+      try {
+        const resp = await fetch(`/api/dm/monster-capabilities/${actorCid}/resolve-targets?workspace=dmcontrol`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(payload)
+        });
+        const data = await resp.json();
+        if (data.ok) {
+          const appliedCount = Array.isArray(data.results) ? data.results.length : 0;
+          let msg = `Applied ${appliedCount} targets.`;
+          if (data.hazard_placed_count) msg += ` Placed ${data.hazard_placed_count} hazards.`;
+          showTransientStatus(msg, 'var(--gold)');
+
+          if (data.results) queueDamagePopupsFromResults(data.results);
+
+          cancelAoePlacementModeAndCloseModal();
+          // Redesign ITR-20260602-G5HR: Scorcher lane usage
+          if (capabilitySummary && capabilitySummary.slug === 'black-and-tan-vda-scorcher') {
+            if (LANE_A_IDS.includes(capId)) usedLaneA = true;
+            if (LANE_B_IDS.includes(capId)) usedLaneB = true;
+          }
+          if (data.snapshot) applyAuthoritativeSnapshot(data.snapshot);
+        } else {
+          showTransientStatus(data.error || 'Failed to apply AoE.', 'var(--danger)');
+          if (btn) {
+            btn.disabled = false;
+            btn.textContent = 'Apply Result';
+          }
+        }
+      } catch (err) {
+        console.error('Failed to apply AoE:', err);
+        showTransientStatus('Network error applying AoE.', 'var(--danger)');
+        if (btn) {
+          btn.disabled = false;
+          btn.textContent = 'Apply Result';
+        }
+      } finally {
+        aoeResolutionInFlight = false;
+      }
+    }
+
+    function setAoeTargetOutcome(targetCid, outcome) {
+      localResolutionOutcomes[String(targetCid)] = outcome;
+      // Re-derive targets and re-render to keep list in sync with map
+      const cap = findCapabilityById(aoePlacementMode.capabilityId);
+      const targets = (state?.tactical_map?.units || []).filter(u => {
+        if (String(u.cid) === String(aoePlacementMode.actorCid)) return false;
+        if (!u.pos) return false;
+        return aoeContainsGridPoint(aoePlacementMode, u.pos);
+      });
+      renderAoeResolutionModal(cap, targets);
+    }
+
+    function unlockAoePlacementAndCloseModal() {
+      const modal = document.getElementById('resolutionModal');
+      if (modal) modal.classList.remove('active');
+      unlockAoePlacement();
+    }
+
+    function cancelAoePlacementModeAndCloseModal() {
+      const modal = document.getElementById('resolutionModal');
+      if (modal) modal.classList.remove('active');
+      cancelAoePlacementMode();
+    }
+
     function renderResolutionModal() {
       const body = document.getElementById('modalBody');
       const title = document.getElementById('modalTitle');
@@ -2010,6 +2472,8 @@
       const panel = document.getElementById('activeActionsPanel');
       if (!panel) return;
 
+      const isScorcher = summary && summary.slug === 'black-and-tan-vda-scorcher';
+
       // Preserve "Traits & Reminders" dropdown state before re-rendering
       let secondaryGroupOpen = false;
       const oldSecondary = panel.querySelector('.secondary-group');
@@ -2093,6 +2557,27 @@
                   </div>
                 </div>
               ` : ''}
+
+              <!-- Redesign ITR-20260602-G5HR: Scorcher lane warning -->
+              ${(() => {
+                let selectedLaneUsed = false;
+                if (isScorcher) {
+                  if (LANE_A_IDS.includes(selected.id) && usedLaneA) selectedLaneUsed = true;
+                  if (LANE_B_IDS.includes(selected.id) && usedLaneB) selectedLaneUsed = true;
+                }
+                if (selectedLaneUsed) {
+                  return `
+                    <div style="margin-top:12px; border:1px solid var(--danger); background:rgba(255,91,91,0.1); padding:10px 14px; border-radius:4px; font-size:13px; color:var(--danger); display:flex; gap:8px; align-items:start;">
+                      <span style="font-size:16px;">⚠️</span>
+                      <div>
+                        <strong style="text-transform:uppercase; font-size:11px; letter-spacing:0.5px;">Attack Lane Guidance</strong><br/>
+                        This suggestive attack lane (A or B) has already been used this turn.
+                      </div>
+                    </div>
+                  `;
+                }
+                return '';
+              })()}
           `;
 
           // Sequence Tray Integration
@@ -2292,7 +2777,22 @@
         const isSelected = String(item.id) === String(selectedCapabilityId);
         const isTrait = conf.key === 'traits' || conf.key === 'lair_actions';
         const isExecutable = item.executable !== false && !isTrait;
+
+        // Redesign ITR-20260602-G5HR: Scorcher lane suggestive guidance
+        let laneUsed = false;
+        if (isScorcher) {
+          if (LANE_A_IDS.includes(item.id) && usedLaneA) laneUsed = true;
+          if (LANE_B_IDS.includes(item.id) && usedLaneB) laneUsed = true;
+        }
+
+        // Turn resource availability (Action/Bonus Action/Reaction)
+        // Redesign ITR-20260602-G5HR: flat Action/Bonus/Reaction counters are rejected as misleading.
+        // We no longer display Action 1/1 badges or dim cards based on oversimplified generic counters.
+
         const badges = [];
+        if (laneUsed) {
+          badges.push({ text: 'Lane Used', cls: 'manual-tag', style: 'background:rgba(255,255,255,0.1)' });
+        }
         // Highlight primary classification first.
         if (isExecutable) {
           badges.push({ text: 'Attack', cls: 'exec' });
@@ -2320,6 +2820,7 @@
         if (!isExecutable && !isTrait) cardCls.push('manual');
         if (isExecutable) cardCls.push('executable');
         if (item.jammed) cardCls.push('jammed');
+        if (laneUsed) cardCls.push('lane-used');
 
         const badgeHtml = badges.map(b => {
           const style = b.style ? `style="${b.style}"` : '';
@@ -2338,6 +2839,7 @@
       };
 
       // Pass 1: prominent groups.
+
       groupConfig.forEach(conf => {
         if (!primaryKeys.has(conf.key)) return;
         const allItems = groups[conf.key];
@@ -2347,11 +2849,34 @@
         const execItems = allItems.filter(item => item.executable !== false);
         if (execItems.length === 0) return;
 
-        html += `<div class="action-group">`;
-        html += `<div class="group-label">${esc(conf.label)}</div>`;
-        html += `<div class="action-grid">`;
-        execItems.forEach(item => { html += renderItem(item, conf); });
-        html += `</div></div>`;
+        if (isScorcher && conf.key === 'actions') {
+          // Special Lane Grouping for Scorcher Actions
+          const laneA = execItems.filter(a => LANE_A_IDS.includes(a.id));
+          const laneB = execItems.filter(a => LANE_B_IDS.includes(a.id));
+          const others = execItems.filter(a => !LANE_A_IDS.includes(a.id) && !LANE_B_IDS.includes(a.id));
+
+          if (laneA.length) {
+            html += `<div class="action-group"><div class="group-label">Attack Lane A (Suggestive)</div><div class="action-grid">`;
+            laneA.forEach(item => { html += renderItem(item, conf); });
+            html += `</div></div>`;
+          }
+          if (laneB.length) {
+            html += `<div class="action-group" style="margin-top:4px;"><div class="group-label">Attack Lane B (Suggestive)</div><div class="action-grid">`;
+            laneB.forEach(item => { html += renderItem(item, conf); });
+            html += `</div></div>`;
+          }
+          if (others.length) {
+            html += `<div class="action-group" style="margin-top:4px;"><div class="group-label">Other Actions</div><div class="action-grid">`;
+            others.forEach(item => { html += renderItem(item, conf); });
+            html += `</div></div>`;
+          }
+        } else {
+          html += `<div class="action-group">`;
+          html += `<div class="group-label">${esc(conf.label)}</div>`;
+          html += `<div class="action-grid">`;
+          execItems.forEach(item => { html += renderItem(item, conf); });
+          html += `</div></div>`;
+        }
       });
 
       // Pass 2: collapsed/secondary groups under a single <details> so the active cockpit stays compact.
@@ -2406,6 +2931,9 @@
 
       selectedCapabilityId = alreadySelected ? null : id;
 
+      const actor = (state.combatants || []).find(c => String(c.cid) === String(state.active_cid));
+      const cap = findCapabilityById(id);
+
       // Clear local resolution state on any capability change
       localResolutionTray = null;
       localResolutionPacket = null;
@@ -2413,14 +2941,15 @@
       localResolutionInFlight = false;
       localResolutionOutcomes = {};
 
-      const cap = findCapabilityById(id);
-      if (!alreadySelected && isPreviewableTargetAction(cap)) {
+      if (!alreadySelected && isAoeAction(cap)) {
+        enterAoePlacementMode(cap);
+      } else if (!alreadySelected && isPreviewableTargetAction(cap)) {
         enterTargetPreviewMode(cap);
       } else {
         cancelTargetPreviewMode();
+        cancelAoePlacementMode();
       }
 
-      const actor = (state.combatants || []).find(c => String(c.cid) === String(state.active_cid));
       renderActionPanel(actor, capabilitySummary);
     }
 
@@ -2548,6 +3077,7 @@
             <span class="stat-pill"><strong>AC</strong> ${esc(actor.ac || '—')}</span>
             <span class="stat-pill" title="Movement Remaining"><strong>Movement Remaining</strong> ${esc(moveRemaining)} / ${esc(actor.speed || '—')} ft</span>
             <span class="stat-pill"><strong>Conditions</strong> ${esc(conditions)}</span>
+            <span class="stat-pill" title="Action economy and multiattacks are enforced by the backend."><strong>Turn Resources</strong> Backend Enforced</span>
           </div>
         `;
         overlay.textContent = `Focus: ${actor.name} (Active)`;
@@ -2573,6 +3103,183 @@
 
     function gridToScreen(col, row) {
       return { x: panX + col * zoom + zoom / 2, y: panY + row * zoom + zoom / 2 };
+    }
+
+    function renderAoePreview(mode) {
+      if (!mode.origin || !cursorGridPos) return;
+
+      const start = gridToScreen(mode.origin.col, mode.origin.row);
+      const targetPos = mode.aoeConfirmed ? mode.lockedCursorGridPos : cursorGridPos;
+      const end = gridToScreen(targetPos.col, targetPos.row);
+
+      ctx.save();
+      if (mode.shape === 'line') {
+        const dx = end.x - start.x;
+        const dy = end.y - start.y;
+        const dist = Math.hypot(dx, dy);
+        if (dist > 1) {
+          const angle = Math.atan2(dy, dx);
+          const lengthPx = (mode.size || 30) / 5 * zoom;
+          const widthPx = (mode.width || 5) / 5 * zoom;
+
+          ctx.translate(start.x, start.y);
+          ctx.rotate(angle);
+
+          ctx.fillStyle = "rgba(214, 186, 126, 0.25)";
+          ctx.strokeStyle = "rgba(214, 186, 126, 0.8)";
+          ctx.lineWidth = 2;
+          ctx.fillRect(0, -widthPx / 2, lengthPx, widthPx);
+          ctx.strokeRect(0, -widthPx / 2, lengthPx, widthPx);
+
+          // Anchor point at origin
+          ctx.beginPath();
+          ctx.arc(0, 0, 4, 0, Math.PI * 2);
+          ctx.fillStyle = "var(--gold)";
+          ctx.fill();
+        }
+      } else if (mode.shape === 'cone') {
+        const dx = end.x - start.x;
+        const dy = end.y - start.y;
+        const dist = Math.hypot(dx, dy);
+        if (dist > 1) {
+          const angle = Math.atan2(dy, dx);
+          const lengthPx = (mode.size || 15) / 5 * zoom;
+
+          ctx.translate(start.x, start.y);
+          ctx.rotate(angle);
+
+          ctx.fillStyle = "rgba(214, 186, 126, 0.25)";
+          ctx.strokeStyle = "rgba(214, 186, 126, 0.8)";
+          ctx.lineWidth = 2;
+          ctx.beginPath();
+          ctx.moveTo(0, 0);
+          ctx.arc(0, 0, lengthPx, -Math.PI / 4, Math.PI / 4); // 90 degree cone
+          ctx.closePath();
+          ctx.fill();
+          ctx.stroke();
+
+          // Anchor point at origin
+          ctx.beginPath();
+          ctx.arc(0, 0, 4, 0, Math.PI * 2);
+          ctx.fillStyle = "var(--gold)";
+          ctx.fill();
+        }
+      } else if (mode.shape === 'square') {
+        const sizePx = (mode.size || 10) / 5 * zoom;
+        ctx.fillStyle = "rgba(214, 186, 126, 0.25)";
+        ctx.strokeStyle = "rgba(214, 186, 126, 0.8)";
+        ctx.lineWidth = 2;
+        ctx.fillRect(end.x - sizePx / 2, end.y - sizePx / 2, sizePx, sizePx);
+        ctx.strokeRect(end.x - sizePx / 2, end.y - sizePx / 2, sizePx, sizePx);
+
+        // Dashed connector from origin
+        ctx.beginPath();
+        ctx.moveTo(start.x, start.y);
+        ctx.lineTo(end.x, end.y);
+        ctx.strokeStyle = "rgba(214, 186, 126, 0.3)";
+        ctx.setLineDash([5, 5]);
+        ctx.stroke();
+      } else if (mode.shape === 'radius' || mode.shape === 'sphere' || mode.shape === 'circle') {
+        const radiusPx = (mode.size || 10) / 5 * zoom;
+        ctx.fillStyle = "rgba(214, 186, 126, 0.25)";
+        ctx.strokeStyle = "rgba(214, 186, 126, 0.8)";
+        ctx.lineWidth = 2;
+        ctx.beginPath();
+        ctx.arc(end.x, end.y, radiusPx, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.stroke();
+
+        // Dashed connector from origin
+        ctx.beginPath();
+        ctx.moveTo(start.x, start.y);
+        ctx.lineTo(end.x, end.y);
+        ctx.strokeStyle = "rgba(214, 186, 126, 0.3)";
+        ctx.setLineDash([5, 5]);
+        ctx.stroke();
+      } else {
+        // Simple dashed line fallback for other shapes
+        ctx.beginPath();
+        ctx.moveTo(start.x, start.y);
+        ctx.lineTo(end.x, end.y);
+        ctx.strokeStyle = "rgba(214, 186, 126, 0.5)";
+        ctx.setLineDash([5, 5]);
+        ctx.stroke();
+
+        ctx.beginPath();
+        ctx.arc(start.x, start.y, 4, 0, Math.PI * 2);
+        ctx.fillStyle = "rgba(214, 186, 126, 0.5)";
+        ctx.fill();
+      }
+      ctx.restore();
+    }
+
+    function aoeContainsGridPoint(aoe, point) {
+      if (!aoe.origin || !cursorGridPos) return false;
+      const targetPos = aoe.aoeConfirmed ? aoe.lockedCursorGridPos : cursorGridPos;
+      if (!targetPos) return false;
+
+      const px = point.col + 0.5;
+      const py = point.row + 0.5;
+
+      if (aoe.shape === 'line') {
+        const x0 = aoe.origin.col + 0.5;
+        const y0 = aoe.origin.row + 0.5;
+        const x1 = targetPos.col + 0.5;
+        const y1 = targetPos.row + 0.5;
+
+        const dx = x1 - x0;
+        const dy = y1 - y0;
+        const dist = Math.hypot(dx, dy);
+        if (dist < 0.01) return false;
+
+        const lengthSq = (aoe.size || 30) / 5;
+        const widthSq = (aoe.width || 5) / 5;
+
+        const cx = px - x0;
+        const cy = py - y0;
+
+        const cosTheta = dx / dist;
+        const sinTheta = dy / dist;
+
+        const cLong = cx * cosTheta + cy * sinTheta;
+        const cPerp = -cx * sinTheta + cy * cosTheta;
+
+        return cLong >= 0 && cLong <= lengthSq && Math.abs(cPerp) <= widthSq / 2;
+      } else if (aoe.shape === 'cone') {
+        const x0 = aoe.origin.col + 0.5;
+        const y0 = aoe.origin.row + 0.5;
+        const x1 = targetPos.col + 0.5;
+        const y1 = targetPos.row + 0.5;
+
+        const dx = x1 - x0;
+        const dy = y1 - y0;
+        const dist = Math.hypot(dx, dy);
+        if (dist < 0.01) return false;
+
+        const rangeSq = (aoe.size || 15) / 5;
+        const cx = px - x0;
+        const cy = py - y0;
+        const cDist = Math.hypot(cx, cy);
+
+        if (cDist > rangeSq || cDist < 0.01) return false;
+
+        const dot = (cx * dx + cy * dy) / (cDist * dist);
+        // dot is cos(angle). 90 degree cone is +/- 45 deg, cos(45) approx 0.707
+        return dot >= 0.707;
+      } else if (aoe.shape === 'square') {
+        const sizeCells = (aoe.size || 10) / 5;
+        const halfSize = sizeCells / 2;
+        const dx = Math.abs(px - (targetPos.col + 0.5));
+        const dy = Math.abs(py - (targetPos.row + 0.5));
+        return dx <= halfSize && dy <= halfSize;
+      } else if (aoe.shape === 'radius' || aoe.shape === 'sphere' || aoe.shape === 'circle') {
+        const radiusCells = (aoe.size || 10) / 5;
+        const dx = px - (targetPos.col + 0.5);
+        const dy = py - (targetPos.row + 0.5);
+        return Math.hypot(dx, dy) <= radiusCells;
+      }
+
+      return false;
     }
 
     // --- Movement Range Helpers (Ported from LAN) ---
@@ -2803,6 +3510,11 @@
         }
       }
 
+      // AoE Preview Rendering
+      if (aoePlacementMode) {
+        renderAoePreview(aoePlacementMode);
+      }
+
       // Render tokens
       units.forEach(u => {
         if (!u.pos) return;
@@ -2832,6 +3544,30 @@
         ctx.textBaseline = "middle";
         ctx.fillStyle = "rgba(255,255,255,0.95)";
         ctx.fillText(label, x, y);
+
+        // AoE Preview targeting - highlight included tokens
+        if (aoePlacementMode && !active && u.pos) {
+          const effective = aoeContainsGridPoint(aoePlacementMode, u.pos);
+
+          if (effective) {
+            // Visual highlight for included target
+            ctx.beginPath();
+            ctx.arc(x, y, r + 6, 0, Math.PI * 2);
+            ctx.fillStyle = "rgba(214, 186, 126, 0.35)"; // Gold for derived
+            ctx.strokeStyle = "var(--gold)";
+
+            ctx.fill();
+            ctx.lineWidth = 3;
+            ctx.stroke();
+
+            // Inner accent
+            ctx.beginPath();
+            ctx.arc(x, y, r + 2, 0, Math.PI * 2);
+            ctx.lineWidth = 1;
+            ctx.strokeStyle = "rgba(255,255,255,0.6)";
+            ctx.stroke();
+          }
+        }
 
         // Target Preview indicator — make candidates clearly highlighted, and the
         // selected target much more obvious than unselected candidates.
@@ -2924,6 +3660,36 @@
         ctx.fillText("Esc to cancel", 320, 30);
       }
 
+      if (aoePlacementMode) {
+        const aoeTargets = units.filter(u => {
+          const active = (activeCid !== null && String(activeCid) === String(u.cid));
+          if (active || !u.pos) return false;
+          return aoeContainsGridPoint(aoePlacementMode, u.pos);
+        });
+        const targetCount = aoeTargets.length;
+        const targetPos = aoePlacementMode.aoeConfirmed ? aoePlacementMode.lockedCursorGridPos : cursorGridPos;
+
+        ctx.fillStyle = "rgba(0, 0, 0, 0.75)";
+        ctx.fillRect(10, 10, 320, 60);
+        ctx.strokeStyle = "#d6ba7e";
+        ctx.strokeRect(10, 10, 320, 60);
+        ctx.fillStyle = "#d6ba7e";
+        ctx.font = "bold 14px system-ui";
+        ctx.textAlign = "left";
+        ctx.fillText(`Action: ${aoePlacementMode.capabilityName}`, 20, 30);
+
+        ctx.font = "12px system-ui";
+        ctx.fillStyle = "#e8eef7";
+        ctx.fillText(`Shape: ${aoePlacementMode.shape} (${aoePlacementMode.size} ft) • ${targetCount} targets`, 20, 48);
+        const label = aoePlacementMode.aoeConfirmed ? "Locked" : "Aiming";
+        if (targetPos) {
+          ctx.fillText(`${label}: (${targetPos.col}, ${targetPos.row})`, 20, 64);
+        }
+
+        ctx.textAlign = "right";
+        ctx.fillText("Esc to cancel", 320, 30);
+      }
+
       if (freeMoveMode) {
         const selected = findCombatantByCid(freeMoveMode.selectedCid);
         ctx.fillStyle = "rgba(0, 0, 0, 0.72)";
@@ -2972,6 +3738,35 @@
         ctx.fillStyle = "rgba(255,255,255,0.95)";
         ctx.fillText(label, x, y);
         ctx.restore();
+      }
+
+      // Redesign ITR-20260603-G5HR: Damage Popups Rendering
+      const now = Date.now();
+      damagePopups = damagePopups.filter(p => p.expiresAt > now);
+      damagePopups.forEach(p => {
+        const u = units.find(unit => String(unit.cid) === String(p.targetCid));
+        if (!u || !u.pos) return;
+
+        const { x, y } = gridToScreen(u.pos.col, u.pos.row);
+        const elapsed = now - p.createdAt;
+        const progress = elapsed / DAMAGE_POPUP_DURATION_MS;
+
+        const floatingY = y - (progress * 40) - 20;
+        const alpha = progress < 0.2 ? progress / 0.2 : (progress > 0.8 ? (1 - progress) / 0.2 : 1);
+
+        ctx.save();
+        ctx.globalAlpha = alpha;
+        ctx.shadowBlur = 4;
+        ctx.shadowColor = "rgba(0,0,0,0.5)";
+        ctx.font = "bold 18px system-ui";
+        ctx.textAlign = "center";
+        ctx.fillStyle = damagePopupColorForType(p.damageType);
+        ctx.fillText(p.amount, x, floatingY);
+        ctx.restore();
+      });
+
+      if (damagePopups.length > 0) {
+        requestAnimationFrame(draw);
       }
     }
 

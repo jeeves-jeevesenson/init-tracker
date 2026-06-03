@@ -10,8 +10,8 @@ If an item is not marked as **Active** here, it is NOT current work.
 <!-- ACTIVE_WORK_STATUS_START -->
 - **Status:** Active
 - **Current Work Item:** WORK-20260530-black-tan-vda-scorcher-automation: Automate Black and Tan monster control and add VDA Scorcher
-- **Active Gate:** Gate 4: VDA Scorcher Stat Block & Lore
-- **Allowed Next Action:** Implement VDA Scorcher stat block and Scorched Earth Protocol.
+- **Active Gate:** Gate 5I-R: Final Scorcher smoke audit.
+- **Allowed Next Action:** Perform final browser smoke testing and mark WORK-20260530-black-tan-vda-scorcher-automation as complete.
 <!-- ACTIVE_WORK_STATUS_END -->
 
 ---

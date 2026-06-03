@@ -1,10 +1,10 @@
 # Monster Capability Quality Report
 
 ## Summary
-- Total overlays scanned: 24
-- Total capabilities scanned: 153
+- Total overlays scanned: 25
+- Total capabilities scanned: 164
 - Hard errors: 0
-- Warnings: 43
+- Warnings: 48
 
 ## Per-Monster Summary
 
@@ -19,8 +19,9 @@
 | black-and-tan-lieutenant | `monster_capabilities/vandergraff/black-and-tan-lieutenant.yaml` | 14 | 0 | 6 |
 | black-and-tan-major | `monster_capabilities/vandergraff/black-and-tan-major.yaml` | 17 | 0 | 7 |
 | black-and-tan-rifleman | `monster_capabilities/vandergraff/black-and-tan-rifleman.yaml` | 9 | 0 | 3 |
-| black-and-tan-shield-trooper | `monster_capabilities/vandergraff/black-and-tan-shield-trooper.yaml` | 11 | 0 | 4 |
+| black-and-tan-shield-trooper | `monster_capabilities/vandergraff/black-and-tan-shield-trooper.yaml` | 11 | 0 | 3 |
 | black-and-tan-suppression-gunner | `monster_capabilities/vandergraff/black-and-tan-suppression-gunner.yaml` | 13 | 0 | 2 |
+| black-and-tan-vda-scorcher | `monster_capabilities/vandergraff/black-and-tan-vda-scorcher.yaml` | 11 | 0 | 6 |
 | bugbear | `monster_capabilities/samples/bugbear.yaml` | 4 | 0 | 1 |
 | bugbear-warrior | `monster_capabilities/samples/bugbear-warrior.yaml` | 4 | 0 | 1 |
 | cultist | `monster_capabilities/samples/cultist.yaml` | 2 | 0 | 0 |
@@ -93,7 +94,6 @@
 - File: `monster_capabilities/vandergraff/black-and-tan-shield-trooper.yaml`
 - WARNING `manual_action_without_warning` `baton-and-boot`: Display-only/manual capability has no warning or reason.
 - WARNING `manual_action_without_warning` `fire-discipline`: Display-only/manual capability has no warning or reason.
-- WARNING `manual_action_without_warning` `interpose-shield`: Display-only/manual capability has no warning or reason.
 - WARNING `manual_action_without_warning` `vandergraff-drill`: Display-only/manual capability has no warning or reason.
 
 ### black-and-tan-suppression-gunner
@@ -101,6 +101,16 @@
 - File: `monster_capabilities/vandergraff/black-and-tan-suppression-gunner.yaml`
 - WARNING `manual_action_without_warning` `baton-and-boot`: Display-only/manual capability has no warning or reason.
 - WARNING `manual_action_without_warning` `set-up-gun`: Display-only/manual capability has no warning or reason.
+
+### black-and-tan-vda-scorcher
+
+- File: `monster_capabilities/vandergraff/black-and-tan-vda-scorcher.yaml`
+- WARNING `manual_action_without_warning` `fire-discipline`: Display-only/manual capability has no warning or reason.
+- WARNING `manual_action_without_warning` `fireproofed-suit`: Display-only/manual capability has no warning or reason.
+- WARNING `manual_action_without_warning` `heavy-protective-rig`: Display-only/manual capability has no warning or reason.
+- WARNING `manual_action_without_warning` `vandergraff-drill`: Display-only/manual capability has no warning or reason.
+- WARNING `save_area_metadata_missing` `flamethrower-burst`: Save ability description mentions area/range but mechanics.shape is missing.
+- WARNING `save_area_metadata_missing` `sweeping-burn`: Save ability description mentions area/range but mechanics.shape is missing.
 
 ### bugbear
 

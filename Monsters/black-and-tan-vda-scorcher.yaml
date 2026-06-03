@@ -1,0 +1,52 @@
+name: Black and Tan VDA Scorcher
+size: Medium
+type: Humanoid
+alignment: Lawful Evil
+initiative: '+0'
+ac: '18'
+hp: 126
+speed:
+  Normal: 20 ft.
+challenge_rating: '7'
+abilities:
+  Str: 18
+  Dex: 10
+  Con: 18
+  Int: 11
+  Wis: 12
+  Cha: 10
+saving_throws:
+  Con: 7
+  Wis: 4
+skills:
+  Perception: 4
+senses: Passive Perception 14
+languages:
+- Common
+damage_resistances:
+- fire
+actions:
+- name: Flamethrower Burst
+  desc: "The Scorcher releases a 15-foot cone of fire. Each creature in that area must make a DC 15 Dexterity saving throw, taking 21 (6d6) fire damage on a failed save, or half as much damage on a successful one. Spends 2 fuel."
+- name: Sweeping Burn
+  desc: "The Scorcher sweeps a 30-foot line that is 5 feet wide. Each creature in that area must make a DC 15 Dexterity saving throw, taking 21 (6d6) fire damage on a failed save, or half as much damage on a successful one. Spends 3 fuel."
+- name: Ignite Ground
+  desc: "The Scorcher ignites a 10-foot square area within 30 feet. The area becomes difficult terrain and any creature that enters the area or starts its turn there takes 7 (2d6) fire damage. Spends 2 fuel."
+- name: Tank Bash
+  desc: "{@atk mw} {@hit 7} to hit, reach 5 ft., one target. {@h}8 ({@damage 1d8 + 4}) bludgeoning damage."
+bonus_actions:
+- name: Brace Hose
+  desc: "Until the end of the current turn, the Scorcher’s flamethrower DC increases by 2 and its range increases by 5 feet."
+- name: Swap Tank
+  desc: "The Scorcher replaces its current fuel tank with a reserve tank, restoring fuel to maximum."
+traits:
+- name: Heavy Protective Rig
+  desc: "The Scorcher has disadvantage on Dexterity (Stealth) checks and cannot use the Dash action."
+- name: Fireproofed Suit
+  desc: "The Scorcher has resistance to fire damage."
+- name: Protocol Implant
+  desc: "The Scorcher is eligible for the Scorched Earth Protocol."
+- name: Vandergraff Drill
+  desc: "If this creature starts its turn within 30 feet of an allied Black and Tan officer it can see or hear, it gains +1 to attack rolls until the start of its next turn."
+- name: Fire Discipline
+  desc: "This creature does not expend extra fuel on a missed attack."
