@@ -10,8 +10,8 @@ If an item is not marked as **Active** here, it is NOT current work.
 <!-- ACTIVE_WORK_STATUS_START -->
 - **Status:** Active
 - **Current Work Item:** WORK-20260603-browser-smoke-harness-scorcher-ignite-ground
-- **Active Gate:** Gate 0 — Current-state refresh and scope confirmation
-- **Allowed Next Action:** Gate 0 complete. Proceed to Gate 1 (Instrumentation) upon next directive.
+- **Active Gate:** Gate 1 — Instrumentation
+- **Allowed Next Action:** implement only the instrumentation needed for the Scorcher pilot and future extensible harness
 <!-- ACTIVE_WORK_STATUS_END -->
 
 ---

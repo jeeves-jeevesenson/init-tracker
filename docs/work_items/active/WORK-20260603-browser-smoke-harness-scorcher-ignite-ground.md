@@ -10,7 +10,11 @@ Active
 
 ## Active Gate
 
-Gate 0 — Current-state refresh and scope confirmation
+Gate 1 — Instrumentation
+
+## Note (2026-06-04)
+
+Gate 0 (Architecture/Planning) is closed. Gate 1 (Instrumentation) is ready for implementation.
 
 ## Product Goal
 
