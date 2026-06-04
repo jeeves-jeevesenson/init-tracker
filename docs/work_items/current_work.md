@@ -10,8 +10,8 @@ If an item is not marked as **Active** here, it is NOT current work.
 <!-- ACTIVE_WORK_STATUS_START -->
 - **Status:** Active
 - **Current Work Item:** WORK-20260603-browser-smoke-harness-scorcher-ignite-ground
-- **Active Gate:** Gate 2 — Deterministic Scorcher fixture
-- **Allowed Next Action:** implement the debug-only backend fixture route for the Scorcher pilot
+- **Active Gate:** Gate 3 — Harness shell and artifacts
+- **Allowed Next Action:** implement the Playwright harness runner and artifact collector
 <!-- ACTIVE_WORK_STATUS_END -->
 
 ---

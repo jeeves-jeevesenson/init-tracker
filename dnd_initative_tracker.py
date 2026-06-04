@@ -5192,6 +5192,86 @@ class LanController:
                 "snapshot": _dm_console_snapshot(),
             }
 
+        @self._fastapi_app.post("/api/dev/smoke-fixtures/dmcontrol-scorcher-ignite-ground")
+        async def dev_smoke_fixture_scorcher_ignite_ground(request: Request):
+            """Seed a deterministic /dmcontrol state for the Scorcher Ignite Ground pilot."""
+            from runtime_config import debugging_env_enabled
+            if not debugging_env_enabled():
+                raise HTTPException(status_code=403, detail="Debugging mode is not enabled.")
+
+            # Note: We skip _check_dm_auth for this dev fixture to simplify automated harness setup,
+            # as it is already gated by INIT_TRACKER_DEBUGGING.
+
+            try:
+                # 1. Reset everything
+                self._dm_service.end_combat()
+
+                t = self.app
+                with self._dm_service._lock:
+                    # Clear all combatants
+                    cids = list(t.combatants.keys())
+                    cleanup = getattr(t, "_remove_combatants_with_lan_cleanup", None)
+                    if callable(cleanup):
+                        cleanup(cids)
+                    else:
+                        t.combatants.clear()
+                        t.current_cid = None
+
+                    # 2. Add Black and Tan VDA Scorcher
+                    scorcher_entry = {
+                        "name": "Scorcher Pilot",
+                        "monster_slug": "black-and-tan-vda-scorcher",
+                        "initiative": 20
+                    }
+                    # And a target (bandit is fine for DM control testing)
+                    target_entry = {
+                        "name": "Target Dummy",
+                        "monster_slug": "bandit",
+                        "initiative": 10
+                    }
+
+                    self._dm_service.add_monster_spec_combatants([scorcher_entry, target_entry])
+
+                    # 3. Initialize Map (Clear existing)
+                    t._dm_create_blank_map(cols=20, rows=20)
+
+                    # 4. Find CIDs
+                    scorcher_cid = None
+                    target_cid = None
+                    for cid, c in t.combatants.items():
+                        if c.name == "Scorcher Pilot":
+                            scorcher_cid = cid
+                        elif c.name == "Target Dummy":
+                            target_cid = cid
+
+                    if not scorcher_cid:
+                        raise Exception("Failed to create Scorcher Pilot.")
+
+                    # 5. Place combatants
+                    t._dm_place_combatant_on_map(scorcher_cid, 5, 5)
+                    t._dm_place_combatant_on_map(target_cid, 7, 5) # 10ft away
+
+                    # 6. Start combat
+                    self._dm_service.start_combat()
+
+                    # 7. Ensure Scorcher's turn
+                    self._dm_service.set_turn_here(cid=scorcher_cid)
+
+                return {
+                    "ok": True,
+                    "fixture_id": "dmcontrol-scorcher-ignite-ground",
+                    "actor_cid": scorcher_cid,
+                    "target_cid": target_cid,
+                    "expected_action": "Ignite Ground",
+                    "expected_initial_hazard_count": 0,
+                    "dmcontrol_url": "/dmcontrol",
+                    "snapshot": _dm_console_snapshot(include_tactical=True)
+                }
+
+            except Exception as exc:
+                self._append_lan_log(f"Fixture error: {exc}", level="error")
+                raise HTTPException(status_code=500, detail=f"Failed to seed fixture: {exc}")
+
         @self._fastapi_app.get("/api/dm/map/tactical-presets")
         async def dm_tactical_presets(request: Request):
             """List tactical presets for DM battlefield/map controls."""

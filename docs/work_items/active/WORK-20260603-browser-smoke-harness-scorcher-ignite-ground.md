@@ -153,11 +153,18 @@ Notes (2026-06-04):
 
 ### Gate 2 — Deterministic Scorcher fixture
 
-**Status: Pending**
+**Status: Completed**
 
 Tasks:
-- [ ] Add debug-only fixture route or fixture-load strategy.
-- [ ] Add route gating tests.
+- [x] Implement debug-only route `POST /api/dev/smoke-fixtures/dmcontrol-scorcher-ignite-ground`.
+- [x] Route seeds a clean 20x20 grid with Scorcher at (5,5) and target at (7,5).
+- [x] Add backend tests for fixture route (`tests/test_scorcher_smoke_fixture.py`).
+
+Notes (2026-06-04):
+- Route added to `LanController` in `dnd_initative_tracker.py`.
+- Gated by `INIT_TRACKER_DEBUGGING` via `runtime_config.debugging_env_enabled()`.
+- Successfully verified with `tests/test_scorcher_smoke_fixture.py`.
+- Fixture returns `actor_cid`, `target_cid`, and `expected_action` for harness consumption.
 
 ### Gate 3 — Harness shell and artifacts
 
