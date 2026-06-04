@@ -449,34 +449,34 @@
     </div>
 
     <main class="main-surface" id="mapWrap">
-      <canvas id="mapCanvas"></canvas>
+      <canvas id="mapCanvas" data-testid="dmcontrol-map-canvas"></canvas>
       <div id="statusOverlay" class="status-overlay" style="display:none;"></div>
     </main>
 
     <div id="splitHandle" class="split-handle" role="separator" aria-orientation="horizontal" title="Drag to resize map / control split"></div>
 
     <footer class="control-bar" id="controlBar">
-      <div id="activeActorPanel">
+      <div id="activeActorPanel" data-testid="dmcontrol-active-actor-panel">
         <div class="status-idle">Waiting for combat data...</div>
       </div>
-      <div id="activeActionsPanel" class="action-panel">
+      <div id="activeActionsPanel" class="action-panel" data-testid="dmcontrol-active-actions-panel">
         <!-- Actions rendered here -->
       </div>
     </footer>
   </div>
 
-  <div id="resolutionModal" class="modal-overlay">
+  <div id="resolutionModal" class="modal-overlay" data-testid="dmcontrol-resolution-modal">
     <div class="modal-content">
       <div class="modal-header">
-        <h2 id="modalTitle">Resolve Action</h2>
+        <h2 id="modalTitle" data-testid="dmcontrol-modal-title">Resolve Action</h2>
         <button class="workspace-link" onclick="closeLocalResolutionTray()" style="padding:4px 8px; font-size:11px;">✕</button>
       </div>
-      <div class="modal-body" id="modalBody">
+      <div class="modal-body" id="modalBody" data-testid="dmcontrol-modal-body">
         <!-- Modal content rendered here -->
       </div>
       <div class="modal-footer" id="modalFooter">
         <button class="cancel-btn" onclick="closeLocalResolutionTray()">Cancel</button>
-        <button class="apply-btn" id="modalApplyBtn" onclick="applyLocalResolutionResultsFromModal()">Apply Result</button>
+        <button class="apply-btn" id="modalApplyBtn" data-testid="dmcontrol-apply-result" onclick="applyLocalResolutionResultsFromModal()">Apply Result</button>
       </div>
     </div>
   </div>
@@ -2177,7 +2177,7 @@
         </div>
 
         <div class="modal-field" style="margin-top: 16px;">
-          <span class="modal-label" style="margin-bottom: 8px;">Affected Creatures (${targets.length})</span>
+          <span class="modal-label" style="margin-bottom: 8px;" data-testid="dmcontrol-aoe-affected-count">Affected Creatures (${targets.length})</span>
           <div style="display: flex; flex-direction: column; gap: 8px;">
             ${targets.length === 0 ? '<div class="actor-meta" style="padding: 12px; background: rgba(0,0,0,0.2); border-radius: 6px; text-align: center;">No creatures affected in the selected area.</div>' : ''}
             ${targets.map(t => {
@@ -2866,7 +2866,7 @@
         }).join('');
 
         return `
-          <div class="${cardCls.join(' ')}" onclick="selectCapability('${esc(item.id)}')">
+          <div class="${cardCls.join(' ')}" onclick="selectCapability('${esc(item.id)}')" data-testid="dmcontrol-action-card-${item.id}">
             <div class="card-header">
               <span class="card-name">${esc(item.name)}</span>
               <span class="card-badges">${badgeHtml}</span>
@@ -3876,6 +3876,27 @@
     // Initial fetch and start polling
     fetchState();
     pollInterval = setInterval(fetchState, 2000);
+
+    // --- Smoke Instrumentation (ITR-20260604-G1-01) ---
+    window.__dmcontrolSmoke = {
+      ready: () => !!state && !!state.tactical_map,
+      state: () => state,
+      selectedAction: () => selectedCapabilityId,
+      isModalOpen: () => document.getElementById('resolutionModal')?.classList.contains('active') || false,
+      activeActorCid: () => state?.active_cid,
+      hazardCount: () => (state?.tactical_map?.hazards || []).length,
+      aoeState: () => aoePlacementMode ? { ...aoePlacementMode } : null,
+      targetCount: () => {
+        if (aoePlacementMode) {
+          return (state?.tactical_map?.units || []).filter(u => {
+            if (String(u.cid) === String(aoePlacementMode.actorCid)) return false;
+            if (!u.pos) return false;
+            return aoeContainsGridPoint(aoePlacementMode, u.pos);
+          }).length;
+        }
+        return localResolutionTray ? 1 : 0;
+      }
+    };
   </script>
 </body>
 </html>

@@ -136,14 +136,20 @@ Tasks:
 - [x] Define harness foundation architecture (Scenario, Role, Actor models).
 - [x] Prepare Gate 1 task list.
 
-### Gate 1 — `/dmcontrol` test IDs and smoke helper
+### Gate 1 — Instrumentation
 
-**Status: Pending**
+**Status: Completed (Frontend)**
 
 Tasks:
-- [ ] Add stable `data-testid` attributes to `/dmcontrol`.
-- [ ] Add debug-gated `window.__dmcontrolSmoke` helper.
-- [ ] Run asset syntax checks.
+- [x] Add stable `data-testid` attributes to `/dmcontrol`.
+- [x] Add debug-gated `window.__dmcontrolSmoke` helper.
+- [x] Run asset syntax checks.
+
+Notes (2026-06-04):
+- Frontend data-testid hooks added for action cards, map, resolution modal, and apply button.
+- `window.__dmcontrolSmoke` added providing logical state (active actor, selected action, modal status, hazard count).
+- Backend fixture route still pending (Gate 2).
+- Harness runner/scenario files still pending (Gate 3/4).
 
 ### Gate 2 — Deterministic Scorcher fixture
 
