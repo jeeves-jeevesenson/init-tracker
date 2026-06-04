@@ -11,7 +11,7 @@ If an item is not marked as **Active** here, it is NOT current work.
 - **Status:** Active
 - **Current Work Item:** WORK-20260603-browser-smoke-harness-scorcher-ignite-ground
 - **Active Gate:** Gate 0 — Current-state refresh and scope confirmation
-- **Allowed Next Action:** Run context refresh, confirm repo state, confirm current automation conventions, and prepare Gate 1 task only if Gate 0 confirms scope.
+- **Allowed Next Action:** Gate 0 complete. Proceed to Gate 1 (Instrumentation) upon next directive.
 <!-- ACTIVE_WORK_STATUS_END -->
 
 ---

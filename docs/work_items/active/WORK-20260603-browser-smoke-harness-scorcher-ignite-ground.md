@@ -43,13 +43,25 @@ In scope:
 
 ### Gate 0 — Current-state refresh and scope confirmation
 
-**Status: Active**
+**Status: Completed**
+
+Findings:
+- **Repo state confirmed**: Tree is clean. Recent Scorcher automation work (WORK-20260530-black-tan-vda-scorcher-automation) is completed and committed.
+- **Automation convention confirmed**: Existing `scripts/validation/lan-smoke-playwright.py` uses `playwright.sync_api`. The harness will follow this direct-library Python style.
+- **Dependencies confirmed**: `playwright` is present in `requirements.txt`.
+- **Minimal implementation target**:
+  - Harness: `scripts/validation/dmcontrol-smoke-playwright.py`.
+  - Instrumentation: Add `data-testid` to `assets/web/dmcontrol/index.html` and expose `window.__dmcontrolSmoke`.
+  - Fixture: Add a debug-only POST route `/api/dev/smoke-fixtures/dmcontrol-scorcher-ignite-ground` in `dnd_initative_tracker.py`.
+- **Blockers/Risks**: None identified. Asset size for `dmcontrol` is large (3.8k lines); surgical `data-testid` additions must be verified with `TestDmConsoleAssetSyntax`.
+
+Recommended next gate: Gate 1 — `/dmcontrol` test IDs and smoke helper.
 
 Tasks:
-- [ ] Run context refresh (`scripts/chatgpt_context_refresher.sh`).
-- [ ] Confirm repo state (clean tree, recent Scorcher work committed).
-- [ ] Confirm current automation conventions (Python Playwright library style).
-- [ ] Prepare Gate 1 task list.
+- [x] Run context refresh (`scripts/chatgpt_context_refresher.sh`).
+- [x] Confirm repo state (clean tree, recent Scorcher work committed).
+- [x] Confirm current automation conventions (Python Playwright library style).
+- [x] Prepare Gate 1 task list.
 
 ### Gate 1 — `/dmcontrol` test IDs and smoke helper
 
