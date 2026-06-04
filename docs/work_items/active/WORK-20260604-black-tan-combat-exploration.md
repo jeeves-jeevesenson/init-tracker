@@ -54,19 +54,29 @@ The scenario will seed a combat session containing the full roster of available 
 
 ## Gate Progress
 
-### Gate 0: Scenario Inventory and Scope Definition (ACTIVE)
+### Gate 0: Scenario Inventory and Scope Definition (COMPLETE)
 - [x] Define roster for all combatants vs all Black and Tans
 - [x] Identify fixture strategy (extending smoke fixture API)
 - [x] Define automation boundary (multi-round combat)
 - [x] Define evidence output (logs/screenshots/traces)
-- [ ] Identify and document risks
+- [x] Identify and document risks
 
-### Gate 1: Deterministic All-vs-Black-and-Tan Fixture
-- [ ] Implement fixture seeding for full roster
-- [ ] Verify map placement and initative order
-- [ ] Validate snapshot consistency
+### Gate 1: Deterministic All-vs-Black-and-Tan Fixture (COMPLETE)
+- [x] Implement fixture seeding for full roster
+- [x] Verify map placement and initative order
+- [x] Validate snapshot consistency
 
-### Gate 2: Harness Scenario Runner for Multi-Round Combat
+#### Gate 1 Results
+- **Route Path:** `POST /api/dev/smoke-fixtures/black-tan-combat-exploration`
+- **Final Roster:** 10 Players, 9 Black and Tan Monsters, 2 automatic Summons (Total 21 combatants).
+- **Player Names:** Dorian, Eldramar, Fred, John Twilight, Johnny Morris, Malagrou, Old Man, Throat Goat, Vicnor, стихия.
+- **Monster Slugs:** black-and-tan-captain, black-and-tan-constable, black-and-tan-field-medic, black-and-tan-lieutenant, black-and-tan-major, black-and-tan-rifleman, black-and-tan-vda-scorcher, black-and-tan-shield-trooper, black-and-tan-suppression-gunner.
+- **Template Character:** Excluded (file not found in repo, confirmed 10 active players).
+- **Automatic Summons:** Eldramar (Owl) and стихия (Raven) are automatically added by the engine.
+- **Map Strategy:** 30x30 map. Players at cols 2-3, Monsters at cols 26-27. Deterministic non-overlapping rows.
+- **Tests Passed:** `tests/test_black_tan_combat_fixture.py` (validated rejection when debugging off, success when on, counts, and placements).
+
+### Gate 2: Harness Scenario Runner for Multi-Round Combat (ACTIVE)
 - [ ] Implement multi-round cycle logic
 - [ ] Handle action selection and resolution
 - [ ] Verify turn advancement

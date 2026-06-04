@@ -11,6 +11,7 @@ sys.path.append(os.getcwd())
 os.environ["INIT_TRACKER_HEADLESS"] = "1"
 os.environ["INIT_TRACKER_DEBUGGING"] = "1"
 os.environ["INIT_TRACKER_ENABLE_TACTICAL_MAP"] = "1"
+os.environ["INIT_TRACKER_MODE"] = "production"
 
 import dnd_initative_tracker as tracker_mod
 

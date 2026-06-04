@@ -5272,6 +5272,94 @@ class LanController:
                 self._append_lan_log(f"Fixture error: {exc}", level="error")
                 raise HTTPException(status_code=500, detail=f"Failed to seed fixture: {exc}")
 
+        @self._fastapi_app.post("/api/dev/smoke-fixtures/black-tan-combat-exploration")
+        async def dev_smoke_fixture_black_tan_combat_exploration(request: Request):
+            """Seed a deterministic /dmcontrol state for all players vs all Black and Tans."""
+            from runtime_config import debugging_env_enabled
+            if not debugging_env_enabled():
+                raise HTTPException(status_code=403, detail="Debugging mode is not enabled.")
+
+            try:
+                # 1. Reset everything
+                self._dm_service.end_combat()
+
+                t = self.app
+                with self._dm_service._lock:
+                    # Clear all combatants
+                    cids = list(t.combatants.keys())
+                    cleanup = getattr(t, "_remove_combatants_with_lan_cleanup", None)
+                    if callable(cleanup):
+                        cleanup(cids)
+                    else:
+                        t.combatants.clear()
+                        t.current_cid = None
+
+                    # 2. Add Players (10)
+                    player_names = [
+                        "Dorian", "Eldramar", "Fred", "John Twilight", "Johnny Morris",
+                        "Malagrou", "Old Man", "Throat Goat", "Vicnor", "стихия"
+                    ]
+                    p_result = self._dm_service.add_player_profile_combatants(player_names)
+                    if not p_result.get("ok"):
+                        raise Exception(f"Failed to add players: {p_result.get('error')}")
+
+                    # 3. Add Black and Tan Monsters (9)
+                    monster_slugs = [
+                        "black-and-tan-captain", "black-and-tan-constable", "black-and-tan-field-medic",
+                        "black-and-tan-lieutenant", "black-and-tan-major", "black-and-tan-rifleman",
+                        "black-and-tan-vda-scorcher", "black-and-tan-shield-trooper",
+                        "black-and-tan-suppression-gunner"
+                    ]
+                    monster_entries = [{"name": slug.replace("black-and-tan-", "").title(), "monster_slug": slug} for slug in monster_slugs]
+                    m_result = self._dm_service.add_monster_spec_combatants(monster_entries)
+                    if not m_result.get("ok"):
+                        raise Exception(f"Failed to add monsters: {m_result.get('error')}")
+
+                    # 4. Initialize Map
+                    t._dm_create_blank_map(cols=30, rows=30)
+
+                    # 5. Place combatants deterministically
+                    # Players on the left (cols 2-3)
+                    player_cids = []
+                    for entry in p_result.get("created", []):
+                        player_cids.append(entry["cid"])
+                    for i, cid in enumerate(player_cids):
+                        col = 2 + (i % 2)
+                        row = 2 + (i // 2) * 2
+                        t._dm_place_combatant_on_map(cid, col, row)
+
+                    # Monsters on the right (cols 26-27)
+                    monster_cids = []
+                    for entry in m_result.get("added", []):
+                        monster_cids.append(entry["cid"])
+
+                    for i, cid in enumerate(monster_cids):
+                        col = 26 + (i % 2)
+                        row = 2 + (i // 2) * 2
+                        t._dm_place_combatant_on_map(cid, col, row)
+
+                    # 6. Start combat (Initialize initiative)
+                    self._dm_service.start_combat()
+
+                    # 7. Set active turn to first player
+                    if player_cids:
+                        self._dm_service.set_turn_here(cid=player_cids[0])
+
+                return {
+                    "ok": True,
+                    "fixture_id": "black-tan-combat-exploration",
+                    "player_count": len(player_cids),
+                    "monster_count": len(monster_cids),
+                    "player_names": player_names,
+                    "monster_names": [e["name"] for e in monster_entries],
+                    "dmcontrol_url": "/dmcontrol",
+                    "snapshot": _dm_console_snapshot(include_tactical=True)
+                }
+
+            except Exception as exc:
+                self._append_lan_log(f"Fixture error: {exc}", level="error")
+                raise HTTPException(status_code=500, detail=f"Failed to seed fixture: {exc}")
+
         @self._fastapi_app.get("/api/dm/map/tactical-presets")
         async def dm_tactical_presets(request: Request):
             """List tactical presets for DM battlefield/map controls."""

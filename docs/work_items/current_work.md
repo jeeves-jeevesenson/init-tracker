@@ -10,8 +10,8 @@ If an item is not marked as **Active** here, it is NOT current work.
 <!-- ACTIVE_WORK_STATUS_START -->
 - **Status:** Active
 - **Current Work Item:** WORK-20260604-black-tan-combat-exploration
-- **Active Gate:** Gate 0 — Scenario inventory and scope definition
-- **Allowed Next Action:** scenario inventory and scope definition only
+- **Active Gate:** Gate 2 — Harness scenario runner for multi-round combat
+- **Allowed Next Action:** Implement multi-round cycle logic in browser harness
 <!-- ACTIVE_WORK_STATUS_END -->
 
 ---
