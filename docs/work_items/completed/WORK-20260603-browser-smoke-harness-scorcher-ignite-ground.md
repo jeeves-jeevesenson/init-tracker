@@ -70,6 +70,7 @@ The harness architecture must support:
 - `python3 -m unittest tests/test_browser_smoke_harness.py` (Passes)
 - `python3 -m unittest tests/test_scorcher_smoke_fixture.py` (Passes)
 - `scripts/validation/browser-smoke-harness.py --scenario scorcher-ignite-ground --start-server` (Passes locally)
+- **Latest Artifact (Pass):** `logs/browser-smoke/scorcher-ignite-ground/20260604_142105/`
 
 ## Commitment
 

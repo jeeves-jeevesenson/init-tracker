@@ -8,10 +8,10 @@ If an item is not marked as **Active** here, it is NOT current work.
 ## Current Status
 
 <!-- ACTIVE_WORK_STATUS_START -->
-- **Status:** Idle
+- **Status:** No Active Work
 - **Current Work Item:** None
 - **Active Gate:** None
-- **Allowed Next Action:** Stop and report
+- **Allowed Next Action:** developer decision required — push completed commits, open a new work item, create a planning doc, or start a new bug/report.
 <!-- ACTIVE_WORK_STATUS_END -->
 
 ---
@@ -30,7 +30,7 @@ If an item is not marked as **Active** here, it is NOT current work.
 | ID | Title | Completion Date | Evidence |
 | --- | --- | --- | --- |
 <!-- COMPLETED_WORK_TABLE_START -->
-| WORK-20260603-browser-smoke-harness-scorcher-ignite-ground | Browser Automation Smoke Harness Foundation (Pilot: Scorcher) | 2026-06-04 | docs/work_items/active/WORK-20260603-browser-smoke-harness-scorcher-ignite-ground.md |
+| WORK-20260603-browser-smoke-harness-scorcher-ignite-ground | Browser Automation Smoke Harness Foundation (Pilot: Scorcher) | 2026-06-04 | [completed/WORK-20260603-browser-smoke-harness-scorcher-ignite-ground.md](completed/WORK-20260603-browser-smoke-harness-scorcher-ignite-ground.md) |
 | WORK-20260530-black-tan-vda-scorcher-automation | Automate Black and Tan monster control and add VDA Scorcher | 2026-06-04 | docs/work_items/completed/WORK-20260530-black-tan-vda-scorcher-automation.md |
 | ITR-20260529-A0-08 | Add current work ledger and long-term planning GPT workflow | 2026-05-30 | docs/work_items/completed/ITR-20260529-A0-08.md |
 <!-- COMPLETED_WORK_TABLE_END -->
