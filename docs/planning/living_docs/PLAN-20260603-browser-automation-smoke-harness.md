@@ -30,6 +30,8 @@ The first target is the current Scorcher gate:
 
 **Black and Tan VDA Scorcher Ignite Ground / Apply Result browser smoke** on `/dmcontrol`.
 
+*Note (2026-06-04): While Scorcher is the first pilot, the foundational goal is a whole-app local browser/AI smoke harness capable of DM + player role testing. The harness structure should be designed for extensibility and not hard-coded for the pilot scenario.*
+
 ## Scope
 
 In scope:

@@ -2,7 +2,7 @@
 
 ## ID and Title
 
-WORK-20260603-browser-smoke-harness-scorcher-ignite-ground: Add bounded Playwright smoke for Scorcher Ignite Ground Apply Result
+WORK-20260603-browser-smoke-harness-scorcher-ignite-ground: Browser Automation Smoke Harness Foundation (Pilot: Scorcher Ignite Ground)
 
 ## Status
 
@@ -12,56 +12,81 @@ Active
 
 Gate 0 — Current-state refresh and scope confirmation
 
-## Goal
+## Product Goal
 
-Add a local-only Python Playwright smoke harness for `/dmcontrol` that seeds a deterministic Black and Tan VDA Scorcher encounter, performs Ignite Ground zero-target Apply Result, verifies persistent fire hazards, collects artifacts, and reports pass/fail without developer manual browser repetition.
+Establish a foundational whole-app local browser/AI smoke harness capable of exercising the entire application as both DM and Player roles over time. This harness allows agents to run high-fatigue UI smoke flows locally and provide deterministic pass/fail evidence to the developer.
+
+## Pilot Scenario
+
+The first deterministic pilot scenario is the **Black and Tan VDA Scorcher Ignite Ground / Apply Result** on `/dmcontrol`. This scenario serves to validate the harness foundation and instrumentation strategy.
 
 ## Parent Plan
 
 [PLAN-20260603-browser-automation-smoke-harness.md](../../planning/living_docs/PLAN-20260603-browser-automation-smoke-harness.md)
 
-## Scope (Implementation Slice 1)
+## Future-Facing Harness Requirements
 
-In scope:
+The harness architecture must support:
+- **DM Browser Role**: Automation for the DM control surface and map.
+- **Player Browser Role(s)**: Multi-role support for one or more player views (LAN).
+- **Deterministic Scenario Setup/Reset**: Atomic seeding of specific combat/map states via fixtures.
+- **Scripted Combat Actions**: Explicit sequences of capability selection, targeting, and resolution.
+- **Observable Pass/Fail Checks**: Assertions against both DOM state and logical application state (via helpers).
+- **Debug Trace and Smoke Log Collection**: Aggregation of server logs, browser console errors, network failures, and debug-trace JSONL.
+- **Bug Evidence Output**: Clear artifacts (screenshots, traces, summaries) for developer and future agent diagnosis.
+
+## Scope (Implementation Slice 1: Pilot)
+
+In scope for the pilot:
 
 - Gate 1: `/dmcontrol` stable test IDs.
-- Debug-gated smoke helper.
-- Deterministic Scorcher fixture strategy.
-- One Scorcher Ignite Ground Playwright scenario only.
+- Debug-gated smoke helper foundation (designed for extensibility).
+- Deterministic fixture strategy (seeding Scorcher).
+- One pilot scenario: Scorcher Ignite Ground.
 
 ## Non-Goals
 
-- No LAN sync.
-- No broad regression suite.
-- No CI integration.
-- No production dependency.
-- No additional Scorcher action scenarios.
-- No deployment changes.
-- No browser automation expansion beyond the first scenario until stable.
+- No full autonomous AI explorer in the first implementation gate.
+- No CI integration yet.
+- No production dependency or deployment changes.
+- No LAN sync testing in the first pilot gate.
+- No broad app suite before the pilot harness is verified.
+- No persistent browser automation expansion beyond the first scenario until stable.
 
 ## Gates
 
 ### Gate 0 — Current-state refresh and scope confirmation
 
-**Status: Completed**
+**Status: In Progress**
+
+Purpose:
+- Confirm repo state and automation conventions.
+- **Design the harness foundation** so it is extensible to other scenarios and roles (DM/Player) and not hard-coded for Scorcher only.
+- Define the minimal harness architecture, scenario format, and role model.
 
 Findings:
 - **Repo state confirmed**: Tree is clean. Recent Scorcher automation work (WORK-20260530-black-tan-vda-scorcher-automation) is completed and committed.
 - **Automation convention confirmed**: Existing `scripts/validation/lan-smoke-playwright.py` uses `playwright.sync_api`. The harness will follow this direct-library Python style.
 - **Dependencies confirmed**: `playwright` is present in `requirements.txt`.
 - **Minimal implementation target**:
-  - Harness: `scripts/validation/dmcontrol-smoke-playwright.py`.
+  - Harness: `scripts/validation/dmcontrol-smoke-playwright.py` (to be renamed/generalized to `scripts/validation/browser-smoke-harness.py` or similar in a future gate if appropriate).
   - Instrumentation: Add `data-testid` to `assets/web/dmcontrol/index.html` and expose `window.__dmcontrolSmoke`.
   - Fixture: Add a debug-only POST route `/api/dev/smoke-fixtures/dmcontrol-scorcher-ignite-ground` in `dnd_initative_tracker.py`.
 - **Blockers/Risks**: None identified. Asset size for `dmcontrol` is large (3.8k lines); surgical `data-testid` additions must be verified with `TestDmConsoleAssetSyntax`.
 
-Recommended next gate: Gate 1 — `/dmcontrol` test IDs and smoke helper.
+Recommended next output for Gate 0:
+- Minimal harness architecture (base classes, role handling).
+- Scenario format/location definition (e.g., JSON or Python-based scenarios).
+- Role model for DM/Player browser sessions.
+- Detailed pilot scenario definition for Scorcher Ignite Ground.
+- Expansion path for broader combat/app exploration.
 
 Tasks:
 - [x] Run context refresh (`scripts/chatgpt_context_refresher.sh`).
 - [x] Confirm repo state (clean tree, recent Scorcher work committed).
 - [x] Confirm current automation conventions (Python Playwright library style).
-- [x] Prepare Gate 1 task list.
+- [ ] Define harness foundation architecture (Scenario, Role, Actor models).
+- [ ] Prepare Gate 1 task list.
 
 ### Gate 1 — `/dmcontrol` test IDs and smoke helper
 

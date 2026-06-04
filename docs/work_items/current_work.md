@@ -21,7 +21,7 @@ If an item is not marked as **Active** here, it is NOT current work.
 | ID | Title | Status | Goal |
 | --- | --- | --- | --- |
 <!-- ACTIVE_WORK_TABLE_START -->
-| WORK-20260603-browser-smoke-harness-scorcher-ignite-ground | Add bounded Playwright smoke for Scorcher Ignite Ground | Active | Add local-only Playwright smoke for /dmcontrol Scorcher Ignite Ground. |
+| WORK-20260603-browser-smoke-harness-scorcher-ignite-ground | Browser Automation Smoke Harness Foundation (Pilot: Scorcher) | Active | Establish a whole-app browser smoke harness foundation, starting with a Scorcher pilot. |
 <!-- ACTIVE_WORK_TABLE_END -->
 
 ---
