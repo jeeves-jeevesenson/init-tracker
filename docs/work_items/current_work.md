@@ -8,10 +8,10 @@ If an item is not marked as **Active** here, it is NOT current work.
 ## Current Status
 
 <!-- ACTIVE_WORK_STATUS_START -->
-- **Status:** Idle
-- **Current Work Item:** None
-- **Active Gate:** None
-- **Allowed Next Action:** Select a new work item or start a new planning pass.
+- **Status:** Active
+- **Current Work Item:** WORK-20260603-browser-smoke-harness-scorcher-ignite-ground
+- **Active Gate:** Gate 0 — Current-state refresh and scope confirmation
+- **Allowed Next Action:** Run context refresh, confirm repo state, confirm current automation conventions, and prepare Gate 1 task only if Gate 0 confirms scope.
 <!-- ACTIVE_WORK_STATUS_END -->
 
 ---
@@ -21,6 +21,7 @@ If an item is not marked as **Active** here, it is NOT current work.
 | ID | Title | Status | Goal |
 | --- | --- | --- | --- |
 <!-- ACTIVE_WORK_TABLE_START -->
+| WORK-20260603-browser-smoke-harness-scorcher-ignite-ground | Add bounded Playwright smoke for Scorcher Ignite Ground | Active | Add local-only Playwright smoke for /dmcontrol Scorcher Ignite Ground. |
 <!-- ACTIVE_WORK_TABLE_END -->
 
 ---

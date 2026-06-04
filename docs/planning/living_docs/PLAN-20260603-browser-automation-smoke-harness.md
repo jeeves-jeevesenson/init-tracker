@@ -6,9 +6,9 @@ PLAN-20260603-browser-automation-smoke-harness: Browser Automation Smoke Harness
 
 ## Status
 
-Ready for Orchestrator
+Promoted
 
-Planning-only status. This document does not activate implementation work. Orchestrator must ask the developer whether to finish/commit the current Scorcher work, promote this plan into a new active work item, or keep it as future planning.
+This plan was promoted to [WORK-20260603-browser-smoke-harness-scorcher-ignite-ground](../../work_items/active/WORK-20260603-browser-smoke-harness-scorcher-ignite-ground.md) on 2026-06-04.
 
 ## Last Updated
 
