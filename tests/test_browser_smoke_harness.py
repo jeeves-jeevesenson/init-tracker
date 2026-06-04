@@ -31,14 +31,48 @@ class TestBrowserSmokeHarness(unittest.TestCase):
         self.assertIn("--scenario", result.stdout)
 
     def test_list_scenarios(self):
-        """Verify --list-scenarios shows the pending Scorcher scenario."""
+        """Verify --list-scenarios shows the Scorcher scenario."""
         result = subprocess.run(
             [sys.executable, "scripts/validation/browser-smoke-harness.py", "--list-scenarios"],
             capture_output=True, text=True
         )
         self.assertEqual(result.returncode, 0)
         self.assertIn("scorcher-ignite-ground", result.stdout)
-        self.assertIn("Pilot: Scorcher Ignite Ground", result.stdout)
+        self.assertIn("Black and Tan VDA Scorcher Ignite Ground pilot", result.stdout)
+
+    def test_scorcher_scenario_attempt_artifacts(self):
+        """Verify the Scorcher scenario attempt creates artifacts even on failure."""
+        # This will fail because no server is running, but it should create artifacts
+        result = subprocess.run(
+            [sys.executable, "scripts/validation/browser-smoke-harness.py", 
+             "--scenario", "scorcher-ignite-ground", 
+             "--artifact-root", str(self.test_root),
+             "--base-url", "http://localhost:9999"], # Non-existent server
+            capture_output=True, text=True
+        )
+        self.assertEqual(result.returncode, 1)
+
+        # Verify artifact directory was created
+        self.assertTrue(self.test_root.exists())
+        # The structure is now: artifact-root / scenario-id / timestamp
+        scenario_dir = self.test_root / "scorcher-ignite-ground"
+        self.assertTrue(scenario_dir.exists())
+
+        runs = list(scenario_dir.iterdir())
+        self.assertEqual(len(runs), 1)
+
+        run_dir = runs[0]
+        summary_path = run_dir / "summary.json"
+        self.assertTrue(summary_path.exists())
+
+        with open(summary_path, "r", encoding="utf-8") as f:
+            summary = json.load(f)
+            self.assertEqual(summary["scenario"], "scorcher-ignite-ground")
+            self.assertEqual(summary["status"], "fail")
+            self.assertIn("dm", summary["roles"])
+            self.assertIn("artifacts", summary)
+            # Screenshots might be empty if it failed before browser launch or during run
+            self.assertIn("screenshots", summary["artifacts"])
 
     def test_unknown_scenario(self):
         """Verify unknown scenario IDs fail with a useful message."""
@@ -48,38 +82,6 @@ class TestBrowserSmokeHarness(unittest.TestCase):
         )
         self.assertEqual(result.returncode, 1)
         self.assertIn("Error: Unknown scenario 'non-existent'", result.stderr)
-
-    def test_pending_scorcher_scenario_artifacts(self):
-        """Verify the pending Scorcher scenario fails but creates artifacts."""
-        result = subprocess.run(
-            [sys.executable, "scripts/validation/browser-smoke-harness.py", 
-             "--scenario", "scorcher-ignite-ground", 
-             "--artifact-root", str(self.test_root)],
-            capture_output=True, text=True
-        )
-        # It should fail because it's not implemented yet (Gate 3 requirement)
-        self.assertEqual(result.returncode, 1)
-        self.assertIn("not implemented until Gate 4", result.stderr)
-        
-        # Verify artifact directory was created
-        self.assertTrue(self.test_root.exists())
-        runs = list(self.test_root.iterdir())
-        self.assertEqual(len(runs), 1)
-        
-        run_dir = runs[0]
-        summary_path = run_dir / "summary.json"
-        self.assertTrue(summary_path.exists())
-        
-        with open(summary_path, "r", encoding="utf-8") as f:
-            summary = json.load(f)
-            self.assertEqual(summary["scenario"], "scorcher-ignite-ground")
-            self.assertEqual(summary["status"], "not_implemented")
-            self.assertIn("dm", summary["roles"])
-            self.assertIn("artifacts", summary)
-            self.assertIn("server_log", summary["artifacts"])
-            # Metadata placeholder
-            self.assertIn("browser_context_metadata", summary)
-            self.assertIn("dm", summary["browser_context_metadata"])
 
 if __name__ == "__main__":
     unittest.main()
