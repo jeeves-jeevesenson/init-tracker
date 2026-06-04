@@ -3885,8 +3885,8 @@
       isModalOpen: () => document.getElementById('resolutionModal')?.classList.contains('active') || false,
       activeActorCid: () => state?.active_cid,
       hazardCount: () => (state?.tactical_map?.hazards || []).length,
-      aoeState: () => aoePlacementMode ? { ...aoePlacementMode } : null,
-      targetPreviewMode: () => targetPreviewMode ? { ...targetPreviewMode } : null,
+      aoeState: () => aoePlacementMode ? { active: true, ...aoePlacementMode } : { active: false },
+      targetPreviewMode: () => targetPreviewMode ? { active: true, ...targetPreviewMode } : { active: false },
       targetCount: () => {
         if (aoePlacementMode) {
           return (state?.tactical_map?.units || []).filter(u => {

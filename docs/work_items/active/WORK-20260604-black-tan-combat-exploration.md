@@ -88,10 +88,11 @@ The scenario will seed a combat session containing the full roster of available 
 - **Evidence Collection:** Per-turn `event_log.json`, failure/success screenshots, and extended `summary.json` metadata.
 - **Helper Additions:** Enhanced `window.__dmcontrolSmoke` with `activeActorName`, `roundOrTurn`, `availableActions`, `combatantSummary`, `modalSummary`, and `targetPreviewMode`.
 
-### Gate 3: Bug Evidence / Report Output (COMPLETE)
+### Gate 3: Bug Evidence / Report Output (ACTIVE)
 - [x] aggregate console/page/backend errors
 - [x] Generate summary report of "weird behavior"
 - [x] Capture trace evidence for identified issues (Screenshots captured; trace log skipped due to crash)
+- [ ] Fix BUG-20260604-SMOKE-01 (AoE state crash)
 
 #### Gate 3 Evidence
 - **Command Run:** `env INIT_TRACKER_DEBUGGING=1 .venv/bin/python scripts/validation/browser-smoke-harness.py --scenario black-tan-combat-exploration --max-rounds 1 --max-turns 40 --artifact-root logs/browser-smoke --base-url http://127.0.0.1:8787`
@@ -104,7 +105,7 @@ The scenario will seed a combat session containing the full roster of available 
   - **Turn 6 (Vda-Scorcher):** Selected "Flamethrower Burst". Harness crashed while checking `aoeState().active`. The `aoeState()` hook returns the `aoePlacementMode` object directly, which lacks an `active` property.
 - **Console Errors:** None recorded before crash.
 - **Top Suspected Bug Candidates:**
-  - `BUG-20260604-SMOKE-01`: Harness crash on AoE actions (`KeyError: 'active'`).
+  - `BUG-20260604-SMOKE-01`: Harness crash on AoE actions (`KeyError: 'active'`). (FIXING)
   - `BUG-20260604-SMOKE-02`: Harness lacks support for `composite` action types (Multiattack).
 
 ### Gate 4: Developer Smoke and Closure

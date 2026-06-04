@@ -247,7 +247,7 @@ class BlackTanCombatExplorationScenario(Scenario):
 
                     # Check for AoE placement
                     aoe = page.evaluate("window.__dmcontrolSmoke.aoeState()")
-                    if aoe and aoe["active"]:
+                    if aoe and aoe.get("active"):
                          logging.info("Entering AoE targeting. Clicking (15, 15)")
                          event["actions"].append("aoe-click (15,15)")
                          coords = page.evaluate("""() => {
@@ -264,7 +264,7 @@ class BlackTanCombatExplorationScenario(Scenario):
 
                     # Check for single target selection
                     preview = page.evaluate("window.__dmcontrolSmoke.targetPreviewMode()")
-                    if preview:
+                    if preview and preview.get("active"):
                          logging.info("Entering Single Target mode. Clicking first candidate.")
                          target = page.evaluate("""() => {
                             const units = state?.tactical_map?.units || [];
