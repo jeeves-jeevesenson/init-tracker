@@ -10,11 +10,11 @@ Active
 
 ## Active Gate
 
-Gate 1 — Instrumentation
+Gate 3 — Harness shell and artifacts
 
 ## Note (2026-06-04)
 
-Gate 0 (Architecture/Planning) is closed. Gate 1 (Instrumentation) is ready for implementation.
+Gate 0 (Architecture/Planning), Gate 1 (Instrumentation), and Gate 2 (Fixtures) are closed. Gate 3 (Harness shell and artifacts) is implemented.
 
 ## Product Goal
 
@@ -33,7 +33,38 @@ The first deterministic pilot scenario is the **Black and Tan VDA Scorcher Ignit
 The harness architecture must support:
 - **DM Browser Role**: Automation for the DM control surface and map.
 - **Player Browser Role(s)**: Multi-role support for one or more player views (LAN).
-- **Deterministic Scenario Setup/Reset**: Atomic seeding of specific combat/map states via fixtures.
+- **Role-Based Artifacts**: Separate logs/screenshots per role.
+- **Scenario Registry**: Plug-and-play scenarios.
+
+## Gate Progress
+
+### Gate 0: Architecture and Planning
+- [x] Define harness CLI shape
+- [x] Define artifact directory layout
+- [x] Define role model (DM/Player)
+
+### Gate 1: Instrumentation
+- [x] Add `data-smoke` attributes to DM Control surface
+- [x] Add instrumentation hooks for modal state
+- [x] Add instrumentation hooks for result application
+
+### Gate 2: Fixtures
+- [x] Implement `/api/dev/smoke-fixtures/dmcontrol-scorcher-ignite-ground`
+- [x] Verify fixture seeds correct combat and map state
+
+### Gate 3: Harness Shell and Artifacts
+- [x] Implement `scripts/validation/browser-smoke-harness.py`
+- [x] Implement CLI entrypoint (`--list-scenarios`, `--scenario`, `--base-url`)
+- [x] Implement artifact collector (timestamped directories, `summary.json`)
+- [x] Implement architectural support for DM/Player roles
+- [x] Add tests for harness shell (`tests/test_browser_smoke_harness.py`)
+
+### Gate 4: Pilot Scenario Implementation
+- [ ] Implement Scorcher Ignite Ground scenario logic
+- [ ] Automate DM login and map interaction
+- [ ] Verify Ignite Ground result application
+- [ ] Capture pass/fail evidence artifacts
+Deterministic Scenario Setup/Reset**: Atomic seeding of specific combat/map states via fixtures.
 - **Scripted Combat Actions**: Explicit sequences of capability selection, targeting, and resolution.
 - **Observable Pass/Fail Checks**: Assertions against both DOM state and logical application state (via helpers).
 - **Debug Trace and Smoke Log Collection**: Aggregation of server logs, browser console errors, network failures, and debug-trace JSONL.
