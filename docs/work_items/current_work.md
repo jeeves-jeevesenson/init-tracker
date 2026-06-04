@@ -10,8 +10,8 @@ If an item is not marked as **Active** here, it is NOT current work.
 <!-- ACTIVE_WORK_STATUS_START -->
 - **Status:** Active
 - **Current Work Item:** WORK-20260604-black-tan-combat-exploration
-- **Active Gate:** Gate 3 — Bug evidence / report output
-- **Allowed Next Action:** Run scenario and generate bug exploration report
+- **Active Gate:** Gate 4 — Developer Smoke and Closure
+- **Allowed Next Action:** Review findings and close work item
 <!-- ACTIVE_WORK_STATUS_END -->
 
 ---
