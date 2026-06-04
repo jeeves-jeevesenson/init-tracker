@@ -8,10 +8,10 @@ If an item is not marked as **Active** here, it is NOT current work.
 ## Current Status
 
 <!-- ACTIVE_WORK_STATUS_START -->
-- **Status:** No Active Work
-- **Current Work Item:** None
-- **Active Gate:** None
-- **Allowed Next Action:** developer decision required — push completed commits, open a new work item, create a planning doc, or start a new bug/report.
+- **Status:** Active
+- **Current Work Item:** WORK-20260604-black-tan-combat-exploration
+- **Active Gate:** Gate 0 — Scenario inventory and scope definition
+- **Allowed Next Action:** scenario inventory and scope definition only
 <!-- ACTIVE_WORK_STATUS_END -->
 
 ---
@@ -21,6 +21,7 @@ If an item is not marked as **Active** here, it is NOT current work.
 | ID | Title | Status | Goal |
 | --- | --- | --- | --- |
 <!-- ACTIVE_WORK_TABLE_START -->
+| WORK-20260604-black-tan-combat-exploration | AI/Browser-Driven Combat Bug Exploration | Active | Deterministic multi-round combat exploration of Black and Tan roster |
 <!-- ACTIVE_WORK_TABLE_END -->
 
 ---

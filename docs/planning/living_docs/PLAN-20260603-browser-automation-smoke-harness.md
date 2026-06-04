@@ -10,6 +10,8 @@ Promoted
 
 This plan was promoted to [WORK-20260603-browser-smoke-harness-scorcher-ignite-ground](../../work_items/active/WORK-20260603-browser-smoke-harness-scorcher-ignite-ground.md) on 2026-06-04.
 
+*Note (2026-06-04): A follow-up work item [WORK-20260604-black-tan-combat-exploration](../../work_items/active/WORK-20260604-black-tan-combat-exploration.md) has been opened to leverage this harness for larger combat exploration scenarios.*
+
 ## Last Updated
 
 2026-06-03
