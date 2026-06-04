@@ -40,6 +40,28 @@ class TestBrowserSmokeHarness(unittest.TestCase):
         self.assertIn("scorcher-ignite-ground", result.stdout)
         self.assertIn("Black and Tan VDA Scorcher Ignite Ground pilot", result.stdout)
 
+    def test_list_exploration_scenario(self):
+        """Verify --list-scenarios shows the exploration scenario."""
+        result = subprocess.run(
+            [sys.executable, "scripts/validation/browser-smoke-harness.py", "--list-scenarios"],
+            capture_output=True, text=True
+        )
+        self.assertEqual(result.returncode, 0)
+        self.assertIn("black-tan-combat-exploration", result.stdout)
+        self.assertIn("All Players vs All Black and Tans combat exploration", result.stdout)
+
+    def test_multi_round_cli_args(self):
+        """Verify the multi-round CLI arguments are accepted."""
+        # Just check if --help shows them
+        result = subprocess.run(
+            [sys.executable, "scripts/validation/browser-smoke-harness.py", "--help"],
+            capture_output=True, text=True
+        )
+        self.assertEqual(result.returncode, 0)
+        self.assertIn("--max-rounds", result.stdout)
+        self.assertIn("--max-turns", result.stdout)
+        self.assertIn("--slow-mo-ms", result.stdout)
+
     def test_scorcher_scenario_attempt_artifacts(self):
         """Verify the Scorcher scenario attempt creates artifacts even on failure."""
         # This will fail because no server is running, but it should create artifacts

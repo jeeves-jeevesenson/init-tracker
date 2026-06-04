@@ -3886,6 +3886,7 @@
       activeActorCid: () => state?.active_cid,
       hazardCount: () => (state?.tactical_map?.hazards || []).length,
       aoeState: () => aoePlacementMode ? { ...aoePlacementMode } : null,
+      targetPreviewMode: () => targetPreviewMode ? { ...targetPreviewMode } : null,
       targetCount: () => {
         if (aoePlacementMode) {
           return (state?.tactical_map?.units || []).filter(u => {
@@ -3895,7 +3896,38 @@
           }).length;
         }
         return localResolutionTray ? 1 : 0;
-      }
+      },
+      activeActorName: () => (state?.combatants || []).find(c => String(c.cid) === String(state?.active_cid))?.name || null,
+      roundOrTurn: () => ({ round: state?.round || 1, turn: state?.turn || 0 }),
+      availableActions: () => {
+        if (!capabilitySummary || !capabilitySummary.groups) return [];
+        const actions = [];
+        for (const [group, list] of Object.entries(capabilitySummary.groups)) {
+          if (!Array.isArray(list)) continue;
+          for (const action of list) {
+            actions.push({
+              id: action.id,
+              name: action.name,
+              group: group,
+              action_type: action.action_type,
+              executable: action.executable !== false
+            });
+          }
+        }
+        return actions;
+      },
+      combatantSummary: () => (state?.combatants || []).map(c => ({
+        cid: c.cid,
+        name: c.name,
+        hp: c.hp,
+        max_hp: c.max_hp,
+        is_pc: !!c.is_pc,
+        role: c.role || 'unknown'
+      })),
+      modalSummary: () => ({
+        active: document.getElementById('resolutionModal')?.classList.contains('active') || false,
+        title: document.getElementById('modalTitle')?.innerText || ''
+      })
     };
   </script>
 </body>

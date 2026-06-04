@@ -76,12 +76,19 @@ The scenario will seed a combat session containing the full roster of available 
 - **Map Strategy:** 30x30 map. Players at cols 2-3, Monsters at cols 26-27. Deterministic non-overlapping rows.
 - **Tests Passed:** `tests/test_black_tan_combat_fixture.py` (validated rejection when debugging off, success when on, counts, and placements).
 
-### Gate 2: Harness Scenario Runner for Multi-Round Combat (ACTIVE)
-- [ ] Implement multi-round cycle logic
-- [ ] Handle action selection and resolution
-- [ ] Verify turn advancement
+### Gate 2: Harness Scenario Runner for Multi-Round Combat (COMPLETE)
+- [x] Implement multi-round cycle logic
+- [x] Handle action selection and resolution
+- [x] Verify turn advancement
 
-### Gate 3: Bug Evidence / Report Output
+#### Gate 2 Results
+- **Scenario ID:** `black-tan-combat-exploration`
+- **Driving Policy:** Deterministic first-executable action selection. Handles AoE (clicks 15,15) and Single Target (clicks first candidate).
+- **Control Flags:** Added `--max-rounds`, `--max-turns`, `--slow-mo-ms` to `browser-smoke-harness.py`.
+- **Evidence Collection:** Per-turn `event_log.json`, failure/success screenshots, and extended `summary.json` metadata.
+- **Helper Additions:** Enhanced `window.__dmcontrolSmoke` with `activeActorName`, `roundOrTurn`, `availableActions`, `combatantSummary`, `modalSummary`, and `targetPreviewMode`.
+
+### Gate 3: Bug Evidence / Report Output (ACTIVE)
 - [ ] aggregate console/page/backend errors
 - [ ] Generate summary report of "weird behavior"
 - [ ] Capture trace evidence for identified issues
