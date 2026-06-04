@@ -550,6 +550,8 @@
     let capabilityActorCid = null;
     let selectedCapabilityId = null;
     let lastActiveCid = null;
+    let lastRound = null;
+    let lastTurn = null;
     let targetPreviewMode = null; // { capabilityId, capabilityName, actorCid, actionType }
     let aoePlacementMode = null; // { capabilityId, capabilityName, actorCid, shape, size, width, origin }
     let aoeManualIncluded = new Set();
@@ -701,8 +703,6 @@
       selectedCapabilityId = null;
       localSequencePacket = null;
       localSequenceCompletedSteps = {};
-      usedLaneA = false;
-      usedLaneB = false;
 
       const modal = document.getElementById('resolutionModal');
       if (modal) modal.classList.remove('active');
@@ -1826,6 +1826,14 @@
       if (localResolutionPacket) renderResolutionModal();
       if (DM_PERF) dmPerfMark('applyResults.feedbackRender', performance.now() - tPanelStart);
 
+      const isScorcher = capabilitySummary && capabilitySummary.slug === 'black-and-tan-vda-scorcher';
+      let spend = 'action';
+      if (isScorcher) {
+         if ((LANE_A_IDS.includes(capId) && usedLaneB) || (LANE_B_IDS.includes(capId) && usedLaneA)) {
+            spend = 'none';
+         }
+      }
+
       try {
         const tBuildStart = DM_PERF ? performance.now() : 0;
         const requestBody = JSON.stringify({
@@ -1834,6 +1842,7 @@
           damage_rolls: localResolutionPacket.damage_rolls || [],
           apply_damage: !!applyDamage,
           apply_effects: !!applyEffects,
+          spend: spend,
           override_range: !!localResolutionOverrideRange
         });
         if (DM_PERF) dmPerfMark('applyResults.requestBuild', performance.now() - tBuildStart);
@@ -1855,7 +1864,7 @@
 
         if (!resp.ok || !data.ok) {
           // Check for sequence-specific rejections
-          const errorMsg = data.detail || (data.result && data.result.error) || 'Resolution failed.';
+          const errorMsg = data.detail || data.error || (data.result && data.result.error) || 'Resolution failed.';
           if (errorMsg.includes("Max attacks") || errorMsg.includes("budget exhausted") || errorMsg.includes("active sequence")) {
              localResolutionError = `Sequence Error: ${errorMsg}`;
           } else {
@@ -2220,6 +2229,29 @@
       const actorCid = aoePlacementMode.actorCid;
       const capId = aoePlacementMode.capabilityId;
 
+      const targetPos = aoePlacementMode.aoeConfirmed ? aoePlacementMode.lockedCursorGridPos : cursorGridPos;
+      let finalOrigin = { ...aoePlacementMode.origin };
+      let direction = aoePlacementMode.direction;
+
+      // For centered shapes (square, radius), the "origin" for hazard placement
+      // should be the target location.
+      if (['square', 'radius', 'sphere', 'circle'].includes(aoePlacementMode.shape)) {
+        if (targetPos) {
+          finalOrigin = { col: targetPos.col, row: targetPos.row };
+        }
+      }
+
+      // Calculate direction and target coordinates for the backend if missing
+      if (['line', 'cone'].includes(aoePlacementMode.shape)) {
+        if (targetPos && finalOrigin) {
+          const dx = targetPos.col - finalOrigin.col;
+          const dy = targetPos.row - finalOrigin.row;
+          if (direction === undefined) {
+             direction = Math.atan2(dy, dx) * 180 / Math.PI;
+          }
+        }
+      }
+
       // Re-derive targets one last time to be sure
       const targets = (state?.tactical_map?.units || []).filter(u => {
         if (String(u.cid) === String(actorCid)) return false;
@@ -2233,8 +2265,10 @@
           shape: aoePlacementMode.shape,
           size: aoePlacementMode.size,
           width: aoePlacementMode.width,
-          origin: aoePlacementMode.origin,
-          direction: aoePlacementMode.direction,
+          origin: finalOrigin,
+          ax: targetPos ? targetPos.col : undefined,
+          ay: targetPos ? targetPos.row : undefined,
+          direction: direction,
           range: aoePlacementMode.range
         },
         targets: targets.map(t => ({
@@ -2243,7 +2277,7 @@
         })),
         apply_damage: true,
         apply_effects: true,
-        spend: 'action'
+        spend: (capabilitySummary && capabilitySummary.slug === 'black-and-tan-vda-scorcher' && ((LANE_A_IDS.includes(capId) && usedLaneB) || (LANE_B_IDS.includes(capId) && usedLaneA))) ? 'none' : 'action'
       };
 
       try {
@@ -2262,6 +2296,10 @@
           if (data.results) queueDamagePopupsFromResults(data.results);
 
           cancelAoePlacementModeAndCloseModal();
+          // Clear any stale local resolution packet to prevent re-opening modal on snapshot apply
+          localResolutionPacket = null;
+          localResolutionTray = null;
+
           // Redesign ITR-20260602-G5HR: Scorcher lane usage
           if (capabilitySummary && capabilitySummary.slug === 'black-and-tan-vda-scorcher') {
             if (LANE_A_IDS.includes(capId)) usedLaneA = true;
@@ -3033,11 +3071,20 @@
 
       const activeCid = data.active_cid;
 
-      // Hardening: If active actor changes, clear all local state
-      if (lastActiveCid !== null && String(lastActiveCid) !== String(activeCid)) {
+      // Hardening: If active actor, round, or turn changes, clear all local state
+      // This preserves usedLaneA/B flags during multiple actions within the same turn.
+      const turnChanged = (lastActiveCid !== null && String(lastActiveCid) !== String(activeCid))
+                         || (lastRound !== null && lastRound !== data.round)
+                         || (lastTurn !== null && lastTurn !== data.turn);
+
+      if (turnChanged) {
         fullResetLocalState();
+        usedLaneA = false;
+        usedLaneB = false;
       }
       lastActiveCid = activeCid;
+      lastRound = data.round;
+      lastTurn = data.turn;
 
       // Hardening: If selected target no longer exists, clear it
       if (selectedTargetCid && !findCombatantByCid(selectedTargetCid)) {
@@ -3214,7 +3261,7 @@
     }
 
     function aoeContainsGridPoint(aoe, point) {
-      if (!aoe.origin || !cursorGridPos) return false;
+      if (!aoe.origin) return false;
       const targetPos = aoe.aoeConfirmed ? aoe.lockedCursorGridPos : cursorGridPos;
       if (!targetPos) return false;
 
@@ -3508,6 +3555,23 @@
             });
           }
         }
+      }
+
+      // Render hazards
+      if (Array.isArray(state.tactical_map?.hazards)) {
+        ctx.save();
+        state.tactical_map.hazards.forEach((hazard) => {
+          entityCellsForEntry(hazard).forEach((cell) => {
+            const x = panX + cell.col * zoom;
+            const y = panY + cell.row * zoom;
+            ctx.fillStyle = "rgba(255,96,96,0.28)";
+            ctx.strokeStyle = "rgba(186,34,34,0.75)";
+            ctx.lineWidth = 1;
+            ctx.fillRect(x + 1, y + 1, zoom - 2, zoom - 2);
+            ctx.strokeRect(x + 1, y + 1, zoom - 2, zoom - 2);
+          });
+        });
+        ctx.restore();
       }
 
       // AoE Preview Rendering

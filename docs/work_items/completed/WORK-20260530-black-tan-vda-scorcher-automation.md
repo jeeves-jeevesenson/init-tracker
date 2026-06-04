@@ -1,6 +1,6 @@
 # Work Item: WORK-20260530-black-tan-vda-scorcher-automation - Automate Black and Tan monster control and add VDA Scorcher
 
-- **Status:** Active
+- **Status:** Completed (2026-06-04)
 - **Source:** docs/planning/living_docs/PLAN-20260530-black-tan-vda-scorcher-automation.md
 - **Assigned To:** Gemini CLI (Orchestrator)
 

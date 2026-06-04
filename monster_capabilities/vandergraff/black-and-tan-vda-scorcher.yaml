@@ -43,7 +43,7 @@ capabilities:
     name: Ignite Ground
     type: action
     executable: true
-    desc: "Creates a 10ft burning square. Difficult terrain, 7 (2d6) fire damage on entry/start of turn. Spends 2 fuel."
+    desc: "Creates a 10ft burning square. Difficult terrain, 7 (2d6) fire damage on start of turn. Spends 2 fuel."
     action_type: area_hazard
     mechanics:
       damage:

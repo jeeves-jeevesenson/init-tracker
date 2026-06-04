@@ -8108,7 +8108,7 @@ async function resolveMonsterCapabilityTargets(cid, capId, applyDamage, applyEff
     });
     const data = await r.json();
     if (r.ok && data.ok) {
-      const result = data.result || {};
+      const result = data.result || data || {};
       const applied = (result.results || []).map(row => {
         const bits = [`${row.target_name || row.target_cid}: ${row.outcome}`];
         if (row.damage_applied) bits.push('damage');

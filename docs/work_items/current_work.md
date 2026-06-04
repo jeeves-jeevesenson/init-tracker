@@ -8,10 +8,10 @@ If an item is not marked as **Active** here, it is NOT current work.
 ## Current Status
 
 <!-- ACTIVE_WORK_STATUS_START -->
-- **Status:** Active
-- **Current Work Item:** WORK-20260530-black-tan-vda-scorcher-automation: Automate Black and Tan monster control and add VDA Scorcher
-- **Active Gate:** Gate 5I-R: Final Scorcher smoke audit.
-- **Allowed Next Action:** Perform final browser smoke testing and mark WORK-20260530-black-tan-vda-scorcher-automation as complete.
+- **Status:** Idle
+- **Current Work Item:** None
+- **Active Gate:** None
+- **Allowed Next Action:** Select a new work item or start a new planning pass.
 <!-- ACTIVE_WORK_STATUS_END -->
 
 ---
@@ -21,7 +21,6 @@ If an item is not marked as **Active** here, it is NOT current work.
 | ID | Title | Status | Goal |
 | --- | --- | --- | --- |
 <!-- ACTIVE_WORK_TABLE_START -->
-| WORK-20260530-black-tan-vda-scorcher-automation | Automate Black and Tan monster control and add VDA Scorcher | Active | Add Scorcher and remove all manual reminders from Black and Tan capabilities. |
 <!-- ACTIVE_WORK_TABLE_END -->
 
 ---
@@ -31,6 +30,7 @@ If an item is not marked as **Active** here, it is NOT current work.
 | ID | Title | Completion Date | Evidence |
 | --- | --- | --- | --- |
 <!-- COMPLETED_WORK_TABLE_START -->
+| WORK-20260530-black-tan-vda-scorcher-automation | Automate Black and Tan monster control and add VDA Scorcher | 2026-06-04 | docs/work_items/completed/WORK-20260530-black-tan-vda-scorcher-automation.md |
 | ITR-20260529-A0-08 | Add current work ledger and long-term planning GPT workflow | 2026-05-30 | docs/work_items/completed/ITR-20260529-A0-08.md |
 <!-- COMPLETED_WORK_TABLE_END -->
 

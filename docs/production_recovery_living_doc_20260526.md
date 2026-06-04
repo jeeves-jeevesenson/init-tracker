@@ -194,3 +194,24 @@ Key trace findings:
 
 Regression guardrail:
 - Do not accept future Long Rest changes unless live trace keeps `combat_service.long_rest < 5000ms` and restored state survives restart.
+
+## J. Gate 5I-R Recovery — 2026-06-03
+
+Source report:
+- `logs/smoke/WORK-20260530-black-tan-vda-scorcher-automation_Gate-5I-R_contract-render-resmoke_20260603-115352.log`
+
+Findings:
+- **Frontend Bug 1 (Target Derivation)**: `aoeContainsGridPoint` failed in modal context because it incorrectly required non-null `cursorGridPos`, which is null during button interaction. Resulted in 0 targets sent to backend.
+- **Frontend Bug 2 (Modal Management)**: `localResolutionPacket` was not cleared in AoE flow, causing `applyAuthoritativeSnapshot` to re-open the modal after resolution, creating the "modal stays open" symptom.
+- **Backend Robustness**: `_dm_monster_capability_resolve_targets` was brittle regarding `origin` format (dict vs list).
+
+Fixes Landed:
+- Fixed `aoeContainsGridPoint` to use `lockedCursorGridPos` if `aoeConfirmed` is true.
+- Fixed `applyAoeResolutionResultsFromModal` to clear `localResolutionPacket` and `localResolutionTray` on success.
+- Hardened `_dm_monster_capability_resolve_targets` to handle both list and dict `origin` formats.
+- Verified hazard rendering path in `/dmcontrol` via dirty-patch audit.
+
+Validation:
+- `tests/test_scorcher_aoe_resolution.py`: PASSED
+- `tests/test_scorcher_aoe_contract.py`: PASSED
+- `node --check` JS syntax validation for `dmcontrol`: PASSED

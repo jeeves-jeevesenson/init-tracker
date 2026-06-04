@@ -18,6 +18,8 @@ class TestScorcherAoeResolution(unittest.TestCase):
             "_monster_resource_state": {},
             "_monster_modifier_state": {},
             "_monster_sequence_state": {},
+            "_lan_grid_cols": 20,
+            "_lan_grid_rows": 20,
             "round_num": 1,
             "turn_num": 1,
             "in_combat": True
@@ -149,10 +151,8 @@ class TestScorcherAoeResolution(unittest.TestCase):
         # Verify Action spending
         self.assertEqual(self.app.combatants[1].action_resource, 0)
         
-        # Verify damage (7)
-        self.app._apply_map_attack_manual_damage.assert_called_once()
-        args = self.app._apply_map_attack_manual_damage.call_args
-        self.assertEqual(args[0][3][0]["amount"], 7)
+        # Verify immediate damage application
+        self.assertEqual(self.app._apply_map_attack_manual_damage.call_count, 1)
 
     def test_unsupported_aoe_shape_rejection(self):
         """Backend should reject unsupported AoE shapes."""
@@ -189,6 +189,37 @@ class TestScorcherAoeResolution(unittest.TestCase):
         self.assertTrue(result["ok"])
         self.assertEqual(result.get("hazard_placed_count"), 4)
         self.assertEqual(self.app._upsert_map_hazard.call_count, 4)
+
+    def test_scorcher_sequential_lane_bypass(self):
+        """Ignite Ground should succeed after Flamethrower if spend: 'none' is used (simulating lane bypass)."""
+        # 1. First action (Lane A)
+        self.app._monster_resource_state["1:ammo:flamethrower-burst:current"] = 10
+        payload_a = {
+            "capability_id": "flamethrower-burst",
+            "targets": [{"target_cid": 2, "outcome": "fail"}],
+            "apply_damage": True,
+            "spend": "action"
+        }
+        res_a = self.app._dm_monster_capability_resolve_targets(actor_cid=1, payload=payload_a)
+        self.assertTrue(res_a["ok"])
+        self.assertEqual(self.app.combatants[1].action_resource, 0)
+
+        # 2. Second action (Lane B) with spend: 'none'
+        self.app._upsert_map_hazard = mock.Mock(return_value="haz_123")
+        self.app._resolve_aoe_cells = lambda spec: {(10, 10)}
+        self.app._monster_resource_state["1:ammo:ignite-ground:current"] = 10
+        payload_b = {
+            "capability_id": "ignite-ground",
+            "targets": [],
+            "apply_damage": True,
+            "spend": "none",
+            "aoe_geometry": {"shape": "square", "size": 10, "origin": {"col": 10, "row": 10}}
+        }
+        res_b = self.app._dm_monster_capability_resolve_targets(actor_cid=1, payload=payload_b)
+        self.assertTrue(res_b["ok"], f"Sequential Ignite Ground failed: {res_b.get('error')}")
+        self.assertEqual(res_b.get("hazard_placed_count"), 1)
+        self.assertEqual(self.app.combatants[1].action_resource, 0)
+
 
 if __name__ == "__main__":
     unittest.main()

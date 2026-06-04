@@ -5005,11 +5005,8 @@ class LanController:
                         })
                     except Exception:
                         pass
-                return {
-                    "ok": result.get("ok"),
-                    "result": result,
-                    "snapshot": snapshot,
-                }
+                result["snapshot"] = snapshot
+                return result
             except Exception as exc:
                 raise HTTPException(status_code=500, detail=f"Failed to resolve monster capability targets: {exc}")
 
@@ -22956,9 +22953,9 @@ class InitiativeTracker(base.InitiativeTracker):
                 or payload.get("timing")
             )
             if trigger_mode in {"enter", "start_or_enter", "enter_or_end"} and hazard_id in after and hazard_id not in before:
-                self._apply_map_hazard_trigger_to_combatant(str(hazard_id), hazard, combatant, turn_key=turn_key)
+                self._apply_map_hazard_trigger_to_combatant(str(hazard_id), hazard, combatant, turn_key=turn_key, timing="move")
             elif trigger_mode == "leave" and hazard_id in before and hazard_id not in after:
-                self._apply_map_hazard_trigger_to_combatant(str(hazard_id), hazard, combatant, turn_key=turn_key)
+                self._apply_map_hazard_trigger_to_combatant(str(hazard_id), hazard, combatant, turn_key=turn_key, timing="move")
 
     def _lan_handle_environment_triggers_for_moved_unit(
         self,
@@ -47441,10 +47438,19 @@ class InitiativeTracker(base.InitiativeTracker):
         if is_hazard and aoe_geometry:
             shape = str(aoe_geometry.get("shape") or "square").strip().lower()
             origin = aoe_geometry.get("origin")
-            if origin and isinstance(origin, dict):
-                oc = origin.get("col")
-                orow = origin.get("row")
-                size_ft = float(aoe_geometry.get("size") or 10.0)
+            if origin:
+                if isinstance(origin, dict):
+                    oc = origin.get("col")
+                    orow = origin.get("row")
+                elif isinstance(origin, (list, tuple)) and len(origin) >= 2:
+                    oc, orow = origin[0], origin[1]
+                else:
+                    oc, orow = None, None
+
+                if oc is not None and orow is not None:
+                    size_ft = float(aoe_geometry.get("size") or 10.0)
+                    ax = aoe_geometry.get("ax")
+                    ay = aoe_geometry.get("ay")
 
                 # Match JS center-of-cell origin
                 spec = AoeSpec(
@@ -47452,6 +47458,8 @@ class InitiativeTracker(base.InitiativeTracker):
                     origin_mode="point",
                     origin_col=float(oc) + 0.5,
                     origin_row=float(orow) + 0.5,
+                    target_col=float(ax) + 0.5 if ax is not None else None,
+                    target_row=float(ay) + 0.5 if ay is not None else None,
                     radius_ft=size_ft,
                     length_ft=size_ft,
                     width_ft=size_ft,
@@ -47472,7 +47480,7 @@ class InitiativeTracker(base.InitiativeTracker):
                                 "damage_type": "fire",
                                 "is_difficult_terrain": True,
                                 "over_time": True,
-                                "trigger_on_start_or_enter": "enter_or_end"
+                                "trigger_on_start_or_enter": "start"
                             },
                             defer_broadcast=True
                         )
