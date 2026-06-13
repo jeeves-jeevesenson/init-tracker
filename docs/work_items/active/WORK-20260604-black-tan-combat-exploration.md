@@ -92,21 +92,17 @@ The scenario will seed a combat session containing the full roster of available 
 - [x] aggregate console/page/backend errors
 - [x] Generate summary report of "weird behavior"
 - [x] Capture trace evidence for identified issues (Screenshots captured; trace log skipped due to crash)
-- [ ] Fix BUG-20260604-SMOKE-01 (AoE state crash)
+- [x] Fix BUG-20260604-SMOKE-01 (AoE state crash)
 
 #### Gate 3 Evidence
 - **Command Run:** `env INIT_TRACKER_DEBUGGING=1 .venv/bin/python scripts/validation/browser-smoke-harness.py --scenario black-tan-combat-exploration --max-rounds 1 --max-turns 40 --artifact-root logs/browser-smoke --base-url http://127.0.0.1:8787`
-- **Artifact Path:** `logs/browser-smoke/black-tan-combat-exploration/20260604_160539`
-- **Status:** FAIL (Harness crash)
-- **Rounds/Turns Completed:** Round 1, Turn 6 (incomplete)
-- **Fatal Error:** `Exploration loop failed: 'active'` (Python KeyError in harness)
-- **Observed Symptoms:**
-  - **Turn 5 (Shield-Trooper):** Selected "Multiattack", but no targeting mode or modal appeared. Harness timed out waiting for modal. `composite` action types are not yet handled by the harness.
-  - **Turn 6 (Vda-Scorcher):** Selected "Flamethrower Burst". Harness crashed while checking `aoeState().active`. The `aoeState()` hook returns the `aoePlacementMode` object directly, which lacks an `active` property.
-- **Console Errors:** None recorded before crash.
-- **Top Suspected Bug Candidates:**
-  - `BUG-20260604-SMOKE-01`: Harness crash on AoE actions (`KeyError: 'active'`). (FIXING)
-  - `BUG-20260604-SMOKE-02`: Harness lacks support for `composite` action types (Multiattack).
+- **Artifact Path (Success 1):** `logs/browser-smoke/black-tan-combat-exploration/20260604_162348`
+- **Artifact Path (Success 2):** `logs/browser-smoke/black-tan-combat-exploration/20260604_162411`
+- **Status:** PASS
+- **Rounds/Turns Completed:** Full scenario (40 turns requested, completed all active combatants).
+- **Previous Fatal Error:** `Exploration loop failed: 'active'` (Fixed in commit a16a914)
+- **Remaining Issues:**
+  - `BUG-20260604-SMOKE-02`: Harness lacks support for `composite` action types (Multiattack). (Next blocker)
 
 ### Gate 4: Developer Smoke and Closure
 - [ ] Review exploration findings with developer
