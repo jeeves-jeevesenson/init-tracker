@@ -53,3 +53,6 @@ logs/smoke/
 .agent_bootstrap_backups/
 .agy-local/
 *.tmp-agent-diff
+
+# Local-only documentation and environment details
+docs/local/

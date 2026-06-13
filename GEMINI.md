@@ -37,6 +37,15 @@ Recovery work rules:
   evidence the agent cannot perform.
 - Final reports for recovery passes must include `git status --short`.
 
+## Production Operations
+
+Production server updates and environment details are governed by:
+- `docs/agent_ops/production_update_runbook.md` (Sanitized procedures)
+- `docs/local/production_environment.md` (Local-only environment details)
+
+Agents must follow the runbook and must not attempt production deployment,
+restarts, or code pushes without explicit instruction.
+
 ---
 
 ## Mission (permanent direction)

@@ -7,6 +7,15 @@ For recovery gates, that document overrides `majorTODO.md` and older docs when t
 Do not mix gates. Do not commit, push, deploy, SSH, or restart services unless explicitly asked.
 Browser UI readiness requires an inline JavaScript syntax check plus browser smoke; edits to `assets/web/dmcontrol/index.html` require the same inline JS syntax check as other browser HTML assets.
 
+## Production Operations
+
+Production server updates and environment details are governed by:
+- `docs/agent_ops/production_update_runbook.md` (Sanitized procedures)
+- `docs/local/production_environment.md` (Local-only environment details)
+
+Agents must follow the runbook and must not attempt production deployment,
+restarts, or code pushes without explicit instruction.
+
 ## Mission
 
 This repository is in a broad migration away from a Tkinter/canvas-heavy desktop host toward a production-ready, web-first, backend-owned system.
