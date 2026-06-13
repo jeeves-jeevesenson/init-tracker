@@ -227,27 +227,31 @@ class BlackTanCombatExplorationScenario(Scenario):
                     "actions": []
                 }
 
-                # 5. Choose action
-                actions = page.evaluate("window.__dmcontrolSmoke.availableActions()")
-                chosen_action = None
+                # 5. Execute Turn actions (potentially multiple steps)
+                turn_step = 0
+                max_turn_steps = 20 # Safety break
 
-                if actions:
-                    for a in actions:
-                        if a["executable"]:
-                             chosen_action = a
-                             break
+                while turn_step < max_turn_steps:
+                    turn_step += 1
 
-                if chosen_action:
-                    logging.info(f"Executing action: {chosen_action['name']} ({chosen_action['id']})")
-                    event["actions"].append(f"select {chosen_action['id']}")
+                    # 5a. Check for modal
+                    modal = page.evaluate("window.__dmcontrolSmoke.modalSummary()")
+                    if modal.get("active"):
+                         logging.info(f"Modal active: {modal['title']}. Applying.")
+                         event["actions"].append(f"apply-result: {modal['title']}")
 
-                    # Selection
-                    page.evaluate(f"selectCapability('{chosen_action['id']}')")
-                    time.sleep(0.5)
+                         apply_btn_selector = "#modalApplyBtn"
+                         page.wait_for_selector(apply_btn_selector, state="visible", timeout=2000)
+                         page.evaluate(f"document.querySelector('{apply_btn_selector}').click()")
 
-                    # Check for AoE placement
+                         # Wait for modal to close
+                         page.wait_for_function("!window.__dmcontrolSmoke.modalSummary().active", timeout=5000)
+                         time.sleep(0.5)
+                         continue
+
+                    # 5b. Check for AoE placement
                     aoe = page.evaluate("window.__dmcontrolSmoke.aoeState()")
-                    if aoe and aoe.get("active"):
+                    if aoe.get("active"):
                          logging.info("Entering AoE targeting. Clicking (15, 15)")
                          event["actions"].append("aoe-click (15,15)")
                          coords = page.evaluate("""() => {
@@ -261,10 +265,12 @@ class BlackTanCombatExplorationScenario(Scenario):
                          page.mouse.move(coords["x"], coords["y"])
                          page.mouse.down()
                          page.mouse.up()
+                         time.sleep(0.5)
+                         continue
 
-                    # Check for single target selection
+                    # 5c. Check for single target selection
                     preview = page.evaluate("window.__dmcontrolSmoke.targetPreviewMode()")
-                    if preview and preview.get("active"):
+                    if preview.get("active"):
                          logging.info("Entering Single Target mode. Clicking first candidate.")
                          target = page.evaluate("""() => {
                             const units = state?.tactical_map?.units || [];
@@ -290,26 +296,61 @@ class BlackTanCombatExplorationScenario(Scenario):
                             page.mouse.move(coords["x"], coords["y"])
                             page.mouse.down()
                             page.mouse.up()
+                         else:
+                            logging.warning("Single target mode active but no candidates found. Canceling.")
+                            page.evaluate("cancelTargetPreviewMode()")
 
-                    # Wait for modal
-                    try:
-                        page.wait_for_function("window.__dmcontrolSmoke.modalSummary().active", timeout=3000)
-                        modal = page.evaluate("window.__dmcontrolSmoke.modalSummary()")
-                        logging.info(f"Modal opened: {modal['title']}")
-                        event["actions"].append(f"apply-result: {modal['title']}")
+                         time.sleep(0.5)
+                         continue
 
-                        # Apply Result
-                        apply_btn_selector = "#modalApplyBtn"
-                        page.wait_for_selector(apply_btn_selector, state="visible", timeout=2000)
-                        page.evaluate(f"document.querySelector('{apply_btn_selector}').click()")
+                    # 5d. Check for composite sequence
+                    comp = page.evaluate("window.__dmcontrolSmoke.compositeState()")
+                    if comp.get("active"):
+                        sub_action = next((s for s in comp["steps"] if s["executable"]), None)
+                        if sub_action:
+                            logging.info(f"Selecting sequence step: {sub_action['name']} ({sub_action['id']})")
+                            event["actions"].append(f"select-step {sub_action['id']}")
+                            page.evaluate(f"selectCapability('{sub_action['id']}')")
+                            time.sleep(0.5)
+                            continue
+                        else:
+                            logging.info("Sequence active but no steps executable. Ending sequence.")
+                            event["actions"].append("end-sequence")
+                            page.evaluate("cancelLocalSequence()")
+                            time.sleep(0.5)
+                            continue
 
-                        # Wait for modal to close
-                        page.wait_for_function("!window.__dmcontrolSmoke.modalSummary().active", timeout=5000)
-                    except:
-                        logging.warning("No modal appeared after action selection/click.")
-                else:
-                    logging.warning(f"No executable actions available for {active_actor}.")
-                    event["actions"].append("skip-actions")
+                    # 5e. If no mode active, pick a main action if none selected
+                    selected_id = page.evaluate("window.__dmcontrolSmoke.selectedAction()")
+                    if not selected_id:
+                        actions = page.evaluate("window.__dmcontrolSmoke.availableActions()")
+                        chosen_action = next((a for a in actions if a["executable"]), None)
+                        if chosen_action:
+                            logging.info(f"Selecting main action: {chosen_action['name']} ({chosen_action['id']})")
+                            event["actions"].append(f"select {chosen_action['id']}")
+                            page.evaluate(f"selectCapability('{chosen_action['id']}')")
+                            time.sleep(0.5)
+
+                            # Start sequence if composite
+                            if chosen_action.get("action_type") == "composite":
+                                logging.info(f"Starting composite sequence: {chosen_action['id']}")
+                                event["actions"].append(f"start-sequence {chosen_action['id']}")
+                                page.evaluate(f"startSequence('{chosen_action['id']}')")
+                                time.sleep(0.5)
+                            continue
+                        else:
+                            logging.warning(f"No executable actions available for {active_actor}.")
+                            event["actions"].append("skip-actions")
+                            break # Done with this turn
+                    else:
+                        # We have a selected action but no targeting/modal/sequence.
+                        # This might be a simple action that didn't trigger anything,
+                        # or we just finished an action.
+                        logging.info(f"Action {selected_id} selected but no further mode active. Assuming turn done.")
+                        break
+
+                if turn_step >= max_turn_steps:
+                    logging.warning(f"Turn sub-loop reached safety limit ({max_turn_steps}) for {active_actor}.")
 
                 # 6. Next Turn
                 logging.info("Advancing turn...")

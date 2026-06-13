@@ -3927,8 +3927,31 @@
       modalSummary: () => ({
         active: document.getElementById('resolutionModal')?.classList.contains('active') || false,
         title: document.getElementById('modalTitle')?.innerText || ''
-      })
-    };
+      }),
+      compositeState: () => {
+        if (!localSequencePacket) return { active: false };
+        return {
+          active: true,
+          parentId: localSequencePacket.capability_id,
+          kind: localSequencePacket.sequence_kind,
+          remainingBudget: localSequencePacket.remaining_budget,
+          steps: (localSequencePacket.steps || []).map(s => {
+            const completed = localSequenceCompletedSteps[String(s.action_id)] || 0;
+            const max = s.count || s.max || 1;
+            const isChooseN = localSequencePacket.sequence_kind === 'choose_n';
+            const budgetExhausted = isChooseN && localSequencePacket.remaining_budget <= 0;
+            return {
+              id: s.action_id,
+              name: s.name,
+              completed,
+              max,
+              executable: completed < max && !budgetExhausted
+            };
+          })
+        };
+      }
+      };
+
   </script>
 </body>
 </html>

@@ -10,7 +10,7 @@ Active
 
 ## Active Gate
 
-Gate 0 — Scenario inventory and scope definition
+Gate 4 — Developer Smoke and Closure
 
 ## Product Goal
 
@@ -88,23 +88,23 @@ The scenario will seed a combat session containing the full roster of available 
 - **Evidence Collection:** Per-turn `event_log.json`, failure/success screenshots, and extended `summary.json` metadata.
 - **Helper Additions:** Enhanced `window.__dmcontrolSmoke` with `activeActorName`, `roundOrTurn`, `availableActions`, `combatantSummary`, `modalSummary`, and `targetPreviewMode`.
 
-### Gate 3: Bug Evidence / Report Output (ACTIVE)
+### Gate 3: Bug Evidence / Report Output (COMPLETE)
 - [x] aggregate console/page/backend errors
 - [x] Generate summary report of "weird behavior"
 - [x] Capture trace evidence for identified issues (Screenshots captured; trace log skipped due to crash)
 - [x] Fix BUG-20260604-SMOKE-01 (AoE state crash)
+- [x] Fix BUG-20260604-SMOKE-02 (Composite action support)
 
 #### Gate 3 Evidence
 - **Command Run:** `env INIT_TRACKER_DEBUGGING=1 .venv/bin/python scripts/validation/browser-smoke-harness.py --scenario black-tan-combat-exploration --max-rounds 1 --max-turns 40 --artifact-root logs/browser-smoke --base-url http://127.0.0.1:8787`
-- **Artifact Path (Success 1):** `logs/browser-smoke/black-tan-combat-exploration/20260604_162348`
-- **Artifact Path (Success 2):** `logs/browser-smoke/black-tan-combat-exploration/20260604_162411`
+- **Artifact Path (Success 3):** `logs/browser-smoke/black-tan-combat-exploration/20260613_141900`
 - **Status:** PASS
 - **Rounds/Turns Completed:** Full scenario (40 turns requested, completed all active combatants).
 - **Previous Fatal Error:** `Exploration loop failed: 'active'` (Fixed in commit a16a914)
-- **Remaining Issues:**
-  - `BUG-20260604-SMOKE-02`: Harness lacks support for `composite` action types (Multiattack). (Next blocker)
+- **Resolved Issues:**
+  - `BUG-20260604-SMOKE-02`: Harness lacks support for `composite` action types (Multiattack). (Resolved and validated in 20260613_141900)
 
-### Gate 4: Developer Smoke and Closure
+### Gate 4: Developer Smoke and Closure (ACTIVE)
 - [ ] Review exploration findings with developer
 - [ ] Close work item
 
