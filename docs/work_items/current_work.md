@@ -10,8 +10,8 @@ If an item is not marked as **Active** here, it is NOT current work.
 <!-- ACTIVE_WORK_STATUS_START -->
 - **Status:** Active
 - **Current Work Item:** BUG-20260614-player-spell-slots-not-syncing
-- **Active Gate:** Gate 1 — Evidence capture and bounded fix plan
-- **Allowed Next Action:** Run a bounded investigation/implementation task for BUG-20260614-player-spell-slots-not-syncing
+- **Active Gate:** Gate 2 — Implementation and Validation
+- **Allowed Next Action:** Run the bounded Gate 2 implementation task for BUG-20260614-player-spell-slots-not-syncing
 <!-- ACTIVE_WORK_STATUS_END -->
 
 ---

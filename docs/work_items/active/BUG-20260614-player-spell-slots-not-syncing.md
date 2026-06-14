@@ -20,10 +20,28 @@ Identify why spell slot casts and manual slot overrides appear in logs/API respo
 ## Plan
 
 ### Gate 1: Evidence capture and bounded fix plan
-- [ ] Reproduce the issue using browser smoke or manual inspection of resource sync payloads.
-- [ ] Inspect `assets/web/lan/index.html` (player UI) resource update logic.
-- [ ] Verify if manual override menu state is correctly hydrated from backend state.
-- [ ] Propose a bounded fix plan.
+- [x] Reproduce the issue using browser smoke or manual inspection of resource sync payloads.
+- [x] Inspect `assets/web/lan/index.html` (player UI) resource update logic.
+- [x] Verify if manual override menu state is correctly hydrated from backend state.
+- [x] Propose a bounded fix plan.
+
+#### Suspected Root Cause
+1.  **Stale LAN Cache**: `dnd_initative_tracker.py` -> `_save_player_spell_slots` is missing a call to `self._refresh_cached_player_profile_projection(profile_name, profile)`. This means the LAN protocol's static data cache is not updated when spell slots are changed via casting or manual override.
+2.  **Insufficient Broadcast Scope**: `_save_player_spell_slots` schedules a refresh with `include_static=False`. Since spell slots are part of the "static" (slow-moving) player profiles in the LAN protocol, a dynamic-only broadcast combined with a stale cache results in the client receiving old slot data.
+3.  **Invalidation Domain Clobbering**: `_write_player_yaml_atomic` overwrites `self._last_invalidation_domains` instead of accumulating domains. This can cause the `_lan_snapshot` rebuild of `resource_pools` to be skipped if multiple writes occur before the 200ms refresh window.
+
+#### Bounded Fix Plan
+1.  **Repair `_save_player_spell_slots`**:
+    *   Call `_refresh_cached_player_profile_projection` before scheduling refresh.
+    *   Use `include_static=True` for the refresh to ensure authoritative sync.
+2.  **Robust Invalidation Accumulation**:
+    *   Modify `_write_player_yaml_atomic` to accumulate `invalidation_domains` into a set.
+    *   Modify `_schedule_player_yaml_refresh` to clear the set after the broadcast.
+3.  **Validation**:
+    *   Verify `dnd_initative_tracker.py` consistency across `_save_player_spell_config`, `_save_player_spellbook`, and `_save_player_spell_slots`.
+    *   Verify `resource_pools` rebuild logic in `_lan_snapshot`.
 
 ### Gate 2: Implementation and Validation
-- [ ] (TBD)
+- [ ] Apply fix to `dnd_initative_tracker.py`.
+- [ ] Run focused unit tests for player resource sync.
+- [ ] Verify fix with browser smoke test (developer-led).
