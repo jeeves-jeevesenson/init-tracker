@@ -8,10 +8,10 @@ If an item is not marked as **Active** here, it is NOT current work.
 ## Current Status
 
 <!-- ACTIVE_WORK_STATUS_START -->
-- **Status:** No Active Work
-- **Current Work Item:** None
-- **Active Gate:** None
-- **Allowed Next Action:** Await developer direction to open/promote a specific work item or bug
+- **Status:** Active
+- **Current Work Item:** BUG-20260614-player-spell-slots-not-syncing
+- **Active Gate:** Gate 1 — Evidence capture and bounded fix plan
+- **Allowed Next Action:** Run a bounded investigation/implementation task for BUG-20260614-player-spell-slots-not-syncing
 <!-- ACTIVE_WORK_STATUS_END -->
 
 ---
@@ -21,6 +21,7 @@ If an item is not marked as **Active** here, it is NOT current work.
 | ID | Title | Status | Goal |
 | --- | --- | --- | --- |
 <!-- ACTIVE_WORK_TABLE_START -->
+| BUG-20260614-player-spell-slots-not-syncing | Player spell slot/resource sync does not update UI after cast or manual override | Active | Identify why spell slot casts and manual slot overrides appear in logs/API responses but do not refresh player UI or manual override menu state. |
 <!-- ACTIVE_WORK_TABLE_END -->
 
 ---
