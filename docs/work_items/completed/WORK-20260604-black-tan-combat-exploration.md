@@ -6,11 +6,11 @@ WORK-20260604-black-tan-combat-exploration: AI/Browser-Driven Combat Bug Explora
 
 ## Status
 
-Active
+Completed
 
 ## Active Gate
 
-Gate 4 — Developer Smoke and Closure
+None (Closed)
 
 ## Product Goal
 
@@ -104,9 +104,15 @@ The scenario will seed a combat session containing the full roster of available 
 - **Resolved Issues:**
   - `BUG-20260604-SMOKE-02`: Harness lacks support for `composite` action types (Multiattack). (Resolved and validated in 20260613_141900)
 
-### Gate 4: Developer Smoke and Closure (ACTIVE)
-- [ ] Review exploration findings with developer
-- [ ] Close work item
+### Gate 4: Developer Smoke and Closure (COMPLETE)
+- [x] Review exploration findings with developer
+- [x] Close work item
+
+#### Gate 4 Results
+- **Date:** 2026-06-14
+- **Outcome:** Live player/developer smoke was performed on production after deployment of the validated Black and Tan branch.
+- **Findings:** The exploration successfully exercised the Black and Tan roster. The smoke test identified several player-side regressions and UI issues (now captured in `docs/bug_reports/inbox/`).
+- **Resolution:** The original exploration goals are met. Harness bugs `BUG-20260604-SMOKE-01` and `BUG-20260604-SMOKE-02` are resolved and validated. Follow-up player issues are tracked separately and do not block the closure of this exploration.
 
 ## Non-Goals
 - No generic whole-app explorer yet.
