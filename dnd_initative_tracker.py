@@ -30438,7 +30438,12 @@ class InitiativeTracker(base.InitiativeTracker):
         self._player_yaml_data_by_name[profile_name] = profile
         self._player_yaml_name_map[self._normalize_character_lookup_key(player_name)] = path
         self._player_yaml_name_map[self._normalize_character_lookup_key(path.stem)] = path
-        self._schedule_player_yaml_refresh(include_static=False)
+
+        # Patch the LAN cache in-place instead of invalidating it.
+        self._refresh_cached_player_profile_projection(profile_name, profile)
+
+        # Broadcast with include_static=True but force_reload=False.
+        self._schedule_player_yaml_refresh(include_static=True, force_reload=False)
 
         return normalized_slots
 
@@ -51365,7 +51370,6 @@ def main() -> None:
             app.destroy()
         except Exception:
             pass
-
 
 if __name__ == "__main__":
     main()

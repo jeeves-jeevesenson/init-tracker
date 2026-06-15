@@ -16,6 +16,7 @@ class LanBroadcastInvalidationTests(unittest.TestCase):
         self.app._player_yaml_lock.__exit__ = MagicMock(return_value=None)
 
         self.app._invalidate_lan_static_snapshot_cache = MagicMock()
+        self.app._refresh_cached_player_profile_projection = MagicMock()
 
         # We replace the actual file write with a no-op
         self.patcher = patch("pathlib.Path.replace")
@@ -28,13 +29,16 @@ class LanBroadcastInvalidationTests(unittest.TestCase):
         self.patcher.stop()
         self.patcher2.stop()
 
-    def test_cast_spell_current_values_do_not_request_static_snapshot(self):
-        """Casting a spell (which writes player slots) should only invalidate dynamic state."""
+    def test_cast_spell_current_values_request_static_snapshot_for_authoritative_sync(self):
+        """Casting a spell (which writes player slots) requests static refresh to ensure profile-sync."""
         self.app._schedule_player_yaml_refresh = MagicMock()
         self.app._save_player_spell_slots("Tester", {"1": {"max": 4, "current": 3}})
 
-        self.app._invalidate_lan_static_snapshot_cache.assert_not_called()
-        self.app._schedule_player_yaml_refresh.assert_called_with(include_static=False)
+        # Static invalidation optimized to projection refresh
+        self.assertTrue(self.app._refresh_cached_player_profile_projection.called)
+
+        # We now expect include_static=True for spell slots because they live in the static projection.
+        self.app._schedule_player_yaml_refresh.assert_called_with(include_static=True, force_reload=False)
 
     def test_unknown_player_yaml_write_domain_traces_warning(self):
         """Writing a player YAML without passing domains logs a warning and falls back to static invalidation."""
@@ -53,11 +57,11 @@ class LanBroadcastInvalidationTests(unittest.TestCase):
         self.app._schedule_player_yaml_refresh = MagicMock()
         self.app._save_player_spellbook("Tester", {"prepared_list": ["fireball"]})
 
-        # Static invalidation called
-        self.assertTrue(self.app._invalidate_lan_static_snapshot_cache.called)
+        # Static invalidation optimized to projection refresh
+        self.assertTrue(self.app._refresh_cached_player_profile_projection.called)
 
         # Scheduler called with include_static=True
-        self.app._schedule_player_yaml_refresh.assert_called_with(include_static=True)
+        self.app._schedule_player_yaml_refresh.assert_called_with(include_static=True, force_reload=False)
 
     def test_broadcast_trace_records_kind_and_invalidation_domains(self):
         """The broadcast mechanism includes necessary tracing information."""

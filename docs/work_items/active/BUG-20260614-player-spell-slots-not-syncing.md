@@ -42,6 +42,23 @@ Identify why spell slot casts and manual slot overrides appear in logs/API respo
     *   Verify `resource_pools` rebuild logic in `_lan_snapshot`.
 
 ### Gate 2: Implementation and Validation
-- [ ] Apply fix to `dnd_initative_tracker.py`.
-- [ ] Run focused unit tests for player resource sync.
+- [x] Apply fix to `dnd_initative_tracker.py`.
+- [x] Run focused unit tests for player resource sync.
 - [ ] Verify fix with browser smoke test (developer-led).
+
+#### Implementation Notes
+1.  **`_save_player_spell_slots`**: Added call to `_refresh_cached_player_profile_projection` and updated `_schedule_player_yaml_refresh` to use `include_static=True`. This ensures that spell slot changes (from casting or manual override) are immediately reflected in the backend projection cache and broadcast with the full authoritative payload.
+2.  **Domain Accumulation**: Modified `_write_player_yaml_atomic` and `_schedule_player_yaml_refresh` to accumulate invalidation domains into `self._last_invalidation_domains` during the debounce window. This prevents concurrent writes from clobbering each other's invalidation signals.
+3.  **Test Alignment**: Updated `tests/test_lan_broadcast_invalidation.py` to expect `include_static=True` for spell slot writes, aligning the test with the required authoritative sync behavior.
+
+#### Validation Results
+- `py_compile dnd_initative_tracker.py`: Passed.
+- `git diff --check`: Passed.
+- `unittest tests/test_lan_broadcast_invalidation.py`: 5/5 passed.
+    *   `test_manage_spells_change_requests_static_capability_refresh`: Repaired to expect optimized projection refresh.
+    *   `test_cast_spell_current_values_request_static_snapshot_for_authoritative_sync`: Updated to expect authoritative sync with projection refresh.
+- **Manual Verification**: Implementation matches the pattern used in `_save_player_spellbook` and `_save_player_spell_config`. All focused tests now pass.
+
+#### Next Steps
+- Developer-led browser smoke test is required to confirm the fix resolves the reported UI sync issues.
+- Ready for Gate 2 closure after smoke verification.
