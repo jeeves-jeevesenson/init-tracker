@@ -8,10 +8,10 @@ If an item is not marked as **Active** here, it is NOT current work.
 ## Current Status
 
 <!-- ACTIVE_WORK_STATUS_START -->
-- **Status:** Idle
-- **Current Work Item:** None
-- **Active Gate:** None
-- **Allowed Next Action:** Ask the developer for a new task or planning pass.
+- **Status:** Active
+- **Current Work Item:** BUG-20260614-player-fireball-preview-applies-one-target
+- **Active Gate:** triage/evidence
+- **Allowed Next Action:** Perform evidence capture and reproduction to identify the mismatch between AoE preview and resolution.
 <!-- ACTIVE_WORK_STATUS_END -->
 
 ---
@@ -21,6 +21,7 @@ If an item is not marked as **Active** here, it is NOT current work.
 | ID | Title | Status | Goal |
 | --- | --- | --- | --- |
 <!-- ACTIVE_WORK_TABLE_START -->
+| BUG-20260614-player-fireball-preview-applies-one-target | Fireball preview mismatch | Active | Resolve preview vs resolution discrepancy |
 <!-- ACTIVE_WORK_TABLE_END -->
 
 ---
@@ -45,6 +46,15 @@ If an item is not marked as **Active** here, it is NOT current work.
 | --- | --- | --- | --- |
 <!-- SUPERSEDED_WORK_TABLE_START -->
 <!-- SUPERSEDED_WORK_TABLE_END -->
+
+---
+
+## Unresolved Bugs Queue (Triaged)
+
+| ID | Title | Severity | Note |
+| --- | --- | --- | --- |
+| BUG-20260614-player-mount-lockout | Player mount lockout / movement failure | P1 | High priority blocker, queued behind Fireball resolution. |
+| BUG-20260614-player-1080p-header-overflow | 1080p header overflow / Battle Log invisible | P2 | UX issue, queued. |
 
 ---
 
