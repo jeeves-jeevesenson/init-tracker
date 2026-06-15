@@ -14,28 +14,38 @@
 A player used Fireball, the frontend overlay showed two targets would be hit, but the cast resolution only affected one.
 
 ### Suspected Root Cause
-Discrepancy between frontend geometry calculation (Pass 2/3) and backend resolution logic (Pass 6.8). Specifically, `_handle_cast_aoe_request` or the geometric primitive delegation in `spell_engine_primitives.py` may be using different inclusion rules than the frontend visualization.
+1.  **Missing `radius_ft` in Backend Context**: In `_handle_cast_aoe_request`, if the client sends `size` instead of `radius_ft`, the server populates `aoe["radius_sq"]` but leaves `aoe["radius_ft"]` unset. The `AoeSpec` then defaults to `radius_ft=0.0`, making the spell effective only in its origin cell.
+2.  **Center-Point Logic Change**: `spell_engine_primitives.py` now uses cell centers (`+ 0.5`) for inclusion checks. This makes radial AoEs effectively smaller than the old integer-corner logic, causing targets at the exact radius boundary to be missed.
+3.  **Missing `_lan_get_map_state`**: The method is called during AoE resolution but appears to be missing or returning `None`, causing a fallback to a 20x20 blank grid which might exclude targets on larger maps.
 
 ### Evidence
 - **Source**: Jun 13 live player smoke test.
-- **Severity**: P1 Combat Correctness.
+- **Unit Test Failures**: `tests/test_spell_aoe_targeting_primitives.py` fails with:
+  - `test_sphere_resolution`: Cell `(7, 5)` missed by 10ft radius from `(5, 5)` due to center-point distance (2.54 sq vs 2.0 sq).
+  - `test_lan_get_map_state_returns_valid_state`: Returned `None` instead of `MapState`.
+- **Static Trace**:
+  - `dnd_initative_tracker.py:40502`: `elif shape in ("sphere", "cylinder"):` block does not set `aoe["radius_ft"]` in the `else` (size-based) branch.
+  - `dnd_initative_tracker.py:22207`: `AoeSpec` construction uses `float(aoe.get("radius_ft") or 0.0)`.
 
 ---
 
 ## 2. Execution Plan
 
-### Gate 1: Evidence Capture & Reproduction (Active)
+### Gate 1: Evidence Capture & Reproduction (Completed)
 - **Goal**: Confirm the mismatch between `AoeSpec` visualization and backend unit inclusion.
+- **Findings**: Backend `radius_ft` is lost if client sends `size`. Center-point logic and map-state fallback further degrade precision and coverage.
+
+### Gate 2: Implementation (Pending)
+- **Goal**: Align the inclusion logic and restore missing state.
+- **Action**:
+  - Update `_handle_cast_aoe_request` to ensure `radius_ft` is always set for radial shapes (syncing with `radius_sq` if needed).
+  - Add missing `_lan_get_map_state` method to `InitiativeTracker`.
+  - Refine `is_cell_in_aoe` to match client-side inclusion expectations (e.g. including cells where the center OR any corner is hit, or reverting to integer-based checks if appropriate for the D&D grid).
 - **Files**: `dnd_initative_tracker.py`, `spell_engine_primitives.py`.
-- **Action**: Add instrumentation to `_handle_cast_aoe_request` to log the `AoeSpec` and the resulting `target_cids`. Use a reproduction script or unit test to simulate the specific Fireball placement.
 
-### Gate 2: Implementation
-- **Goal**: Align the inclusion logic.
-- **Action**: Fix any discrepancies in `spell_engine_primitives.py` or the backend unit filtering.
-
-### Gate 3: Validation
+### Gate 3: Validation (Pending)
 - **Goal**: Verify the fix with targeted unit tests and browser smoke check.
-- **Action**: Run `tests/test_spell_aoe_targeting_primitives.py` and a new regression test covering the specific reported scenario.
+- **Action**: Fix `tests/test_spell_aoe_targeting_primitives.py` and add a new regression test covering the `size` vs `radius_ft` discrepancy.
 
 ---
 
