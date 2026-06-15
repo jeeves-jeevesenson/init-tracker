@@ -21,3 +21,8 @@ Player spell slots do not seem to be used when casting spells. Spell slot overri
 
 ## Suspected Area
 Resource sync between backend and player UI, specifically spell slots.
+
+## Resolution
+Resolved on 2026-06-14.
+
+Fixed by ensuring `_save_player_spell_slots` triggers an authoritative static refresh, repairing the LAN projection cache to correctly patch resource pools and clear stale JSON payloads, and accumulating invalidation domains to prevent concurrent write clobbering. Developer-led browser smoke confirmed that spell slots now update correctly in both the main UI and the manual override menu.

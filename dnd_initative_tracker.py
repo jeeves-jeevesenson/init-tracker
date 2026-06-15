@@ -20866,7 +20866,7 @@ class InitiativeTracker(base.InitiativeTracker):
         # Optimization: only rebuild resource pools if requested or throttled.
         # We also force rebuild if the last mutation touched resource pools.
         last_domains = getattr(self, "_last_invalidation_domains", None)
-        force_rebuild = include_static or (isinstance(last_domains, list) and "resource_pools" in last_domains)
+        force_rebuild = include_static or (isinstance(last_domains, (list, set)) and "resource_pools" in last_domains)
 
         if force_rebuild or (now - last_build) >= 1.0:
             try:
@@ -25202,7 +25202,9 @@ class InitiativeTracker(base.InitiativeTracker):
             self._lan_log_warning(f"player_yaml_write without invalidation_domains. Defaulting to static.")
             debug_event("ws.warning.unknown_player_yaml_write_domain", path=str(path.name))
 
-        self._last_invalidation_domains = invalidation_domains
+        if not hasattr(self, "_last_invalidation_domains") or not isinstance(self._last_invalidation_domains, set):
+            self._last_invalidation_domains = set()
+        self._last_invalidation_domains.update(invalidation_domains)
 
         static_domains = {"static_capabilities", "profile_structure", "static_catalogs"}
         requires_static = any(d in static_domains for d in invalidation_domains)
@@ -25453,6 +25455,9 @@ class InitiativeTracker(base.InitiativeTracker):
                     return
             try:
                 self._lan_force_state_broadcast(include_static=do_static)
+                # Clear accumulated domains after authoritative broadcast
+                if hasattr(self, "_last_invalidation_domains") and isinstance(self._last_invalidation_domains, set):
+                    self._last_invalidation_domains.clear()
             except Exception:
                 pass
 
@@ -25756,9 +25761,14 @@ class InitiativeTracker(base.InitiativeTracker):
             if not isinstance(snapshot, dict):
                 return
             profiles = snapshot.get("player_profiles")
-            if not isinstance(profiles, dict):
-                return
-            profiles[name] = profile_copy
+            if isinstance(profiles, dict):
+                profiles[name] = profile_copy
+
+            # Patch resource pools to ensure immediate sync for manual overrides
+            pools = snapshot.get("resource_pools")
+            if isinstance(pools, dict):
+                pools[name] = self._normalize_player_resource_pools(profile_copy)
+
             # Update internal version to match global version
             snapshot["static_version"] = new_version
 
@@ -25772,7 +25782,9 @@ class InitiativeTracker(base.InitiativeTracker):
         if lan is not None:
             patch_snapshot(getattr(lan, "_cached_snapshot", None))
             if hasattr(lan, "_cached_static_payload"):
-                patch_snapshot(lan._cached_static_payload)
+                # Clear the string cache to force rebuild on next broadcast.
+                # Strings cannot be patched in-place.
+                lan._cached_static_payload = None
 
     def _normalize_character_filename(self, raw_filename: Optional[str], fallback_name: str) -> str:
         filename = str(raw_filename or "").strip()
@@ -30428,7 +30440,7 @@ class InitiativeTracker(base.InitiativeTracker):
             spellcasting["spell_slots"] = normalized_slots
             existing["spellcasting"] = spellcasting
 
-        self._write_player_yaml_atomic(path, existing, invalidation_domains=["dynamic_player_values"])
+            self._write_player_yaml_atomic(path, existing, invalidation_domains=["dynamic_player_values", "resource_pools"])
 
         meta = _file_stat_metadata(path)
         self._player_yaml_cache_by_path[path] = existing
@@ -30613,7 +30625,7 @@ class InitiativeTracker(base.InitiativeTracker):
             identity["name"] = player_name
         existing["identity"] = identity
 
-        self._write_player_yaml_atomic(path, existing, invalidation_domains=["dynamic_player_values"])
+        self._write_player_yaml_atomic(path, existing, invalidation_domains=["dynamic_player_values", "resource_pools"])
         meta = _file_stat_metadata(path)
         self._player_yaml_cache_by_path[path] = existing
         self._player_yaml_meta_by_path[path] = meta

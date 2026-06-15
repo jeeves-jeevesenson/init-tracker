@@ -8,10 +8,10 @@ If an item is not marked as **Active** here, it is NOT current work.
 ## Current Status
 
 <!-- ACTIVE_WORK_STATUS_START -->
-- **Status:** Active
-- **Current Work Item:** BUG-20260614-player-spell-slots-not-syncing
-- **Active Gate:** Gate 2 — Implementation and Validation
-- **Allowed Next Action:** Run the bounded Gate 2 implementation task for BUG-20260614-player-spell-slots-not-syncing
+- **Status:** Idle
+- **Current Work Item:** None
+- **Active Gate:** None
+- **Allowed Next Action:** Ask the developer for a new task or planning pass.
 <!-- ACTIVE_WORK_STATUS_END -->
 
 ---
@@ -21,7 +21,6 @@ If an item is not marked as **Active** here, it is NOT current work.
 | ID | Title | Status | Goal |
 | --- | --- | --- | --- |
 <!-- ACTIVE_WORK_TABLE_START -->
-| BUG-20260614-player-spell-slots-not-syncing | Player spell slot/resource sync does not update UI after cast or manual override | Active | Identify why spell slot casts and manual slot overrides appear in logs/API responses but do not refresh player UI or manual override menu state. |
 <!-- ACTIVE_WORK_TABLE_END -->
 
 ---
@@ -31,6 +30,7 @@ If an item is not marked as **Active** here, it is NOT current work.
 | ID | Title | Completion Date | Evidence |
 | --- | --- | --- | --- |
 <!-- COMPLETED_WORK_TABLE_START -->
+| BUG-20260614-player-spell-slots-not-syncing | Player spell slot/resource sync does not update UI after cast or manual override | 2026-06-14 | [active/BUG-20260614-player-spell-slots-not-syncing.md](active/BUG-20260614-player-spell-slots-not-syncing.md) |
 | WORK-20260604-black-tan-combat-exploration | AI/Browser-Driven Combat Bug Exploration | 2026-06-14 | [completed/WORK-20260604-black-tan-combat-exploration.md](completed/WORK-20260604-black-tan-combat-exploration.md) |
 | WORK-20260603-browser-smoke-harness-scorcher-ignite-ground | Browser Automation Smoke Harness Foundation (Pilot: Scorcher) | 2026-06-04 | [completed/WORK-20260603-browser-smoke-harness-scorcher-ignite-ground.md](completed/WORK-20260603-browser-smoke-harness-scorcher-ignite-ground.md) |
 | WORK-20260530-black-tan-vda-scorcher-automation | Automate Black and Tan monster control and add VDA Scorcher | 2026-06-04 | docs/work_items/completed/WORK-20260530-black-tan-vda-scorcher-automation.md |

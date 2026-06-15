@@ -68,7 +68,7 @@ class LanBroadcastInvalidationTests(unittest.TestCase):
         self.app._lan = MagicMock()
         self.app._lan._clients = {"ws1": MagicMock()}
         self.app._lan_snapshot = MagicMock(return_value={})
-        self.app._last_invalidation_domains = ["dynamic_player_values"]
+        self.app._last_invalidation_domains = {"dynamic_player_values"}
         self.app._lan_static_snapshot_cache_status = MagicMock(return_value=(True, "", 1))
 
         with patch("dnd_initative_tracker.debug_event") as mock_debug:
@@ -79,7 +79,7 @@ class LanBroadcastInvalidationTests(unittest.TestCase):
 
             kwargs = completed_call.kwargs
             self.assertEqual(kwargs.get("broadcast_kind"), "dynamic_only")
-            self.assertEqual(kwargs.get("invalidation_domains"), ["dynamic_player_values"])
+            self.assertEqual(set(kwargs.get("invalidation_domains") or []), {"dynamic_player_values"})
             self.assertFalse(kwargs.get("include_static"))
             self.assertFalse(kwargs.get("static_payload_rebuild"))
             self.assertTrue(kwargs.get("dynamic_payload_rebuild"))
@@ -99,7 +99,7 @@ class LanBroadcastInvalidationTests(unittest.TestCase):
         self.assertTrue(ok, err)
         self.app._store_character_yaml.assert_called_once()
         kwargs = self.app._store_character_yaml.call_args.kwargs
-        self.assertEqual(["dynamic_player_values", "resource_pools"], kwargs.get("invalidation_domains"))
+        self.assertEqual(set(kwargs.get("invalidation_domains") or []), {"dynamic_player_values", "resource_pools"})
         self.assertFalse(kwargs.get("include_static_refresh"))
 
 if __name__ == "__main__":
