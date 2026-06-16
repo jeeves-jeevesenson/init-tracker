@@ -8,10 +8,10 @@ If an item is not marked as **Active** here, it is NOT current work.
 ## Current Status
 
 <!-- ACTIVE_WORK_STATUS_START -->
-- **Status:** Idle
-- **Current Work Item:** None
-- **Active Gate:** None
-- **Allowed Next Action:** Choose next bug promotion, deploy/push, planning, or idle.
+- **Status:** Active
+- **Current Work Item:** BUG-20260614-player-mount-lockout
+- **Active Gate:** Evidence / reproduction gate
+- **Allowed Next Action:** bounded evidence capture or implementation task for the mount lockout bug
 <!-- ACTIVE_WORK_STATUS_END -->
 
 ---
@@ -21,6 +21,7 @@ If an item is not marked as **Active** here, it is NOT current work.
 | ID | Title | Status | Goal |
 | --- | --- | --- | --- |
 <!-- ACTIVE_WORK_TABLE_START -->
+| BUG-20260614-player-mount-lockout | Player mount lockout / movement failure | Active | Evidence / reproduction |
 <!-- ACTIVE_WORK_TABLE_END -->
 
 ---
@@ -53,7 +54,6 @@ If an item is not marked as **Active** here, it is NOT current work.
 
 | ID | Title | Severity | Note |
 | --- | --- | --- | --- |
-| BUG-20260614-player-mount-lockout | Player mount lockout / movement failure | P1 | High priority blocker, queued behind Fireball resolution. |
 | BUG-20260614-player-1080p-header-overflow | 1080p header overflow / Battle Log invisible | P2 | UX issue, queued. |
 
 ---
