@@ -2,9 +2,9 @@
 
 - **ID**: BUG-20260614-player-fireball-preview-applies-one-target
 - **Title**: Player Fireball AoE preview includes multiple targets but resolution applies to only one
-- **Status**: Active
+- **Status**: Completed
 - **Goal**: Identify and resolve the discrepancy between the frontend AoE targeting preview and backend spell resolution.
-- **Bug Report**: [docs/bug_reports/triaged/BUG-20260614-player-fireball-preview-applies-one-target.md](../bug_reports/triaged/BUG-20260614-player-fireball-preview-applies-one-target.md)
+- **Bug Report**: [docs/bug_reports/resolved/BUG-20260614-player-fireball-preview-applies-one-target.md](../bug_reports/resolved/BUG-20260614-player-fireball-preview-applies-one-target.md)
 
 ---
 
@@ -74,19 +74,22 @@ A player used Fireball, the frontend overlay showed two targets would be hit, bu
   - `python3 -m unittest tests.test_spell_aoe_targeting_primitives` passed (10 tests).
   - Mandatory browser-asset JS syntax check passed.
 
-### Next Steps
-- Developer Gate 3 smoke test retry.
-- **Action**: Hover Fireball and move it slowly/precisely between targets.
-- **Expected**:
-  - The rendered circle follows the mouse precisely (not snapping to cell centers).
-  - The preview target list updates exactly as the circle covers/uncovers tokens.
-  - Resolution (Cast) matches the final preview exactly.
+### Gate 4: Closure
+- **Status**: Completed
+- **Final Commit**: ccbd6a8
+- **Developer Smoke Result**: Passed
+- **Final Behavior**:
+  - Free-floating Fireball aim restored.
+  - Rendered circle is the source of truth for targeting.
+  - Targets included only when >= 50% of the visible token footprint (radius 0.35) is covered by the AoE.
+  - Preview panel and resolution match exactly by target identity.
+- **Future Follow-up**: An optional automated harness to test all AoE spells against the deterministic geometry contract could be implemented later to prevent regressions.
 
 ---
 
 ## 3. Progress Tracking
 
-- [ ] Gate 1: Evidence Capture & Reproduction
-...
-- [ ] Gate 2: Implementation
-- [ ] Gate 3: Validation
+- [x] Gate 1: Evidence Capture & Reproduction
+- [x] Gate 2: Implementation
+- [x] Gate 3: Validation
+- [x] Gate 4: Closure
