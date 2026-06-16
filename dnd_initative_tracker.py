@@ -22732,8 +22732,8 @@ class InitiativeTracker(base.InitiativeTracker):
         if origin_type == "self" or payload.get("fixed_to_caster"):
             origin_mode = "caster"
             if caster:
-                cx = float(caster.col)
-                cy = float(caster.row)
+                cx = float(caster.col) + 0.5
+                cy = float(caster.row) + 0.5
 
         target_col = payload.get("ax") # Often used as 'aim point' for directional AoEs
         target_row = payload.get("ay")
@@ -22765,6 +22765,10 @@ class InitiativeTracker(base.InitiativeTracker):
             damage_type=str(payload.get("damage_type") or ""),
             dc=payload.get("dc")
         )
+
+    def _lan_get_map_state(self) -> MapState:
+        """Returns the current canonical map state."""
+        return self._capture_canonical_map_state(prefer_window=False)
 
     def _resolve_aoe_cells(self, spec: AoeSpec) -> Set[Tuple[int, int]]:
         """Wraps spell_engine_primitives.resolve_aoe_cells with current map bounds."""
@@ -40492,6 +40496,7 @@ class InitiativeTracker(base.InitiativeTracker):
                 aoe["radius_ft"] = float(radius_ft)
             else:
                 aoe["radius_sq"] = float(size)
+                aoe["radius_ft"] = float(size) * feet_per_square
         elif shape in ("sphere", "cylinder"):
             if radius_ft is None and size is None:
                 _reject("Pick a valid spell radius, matey.")
@@ -40501,6 +40506,7 @@ class InitiativeTracker(base.InitiativeTracker):
                 aoe["radius_ft"] = float(radius_ft)
             else:
                 aoe["radius_sq"] = float(size)
+                aoe["radius_ft"] = float(size) * feet_per_square
             if height_ft is not None:
                 aoe["height_ft"] = float(height_ft)
         elif shape == "square":

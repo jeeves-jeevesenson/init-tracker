@@ -8,49 +8,70 @@
 
 ---
 
-## 1. Evidence and Triage
+## 1. Evidence and Triage (Completed)
 
 ### Symptom
 A player used Fireball, the frontend overlay showed two targets would be hit, but the cast resolution only affected one.
 
-### Suspected Root Cause
-1.  **Missing `radius_ft` in Backend Context**: In `_handle_cast_aoe_request`, if the client sends `size` instead of `radius_ft`, the server populates `aoe["radius_sq"]` but leaves `aoe["radius_ft"]` unset. The `AoeSpec` then defaults to `radius_ft=0.0`, making the spell effective only in its origin cell.
-2.  **Center-Point Logic Change**: `spell_engine_primitives.py` now uses cell centers (`+ 0.5`) for inclusion checks. This makes radial AoEs effectively smaller than the old integer-corner logic, causing targets at the exact radius boundary to be missed.
-3.  **Missing `_lan_get_map_state`**: The method is called during AoE resolution but appears to be missing or returning `None`, causing a fallback to a 20x20 blank grid which might exclude targets on larger maps.
+### Root Cause
+1.  **Missing `radius_ft` in Backend Context**: In `_handle_cast_aoe_request`, if the client sent `size` instead of `radius_ft`, the server populated `aoe["radius_sq"]` but left `aoe["radius_ft"]` unset. This caused the reconstructed `AoeSpec` to default to `0.0` radius.
+2.  **Missing `_lan_get_map_state`**: The method was missing from `InitiativeTracker`, causing MapQueryAPI to fallback to a default 20x20 blank state during AoE resolution.
+3.  **Coordinate Offset Mismatch**: Backend inclusion logic in `spell_engine_primitives.py` uses cell centers (`+ 0.5`). `InitiativeTracker` was providing integer coordinates for caster-aligned spells, causing a half-square offset that excluded targets at the radius boundary.
 
 ### Evidence
 - **Source**: Jun 13 live player smoke test.
-- **Unit Test Failures**: `tests/test_spell_aoe_targeting_primitives.py` fails with:
-  - `test_sphere_resolution`: Cell `(7, 5)` missed by 10ft radius from `(5, 5)` due to center-point distance (2.54 sq vs 2.0 sq).
-  - `test_lan_get_map_state_returns_valid_state`: Returned `None` instead of `MapState`.
-- **Static Trace**:
-  - `dnd_initative_tracker.py:40502`: `elif shape in ("sphere", "cylinder"):` block does not set `aoe["radius_ft"]` in the `else` (size-based) branch.
-  - `dnd_initative_tracker.py:22207`: `AoeSpec` construction uses `float(aoe.get("radius_ft") or 0.0)`.
+- **Unit Test Failures**: `tests/test_spell_aoe_targeting_primitives.py` failures confirmed the radius loss and coordinate offset issue.
 
 ---
 
 ## 2. Execution Plan
 
 ### Gate 1: Evidence Capture & Reproduction (Completed)
-- **Goal**: Confirm the mismatch between `AoeSpec` visualization and backend unit inclusion.
-- **Findings**: Backend `radius_ft` is lost if client sends `size`. Center-point logic and map-state fallback further degrade precision and coverage.
+- **Findings**: Backend `radius_ft` was lost if client sent `size`. Center-point logic and map-state fallback further degraded precision.
 
-### Gate 2: Implementation (Pending)
-- **Goal**: Align the inclusion logic and restore missing state.
+### Gate 2: Implementation (Completed)
 - **Action**:
-  - Update `_handle_cast_aoe_request` to ensure `radius_ft` is always set for radial shapes (syncing with `radius_sq` if needed).
-  - Add missing `_lan_get_map_state` method to `InitiativeTracker`.
-  - Refine `is_cell_in_aoe` to match client-side inclusion expectations (e.g. including cells where the center OR any corner is hit, or reverting to integer-based checks if appropriate for the D&D grid).
-- **Files**: `dnd_initative_tracker.py`, `spell_engine_primitives.py`.
+  - Updated `_handle_cast_aoe_request` to ensure `radius_ft` is derived from `size` if missing.
+  - Implemented `_lan_get_map_state` in `InitiativeTracker` returning the canonical map state.
+  - Adjusted caster-aligned origin coordinates to cell centers (`+ 0.5`) in `_normalize_aoe_spec` and `_handle_cast_aoe_request`.
+  - Updated `tests/test_spell_aoe_targeting_primitives.py` to use center-aligned coordinates and verified all 7 tests pass.
+- **Files**: `dnd_initative_tracker.py`, `tests/test_spell_aoe_targeting_primitives.py`.
+### Gate 3: Validation (Failed Smoke Correction - Round 5)
+- **Status**: Completed (Correction Pass 5)
+- **Symptom Root Cause**:
+  - **Render Shift**: The LAN map `renderAoeOverlay` used `gridToScreen(cx, cy)`, which adds `0.5 * zoom` to center indices. However, the backend and preview logic had already normalized `cx` to the absolute center (`col + 0.5`). This resulted in a double-addition of `0.5`, shifting the rendered circle half a square away from its logical center.
+  - **Geometry Mismatch**: The 9-point sampling was an approximation that disagreed with the sharp visual boundary of the rendered circle and token.
+- **Algorithm**: Deterministic circle-circle overlap area.
+  - Token footprint is a circle of radius 0.35 centered at `col + 0.5`.
+  - AoE is a circle of radius `R` centered at `cx`.
+  - Target is included if the overlap area between these two circles is >= 50% of the token footprint area.
+  - Boundary equality (within `1e-9`) counts as included.
+  - Fallback to 9-point sampling remains for non-circular AoE shapes (cones, lines, squares) until exact geometry is required for them.
+- **Action**:
+  - **Fixed Rendering**: Updated `renderAoeOverlay` and `renderDmPreview` in `assets/web/lan/index.html` to use absolute grid coordinates (`panX + cx * zoom`), removing the redundant `0.5` offset.
+  - **Fixed Snapping**: Updated `setPendingAoePlacementCursorFromPointer` to snap point-clicks to the center of the cell (`col + 0.5`) to ensure consistent absolute coordinates.
+  - **Exact Math**: Implemented `getCircleCircleOverlapArea` in `assets/web/lan/index.html` and `get_circle_circle_overlap_area` in `spell_engine_primitives.py`.
+  - **Unified Logic**: Updated `aoeContainsGridPoint` (JS) and `is_cell_in_aoe` (Python) to use the exact overlap math for circular AoEs.
+- **Files**: `spell_engine_primitives.py`, `assets/web/lan/index.html`.
+- **Validation**:
+  - `python3 -m unittest tests.test_spell_aoe_targeting_primitives` passed (9 tests).
+  - Mandatory browser-asset JS syntax check passed for `assets/web/lan/index.html`.
+  - `git status --short` verified.
 
-### Gate 3: Validation (Pending)
-- **Goal**: Verify the fix with targeted unit tests and browser smoke check.
-- **Action**: Fix `tests/test_spell_aoe_targeting_primitives.py` and add a new regression test covering the `size` vs `radius_ft` discrepancy.
+### Next Steps
+- Developer Gate 3 smoke test retry.
+- **Action**: Hover Fireball over a target so that the circle visually covers exactly half the token.
+- **Expected**:
+  - The target should be included in the preview panel and combat log.
+  - The rendered circle should be perfectly centered on the caster (or the clicked cell) without any half-square shift.
+  - Moving the circle slightly so it covers < 50% of the token should exclude the target.
+- **Verification**: Ensure preview and resolution match by identity.
 
 ---
 
 ## 3. Progress Tracking
 
 - [ ] Gate 1: Evidence Capture & Reproduction
+...
 - [ ] Gate 2: Implementation
 - [ ] Gate 3: Validation

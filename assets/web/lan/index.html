@@ -687,7 +687,7 @@
       right:10px;
       z-index:8;
       width:min(220px, 34vw);
-      max-height:min(40vh, 300px);
+      max-height:min(70vh, 500px);
       padding:8px 10px;
       border-radius:10px;
       border:1px solid rgba(255,255,255,0.18);
@@ -698,6 +698,7 @@
       backdrop-filter: blur(6px);
       font-size:11px;
       line-height:1.35;
+      overflow-y: auto;
     }
     .aoe-target-preview.hidden{display:none;}
     .aoe-target-preview h4{
@@ -719,8 +720,8 @@
     .aoe-target-preview ul{
       margin:2px 0 0;
       padding-left:14px;
-      max-height:84px;
-      overflow:auto;
+      max-height:none;
+      overflow:visible;
       pointer-events:auto;
     }
     .spell-target-selection-ui{
@@ -11825,7 +11826,9 @@ __DAMAGE_TYPE_OPTIONS__
       : Number(remainingTurnsRaw);
     const cx = Number(options.cx ?? renderAoe.cx ?? 0);
     const cy = Number(options.cy ?? renderAoe.cy ?? 0);
-    const {x,y} = gridToScreen(cx, cy);
+    // Use absolute grid coordinates. gridToScreen adds zoom/2, which would shift AoEs that are already absolute centers.
+    const x = panX + cx * zoom;
+    const y = panY + cy * zoom;
     const colorHex = normalizeHexColor(renderAoe.color || "");
     const isPreview = !!options.preview;
     const alphaScale = isPreview ? 0.65 : 1;
@@ -11990,55 +11993,135 @@ __DAMAGE_TYPE_OPTIONS__
     return null;
   }
 
-  function aoeContainsGridPoint(aoe, point){
-    if (!aoe || !point) return false;
+  function aoeContainsPoint(aoe, px, py){
+    if (!aoe) return false;
     const cx = Number(aoe.cx ?? 0);
     const cy = Number(aoe.cy ?? 0);
-    const dx = Number(point.col) - cx;
-    const dy = Number(point.row) - cy;
+    const dx = px - cx;
+    const dy = py - cy;
     const kind = String(aoe.kind || "");
+    const epsilon = 1e-9;
+    const feetPerSquare = Math.max(1, Number(state?.grid?.feet_per_square || 5));
+
     if (kind === "circle" || kind === "sphere" || kind === "cylinder"){
-      const radius = Math.max(0, Number(aoe.radius_sq || 0));
-      return dx * dx + dy * dy <= radius * radius;
+      let radiusSqValue = Number(aoe.radius_sq);
+      if (!Number.isFinite(radiusSqValue) && Number.isFinite(Number(aoe.radius_ft))){
+        radiusSqValue = Number(aoe.radius_ft) / feetPerSquare;
+      }
+      const radius = Math.max(0, radiusSqValue || 0);
+      return dx * dx + dy * dy <= radius * radius + epsilon;
     }
     if (kind === "square" || kind === "cube"){
-      const side = Math.max(0, Number(aoe.side_sq || 0));
+      let sideSqValue = Number(aoe.side_sq);
+      if (!Number.isFinite(sideSqValue) && Number.isFinite(Number(aoe.side_ft))){
+        sideSqValue = Number(aoe.side_ft) / feetPerSquare;
+      }
+      const side = Math.max(0, sideSqValue || 0);
       const half = side / 2;
       const angleDeg = Number.isFinite(Number(aoe.angle_deg)) ? Number(aoe.angle_deg) : null;
       if (angleDeg !== null){
         const rad = (-angleDeg * Math.PI) / 180;
         const rx = dx * Math.cos(rad) - dy * Math.sin(rad);
         const ry = dx * Math.sin(rad) + dy * Math.cos(rad);
-        return Math.abs(rx) <= half && Math.abs(ry) <= half;
+        return Math.abs(rx) <= half + epsilon && Math.abs(ry) <= half + epsilon;
       }
-      return Math.abs(dx) <= half && Math.abs(dy) <= half;
+      return Math.abs(dx) <= half + epsilon && Math.abs(dy) <= half + epsilon;
     }
     if (kind === "line" || kind === "wall"){
-      const length = Math.max(0, Number(aoe.length_sq || 0));
-      const width = Math.max(0, Number(aoe.width_sq || 0));
+      let lengthSqValue = Number(aoe.length_sq);
+      if (!Number.isFinite(lengthSqValue) && Number.isFinite(Number(aoe.length_ft))){
+        lengthSqValue = Number(aoe.length_ft) / feetPerSquare;
+      }
+      let widthSqValue = Number(aoe.width_sq);
+      if (!Number.isFinite(widthSqValue) && Number.isFinite(Number(aoe.width_ft))){
+        widthSqValue = Number(aoe.width_ft) / feetPerSquare;
+      }
+      const length = Math.max(0, lengthSqValue || 0);
+      const width = Math.max(0, widthSqValue || 0);
       const angleDeg = Number.isFinite(Number(aoe.angle_deg)) ? Number(aoe.angle_deg) : null;
       const orient = aoe.orient === "horizontal" ? "horizontal" : "vertical";
       if (angleDeg !== null){
         const rad = (-angleDeg * Math.PI) / 180;
         const rx = dx * Math.cos(rad) - dy * Math.sin(rad);
         const ry = dx * Math.sin(rad) + dy * Math.cos(rad);
-        return Math.abs(rx) <= length / 2 && Math.abs(ry) <= width / 2;
+        return rx >= -epsilon && rx <= length + epsilon && Math.abs(ry) <= width / 2 + epsilon;
       }
       const halfW = orient === "horizontal" ? length / 2 : width / 2;
       const halfH = orient === "horizontal" ? width / 2 : length / 2;
-      return Math.abs(dx) <= halfW && Math.abs(dy) <= halfH;
+      return Math.abs(dx) <= halfW + epsilon && Math.abs(dy) <= halfH + epsilon;
     }
     if (kind === "cone"){
-      const length = Math.max(0, Number(aoe.length_sq || 0));
+      let lengthSqValue = Number(aoe.length_sq);
+      if (!Number.isFinite(lengthSqValue) && Number.isFinite(Number(aoe.length_ft))){
+        lengthSqValue = Number(aoe.length_ft) / feetPerSquare;
+      }
+      const length = Math.max(0, lengthSqValue || 0);
       const dist = Math.hypot(dx, dy);
-      if (dist > length) return false;
+      if (dist > length + epsilon) return false;
+      if (dist < 0.001) return true;
       const angleToPoint = (Math.atan2(dy, dx) * 180) / Math.PI;
       const headingDeg = coneHeadingDeg(aoe);
       const spreadDeg = coneSpreadDeg(aoe);
       const diff = angularDiffDeg(angleToPoint, headingDeg);
-      return diff <= spreadDeg / 2;
+      return diff <= spreadDeg / 2 + epsilon;
     }
     return false;
+  }
+
+  function getCircleCircleOverlapArea(r1, r2, d){
+    if (d >= r1 + r2) return 0;
+    if (d <= Math.abs(r1 - r2)) return Math.PI * Math.min(r1, r2) ** 2;
+    const r1sq = r1 * r1;
+    const r2sq = r2 * r2;
+    const dsq = d * d;
+    const phi1 = Math.acos((dsq + r1sq - r2sq) / (2 * d * r1));
+    const phi2 = Math.acos((dsq + r2sq - r1sq) / (2 * d * r2));
+    const area = r1sq * phi1 + r2sq * phi2 - 0.5 * Math.sqrt((-d + r1 + r2) * (d + r1 - r2) * (d - r1 + r2) * (d + r1 + r2));
+    return area;
+  }
+
+  function aoeContainsGridPoint(aoe, point){
+    if (!aoe || !point) return false;
+    const col = Number(point.col);
+    const row = Number(point.row);
+    const centerX = col + 0.5;
+    const centerY = row + 0.5;
+    const tokenRadius = 0.35;
+
+    const kind = String(aoe.kind || "");
+    if (kind === "circle" || kind === "sphere" || kind === "cylinder"){
+      const cx = Number(aoe.cx ?? 0);
+      const cy = Number(aoe.cy ?? 0);
+      const dx = centerX - cx;
+      const dy = centerY - cy;
+      const dist = Math.hypot(dx, dy);
+
+      const feetPerSquare = Math.max(1, Number(state?.grid?.feet_per_square || 5));
+      let radiusSqValue = Number(aoe.radius_sq);
+      if (!Number.isFinite(radiusSqValue) && Number.isFinite(Number(aoe.radius_ft))){
+        radiusSqValue = Number(aoe.radius_ft) / feetPerSquare;
+      }
+      const aoeRadius = Math.max(0, radiusSqValue || 0);
+
+      const overlap = getCircleCircleOverlapArea(aoeRadius, tokenRadius, dist);
+      const tokenArea = Math.PI * tokenRadius * tokenRadius;
+      return overlap >= (tokenArea * 0.5) - 1e-9;
+    }
+
+    // 9 points distributed within the 0.35 radius circular footprint
+    // to approximate 50% area coverage of the token itself.
+    // Pattern matches Python backend exactly.
+    const offsets = [
+      [0.0, 0.0],
+      [0.3, 0.0], [-0.3, 0.0], [0.0, 0.3], [0.0, -0.3],
+      [0.22, 0.22], [-0.22, 0.22], [0.22, -0.22], [-0.22, -0.22]
+    ];
+
+    let inCount = 0;
+    for (const [ox, oy] of offsets){
+      if (aoeContainsPoint(aoe, centerX + ox, centerY + oy)) inCount++;
+    }
+    return inCount >= 5;
   }
 
   function isAoeAllyUnit(unit){
@@ -12082,6 +12165,7 @@ __DAMAGE_TYPE_OPTIONS__
       const row = Number(unit.pos.row);
       if (!Number.isFinite(col) || !Number.isFinite(row)) return;
       if (!aoeContainsGridPoint(previewAoe, {col, row})) return;
+      if (isLineOfSightBlocked(previewAoe, {col, row})) return;
       const unitName = String(unit.name || `#${unit.cid ?? "?"}`);
       if (isAoeAllyUnit(unit)) allies.push(unitName);
       else enemies.push(unitName);
@@ -13209,12 +13293,12 @@ __DAMAGE_TYPE_OPTIONS__
   function getPendingAoeCasterPos(){
     if (!pendingAoePlacement) return null;
     const casterCid = Number(pendingAoePlacement.casterCid);
-    if (!Number.isFinite(casterCid)) return pendingAoePlacement?.casterPos ? toGridPoint(pendingAoePlacement.casterPos) : null;
+    if (!Number.isFinite(casterCid)) return pendingAoePlacement?.casterPos ? {col: Number(pendingAoePlacement.casterPos.col) + 0.5, row: Number(pendingAoePlacement.casterPos.row) + 0.5} : null;
     const caster = getUnitByCid(casterCid);
     if (caster?.pos){
-      return toGridPoint(caster.pos);
+      return {col: Number(caster.pos.col) + 0.5, row: Number(caster.pos.row) + 0.5};
     }
-    return pendingAoePlacement?.casterPos ? toGridPoint(pendingAoePlacement.casterPos) : null;
+    return pendingAoePlacement?.casterPos ? {col: Number(pendingAoePlacement.casterPos.col) + 0.5, row: Number(pendingAoePlacement.casterPos.row) + 0.5} : null;
   }
 
   function renderAimlessAoeConfirm(){
@@ -13262,8 +13346,8 @@ __DAMAGE_TYPE_OPTIONS__
 
   function setPendingAoePlacementCursorFromPointer(pointer){
     if (!pendingAoePlacement || !pointer) return;
-    const gridPos = screenToGridFloat(pointer.x, pointer.y);
-    pendingAoePlacement.cursor = {col: Number(gridPos.col), row: Number(gridPos.row)};
+    const gridPos = screenToGrid(pointer.x, pointer.y);
+    pendingAoePlacement.cursor = {col: gridPos.col + 0.5, row: gridPos.row + 0.5};
     if (isDirectionalSelfRangePlacementActive()){
       applyDirectionalSelfRangePlacement();
     }
@@ -13834,14 +13918,28 @@ __DAMAGE_TYPE_OPTIONS__
     if (!point) return {col: 0, row: 0};
     const colValue = point.col ?? point.cx ?? 0;
     const rowValue = point.row ?? point.cy ?? 0;
-    return {col: Math.round(Number(colValue)), row: Math.round(Number(rowValue))};
+    return {col: Math.floor(Number(colValue)), row: Math.floor(Number(rowValue))};
   }
 
   function isLineOfSightBlocked(startPoint, endPoint){
-    if (!state || !state.obstacles || !state.obstacles.length) return false;
+    if (!state) return false;
+    const obstacleList = state.obstacles || [];
+    const structureList = state.structures || [];
+    if (!obstacleList.length && !structureList.length) return false;
+
     const start = toGridPoint(startPoint);
     const end = toGridPoint(endPoint);
-    const obstacles = new Set(state.obstacles.map(o => `${Number(o.col)},${Number(o.row)}`));
+    const obstacles = new Set(obstacleList.map(o => `${Number(o.col)},${Number(o.row)}`));
+
+    if (Array.isArray(structureList)){
+      structureList.forEach((s) => {
+        const cells = entityCellsForEntry(s);
+        cells.forEach((c) => {
+          obstacles.add(`${Number(c.col)},${Number(c.row)}`);
+        });
+      });
+    }
+
     let x0 = start.col;
     let y0 = start.row;
     const x1 = end.col;
@@ -14386,7 +14484,7 @@ __DAMAGE_TYPE_OPTIONS__
 
   function saveDmUiPrefs(){ try { localStorage.setItem(dmUiPrefsKey, JSON.stringify(dmUiPrefs)); } catch(_) {} }
   function classifyLogLine(text){ const t=(text||"").toLowerCase(); if (t.includes("heal")) return "heal"; if (t.includes("save")||t.includes("concentration")) return "save"; if (t.includes("hits")||t.includes("miss")) return "attack"; if (t.includes("damage")||t.includes("takes")) return "damage"; if (t.includes("spell")||t.includes("🔮")) return "spell"; return "spell"; }
-  function parseBattleLine(line){ const m=String(line||"").match(/^\[([^\]]+)\]\s*	?\s*(.*)$/); return {time:m?m[1]:"", msg:m?m[2]:String(line||"")}; }
+  function parseBattleLine(line){ const m=String(line||"").match(/^\[([^\]]+)\]\s*    ?\s*(.*)$/); return {time:m?m[1]:"", msg:m?m[2]:String(line||"")}; }
   function escapeHtml(text){
     return String(text ?? "").replace(/[&<>"']/g, (ch) => {
       if (ch === "&") return "&amp;";
@@ -14565,7 +14663,7 @@ __DAMAGE_TYPE_OPTIONS__
     pctx.strokeStyle='rgba(255,255,255,0.08)'; pctx.lineWidth=1;
     for(let c=0;c<=cols;c++){const x=ox+c*cell; pctx.beginPath(); pctx.moveTo(x,oy); pctx.lineTo(x,oy+rows*cell); pctx.stroke();}
     for(let r=0;r<=rows;r++){const y=oy+r*cell; pctx.beginPath(); pctx.moveTo(ox,y); pctx.lineTo(ox+cols*cell,y); pctx.stroke();}
-    (state.aoes||[]).forEach(a=>{ if (!shouldRenderAoe(a)) return; pctx.fillStyle='rgba(120,160,255,0.18)'; const cx=ox+(Number(a.cx||0)+0.5)*cell; const cy=oy+(Number(a.cy||0)+0.5)*cell; const rr=Math.max(2, Number(a.radius_sq||1)*cell); pctx.beginPath(); pctx.arc(cx,cy,rr,0,Math.PI*2); pctx.fill(); });
+    (state.aoes||[]).forEach(a=>{ if (!shouldRenderAoe(a)) return; pctx.fillStyle='rgba(120,160,255,0.18)'; const cx=ox+Number(a.cx||0)*cell; const cy=oy+Number(a.cy||0)*cell; const rr=Math.max(2, Number(a.radius_sq||1)*cell); pctx.beginPath(); pctx.arc(cx,cy,rr,0,Math.PI*2); pctx.fill(); });
     (state.units||[]).forEach(u=>{ const x=ox+(Number(u.pos.col)+0.5)*cell; const y=oy+(Number(u.pos.row)+0.5)*cell; pctx.fillStyle=(u.role==='enemy')?'rgba(255,91,91,0.9)':'rgba(106,255,176,0.9)'; pctx.beginPath(); pctx.arc(x,y,Math.max(2,cell*0.25),0,Math.PI*2); pctx.fill(); });
   }
 
