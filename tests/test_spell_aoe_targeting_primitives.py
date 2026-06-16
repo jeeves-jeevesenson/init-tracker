@@ -201,5 +201,25 @@ class TestSpellAoeTargetingPrimitives(unittest.TestCase):
         self.assertIsInstance(state, MapState)
         self.assertEqual(state.grid.cols, 20)
 
+    def test_fractional_center(self):
+        # A 10ft circle (R=2.0) at (5.7, 5.7)
+        # Token at (7, 7) center is (7.5, 7.5).
+        # Distance = sqrt((7.5-5.7)^2 + (7.5-5.7)^2) = sqrt(1.8^2 + 1.8^2) = 2.54.
+        # R=2.0, dist=2.54. Should be OUT.
+        spec = AoeSpec(
+            origin_mode="point",
+            shape="sphere",
+            origin_col=5.7,
+            origin_row=5.7,
+            radius_ft=10.0
+        )
+        cells = self.tracker._resolve_aoe_cells(spec)
+        self.assertNotIn((7, 7), cells)
+
+        # Token at (5, 5) center is (5.5, 5.5).
+        # Distance = sqrt(0.2^2 + 0.2^2) = 0.28.
+        # R=2.0, dist=0.28. Should be IN.
+        self.assertIn((5, 5), cells)
+
 if __name__ == "__main__":
     unittest.main()

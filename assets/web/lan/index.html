@@ -13346,7 +13346,7 @@ __DAMAGE_TYPE_OPTIONS__
 
   function setPendingAoePlacementCursorFromPointer(pointer){
     if (!pendingAoePlacement || !pointer) return;
-    const gridPos = screenToGrid(pointer.x, pointer.y);
+    const gridPos = screenToGridFloat(pointer.x, pointer.y);
     pendingAoePlacement.cursor = {col: gridPos.col + 0.5, row: gridPos.row + 0.5};
     if (isDirectionalSelfRangePlacementActive()){
       applyDirectionalSelfRangePlacement();

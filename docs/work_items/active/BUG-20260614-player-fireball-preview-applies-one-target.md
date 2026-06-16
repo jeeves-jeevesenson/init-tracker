@@ -52,20 +52,35 @@ A player used Fireball, the frontend overlay showed two targets would be hit, bu
   - **Fixed Snapping**: Updated `setPendingAoePlacementCursorFromPointer` to snap point-clicks to the center of the cell (`col + 0.5`) to ensure consistent absolute coordinates.
   - **Exact Math**: Implemented `getCircleCircleOverlapArea` in `assets/web/lan/index.html` and `get_circle_circle_overlap_area` in `spell_engine_primitives.py`.
   - **Unified Logic**: Updated `aoeContainsGridPoint` (JS) and `is_cell_in_aoe` (Python) to use the exact overlap math for circular AoEs.
-- **Files**: `spell_engine_primitives.py`, `assets/web/lan/index.html`.
+- **Files**: `spell_engine_primitives.py`, `assets/web/lan/index.html`, `tests/test_spell_aoe_targeting_primitives.py`.
 - **Validation**:
   - `python3 -m unittest tests.test_spell_aoe_targeting_primitives` passed (9 tests).
   - Mandatory browser-asset JS syntax check passed for `assets/web/lan/index.html`.
   - `git status --short` verified.
 
+### Gate 3: Validation (Failed Smoke Correction - Round 6)
+- **Status**: Completed (Correction Pass 6)
+- **Precision Restoration**: Restored free-floating AoE aiming for point-click spells like Fireball.
+  - Updated `setPendingAoePlacementCursorFromPointer` to use `screenToGridFloat`, allowing fractional grid coordinates for the AoE center.
+  - Verified that rendering, preview, and backend resolution all use these fractional absolute grid coordinates.
+- **Contract Preservation**:
+  - Kept exact circle-circle overlap area targeting (>= 50% coverage).
+  - Kept absolute grid rendering (no double 0.5 offset).
+  - Kept caster-origin snap-to-center behavior.
+- **Action**:
+  - Modified `assets/web/lan/index.html` to capture precise pointer coordinates.
+  - Added `test_fractional_center` to `tests/test_spell_aoe_targeting_primitives.py` verifying that fractional centers correctly include/exclude targets.
+- **Validation**:
+  - `python3 -m unittest tests.test_spell_aoe_targeting_primitives` passed (10 tests).
+  - Mandatory browser-asset JS syntax check passed.
+
 ### Next Steps
 - Developer Gate 3 smoke test retry.
-- **Action**: Hover Fireball over a target so that the circle visually covers exactly half the token.
+- **Action**: Hover Fireball and move it slowly/precisely between targets.
 - **Expected**:
-  - The target should be included in the preview panel and combat log.
-  - The rendered circle should be perfectly centered on the caster (or the clicked cell) without any half-square shift.
-  - Moving the circle slightly so it covers < 50% of the token should exclude the target.
-- **Verification**: Ensure preview and resolution match by identity.
+  - The rendered circle follows the mouse precisely (not snapping to cell centers).
+  - The preview target list updates exactly as the circle covers/uncovers tokens.
+  - Resolution (Cast) matches the final preview exactly.
 
 ---
 
