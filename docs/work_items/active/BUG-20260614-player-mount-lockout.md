@@ -26,6 +26,7 @@ Restore movement capability and ensure the mount interaction completes or fails 
 
 ## Implementation Status
 - [x] Corrected symptom model documented
+- [x] Instrumentation plan created: See [docs/runtime_reports/BUG-20260614-player-mount-lockout_instrumentation_plan_20260617.md](../../runtime_reports/BUG-20260614-player-mount-lockout_instrumentation_plan_20260617.md)
 - [ ] Root cause not confirmed
 - [ ] Reproduction still needed
 - [ ] Mounted rider-follow broadcast/render/state sync hypothesis pending evidence
@@ -35,4 +36,4 @@ Restore movement capability and ensure the mount interaction completes or fails 
 **Note**: Implementation is not yet started. This item is in the **Evidence / reproduction gate**.
 
 ## Next Orchestrator Action
-Evidence/instrumentation around what happens when bottom/mount moves while top/rider is mounted. Compare backend coordinates, websocket/broadcast payloads, and frontend render state for both bottom and top to determine whether the failure is server state, broadcast payload, or frontend stale local render state.
+Implement the **Temporary Instrumentation Patch** identified in the plan to capture a combined server/client log trace during a live reproduction. Compare logged `MUTATE`, `SNAPSHOT`, `BROADCAST`, and `WS_RECV` events to identify the divergence point.
