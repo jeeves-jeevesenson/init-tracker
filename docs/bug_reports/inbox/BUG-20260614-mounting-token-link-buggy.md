@@ -67,6 +67,10 @@ grep -Rni "mount\|mounted\|token\|move" logs docs/runtime_reports 2>/dev/null | 
 * Drag/drop move handling.
 * Do not treat this as root cause.
 
+## Related fixed player-surface work
+- **Resolved**: [BUG-20260614-player-mount-lockout](../../work_items/completed/BUG-20260614-player-mount-lockout.md)
+- **Note**: A major player-surface mount lockout caused by turn-gate blockers was fixed on 2026-06-17. During that fix, the "rider-follow desync" (leaving token behind) was not reproduced and server broadcasts were verified as synchronized. However, if this intermittent desync persists on `/dm` or `/dmcontrol`, it remains an open issue.
+
 ## Related history
 
 None provided.

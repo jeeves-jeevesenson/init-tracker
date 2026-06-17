@@ -26,6 +26,9 @@ Unknown.
 ## Environment
 Unknown. Surface not specified.
 
+## Surface clarification needed
+This report is a data/coverage request ("add guns for all players"). It should be clarified whether this is a request for new item YAMLs, or a request to update specific character `.yaml` files in `players/`.
+
 ## Evidence provided
 Developer note only.
 

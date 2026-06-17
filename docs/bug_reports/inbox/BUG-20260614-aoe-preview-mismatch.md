@@ -66,6 +66,10 @@ grep -Rni "aoe\|preview\|range\|target\|spell" logs docs/runtime_reports 2>/dev/
 * Coordinate/grid mismatch between preview and resolution.
 * Do not treat this as root cause.
 
+## Related fixed player-surface work
+- **Resolved**: [BUG-20260614-player-fireball-preview-applies-one-target](../../work_items/completed/BUG-20260614-player-fireball-preview-applies-one-target.md)
+- **Note**: The player-surface Fireball preview mismatch (radius loss and coordinate offset) was fixed on 2026-06-16. This included fixes to `spell_engine_primitives.py` and `assets/web/lan/index.html`. However, the DM control surface (`assets/web/dmcontrol/index.html`) still uses the old point-sampling math and may still exhibit this mismatch. DM-surface behavior is not proven fixed.
+
 ## Related history
 
 The debugging report also includes Fireball damage inconsistency. That is tracked separately because preview targeting and damage rolling may be distinct issues.

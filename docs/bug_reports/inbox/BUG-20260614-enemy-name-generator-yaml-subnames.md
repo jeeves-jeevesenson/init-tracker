@@ -21,10 +21,13 @@ Enemy names/IDs may be less useful or less stable than desired, making it harder
 The uploaded debugging notes say: "enemny name generator lists tied to yamls with subname for ID."
 
 ## Expected behavior
-
 Enemy name generator behavior should support YAML-tied lists and subnames for stable/useful enemy IDs, subject to product design.
 
+## Surface clarification needed
+This is a feature/data-model request for enemy generation. Developer decision is needed on the desired YAML schema for subnames and how they should be used for ID stability.
+
 ## Reproduction steps
+
 
 Unknown.
 

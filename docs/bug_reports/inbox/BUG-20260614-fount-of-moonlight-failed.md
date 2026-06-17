@@ -61,6 +61,10 @@ grep -Rni "fount\|moonlight" logs docs/runtime_reports 2>/dev/null | tail -80
 * Effect/resource application.
 * Do not treat this as root cause.
 
+## Related fixed player-surface work
+- **Resolved**: [BUG-20260614-player-spell-slots-not-syncing](../../work_items/active/BUG-20260614-player-spell-slots-not-syncing.md) (Completed 2026-06-14)
+- **Note**: A player-surface bug where spell slot/resource changes did not sync to the UI was fixed. If "failure" refers to resource UI desync, it may be resolved on the player surface but should be verified on DM surfaces.
+
 ## Related history
 
 The debugging report also mentions Moonbeam in the Counterspell example, but no direct connection is established.

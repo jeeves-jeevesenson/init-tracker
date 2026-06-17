@@ -21,10 +21,13 @@ Players may not be able to conveniently add Divine Smite damage when using a man
 The uploaded debugging notes say: "non automation mode for divine smite so the weapon resolution modal has spots for divine smite damage."
 
 ## Expected behavior
-
 Weapon resolution should allow a manual Divine Smite damage entry path when automation is disabled or not desired.
 
+## Surface clarification needed
+This is a UI capability request for the weapon resolution modal. It needs to be clarified which surface (/dm, /dmcontrol, or /lan) is the priority for this manual override.
+
 ## Reproduction steps
+
 
 Unknown.
 

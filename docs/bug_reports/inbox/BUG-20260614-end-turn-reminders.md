@@ -21,10 +21,13 @@ Players or the DM may forget to end turns or miss required end-of-turn actions/e
 The uploaded debugging notes say: "end turn reminders."
 
 ## Expected behavior
-
 The app should provide useful end-turn reminders, such as unresolved reactions, concentration, ongoing effects, conditions, saves, or resource prompts, depending on product design.
 
+## Surface clarification needed
+This is a feature/UX request. Developer decision is needed on whether this should be a player-facing popup, a DM-facing notification, or a subtle UI indicator.
+
 ## Reproduction steps
+
 
 Not applicable yet; this is a feature/UX request unless tied to a specific missed reminder.
 

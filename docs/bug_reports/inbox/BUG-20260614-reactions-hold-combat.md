@@ -62,6 +62,10 @@ grep -Rni "reaction\|counterspell\|opportunity" logs docs/runtime_reports 2>/dev
 * Turn advancement gating.
 * Do not treat this as root cause.
 
+## Related fixed player-surface work
+- **Resolved**: [BUG-20260614-player-mount-lockout](../../work_items/completed/BUG-20260614-player-mount-lockout.md)
+- **Note**: The `mount_response` was exempted from the turn-gate blocker on 2026-06-17 to prevent combat stalls during mounting. If other reactions (Counterspell, Opportunity Attacks) still hold up combat, this report remains active for those triggers.
+
 ## Related history
 
 Related notes include Counterspell ally trigger behavior and end-turn reminders.
