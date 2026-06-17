@@ -1,12 +1,21 @@
 # BUG-20260614-fireball-damage-roll-inconsistent
 
-* status: inbox
+* status: resolved
 * severity: S2
 * priority: P1
 * reported date: 2026-06-14
 * reported by: developer
 * area: Spells / Damage Resolution
 * confidence: high
+
+## Resolution Summary
+
+- **Implementation Task**: BUG-20260617-fireball-shared-damage-roll-impl-01
+- **Fix**: Refactored `_lan_auto_resolve_cast_aoe` in `dnd_initative_tracker.py` to pre-calculate damage rolls for each structural spell effect before iterating over targets. Caching by formula ensures that success/fail outcomes share the same base roll.
+- **Verification**: New unit test `tests/test_fireball_shared_damage.py` confirms shared rolls across multiple targets (including save success/failure).
+- **Smoke Evidence**: Developer browser smoke passed on 2026-06-17.
+- **Smoke Log**: `logs/smoke/BUG-20260614-fireball-damage-roll-inconsistent_smoke-server_20260617-154407.log`
+- **Debug Trace**: `logs/debug-trace-20260617-154407.jsonl`
 
 ## Summary
 

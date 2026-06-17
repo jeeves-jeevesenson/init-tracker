@@ -24190,7 +24190,7 @@ class InitiativeTracker(base.InitiativeTracker):
                     continue
                 manual_damage_map[key] = max(manual_damage_map.get(key, 0), int(amount))
 
-        def _scaled_damage(effect: Dict[str, Any]) -> int:
+        def _scaled_damage(effect: Dict[str, Any], apply_multiplier: bool = True) -> int:
             base_expr = effect.get("dice")
             base_amount = _roll_dice(base_expr)
             if base_amount is None:
@@ -24208,13 +24208,37 @@ class InitiativeTracker(base.InitiativeTracker):
                         extra = _roll_dice(add_expr)
                         if extra is not None:
                             total += int(extra)
-            mult = effect.get("multiplier")
-            try:
-                if mult is not None:
-                    total = int(math.floor(float(total) * float(mult)))
-            except Exception:
-                pass
+
+            if apply_multiplier:
+                mult = effect.get("multiplier")
+                try:
+                    if mult is not None:
+                        total = int(math.floor(float(total) * float(mult)))
+                except Exception:
+                    pass
             return max(0, int(total))
+
+        # Pre-roll damage for all damage effects in the outcome buckets to ensure
+        # damage is rolled once per cast/effect rather than per target.
+        # We cache by a structural key (dice + damage type + scaling) to share rolls
+        # even between success/fail buckets if they use the same formula.
+        pre_rolled_damage: Dict[tuple, int] = {}
+        for bucket in outcomes.values():
+            if not isinstance(bucket, list):
+                continue
+            for effect in bucket:
+                if not isinstance(effect, dict):
+                    continue
+                if str(effect.get("effect") or "").strip().lower() == "damage":
+                    scaling = effect.get("scaling") if isinstance(effect.get("scaling"), dict) else mechanics.get("scaling") if isinstance(mechanics.get("scaling"), dict) else None
+                    key = (
+                        str(effect.get("dice") or "").strip().lower(),
+                        str(effect.get("damage_type") or effect.get("type") or aoe.get("damage_type") or "").strip().lower(),
+                        id(scaling) if scaling else 0
+                    )
+                    if key not in pre_rolled_damage:
+                        # Roll base amount (without multiplier)
+                        pre_rolled_damage[key] = _scaled_damage(effect, apply_multiplier=False)
 
         def _adjustment_note(notes: List[Dict[str, Any]]) -> str:
             chunks: List[str] = []
@@ -24341,14 +24365,26 @@ class InitiativeTracker(base.InitiativeTracker):
                                 amount = int(manual_damage_map.get(key) or 0)
                                 break
                     if amount is None:
-                        amount = _scaled_damage(effect)
-                    else:
-                        mult = effect.get("multiplier")
-                        try:
-                            if mult is not None:
-                                amount = int(math.floor(float(amount) * float(mult)))
-                        except Exception:
-                            pass
+                        # Use pre-rolled base value if available
+                        scaling = effect.get("scaling") if isinstance(effect.get("scaling"), dict) else mechanics.get("scaling") if isinstance(mechanics.get("scaling"), dict) else None
+                        key = (
+                            str(effect.get("dice") or "").strip().lower(),
+                            str(effect.get("damage_type") or effect.get("type") or aoe.get("damage_type") or "").strip().lower(),
+                            id(scaling) if scaling else 0
+                        )
+                        if key in pre_rolled_damage:
+                            amount = pre_rolled_damage[key]
+                        else:
+                            amount = _scaled_damage(effect, apply_multiplier=False)
+
+                    # Apply the multiplier of the CURRENT effect (e.g. 0.5 for success bucket)
+                    mult = effect.get("multiplier")
+                    try:
+                        if mult is not None:
+                            amount = int(math.floor(float(amount) * float(mult)))
+                    except Exception:
+                        pass
+
                     if sculpt_auto_success and outcome_key == "success":
                         mult = effect.get("multiplier")
                         try:
