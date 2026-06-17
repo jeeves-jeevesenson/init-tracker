@@ -8,10 +8,10 @@ If an item is not marked as **Active** here, it is NOT current work.
 ## Current Status
 
 <!-- ACTIVE_WORK_STATUS_START -->
-- **Status:** Active
-- **Current Work Item:** BUG-20260614-player-1080p-header-overflow
-- **Active Gate:** developer browser smoke
-- **Allowed Next Action:** developer smoke verification only
+- **Status:** No Active Work
+- **Current Work Item:** None
+- **Active Gate:** None
+- **Allowed Next Action:** choose next work / push / deploy / open another bug
 <!-- ACTIVE_WORK_STATUS_END -->
 
 ---
@@ -21,7 +21,6 @@ If an item is not marked as **Active** here, it is NOT current work.
 | ID | Title | Status | Goal |
 | --- | --- | --- | --- |
 <!-- ACTIVE_WORK_TABLE_START -->
-| BUG-20260614-player-1080p-header-overflow | 1080p header overflow / Battle Log invisible | Active | developer browser smoke |
 <!-- ACTIVE_WORK_TABLE_END -->
 
 ---
@@ -31,6 +30,7 @@ If an item is not marked as **Active** here, it is NOT current work.
 | ID | Title | Completion Date | Evidence |
 | --- | --- | --- | --- |
 <!-- COMPLETED_WORK_TABLE_START -->
+| BUG-20260614-player-1080p-header-overflow | 1080p header overflow / Battle Log invisible | 2026-06-17 | [completed/BUG-20260614-player-1080p-header-overflow.md](completed/BUG-20260614-player-1080p-header-overflow.md) |
 | BUG-20260614-player-mount-lockout | Player mount lockout / movement failure | 2026-06-17 | [completed/BUG-20260614-player-mount-lockout.md](completed/BUG-20260614-player-mount-lockout.md) |
 | BUG-20260614-player-fireball-preview-applies-one-target | Fireball preview mismatch | 2026-06-16 | [completed/BUG-20260614-player-fireball-preview-applies-one-target.md](completed/BUG-20260614-player-fireball-preview-applies-one-target.md) |
 | BUG-20260614-player-spell-slots-not-syncing | Player spell slot/resource sync does not update UI after cast or manual override | 2026-06-14 | [active/BUG-20260614-player-spell-slots-not-syncing.md](active/BUG-20260614-player-spell-slots-not-syncing.md) |
@@ -55,7 +55,8 @@ If an item is not marked as **Active** here, it is NOT current work.
 
 | ID | Title | Severity | Note |
 | --- | --- | --- | --- |
-| BUG-20260614-player-1080p-header-overflow | 1080p header overflow / Battle Log invisible | P2 | UX issue, queued. |
+<!-- UNRESOLVED_BUGS_QUEUE_START -->
+<!-- UNRESOLVED_BUGS_QUEUE_END -->
 
 ---
 

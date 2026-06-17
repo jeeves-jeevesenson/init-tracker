@@ -38,21 +38,34 @@ The `topbar-main-row` (which contains 20+ buttons) is configured with `flex-wrap
 - [x] Verify `topbar-main-row` wrapping behavior in simulated 1080p viewport.
 - [x] Perform mandatory inline JS syntax check.
 
+### Gate 3: Developer browser smoke (Complete)
+- [x] Verify fix at 1920x1080 / 100% zoom.
+- [x] Record results and close bug.
+
 ## Validation & Evidence
 
 ### Required Validation
 - Node.js `--check` for inline JavaScript in `assets/web/lan/index.html` (if edited).
 - `git diff --check` and `py_compile` (if applicable).
 
+### Developer Smoke Verification
+- Viewport: 1920x1080 / 100% browser zoom
+- Result: **PASS**
+- Evidence: Buttons wrap correctly; Battle Log is visible and reachable.
+- Out-of-scope: 150% zoom overflow accepted as non-issue.
+- Logs:
+  - Smoke log: `logs/smoke/BUG-20260614-player-1080p-header-overflow_smoke-server_20260617-135340.log`
+  - Debug trace: `logs/debug-trace-20260617-135340.jsonl`
+
 ### Completion Evidence
 - Inspected `assets/web/lan/index.html` and identified missing width constraints on root and major containers.
 - Confirmed `auto-compact` mode (which hides the button) is not active at 1080p, supporting the overflow hypothesis.
 - Calculated total content width of header elements exceeds 1920px, necessitating wrap.
-- Applied the following CSS changes to `assets/web/lan/index.html`:
+- Applied the following CSS changes to `assets/web/lan/index.html` in commit `2453a16`:
   - `html, body`: Added `width: 100%`.
   - `.app`: Added `width: 100%` and `max-width: 100vw`.
   - `.topbar`: Added `width: 100%` and `box-sizing: border-box`.
-- Verified JS syntax (if applicable).
+- Verified JS syntax: Passed.
 
 ## Next Allowed Action
-- Developer browser smoke verification only.
+- choose next work / push / deploy / open another bug.
