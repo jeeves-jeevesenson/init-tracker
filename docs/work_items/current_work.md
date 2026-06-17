@@ -8,10 +8,10 @@ If an item is not marked as **Active** here, it is NOT current work.
 ## Current Status
 
 <!-- ACTIVE_WORK_STATUS_START -->
-- **Status:** Idle
-- **Current Work Item:** None
-- **Active Gate:** None
-- **Allowed Next Action:** choose next bug promotion, deploy/push, planning, or idle
+- **Status:** Active
+- **Current Work Item:** BUG-20260614-player-1080p-header-overflow
+- **Active Gate:** Initial intake/reproduction/planning
+- **Allowed Next Action:** run the bounded initial diagnosis/planning task only
 <!-- ACTIVE_WORK_STATUS_END -->
 
 ---
@@ -21,6 +21,7 @@ If an item is not marked as **Active** here, it is NOT current work.
 | ID | Title | Status | Goal |
 | --- | --- | --- | --- |
 <!-- ACTIVE_WORK_TABLE_START -->
+| BUG-20260614-player-1080p-header-overflow | 1080p header overflow / Battle Log invisible | Active | Initial intake/reproduction/planning |
 <!-- ACTIVE_WORK_TABLE_END -->
 
 ---
