@@ -12,20 +12,27 @@ A player attempted a mount interaction. The mount flow did not complete successf
 ## Goal
 Restore movement capability and ensure the mount interaction completes or fails gracefully without locking the player.
 
+## Symptom Model
+- Vicnor (Rider) mounted on John Twilight (Mount).
+- John moves. John's token moves fine (on John's screen).
+- Vicnor's token does not follow John immediately.
+- Vicnor appears stale until his turn or a later update causes a "snap" to the correct square.
+- Perception of lockout occurs because Vicnor cannot move himself (D&D rules) and cannot move John ("independent" PC mode).
+
 ## Reproduction / Evidence Needed
-- Identify specific character/mount pair used.
-- Confirm if both participants were player-claimed.
-- Check if refreshing the browser clears the lockout.
-- Inspect `client_errors` in logs for relevant entries during the lockout.
-- Reproduce the lock state in a test or local browser session.
+- [x] Evidence report corrected: See [docs/runtime_reports/BUG-20260614-player-mount-lockout_evidence_20260616.md](../../runtime_reports/BUG-20260614-player-mount-lockout_evidence_20260616.md)
+- [ ] Verify mounted rider-follow state/broadcast/render behavior via instrumentation.
+- [ ] Confirm if refreshing browser resolves stale position.
 
 ## Implementation Status
-- [ ] Evidence captured / Reproduction confirmed
-- [ ] Root cause identified
+- [x] Corrected symptom model documented
+- [ ] Root cause not confirmed
+- [ ] Reproduction still needed
+- [ ] Mounted rider-follow broadcast/render/state sync hypothesis pending evidence
 - [ ] Fix implemented
 - [ ] Verification / Smoke test passed
 
 **Note**: Implementation is not yet started. This item is in the **Evidence / reproduction gate**.
 
 ## Next Orchestrator Action
-Perform bounded evidence capture or reproduction task for the mount lockout bug.
+Evidence/instrumentation around what happens when bottom/mount moves while top/rider is mounted. Compare backend coordinates, websocket/broadcast payloads, and frontend render state for both bottom and top to determine whether the failure is server state, broadcast payload, or frontend stale local render state.
