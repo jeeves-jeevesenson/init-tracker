@@ -8,10 +8,10 @@ If an item is not marked as **Active** here, it is NOT current work.
 ## Current Status
 
 <!-- ACTIVE_WORK_STATUS_START -->
-- **Status:** Active
-- **Current Work Item:** BUG-20260614-player-mount-lockout
-- **Active Gate:** Evidence / reproduction gate
-- **Allowed Next Action:** bounded evidence capture or implementation task for the mount lockout bug
+- **Status:** Idle
+- **Current Work Item:** None
+- **Active Gate:** None
+- **Allowed Next Action:** choose next bug promotion, deploy/push, planning, or idle
 <!-- ACTIVE_WORK_STATUS_END -->
 
 ---
@@ -21,7 +21,6 @@ If an item is not marked as **Active** here, it is NOT current work.
 | ID | Title | Status | Goal |
 | --- | --- | --- | --- |
 <!-- ACTIVE_WORK_TABLE_START -->
-| BUG-20260614-player-mount-lockout | Player mount lockout / movement failure | Active | Evidence / reproduction |
 <!-- ACTIVE_WORK_TABLE_END -->
 
 ---
@@ -31,6 +30,7 @@ If an item is not marked as **Active** here, it is NOT current work.
 | ID | Title | Completion Date | Evidence |
 | --- | --- | --- | --- |
 <!-- COMPLETED_WORK_TABLE_START -->
+| BUG-20260614-player-mount-lockout | Player mount lockout / movement failure | 2026-06-17 | [completed/BUG-20260614-player-mount-lockout.md](completed/BUG-20260614-player-mount-lockout.md) |
 | BUG-20260614-player-fireball-preview-applies-one-target | Fireball preview mismatch | 2026-06-16 | [completed/BUG-20260614-player-fireball-preview-applies-one-target.md](completed/BUG-20260614-player-fireball-preview-applies-one-target.md) |
 | BUG-20260614-player-spell-slots-not-syncing | Player spell slot/resource sync does not update UI after cast or manual override | 2026-06-14 | [active/BUG-20260614-player-spell-slots-not-syncing.md](active/BUG-20260614-player-spell-slots-not-syncing.md) |
 | WORK-20260604-black-tan-combat-exploration | AI/Browser-Driven Combat Bug Exploration | 2026-06-14 | [completed/WORK-20260604-black-tan-combat-exploration.md](completed/WORK-20260604-black-tan-combat-exploration.md) |
