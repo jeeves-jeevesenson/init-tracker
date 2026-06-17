@@ -21,6 +21,7 @@ Restore movement capability and ensure the mount interaction completes or fails 
 
 ## Reproduction / Evidence Needed
 - [x] Evidence report corrected: See [docs/runtime_reports/BUG-20260614-player-mount-lockout_evidence_20260616.md](../../runtime_reports/BUG-20260614-player-mount-lockout_evidence_20260616.md)
+- [x] Off-turn mount acceptance blocker fixed and hardened: See [docs/runtime_reports/BUG-20260614-player-mount-lockout_accept_offturn_fix_20260617.md](../../runtime_reports/BUG-20260614-player-mount-lockout_accept_offturn_fix_20260617.md)
 - [ ] Verify mounted rider-follow state/broadcast/render behavior via instrumentation.
 - [ ] Confirm if refreshing browser resolves stale position.
 

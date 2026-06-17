@@ -4397,6 +4397,19 @@ class PlayerCommandService:
         if not pending:
             self._toast(ws_id, "Mount request expired.")
             return build_dispatch_result("mount_response", False, reason="request_expired", request=request_contract)
+        
+        # Safety check: responder must be the intended mount or admin
+        allowed = is_admin
+        if not allowed and cid is not None:
+            allowed = (int(cid) == int(pending.get("mount_cid")))
+
+        if not allowed:
+            self._toast(ws_id, "Ye are not the one being mounted, matey.")
+            # Put it back since it wasn't a valid response from the target
+            if isinstance(pending_mount_requests, dict):
+                pending_mount_requests[request_id] = pending
+            return build_dispatch_result("mount_response", False, reason="mount_cid_mismatch", request=request_contract)
+
         if bool(msg.get("accept")):
             t._accept_mount(
                 int(pending.get("rider_cid")),
