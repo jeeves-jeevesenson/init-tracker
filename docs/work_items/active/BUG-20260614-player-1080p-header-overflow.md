@@ -33,22 +33,26 @@ The `topbar-main-row` (which contains 20+ buttons) is configured with `flex-wrap
 4.  **Refine Wrapping**: Verify `.topbar-main-row` and `.topbar-controls` wrap correctly once the width is constrained.
 5.  **Validation**: Verify fix at 1920x1080 resolution and run inline JS syntax check on `assets/web/lan/index.html`.
 
-### Gate 2: Bounded implementation of CSS/layout fix
-- [ ] Apply width constraints to `html`, `body`, `.app`, and `.topbar` in `assets/web/lan/index.html`.
-- [ ] Verify `topbar-main-row` wrapping behavior in simulated 1080p viewport.
-- [ ] Perform mandatory inline JS syntax check.
+### Gate 2: Bounded implementation of CSS/layout fix (Complete)
+- [x] Apply width constraints to `html`, `body`, `.app`, and `.topbar` in `assets/web/lan/index.html`.
+- [x] Verify `topbar-main-row` wrapping behavior in simulated 1080p viewport.
+- [x] Perform mandatory inline JS syntax check.
 
 ## Validation & Evidence
 
 ### Required Validation
 - Node.js `--check` for inline JavaScript in `assets/web/lan/index.html` (if edited).
+- `git diff --check` and `py_compile` (if applicable).
 
 ### Completion Evidence
 - Inspected `assets/web/lan/index.html` and identified missing width constraints on root and major containers.
 - Confirmed `auto-compact` mode (which hides the button) is not active at 1080p, supporting the overflow hypothesis.
 - Calculated total content width of header elements exceeds 1920px, necessitating wrap.
-- Proposed surgery: Add horizontal constraints to `html`, `body`, `.app`, and `.topbar`.
-
+- Applied the following CSS changes to `assets/web/lan/index.html`:
+  - `html, body`: Added `width: 100%`.
+  - `.app`: Added `width: 100%` and `max-width: 100vw`.
+  - `.topbar`: Added `width: 100%` and `box-sizing: border-box`.
+- Verified JS syntax (if applicable).
 
 ## Next Allowed Action
-- Run the bounded Gate 2 implementation task only.
+- Developer browser smoke verification only.

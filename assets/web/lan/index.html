@@ -31,9 +31,11 @@
       --battle-log-font-size: 14px;
       --battle-log-font-family: system-ui,-apple-system,Segoe UI,Roboto,Ubuntu,Cantarell,Noto Sans,sans-serif;
     }
-    html,body{height:100%; margin:0; background:var(--bg); color:var(--text); font-family: system-ui,-apple-system,Segoe UI,Roboto,Ubuntu,Cantarell,Noto Sans,sans-serif; overflow:hidden;}
-    .app{height:100dvh; display:flex; flex-direction:column; min-height:0;}
+    html,body{width:100%; height:100%; margin:0; background:var(--bg); color:var(--text); font-family: system-ui,-apple-system,Segoe UI,Roboto,Ubuntu,Cantarell,Noto Sans,sans-serif; overflow:hidden;}
+    .app{width:100%; max-width:100vw; height:100dvh; display:flex; flex-direction:column; min-height:0;}
     .topbar{
+      width:100%;
+      box-sizing:border-box;
       padding: calc(10px + var(--safeInsetTop)) 12px 10px 12px;
       background: linear-gradient(180deg, rgba(22,24,30,0.96), rgba(12,14,20,0.88));
       border-bottom: 1px solid rgba(214,186,126,0.28);

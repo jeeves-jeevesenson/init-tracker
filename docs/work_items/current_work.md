@@ -10,8 +10,8 @@ If an item is not marked as **Active** here, it is NOT current work.
 <!-- ACTIVE_WORK_STATUS_START -->
 - **Status:** Active
 - **Current Work Item:** BUG-20260614-player-1080p-header-overflow
-- **Active Gate:** bounded Gate 2 implementation
-- **Allowed Next Action:** run the bounded Gate 2 implementation task only
+- **Active Gate:** developer browser smoke
+- **Allowed Next Action:** developer smoke verification only
 <!-- ACTIVE_WORK_STATUS_END -->
 
 ---
@@ -21,7 +21,7 @@ If an item is not marked as **Active** here, it is NOT current work.
 | ID | Title | Status | Goal |
 | --- | --- | --- | --- |
 <!-- ACTIVE_WORK_TABLE_START -->
-| BUG-20260614-player-1080p-header-overflow | 1080p header overflow / Battle Log invisible | Active | bounded Gate 2 implementation |
+| BUG-20260614-player-1080p-header-overflow | 1080p header overflow / Battle Log invisible | Active | developer browser smoke |
 <!-- ACTIVE_WORK_TABLE_END -->
 
 ---
