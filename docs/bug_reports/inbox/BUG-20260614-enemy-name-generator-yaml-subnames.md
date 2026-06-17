@@ -27,9 +27,8 @@ Enemy name generator behavior should support YAML-tied lists and subnames for st
 This is a feature/data-model request for enemy generation. Developer decision is needed on the desired YAML schema for subnames and how they should be used for ID stability.
 
 ## Reproduction steps
-
-
 Unknown.
+
 
 ## Environment
 

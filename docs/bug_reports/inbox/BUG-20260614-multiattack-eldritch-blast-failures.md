@@ -70,6 +70,10 @@ grep -Rni "multiattack\|eldritch\|blast\|attack" logs docs/runtime_reports 2>/de
 * Damage application and enemy removal after failed resolution.
 * Do not treat this as root cause.
 
+## Related fixed player-surface work
+- **Resolved**: [BUG-20260614-player-spell-slots-not-syncing](../../work_items/active/BUG-20260614-player-spell-slots-not-syncing.md) (Completed 2026-06-14)
+- **Note**: Eldritch Blast failures can sometimes be caused by UI/resource desync if the client thinks it has slots/resources but the backend disagrees (or vice versa). A player-surface sync fix was applied on 2026-06-14. This report remains active for broader attack-resolution errors or DM-surface desync.
+
 ## Related history
 
 May be related to weapon attack failures and manual HP cleanup, but this should remain a separate report until evidence connects them.

@@ -27,9 +27,8 @@ The app should provide useful end-turn reminders, such as unresolved reactions, 
 This is a feature/UX request. Developer decision is needed on whether this should be a player-facing popup, a DM-facing notification, or a subtle UI indicator.
 
 ## Reproduction steps
-
-
 Not applicable yet; this is a feature/UX request unless tied to a specific missed reminder.
+
 
 ## Environment
 

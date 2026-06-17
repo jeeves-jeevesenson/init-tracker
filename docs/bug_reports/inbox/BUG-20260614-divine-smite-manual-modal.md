@@ -27,9 +27,8 @@ Weapon resolution should allow a manual Divine Smite damage entry path when auto
 This is a UI capability request for the weapon resolution modal. It needs to be clarified which surface (/dm, /dmcontrol, or /lan) is the priority for this manual override.
 
 ## Reproduction steps
-
-
 Unknown.
+
 
 ## Environment
 
