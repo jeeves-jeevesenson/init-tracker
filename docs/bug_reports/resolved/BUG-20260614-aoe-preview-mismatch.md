@@ -1,6 +1,8 @@
 # BUG-20260614-aoe-preview-mismatch
 
-* status: inbox
+* status: resolved (already fixed/stale)
+* resolution: Already fixed by BUG-20260614-player-fireball-preview-applies-one-target.
+* resolution date: 2026-06-17
 * severity: S1
 * priority: P1
 * reported date: 2026-06-14
