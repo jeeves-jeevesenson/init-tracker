@@ -92,7 +92,7 @@ import uuid
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Dict, Optional
 
-from runtime_config import trace_timed
+from runtime_config import debug_event, trace_timed
 from player_command_contracts import (
     ACTIVE_PROMPT_STATES,
     AOE_MANIPULATION_COMMAND_TYPES,
@@ -1619,6 +1619,7 @@ class PlayerCommandService:
         ws_id: Any,
         is_admin: bool,
     ) -> Dict[str, Any]:
+        debug_event("mount.follow.trace", marker="BUG-20260614-MOUNT-FOLLOW", step="command_start", cid=cid, ws_id=ws_id, msg=msg)
         t = self._tracker
         request_contract = build_move_contract(
             msg,

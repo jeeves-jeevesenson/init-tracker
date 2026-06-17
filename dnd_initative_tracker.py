@@ -7267,6 +7267,7 @@ class LanController:
                 if units_snapshot is not None:
                     self._broadcast_payload({"type": "units_snapshot", "units": units_snapshot})
                 elif unit_updates:
+                    debug_event("mount.follow.trace", marker="BUG-20260614-MOUNT-FOLLOW", step="broadcast_unit_update", updates=unit_updates)
                     self._broadcast_payload({"type": "unit_update", "updates": unit_updates})
 
                 terrain_patch = self._build_terrain_patch(prev_snap, snap)
@@ -46057,6 +46058,11 @@ class InitiativeTracker(base.InitiativeTracker):
     def _lan_try_move(self, cid: int, col: int, row: int) -> Tuple[bool, str, int]:
         # Boundaries
         cols, rows, obstacles, rough_terrain, positions = self._lan_live_map_data()
+        
+        mover = self.combatants.get(cid)
+        rider_cid = getattr(mover, "rider_cid", None) if mover else None
+        debug_event("mount.follow.trace", marker="BUG-20260614-MOUNT-FOLLOW", step="mutate_start", cid=cid, col=col, row=row, rider_cid=rider_cid, before_positions=copy.deepcopy(self._lan_positions))
+
         if not (0 <= col < cols and 0 <= row < rows):
             return (False, "Off the map, matey.", 0)
         if (col, row) in obstacles:
@@ -46133,6 +46139,7 @@ class InitiativeTracker(base.InitiativeTracker):
             pass
 
         self._log(f"moved to ({col},{row}) (spent {cost} ft; {movement_owner.move_remaining}/{movement_owner.move_total} left)", cid=cid)
+        debug_event("mount.follow.trace", marker="BUG-20260614-MOUNT-FOLLOW", step="mutate_end", cid=cid, after_positions=copy.deepcopy(self._lan_positions))
         self._rebuild_table(scroll_to_current=True)
         return (True, "", int(cost))
 

@@ -11102,11 +11102,25 @@ __DAMAGE_TYPE_OPTIONS__
     }
   }
 
+  function isMountFollowDebugEnabled() {
+    try {
+      return localStorage.getItem("BUG-20260614-MOUNT-FOLLOW") === "1";
+    } catch (e) {
+      return false;
+    }
+  }
+
   function applyUnitUpdates(updates){
+    if (updates && updates.length > 0 && isMountFollowDebugEnabled()) {
+        console.log(`[BUG-20260614-MOUNT-FOLLOW] applyUnitUpdates: count=${updates.length}`);
+    }
     if (!state || !Array.isArray(state.units)) return;
     updates.forEach((update) => {
       if (!update || update.cid === undefined || update.cid === null) return;
       const cid = Number(update.cid);
+      if (update.pos && isMountFollowDebugEnabled()) {
+          console.log(`[BUG-20260614-MOUNT-FOLLOW] UI_APPLY: cid=${cid} pos=${update.pos.col},${update.pos.row}`);
+      }
       const idx = state.units.findIndex((unit) => Number(unit.cid) === cid);
       if (idx < 0) return;
       const current = state.units[idx];
@@ -17696,6 +17710,10 @@ __DAMAGE_TYPE_OPTIONS__
       if (!isCurrentSocket(socket, socketGeneration)) return;
       let msg = null;
       try { msg = JSON.parse(ev.data); } catch(e){ return; }
+
+      if (msg && (msg.type === 'state' || msg.type === 'unit_update') && isMountFollowDebugEnabled()) {
+        console.log(`[BUG-20260614-MOUNT-FOLLOW] WS_RECV: type=${msg.type} updates=${msg.updates ? msg.updates.length : (msg.units ? msg.units.length : 'N/A')}`);
+      }
 
       const now = Date.now();
       if (now - lastMessageSummaryLogTs > messageSummaryLogIntervalMs){
