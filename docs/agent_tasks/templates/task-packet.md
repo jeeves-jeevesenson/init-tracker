@@ -23,12 +23,14 @@ Forbidden scope:
 - No YAML reformatting
 
 Validation commands:
-- python3 -m py_compile <edited-files>
-- timeout 30s python3 -m unittest <relevant-tests>
-- git status --short
+- <Validation must be explicitly provided by the Orchestrator/task author and bounded to the task scope. If none are listed, stop and report that validation is missing instead of inventing commands.>
+- Examples (NOT defaults):
+  - Doc/workflow tasks: git status --short && timeout 10s git diff --check
+  - App/code tasks (only if explicitly authorized/listed): python3 -m py_compile <edited-files> && timeout 30s python3 -m unittest <relevant-tests>
+- Do not run full test suites, broad validation, browser smoke, deploys, restarts, or production commands unless explicitly authorized.
 
 AGY Token Budget:
-- Max 3 broad searches
+- No broad searches, recursive tree scans, or whole-repo greps unless explicitly listed by the task
 - Max 5 file reads before first edit
 - Stop immediately after validation/report
 
