@@ -1,18 +1,36 @@
-# Using Gemini on init-tracker
+# Using Gemini on init-tracker (Temporary Migration Tool)
 
-This guide covers when (and when not) to use Gemini CLI / Gemini Code
-Assist on this repo, and how to make sessions evidence-backed and
-hand-offable to other agents.
+**Gemini is currently a temporary migration tool.** The primary agent
+executor for this repository is **AGY (Antigravity CLI)**.
 
-The repo-local Gemini infrastructure lives under:
+Gemini CLI / Gemini Code Assist should be used primarily for:
 
-- `GEMINI.md` — repo-root instructions Gemini loads automatically
-- `.gemini/agents/` — repo-local subagent definitions
-- `.gemini/commands/init/` — repo-local slash commands (namespaced
-  under `init:`)
-- `.gemini/settings.example.json` — conservative settings template
-  (copy to `.gemini/settings.json` to use; do not commit machine-
-  specific overrides)
+- migrating existing workflows to AGY-default execution
+- broad analysis passes that benefit from large context windows
+  (architecture snapshots, repo maps, contract surveys)
+- producing handoff reports that AGY can pick up cold
+- evidence-first bug investigation when paired with the
+  measured-debugger subagent
+- cross-file consistency reads (e.g. "where does this contract field
+  flow end-to-end?")
+
+For active product work, use AGY with a bounded task packet.
+
+## AGY Token Budget & Discipline
+
+When using AGY (or Gemini during the migration), follow these rules to
+minimize token burn:
+
+- **No broad repo scans:** Do not scan the whole repo unless explicitly allowed.
+- **Read-first:** Read only named files first.
+- **Source preference:** Prefer `docs/work_items/current_work.md` and active
+  task documents over historical or archived docs.
+- **Minimal inspection:** Do not inspect `majorTODO.md`, old plans, or
+  historical reports unless they are named in the task packet.
+- **Log efficiency:** Use `grep`, `head`, `tail`, or `sed` for logs instead
+  of reading full log files.
+- **Scope limit:** Identify the minimal file list needed before editing.
+- **Stop early:** Stop immediately after bounded validation/report.
 
 ## Getting set up
 

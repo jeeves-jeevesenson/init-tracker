@@ -1,4 +1,21 @@
-# Repository guidance for Codex and other autonomous coding agents
+# Repository guidance for AGY (Antigravity CLI) and other agents
+
+The primary agent executor for this repository is **AGY (Antigravity CLI)**.
+Gemini and Claude are secondary tools for broad analysis or migration support.
+
+## AGY Token Budget & Discipline
+
+To maintain focus and minimize token burn:
+- **No broad repo scans:** Do not scan the whole repo unless explicitly allowed.
+- **Read-first:** Read only named files first.
+- **Source preference:** Prefer `docs/work_items/current_work.md` and active
+  task documents over historical or archived docs.
+- **Minimal inspection:** Do not inspect `majorTODO.md`, old plans, or
+  historical reports unless they are named in the task packet.
+- **Log efficiency:** Use `grep`, `head`, `tail`, or `sed` for logs instead
+  of reading full log files.
+- **Scope limit:** Identify the minimal file list needed before editing.
+- **Stop early:** Stop immediately after bounded validation/report.
 
 ## Active production recovery
 

@@ -1,5 +1,22 @@
 # Claude project instructions
 
+**AGY (Antigravity CLI)** is the primary agent executor for this repository.
+Claude is used for focused product work and architectural analysis.
+
+## AGY Token Budget & Discipline
+
+To maintain focus and minimize token burn:
+- **No broad repo scans:** Do not scan the whole repo unless explicitly allowed.
+- **Read-first:** Read only named files first.
+- **Source preference:** Prefer `docs/work_items/current_work.md` and active
+  task documents over historical or archived docs.
+- **Minimal inspection:** Do not inspect `majorTODO.md`, old plans, or
+  historical reports unless they are named in the task packet.
+- **Log efficiency:** Use `grep`, `head`, `tail`, or `sed` for logs instead
+  of reading full log files.
+- **Scope limit:** Identify the minimal file list needed before editing.
+- **Stop early:** Stop immediately after bounded validation/report.
+
 ## Active production recovery
 
 Active production recovery work is controlled by `docs/production_recovery_living_doc_20260526.md`.

@@ -1,13 +1,27 @@
-# Gemini instructions for this repository
+# Gemini instructions (Temporary Migration Tool)
 
-These are repo-local instructions for Gemini CLI and Gemini Code Assist.
-They are written to keep Gemini focused, evidence-based, and consistent
-with the direction the rest of this project's agent guidance already
-encodes (see `AGENTS.md`, `CLAUDE.md`, `.github/copilot-instructions.md`,
-and `.github/instructions/*.instructions.md`).
+These instructions are for Gemini CLI and Gemini Code Assist.
+**Gemini is currently a temporary migration tool.** The primary agent
+executor for this repository is **AGY (Antigravity CLI)**.
 
-If anything here disagrees with current code or `majorTODO.md`, trust the
-code/tracker first and update this file.
+If you are Gemini, your goal is to help migrate the workflow to AGY-default
+execution or handle broad analysis that benefits from your large context,
+but **do not perform active product work** unless explicitly asked.
+
+## AGY-Default Migration & Token Budget
+
+To minimize token burn in AGY and maintain focus:
+
+- **No broad repo scans:** Do not scan the whole repo unless explicitly allowed.
+- **Read-first:** Read only named files first.
+- **Source preference:** Prefer `docs/work_items/current_work.md` and active
+  task documents over historical or archived docs.
+- **Minimal inspection:** Do not inspect `majorTODO.md`, old plans, or
+  historical reports unless they are named in the task packet.
+- **Log efficiency:** Use `grep`, `head`, `tail`, or `sed` for logs instead
+  of reading full log files.
+- **Scope limit:** Identify the minimal file list needed before editing.
+- **Stop early:** Stop immediately after bounded validation/report.
 
 ---
 
