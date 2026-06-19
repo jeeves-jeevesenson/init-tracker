@@ -1,8 +1,8 @@
 # BUG-20260614-player-spell-slots-not-syncing
 
 - **Title**: Player spell slot/resource sync does not update UI after cast or manual override.
-- **Status**: Active
-- **Source bug**: [docs/bug_reports/inbox/BUG-20260614-player-spell-slots-not-syncing.md](../bug_reports/inbox/BUG-20260614-player-spell-slots-not-syncing.md)
+- **Status**: Completed
+- **Source bug**: [docs/bug_reports/resolved/BUG-20260614-player-spell-slots-not-syncing.md](../../bug_reports/resolved/BUG-20260614-player-spell-slots-not-syncing.md)
 - **Scope**: player web index/player UI resource synchronization only.
 
 ## Initial Gate: Gate 1 — Evidence capture and bounded fix plan
@@ -67,5 +67,5 @@ The root cause was a combination of:
 
 Gate 2 is complete. Implementation and smoke verification are successful.
 
-#### Next Steps
-- Commit and close.
+#### Closeout
+- Closed after commit and developer-led smoke pass on 2026-06-14.
