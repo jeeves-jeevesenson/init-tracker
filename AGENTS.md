@@ -1,21 +1,26 @@
 # Repository guidance for AGY (Antigravity CLI) and other agents
 
 The primary agent executor for this repository is **AGY (Antigravity CLI)**.
-Gemini and Claude are secondary tools for broad analysis or migration support.
+
+Codex is explicit-only. Use Codex only when the developer explicitly asks for Codex or asks whether Codex is worth spending.
+
+Gemini CLI is retired for this workflow. Gemini-era files are legacy compatibility artifacts only. Do not use Gemini as default, fallback, temporary migration, broad-analysis, or cheap executor.
 
 ## AGY Token Budget & Discipline
 
 To maintain focus and minimize token burn:
+
+- **Repo is durable; chat is volatile:** ChatGPT chats, pasted summaries, uploaded files, and conversational memory are scratch space. Anything important enough to rely on later must be written to the repo.
+- **AGY is for init-tracker work:** Do not spend AGY on workflow optimization that can be performed by an Orchestrator-drafted shell patch.
+- **One narrow task:** Use one bounded AGY task per pass.
 - **No broad repo scans:** Do not scan the whole repo unless explicitly allowed.
 - **Read-first:** Read only named files first.
-- **Source preference:** Prefer `docs/work_items/current_work.md` and active
-  task documents over historical or archived docs.
-- **Minimal inspection:** Do not inspect `majorTODO.md`, old plans, or
-  historical reports unless they are named in the task packet.
-- **Log efficiency:** Use `grep`, `head`, `tail`, or `sed` for logs instead
-  of reading full log files.
+- **Source preference:** Prefer `docs/work_items/current_work.md`, the active work item, and the task packet over historical or archived docs.
+- **Minimal inspection:** Do not inspect `majorTODO.md`, old plans, old bugs, completed work, runtime reports, or historical reports unless they are named in the task packet.
+- **Log efficiency:** Use `grep`, `head`, `tail`, or `sed` for logs instead of reading full log files.
 - **Scope limit:** Identify the minimal file list needed before editing.
-- **Stop early:** Stop immediately after bounded validation/report.
+- **No opportunistic cleanup:** Do not fix adjacent issues unless explicitly scoped.
+- **Stop early:** Stop immediately when required context is missing, validation is missing, validation passes, or the task needs a developer decision.
 
 ## Active production recovery
 
@@ -48,23 +53,30 @@ The final target is not a better desktop shell. The final target is a web-first 
 ## Source of truth
 
 Before making strong claims:
-- inspect the current repository state
-- use current code plus `majorTODO.md` as source of truth
-- trust code/tests over stale docs when they disagree
-- update `majorTODO.md` honestly when the repo state has changed
+- inspect the current repository state or use current command output provided by the developer
+- treat `docs/work_items/current_work.md` as the authoritative active-work ledger
+- use the active work item and task packet as the source of scope
+- trust current code/tests over stale docs when they disagree
+- treat `majorTODO.md`, old runtime reports, old plans, completed work items, and old bug reports as historical unless the active ledger or developer explicitly names them
+
+Do not rely on:
+- hidden chat history
+- ChatGPT memory
+- uploaded file cards after the relevant facts have not been persisted
+- guessed branches, paths, hostnames, ports, services, credentials, or topology
 
 Do not invent:
 - missing branches
 - stale TODO items
 - file paths or systems that are not present in the repo
 
-If a TODO/reference is stale, say so plainly and fix the tracker instead of fabricating compatibility work.
+If a TODO/reference is stale, say so plainly and fix the tracker only when that tracker update is explicitly in scope.
 
 ## Working style
 
 Default to:
 - minimal repo inspection
-- one broad, coherent, bounded pass
+- one coherent, bounded pass
 - focused validation
 - clear end-of-pass reporting
 

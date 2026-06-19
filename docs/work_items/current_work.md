@@ -30,6 +30,7 @@ If an item is not marked as **Active** here, it is NOT current work.
 | ID | Title | Completion Date | Evidence |
 | --- | --- | --- | --- |
 <!-- COMPLETED_WORK_TABLE_START -->
+| WORK-20260619-orchestrator-agy-context-hygiene | Orchestrator + AGY context hygiene | 2026-06-19 | [completed/WORK-20260619-orchestrator-agy-context-hygiene.md](completed/WORK-20260619-orchestrator-agy-context-hygiene.md) |
 | BUG-20260614-aoe-preview-mismatch | AoE preview mismatch (Target count/location) | 2026-06-17 | [completed/BUG-20260614-aoe-preview-mismatch.md](completed/BUG-20260614-aoe-preview-mismatch.md) |
 | BUG-20260614-fireball-damage-roll-inconsistent | Fireball damage rolled separately per target | 2026-06-17 | [completed/BUG-20260614-fireball-damage-roll-inconsistent.md](completed/BUG-20260614-fireball-damage-roll-inconsistent.md) |
 | BUG-20260614-player-1080p-header-overflow | 1080p header overflow / Battle Log invisible | 2026-06-17 | [completed/BUG-20260614-player-1080p-header-overflow.md](completed/BUG-20260614-player-1080p-header-overflow.md) |
