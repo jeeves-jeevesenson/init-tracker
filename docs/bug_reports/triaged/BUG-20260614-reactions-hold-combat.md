@@ -1,6 +1,6 @@
 # BUG-20260614-reactions-hold-combat
 
-* status: inbox
+* status: triaged
 * severity: S1
 * priority: P1
 * reported date: 2026-06-14
@@ -72,7 +72,7 @@ Related notes include Counterspell ally trigger behavior and end-turn reminders.
 
 ## Orchestrator handoff
 
-This bug is not active work until promoted into `docs/work_items/current_work.md` or an active work item. Orchestrator should read this report, request current context if needed, classify it against active work/recovery gates, and decide whether this needs evidence capture, a Gemini task, a Codex task, or a smoke test.
+This bug is promoted into active work for Gate 1 evidence capture. Orchestrator should read this report, request current context if needed, classify it against active work/recovery gates, and decide whether this needs evidence capture, a Gemini task, a Codex task, or a smoke test.
 
 ## Do not assume
 

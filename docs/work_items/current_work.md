@@ -8,10 +8,10 @@ If an item is not marked as **Active** here, it is NOT current work.
 ## Current Status
 
 <!-- ACTIVE_WORK_STATUS_START -->
-- **Status:** No Active Work
-- **Current Work Item:** None
-- **Active Gate:** None
-- **Allowed Next Action:** choose next work / push / deploy / open another bug
+- **Status:** Active
+- **Current Work Item:** BUG-20260614-reactions-hold-combat
+- **Active Gate:** Gate 1 — Evidence capture and bounded fix plan
+- **Allowed Next Action:** evidence capture / bounded AGY Gate 1 task
 <!-- ACTIVE_WORK_STATUS_END -->
 
 ---
@@ -21,6 +21,7 @@ If an item is not marked as **Active** here, it is NOT current work.
 | ID | Title | Status | Goal |
 | --- | --- | --- | --- |
 <!-- ACTIVE_WORK_TABLE_START -->
+| BUG-20260614-reactions-hold-combat | Reactions can hold up combat | Active | Capture evidence and produce bounded fix plan for reaction-related combat stalls. |
 <!-- ACTIVE_WORK_TABLE_END -->
 
 ---
