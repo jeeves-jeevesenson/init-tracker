@@ -8,10 +8,10 @@ If an item is not marked as **Active** here, it is NOT current work.
 ## Current Status
 
 <!-- ACTIVE_WORK_STATUS_START -->
-- **Status:** No Active Work
-- **Current Work Item:** None
-- **Active Gate:** None
-- **Allowed Next Action:** bug triage / elevate next bug / commit-push current closeout
+- **Status:** Active
+- **Current Work Item:** BUG-20260626-aura-of-protection-grid-snap
+- **Active Gate:** Classify and fix Aura of Protection anchor/render offset
+- **Allowed Next Action:** run bounded AGY classify-and-fix task for `BUG-20260626-aura-of-protection-grid-snap`
 <!-- ACTIVE_WORK_STATUS_END -->
 
 ---
@@ -21,6 +21,7 @@ If an item is not marked as **Active** here, it is NOT current work.
 | ID | Title | Status | Goal |
 | --- | --- | --- | --- |
 <!-- ACTIVE_WORK_TABLE_START -->
+| BUG-20260626-aura-of-protection-grid-snap | Aura of Protection grid snap offset | Active | Confirm whether the aura is gameplay-misanchored or visual-only, then apply the narrowest safe fix. |
 <!-- ACTIVE_WORK_TABLE_END -->
 
 ---
@@ -67,7 +68,6 @@ If an item is not marked as **Active** here, it is NOT current work.
 | BUG-20260614-dm-ac-display-wrong | DM AC display wrong | S2 | Triaged unresolved; needs combatant expected-vs-actual evidence. |
 | BUG-20260614-enemy-hp-redaction-manual-adjust | Enemy HP redaction after manual adjust | S2 | Triaged unresolved; potential hidden-HP leak, needs log evidence. |
 | BUG-20260614-mounting-token-link-buggy | Mounting token link intermittent desync | S2 | Triaged unresolved; distinct from completed mount-lockout bug. |
-| BUG-20260626-aura-of-protection-grid-snap | Aura of Protection grid snap offset | S2 | Triaged unresolved; visual evidence exists, bounded rendering fix candidate. |
 | BUG-20260614-divine-smite-manual-modal | Divine Smite manual modal support | S3 | Triaged backlog/design; product decision needed before app work. |
 | BUG-20260614-end-turn-reminders | End turn reminders | S3 | Triaged backlog/design; feature definition needed. |
 | BUG-20260614-enemy-name-generator-yaml-subnames | Enemy YAML subname/name generator | S3 | Triaged backlog/design; schema examples needed. |
