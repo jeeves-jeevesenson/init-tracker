@@ -18840,7 +18840,11 @@ __DAMAGE_TYPE_OPTIONS__
   canvas.addEventListener("pointerdown", (ev) => {
     if (enforceLoginGate()) return;
     setTokenTooltip(null);
-    canvas.setPointerCapture(ev.pointerId);
+    try {
+      canvas.setPointerCapture(ev.pointerId);
+    } catch (err) {
+      console.warn("Failed to set pointer capture:", err);
+    }
     const p = pointerPos(ev);
     activePointers.set(ev.pointerId, p);
     if (activePointers.size >= 2){
@@ -19192,6 +19196,9 @@ __DAMAGE_TYPE_OPTIONS__
 
   canvas.addEventListener("pointerup", (ev) => {
     if (enforceLoginGate()) return;
+    try {
+      canvas.releasePointerCapture(ev.pointerId);
+    } catch (err) {}
     const p = pointerPos(ev);
     activePointers.delete(ev.pointerId);
     if (activePointers.size < 2){
@@ -19517,6 +19524,9 @@ __DAMAGE_TYPE_OPTIONS__
 
   canvas.addEventListener("pointercancel", (ev) => {
     if (enforceLoginGate()) return;
+    try {
+      canvas.releasePointerCapture(ev.pointerId);
+    } catch (err) {}
     activePointers.delete(ev.pointerId);
     if (activePointers.size < 2){
       pinchState = null;

@@ -1,5 +1,31 @@
 # BUG-20260614-reactions-hold-combat
 
+## Resolution Summary
+
+- **Status**: Resolved
+- **Resolution Date**: 2026-06-26
+- **Completed work item**: `docs/work_items/completed/BUG-20260614-reactions-hold-combat.md`
+- **Smoke evidence**: `docs/runtime_reports/BUG-20260614-reactions-hold-combat_smoke_pass_20260626.md`
+
+### Fix summary
+
+Expired reaction prompts now resolve as declined, clear waiting state, and resume suspended combat dispatch. Hostile/oppositional reactions now filter allied actors so allied Counterspell, Spell Stopper, and Hellish Rebuke offers are not created.
+
+### Validation summary
+
+Focused validation passed:
+
+- `py_compile` for edited backend files.
+- `unittest` reaction prompt expiry regression.
+- `unittest` reaction ally filter regression.
+- `git diff --check`.
+- Developer browser smoke confirmed the allied Counterspell prompt did not appear for Eldramar when Dorian cast.
+
+### Related follow-up
+
+A non-blocking aura positioning bug was captured separately as `docs/bug_reports/inbox/BUG-20260626-aura-of-protection-grid-snap.md`.
+
+
 * status: triaged
 * severity: S1
 * priority: P1

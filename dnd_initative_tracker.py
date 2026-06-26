@@ -34993,6 +34993,10 @@ class InitiativeTracker(base.InitiativeTracker):
             return False, "missing_reactor"
         if int(getattr(reactor, "reaction_remaining", 0) or 0) <= 0:
             return False, "no_reaction"
+        if source_cid is not None:
+            source = self.combatants.get(int(source_cid))
+            if source is not None and not self._combatants_are_hostile(reactor, source):
+                return False, "ally"
 
         # Check if equipped Spell Stopper dagger exists (item grants pool)
         inventory = getattr(reactor, "inventory", None)
@@ -35081,6 +35085,9 @@ class InitiativeTracker(base.InitiativeTracker):
         reactor_cid = int(getattr(reactor, "cid", 0) or 0)
         if reactor_cid <= 0 or int(source_cid) == reactor_cid:
             return False, "self_cast"
+        source = self.combatants.get(int(source_cid))
+        if source is not None and not self._combatants_are_hostile(reactor, source):
+            return False, "ally"
         has_prepared, slot_level = self._counterspell_prepared_slots(reactor)
         if not has_prepared:
             return False, "no_counterspell"

@@ -706,9 +706,76 @@ class PromptState:
                 expired_ids.append(str(request_id))
 
         for request_id in expired_ids:
-            # When expiring, we should ideally notify clients that it expired
-            # but for now we just pop it.
-            store.pop(str(request_id), None)
+            prompt = store.get(str(request_id))
+            if not isinstance(prompt, dict):
+                continue
+
+            p_reactor_cid = None
+            try:
+                p_reactor_cid = int(prompt.get("reactor_cid") or -1)
+            except Exception:
+                pass
+
+            resume_dispatch = prompt.get("resume_dispatch") or prompt.get("resume")
+            service = self._tracker._ensure_player_commands()
+
+            # 1. Resolve prompt off-turn by declining it to build correct flags/state
+            adjudicate_result = None
+            try:
+                adjudicate_result = service._resolve_reaction_response(
+                    msg={"choice": "decline", "request_id": request_id},
+                    cid=p_reactor_cid if p_reactor_cid is not None else -1,
+                    ws_id=None,
+                    offer=prompt,
+                    request_id=request_id,
+                )
+            except Exception as exc:
+                oplog = getattr(self._tracker, "_oplog", None)
+                if callable(oplog):
+                    oplog(f"prompts:expire_offers resolution error: {exc}", level="warning")
+
+            # 2. Ensure prompt is popped from the store
+            if str(request_id) in store:
+                store.pop(str(request_id), None)
+
+            # 3. Notify clients that the prompt expired
+            send_fn = getattr(self._tracker, "_send_reaction_result", None)
+            if callable(send_fn):
+                from player_command_contracts import REACTION_EXPIRED
+                target_ws_ids = set()
+                for w in prompt.get("ws_ids") or []:
+                    if w is not None:
+                        target_ws_ids.add(w)
+                if isinstance(resume_dispatch, dict) and resume_dispatch.get("ws_id") is not None:
+                    target_ws_ids.add(resume_dispatch.get("ws_id"))
+
+                for ws_id in target_ws_ids:
+                    try:
+                        send_fn(
+                            ws_id,
+                            False,
+                            REACTION_EXPIRED,
+                            request_id=request_id,
+                            reactor_cid=p_reactor_cid if p_reactor_cid is not None else -1,
+                            message="Reaction offer expired.",
+                            reason="expired",
+                        )
+                    except Exception:
+                        pass
+
+            # 4. Resume the suspended command using the safe resume path
+            if isinstance(adjudicate_result, dict):
+                res_disp = adjudicate_result.get("resume_dispatch") or adjudicate_result.get("resume")
+            else:
+                res_disp = resume_dispatch
+
+            if isinstance(res_disp, dict):
+                try:
+                    service._dispatch_resume(res_disp)
+                except Exception as exc:
+                    oplog = getattr(self._tracker, "_oplog", None)
+                    if callable(oplog):
+                        oplog(f"prompts:expire_offers resume error: {exc}", level="warning")
 
         if expired_ids:
             self._sync_legacy_views(store)
@@ -1202,6 +1269,8 @@ class PlayerCommandService:
         victim = t.combatants.get(int(victim_cid))
         attacker = t.combatants.get(int(attacker_cid))
         if victim is None or attacker is None:
+            return None
+        if not t._combatants_are_hostile(victim, attacker):
             return None
         mode = t._reaction_mode_for(int(victim_cid), "hellish_rebuke", default="ask")
         if mode == "off":
