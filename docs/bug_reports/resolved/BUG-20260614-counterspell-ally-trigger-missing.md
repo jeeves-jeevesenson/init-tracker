@@ -1,5 +1,16 @@
 # BUG-20260614-counterspell-ally-trigger-missing
 
+## Resolution Summary
+
+- **Status**: Resolved / superseded by product decision and reactions closeout
+- **Resolution Date**: 2026-06-26
+- **Related completed work**: `docs/work_items/completed/BUG-20260614-reactions-hold-combat.md`
+- **Evidence**: `docs/runtime_reports/BUG-20260614-reactions-hold-combat_smoke_pass_20260626.md`
+
+This report originally suggested allied Counterspell prompts should appear when an ally casts. During the reactions closeout, the desired behavior was confirmed in the opposite direction: allied/oppositional reaction prompts should not be offered for allied actors. Gate 2B added ally filtering for Counterspell, Spell Stopper, and Hellish Rebuke. Developer smoke confirmed Dorian could cast with Eldramar present and Eldramar did not receive an allied Counterspell prompt.
+
+Closed as superseded by the reactions ally-filter behavior.
+
 * status: inbox
 * severity: S2
 * priority: P1

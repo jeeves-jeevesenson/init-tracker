@@ -1,5 +1,12 @@
 # BUG-20260614-enemy-name-generator-yaml-subnames
 
+## Triage Disposition
+
+- **Status**: Triaged backlog/design
+- **Triage Date**: 2026-06-26
+- **Disposition**: Data-model/product design clarification before app work.
+- **Reason**: Desired YAML schema and ID behavior need examples.
+
 * status: inbox
 * severity: S3
 * priority: P2

@@ -1,5 +1,12 @@
 # BUG-20260614-dm-ac-display-wrong
 
+## Triage Disposition
+
+- **Status**: Triaged unresolved
+- **Triage Date**: 2026-06-26
+- **Disposition**: Evidence capture candidate.
+- **Reason**: DM-facing AC display can affect tactical decisions, but specific combatants/expected values are missing.
+
 - status: inbox
 - severity: S2
 - priority: P1

@@ -1,5 +1,12 @@
 # BUG-20260626-aura-of-protection-grid-snap
 
+## Triage Disposition
+
+- **Status**: Triaged unresolved
+- **Triage Date**: 2026-06-26
+- **Disposition**: Bounded visual-rendering fix candidate.
+- **Reason**: Screenshot evidence exists and expected behavior is clear: aura should stay centered on Dorian.
+
 ## Summary
 
 Dorian's Aura of Protection visual appears snapped to the wrong grid position instead of staying centered on Dorian.

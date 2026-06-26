@@ -1,5 +1,12 @@
 # BUG-20260614-player-guns-missing
 
+## Triage Disposition
+
+- **Status**: Triaged backlog/data
+- **Triage Date**: 2026-06-26
+- **Disposition**: Data coverage task candidate after developer identifies which players and guns.
+- **Reason**: This is a character equipment coverage request, not yet a repro-backed app bug.
+
 - status: inbox
 - severity: S3
 - priority: P2

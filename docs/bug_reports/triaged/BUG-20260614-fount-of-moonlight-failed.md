@@ -1,5 +1,12 @@
 # BUG-20260614-fount-of-moonlight-failed
 
+## Triage Disposition
+
+- **Status**: Triaged unresolved
+- **Triage Date**: 2026-06-26
+- **Disposition**: Evidence capture candidate.
+- **Reason**: Report is high-impact but vague; needs current repro/evidence before implementation.
+
 * status: inbox
 * severity: S1
 * priority: P1

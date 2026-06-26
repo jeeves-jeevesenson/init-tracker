@@ -1,5 +1,12 @@
 # BUG-20260614-enemy-hp-redaction-manual-adjust
 
+## Triage Disposition
+
+- **Status**: Triaged unresolved
+- **Triage Date**: 2026-06-26
+- **Disposition**: Evidence capture candidate.
+- **Reason**: Potential player-facing hidden-HP leak; privacy/redaction expectation needs current log evidence.
+
 * status: inbox
 * severity: S2
 * priority: P1

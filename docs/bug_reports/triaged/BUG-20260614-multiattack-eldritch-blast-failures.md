@@ -1,5 +1,12 @@
 # BUG-20260614-multiattack-eldritch-blast-failures
 
+## Triage Disposition
+
+- **Status**: Triaged unresolved
+- **Triage Date**: 2026-06-26
+- **Disposition**: Evidence capture candidate.
+- **Reason**: Attack-resolution failures are core combat blockers and may force manual HP/troop cleanup.
+
 * status: inbox
 * severity: S1
 * priority: P1

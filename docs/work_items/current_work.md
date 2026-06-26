@@ -60,6 +60,18 @@ If an item is not marked as **Active** here, it is NOT current work.
 | ID | Title | Severity | Note |
 | --- | --- | --- | --- |
 <!-- UNRESOLVED_BUGS_QUEUE_START -->
+| BUG-20260614-weapon-attacks-reload-fail | Weapon attacks / reload fail | S1 | Triaged unresolved; evidence capture candidate and likely best next active bug. |
+| BUG-20260614-multiattack-eldritch-blast-failures | Multiattack / Eldritch Blast failures | S1 | Triaged unresolved; needs exact actor/target/error evidence. |
+| BUG-20260614-dm-zero-hp-enemies-not-removed | DM 0 HP enemy override does not remove enemy | S1 | Triaged unresolved; needs DM override repro/evidence. |
+| BUG-20260614-fount-of-moonlight-failed | Fount of Moonlight failed | S1 | Triaged unresolved; vague report, needs current repro/evidence. |
+| BUG-20260614-dm-ac-display-wrong | DM AC display wrong | S2 | Triaged unresolved; needs combatant expected-vs-actual evidence. |
+| BUG-20260614-enemy-hp-redaction-manual-adjust | Enemy HP redaction after manual adjust | S2 | Triaged unresolved; potential hidden-HP leak, needs log evidence. |
+| BUG-20260614-mounting-token-link-buggy | Mounting token link intermittent desync | S2 | Triaged unresolved; distinct from completed mount-lockout bug. |
+| BUG-20260626-aura-of-protection-grid-snap | Aura of Protection grid snap offset | S2 | Triaged unresolved; visual evidence exists, bounded rendering fix candidate. |
+| BUG-20260614-divine-smite-manual-modal | Divine Smite manual modal support | S3 | Triaged backlog/design; product decision needed before app work. |
+| BUG-20260614-end-turn-reminders | End turn reminders | S3 | Triaged backlog/design; feature definition needed. |
+| BUG-20260614-enemy-name-generator-yaml-subnames | Enemy YAML subname/name generator | S3 | Triaged backlog/design; schema examples needed. |
+| BUG-20260614-player-guns-missing | Add guns for all players | S3 | Triaged backlog/data; needs character/equipment list. |
 <!-- UNRESOLVED_BUGS_QUEUE_END -->
 
 ---

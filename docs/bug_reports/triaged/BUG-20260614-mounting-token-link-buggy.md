@@ -1,5 +1,12 @@
 # BUG-20260614-mounting-token-link-buggy
 
+## Triage Disposition
+
+- **Status**: Triaged unresolved
+- **Triage Date**: 2026-06-26
+- **Disposition**: Evidence capture candidate, distinct from completed mount-lockout bug.
+- **Reason**: Completed mount-lockout work did not close intermittent rider-follow/token-link desync.
+
 * status: inbox
 * severity: S2
 * priority: P1

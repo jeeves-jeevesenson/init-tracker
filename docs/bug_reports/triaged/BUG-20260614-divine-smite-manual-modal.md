@@ -1,5 +1,12 @@
 # BUG-20260614-divine-smite-manual-modal
 
+## Triage Disposition
+
+- **Status**: Triaged backlog/design
+- **Triage Date**: 2026-06-26
+- **Disposition**: Product/design clarification before app work.
+- **Reason**: This is a manual-mode capability request, not a proven regression.
+
 * status: inbox
 * severity: S3
 * priority: P2

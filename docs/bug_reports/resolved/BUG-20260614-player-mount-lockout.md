@@ -1,5 +1,13 @@
 # BUG-20260614-player-mount-lockout
 
+## Resolution Summary
+
+- **Status**: Resolved
+- **Resolution Date**: 2026-06-17
+- **Completed work item**: `docs/work_items/completed/BUG-20260614-player-mount-lockout.md`
+
+This triaged source report was stale: the current work ledger already marks `BUG-20260614-player-mount-lockout` completed. The separate intermittent rider-follow issue remains tracked as `BUG-20260614-mounting-token-link-buggy`.
+
 - **Title**: Mounting did not work when pressed on both sides, and the player could not move afterward.
 - **Surface**: player web index / player-side UI
 - **Source**: Jun 13 live player smoke test

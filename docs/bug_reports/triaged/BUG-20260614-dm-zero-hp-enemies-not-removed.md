@@ -1,5 +1,12 @@
 # BUG-20260614-dm-zero-hp-enemies-not-removed
 
+## Triage Disposition
+
+- **Status**: Triaged unresolved
+- **Triage Date**: 2026-06-26
+- **Disposition**: Evidence capture candidate.
+- **Reason**: DM manual HP override to 0 can leave defeated enemies active, causing stale combat state.
+
 * status: inbox
 * severity: S1
 * priority: P1
