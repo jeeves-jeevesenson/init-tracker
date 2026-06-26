@@ -11,7 +11,7 @@ If an item is not marked as **Active** here, it is NOT current work.
 - **Status:** Active
 - **Current Work Item:** BUG-20260614-weapon-attacks-reload-fail
 - **Active Gate:** None
-- **Allowed Next Action:** evidence capture / classify active weapon reload + attack failure bug
+- **Allowed Next Action:** bounded implementation fix for reload websocket routing and inventory-equipped weapon normalization
 <!-- ACTIVE_WORK_STATUS_END -->
 
 ---
@@ -21,7 +21,7 @@ If an item is not marked as **Active** here, it is NOT current work.
 | ID | Title | Status | Goal |
 | --- | --- | --- | --- |
 <!-- ACTIVE_WORK_TABLE_START -->
-| BUG-20260614-weapon-attacks-reload-fail | Weapon attacks / reload fail | Active | Capture current evidence and classify before implementation. |
+| BUG-20260614-weapon-attacks-reload-fail | Weapon attacks / reload fail | Active | Implement bounded fix from evidence note: reload routing plus inventory-equipped weapon normalization. |
 <!-- ACTIVE_WORK_TABLE_END -->
 
 ---

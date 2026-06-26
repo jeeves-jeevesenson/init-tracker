@@ -52,6 +52,23 @@ Use AGY only for a bounded evidence-capture/classification task.
 
 AGY must not perform broad implementation, whole-repo review, full-suite testing, deploys, service restarts, or unrelated cleanup.
 
+## Fix phase
+
+Evidence capture classified the initial report as two separate defects with small implicated areas:
+
+1. Reload failure: missing websocket routing for `reload_weapon` in `InitiativeTracker._lan_apply_action`.
+2. Saber/inventory weapon failure: inventory-equipped weapons bypass full weapon normalization in `InitiativeTracker._normalize_player_profile`.
+
+Use `docs/work_items/active/BUG-20260614-weapon-attacks-reload-fail-evidence.md` as the canonical evidence note for implementation scope.
+
+## Fix done condition
+
+- `reload_weapon` websocket action reaches the existing reload backend path.
+- Inventory-equipped synced weapons receive the same normalization needed by normal profile weapons.
+- Focused regression tests cover both fixes.
+- No broad weapon/action rewrite is performed.
+- Developer browser smoke remains required before closeout.
+
 ## Done condition for this phase
 
 A repo-written evidence/classification note exists that states:
