@@ -8,10 +8,10 @@ If an item is not marked as **Active** here, it is NOT current work.
 ## Current Status
 
 <!-- ACTIVE_WORK_STATUS_START -->
-- **Status:** No Active Work
-- **Current Work Item:** None
+- **Status:** Active
+- **Current Work Item:** BUG-20260614-weapon-attacks-reload-fail
 - **Active Gate:** None
-- **Allowed Next Action:** bug triage / elevate next bug / commit-push current closeout
+- **Allowed Next Action:** evidence capture / classify active weapon reload + attack failure bug
 <!-- ACTIVE_WORK_STATUS_END -->
 
 ---
@@ -21,7 +21,7 @@ If an item is not marked as **Active** here, it is NOT current work.
 | ID | Title | Status | Goal |
 | --- | --- | --- | --- |
 <!-- ACTIVE_WORK_TABLE_START -->
-
+| BUG-20260614-weapon-attacks-reload-fail | Weapon attacks / reload fail | Active | Capture current evidence and classify before implementation. |
 <!-- ACTIVE_WORK_TABLE_END -->
 
 ---
@@ -62,7 +62,6 @@ If an item is not marked as **Active** here, it is NOT current work.
 | ID | Title | Severity | Note |
 | --- | --- | --- | --- |
 <!-- UNRESOLVED_BUGS_QUEUE_START -->
-| BUG-20260614-weapon-attacks-reload-fail | Weapon attacks / reload fail | S1 | Triaged unresolved; evidence capture candidate and likely best next active bug. |
 | BUG-20260614-multiattack-eldritch-blast-failures | Multiattack / Eldritch Blast failures | S1 | Triaged unresolved; needs exact actor/target/error evidence. |
 | BUG-20260614-dm-zero-hp-enemies-not-removed | DM 0 HP enemy override does not remove enemy | S1 | Triaged unresolved; needs DM override repro/evidence. |
 | BUG-20260614-fount-of-moonlight-failed | Fount of Moonlight failed | S1 | Triaged unresolved; vague report, needs current repro/evidence. |
