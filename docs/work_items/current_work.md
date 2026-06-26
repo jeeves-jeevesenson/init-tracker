@@ -8,10 +8,10 @@ If an item is not marked as **Active** here, it is NOT current work.
 ## Current Status
 
 <!-- ACTIVE_WORK_STATUS_START -->
-- **Status:** Active
-- **Current Work Item:** BUG-20260626-aura-of-protection-grid-snap
-- **Active Gate:** Classify and fix Aura of Protection anchor/render offset
-- **Allowed Next Action:** run bounded AGY classify-and-fix task for `BUG-20260626-aura-of-protection-grid-snap`
+- **Status:** No Active Work
+- **Current Work Item:** None
+- **Active Gate:** None
+- **Allowed Next Action:** bug triage / elevate next bug / commit-push current closeout
 <!-- ACTIVE_WORK_STATUS_END -->
 
 ---
@@ -21,7 +21,7 @@ If an item is not marked as **Active** here, it is NOT current work.
 | ID | Title | Status | Goal |
 | --- | --- | --- | --- |
 <!-- ACTIVE_WORK_TABLE_START -->
-| BUG-20260626-aura-of-protection-grid-snap | Aura of Protection grid snap offset | Active | Confirm whether the aura is gameplay-misanchored or visual-only, then apply the narrowest safe fix. |
+
 <!-- ACTIVE_WORK_TABLE_END -->
 
 ---
@@ -31,6 +31,7 @@ If an item is not marked as **Active** here, it is NOT current work.
 | ID | Title | Completion Date | Evidence |
 | --- | --- | --- | --- |
 <!-- COMPLETED_WORK_TABLE_START -->
+| BUG-20260626-aura-of-protection-grid-snap | Aura of Protection grid snap offset | 2026-06-26 | [completed/BUG-20260626-aura-of-protection-grid-snap.md](completed/BUG-20260626-aura-of-protection-grid-snap.md) |
 | BUG-20260614-reactions-hold-combat | Reactions can hold up combat | 2026-06-26 | [completed/BUG-20260614-reactions-hold-combat.md](completed/BUG-20260614-reactions-hold-combat.md) |
 | WORK-20260619-orchestrator-agy-context-hygiene | Orchestrator + AGY context hygiene | 2026-06-19 | [completed/WORK-20260619-orchestrator-agy-context-hygiene.md](completed/WORK-20260619-orchestrator-agy-context-hygiene.md) |
 | BUG-20260614-aoe-preview-mismatch | AoE preview mismatch (Target count/location) | 2026-06-17 | [completed/BUG-20260614-aoe-preview-mismatch.md](completed/BUG-20260614-aoe-preview-mismatch.md) |
