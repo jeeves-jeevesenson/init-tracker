@@ -2,7 +2,7 @@
 
 ## Status
 
-- **Status:** Active
+- **Status:** Completed
 - **Type:** Bug evidence capture / classification
 - **Severity:** S1
 - **Source bug report:** ../../bug_reports/triaged/BUG-20260614-weapon-attacks-reload-fail.md
@@ -82,9 +82,13 @@ A repo-written evidence/classification note exists that states:
 
 Status: Complete
 
-Functional fix commit: `7d10a14`
+Functional fix commits: `7d10a14`, closed in `6d14706`
 
 Developer browser smoke passed.
+
+Focused unit tests passed. Inline JavaScript syntax check passed. Diff check passed.
+
+Final weapon reload / ammo / Multiattack behavior was accepted by the developer.
 
 Validated outcomes:
 

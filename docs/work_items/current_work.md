@@ -9,9 +9,9 @@ If an item is not marked as **Active** here, it is NOT current work.
 
 <!-- ACTIVE_WORK_STATUS_START -->
 - **Status:** Active
-- **Current Work Item:** BUG-20260614-weapon-attacks-reload-fail
+- **Current Work Item:** BUG-20260626-spell-multiattack-ranged-fail
 - **Active Gate:** None
-- **Allowed Next Action:** bounded implementation fix for reload websocket routing and inventory-equipped weapon normalization
+- **Allowed Next Action:** capture or confirm a narrow spell Multiattack / ranged attack repro before code changes unless existing active docs already contain enough repo evidence
 <!-- ACTIVE_WORK_STATUS_END -->
 
 ---
@@ -21,6 +21,7 @@ If an item is not marked as **Active** here, it is NOT current work.
 | ID | Title | Status | Goal |
 | --- | --- | --- | --- |
 <!-- ACTIVE_WORK_TABLE_START -->
+| BUG-20260626-spell-multiattack-ranged-fail | Spell Multiattack and ranged attack failure | Active | Capture or confirm a narrow repro for spell Multiattack / ranged attack failure before implementation. See [active/BUG-20260626-spell-multiattack-ranged-fail.md](active/BUG-20260626-spell-multiattack-ranged-fail.md). |
 <!-- ACTIVE_WORK_TABLE_END -->
 
 ---
@@ -29,7 +30,7 @@ If an item is not marked as **Active** here, it is NOT current work.
 
 | ID | Title | Completion Date | Evidence |
 | --- | --- | --- | --- |
-| BUG-20260614-weapon-attacks-reload-fail | Weapon attacks / reload fail | 2026-06-26 | Fixed in `7d10a14`; developer browser smoke passed; see `docs/work_items/active/BUG-20260614-weapon-attacks-reload-fail-smoke-failure-20260626.md`. |
+| BUG-20260614-weapon-attacks-reload-fail | Weapon attacks / reload fail | 2026-06-26 | Closed in `6d14706`; focused unit tests passed; JS syntax check passed; diff check passed; developer browser smoke passed; final weapon reload / ammo / Multiattack behavior accepted. See `docs/work_items/active/BUG-20260614-weapon-attacks-reload-fail-smoke-failure-20260626.md`. |
 <!-- COMPLETED_WORK_TABLE_START -->
 | BUG-20260626-aura-of-protection-grid-snap | Aura of Protection grid snap offset | 2026-06-26 | [completed/BUG-20260626-aura-of-protection-grid-snap.md](completed/BUG-20260626-aura-of-protection-grid-snap.md) |
 | BUG-20260614-reactions-hold-combat | Reactions can hold up combat | 2026-06-26 | [completed/BUG-20260614-reactions-hold-combat.md](completed/BUG-20260614-reactions-hold-combat.md) |
