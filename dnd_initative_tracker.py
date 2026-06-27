@@ -687,8 +687,20 @@ def _seed_user_spells_dir() -> Optional[Path]:
     try:
         for path in list(source_dir.glob("*.y*ml")):
             dest = user_dir / path.name
-            if not dest.exists():
+            try:
+                if dest.exists():
+                    source_raw = path.read_text(encoding="utf-8")
+                    dest_raw = dest.read_text(encoding="utf-8")
+                    if _hash_text(source_raw) == _hash_text(dest_raw):
+                        continue
                 shutil.copy2(path, dest)
+            except Exception:
+                if not dest.exists():
+                    try:
+                        shutil.copy2(path, dest)
+                    except Exception:
+                        pass
+                continue
     except Exception:
         pass
     return user_dir
@@ -1424,6 +1436,13 @@ def _file_stat_metadata(fp: Path) -> Dict[str, object]:
 
 def _metadata_matches(entry: Dict[str, object], meta: Dict[str, object]) -> bool:
     return entry.get("mtime_ns") == meta.get("mtime_ns") and entry.get("size") == meta.get("size")
+
+
+def _metadata_and_hash_match(entry: Dict[str, object], meta: Dict[str, object], raw: str) -> bool:
+    if not _metadata_matches(entry, meta):
+        return False
+    cached_hash = entry.get("hash")
+    return isinstance(cached_hash, str) and cached_hash == _hash_text(raw)
 
 
 def _parse_fractional_cr(value: str) -> Optional[float]:
@@ -24682,10 +24701,14 @@ class InitiativeTracker(base.InitiativeTracker):
                 return False
             for fp in files:
                 meta = _file_stat_metadata(fp)
+                try:
+                    raw = fp.read_text(encoding="utf-8")
+                except Exception:
+                    return False
                 entry = entries.get(fp.name) if isinstance(entries, dict) else None
                 if not isinstance(entry, dict):
                     return False
-                if not _metadata_matches(entry, meta):
+                if not _metadata_and_hash_match(entry, meta, raw):
                     return False
                 if not isinstance(entry.get("preset"), dict):
                     return False
@@ -24725,13 +24748,16 @@ class InitiativeTracker(base.InitiativeTracker):
             if value in (None, ""):
                 return None
             raw = str(value).strip().lower()
-            match = re.fullmatch(r"(\\d+)d(4|6|8|10|12)", raw)
+            match = re.fullmatch(r"(\d+)d(4|6|8|10|12)(?:\s*([+-])\s*(\d+))?", raw)
             if not match:
                 return None
             count = int(match.group(1))
             if count <= 0:
                 return None
-            return f"{count}d{match.group(2)}"
+            modifier_sign = match.group(3)
+            modifier_value = match.group(4)
+            modifier = f"{modifier_sign}{modifier_value}" if modifier_sign and modifier_value else ""
+            return f"{count}d{match.group(2)}{modifier}"
 
         def normalize_color(value: Any) -> Optional[str]:
             if not isinstance(value, str):
@@ -25156,7 +25182,13 @@ class InitiativeTracker(base.InitiativeTracker):
         for fp in files:
             meta = _file_stat_metadata(fp)
             entry = cached_entries.get(fp.name) if isinstance(cached_entries, dict) else None
-            if isinstance(entry, dict) and _metadata_matches(entry, meta):
+            raw_for_hash: Optional[str] = None
+            if isinstance(entry, dict):
+                try:
+                    raw_for_hash = fp.read_text(encoding="utf-8")
+                except Exception:
+                    raw_for_hash = None
+            if isinstance(entry, dict) and raw_for_hash is not None and _metadata_and_hash_match(entry, meta, raw_for_hash):
                 preset = entry.get("preset")
                 if isinstance(preset, dict):
                     if "slug" not in preset:
@@ -32848,6 +32880,7 @@ class InitiativeTracker(base.InitiativeTracker):
         spell_slug: Any,
         spell_id: Any,
         requested_slot_level: Optional[int],
+        target_request_total: Optional[int] = None,
     ) -> Optional[Dict[str, Any]]:
         if caster_cid is None:
             return None
@@ -32887,8 +32920,22 @@ class InitiativeTracker(base.InitiativeTracker):
             and int(stored_requested_level) != int(requested_level)
         ):
             return None
+        try:
+            remaining_requests = int(record.get("remaining_target_requests"))
+        except Exception:
+            remaining_requests = 0
+        try:
+            requested_total = int(target_request_total) if target_request_total is not None else 0
+        except Exception:
+            requested_total = 0
+        if remaining_requests <= 0:
+            remaining_requests = max(1, requested_total)
+        remaining_requests = max(0, remaining_requests - 1)
         spend_provenance = record.get("spend_provenance")
-        pending.pop(cid_int, None)
+        if remaining_requests > 0:
+            record["remaining_target_requests"] = remaining_requests
+        else:
+            pending.pop(cid_int, None)
         return {
             "authorized": True,
             "source": "cast_spell",
@@ -32922,12 +32969,14 @@ class InitiativeTracker(base.InitiativeTracker):
         spell_slug: Any,
         spell_id: Any,
         requested_slot_level: Optional[int],
+        target_request_total: Optional[int] = None,
     ) -> Optional[Dict[str, Any]]:
         authority = self._consume_pending_spell_target_cast_authority_for_request(
             caster_cid,
             spell_slug=spell_slug,
             spell_id=spell_id,
             requested_slot_level=requested_slot_level,
+            target_request_total=target_request_total,
         )
         if not isinstance(authority, dict):
             return None
@@ -33144,7 +33193,8 @@ class InitiativeTracker(base.InitiativeTracker):
                     provenance = self._spell_resource_spend_provenance("spell_slots", int(spent_level))
                 except Exception:
                     provenance = None
-            return bool(ok), str(err or ""), spent_level, provenance
+            if ok or str(err or "").strip().lower() != "not_caster":
+                return bool(ok), str(err or ""), spent_level, provenance
         try:
             player_name, slots = self._resolve_spell_slot_profile(caster_name)
         except ValueError as exc:
@@ -36876,6 +36926,7 @@ class InitiativeTracker(base.InitiativeTracker):
                 spell_slug=msg.get("spell_slug") or preset_slug,
                 spell_id=msg.get("spell_id") or preset_id,
                 requested_slot_level=request_slot_level,
+                target_request_total=_parse_int(msg.get("shot_total"), None),
             )
             if isinstance(pending_authority, dict):
                 msg["_spell_cast_authorized"] = True
@@ -37376,6 +37427,7 @@ class InitiativeTracker(base.InitiativeTracker):
                     continue
                 dtype = str(entry.get("type") or "").strip().lower()
                 damage_entries.append({"amount": amount, "type": dtype})
+        manual_damage_provided = bool(damage_entries)
 
         spell_range_ft = self._parse_int_value(msg.get("range_ft"), None)
         if spell_range_ft is None and isinstance(preset, dict):
@@ -37411,7 +37463,19 @@ class InitiativeTracker(base.InitiativeTracker):
             if preset_damage_types:
                 damage_type_hint = str(preset_damage_types[0] or "").strip().lower()
         damage_type_hint = damage_type_hint or "damage"
-        auto_spell_damage = bool(hit and not damage_entries and damage_dice_text)
+        has_automated_damage = False
+        if sequence:
+            for step in sequence:
+                if isinstance(step, dict):
+                    outcomes = step.get("outcomes")
+                    if isinstance(outcomes, dict):
+                        for bucket in outcomes.values():
+                            if isinstance(bucket, list):
+                                for effect in bucket:
+                                    if isinstance(effect, dict) and str(effect.get("effect") or "").strip().lower() == "damage":
+                                        has_automated_damage = True
+                                        break
+        auto_spell_damage = bool(hit and not damage_entries and damage_dice_text and not has_automated_damage)
         if auto_spell_damage:
             dice_match = re.fullmatch(r"\s*(\d+)d(\d+)\s*([+\-]\s*\d+)?\s*", damage_dice_text)
             if dice_match:
@@ -37573,12 +37637,14 @@ class InitiativeTracker(base.InitiativeTracker):
             return max(0, int(total))
 
         if spell_mode == "save" and save_type and save_dc > 0 and roll_save:
-            forced_save_result = self._normalize_monster_save_result(
-                msg.get("_monster_forced_save_result"),
-                ability=save_type,
-                dc=save_dc,
-                default_passed=False,
-            )
+            forced_save_result = None
+            if msg.get("_monster_forced_save_result") is not None:
+                forced_save_result = self._normalize_monster_save_result(
+                    msg.get("_monster_forced_save_result"),
+                    ability=save_type,
+                    dc=save_dc,
+                    default_passed=False,
+                )
             if forced_save_result:
                 save_result = dict(forced_save_result)
                 save_total = save_result.get("total")
@@ -37783,6 +37849,8 @@ class InitiativeTracker(base.InitiativeTracker):
                         setattr(target, "condition_stacks", stacks)
             if str(effect.get("effect") or "").strip().lower() != "damage":
                 continue
+            if manual_damage_provided:
+                continue
             amount = _roll_scaled_effect_damage(effect)
             if amount <= 0:
                 continue
@@ -37959,16 +38027,6 @@ class InitiativeTracker(base.InitiativeTracker):
                         self._lan.play_ko(int(cid))
                     except Exception:
                         pass
-            damage_desc = ", ".join(
-                f"{int(entry.get('amount', 0) or 0)} {str(entry.get('type') or '').strip() or 'damage'}"
-                for entry in damage_entries
-            )
-            self._log(
-                f"{c.name} deals {int(total_damage)} damage to {result_payload['target_name']} with {spell_name}"
-                f"{f' ({damage_desc})' if damage_desc else ''}"
-                f"{' (CRIT)' if result_payload.get('critical') else ''}.",
-                cid=int(target_cid),
-            )
             try:
                 self._ensure_player_commands().maybe_offer_hellish_rebuke(
                     int(target_cid),
@@ -43767,6 +43825,15 @@ class InitiativeTracker(base.InitiativeTracker):
         effect_kind = str(effect.get("effect") or "").strip().lower()
         target = ctx.get("target")
         if effect_kind == "damage":
+            raw_entries = ctx.get("msg", {}).get("damage_entries")
+            manual_provided = False
+            if isinstance(raw_entries, list):
+                for entry in raw_entries:
+                    if isinstance(entry, dict) and entry.get("amount") is not None:
+                        manual_provided = True
+                        break
+            if manual_provided:
+                return
             amount = self._roll_spell_effect_damage(effect, ctx)
             if amount <= 0:
                 return
@@ -43945,7 +44012,20 @@ class InitiativeTracker(base.InitiativeTracker):
         hit = bool(check_result.get("hit"))
         critical = bool(check_result.get("critical"))
 
-        if hit and not ctx.get("damage_entries") and ctx.get("damage_dice_text"):
+        has_automated_damage = False
+        sequence = ctx.get("sequence") if isinstance(ctx.get("sequence"), list) else []
+        for step in sequence:
+            if isinstance(step, dict):
+                outcomes = step.get("outcomes")
+                if isinstance(outcomes, dict):
+                    for bucket in outcomes.values():
+                        if isinstance(bucket, list):
+                            for effect in bucket:
+                                if isinstance(effect, dict) and str(effect.get("effect") or "").strip().lower() == "damage":
+                                    has_automated_damage = True
+                                    break
+        manual_damage_provided = bool(ctx.get("damage_entries"))
+        if hit and not manual_damage_provided and ctx.get("damage_dice_text") and not has_automated_damage:
             amount = self._roll_dice_expression(
                 ctx.get("damage_dice_text"),
                 critical_max=bool(critical and str(ctx.get("spell_mode")) in ("attack", "auto_hit")),
@@ -44030,8 +44110,7 @@ class InitiativeTracker(base.InitiativeTracker):
         total_healing = int(sum(int(entry.get("amount", 0) or 0) for entry in healing_entries))
 
         if total_damage > 0 and hit:
-            before_hp = self._parse_int_value(getattr(target, "hp", None), 0) or 0
-            setattr(target, "hp", max(0, int(before_hp) - int(total_damage)))
+            self._apply_damage_via_service(target, int(total_damage), _broadcast=False)
         if hit and total_damage > 0 and spell_key == "harm":
             save_result = check_result.get("save_result") if isinstance(check_result.get("save_result"), dict) else {}
             if not bool(save_result.get("passed")):

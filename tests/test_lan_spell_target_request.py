@@ -1,6 +1,7 @@
 import unittest
 from unittest import mock
 from pathlib import Path
+import tempfile
 
 import dnd_initative_tracker as tracker_mod
 import yaml
@@ -48,6 +49,19 @@ def _produce_flame_preset():
             "ui": {"spell_targeting": {"follow_up_only": True}},
         },
     }
+
+
+def _first_spell_damage_effect(preset):
+    sequence = ((preset.get("mechanics") or {}).get("sequence") or [])
+    for step in sequence:
+        outcomes = (step.get("outcomes") or {}) if isinstance(step, dict) else {}
+        for effects in outcomes.values():
+            if not isinstance(effects, list):
+                continue
+            for effect in effects:
+                if isinstance(effect, dict) and effect.get("effect") == "damage":
+                    return effect
+    return {}
 
 
 class LanSpellTargetRequestTests(unittest.TestCase):
@@ -253,6 +267,260 @@ class LanSpellTargetRequestTests(unittest.TestCase):
         self.app._lan_apply_action(msg)
 
         self.assertIn((31, "Beam 2/3: Eldritch Blast hits: 7 damage (7 force)."), self.toasts)
+
+    def test_pending_spell_target_authority_requires_matching_upcast_slot(self):
+        self.app._record_pending_spell_target_cast_authority(
+            1,
+            spell_slug="guiding-bolt",
+            spell_id="guiding-bolt",
+            requested_slot_level=2,
+            spend_provenance={"pool_id": "spell_slots", "slot_level": 2},
+        )
+
+        mismatch = self.app._consume_pending_spell_target_cast_authority_for_request(
+            1,
+            spell_slug="guiding-bolt",
+            spell_id="guiding-bolt",
+            requested_slot_level=1,
+        )
+        self.assertIsNone(mismatch)
+        self.assertIn(1, self.app._pending_spell_target_cast_authorities())
+
+        matched = self.app._consume_pending_spell_target_cast_authority_for_request(
+            1,
+            spell_slug="guiding-bolt",
+            spell_id="guiding-bolt",
+            requested_slot_level=2,
+        )
+        self.assertIsInstance(matched, dict)
+        self.assertEqual(matched.get("source"), "cast_spell")
+        self.assertEqual(matched.get("spend_provenance"), {"pool_id": "spell_slots", "slot_level": 2})
+        self.assertNotIn(1, self.app._pending_spell_target_cast_authorities())
+
+    def test_pending_spell_target_authority_reuses_same_cast_for_multi_projectile(self):
+        self.app._record_pending_spell_target_cast_authority(
+            1,
+            spell_slug="eldritch-blast",
+            spell_id="eldritch-blast",
+            requested_slot_level=0,
+            spend_provenance=None,
+        )
+
+        for expected_remaining in (2, 1):
+            authority = self.app._consume_pending_spell_target_cast_authority_for_request(
+                1,
+                spell_slug="eldritch-blast",
+                spell_id="eldritch-blast",
+                requested_slot_level=0,
+                target_request_total=3,
+            )
+            self.assertIsInstance(authority, dict)
+            self.assertEqual(
+                self.app._pending_spell_target_cast_authorities()[1].get("remaining_target_requests"),
+                expected_remaining,
+            )
+
+        final_authority = self.app._consume_pending_spell_target_cast_authority_for_request(
+            1,
+            spell_slug="eldritch-blast",
+            spell_id="eldritch-blast",
+            requested_slot_level=0,
+            target_request_total=3,
+        )
+        self.assertIsInstance(final_authority, dict)
+        self.assertNotIn(1, self.app._pending_spell_target_cast_authorities())
+
+        exhausted = self.app._consume_pending_spell_target_cast_authority_for_request(
+            1,
+            spell_slug="eldritch-blast",
+            spell_id="eldritch-blast",
+            requested_slot_level=0,
+            target_request_total=3,
+        )
+        self.assertIsNone(exhausted)
+
+    def test_magic_missile_dart_uses_one_d4_plus_one_damage(self):
+        preset = yaml.safe_load((Path(__file__).resolve().parents[1] / "Spells" / "magic-missile.yaml").read_text())
+        self.app._find_spell_preset = lambda *_args, **_kwargs: preset
+        msg = {
+            "type": "spell_target_request",
+            "cid": 1,
+            "_claimed_cid": 1,
+            "_ws_id": 33,
+            "target_cid": 2,
+            "spell_name": "Magic Missile",
+            "spell_slug": "magic-missile",
+            "spell_id": "magic-missile",
+            "spell_mode": "auto_hit",
+            "slot_level": 1,
+            "shot_index": 1,
+            "shot_total": 3,
+        }
+
+        with mock.patch("dnd_initative_tracker.random.randint", return_value=1):
+            self.app._lan_apply_action(msg)
+
+        result = msg.get("_spell_target_result") or {}
+        self.assertTrue(result.get("hit"))
+        self.assertEqual(result.get("damage_entries"), [{"amount": 2, "type": "force"}])
+        self.assertEqual(result.get("damage_total"), 2)
+        self.assertEqual(self.app.combatants[2].hp, 18)
+        missile_logs = [message for _cid, message in self.logs if "Magic Missile" in message]
+        self.assertEqual(len(missile_logs), 1)
+
+    def test_magic_missile_level_two_adds_fourth_dart_not_dart_damage_scaling(self):
+        preset = yaml.safe_load((Path(__file__).resolve().parents[1] / "Spells" / "magic-missile.yaml").read_text())
+        ui_targeting = (((preset.get("mechanics") or {}).get("ui") or {}).get("spell_targeting") or {})
+        self.assertEqual(
+            int(ui_targeting.get("projectiles_base") or 0)
+            + max(0, 2 - int(ui_targeting.get("base_slot_level") or 1)) * int(ui_targeting.get("add_per_slot_above") or 0),
+            4,
+        )
+        effect = preset["mechanics"]["sequence"][0]["outcomes"]["hit"][0]
+        self.assertEqual(str(effect.get("dice") or ""), "1d4+1")
+        self.assertNotIn("scaling", effect)
+        self.assertNotIn("scaling", preset.get("mechanics") or {})
+        self.app._find_spell_preset = lambda *_args, **_kwargs: preset
+        msg = {
+            "type": "spell_target_request",
+            "cid": 1,
+            "_claimed_cid": 1,
+            "_ws_id": 34,
+            "target_cid": 2,
+            "spell_name": "Magic Missile",
+            "spell_slug": "magic-missile",
+            "spell_id": "magic-missile",
+            "spell_mode": "auto_hit",
+            "slot_level": 2,
+            "shot_index": 4,
+            "shot_total": 4,
+        }
+
+        with mock.patch("dnd_initative_tracker.random.randint", return_value=1):
+            self.app._lan_apply_action(msg)
+
+        result = msg.get("_spell_target_result") or {}
+        self.assertTrue(result.get("hit"))
+        self.assertEqual(result.get("shot_total"), 4)
+        self.assertEqual(result.get("damage_entries"), [{"amount": 2, "type": "force"}])
+        self.assertEqual(result.get("damage_total"), 2)
+
+    def test_eldritch_blast_level_eleven_exposes_three_beams(self):
+        preset = yaml.safe_load((Path(__file__).resolve().parents[1] / "Spells" / "eldritch-blast.yaml").read_text())
+        ui_targeting = (((preset.get("mechanics") or {}).get("ui") or {}).get("spell_targeting") or {})
+        raw_description = str((((preset.get("import") or {}).get("raw") or {}).get("description")) or "").lower()
+
+        self.assertEqual(ui_targeting.get("mode"), "attack")
+        self.assertNotIn("projectiles_base", ui_targeting)
+        self.assertIn("two beams at level 5", raw_description)
+        self.assertIn("three beams at level 11", raw_description)
+        self.assertIn("four beams at level 17", raw_description)
+        beam_count = 4 if 11 >= 17 else 3 if 11 >= 11 else 2 if 11 >= 5 else 1
+        self.assertEqual(beam_count, 3)
+
+    def test_eldritch_blast_beam_damage_stays_one_d10_at_level_eleven(self):
+        preset = yaml.safe_load((Path(__file__).resolve().parents[1] / "Spells" / "eldritch-blast.yaml").read_text())
+        effect = preset["mechanics"]["sequence"][0]["outcomes"]["hit"][0]
+        self.assertEqual(str(effect.get("dice") or ""), "1d10")
+        self.assertNotIn("scaling", effect)
+        self.assertNotIn("scaling", preset.get("mechanics") or {})
+        self.app._profile_for_player_name = lambda _name: {"leveling": {"level": 11}}
+        self.app._find_spell_preset = lambda *_args, **_kwargs: preset
+        msg = {
+            "type": "spell_target_request",
+            "cid": 1,
+            "_claimed_cid": 1,
+            "_ws_id": 35,
+            "target_cid": 2,
+            "spell_name": "Eldritch Blast",
+            "spell_slug": "eldritch-blast",
+            "spell_id": "eldritch-blast",
+            "spell_mode": "attack",
+            "hit": True,
+            "critical": False,
+            "slot_level": 0,
+            "shot_index": 2,
+            "shot_total": 3,
+        }
+
+        with mock.patch("dnd_initative_tracker.random.randint", return_value=10) as roll:
+            self.app._lan_apply_action(msg)
+
+        result = msg.get("_spell_target_result") or {}
+        self.assertTrue(result.get("hit"))
+        self.assertEqual(result.get("shot_total"), 3)
+        self.assertEqual(result.get("damage_entries"), [{"amount": 10, "type": "force"}])
+        self.assertEqual(result.get("damage_total"), 10)
+        self.assertEqual(roll.call_count, 1)
+        eb_logs = [m for _, m in self.logs if "Eldritch Blast" in m]
+        self.assertEqual(len(eb_logs), 1)
+
+    def test_app_loaded_spell_presets_use_current_yaml_mechanics(self):
+        repo_root = Path(__file__).resolve().parents[1]
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_root = Path(tmp)
+            app_dir = tmp_root / "app"
+            data_dir = tmp_root / "data"
+            source_spells = app_dir / "Spells"
+            stale_spells = data_dir / "Spells"
+            source_spells.mkdir(parents=True)
+            stale_spells.mkdir(parents=True)
+
+            for slug in ("magic-missile", "eldritch-blast", "fire-bolt"):
+                source_raw = (repo_root / "Spells" / f"{slug}.yaml").read_text(encoding="utf-8")
+                (source_spells / f"{slug}.yaml").write_text(source_raw, encoding="utf-8")
+
+            stale_magic = (source_spells / "magic-missile.yaml").read_text(encoding="utf-8").replace(
+                "dice: 1d4+1",
+                "dice: 1d4\n        scaling:\n          kind: slot_level\n          base_slot: 1\n          add_per_slot_above: 1d4",
+            )
+            stale_eldritch = (source_spells / "eldritch-blast.yaml").read_text(encoding="utf-8").replace(
+                "dice: 1d10",
+                "dice: 1d10\n        scaling:\n          kind: character_level\n          thresholds:\n            5:\n              add: 1d10\n            11:\n              add: 1d10\n            17:\n              add: 1d10",
+                1,
+            )
+            (stale_spells / "magic-missile.yaml").write_text(stale_magic, encoding="utf-8")
+            (stale_spells / "eldritch-blast.yaml").write_text(stale_eldritch, encoding="utf-8")
+            (stale_spells / "fire-bolt.yaml").write_text(
+                (source_spells / "fire-bolt.yaml").read_text(encoding="utf-8"),
+                encoding="utf-8",
+            )
+
+            app = object.__new__(tracker_mod.InitiativeTracker)
+            app._spell_presets_cache = None
+            app._spell_index_entries = {}
+            app._spell_index_loaded = False
+            app._spell_dir_notice = None
+            app._spell_dir_signature = None
+            app._spell_preset_lookup_cache = None
+            app._spell_preset_lookup_sig = None
+            app._oplog = lambda *args, **kwargs: None
+            app._spell_index_path = lambda: tmp_root / "spell_index.json"
+            app._invalidate_lan_static_snapshot_cache = lambda *_args, **_kwargs: None
+
+            with mock.patch("dnd_initative_tracker._app_base_dir", return_value=app_dir), mock.patch(
+                "dnd_initative_tracker._app_data_dir", return_value=data_dir
+            ):
+                magic = app._find_spell_preset("magic-missile", "magic-missile") or {}
+                eldritch = app._find_spell_preset("eldritch-blast", "eldritch-blast") or {}
+                fire_bolt = app._find_spell_preset("fire-bolt", "fire-bolt") or {}
+
+            magic_effect = _first_spell_damage_effect(magic)
+            self.assertEqual(magic.get("dice"), "1d4+1")
+            self.assertEqual(magic_effect.get("dice"), "1d4+1")
+            self.assertNotIn("scaling", magic_effect)
+            self.assertNotIn("scaling", magic.get("mechanics") or {})
+
+            eldritch_effect = _first_spell_damage_effect(eldritch)
+            self.assertEqual(eldritch.get("dice"), "1d10")
+            self.assertEqual(eldritch_effect.get("dice"), "1d10")
+            self.assertNotIn("scaling", eldritch_effect)
+            self.assertNotIn("scaling", eldritch.get("mechanics") or {})
+
+            fire_effect = _first_spell_damage_effect(fire_bolt)
+            self.assertEqual(fire_bolt.get("dice"), "1d10")
+            self.assertEqual(fire_effect.get("dice"), "1d10")
+            self.assertEqual((fire_bolt.get("scaling") or {}).get("kind"), "character_level")
 
     def test_disintegrate_failed_save_removes_target(self):
         self.app._find_spell_preset = lambda *_args, **_kwargs: {
@@ -3137,6 +3405,91 @@ class LanSpellTargetRequestTests(unittest.TestCase):
         target = self.app.combatants[2]
         self.assertFalse(self.app._has_condition(target, "invisible"))
         self.assertTrue(self.app._has_condition(target, "starry_wisp_revealed"))
+
+    def test_spell_target_damage_does_not_mutate_max_hp(self):
+        target = self.app.combatants[2]
+        self.assertEqual(target.hp, 20)
+        self.assertEqual(target.max_hp, 20)
+
+        msg = {
+            "type": "spell_target_request",
+            "cid": 1,
+            "_claimed_cid": 1,
+            "_ws_id": 50,
+            "target_cid": 2,
+            "spell_name": "Fire Bolt",
+            "spell_slug": "fire-bolt",
+            "spell_mode": "attack",
+            "hit": True,
+            "damage_entries": [{"amount": 5, "type": "fire"}],
+        }
+        self.app._lan_apply_action(msg)
+
+        self.assertEqual(target.hp, 15)
+        self.assertEqual(target.max_hp, 20)
+
+    def test_magic_missile_reduces_hp_cumulatively_max_hp_constant(self):
+        target = self.app.combatants[2]
+        self.assertEqual(target.hp, 20)
+        self.assertEqual(target.max_hp, 20)
+
+        # First dart
+        msg1 = {
+            "type": "spell_target_request",
+            "cid": 1,
+            "_claimed_cid": 1,
+            "_ws_id": 50,
+            "target_cid": 2,
+            "spell_name": "Magic Missile",
+            "spell_slug": "magic-missile",
+            "spell_mode": "auto_hit",
+            "hit": True,
+            "damage_entries": [{"amount": 3, "type": "force"}],
+            "shot_index": 1,
+            "shot_total": 3,
+        }
+        self.app._lan_apply_action(msg1)
+        self.assertEqual(target.hp, 17)
+        self.assertEqual(target.max_hp, 20)
+
+        # Second dart targeting the same target
+        msg2 = {
+            "type": "spell_target_request",
+            "cid": 1,
+            "_claimed_cid": 1,
+            "_ws_id": 50,
+            "target_cid": 2,
+            "spell_name": "Magic Missile",
+            "spell_slug": "magic-missile",
+            "spell_mode": "auto_hit",
+            "hit": True,
+            "damage_entries": [{"amount": 4, "type": "force"}],
+            "shot_index": 2,
+            "shot_total": 3,
+        }
+        self.app._lan_apply_action(msg2)
+        self.assertEqual(target.hp, 13)
+        self.assertEqual(target.max_hp, 20)
+
+    def test_eldritch_blast_logs_exactly_once_per_beam(self):
+        self.logs.clear()
+        msg = {
+            "type": "spell_target_request",
+            "cid": 1,
+            "_claimed_cid": 1,
+            "_ws_id": 50,
+            "target_cid": 2,
+            "spell_name": "Eldritch Blast",
+            "spell_slug": "eldritch-blast",
+            "spell_mode": "attack",
+            "hit": True,
+            "damage_entries": [{"amount": 8, "type": "force"}],
+            "shot_index": 1,
+            "shot_total": 3,
+        }
+        self.app._lan_apply_action(msg)
+        eb_logs = [m for _, m in self.logs if "Eldritch Blast" in m]
+        self.assertEqual(len(eb_logs), 1)
 
 
 if __name__ == "__main__":

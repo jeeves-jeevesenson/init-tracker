@@ -8,10 +8,10 @@ If an item is not marked as **Active** here, it is NOT current work.
 ## Current Status
 
 <!-- ACTIVE_WORK_STATUS_START -->
-- **Status:** Active
-- **Current Work Item:** BUG-20260626-spell-multiattack-ranged-fail
+- **Status:** Idle
+- **Current Work Item:** None
 - **Active Gate:** None
-- **Allowed Next Action:** capture or confirm a narrow spell Multiattack / ranged attack repro before code changes unless existing active docs already contain enough repo evidence
+- **Allowed Next Action:** none
 <!-- ACTIVE_WORK_STATUS_END -->
 
 ---
@@ -21,7 +21,6 @@ If an item is not marked as **Active** here, it is NOT current work.
 | ID | Title | Status | Goal |
 | --- | --- | --- | --- |
 <!-- ACTIVE_WORK_TABLE_START -->
-| BUG-20260626-spell-multiattack-ranged-fail | Spell Multiattack and ranged attack failure | Active | Capture or confirm a narrow repro for spell Multiattack / ranged attack failure before implementation. See [active/BUG-20260626-spell-multiattack-ranged-fail.md](active/BUG-20260626-spell-multiattack-ranged-fail.md). |
 <!-- ACTIVE_WORK_TABLE_END -->
 
 ---
@@ -32,6 +31,7 @@ If an item is not marked as **Active** here, it is NOT current work.
 | --- | --- | --- | --- |
 | BUG-20260614-weapon-attacks-reload-fail | Weapon attacks / reload fail | 2026-06-26 | Closed in `6d14706`; focused unit tests passed; JS syntax check passed; diff check passed; developer browser smoke passed; final weapon reload / ammo / Multiattack behavior accepted. See `docs/work_items/active/BUG-20260614-weapon-attacks-reload-fail-smoke-failure-20260626.md`. |
 <!-- COMPLETED_WORK_TABLE_START -->
+| BUG-20260626-spell-multiattack-ranged-fail | Spell Multiattack and ranged attack failure | 2026-06-27 | Fixed upcast ranged spell attack pending authority and multi-projectile reuse; repaired Magic Missile and Eldritch Blast YAML scaling; corrected runtime user preset seeding and hashing cache; fixed unconditional forced save check; repaired monster/combatant max HP preservation on damage; verified backend-only single-log-line outputs. Passed all 108 tests. See [completed/BUG-20260626-spell-multiattack-ranged-fail.md](completed/BUG-20260626-spell-multiattack-ranged-fail.md). |
 | BUG-20260626-aura-of-protection-grid-snap | Aura of Protection grid snap offset | 2026-06-26 | [completed/BUG-20260626-aura-of-protection-grid-snap.md](completed/BUG-20260626-aura-of-protection-grid-snap.md) |
 | BUG-20260614-reactions-hold-combat | Reactions can hold up combat | 2026-06-26 | [completed/BUG-20260614-reactions-hold-combat.md](completed/BUG-20260614-reactions-hold-combat.md) |
 | WORK-20260619-orchestrator-agy-context-hygiene | Orchestrator + AGY context hygiene | 2026-06-19 | [completed/WORK-20260619-orchestrator-agy-context-hygiene.md](completed/WORK-20260619-orchestrator-agy-context-hygiene.md) |

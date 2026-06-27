@@ -11,6 +11,8 @@ level: 0
 school: evocation
 tags:
 - damage
+- spell_attack_target
+- spell_multi_target
 - attack
 - automation_full
 casting_time: Action
@@ -59,17 +61,9 @@ mechanics:
       - effect: damage
         damage_type: force
         dice: 1d10
-        scaling: &id001
-          kind: character_level
-          thresholds:
-            5:
-              add: 1d10
-            11:
-              add: 1d10
-            17:
-              add: 1d10
       miss: []
-  scaling: *id001
   ui:
     template_preview: false
+    spell_targeting:
+      mode: attack
   notes: []

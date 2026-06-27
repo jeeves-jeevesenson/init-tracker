@@ -57,12 +57,7 @@ mechanics:
       hit:
       - effect: damage
         damage_type: force
-        dice: 1d4
-        scaling: &id001
-          kind: slot_level
-          base_slot: 1
-          add_per_slot_above: 1d4
-  scaling: *id001
+        dice: 1d4+1
   ui:
     template_preview: false
     spell_targeting:

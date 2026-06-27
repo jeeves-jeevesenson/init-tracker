@@ -385,6 +385,19 @@ class Combatant:
     concentration_started_turn: Optional[Tuple[int, int]] = None
     concentration_aoe_ids: List[int] = field(default_factory=list)
 
+    def __post_init__(self) -> None:
+        self._max_hp = self.hp
+
+    @property
+    def max_hp(self) -> int:
+        if not hasattr(self, "_max_hp"):
+            self._max_hp = self.hp
+        return self._max_hp
+
+    @max_hp.setter
+    def max_hp(self, val: int) -> None:
+        self._max_hp = val
+
 
 @dataclass
 class MonsterSpec:
