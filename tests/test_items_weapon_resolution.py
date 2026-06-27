@@ -469,6 +469,44 @@ class ItemsWeaponResolutionTests(unittest.TestCase):
             toasts = [str(args[1]) for args, kwargs in self.app._lan.toast.call_args_list]
             self.assertTrue(any("Requested weapon 'missing' not found" in t for t in toasts))
 
+    def test_inventory_equipped_weapon_normalization_preserves_attack_fields(self):
+        profile_data = {
+            "name": "John",
+            "inventory": {
+                "items": [
+                    {"id": "saber", "instance_id": "sab1", "equipped": True, "equipped_slot": "main_hand"}
+                ]
+            },
+            "attacks": {"weapons": []}
+        }
+        weapon_registry = {
+            "saber": {
+                "id": "saber",
+                "name": "Saber",
+                "category": "martial_melee",
+                "damage": {"one_handed": {"formula": "1d8", "type": "slashing"}},
+                "properties": ["finesse", "light"]
+            }
+        }
+
+        with mock.patch.object(self.app, "_items_registry_payload", return_value={"weapons": weapon_registry}), \
+             mock.patch.object(self.app, "_magic_items_registry_payload", return_value={}):
+            normalized = self.app._normalize_player_profile(profile_data, "John")
+
+        weapons = normalized.get("attacks", {}).get("weapons", [])
+        self.assertEqual(len(weapons), 1)
+        saber = weapons[0]
+
+        self.assertEqual(saber["id"], "saber")
+        self.assertEqual(saber["instance_id"], "sab1")
+        self.assertTrue(saber["equipped"])
+        self.assertTrue(saber["main_hand"])
+        self.assertEqual(saber["to_hit"], 0)
+        self.assertEqual(saber["magic_bonus"], 0)
+        self.assertEqual(saber["properties"], ["finesse", "light"])
+        self.assertEqual(saber["selected_mode"], "one")
+        self.assertEqual(saber["one_handed"]["damage_formula"], "1d8 + max(str_mod, dex_mod)")
+        self.assertEqual(saber["one_handed"]["damage_type"], "slashing")
 
 if __name__ == "__main__":
     unittest.main()

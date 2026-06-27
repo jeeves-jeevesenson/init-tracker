@@ -18,6 +18,8 @@ class TestMonsterSequenceState(unittest.TestCase):
             "current_cid": 1,
             "_monster_resource_state": {},
             "_monster_sequence_state": {},
+            "_monster_modifier_state": {},
+            "_name_role_memory": {},
             "_monster_capability_service": MonsterCapabilityService()
         })
         # Mock methods
@@ -25,7 +27,7 @@ class TestMonsterSequenceState(unittest.TestCase):
         self.tracker._ensure_monster_capabilities = lambda: self.tracker._monster_capability_service
         self.tracker._dm_normalize_turn_spend = lambda s, **kwargs: s
         self.tracker._lan_force_state_broadcast = lambda: None
-        self.tracker._monster_capability_damage_roll_packet = lambda cap: {"damage_rolls": [], "total_fail": 0, "total_success": 0}
+        self.tracker._monster_capability_damage_roll_packet = lambda cap, **kwargs: {"damage_rolls": [], "total_fail": 0, "total_success": 0}
         self.tracker._monster_capability_resolution_packet = lambda **kwargs: {}
         self.tracker._lan_feet_per_square = lambda: 5
         self.tracker._apply_map_attack_manual_damage = lambda *args: {"ok": True}
@@ -265,6 +267,50 @@ class TestMonsterSequenceState(unittest.TestCase):
         self.tracker._monster_sequence_state.clear() # If I implement it this way
         
         self.assertNotIn(actor_cid, self.tracker._monster_sequence_state)
+
+    def test_monster_turn_resource_bypass(self):
+        """Verify that monster capability resolution bypasses player-style action budget checks, while PC is blocked."""
+        # Un-mock _dm_spend_combatant_turn_resource so we test the actual logic
+        self.tracker._dm_spend_combatant_turn_resource = InitiativeTracker._dm_spend_combatant_turn_resource.__get__(self.tracker, InitiativeTracker)
+
+        # Define mock base _use_action, _use_bonus_action, _use_reaction that decrement actual resources
+        class MockCombatant:
+            def __init__(self, cid, name, is_pc=False):
+                self.cid = cid
+                self.name = name
+                self.is_pc = is_pc
+                self.action_remaining = 1
+                self.bonus_action_remaining = 1
+                self.reaction_remaining = 1
+
+        # 1. Non-PC combatant (monster)
+        monster = MockCombatant(cid=10, name="Orc", is_pc=False)
+        self.tracker._use_action = lambda c, **kw: False # Force action spending to fail if called
+
+        # Spend action for monster: should succeed immediately because is_pc is False
+        ok, err = self.tracker._dm_spend_combatant_turn_resource(monster, "action")
+        self.assertTrue(ok)
+        self.assertEqual(err, "")
+
+        # Spend bonus action for monster: should also succeed
+        ok, err = self.tracker._dm_spend_combatant_turn_resource(monster, "bonus")
+        self.assertTrue(ok)
+        self.assertEqual(err, "")
+
+        # 2. PC combatant
+        pc = MockCombatant(cid=20, name="Fighter", is_pc=True)
+        # Bind actual _use_action from class to test PC blocking behavior
+        self.tracker._use_action = InitiativeTracker._use_action.__get__(self.tracker, InitiativeTracker)
+
+        # PC has 1 action. First spend should succeed
+        ok, err = self.tracker._dm_spend_combatant_turn_resource(pc, "action")
+        self.assertTrue(ok)
+        self.assertEqual(pc.action_remaining, 0)
+
+        # Second spend should fail because action_remaining is 0
+        ok, err = self.tracker._dm_spend_combatant_turn_resource(pc, "action")
+        self.assertFalse(ok)
+        self.assertEqual(err, "No actions left, matey.")
 
 if __name__ == "__main__":
     unittest.main()

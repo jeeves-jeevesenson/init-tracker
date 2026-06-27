@@ -475,8 +475,14 @@
         <!-- Modal content rendered here -->
       </div>
       <div class="modal-footer" id="modalFooter">
-        <button class="cancel-btn" onclick="closeLocalResolutionTray()">Cancel</button>
-        <button class="apply-btn" id="modalApplyBtn" data-testid="dmcontrol-apply-result" onclick="applyLocalResolutionResultsFromModal()">Apply Result</button>
+        <div id="standardModalFooter" style="display:flex; width:100%; gap:8px; justify-content:flex-end;">
+          <button class="cancel-btn" onclick="closeLocalResolutionTray()">Cancel</button>
+          <button class="apply-btn" id="modalApplyBtn" data-testid="dmcontrol-apply-result" onclick="applyLocalResolutionResultsFromModal()">Apply Result</button>
+        </div>
+        <div id="reloadModalFooter" style="display:none; width:100%; gap:8px; justify-content:flex-end;">
+          <button class="cancel-btn" onclick="closeLocalResolutionTray()">Cancel</button>
+          <button class="apply-btn" id="reloadModalConfirmBtn" style="background:var(--gold); border-color:var(--gold); color:var(--bg)">Reload</button>
+        </div>
       </div>
     </div>
   </div>
@@ -1354,7 +1360,9 @@
       }
     }
 
-    async function fetchCapabilitiesForActiveActor(actor) {
+    async function fetchCapabilitiesForActiveActor(actor, opts = {}) {
+      const forceRefresh = !!opts.forceRefresh;
+      const preserveSelection = !!opts.preserveSelection;
       if (!actor || actor.is_pc) {
         capabilitySummary = null;
         capabilityActorCid = null;
@@ -1365,11 +1373,15 @@
         return;
       }
 
-      if (String(capabilityActorCid) === String(actor.cid)) {
+      if (!forceRefresh && String(capabilityActorCid) === String(actor.cid)) {
         // Already have it, just re-render in case local state (selection) changed
         renderActionPanel(actor, capabilitySummary);
         return;
       }
+
+      const previousSelectionId = selectedCapabilityId;
+      const previousPreviewMode = targetPreviewMode;
+      const previousOutcomes = localResolutionOutcomes;
 
       try {
         const resp = await fetch(`/api/dm/monster-capabilities/${actor.cid}`);
@@ -1388,9 +1400,23 @@
           }
         }
         capabilityActorCid = actor.cid;
-        selectedCapabilityId = null;
-        localResolutionOutcomes = {};
-        cancelTargetPreviewMode();
+        if (preserveSelection) {
+          localResolutionOutcomes = previousOutcomes;
+          const stillExists = previousSelectionId && (() => {
+            if (!capabilitySummary || !capabilitySummary.groups) return false;
+            for (const list of Object.values(capabilitySummary.groups)) {
+              if (!Array.isArray(list)) continue;
+              if (list.some(a => String(a.id) === String(previousSelectionId))) return true;
+            }
+            return false;
+          })();
+          selectedCapabilityId = stillExists ? previousSelectionId : null;
+          targetPreviewMode = previousPreviewMode;
+        } else {
+          selectedCapabilityId = null;
+          localResolutionOutcomes = {};
+          cancelTargetPreviewMode();
+        }
         renderActionPanel(actor, capabilitySummary);
       } catch (err) {
         console.error('Capabilities fetch error:', err);
@@ -1427,6 +1453,10 @@
 
     function enterTargetPreviewMode(cap) {
       if (!cap || !state) return;
+      if (cap.ammo && cap.ammo.current < (cap.ammo_cost || 1)) {
+        showTransientStatus(`Cannot target: ${cap.name} needs reload!`, 'var(--danger)');
+        return;
+      }
       if (freeMoveMode) {
         cancelFreeMoveMode(false);
       }
@@ -1443,6 +1473,10 @@
 
     function enterAoePlacementMode(cap) {
       if (!cap || !state) return;
+      if (cap.ammo && cap.ammo.current < (cap.ammo_cost || 1)) {
+        showTransientStatus(`Cannot target: ${cap.name} needs reload!`, 'var(--danger)');
+        return;
+      }
       fullResetLocalState();
 
       const activeUnit = (state.tactical_map?.units || []).find(u => String(u.cid) === String(state.active_cid));
@@ -1557,6 +1591,7 @@
 
       const modal = document.getElementById('resolutionModal');
       if (modal) modal.classList.remove('active');
+      setResolutionModalFooterMode('standard');
 
       draw();
       const actor = (state?.combatants || []).find(c => String(c.cid) === String(state?.active_cid));
@@ -1645,6 +1680,256 @@
     }
     document.getElementById('toolboxBtn')?.addEventListener('click', openToolboxModal);
 
+    function hasActiveLocalSequence() {
+      return !!(localSequencePacket && localSequencePacket.capability_id);
+    }
+
+    function formatReloadCostLabel(rawCost) {
+      const cost = String(rawCost || '').trim().toLowerCase();
+      if (cost === 'bonus') return 'bonus action';
+      if (cost === 'reaction') return 'reaction';
+      if (cost === 'none') return 'no turn cost';
+      return 'action';
+    }
+
+    function isReloadAction(cap) {
+      return !!(cap && String(cap.action_type || '').trim().toLowerCase() === 'firearm_reload');
+    }
+    window.isReloadAction = isReloadAction;
+
+    function isReloadableWeaponCapability(cap) {
+      if (!cap) return false;
+      const ammoMax = Number(cap?.ammo?.max ?? cap?.mechanics?.magazine_capacity ?? 0);
+      return Number.isFinite(ammoMax) && ammoMax > 0;
+    }
+
+    function ensureResolutionModalFooterScaffold() {
+      const footer = document.getElementById('modalFooter');
+      if (!footer) return;
+      if (document.getElementById('standardModalFooter') && document.getElementById('reloadModalFooter')) return;
+      footer.innerHTML = `
+        <div id="standardModalFooter" style="display:flex; width:100%; gap:8px; justify-content:flex-end;">
+          <button class="cancel-btn" onclick="closeLocalResolutionTray()">Cancel</button>
+          <button class="apply-btn" id="modalApplyBtn" data-testid="dmcontrol-apply-result" onclick="applyLocalResolutionResultsFromModal()">Apply Result</button>
+        </div>
+        <div id="reloadModalFooter" style="display:none; width:100%; gap:8px; justify-content:flex-end;">
+          <button class="cancel-btn" onclick="closeLocalResolutionTray()">Cancel</button>
+          <button class="apply-btn" id="reloadModalConfirmBtn" style="background:var(--gold); border-color:var(--gold); color:var(--bg)">Reload</button>
+        </div>
+      `;
+    }
+
+    function setResolutionModalFooterMode(mode) {
+      ensureResolutionModalFooterScaffold();
+      const standardFooter = document.getElementById('standardModalFooter');
+      const reloadFooter = document.getElementById('reloadModalFooter');
+      const applyBtn = document.getElementById('modalApplyBtn');
+      if (standardFooter) standardFooter.style.display = mode === 'reload' ? 'none' : 'flex';
+      if (reloadFooter) reloadFooter.style.display = mode === 'reload' ? 'flex' : 'none';
+      if (applyBtn) {
+        applyBtn.style.display = mode === 'standard' ? '' : 'none';
+        applyBtn.disabled = false;
+        applyBtn.textContent = 'Apply Result';
+      }
+    }
+
+    function buildReloadOption(cap, rawOption) {
+      if (!cap) return null;
+      const ammoMax = Number(rawOption?.ammo?.max ?? cap?.ammo?.max ?? cap?.mechanics?.magazine_capacity ?? 0);
+      if (!Number.isFinite(ammoMax) || ammoMax <= 0) return null;
+      const ammoCurrent = Number(rawOption?.ammo?.current ?? cap?.ammo?.current ?? ammoMax);
+      const reserveMags = rawOption?.ammo?.reserve_mags ?? cap?.ammo?.reserve_mags;
+      return {
+        capability_id: String(rawOption?.capability_id || cap.id || '').trim(),
+        weapon_name: String(rawOption?.weapon_name || cap.reload_weapon_name || cap.weapon_name || cap.name || cap.id || 'Weapon').trim(),
+        reload_source_capability_id: String(rawOption?.reload_source_capability_id || cap.reload_source_capability_id || cap.id || '').trim(),
+        reload_cost: String(rawOption?.reload_cost || cap.reload_cost || cap?.mechanics?.reload_cost || 'action').trim().toLowerCase() || 'action',
+        ammo: {
+          current: Number.isFinite(ammoCurrent) ? ammoCurrent : ammoMax,
+          max: ammoMax,
+          reserve_mags: reserveMags
+        }
+      };
+    }
+
+    function getReloadOptionsForCapability(cap) {
+      if (!cap) return [];
+      if (isReloadAction(cap)) {
+        return (Array.isArray(cap.reload_targets) ? cap.reload_targets : [])
+          .map(option => buildReloadOption(cap, option))
+          .filter(Boolean);
+      }
+      const directOption = buildReloadOption(cap, null);
+      return directOption ? [directOption] : [];
+    }
+
+    function renderReloadTargetSelection(cap, options) {
+      const modal = document.getElementById('resolutionModal');
+      const title = document.getElementById('modalTitle');
+      const body = document.getElementById('modalBody');
+      if (!modal || !title || !body) return;
+
+      title.textContent = 'Choose weapon to reload';
+      body.innerHTML = `
+        <div style="padding:16px; font-size:14px; color:var(--text);">
+          <p>Select the specific weapon to reload for <strong>${esc(cap.name || 'Reload')}</strong>.</p>
+          <div style="display:flex; flex-direction:column; gap:10px; margin-top:12px;">
+            ${options.map(option => `
+              <button class="workspace-link"
+                      onclick="openReloadConfirmationModalById('${esc(cap.id)}', '${esc(option.capability_id)}')"
+                      style="width:100%; justify-content:space-between; padding:10px 12px; border-color:var(--gold); color:var(--text); background:rgba(214,186,126,0.08);">
+                <span><strong>${esc(option.weapon_name)}</strong></span>
+                <span style="font-size:12px; color:var(--muted);">
+                  ${esc(`${option.ammo.current}/${option.ammo.max}`)}${option.ammo.reserve_mags !== undefined ? esc(` • ${option.ammo.reserve_mags} mags`) : ''}
+                </span>
+              </button>
+            `).join('')}
+          </div>
+        </div>
+      `;
+      setResolutionModalFooterMode('selection');
+      modal.classList.add('active');
+    }
+
+    function renderReloadConfirmationModal(cap, option) {
+      const modal = document.getElementById('resolutionModal');
+      const title = document.getElementById('modalTitle');
+      const body = document.getElementById('modalBody');
+      if (!modal || !title || !body || !option) return;
+
+      title.textContent = `Reload ${option.weapon_name}?`;
+      body.innerHTML = `
+        <div style="padding:16px; font-size:14px; color:var(--text);">
+          <p>The weapon <strong>${esc(option.weapon_name)}</strong> will be reloaded.</p>
+          <div style="margin-top:12px; padding:12px; background:rgba(255,255,255,0.05); border-radius:4px; border-left:4px solid var(--gold);">
+            <div>Current Ammo: <strong>${esc(`${option.ammo.current} / ${option.ammo.max}`)}</strong></div>
+            ${option.ammo.reserve_mags !== undefined ? `<div>Available Reserves: <strong>${esc(String(option.ammo.reserve_mags))} mags</strong></div>` : ''}
+            <div>Reload Cost: <strong>${esc(formatReloadCostLabel(option.reload_cost))}</strong></div>
+          </div>
+          <p style="margin-top:12px; color:var(--muted); font-size:12px;">
+            Confirm to reload this weapon only.
+          </p>
+        </div>
+      `;
+
+      setResolutionModalFooterMode('reload');
+      const confirmBtn = document.getElementById('reloadModalConfirmBtn');
+      if (confirmBtn) {
+        confirmBtn.disabled = false;
+        confirmBtn.textContent = 'Reload';
+        confirmBtn.onclick = async () => {
+          confirmBtn.disabled = true;
+          confirmBtn.textContent = 'Reloading...';
+          try {
+            await reloadMonsterCapabilityFromModal(option.reload_source_capability_id || cap.id, option.capability_id);
+          } catch (err) {
+            confirmBtn.disabled = false;
+            confirmBtn.textContent = 'Reload';
+            const errDiv = document.createElement('div');
+            errDiv.style.color = 'var(--danger)';
+            errDiv.style.marginTop = '8px';
+            errDiv.style.fontWeight = 'bold';
+            errDiv.textContent = `Reload failed: ${err.message}`;
+            const existingErr = body.querySelector('.reload-error');
+            if (existingErr) existingErr.remove();
+            errDiv.classList.add('reload-error');
+            body.appendChild(errDiv);
+          }
+        };
+      }
+
+      modal.classList.add('active');
+    }
+
+    function openReloadConfirmationModal(cap) {
+      if (!cap) return;
+      if (hasActiveLocalSequence()) {
+        showTransientStatus('Finish or cancel Multiattack before reloading.', 'var(--danger)');
+        return;
+      }
+      const options = getReloadOptionsForCapability(cap);
+      if (options.length === 0) {
+        showTransientStatus('No reloadable weapon is available for this action.', 'var(--danger)');
+        return;
+      }
+      if (options.length > 1) {
+        renderReloadTargetSelection(cap, options);
+        return;
+      }
+      renderReloadConfirmationModal(cap, options[0]);
+    }
+    window.openReloadConfirmationModal = openReloadConfirmationModal;
+
+    function openReloadConfirmationModalById(capId, targetCapId = null) {
+      const cap = findCapabilityById(capId);
+      if (!cap) return;
+      if (targetCapId) {
+        const option = getReloadOptionsForCapability(cap).find(entry => String(entry.capability_id) === String(targetCapId));
+        if (option) {
+          renderReloadConfirmationModal(cap, option);
+          return;
+        }
+      }
+      openReloadConfirmationModal(cap);
+    }
+    window.openReloadConfirmationModalById = openReloadConfirmationModalById;
+
+    async function performReloadRequest(capId, reloadTargetId = null) {
+      const actorCid = state.active_cid;
+      const requestBody = {
+        capability_id: capId,
+        operation: 'reload'
+      };
+      if (reloadTargetId && String(reloadTargetId) !== String(capId)) {
+        requestBody.reload_capability_id = reloadTargetId;
+      }
+      const resp = await fetch(`/api/dm/monster-capabilities/${actorCid}/resource?workspace=dmcontrol`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(requestBody)
+      });
+      const rawData = await resp.json();
+      const data = normalizeLocalExecutionResult(rawData);
+      if (!data.ok) throw new Error(data.error || 'Failed to reload weapon.');
+      return { rawData, data };
+    }
+
+    async function reloadMonsterCapability(capId, reloadTargetId = null) {
+      if (localResolutionInFlight || !state) return null;
+      localResolutionInFlight = true;
+      draw();
+      try {
+        const result = await performReloadRequest(capId, reloadTargetId);
+        showTransientStatus(result.rawData.status || result.data.status || 'Weapon reloaded.', 'var(--heal)');
+
+        if (result.rawData.snapshot) {
+          state = result.rawData.snapshot;
+          draw();
+        }
+
+        capabilityActorCid = null;
+        const actor = (state.combatants || []).find(c => String(c.cid) === String(state.active_cid));
+        await fetchCapabilitiesForActiveActor(actor);
+        return result;
+      } catch (err) {
+        console.error('Reload capability error:', err);
+        showTransientStatus(err.message, 'var(--danger)');
+        throw err;
+      } finally {
+        localResolutionInFlight = false;
+        const actor = (state?.combatants || []).find(c => String(c.cid) === String(state?.active_cid));
+        renderActionPanel(actor, capabilitySummary);
+      }
+    }
+    window.reloadMonsterCapability = reloadMonsterCapability;
+
+    async function reloadMonsterCapabilityFromModal(capId, reloadTargetId = null) {
+      const result = await reloadMonsterCapability(capId, reloadTargetId);
+      if (!result) return;
+      closeLocalResolutionTray();
+    }
+    window.reloadMonsterCapabilityFromModal = reloadMonsterCapabilityFromModal;
+
     async function activateModifier(id) {
       if (localResolutionInFlight || !state) return;
       const actorCid = state.active_cid;
@@ -1686,6 +1971,12 @@
 
     async function prepareLocalResolutionPreview() {
       if (!localResolutionTray || localResolutionInFlight || !state) return;
+
+      const cap = findCapabilityById(localResolutionTray.capabilityId);
+      if (cap && isReloadNeeded(cap)) {
+        openReloadConfirmationModal(cap);
+        return;
+      }
 
       const actorCid = localResolutionTray.actorCid;
       const targetCid = localResolutionTray.targetCid;
@@ -1952,6 +2243,9 @@
           // Outside Multiattack, after Apply Result, standalone targeting should end cleanly.
           selectedCapabilityId = null;
         }
+        const refreshedActor = (state?.combatants || []).find(c => String(c.cid) === String(state?.active_cid));
+        capabilityActorCid = null;
+        await fetchCapabilitiesForActiveActor(refreshedActor, { forceRefresh: true, preserveSelection: true });
         const tFinalRenderStart = DM_PERF ? performance.now() : 0;
         renderActionPanel(actor, capabilitySummary);
         draw();
@@ -2099,9 +2393,22 @@
       }
     }
 
+    function isReloadNeeded(cap) {
+      if (!isReloadableWeaponCapability(cap)) return false;
+      const currentAmmo = Number(cap?.ammo?.current);
+      const requiredAmmo = Number(cap?.ammo_cost || 1);
+      return Number.isFinite(currentAmmo) && currentAmmo < requiredAmmo;
+    }
+
     function openResolutionModal() {
+      const cap = selectedCapabilityId ? findCapabilityById(selectedCapabilityId) : null;
+      if (cap && isReloadNeeded(cap)) {
+        openReloadConfirmationModal(cap);
+        return;
+      }
       const modal = document.getElementById('resolutionModal');
       if (!modal) return;
+      setResolutionModalFooterMode('standard');
       renderResolutionModal();
       modal.classList.add('active');
     }
@@ -2113,6 +2420,11 @@
 
       const cap = findCapabilityById(aoePlacementMode.capabilityId);
       if (!cap) return;
+
+      if (isReloadNeeded(cap)) {
+        openReloadConfirmationModal(cap);
+        return;
+      }
 
       // Derive affected targets
       const targets = (state?.tactical_map?.units || []).filter(u => {
@@ -2350,10 +2662,11 @@
     }
 
     function renderResolutionModal() {
+      ensureResolutionModalFooterScaffold();
       const body = document.getElementById('modalBody');
       const title = document.getElementById('modalTitle');
       const applyBtn = document.getElementById('modalApplyBtn');
-      if (!body || !localResolutionTray || !localResolutionPacket) return;
+      if (!body || !applyBtn || !localResolutionTray || !localResolutionPacket) return;
 
       const ctx = getLocalResolutionContext();
       const packet = localResolutionPacket;
@@ -2563,7 +2876,7 @@
               <h4>${esc(selected.name)} Selected</h4>
               <p>${esc(selected.description || selected.desc || 'No description available.')}</p>
 
-              ${selected.ammo ? `
+              ${isReloadableWeaponCapability(selected) ? `
                 <div style="margin-top:12px; border:1px solid var(--accent); background:rgba(106,169,255,0.1); padding:10px; border-radius:4px; font-size:12px;">
                   <div style="font-weight:bold; color:var(--accent); text-transform:uppercase; font-size:11px; margin-bottom:4px; letter-spacing:0.5px;">Ammunition Status</div>
                   <div style="display:flex; gap:16px;">
@@ -2577,14 +2890,26 @@
                   ${selected.mechanics && selected.mechanics.reload_cost ? `
                     <div style="margin-top:4px; font-size:11px; color:var(--accent); opacity:0.9;">Reload: ${esc(selected.mechanics.reload_cost)}</div>
                   ` : ''}
+                  ${!isReloadAction(selected) && Number(selected.ammo.current) < Number(selected.ammo.max) ? `
+                    <div style="margin-top:8px;">
+                      <button class="workspace-link" onclick="openReloadConfirmationModalById('${esc(selected.id)}')"
+                              style="width:100%; justify-content:center; padding:6px; font-weight:bold; border-color:var(--gold); color:var(--gold); background:rgba(214,186,126,0.1)">
+                        Reload ${esc(selected.reload_weapon_name || selected.weapon_name || selected.name)}
+                      </button>
+                    </div>
+                  ` : ''}
                 </div>
               ` : ''}
 
-              ${selected.ammo_cost ? `
+              ${isReloadNeeded(selected) ? `
+                <div style="margin-top:8px; border:1px solid var(--danger); background:rgba(255,91,91,0.15); padding:10px; border-radius:4px; font-size:12px; color:var(--danger); font-weight:bold;">
+                  ⚠️ Weapon Empty! You must reload before attacking.
+                </div>
+              ` : (selected.ammo_cost ? `
                 <div style="margin-top:8px; border:1px solid var(--danger); background:rgba(255,91,91,0.1); padding:8px; border-radius:4px; font-size:12px; color:var(--danger); font-weight:bold;">
                   ⚠️ Requires ${selected.ammo_cost} loaded rounds to use.
                 </div>
-              ` : ''}
+              ` : '')}
 
               ${selected.manual_instructions ? `
                 <div style="margin-top:12px; border:1px solid var(--gold); background:rgba(214,186,126,0.15); padding:10px 14px; border-radius:4px; font-size:13px; color:var(--gold); display:flex; gap:8px; align-items:start;">
@@ -2814,7 +3139,8 @@
       const renderItem = (item, conf) => {
         const isSelected = String(item.id) === String(selectedCapabilityId);
         const isTrait = conf.key === 'traits' || conf.key === 'lair_actions';
-        const isExecutable = item.executable !== false && !isTrait;
+        const isReload = isReloadAction(item);
+        const isExecutable = item.executable !== false && !isTrait && !isReload;
 
         // Redesign ITR-20260602-G5HR: Scorcher lane suggestive guidance
         let laneUsed = false;
@@ -2832,7 +3158,9 @@
           badges.push({ text: 'Lane Used', cls: 'manual-tag', style: 'background:rgba(255,255,255,0.1)' });
         }
         // Highlight primary classification first.
-        if (isExecutable) {
+        if (isReload) {
+          badges.push({ text: 'Reload', cls: 'manual-tag' });
+        } else if (isExecutable) {
           badges.push({ text: 'Attack', cls: 'exec' });
         } else if (isTrait) {
           badges.push({ text: 'Reminder', cls: 'manual-tag' });
@@ -2844,6 +3172,14 @@
         if (item.recharge_rule) badges.push({ text: item.recharge_rule, cls: '' });
         if (item.uses_remaining !== undefined && item.uses_total !== undefined) {
           badges.push({ text: `${item.uses_remaining}/${item.uses_total} Uses`, cls: '' });
+        }
+        if (isReloadableWeaponCapability(item) && item.ammo && item.ammo.current !== undefined) {
+          const needsReload = item.ammo.current < (item.ammo_cost || 1);
+          badges.push({
+            text: `Ammo: ${item.ammo.current}/${item.ammo.max}`,
+            cls: needsReload ? 'manual-tag' : '',
+            style: needsReload ? 'background:var(--danger)' : ''
+          });
         }
         if (item.modifier_active) {
           badges.push({ text: 'Active', cls: 'exec' });
@@ -2952,6 +3288,12 @@
     }
 
     function selectCapability(id) {
+      const cap = findCapabilityById(id);
+      if (cap && isReloadAction(cap)) {
+        openReloadConfirmationModal(cap);
+        return;
+      }
+
       const alreadySelected = String(selectedCapabilityId) === String(id);
 
       if (freeMoveMode) {
@@ -2970,7 +3312,6 @@
       selectedCapabilityId = alreadySelected ? null : id;
 
       const actor = (state.combatants || []).find(c => String(c.cid) === String(state.active_cid));
-      const cap = findCapabilityById(id);
 
       // Clear local resolution state on any capability change
       localResolutionTray = null;

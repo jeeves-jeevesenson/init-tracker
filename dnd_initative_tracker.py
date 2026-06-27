@@ -4879,20 +4879,7 @@ class LanController:
                 combatant = self.app.combatants.get(int(cid))
                 if not combatant:
                     raise HTTPException(status_code=404, detail="Combatant not found.")
-                svc = self._ensure_monster_capabilities()
-
-                # Ensure resources are initialized
-                matched = svc.match_capabilities_for_combatant(combatant)
-                if matched:
-                    for cap in matched.get("capabilities", []):
-                        self.app._monster_capability_ensure_resource_state(int(cid), cap)
-
-                summary = svc.summarize_capabilities_for_ui(
-                    int(cid),
-                    combatant,
-                    resource_state=self.app._monster_resource_state,
-                    pending_modifiers=self.app._monster_modifier_state.get(int(cid))
-                )
+                summary = self.app._dm_monster_capability_summary_for_ui(int(cid), combatant)
                 # Inject resource status
                 for group in summary.get("groups", {}).values():
                     for cap in group:
@@ -27281,73 +27268,76 @@ class InitiativeTracker(base.InitiativeTracker):
 
         raw_weapons = attacks.get("weapons")
         normalized_weapons: List[Dict[str, Any]] = []
-        weapon_registry = self._items_registry_payload().get("weapons", {}) if isinstance(raw_weapons, list) else {}
+        weapon_registry = self._items_registry_payload().get("weapons", {})
+
+        def normalize_single_weapon(entry: Dict[str, Any]) -> Dict[str, Any]:
+            weapon = self._resolve_weapon_from_items(dict(entry), weapon_registry=weapon_registry)
+            one_handed = dict(weapon.get("one_handed")) if isinstance(weapon.get("one_handed"), dict) else {}
+            two_handed = dict(weapon.get("two_handed")) if isinstance(weapon.get("two_handed"), dict) else {}
+            effect = dict(weapon.get("effect")) if isinstance(weapon.get("effect"), dict) else {}
+            save_dc = normalize_attack_int(effect.get("save_dc"))
+            if save_dc is None:
+                save_dc = 0
+            weapon["id"] = str(weapon.get("id") or "").strip()
+            weapon["name"] = str(weapon.get("name") or "").strip()
+            weapon["instance_id"] = str(entry.get("instance_id") or "").strip()
+            weapon["ammo_current"] = entry.get("ammo_current")
+            weapon["ammo_max"] = entry.get("ammo_max")
+            weapon["ammo_type"] = entry.get("ammo_type")
+            weapon["proficient"] = bool(entry.get("proficient", True))
+            to_hit_normalized = normalize_attack_int(weapon.get("to_hit"))
+            weapon["to_hit"] = to_hit_normalized if to_hit_normalized is not None else 0
+            magic_bonus_normalized = normalize_attack_int(weapon.get("magic_bonus"))
+            if magic_bonus_normalized is None:
+                magic_bonus_normalized = normalize_attack_int(weapon.get("item_bonus"))
+            weapon["magic_bonus"] = magic_bonus_normalized if magic_bonus_normalized is not None else 0
+            weapon["range"] = str(weapon.get("range") or "").strip()
+            properties = weapon.get("properties") if isinstance(weapon.get("properties"), list) else []
+            normalized_properties: List[str] = []
+            for prop in properties:
+                if isinstance(prop, dict):
+                    prop_id = str(prop.get("id") or prop.get("name") or "").strip().lower()
+                else:
+                    prop_id = str(prop or "").strip().lower()
+                prop_id = re.sub(r"[\s-]+", "_", prop_id)
+                if prop_id:
+                    normalized_properties.append(prop_id)
+            weapon["properties"] = normalized_properties
+            selected_mode = str(weapon.get("selected_mode") or entry.get("selected_mode") or "").strip().lower()
+            weapon["selected_mode"] = "two" if selected_mode == "two" else "one"
+            weapon["equipped"] = normalize_attack_bool(
+                entry.get("equipped"),
+                normalize_attack_bool(weapon.get("equipped")),
+            )
+            weapon["main_hand"] = normalize_attack_bool(
+                entry.get("main_hand"),
+                normalize_attack_bool(weapon.get("main_hand")),
+            )
+            weapon["off_hand"] = normalize_attack_bool(
+                entry.get("off_hand"),
+                normalize_attack_bool(weapon.get("off_hand")),
+            )
+            weapon["mastery"] = str(weapon.get("mastery") or "").strip().lower()
+            weapon["one_handed"] = {
+                "damage_formula": str(one_handed.get("damage_formula") or "").strip(),
+                "damage_type": str(one_handed.get("damage_type") or "").strip(),
+            }
+            weapon["two_handed"] = {
+                "damage_formula": str(two_handed.get("damage_formula") or "").strip(),
+                "damage_type": str(two_handed.get("damage_type") or "").strip(),
+            }
+            weapon["effect"] = {
+                "on_hit": str(effect.get("on_hit") or "").strip(),
+                "save_ability": str(effect.get("save_ability") or "").strip().lower(),
+                "save_dc": save_dc,
+            }
+            return weapon
+
         if isinstance(raw_weapons, list):
             for entry in raw_weapons:
                 if not isinstance(entry, dict):
                     continue
-                player_weapon_entry = dict(entry)
-                weapon = self._resolve_weapon_from_items(dict(player_weapon_entry), weapon_registry=weapon_registry)
-                one_handed = dict(weapon.get("one_handed")) if isinstance(weapon.get("one_handed"), dict) else {}
-                two_handed = dict(weapon.get("two_handed")) if isinstance(weapon.get("two_handed"), dict) else {}
-                effect = dict(weapon.get("effect")) if isinstance(weapon.get("effect"), dict) else {}
-                save_dc = normalize_attack_int(effect.get("save_dc"))
-                if save_dc is None:
-                    save_dc = 0
-                weapon["id"] = str(weapon.get("id") or "").strip()
-                weapon["name"] = str(weapon.get("name") or "").strip()
-                weapon["instance_id"] = str(player_weapon_entry.get("instance_id") or "").strip()
-                weapon["ammo_current"] = player_weapon_entry.get("ammo_current")
-                weapon["ammo_max"] = player_weapon_entry.get("ammo_max")
-                weapon["ammo_type"] = player_weapon_entry.get("ammo_type")
-                weapon["proficient"] = bool(player_weapon_entry.get("proficient", True))
-                to_hit_normalized = normalize_attack_int(weapon.get("to_hit"))
-                weapon["to_hit"] = to_hit_normalized if to_hit_normalized is not None else 0
-                magic_bonus_normalized = normalize_attack_int(weapon.get("magic_bonus"))
-                if magic_bonus_normalized is None:
-                    magic_bonus_normalized = normalize_attack_int(weapon.get("item_bonus"))
-                weapon["magic_bonus"] = magic_bonus_normalized if magic_bonus_normalized is not None else 0
-                weapon["range"] = str(weapon.get("range") or "").strip()
-                properties = weapon.get("properties") if isinstance(weapon.get("properties"), list) else []
-                normalized_properties: List[str] = []
-                for prop in properties:
-                    if isinstance(prop, dict):
-                        prop_id = str(prop.get("id") or prop.get("name") or "").strip().lower()
-                    else:
-                        prop_id = str(prop or "").strip().lower()
-                    prop_id = re.sub(r"[\s-]+", "_", prop_id)
-                    if prop_id:
-                        normalized_properties.append(prop_id)
-                weapon["properties"] = normalized_properties
-                selected_mode = str(weapon.get("selected_mode") or player_weapon_entry.get("selected_mode") or "").strip().lower()
-                weapon["selected_mode"] = "two" if selected_mode == "two" else "one"
-                weapon["equipped"] = normalize_attack_bool(
-                    player_weapon_entry.get("equipped"),
-                    normalize_attack_bool(weapon.get("equipped")),
-                )
-                weapon["main_hand"] = normalize_attack_bool(
-                    player_weapon_entry.get("main_hand"),
-                    normalize_attack_bool(weapon.get("main_hand")),
-                )
-                weapon["off_hand"] = normalize_attack_bool(
-                    player_weapon_entry.get("off_hand"),
-                    normalize_attack_bool(weapon.get("off_hand")),
-                )
-                weapon["mastery"] = str(weapon.get("mastery") or "").strip().lower()
-                weapon["one_handed"] = {
-                    "damage_formula": str(one_handed.get("damage_formula") or "").strip(),
-                    "damage_type": str(one_handed.get("damage_type") or "").strip(),
-                }
-                weapon["two_handed"] = {
-                    "damage_formula": str(two_handed.get("damage_formula") or "").strip(),
-                    "damage_type": str(two_handed.get("damage_type") or "").strip(),
-                }
-                weapon["effect"] = {
-                    "on_hit": str(effect.get("on_hit") or "").strip(),
-                    "save_ability": str(effect.get("save_ability") or "").strip().lower(),
-                    "save_dc": save_dc,
-                }
-                normalized_weapons.append(weapon)
+                normalized_weapons.append(normalize_single_weapon(entry))
         attacks["weapons"] = normalized_weapons
 
         # Sync equipped weapons from inventory to attacks.weapons if not already present.
@@ -27365,17 +27355,16 @@ class InitiativeTracker(base.InitiativeTracker):
                 continue
 
             # Not present, add it.
-            # We resolve it into an attack-compatible dict.
-            resolved = self._resolve_weapon_from_items(inv_weapon)
-            # Ensure it has the necessary flags
-            resolved["equipped"] = True
-            resolved["instance_id"] = instance_id
+            # We resolve and normalize it into an attack-compatible dict.
+            entry_to_normalize = dict(inv_weapon)
+            entry_to_normalize["equipped"] = True
+            entry_to_normalize["instance_id"] = instance_id
             if inv_weapon.get("equipped_slot") == "main_hand":
-                resolved["main_hand"] = True
+                entry_to_normalize["main_hand"] = True
             elif inv_weapon.get("equipped_slot") == "off_hand":
-                resolved["off_hand"] = True
+                entry_to_normalize["off_hand"] = True
 
-            normalized_weapons.append(resolved)
+            normalized_weapons.append(normalize_single_weapon(entry_to_normalize))
 
         raw_spell_slots = None
         if isinstance(spellcasting, dict) and "spell_slots" in spellcasting:
@@ -43120,6 +43109,14 @@ class InitiativeTracker(base.InitiativeTracker):
                 ws_id=ws_id,
                 is_admin=is_admin,
             )
+        elif typ == "reload_weapon":
+            self._ensure_player_commands().reload_weapon(
+                msg,
+                cid=cid,
+                ws_id=ws_id,
+                is_admin=is_admin,
+            )
+            return
         elif typ == "end_turn":
             active_cid = _normalize_cid_value(
                 getattr(self, "current_cid", None), "lan_action.end_turn.current_cid", log_fn=log_warning
@@ -46359,6 +46356,8 @@ class InitiativeTracker(base.InitiativeTracker):
         return combatant, None, int(actor_cid)
 
     def _dm_spend_combatant_turn_resource(self, combatant: Any, spend: str) -> Tuple[bool, str]:
+        if not bool(getattr(combatant, "is_pc", False)):
+            return True, ""
         spend_key = str(spend or "action").strip().lower()
         if spend_key == "none":
             return True, ""
@@ -46698,6 +46697,177 @@ class InitiativeTracker(base.InitiativeTracker):
                     self._monster_resource_state[uses_key] = max_uses
                     self._monster_resource_state[f"{actor_cid}:uses:{cap_id}:max"] = max_uses
 
+    @staticmethod
+    def _monster_capability_reload_cost_label(cap: Optional[Dict[str, Any]]) -> str:
+        if not isinstance(cap, dict):
+            return "none"
+        mechanics = cap.get("mechanics", {}) if isinstance(cap.get("mechanics"), dict) else {}
+        reload_cost = str(mechanics.get("reload_cost") or "").strip().lower()
+        if reload_cost in {"action", "bonus", "reaction", "none"}:
+            return reload_cost
+        cap_type = str(cap.get("type") or "").strip().lower() if isinstance(cap, dict) else ""
+        if cap_type == "bonus_action":
+            return "bonus"
+        if cap_type == "reaction":
+            return "reaction"
+        return "action"
+
+    def _dm_active_monster_sequence(self, actor_cid: Any) -> Optional[Dict[str, Any]]:
+        normalized_actor_cid = _normalize_cid_value(actor_cid, "dm.monster.sequence.actor")
+        if normalized_actor_cid is None:
+            return None
+        active_seq = self._monster_sequence_state.get(int(normalized_actor_cid))
+        if not isinstance(active_seq, dict):
+            return None
+        if active_seq.get("turn_marker") != (self.round_num, self.turn_num):
+            return None
+        return active_seq
+
+    def _monster_capability_reload_targets(
+        self,
+        *,
+        actor_cid: int,
+        capabilities: List[Dict[str, Any]],
+        reload_cap: Optional[Dict[str, Any]] = None,
+    ) -> List[Dict[str, Any]]:
+        """Resolve real reloadable weapon targets for a capability."""
+        reload_mechanics = reload_cap.get("mechanics", {}) if isinstance(reload_cap, dict) and isinstance(reload_cap.get("mechanics"), dict) else {}
+        reload_cap_id = str(reload_cap.get("id") or "").strip() if isinstance(reload_cap, dict) else ""
+        allowed_ids = {
+            str(entry or "").strip()
+            for entry in list(reload_mechanics.get("eligible_action_ids") or [])
+            if str(entry or "").strip()
+        }
+        ammo_type_filter = str(reload_mechanics.get("ammo_type") or "").strip()
+        reload_cost = self._monster_capability_reload_cost_label(reload_cap)
+        targets: List[Dict[str, Any]] = []
+
+        for cap in capabilities:
+            if not isinstance(cap, dict):
+                continue
+            cap_id = str(cap.get("id") or "").strip()
+            if not cap_id or cap_id == reload_cap_id:
+                continue
+            if allowed_ids and cap_id not in allowed_ids:
+                continue
+
+            mechanics = cap.get("mechanics", {}) if isinstance(cap.get("mechanics"), dict) else {}
+            ammo_type = str(mechanics.get("ammo_type") or "").strip()
+            if ammo_type_filter and ammo_type != ammo_type_filter:
+                continue
+
+            ammo_max = self._monster_resource_state.get(f"{int(actor_cid)}:ammo:{cap_id}:max", mechanics.get("magazine_capacity"))
+            try:
+                ammo_max_int = int(ammo_max)
+            except Exception:
+                ammo_max_int = 0
+            if ammo_max_int <= 0:
+                continue
+
+            ammo_current = self._monster_resource_state.get(f"{int(actor_cid)}:ammo:{cap_id}:current", ammo_max_int)
+            try:
+                ammo_current_int = int(ammo_current)
+            except Exception:
+                ammo_current_int = ammo_max_int
+
+            option: Dict[str, Any] = {
+                "capability_id": cap_id,
+                "weapon_name": str(cap.get("name") or cap_id).strip() or cap_id,
+                "reload_source_capability_id": reload_cap_id or cap_id,
+                "reload_cost": reload_cost,
+                "ammo": {
+                    "current": int(ammo_current_int),
+                    "max": int(ammo_max_int),
+                },
+            }
+            if ammo_type:
+                option["ammo"]["type"] = ammo_type
+                reserve_mags = self._monster_resource_state.get(f"{int(actor_cid)}:ammo:{ammo_type}:reserve_mags")
+                if reserve_mags is not None:
+                    try:
+                        option["ammo"]["reserve_mags"] = int(reserve_mags)
+                    except Exception:
+                        option["ammo"]["reserve_mags"] = reserve_mags
+            targets.append(option)
+
+        return targets
+
+    def _dm_monster_capability_summary_for_ui(self, cid: int, combatant: Any) -> Dict[str, Any]:
+        svc = self._ensure_monster_capabilities()
+        matched = svc.match_capabilities_for_combatant(combatant)
+        if matched:
+            for cap in matched.get("capabilities", []):
+                if isinstance(cap, dict):
+                    self._monster_capability_ensure_resource_state(int(cid), cap)
+
+        summary = svc.summarize_capabilities_for_ui(
+            int(cid),
+            combatant,
+            resource_state=self._monster_resource_state,
+            pending_modifiers=self._monster_modifier_state.get(int(cid)),
+        )
+
+        all_caps: List[Dict[str, Any]] = []
+        for group in summary.get("groups", {}).values():
+            for cap in list(group or []):
+                if isinstance(cap, dict):
+                    all_caps.append(cap)
+
+        reload_sources_by_weapon: Dict[str, Dict[str, Any]] = {}
+        for cap in all_caps:
+            if str(cap.get("action_type") or "").strip().lower() != "firearm_reload":
+                continue
+            reload_targets = self._monster_capability_reload_targets(
+                actor_cid=int(cid),
+                capabilities=all_caps,
+                reload_cap=cap,
+            )
+            cap["reload_capability"] = True
+            cap["reload_targets"] = reload_targets
+            cap["reload_target_count"] = len(reload_targets)
+            cap["reload_selection_required"] = len(reload_targets) > 1
+            cap["reload_cost"] = self._monster_capability_reload_cost_label(cap)
+            if len(reload_targets) == 1:
+                target = reload_targets[0]
+                cap["reload_target_capability_id"] = target["capability_id"]
+                cap["weapon_name"] = target["weapon_name"]
+                cap["ammo"] = copy.deepcopy(target.get("ammo") or {})
+                cap["mechanics_summary"] = (
+                    f"Reload {target['weapon_name']} • "
+                    f"Loaded: {target['ammo']['current']}/{target['ammo']['max']}"
+                )
+                reserve_mags = target.get("ammo", {}).get("reserve_mags")
+                if reserve_mags is not None:
+                    cap["mechanics_summary"] += f" • Reserves: {reserve_mags} mags"
+                if str(cap.get("name") or "").strip().lower() == "reload":
+                    cap["name"] = f"Reload {target['weapon_name']}"
+            elif len(reload_targets) > 1:
+                cap["mechanics_summary"] = "Choose weapon to reload."
+            for target in reload_targets:
+                reload_sources_by_weapon[str(target.get("capability_id") or "")] = {
+                    "source_capability_id": str(cap.get("id") or "").strip(),
+                    "reload_cost": str(target.get("reload_cost") or cap.get("reload_cost") or "action"),
+                }
+
+        for group_name, group in list(summary.get("groups", {}).items()):
+            filtered_group: List[Dict[str, Any]] = []
+            for cap in list(group or []):
+                if not isinstance(cap, dict):
+                    continue
+                action_type = str(cap.get("action_type") or "").strip().lower()
+                cap_id = str(cap.get("id") or "").strip()
+                if action_type == "firearm_reload" and not list(cap.get("reload_targets") or []):
+                    continue
+                reload_source = reload_sources_by_weapon.get(cap_id)
+                if reload_source:
+                    cap["reload_source_capability_id"] = reload_source["source_capability_id"]
+                    cap["reload_cost"] = reload_source["reload_cost"]
+                    cap["reload_weapon_name"] = str(cap.get("name") or cap_id).strip() or cap_id
+                filtered_group.append(cap)
+            summary["groups"][group_name] = filtered_group
+
+        return summary
+
     def _dm_monster_capability_execute(self, *, actor_cid: Any, payload: Dict[str, Any]) -> Dict[str, Any]:
         """Execute a monster capability by ID, with optional target."""
         actor, error, normalized_actor_cid = self._dm_validate_monster_actor_for_turn(actor_cid)
@@ -46913,12 +47083,6 @@ class InitiativeTracker(base.InitiativeTracker):
             if not bool(result.get("ok")):
                 return {"ok": False, "error": str(result.get("reason") or "Failed to resolve monster attacks.")}
 
-            # Spend the ammo
-            ammo_current_key = f"{normalized_actor_cid}:ammo:{cap_id}:current"
-            if ammo_current_key in self._monster_resource_state:
-                current = self._monster_resource_state[ammo_current_key]
-                self._monster_resource_state[ammo_current_key] = max(0, current - ammo_spent)
-
             # Clear consumed modifiers
             for mod in mods_to_clear:
                 if mod in pending_mods:
@@ -46962,6 +47126,12 @@ class InitiativeTracker(base.InitiativeTracker):
                          res["choose_n"] = active_seq["choose_n"]
                          res["remaining_budget"] = active_seq["choose_n"] - active_seq["total_completed"]
                  return res
+
+            # Spend ammo only when the attack is actually applied, never on preview.
+            ammo_current_key = f"{normalized_actor_cid}:ammo:{cap_id}:current"
+            if ammo_current_key in self._monster_resource_state:
+                current = self._monster_resource_state[ammo_current_key]
+                self._monster_resource_state[ammo_current_key] = max(0, current - ammo_spent)
 
             # 5. Mark as used if it was a recharge ability
             if recharge:
@@ -47044,6 +47214,9 @@ class InitiativeTracker(base.InitiativeTracker):
              }
 
         elif action_type == "firearm_reload":
+             if self._dm_active_monster_sequence(int(normalized_actor_cid)):
+                 return {"ok": False, "error": "Finish or cancel Multiattack before reloading."}
+
              # 1. Spend resource
              spend_key = self._dm_normalize_turn_spend(spend, default="bonus", allow_none=True)
              if spend_key != "none":
@@ -47052,40 +47225,70 @@ class InitiativeTracker(base.InitiativeTracker):
                      return {"ok": False, "error": spend_error or "No turn resource available."}
 
              # 2. Logic to reload
-             target_cap_id = payload.get("reload_capability_id")
-             reloaded = []
-             for c_overlay in data.get("capabilities", []):
-                 if target_cap_id and c_overlay.get("id") != target_cap_id:
-                     continue
+             target_cap_id = str(payload.get("reload_capability_id") or "").strip()
+             reload_targets = self._monster_capability_reload_targets(
+                 actor_cid=int(normalized_actor_cid),
+                 capabilities=[entry for entry in list(data.get("capabilities") or []) if isinstance(entry, dict)],
+                 reload_cap=cap,
+             )
+             if not reload_targets:
+                 return {"ok": False, "error": "No reloadable weapon is available for this action."}
+             if target_cap_id:
+                 chosen_target = next((entry for entry in reload_targets if str(entry.get("capability_id") or "") == target_cap_id), None)
+                 if chosen_target is None:
+                     return {"ok": False, "error": "That reload action cannot reload the selected weapon."}
+             elif len(reload_targets) == 1:
+                 chosen_target = reload_targets[0]
+             else:
+                 return {"ok": False, "error": "Choose which weapon to reload."}
 
-                 c_id = c_overlay.get("id")
-                 m_overlay = c_overlay.get("mechanics", {})
-                 mag_cap = m_overlay.get("magazine_capacity", m_overlay.get("ammo_max"))
-                 if not mag_cap:
-                     mag_cap = self._monster_resource_state.get(f"{normalized_actor_cid}:ammo:{c_id}:max")
+             c_id = str(chosen_target.get("capability_id") or "").strip()
+             c_overlay = next(
+                 (
+                     entry for entry in data.get("capabilities", [])
+                     if isinstance(entry, dict) and str(entry.get("id") or "").strip() == c_id
+                 ),
+                 None,
+             )
+             if not isinstance(c_overlay, dict):
+                 return {"ok": False, "error": "Reload target capability not found."}
+             m_overlay = c_overlay.get("mechanics", {}) if isinstance(c_overlay.get("mechanics"), dict) else {}
+             mag_cap = self._monster_resource_state.get(f"{normalized_actor_cid}:ammo:{c_id}:max", m_overlay.get("magazine_capacity", m_overlay.get("ammo_max")))
+             try:
+                 mag_cap = int(mag_cap)
+             except Exception:
+                 mag_cap = 0
+             if mag_cap <= 0:
+                 return {"ok": False, "error": "This capability does not use ammunition."}
 
-                 if mag_cap:
-                     ammo_type = m_overlay.get("ammo_type")
-                     if ammo_type:
-                         reserve_key = f"{normalized_actor_cid}:ammo:{ammo_type}:reserve_mags"
-                         reserves = self._monster_resource_state.get(reserve_key, 0)
-                         if reserves > 0:
-                             # Swap magazine
-                             self._monster_resource_state[reserve_key] = reserves - 1
-                             self._monster_resource_state[f"{normalized_actor_cid}:ammo:{c_id}:current"] = mag_cap
-                             reloaded.append(c_overlay.get("name"))
-                         else:
-                             # Try loose ammo if supported (not yet in schema)
-                             pass
+             current_key = f"{normalized_actor_cid}:ammo:{c_id}:current"
+             current_value = self._monster_resource_state.get(current_key, mag_cap)
+             try:
+                 current_value = int(current_value)
+             except Exception:
+                 current_value = 0
+             if current_value >= mag_cap:
+                 return {
+                     "ok": True,
+                     "resolution": "reloaded",
+                     "status": f"{chosen_target.get('weapon_name') or 'Weapon'} is already full."
+                 }
 
-             if not reloaded:
-                 return {"ok": False, "error": "No ammo/magazines available to reload."}
+             ammo_type = str(m_overlay.get("ammo_type") or "").strip()
+             if ammo_type:
+                 reserve_key = f"{normalized_actor_cid}:ammo:{ammo_type}:reserve_mags"
+                 reserves = self._monster_resource_state.get(reserve_key, 0)
+                 if int(reserves) <= 0:
+                     return {"ok": False, "error": "No ammo/magazines available to reload."}
+                 self._monster_resource_state[reserve_key] = int(reserves) - 1
+
+             self._monster_resource_state[current_key] = mag_cap
 
              self._lan_force_state_broadcast()
              return {
                  "ok": True,
                  "resolution": "reloaded",
-                 "status": f"Reloaded: {', '.join(reloaded)}."
+                 "status": f"Reloaded: {chosen_target.get('weapon_name') or c_id}."
              }
 
         elif action_type == "save_ability" and (target_cid is not None or payload.get("target_ids")):
@@ -47460,13 +47663,6 @@ class InitiativeTracker(base.InitiativeTracker):
                 if m_mech.get("clears_on") == "attack_resolution" or m_mech.get("consume_on") == "attack_resolution" or m_mech.get("clears_on") == "next_eligible_attack":
                     pending_mods.remove(mod)
 
-        # Spend the ammo
-        if ammo_spent > 0:
-            ammo_current_key = f"{normalized_actor_cid}:ammo:{cap_id}:current"
-            if ammo_current_key in self._monster_resource_state:
-                current = self._monster_resource_state[ammo_current_key]
-                self._monster_resource_state[ammo_current_key] = max(0, current - ammo_spent)
-
         if action_type in ("save_ability", "area_hazard"):
             save_ability_name = str(cap.get("mechanics", {}).get("save_ability", "wis") or "wis").strip().lower()
             save_dc_val = int(cap.get("mechanics", {}).get("save_dc", 10) or 10)
@@ -47727,9 +47923,17 @@ class InitiativeTracker(base.InitiativeTracker):
                         )
                     hazard_placed_count = len(cells)
 
+        apply_succeeded = not any(r.get("error") for r in results)
+
+        if apply_succeeded and ammo_spent > 0:
+            ammo_current_key = f"{normalized_actor_cid}:ammo:{cap_id}:current"
+            if ammo_current_key in self._monster_resource_state:
+                current = self._monster_resource_state[ammo_current_key]
+                self._monster_resource_state[ammo_current_key] = max(0, current - ammo_spent)
+
         if (apply_damage or apply_effects or hazard_placed_count > 0) and active_seq and active_seq.get("turn_marker") == (self.round_num, self.turn_num):
             # Only increment if NO errors occurred in results
-            if not any(r.get("error") for r in results):
+            if apply_succeeded:
                 if cap_id in active_seq.get("children", {}):
                     active_seq["children"][cap_id]["completed"] += 1
                     active_seq["total_completed"] += 1
@@ -47812,6 +48016,103 @@ class InitiativeTracker(base.InitiativeTracker):
         cap = next((c for c in data.get("capabilities", []) if c.get("id") == cap_id), None)
         if not cap:
             return {"ok": False, "error": f"Capability {cap_id} not found."}
+
+        if op == "reload":
+            if self._dm_active_monster_sequence(cid):
+                return {"ok": False, "error": "Finish or cancel Multiattack before reloading."}
+
+            capabilities = [entry for entry in list(data.get("capabilities") or []) if isinstance(entry, dict)]
+            action_type = str(cap.get("action_type") or "").strip().lower()
+            reload_cap = cap if action_type == "firearm_reload" else None
+            reload_target_id = str(payload.get("reload_capability_id") or "").strip()
+            target_cap = cap
+
+            if reload_cap is not None:
+                reload_targets = self._monster_capability_reload_targets(
+                    actor_cid=int(cid),
+                    capabilities=capabilities,
+                    reload_cap=reload_cap,
+                )
+                if not reload_targets:
+                    return {"ok": False, "error": "No reloadable weapon is available for this action."}
+                chosen_target = None
+                if reload_target_id:
+                    chosen_target = next((entry for entry in reload_targets if str(entry.get("capability_id") or "") == reload_target_id), None)
+                    if chosen_target is None:
+                        return {"ok": False, "error": "That reload action cannot reload the selected weapon."}
+                elif len(reload_targets) == 1:
+                    chosen_target = reload_targets[0]
+                else:
+                    return {"ok": False, "error": "Choose which weapon to reload."}
+                target_cap = next(
+                    (entry for entry in capabilities if str(entry.get("id") or "") == str(chosen_target.get("capability_id") or "")),
+                    None,
+                )
+                if not isinstance(target_cap, dict):
+                    return {"ok": False, "error": "Reload target capability not found."}
+
+            mechanics = target_cap.get("mechanics", {}) if isinstance(target_cap.get("mechanics"), dict) else {}
+            try:
+                mag_capacity = int(self._monster_resource_state.get(f"{cid}:ammo:{target_cap.get('id')}:max", mechanics.get("magazine_capacity")))
+            except Exception:
+                mag_capacity = 0
+            if mag_capacity <= 0:
+                return {"ok": False, "error": "This capability does not use ammunition."}
+
+            target_cap_id = str(target_cap.get("id") or "").strip()
+            current_key = f"{cid}:ammo:{target_cap_id}:current"
+            previous_current = self._monster_resource_state.get(current_key)
+            try:
+                previous_current_int = int(previous_current)
+            except Exception:
+                previous_current_int = None
+            if previous_current_int is not None and previous_current_int >= mag_capacity:
+                return {
+                    "ok": True,
+                    "action": "reload",
+                    "capability_id": target_cap_id,
+                    "new_value": previous_current_int,
+                    "status": f"{target_cap.get('name') or 'Weapon'} is already full.",
+                    "already_full": True,
+                }
+
+            ammo_type = str(mechanics.get("ammo_type") or "").strip()
+            reserves = None
+            reserve_key = None
+            if ammo_type:
+                reserve_key = f"{cid}:ammo:{ammo_type}:reserve_mags"
+                reserves = self._monster_resource_state.get(reserve_key)
+                if reserves is not None:
+                    if int(reserves) <= 0:
+                        return {"ok": False, "error": "No reserve magazines available."}
+                    self._monster_resource_state[reserve_key] = max(0, int(reserves) - 1)
+
+            self._monster_resource_state[current_key] = mag_capacity
+
+            reload_cost = "none"
+            if reload_cap is not None:
+                reload_cost = self._monster_capability_reload_cost_label(reload_cap)
+            else:
+                reload_cost = self._monster_capability_reload_cost_label(target_cap if mechanics.get("reload_cost") is not None else None)
+            if reload_cost and reload_cost != "none":
+                spent_ok, spend_error = self._dm_spend_combatant_turn_resource(actor, reload_cost)
+                if not spent_ok:
+                    if previous_current is None:
+                        self._monster_resource_state.pop(current_key, None)
+                    else:
+                        self._monster_resource_state[current_key] = previous_current
+                    if reserve_key and reserves is not None:
+                        self._monster_resource_state[reserve_key] = reserves
+                    return {"ok": False, "error": spend_error or "No turn resource available for reload."}
+
+            self._lan_force_state_broadcast()
+            return {
+                "ok": True,
+                "action": "reload",
+                "capability_id": target_cap_id,
+                "new_value": mag_capacity,
+                "status": f"Reloaded {target_cap.get('name') or 'weapon'}.",
+            }
 
         # Resolve the specific resource key
         res_key = f"cap:{cap_id}"
