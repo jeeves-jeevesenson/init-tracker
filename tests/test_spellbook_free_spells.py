@@ -96,7 +96,7 @@ class SpellbookFreeSpellsTests(unittest.TestCase):
             app._players_dir = lambda: player_path.parent
             app._sanitize_player_filename = lambda value: str(value or "player")
             app._normalize_character_lookup_key = lambda value: str(value or "").strip().lower()
-            app._schedule_player_yaml_refresh = lambda: None
+            app._schedule_player_yaml_refresh = lambda *args, **kwargs: None
             app._player_yaml_cache_by_path = {
                 player_path: {
                     "name": "Mage",
@@ -109,7 +109,7 @@ class SpellbookFreeSpellsTests(unittest.TestCase):
             app._player_yaml_meta_by_path = {}
             app._player_yaml_data_by_name = {}
             app._player_yaml_name_map = {}
-            app._write_player_yaml_atomic = lambda path, payload: app._player_yaml_cache_by_path.__setitem__(path, payload)
+            app._write_player_yaml_atomic = lambda path, payload, *args, **kwargs: app._player_yaml_cache_by_path.__setitem__(path, payload)
             app._find_spell_preset = lambda spell_slug=None, spell_id=None: None
             app._normalize_player_profile = lambda payload, _stem: {
                 "name": payload.get("name", "Mage"),
@@ -153,7 +153,7 @@ class SpellbookFreeSpellsTests(unittest.TestCase):
             app._players_dir = lambda: player_path.parent
             app._sanitize_player_filename = lambda value: str(value or "player")
             app._normalize_character_lookup_key = lambda value: str(value or "").strip().lower()
-            app._schedule_player_yaml_refresh = lambda: None
+            app._schedule_player_yaml_refresh = lambda *args, **kwargs: None
             app._all_active_features = lambda profile: profile.get("features", []) if isinstance(profile, dict) else []
             app._normalize_spell_slug_list = lambda value: [
                 str(item).strip().lower()
@@ -176,7 +176,7 @@ class SpellbookFreeSpellsTests(unittest.TestCase):
             app._player_yaml_meta_by_path = {}
             app._player_yaml_data_by_name = {}
             app._player_yaml_name_map = {}
-            app._write_player_yaml_atomic = lambda path, payload: app._player_yaml_cache_by_path.__setitem__(path, payload)
+            app._write_player_yaml_atomic = lambda path, payload, *args, **kwargs: app._player_yaml_cache_by_path.__setitem__(path, payload)
             app._normalize_player_profile = lambda payload, _stem: {
                 "name": payload.get("name", "Cleric"),
                 "spellcasting": payload.get("spellcasting", {}),
@@ -212,7 +212,7 @@ class SpellbookFreeSpellsTests(unittest.TestCase):
             app._players_dir = lambda: player_path.parent
             app._sanitize_player_filename = lambda value: str(value or "player")
             app._normalize_character_lookup_key = lambda value: str(value or "").strip().lower()
-            app._schedule_player_yaml_refresh = lambda: None
+            app._schedule_player_yaml_refresh = lambda *args, **kwargs: None
             app._all_active_features = lambda profile: profile.get("features", []) if isinstance(profile, dict) else []
             app._normalize_spell_slug_list = lambda value: [str(item).strip().lower() for item in (value if isinstance(value, list) else [value] if isinstance(value, str) else []) if str(item).strip()]
             app._find_spell_preset = lambda spell_slug=None, spell_id=None: None
@@ -236,7 +236,7 @@ class SpellbookFreeSpellsTests(unittest.TestCase):
             app._player_yaml_meta_by_path = {}
             app._player_yaml_data_by_name = {}
             app._player_yaml_name_map = {}
-            app._write_player_yaml_atomic = lambda path, payload: app._player_yaml_cache_by_path.__setitem__(path, payload)
+            app._write_player_yaml_atomic = lambda path, payload, *args, **kwargs: app._player_yaml_cache_by_path.__setitem__(path, payload)
             app._normalize_player_profile = lambda payload, _stem: {
                 "name": payload.get("name", "Throat Goat"),
                 "spellcasting": payload.get("spellcasting", {}),
@@ -272,7 +272,7 @@ class SpellbookFreeSpellsTests(unittest.TestCase):
             app._players_dir = lambda: player_path.parent
             app._sanitize_player_filename = lambda value: str(value or "player")
             app._normalize_character_lookup_key = lambda value: str(value or "").strip().lower()
-            app._schedule_player_yaml_refresh = lambda: None
+            app._schedule_player_yaml_refresh = lambda *args, **kwargs: None
             app._all_active_features = lambda profile: profile.get("features", []) if isinstance(profile, dict) else []
             app._normalize_spell_slug_list = lambda value: [
                 str(item).strip().lower()
@@ -293,7 +293,7 @@ class SpellbookFreeSpellsTests(unittest.TestCase):
             app._player_yaml_meta_by_path = {}
             app._player_yaml_data_by_name = {}
             app._player_yaml_name_map = {}
-            app._write_player_yaml_atomic = lambda path, payload: app._player_yaml_cache_by_path.__setitem__(path, payload)
+            app._write_player_yaml_atomic = lambda path, payload, *args, **kwargs: app._player_yaml_cache_by_path.__setitem__(path, payload)
             app._normalize_player_profile = lambda payload, _stem: {
                 "name": payload.get("name", "Wizard"),
                 "spellcasting": payload.get("spellcasting", {}),
@@ -328,7 +328,7 @@ class SpellbookFreeSpellsTests(unittest.TestCase):
             app._players_dir = lambda: player_path.parent
             app._sanitize_player_filename = lambda value: str(value or "player")
             app._normalize_character_lookup_key = lambda value: str(value or "").strip().lower()
-            app._schedule_player_yaml_refresh = lambda: None
+            app._schedule_player_yaml_refresh = lambda *args, **kwargs: None
             app._all_active_features = lambda profile: profile.get("features", []) if isinstance(profile, dict) else []
             app._normalize_spell_slug_list = lambda value: [
                 str(item).strip().lower()
@@ -349,7 +349,7 @@ class SpellbookFreeSpellsTests(unittest.TestCase):
             app._player_yaml_meta_by_path = {}
             app._player_yaml_data_by_name = {}
             app._player_yaml_name_map = {}
-            app._write_player_yaml_atomic = lambda path, payload: app._player_yaml_cache_by_path.__setitem__(path, payload)
+            app._write_player_yaml_atomic = lambda path, payload, *args, **kwargs: app._player_yaml_cache_by_path.__setitem__(path, payload)
             app._normalize_player_profile = lambda payload, _stem: {
                 "name": payload.get("name", "Cleric"),
                 "spellcasting": payload.get("spellcasting", {}),

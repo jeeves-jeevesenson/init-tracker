@@ -6328,7 +6328,7 @@ __DAMAGE_TYPE_OPTIONS__
 
   function characterSlugify(value){
     return normalizeCharacterLookupKey(value)
-      .replace(/[^a-z0-9]+/g, "-")
+      .replace(/[^\p{L}\p{N}]+/gu, "-")
       .replace(/^-+|-+$/g, "");
   }
 
@@ -21237,9 +21237,9 @@ __DAMAGE_TYPE_OPTIONS__
     renderSpellbookList(
       spellbookFreePreparedList,
       sortedFree,
-      new Set(),
+      spellbookRightSelection,
       emptyLabel,
-      {locked: true},
+      {locked: !modeActions.remove},
     );
     const filteredLeft = filterSpellbookSlugs(leftSlugs);
     const filteredRight = filterSpellbookSlugs(rightSlugs);
@@ -21389,7 +21389,7 @@ __DAMAGE_TYPE_OPTIONS__
           return;
         }
         const delta = addAsFree && limitPolicy.counts_free !== true ? 0 : 1;
-        if (Number.isFinite(Number(limitPolicy.max)) && getSpellbookCurrentCount(limitKey) + delta > limitPolicy.max){
+        if (delta > 0 && Number.isFinite(Number(limitPolicy.max)) && getSpellbookCurrentCount(limitKey) + delta > limitPolicy.max){
           localToast(`${limitLabel} limited to ${limitPolicy.max}.`);
           return;
         }

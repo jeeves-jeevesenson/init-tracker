@@ -25528,7 +25528,7 @@ class InitiativeTracker(base.InitiativeTracker):
 
     @staticmethod
     def _sanitize_player_filename(name: str) -> str:
-        slug = re.sub(r"[^A-Za-z0-9._-]+", "-", str(name or "").strip())
+        slug = re.sub(r"[^\w.-]+", "-", str(name or "").strip())
         slug = slug.strip("-._")
         return slug or "player"
 
