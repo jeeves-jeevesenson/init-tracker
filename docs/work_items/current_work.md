@@ -21,7 +21,6 @@ If an item is not marked as **Active** here, it is NOT current work.
 | ID | Title | Status | Goal |
 | --- | --- | --- | --- |
 <!-- ACTIVE_WORK_TABLE_START -->
-| BUG-20260614-weapon-attacks-reload-fail | Weapon attacks / reload fail | Active | Implement bounded fix from evidence note: reload routing plus inventory-equipped weapon normalization. |
 <!-- ACTIVE_WORK_TABLE_END -->
 
 ---
@@ -30,6 +29,7 @@ If an item is not marked as **Active** here, it is NOT current work.
 
 | ID | Title | Completion Date | Evidence |
 | --- | --- | --- | --- |
+| BUG-20260614-weapon-attacks-reload-fail | Weapon attacks / reload fail | 2026-06-26 | Fixed in `7d10a14`; developer browser smoke passed; see `docs/work_items/active/BUG-20260614-weapon-attacks-reload-fail-smoke-failure-20260626.md`. |
 <!-- COMPLETED_WORK_TABLE_START -->
 | BUG-20260626-aura-of-protection-grid-snap | Aura of Protection grid snap offset | 2026-06-26 | [completed/BUG-20260626-aura-of-protection-grid-snap.md](completed/BUG-20260626-aura-of-protection-grid-snap.md) |
 | BUG-20260614-reactions-hold-combat | Reactions can hold up combat | 2026-06-26 | [completed/BUG-20260614-reactions-hold-combat.md](completed/BUG-20260614-reactions-hold-combat.md) |

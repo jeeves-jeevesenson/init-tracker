@@ -77,3 +77,28 @@ A repo-written evidence/classification note exists that states:
 - whether the bug is currently reproducible from available logs/traces/docs,
 - the smallest likely code/data area for a follow-up fix, or
 - what specific developer smoke evidence is still required.
+
+## Closeout
+
+Status: Complete
+
+Functional fix commit: `7d10a14`
+
+Developer browser smoke passed.
+
+Validated outcomes:
+
+- Multiattack no longer fails with `No actions left, matey.`
+- Monster/enemy capability resolution no longer uses PC-style action-budget blocking.
+- Single rifle attacks decrement loaded ammo after Apply.
+- Multiattack rifle components decrement the correct weapon ammo after Apply.
+- Preview/target selection does not decrement ammo.
+- Failed/canceled apply does not decrement ammo.
+- Reload fills the selected weapon after ammo is spent.
+- Invalid `Current Ammo: 0 / 0` reload modal no longer appears.
+- Reload is weapon-specific when enemies have multiple weapons.
+- Reload remains mutually exclusive with active Multiattack.
+
+Follow-up recommendation:
+
+Open a separate work item for a dedicated Multiattack modal UI.
