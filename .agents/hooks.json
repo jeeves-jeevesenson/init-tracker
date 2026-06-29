@@ -1,0 +1,17 @@
+{
+  "version": 1,
+  "migration_mode": true,
+  "hooks": {
+    "pre_tool_use": [
+      {
+        "name": "migration-scope-command-guard",
+        "description": "Conservative command guard for AGY migration-mode tasks. The script parses hook payloads defensively and blocks clearly unsafe/off-scope shell commands.",
+        "command": "python3 .agents/scripts/validate_tool_call.py"
+      }
+    ]
+  },
+  "notes": [
+    "This is repo-local scaffold. If AGY hook payload schema changes, the script should fail open with a warning instead of blocking unrelated tools.",
+    "The scope validator remains the objective end-of-task gate: python3 scripts/agent_scope_validate.py path/to/scope.json"
+  ]
+}
