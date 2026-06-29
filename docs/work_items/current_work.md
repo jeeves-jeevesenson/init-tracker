@@ -8,10 +8,10 @@ If an item is not marked as **Active** here, it is NOT current work.
 ## Current Status
 
 <!-- ACTIVE_WORK_STATUS_START -->
-- **Status:** Idle
-- **Current Work Item:** None
-- **Active Gate:** None
-- **Allowed Next Action:** None. Ask developer whether to open a bug, plan, smoke, commit/push, deploy, reopen work, or perform authorized workflow/admin migration.
+- **Status:** Active
+- **Current Work Item:** WORK-20260628-server-runtime-roadmap
+- **Active Gate:** Server Runtime Roadmap Gate
+- **Allowed Next Action:** Distill imported external research into a repo-specific server-runtime extraction roadmap and bounded follow-up tasks; no app implementation.
 <!-- ACTIVE_WORK_STATUS_END -->
 
 ---
@@ -21,6 +21,7 @@ If an item is not marked as **Active** here, it is NOT current work.
 | ID | Title | Status | Goal |
 | --- | --- | --- | --- |
 <!-- ACTIVE_WORK_TABLE_START -->
+| WORK-20260628-server-runtime-roadmap | Server runtime extraction roadmap | Active | Convert imported ASGI/runtime research into a repo-specific phased roadmap, decision list, and candidate bounded follow-up tasks; no app implementation. |
 <!-- ACTIVE_WORK_TABLE_END -->
 
 ---
