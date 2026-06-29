@@ -1,0 +1,38 @@
+{
+  "task_id": "WORK-20260628-command-queue-slice-selection",
+  "allowed_edit_paths": [
+    "docs/work_items/active/WORK-20260628-command-queue-slice-selection.md"
+  ],
+  "forbidden_paths": [
+    "docs/work_items/current_work.md",
+    "docs/bug_reports/inbox/BUG-20260626-dmcontrol-terrain-not-visible.md",
+    "logs/context/",
+    "server_runtime.py",
+    "server_app.py",
+    "serve_headless.py",
+    "dnd_initative_tracker.py",
+    "tests/",
+    "static/",
+    "templates/"
+  ],
+  "forbidden_diff_patterns": [
+    "asyncio.Queue",
+    "collections.deque",
+    "command_queue =",
+    "snapshot_cache",
+    "@app.get",
+    "@app.post",
+    "@app.put",
+    "@app.delete",
+    "def submit_command",
+    "def read_snapshot",
+    "**Status:** Completed"
+  ],
+  "allow_work_close": false,
+  "allow_commit": false,
+  "required_clean_staging": true,
+  "baseline_allowed_dirty_paths": [
+    "docs/bug_reports/inbox/BUG-20260626-dmcontrol-terrain-not-visible.md",
+    "logs/context/"
+  ]
+}
