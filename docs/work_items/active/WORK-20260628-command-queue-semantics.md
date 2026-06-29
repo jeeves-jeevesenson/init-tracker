@@ -145,13 +145,13 @@ Run:
 
 ### 1. Existing Evidence
 - **Existing LAN/WebSocket Action Queue Initialization:**
-  In [dnd_initative_tracker.py:L1973-1975](file:///home/a2-jeeves@iamjeeves.dev/src/init-tracker/dnd_initative_tracker.py#L1973-1975), the action queue `self._actions` is initialized as a thread-safe `queue.Queue` within `LanController.__init__`. An action state registry `self._action_states` is created alongside `self._action_states_lock` to track action lifecycles.
+  In `dnd_initative_tracker.py` around lines 1973-1975, the action queue `self._actions` is initialized as a thread-safe `queue.Queue` within `LanController.__init__`. An action state registry `self._action_states` is created alongside `self._action_states_lock` to track action lifecycles.
 - **Existing Action Enqueue Behavior:**
-  In the WebSocket receiver path under [dnd_initative_tracker.py:L3935-3998](file:///home/a2-jeeves@iamjeeves.dev/src/init-tracker/dnd_initative_tracker.py#L3935-3998), incoming actions undergo idempotency and duplicate checking. If valid, the state is registered as `"pending"`, an immediate `action_ack` with `status: "accepted"` is sent back to the WebSocket client, and the message is put onto `self._actions`.
+  In the WebSocket receiver path under `dnd_initative_tracker.py` around lines 3935-3998, incoming actions undergo idempotency and duplicate checking. If valid, the state is registered as `"pending"`, an immediate `action_ack` with `status: "accepted"` is sent back to the WebSocket client, and the message is put onto `self._actions`.
 - **Existing Tk-Thread Action Dispatch Behavior:**
-  In [dnd_initative_tracker.py:L7054-7185](file:///home/a2-jeeves@iamjeeves.dev/src/init-tracker/dnd_initative_tracker.py#L7054-7185), the Tk event loop periodically ticks (`LanController._tick`) on the main GUI thread, draining the `self._actions` queue. It calculates `queue_wait_ms`, emits a `ws.action.dispatch.start` debug event, applies the action via `_tracker._lan_apply_action(msg)`, updates the state in `self._action_states`, and sends the final `action_ack` with status `"completed"` and the result or error.
+  In `dnd_initative_tracker.py` around lines 7054-7185, the Tk event loop periodically ticks (`LanController._tick`) on the main GUI thread, draining the `self._actions` queue. It calculates `queue_wait_ms`, emits a `ws.action.dispatch.start` debug event, applies the action via `_tracker._lan_apply_action(msg)`, updates the state in `self._action_states`, and sends the final `action_ack` with status `"completed"` and the result or error.
 - **Existing Runtime Facade Synchronous Command Behavior:**
-  In [server_runtime.py:L58-77](file:///home/a2-jeeves@iamjeeves.dev/src/init-tracker/server_runtime.py#L58-77), the facade method `submit_command` currently routes `COMMAND_UPDATE_SPELL_COLOR` synchronously. It accesses the tracker app from `lan_controller` and invokes `app._save_spell_color` directly on the caller thread.
+  In `server_runtime.py` around lines 58-77, the facade method `submit_command` currently routes `COMMAND_UPDATE_SPELL_COLOR` synchronously. It accesses the tracker app from `lan_controller` and invokes `app._save_spell_color` directly on the caller thread.
 
 ### 2. Decision: Queue Model
 **Selected Model:** A facade-owned command gateway that initially executes synchronous metadata commands and later adapts selected async commands onto the existing LAN queue.
@@ -196,7 +196,7 @@ Run:
   - `dispatch_duration_ms`: Duration of handler execution.
   - `result_status`: Status result (`completed`, `failed`, `timed_out`).
   - `error_class`: Name of the raised exception if failed.
-- **Existing Evidence:** In [dnd_initative_tracker.py:L7098-7114](file:///home/a2-jeeves@iamjeeves.dev/src/init-tracker/dnd_initative_tracker.py#L7098-7114), `queue_wait_ms` is computed using `time.perf_counter_ns()` relative to the enqueued timestamp `_received_at_ns`, and `queue_size` is read via `self._actions.qsize()`, which are logged under the `ws.action.dispatch.start` debug event.
+- **Existing Evidence:** In `dnd_initative_tracker.py` around lines 7098-7114, `queue_wait_ms` is computed using `time.perf_counter_ns()` relative to the enqueued timestamp `_received_at_ns`, and `queue_size` is read via `self._actions.qsize()`, which are logged under the `ws.action.dispatch.start` debug event.
 
 ### 8. Exactly One Next Implementation Candidate
 - **Candidate Name:** Observability and Lifecycle Foundations for Spell Color Facade
