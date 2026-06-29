@@ -79,3 +79,17 @@ Run:
 - Runtime facade skeleton implementation evidence is written back to this work item.
 - `current_work.md` is updated when complete.
 - Developer smoke is only required if runtime/server behavior needs a browser claim.
+
+## Implementation Evidence (Pending Developer Review)
+
+- Added `server_runtime.py` with a narrow `ServerRuntimeFacade` skeleton that stores the existing LAN controller reference and exposes lifecycle readiness through `start()`, `shutdown()`, and `is_ready()`.
+- Updated `server_app.py` so `create_app()` stores the facade on `app.state.runtime` and the lifespan hook starts/shuts it down alongside existing readiness state.
+- Added focused tests in `tests/test_server_app.py` for app factory facade ownership, lifespan readiness transitions, and existing health/readiness endpoints.
+
+## Scope Guard Evidence
+
+Run before commit:
+
+    timeout 10s python3 scripts/agent_scope_validate.py docs/agent_tasks/scopes/examples/runtime-facade-skeleton-scope.example.json
+
+The scope guard must pass before this implementation is committed.
