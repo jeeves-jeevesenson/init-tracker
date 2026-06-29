@@ -8,10 +8,10 @@ If an item is not marked as **Active** here, it is NOT current work.
 ## Current Status
 
 <!-- ACTIVE_WORK_STATUS_START -->
-- **Status:** Active
-- **Current Work Item:** WORK-20260628-runtime-facade-contracts
-- **Active Gate:** Runtime Facade Contracts Gate
-- **Allowed Next Action:** Draft or run one bounded AGY implementation task for runtime facade command/snapshot contracts. Continue server-runtime extraction migration. Do not triage unrelated bug inbox dirt, logs/context, frontend, route migration, real command queue, snapshot cache, deploy, or random cleanup.
+- **Status:** Idle
+- **Current Work Item:** None
+- **Active Gate:** None
+- **Allowed Next Action:** Continue server-runtime extraction migration by opening the next bounded work item. Do not triage unrelated bug inbox dirt, logs/context, deploy, or random cleanup unless the developer explicitly asks.
 <!-- ACTIVE_WORK_STATUS_END -->
 
 ---
@@ -21,7 +21,6 @@ If an item is not marked as **Active** here, it is NOT current work.
 | ID | Title | Status | Goal |
 | --- | --- | --- | --- |
 <!-- ACTIVE_WORK_TABLE_START -->
-| WORK-20260628-runtime-facade-contracts | Runtime facade command and snapshot contracts | Active | Define the explicit facade contract surface for future command submission and snapshot reads; no queue implementation, snapshot cache, gameplay route migration, or frontend work. |
 <!-- ACTIVE_WORK_TABLE_END -->
 
 ---
@@ -32,6 +31,7 @@ If an item is not marked as **Active** here, it is NOT current work.
 | --- | --- | --- | --- |
 | BUG-20260614-weapon-attacks-reload-fail | Weapon attacks / reload fail | 2026-06-26 | Closed in `6d14706`; focused unit tests passed; JS syntax check passed; diff check passed; developer browser smoke passed; final weapon reload / ammo / Multiattack behavior accepted. See `docs/work_items/active/BUG-20260614-weapon-attacks-reload-fail-smoke-failure-20260626.md`. |
 <!-- COMPLETED_WORK_TABLE_START -->
+| WORK-20260628-runtime-facade-contracts | Runtime facade command and snapshot contracts | 2026-06-28 | Completed in `2244f09`; added explicit command/snapshot contract dataclasses and fail-closed facade boundaries; focused tests and scope validation passed. See [completed/WORK-20260628-runtime-facade-contracts.md](completed/WORK-20260628-runtime-facade-contracts.md). |
 | WORK-20260628-runtime-facade-skeleton | Runtime facade skeleton | 2026-06-28 | Completed in `ac210c6`; added narrow `ServerRuntimeFacade`, wired app factory ownership via `app.state.runtime`, preserved health/readiness, added focused tests, and passed scoped validation. See [completed/WORK-20260628-runtime-facade-skeleton.md](completed/WORK-20260628-runtime-facade-skeleton.md). |
 | BUG-20260627-manage-spells-free-spell-limit-and-save-failures | Manage Spells free spell limits and save failures | 2026-06-27 | Fixed free spell add/remove behavior and Unicode/Cyrillic player profile save lookup; py_compile passed; spellbook unittest passed; A0 gate passed; diff check passed; developer browser smoke passed. See [completed/BUG-20260627-manage-spells-free-spell-limit-and-save-failures.md](completed/BUG-20260627-manage-spells-free-spell-limit-and-save-failures.md). |
 | BUG-20260626-spell-multiattack-ranged-fail | Spell Multiattack and ranged attack failure | 2026-06-27 | Fixed upcast ranged spell attack pending authority and multi-projectile reuse; repaired Magic Missile and Eldritch Blast YAML scaling; corrected runtime user preset seeding and hashing cache; fixed unconditional forced save check; repaired monster/combatant max HP preservation on damage; verified backend-only single-log-line outputs. Passed all 108 tests. See [completed/BUG-20260626-spell-multiattack-ranged-fail.md](completed/BUG-20260626-spell-multiattack-ranged-fail.md). |

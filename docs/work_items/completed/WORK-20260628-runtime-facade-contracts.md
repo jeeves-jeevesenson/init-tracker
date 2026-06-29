@@ -1,6 +1,6 @@
 # WORK-20260628-runtime-facade-contracts: Runtime facade command and snapshot contracts
 
-- **Status:** Active
+- **Status:** Completed
 - **Gate:** Runtime Facade Contracts Gate
 - **Opened:** 2026-06-28
 - **Executor:** AGY by explicit bounded task packet.
@@ -129,3 +129,20 @@ Run:
 - **Validation:**
   - All 8 unit tests in `tests/test_server_app.py` run successfully.
   - Scope validation passes without errors.
+
+
+## Completion Evidence
+
+- Completed in `2244f09`.
+- Added explicit runtime facade contract dataclasses:
+  - `RuntimeCommand`
+  - `RuntimeCommandResult`
+  - `RuntimeSnapshotRequest`
+  - `RuntimeSnapshotResult`
+- Added `ServerRuntimeFacade.submit_command()` and `ServerRuntimeFacade.read_snapshot()` as fail-closed contract boundaries.
+- Added focused tests for contract construction and fail-closed facade methods.
+- Validation passed before implementation commit:
+  - `python3 -m py_compile server_runtime.py server_app.py serve_headless.py dnd_initative_tracker.py`
+  - `.venv/bin/python -m pytest tests/test_server_app.py`
+  - `scripts/agent_scope_validate.py docs/agent_tasks/scopes/WORK-20260628-runtime-facade-contracts.json`
+- No gameplay route migration, command queue, snapshot cache, frontend work, unrelated inbox dirt, `logs/context/`, or `current_work.md` implementation edits.
