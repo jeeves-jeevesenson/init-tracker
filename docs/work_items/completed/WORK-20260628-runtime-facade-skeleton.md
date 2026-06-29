@@ -1,6 +1,6 @@
 # WORK-20260628-runtime-facade-skeleton: Runtime facade skeleton
 
-- **Status:** Active
+- **Status:** Completed
 - **Gate:** Runtime Facade Skeleton Gate
 - **Opened:** 2026-06-28
 - **Executor:** AGY by explicit bounded task packet, or developer no-agent patch if chosen.
@@ -93,3 +93,17 @@ Run before commit:
     timeout 10s python3 scripts/agent_scope_validate.py docs/agent_tasks/scopes/examples/runtime-facade-skeleton-scope.example.json
 
 The scope guard must pass before this implementation is committed.
+
+
+## Completion Evidence
+
+- Completed in `ac210c6`.
+- Added `server_runtime.py` with narrow `ServerRuntimeFacade` lifecycle/readiness skeleton.
+- Wired `create_app()` to store the facade on `app.state.runtime`.
+- Preserved existing health/readiness behavior.
+- Added focused tests in `tests/test_server_app.py`.
+- Validation passed before commit:
+  - `python3 -m py_compile server_app.py server_runtime.py serve_headless.py dnd_initative_tracker.py`
+  - `.venv/bin/python -m pytest tests/test_server_app.py`
+  - `scripts/agent_scope_validate.py docs/agent_tasks/scopes/examples/runtime-facade-skeleton-scope.example.json` before staging
+- No gameplay route migration, command queue, snapshot cache, frontend work, unrelated inbox dirt, or `logs/context/` edits.
