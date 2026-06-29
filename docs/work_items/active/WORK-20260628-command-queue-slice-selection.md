@@ -138,3 +138,61 @@ Run:
 - The selected candidate and evidence are written into this work item.
 - No source code changes are made.
 - `current_work.md` is updated only when closing this work item.
+
+## Slice Selection Evidence
+
+### 1. Route/action seam inventory
+The routes and action seams are currently registered as follows:
+- **HTTP / Server Routes**:
+  - Dynamic registration within the `start` method of `LanController` in `dnd_initative_tracker.py` around `LanController.start`. This registers endpoints for the player web page, character editors, shop, and DM console routes.
+  - The `server_app.py` ASGI factory exposes only health and readiness endpoints: `/health`, `/api/health`, `/ready`, and `/api/ready`. No other routes exist there.
+- **Local Action Seams**:
+  - The WebSocket endpoint `/ws` in `dnd_initative_tracker.py` around the `/ws` endpoint receives messages of type matching `_ACTION_MESSAGE_TYPES` and puts them into `self._actions`, which is a `queue.Queue`.
+  - The Tk event loop thread in `LanController._tick` pulls actions from `self._actions` via `get_nowait` and dispatches them to the InitiativeTracker `_lan_apply_action` method for execution on the main GUI/tracker thread.
+
+### 2. Candidate classification
+Below is the classification of mutating candidate routes:
+
+| Candidate | File/Seam | Mutating/Read-only | Risk | Testability | Selected/Not Selected | Reason |
+| --- | --- | --- | --- | --- | --- | --- |
+| `POST /api/spells/{spell_id}/color` | `dnd_initative_tracker.py:3155` | Mutating | Low | High | Selected | Smallest safe candidate. Only updates custom display color metadata of a spell. Zero impact on gameplay mechanics or map state. |
+| `POST /api/players/cache/refresh` | `dnd_initative_tracker.py:3184` | Mutating | Low | Medium | Not Selected | Requires file I/O and rebuilding player roster cache. Spell color metadata is simpler and more isolated. |
+| `POST /api/push/subscribe` | `dnd_initative_tracker.py:2857` | Mutating | Low | Low | Not Selected | Involves browser push notification metadata configuration. |
+| `POST /api/dm/combat/next-turn` | `dnd_initative_tracker.py:4159` | Mutating | High | Medium | Not Selected | High gameplay-rule risk (advances combat turn, triggers reactions/saves). |
+| `POST /api/dm/map/combatants/{cid}/move` | `dnd_initative_tracker.py:4658` | Mutating | High | Medium | Not Selected | Touches tactical map rendering and grid coordinate validation. |
+
+### 3. Selected next slice
+The selected candidate is `POST /api/spells/{spell_id}/color` in `LanController`.
+- **Rationale**: It is the smallest and safest mutating action. It modifies a simple YAML/JSON metadata attribute (display color of a spell) and has no dependency on combat rules, turn orders, initiative state, or tactical map grids. It does not affect active combatants or trigger reactions. It is easily simulated and tested via a single mock command payload.
+- **Future Work Item ID Suggestion**: `WORK-20260628-command-queue-spell-color`
+
+### 4. Proposed future implementation scope
+- **Exact files likely needed**:
+  - `server_runtime.py` (to define command contracts and implement facade command dispatching)
+  - `dnd_initative_tracker.py` (to delegate the route request to `ServerRuntimeFacade`)
+  - `tests/test_server_runtime.py` (to verify facade command integration and execution)
+- **Exact files forbidden**:
+  - `serve_headless.py`
+  - Gameplay engines and combat logic files (e.g., `combat_service.py` or specific combat rules in `dnd_initative_tracker.py` outside of the API route delegation)
+  - Frontend assets (`static/`, `templates/`, HTML, CSS, JS)
+- **Proposed scope validator forbidden patterns**:
+  - `@app.get`
+  - `@app.post`
+  - `@app.put`
+  - `@app.delete`
+  - `snapshot_cache`
+  - `asyncio.Queue`
+  - `collections.deque`
+  - `next_turn`
+  - `move_combatant`
+  - `tactical`
+  - `map`
+- **Proposed validation commands**:
+  - `python3 -m py_compile server_runtime.py dnd_initative_tracker.py`
+  - `python3 -m unittest tests/test_server_runtime.py`
+  - `python3 scripts/agent_scope_validate.py docs/agent_tasks/scopes/WORK-20260628-command-queue-spell-color.json`
+
+### 5. Rejected candidates
+- `POST /api/players/cache/refresh`: Rejected because it interacts with player profile disk storage and cache rebuilds, which carries I/O and synchronization overhead.
+- `POST /api/dm/combat/next-turn`: Rejected because turn advancement affects multiple sub-components (monsters, active players, reaction prompts, log writers), representing high gameplay risk.
+- `POST /api/dm/map/combatants/{cid}/move`: Rejected because it relies on tactical grid layout coordinates, movement speed rules, and map workspace updates, violating our selection guidelines.
