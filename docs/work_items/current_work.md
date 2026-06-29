@@ -8,10 +8,10 @@ If an item is not marked as **Active** here, it is NOT current work.
 ## Current Status
 
 <!-- ACTIVE_WORK_STATUS_START -->
-- **Status:** Idle
-- **Current Work Item:** None
-- **Active Gate:** None
-- **Allowed Next Action:** Continue server-runtime extraction migration by opening `WORK-20260628-command-queue-spell-color`. Do not triage unrelated bug inbox dirt, logs/context, deploy, or random cleanup unless the developer explicitly asks.
+- **Status:** Active
+- **Current Work Item:** WORK-20260628-command-queue-spell-color
+- **Active Gate:** Spell Color Command Boundary Gate
+- **Allowed Next Action:** Run one bounded AGY implementation task for the selected spell color command boundary. Do not triage unrelated bug inbox dirt, logs/context, frontend, tactical/map/combat, deploy, broad route migration, or random cleanup.
 <!-- ACTIVE_WORK_STATUS_END -->
 
 ---
@@ -21,6 +21,7 @@ If an item is not marked as **Active** here, it is NOT current work.
 | ID | Title | Status | Goal |
 | --- | --- | --- | --- |
 <!-- ACTIVE_WORK_TABLE_START -->
+| WORK-20260628-command-queue-spell-color | Spell color command boundary | Active | Move only `POST /api/spells/{spell_id}/color` behind the runtime facade command boundary while preserving behavior; no broad queue, route migration, frontend, tactical/map, or combat-rule work. |
 <!-- ACTIVE_WORK_TABLE_END -->
 
 ---
