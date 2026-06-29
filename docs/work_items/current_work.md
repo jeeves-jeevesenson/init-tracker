@@ -8,10 +8,10 @@ If an item is not marked as **Active** here, it is NOT current work.
 ## Current Status
 
 <!-- ACTIVE_WORK_STATUS_START -->
-- **Status:** Idle
-- **Current Work Item:** None
-- **Active Gate:** None
-- **Allowed Next Action:** None. Ask developer whether to open a bug, plan, smoke, commit/push, deploy, reopen work, or perform authorized workflow/admin migration.
+- **Status:** Active
+- **Current Work Item:** WORK-20260628-server-first-health-shell
+- **Active Gate:** Server Ownership Shell Gate
+- **Allowed Next Action:** Draft or run one bounded AGY implementation task for the server-first health/app-factory shell. Do not migrate gameplay routes, runtime facade, queue, cache, frontend, or deploy.
 <!-- ACTIVE_WORK_STATUS_END -->
 
 ---
@@ -21,6 +21,7 @@ If an item is not marked as **Active** here, it is NOT current work.
 | ID | Title | Status | Goal |
 | --- | --- | --- | --- |
 <!-- ACTIVE_WORK_TABLE_START -->
+| WORK-20260628-server-first-health-shell | Server-first health and app factory shell | Active | Add the smallest server-owned FastAPI app factory/lifespan/health shell while preserving existing headless behavior; no gameplay route migration. |
 <!-- ACTIVE_WORK_TABLE_END -->
 
 ---
