@@ -25,9 +25,8 @@ If an item is not marked as **Active** here, it is NOT current work.
 
 ---
 
-## Recently Completed
+## Recently Completed Table
 
-Table
 | ID | Title | Completion Date | Evidence |
 | --- | --- | --- | --- |
 | BUG-20260614-weapon-attacks-reload-fail | Weapon attacks / reload fail | 2026-06-26 | Closed in `6d14706`; focused unit tests passed; JS syntax check passed; diff check passed; developer browser smoke passed; final weapon reload / ammo / Multiattack behavior accepted. See `docs/work_items/active/BUG-20260614-weapon-attacks-reload-fail-smoke-failure-20260626.md`. |
@@ -47,14 +46,25 @@ Table
 | WORK-20260603-browser-smoke-harness-scorcher-ignite-ground | Browser Automation Smoke Harness Foundation (Pilot: Scorcher) | 2026-06-04 | [completed/WORK-20260603-browser-smoke-harness-scorcher-ignite-ground.md](completed/WORK-20260603-browser-smoke-harness-scorcher-ignite-ground.md) |
 | WORK-20260530-black-tan-vda-scorcher-automation | Automate Black and Tan monster control and add VDA Scorcher | 2026-06-04 | docs/work_items/completed/WORK-20260530-black-tan-vda-scorcher-automation.md |
 | ITR-20260529-A0-08 | Add current work ledger and long-term planning GPT workflow | 2026-05-30 | docs/work_items/completed/ITR-20260529-A0-08.md |
+| WORK-20260628-port-external-research | Port external server runtime research | 2026-06-28 | Imported external research docs and server-runtime planning foundation in commit `a210eca`. No app implementation. |
+| WORK-20260628-server-runtime-roadmap | Server runtime extraction roadmap | 2026-06-28 | Distilled imported ASGI/runtime research into repo-specific target architecture, decision list, phased roadmap, and first future implementation candidate. No app implementation. |
 <!-- COMPLETED_WORK_TABLE_END -->
+
 ---
+
 ## Superseded Plans Table
+
 | ID | Title | Superseded By | Reason |
+| --- | --- | --- | --- |
 <!-- SUPERSEDED_WORK_TABLE_START -->
 <!-- SUPERSEDED_WORK_TABLE_END -->
+
+---
+
 ## Unresolved Bugs Queue (Triaged)
+
 | ID | Title | Severity | Note |
+| --- | --- | --- | --- |
 <!-- UNRESOLVED_BUGS_QUEUE_START -->
 | BUG-20260614-multiattack-eldritch-blast-failures | Multiattack / Eldritch Blast failures | S1 | Triaged unresolved; needs exact actor/target/error evidence. |
 | BUG-20260614-dm-zero-hp-enemies-not-removed | DM 0 HP enemy override does not remove enemy | S1 | Triaged unresolved; needs DM override repro/evidence. |
@@ -67,13 +77,22 @@ Table
 | BUG-20260614-enemy-name-generator-yaml-subnames | Enemy YAML subname/name generator | S3 | Triaged backlog/design; schema examples needed. |
 | BUG-20260614-player-guns-missing | Add guns for all players | S3 | Triaged backlog/data; needs character/equipment list. |
 <!-- UNRESOLVED_BUGS_QUEUE_END -->
+
+---
+
 ## Reopen Conditions
+
 An item may only be reopened if:
 1. A regression is found in the specific files touched by the item.
 2. The original goal was not met as proven by new smoke/test evidence.
 3. The developer explicitly requests a reopen.
+
+---
+
 ## Orchestrator Refusal Rule
+
 **If no active work item exists in this section, do not invent one from old docs, majorTODO.md, or historical runtime reports.**
+
 In the absence of an active work item, the Orchestrator MUST stop and ask the developer whether to:
 1. Open a new bug report.
 2. Start a new planning/research pass.
@@ -81,5 +100,3 @@ In the absence of an active work item, the Orchestrator MUST stop and ask the de
 4. Perform smoke testing.
 5. Commit/Push current changes.
 6. Deploy to production.
-| WORK-20260628-port-external-research | Port external server runtime research | Completed | Imported external research docs and server-runtime planning foundation in commit `a210eca`. No app implementation. |
-| WORK-20260628-server-runtime-roadmap | Server runtime extraction roadmap | Completed | Distilled imported ASGI/runtime research into repo-specific target architecture, decision list, phased roadmap, and first future implementation candidate. No app implementation. |
