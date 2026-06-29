@@ -1,6 +1,6 @@
 # WORK-20260628-command-queue-semantics: Command queue semantics
 
-- **Status:** Active
+- **Status:** Completed
 - **Gate:** Command Queue Semantics Gate
 - **Opened:** 2026-06-28
 - **Executor:** AGY by explicit bounded evidence/design task, or developer no-agent design patch if chosen.
@@ -218,3 +218,15 @@ Run:
   - `python3 -m unittest tests/test_server_runtime.py`
   - `python3 scripts/agent_scope_validate.py docs/agent_tasks/scopes/WORK-20260628-command-queue-observability-foundation.json`
 - **Scope Validator Guidance:** The scope validator must verify that only `server_runtime.py` and `tests/test_server_runtime.py` are edited. No new endpoints, queues, threads, or changes to existing routes or state authority are allowed.
+
+
+## Completion Evidence
+
+- Decision recorded in `8e533fa` and portable evidence links repaired in `fb33b9f`.
+- Selected queue model: facade-owned command gateway.
+- Current metadata commands may execute synchronously through the facade.
+- Future gameplay/stateful commands should adapt onto the existing LAN/Tk action queue rather than creating a competing runtime queue.
+- Threading authority remains the main GUI/Tk thread for gameplay/combat/tactical state mutation.
+- Defined command lifecycle statuses: accepted, queued, dispatching, completed, failed, timed_out.
+- Selected next implementation candidate: `WORK-20260628-command-queue-observability-foundation`.
+- No app/runtime source, tests, current_work implementation edits, unrelated inbox dirt, `logs/context/`, route migration, queue implementation, snapshot cache, frontend, tactical/map/combat, or deploy work.

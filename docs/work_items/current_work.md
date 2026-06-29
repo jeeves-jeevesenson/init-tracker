@@ -8,10 +8,10 @@ If an item is not marked as **Active** here, it is NOT current work.
 ## Current Status
 
 <!-- ACTIVE_WORK_STATUS_START -->
-- **Status:** Active
-- **Current Work Item:** WORK-20260628-command-queue-semantics
-- **Active Gate:** Command Queue Semantics Gate
-- **Allowed Next Action:** Run one bounded evidence/design task to define minimal command queue semantics before moving more mutations. Do not implement queue infrastructure, migrate routes, triage unrelated bug inbox dirt, logs/context, frontend, deploy, or random cleanup.
+- **Status:** Idle
+- **Current Work Item:** None
+- **Active Gate:** None
+- **Allowed Next Action:** Continue server-runtime extraction migration by opening `WORK-20260628-command-queue-observability-foundation`. Do not triage unrelated bug inbox dirt, logs/context, deploy, or random cleanup unless the developer explicitly asks.
 <!-- ACTIVE_WORK_STATUS_END -->
 
 ---
@@ -21,7 +21,6 @@ If an item is not marked as **Active** here, it is NOT current work.
 | ID | Title | Status | Goal |
 | --- | --- | --- | --- |
 <!-- ACTIVE_WORK_TABLE_START -->
-| WORK-20260628-command-queue-semantics | Command queue semantics | Active | Define minimal runtime command queue semantics, threading boundary, failure behavior, and observability before moving more mutations; no app implementation. |
 <!-- ACTIVE_WORK_TABLE_END -->
 
 ---
@@ -32,6 +31,7 @@ If an item is not marked as **Active** here, it is NOT current work.
 | --- | --- | --- | --- |
 | BUG-20260614-weapon-attacks-reload-fail | Weapon attacks / reload fail | 2026-06-26 | Closed in `6d14706`; focused unit tests passed; JS syntax check passed; diff check passed; developer browser smoke passed; final weapon reload / ammo / Multiattack behavior accepted. See `docs/work_items/active/BUG-20260614-weapon-attacks-reload-fail-smoke-failure-20260626.md`. |
 <!-- COMPLETED_WORK_TABLE_START -->
+| WORK-20260628-command-queue-semantics | Command queue semantics | 2026-06-28 | Completed in `fb33b9f`; defined facade-owned command gateway semantics, threading authority, lifecycle/failure/observability model, and selected `WORK-20260628-command-queue-observability-foundation`. See [completed/WORK-20260628-command-queue-semantics.md](completed/WORK-20260628-command-queue-semantics.md). |
 | WORK-20260628-command-queue-spell-color | Spell color command boundary | 2026-06-28 | Completed in `fa1e79f`; routed only `POST /api/spells/{spell_id}/color` through the runtime facade command boundary, preserved behavior, and added focused tests. See [completed/WORK-20260628-command-queue-spell-color.md](completed/WORK-20260628-command-queue-spell-color.md). |
 | WORK-20260628-command-queue-slice-selection | Command queue slice selection | 2026-06-28 | Completed in `22d5637`; selected `POST /api/spells/{spell_id}/color` as the first low-risk command-queue candidate and proposed `WORK-20260628-command-queue-spell-color`. See [completed/WORK-20260628-command-queue-slice-selection.md](completed/WORK-20260628-command-queue-slice-selection.md). |
 | WORK-20260628-runtime-facade-contracts | Runtime facade command and snapshot contracts | 2026-06-28 | Completed in `2244f09`; added explicit command/snapshot contract dataclasses and fail-closed facade boundaries; focused tests and scope validation passed. See [completed/WORK-20260628-runtime-facade-contracts.md](completed/WORK-20260628-runtime-facade-contracts.md). |
