@@ -2505,7 +2505,8 @@ class LanController:
             )
             return
 
-        self._fastapi_app = FastAPI()
+        from server_app import create_app
+        self._fastapi_app = create_app(lan_controller=self)
 
         @self._fastapi_app.middleware("http")
         async def set_current_request_path_middleware(request: Request, call_next):

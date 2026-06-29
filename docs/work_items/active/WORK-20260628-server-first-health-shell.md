@@ -81,3 +81,10 @@ If no focused test exists and adding one is outside the chosen scope, AGY must s
 - Implementation evidence is written back to this work item.
 - `current_work.md` is updated when complete.
 - The developer performs browser smoke only if UI/runtime readiness needs to be claimed.
+
+## Implementation Evidence
+
+- **App Factory Seam:** Created `server_app.py` defining `create_app` and `app_lifespan`.
+- **Health/Readiness Routes:** Bounded routes `/health`, `/api/health`, `/ready`, `/api/ready` configured through the factory.
+- **Integration:** Replaced FastAPI construction in `dnd_initative_tracker.py` with `create_app(lan_controller=self)`.
+- **Validation:** Added `tests/test_server_health.py`; verified successfully via `timeout 30s .venv/bin/python -m unittest tests/test_server_health.py -q`. Headless host test `timeout 90s .venv/bin/python -m unittest tests/test_headless_host.py -q` passed successfully.

@@ -11,7 +11,7 @@ If an item is not marked as **Active** here, it is NOT current work.
 - **Status:** Active
 - **Current Work Item:** WORK-20260628-server-first-health-shell
 - **Active Gate:** Server Ownership Shell Gate
-- **Allowed Next Action:** Draft or run one bounded AGY implementation task for the server-first health/app-factory shell. Do not migrate gameplay routes, runtime facade, queue, cache, frontend, or deploy.
+- **Allowed Next Action:** Developer validation and browser smoke. Implementation of the health/readiness endpoints and app factory seam is complete and unit tested.
 <!-- ACTIVE_WORK_STATUS_END -->
 
 ---
