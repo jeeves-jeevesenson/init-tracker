@@ -145,3 +145,69 @@ class ServerRuntimeFacadeTests(unittest.TestCase):
         response = client.post("/api/spells/fireball/color", json={"color": "green"})
         self.assertEqual(response.status_code, 500)
         self.assertIn("Failed to save spell color.", response.json()["detail"])
+
+    def test_spell_color_lifecycle_observability_success(self):
+        # 1. successful spell-color command still works and records a completed lifecycle/trace
+        mock_app = MagicMock()
+        mock_app._save_spell_color.return_value = {"id": "fireball", "color": "red"}
+
+        mock_lan_controller = MagicMock()
+        mock_lan_controller.app = mock_app
+
+        facade = ServerRuntimeFacade(lan_controller=mock_lan_controller)
+        command = RuntimeCommand(
+            command_type=COMMAND_UPDATE_SPELL_COLOR,
+            payload={"spell_id": "fireball", "color": "red"}
+        )
+
+        result = facade.submit_command(command)
+        self.assertTrue(result.success)
+
+        # Trace duration/status fields are present and deterministic enough for unit tests
+        trace = facade.last_command_trace
+        self.assertIsNotNone(trace)
+        self.assertEqual(trace.command_type, COMMAND_UPDATE_SPELL_COLOR)
+        self.assertEqual(trace.status, "completed")
+        self.assertIsInstance(trace.duration_ms, float)
+        self.assertGreaterEqual(trace.duration_ms, 0.0)
+        self.assertIsNone(trace.error_class)
+
+    def test_spell_color_lifecycle_observability_failure(self):
+        # 2. failing spell-color command still raises the original exception and records a failed lifecycle/trace with error_class
+        mock_app = MagicMock()
+        mock_app._save_spell_color.side_effect = ValueError("Invalid hex color")
+
+        mock_lan_controller = MagicMock()
+        mock_lan_controller.app = mock_app
+
+        facade = ServerRuntimeFacade(lan_controller=mock_lan_controller)
+        command = RuntimeCommand(
+            command_type=COMMAND_UPDATE_SPELL_COLOR,
+            payload={"spell_id": "fireball", "color": "invalid"}
+        )
+
+        with self.assertRaises(ValueError) as ctx:
+            facade.submit_command(command)
+        self.assertEqual(str(ctx.exception), "Invalid hex color")
+
+        trace = facade.last_command_trace
+        self.assertIsNotNone(trace)
+        self.assertEqual(trace.command_type, COMMAND_UPDATE_SPELL_COLOR)
+        self.assertEqual(trace.status, "failed")
+        self.assertIsInstance(trace.duration_ms, float)
+        self.assertGreaterEqual(trace.duration_ms, 0.0)
+        self.assertEqual(trace.error_class, "ValueError")
+
+    def test_unknown_command_lifecycle_observability_failure(self):
+        # 3. unknown command still fails closed and records no successful completion
+        facade = ServerRuntimeFacade()
+        command = RuntimeCommand(command_type="unknown_action")
+
+        with self.assertRaises(NotImplementedError):
+            facade.submit_command(command)
+
+        trace = facade.last_command_trace
+        self.assertIsNotNone(trace)
+        self.assertEqual(trace.command_type, "unknown_action")
+        self.assertEqual(trace.status, "failed")
+        self.assertEqual(trace.error_class, "NotImplementedError")

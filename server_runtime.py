@@ -19,6 +19,25 @@ class RuntimeCommandResult:
     data: Dict[str, Any] = field(default_factory=dict)
 
 
+# Command lifecycle status constants
+STATUS_ACCEPTED = "accepted"
+STATUS_QUEUED = "queued"
+STATUS_DISPATCHING = "dispatching"
+STATUS_COMPLETED = "completed"
+STATUS_FAILED = "failed"
+STATUS_TIMED_OUT = "timed_out"
+
+
+@dataclass(frozen=True)
+class RuntimeCommandTrace:
+    """Record of a command execution trace for observability."""
+    command_type: str
+    status: str
+    duration_ms: float
+    error_class: Optional[str] = None
+    metadata: Dict[str, Any] = field(default_factory=dict)
+
+
 @dataclass(frozen=True)
 class RuntimeSnapshotRequest:
     """Explicit contract for requesting a read-model snapshot of runtime state."""
@@ -42,6 +61,7 @@ class ServerRuntimeFacade:
     def __init__(self, lan_controller: Optional[Any] = None) -> None:
         self.lan_controller = lan_controller
         self._ready = False
+        self.last_command_trace: Optional[RuntimeCommandTrace] = None
 
     def start(self) -> None:
         """Mark the runtime facade ready for ASGI request handling."""
@@ -57,25 +77,46 @@ class ServerRuntimeFacade:
 
     def submit_command(self, command: RuntimeCommand) -> RuntimeCommandResult:
         """Submit a command to the runtime."""
-        if command.command_type == COMMAND_UPDATE_SPELL_COLOR:
-            if not self.lan_controller:
-                raise RuntimeError("LanController is not configured on the facade.")
-            app = getattr(self.lan_controller, "app", None)
-            if not app:
-                raise RuntimeError("InitiativeTracker app is not configured on LanController.")
+        import time
+        start_time = time.perf_counter()
 
-            spell_id = command.payload.get("spell_id")
-            color = command.payload.get("color")
+        try:
+            if command.command_type == COMMAND_UPDATE_SPELL_COLOR:
+                if not self.lan_controller:
+                    raise RuntimeError("LanController is not configured on the facade.")
+                app = getattr(self.lan_controller, "app", None)
+                if not app:
+                    raise RuntimeError("InitiativeTracker app is not configured on LanController.")
 
-            # Call the actual save function
-            result = app._save_spell_color(spell_id, color)
-            return RuntimeCommandResult(
-                success=True,
-                message="Spell color updated successfully.",
-                data={"spell": result}
+                spell_id = command.payload.get("spell_id")
+                color = command.payload.get("color")
+
+                # Call the actual save function
+                result = app._save_spell_color(spell_id, color)
+
+                duration_ms = (time.perf_counter() - start_time) * 1000.0
+                self.last_command_trace = RuntimeCommandTrace(
+                    command_type=command.command_type,
+                    status=STATUS_COMPLETED,
+                    duration_ms=duration_ms,
+                    error_class=None
+                )
+                return RuntimeCommandResult(
+                    success=True,
+                    message="Spell color updated successfully.",
+                    data={"spell": result}
+                )
+
+            raise NotImplementedError(f"Command type '{command.command_type}' is not yet implemented.")
+        except Exception as exc:
+            duration_ms = (time.perf_counter() - start_time) * 1000.0
+            self.last_command_trace = RuntimeCommandTrace(
+                command_type=command.command_type,
+                status=STATUS_FAILED,
+                duration_ms=duration_ms,
+                error_class=exc.__class__.__name__
             )
-
-        raise NotImplementedError(f"Command type '{command.command_type}' is not yet implemented.")
+            raise
 
     def read_snapshot(self, request: RuntimeSnapshotRequest) -> RuntimeSnapshotResult:
         """Read a state snapshot from the runtime.

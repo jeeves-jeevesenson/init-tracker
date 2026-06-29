@@ -122,3 +122,21 @@ Run:
 - Implementation evidence is written into this work item.
 - Scope validator passes before implementation commit staging.
 - `current_work.md` is updated only when closing this work item.
+
+## Implementation Evidence
+
+### 1. In-Process Observability Structures
+We introduced:
+- Command lifecycle status constants: `STATUS_ACCEPTED`, `STATUS_QUEUED`, `STATUS_DISPATCHING`, `STATUS_COMPLETED`, `STATUS_FAILED`, and `STATUS_TIMED_OUT`.
+- The `RuntimeCommandTrace` dataclass containing `command_type`, `status`, `duration_ms`, `error_class`, and `metadata`.
+- A `last_command_trace` attribute initialized to `None` on the `ServerRuntimeFacade`.
+
+### 2. Trace Recording and Lifecycle Updates
+We updated `ServerRuntimeFacade.submit_command` to record execution traces:
+- Successfully processed spell-color commands record a trace with `STATUS_COMPLETED`, the measured `duration_ms` in milliseconds, and `error_class=None`.
+- Commands that fail with an exception record a trace with `STATUS_FAILED`, the measured `duration_ms`, and the name of the caught exception (`error_class=exc.__class__.__name__`), and then propagate the exception unaltered.
+- Unknown commands fail closed by raising `NotImplementedError` and trace the failure.
+
+### 3. Verification & Validation
+- Unit tests added to `tests/test_server_runtime.py` covering successful spell-color traces, exception-raising spell-color traces, unknown commands, and verification that no forbidden queue/cache attributes are introduced.
+- Bounded validations run and passed (compiling, tests, scope validation, and git check diff).
