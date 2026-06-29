@@ -2506,7 +2506,9 @@ class LanController:
             return
 
         from server_app import create_app
+        from server_runtime import RuntimeCommand, COMMAND_UPDATE_SPELL_COLOR
         self._fastapi_app = create_app(lan_controller=self)
+        self._runtime = self._fastapi_app.state.runtime
 
         @self._fastapi_app.middleware("http")
         async def set_current_request_path_middleware(request: Request, call_next):
@@ -3160,7 +3162,12 @@ class LanController:
             if not spell_id:
                 raise HTTPException(status_code=400, detail="Missing spell id.")
             try:
-                result = self.app._save_spell_color(spell_id, payload.get("color"))
+                command = RuntimeCommand(
+                    command_type=COMMAND_UPDATE_SPELL_COLOR,
+                    payload={"spell_id": spell_id, "color": payload.get("color")}
+                )
+                cmd_result = self._runtime.submit_command(command)
+                result = cmd_result.data.get("spell")
             except FileNotFoundError:
                 raise HTTPException(status_code=404, detail="Spell not found.")
             except ValueError as exc:

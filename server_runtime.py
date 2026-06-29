@@ -33,6 +33,9 @@ class RuntimeSnapshotResult:
     data: Dict[str, Any] = field(default_factory=dict)
 
 
+COMMAND_UPDATE_SPELL_COLOR = "update_spell_color"
+
+
 class ServerRuntimeFacade:
     """Narrow facade skeleton between ASGI app and the legacy tracker runtime."""
 
@@ -53,11 +56,26 @@ class ServerRuntimeFacade:
         return self._ready
 
     def submit_command(self, command: RuntimeCommand) -> RuntimeCommandResult:
-        """Submit a command to the runtime.
+        """Submit a command to the runtime."""
+        if command.command_type == COMMAND_UPDATE_SPELL_COLOR:
+            if not self.lan_controller:
+                raise RuntimeError("LanController is not configured on the facade.")
+            app = getattr(self.lan_controller, "app", None)
+            if not app:
+                raise RuntimeError("InitiativeTracker app is not configured on LanController.")
 
-        Currently fails closed with NotImplementedError.
-        """
-        raise NotImplementedError("Command submission is not yet implemented.")
+            spell_id = command.payload.get("spell_id")
+            color = command.payload.get("color")
+
+            # Call the actual save function
+            result = app._save_spell_color(spell_id, color)
+            return RuntimeCommandResult(
+                success=True,
+                message="Spell color updated successfully.",
+                data={"spell": result}
+            )
+
+        raise NotImplementedError(f"Command type '{command.command_type}' is not yet implemented.")
 
     def read_snapshot(self, request: RuntimeSnapshotRequest) -> RuntimeSnapshotResult:
         """Read a state snapshot from the runtime.

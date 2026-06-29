@@ -127,3 +127,31 @@ Run:
 - Spell color command-boundary implementation evidence is written back to this work item.
 - Scope validator passes before implementation commit staging.
 - `current_work.md` is updated only when closing this work item.
+
+## Implementation Evidence
+
+### 1. Facade Command Integration
+The spell color command type has been defined in `server_runtime.py`:
+- `COMMAND_UPDATE_SPELL_COLOR = "update_spell_color"`
+- Implemented in `ServerRuntimeFacade.submit_command(...)`. It checks the command type, retrieves the tracker app instance from the attached `lan_controller`, and invokes `app._save_spell_color(spell_id, color)`.
+
+### 2. Route Delegation
+In `dnd_initative_tracker.py`:
+- Imported `RuntimeCommand` and `COMMAND_UPDATE_SPELL_COLOR` from `server_runtime`.
+- Attached the facade reference `self._runtime = self._fastapi_app.state.runtime` on the `LanController` instance.
+- Migrated only the `POST /api/spells/{spell_id}/color` route to build a `RuntimeCommand` and submit it to the facade via `self._runtime.submit_command(command)`.
+
+### 3. Preserved Validation and Mappings
+- Non-dict payload triggers HTTP 400.
+- Empty spell_id triggers HTTP 400.
+- Exception mappings (FileNotFoundError -> 404, ValueError -> 400, RuntimeError -> 500, other Exceptions -> 500) are fully preserved.
+- The returned JSON success shape `{"ok": True, "spell": result}` is fully preserved.
+
+### 4. Focused Verification
+The implementation is covered by unit tests in `tests/test_server_runtime.py`:
+- `test_spell_color_command_execution`: Verifies command executes by calling the hook on a mock controller/app.
+- `test_unknown_command_fails_closed`: Verifies unknown commands raise `NotImplementedError`.
+- `test_facade_without_lan_controller_fails`: Verifies error handling when `lan_controller` is not configured.
+- `test_facade_without_app_fails`: Verifies error handling when `app` is missing.
+- `test_no_queue_or_cache_behavior_introduced`: Verifies no queue/cache behavior is added.
+- `test_route_level_behavior_mapping`: Verifies that the route-level logic and exception to HTTP status mapping match perfectly.
