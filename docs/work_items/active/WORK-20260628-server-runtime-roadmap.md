@@ -1,6 +1,6 @@
 # WORK-20260628-server-runtime-roadmap: Server runtime extraction roadmap
 
-- **Status:** Active
+- **Status:** Completed
 - **Gate:** Server Runtime Roadmap Gate
 - **Opened:** 2026-06-28
 - **Executor:** Orchestrator/developer no-AGY docs workflow unless the developer explicitly authorizes an AGY task.
@@ -63,3 +63,23 @@ Run these commands:
 - The next implementation candidate is identified but not opened as active work.
 - `current_work.md` is updated when this work item is completed.
 - Validation commands above pass.
+
+
+---
+
+<!-- COMPLETION_20260628_START -->
+## Completion summary, 2026-06-28
+
+Completed as a planning-only roadmap pass.
+
+Outputs:
+- `docs/architecture/server_runtime_extraction_decision_20260628.md` now contains the repo-specific target architecture and non-negotiable decision list.
+- `docs/planning/living_docs/server_runtime_extraction_living_plan_20260628.md` now contains the phased extraction roadmap.
+- The first future implementation candidate is identified as `WORK-20260628-server-first-health-shell`, but it is not active.
+- No app/runtime/frontend/test code was edited.
+
+Validation to record before commit:
+- `git status --short`
+- `timeout 10s git diff --check`
+- diff review limited to allowed docs.
+<!-- COMPLETION_20260628_END -->

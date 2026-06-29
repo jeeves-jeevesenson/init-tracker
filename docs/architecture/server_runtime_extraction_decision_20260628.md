@@ -63,3 +63,34 @@ Any AGY task spawned from this decision must name exact files to inspect and exa
 3. **Server Ownership Shell Gate** — code pass for app factory and health endpoints, with bounded validation.
 4. **Runtime Facade Gate** — code pass to introduce facade/queue skeleton without broad route migration.
 5. **Snapshot Contract Gate** — code pass to formalize combat-lite vs. tactical workspace snapshots.
+
+
+---
+
+<!-- ROADMAP_SYNTHESIS_20260628_START -->
+## Repo-specific roadmap synthesis, 2026-06-28
+
+### Target architecture
+
+The target architecture is **ASGI server first, runtime as a service**.
+
+FastAPI/Uvicorn should own process startup, health endpoints, HTTP routing, WebSocket lifecycle, and shutdown. The current tracker/runtime should sit behind a small runtime facade that exposes command submission, read-model snapshot access, health/readiness state, and event publication. Route handlers should become thin adapters: validate request, choose snapshot contract or command type, call the facade, return response.
+
+The first extraction should stay conservative. It should preserve the existing runtime and current gameplay behavior while changing ownership boundaries. The objective is not to rewrite the engine, redesign the frontend, or move all domain logic at once. The objective is to stop normal HTTP/WebSocket responsiveness from being downstream of tracker-shaped blocking work.
+
+### Non-negotiable decisions
+
+1. **ASGI owns lifecycle in the future hosted path.** Server startup/shutdown should move toward an application factory and lifespan-managed runtime service.
+2. **Runtime access must narrow.** New server routes should not grow more direct calls into tracker internals.
+3. **Mutations become commands.** Player and DM mutations should pass through a queue/facade boundary before touching authoritative state.
+4. **Reads use explicit snapshot contracts.** Combat-lite and tactical/map snapshots must remain separate contracts, with workspace-aware tactical behavior preserved.
+5. **Blocking containment is temporary.** Threadpool/offload is allowed as a transition tool, not as the final architecture.
+6. **The repo ledger controls activation.** Imported research and this decision doc are planning inputs only until `docs/work_items/current_work.md` activates a specific implementation item.
+7. **Real engine/runtime replacement is not now.** Engine migration, TypeScript runtime work, and broad frontend redesign remain future exploration until the server/runtime boundary is stable.
+
+### First future implementation candidate
+
+The first implementation candidate should be a narrow **server-first health/app-factory shell**. It should add the smallest factory/lifespan seam needed to prove that the ASGI layer can own health/readiness and hold a runtime service object without migrating gameplay routes yet.
+
+That future task should not start until opened as its own active work item. It should name exact files, explicit validation, and a rollback plan.
+<!-- ROADMAP_SYNTHESIS_20260628_END -->
