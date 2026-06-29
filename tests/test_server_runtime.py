@@ -211,3 +211,150 @@ class ServerRuntimeFacadeTests(unittest.TestCase):
         self.assertEqual(trace.command_type, "unknown_action")
         self.assertEqual(trace.status, "failed")
         self.assertEqual(trace.error_class, "NotImplementedError")
+
+    def test_queue_adapter_success(self):
+        # Test that the queue adapter successfully enqueues the action,
+        # registers pending state, polls for completion, updates state and returns result.
+        import threading
+        import time
+
+        class FakeQueue:
+            def __init__(self):
+                self.items = []
+                self.on_put = None
+            def put(self, item):
+                self.items.append(item)
+                if self.on_put:
+                    self.on_put(item)
+            def qsize(self):
+                return len(self.items)
+
+        class FakeLanController:
+            def __init__(self):
+                self._actions = FakeQueue()
+                self._action_states = {}
+                self._action_states_lock = threading.Lock()
+                self._action_history_limit = 500
+
+        controller = FakeLanController()
+
+        def process_success(msg):
+            action_id = msg["action_id"]
+            with controller._action_states_lock:
+                controller._action_states[action_id].update({
+                    "status": "completed",
+                    "result": {"status": "applied", "custom_key": "val"},
+                    "completed_at_ns": time.perf_counter_ns()
+                })
+
+        controller._actions.on_put = process_success
+
+        facade = ServerRuntimeFacade(lan_controller=controller)
+        command = RuntimeCommand(
+            command_type="test_queue_command",
+            payload={"cid": 42, "foo": "bar"}
+        )
+
+        result = facade.submit_command(command)
+        self.assertTrue(result.success)
+        self.assertEqual(result.data["result"]["status"], "applied")
+        self.assertEqual(result.data["result"]["custom_key"], "val")
+
+        trace = facade.last_command_trace
+        self.assertIsNotNone(trace)
+        self.assertEqual(trace.command_type, "test_queue_command")
+        self.assertEqual(trace.status, "completed")
+        self.assertIsNone(trace.error_class)
+        self.assertEqual(trace.metadata["queue_size"], 1)
+        self.assertIn("queue_wait_ms", trace.metadata)
+
+    def test_queue_adapter_timeout(self):
+        # Test that the queue adapter handles timeouts properly by raising TimeoutError
+        # and tracing the event with STATUS_TIMED_OUT.
+        import threading
+
+        class FakeQueue:
+            def __init__(self):
+                self.items = []
+            def put(self, item):
+                self.items.append(item)
+            def qsize(self):
+                return len(self.items)
+
+        class FakeLanController:
+            def __init__(self):
+                self._actions = FakeQueue()
+                self._action_states = {}
+                self._action_states_lock = threading.Lock()
+                self._action_history_limit = 500
+
+        controller = FakeLanController()
+        facade = ServerRuntimeFacade(lan_controller=controller)
+        command = RuntimeCommand(
+            command_type="test_queue_command",
+            payload={"cid": 42, "timeout_ms": 10}
+        )
+
+        with self.assertRaises(TimeoutError) as ctx:
+            facade.submit_command(command)
+        self.assertIn("timed out after 10ms", str(ctx.exception))
+
+        trace = facade.last_command_trace
+        self.assertIsNotNone(trace)
+        self.assertEqual(trace.command_type, "test_queue_command")
+        self.assertEqual(trace.status, "timed_out")
+        self.assertEqual(trace.error_class, "TimeoutError")
+        self.assertEqual(trace.metadata["queue_size"], 1)
+
+    def test_queue_adapter_mapped_errors(self):
+        # Test that the queue adapter maps and raises the correct exceptions.
+        import threading
+        import time
+
+        class FakeQueue:
+            def __init__(self):
+                self.items = []
+                self.on_put = None
+            def put(self, item):
+                self.items.append(item)
+                if self.on_put:
+                    self.on_put(item)
+            def qsize(self):
+                return len(self.items)
+
+        class FakeLanController:
+            def __init__(self):
+                self._actions = FakeQueue()
+                self._action_states = {}
+                self._action_states_lock = threading.Lock()
+                self._action_history_limit = 500
+
+        for err_type, expected_exc in [
+            ("ValueError", ValueError),
+            ("FileNotFoundError", FileNotFoundError),
+            ("RuntimeError", RuntimeError),
+            ("NotImplementedError", NotImplementedError),
+            ("SomeOtherError", RuntimeError)
+        ]:
+            controller = FakeLanController()
+            facade = ServerRuntimeFacade(lan_controller=controller)
+
+            def make_process_error(err_name, ctrl):
+                return lambda msg: ctrl._action_states[msg["action_id"]].update({
+                    "status": "completed",
+                    "result": {"status": "error", "reason": err_name},
+                    "completed_at_ns": time.perf_counter_ns()
+                })
+
+            controller._actions.on_put = make_process_error(err_type, controller)
+            command = RuntimeCommand(command_type="test_queue_command")
+            with self.assertRaises(expected_exc) as ctx:
+                facade.submit_command(command)
+            self.assertIn(f"Queue command failed: {err_type}", str(ctx.exception))
+
+            trace = facade.last_command_trace
+            self.assertIsNotNone(trace)
+            self.assertEqual(trace.command_type, "test_queue_command")
+            self.assertEqual(trace.status, "failed")
+            self.assertEqual(trace.error_class, err_type)
+            self.assertEqual(trace.metadata["queue_size"], 1)
