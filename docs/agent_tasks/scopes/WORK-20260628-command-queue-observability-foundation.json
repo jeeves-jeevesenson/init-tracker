@@ -32,7 +32,6 @@
     "_actions.put",
     "_lan_apply_action",
     "snapshot_cache",
-    "read_snapshot(",
     "**Status:** Completed"
   ],
   "allow_work_close": false,
