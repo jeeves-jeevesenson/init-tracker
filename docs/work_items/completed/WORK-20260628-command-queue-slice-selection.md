@@ -1,6 +1,6 @@
 # WORK-20260628-command-queue-slice-selection: Command queue slice selection
 
-- **Status:** Active
+- **Status:** Completed
 - **Gate:** Command Queue Slice Selection Gate
 - **Opened:** 2026-06-28
 - **Executor:** AGY by explicit bounded evidence task, or developer no-agent command inventory if chosen.
@@ -191,3 +191,15 @@ The selected candidate is `POST /api/spells/{spell_id}/color` in `LanController`
 - `POST /api/players/cache/refresh`: Rejected because it interacts with player profile disk storage and cache rebuilds, which carries I/O and synchronization overhead.
 - `POST /api/dm/combat/next-turn`: Rejected because turn advancement affects multiple sub-components (monsters, active players, reaction prompts, log writers), representing high gameplay risk.
 - `POST /api/dm/map/combatants/{cid}/move`: Rejected because it relies on tactical grid layout coordinates, movement speed rules, and map workspace updates, violating our selection guidelines.
+
+
+## Completion Evidence
+
+- Completed in `22d5637`.
+- Inventory found that `server_app.py` only owns health/readiness endpoints.
+- Evidence identified dynamic HTTP/server route registration and WebSocket action seams in `LanController`.
+- Selected `POST /api/spells/{spell_id}/color` as the lowest-risk first command-queue candidate.
+- Suggested next work item: `WORK-20260628-command-queue-spell-color`.
+- Scope validation passed after evidence wording repair:
+  - `scripts/agent_scope_validate.py docs/agent_tasks/scopes/WORK-20260628-command-queue-slice-selection.json`
+- No source code, tests, current_work implementation changes, unrelated inbox dirt, or `logs/context/` edits.

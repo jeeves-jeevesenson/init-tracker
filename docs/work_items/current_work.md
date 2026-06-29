@@ -8,10 +8,10 @@ If an item is not marked as **Active** here, it is NOT current work.
 ## Current Status
 
 <!-- ACTIVE_WORK_STATUS_START -->
-- **Status:** Active
-- **Current Work Item:** WORK-20260628-command-queue-slice-selection
-- **Active Gate:** Command Queue Slice Selection Gate
-- **Allowed Next Action:** Run one bounded evidence/inventory task to identify exactly one low-risk command-queue candidate from current repo behavior. Do not implement queue, migrate routes, triage unrelated bug inbox dirt, logs/context, frontend, deploy, or random cleanup.
+- **Status:** Idle
+- **Current Work Item:** None
+- **Active Gate:** None
+- **Allowed Next Action:** Continue server-runtime extraction migration by opening `WORK-20260628-command-queue-spell-color`. Do not triage unrelated bug inbox dirt, logs/context, deploy, or random cleanup unless the developer explicitly asks.
 <!-- ACTIVE_WORK_STATUS_END -->
 
 ---
@@ -21,7 +21,6 @@ If an item is not marked as **Active** here, it is NOT current work.
 | ID | Title | Status | Goal |
 | --- | --- | --- | --- |
 <!-- ACTIVE_WORK_TABLE_START -->
-| WORK-20260628-command-queue-slice-selection | Command queue slice selection | Active | Inventory current mutating route/action seams and select exactly one low-risk candidate for the next command-queue implementation slice; no app implementation. |
 <!-- ACTIVE_WORK_TABLE_END -->
 
 ---
@@ -32,6 +31,7 @@ If an item is not marked as **Active** here, it is NOT current work.
 | --- | --- | --- | --- |
 | BUG-20260614-weapon-attacks-reload-fail | Weapon attacks / reload fail | 2026-06-26 | Closed in `6d14706`; focused unit tests passed; JS syntax check passed; diff check passed; developer browser smoke passed; final weapon reload / ammo / Multiattack behavior accepted. See `docs/work_items/active/BUG-20260614-weapon-attacks-reload-fail-smoke-failure-20260626.md`. |
 <!-- COMPLETED_WORK_TABLE_START -->
+| WORK-20260628-command-queue-slice-selection | Command queue slice selection | 2026-06-28 | Completed in `22d5637`; selected `POST /api/spells/{spell_id}/color` as the first low-risk command-queue candidate and proposed `WORK-20260628-command-queue-spell-color`. See [completed/WORK-20260628-command-queue-slice-selection.md](completed/WORK-20260628-command-queue-slice-selection.md). |
 | WORK-20260628-runtime-facade-contracts | Runtime facade command and snapshot contracts | 2026-06-28 | Completed in `2244f09`; added explicit command/snapshot contract dataclasses and fail-closed facade boundaries; focused tests and scope validation passed. See [completed/WORK-20260628-runtime-facade-contracts.md](completed/WORK-20260628-runtime-facade-contracts.md). |
 | WORK-20260628-runtime-facade-skeleton | Runtime facade skeleton | 2026-06-28 | Completed in `ac210c6`; added narrow `ServerRuntimeFacade`, wired app factory ownership via `app.state.runtime`, preserved health/readiness, added focused tests, and passed scoped validation. See [completed/WORK-20260628-runtime-facade-skeleton.md](completed/WORK-20260628-runtime-facade-skeleton.md). |
 | BUG-20260627-manage-spells-free-spell-limit-and-save-failures | Manage Spells free spell limits and save failures | 2026-06-27 | Fixed free spell add/remove behavior and Unicode/Cyrillic player profile save lookup; py_compile passed; spellbook unittest passed; A0 gate passed; diff check passed; developer browser smoke passed. See [completed/BUG-20260627-manage-spells-free-spell-limit-and-save-failures.md](completed/BUG-20260627-manage-spells-free-spell-limit-and-save-failures.md). |
