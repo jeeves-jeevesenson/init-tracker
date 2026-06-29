@@ -1855,6 +1855,7 @@ class LanController:
         "move",
         "cycle_movement_mode",
         "set_facing",
+        "place_combatant",
         "dash",
         "perform_action",
         "end_turn",
@@ -2506,7 +2507,7 @@ class LanController:
             return
 
         from server_app import create_app
-        from server_runtime import RuntimeCommand, COMMAND_UPDATE_SPELL_COLOR, COMMAND_SET_FACING, COMMAND_SET_AURAS_ENABLED
+        from server_runtime import RuntimeCommand, COMMAND_UPDATE_SPELL_COLOR, COMMAND_SET_FACING, COMMAND_SET_AURAS_ENABLED, COMMAND_PLACE_COMBATANT
         self._fastapi_app = create_app(lan_controller=self)
         self._runtime = self._fastapi_app.state.runtime
 
@@ -4708,18 +4709,38 @@ class LanController:
             except Exception:
                 raise HTTPException(status_code=400, detail="col and row must be integers.")
             try:
-                result = self.app._dm_place_combatant_on_map(int(cid), int(col), int(row))
+                header = request.headers.get("authorization", "")
+                token = ""
+                if header.lower().startswith("bearer "):
+                    token = header.split(" ", 1)[1].strip()
+                if not token or not self.app._is_admin_token_valid(token):
+                    token = self.app._issue_admin_token()
+
+                command = RuntimeCommand(
+                    command_type=COMMAND_PLACE_COMBATANT,
+                    payload={
+                        "cid": int(cid),
+                        "col": int(col),
+                        "row": int(row),
+                        "admin_token": token,
+                    }
+                )
+                cmd_result = self._runtime.submit_command(command)
+                place_result = cmd_result.data.get("place_result") or {}
+            except TimeoutError as exc:
+                raise HTTPException(status_code=504, detail=str(exc))
+            except ValueError as exc:
+                raise HTTPException(status_code=400, detail=str(exc))
             except Exception as exc:
                 raise HTTPException(status_code=500, detail=f"Failed to place combatant: {exc}")
-            if not result.get("ok"):
-                raise HTTPException(status_code=400, detail=result.get("error", "Cannot place combatant."))
             return {
                 "ok": True,
-                "cid": result.get("cid"),
-                "col": result.get("col"),
-                "row": result.get("row"),
+                "cid": place_result.get("cid", int(cid)),
+                "col": place_result.get("col", int(col)),
+                "row": place_result.get("row", int(row)),
                 "snapshot": _dm_console_snapshot(),
             }
+
 
         @self._fastapi_app.post("/api/dm/map/combatants/{cid}/facing")
         async def dm_set_combatant_facing(cid: int, request: Request, payload: Dict[str, Any] = Body(...)):
@@ -43211,6 +43232,16 @@ class InitiativeTracker(base.InitiativeTracker):
                 ws_id=ws_id,
                 is_admin=is_admin,
             )
+        elif typ == "place_combatant":
+            col = msg.get("col")
+            row = msg.get("row")
+            result = self._dm_place_combatant_on_map(int(cid), int(col), int(row))
+            action_id = msg.get("action_id")
+            if action_id:
+                with self._action_states_lock:
+                    if action_id in self._action_states:
+                        self._action_states[action_id]["place_result"] = result
+            return
         elif typ == "reload_weapon":
             self._ensure_player_commands().reload_weapon(
                 msg,
