@@ -175,18 +175,13 @@ The selected candidate is `POST /api/spells/{spell_id}/color` in `LanController`
   - `serve_headless.py`
   - Gameplay engines and combat logic files (e.g., `combat_service.py` or specific combat rules in `dnd_initative_tracker.py` outside of the API route delegation)
   - Frontend assets (`static/`, `templates/`, HTML, CSS, JS)
-- **Proposed scope validator forbidden patterns**:
-  - `@app.get`
-  - `@app.post`
-  - `@app.put`
-  - `@app.delete`
-  - `snapshot_cache`
-  - `asyncio.Queue`
-  - `collections.deque`
-  - `next_turn`
-  - `move_combatant`
-  - `tactical`
-  - `map`
+- **Proposed scope validator forbidden pattern categories**:
+  - Adding new FastAPI route decorators in application source.
+  - Introducing snapshot-cache implementation markers.
+  - Introducing async or deque-based command queue structures.
+  - Touching combat turn advancement.
+  - Touching combatant movement.
+  - Touching tactical/map behavior.
 - **Proposed validation commands**:
   - `python3 -m py_compile server_runtime.py dnd_initative_tracker.py`
   - `python3 -m unittest tests/test_server_runtime.py`
