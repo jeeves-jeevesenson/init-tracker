@@ -1,6 +1,6 @@
 # Work Item: WORK-20260628-port-external-research - Port External Server Runtime Research
 
-- **Status:** Active
+- **Status:** Completed
 - **Source:** Developer-provided external research uploaded on 2026-06-28
 - **Assigned To:** Orchestrator / developer shell patch
 - **Mode:** Workflow/Admin + Planning
@@ -85,7 +85,12 @@ No browser smoke. This is a documentation/workflow import only.
 
 ### Completion Notes
 
-Pending developer validation and approval.
+Completed on 2026-06-28.
+
+Evidence:
+- Imported research docs committed in `a210eca`.
+- `timeout 10s git diff --check` passed before commit.
+- Remaining untracked `docs/bug_reports/inbox/BUG-20260626-dmcontrol-terrain-not-visible.md` and `logs/context/` were intentionally not staged.
 
 ---
 
