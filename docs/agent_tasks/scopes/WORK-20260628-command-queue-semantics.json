@@ -1,0 +1,30 @@
+{
+  "task_id": "WORK-20260628-command-queue-semantics",
+  "allowed_edit_paths": [
+    "docs/work_items/active/WORK-20260628-command-queue-semantics.md"
+  ],
+  "forbidden_paths": [
+    "docs/work_items/current_work.md",
+    "docs/bug_reports/inbox/BUG-20260626-dmcontrol-terrain-not-visible.md",
+    "logs/context/",
+    "server_runtime.py",
+    "dnd_initative_tracker.py",
+    "server_app.py",
+    "serve_headless.py",
+    "tests/",
+    "static/",
+    "templates/",
+    "data/",
+    "docs/runtime_reports/"
+  ],
+  "forbidden_diff_patterns": [
+    "**Status:** Completed"
+  ],
+  "allow_work_close": false,
+  "allow_commit": false,
+  "required_clean_staging": true,
+  "baseline_allowed_dirty_paths": [
+    "docs/bug_reports/inbox/BUG-20260626-dmcontrol-terrain-not-visible.md",
+    "logs/context/"
+  ]
+}
