@@ -1,6 +1,6 @@
 # WORK-20260628-server-first-health-shell: Server-first health and app factory shell
 
-- **Status:** Active
+- **Status:** Completed
 - **Gate:** Server Ownership Shell Gate
 - **Opened:** 2026-06-28
 - **Executor:** AGY by explicit bounded task packet, or developer no-agent patch if chosen.
@@ -88,3 +88,30 @@ If no focused test exists and adding one is outside the chosen scope, AGY must s
 - **Health/Readiness Routes:** Bounded routes `/health`, `/api/health`, `/ready`, `/api/ready` configured through the factory.
 - **Integration:** Replaced FastAPI construction in `dnd_initative_tracker.py` with `create_app(lan_controller=self)`.
 - **Validation:** Added `tests/test_server_health.py`; verified successfully via `timeout 30s .venv/bin/python -m unittest tests/test_server_health.py -q`. Headless host test `timeout 90s .venv/bin/python -m unittest tests/test_headless_host.py -q` passed successfully.
+
+## Completion Summary
+
+Completed on 2026-06-28.
+
+Implementation commit:
+- `af88529` — app factory health/readiness seam.
+
+Validation evidence:
+- `timeout 10s git diff --check` passed.
+- `timeout 10s .venv/bin/python -m py_compile serve_headless.py` passed.
+- `timeout 10s .venv/bin/python -m py_compile server_app.py` passed.
+- `timeout 30s .venv/bin/python -m unittest tests/test_server_health.py -q` passed.
+- `timeout 90s .venv/bin/python -m unittest tests/test_headless_host.py -q` passed.
+- Developer smoke server started successfully with `serve_headless.py`.
+- Smoke log: `logs/smoke/WORK-20260628-server-first-health-shell_smoke-server_20260628-220510.log`.
+- Debug trace: `logs/debug-trace-20260628-220510.jsonl`.
+- Endpoint smoke confirmed:
+  - `/health` returned HTTP 200 and `{"status":"healthy","ready":true}`.
+  - `/api/health` returned HTTP 200 and `{"status":"healthy","ready":true}`.
+  - `/ready` returned HTTP 200 and `{"status":"ready"}`.
+  - `/api/ready` returned HTTP 200 and `{"status":"ready"}`.
+
+Scope notes:
+- `serve_headless.py` remains the developer smoke launcher.
+- No gameplay route migration was performed.
+- No runtime facade, command queue, snapshot cache, frontend, deploy, DNS, or production topology changes were performed.

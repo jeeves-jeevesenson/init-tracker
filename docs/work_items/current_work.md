@@ -8,10 +8,10 @@ If an item is not marked as **Active** here, it is NOT current work.
 ## Current Status
 
 <!-- ACTIVE_WORK_STATUS_START -->
-- **Status:** Active
-- **Current Work Item:** WORK-20260628-server-first-health-shell
-- **Active Gate:** Server Ownership Shell Gate
-- **Allowed Next Action:** Developer validation and browser smoke. Implementation of the health/readiness endpoints and app factory seam is complete and unit tested.
+- **Status:** Idle
+- **Current Work Item:** None
+- **Active Gate:** None
+- **Allowed Next Action:** None. Ask developer whether to open a bug, plan, smoke, commit/push, deploy, reopen work, or perform authorized workflow/admin migration.
 <!-- ACTIVE_WORK_STATUS_END -->
 
 ---
@@ -21,7 +21,6 @@ If an item is not marked as **Active** here, it is NOT current work.
 | ID | Title | Status | Goal |
 | --- | --- | --- | --- |
 <!-- ACTIVE_WORK_TABLE_START -->
-| WORK-20260628-server-first-health-shell | Server-first health and app factory shell | Active | Add the smallest server-owned FastAPI app factory/lifespan/health shell while preserving existing headless behavior; no gameplay route migration. |
 <!-- ACTIVE_WORK_TABLE_END -->
 
 ---
@@ -49,6 +48,7 @@ If an item is not marked as **Active** here, it is NOT current work.
 | ITR-20260529-A0-08 | Add current work ledger and long-term planning GPT workflow | 2026-05-30 | docs/work_items/completed/ITR-20260529-A0-08.md |
 | WORK-20260628-port-external-research | Port external server runtime research | 2026-06-28 | Imported external research docs and server-runtime planning foundation in commit `a210eca`. No app implementation. |
 | WORK-20260628-server-runtime-roadmap | Server runtime extraction roadmap | 2026-06-28 | Distilled imported ASGI/runtime research into repo-specific target architecture, decision list, phased roadmap, and first future implementation candidate. No app implementation. |
+| WORK-20260628-server-first-health-shell | Server-first health and app factory shell | 2026-06-28 | Implemented app factory health/readiness seam in `af88529`; focused unit/headless validations passed; developer smoke confirmed `/health`, `/api/health`, `/ready`, and `/api/ready` return HTTP 200 with expected JSON. Smoke log: `logs/smoke/WORK-20260628-server-first-health-shell_smoke-server_20260628-220510.log`. Debug trace: `logs/debug-trace-20260628-220510.jsonl`. |
 <!-- COMPLETED_WORK_TABLE_END -->
 
 ---
