@@ -2506,7 +2506,7 @@ class LanController:
             return
 
         from server_app import create_app
-        from server_runtime import RuntimeCommand, COMMAND_UPDATE_SPELL_COLOR, COMMAND_SET_FACING
+        from server_runtime import RuntimeCommand, COMMAND_UPDATE_SPELL_COLOR, COMMAND_SET_FACING, COMMAND_SET_AURAS_ENABLED
         self._fastapi_app = create_app(lan_controller=self)
         self._runtime = self._fastapi_app.state.runtime
 
@@ -6346,14 +6346,30 @@ class LanController:
             else:
                 enabled = bool(enabled_raw)
             try:
-                result = self.app._dm_set_auras_enabled(bool(enabled))
+                header = request.headers.get("authorization", "")
+                token = ""
+                if header.lower().startswith("bearer "):
+                    token = header.split(" ", 1)[1].strip()
+                if not token or not self.app._is_admin_token_valid(token):
+                    token = self.app._issue_admin_token()
+
+                command = RuntimeCommand(
+                    command_type=COMMAND_SET_AURAS_ENABLED,
+                    payload={
+                        "enabled": bool(enabled),
+                        "admin_token": token,
+                    }
+                )
+                self._runtime.submit_command(command)
+            except TimeoutError as exc:
+                raise HTTPException(status_code=504, detail=str(exc))
+            except ValueError as exc:
+                raise HTTPException(status_code=400, detail=str(exc))
             except Exception as exc:
                 raise HTTPException(status_code=500, detail=f"Failed to update overlays: {exc}")
-            if not result.get("ok"):
-                raise HTTPException(status_code=400, detail=result.get("error", "Cannot update overlays."))
             return {
                 "ok": True,
-                "enabled": result.get("enabled"),
+                "enabled": bool(getattr(self.app, "_lan_auras_enabled", enabled)),
                 "snapshot": _dm_console_snapshot(),
             }
 

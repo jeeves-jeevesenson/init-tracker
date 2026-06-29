@@ -6,6 +6,7 @@ from server_runtime import (
     RuntimeCommandResult,
     COMMAND_UPDATE_SPELL_COLOR,
     COMMAND_SET_FACING,
+    COMMAND_SET_AURAS_ENABLED,
 )
 
 
@@ -146,6 +147,90 @@ class ServerRuntimeFacadeTests(unittest.TestCase):
         response = client.post("/api/spells/fireball/color", json={"color": "green"})
         self.assertEqual(response.status_code, 500)
         self.assertIn("Failed to save spell color.", response.json()["detail"])
+
+    def test_auras_route_level_behavior_mapping(self):
+        from fastapi import FastAPI, Body, HTTPException, Request
+        from fastapi.testclient import TestClient
+        from typing import Dict, Any
+
+        app = FastAPI()
+        mock_runtime = MagicMock()
+        mock_tracker_app = MagicMock()
+        mock_tracker_app._is_admin_token_valid.return_value = True
+        mock_tracker_app._issue_admin_token.return_value = "fake-token"
+        mock_tracker_app._lan_auras_enabled = True
+
+        def _dm_console_snapshot():
+            return {"map": "dummy"}
+
+        @app.post("/api/dm/map/overlays/auras")
+        async def dm_set_auras_overlay(request: Request, payload: Dict[str, Any] = Body(...)):
+            if not isinstance(payload, dict):
+                raise HTTPException(status_code=400, detail="Invalid payload.")
+            enabled_raw = payload.get("enabled")
+            if isinstance(enabled_raw, str):
+                enabled = enabled_raw.strip().lower() in {"1", "true", "yes", "on"}
+            elif isinstance(enabled_raw, (int, float)):
+                enabled = bool(enabled_raw)
+            else:
+                enabled = bool(enabled_raw)
+            try:
+                command = RuntimeCommand(
+                    command_type=COMMAND_SET_AURAS_ENABLED,
+                    payload={
+                        "enabled": bool(enabled),
+                        "admin_token": "fake-token",
+                    }
+                )
+                mock_runtime.submit_command(command)
+            except TimeoutError as exc:
+                raise HTTPException(status_code=504, detail=str(exc))
+            except ValueError as exc:
+                raise HTTPException(status_code=400, detail=str(exc))
+            except Exception as exc:
+                raise HTTPException(status_code=500, detail=f"Failed to update overlays: {exc}")
+            return {
+                "ok": True,
+                "enabled": bool(getattr(mock_tracker_app, "_lan_auras_enabled", enabled)),
+                "snapshot": _dm_console_snapshot(),
+            }
+
+        client = TestClient(app)
+
+        # 1. Success case
+        mock_runtime.submit_command.return_value = RuntimeCommandResult(
+            success=True, message="ok", data={}
+        )
+        response = client.post("/api/dm/map/overlays/auras", json={"enabled": True})
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json(), {"ok": True, "enabled": True, "snapshot": {"map": "dummy"}})
+
+        # 2. Invalid payload (non-dict)
+        import asyncio
+        try:
+            asyncio.run(dm_set_auras_overlay(MagicMock(), "not a dict"))
+            self.fail("HTTPException not raised for non-dict payload")
+        except HTTPException as e:
+            self.assertEqual(e.status_code, 400)
+            self.assertEqual(e.detail, "Invalid payload.")
+
+        # 3. TimeoutError -> 504
+        mock_runtime.submit_command.side_effect = TimeoutError("Command timed out")
+        response = client.post("/api/dm/map/overlays/auras", json={"enabled": False})
+        self.assertEqual(response.status_code, 504)
+        self.assertIn("Command timed out", response.json()["detail"])
+
+        # 4. ValueError -> 400
+        mock_runtime.submit_command.side_effect = ValueError("Invalid value")
+        response = client.post("/api/dm/map/overlays/auras", json={"enabled": False})
+        self.assertEqual(response.status_code, 400)
+        self.assertIn("Invalid value", response.json()["detail"])
+
+        # 5. Generic Exception -> 500
+        mock_runtime.submit_command.side_effect = Exception("Runtime fail")
+        response = client.post("/api/dm/map/overlays/auras", json={"enabled": False})
+        self.assertEqual(response.status_code, 500)
+        self.assertIn("Failed to update overlays: Runtime fail", response.json()["detail"])
 
     def test_spell_color_lifecycle_observability_success(self):
         # 1. successful spell-color command still works and records a completed lifecycle/trace
@@ -414,6 +499,64 @@ class ServerRuntimeFacadeTests(unittest.TestCase):
         trace = facade.last_command_trace
         self.assertIsNotNone(trace)
         self.assertEqual(trace.command_type, COMMAND_SET_FACING)
+        self.assertEqual(trace.status, "completed")
+        self.assertIsNone(trace.error_class)
+        self.assertEqual(trace.metadata["queue_size"], 1)
+        self.assertIn("queue_wait_ms", trace.metadata)
+
+    def test_set_auras_enabled_command_success(self):
+        import threading
+        import time
+
+        class FakeQueue:
+            def __init__(self):
+                self.items = []
+                self.on_put = None
+            def put(self, item):
+                self.items.append(item)
+                if self.on_put:
+                    self.on_put(item)
+            def qsize(self):
+                return len(self.items)
+
+        class FakeLanController:
+            def __init__(self):
+                self._actions = FakeQueue()
+                self._action_states = {}
+                self._action_states_lock = threading.Lock()
+                self._action_history_limit = 500
+
+        controller = FakeLanController()
+        captured_msg = []
+
+        def process_success(msg):
+            captured_msg.append(msg)
+            action_id = msg["action_id"]
+            with controller._action_states_lock:
+                controller._action_states[action_id].update({
+                    "status": "completed",
+                    "result": {"status": "applied", "enabled": msg.get("enabled")},
+                    "completed_at_ns": time.perf_counter_ns()
+                })
+
+        controller._actions.on_put = process_success
+
+        facade = ServerRuntimeFacade(lan_controller=controller)
+        command = RuntimeCommand(
+            command_type=COMMAND_SET_AURAS_ENABLED,
+            payload={"enabled": True}
+        )
+
+        result = facade.submit_command(command)
+        self.assertTrue(result.success)
+        self.assertEqual(len(captured_msg), 1)
+        msg = captured_msg[0]
+        self.assertEqual(msg["type"], "set_auras_enabled")
+        self.assertEqual(msg["enabled"], True)
+
+        trace = facade.last_command_trace
+        self.assertIsNotNone(trace)
+        self.assertEqual(trace.command_type, COMMAND_SET_AURAS_ENABLED)
         self.assertEqual(trace.status, "completed")
         self.assertIsNone(trace.error_class)
         self.assertEqual(trace.metadata["queue_size"], 1)

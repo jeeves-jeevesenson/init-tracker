@@ -55,6 +55,8 @@ class RuntimeSnapshotResult:
 COMMAND_UPDATE_SPELL_COLOR = "update_spell_color"
 COMMAND_TEST_QUEUE = "test_queue_command"
 COMMAND_SET_FACING = "set_facing"
+COMMAND_SET_AURAS_ENABLED = "set_auras_enabled"
+
 
 
 
@@ -209,6 +211,10 @@ class ServerRuntimeFacade:
         elif command.command_type == COMMAND_SET_FACING:
             timeout_ms = command.payload.get("timeout_ms", 5000)
             return self._submit_to_lan_queue(command, timeout_ms=timeout_ms)
+        elif command.command_type == COMMAND_SET_AURAS_ENABLED:
+            timeout_ms = command.payload.get("timeout_ms", 5000)
+            return self._submit_to_lan_queue(command, timeout_ms=timeout_ms)
+
 
         import time
         start_time = time.perf_counter()
