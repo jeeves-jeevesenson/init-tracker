@@ -2507,7 +2507,7 @@ class LanController:
             return
 
         from server_app import create_app
-        from server_runtime import RuntimeCommand, COMMAND_UPDATE_SPELL_COLOR, COMMAND_SET_FACING, COMMAND_SET_AURAS_ENABLED, COMMAND_PLACE_COMBATANT
+        from server_runtime import RuntimeCommand, COMMAND_UPDATE_SPELL_COLOR, COMMAND_SET_FACING, COMMAND_SET_AURAS_ENABLED, COMMAND_PLACE_COMBATANT, COMMAND_REMOVE_AOE
         self._fastapi_app = create_app(lan_controller=self)
         self._runtime = self._fastapi_app.state.runtime
 
@@ -6342,14 +6342,31 @@ class LanController:
             """Remove a map AoE effect."""
             _check_dm_auth(request)
             try:
-                result = self.app._dm_remove_aoe_on_map(int(aid))
+                header = request.headers.get("authorization", "")
+                token = ""
+                if header.lower().startswith("bearer "):
+                    token = header.split(" ", 1)[1].strip()
+                if not token or not self.app._is_admin_token_valid(token):
+                    token = self.app._issue_admin_token()
+
+                command = RuntimeCommand(
+                    command_type=COMMAND_REMOVE_AOE,
+                    payload={
+                        "aid": int(aid),
+                        "admin_token": token,
+                    }
+                )
+                cmd_result = self._runtime.submit_command(command)
+                remove_result = cmd_result.data.get("remove_result") or {}
+            except TimeoutError as exc:
+                raise HTTPException(status_code=504, detail=str(exc))
+            except ValueError as exc:
+                raise HTTPException(status_code=400, detail=str(exc))
             except Exception as exc:
                 raise HTTPException(status_code=500, detail=f"Failed to remove AoE: {exc}")
-            if not result.get("ok"):
-                raise HTTPException(status_code=400, detail=result.get("error", "Cannot remove AoE."))
             return {
                 "ok": True,
-                "aid": result.get("aid"),
+                "aid": remove_result.get("aid", int(aid)),
                 "snapshot": _dm_console_snapshot(),
             }
 
@@ -43119,6 +43136,16 @@ class InitiativeTracker(base.InitiativeTracker):
                 is_admin=is_admin,
                 claimed=claimed,
             )
+            return
+
+        if typ == "aoe_remove" and is_admin:
+            aid = msg.get("aid")
+            result = self._dm_remove_aoe_on_map(int(aid))
+            action_id = msg.get("action_id")
+            if action_id:
+                with self._action_states_lock:
+                    if action_id in self._action_states:
+                        self._action_states[action_id]["remove_result"] = result
             return
 
         if typ in AOE_MANIPULATION_COMMAND_TYPES:
