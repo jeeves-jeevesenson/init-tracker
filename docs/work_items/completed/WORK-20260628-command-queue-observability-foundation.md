@@ -1,6 +1,6 @@
 # WORK-20260628-command-queue-observability-foundation: Command queue observability foundation
 
-- **Status:** Active
+- **Status:** Completed
 - **Gate:** Command Queue Observability Foundation Gate
 - **Opened:** 2026-06-28
 - **Executor:** AGY by explicit bounded implementation task.
@@ -140,3 +140,20 @@ We updated `ServerRuntimeFacade.submit_command` to record execution traces:
 ### 3. Verification & Validation
 - Unit tests added to `tests/test_server_runtime.py` covering successful spell-color traces, exception-raising spell-color traces, unknown commands, and verification that no forbidden queue/cache attributes are introduced.
 - Bounded validations run and passed (compiling, tests, scope validation, and git check diff).
+
+
+## Completion Evidence
+
+- Completed in `153c23d`.
+- Added command lifecycle status constants.
+- Added `RuntimeCommandTrace`.
+- Added `ServerRuntimeFacade.last_command_trace`.
+- `ServerRuntimeFacade.submit_command(...)` now records completed and failed command traces for the existing synchronous spell-color command path.
+- Preserved spell-color success behavior and exception propagation.
+- Unknown commands still fail closed with `NotImplementedError` and now record a failed trace.
+- Added focused unit coverage in `tests/test_server_runtime.py`.
+- Validation passed:
+  - `python3 -m py_compile server_runtime.py tests/test_server_runtime.py`
+  - `.venv/bin/python -m unittest tests/test_server_runtime.py`
+  - `scripts/agent_scope_validate.py docs/agent_tasks/scopes/WORK-20260628-command-queue-observability-foundation.json`
+- No route migration, queue infrastructure, snapshot cache, thread/background worker, frontend, tactical/map/combat, `dnd_initative_tracker.py`, `current_work.md` implementation edits, unrelated inbox dirt, or `logs/context/` edits.

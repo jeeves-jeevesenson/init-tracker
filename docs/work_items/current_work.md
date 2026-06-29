@@ -8,10 +8,10 @@ If an item is not marked as **Active** here, it is NOT current work.
 ## Current Status
 
 <!-- ACTIVE_WORK_STATUS_START -->
-- **Status:** Active
-- **Current Work Item:** WORK-20260628-command-queue-observability-foundation
-- **Active Gate:** Command Queue Observability Foundation Gate
-- **Allowed Next Action:** Run one bounded AGY implementation task to add minimal command lifecycle/observability structures to the runtime facade for the existing spell-color command path. Do not migrate routes, add queue infrastructure, edit dnd_initative_tracker.py, triage unrelated bug inbox dirt, logs/context, frontend, deploy, or random cleanup.
+- **Status:** Idle
+- **Current Work Item:** None
+- **Active Gate:** None
+- **Allowed Next Action:** Continue server-runtime extraction migration by opening the next bounded work item, or pause for a repo handoff/fresh chat if context is getting heavy. Do not triage unrelated bug inbox dirt, logs/context, deploy, or random cleanup unless the developer explicitly asks.
 <!-- ACTIVE_WORK_STATUS_END -->
 
 ---
@@ -21,7 +21,6 @@ If an item is not marked as **Active** here, it is NOT current work.
 | ID | Title | Status | Goal |
 | --- | --- | --- | --- |
 <!-- ACTIVE_WORK_TABLE_START -->
-| WORK-20260628-command-queue-observability-foundation | Command queue observability foundation | Active | Add minimal command lifecycle and observability foundation inside `server_runtime.py` for the existing spell-color facade path; no route migration or queue implementation. |
 <!-- ACTIVE_WORK_TABLE_END -->
 
 ---
@@ -32,6 +31,7 @@ If an item is not marked as **Active** here, it is NOT current work.
 | --- | --- | --- | --- |
 | BUG-20260614-weapon-attacks-reload-fail | Weapon attacks / reload fail | 2026-06-26 | Closed in `6d14706`; focused unit tests passed; JS syntax check passed; diff check passed; developer browser smoke passed; final weapon reload / ammo / Multiattack behavior accepted. See `docs/work_items/active/BUG-20260614-weapon-attacks-reload-fail-smoke-failure-20260626.md`. |
 <!-- COMPLETED_WORK_TABLE_START -->
+| WORK-20260628-command-queue-observability-foundation | Command queue observability foundation | 2026-06-28 | Completed in `153c23d`; added runtime command lifecycle constants, `RuntimeCommandTrace`, and focused trace coverage for the spell-color facade path. See [completed/WORK-20260628-command-queue-observability-foundation.md](completed/WORK-20260628-command-queue-observability-foundation.md). |
 | WORK-20260628-command-queue-semantics | Command queue semantics | 2026-06-28 | Completed in `fb33b9f`; defined facade-owned command gateway semantics, threading authority, lifecycle/failure/observability model, and selected `WORK-20260628-command-queue-observability-foundation`. See [completed/WORK-20260628-command-queue-semantics.md](completed/WORK-20260628-command-queue-semantics.md). |
 | WORK-20260628-command-queue-spell-color | Spell color command boundary | 2026-06-28 | Completed in `fa1e79f`; routed only `POST /api/spells/{spell_id}/color` through the runtime facade command boundary, preserved behavior, and added focused tests. See [completed/WORK-20260628-command-queue-spell-color.md](completed/WORK-20260628-command-queue-spell-color.md). |
 | WORK-20260628-command-queue-slice-selection | Command queue slice selection | 2026-06-28 | Completed in `22d5637`; selected `POST /api/spells/{spell_id}/color` as the first low-risk command-queue candidate and proposed `WORK-20260628-command-queue-spell-color`. See [completed/WORK-20260628-command-queue-slice-selection.md](completed/WORK-20260628-command-queue-slice-selection.md). |
