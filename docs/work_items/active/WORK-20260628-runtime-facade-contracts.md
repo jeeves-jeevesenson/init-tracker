@@ -106,3 +106,26 @@ Run:
 - Contract implementation evidence is written back to this work item.
 - The scope validator passes before implementation commit staging.
 - `current_work.md` is updated only when closing this work item.
+
+## Implementation Evidence
+
+- **Contract Types Defined in `server_runtime.py`:**
+  - `RuntimeCommand`: frozen dataclass representing a command structure.
+  - `RuntimeCommandResult`: frozen dataclass representing the status result of command execution.
+  - `RuntimeSnapshotRequest`: frozen dataclass representing a request for a state snapshot.
+  - `RuntimeSnapshotResult`: frozen dataclass containing the retrieved state snapshot data.
+
+- **Facade Methods Exposed:**
+  - `submit_command(self, command: RuntimeCommand) -> RuntimeCommandResult` - raises `NotImplementedError`
+  - `read_snapshot(self, request: RuntimeSnapshotRequest) -> RuntimeSnapshotResult` - raises `NotImplementedError`
+
+- **Tests Added in `tests/test_server_app.py`:**
+  - `test_command_contract_constructible`
+  - `test_command_result_constructible`
+  - `test_snapshot_request_constructible`
+  - `test_snapshot_result_constructible`
+  - `test_facade_methods_fail_closed_and_no_mutation`
+
+- **Validation:**
+  - All 8 unit tests in `tests/test_server_app.py` run successfully.
+  - Scope validation passes without errors.

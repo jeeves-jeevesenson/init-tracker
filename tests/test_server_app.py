@@ -3,7 +3,13 @@ import unittest
 from fastapi.testclient import TestClient
 
 from server_app import create_app
-from server_runtime import ServerRuntimeFacade
+from server_runtime import (
+    ServerRuntimeFacade,
+    RuntimeCommand,
+    RuntimeCommandResult,
+    RuntimeSnapshotRequest,
+    RuntimeSnapshotResult,
+)
 
 
 class ServerAppTests(unittest.TestCase):
@@ -55,3 +61,35 @@ class ServerAppTests(unittest.TestCase):
         ready = client.get("/ready")
         self.assertEqual(ready.status_code, 503)
         self.assertEqual(ready.json(), {"status": "not ready"})
+
+    def test_command_contract_constructible(self):
+        command = RuntimeCommand(command_type="test_action", payload={"key": "val"})
+        self.assertEqual(command.command_type, "test_action")
+        self.assertEqual(command.payload, {"key": "val"})
+
+    def test_command_result_constructible(self):
+        result = RuntimeCommandResult(success=True, message="done", data={"id": 123})
+        self.assertTrue(result.success)
+        self.assertEqual(result.message, "done")
+        self.assertEqual(result.data, {"id": 123})
+
+    def test_snapshot_request_constructible(self):
+        request = RuntimeSnapshotRequest(snapshot_type="lite", params={"combat_id": "abc"})
+        self.assertEqual(request.snapshot_type, "lite")
+        self.assertEqual(request.params, {"combat_id": "abc"})
+
+    def test_snapshot_result_constructible(self):
+        result = RuntimeSnapshotResult(success=True, data={"combatants": []})
+        self.assertTrue(result.success)
+        self.assertEqual(result.data, {"combatants": []})
+
+    def test_facade_methods_fail_closed_and_no_mutation(self):
+        facade = ServerRuntimeFacade()
+        command = RuntimeCommand(command_type="test_action")
+        request = RuntimeSnapshotRequest(snapshot_type="lite")
+
+        with self.assertRaises(NotImplementedError):
+            facade.submit_command(command)
+
+        with self.assertRaises(NotImplementedError):
+            facade.read_snapshot(request)

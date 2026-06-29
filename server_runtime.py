@@ -1,6 +1,36 @@
 from __future__ import annotations
 
-from typing import Any, Optional
+from dataclasses import dataclass, field
+from typing import Any, Dict, Optional
+
+
+@dataclass(frozen=True)
+class RuntimeCommand:
+    """Explicit contract for a mutating action submitted to the server runtime."""
+    command_type: str
+    payload: Dict[str, Any] = field(default_factory=dict)
+
+
+@dataclass(frozen=True)
+class RuntimeCommandResult:
+    """Explicit result returned by the runtime command execution."""
+    success: bool
+    message: str
+    data: Dict[str, Any] = field(default_factory=dict)
+
+
+@dataclass(frozen=True)
+class RuntimeSnapshotRequest:
+    """Explicit contract for requesting a read-model snapshot of runtime state."""
+    snapshot_type: str
+    params: Dict[str, Any] = field(default_factory=dict)
+
+
+@dataclass(frozen=True)
+class RuntimeSnapshotResult:
+    """Explicit container for a retrieved read-model snapshot."""
+    success: bool
+    data: Dict[str, Any] = field(default_factory=dict)
 
 
 class ServerRuntimeFacade:
@@ -21,3 +51,17 @@ class ServerRuntimeFacade:
     def is_ready(self) -> bool:
         """Return whether the runtime facade is ready."""
         return self._ready
+
+    def submit_command(self, command: RuntimeCommand) -> RuntimeCommandResult:
+        """Submit a command to the runtime.
+
+        Currently fails closed with NotImplementedError.
+        """
+        raise NotImplementedError("Command submission is not yet implemented.")
+
+    def read_snapshot(self, request: RuntimeSnapshotRequest) -> RuntimeSnapshotResult:
+        """Read a state snapshot from the runtime.
+
+        Currently fails closed with NotImplementedError.
+        """
+        raise NotImplementedError("Snapshot reading is not yet implemented.")
