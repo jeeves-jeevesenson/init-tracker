@@ -1,0 +1,37 @@
+{
+  "task_id": "WORK-20260628-runtime-facade-contracts",
+  "allowed_edit_paths": [
+    "server_runtime.py",
+    "tests/test_server_app.py",
+    "docs/work_items/active/WORK-20260628-runtime-facade-contracts.md"
+  ],
+  "forbidden_paths": [
+    "docs/work_items/current_work.md",
+    "docs/bug_reports/inbox/BUG-20260626-dmcontrol-terrain-not-visible.md",
+    "logs/context/",
+    "server_app.py",
+    "serve_headless.py",
+    "dnd_initative_tracker.py",
+    "static/",
+    "templates/"
+  ],
+  "forbidden_diff_patterns": [
+    "asyncio.Queue",
+    "collections.deque",
+    "command_queue",
+    "snapshot_cache",
+    "@app.get",
+    "@app.post",
+    "@app.put",
+    "@app.delete",
+    "route(",
+    "**Status:** Completed"
+  ],
+  "allow_work_close": false,
+  "allow_commit": false,
+  "required_clean_staging": true,
+  "baseline_allowed_dirty_paths": [
+    "docs/bug_reports/inbox/BUG-20260626-dmcontrol-terrain-not-visible.md",
+    "logs/context/"
+  ]
+}

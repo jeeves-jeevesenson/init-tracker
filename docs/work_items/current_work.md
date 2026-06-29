@@ -8,10 +8,10 @@ If an item is not marked as **Active** here, it is NOT current work.
 ## Current Status
 
 <!-- ACTIVE_WORK_STATUS_START -->
-- **Status:** Idle
-- **Current Work Item:** None
-- **Active Gate:** None
-- **Allowed Next Action:** Continue server-runtime extraction migration by opening the next bounded work item. Do not triage unrelated bug inbox dirt, logs/context, deploy, or random cleanup unless the developer explicitly asks.
+- **Status:** Active
+- **Current Work Item:** WORK-20260628-runtime-facade-contracts
+- **Active Gate:** Runtime Facade Contracts Gate
+- **Allowed Next Action:** Draft or run one bounded AGY implementation task for runtime facade command/snapshot contracts. Continue server-runtime extraction migration. Do not triage unrelated bug inbox dirt, logs/context, frontend, route migration, real command queue, snapshot cache, deploy, or random cleanup.
 <!-- ACTIVE_WORK_STATUS_END -->
 
 ---
@@ -21,6 +21,7 @@ If an item is not marked as **Active** here, it is NOT current work.
 | ID | Title | Status | Goal |
 | --- | --- | --- | --- |
 <!-- ACTIVE_WORK_TABLE_START -->
+| WORK-20260628-runtime-facade-contracts | Runtime facade command and snapshot contracts | Active | Define the explicit facade contract surface for future command submission and snapshot reads; no queue implementation, snapshot cache, gameplay route migration, or frontend work. |
 <!-- ACTIVE_WORK_TABLE_END -->
 
 ---
