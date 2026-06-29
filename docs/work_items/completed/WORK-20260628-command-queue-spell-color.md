@@ -1,6 +1,6 @@
 # WORK-20260628-command-queue-spell-color: Spell color command boundary
 
-- **Status:** Active
+- **Status:** Completed
 - **Gate:** Spell Color Command Boundary Gate
 - **Opened:** 2026-06-28
 - **Executor:** AGY by explicit bounded implementation task.
@@ -155,3 +155,19 @@ The implementation is covered by unit tests in `tests/test_server_runtime.py`:
 - `test_facade_without_app_fails`: Verifies error handling when `app` is missing.
 - `test_no_queue_or_cache_behavior_introduced`: Verifies no queue/cache behavior is added.
 - `test_route_level_behavior_mapping`: Verifies that the route-level logic and exception to HTTP status mapping match perfectly.
+
+
+## Completion Evidence
+
+- Completed in `fa1e79f`.
+- Added `COMMAND_UPDATE_SPELL_COLOR`.
+- Implemented the selected `RuntimeCommand` path in `ServerRuntimeFacade.submit_command(...)`.
+- Routed only `POST /api/spells/{spell_id}/color` through the facade command boundary.
+- Preserved success response shape: `{"ok": True, "spell": result}`.
+- Preserved route validation and exception mapping.
+- Added focused `tests/test_server_runtime.py`.
+- Validation passed:
+  - `python3 -m py_compile server_runtime.py dnd_initative_tracker.py`
+  - `.venv/bin/python -m unittest tests/test_server_runtime.py`
+  - `scripts/agent_scope_validate.py docs/agent_tasks/scopes/WORK-20260628-command-queue-spell-color.json`
+- No broad command queue, snapshot cache, background worker, tactical/map/combat, frontend, unrelated inbox dirt, `logs/context/`, or `current_work.md` implementation edits.
