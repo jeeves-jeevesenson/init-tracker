@@ -8,10 +8,10 @@ If an item is not marked as **Active** here, it is NOT current work.
 ## Current Status
 
 <!-- ACTIVE_WORK_STATUS_START -->
-- **Status:** Idle
-- **Current Work Item:** None
-- **Active Gate:** None
-- **Allowed Next Action:** none
+- **Status:** Active
+- **Current Work Item:** WORK-20260628-port-external-research
+- **Active Gate:** Research Port Gate
+- **Allowed Next Action:** Port external research into durable repo docs; no app implementation.
 <!-- ACTIVE_WORK_STATUS_END -->
 
 ---
@@ -21,6 +21,7 @@ If an item is not marked as **Active** here, it is NOT current work.
 | ID | Title | Status | Goal |
 | --- | --- | --- | --- |
 <!-- ACTIVE_WORK_TABLE_START -->
+| WORK-20260628-port-external-research | Port external server runtime research | Active | Import external research into durable repo docs and create a server-runtime extraction planning foundation; no app implementation. |
 <!-- ACTIVE_WORK_TABLE_END -->
 
 ---
