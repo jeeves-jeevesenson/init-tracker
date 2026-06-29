@@ -5,6 +5,7 @@ from server_runtime import (
     RuntimeCommand,
     RuntimeCommandResult,
     COMMAND_UPDATE_SPELL_COLOR,
+    COMMAND_SET_FACING,
 )
 
 
@@ -358,3 +359,62 @@ class ServerRuntimeFacadeTests(unittest.TestCase):
             self.assertEqual(trace.status, "failed")
             self.assertEqual(trace.error_class, err_type)
             self.assertEqual(trace.metadata["queue_size"], 1)
+
+    def test_set_facing_command_success(self):
+        import threading
+        import time
+
+        class FakeQueue:
+            def __init__(self):
+                self.items = []
+                self.on_put = None
+            def put(self, item):
+                self.items.append(item)
+                if self.on_put:
+                    self.on_put(item)
+            def qsize(self):
+                return len(self.items)
+
+        class FakeLanController:
+            def __init__(self):
+                self._actions = FakeQueue()
+                self._action_states = {}
+                self._action_states_lock = threading.Lock()
+                self._action_history_limit = 500
+
+        controller = FakeLanController()
+        captured_msg = []
+
+        def process_success(msg):
+            captured_msg.append(msg)
+            action_id = msg["action_id"]
+            with controller._action_states_lock:
+                controller._action_states[action_id].update({
+                    "status": "completed",
+                    "result": {"status": "applied", "cid": msg.get("cid"), "facing_deg": msg.get("facing_deg")},
+                    "completed_at_ns": time.perf_counter_ns()
+                })
+
+        controller._actions.on_put = process_success
+
+        facade = ServerRuntimeFacade(lan_controller=controller)
+        command = RuntimeCommand(
+            command_type=COMMAND_SET_FACING,
+            payload={"cid": 42, "facing_deg": 180}
+        )
+
+        result = facade.submit_command(command)
+        self.assertTrue(result.success)
+        self.assertEqual(len(captured_msg), 1)
+        msg = captured_msg[0]
+        self.assertEqual(msg["type"], "set_facing")
+        self.assertEqual(msg["cid"], 42)
+        self.assertEqual(msg["facing_deg"], 180)
+
+        trace = facade.last_command_trace
+        self.assertIsNotNone(trace)
+        self.assertEqual(trace.command_type, COMMAND_SET_FACING)
+        self.assertEqual(trace.status, "completed")
+        self.assertIsNone(trace.error_class)
+        self.assertEqual(trace.metadata["queue_size"], 1)
+        self.assertIn("queue_wait_ms", trace.metadata)

@@ -2506,7 +2506,7 @@ class LanController:
             return
 
         from server_app import create_app
-        from server_runtime import RuntimeCommand, COMMAND_UPDATE_SPELL_COLOR
+        from server_runtime import RuntimeCommand, COMMAND_UPDATE_SPELL_COLOR, COMMAND_SET_FACING
         self._fastapi_app = create_app(lan_controller=self)
         self._runtime = self._fastapi_app.state.runtime
 
@@ -4737,16 +4737,36 @@ class LanController:
                 facing_deg = int(payload.get("facing_deg"))
             except Exception:
                 raise HTTPException(status_code=400, detail="facing_deg must be an integer.")
+            combatant = self.app.combatants.get(int(cid))
+            if combatant is None:
+                raise HTTPException(status_code=400, detail="Combatant not found.")
             try:
-                result = self.app._dm_set_combatant_facing(int(cid), int(facing_deg))
+                header = request.headers.get("authorization", "")
+                token = ""
+                if header.lower().startswith("bearer "):
+                    token = header.split(" ", 1)[1].strip()
+                if not token or not self.app._is_admin_token_valid(token):
+                    token = self.app._issue_admin_token()
+
+                command = RuntimeCommand(
+                    command_type=COMMAND_SET_FACING,
+                    payload={
+                        "cid": int(cid),
+                        "facing_deg": int(facing_deg),
+                        "admin_token": token,
+                    }
+                )
+                self._runtime.submit_command(command)
+            except TimeoutError as exc:
+                raise HTTPException(status_code=504, detail=str(exc))
+            except ValueError as exc:
+                raise HTTPException(status_code=400, detail=str(exc))
             except Exception as exc:
                 raise HTTPException(status_code=500, detail=f"Failed to set facing: {exc}")
-            if not result.get("ok"):
-                raise HTTPException(status_code=400, detail=result.get("error", "Cannot set facing."))
             return {
                 "ok": True,
-                "cid": result.get("cid"),
-                "facing_deg": result.get("facing_deg"),
+                "cid": int(cid),
+                "facing_deg": int(getattr(combatant, "facing_deg", facing_deg)),
                 "snapshot": _dm_console_snapshot(),
             }
 
