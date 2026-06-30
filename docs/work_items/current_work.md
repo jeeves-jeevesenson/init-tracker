@@ -11,7 +11,7 @@ If an item is not marked as **Active** here, it is NOT current work.
 - **Status:** Idle
 - **Current Work Item:** None
 - **Active Gate:** None
-- **Allowed Next Action:** open the next bounded server-runtime extraction planning slice.
+- **Allowed Next Action:** Open WORK-20260629-runtime-facade-queue-command-obstacle-cell as the next bounded implementation slice for POST /api/dm/map/obstacles/cell. Do not open another planning slice first unless fresh repo context contradicts the completed selection-5 recommendation.
 <!-- ACTIVE_WORK_STATUS_END -->
 
 ---
@@ -31,6 +31,7 @@ If an item is not marked as **Active** here, it is NOT current work.
 | --- | --- | --- | --- |
 | BUG-20260614-weapon-attacks-reload-fail | Weapon attacks / reload fail | 2026-06-26 | Closed in `6d14706`; focused unit tests passed; JS syntax check passed; diff check passed; developer browser smoke passed; final weapon reload / ammo / Multiattack behavior accepted. See `docs/work_items/active/BUG-20260614-weapon-attacks-reload-fail-smoke-failure-20260626.md`. |
 <!-- COMPLETED_WORK_TABLE_START -->
+| WORK-20260629-runtime-facade-next-queue-command-selection-5 | Runtime facade next queue command selection 5 | 2026-06-29 | Completed evidence/planning slice; evaluated map obstacles cell toggle, terrain cell toggle, and rules-aware combatant move candidates; recommended migrating POST /api/dm/map/obstacles/cell next. See [completed/WORK-20260629-runtime-facade-next-queue-command-selection-5.md](completed/WORK-20260629-runtime-facade-next-queue-command-selection-5.md). |
 | WORK-20260629-runtime-facade-queue-command-aoe-move | Queue-backed facade command for AoE move | 2026-06-29 | Completed implementation slice; migrated only POST /api/dm/map/aoes/{aid}/move through ServerRuntimeFacade and the queue adapter seam, preserving existing behavior and focused tests. See [completed/WORK-20260629-runtime-facade-queue-command-aoe-move.md](completed/WORK-20260629-runtime-facade-queue-command-aoe-move.md). |
 | WORK-20260629-runtime-facade-next-queue-command-selection-4 | Runtime facade next queue command selection 4 | 2026-06-29 | Completed evidence/planning slice; evaluated AoE move, combatant move, and narrower player command candidates; recommended migrating `POST /api/dm/map/aoes/{aid}/move` next. See [completed/WORK-20260629-runtime-facade-next-queue-command-selection-4.md](completed/WORK-20260629-runtime-facade-next-queue-command-selection-4.md). |
 | WORK-20260629-runtime-facade-queue-command-aoe-remove | Queue-backed facade command for AoE removal | 2026-06-29 | Completed implementation slice; migrated only DELETE /api/dm/map/aoes/{aid} through ServerRuntimeFacade and the queue adapter seam, preserving existing behavior and focused tests. See [completed/WORK-20260629-runtime-facade-queue-command-aoe-remove.md](completed/WORK-20260629-runtime-facade-queue-command-aoe-remove.md). |
