@@ -11,7 +11,7 @@ If an item is not marked as **Active** here, it is NOT current work.
 - **Status:** Idle
 - **Current Work Item:** None
 - **Active Gate:** None
-- **Allowed Next Action:** Select the next low-risk production command to route through the facade queue adapter.
+- **Allowed Next Action:** Implement the queue-backed facade command for map backgrounds.
 <!-- ACTIVE_WORK_STATUS_END -->
 
 ---
@@ -31,6 +31,7 @@ If an item is not marked as **Active** here, it is NOT current work.
 | --- | --- | --- | --- |
 | BUG-20260614-weapon-attacks-reload-fail | Weapon attacks / reload fail | 2026-06-26 | Closed in `6d14706`; focused unit tests passed; JS syntax check passed; diff check passed; developer browser smoke passed; final weapon reload / ammo / Multiattack behavior accepted. See `docs/work_items/active/BUG-20260614-weapon-attacks-reload-fail-smoke-failure-20260626.md`. |
 <!-- COMPLETED_WORK_TABLE_START -->
+| WORK-20260630-runtime-facade-next-queue-command-selection-9 | Runtime facade next queue command selection 9 | 2026-06-30 | Completed evidence/planning slice; evaluated map backgrounds upsert, map AoE creation, and rules-aware combatant move candidates; recommended migrating POST /api/dm/map/backgrounds next. See [completed/WORK-20260630-runtime-facade-next-queue-command-selection-9.md](completed/WORK-20260630-runtime-facade-next-queue-command-selection-9.md). |
 | WORK-20260630-runtime-facade-queue-command-map-settings | Queue-backed facade command for map settings | 2026-06-30 | Completed implementation slice; routed only POST /api/dm/map/settings through ServerRuntimeFacade and the queue adapter seam, preserving existing map settings behavior and focused tests. See [completed/WORK-20260630-runtime-facade-queue-command-map-settings.md](completed/WORK-20260630-runtime-facade-queue-command-map-settings.md). |
 | WORK-20260630-runtime-facade-next-queue-command-selection-8 | Runtime facade next queue command selection 8 | 2026-06-30 | Completed evidence/planning slice; evaluated map settings, map background layer upsert, map AoE creation, and rules-aware combatant move candidates; recommended migrating POST /api/dm/map/settings next. See [completed/WORK-20260630-runtime-facade-next-queue-command-selection-8.md](completed/WORK-20260630-runtime-facade-next-queue-command-selection-8.md). |
 | WORK-20260630-runtime-facade-queue-command-elevation-cell | Queue-backed facade command for elevation cell toggle | 2026-06-30 | Completed implementation slice; migrated only POST /api/dm/map/elevation/cell through ServerRuntimeFacade and the queue adapter seam, preserving existing elevation-cell behavior and focused tests. See [completed/WORK-20260630-runtime-facade-queue-command-elevation-cell.md](completed/WORK-20260630-runtime-facade-queue-command-elevation-cell.md). |
