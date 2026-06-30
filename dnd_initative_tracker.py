@@ -2507,7 +2507,7 @@ class LanController:
             return
 
         from server_app import create_app
-        from server_runtime import RuntimeCommand, COMMAND_UPDATE_SPELL_COLOR, COMMAND_SET_FACING, COMMAND_SET_AURAS_ENABLED, COMMAND_PLACE_COMBATANT, COMMAND_REMOVE_AOE, COMMAND_MOVE_AOE
+        from server_runtime import RuntimeCommand, COMMAND_UPDATE_SPELL_COLOR, COMMAND_SET_FACING, COMMAND_SET_AURAS_ENABLED, COMMAND_PLACE_COMBATANT, COMMAND_REMOVE_AOE, COMMAND_MOVE_AOE, COMMAND_SET_OBSTACLE
         self._fastapi_app = create_app(lan_controller=self)
         self._runtime = self._fastapi_app.state.runtime
 
@@ -5577,16 +5577,35 @@ class LanController:
             else:
                 blocked = bool(blocked_raw)
             try:
-                result = self.app._dm_set_obstacle_on_map(int(col), int(row), bool(blocked))
+                header = request.headers.get("authorization", "")
+                token = ""
+                if header.lower().startswith("bearer "):
+                    token = header.split(" ", 1)[1].strip()
+                if not token or not self.app._is_admin_token_valid(token):
+                    token = self.app._issue_admin_token()
+
+                command = RuntimeCommand(
+                    command_type=COMMAND_SET_OBSTACLE,
+                    payload={
+                        "col": int(col),
+                        "row": int(row),
+                        "blocked": bool(blocked),
+                        "admin_token": token,
+                    }
+                )
+                cmd_result = self._runtime.submit_command(command)
+                obstacle_result = cmd_result.data.get("obstacle_result") or {}
+            except TimeoutError as exc:
+                raise HTTPException(status_code=504, detail=str(exc))
+            except ValueError as exc:
+                raise HTTPException(status_code=400, detail=str(exc))
             except Exception as exc:
                 raise HTTPException(status_code=500, detail=f"Failed to update obstacle: {exc}")
-            if not result.get("ok"):
-                raise HTTPException(status_code=400, detail=result.get("error", "Cannot update obstacle."))
             return {
                 "ok": True,
-                "col": result.get("col"),
-                "row": result.get("row"),
-                "blocked": result.get("blocked"),
+                "col": obstacle_result.get("col"),
+                "row": obstacle_result.get("row"),
+                "blocked": obstacle_result.get("blocked"),
                 "snapshot": _dm_console_snapshot(),
             }
 
@@ -43174,6 +43193,18 @@ class InitiativeTracker(base.InitiativeTracker):
                 with self._action_states_lock:
                     if action_id in self._action_states:
                         self._action_states[action_id]["move_result"] = result
+            return
+
+        if typ == "set_obstacle" and is_admin:
+            col = msg.get("col")
+            row = msg.get("row")
+            blocked = msg.get("blocked")
+            result = self._dm_set_obstacle_on_map(int(col), int(row), bool(blocked))
+            action_id = msg.get("action_id")
+            if action_id:
+                with self._action_states_lock:
+                    if action_id in self._action_states:
+                        self._action_states[action_id]["obstacle_result"] = result
             return
 
         if typ in AOE_MANIPULATION_COMMAND_TYPES:

@@ -10,6 +10,7 @@ from server_runtime import (
     COMMAND_PLACE_COMBATANT,
     COMMAND_REMOVE_AOE,
     COMMAND_MOVE_AOE,
+    COMMAND_SET_OBSTACLE,
 )
 
 
@@ -1168,3 +1169,201 @@ class ServerRuntimeFacadeTests(unittest.TestCase):
         response = client.post("/api/dm/map/aoes/10/move", json={"cx": 5.0, "cy": 6.0})
         self.assertEqual(response.status_code, 500)
         self.assertIn("Failed to move AoE: Runtime fail", response.json()["detail"])
+
+    def test_set_obstacle_command_success(self):
+        import threading
+        import time
+
+        class FakeQueue:
+            def __init__(self):
+                self.items = []
+                self.on_put = None
+            def put(self, item):
+                self.items.append(item)
+                if self.on_put:
+                    self.on_put(item)
+            def qsize(self):
+                return len(self.items)
+
+        class FakeLanController:
+            def __init__(self):
+                self._actions = FakeQueue()
+                self._action_states = {}
+                self._action_states_lock = threading.Lock()
+                self._action_history_limit = 500
+
+        controller = FakeLanController()
+        captured_msg = []
+
+        def process_success(msg):
+            captured_msg.append(msg)
+            action_id = msg["action_id"]
+            with controller._action_states_lock:
+                controller._action_states[action_id].update({
+                    "status": "completed",
+                    "result": {"status": "applied"},
+                    "obstacle_result": {"ok": True, "col": 2, "row": 3, "blocked": True},
+                    "completed_at_ns": time.perf_counter_ns()
+                })
+
+        controller._actions.on_put = process_success
+
+        facade = ServerRuntimeFacade(lan_controller=controller)
+        command = RuntimeCommand(
+            command_type=COMMAND_SET_OBSTACLE,
+            payload={"col": 2, "row": 3, "blocked": True}
+        )
+
+        result = facade.submit_command(command)
+        self.assertTrue(result.success)
+        self.assertEqual(len(captured_msg), 1)
+        msg = captured_msg[0]
+        self.assertEqual(msg["type"], "set_obstacle")
+        self.assertEqual(msg["col"], 2)
+        self.assertEqual(msg["row"], 3)
+        self.assertEqual(msg["blocked"], True)
+
+        obstacle_res = result.data.get("obstacle_result")
+        self.assertIsNotNone(obstacle_res)
+        self.assertTrue(obstacle_res.get("ok"))
+        self.assertEqual(obstacle_res.get("col"), 2)
+        self.assertEqual(obstacle_res.get("row"), 3)
+        self.assertEqual(obstacle_res.get("blocked"), True)
+
+        trace = facade.last_command_trace
+        self.assertIsNotNone(trace)
+        self.assertEqual(trace.command_type, COMMAND_SET_OBSTACLE)
+        self.assertEqual(trace.status, "completed")
+        self.assertIsNone(trace.error_class)
+        self.assertEqual(trace.metadata["queue_size"], 1)
+        self.assertIn("queue_wait_ms", trace.metadata)
+
+    def test_set_obstacle_command_validation_failure(self):
+        import threading
+        import time
+
+        class FakeQueue:
+            def __init__(self):
+                self.items = []
+                self.on_put = None
+            def put(self, item):
+                self.items.append(item)
+                if self.on_put:
+                    self.on_put(item)
+            def qsize(self):
+                return len(self.items)
+
+        class FakeLanController:
+            def __init__(self):
+                self._actions = FakeQueue()
+                self._action_states = {}
+                self._action_states_lock = threading.Lock()
+                self._action_history_limit = 500
+
+        controller = FakeLanController()
+        captured_msg = []
+
+        def process_failure(msg):
+            captured_msg.append(msg)
+            action_id = msg["action_id"]
+            with controller._action_states_lock:
+                controller._action_states[action_id].update({
+                    "status": "completed",
+                    "result": {"status": "applied"},
+                    "obstacle_result": {"ok": False, "error": "Cell out of bounds."},
+                    "completed_at_ns": time.perf_counter_ns()
+                })
+
+        controller._actions.on_put = process_failure
+
+        facade = ServerRuntimeFacade(lan_controller=controller)
+        command = RuntimeCommand(
+            command_type=COMMAND_SET_OBSTACLE,
+            payload={"col": 999, "row": 3, "blocked": True}
+        )
+
+        with self.assertRaises(ValueError) as ctx:
+            facade.submit_command(command)
+        self.assertEqual(str(ctx.exception), "Cell out of bounds.")
+
+        trace = facade.last_command_trace
+        self.assertIsNotNone(trace)
+        self.assertEqual(trace.command_type, COMMAND_SET_OBSTACLE)
+        self.assertEqual(trace.status, "failed")
+        self.assertEqual(trace.error_class, "ValueError")
+        self.assertEqual(trace.metadata["queue_size"], 1)
+
+    def test_set_obstacle_route_level_behavior_mapping(self):
+        from fastapi import FastAPI, Body, HTTPException, Request
+        from fastapi.testclient import TestClient
+        from typing import Dict, Any
+
+        app = FastAPI()
+        mock_runtime = MagicMock()
+
+        def _dm_console_snapshot():
+            return {"map": "dummy"}
+
+        @app.post("/api/dm/map/obstacles/cell")
+        async def dm_set_obstacle_cell(request: Request, payload: Dict[str, Any] = Body(...)):
+            if not isinstance(payload, dict):
+                raise HTTPException(status_code=400, detail="Invalid payload.")
+            try:
+                col = int(payload.get("col"))
+                row = int(payload.get("row"))
+            except Exception:
+                raise HTTPException(status_code=400, detail="col and row must be integers.")
+            blocked = bool(payload.get("blocked", True))
+            try:
+                command = RuntimeCommand(
+                    command_type=COMMAND_SET_OBSTACLE,
+                    payload={
+                        "col": int(col),
+                        "row": int(row),
+                        "blocked": bool(blocked),
+                        "admin_token": "fake-token",
+                    }
+                )
+                cmd_result = mock_runtime.submit_command(command)
+                obstacle_result = cmd_result.data.get("obstacle_result") or {}
+            except TimeoutError as exc:
+                raise HTTPException(status_code=504, detail=str(exc))
+            except ValueError as exc:
+                raise HTTPException(status_code=400, detail=str(exc))
+            except Exception as exc:
+                raise HTTPException(status_code=500, detail=f"Failed to update obstacle: {exc}")
+            return {
+                "ok": True,
+                "col": obstacle_result.get("col"),
+                "row": obstacle_result.get("row"),
+                "blocked": obstacle_result.get("blocked"),
+                "snapshot": _dm_console_snapshot(),
+            }
+
+        client = TestClient(app)
+
+        # 1. Success case
+        mock_runtime.submit_command.return_value = RuntimeCommandResult(
+            success=True, message="ok", data={"obstacle_result": {"ok": True, "col": 2, "row": 3, "blocked": True}}
+        )
+        response = client.post("/api/dm/map/obstacles/cell", json={"col": 2, "row": 3, "blocked": True})
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json(), {"ok": True, "col": 2, "row": 3, "blocked": True, "snapshot": {"map": "dummy"}})
+
+        # 2. TimeoutError -> 504
+        mock_runtime.submit_command.side_effect = TimeoutError("Command timed out")
+        response = client.post("/api/dm/map/obstacles/cell", json={"col": 2, "row": 3, "blocked": True})
+        self.assertEqual(response.status_code, 504)
+        self.assertIn("Command timed out", response.json()["detail"])
+
+        # 3. ValueError -> 400
+        mock_runtime.submit_command.side_effect = ValueError("Cell out of bounds.")
+        response = client.post("/api/dm/map/obstacles/cell", json={"col": 2, "row": 3, "blocked": True})
+        self.assertEqual(response.status_code, 400)
+        self.assertIn("Cell out of bounds.", response.json()["detail"])
+
+        # 4. Generic Exception -> 500
+        mock_runtime.submit_command.side_effect = Exception("Runtime fail")
+        response = client.post("/api/dm/map/obstacles/cell", json={"col": 2, "row": 3, "blocked": True})
+        self.assertEqual(response.status_code, 500)
+        self.assertIn("Failed to update obstacle: Runtime fail", response.json()["detail"])
