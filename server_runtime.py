@@ -69,6 +69,8 @@ COMMAND_SET_MAP_BACKGROUND_ORDER = "set_map_background_order"
 COMMAND_UPSERT_MAP_HAZARD = "upsert_map_hazard"
 COMMAND_REMOVE_MAP_HAZARD = "remove_map_hazard"
 COMMAND_UPSERT_MAP_FEATURE = "upsert_map_feature"
+COMMAND_REMOVE_MAP_FEATURE = "remove_map_feature"
+
 
 
 
@@ -661,6 +663,40 @@ class ServerRuntimeFacade:
                     metadata=self.last_command_trace.metadata if self.last_command_trace else {}
                 )
                 raise
+        elif command.command_type == COMMAND_REMOVE_MAP_FEATURE:
+            import time
+            start_time = time.perf_counter()
+            try:
+                timeout_ms = command.payload.get("timeout_ms", 5000)
+                res = self._submit_to_lan_queue(command, timeout_ms=timeout_ms)
+                action_id = self.last_command_trace.metadata.get("action_id")
+                with self.lan_controller._action_states_lock:
+                    state = self.lan_controller._action_states.get(action_id)
+                    feature_result = state.get("feature_result") if state else None
+
+                if feature_result and not feature_result.get("ok"):
+                    raise ValueError(feature_result.get("error", "Cannot remove feature."))
+
+                if not feature_result:
+                    raise RuntimeError("No feature result from queue.")
+
+                return RuntimeCommandResult(
+                    success=True,
+                    message="Map feature removed successfully.",
+                    data={"feature_result": feature_result}
+                )
+            except Exception as exc:
+                duration_ms = (time.perf_counter() - start_time) * 1000.0
+                status = STATUS_TIMED_OUT if isinstance(exc, TimeoutError) else STATUS_FAILED
+                self.last_command_trace = RuntimeCommandTrace(
+                    command_type=command.command_type,
+                    status=status,
+                    duration_ms=duration_ms,
+                    error_class=exc.__class__.__name__,
+                    metadata=self.last_command_trace.metadata if self.last_command_trace else {}
+                )
+                raise
+
 
 
 
