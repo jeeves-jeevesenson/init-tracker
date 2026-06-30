@@ -2000,6 +2000,9 @@ class LanController:
             "active_cid": None,
             "round_num": 0,
         }
+        self._cached_dm_snapshot: Optional[Dict[str, Any]] = None
+        self._cached_dm_snapshot_at: float = 0.0
+        self._cached_dm_snapshot_include_tactical: Optional[bool] = None
         self._cached_pcs: List[Dict[str, Any]] = []
         self._idle_poll_interval_ms: int = 350
         self._active_poll_interval_ms: int = 120
@@ -8429,24 +8432,37 @@ class LanController:
         """
         if include_tactical is None:
             include_tactical = tactical_map_enabled() or _current_request_wants_tactical_map()
+        include_tactical_flag = bool(include_tactical)
 
         if combat_snapshot is None and tactical_snapshot is None:
             cached = getattr(self, "_cached_dm_snapshot", None)
             cached_at = getattr(self, "_cached_dm_snapshot_at", 0.0)
+            cached_include_tactical = getattr(self, "_cached_dm_snapshot_include_tactical", None)
             if isinstance(cached, dict) and cached_at:
                 age = time.perf_counter() - cached_at
-                if age < 0.25:
+                if (
+                    age < 0.25
+                    and isinstance(cached_include_tactical, bool)
+                    and cached_include_tactical == include_tactical_flag
+                ):
                     try:
                         self._cached_dm_snapshot = None
                         self._cached_dm_snapshot_at = 0.0
+                        self._cached_dm_snapshot_include_tactical = None
                     except Exception:
                         pass
                     return cached
+                try:
+                    self._cached_dm_snapshot = None
+                    self._cached_dm_snapshot_at = 0.0
+                    self._cached_dm_snapshot_include_tactical = None
+                except Exception:
+                    pass
 
         return self._dm_console_snapshot_payload(
             combat_snapshot=combat_snapshot,
             tactical_snapshot=tactical_snapshot,
-            include_tactical=include_tactical,
+            include_tactical=include_tactical_flag,
         )
 
     @trace_timed("_dm_console_snapshot_payload")
@@ -21464,6 +21480,7 @@ class InitiativeTracker(base.InitiativeTracker):
                 try:
                     self._lan._cached_dm_snapshot = dm_snap
                     self._lan._cached_dm_snapshot_at = time.perf_counter()
+                    self._lan._cached_dm_snapshot_include_tactical = bool(include_tact)
                 except Exception:
                     pass
                 self._lan._push_dm_snapshot_to_ws_clients(dm_snap)

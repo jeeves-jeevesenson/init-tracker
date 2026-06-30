@@ -1,4 +1,5 @@
 import importlib
+import time
 import unittest
 from unittest.mock import MagicMock
 
@@ -268,6 +269,72 @@ class ServerRuntimeFacadeTests(unittest.TestCase):
         self.assertEqual(with_tactical.data["tactical_map"], {"grid": {"cols": 10, "rows": 10}})
         self.assertTrue(with_tactical.metadata.get("include_tactical"))
         self.assertEqual(controller.dm_console_calls, [False, True])
+
+    def _dm_console_cache_controller(self, *, cached_payload, cached_include_tactical, fresh_payload):
+        from dnd_initative_tracker import LanController
+
+        controller = object.__new__(LanController)
+        controller._cached_dm_snapshot = cached_payload
+        controller._cached_dm_snapshot_at = time.perf_counter()
+        controller._cached_dm_snapshot_include_tactical = cached_include_tactical
+        calls = []
+
+        def _fresh_payload(**kwargs):
+            calls.append(dict(kwargs))
+            return dict(fresh_payload)
+
+        controller._dm_console_snapshot_payload = _fresh_payload
+        return controller, calls
+
+    def test_dm_console_snapshot_reuses_cached_payload_when_include_tactical_matches(self):
+        cached_payload = {"console": "cached"}
+        controller, calls = self._dm_console_cache_controller(
+            cached_payload=cached_payload,
+            cached_include_tactical=False,
+            fresh_payload={"console": "fresh"},
+        )
+
+        result = controller._dm_console_snapshot(include_tactical=False)
+
+        self.assertEqual(result, cached_payload)
+        self.assertEqual(calls, [])
+        self.assertIsNone(controller._cached_dm_snapshot)
+        self.assertEqual(controller._cached_dm_snapshot_at, 0.0)
+        self.assertIsNone(controller._cached_dm_snapshot_include_tactical)
+
+    def test_dm_console_snapshot_does_not_reuse_tactical_cache_for_non_tactical_request(self):
+        controller, calls = self._dm_console_cache_controller(
+            cached_payload={"console": "cached", "tactical_map": {"grid": {"cols": 10}}},
+            cached_include_tactical=True,
+            fresh_payload={"console": "fresh"},
+        )
+
+        result = controller._dm_console_snapshot(include_tactical=False)
+
+        self.assertEqual(result, {"console": "fresh"})
+        self.assertEqual(calls, [{
+            "combat_snapshot": None,
+            "tactical_snapshot": None,
+            "include_tactical": False,
+        }])
+        self.assertNotIn("tactical_map", result)
+
+    def test_dm_console_snapshot_does_not_reuse_non_tactical_cache_for_tactical_request(self):
+        controller, calls = self._dm_console_cache_controller(
+            cached_payload={"console": "cached"},
+            cached_include_tactical=False,
+            fresh_payload={"console": "fresh", "tactical_map": {"grid": {"cols": 12}}},
+        )
+
+        result = controller._dm_console_snapshot(include_tactical=True)
+
+        self.assertEqual(result, {"console": "fresh", "tactical_map": {"grid": {"cols": 12}}})
+        self.assertEqual(calls, [{
+            "combat_snapshot": None,
+            "tactical_snapshot": None,
+            "include_tactical": True,
+        }])
+        self.assertIn("tactical_map", result)
 
     def test_read_snapshot_static_hydration_request_fails_closed(self):
         app = self._SnapshotApp()
