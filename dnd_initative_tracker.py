@@ -2507,7 +2507,7 @@ class LanController:
             return
 
         from server_app import create_app
-        from server_runtime import RuntimeCommand, COMMAND_UPDATE_SPELL_COLOR, COMMAND_SET_FACING, COMMAND_SET_AURAS_ENABLED, COMMAND_PLACE_COMBATANT, COMMAND_REMOVE_AOE, COMMAND_MOVE_AOE, COMMAND_SET_OBSTACLE, COMMAND_SET_TERRAIN
+        from server_runtime import RuntimeCommand, COMMAND_UPDATE_SPELL_COLOR, COMMAND_SET_FACING, COMMAND_SET_AURAS_ENABLED, COMMAND_PLACE_COMBATANT, COMMAND_REMOVE_AOE, COMMAND_MOVE_AOE, COMMAND_SET_OBSTACLE, COMMAND_SET_TERRAIN, COMMAND_SET_ELEVATION
         self._fastapi_app = create_app(lan_controller=self)
         self._runtime = self._fastapi_app.state.runtime
 
@@ -6242,16 +6242,35 @@ class LanController:
             if payload.get("elevation") is None:
                 raise HTTPException(status_code=400, detail="elevation is required.")
             try:
-                result = self.app._dm_set_elevation_on_map(col=col, row=row, elevation=payload.get("elevation"))
+                header = request.headers.get("authorization", "")
+                token = ""
+                if header.lower().startswith("bearer "):
+                    token = header.split(" ", 1)[1].strip()
+                if not token or not self.app._is_admin_token_valid(token):
+                    token = self.app._issue_admin_token()
+
+                command = RuntimeCommand(
+                    command_type=COMMAND_SET_ELEVATION,
+                    payload={
+                        "col": int(col),
+                        "row": int(row),
+                        "elevation": payload.get("elevation"),
+                        "admin_token": token,
+                    }
+                )
+                cmd_result = self._runtime.submit_command(command)
+                elevation_result = cmd_result.data.get("elevation_result") or {}
+            except TimeoutError as exc:
+                raise HTTPException(status_code=504, detail=str(exc))
+            except ValueError as exc:
+                raise HTTPException(status_code=400, detail=str(exc))
             except Exception as exc:
                 raise HTTPException(status_code=500, detail=f"Failed to set elevation: {exc}")
-            if not result.get("ok"):
-                raise HTTPException(status_code=400, detail=result.get("error", "Cannot set elevation."))
             return {
                 "ok": True,
-                "col": result.get("col"),
-                "row": result.get("row"),
-                "elevation": result.get("elevation"),
+                "col": elevation_result.get("col"),
+                "row": elevation_result.get("row"),
+                "elevation": elevation_result.get("elevation"),
                 "snapshot": _dm_console_snapshot(),
             }
 
@@ -43242,6 +43261,22 @@ class InitiativeTracker(base.InitiativeTracker):
                 with self._action_states_lock:
                     if action_id in self._action_states:
                         self._action_states[action_id]["terrain_result"] = result
+            return
+
+        if typ == "set_elevation" and is_admin:
+            col = msg.get("col")
+            row = msg.get("row")
+            elevation = msg.get("elevation")
+            result = self._dm_set_elevation_on_map(
+                int(col),
+                int(row),
+                elevation,
+            )
+            action_id = msg.get("action_id")
+            if action_id:
+                with self._action_states_lock:
+                    if action_id in self._action_states:
+                        self._action_states[action_id]["elevation_result"] = result
             return
 
         if typ in AOE_MANIPULATION_COMMAND_TYPES:
