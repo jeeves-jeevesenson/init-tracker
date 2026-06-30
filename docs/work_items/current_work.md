@@ -11,7 +11,7 @@ If an item is not marked as **Active** here, it is NOT current work.
 - **Status:** Idle
 - **Current Work Item:** None
 - **Active Gate:** None
-- **Allowed Next Action:** Migrate POST /api/dm/map/terrain/cell command to queue-backed ServerRuntimeFacade.
+- **Allowed Next Action:** Select the next low-risk production command to route through the facade queue adapter.
 <!-- ACTIVE_WORK_STATUS_END -->
 
 ---
@@ -31,6 +31,7 @@ If an item is not marked as **Active** here, it is NOT current work.
 | --- | --- | --- | --- |
 | BUG-20260614-weapon-attacks-reload-fail | Weapon attacks / reload fail | 2026-06-26 | Closed in `6d14706`; focused unit tests passed; JS syntax check passed; diff check passed; developer browser smoke passed; final weapon reload / ammo / Multiattack behavior accepted. See `docs/work_items/active/BUG-20260614-weapon-attacks-reload-fail-smoke-failure-20260626.md`. |
 <!-- COMPLETED_WORK_TABLE_START -->
+| WORK-20260630-runtime-facade-queue-command-terrain-cell | Queue-backed facade command for terrain cell toggle | 2026-06-30 | Completed implementation slice; migrated only POST /api/dm/map/terrain/cell through ServerRuntimeFacade and the queue adapter seam, preserving existing terrain-cell behavior and focused tests. See [completed/WORK-20260630-runtime-facade-queue-command-terrain-cell.md](completed/WORK-20260630-runtime-facade-queue-command-terrain-cell.md). |
 | WORK-20260630-runtime-facade-next-queue-command-selection-6 | Runtime facade next queue command selection 6 | 2026-06-30 | Completed evidence/planning slice; evaluated terrain cell toggle and rules-aware combatant move candidates; recommended migrating POST /api/dm/map/terrain/cell next. See [completed/WORK-20260630-runtime-facade-next-queue-command-selection-6.md](completed/WORK-20260630-runtime-facade-next-queue-command-selection-6.md). |
 | WORK-20260629-runtime-facade-queue-command-obstacle-cell | Queue-backed facade command for obstacle cell toggle | 2026-06-29 | Completed implementation slice; migrated only POST /api/dm/map/obstacles/cell through ServerRuntimeFacade and the queue adapter seam, preserving existing behavior and focused tests. See [completed/WORK-20260629-runtime-facade-queue-command-obstacle-cell.md](completed/WORK-20260629-runtime-facade-queue-command-obstacle-cell.md). |
 | WORK-20260629-runtime-facade-next-queue-command-selection-5 | Runtime facade next queue command selection 5 | 2026-06-29 | Completed evidence/planning slice; evaluated map obstacles cell toggle, terrain cell toggle, and rules-aware combatant move candidates; recommended migrating POST /api/dm/map/obstacles/cell next. See [completed/WORK-20260629-runtime-facade-next-queue-command-selection-5.md](completed/WORK-20260629-runtime-facade-next-queue-command-selection-5.md). |

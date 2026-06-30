@@ -2507,7 +2507,7 @@ class LanController:
             return
 
         from server_app import create_app
-        from server_runtime import RuntimeCommand, COMMAND_UPDATE_SPELL_COLOR, COMMAND_SET_FACING, COMMAND_SET_AURAS_ENABLED, COMMAND_PLACE_COMBATANT, COMMAND_REMOVE_AOE, COMMAND_MOVE_AOE, COMMAND_SET_OBSTACLE
+        from server_runtime import RuntimeCommand, COMMAND_UPDATE_SPELL_COLOR, COMMAND_SET_FACING, COMMAND_SET_AURAS_ENABLED, COMMAND_PLACE_COMBATANT, COMMAND_REMOVE_AOE, COMMAND_MOVE_AOE, COMMAND_SET_OBSTACLE, COMMAND_SET_TERRAIN
         self._fastapi_app = create_app(lan_controller=self)
         self._runtime = self._fastapi_app.state.runtime
 
@@ -5634,24 +5634,39 @@ class LanController:
             color = payload.get("color")
             label = payload.get("label")
             try:
-                result = self.app._dm_set_terrain_on_map(
-                    int(col),
-                    int(row),
-                    is_rough=bool(is_rough),
-                    movement_type=movement_type,
-                    color=str(color) if color not in (None, "") else None,
-                    label=str(label) if label not in (None, "") else None,
+                header = request.headers.get("authorization", "")
+                token = ""
+                if header.lower().startswith("bearer "):
+                    token = header.split(" ", 1)[1].strip()
+                if not token or not self.app._is_admin_token_valid(token):
+                    token = self.app._issue_admin_token()
+
+                command = RuntimeCommand(
+                    command_type=COMMAND_SET_TERRAIN,
+                    payload={
+                        "col": int(col),
+                        "row": int(row),
+                        "is_rough": bool(is_rough),
+                        "movement_type": movement_type,
+                        "color": str(color) if color not in (None, "") else None,
+                        "label": str(label) if label not in (None, "") else None,
+                        "admin_token": token,
+                    }
                 )
+                cmd_result = self._runtime.submit_command(command)
+                terrain_result = cmd_result.data.get("terrain_result") or {}
+            except TimeoutError as exc:
+                raise HTTPException(status_code=504, detail=str(exc))
+            except ValueError as exc:
+                raise HTTPException(status_code=400, detail=str(exc))
             except Exception as exc:
                 raise HTTPException(status_code=500, detail=f"Failed to update terrain: {exc}")
-            if not result.get("ok"):
-                raise HTTPException(status_code=400, detail=result.get("error", "Cannot update terrain."))
             return {
                 "ok": True,
-                "col": result.get("col"),
-                "row": result.get("row"),
-                "is_rough": result.get("is_rough"),
-                "movement_type": result.get("movement_type"),
+                "col": terrain_result.get("col"),
+                "row": terrain_result.get("row"),
+                "is_rough": terrain_result.get("is_rough"),
+                "movement_type": terrain_result.get("movement_type"),
                 "snapshot": _dm_console_snapshot(),
             }
 
@@ -43205,6 +43220,28 @@ class InitiativeTracker(base.InitiativeTracker):
                 with self._action_states_lock:
                     if action_id in self._action_states:
                         self._action_states[action_id]["obstacle_result"] = result
+            return
+
+        if typ == "set_terrain" and is_admin:
+            col = msg.get("col")
+            row = msg.get("row")
+            is_rough = msg.get("is_rough")
+            movement_type = msg.get("movement_type")
+            color = msg.get("color")
+            label = msg.get("label")
+            result = self._dm_set_terrain_on_map(
+                int(col),
+                int(row),
+                is_rough=bool(is_rough),
+                movement_type=movement_type,
+                color=str(color) if color not in (None, "") else None,
+                label=str(label) if label not in (None, "") else None,
+            )
+            action_id = msg.get("action_id")
+            if action_id:
+                with self._action_states_lock:
+                    if action_id in self._action_states:
+                        self._action_states[action_id]["terrain_result"] = result
             return
 
         if typ in AOE_MANIPULATION_COMMAND_TYPES:

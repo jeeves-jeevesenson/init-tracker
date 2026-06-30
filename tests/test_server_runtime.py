@@ -11,6 +11,7 @@ from server_runtime import (
     COMMAND_REMOVE_AOE,
     COMMAND_MOVE_AOE,
     COMMAND_SET_OBSTACLE,
+    COMMAND_SET_TERRAIN,
 )
 
 
@@ -1367,3 +1368,241 @@ class ServerRuntimeFacadeTests(unittest.TestCase):
         response = client.post("/api/dm/map/obstacles/cell", json={"col": 2, "row": 3, "blocked": True})
         self.assertEqual(response.status_code, 500)
         self.assertIn("Failed to update obstacle: Runtime fail", response.json()["detail"])
+
+    def test_set_terrain_command_success(self):
+        import threading
+        import time
+
+        class FakeQueue:
+            def __init__(self):
+                self.items = []
+                self.on_put = None
+            def put(self, item):
+                self.items.append(item)
+                if self.on_put:
+                    self.on_put(item)
+            def qsize(self):
+                return len(self.items)
+
+        class FakeLanController:
+            def __init__(self):
+                self._actions = FakeQueue()
+                self._action_states = {}
+                self._action_states_lock = threading.Lock()
+                self._action_history_limit = 500
+
+        controller = FakeLanController()
+        captured_msg = []
+
+        def process_success(msg):
+            captured_msg.append(msg)
+            action_id = msg["action_id"]
+            with controller._action_states_lock:
+                controller._action_states[action_id].update({
+                    "status": "completed",
+                    "result": {"status": "applied"},
+                    "terrain_result": {
+                        "ok": True,
+                        "col": 2,
+                        "row": 3,
+                        "is_rough": True,
+                        "movement_type": "water",
+                        "color": "blue",
+                        "label": "Deep Water",
+                    },
+                    "completed_at_ns": time.perf_counter_ns()
+                })
+
+        controller._actions.on_put = process_success
+
+        facade = ServerRuntimeFacade(lan_controller=controller)
+        command = RuntimeCommand(
+            command_type=COMMAND_SET_TERRAIN,
+            payload={
+                "col": 2,
+                "row": 3,
+                "is_rough": True,
+                "movement_type": "water",
+                "color": "blue",
+                "label": "Deep Water",
+            }
+        )
+
+        result = facade.submit_command(command)
+        self.assertTrue(result.success)
+        self.assertEqual(len(captured_msg), 1)
+        msg = captured_msg[0]
+        self.assertEqual(msg["type"], "set_terrain")
+        self.assertEqual(msg["col"], 2)
+        self.assertEqual(msg["row"], 3)
+        self.assertEqual(msg["is_rough"], True)
+        self.assertEqual(msg["movement_type"], "water")
+        self.assertEqual(msg["color"], "blue")
+        self.assertEqual(msg["label"], "Deep Water")
+
+        terrain_res = result.data.get("terrain_result")
+        self.assertIsNotNone(terrain_res)
+        self.assertTrue(terrain_res.get("ok"))
+        self.assertEqual(terrain_res.get("col"), 2)
+        self.assertEqual(terrain_res.get("row"), 3)
+        self.assertEqual(terrain_res.get("is_rough"), True)
+        self.assertEqual(terrain_res.get("movement_type"), "water")
+        self.assertEqual(terrain_res.get("color"), "blue")
+        self.assertEqual(terrain_res.get("label"), "Deep Water")
+
+        trace = facade.last_command_trace
+        self.assertIsNotNone(trace)
+        self.assertEqual(trace.command_type, COMMAND_SET_TERRAIN)
+        self.assertEqual(trace.status, "completed")
+        self.assertIsNone(trace.error_class)
+        self.assertEqual(trace.metadata["queue_size"], 1)
+        self.assertIn("queue_wait_ms", trace.metadata)
+
+    def test_set_terrain_command_validation_failure(self):
+        import threading
+        import time
+
+        class FakeQueue:
+            def __init__(self):
+                self.items = []
+                self.on_put = None
+            def put(self, item):
+                self.items.append(item)
+                if self.on_put:
+                    self.on_put(item)
+            def qsize(self):
+                return len(self.items)
+
+        class FakeLanController:
+            def __init__(self):
+                self._actions = FakeQueue()
+                self._action_states = {}
+                self._action_states_lock = threading.Lock()
+                self._action_history_limit = 500
+
+        controller = FakeLanController()
+        captured_msg = []
+
+        def process_failure(msg):
+            captured_msg.append(msg)
+            action_id = msg["action_id"]
+            with controller._action_states_lock:
+                controller._action_states[action_id].update({
+                    "status": "completed",
+                    "result": {"status": "applied"},
+                    "terrain_result": {"ok": False, "error": "Cell out of bounds."},
+                    "completed_at_ns": time.perf_counter_ns()
+                })
+
+        controller._actions.on_put = process_failure
+
+        facade = ServerRuntimeFacade(lan_controller=controller)
+        command = RuntimeCommand(
+            command_type=COMMAND_SET_TERRAIN,
+            payload={
+                "col": 999,
+                "row": 3,
+                "is_rough": True,
+                "movement_type": "ground",
+            }
+        )
+
+        with self.assertRaises(ValueError) as ctx:
+            facade.submit_command(command)
+        self.assertEqual(str(ctx.exception), "Cell out of bounds.")
+
+        trace = facade.last_command_trace
+        self.assertIsNotNone(trace)
+        self.assertEqual(trace.command_type, COMMAND_SET_TERRAIN)
+        self.assertEqual(trace.status, "failed")
+        self.assertEqual(trace.error_class, "ValueError")
+        self.assertEqual(trace.metadata["queue_size"], 1)
+
+    def test_set_terrain_route_level_behavior_mapping(self):
+        from fastapi import FastAPI, Body, HTTPException, Request
+        from fastapi.testclient import TestClient
+        from typing import Dict, Any
+
+        app = FastAPI()
+        mock_runtime = MagicMock()
+
+        def _dm_console_snapshot():
+            return {"map": "dummy"}
+
+        @app.post("/api/dm/map/terrain/cell")
+        async def dm_set_terrain_cell(request: Request, payload: Dict[str, Any] = Body(...)):
+            if not isinstance(payload, dict):
+                raise HTTPException(status_code=400, detail="Invalid payload.")
+            try:
+                col = int(payload.get("col"))
+                row = int(payload.get("row"))
+            except Exception:
+                raise HTTPException(status_code=400, detail="col and row must be integers.")
+            is_rough = bool(payload.get("is_rough", True))
+            movement_type = str(payload.get("movement_type") or "ground")
+            color = payload.get("color")
+            label = payload.get("label")
+            try:
+                command = RuntimeCommand(
+                    command_type=COMMAND_SET_TERRAIN,
+                    payload={
+                        "col": int(col),
+                        "row": int(row),
+                        "is_rough": bool(is_rough),
+                        "movement_type": movement_type,
+                        "color": color,
+                        "label": label,
+                        "admin_token": "fake-token",
+                    }
+                )
+                cmd_result = mock_runtime.submit_command(command)
+                terrain_result = cmd_result.data.get("terrain_result") or {}
+            except TimeoutError as exc:
+                raise HTTPException(status_code=504, detail=str(exc))
+            except ValueError as exc:
+                raise HTTPException(status_code=400, detail=str(exc))
+            except Exception as exc:
+                raise HTTPException(status_code=500, detail=f"Failed to update terrain: {exc}")
+            return {
+                "ok": True,
+                "col": terrain_result.get("col"),
+                "row": terrain_result.get("row"),
+                "is_rough": terrain_result.get("is_rough"),
+                "movement_type": terrain_result.get("movement_type"),
+                "snapshot": _dm_console_snapshot(),
+            }
+
+        client = TestClient(app)
+
+        # 1. Success case
+        mock_runtime.submit_command.return_value = RuntimeCommandResult(
+            success=True, message="ok", data={"terrain_result": {"ok": True, "col": 2, "row": 3, "is_rough": True, "movement_type": "water"}}
+        )
+        response = client.post("/api/dm/map/terrain/cell", json={"col": 2, "row": 3, "is_rough": True, "movement_type": "water"})
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json(), {
+            "ok": True,
+            "col": 2,
+            "row": 3,
+            "is_rough": True,
+            "movement_type": "water",
+            "snapshot": {"map": "dummy"}
+        })
+
+        # 2. TimeoutError -> 504
+        mock_runtime.submit_command.side_effect = TimeoutError("Command timed out")
+        response = client.post("/api/dm/map/terrain/cell", json={"col": 2, "row": 3, "is_rough": True})
+        self.assertEqual(response.status_code, 504)
+        self.assertIn("Command timed out", response.json()["detail"])
+
+        # 3. ValueError -> 400
+        mock_runtime.submit_command.side_effect = ValueError("Cell out of bounds.")
+        response = client.post("/api/dm/map/terrain/cell", json={"col": 2, "row": 3, "is_rough": True})
+        self.assertEqual(response.status_code, 400)
+        self.assertIn("Cell out of bounds.", response.json()["detail"])
+
+        # 4. Generic Exception -> 500
+        mock_runtime.submit_command.side_effect = Exception("Runtime fail")
+        response = client.post("/api/dm/map/terrain/cell", json={"col": 2, "row": 3, "is_rough": True})
+        self.assertEqual(response.status_code, 500)
+        self.assertIn("Failed to update terrain: Runtime fail", response.json()["detail"])
