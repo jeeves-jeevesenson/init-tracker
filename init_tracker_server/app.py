@@ -6,7 +6,7 @@ from typing import Any, Optional
 from fastapi import FastAPI
 from fastapi.responses import JSONResponse
 
-from server_runtime import ServerRuntimeFacade
+from .runtime import ServerRuntimeFacade
 
 
 @asynccontextmanager
