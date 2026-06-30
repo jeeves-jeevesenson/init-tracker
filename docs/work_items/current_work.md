@@ -11,7 +11,7 @@ If an item is not marked as **Active** here, it is NOT current work.
 - **Status:** Idle
 - **Current Work Item:** None
 - **Active Gate:** None
-- **Allowed Next Action:** Start `WORK-20260630-runtime-facade-runtime-reexport-boundary`: add `init_tracker_server/runtime.py` as a package re-export boundary while preserving `server_runtime.py` as the implementation source and preserving current command semantics.
+- **Allowed Next Action:** Select the next bounded runtime package-boundary pass; recommended next is a package-internal import realignment decision for whether `init_tracker_server/app.py` should import through `init_tracker_server.runtime`.
 <!-- ACTIVE_WORK_STATUS_END -->
 
 ---
@@ -29,6 +29,7 @@ If an item is not marked as **Active** here, it is NOT current work.
 
 | ID | Title | Completion Date | Evidence |
 | --- | --- | --- | --- |
+| WORK-20260630-runtime-facade-runtime-reexport-boundary | Runtime facade re-export boundary | 2026-06-30 | Completed implementation slice; added `init_tracker_server/runtime.py` as a package re-export boundary for the existing runtime facade, command/status constants, and command/snapshot/trace contracts while preserving `server_runtime.py` as the implementation source and preserving existing imports and behavior. See [completed/WORK-20260630-runtime-facade-runtime-reexport-boundary.md](completed/WORK-20260630-runtime-facade-runtime-reexport-boundary.md). |
 | WORK-20260630-runtime-facade-runtime-import-boundary-plan | Runtime facade import-boundary decision | 2026-06-30 | Completed planning/evidence pass; selected the minimal package runtime re-export boundary as the next implementation slice, deferred moving `ServerRuntimeFacade`, and preserved `server_runtime.py` as implementation source for now. See [completed/WORK-20260630-runtime-facade-runtime-import-boundary-plan.md](completed/WORK-20260630-runtime-facade-runtime-import-boundary-plan.md). |
 | WORK-20260630-runtime-facade-package-skeleton | Add init_tracker_server package skeleton | 2026-06-30 | Completed implementation slice; added the `init_tracker_server/` package app-factory boundary, kept `server_app.py` as a compatibility shim, preserved health/readiness behavior, and avoided route, queue, WebSocket, snapshot/cache, gameplay, launcher, and topology changes. See [completed/WORK-20260630-runtime-facade-package-skeleton.md](completed/WORK-20260630-runtime-facade-package-skeleton.md). |
 | WORK-20260630-runtime-facade-package-boundary-plan | App-host/runtime-service package-boundary planning | 2026-06-30 | Completed planning/evidence pass; defined the target `init_tracker_server/` package boundary, compatibility shims, phased package plan, and recommended `WORK-20260630-runtime-facade-package-skeleton` as the first implementation slice. See [completed/WORK-20260630-runtime-facade-package-boundary-plan.md](completed/WORK-20260630-runtime-facade-package-boundary-plan.md) and [../planning/living_docs/server_runtime_package_boundary_plan_20260630.md](../planning/living_docs/server_runtime_package_boundary_plan_20260630.md). |

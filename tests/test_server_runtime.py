@@ -1,5 +1,8 @@
+import importlib
 import unittest
 from unittest.mock import MagicMock
+
+import server_runtime
 from server_runtime import (
     ServerRuntimeFacade,
     RuntimeCommand,
@@ -23,6 +26,49 @@ from server_runtime import (
 
 
 class ServerRuntimeFacadeTests(unittest.TestCase):
+    def test_package_runtime_reexports_current_runtime_boundary(self):
+        runtime = importlib.import_module("init_tracker_server.runtime")
+
+        self.assertIs(runtime.ServerRuntimeFacade, server_runtime.ServerRuntimeFacade)
+
+        expected_symbols = [
+            "RuntimeCommand",
+            "RuntimeCommandResult",
+            "RuntimeCommandTrace",
+            "RuntimeSnapshotRequest",
+            "RuntimeSnapshotResult",
+            "STATUS_ACCEPTED",
+            "STATUS_QUEUED",
+            "STATUS_DISPATCHING",
+            "STATUS_COMPLETED",
+            "STATUS_FAILED",
+            "STATUS_TIMED_OUT",
+            "COMMAND_UPDATE_SPELL_COLOR",
+            "COMMAND_TEST_QUEUE",
+            "COMMAND_SET_FACING",
+            "COMMAND_SET_AURAS_ENABLED",
+            "COMMAND_PLACE_COMBATANT",
+            "COMMAND_REMOVE_AOE",
+            "COMMAND_MOVE_AOE",
+            "COMMAND_SET_OBSTACLE",
+            "COMMAND_SET_TERRAIN",
+            "COMMAND_SET_ELEVATION",
+            "COMMAND_SET_MAP_SETTINGS",
+            "COMMAND_UPSERT_MAP_BACKGROUND",
+            "COMMAND_REMOVE_MAP_BACKGROUND",
+            "COMMAND_SET_MAP_BACKGROUND_ORDER",
+            "COMMAND_UPSERT_MAP_HAZARD",
+            "COMMAND_REMOVE_MAP_HAZARD",
+            "COMMAND_UPSERT_MAP_FEATURE",
+            "COMMAND_REMOVE_MAP_FEATURE",
+        ]
+
+        self.assertEqual(set(runtime.__all__), set(expected_symbols + ["ServerRuntimeFacade"]))
+        for name in expected_symbols:
+            with self.subTest(symbol=name):
+                self.assertTrue(hasattr(runtime, name))
+                self.assertEqual(getattr(runtime, name), getattr(server_runtime, name))
+
     def test_spell_color_command_execution(self):
         # 1. facade executes the spell-color command using a fake app/controller hook
         mock_app = MagicMock()
