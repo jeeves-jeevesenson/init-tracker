@@ -11,7 +11,7 @@ If an item is not marked as **Active** here, it is NOT current work.
 - **Status:** Idle
 - **Current Work Item:** None
 - **Active Gate:** None
-- **Allowed Next Action:** Open implementation slice `WORK-20260630-runtime-facade-package-skeleton` to add an `init_tracker_server/` package skeleton and app factory compatibility shim. Do not migrate routes, change queue semantics, change WebSockets, change snapshots/cache, change gameplay/combat mutation behavior, or alter deploy/topology.
+- **Allowed Next Action:** Select the next bounded package-boundary pass. Recommended next broad pass: runtime facade ownership/import boundary while preserving `server_runtime.py` compatibility and current command semantics.
 <!-- ACTIVE_WORK_STATUS_END -->
 
 ---
@@ -29,6 +29,7 @@ If an item is not marked as **Active** here, it is NOT current work.
 
 | ID | Title | Completion Date | Evidence |
 | --- | --- | --- | --- |
+| WORK-20260630-runtime-facade-package-skeleton | Add init_tracker_server package skeleton | 2026-06-30 | Completed implementation slice; added the `init_tracker_server/` package app-factory boundary, kept `server_app.py` as a compatibility shim, preserved health/readiness behavior, and avoided route, queue, WebSocket, snapshot/cache, gameplay, launcher, and topology changes. See [completed/WORK-20260630-runtime-facade-package-skeleton.md](completed/WORK-20260630-runtime-facade-package-skeleton.md). |
 | WORK-20260630-runtime-facade-package-boundary-plan | App-host/runtime-service package-boundary planning | 2026-06-30 | Completed planning/evidence pass; defined the target `init_tracker_server/` package boundary, compatibility shims, phased package plan, and recommended `WORK-20260630-runtime-facade-package-skeleton` as the first implementation slice. See [completed/WORK-20260630-runtime-facade-package-boundary-plan.md](completed/WORK-20260630-runtime-facade-package-boundary-plan.md) and [../planning/living_docs/server_runtime_package_boundary_plan_20260630.md](../planning/living_docs/server_runtime_package_boundary_plan_20260630.md). |
 | WORK-20260630-runtime-facade-package-boundary-readiness | Runtime facade package-boundary readiness | 2026-06-30 | Completed planning/evidence readiness pass; found the command inventory sufficient to proceed to app-host/runtime-service package-boundary planning, with command-semantics gaps documented as planning constraints rather than prerequisites. Recommended `WORK-20260630-runtime-facade-package-boundary-plan` next. See [completed/WORK-20260630-runtime-facade-package-boundary-readiness.md](completed/WORK-20260630-runtime-facade-package-boundary-readiness.md). |
 | WORK-20260630-runtime-facade-command-inventory-consolidation | ServerRuntimeFacade command inventory consolidation | 2026-06-30 | Completed docs-only inventory; documented migrated route-command mappings, payload/result semantics, timeout/error behavior, trace expectations, focused tests, direct-route risks, naming gaps, and recommended package-boundary readiness as the next planning/evidence item. See [completed/WORK-20260630-runtime-facade-command-inventory-consolidation.md](completed/WORK-20260630-runtime-facade-command-inventory-consolidation.md) and [../architecture/server_runtime_facade_command_inventory_20260630.md](../architecture/server_runtime_facade_command_inventory_20260630.md). |
