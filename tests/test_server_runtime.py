@@ -18,6 +18,7 @@ from server_runtime import (
     COMMAND_REMOVE_MAP_BACKGROUND,
     COMMAND_SET_MAP_BACKGROUND_ORDER,
     COMMAND_UPSERT_MAP_HAZARD,
+    COMMAND_REMOVE_MAP_HAZARD,
 )
 
 
@@ -2893,3 +2894,203 @@ class ServerRuntimeFacadeTests(unittest.TestCase):
         response = client.post("/api/dm/map/hazards", json={"col": 2, "row": 3})
         self.assertEqual(response.status_code, 500)
         self.assertIn("Failed to update hazard: Runtime fail", response.json()["detail"])
+
+    def test_remove_hazard_success(self):
+        import threading
+        import time
+
+        class FakeQueue:
+            def __init__(self):
+                self.items = []
+                self.on_put = None
+            def put(self, item):
+                self.items.append(item)
+                if self.on_put:
+                    self.on_put(item)
+            def qsize(self):
+                return len(self.items)
+
+        class FakeLanController:
+            def __init__(self):
+                self._actions = FakeQueue()
+                self._action_states = {}
+                self._action_states_lock = threading.Lock()
+                self._action_history_limit = 500
+
+        controller = FakeLanController()
+        captured_msg = []
+
+        def process_success(msg):
+            captured_msg.append(msg)
+            action_id = msg["action_id"]
+            with controller._action_states_lock:
+                controller._action_states[action_id].update({
+                    "status": "completed",
+                    "result": {"status": "applied"},
+                    "hazard_result": {
+                        "ok": True,
+                        "hazard_id": "hazard-123"
+                    },
+                    "completed_at_ns": time.perf_counter_ns()
+                })
+
+        controller._actions.on_put = process_success
+
+        facade = ServerRuntimeFacade(lan_controller=controller)
+        command = RuntimeCommand(
+            command_type=COMMAND_REMOVE_MAP_HAZARD,
+            payload={
+                "hazard_id": "hazard-123"
+            }
+        )
+
+        result = facade.submit_command(command)
+        self.assertTrue(result.success)
+        self.assertEqual(len(captured_msg), 1)
+        msg = captured_msg[0]
+        self.assertEqual(msg["type"], "remove_map_hazard")
+        self.assertEqual(msg["hazard_id"], "hazard-123")
+
+        haz_res = result.data.get("hazard_result")
+        self.assertIsNotNone(haz_res)
+        self.assertTrue(haz_res.get("ok"))
+        self.assertEqual(haz_res.get("hazard_id"), "hazard-123")
+
+        trace = facade.last_command_trace
+        self.assertIsNotNone(trace)
+        self.assertEqual(trace.command_type, COMMAND_REMOVE_MAP_HAZARD)
+        self.assertEqual(trace.status, "completed")
+        self.assertIsNone(trace.error_class)
+        self.assertEqual(trace.metadata["queue_size"], 1)
+        self.assertIn("queue_wait_ms", trace.metadata)
+
+    def test_remove_hazard_validation_failure(self):
+        import threading
+        import time
+
+        class FakeQueue:
+            def __init__(self):
+                self.items = []
+                self.on_put = None
+            def put(self, item):
+                self.items.append(item)
+                if self.on_put:
+                    self.on_put(item)
+            def qsize(self):
+                return len(self.items)
+
+        class FakeLanController:
+            def __init__(self):
+                self._actions = FakeQueue()
+                self._action_states = {}
+                self._action_states_lock = threading.Lock()
+                self._action_history_limit = 500
+
+        controller = FakeLanController()
+        captured_msg = []
+
+        def process_failure(msg):
+            captured_msg.append(msg)
+            action_id = msg["action_id"]
+            with controller._action_states_lock:
+                controller._action_states[action_id].update({
+                    "status": "completed",
+                    "result": {"status": "applied"},
+                    "hazard_result": {"ok": False, "error": "Hazard not found."},
+                    "completed_at_ns": time.perf_counter_ns()
+                })
+
+        controller._actions.on_put = process_failure
+
+        facade = ServerRuntimeFacade(lan_controller=controller)
+        command = RuntimeCommand(
+            command_type=COMMAND_REMOVE_MAP_HAZARD,
+            payload={
+                "hazard_id": "nonexistent"
+            }
+        )
+
+        with self.assertRaises(ValueError) as ctx:
+            facade.submit_command(command)
+        self.assertEqual(str(ctx.exception), "Hazard not found.")
+
+        trace = facade.last_command_trace
+        self.assertIsNotNone(trace)
+        self.assertEqual(trace.command_type, COMMAND_REMOVE_MAP_HAZARD)
+        self.assertEqual(trace.status, "failed")
+        self.assertEqual(trace.error_class, "ValueError")
+        self.assertEqual(trace.metadata["queue_size"], 1)
+
+    def test_remove_hazard_route_level_behavior_mapping(self):
+        from fastapi import FastAPI, HTTPException, Request
+        from fastapi.testclient import TestClient
+        from typing import Dict, Any
+
+        app = FastAPI()
+        mock_runtime = MagicMock()
+
+        def _dm_console_snapshot():
+            return {"map": "dummy"}
+
+        @app.delete("/api/dm/map/hazards/{hazard_id}")
+        async def dm_remove_hazard(hazard_id: str, request: Request):
+            try:
+                command = RuntimeCommand(
+                    command_type=COMMAND_REMOVE_MAP_HAZARD,
+                    payload={
+                        "hazard_id": hazard_id,
+                        "admin_token": "fake-token",
+                    }
+                )
+                cmd_result = mock_runtime.submit_command(command)
+                hazard_result = cmd_result.data.get("hazard_result") or {}
+            except TimeoutError as exc:
+                raise HTTPException(status_code=504, detail=str(exc))
+            except ValueError as exc:
+                raise HTTPException(status_code=400, detail=str(exc))
+            except Exception as exc:
+                raise HTTPException(status_code=500, detail=f"Failed to remove hazard: {exc}")
+            if not hazard_result.get("ok"):
+                raise HTTPException(status_code=400, detail=hazard_result.get("error", "Cannot remove hazard."))
+            return {
+                "ok": True,
+                "hazard_id": hazard_result.get("hazard_id"),
+                "snapshot": _dm_console_snapshot(),
+            }
+
+        client = TestClient(app)
+
+        # 1. Success case
+        mock_runtime.submit_command.return_value = RuntimeCommandResult(
+            success=True, message="ok", data={
+                "hazard_result": {
+                    "ok": True,
+                    "hazard_id": "hazard-123"
+                }
+            }
+        )
+        response = client.delete("/api/dm/map/hazards/hazard-123")
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json(), {
+            "ok": True,
+            "hazard_id": "hazard-123",
+            "snapshot": {"map": "dummy"}
+        })
+
+        # 2. TimeoutError -> 504
+        mock_runtime.submit_command.side_effect = TimeoutError("Command timed out")
+        response = client.delete("/api/dm/map/hazards/hazard-123")
+        self.assertEqual(response.status_code, 504)
+        self.assertIn("Command timed out", response.json()["detail"])
+
+        # 3. ValueError -> 400
+        mock_runtime.submit_command.side_effect = ValueError("Hazard not found.")
+        response = client.delete("/api/dm/map/hazards/nonexistent")
+        self.assertEqual(response.status_code, 400)
+        self.assertIn("Hazard not found.", response.json()["detail"])
+
+        # 4. Generic Exception -> 500
+        mock_runtime.submit_command.side_effect = Exception("Runtime fail")
+        response = client.delete("/api/dm/map/hazards/hazard-123")
+        self.assertEqual(response.status_code, 500)
+        self.assertIn("Failed to remove hazard: Runtime fail", response.json()["detail"])
