@@ -58,6 +58,7 @@ COMMAND_SET_FACING = "set_facing"
 COMMAND_SET_AURAS_ENABLED = "set_auras_enabled"
 COMMAND_PLACE_COMBATANT = "place_combatant"
 COMMAND_REMOVE_AOE = "aoe_remove"
+COMMAND_MOVE_AOE = "aoe_move"
 
 
 
@@ -273,6 +274,39 @@ class ServerRuntimeFacade:
                     success=True,
                     message="AoE removed successfully.",
                     data={"remove_result": remove_result}
+                )
+            except Exception as exc:
+                duration_ms = (time.perf_counter() - start_time) * 1000.0
+                status = STATUS_TIMED_OUT if isinstance(exc, TimeoutError) else STATUS_FAILED
+                self.last_command_trace = RuntimeCommandTrace(
+                    command_type=command.command_type,
+                    status=status,
+                    duration_ms=duration_ms,
+                    error_class=exc.__class__.__name__,
+                    metadata=self.last_command_trace.metadata if self.last_command_trace else {}
+                )
+                raise
+        elif command.command_type == COMMAND_MOVE_AOE:
+            import time
+            start_time = time.perf_counter()
+            try:
+                timeout_ms = command.payload.get("timeout_ms", 5000)
+                res = self._submit_to_lan_queue(command, timeout_ms=timeout_ms)
+                action_id = self.last_command_trace.metadata.get("action_id")
+                with self.lan_controller._action_states_lock:
+                    state = self.lan_controller._action_states.get(action_id)
+                    move_result = state.get("move_result") if state else None
+
+                if move_result and not move_result.get("ok"):
+                    raise ValueError(move_result.get("error", "Cannot move AoE."))
+
+                if not move_result:
+                    raise RuntimeError("No move result from queue.")
+
+                return RuntimeCommandResult(
+                    success=True,
+                    message="AoE moved successfully.",
+                    data={"move_result": move_result}
                 )
             except Exception as exc:
                 duration_ms = (time.perf_counter() - start_time) * 1000.0
