@@ -11,7 +11,7 @@ If an item is not marked as **Active** here, it is NOT current work.
 - **Status:** Idle
 - **Current Work Item:** None
 - **Active Gate:** None
-- **Allowed Next Action:** Proceed with the minimal route-read adoption implementation slice under WORK-20260630-runtime-facade-route-read-adoption-minimal-implementation to adopt read_snapshot() for the selected route GET /api/dm/combat.
+- **Allowed Next Action:** Open a bounded latency/read-model follow-up decision for GET /api/dm/combat and snapshot hot paths using logs/debug-trace-20260630-164720.jsonl and the smoke follow-up evidence. Do not proceed to player-command routes, combat mutation routes, or high-risk direct gameplay route migration without a new active work item.
 <!-- ACTIVE_WORK_STATUS_END -->
 
 ---
