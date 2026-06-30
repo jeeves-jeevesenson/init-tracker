@@ -2507,7 +2507,7 @@ class LanController:
             return
 
         from server_app import create_app
-        from server_runtime import RuntimeCommand, COMMAND_UPDATE_SPELL_COLOR, COMMAND_SET_FACING, COMMAND_SET_AURAS_ENABLED, COMMAND_PLACE_COMBATANT, COMMAND_REMOVE_AOE, COMMAND_MOVE_AOE, COMMAND_SET_OBSTACLE, COMMAND_SET_TERRAIN, COMMAND_SET_ELEVATION, COMMAND_SET_MAP_SETTINGS, COMMAND_UPSERT_MAP_BACKGROUND, COMMAND_REMOVE_MAP_BACKGROUND, COMMAND_SET_MAP_BACKGROUND_ORDER
+        from server_runtime import RuntimeCommand, COMMAND_UPDATE_SPELL_COLOR, COMMAND_SET_FACING, COMMAND_SET_AURAS_ENABLED, COMMAND_PLACE_COMBATANT, COMMAND_REMOVE_AOE, COMMAND_MOVE_AOE, COMMAND_SET_OBSTACLE, COMMAND_SET_TERRAIN, COMMAND_SET_ELEVATION, COMMAND_SET_MAP_SETTINGS, COMMAND_UPSERT_MAP_BACKGROUND, COMMAND_REMOVE_MAP_BACKGROUND, COMMAND_SET_MAP_BACKGROUND_ORDER, COMMAND_UPSERT_MAP_HAZARD
         self._fastapi_app = create_app(lan_controller=self)
         self._runtime = self._fastapi_app.state.runtime
 
@@ -5705,26 +5705,44 @@ class LanController:
             if custom_payload is not None and not isinstance(custom_payload, dict):
                 raise HTTPException(status_code=400, detail="payload must be an object when provided.")
             try:
-                result = self.app._dm_upsert_hazard_on_map(
-                    col=int(col),
-                    row=int(row),
-                    hazard_id=str(payload.get("hazard_id") or "").strip() or None,
-                    kind=str(payload.get("kind") or "hazard"),
-                    tactical_preset_id=str(payload.get("tactical_preset_id") or "").strip() or None,
-                    count=payload.get("count"),
-                    name=str(payload.get("name") or "").strip() or None,
-                    payload=dict(custom_payload or {}),
+                header = request.headers.get("authorization", "")
+                token = ""
+                if header.lower().startswith("bearer "):
+                    token = header.split(" ", 1)[1].strip()
+                if not token or not self.app._is_admin_token_valid(token):
+                    token = self.app._issue_admin_token()
+
+                command = RuntimeCommand(
+                    command_type=COMMAND_UPSERT_MAP_HAZARD,
+                    payload={
+                        "col": col,
+                        "row": row,
+                        "hazard_id": str(payload.get("hazard_id") or "").strip() or None,
+                        "kind": str(payload.get("kind") or "hazard"),
+                        "tactical_preset_id": str(payload.get("tactical_preset_id") or "").strip() or None,
+                        "count": payload.get("count"),
+                        "name": str(payload.get("name") or "").strip() or None,
+                        "payload": dict(custom_payload or {}),
+                        "admin_token": token,
+                    }
                 )
+                cmd_result = self._runtime.submit_command(command)
+                hazard_result = cmd_result.data.get("hazard_result") or {}
+            except TimeoutError as exc:
+                raise HTTPException(status_code=504, detail=str(exc))
+            except ValueError as exc:
+                raise HTTPException(status_code=400, detail=str(exc))
             except Exception as exc:
                 raise HTTPException(status_code=500, detail=f"Failed to update hazard: {exc}")
-            if not result.get("ok"):
-                raise HTTPException(status_code=400, detail=result.get("error", "Cannot update hazard."))
+            if not hazard_result.get("ok"):
+                raise HTTPException(status_code=400, detail=hazard_result.get("error", "Cannot update hazard."))
             return {
                 "ok": True,
-                "hazard_id": result.get("hazard_id"),
-                "hazard": result.get("hazard"),
+                "hazard_id": hazard_result.get("hazard_id"),
+                "hazard": hazard_result.get("hazard"),
                 "snapshot": _dm_console_snapshot(),
             }
+
 
         @self._fastapi_app.delete("/api/dm/map/hazards/{hazard_id}")
         async def dm_remove_hazard(hazard_id: str, request: Request):
@@ -43408,6 +43426,33 @@ class InitiativeTracker(base.InitiativeTracker):
                     if action_id in self._action_states:
                         self._action_states[action_id]["reorder_background_result"] = result
             return
+
+        if typ == "upsert_map_hazard" and is_admin:
+            col = msg.get("col")
+            row = msg.get("row")
+            hazard_id = msg.get("hazard_id")
+            kind = msg.get("kind")
+            tactical_preset_id = msg.get("tactical_preset_id")
+            count = msg.get("count")
+            name = msg.get("name")
+            payload_dict = msg.get("payload")
+            result = self._dm_upsert_hazard_on_map(
+                col=col,
+                row=row,
+                hazard_id=hazard_id,
+                kind=kind,
+                tactical_preset_id=tactical_preset_id,
+                count=count,
+                name=name,
+                payload=payload_dict,
+            )
+            action_id = msg.get("action_id")
+            if action_id:
+                with self._action_states_lock:
+                    if action_id in self._action_states:
+                        self._action_states[action_id]["hazard_result"] = result
+            return
+
 
 
         if typ in AOE_MANIPULATION_COMMAND_TYPES:
