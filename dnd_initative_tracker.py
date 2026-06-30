@@ -4160,7 +4160,19 @@ class LanController:
             if _dm_service is None:
                 raise HTTPException(status_code=503, detail="DM combat service unavailable.")
             try:
-                return _dm_console_snapshot()
+                from server_runtime import RuntimeSnapshotRequest
+                snap_req = RuntimeSnapshotRequest(
+                    snapshot_type="dm_console",
+                    params={"include_tactical": _current_request_wants_tactical_map()}
+                )
+                result = self._runtime.read_snapshot(snap_req)
+                if not result.success:
+                    if result.error and result.error.get("code") == "runtime_not_ready":
+                        raise HTTPException(status_code=503, detail="Service Unavailable")
+                    raise HTTPException(status_code=500, detail="Failed to read combat snapshot.")
+                return result.data
+            except HTTPException:
+                raise
             except Exception:
                 raise HTTPException(status_code=500, detail="Failed to read combat snapshot.")
 

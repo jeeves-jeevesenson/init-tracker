@@ -153,3 +153,9 @@ In the absence of an active work item, the Orchestrator MUST stop and ask the de
 4. Perform smoke testing.
 5. Commit/Push current changes.
 6. Deploy to production.
+
+Allowed Next Action: bounded developer smoke/evidence pass for GET /api/dm/combat route-read adoption
+
+## Recent completion
+
+- WORK-20260630-runtime-facade-route-read-adoption-minimal-implementation completed: GET /api/dm/combat now routes its snapshot read through ServerRuntimeFacade.read_snapshot(dm_console). Next safe action is bounded developer smoke/evidence for this route-read adoption.
