@@ -72,3 +72,17 @@ Required validation run:
 Run bounded developer smoke/evidence for `GET /api/dm/combat` and `GET /api/dm/combat?workspace`, or commit the completed implementation if requested.
 
 Do not proceed to facade-owned cache, TTL increase, route-side read offload, LAN dynamic snapshot reuse, static hydration, another read-route adoption, player-command routes, combat mutation routes, rules-aware move, AoE create, structures, ships, boarding links, or high-risk direct gameplay route migration without a new active work item.
+
+## Developer smoke follow-up — 2026-06-30
+
+Smoke status: passed.
+
+Evidence:
+- Developer reported: "dm worked fine."
+- Smoke log: `logs/smoke/WORK-20260630-runtime-facade-dm-console-read-model-cache-refinement-minimal-implementation_smoke-server_20260630-183429.log`.
+- Debug trace: `logs/debug-trace-20260630-183429.jsonl`.
+- Headless server started and advertised DM/player surfaces.
+- LAN session connected and claimed `Dorian`.
+- `GET /api/dm/combat?workspace` returned HTTP 200.
+- Observed route trace near the smoke interaction: HTTP request about 29 ms, `_dm_console_snapshot` about 21.7 ms, `_dm_tactical_snapshot` about 3.6 ms, and `_lan_snapshot` about 3.4 ms.
+- No stale tactical/non-tactical cross-mode data or responsiveness problem was reported by the developer.
