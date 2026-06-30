@@ -2507,7 +2507,7 @@ class LanController:
             return
 
         from server_app import create_app
-        from server_runtime import RuntimeCommand, COMMAND_UPDATE_SPELL_COLOR, COMMAND_SET_FACING, COMMAND_SET_AURAS_ENABLED, COMMAND_PLACE_COMBATANT, COMMAND_REMOVE_AOE, COMMAND_MOVE_AOE, COMMAND_SET_OBSTACLE, COMMAND_SET_TERRAIN, COMMAND_SET_ELEVATION, COMMAND_SET_MAP_SETTINGS, COMMAND_UPSERT_MAP_BACKGROUND, COMMAND_REMOVE_MAP_BACKGROUND, COMMAND_SET_MAP_BACKGROUND_ORDER, COMMAND_UPSERT_MAP_HAZARD, COMMAND_REMOVE_MAP_HAZARD
+        from server_runtime import RuntimeCommand, COMMAND_UPDATE_SPELL_COLOR, COMMAND_SET_FACING, COMMAND_SET_AURAS_ENABLED, COMMAND_PLACE_COMBATANT, COMMAND_REMOVE_AOE, COMMAND_MOVE_AOE, COMMAND_SET_OBSTACLE, COMMAND_SET_TERRAIN, COMMAND_SET_ELEVATION, COMMAND_SET_MAP_SETTINGS, COMMAND_UPSERT_MAP_BACKGROUND, COMMAND_REMOVE_MAP_BACKGROUND, COMMAND_SET_MAP_BACKGROUND_ORDER, COMMAND_UPSERT_MAP_HAZARD, COMMAND_REMOVE_MAP_HAZARD, COMMAND_UPSERT_MAP_FEATURE
         self._fastapi_app = create_app(lan_controller=self)
         self._runtime = self._fastapi_app.state.runtime
 
@@ -5797,24 +5797,41 @@ class LanController:
             if custom_payload is not None and not isinstance(custom_payload, dict):
                 raise HTTPException(status_code=400, detail="payload must be an object when provided.")
             try:
-                result = self.app._dm_upsert_feature_on_map(
-                    col=int(col),
-                    row=int(row),
-                    feature_id=str(payload.get("feature_id") or "").strip() or None,
-                    kind=str(payload.get("kind") or "feature"),
-                    tactical_preset_id=str(payload.get("tactical_preset_id") or "").strip() or None,
-                    count=payload.get("count"),
-                    name=str(payload.get("name") or "").strip() or None,
-                    payload=dict(custom_payload or {}),
+                header = request.headers.get("authorization", "")
+                token = ""
+                if header.lower().startswith("bearer "):
+                    token = header.split(" ", 1)[1].strip()
+                if not token or not self.app._is_admin_token_valid(token):
+                    token = self.app._issue_admin_token()
+
+                command = RuntimeCommand(
+                    command_type=COMMAND_UPSERT_MAP_FEATURE,
+                    payload={
+                        "col": col,
+                        "row": row,
+                        "feature_id": str(payload.get("feature_id") or "").strip() or None,
+                        "kind": str(payload.get("kind") or "feature"),
+                        "tactical_preset_id": str(payload.get("tactical_preset_id") or "").strip() or None,
+                        "count": payload.get("count"),
+                        "name": str(payload.get("name") or "").strip() or None,
+                        "payload": dict(custom_payload or {}),
+                        "admin_token": token,
+                    }
                 )
+                cmd_result = self._runtime.submit_command(command)
+                feature_result = cmd_result.data.get("feature_result") or {}
+            except TimeoutError as exc:
+                raise HTTPException(status_code=504, detail=str(exc))
+            except ValueError as exc:
+                raise HTTPException(status_code=400, detail=str(exc))
             except Exception as exc:
                 raise HTTPException(status_code=500, detail=f"Failed to update feature: {exc}")
-            if not result.get("ok"):
-                raise HTTPException(status_code=400, detail=result.get("error", "Cannot update feature."))
+            if not feature_result.get("ok"):
+                raise HTTPException(status_code=400, detail=feature_result.get("error", "Cannot update feature."))
             return {
                 "ok": True,
-                "feature_id": result.get("feature_id"),
-                "feature": result.get("feature"),
+                "feature_id": feature_result.get("feature_id"),
+                "feature": feature_result.get("feature"),
                 "snapshot": _dm_console_snapshot(),
             }
 
@@ -43470,6 +43487,32 @@ class InitiativeTracker(base.InitiativeTracker):
                 with self._action_states_lock:
                     if action_id in self._action_states:
                         self._action_states[action_id]["hazard_result"] = result
+            return
+
+        if typ == "upsert_map_feature" and is_admin:
+            col = msg.get("col")
+            row = msg.get("row")
+            feature_id = msg.get("feature_id")
+            kind = msg.get("kind")
+            tactical_preset_id = msg.get("tactical_preset_id")
+            count = msg.get("count")
+            name = msg.get("name")
+            payload_dict = msg.get("payload")
+            result = self._dm_upsert_feature_on_map(
+                col=col,
+                row=row,
+                feature_id=feature_id,
+                kind=kind,
+                tactical_preset_id=tactical_preset_id,
+                count=count,
+                name=name,
+                payload=payload_dict,
+            )
+            action_id = msg.get("action_id")
+            if action_id:
+                with self._action_states_lock:
+                    if action_id in self._action_states:
+                        self._action_states[action_id]["feature_result"] = result
             return
 
         if typ == "remove_map_hazard" and is_admin:

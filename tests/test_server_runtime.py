@@ -3094,3 +3094,230 @@ class ServerRuntimeFacadeTests(unittest.TestCase):
         response = client.delete("/api/dm/map/hazards/hazard-123")
         self.assertEqual(response.status_code, 500)
         self.assertIn("Failed to remove hazard: Runtime fail", response.json()["detail"])
+
+    def test_upsert_feature_success(self):
+        import threading
+        import time
+        from server_runtime import COMMAND_UPSERT_MAP_FEATURE
+
+        class FakeQueue:
+            def __init__(self):
+                self.items = []
+                self.on_put = None
+            def put(self, item):
+                self.items.append(item)
+                if self.on_put:
+                    self.on_put(item)
+            def qsize(self):
+                return len(self.items)
+
+        class FakeLanController:
+            def __init__(self):
+                self._actions = FakeQueue()
+                self._action_states = {}
+                self._action_states_lock = threading.Lock()
+                self._action_history_limit = 500
+
+        controller = FakeLanController()
+        captured_msg = []
+
+        def process_success(msg):
+            captured_msg.append(msg)
+            action_id = msg["action_id"]
+            with controller._action_states_lock:
+                controller._action_states[action_id].update({
+                    "status": "completed",
+                    "result": {"status": "applied"},
+                    "feature_result": {
+                        "ok": True,
+                        "feature_id": "feature-123",
+                        "feature": {
+                            "col": 2,
+                            "row": 3,
+                            "kind": "feature",
+                            "name": "Wall"
+                        }
+                    },
+                    "completed_at_ns": time.perf_counter_ns()
+                })
+
+        controller._actions.on_put = process_success
+
+        facade = ServerRuntimeFacade(lan_controller=controller)
+        command = RuntimeCommand(
+            command_type=COMMAND_UPSERT_MAP_FEATURE,
+            payload={
+                "col": 2,
+                "row": 3,
+                "feature_id": "feature-123",
+                "kind": "feature",
+                "name": "Wall",
+                "payload": {}
+            }
+        )
+
+        result = facade.submit_command(command)
+        self.assertTrue(result.success)
+        self.assertEqual(len(captured_msg), 1)
+        msg = captured_msg[0]
+        self.assertEqual(msg["type"], "upsert_map_feature")
+        self.assertEqual(msg["col"], 2)
+        self.assertEqual(msg["row"], 3)
+
+        feat_res = result.data.get("feature_result")
+        self.assertIsNotNone(feat_res)
+        self.assertTrue(feat_res.get("ok"))
+        self.assertEqual(feat_res.get("feature_id"), "feature-123")
+        self.assertEqual(feat_res.get("feature", {}).get("name"), "Wall")
+
+        trace = facade.last_command_trace
+        self.assertIsNotNone(trace)
+        self.assertEqual(trace.command_type, COMMAND_UPSERT_MAP_FEATURE)
+        self.assertEqual(trace.status, "completed")
+        self.assertIsNone(trace.error_class)
+        self.assertEqual(trace.metadata["queue_size"], 1)
+        self.assertIn("queue_wait_ms", trace.metadata)
+
+    def test_upsert_feature_validation_failure(self):
+        import threading
+        import time
+        from server_runtime import COMMAND_UPSERT_MAP_FEATURE
+
+        class FakeQueue:
+            def __init__(self):
+                self.items = []
+                self.on_put = None
+            def put(self, item):
+                self.items.append(item)
+                if self.on_put:
+                    self.on_put(item)
+            def qsize(self):
+                return len(self.items)
+
+        class FakeLanController:
+            def __init__(self):
+                self._actions = FakeQueue()
+                self._action_states = {}
+                self._action_states_lock = threading.Lock()
+                self._action_history_limit = 500
+
+        controller = FakeLanController()
+        captured_msg = []
+
+        def process_failure(msg):
+            captured_msg.append(msg)
+            action_id = msg["action_id"]
+            with controller._action_states_lock:
+                controller._action_states[action_id].update({
+                    "status": "completed",
+                    "result": {"status": "applied"},
+                    "feature_result": {"ok": False, "error": "col and row must be integers."},
+                    "completed_at_ns": time.perf_counter_ns()
+                })
+
+        controller._actions.on_put = process_failure
+
+        facade = ServerRuntimeFacade(lan_controller=controller)
+        command = RuntimeCommand(
+            command_type=COMMAND_UPSERT_MAP_FEATURE,
+            payload={
+                "col": "invalid",
+                "row": 3,
+            }
+        )
+
+        with self.assertRaises(ValueError) as ctx:
+            facade.submit_command(command)
+        self.assertEqual(str(ctx.exception), "col and row must be integers.")
+
+        trace = facade.last_command_trace
+        self.assertIsNotNone(trace)
+        self.assertEqual(trace.command_type, COMMAND_UPSERT_MAP_FEATURE)
+        self.assertEqual(trace.status, "failed")
+        self.assertEqual(trace.error_class, "ValueError")
+        self.assertEqual(trace.metadata["queue_size"], 1)
+
+    def test_upsert_feature_route_level_behavior_mapping(self):
+        from fastapi import FastAPI, Body, HTTPException, Request
+        from fastapi.testclient import TestClient
+        from typing import Dict, Any, Optional
+        from server_runtime import COMMAND_UPSERT_MAP_FEATURE
+
+        app = FastAPI()
+        mock_runtime = MagicMock()
+
+        def _dm_console_snapshot():
+            return {"map": "dummy"}
+
+        @app.post("/api/dm/map/features")
+        async def dm_upsert_feature(request: Request, payload: Dict[str, Any] = Body(...)):
+            try:
+                command = RuntimeCommand(
+                    command_type=COMMAND_UPSERT_MAP_FEATURE,
+                    payload={
+                        "col": payload.get("col"),
+                        "row": payload.get("row"),
+                        "feature_id": payload.get("feature_id"),
+                        "kind": payload.get("kind"),
+                        "tactical_preset_id": payload.get("tactical_preset_id"),
+                        "count": payload.get("count"),
+                        "name": payload.get("name"),
+                        "payload": payload.get("payload"),
+                        "admin_token": "fake-token",
+                    }
+                )
+                cmd_result = mock_runtime.submit_command(command)
+                feature_result = cmd_result.data.get("feature_result") or {}
+            except TimeoutError as exc:
+                raise HTTPException(status_code=504, detail=str(exc))
+            except ValueError as exc:
+                raise HTTPException(status_code=400, detail=str(exc))
+            except Exception as exc:
+                raise HTTPException(status_code=500, detail=f"Failed to update feature: {exc}")
+            if not feature_result.get("ok"):
+                raise HTTPException(status_code=400, detail=feature_result.get("error", "Cannot update feature."))
+            return {
+                "ok": True,
+                "feature_id": feature_result.get("feature_id"),
+                "feature": feature_result.get("feature"),
+                "snapshot": _dm_console_snapshot(),
+            }
+
+        client = TestClient(app)
+
+        # 1. Success case
+        mock_runtime.submit_command.return_value = RuntimeCommandResult(
+            success=True, message="ok", data={
+                "feature_result": {
+                    "ok": True,
+                    "feature_id": "feature-123",
+                    "feature": {"col": 2, "row": 3, "kind": "feature", "name": "Wall"}
+                }
+            }
+        )
+        response = client.post("/api/dm/map/features", json={"col": 2, "row": 3})
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json(), {
+            "ok": True,
+            "feature_id": "feature-123",
+            "feature": {"col": 2, "row": 3, "kind": "feature", "name": "Wall"},
+            "snapshot": {"map": "dummy"}
+        })
+
+        # 2. TimeoutError -> 504
+        mock_runtime.submit_command.side_effect = TimeoutError("Command timed out")
+        response = client.post("/api/dm/map/features", json={"col": 2, "row": 3})
+        self.assertEqual(response.status_code, 504)
+        self.assertIn("Command timed out", response.json()["detail"])
+
+        # 3. ValueError -> 400
+        mock_runtime.submit_command.side_effect = ValueError("col and row must be integers.")
+        response = client.post("/api/dm/map/features", json={"col": "invalid", "row": 3})
+        self.assertEqual(response.status_code, 400)
+        self.assertIn("col and row must be integers.", response.json()["detail"])
+
+        # 4. Generic Exception -> 500
+        mock_runtime.submit_command.side_effect = Exception("Runtime fail")
+        response = client.post("/api/dm/map/features", json={"col": 2, "row": 3})
+        self.assertEqual(response.status_code, 500)
+        self.assertIn("Failed to update feature: Runtime fail", response.json()["detail"])
