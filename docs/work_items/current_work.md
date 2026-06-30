@@ -11,7 +11,7 @@ If an item is not marked as **Active** here, it is NOT current work.
 - **Status:** Idle
 - **Current Work Item:** None
 - **Active Gate:** None
-- **Allowed Next Action:** Evaluate and select next candidates for runtime facade queue command migration.
+- **Allowed Next Action:** Open planning slice `WORK-20260630-runtime-facade-next-boundary-checkpoint-decision` to decide between one more static map migration, ServerRuntimeFacade command inventory consolidation, or app-host/runtime-service package boundary planning.
 <!-- ACTIVE_WORK_STATUS_END -->
 
 ---
@@ -29,6 +29,7 @@ If an item is not marked as **Active** here, it is NOT current work.
 
 | ID | Title | Completion Date | Evidence |
 | --- | --- | --- | --- |
+| WORK-20260630-runtime-facade-queue-migration-checkpoint | Runtime facade queue migration checkpoint | 2026-06-30 | Completed docs/planning checkpoint; paused the low-risk route-migration loop after feature removal, reconciled queue-backed facade migration progress with the ASGI/server-first/runtime-as-service direction, and recommended the next action as a planning/decision slice. See [completed/WORK-20260630-runtime-facade-queue-migration-checkpoint.md](completed/WORK-20260630-runtime-facade-queue-migration-checkpoint.md) and [../planning/living_docs/server_runtime_facade_queue_migration_checkpoint_20260630.md](../planning/living_docs/server_runtime_facade_queue_migration_checkpoint_20260630.md). |
 | WORK-20260630-runtime-facade-queue-command-feature-remove | Queue-backed facade command for map feature removal | 2026-06-30 | Completed implementation slice; routed only DELETE /api/dm/map/features/{feature_id} through ServerRuntimeFacade and the queue adapter seam, preserving existing map feature removal behavior and focused tests. See [completed/WORK-20260630-runtime-facade-queue-command-feature-remove.md](completed/WORK-20260630-runtime-facade-queue-command-feature-remove.md). |
 | WORK-20260630-runtime-facade-queue-command-feature-upsert | Queue-backed facade command for map feature upsert | 2026-06-30 | Completed implementation slice; routed only POST /api/dm/map/features through ServerRuntimeFacade and the queue adapter seam, preserving existing map feature create/update behavior and focused tests. See [completed/WORK-20260630-runtime-facade-queue-command-feature-upsert.md](completed/WORK-20260630-runtime-facade-queue-command-feature-upsert.md). |
 | WORK-20260630-runtime-facade-queue-command-hazard-remove | Queue-backed facade command for map hazard removal | 2026-06-30 | Completed implementation slice; routed only DELETE /api/dm/map/hazards/{hazard_id} through ServerRuntimeFacade and the queue adapter seam, preserving existing map hazard removal behavior and focused tests. See [completed/WORK-20260630-runtime-facade-queue-command-hazard-remove.md](completed/WORK-20260630-runtime-facade-queue-command-hazard-remove.md). |
