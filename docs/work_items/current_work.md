@@ -11,7 +11,7 @@ If an item is not marked as **Active** here, it is NOT current work.
 - **Status:** Idle
 - **Current Work Item:** None
 - **Active Gate:** None
-- **Allowed Next Action:** Open a bounded latency/read-model follow-up decision for GET /api/dm/combat and snapshot hot paths using logs/debug-trace-20260630-164720.jsonl and the smoke follow-up evidence. Do not proceed to player-command routes, combat mutation routes, or high-risk direct gameplay route migration without a new active work item.
+- **Allowed Next Action:** Open `WORK-20260630-runtime-facade-dm-console-read-model-cache-refinement-decision` to define a bounded cache/read-model refinement for `GET /api/dm/combat` and DM console/tactical snapshot hot paths. Do not proceed to route-side read offload, another read-route adoption, player-command routes, combat mutation routes, rules-aware move, AoE create, structures, ships, boarding links, or high-risk direct gameplay route migration without a new active work item.
 <!-- ACTIVE_WORK_STATUS_END -->
 
 ---
@@ -29,6 +29,7 @@ If an item is not marked as **Active** here, it is NOT current work.
 
 | ID | Title | Completion Date | Evidence |
 | --- | --- | --- | --- |
+| WORK-20260630-runtime-facade-latency-read-model-followup-decision | Runtime facade latency/read-model follow-up decision | 2026-06-30 | Completed docs-only latency/read-model follow-up decision using the route-read adoption smoke log and debug trace; selected a bounded DM console/read-model cache refinement decision as the next safest slice, deferred route offload and further read-route adoption, and recorded snapshot hot-path evidence. See [completed/WORK-20260630-runtime-facade-latency-read-model-followup-decision.md](completed/WORK-20260630-runtime-facade-latency-read-model-followup-decision.md) and [../planning/living_docs/server_runtime_latency_read_model_followup_decision_20260630.md](../planning/living_docs/server_runtime_latency_read_model_followup_decision_20260630.md). |
 | WORK-20260630-runtime-facade-route-read-adoption-decision | Runtime facade route-read adoption decision | 2026-06-30 | Completed docs-only route-read adoption decision pass; selected GET /api/dm/combat as the first candidate for adopting read_snapshot(), mapped parameters and error/fail-closed behaviors, deferred gameplay mutations, and recommended WORK-20260630-runtime-facade-route-read-adoption-minimal-implementation next. See [completed/WORK-20260630-runtime-facade-route-read-adoption-decision.md](completed/WORK-20260630-runtime-facade-route-read-adoption-decision.md) and [../planning/living_docs/server_runtime_route_read_adoption_decision_20260630.md](../planning/living_docs/server_runtime_route_read_adoption_decision_20260630.md). |
 | WORK-20260630-runtime-facade-read-snapshot-minimal-implementation | Runtime facade read snapshot minimal implementation | 2026-06-30 | Implemented minimal `ServerRuntimeFacade.read_snapshot()` wrapper over existing legacy combat, tactical, and DM-console snapshot helpers; added focused contract tests for readiness, unsupported modes, delegation, static hydration rejection, and builder failure; preserved route behavior and cache ownership posture. See [completed/WORK-20260630-runtime-facade-read-snapshot-minimal-implementation.md](completed/WORK-20260630-runtime-facade-read-snapshot-minimal-implementation.md). |
 | WORK-20260630-runtime-facade-snapshot-boundary-readiness-decision | Runtime facade snapshot-boundary readiness decision | 2026-06-30 | Completed docs-only readiness decision for future `ServerRuntimeFacade.read_snapshot()` implementation; defined combat/tactical/DM-console snapshot modes, explicit caller context, fail-closed behavior, cache/prebuild ownership posture, implementation boundary, validation plan, deferred scope, and selected `WORK-20260630-runtime-facade-read-snapshot-minimal-implementation` as the exact next task. See [completed/WORK-20260630-runtime-facade-snapshot-boundary-readiness-decision.md](completed/WORK-20260630-runtime-facade-snapshot-boundary-readiness-decision.md) and [../planning/living_docs/server_runtime_snapshot_boundary_readiness_decision_20260630.md](../planning/living_docs/server_runtime_snapshot_boundary_readiness_decision_20260630.md). |
@@ -154,9 +155,10 @@ In the absence of an active work item, the Orchestrator MUST stop and ask the de
 5. Commit/Push current changes.
 6. Deploy to production.
 
-Allowed Next Action: bounded latency/read-model follow-up decision for GET /api/dm/combat and snapshot hot paths
+Allowed Next Action: open WORK-20260630-runtime-facade-dm-console-read-model-cache-refinement-decision
 
 ## Recent completion
 
+- WORK-20260630-runtime-facade-latency-read-model-followup-decision completed: existing smoke/debug trace evidence is sufficient to avoid another evidence-capture pass; the next safest slice is a bounded DM console/read-model cache refinement decision focused on `_dm_console_snapshot_payload`, `_dm_tactical_snapshot`, and `_lan_snapshot` hot paths. Route-side read offload and further read-route adoption remain deferred.
 - WORK-20260630-runtime-facade-route-read-adoption-minimal-implementation completed: GET /api/dm/combat now routes its snapshot read through ServerRuntimeFacade.read_snapshot(dm_console). Next safe action is bounded developer smoke/evidence for this route-read adoption.
 - WORK-20260630-runtime-facade-route-read-adoption-minimal-implementation smoke-passed: small combat test worked, DM/player surfaces started, LAN claim worked, and GET /api/dm/combat?workspace returned HTTP 200. Follow-up evidence remains snapshot/read-model latency, especially _dm_console_snapshot and _lan_snapshot slow spans.
