@@ -65,6 +65,8 @@ COMMAND_SET_ELEVATION = "set_elevation"
 COMMAND_SET_MAP_SETTINGS = "set_map_settings"
 COMMAND_UPSERT_MAP_BACKGROUND = "upsert_map_background"
 COMMAND_REMOVE_MAP_BACKGROUND = "remove_map_background"
+COMMAND_SET_MAP_BACKGROUND_ORDER = "set_map_background_order"
+
 
 
 
@@ -523,6 +525,40 @@ class ServerRuntimeFacade:
                     metadata=self.last_command_trace.metadata if self.last_command_trace else {}
                 )
                 raise
+        elif command.command_type == COMMAND_SET_MAP_BACKGROUND_ORDER:
+            import time
+            start_time = time.perf_counter()
+            try:
+                timeout_ms = command.payload.get("timeout_ms", 5000)
+                res = self._submit_to_lan_queue(command, timeout_ms=timeout_ms)
+                action_id = self.last_command_trace.metadata.get("action_id")
+                with self.lan_controller._action_states_lock:
+                    state = self.lan_controller._action_states.get(action_id)
+                    reorder_background_result = state.get("reorder_background_result") if state else None
+
+                if reorder_background_result and not reorder_background_result.get("ok"):
+                    raise ValueError(reorder_background_result.get("error", "Cannot reorder background layer."))
+
+                if not reorder_background_result:
+                    raise RuntimeError("No reorder background result from queue.")
+
+                return RuntimeCommandResult(
+                    success=True,
+                    message="Map background order updated successfully.",
+                    data={"reorder_background_result": reorder_background_result}
+                )
+            except Exception as exc:
+                duration_ms = (time.perf_counter() - start_time) * 1000.0
+                status = STATUS_TIMED_OUT if isinstance(exc, TimeoutError) else STATUS_FAILED
+                self.last_command_trace = RuntimeCommandTrace(
+                    command_type=command.command_type,
+                    status=status,
+                    duration_ms=duration_ms,
+                    error_class=exc.__class__.__name__,
+                    metadata=self.last_command_trace.metadata if self.last_command_trace else {}
+                )
+                raise
+
 
 
 

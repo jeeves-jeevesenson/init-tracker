@@ -2507,7 +2507,7 @@ class LanController:
             return
 
         from server_app import create_app
-        from server_runtime import RuntimeCommand, COMMAND_UPDATE_SPELL_COLOR, COMMAND_SET_FACING, COMMAND_SET_AURAS_ENABLED, COMMAND_PLACE_COMBATANT, COMMAND_REMOVE_AOE, COMMAND_MOVE_AOE, COMMAND_SET_OBSTACLE, COMMAND_SET_TERRAIN, COMMAND_SET_ELEVATION, COMMAND_SET_MAP_SETTINGS, COMMAND_UPSERT_MAP_BACKGROUND, COMMAND_REMOVE_MAP_BACKGROUND
+        from server_runtime import RuntimeCommand, COMMAND_UPDATE_SPELL_COLOR, COMMAND_SET_FACING, COMMAND_SET_AURAS_ENABLED, COMMAND_PLACE_COMBATANT, COMMAND_REMOVE_AOE, COMMAND_MOVE_AOE, COMMAND_SET_OBSTACLE, COMMAND_SET_TERRAIN, COMMAND_SET_ELEVATION, COMMAND_SET_MAP_SETTINGS, COMMAND_UPSERT_MAP_BACKGROUND, COMMAND_REMOVE_MAP_BACKGROUND, COMMAND_SET_MAP_BACKGROUND_ORDER
         self._fastapi_app = create_app(lan_controller=self)
         self._runtime = self._fastapi_app.state.runtime
 
@@ -6389,18 +6389,39 @@ class LanController:
             if not direction:
                 raise HTTPException(status_code=400, detail="direction is required.")
             try:
-                result = self.app._dm_reorder_background_layer(bid=bid, direction=direction)
+                header = request.headers.get("authorization", "")
+                token = ""
+                if header.lower().startswith("bearer "):
+                    token = header.split(" ", 1)[1].strip()
+                if not token or not self.app._is_admin_token_valid(token):
+                    token = self.app._issue_admin_token()
+
+                command = RuntimeCommand(
+                    command_type=COMMAND_SET_MAP_BACKGROUND_ORDER,
+                    payload={
+                        "bid": bid,
+                        "direction": direction,
+                        "admin_token": token,
+                    }
+                )
+                cmd_result = self._runtime.submit_command(command)
+                reorder_background_result = cmd_result.data.get("reorder_background_result") or {}
+            except TimeoutError as exc:
+                raise HTTPException(status_code=504, detail=str(exc))
+            except ValueError as exc:
+                raise HTTPException(status_code=400, detail=str(exc))
             except Exception as exc:
                 raise HTTPException(status_code=500, detail=f"Failed to reorder background layer: {exc}")
-            if not result.get("ok"):
-                raise HTTPException(status_code=400, detail=result.get("error", "Cannot reorder background layer."))
+            if not reorder_background_result.get("ok"):
+                raise HTTPException(status_code=400, detail=reorder_background_result.get("error", "Cannot reorder background layer."))
             return {
                 "ok": True,
-                "bid": result.get("bid"),
-                "background": result.get("background", {}),
-                "backgrounds": result.get("backgrounds", []),
+                "bid": reorder_background_result.get("bid"),
+                "background": reorder_background_result.get("background", {}),
+                "backgrounds": reorder_background_result.get("backgrounds", []),
                 "snapshot": _dm_console_snapshot(),
             }
+
 
         @self._fastapi_app.post("/api/dm/map/aoes")
         async def dm_create_aoe(request: Request, payload: Dict[str, Any] = Body(...)):
@@ -43376,6 +43397,18 @@ class InitiativeTracker(base.InitiativeTracker):
                     if action_id in self._action_states:
                         self._action_states[action_id]["remove_background_result"] = result
             return
+
+        if typ == "set_map_background_order" and is_admin:
+            bid = msg.get("bid")
+            direction = msg.get("direction")
+            result = self._dm_reorder_background_layer(bid=bid, direction=direction)
+            action_id = msg.get("action_id")
+            if action_id:
+                with self._action_states_lock:
+                    if action_id in self._action_states:
+                        self._action_states[action_id]["reorder_background_result"] = result
+            return
+
 
         if typ in AOE_MANIPULATION_COMMAND_TYPES:
             self._ensure_player_commands().dispatch_aoe_manipulation_command(
