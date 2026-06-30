@@ -75,8 +75,9 @@ OUTPUT_PATH="${1:-/tmp/init-tracker-context-refresher.txt}"
     echo "Does NOT perform manual code review; agents are responsible for correctness."
     echo
     echo "--- AGENT DEFAULTS ---"
-    echo "Gemini is the default executor."
-    echo "Codex only when the developer explicitly says 'Codex' or 'is Codex worth it?'."
+    echo "AGY / Antigravity CLI is the default executor."
+    echo "Gemini CLI is retired for this workflow."
+    echo "Codex only when the developer explicitly says 'Codex' or asks whether Codex is worth the spend."
     echo
     echo "--- TASK DISCIPLINE ---"
     echo "- One task per message."
