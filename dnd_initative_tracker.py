@@ -2507,7 +2507,7 @@ class LanController:
             return
 
         from server_app import create_app
-        from server_runtime import RuntimeCommand, COMMAND_UPDATE_SPELL_COLOR, COMMAND_SET_FACING, COMMAND_SET_AURAS_ENABLED, COMMAND_PLACE_COMBATANT, COMMAND_REMOVE_AOE, COMMAND_MOVE_AOE, COMMAND_SET_OBSTACLE, COMMAND_SET_TERRAIN, COMMAND_SET_ELEVATION, COMMAND_SET_MAP_SETTINGS
+        from server_runtime import RuntimeCommand, COMMAND_UPDATE_SPELL_COLOR, COMMAND_SET_FACING, COMMAND_SET_AURAS_ENABLED, COMMAND_PLACE_COMBATANT, COMMAND_REMOVE_AOE, COMMAND_MOVE_AOE, COMMAND_SET_OBSTACLE, COMMAND_SET_TERRAIN, COMMAND_SET_ELEVATION, COMMAND_SET_MAP_SETTINGS, COMMAND_UPSERT_MAP_BACKGROUND
         self._fastapi_app = create_app(lan_controller=self)
         self._runtime = self._fastapi_app.state.runtime
 
@@ -6308,22 +6308,39 @@ class LanController:
             else:
                 locked = bool(locked_raw)
             try:
-                result = self.app._dm_upsert_background_layer(
-                    asset_path=asset_path,
-                    bid=payload.get("bid"),
-                    x=payload.get("x", 0.0),
-                    y=payload.get("y", 0.0),
-                    scale_pct=payload.get("scale_pct", 100.0),
-                    trans_pct=payload.get("trans_pct", 0.0),
-                    locked=locked,
+                header = request.headers.get("authorization", "")
+                token = ""
+                if header.lower().startswith("bearer "):
+                    token = header.split(" ", 1)[1].strip()
+                if not token or not self.app._is_admin_token_valid(token):
+                    token = self.app._issue_admin_token()
+
+                command = RuntimeCommand(
+                    command_type=COMMAND_UPSERT_MAP_BACKGROUND,
+                    payload={
+                        "asset_path": asset_path,
+                        "bid": payload.get("bid"),
+                        "x": payload.get("x", 0.0),
+                        "y": payload.get("y", 0.0),
+                        "scale_pct": payload.get("scale_pct", 100.0),
+                        "trans_pct": payload.get("trans_pct", 0.0),
+                        "locked": locked,
+                        "admin_token": token,
+                    }
                 )
+                cmd_result = self._runtime.submit_command(command)
+                background_result = cmd_result.data.get("background_result") or {}
+            except TimeoutError as exc:
+                raise HTTPException(status_code=504, detail=str(exc))
+            except ValueError as exc:
+                raise HTTPException(status_code=400, detail=str(exc))
             except Exception as exc:
                 raise HTTPException(status_code=500, detail=f"Failed to update background layer: {exc}")
-            if not result.get("ok"):
-                raise HTTPException(status_code=400, detail=result.get("error", "Cannot update background layer."))
+            if not background_result.get("ok"):
+                raise HTTPException(status_code=400, detail=background_result.get("error", "Cannot update background layer."))
             return {
                 "ok": True,
-                "background": result.get("background"),
+                "background": background_result.get("background"),
                 "snapshot": _dm_console_snapshot(),
             }
 
@@ -43305,6 +43322,30 @@ class InitiativeTracker(base.InitiativeTracker):
                 with self._action_states_lock:
                     if action_id in self._action_states:
                         self._action_states[action_id]["settings_result"] = result
+            return
+
+        if typ == "upsert_map_background" and is_admin:
+            asset_path = msg.get("asset_path")
+            bid = msg.get("bid")
+            x = msg.get("x", 0.0)
+            y = msg.get("y", 0.0)
+            scale_pct = msg.get("scale_pct", 100.0)
+            trans_pct = msg.get("trans_pct", 0.0)
+            locked = msg.get("locked", False)
+            result = self._dm_upsert_background_layer(
+                asset_path=asset_path,
+                bid=bid,
+                x=x,
+                y=y,
+                scale_pct=scale_pct,
+                trans_pct=trans_pct,
+                locked=locked,
+            )
+            action_id = msg.get("action_id")
+            if action_id:
+                with self._action_states_lock:
+                    if action_id in self._action_states:
+                        self._action_states[action_id]["background_result"] = result
             return
 
         if typ in AOE_MANIPULATION_COMMAND_TYPES:

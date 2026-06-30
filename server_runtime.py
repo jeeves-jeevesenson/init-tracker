@@ -63,6 +63,7 @@ COMMAND_SET_OBSTACLE = "set_obstacle"
 COMMAND_SET_TERRAIN = "set_terrain"
 COMMAND_SET_ELEVATION = "set_elevation"
 COMMAND_SET_MAP_SETTINGS = "set_map_settings"
+COMMAND_UPSERT_MAP_BACKGROUND = "upsert_map_background"
 
 
 
@@ -443,6 +444,39 @@ class ServerRuntimeFacade:
                     success=True,
                     message="Map settings updated successfully.",
                     data={"settings_result": settings_result}
+                )
+            except Exception as exc:
+                duration_ms = (time.perf_counter() - start_time) * 1000.0
+                status = STATUS_TIMED_OUT if isinstance(exc, TimeoutError) else STATUS_FAILED
+                self.last_command_trace = RuntimeCommandTrace(
+                    command_type=command.command_type,
+                    status=status,
+                    duration_ms=duration_ms,
+                    error_class=exc.__class__.__name__,
+                    metadata=self.last_command_trace.metadata if self.last_command_trace else {}
+                )
+                raise
+        elif command.command_type == COMMAND_UPSERT_MAP_BACKGROUND:
+            import time
+            start_time = time.perf_counter()
+            try:
+                timeout_ms = command.payload.get("timeout_ms", 5000)
+                res = self._submit_to_lan_queue(command, timeout_ms=timeout_ms)
+                action_id = self.last_command_trace.metadata.get("action_id")
+                with self.lan_controller._action_states_lock:
+                    state = self.lan_controller._action_states.get(action_id)
+                    background_result = state.get("background_result") if state else None
+
+                if background_result and not background_result.get("ok"):
+                    raise ValueError(background_result.get("error", "Cannot update background layer."))
+
+                if not background_result:
+                    raise RuntimeError("No background result from queue.")
+
+                return RuntimeCommandResult(
+                    success=True,
+                    message="Map background updated successfully.",
+                    data={"background_result": background_result}
                 )
             except Exception as exc:
                 duration_ms = (time.perf_counter() - start_time) * 1000.0

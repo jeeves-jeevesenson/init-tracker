@@ -14,6 +14,7 @@ from server_runtime import (
     COMMAND_SET_TERRAIN,
     COMMAND_SET_ELEVATION,
     COMMAND_SET_MAP_SETTINGS,
+    COMMAND_UPSERT_MAP_BACKGROUND,
 )
 
 
@@ -2033,3 +2034,226 @@ class ServerRuntimeFacadeTests(unittest.TestCase):
         response = client.post("/api/dm/map/settings", json={"cols": 12, "rows": 15})
         self.assertEqual(response.status_code, 500)
         self.assertIn("Failed to update map settings: Runtime fail", response.json()["detail"])
+
+    def test_upsert_background_success(self):
+        import threading
+        import time
+
+        class FakeQueue:
+            def __init__(self):
+                self.items = []
+                self.on_put = None
+            def put(self, item):
+                self.items.append(item)
+                if self.on_put:
+                    self.on_put(item)
+            def qsize(self):
+                return len(self.items)
+
+        class FakeLanController:
+            def __init__(self):
+                self._actions = FakeQueue()
+                self._action_states = {}
+                self._action_states_lock = threading.Lock()
+                self._action_history_limit = 500
+
+        controller = FakeLanController()
+        captured_msg = []
+
+        def process_success(msg):
+            captured_msg.append(msg)
+            action_id = msg["action_id"]
+            with controller._action_states_lock:
+                controller._action_states[action_id].update({
+                    "status": "completed",
+                    "result": {"status": "applied"},
+                    "background_result": {
+                        "ok": True,
+                        "background": {
+                            "bid": 1,
+                            "path": "maps/forest.png",
+                            "x": 0.0,
+                            "y": 0.0,
+                            "scale_pct": 100.0,
+                            "trans_pct": 0.0,
+                            "locked": False,
+                            "asset_url": "/assets/maps/forest.png"
+                        }
+                    },
+                    "completed_at_ns": time.perf_counter_ns()
+                })
+
+        controller._actions.on_put = process_success
+
+        facade = ServerRuntimeFacade(lan_controller=controller)
+        command = RuntimeCommand(
+            command_type=COMMAND_UPSERT_MAP_BACKGROUND,
+            payload={
+                "asset_path": "maps/forest.png",
+                "bid": None,
+                "x": 0.0,
+                "y": 0.0,
+                "scale_pct": 100.0,
+                "trans_pct": 0.0,
+                "locked": False,
+            }
+        )
+
+        result = facade.submit_command(command)
+        self.assertTrue(result.success)
+        self.assertEqual(len(captured_msg), 1)
+        msg = captured_msg[0]
+        self.assertEqual(msg["type"], "upsert_map_background")
+        self.assertEqual(msg["asset_path"], "maps/forest.png")
+
+        bg_res = result.data.get("background_result")
+        self.assertIsNotNone(bg_res)
+        self.assertTrue(bg_res.get("ok"))
+        self.assertEqual(bg_res.get("background", {}).get("bid"), 1)
+        self.assertEqual(bg_res.get("background", {}).get("path"), "maps/forest.png")
+
+        trace = facade.last_command_trace
+        self.assertIsNotNone(trace)
+        self.assertEqual(trace.command_type, COMMAND_UPSERT_MAP_BACKGROUND)
+        self.assertEqual(trace.status, "completed")
+        self.assertIsNone(trace.error_class)
+        self.assertEqual(trace.metadata["queue_size"], 1)
+        self.assertIn("queue_wait_ms", trace.metadata)
+
+    def test_upsert_background_validation_failure(self):
+        import threading
+        import time
+
+        class FakeQueue:
+            def __init__(self):
+                self.items = []
+                self.on_put = None
+            def put(self, item):
+                self.items.append(item)
+                if self.on_put:
+                    self.on_put(item)
+            def qsize(self):
+                return len(self.items)
+
+        class FakeLanController:
+            def __init__(self):
+                self._actions = FakeQueue()
+                self._action_states = {}
+                self._action_states_lock = threading.Lock()
+                self._action_history_limit = 500
+
+        controller = FakeLanController()
+        captured_msg = []
+
+        def process_failure(msg):
+            captured_msg.append(msg)
+            action_id = msg["action_id"]
+            with controller._action_states_lock:
+                controller._action_states[action_id].update({
+                    "status": "completed",
+                    "result": {"status": "applied"},
+                    "background_result": {"ok": False, "error": "Background asset path is invalid or not found."},
+                    "completed_at_ns": time.perf_counter_ns()
+                })
+
+        controller._actions.on_put = process_failure
+
+        facade = ServerRuntimeFacade(lan_controller=controller)
+        command = RuntimeCommand(
+            command_type=COMMAND_UPSERT_MAP_BACKGROUND,
+            payload={
+                "asset_path": "invalid.png",
+                "bid": None,
+            }
+        )
+
+        with self.assertRaises(ValueError) as ctx:
+            facade.submit_command(command)
+        self.assertEqual(str(ctx.exception), "Background asset path is invalid or not found.")
+
+        trace = facade.last_command_trace
+        self.assertIsNotNone(trace)
+        self.assertEqual(trace.command_type, COMMAND_UPSERT_MAP_BACKGROUND)
+        self.assertEqual(trace.status, "failed")
+        self.assertEqual(trace.error_class, "ValueError")
+        self.assertEqual(trace.metadata["queue_size"], 1)
+
+    def test_upsert_background_route_level_behavior_mapping(self):
+        from fastapi import FastAPI, Body, HTTPException, Request
+        from fastapi.testclient import TestClient
+        from typing import Dict, Any, Optional
+
+        app = FastAPI()
+        mock_runtime = MagicMock()
+
+        def _dm_console_snapshot():
+            return {"map": "dummy"}
+
+        @app.post("/api/dm/map/backgrounds")
+        async def dm_upsert_background(request: Request, payload: Dict[str, Any] = Body(...)):
+            if not isinstance(payload, dict):
+                raise HTTPException(status_code=400, detail="Invalid payload.")
+            asset_path = payload.get("asset_path")
+            if asset_path in (None, ""):
+                raise HTTPException(status_code=400, detail="asset_path is required.")
+            try:
+                command = RuntimeCommand(
+                    command_type=COMMAND_UPSERT_MAP_BACKGROUND,
+                    payload={
+                        "asset_path": asset_path,
+                        "bid": payload.get("bid"),
+                        "x": payload.get("x", 0.0),
+                        "y": payload.get("y", 0.0),
+                        "scale_pct": payload.get("scale_pct", 100.0),
+                        "trans_pct": payload.get("trans_pct", 0.0),
+                        "locked": payload.get("locked", False),
+                        "admin_token": "fake-token",
+                    }
+                )
+                cmd_result = mock_runtime.submit_command(command)
+                background_result = cmd_result.data.get("background_result") or {}
+            except TimeoutError as exc:
+                raise HTTPException(status_code=504, detail=str(exc))
+            except ValueError as exc:
+                raise HTTPException(status_code=400, detail=str(exc))
+            except Exception as exc:
+                raise HTTPException(status_code=500, detail=f"Failed to update background layer: {exc}")
+            if not background_result.get("ok"):
+                raise HTTPException(status_code=400, detail=background_result.get("error", "Cannot update background layer."))
+            return {
+                "ok": True,
+                "background": background_result.get("background"),
+                "snapshot": _dm_console_snapshot(),
+            }
+
+        client = TestClient(app)
+
+        # 1. Success case
+        mock_runtime.submit_command.return_value = RuntimeCommandResult(
+            success=True, message="ok", data={"background_result": {"ok": True, "background": {"bid": 1, "path": "maps/forest.png"}}}
+        )
+        response = client.post("/api/dm/map/backgrounds", json={"asset_path": "maps/forest.png"})
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json(), {
+            "ok": True,
+            "background": {"bid": 1, "path": "maps/forest.png"},
+            "snapshot": {"map": "dummy"}
+        })
+
+        # 2. TimeoutError -> 504
+        mock_runtime.submit_command.side_effect = TimeoutError("Command timed out")
+        response = client.post("/api/dm/map/backgrounds", json={"asset_path": "maps/forest.png"})
+        self.assertEqual(response.status_code, 504)
+        self.assertIn("Command timed out", response.json()["detail"])
+
+        # 3. ValueError -> 400
+        mock_runtime.submit_command.side_effect = ValueError("Background asset path is invalid or not found.")
+        response = client.post("/api/dm/map/backgrounds", json={"asset_path": "maps/forest.png"})
+        self.assertEqual(response.status_code, 400)
+        self.assertIn("Background asset path is invalid or not found.", response.json()["detail"])
+
+        # 4. Generic Exception -> 500
+        mock_runtime.submit_command.side_effect = Exception("Runtime fail")
+        response = client.post("/api/dm/map/backgrounds", json={"asset_path": "maps/forest.png"})
+        self.assertEqual(response.status_code, 500)
+        self.assertIn("Failed to update background layer: Runtime fail", response.json()["detail"])

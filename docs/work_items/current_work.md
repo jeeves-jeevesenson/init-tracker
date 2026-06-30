@@ -11,7 +11,7 @@ If an item is not marked as **Active** here, it is NOT current work.
 - **Status:** Idle
 - **Current Work Item:** None
 - **Active Gate:** None
-- **Allowed Next Action:** Implement the queue-backed facade command for map backgrounds.
+- **Allowed Next Action:** Evaluate and select next candidates for runtime facade queue command migration.
 <!-- ACTIVE_WORK_STATUS_END -->
 
 ---
@@ -29,6 +29,7 @@ If an item is not marked as **Active** here, it is NOT current work.
 
 | ID | Title | Completion Date | Evidence |
 | --- | --- | --- | --- |
+| WORK-20260630-runtime-facade-queue-command-backgrounds | Queue-backed facade command for map backgrounds | 2026-06-30 | Completed implementation slice; routed only POST /api/dm/map/backgrounds through ServerRuntimeFacade and the queue adapter seam, preserving existing map background upsert behavior and focused tests. See [completed/WORK-20260630-runtime-facade-queue-command-backgrounds.md](completed/WORK-20260630-runtime-facade-queue-command-backgrounds.md). |
 | BUG-20260614-weapon-attacks-reload-fail | Weapon attacks / reload fail | 2026-06-26 | Closed in `6d14706`; focused unit tests passed; JS syntax check passed; diff check passed; developer browser smoke passed; final weapon reload / ammo / Multiattack behavior accepted. See `docs/work_items/active/BUG-20260614-weapon-attacks-reload-fail-smoke-failure-20260626.md`. |
 <!-- COMPLETED_WORK_TABLE_START -->
 | WORK-20260630-runtime-facade-next-queue-command-selection-9 | Runtime facade next queue command selection 9 | 2026-06-30 | Completed evidence/planning slice; evaluated map backgrounds upsert, map AoE creation, and rules-aware combatant move candidates; recommended migrating POST /api/dm/map/backgrounds next. See [completed/WORK-20260630-runtime-facade-next-queue-command-selection-9.md](completed/WORK-20260630-runtime-facade-next-queue-command-selection-9.md). |
