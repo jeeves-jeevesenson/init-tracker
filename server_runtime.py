@@ -50,6 +50,10 @@ class RuntimeSnapshotResult:
     """Explicit container for a retrieved read-model snapshot."""
     success: bool
     data: Dict[str, Any] = field(default_factory=dict)
+    status: str = STATUS_COMPLETED
+    message: str = ""
+    error: Optional[Dict[str, Any]] = None
+    metadata: Dict[str, Any] = field(default_factory=dict)
 
 
 COMMAND_UPDATE_SPELL_COLOR = "update_spell_color"
@@ -71,6 +75,25 @@ COMMAND_REMOVE_MAP_HAZARD = "remove_map_hazard"
 COMMAND_UPSERT_MAP_FEATURE = "upsert_map_feature"
 COMMAND_REMOVE_MAP_FEATURE = "remove_map_feature"
 
+
+SNAPSHOT_TYPE_COMBAT = "combat"
+SNAPSHOT_TYPE_TACTICAL = "tactical"
+SNAPSHOT_TYPE_DM_CONSOLE = "dm_console"
+
+_SUPPORTED_SNAPSHOT_TYPES = {
+    SNAPSHOT_TYPE_COMBAT,
+    SNAPSHOT_TYPE_TACTICAL,
+    SNAPSHOT_TYPE_DM_CONSOLE,
+}
+
+_DM_CONSOLE_WORKSPACE_INCLUDE_TACTICAL = {
+    "dm": False,
+    "combat": False,
+    "dmcontrol": True,
+    "map": True,
+    "map-control": True,
+    "monster-pilot": True,
+}
 
 
 
@@ -744,9 +767,274 @@ class ServerRuntimeFacade:
             )
             raise
 
-    def read_snapshot(self, request: RuntimeSnapshotRequest) -> RuntimeSnapshotResult:
-        """Read a state snapshot from the runtime.
+    def _snapshot_failure(
+        self,
+        request: RuntimeSnapshotRequest,
+        code: str,
+        message: str,
+        *,
+        error_class: Optional[str] = None,
+        metadata: Optional[Dict[str, Any]] = None,
+    ) -> RuntimeSnapshotResult:
+        snapshot_type = str(getattr(request, "snapshot_type", "") or "")
+        error = {
+            "code": code,
+            "message": message,
+            "snapshot_type": snapshot_type,
+        }
+        if error_class:
+            error["error_class"] = error_class
+        return RuntimeSnapshotResult(
+            success=False,
+            data={},
+            status=STATUS_FAILED,
+            message=message,
+            error=error,
+            metadata=metadata or {},
+        )
 
-        Currently fails closed with NotImplementedError.
-        """
-        raise NotImplementedError("Snapshot reading is not yet implemented.")
+    @staticmethod
+    def _coerce_snapshot_bool(value: Any) -> Optional[bool]:
+        if isinstance(value, bool):
+            return value
+        if isinstance(value, int) and value in {0, 1}:
+            return bool(value)
+        if isinstance(value, str):
+            normalized = value.strip().lower()
+            if normalized in {"true", "1", "yes", "on"}:
+                return True
+            if normalized in {"false", "0", "no", "off"}:
+                return False
+        return None
+
+    def _reject_static_hydration_params(
+        self,
+        request: RuntimeSnapshotRequest,
+        params: Dict[str, Any],
+        *,
+        snapshot_type: str,
+    ) -> Optional[RuntimeSnapshotResult]:
+        for key in ("include_static", "hydrate_static"):
+            if key not in params:
+                continue
+            requested = self._coerce_snapshot_bool(params.get(key))
+            if requested is None or requested:
+                return self._snapshot_failure(
+                    request,
+                    "snapshot_params_invalid",
+                    "Static map hydration is not supported by this snapshot facade.",
+                    metadata={"snapshot_type": snapshot_type, "param": key},
+                )
+        return None
+
+    def _resolve_dm_console_include_tactical(
+        self,
+        request: RuntimeSnapshotRequest,
+        params: Dict[str, Any],
+    ) -> tuple[Optional[bool], Optional[RuntimeSnapshotResult]]:
+        if "include_tactical" in params:
+            include_tactical = self._coerce_snapshot_bool(params.get("include_tactical"))
+            if include_tactical is None:
+                return None, self._snapshot_failure(
+                    request,
+                    "snapshot_params_invalid",
+                    "include_tactical must be an explicit boolean value.",
+                    metadata={"snapshot_type": SNAPSHOT_TYPE_DM_CONSOLE, "param": "include_tactical"},
+                )
+            return include_tactical, None
+
+        workspace = params.get("workspace")
+        if not isinstance(workspace, str) or not workspace.strip():
+            return None, self._snapshot_failure(
+                request,
+                "snapshot_params_invalid",
+                "dm_console snapshots require explicit include_tactical or workspace params.",
+                metadata={"snapshot_type": SNAPSHOT_TYPE_DM_CONSOLE},
+            )
+        normalized_workspace = workspace.strip().lower()
+        if normalized_workspace not in _DM_CONSOLE_WORKSPACE_INCLUDE_TACTICAL:
+            return None, self._snapshot_failure(
+                request,
+                "snapshot_params_invalid",
+                "Unknown dm_console workspace for tactical snapshot preference.",
+                metadata={"snapshot_type": SNAPSHOT_TYPE_DM_CONSOLE, "workspace": normalized_workspace},
+            )
+        return _DM_CONSOLE_WORKSPACE_INCLUDE_TACTICAL[normalized_workspace], None
+
+    def _snapshot_success(
+        self,
+        *,
+        snapshot_type: str,
+        data: Dict[str, Any],
+        source: str,
+        metadata: Optional[Dict[str, Any]] = None,
+    ) -> RuntimeSnapshotResult:
+        result_metadata = {"snapshot_type": snapshot_type, "source": source}
+        if metadata:
+            result_metadata.update(metadata)
+        return RuntimeSnapshotResult(
+            success=True,
+            data=data,
+            status=STATUS_COMPLETED,
+            metadata=result_metadata,
+        )
+
+    def read_snapshot(self, request: RuntimeSnapshotRequest) -> RuntimeSnapshotResult:
+        """Read a state snapshot from existing legacy snapshot builders."""
+        if not self.is_ready():
+            return self._snapshot_failure(
+                request,
+                "runtime_not_ready",
+                "Runtime facade is not ready for snapshot reads.",
+            )
+
+        params = request.params
+        if not isinstance(params, dict):
+            return self._snapshot_failure(
+                request,
+                "snapshot_params_invalid",
+                "RuntimeSnapshotRequest.params must be a dictionary.",
+            )
+
+        snapshot_type = str(request.snapshot_type or "").strip().lower()
+        if snapshot_type not in _SUPPORTED_SNAPSHOT_TYPES:
+            return self._snapshot_failure(
+                request,
+                "snapshot_type_unsupported",
+                "Unsupported runtime snapshot type.",
+                metadata={"snapshot_type": snapshot_type},
+            )
+
+        invalid_static = self._reject_static_hydration_params(
+            request,
+            params,
+            snapshot_type=snapshot_type,
+        )
+        if invalid_static is not None:
+            return invalid_static
+
+        lan_controller = self.lan_controller
+        if lan_controller is None:
+            return self._snapshot_failure(
+                request,
+                "lan_controller_unavailable",
+                "LanController is not configured on the facade.",
+                metadata={"snapshot_type": snapshot_type},
+            )
+
+        if snapshot_type == SNAPSHOT_TYPE_COMBAT:
+            if "include_tactical" in params:
+                include_tactical = self._coerce_snapshot_bool(params.get("include_tactical"))
+                if include_tactical is None or include_tactical:
+                    return self._snapshot_failure(
+                        request,
+                        "snapshot_params_invalid",
+                        "combat snapshots do not support tactical payload inclusion.",
+                        metadata={"snapshot_type": snapshot_type, "param": "include_tactical"},
+                    )
+            dm_service = getattr(lan_controller, "_dm_service", None)
+            builder = getattr(dm_service, "combat_snapshot", None)
+            if not callable(builder):
+                return self._snapshot_failure(
+                    request,
+                    "combat_service_unavailable",
+                    "Combat snapshot service is unavailable.",
+                    metadata={"snapshot_type": snapshot_type},
+                )
+            try:
+                payload = builder()
+            except Exception as exc:
+                return self._snapshot_failure(
+                    request,
+                    "snapshot_builder_failed",
+                    "combat snapshot builder failed.",
+                    error_class=exc.__class__.__name__,
+                    metadata={"snapshot_type": snapshot_type, "source": "combat_service.combat_snapshot"},
+                )
+            if not isinstance(payload, dict):
+                return self._snapshot_failure(
+                    request,
+                    "snapshot_builder_failed",
+                    "combat snapshot builder returned an invalid payload.",
+                    error_class="TypeError",
+                    metadata={"snapshot_type": snapshot_type, "source": "combat_service.combat_snapshot"},
+                )
+            return self._snapshot_success(
+                snapshot_type=snapshot_type,
+                data=payload,
+                source="combat_service.combat_snapshot",
+            )
+
+        if snapshot_type == SNAPSHOT_TYPE_TACTICAL:
+            app = getattr(lan_controller, "app", None)
+            builder = getattr(app, "_dm_tactical_snapshot", None)
+            if not callable(builder):
+                return self._snapshot_failure(
+                    request,
+                    "tracker_app_unavailable",
+                    "Tracker tactical snapshot builder is unavailable.",
+                    metadata={"snapshot_type": snapshot_type},
+                )
+            try:
+                payload = builder()
+            except Exception as exc:
+                return self._snapshot_failure(
+                    request,
+                    "snapshot_builder_failed",
+                    "tactical snapshot builder failed.",
+                    error_class=exc.__class__.__name__,
+                    metadata={"snapshot_type": snapshot_type, "source": "tracker._dm_tactical_snapshot"},
+                )
+            if not isinstance(payload, dict):
+                return self._snapshot_failure(
+                    request,
+                    "snapshot_builder_failed",
+                    "tactical snapshot builder returned an invalid payload.",
+                    error_class="TypeError",
+                    metadata={"snapshot_type": snapshot_type, "source": "tracker._dm_tactical_snapshot"},
+                )
+            return self._snapshot_success(
+                snapshot_type=snapshot_type,
+                data=payload,
+                source="tracker._dm_tactical_snapshot",
+            )
+
+        include_tactical, include_error = self._resolve_dm_console_include_tactical(request, params)
+        if include_error is not None:
+            return include_error
+        builder = getattr(lan_controller, "_dm_console_snapshot", None)
+        if not callable(builder):
+            return self._snapshot_failure(
+                request,
+                "lan_controller_unavailable",
+                "DM console snapshot builder is unavailable.",
+                metadata={"snapshot_type": snapshot_type},
+            )
+        try:
+            payload = builder(include_tactical=include_tactical)
+        except Exception as exc:
+            return self._snapshot_failure(
+                request,
+                "snapshot_builder_failed",
+                "dm_console snapshot builder failed.",
+                error_class=exc.__class__.__name__,
+                metadata={"snapshot_type": snapshot_type, "source": "lan_controller._dm_console_snapshot"},
+            )
+        if not isinstance(payload, dict):
+            return self._snapshot_failure(
+                request,
+                "snapshot_builder_failed",
+                "dm_console snapshot builder returned an invalid payload.",
+                error_class="TypeError",
+                metadata={"snapshot_type": snapshot_type, "source": "lan_controller._dm_console_snapshot"},
+            )
+        workspace = params.get("workspace")
+        return self._snapshot_success(
+            snapshot_type=snapshot_type,
+            data=payload,
+            source="lan_controller._dm_console_snapshot",
+            metadata={
+                "include_tactical": bool(include_tactical),
+                "workspace": workspace.strip().lower() if isinstance(workspace, str) else None,
+            },
+        )

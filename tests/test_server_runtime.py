@@ -7,6 +7,7 @@ from server_runtime import (
     ServerRuntimeFacade,
     RuntimeCommand,
     RuntimeCommandResult,
+    RuntimeSnapshotRequest,
     COMMAND_UPDATE_SPELL_COLOR,
     COMMAND_SET_FACING,
     COMMAND_SET_AURAS_ENABLED,
@@ -22,10 +23,62 @@ from server_runtime import (
     COMMAND_SET_MAP_BACKGROUND_ORDER,
     COMMAND_UPSERT_MAP_HAZARD,
     COMMAND_REMOVE_MAP_HAZARD,
+    STATUS_COMPLETED,
+    STATUS_FAILED,
 )
 
 
 class ServerRuntimeFacadeTests(unittest.TestCase):
+    class _SnapshotCombatService:
+        def __init__(self, payload=None, exc=None):
+            self.payload = payload if payload is not None else {"combatants": [], "round": 1}
+            self.exc = exc
+            self.calls = 0
+
+        def combat_snapshot(self):
+            self.calls += 1
+            if self.exc is not None:
+                raise self.exc
+            return self.payload
+
+    class _SnapshotApp:
+        def __init__(self, payload=None, exc=None):
+            self.payload = payload if payload is not None else {"grid": {"cols": 10, "rows": 10}}
+            self.exc = exc
+            self.calls = 0
+
+        def _dm_tactical_snapshot(self):
+            self.calls += 1
+            if self.exc is not None:
+                raise self.exc
+            return self.payload
+
+    class _SnapshotLanController:
+        def __init__(self, combat_service=None, app=None, console_payload=None, console_exc=None):
+            self._dm_service = combat_service
+            self.app = app
+            self.console_payload = console_payload
+            self.console_exc = console_exc
+            self.dm_console_calls = []
+
+        def _dm_console_snapshot(self, *, include_tactical=None):
+            self.dm_console_calls.append(include_tactical)
+            if self.console_exc is not None:
+                raise self.console_exc
+            if self.console_payload is not None:
+                return self.console_payload
+            payload = {"console": "snapshot"}
+            if include_tactical:
+                payload["tactical_map"] = {"grid": {"cols": 10, "rows": 10}}
+            return payload
+
+    def assertSnapshotFailure(self, result, code):
+        self.assertFalse(result.success)
+        self.assertEqual(result.status, STATUS_FAILED)
+        self.assertEqual(result.data, {})
+        self.assertIsInstance(result.error, dict)
+        self.assertEqual(result.error.get("code"), code)
+
     def test_package_runtime_reexports_current_runtime_boundary(self):
         runtime = importlib.import_module("init_tracker_server.runtime")
 
@@ -128,6 +181,127 @@ class ServerRuntimeFacadeTests(unittest.TestCase):
         self.assertFalse(hasattr(facade, "queue"))
         self.assertFalse(hasattr(facade, "command_" + "queue"))
         self.assertFalse(hasattr(facade, "snapshot_" + "cache"))
+
+    def test_read_snapshot_fails_closed_before_readiness(self):
+        combat_service = self._SnapshotCombatService()
+        controller = self._SnapshotLanController(combat_service=combat_service, app=self._SnapshotApp())
+        facade = ServerRuntimeFacade(lan_controller=controller)
+
+        result = facade.read_snapshot(RuntimeSnapshotRequest(snapshot_type="combat"))
+
+        self.assertSnapshotFailure(result, "runtime_not_ready")
+        self.assertEqual(combat_service.calls, 0)
+
+    def test_read_snapshot_unsupported_mode_fails_closed(self):
+        facade = ServerRuntimeFacade(
+            lan_controller=self._SnapshotLanController(
+                combat_service=self._SnapshotCombatService(),
+                app=self._SnapshotApp(),
+            )
+        )
+        facade.start()
+
+        result = facade.read_snapshot(RuntimeSnapshotRequest(snapshot_type="unknown"))
+
+        self.assertSnapshotFailure(result, "snapshot_type_unsupported")
+
+    def test_read_snapshot_combat_delegates_to_combat_service(self):
+        payload = {"in_combat": True, "round": 2, "combatants": [{"cid": 1}]}
+        combat_service = self._SnapshotCombatService(payload=payload)
+        facade = ServerRuntimeFacade(
+            lan_controller=self._SnapshotLanController(
+                combat_service=combat_service,
+                app=self._SnapshotApp(),
+            )
+        )
+        facade.start()
+
+        result = facade.read_snapshot(RuntimeSnapshotRequest(snapshot_type="combat", params={"caller": "dm"}))
+
+        self.assertTrue(result.success)
+        self.assertEqual(result.status, STATUS_COMPLETED)
+        self.assertEqual(result.data, payload)
+        self.assertEqual(result.metadata.get("source"), "combat_service.combat_snapshot")
+        self.assertNotIn("tactical_map", result.data)
+        self.assertEqual(combat_service.calls, 1)
+
+    def test_read_snapshot_tactical_delegates_to_tracker_app(self):
+        payload = {"grid": {"cols": 12, "rows": 8}, "units": [{"cid": 2}]}
+        app = self._SnapshotApp(payload=payload)
+        controller = self._SnapshotLanController(
+            combat_service=self._SnapshotCombatService(),
+            app=app,
+        )
+        facade = ServerRuntimeFacade(lan_controller=controller)
+        facade.start()
+
+        result = facade.read_snapshot(RuntimeSnapshotRequest(snapshot_type="tactical"))
+
+        self.assertTrue(result.success)
+        self.assertEqual(result.status, STATUS_COMPLETED)
+        self.assertEqual(result.data, payload)
+        self.assertEqual(result.metadata.get("source"), "tracker._dm_tactical_snapshot")
+        self.assertEqual(app.calls, 1)
+        self.assertEqual(controller.dm_console_calls, [])
+
+    def test_read_snapshot_dm_console_delegates_with_explicit_include_tactical(self):
+        controller = self._SnapshotLanController(
+            combat_service=self._SnapshotCombatService(),
+            app=self._SnapshotApp(),
+        )
+        facade = ServerRuntimeFacade(lan_controller=controller)
+        facade.start()
+
+        without_tactical = facade.read_snapshot(
+            RuntimeSnapshotRequest(snapshot_type="dm_console", params={"include_tactical": False})
+        )
+        with_tactical = facade.read_snapshot(
+            RuntimeSnapshotRequest(snapshot_type="dm_console", params={"include_tactical": True})
+        )
+
+        self.assertTrue(without_tactical.success)
+        self.assertEqual(without_tactical.status, STATUS_COMPLETED)
+        self.assertEqual(without_tactical.data, {"console": "snapshot"})
+        self.assertFalse(without_tactical.metadata.get("include_tactical"))
+        self.assertTrue(with_tactical.success)
+        self.assertEqual(with_tactical.status, STATUS_COMPLETED)
+        self.assertEqual(with_tactical.data["tactical_map"], {"grid": {"cols": 10, "rows": 10}})
+        self.assertTrue(with_tactical.metadata.get("include_tactical"))
+        self.assertEqual(controller.dm_console_calls, [False, True])
+
+    def test_read_snapshot_static_hydration_request_fails_closed(self):
+        app = self._SnapshotApp()
+        facade = ServerRuntimeFacade(
+            lan_controller=self._SnapshotLanController(
+                combat_service=self._SnapshotCombatService(),
+                app=app,
+            )
+        )
+        facade.start()
+
+        result = facade.read_snapshot(
+            RuntimeSnapshotRequest(snapshot_type="tactical", params={"hydrate_static": True})
+        )
+
+        self.assertSnapshotFailure(result, "snapshot_params_invalid")
+        self.assertEqual(app.calls, 0)
+
+    def test_read_snapshot_builder_exception_fails_closed_without_partial_payload(self):
+        combat_service = self._SnapshotCombatService(exc=RuntimeError("boom"))
+        facade = ServerRuntimeFacade(
+            lan_controller=self._SnapshotLanController(
+                combat_service=combat_service,
+                app=self._SnapshotApp(),
+            )
+        )
+        facade.start()
+
+        result = facade.read_snapshot(RuntimeSnapshotRequest(snapshot_type="combat"))
+
+        self.assertSnapshotFailure(result, "snapshot_builder_failed")
+        self.assertEqual(result.data, {})
+        self.assertEqual(result.error.get("error_class"), "RuntimeError")
+        self.assertEqual(combat_service.calls, 1)
 
     def test_route_level_behavior_mapping(self):
         # 3. route-level behavior mapping is preserved
