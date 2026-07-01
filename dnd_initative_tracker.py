@@ -1947,6 +1947,7 @@ class LanController:
         self._server_thread: Optional[threading.Thread] = None
         self._loop: Optional[asyncio.AbstractEventLoop] = None
         self._uvicorn_server = None
+        self._server_host = None
         self._admin_password_hash: Optional[bytes] = None
         self._admin_password_salt: Optional[bytes] = None
         self._admin_tokens: Dict[str, float] = {}
@@ -2537,6 +2538,7 @@ class LanController:
             )
             return
 
+        from init_tracker_server.host import UvicornServerHost
         from server_app import create_app
         from server_runtime import RuntimeCommand, COMMAND_UPDATE_SPELL_COLOR, COMMAND_SET_FACING, COMMAND_SET_AURAS_ENABLED, COMMAND_PLACE_COMBATANT, COMMAND_REMOVE_AOE, COMMAND_MOVE_AOE, COMMAND_SET_OBSTACLE, COMMAND_SET_TERRAIN, COMMAND_SET_ELEVATION, COMMAND_SET_MAP_SETTINGS, COMMAND_UPSERT_MAP_BACKGROUND, COMMAND_REMOVE_MAP_BACKGROUND, COMMAND_SET_MAP_BACKGROUND_ORDER, COMMAND_UPSERT_MAP_HAZARD, COMMAND_REMOVE_MAP_HAZARD, COMMAND_UPSERT_MAP_FEATURE, COMMAND_REMOVE_MAP_FEATURE
         self._fastapi_app = create_app(lan_controller=self)
@@ -7136,19 +7138,20 @@ class LanController:
                 self._cached_snapshot = self.app._lan_snapshot(include_static=False, hydrate_static=False)
             except Exception:
                 pass
-        def run_server():
-            # Create fresh loop for this thread
-            loop = asyncio.new_event_loop()
-            asyncio.set_event_loop(loop)
+        def _store_server_host_runtime(loop, server):
             self._loop = loop
-
-            config = uvicorn.Config(self._fastapi_app, host=self.cfg.host, port=self.cfg.port, log_level="warning", access_log=False)
-            server = uvicorn.Server(config)
             self._uvicorn_server = server
-            loop.run_until_complete(server.serve())
 
-        self._server_thread = threading.Thread(target=run_server, name="InitTrackerLAN", daemon=True)
-        self._server_thread.start()
+        self._server_host = UvicornServerHost(
+            self._fastapi_app,
+            host=self.cfg.host,
+            port=self.cfg.port,
+            log_level="warning",
+            access_log=False,
+            thread_name="InitTrackerLAN",
+            on_server_ready=_store_server_host_runtime,
+        )
+        self._server_thread = self._server_host.start()
 
         # Start Tk polling for actions and state broadcasts
         if not self._polling:
@@ -7160,7 +7163,10 @@ class LanController:
 
     def stop(self) -> None:
         # Ask uvicorn to stop
-        if self._uvicorn_server is not None:
+        server_host = getattr(self, "_server_host", None)
+        if server_host is not None:
+            server_host.request_stop()
+        elif self._uvicorn_server is not None:
             try:
                 self._uvicorn_server.should_exit = True
             except Exception:
