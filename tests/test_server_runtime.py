@@ -1,4 +1,6 @@
+import asyncio
 import importlib
+import threading
 import time
 import unittest
 from unittest.mock import MagicMock
@@ -9,6 +11,7 @@ from server_runtime import (
     RuntimeCommand,
     RuntimeCommandResult,
     RuntimeSnapshotRequest,
+    RuntimeSnapshotResult,
     COMMAND_UPDATE_SPELL_COLOR,
     COMMAND_SET_FACING,
     COMMAND_SET_AURAS_ENABLED,
@@ -79,6 +82,207 @@ class ServerRuntimeFacadeTests(unittest.TestCase):
         self.assertEqual(result.data, {})
         self.assertIsInstance(result.error, dict)
         self.assertEqual(result.error.get("code"), code)
+
+    class _DmCombatRouteRuntime:
+        def __init__(self, result=None, exc=None, delay_seconds=0.0):
+            self.result = result
+            self.exc = exc
+            self.delay_seconds = delay_seconds
+            self.requests = []
+            self.read_thread_ids = []
+            self.active_reads = 0
+            self.max_active_reads = 0
+            self._read_lock = threading.Lock()
+
+        def read_snapshot(self, snap_req):
+            with self._read_lock:
+                self.requests.append(snap_req)
+                self.read_thread_ids.append(threading.get_ident())
+                self.active_reads += 1
+                self.max_active_reads = max(self.max_active_reads, self.active_reads)
+            try:
+                if self.delay_seconds:
+                    time.sleep(self.delay_seconds)
+                if self.exc is not None:
+                    raise self.exc
+                return self.result
+            finally:
+                with self._read_lock:
+                    self.active_reads -= 1
+
+    def _dm_combat_route_client(self, *, runtime, auth_ok=True, dm_service=object()):
+        from fastapi import FastAPI, HTTPException, Request
+        from fastapi.testclient import TestClient
+        from dnd_initative_tracker import (
+            _CURRENT_REQUEST_PATH,
+            _current_request_wants_tactical_map,
+            _dm_combat_read_snapshot_in_threadpool,
+        )
+
+        app = FastAPI()
+        route_thread_ids = []
+
+        @app.middleware("http")
+        async def set_current_request_path_middleware(request: Request, call_next):
+            full_path = request.url.path
+            if request.url.query:
+                full_path += f"?{request.url.query}"
+            token = _CURRENT_REQUEST_PATH.set(full_path)
+            try:
+                return await call_next(request)
+            finally:
+                _CURRENT_REQUEST_PATH.reset(token)
+
+        def _check_dm_auth(request):
+            if not auth_ok:
+                raise HTTPException(status_code=401, detail="Admin authentication required.")
+
+        @app.get("/api/dm/combat")
+        async def dm_combat_snapshot(request: Request):
+            _check_dm_auth(request)
+            if dm_service is None:
+                raise HTTPException(status_code=503, detail="DM combat service unavailable.")
+            try:
+                snap_req = RuntimeSnapshotRequest(
+                    snapshot_type="dm_console",
+                    params={"include_tactical": _current_request_wants_tactical_map()},
+                )
+                route_thread_ids.append(threading.get_ident())
+                result = await _dm_combat_read_snapshot_in_threadpool(runtime, snap_req)
+                if not result.success:
+                    if result.error and result.error.get("code") == "runtime_not_ready":
+                        raise HTTPException(status_code=503, detail="Service Unavailable")
+                    raise HTTPException(status_code=500, detail="Failed to read combat snapshot.")
+                return result.data
+            except HTTPException:
+                raise
+            except Exception:
+                raise HTTPException(status_code=500, detail="Failed to read combat snapshot.")
+
+        return TestClient(app), route_thread_ids
+
+    def test_dm_combat_route_offloads_dm_console_snapshot_read(self):
+        payload = {"in_combat": True, "round": 3, "combatants": [{"cid": 7}]}
+        runtime = self._DmCombatRouteRuntime(
+            result=RuntimeSnapshotResult(success=True, data=payload)
+        )
+        client, route_thread_ids = self._dm_combat_route_client(runtime=runtime)
+
+        response = client.get("/api/dm/combat?workspace=dmcontrol")
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json(), payload)
+        self.assertEqual(len(runtime.requests), 1)
+        snap_req = runtime.requests[0]
+        self.assertEqual(snap_req.snapshot_type, "dm_console")
+        self.assertEqual(snap_req.params, {"include_tactical": True})
+        self.assertNotIn("request", snap_req.params)
+        self.assertEqual(len(route_thread_ids), 1)
+        self.assertEqual(len(runtime.read_thread_ids), 1)
+        self.assertNotEqual(runtime.read_thread_ids[0], route_thread_ids[0])
+
+    def test_dm_combat_tactical_offload_serializes_concurrent_snapshot_reads(self):
+        from dnd_initative_tracker import _dm_combat_read_snapshot_in_threadpool
+
+        payload = {"in_combat": True, "round": 3, "combatants": [{"cid": 7}]}
+        runtime = self._DmCombatRouteRuntime(
+            result=RuntimeSnapshotResult(success=True, data=payload),
+            delay_seconds=0.05,
+        )
+        snap_req = RuntimeSnapshotRequest(
+            snapshot_type="dm_console",
+            params={"include_tactical": True},
+        )
+
+        async def run_reads():
+            return await asyncio.gather(
+                _dm_combat_read_snapshot_in_threadpool(runtime, snap_req),
+                _dm_combat_read_snapshot_in_threadpool(runtime, snap_req),
+                _dm_combat_read_snapshot_in_threadpool(runtime, snap_req),
+            )
+
+        results = asyncio.run(run_reads())
+
+        self.assertEqual([result.data for result in results], [payload, payload, payload])
+        self.assertEqual(len(runtime.requests), 3)
+        self.assertEqual(runtime.max_active_reads, 1)
+
+    def test_dm_combat_route_preserves_non_tactical_read_context(self):
+        payload = {"in_combat": False, "round": 1, "combatants": []}
+        runtime = self._DmCombatRouteRuntime(
+            result=RuntimeSnapshotResult(success=True, data=payload)
+        )
+        client, _route_thread_ids = self._dm_combat_route_client(runtime=runtime)
+
+        response = client.get("/api/dm/combat")
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json(), payload)
+        self.assertEqual(len(runtime.requests), 1)
+        self.assertEqual(runtime.requests[0].params, {"include_tactical": False})
+
+    def test_dm_combat_route_auth_and_service_checks_happen_before_offload(self):
+        runtime = self._DmCombatRouteRuntime(
+            result=RuntimeSnapshotResult(success=True, data={"ok": True})
+        )
+        client, route_thread_ids = self._dm_combat_route_client(runtime=runtime, auth_ok=False)
+
+        response = client.get("/api/dm/combat?workspace=dmcontrol")
+
+        self.assertEqual(response.status_code, 401)
+        self.assertEqual(runtime.requests, [])
+        self.assertEqual(route_thread_ids, [])
+
+        runtime = self._DmCombatRouteRuntime(
+            result=RuntimeSnapshotResult(success=True, data={"ok": True})
+        )
+        client, route_thread_ids = self._dm_combat_route_client(runtime=runtime, dm_service=None)
+
+        response = client.get("/api/dm/combat?workspace=dmcontrol")
+
+        self.assertEqual(response.status_code, 503)
+        self.assertEqual(response.json()["detail"], "DM combat service unavailable.")
+        self.assertEqual(runtime.requests, [])
+        self.assertEqual(route_thread_ids, [])
+
+    def test_dm_combat_route_preserves_snapshot_failure_mapping(self):
+        runtime = self._DmCombatRouteRuntime(
+            result=RuntimeSnapshotResult(
+                success=False,
+                status=STATUS_FAILED,
+                error={"code": "runtime_not_ready"},
+            )
+        )
+        client, _route_thread_ids = self._dm_combat_route_client(runtime=runtime)
+
+        response = client.get("/api/dm/combat")
+
+        self.assertEqual(response.status_code, 503)
+        self.assertEqual(response.json()["detail"], "Service Unavailable")
+
+        runtime = self._DmCombatRouteRuntime(
+            result=RuntimeSnapshotResult(
+                success=False,
+                status=STATUS_FAILED,
+                error={"code": "snapshot_builder_failed"},
+            )
+        )
+        client, _route_thread_ids = self._dm_combat_route_client(runtime=runtime)
+
+        response = client.get("/api/dm/combat")
+
+        self.assertEqual(response.status_code, 500)
+        self.assertEqual(response.json()["detail"], "Failed to read combat snapshot.")
+
+    def test_dm_combat_route_preserves_worker_exception_mapping(self):
+        runtime = self._DmCombatRouteRuntime(exc=RuntimeError("boom"))
+        client, _route_thread_ids = self._dm_combat_route_client(runtime=runtime)
+
+        response = client.get("/api/dm/combat?workspace=dmcontrol")
+
+        self.assertEqual(response.status_code, 500)
+        self.assertEqual(response.json()["detail"], "Failed to read combat snapshot.")
+        self.assertEqual(len(runtime.requests), 1)
 
     def test_package_runtime_reexports_current_runtime_boundary(self):
         runtime = importlib.import_module("init_tracker_server.runtime")

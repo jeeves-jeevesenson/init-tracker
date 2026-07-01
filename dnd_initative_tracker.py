@@ -186,6 +186,34 @@ def _current_request_wants_tactical_map() -> bool:
     )
 
 
+_DM_COMBAT_TACTICAL_READ_LOCKS: Dict[Any, asyncio.Lock] = {}
+
+
+def _dm_combat_snapshot_read_needs_serialization(snap_req: Any) -> bool:
+    params = getattr(snap_req, "params", None)
+    return isinstance(params, dict) and bool(params.get("include_tactical"))
+
+
+def _dm_combat_tactical_read_lock() -> asyncio.Lock:
+    loop = asyncio.get_running_loop()
+    lock = _DM_COMBAT_TACTICAL_READ_LOCKS.get(loop)
+    if lock is None:
+        lock = asyncio.Lock()
+        _DM_COMBAT_TACTICAL_READ_LOCKS[loop] = lock
+    return lock
+
+
+async def _dm_combat_read_snapshot_in_threadpool(runtime: Any, snap_req: Any) -> Any:
+    """Offload the DM combat route's synchronous runtime snapshot read."""
+    from starlette.concurrency import run_in_threadpool
+
+    if not _dm_combat_snapshot_read_needs_serialization(snap_req):
+        return await run_in_threadpool(runtime.read_snapshot, snap_req)
+
+    async with _dm_combat_tactical_read_lock():
+        return await run_in_threadpool(runtime.read_snapshot, snap_req)
+
+
 FAIL_OUTCOME_LABELS = {"fail", "failed", "failure", "failed_save", "fail_save"}
 USER_YAML_DIRNAME = "Dnd-Init-Yamls"
 SESSION_SNAPSHOT_SCHEMA_VERSION = 2
@@ -4168,7 +4196,7 @@ class LanController:
                     snapshot_type="dm_console",
                     params={"include_tactical": _current_request_wants_tactical_map()}
                 )
-                result = self._runtime.read_snapshot(snap_req)
+                result = await _dm_combat_read_snapshot_in_threadpool(self._runtime, snap_req)
                 if not result.success:
                     if result.error and result.error.get("code") == "runtime_not_ready":
                         raise HTTPException(status_code=503, detail="Service Unavailable")
