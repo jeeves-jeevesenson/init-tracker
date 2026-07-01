@@ -11,7 +11,7 @@ If an item is not marked as **Active** here, it is NOT current work.
 - **Status:** Idle
 - **Current Work Item:** None
 - **Active Gate:** None
-- **Allowed Next Action:** Review, developer-smoke if desired, and commit `WORK-20260701-app-host-runtime-lifecycle-minimal-implementation`. Do not proceed to route migration, route body movement, broader offload, facade-owned cache, TTL changes, static hydration changes, snapshot warm-up ownership changes, player-command routes, combat mutation routes, lower-level tactical/LAN work, queue-wait behavior changes, async command acceptance semantics, WebSocket behavior changes, server launch command changes, lifespan behavior changes, shutdown join/cancellation semantics, or high-risk gameplay route work without a new active work item.
+- **Allowed Next Action:** No active work. Safe next options are to open a bounded post-implementation checkpoint for `WORK-20260701-app-host-runtime-lifecycle-minimal-implementation`, open or reopen a bug/planning item, prepare a session handoff, or decide on deploy guidance. Do not proceed to route migration, route body movement, broader offload, facade-owned cache, TTL changes, static hydration changes, snapshot warm-up ownership changes, player-command routes, combat mutation routes, lower-level tactical/LAN work, queue-wait behavior changes, async command acceptance semantics, WebSocket behavior changes, server launch command changes, lifespan behavior changes, shutdown join/cancellation semantics, or high-risk gameplay route work without a new active work item.
 <!-- ACTIVE_WORK_STATUS_END -->
 
 ---
