@@ -540,6 +540,148 @@ class ServerRuntimeFacadeTests(unittest.TestCase):
         }])
         self.assertIn("tactical_map", result)
 
+    def _resource_pool_cache_tracker(
+        self,
+        *,
+        cached_payload=None,
+        lan_cached_payload=None,
+        fresh_payload=None,
+        fresh_exc=None,
+    ):
+        from dnd_initative_tracker import InitiativeTracker
+
+        tracker = object.__new__(InitiativeTracker)
+        tracker._lan_resource_pools_last_build = 100.0
+        tracker._lan_resource_pools_payload_cache = cached_payload
+        tracker._last_invalidation_domains = set()
+        tracker._lan = MagicMock()
+        tracker._lan._cached_snapshot = (
+            {"resource_pools": lan_cached_payload}
+            if lan_cached_payload is not None
+            else {}
+        )
+        calls = []
+
+        def _fresh_payload():
+            calls.append("build")
+            if fresh_exc is not None:
+                raise fresh_exc
+            return fresh_payload if fresh_payload is not None else {"Fresh": []}
+
+        tracker._player_resource_pools_payload = _fresh_payload
+        return tracker, calls
+
+    def test_lan_resource_pools_cache_reuses_dedicated_payload_inside_throttle(self):
+        cached_payload = {
+            "Alice": [
+                {"id": "focus_points", "label": "Focus Points", "current": 2, "max": 2}
+            ]
+        }
+        tracker, calls = self._resource_pool_cache_tracker(cached_payload=cached_payload)
+
+        payload, result = tracker._lan_resource_pools_payload_for_snapshot(
+            include_static=False,
+            last_domains=set(),
+            now=100.25,
+        )
+
+        self.assertEqual(payload, cached_payload)
+        self.assertEqual(result, "dedicated_cache_hit")
+        self.assertEqual(calls, [])
+        self.assertEqual(
+            tracker._lan_resource_pools_trace_mode(
+                include_static=False,
+                last_domains=set(),
+                now=100.25,
+            ),
+            "dedicated_cache_hit",
+        )
+
+    def test_lan_resource_pools_cache_backfills_from_legacy_snapshot_cache(self):
+        lan_cached_payload = {
+            "Bob": [
+                {
+                    "id": "temp_bardic_dice_7",
+                    "label": "Bardic Dice",
+                    "current": 1,
+                    "max": 1,
+                    "temporary": True,
+                    "time_left_s": 12.5,
+                }
+            ]
+        }
+        tracker, calls = self._resource_pool_cache_tracker(
+            cached_payload=None,
+            lan_cached_payload=lan_cached_payload,
+        )
+
+        payload, result = tracker._lan_resource_pools_payload_for_snapshot(
+            include_static=False,
+            last_domains=set(),
+            now=100.25,
+        )
+
+        self.assertEqual(payload, lan_cached_payload)
+        self.assertEqual(tracker._lan_resource_pools_payload_cache, lan_cached_payload)
+        self.assertEqual(result, "lan_snapshot_cache_hit")
+        self.assertEqual(calls, [])
+
+    def test_lan_resource_pools_cache_rebuilds_for_static_and_invalidation(self):
+        stale_payload = {"Alice": [{"id": "wild_shape", "current": 0, "max": 2}]}
+        fresh_static_payload = {"Alice": [{"id": "wild_shape", "current": 2, "max": 2}]}
+        tracker, calls = self._resource_pool_cache_tracker(
+            cached_payload=stale_payload,
+            fresh_payload=fresh_static_payload,
+        )
+
+        payload, result = tracker._lan_resource_pools_payload_for_snapshot(
+            include_static=True,
+            last_domains=set(),
+            now=100.25,
+        )
+
+        self.assertEqual(payload, fresh_static_payload)
+        self.assertEqual(result, "force_rebuild")
+        self.assertEqual(calls, ["build"])
+        self.assertEqual(tracker._lan_resource_pools_payload_cache, fresh_static_payload)
+        self.assertEqual(tracker._lan_resource_pools_last_build, 100.25)
+
+        fresh_invalidation_payload = {"Alice": [{"id": "wild_shape", "current": 1, "max": 2}]}
+        tracker, calls = self._resource_pool_cache_tracker(
+            cached_payload=stale_payload,
+            fresh_payload=fresh_invalidation_payload,
+        )
+
+        payload, result = tracker._lan_resource_pools_payload_for_snapshot(
+            include_static=False,
+            last_domains={"resource_pools"},
+            now=100.5,
+        )
+
+        self.assertEqual(payload, fresh_invalidation_payload)
+        self.assertEqual(result, "force_rebuild")
+        self.assertEqual(calls, ["build"])
+        self.assertEqual(tracker._lan_resource_pools_payload_cache, fresh_invalidation_payload)
+        self.assertEqual(tracker._lan_resource_pools_last_build, 100.5)
+
+    def test_lan_resource_pools_cache_falls_back_on_rebuild_failure(self):
+        cached_payload = {"Alice": [{"id": "lay_on_hands", "current": 5, "max": 10}]}
+        tracker, calls = self._resource_pool_cache_tracker(
+            cached_payload=cached_payload,
+            fresh_exc=RuntimeError("boom"),
+        )
+
+        payload, result = tracker._lan_resource_pools_payload_for_snapshot(
+            include_static=False,
+            last_domains=set(),
+            now=101.5,
+        )
+
+        self.assertEqual(payload, cached_payload)
+        self.assertEqual(result, "rebuild_failed_dedicated_cache_hit")
+        self.assertEqual(calls, ["build"])
+        self.assertEqual(tracker._lan_resource_pools_last_build, 100.0)
+
     def test_read_snapshot_static_hydration_request_fails_closed(self):
         app = self._SnapshotApp()
         facade = ServerRuntimeFacade(

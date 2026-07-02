@@ -10103,6 +10103,7 @@ class InitiativeTracker(base.InitiativeTracker):
         self._player_yaml_refresh_interval_s = 10.0
         self._player_yaml_cache_hold_depth = 0
         self._lan_resource_pools_last_build = 0.0
+        self._lan_resource_pools_payload_cache: Optional[Dict[str, List[Dict[str, Any]]]] = None
         self._lan_static_snapshot_version = 0
         self._lan_static_snapshot_cache_version = -1
         self._lan_static_snapshot_cache: Optional[Dict[str, Any]] = None
@@ -10487,6 +10488,8 @@ class InitiativeTracker(base.InitiativeTracker):
         self._inventory_missing_instance_id_warnings = set()
         self._player_yaml_dir_signature = None
         self._player_yaml_last_refresh = 0.0
+        self._lan_resource_pools_payload_cache = None
+        self._lan_resource_pools_last_build = 0.0
         if rebuild:
             self._load_player_yaml_cache(force_refresh=True)
         try:
@@ -21305,37 +21308,100 @@ class InitiativeTracker(base.InitiativeTracker):
                 snap["player_profiles"] = {}
                 snap["beast_forms"] = []
 
-        # Resource pools are slightly more dynamic and throttled to 1.0s
-        resource_pools = {}
-        now = time.monotonic()
-        # Be defensive about the type of _lan_resource_pools_last_build
-        last_build_raw = getattr(self, "_lan_resource_pools_last_build", 0.0)
-        last_build = last_build_raw if isinstance(last_build_raw, (int, float)) else 0.0
-
-        # Optimization: only rebuild resource pools if requested or throttled.
-        # We also force rebuild if the last mutation touched resource pools.
         last_domains = getattr(self, "_last_invalidation_domains", None)
-        force_rebuild = include_static or (isinstance(last_domains, (list, set)) and "resource_pools" in last_domains)
-
-        resource_pool_mode = "rebuild" if force_rebuild or (now - last_build) >= 1.0 else "cached"
+        resource_pools_now = time.monotonic()
+        resource_pool_mode = self._lan_resource_pools_trace_mode(
+            include_static=include_static,
+            last_domains=last_domains,
+            now=resource_pools_now,
+        )
         with timed_span("lan.snapshot.resource_pools", resource_pool_mode=resource_pool_mode, **trace_fields):
-            if force_rebuild or (now - last_build) >= 1.0:
-                try:
-                    resource_pools = self._player_resource_pools_payload()
-                    self._lan_resource_pools_last_build = now
-                except Exception:
-                    # Fallback to cache if build fails
-                    cached = (self._lan._cached_snapshot if hasattr(self, "_lan") else {}) or {}
-                    resource_pools = cached.get("resource_pools") or {}
-            else:
-                # Within throttle window and not forced: use cached value from last snapshot.
-                # This prevents stripping resource_pools from dynamic broadcasts.
-                cached = (self._lan._cached_snapshot if hasattr(self, "_lan") else {}) or {}
-                resource_pools = cached.get("resource_pools") or {}
+            resource_pools, resource_pool_result = self._lan_resource_pools_payload_for_snapshot(
+                include_static=include_static,
+                last_domains=last_domains,
+                now=resource_pools_now,
+            )
+        if debug_trace_enabled():
+            debug_event(
+                "lan.snapshot.resource_pools.cache",
+                span="lan.snapshot.resource_pools",
+                resource_pool_mode=resource_pool_mode,
+                resource_pool_result=resource_pool_result,
+                **trace_fields,
+            )
 
         snap["resource_pools"] = resource_pools
 
         return snap
+
+    def _lan_resource_pools_trace_mode(self, *, include_static: bool, last_domains: Any, now: Optional[float] = None) -> str:
+        if now is None:
+            now = time.monotonic()
+        last_build_raw = getattr(self, "_lan_resource_pools_last_build", 0.0)
+        last_build = last_build_raw if isinstance(last_build_raw, (int, float)) else 0.0
+        force_rebuild = bool(include_static) or (
+            isinstance(last_domains, (list, set)) and "resource_pools" in last_domains
+        )
+        if force_rebuild:
+            return "force_rebuild"
+        if float(now) - float(last_build) >= 1.0:
+            return "ttl_rebuild"
+        cached = self.__dict__.get("_lan_resource_pools_payload_cache")
+        if isinstance(cached, dict):
+            return "dedicated_cache_hit"
+        lan = self.__dict__.get("_lan")
+        cached_snapshot = getattr(lan, "_cached_snapshot", None) if lan is not None else None
+        if isinstance(cached_snapshot, dict) and isinstance(cached_snapshot.get("resource_pools"), dict):
+            return "lan_snapshot_cache_hit"
+        return "cache_miss"
+
+    def _lan_cached_resource_pools_payload(self) -> Tuple[Optional[Dict[str, List[Dict[str, Any]]]], str]:
+        cached = self.__dict__.get("_lan_resource_pools_payload_cache")
+        if isinstance(cached, dict):
+            return cached, "dedicated_cache_hit"
+
+        lan = self.__dict__.get("_lan")
+        cached_snapshot = getattr(lan, "_cached_snapshot", None) if lan is not None else None
+        if isinstance(cached_snapshot, dict) and "resource_pools" in cached_snapshot:
+            resource_pools = cached_snapshot.get("resource_pools")
+            if isinstance(resource_pools, dict):
+                self.__dict__["_lan_resource_pools_payload_cache"] = resource_pools
+                return resource_pools, "lan_snapshot_cache_hit"
+
+        return None, "cache_miss"
+
+    def _store_lan_resource_pools_payload(self, payload: Dict[str, List[Dict[str, Any]]]) -> None:
+        if isinstance(payload, dict):
+            self.__dict__["_lan_resource_pools_payload_cache"] = payload
+
+    def _lan_resource_pools_payload_for_snapshot(
+        self,
+        *,
+        include_static: bool,
+        last_domains: Any,
+        now: Optional[float] = None,
+    ) -> Tuple[Dict[str, List[Dict[str, Any]]], str]:
+        if now is None:
+            now = time.monotonic()
+        last_build_raw = getattr(self, "_lan_resource_pools_last_build", 0.0)
+        last_build = last_build_raw if isinstance(last_build_raw, (int, float)) else 0.0
+        force_rebuild = bool(include_static) or (
+            isinstance(last_domains, (list, set)) and "resource_pools" in last_domains
+        )
+        if force_rebuild or (float(now) - float(last_build)) >= 1.0:
+            result = "force_rebuild" if force_rebuild else "ttl_rebuild"
+            try:
+                resource_pools = self._player_resource_pools_payload()
+                self._lan_resource_pools_last_build = float(now)
+                self._store_lan_resource_pools_payload(resource_pools)
+                return resource_pools, result
+            except Exception:
+                cached, source = self._lan_cached_resource_pools_payload()
+                return (cached if isinstance(cached, dict) else {}), f"rebuild_failed_{source}"
+
+        cached, source = self._lan_cached_resource_pools_payload()
+        return (cached if isinstance(cached, dict) else {}), source
+
     def _broadcast_tactical_state_update(self) -> None:
         broadcaster = getattr(self, "_lan_force_state_broadcast", None)
         if not callable(broadcaster):
