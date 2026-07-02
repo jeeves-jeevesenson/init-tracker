@@ -23,11 +23,33 @@ TARGET_SPANS = (
     "_dm_console_snapshot",
     "_dm_console_snapshot_payload",
     "_load_player_yaml_cache",
+    "dm.console.combat_snapshot",
+    "dm.console.tactical_snapshot",
+    "dm.tactical.from_lan_snapshot",
     "lan.snapshot.build",
+    "lan.snapshot.map_window",
+    "lan.snapshot.canonical_map",
+    "lan.snapshot.aoes",
+    "lan.snapshot.auras",
+    "lan.snapshot.units",
+    "lan.snapshot.tactical_payload",
+    "lan.snapshot.static_fields",
+    "lan.snapshot.resource_pools",
 )
 HTTP_COMBAT_LABEL = "http.request:/api/dm/combat"
 TARGET_LABELS = (*TARGET_SPANS, HTTP_COMBAT_LABEL)
 DIAGNOSTIC_EVENTS = ("slow.span", "very_slow.span", "hang_candidate.span")
+COUNT_KEYS = (
+    "combatant_count",
+    "player_count",
+    "monster_count",
+    "map_aoe_count",
+    "pending_prompt_count",
+    "pending_reaction_count",
+    "websocket_client_count",
+    "dm_websocket_client_count",
+    "total_websocket_client_count",
+)
 
 
 def positive_float(raw: str) -> float:
@@ -103,6 +125,37 @@ def duration_from(record: dict[str, object]) -> float | None:
     return None
 
 
+def low_cardinality_context(record: dict[str, object]) -> str | None:
+    raw_context = record.get("snapshot_caller", record.get("scope"))
+    if not isinstance(raw_context, str):
+        return None
+    context = raw_context.strip().lower().replace("-", "_")
+    if not context:
+        return None
+    return context[:80]
+
+
+def numeric_count(value: object) -> int | None:
+    if isinstance(value, bool):
+        return int(value)
+    if isinstance(value, int):
+        return value
+    if isinstance(value, float) and value.is_integer():
+        return int(value)
+    return None
+
+
+def merge_max_counts(max_counts: dict[str, int], record: dict[str, object]) -> None:
+    raw_counts = record.get("counts")
+    if not isinstance(raw_counts, dict):
+        return
+    for key in COUNT_KEYS:
+        value = numeric_count(raw_counts.get(key))
+        if value is None:
+            continue
+        max_counts[key] = max(max_counts.get(key, 0), value)
+
+
 def combat_route_matches(record: dict[str, object]) -> bool:
     route = record.get("route", record.get("path"))
     return record.get("span") == "http.request" and route == "/api/dm/combat"
@@ -123,6 +176,14 @@ def empty_target_summary(thresholds_ms: tuple[float, ...]) -> dict[str, object]:
         "duration_parse_failures": 0,
         "diagnostic_event_counts": {event: 0 for event in DIAGNOSTIC_EVENTS},
         "threshold_counts": {threshold_key(threshold): 0 for threshold in thresholds_ms},
+        "contexts": {},
+    }
+
+
+def empty_context_summary() -> dict[str, object]:
+    return {
+        "durations_ms": [],
+        "max_counts": {},
     }
 
 
@@ -195,6 +256,15 @@ def read_trace_file(
                     target["duration_parse_failures"] += 1
                     continue
                 target["durations_ms"].append(duration_ms)
+                context = low_cardinality_context(record)
+                if context is not None:
+                    contexts = target["contexts"]
+                    if not isinstance(contexts, dict):
+                        contexts = {}
+                        target["contexts"] = contexts
+                    context_target = contexts.setdefault(context, empty_context_summary())
+                    context_target["durations_ms"].append(duration_ms)
+                    merge_max_counts(context_target["max_counts"], record)
             elif event in DIAGNOSTIC_EVENTS:
                 target["diagnostic_event_counts"][event] += 1
 
@@ -227,6 +297,16 @@ def build_summary(
             **duration_summary,
             "duration_parse_failures": target["duration_parse_failures"],
             "diagnostic_event_counts": target["diagnostic_event_counts"],
+            "contexts": {
+                str(context): {
+                    **summarize_durations(context_data["durations_ms"], thresholds_ms),
+                    "max_counts": context_data["max_counts"],
+                }
+                for context, context_data in sorted(
+                    target["contexts"].items(),
+                    key=lambda item: (str(item[0]), len(item[1]["durations_ms"])),
+                )
+            },
         }
 
     return {
@@ -299,6 +379,48 @@ def print_summary(summary: dict[str, object]) -> None:
             str(diagnostic_counts["hang_candidate.span"]),
             str(target["duration_parse_failures"]),
         ]
+        print(" ".join(row))
+
+    context_rows = []
+    for label, target in summary["targets"].items():
+        contexts = target.get("contexts")
+        if not isinstance(contexts, dict):
+            continue
+        for context, context_summary in contexts.items():
+            if not isinstance(context_summary, dict):
+                continue
+            if not context_summary.get("count"):
+                continue
+            max_counts = context_summary.get("max_counts")
+            if not isinstance(max_counts, dict):
+                max_counts = {}
+            context_rows.append(
+                [
+                    label,
+                    str(context),
+                    str(context_summary["count"]),
+                    format_ms(context_summary["p50_ms"]),
+                    format_ms(context_summary["p95_ms"]),
+                    format_ms(context_summary["max_ms"]),
+                    *(str(max_counts.get(key, 0)) for key in COUNT_KEYS),
+                ]
+            )
+    print("")
+    print("Caller/context breakdown:")
+    if not context_rows:
+        print("  No caller/context labels found in these traces.")
+        return
+    headers = [
+        "target",
+        "context",
+        "count",
+        "p50",
+        "p95",
+        "max",
+        *COUNT_KEYS,
+    ]
+    print(" ".join(headers))
+    for row in context_rows:
         print(" ".join(row))
 
 

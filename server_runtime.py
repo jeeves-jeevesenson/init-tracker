@@ -95,6 +95,12 @@ _DM_CONSOLE_WORKSPACE_INCLUDE_TACTICAL = {
     "monster-pilot": True,
 }
 
+_SNAPSHOT_TRACE_CONTEXTS = {
+    "dm_console_route",
+    "dm_console_route_tactical",
+    "server_runtime_tactical",
+}
+
 
 
 
@@ -807,6 +813,16 @@ class ServerRuntimeFacade:
                 return False
         return None
 
+    @staticmethod
+    def _snapshot_trace_context(params: Dict[str, Any]) -> Optional[str]:
+        raw_context = params.get("_trace_context")
+        if not isinstance(raw_context, str):
+            return None
+        normalized = raw_context.strip().lower().replace("-", "_")[:80]
+        if normalized in _SNAPSHOT_TRACE_CONTEXTS:
+            return normalized
+        return None
+
     def _reject_static_hydration_params(
         self,
         request: RuntimeSnapshotRequest,
@@ -913,6 +929,8 @@ class ServerRuntimeFacade:
         if invalid_static is not None:
             return invalid_static
 
+        trace_context = self._snapshot_trace_context(params)
+
         lan_controller = self.lan_controller
         if lan_controller is None:
             return self._snapshot_failure(
@@ -976,7 +994,10 @@ class ServerRuntimeFacade:
                     metadata={"snapshot_type": snapshot_type},
                 )
             try:
-                payload = builder()
+                if trace_context:
+                    payload = builder(scope=trace_context)
+                else:
+                    payload = builder()
             except Exception as exc:
                 return self._snapshot_failure(
                     request,
@@ -1011,7 +1032,10 @@ class ServerRuntimeFacade:
                 metadata={"snapshot_type": snapshot_type},
             )
         try:
-            payload = builder(include_tactical=include_tactical)
+            builder_kwargs: Dict[str, Any] = {"include_tactical": include_tactical}
+            if trace_context:
+                builder_kwargs["scope"] = trace_context
+            payload = builder(**builder_kwargs)
         except Exception as exc:
             return self._snapshot_failure(
                 request,

@@ -4194,9 +4194,13 @@ class LanController:
                 raise HTTPException(status_code=503, detail="DM combat service unavailable.")
             try:
                 from server_runtime import RuntimeSnapshotRequest
+                include_tactical = _current_request_wants_tactical_map()
                 snap_req = RuntimeSnapshotRequest(
                     snapshot_type="dm_console",
-                    params={"include_tactical": _current_request_wants_tactical_map()}
+                    params={
+                        "include_tactical": include_tactical,
+                        "_trace_context": "dm_console_route_tactical" if include_tactical else "dm_console_route",
+                    },
                 )
                 result = await _dm_combat_read_snapshot_in_threadpool(self._runtime, snap_req)
                 if not result.success:
@@ -7086,7 +7090,7 @@ class LanController:
                 # Send initial snapshot immediately on connect
                 try:
                     if _dm_service is not None:
-                        snap = _dm_console_snapshot(include_tactical=is_map_client)
+                        snap = _dm_console_snapshot(include_tactical=is_map_client, scope="dm_ws_connect")
                         await self._send_ws_text_serialized(ws_id, ws, self._dm_state_payload_text(snap))
                 except Exception:
                     pass
@@ -7108,7 +7112,7 @@ class LanController:
                                 with self._clients_lock:
                                     self._dm_ws_is_map[ws_id] = True
                                 if _dm_service is not None:
-                                    snap = _dm_console_snapshot(include_tactical=True)
+                                    snap = _dm_console_snapshot(include_tactical=True, scope="dm_ws_subscribe_map")
                                     await self._send_ws_text_serialized(ws_id, ws, self._dm_state_payload_text(snap))
                         except Exception:
                             pass
@@ -7129,13 +7133,21 @@ class LanController:
             # Seed with static data so the first connecting WS client receives
             # populated spell_presets / player_profiles / player_spells instead
             # of waiting for the first include_static broadcast.
-            self._cached_snapshot = self.app._lan_snapshot(include_static=True, hydrate_static=True)
+            self._cached_snapshot = self.app._lan_snapshot(
+                include_static=True,
+                hydrate_static=True,
+                scope="lan_startup_seed",
+            )
             self._cached_pcs = list(
                 self.app._lan_pcs() if hasattr(self.app, "_lan_pcs") else self.app._lan_claimable()
             )
         except Exception:
             try:
-                self._cached_snapshot = self.app._lan_snapshot(include_static=False, hydrate_static=False)
+                self._cached_snapshot = self.app._lan_snapshot(
+                    include_static=False,
+                    hydrate_static=False,
+                    scope="lan_startup_fallback",
+                )
             except Exception:
                 pass
         def _store_server_host_runtime(loop, server):
@@ -7564,7 +7576,11 @@ class LanController:
                 if now - self._last_idle_cache_refresh >= self._idle_cache_refresh_interval_s:
                     self._last_idle_cache_refresh = now
                     self._cached_snapshot = self._merge_cached_snapshot_carryover(
-                        self.app._lan_snapshot(include_static=False, hydrate_static=False)
+                        self.app._lan_snapshot(
+                            include_static=False,
+                            hydrate_static=False,
+                            scope="lan_tick_idle_cache",
+                        )
                     )
                     try:
                         self._cached_pcs = list(
@@ -7576,7 +7592,11 @@ class LanController:
                 return
 
             # 2) broadcast snapshot if changed (polling-based, avoids wiring every hook)
-            snap = self.app._lan_snapshot(include_static=False, hydrate_static=False)
+            snap = self.app._lan_snapshot(
+                include_static=False,
+                hydrate_static=False,
+                scope="lan_tick_update",
+            )
             self._cached_snapshot = self._merge_cached_snapshot_carryover(snap)
             try:
                 self._cached_pcs = list(
@@ -8458,6 +8478,7 @@ class LanController:
         combat_snapshot: Optional[Dict[str, Any]] = None,
         tactical_snapshot: Optional[Dict[str, Any]] = None,
         include_tactical: Optional[bool] = None,
+        scope: Optional[str] = None,
     ) -> Dict[str, Any]:
         """Return a DM console snapshot, preferring the recent cache if available.
 
@@ -8485,6 +8506,14 @@ class LanController:
                         self._cached_dm_snapshot_include_tactical = None
                     except Exception:
                         pass
+                    if debug_trace_enabled():
+                        debug_event(
+                            "snapshot.cache_hit",
+                            span="_dm_console_snapshot",
+                            scope=scope,
+                            include_tactical=include_tactical_flag,
+                            snapshot_cache_hit=True,
+                        )
                     return cached
                 try:
                     self._cached_dm_snapshot = None
@@ -8493,11 +8522,14 @@ class LanController:
                 except Exception:
                     pass
 
-        return self._dm_console_snapshot_payload(
-            combat_snapshot=combat_snapshot,
-            tactical_snapshot=tactical_snapshot,
-            include_tactical=include_tactical_flag,
-        )
+        payload_kwargs: Dict[str, Any] = {
+            "combat_snapshot": combat_snapshot,
+            "tactical_snapshot": tactical_snapshot,
+            "include_tactical": include_tactical_flag,
+        }
+        if scope:
+            payload_kwargs["scope"] = scope
+        return self._dm_console_snapshot_payload(**payload_kwargs)
 
     @trace_timed("_dm_console_snapshot_payload")
     def _dm_console_snapshot_payload(
@@ -8506,6 +8538,7 @@ class LanController:
         combat_snapshot: Optional[Dict[str, Any]] = None,
         tactical_snapshot: Optional[Dict[str, Any]] = None,
         include_tactical: Optional[bool] = None,
+        scope: Optional[str] = None,
     ) -> Dict[str, Any]:
         perf_debug = os.getenv("LAN_PERF_DEBUG") == "1"
         perf_start = time.perf_counter() if perf_debug else 0.0
@@ -8514,6 +8547,15 @@ class LanController:
         combat_source = "provided" if isinstance(combat_snapshot, dict) else "service"
         tactical_source = "provided" if isinstance(tactical_snapshot, dict) else "tracker"
         include_tactical_flag = tactical_map_enabled() if include_tactical is None else bool(include_tactical)
+        trace_fields: Dict[str, Any] = {}
+        if debug_trace_enabled():
+            trace_scope = str(scope or "dm_console_snapshot").strip().lower().replace("-", "_")[:80]
+            trace_fields = {
+                "scope": trace_scope,
+                "snapshot_caller": trace_scope,
+                "include_tactical": include_tactical_flag,
+                "counts": self._tracker._debug_trace_counts(),
+            }
         snapshot: Dict[str, Any] = {}
         if isinstance(combat_snapshot, dict):
             snapshot = dict(combat_snapshot)
@@ -8523,28 +8565,30 @@ class LanController:
                 combat_source = "missing"
             else:
                 combat_started_at = time.perf_counter() if perf_debug else 0.0
-                try:
-                    candidate = dm_service.combat_snapshot()
-                    if isinstance(candidate, dict):
-                        snapshot = dict(candidate)
-                except Exception:
-                    snapshot = {}
-                finally:
-                    if combat_started_at > 0.0:
-                        combat_snapshot_ms = (time.perf_counter() - combat_started_at) * 1000.0
+                with timed_span("dm.console.combat_snapshot", source=combat_source, **trace_fields):
+                    try:
+                        candidate = dm_service.combat_snapshot()
+                        if isinstance(candidate, dict):
+                            snapshot = dict(candidate)
+                    except Exception:
+                        snapshot = {}
+                    finally:
+                        if combat_started_at > 0.0:
+                            combat_snapshot_ms = (time.perf_counter() - combat_started_at) * 1000.0
         tactical_payload: Dict[str, Any] = {}
         tactical_started_at = time.perf_counter() if perf_debug else 0.0
         if isinstance(tactical_snapshot, dict):
             tactical_payload = dict(tactical_snapshot)
         elif include_tactical_flag:
-            try:
-                tactical_builder = getattr(self.app, "_dm_tactical_snapshot", None)
-                if callable(tactical_builder):
-                    candidate = tactical_builder()
-                    if isinstance(candidate, dict):
-                        tactical_payload = candidate
-            except Exception:
-                tactical_payload = {}
+            with timed_span("dm.console.tactical_snapshot", source=tactical_source, **trace_fields):
+                try:
+                    tactical_builder = getattr(self.app, "_dm_tactical_snapshot", None)
+                    if callable(tactical_builder):
+                        candidate = tactical_builder(scope=f"{trace_fields.get('scope', scope or 'dm_console_snapshot')}_tactical")
+                        if isinstance(candidate, dict):
+                            tactical_payload = candidate
+                except Exception:
+                    tactical_payload = {}
         else:
             tactical_source = "disabled"
         if tactical_started_at > 0.0:
@@ -9591,7 +9635,7 @@ class LanController:
             return [copy.deepcopy(entry) for entry in history if isinstance(entry, dict)]
 
     def _planning_snapshot_payload(self, viewer_cid: Optional[int], is_admin: bool = False) -> Dict[str, Any]:
-        snap = copy.deepcopy(self.app._lan_snapshot())
+        snap = copy.deepcopy(self.app._lan_snapshot(scope="planning_snapshot"))
         units = snap.get("units") if isinstance(snap, dict) else []
         if not isinstance(units, list):
             units = []
@@ -20694,10 +20738,33 @@ class InitiativeTracker(base.InitiativeTracker):
         return merged, True
 
     @trace_timed("_lan_snapshot")
-    def _lan_snapshot(self, include_static: bool = True, hydrate_static: bool = True) -> Dict[str, Any]:
+    def _lan_snapshot(
+        self,
+        include_static: bool = True,
+        hydrate_static: bool = True,
+        *,
+        scope: Optional[str] = None,
+    ) -> Dict[str, Any]:
         perf_debug = os.getenv("LAN_PERF_DEBUG") == "1"
         perf_start = time.perf_counter() if perf_debug else 0.0
         ship_surface_projection_enabled = ship_surfaces_enabled()
+        trace_fields: Dict[str, Any] = {}
+        if debug_trace_enabled():
+            trace_scope = str(scope or "direct").strip().lower().replace("-", "_")[:80] or "direct"
+            cache_hit, cache_reason, static_version = self._lan_static_snapshot_cache_status()
+            trace_fields = {
+                "scope": trace_scope,
+                "snapshot_caller": trace_scope,
+                "include_static": bool(include_static),
+                "hydrate_static": bool(hydrate_static),
+                "snapshot_cache_hit": bool(cache_hit),
+                "snapshot_cache_scope": "static" if include_static else ("cached_static" if hydrate_static else "dynamic_only"),
+                "invalidation_reason": str(cache_reason or ""),
+                "static_version": int(static_version),
+                "ship_surface_projection_enabled": bool(ship_surface_projection_enabled),
+                "counts": self._debug_trace_counts(),
+            }
+            debug_event("snapshot.context", span="_lan_snapshot", **trace_fields)
         # Prefer map window live state when available
         mw = None
         try:
@@ -20719,65 +20786,67 @@ class InitiativeTracker(base.InitiativeTracker):
         rough_terrain: Dict[Tuple[int, int], object] = dict(getattr(self, "_lan_rough_terrain", {}) or {})
         map_batching = False
 
-        if mw is not None:
-            try:
-                cols = int(getattr(mw, "cols", cols))
-                rows = int(getattr(mw, "rows", rows))
-            except Exception:
-                pass
-            try:
-                map_batching = bool(
-                    getattr(mw, "_suspend_lan_sync", False)
-                    or getattr(mw, "_drawing_obstacles", False)
-                    or getattr(mw, "_drawing_rough", False)
-                )
-            except Exception:
-                map_batching = False
-            try:
-                self._lan_sync_aoes_to_map(mw)
-                aoe_source = dict(getattr(mw, "aoes", {}) or {})
-            except Exception:
-                pass
-            if not map_batching:
+        with timed_span("lan.snapshot.map_window", map_window_present=mw is not None, **trace_fields):
+            if mw is not None:
                 try:
-                    obstacles = set(getattr(mw, "obstacles", obstacles) or set())
+                    cols = int(getattr(mw, "cols", cols))
+                    rows = int(getattr(mw, "rows", rows))
                 except Exception:
                     pass
                 try:
-                    rough_terrain = dict(getattr(mw, "rough_terrain", rough_terrain) or {})
+                    map_batching = bool(
+                        getattr(mw, "_suspend_lan_sync", False)
+                        or getattr(mw, "_drawing_obstacles", False)
+                        or getattr(mw, "_drawing_rough", False)
+                    )
                 except Exception:
-                    pass
-            try:
-                for cid, tok in (getattr(mw, "unit_tokens", {}) or {}).items():
-                    positions[int(cid)] = (int(tok.get("col")), int(tok.get("row")))
-            except Exception:
-                pass
-            try:
-                self._lan_aoes = dict(aoe_source)
-                if aoe_source:
-                    max_aid = max(int(aid) for aid in aoe_source.keys())
-                    self._lan_next_aoe_id = max(self._lan_next_aoe_id, max_aid + 1)
-            except Exception:
-                pass
-            if not map_batching:
+                    map_batching = False
                 try:
-                    self._lan_obstacles = set(obstacles)
-                    self._lan_rough_terrain = dict(rough_terrain)
+                    self._lan_sync_aoes_to_map(mw)
+                    aoe_source = dict(getattr(mw, "aoes", {}) or {})
                 except Exception:
                     pass
+                if not map_batching:
+                    try:
+                        obstacles = set(getattr(mw, "obstacles", obstacles) or set())
+                    except Exception:
+                        pass
+                    try:
+                        rough_terrain = dict(getattr(mw, "rough_terrain", rough_terrain) or {})
+                    except Exception:
+                        pass
+                try:
+                    for cid, tok in (getattr(mw, "unit_tokens", {}) or {}).items():
+                        positions[int(cid)] = (int(tok.get("col")), int(tok.get("row")))
+                except Exception:
+                    pass
+                try:
+                    self._lan_aoes = dict(aoe_source)
+                    if aoe_source:
+                        max_aid = max(int(aid) for aid in aoe_source.keys())
+                        self._lan_next_aoe_id = max(self._lan_next_aoe_id, max_aid + 1)
+                except Exception:
+                    pass
+                if not map_batching:
+                    try:
+                        self._lan_obstacles = set(obstacles)
+                        self._lan_rough_terrain = dict(rough_terrain)
+                    except Exception:
+                        pass
 
-        canonical_map_state = self._capture_canonical_map_state(prefer_window=True).normalized()
-        self._apply_canonical_map_state(canonical_map_state, hydrate_window=False)
-        legacy_map_state = canonical_map_state.to_legacy()
-        cols = int(legacy_map_state.get("cols", cols) or cols)
-        rows = int(legacy_map_state.get("rows", rows) or rows)
-        obstacles = set(legacy_map_state.get("obstacles") if isinstance(legacy_map_state.get("obstacles"), set) else obstacles)
-        rough_terrain = dict(
-            legacy_map_state.get("rough_terrain") if isinstance(legacy_map_state.get("rough_terrain"), dict) else rough_terrain
-        )
-        positions = dict(legacy_map_state.get("positions") if isinstance(legacy_map_state.get("positions"), dict) else positions)
-        canonical_payload = canonical_map_state.to_dict()
-        map_query = MapQueryAPI(canonical_map_state)
+        with timed_span("lan.snapshot.canonical_map", **trace_fields):
+            canonical_map_state = self._capture_canonical_map_state(prefer_window=True).normalized()
+            self._apply_canonical_map_state(canonical_map_state, hydrate_window=False)
+            legacy_map_state = canonical_map_state.to_legacy()
+            cols = int(legacy_map_state.get("cols", cols) or cols)
+            rows = int(legacy_map_state.get("rows", rows) or rows)
+            obstacles = set(legacy_map_state.get("obstacles") if isinstance(legacy_map_state.get("obstacles"), set) else obstacles)
+            rough_terrain = dict(
+                legacy_map_state.get("rough_terrain") if isinstance(legacy_map_state.get("rough_terrain"), dict) else rough_terrain
+            )
+            positions = dict(legacy_map_state.get("positions") if isinstance(legacy_map_state.get("positions"), dict) else positions)
+            canonical_payload = canonical_map_state.to_dict()
+            map_query = MapQueryAPI(canonical_map_state)
 
         def _log_invalid_aoe_value(aid_value: int, name_value: str, kind_value: str, key: str, raw_value: Any) -> None:
             self._oplog(
@@ -20805,102 +20874,103 @@ class InitiativeTracker(base.InitiativeTracker):
                 return None if skip_invalid else default
             return candidate
 
-        try:
-            for aid, d in sorted((aoe_source or {}).items()):
-                kind = str(d.get("kind") or d.get("shape") or "").lower()
-                if kind not in ("circle", "square", "line", "sphere", "cube", "cone", "cylinder", "wall"):
-                    continue
-                aid_int = int(aid)
-                name = str(d.get("name") or f"AoE {aid}")
-                payload: Dict[str, Any] = {
-                    "aid": aid_int,
-                    "kind": kind,
-                    "name": name,
-                    "color": str(d.get("color") or ""),
-                    "cx": _finite_float(d.get("cx") or 0.0, aid_int, name, kind, "cx") or 0.0,
-                    "cy": _finite_float(d.get("cy") or 0.0, aid_int, name, kind, "cy") or 0.0,
-                    "pinned": bool(d.get("pinned")),
-                    "duration_turns": d.get("duration_turns"),
-                    "remaining_turns": d.get("remaining_turns"),
-                }
-                if bool(d.get("fixed_to_caster")) and d.get("anchor_cid") is not None:
-                    try:
-                        anchor_cid = int(d.get("anchor_cid"))
-                        anchor_pos = positions.get(anchor_cid)
-                    except Exception:
-                        anchor_pos = None
-                    if isinstance(anchor_pos, tuple) and len(anchor_pos) == 2:
-                        payload["cx"] = float(anchor_pos[0])
-                        payload["cy"] = float(anchor_pos[1])
-                for extra_key in (
-                    "dc", "save_type", "damage_type", "half_on_pass", "default_damage", "owner",
-                    "owner_cid", "owner_ws_id", "over_time", "move_per_turn_ft", "move_remaining_ft",
-                    "trigger_on_start_or_enter", "persistent", "anchor_cid", "fixed_to_caster", "move_action_type",
-                ):
-                    if d.get(extra_key) not in (None, ""):
-                        payload[extra_key] = d.get(extra_key)
-                if kind in ("circle", "sphere", "cylinder"):
-                    payload["radius_sq"] = _finite_float(d.get("radius_sq") or 0.0, aid_int, name, kind, "radius_sq") or 0.0
-                    if d.get("radius_ft") is not None:
-                        radius_ft = _finite_float(d.get("radius_ft"), aid_int, name, kind, "radius_ft", skip_invalid=True)
-                        if radius_ft is not None: payload["radius_ft"] = radius_ft
-                    if d.get("height_ft") is not None:
-                        height_ft = _finite_float(d.get("height_ft"), aid_int, name, kind, "height_ft", skip_invalid=True)
-                        if height_ft is not None: payload["height_ft"] = height_ft
-                elif kind in ("line", "wall"):
-                    payload["length_sq"] = _finite_float(d.get("length_sq") or 0.0, aid_int, name, kind, "length_sq") or 0.0
-                    payload["width_sq"] = _finite_float(d.get("width_sq") or 0.0, aid_int, name, kind, "width_sq") or 0.0
-                    if d.get("ax") is not None:
-                        ax = _finite_float(d.get("ax"), aid_int, name, kind, "ax", skip_invalid=True)
-                        if ax is not None: payload["ax"] = ax
-                    if d.get("ay") is not None:
-                        ay = _finite_float(d.get("ay"), aid_int, name, kind, "ay", skip_invalid=True)
-                        if ay is not None: payload["ay"] = ay
-                    payload["orient"] = str(d.get("orient") or "vertical")
-                    if d.get("angle_deg") is not None:
-                        angle_deg = _finite_float(d.get("angle_deg"), aid_int, name, kind, "angle_deg", skip_invalid=True)
-                        if angle_deg is not None: payload["angle_deg"] = angle_deg
-                    if d.get("length_ft") is not None:
-                        length_ft = _finite_float(d.get("length_ft"), aid_int, name, kind, "length_ft", skip_invalid=True)
-                        if length_ft is not None: payload["length_ft"] = length_ft
-                    if d.get("width_ft") is not None:
-                        width_ft = _finite_float(d.get("width_ft"), aid_int, name, kind, "width_ft", skip_invalid=True)
-                        if width_ft is not None: payload["width_ft"] = width_ft
-                    if d.get("thickness_ft") is not None:
-                        thickness_ft = _finite_float(d.get("thickness_ft"), aid_int, name, kind, "thickness_ft", skip_invalid=True)
-                        if thickness_ft is not None: payload["thickness_ft"] = thickness_ft
-                    if d.get("height_ft") is not None:
-                        height_ft = _finite_float(d.get("height_ft"), aid_int, name, kind, "height_ft", skip_invalid=True)
-                        if height_ft is not None: payload["height_ft"] = height_ft
-                elif kind == "cone":
-                    payload["length_sq"] = _finite_float(d.get("length_sq") or 0.0, aid_int, name, kind, "length_sq") or 0.0
-                    if d.get("ax") is not None:
-                        ax = _finite_float(d.get("ax"), aid_int, name, kind, "ax", skip_invalid=True)
-                        if ax is not None: payload["ax"] = ax
-                    if d.get("ay") is not None:
-                        ay = _finite_float(d.get("ay"), aid_int, name, kind, "ay", skip_invalid=True)
-                        if ay is not None: payload["ay"] = ay
-                    payload["orient"] = str(d.get("orient") or "vertical")
-                    if d.get("angle_deg") is not None:
-                        angle_deg = _finite_float(d.get("angle_deg"), aid_int, name, kind, "angle_deg", skip_invalid=True)
-                        if angle_deg is not None: payload["angle_deg"] = angle_deg
-                    if d.get("spread_deg") is not None:
-                        spread_deg = _finite_float(d.get("spread_deg"), aid_int, name, kind, "spread_deg", skip_invalid=True)
-                        if spread_deg is not None: payload["spread_deg"] = spread_deg
-                    if d.get("length_ft") is not None:
-                        length_ft = _finite_float(d.get("length_ft"), aid_int, name, kind, "length_ft", skip_invalid=True)
-                        if length_ft is not None: payload["length_ft"] = length_ft
-                else:
-                    payload["side_sq"] = _finite_float(d.get("side_sq") or 0.0, aid_int, name, kind, "side_sq") or 0.0
-                    if d.get("angle_deg") is not None:
-                        angle_deg = _finite_float(d.get("angle_deg"), aid_int, name, kind, "angle_deg", skip_invalid=True)
-                        if angle_deg is not None: payload["angle_deg"] = angle_deg
-                    if d.get("side_ft") is not None:
-                        side_ft = _finite_float(d.get("side_ft"), aid_int, name, kind, "side_ft", skip_invalid=True)
-                        if side_ft is not None: payload["side_ft"] = side_ft
-                aoes.append(payload)
-        except Exception:
-            pass
+        with timed_span("lan.snapshot.aoes", aoe_source_count=len(aoe_source or {}), **trace_fields):
+            try:
+                for aid, d in sorted((aoe_source or {}).items()):
+                    kind = str(d.get("kind") or d.get("shape") or "").lower()
+                    if kind not in ("circle", "square", "line", "sphere", "cube", "cone", "cylinder", "wall"):
+                        continue
+                    aid_int = int(aid)
+                    name = str(d.get("name") or f"AoE {aid}")
+                    payload: Dict[str, Any] = {
+                        "aid": aid_int,
+                        "kind": kind,
+                        "name": name,
+                        "color": str(d.get("color") or ""),
+                        "cx": _finite_float(d.get("cx") or 0.0, aid_int, name, kind, "cx") or 0.0,
+                        "cy": _finite_float(d.get("cy") or 0.0, aid_int, name, kind, "cy") or 0.0,
+                        "pinned": bool(d.get("pinned")),
+                        "duration_turns": d.get("duration_turns"),
+                        "remaining_turns": d.get("remaining_turns"),
+                    }
+                    if bool(d.get("fixed_to_caster")) and d.get("anchor_cid") is not None:
+                        try:
+                            anchor_cid = int(d.get("anchor_cid"))
+                            anchor_pos = positions.get(anchor_cid)
+                        except Exception:
+                            anchor_pos = None
+                        if isinstance(anchor_pos, tuple) and len(anchor_pos) == 2:
+                            payload["cx"] = float(anchor_pos[0])
+                            payload["cy"] = float(anchor_pos[1])
+                    for extra_key in (
+                        "dc", "save_type", "damage_type", "half_on_pass", "default_damage", "owner",
+                        "owner_cid", "owner_ws_id", "over_time", "move_per_turn_ft", "move_remaining_ft",
+                        "trigger_on_start_or_enter", "persistent", "anchor_cid", "fixed_to_caster", "move_action_type",
+                    ):
+                        if d.get(extra_key) not in (None, ""):
+                            payload[extra_key] = d.get(extra_key)
+                    if kind in ("circle", "sphere", "cylinder"):
+                        payload["radius_sq"] = _finite_float(d.get("radius_sq") or 0.0, aid_int, name, kind, "radius_sq") or 0.0
+                        if d.get("radius_ft") is not None:
+                            radius_ft = _finite_float(d.get("radius_ft"), aid_int, name, kind, "radius_ft", skip_invalid=True)
+                            if radius_ft is not None: payload["radius_ft"] = radius_ft
+                        if d.get("height_ft") is not None:
+                            height_ft = _finite_float(d.get("height_ft"), aid_int, name, kind, "height_ft", skip_invalid=True)
+                            if height_ft is not None: payload["height_ft"] = height_ft
+                    elif kind in ("line", "wall"):
+                        payload["length_sq"] = _finite_float(d.get("length_sq") or 0.0, aid_int, name, kind, "length_sq") or 0.0
+                        payload["width_sq"] = _finite_float(d.get("width_sq") or 0.0, aid_int, name, kind, "width_sq") or 0.0
+                        if d.get("ax") is not None:
+                            ax = _finite_float(d.get("ax"), aid_int, name, kind, "ax", skip_invalid=True)
+                            if ax is not None: payload["ax"] = ax
+                        if d.get("ay") is not None:
+                            ay = _finite_float(d.get("ay"), aid_int, name, kind, "ay", skip_invalid=True)
+                            if ay is not None: payload["ay"] = ay
+                        payload["orient"] = str(d.get("orient") or "vertical")
+                        if d.get("angle_deg") is not None:
+                            angle_deg = _finite_float(d.get("angle_deg"), aid_int, name, kind, "angle_deg", skip_invalid=True)
+                            if angle_deg is not None: payload["angle_deg"] = angle_deg
+                        if d.get("length_ft") is not None:
+                            length_ft = _finite_float(d.get("length_ft"), aid_int, name, kind, "length_ft", skip_invalid=True)
+                            if length_ft is not None: payload["length_ft"] = length_ft
+                        if d.get("width_ft") is not None:
+                            width_ft = _finite_float(d.get("width_ft"), aid_int, name, kind, "width_ft", skip_invalid=True)
+                            if width_ft is not None: payload["width_ft"] = width_ft
+                        if d.get("thickness_ft") is not None:
+                            thickness_ft = _finite_float(d.get("thickness_ft"), aid_int, name, kind, "thickness_ft", skip_invalid=True)
+                            if thickness_ft is not None: payload["thickness_ft"] = thickness_ft
+                        if d.get("height_ft") is not None:
+                            height_ft = _finite_float(d.get("height_ft"), aid_int, name, kind, "height_ft", skip_invalid=True)
+                            if height_ft is not None: payload["height_ft"] = height_ft
+                    elif kind == "cone":
+                        payload["length_sq"] = _finite_float(d.get("length_sq") or 0.0, aid_int, name, kind, "length_sq") or 0.0
+                        if d.get("ax") is not None:
+                            ax = _finite_float(d.get("ax"), aid_int, name, kind, "ax", skip_invalid=True)
+                            if ax is not None: payload["ax"] = ax
+                        if d.get("ay") is not None:
+                            ay = _finite_float(d.get("ay"), aid_int, name, kind, "ay", skip_invalid=True)
+                            if ay is not None: payload["ay"] = ay
+                        payload["orient"] = str(d.get("orient") or "vertical")
+                        if d.get("angle_deg") is not None:
+                            angle_deg = _finite_float(d.get("angle_deg"), aid_int, name, kind, "angle_deg", skip_invalid=True)
+                            if angle_deg is not None: payload["angle_deg"] = angle_deg
+                        if d.get("spread_deg") is not None:
+                            spread_deg = _finite_float(d.get("spread_deg"), aid_int, name, kind, "spread_deg", skip_invalid=True)
+                            if spread_deg is not None: payload["spread_deg"] = spread_deg
+                        if d.get("length_ft") is not None:
+                            length_ft = _finite_float(d.get("length_ft"), aid_int, name, kind, "length_ft", skip_invalid=True)
+                            if length_ft is not None: payload["length_ft"] = length_ft
+                    else:
+                        payload["side_sq"] = _finite_float(d.get("side_sq") or 0.0, aid_int, name, kind, "side_sq") or 0.0
+                        if d.get("angle_deg") is not None:
+                            angle_deg = _finite_float(d.get("angle_deg"), aid_int, name, kind, "angle_deg", skip_invalid=True)
+                            if angle_deg is not None: payload["angle_deg"] = angle_deg
+                        if d.get("side_ft") is not None:
+                            side_ft = _finite_float(d.get("side_ft"), aid_int, name, kind, "side_ft", skip_invalid=True)
+                            if side_ft is not None: payload["side_ft"] = side_ft
+                    aoes.append(payload)
+            except Exception:
+                pass
 
         feet_per_square = 5.0
         try:
@@ -20913,32 +20983,35 @@ class InitiativeTracker(base.InitiativeTracker):
         if self.combatants and len(positions) < len(self.combatants):
             positions = self._lan_seed_missing_positions(positions, cols, rows)
 
-        active_auras = self._lan_active_aura_contexts(positions=positions, feet_per_square=feet_per_square)
-        for idx, aura in enumerate(active_auras):
-            if not bool(aura.get("visible", True)):
-                continue
-            source_cid = aura.get("source_cid")
-            source_pos = positions.get(int(source_cid)) if source_cid is not None else None
-            if not (isinstance(source_pos, tuple) and len(source_pos) == 2):
-                continue
-            aoes.append(
-                {
-                    "aid": -1001 - int(idx),
-                    "kind": "circle",
-                    "name": str(aura.get("name") or "Aura"),
-                    "color": str(aura.get("color") or "#fcebc4"),
-                    "cx": float(source_pos[0]) + 0.5,
-                    "cy": float(source_pos[1]) + 0.5,
-                    "radius_sq": float(aura.get("radius_sq") or max(0.1, 10.0 / max(1.0, feet_per_square))),
-                    "radius_ft": float(aura.get("radius_ft") or 10.0),
-                    "owner_cid": int(source_cid),
-                    "persistent": True,
-                    "is_aura": True,
-                    "aura_id": str(aura.get("aura_id") or f"aura_{idx}"),
-                    "light": True,
-                }
-            )
+        with timed_span("lan.snapshot.auras", **trace_fields):
+            active_auras = self._lan_active_aura_contexts(positions=positions, feet_per_square=feet_per_square)
+            for idx, aura in enumerate(active_auras):
+                if not bool(aura.get("visible", True)):
+                    continue
+                source_cid = aura.get("source_cid")
+                source_pos = positions.get(int(source_cid)) if source_cid is not None else None
+                if not (isinstance(source_pos, tuple) and len(source_pos) == 2):
+                    continue
+                aoes.append(
+                    {
+                        "aid": -1001 - int(idx),
+                        "kind": "circle",
+                        "name": str(aura.get("name") or "Aura"),
+                        "color": str(aura.get("color") or "#fcebc4"),
+                        "cx": float(source_pos[0]) + 0.5,
+                        "cy": float(source_pos[1]) + 0.5,
+                        "radius_sq": float(aura.get("radius_sq") or max(0.1, 10.0 / max(1.0, feet_per_square))),
+                        "radius_ft": float(aura.get("radius_ft") or 10.0),
+                        "owner_cid": int(source_cid),
+                        "persistent": True,
+                        "is_aura": True,
+                        "aura_id": str(aura.get("aura_id") or f"aura_{idx}"),
+                        "light": True,
+                    }
+                )
 
+        units_span = timed_span("lan.snapshot.units", **trace_fields)
+        units_span.__enter__()
         units: List[Dict[str, Any]] = []
         for c in sorted(self.combatants.values(), key=lambda x: int(x.cid)):
             role = self._name_role_memory.get(str(c.name), "enemy")
@@ -21061,9 +21134,12 @@ class InitiativeTracker(base.InitiativeTracker):
                     "muddled_thoughts": bool(has_muddled_thoughts),
                 }
             )
+        units_span.__exit__(None, None, None)
         s7 = time.perf_counter()
 
         # ... (rest of method, keeping for brevity) ...
+        tactical_payload_span = timed_span("lan.snapshot.tactical_payload", **trace_fields)
+        tactical_payload_span.__enter__()
         # Active creature
         active = self.current_cid if getattr(self, "current_cid", None) is not None else None
 
@@ -21202,29 +21278,32 @@ class InitiativeTracker(base.InitiativeTracker):
                 structure_entry["ship_state"] = ship_summary
             snap["structures"].append(structure_entry)
         snap["ships"] = ships_payload
+        tactical_payload_span.__exit__(None, None, None)
 
         # Populate static fields if requested or available in cache
         # Use 'or {}' and 'or []' to handle cases where cached values might be None
-        if include_static:
-            static_component, cache_hit, invalidation_reason = self._lan_static_snapshot_component()
-            snap.update(static_component)
-            self.__dict__["_lan_static_snapshot_last_cache_info"] = {
-                "snapshot_cache_hit": bool(cache_hit),
-                "snapshot_cache_scope": "static",
-                "snapshot_cache_invalidation_reason": str(invalidation_reason or ""),
-                "static_version": int(self.__dict__.get("_lan_static_snapshot_version", 0) or 0),
-            }
-        elif hydrate_static:
-            cached = (self._lan._cached_snapshot if hasattr(self, "_lan") else {}) or {}
-            snap["spell_presets"] = cached.get("spell_presets") or []
-            snap["player_spells"] = cached.get("player_spells") or {}
-            snap["player_profiles"] = cached.get("player_profiles") or {}
-            snap["beast_forms"] = cached.get("beast_forms") or []
-        else:
-            snap["spell_presets"] = []
-            snap["player_spells"] = {}
-            snap["player_profiles"] = {}
-            snap["beast_forms"] = []
+        static_mode = "include_static" if include_static else ("hydrate_cached" if hydrate_static else "none")
+        with timed_span("lan.snapshot.static_fields", static_mode=static_mode, **trace_fields):
+            if include_static:
+                static_component, cache_hit, invalidation_reason = self._lan_static_snapshot_component()
+                snap.update(static_component)
+                self.__dict__["_lan_static_snapshot_last_cache_info"] = {
+                    "snapshot_cache_hit": bool(cache_hit),
+                    "snapshot_cache_scope": "static",
+                    "snapshot_cache_invalidation_reason": str(invalidation_reason or ""),
+                    "static_version": int(self.__dict__.get("_lan_static_snapshot_version", 0) or 0),
+                }
+            elif hydrate_static:
+                cached = (self._lan._cached_snapshot if hasattr(self, "_lan") else {}) or {}
+                snap["spell_presets"] = cached.get("spell_presets") or []
+                snap["player_spells"] = cached.get("player_spells") or {}
+                snap["player_profiles"] = cached.get("player_profiles") or {}
+                snap["beast_forms"] = cached.get("beast_forms") or []
+            else:
+                snap["spell_presets"] = []
+                snap["player_spells"] = {}
+                snap["player_profiles"] = {}
+                snap["beast_forms"] = []
 
         # Resource pools are slightly more dynamic and throttled to 1.0s
         resource_pools = {}
@@ -21238,19 +21317,21 @@ class InitiativeTracker(base.InitiativeTracker):
         last_domains = getattr(self, "_last_invalidation_domains", None)
         force_rebuild = include_static or (isinstance(last_domains, (list, set)) and "resource_pools" in last_domains)
 
-        if force_rebuild or (now - last_build) >= 1.0:
-            try:
-                resource_pools = self._player_resource_pools_payload()
-                self._lan_resource_pools_last_build = now
-            except Exception:
-                # Fallback to cache if build fails
+        resource_pool_mode = "rebuild" if force_rebuild or (now - last_build) >= 1.0 else "cached"
+        with timed_span("lan.snapshot.resource_pools", resource_pool_mode=resource_pool_mode, **trace_fields):
+            if force_rebuild or (now - last_build) >= 1.0:
+                try:
+                    resource_pools = self._player_resource_pools_payload()
+                    self._lan_resource_pools_last_build = now
+                except Exception:
+                    # Fallback to cache if build fails
+                    cached = (self._lan._cached_snapshot if hasattr(self, "_lan") else {}) or {}
+                    resource_pools = cached.get("resource_pools") or {}
+            else:
+                # Within throttle window and not forced: use cached value from last snapshot.
+                # This prevents stripping resource_pools from dynamic broadcasts.
                 cached = (self._lan._cached_snapshot if hasattr(self, "_lan") else {}) or {}
                 resource_pools = cached.get("resource_pools") or {}
-        else:
-            # Within throttle window and not forced: use cached value from last snapshot.
-            # This prevents stripping resource_pools from dynamic broadcasts.
-            cached = (self._lan._cached_snapshot if hasattr(self, "_lan") else {}) or {}
-            resource_pools = cached.get("resource_pools") or {}
 
         snap["resource_pools"] = resource_pools
 
@@ -21345,6 +21426,10 @@ class InitiativeTracker(base.InitiativeTracker):
             websocket_client_count = len(getattr(lan, "_clients", {}) or {})
         except Exception:
             websocket_client_count = 0
+        try:
+            dm_websocket_client_count = len(getattr(lan, "_dm_ws_clients", {}) or {})
+        except Exception:
+            dm_websocket_client_count = 0
         pending_prompts = self.__dict__.get("_pending_prompts")
         pending_reactions = self.__dict__.get("_pending_reaction_offers")
         return {
@@ -21352,8 +21437,11 @@ class InitiativeTracker(base.InitiativeTracker):
             "player_count": player_count,
             "monster_count": monster_count,
             "map_aoe_count": len(self.__dict__.get("_lan_aoes", {}) or {}),
-            "pending_reaction_count": len(pending_prompts or pending_reactions or {}),
+            "pending_prompt_count": len(pending_prompts or {}),
+            "pending_reaction_count": len(pending_reactions or {}),
             "websocket_client_count": websocket_client_count,
+            "dm_websocket_client_count": dm_websocket_client_count,
+            "total_websocket_client_count": websocket_client_count + dm_websocket_client_count,
         }
 
     @trace_timed("_lan_force_state_broadcast")
@@ -21431,6 +21519,7 @@ class InitiativeTracker(base.InitiativeTracker):
                 snap = self._lan_snapshot(
                     include_static=include_static_flag,
                     hydrate_static=False,
+                    scope="lan_force_state_broadcast",
                 )
             if not include_static_flag:
                 snap, cache_hit = self._lan_merge_cached_static_snapshot(snap)
@@ -21507,6 +21596,7 @@ class InitiativeTracker(base.InitiativeTracker):
                     dm_snap = self._lan._dm_console_snapshot_payload(
                         tactical_snapshot=tactical_snapshot,
                         include_tactical=include_tact,
+                        scope="dm_broadcast_snapshot",
                     )
                 # Stash for any route handler that returns a DM snapshot in
                 # the same request: avoids a second _dm_console_snapshot()
@@ -46870,11 +46960,18 @@ class InitiativeTracker(base.InitiativeTracker):
         return snapshot
 
     @trace_timed("_dm_tactical_snapshot")
-    def _dm_tactical_snapshot(self) -> Dict[str, Any]:
+    def _dm_tactical_snapshot(self, *, scope: Optional[str] = None) -> Dict[str, Any]:
         perf_debug = os.getenv("LAN_PERF_DEBUG") == "1"
         perf_start = time.perf_counter() if perf_debug else 0.0
-        raw = self._lan_snapshot(include_static=False, hydrate_static=False)
-        tactical = self._dm_tactical_snapshot_from_lan_snapshot(raw)
+        trace_scope = str(scope or "dm_tactical_snapshot").strip().lower().replace("-", "_")[:80]
+        raw = self._lan_snapshot(include_static=False, hydrate_static=False, scope=trace_scope)
+        with timed_span(
+            "dm.tactical.from_lan_snapshot",
+            scope=trace_scope,
+            snapshot_caller=trace_scope,
+            counts=self._debug_trace_counts() if debug_trace_enabled() else {},
+        ):
+            tactical = self._dm_tactical_snapshot_from_lan_snapshot(raw)
         if perf_debug:
             elapsed_ms = (time.perf_counter() - perf_start) * 1000.0
             unit_count = len(tactical.get("units")) if isinstance(tactical.get("units"), list) else 0
@@ -50487,7 +50584,7 @@ class InitiativeTracker(base.InitiativeTracker):
         return store
 
     def _dm_aoe_snapshot_entry(self, aid: int) -> Optional[Dict[str, Any]]:
-        tactical = self._dm_tactical_snapshot()
+        tactical = self._dm_tactical_snapshot(scope="dm_aoe_snapshot_entry")
         for entry in tactical.get("aoes") if isinstance(tactical.get("aoes"), list) else []:
             if not isinstance(entry, dict):
                 continue
