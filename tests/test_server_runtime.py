@@ -682,6 +682,81 @@ class ServerRuntimeFacadeTests(unittest.TestCase):
         self.assertEqual(calls, ["build"])
         self.assertEqual(tracker._lan_resource_pools_last_build, 100.0)
 
+    def test_player_resource_pools_payload_reuses_base_and_refreshes_temporary_pools(self):
+        from dnd_initative_tracker import InitiativeTracker
+
+        tracker = object.__new__(InitiativeTracker)
+        profile = {"name": "Alice", "resources": {"pools": []}}
+        tracker._player_yaml_data_by_name = {"Alice": profile}
+        tracker._lan_resource_pools_base_cache = {}
+        tracker._load_player_yaml_cache = lambda force_refresh=False: None
+        registry_signature = {"value": ("items-v1", "magic-v1", "consumables-v1")}
+        tracker._lan_resource_pools_base_registry_signature = lambda: registry_signature["value"]
+        normalize_calls = []
+
+        def normalize(data):
+            normalize_calls.append(data)
+            return [{"id": "focus_points", "label": "Focus Points", "current": 2, "max": 2}]
+
+        temp_counter = {"value": 0}
+
+        def augment(payload):
+            temp_counter["value"] += 1
+            payload["Alice"].append(
+                {
+                    "id": f"temp_bardic_dice_{temp_counter['value']}",
+                    "label": "Bardic Dice",
+                    "current": 1,
+                    "max": 1,
+                    "temporary": True,
+                    "time_left_s": 30.0 - temp_counter["value"],
+                }
+            )
+
+        tracker._normalize_player_resource_pools = normalize
+        tracker._augment_resource_pools_with_temporary_conditions = augment
+
+        first = tracker._player_resource_pools_payload()
+        second = tracker._player_resource_pools_payload()
+
+        self.assertEqual(normalize_calls, [profile])
+        self.assertEqual(first["Alice"][0], {"id": "focus_points", "label": "Focus Points", "current": 2, "max": 2})
+        self.assertEqual(second["Alice"][0], {"id": "focus_points", "label": "Focus Points", "current": 2, "max": 2})
+        self.assertEqual([entry["id"] for entry in first["Alice"]], ["focus_points", "temp_bardic_dice_1"])
+        self.assertEqual([entry["id"] for entry in second["Alice"]], ["focus_points", "temp_bardic_dice_2"])
+        self.assertEqual(tracker._lan_resource_pools_base_cache_result, "base_cache_all_hit")
+
+        registry_signature["value"] = ("items-v2", "magic-v1", "consumables-v1")
+        third = tracker._player_resource_pools_payload()
+
+        self.assertEqual(normalize_calls, [profile, profile])
+        self.assertEqual([entry["id"] for entry in third["Alice"]], ["focus_points", "temp_bardic_dice_3"])
+        self.assertEqual(tracker._lan_resource_pools_base_cache_result, "base_cache_miss")
+
+    def test_lan_resource_pools_ttl_rebuild_reports_base_cache_submode(self):
+        tracker, calls = self._resource_pool_cache_tracker(
+            cached_payload=None,
+            fresh_payload={"Alice": [{"id": "focus_points", "current": 2, "max": 2}]},
+        )
+
+        def fresh_payload():
+            calls.append("build")
+            tracker._lan_resource_pools_base_cache_result = "base_cache_all_hit"
+            return {"Alice": [{"id": "focus_points", "current": 2, "max": 2}]}
+
+        tracker._player_resource_pools_payload = fresh_payload
+
+        payload, result = tracker._lan_resource_pools_payload_for_snapshot(
+            include_static=False,
+            last_domains=set(),
+            now=101.25,
+        )
+
+        self.assertEqual(payload, {"Alice": [{"id": "focus_points", "current": 2, "max": 2}]})
+        self.assertEqual(result, "ttl_rebuild_base_cache_all_hit")
+        self.assertEqual(calls, ["build"])
+        self.assertEqual(tracker._lan_resource_pools_last_build, 101.25)
+
     def test_read_snapshot_static_hydration_request_fails_closed(self):
         app = self._SnapshotApp()
         facade = ServerRuntimeFacade(

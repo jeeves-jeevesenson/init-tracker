@@ -10104,6 +10104,7 @@ class InitiativeTracker(base.InitiativeTracker):
         self._player_yaml_cache_hold_depth = 0
         self._lan_resource_pools_last_build = 0.0
         self._lan_resource_pools_payload_cache: Optional[Dict[str, List[Dict[str, Any]]]] = None
+        self._lan_resource_pools_base_cache: Dict[str, Tuple[Tuple[Any, ...], List[Dict[str, Any]]]] = {}
         self._lan_static_snapshot_version = 0
         self._lan_static_snapshot_cache_version = -1
         self._lan_static_snapshot_cache: Optional[Dict[str, Any]] = None
@@ -10489,6 +10490,7 @@ class InitiativeTracker(base.InitiativeTracker):
         self._player_yaml_dir_signature = None
         self._player_yaml_last_refresh = 0.0
         self._lan_resource_pools_payload_cache = None
+        self._lan_resource_pools_base_cache = {}
         self._lan_resource_pools_last_build = 0.0
         if rebuild:
             self._load_player_yaml_cache(force_refresh=True)
@@ -21374,6 +21376,30 @@ class InitiativeTracker(base.InitiativeTracker):
         if isinstance(payload, dict):
             self.__dict__["_lan_resource_pools_payload_cache"] = payload
 
+    def _clear_lan_resource_pools_base_cache(self) -> None:
+        self.__dict__["_lan_resource_pools_base_cache"] = {}
+        self.__dict__.pop("_lan_resource_pools_base_cache_result", None)
+
+    def _lan_resource_pools_base_registry_signature(self) -> Tuple[Any, Any, Any]:
+        self._items_registry_payload()
+        self._magic_items_registry_payload()
+        self._consumables_registry_payload()
+        return (
+            self.__dict__.get("_items_dir_signature"),
+            self.__dict__.get("_magic_items_dir_signature"),
+            self.__dict__.get("_consumables_dir_signature"),
+        )
+
+    @staticmethod
+    def _format_lan_resource_pools_base_cache_result(reused_count: int, rebuilt_count: int) -> str:
+        if reused_count <= 0 and rebuilt_count <= 0:
+            return "base_cache_empty"
+        if rebuilt_count <= 0:
+            return "base_cache_all_hit"
+        if reused_count > 0:
+            return "base_cache_mixed"
+        return "base_cache_miss"
+
     def _lan_resource_pools_payload_for_snapshot(
         self,
         *,
@@ -21390,10 +21416,16 @@ class InitiativeTracker(base.InitiativeTracker):
         )
         if force_rebuild or (float(now) - float(last_build)) >= 1.0:
             result = "force_rebuild" if force_rebuild else "ttl_rebuild"
+            if force_rebuild:
+                self._clear_lan_resource_pools_base_cache()
             try:
                 resource_pools = self._player_resource_pools_payload()
                 self._lan_resource_pools_last_build = float(now)
                 self._store_lan_resource_pools_payload(resource_pools)
+                if result == "ttl_rebuild":
+                    base_result = self.__dict__.get("_lan_resource_pools_base_cache_result")
+                    if isinstance(base_result, str) and base_result:
+                        result = f"{result}_{base_result}"
                 return resource_pools, result
             except Exception:
                 cached, source = self._lan_cached_resource_pools_payload()
@@ -25785,6 +25817,7 @@ class InitiativeTracker(base.InitiativeTracker):
         if not hasattr(self, "_last_invalidation_domains") or not isinstance(self._last_invalidation_domains, set):
             self._last_invalidation_domains = set()
         self._last_invalidation_domains.update(invalidation_domains)
+        self._clear_lan_resource_pools_base_cache()
 
         static_domains = {"static_capabilities", "profile_structure", "static_catalogs"}
         requires_static = any(d in static_domains for d in invalidation_domains)
@@ -26213,6 +26246,7 @@ class InitiativeTracker(base.InitiativeTracker):
             domains = ["dynamic_player_values"]
         else:
             domains = list(invalidation_domains)
+        self._clear_lan_resource_pools_base_cache()
 
         # Deepcopy once to safely share between in-memory cache and background writer
         payload_copy = copy.deepcopy(payload)
@@ -26253,6 +26287,7 @@ class InitiativeTracker(base.InitiativeTracker):
             return
 
         names_to_refresh = []
+        self._clear_lan_resource_pools_base_cache()
 
         with _PlayerYamlCacheHold(self):
             for m in mutations:
@@ -29605,11 +29640,41 @@ class InitiativeTracker(base.InitiativeTracker):
     def _player_resource_pools_payload(self) -> Dict[str, List[Dict[str, Any]]]:
         self._load_player_yaml_cache()
         payload: Dict[str, List[Dict[str, Any]]] = {}
-        for name, data in self._player_yaml_data_by_name.items():
+        profiles_by_name = self._player_yaml_data_by_name if isinstance(self._player_yaml_data_by_name, dict) else {}
+        base_cache = self.__dict__.get("_lan_resource_pools_base_cache")
+        if not isinstance(base_cache, dict):
+            base_cache = {}
+        next_base_cache: Dict[str, Tuple[Tuple[Any, ...], List[Dict[str, Any]]]] = {}
+        registry_signature: Optional[Tuple[Any, ...]] = None
+        if profiles_by_name:
+            registry_signature = self._lan_resource_pools_base_registry_signature()
+        reused_count = 0
+        rebuilt_count = 0
+        for name, data in profiles_by_name.items():
             if not isinstance(data, dict):
                 continue
-            payload[name] = self._normalize_player_resource_pools(data)
+            cache_key: Tuple[Any, ...] = (id(data), registry_signature)
+            cached_entry = base_cache.get(name)
+            if (
+                isinstance(cached_entry, tuple)
+                and len(cached_entry) == 2
+                and cached_entry[0] == cache_key
+                and isinstance(cached_entry[1], list)
+            ):
+                payload[name] = copy.deepcopy(cached_entry[1])
+                next_base_cache[name] = cached_entry
+                reused_count += 1
+                continue
+            normalized = self._normalize_player_resource_pools(data)
+            next_base_cache[name] = (cache_key, copy.deepcopy(normalized))
+            payload[name] = normalized
+            rebuilt_count += 1
         self._augment_resource_pools_with_temporary_conditions(payload)
+        self.__dict__["_lan_resource_pools_base_cache"] = next_base_cache
+        self.__dict__["_lan_resource_pools_base_cache_result"] = self._format_lan_resource_pools_base_cache_result(
+            reused_count,
+            rebuilt_count,
+        )
         return payload
 
     def _bardic_inspiration_die_sides(self, profile: Dict[str, Any]) -> int:
