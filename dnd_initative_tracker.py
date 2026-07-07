@@ -4202,11 +4202,36 @@ class LanController:
                         "_trace_context": "dm_console_route_tactical" if include_tactical else "dm_console_route",
                     },
                 )
-                result = await _dm_combat_read_snapshot_in_threadpool(self._runtime, snap_req)
+                route_trace_fields = self._dm_console_trace_fields(
+                    scope=snap_req.params.get("_trace_context"),
+                    include_tactical=include_tactical,
+                )
+                route_trace_fields.update(
+                    {
+                        "route": "/api/dm/combat",
+                        "method": "GET",
+                        "read_in_threadpool": True,
+                        "serialized_tactical_read": bool(include_tactical),
+                    }
+                )
+                with timed_span("dm.console.route_read_snapshot", **route_trace_fields):
+                    result = await _dm_combat_read_snapshot_in_threadpool(self._runtime, snap_req)
                 if not result.success:
                     if result.error and result.error.get("code") == "runtime_not_ready":
                         raise HTTPException(status_code=503, detail="Service Unavailable")
                     raise HTTPException(status_code=500, detail="Failed to read combat snapshot.")
+                if debug_trace_enabled() and isinstance(result.data, dict):
+                    try:
+                        with timed_span("dm.console.route_payload_proxy", **route_trace_fields):
+                            payload_sizes = self._dm_console_payload_size_proxy(result.data)
+                            debug_event(
+                                "snapshot.payload_proxy",
+                                span="dm.console.route_payload_proxy",
+                                sizes=payload_sizes,
+                                **route_trace_fields,
+                            )
+                    except Exception:
+                        pass
                 return result.data
             except HTTPException:
                 raise
@@ -8471,6 +8496,68 @@ class LanController:
                 command=payload_type,
             )
 
+    def _dm_console_trace_fields(
+        self,
+        *,
+        scope: Optional[str],
+        include_tactical: bool,
+        default_scope: str = "dm_console_snapshot",
+    ) -> Dict[str, Any]:
+        if not debug_trace_enabled():
+            return {}
+        trace_scope = str(scope or default_scope).strip().lower().replace("-", "_")[:80] or default_scope
+        counts: Dict[str, int] = {}
+        tracker = getattr(self, "_tracker", None) or getattr(self, "app", None)
+        count_builder = getattr(tracker, "_debug_trace_counts", None)
+        if callable(count_builder):
+            try:
+                candidate = count_builder()
+                if isinstance(candidate, dict):
+                    counts = candidate
+            except Exception:
+                counts = {}
+        return {
+            "scope": trace_scope,
+            "snapshot_caller": trace_scope,
+            "include_tactical": bool(include_tactical),
+            "counts": counts,
+        }
+
+    @staticmethod
+    def _dm_console_payload_size_proxy(snapshot: Dict[str, Any]) -> Dict[str, int]:
+        if not isinstance(snapshot, dict):
+            return {}
+
+        def _collection_len(value: Any) -> int:
+            if isinstance(value, (dict, list, tuple, set)):
+                return len(value)
+            return 0
+
+        tactical = snapshot.get("tactical_map")
+        tactical_payload = tactical if isinstance(tactical, dict) else {}
+        grid = tactical_payload.get("grid")
+        grid_payload = grid if isinstance(grid, dict) else {}
+        grid_cells = 0
+        try:
+            cols = int(grid_payload.get("cols", 0) or 0)
+            rows = int(grid_payload.get("rows", 0) or 0)
+            if cols > 0 and rows > 0:
+                grid_cells = cols * rows
+        except Exception:
+            grid_cells = 0
+
+        return {
+            "payload_top_level_key_count": len(snapshot),
+            "payload_combatant_count": _collection_len(snapshot.get("combatants")),
+            "payload_turn_order_count": _collection_len(snapshot.get("turn_order")),
+            "payload_battle_log_count": _collection_len(snapshot.get("battle_log")),
+            "payload_pending_prompt_count": _collection_len(snapshot.get("pending_prompts")),
+            "payload_tactical_key_count": len(tactical_payload),
+            "payload_tactical_unit_count": _collection_len(tactical_payload.get("units")),
+            "payload_tactical_aoe_count": _collection_len(tactical_payload.get("aoes")),
+            "payload_tactical_grid_cell_count": grid_cells,
+        }
+
     @trace_timed("_dm_console_snapshot")
     def _dm_console_snapshot(
         self,
@@ -8488,39 +8575,42 @@ class LanController:
         if include_tactical is None:
             include_tactical = tactical_map_enabled() or _current_request_wants_tactical_map()
         include_tactical_flag = bool(include_tactical)
+        trace_fields = self._dm_console_trace_fields(scope=scope, include_tactical=include_tactical_flag)
 
         if combat_snapshot is None and tactical_snapshot is None:
-            cached = getattr(self, "_cached_dm_snapshot", None)
-            cached_at = getattr(self, "_cached_dm_snapshot_at", 0.0)
-            cached_include_tactical = getattr(self, "_cached_dm_snapshot_include_tactical", None)
-            if isinstance(cached, dict) and cached_at:
-                age = time.perf_counter() - cached_at
-                if (
-                    age < 0.25
-                    and isinstance(cached_include_tactical, bool)
-                    and cached_include_tactical == include_tactical_flag
-                ):
+            with timed_span("dm.console.snapshot.cache_check", **trace_fields):
+                cached = getattr(self, "_cached_dm_snapshot", None)
+                cached_at = getattr(self, "_cached_dm_snapshot_at", 0.0)
+                cached_include_tactical = getattr(self, "_cached_dm_snapshot_include_tactical", None)
+                if isinstance(cached, dict) and cached_at:
+                    age = time.perf_counter() - cached_at
+                    if (
+                        age < 0.25
+                        and isinstance(cached_include_tactical, bool)
+                        and cached_include_tactical == include_tactical_flag
+                    ):
+                        try:
+                            self._cached_dm_snapshot = None
+                            self._cached_dm_snapshot_at = 0.0
+                            self._cached_dm_snapshot_include_tactical = None
+                        except Exception:
+                            pass
+                        if debug_trace_enabled():
+                            cache_event_fields = dict(trace_fields)
+                            cache_event_fields.update(
+                                {
+                                    "span": "_dm_console_snapshot",
+                                    "snapshot_cache_hit": True,
+                                }
+                            )
+                            debug_event("snapshot.cache_hit", **cache_event_fields)
+                        return cached
                     try:
                         self._cached_dm_snapshot = None
                         self._cached_dm_snapshot_at = 0.0
                         self._cached_dm_snapshot_include_tactical = None
                     except Exception:
                         pass
-                    if debug_trace_enabled():
-                        debug_event(
-                            "snapshot.cache_hit",
-                            span="_dm_console_snapshot",
-                            scope=scope,
-                            include_tactical=include_tactical_flag,
-                            snapshot_cache_hit=True,
-                        )
-                    return cached
-                try:
-                    self._cached_dm_snapshot = None
-                    self._cached_dm_snapshot_at = 0.0
-                    self._cached_dm_snapshot_include_tactical = None
-                except Exception:
-                    pass
 
         payload_kwargs: Dict[str, Any] = {
             "combat_snapshot": combat_snapshot,
@@ -8529,7 +8619,8 @@ class LanController:
         }
         if scope:
             payload_kwargs["scope"] = scope
-        return self._dm_console_snapshot_payload(**payload_kwargs)
+        with timed_span("dm.console.snapshot.payload", source="builder", **trace_fields):
+            return self._dm_console_snapshot_payload(**payload_kwargs)
 
     @trace_timed("_dm_console_snapshot_payload")
     def _dm_console_snapshot_payload(
@@ -8547,18 +8638,11 @@ class LanController:
         combat_source = "provided" if isinstance(combat_snapshot, dict) else "service"
         tactical_source = "provided" if isinstance(tactical_snapshot, dict) else "tracker"
         include_tactical_flag = tactical_map_enabled() if include_tactical is None else bool(include_tactical)
-        trace_fields: Dict[str, Any] = {}
-        if debug_trace_enabled():
-            trace_scope = str(scope or "dm_console_snapshot").strip().lower().replace("-", "_")[:80]
-            trace_fields = {
-                "scope": trace_scope,
-                "snapshot_caller": trace_scope,
-                "include_tactical": include_tactical_flag,
-                "counts": self._tracker._debug_trace_counts(),
-            }
+        trace_fields = self._dm_console_trace_fields(scope=scope, include_tactical=include_tactical_flag)
         snapshot: Dict[str, Any] = {}
         if isinstance(combat_snapshot, dict):
-            snapshot = dict(combat_snapshot)
+            with timed_span("dm.console.combat_snapshot.provided_copy", source=combat_source, **trace_fields):
+                snapshot = dict(combat_snapshot)
         else:
             dm_service = getattr(self, "_dm_service", None)
             if dm_service is None:
@@ -8567,9 +8651,11 @@ class LanController:
                 combat_started_at = time.perf_counter() if perf_debug else 0.0
                 with timed_span("dm.console.combat_snapshot", source=combat_source, **trace_fields):
                     try:
-                        candidate = dm_service.combat_snapshot()
+                        with timed_span("dm.console.combat_snapshot.service_call", source=combat_source, **trace_fields):
+                            candidate = dm_service.combat_snapshot()
                         if isinstance(candidate, dict):
-                            snapshot = dict(candidate)
+                            with timed_span("dm.console.combat_snapshot.copy", source=combat_source, **trace_fields):
+                                snapshot = dict(candidate)
                     except Exception:
                         snapshot = {}
                     finally:
@@ -8578,7 +8664,8 @@ class LanController:
         tactical_payload: Dict[str, Any] = {}
         tactical_started_at = time.perf_counter() if perf_debug else 0.0
         if isinstance(tactical_snapshot, dict):
-            tactical_payload = dict(tactical_snapshot)
+            with timed_span("dm.console.tactical_snapshot.provided_copy", source=tactical_source, **trace_fields):
+                tactical_payload = dict(tactical_snapshot)
         elif include_tactical_flag:
             with timed_span("dm.console.tactical_snapshot", source=tactical_source, **trace_fields):
                 try:
@@ -8593,10 +8680,11 @@ class LanController:
             tactical_source = "disabled"
         if tactical_started_at > 0.0:
             tactical_snapshot_ms = (time.perf_counter() - tactical_started_at) * 1000.0
-        if include_tactical_flag or isinstance(tactical_snapshot, dict):
-            snapshot["tactical_map"] = tactical_payload
-        else:
-            snapshot.pop("tactical_map", None)
+        with timed_span("dm.console.payload.tactical_merge", source=tactical_source, **trace_fields):
+            if include_tactical_flag or isinstance(tactical_snapshot, dict):
+                snapshot["tactical_map"] = tactical_payload
+            else:
+                snapshot.pop("tactical_map", None)
         if perf_start > 0.0:
             elapsed_ms = (time.perf_counter() - perf_start) * 1000.0
             combatant_count = len(snapshot.get("combatants")) if isinstance(snapshot.get("combatants"), list) else 0
@@ -8616,7 +8704,21 @@ class LanController:
                 pass
 
         # Merge pending prompts for DM visibility
-        snapshot["pending_prompts"] = self._tracker._json_safe(list(self._ensure_player_commands().prompts.all_prompts().values()))
+        with timed_span("dm.console.payload.pending_prompts", **trace_fields):
+            snapshot["pending_prompts"] = self._tracker._json_safe(list(self._ensure_player_commands().prompts.all_prompts().values()))
+
+        if debug_trace_enabled():
+            try:
+                with timed_span("dm.console.payload.size_proxy", **trace_fields):
+                    payload_sizes = self._dm_console_payload_size_proxy(snapshot)
+                    debug_event(
+                        "snapshot.payload_proxy",
+                        span="dm.console.payload.size_proxy",
+                        sizes=payload_sizes,
+                        **trace_fields,
+                    )
+            except Exception:
+                pass
 
         return snapshot
 
