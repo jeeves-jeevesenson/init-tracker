@@ -76,6 +76,10 @@ class ServerRuntimeFacadeTests(unittest.TestCase):
                 payload["tactical_map"] = {"grid": {"cols": 10, "rows": 10}}
             return payload
 
+    class _CombatSnapshotCombatant:
+        def __init__(self, **attrs):
+            self.__dict__.update(attrs)
+
     def assertSnapshotFailure(self, result, code):
         self.assertFalse(result.success)
         self.assertEqual(result.status, STATUS_FAILED)
@@ -160,6 +164,261 @@ class ServerRuntimeFacadeTests(unittest.TestCase):
                 raise HTTPException(status_code=500, detail="Failed to read combat snapshot.")
 
         return TestClient(app), route_thread_ids
+
+    def _combat_snapshot_tracker(self):
+        tracker = type("CombatSnapshotTracker", (), {})()
+
+        def combatant(**overrides):
+            defaults = {
+                "cid": 0,
+                "name": "",
+                "hp": 1,
+                "max_hp": 1,
+                "temp_hp": 0,
+                "ac": 10,
+                "initiative": 0,
+                "speed": 30,
+                "swim_speed": 0,
+                "fly_speed": 0,
+                "burrow_speed": 0,
+                "climb_speed": 0,
+                "is_pc": False,
+                "ally": False,
+                "concentrating": False,
+                "concentration_spell": "",
+                "is_hidden": False,
+                "is_wild_shaped": False,
+                "wild_shape_form_name": "",
+                "wild_shape_form": "",
+                "summoned_by_cid": None,
+                "summon_source_spell": "",
+                "mounted_by_cid": None,
+                "is_mount": False,
+                "condition_stacks": [],
+                "monster_slug": "",
+            }
+            defaults.update(overrides)
+            return self._CombatSnapshotCombatant(**defaults)
+
+        tracker.combatants = {
+            1: combatant(
+                cid=1,
+                name="Dorian",
+                hp=22,
+                max_hp=30,
+                ac=14,
+                initiative=12,
+                is_pc=True,
+                concentrating=True,
+                concentration_spell="bless",
+            ),
+            2: combatant(
+                cid=2,
+                name="Guard",
+                hp=11,
+                max_hp=11,
+                ac=15,
+                initiative=18,
+                is_hidden=True,
+                condition_stacks=[
+                    self._CombatSnapshotCombatant(ctype="poisoned", remaining_turns=2)
+                ],
+                monster_slug="guard",
+            ),
+        }
+        tracker.current_cid = 1
+        tracker.round_num = 4
+        tracker.turn_num = 9
+        tracker.in_combat = True
+        tracker.passive_values = {1: 16, 2: 11}
+        tracker.ac_modifiers = {1: 1, 2: 2}
+        tracker.defenses_by_cid = {
+            1: {
+                "damage_resistances": {"radiant"},
+                "damage_immunities": set(),
+                "damage_vulnerabilities": set(),
+                "condition_immunities": set(),
+            },
+            2: {
+                "damage_resistances": {"fire"},
+                "damage_immunities": {"poison"},
+                "damage_vulnerabilities": {"cold"},
+                "condition_immunities": {"frightened"},
+            },
+        }
+        tracker._monster_resource_state = {
+            "2:ammo:rifle:current": 3,
+            "2:uses:smoke:current": 1,
+            "20:ammo:other:current": 99,
+        }
+        tracker.display_order_calls = 0
+        tracker.passive_calls = []
+        tracker.defense_calls = []
+        tracker.ac_calls = []
+        tracker.peek_calls = []
+        tracker.battle_log_limits = []
+
+        def _display_order():
+            tracker.display_order_calls += 1
+            return [tracker.combatants[2], tracker.combatants[1]]
+
+        def _observer_passive_perception(combatant):
+            tracker.passive_calls.append(int(combatant.cid))
+            return tracker.passive_values[int(combatant.cid)]
+
+        def _combatant_defense_sets(combatant):
+            tracker.defense_calls.append(int(combatant.cid))
+            return tracker.defenses_by_cid[int(combatant.cid)]
+
+        def _combatant_ac_modifier(combatant):
+            tracker.ac_calls.append(int(combatant.cid))
+            return tracker.ac_modifiers[int(combatant.cid)]
+
+        def _peek_next_turn_cid(current_cid):
+            tracker.peek_calls.append(current_cid)
+            return 2
+
+        def _lan_battle_log_lines(limit=200):
+            tracker.battle_log_limits.append(limit)
+            return ["Guard waits.", "Dorian acts."]
+
+        tracker._display_order = _display_order
+        tracker._observer_passive_perception = _observer_passive_perception
+        tracker._combatant_defense_sets = _combatant_defense_sets
+        tracker._combatant_ac_modifier = _combatant_ac_modifier
+        tracker._peek_next_turn_cid = _peek_next_turn_cid
+        tracker._lan_battle_log_lines = _lan_battle_log_lines
+        return tracker
+
+    def test_combat_snapshot_payload_shape_and_order_stable_with_composition_context(self):
+        from combat_service import CombatService
+
+        tracker = self._combat_snapshot_tracker()
+        snapshot = CombatService(tracker).combat_snapshot()
+
+        self.assertEqual(
+            list(snapshot.keys()),
+            [
+                "in_combat",
+                "round",
+                "turn",
+                "active_cid",
+                "up_next_cid",
+                "up_next_name",
+                "turn_order",
+                "combatants",
+                "battle_log",
+            ],
+        )
+        self.assertEqual(snapshot["turn_order"], [2, 1])
+        self.assertEqual([row["cid"] for row in snapshot["combatants"]], [2, 1])
+        self.assertEqual(snapshot["up_next_cid"], 2)
+        self.assertEqual(snapshot["up_next_name"], "Guard")
+        self.assertEqual(snapshot["battle_log"], ["Guard waits.", "Dorian acts."])
+        self.assertEqual(tracker.battle_log_limits, [30])
+
+        first_row = snapshot["combatants"][0]
+        self.assertEqual(
+            list(first_row.keys()),
+            [
+                "cid",
+                "name",
+                "hp",
+                "max_hp",
+                "temp_hp",
+                "ac",
+                "initiative",
+                "speed",
+                "swim_speed",
+                "fly_speed",
+                "burrow_speed",
+                "climb_speed",
+                "passive_perception",
+                "damage_vulnerabilities",
+                "damage_resistances",
+                "damage_immunities",
+                "condition_immunities",
+                "concentrating",
+                "concentration_spell",
+                "state_markers",
+                "is_pc",
+                "role",
+                "conditions",
+                "monster_resources",
+                "monster_slug",
+                "is_current",
+            ],
+        )
+        self.assertEqual(first_row["ac"], 17)
+        self.assertEqual(first_row["passive_perception"], 11)
+        self.assertEqual(first_row["damage_resistances"], ["fire"])
+        self.assertEqual(first_row["monster_resources"], {"ammo:rifle:current": 3, "uses:smoke:current": 1})
+        self.assertEqual(tracker.passive_calls, [2, 1])
+        self.assertEqual(tracker.defense_calls, [2, 1])
+        self.assertEqual(tracker.ac_calls, [2, 1])
+
+    def test_combat_snapshot_visibility_sensitive_fields_are_not_broadened(self):
+        from combat_service import CombatService
+
+        tracker = self._combat_snapshot_tracker()
+        snapshot = CombatService(tracker).combat_snapshot()
+        rows = {row["cid"]: row for row in snapshot["combatants"]}
+
+        hidden_marker_keys = {marker["key"] for marker in rows[2]["state_markers"]}
+        pc_marker_keys = {marker["key"] for marker in rows[1]["state_markers"]}
+
+        self.assertIn("hidden", hidden_marker_keys)
+        self.assertNotIn("hidden", pc_marker_keys)
+        self.assertNotIn("tactical_map", snapshot)
+        self.assertNotIn("is_hidden", rows[2])
+        self.assertEqual(rows[2]["role"], "enemy")
+        self.assertTrue(rows[1]["is_pc"])
+
+    def test_dm_console_route_snapshot_top_level_structure_remains_stable(self):
+        from combat_service import CombatService
+
+        payload = CombatService(self._combat_snapshot_tracker()).combat_snapshot()
+        runtime = self._DmCombatRouteRuntime(
+            result=RuntimeSnapshotResult(success=True, data=payload)
+        )
+        client, _route_thread_ids = self._dm_combat_route_client(runtime=runtime)
+
+        response = client.get("/api/dm/combat")
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json(), payload)
+        self.assertEqual(list(response.json().keys()), list(payload.keys()))
+        self.assertEqual(runtime.requests[0].params, {"include_tactical": False})
+
+    def test_combat_snapshot_composition_context_is_transient_per_call(self):
+        from combat_service import CombatService
+
+        tracker = self._combat_snapshot_tracker()
+        service = CombatService(tracker)
+
+        first = service.combat_snapshot()
+        tracker.passive_values[2] = 14
+        tracker.ac_modifiers[2] = -1
+        tracker.defenses_by_cid[2] = {
+            "damage_resistances": {"cold"},
+            "damage_immunities": set(),
+            "damage_vulnerabilities": set(),
+            "condition_immunities": set(),
+        }
+        tracker._monster_resource_state = {"2:ammo:rifle:current": 7}
+        second = service.combat_snapshot()
+
+        first_guard = next(row for row in first["combatants"] if row["cid"] == 2)
+        second_guard = next(row for row in second["combatants"] if row["cid"] == 2)
+
+        self.assertEqual(first_guard["passive_perception"], 11)
+        self.assertEqual(first_guard["ac"], 17)
+        self.assertEqual(first_guard["damage_resistances"], ["fire"])
+        self.assertEqual(first_guard["monster_resources"], {"ammo:rifle:current": 3, "uses:smoke:current": 1})
+        self.assertEqual(second_guard["passive_perception"], 14)
+        self.assertEqual(second_guard["ac"], 14)
+        self.assertEqual(second_guard["damage_resistances"], ["cold"])
+        self.assertEqual(second_guard["monster_resources"], {"ammo:rifle:current": 7})
 
     def test_dm_combat_route_offloads_dm_console_snapshot_read(self):
         payload = {"in_combat": True, "round": 3, "combatants": [{"cid": 7}]}

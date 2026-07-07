@@ -237,13 +237,17 @@ class CombatService:
         round_num = int(getattr(t, "round_num", 0) or 0)
         turn_num = int(getattr(t, "turn_num", 0) or 0)
         in_combat = bool(getattr(t, "in_combat", False))
+        role_for_name = getattr(t, "_role_for_name", None)
+        passive_perception_getter = getattr(t, "_observer_passive_perception", None)
+        defense_sets_getter = getattr(t, "_combatant_defense_sets", None)
+        ac_modifier_getter = getattr(t, "_combatant_ac_modifier", None)
+        monster_resource_state = getattr(t, "_monster_resource_state", {}) or {}
 
         def _role_for_combatant(combatant: Any) -> str:
             if bool(getattr(combatant, "is_pc", False)):
                 return "pc"
             if bool(getattr(combatant, "ally", False)):
                 return "ally"
-            role_for_name = getattr(t, "_role_for_name", None)
             if callable(role_for_name):
                 try:
                     role = str(role_for_name(str(getattr(combatant, "name", "") or "")) or "").strip().lower()
@@ -258,11 +262,10 @@ class CombatService:
             return " ".join(part.capitalize() for part in text.split())
 
         def _passive_perception_for(combatant: Any) -> Optional[int]:
-            getter = getattr(t, "_observer_passive_perception", None)
-            if not callable(getter):
+            if not callable(passive_perception_getter):
                 return None
             try:
-                value = int(getter(combatant))
+                value = int(passive_perception_getter(combatant))
             except Exception:
                 return None
             return value if value > 0 else None
@@ -274,11 +277,10 @@ class CombatService:
                 "damage_vulnerabilities": [],
                 "condition_immunities": [],
             }
-            getter = getattr(t, "_combatant_defense_sets", None)
-            if not callable(getter):
+            if not callable(defense_sets_getter):
                 return empty
             try:
-                raw = getter(combatant)
+                raw = defense_sets_getter(combatant)
             except Exception:
                 return empty
             if not isinstance(raw, dict):
@@ -357,26 +359,61 @@ class CombatService:
         except Exception:
             ordered_cids = sorted(combatants.keys())
 
-        combatant_rows: List[Dict[str, Any]] = []
+        # Transient per-call composition context.  This keeps read-model staging
+        # local to one snapshot call and avoids repeated per-row lookup scans.
+        ordered_entries: List[Any] = []
         for cid in ordered_cids:
             c = combatants.get(cid)
-            if c is None:
-                continue
+            if c is not None:
+                ordered_entries.append((cid, c))
+
+        monster_resources_by_cid: Dict[str, Dict[str, Any]] = {}
+        if isinstance(monster_resource_state, dict):
+            for resource_key, resource_value in monster_resource_state.items():
+                if not isinstance(resource_key, str):
+                    continue
+                resource_cid, separator, resource_name = resource_key.partition(":")
+                if not separator:
+                    continue
+                monster_resources_by_cid.setdefault(resource_cid, {})[resource_name] = resource_value
+
+        ac_modifier_by_cid: Dict[Any, int] = {}
+        passive_perception_by_cid: Dict[Any, Optional[int]] = {}
+        defense_lists_by_cid: Dict[Any, Dict[str, List[str]]] = {}
+
+        def _ac_modifier_for(cid: Any, combatant: Any) -> int:
+            if cid not in ac_modifier_by_cid:
+                if callable(ac_modifier_getter):
+                    try:
+                        ac_modifier_by_cid[cid] = int(ac_modifier_getter(combatant) or 0)
+                    except Exception:
+                        ac_modifier_by_cid[cid] = 0
+                else:
+                    ac_modifier_by_cid[cid] = 0
+            return ac_modifier_by_cid[cid]
+
+        def _cached_passive_perception_for(cid: Any, combatant: Any) -> Optional[int]:
+            if cid not in passive_perception_by_cid:
+                passive_perception_by_cid[cid] = _passive_perception_for(combatant)
+            return passive_perception_by_cid[cid]
+
+        def _cached_defense_lists_for(cid: Any, combatant: Any) -> Dict[str, List[str]]:
+            if cid not in defense_lists_by_cid:
+                defense_lists_by_cid[cid] = _defense_lists_for(combatant)
+            return defense_lists_by_cid[cid]
+
+        combatant_rows: List[Dict[str, Any]] = []
+        for cid, c in ordered_entries:
             hp = int(getattr(c, "hp", 0) or 0)
             max_hp = int(getattr(c, "max_hp", hp) or hp)
             ac = int(getattr(c, "ac", 0) or 0)
-            ac_modifier_getter = getattr(t, "_combatant_ac_modifier", None)
-            if callable(ac_modifier_getter):
-                try:
-                    ac += int(ac_modifier_getter(c) or 0)
-                except Exception:
-                    pass
+            ac += _ac_modifier_for(cid, c)
             temp_hp = int(getattr(c, "temp_hp", 0) or 0)
             initiative = int(getattr(c, "initiative", 0) or 0)
             is_pc = bool(getattr(c, "is_pc", False))
             role = _role_for_combatant(c)
-            passive_perception = _passive_perception_for(c)
-            defense_lists = _defense_lists_for(c)
+            passive_perception = _cached_passive_perception_for(cid, c)
+            defense_lists = _cached_defense_lists_for(cid, c)
             state_markers = _state_markers_for(c)
 
             # Conditions: extract from condition_stacks
@@ -396,12 +433,7 @@ class CombatService:
                 )
 
             # Monster resources (ammo, etc.)
-            prefix = f"{cid}:"
-            resources = {
-                k[len(prefix):]: v
-                for k, v in getattr(t, "_monster_resource_state", {}).items()
-                if k.startswith(prefix)
-            }
+            resources = dict(monster_resources_by_cid.get(str(cid), {}))
 
             combatant_rows.append(
                 {
