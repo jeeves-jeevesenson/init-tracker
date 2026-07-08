@@ -207,11 +207,69 @@ async def _dm_combat_read_snapshot_in_threadpool(runtime: Any, snap_req: Any) ->
     """Offload the DM combat route's synchronous runtime snapshot read."""
     from starlette.concurrency import run_in_threadpool
 
+    if not debug_trace_enabled():
+        if not _dm_combat_snapshot_read_needs_serialization(snap_req):
+            return await run_in_threadpool(runtime.read_snapshot, snap_req)
+        async with _dm_combat_tactical_read_lock():
+            return await run_in_threadpool(runtime.read_snapshot, snap_req)
+
+    scheduled_ns = time.perf_counter_ns()
+    params = getattr(snap_req, "params", None)
+    trace_context = params.get("_trace_context", "dm_console_route") if isinstance(params, dict) else "dm_console_route"
+
+    queue_fields = {
+        "route": "/api/dm/combat",
+        "method": "GET",
+        "read_in_threadpool": True,
+        "snapshot_caller": trace_context,
+        "scope": trace_context,
+    }
+    counts = None
+    lan_controller = getattr(runtime, "lan_controller", None)
+    if lan_controller is not None:
+        count_builder = getattr(lan_controller, "_debug_trace_counts", None)
+        if callable(count_builder):
+            try:
+                counts = count_builder()
+            except Exception:
+                pass
+    if isinstance(counts, dict):
+        for count_key in (
+            "combatant_count",
+            "player_count",
+            "monster_count",
+            "websocket_client_count",
+            "dm_websocket_client_count",
+            "total_websocket_client_count",
+        ):
+            if count_key in counts:
+                queue_fields[count_key] = counts[count_key]
+
+    debug_event("span.start", span="dm.console.threadpool_dispatch_queue", **queue_fields)
+
+    def worker_wrapper():
+        start_ns = time.perf_counter_ns()
+        duration_ms = round((start_ns - scheduled_ns) / 1_000_000.0, 3)
+        debug_event(
+            "span.end",
+            span="dm.console.threadpool_dispatch_queue",
+            duration_ms=duration_ms,
+            ok=True,
+            **queue_fields
+        )
+        if duration_ms > 2000.0:
+            debug_event("hang_candidate.span", span="dm.console.threadpool_dispatch_queue", duration_ms=duration_ms, ok=True, **queue_fields)
+        elif duration_ms > 500.0:
+            debug_event("very_slow.span", span="dm.console.threadpool_dispatch_queue", duration_ms=duration_ms, ok=True, **queue_fields)
+        elif duration_ms > 100.0:
+            debug_event("slow.span", span="dm.console.threadpool_dispatch_queue", duration_ms=duration_ms, ok=True, **queue_fields)
+        return runtime.read_snapshot(snap_req)
+
     if not _dm_combat_snapshot_read_needs_serialization(snap_req):
-        return await run_in_threadpool(runtime.read_snapshot, snap_req)
+        return await run_in_threadpool(worker_wrapper)
 
     async with _dm_combat_tactical_read_lock():
-        return await run_in_threadpool(runtime.read_snapshot, snap_req)
+        return await run_in_threadpool(worker_wrapper)
 
 
 FAIL_OUTCOME_LABELS = {"fail", "failed", "failure", "failed_save", "fail_save"}
@@ -4214,24 +4272,52 @@ class LanController:
                         "serialized_tactical_read": bool(include_tactical),
                     }
                 )
+                counts = route_trace_fields.get("counts") or {}
+                if isinstance(counts, dict):
+                    for count_key in (
+                        "combatant_count",
+                        "player_count",
+                        "monster_count",
+                        "websocket_client_count",
+                        "dm_websocket_client_count",
+                        "total_websocket_client_count",
+                    ):
+                        if count_key in counts:
+                            route_trace_fields[count_key] = counts[count_key]
                 with timed_span("dm.console.route_read_snapshot", **route_trace_fields):
                     result = await _dm_combat_read_snapshot_in_threadpool(self._runtime, snap_req)
                 if not result.success:
                     if result.error and result.error.get("code") == "runtime_not_ready":
                         raise HTTPException(status_code=503, detail="Service Unavailable")
                     raise HTTPException(status_code=500, detail="Failed to read combat snapshot.")
-                if debug_trace_enabled() and isinstance(result.data, dict):
-                    try:
-                        with timed_span("dm.console.route_payload_proxy", **route_trace_fields):
-                            payload_sizes = self._dm_console_payload_size_proxy(result.data)
-                            debug_event(
-                                "snapshot.payload_proxy",
-                                span="dm.console.route_payload_proxy",
-                                sizes=payload_sizes,
-                                **route_trace_fields,
-                            )
-                    except Exception:
-                        pass
+
+                build_trace_fields = dict(route_trace_fields)
+                if isinstance(result.data, dict):
+                    combatants = result.data.get("combatants") or []
+                    combatant_count = len(combatants)
+                    player_count = sum(1 for c in combatants if isinstance(c, dict) and bool(c.get("is_pc")))
+                    monster_count = combatant_count - player_count
+                    top_level_key_count = len(result.data)
+                    build_trace_fields.update({
+                        "combatant_count": combatant_count,
+                        "player_count": player_count,
+                        "monster_count": monster_count,
+                        "top_level_key_count": top_level_key_count,
+                    })
+
+                with timed_span("dm.console.route_response_build", **build_trace_fields):
+                    if debug_trace_enabled() and isinstance(result.data, dict):
+                        try:
+                            with timed_span("dm.console.route_payload_proxy", **route_trace_fields):
+                                payload_sizes = self._dm_console_payload_size_proxy(result.data)
+                                debug_event(
+                                    "snapshot.payload_proxy",
+                                    span="dm.console.route_payload_proxy",
+                                    sizes=payload_sizes,
+                                    **route_trace_fields,
+                                )
+                        except Exception:
+                            pass
                 return result.data
             except HTTPException:
                 raise

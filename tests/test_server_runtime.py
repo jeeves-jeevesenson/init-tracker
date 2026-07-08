@@ -147,16 +147,68 @@ class ServerRuntimeFacadeTests(unittest.TestCase):
             if dm_service is None:
                 raise HTTPException(status_code=503, detail="DM combat service unavailable.")
             try:
+                from runtime_config import timed_span, debug_trace_enabled, debug_event
+                include_tactical = _current_request_wants_tactical_map()
                 snap_req = RuntimeSnapshotRequest(
                     snapshot_type="dm_console",
-                    params={"include_tactical": _current_request_wants_tactical_map()},
+                    params={
+                        "include_tactical": include_tactical,
+                    },
                 )
+                trace_context = "dm_console_route_tactical" if include_tactical else "dm_console_route"
+                route_trace_fields = {
+                    "scope": trace_context,
+                    "snapshot_caller": trace_context,
+                    "include_tactical": bool(include_tactical),
+                    "route": "/api/dm/combat",
+                    "method": "GET",
+                    "read_in_threadpool": True,
+                    "serialized_tactical_read": bool(include_tactical),
+                }
+                fake_counts = {
+                    "combatant_count": 2,
+                    "player_count": 1,
+                    "monster_count": 1,
+                    "websocket_client_count": 0,
+                    "dm_websocket_client_count": 0,
+                    "total_websocket_client_count": 0,
+                }
+                route_trace_fields.update(fake_counts)
+
                 route_thread_ids.append(threading.get_ident())
-                result = await _dm_combat_read_snapshot_in_threadpool(runtime, snap_req)
+                with timed_span("dm.console.route_read_snapshot", **route_trace_fields):
+                    result = await _dm_combat_read_snapshot_in_threadpool(runtime, snap_req)
                 if not result.success:
                     if result.error and result.error.get("code") == "runtime_not_ready":
                         raise HTTPException(status_code=503, detail="Service Unavailable")
                     raise HTTPException(status_code=500, detail="Failed to read combat snapshot.")
+
+                build_trace_fields = dict(route_trace_fields)
+                if isinstance(result.data, dict):
+                    combatants = result.data.get("combatants") or []
+                    combatant_count = len(combatants)
+                    player_count = sum(1 for c in combatants if isinstance(c, dict) and bool(c.get("is_pc")))
+                    monster_count = combatant_count - player_count
+                    top_level_key_count = len(result.data)
+                    build_trace_fields.update({
+                        "combatant_count": combatant_count,
+                        "player_count": player_count,
+                        "monster_count": monster_count,
+                        "top_level_key_count": top_level_key_count,
+                    })
+
+                with timed_span("dm.console.route_response_build", **build_trace_fields):
+                    if debug_trace_enabled() and isinstance(result.data, dict):
+                        try:
+                            with timed_span("dm.console.route_payload_proxy", **route_trace_fields):
+                                debug_event(
+                                    "snapshot.payload_proxy",
+                                    span="dm.console.route_payload_proxy",
+                                    sizes={"payload_top_level_key_count": len(result.data)},
+                                    **route_trace_fields,
+                                )
+                        except Exception:
+                            pass
                 return result.data
             except HTTPException:
                 raise
@@ -4491,3 +4543,106 @@ class ServerRuntimeFacadeTests(unittest.TestCase):
         response = client.delete("/api/dm/map/features/feature-123")
         self.assertEqual(response.status_code, 500)
         self.assertIn("Failed to remove feature: Runtime fail", response.json()["detail"])
+
+    def test_combat_route_instrumentation_under_debug_trace(self):
+        from runtime_config import configure_debug_trace
+        from server_runtime import RuntimeSnapshotResult
+        import tempfile
+        import json
+        from pathlib import Path
+
+        # Setup temp trace log
+        with tempfile.TemporaryDirectory() as tmpdir:
+            trace_path = configure_debug_trace(True, log_dir=Path(tmpdir))
+            self.assertIsNotNone(trace_path)
+
+            payload = {
+                "in_combat": True,
+                "round": 3,
+                "combatants": [
+                    {"cid": 1, "is_pc": True, "name": "PC 1"},
+                    {"cid": 2, "is_pc": False, "name": "Monster 1"},
+                ],
+                "turn_order": [1, 2],
+                "battle_log": ["test log"],
+                "pending_prompts": {},
+            }
+            runtime = self._DmCombatRouteRuntime(
+                result=RuntimeSnapshotResult(success=True, data=payload)
+            )
+            mock_lan = MagicMock()
+            mock_lan._debug_trace_counts.return_value = {
+                "combatant_count": 2,
+                "player_count": 1,
+                "monster_count": 1,
+                "websocket_client_count": 0,
+                "dm_websocket_client_count": 0,
+                "total_websocket_client_count": 0,
+            }
+            runtime.lan_controller = mock_lan
+            # Create the test client
+            client, _ = self._dm_combat_route_client(runtime=runtime)
+
+            # 1. Run request and ensure it returns 200 and matches payload
+            response = client.get("/api/dm/combat")
+            self.assertEqual(response.status_code, 200)
+            self.assertEqual(response.json(), payload)
+
+            # 2. Read generated trace
+            configure_debug_trace(False) # flush and close
+            lines = Path(trace_path).read_text(encoding="utf-8").splitlines()
+            entries = [json.loads(line) for line in lines if line.strip()]
+
+            # 3. Assert threadpool queue timing spans exist
+            queue_start = next((e for e in entries if e.get("span") == "dm.console.threadpool_dispatch_queue" and e.get("event") == "span.start"), None)
+            queue_end = next((e for e in entries if e.get("span") == "dm.console.threadpool_dispatch_queue" and e.get("event") == "span.end"), None)
+
+            self.assertIsNotNone(queue_start)
+            self.assertIsNotNone(queue_end)
+            self.assertEqual(queue_start.get("route"), "/api/dm/combat")
+            self.assertEqual(queue_start.get("method"), "GET")
+            self.assertTrue(queue_start.get("read_in_threadpool"))
+
+            # Check low cardinality on queue span: no player/monster names, no ids
+            for key, val in queue_start.items():
+                if isinstance(val, str):
+                    self.assertNotIn("PC 1", val)
+                    self.assertNotIn("Monster 1", val)
+
+            # 4. Assert response build span exists
+            build_start = next((e for e in entries if e.get("span") == "dm.console.route_response_build" and e.get("event") == "span.start"), None)
+            build_end = next((e for e in entries if e.get("span") == "dm.console.route_response_build" and e.get("event") == "span.end"), None)
+
+            self.assertIsNotNone(build_start)
+            self.assertIsNotNone(build_end)
+            self.assertEqual(build_start.get("combatant_count"), 2)
+            self.assertEqual(build_start.get("player_count"), 1)
+            self.assertEqual(build_start.get("monster_count"), 1)
+            self.assertEqual(build_start.get("top_level_key_count"), 6)
+
+            # Check low cardinality on build span: no player/monster names, no ids
+            for key, val in build_start.items():
+                if isinstance(val, str):
+                    self.assertNotIn("PC 1", val)
+                    self.assertNotIn("Monster 1", val)
+
+    def test_combat_route_works_without_debug_trace(self):
+        from runtime_config import configure_debug_trace
+        from server_runtime import RuntimeSnapshotResult
+
+        configure_debug_trace(False)
+        payload = {
+            "in_combat": True,
+            "round": 3,
+            "combatants": [
+                {"cid": 1, "is_pc": True, "name": "PC 1"},
+            ],
+        }
+        runtime = self._DmCombatRouteRuntime(
+            result=RuntimeSnapshotResult(success=True, data=payload)
+        )
+        client, _ = self._dm_combat_route_client(runtime=runtime)
+
+        response = client.get("/api/dm/combat")
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json(), payload)

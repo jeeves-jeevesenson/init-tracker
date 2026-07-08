@@ -47,6 +47,8 @@ TARGET_SPANS = (
     "lan.snapshot.tactical_payload",
     "lan.snapshot.static_fields",
     "lan.snapshot.resource_pools",
+    "dm.console.threadpool_dispatch_queue",
+    "dm.console.route_response_build",
 )
 HTTP_COMBAT_LABEL = "http.request:/api/dm/combat"
 TARGET_LABELS = (*TARGET_SPANS, HTTP_COMBAT_LABEL)
