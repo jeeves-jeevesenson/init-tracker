@@ -8,10 +8,10 @@ If an item is not marked as **Active** here, it is NOT current work.
 ## Current Status
 
 <!-- ACTIVE_WORK_STATUS_START -->
-- **Status:** Paused
-- **Current Work Item:** None
-- **Active Gate:** None
-- **Allowed Next Action:** Bounded implementation under `WORK-20260710-combat-mutation-event-loop-containment-minimal-implementation`, limited to `POST /api/dm/combat/start`, `POST /api/dm/combat/set-turn`, and `POST /api/dm/combat/next-turn` in `server_runtime.py`, `dnd_initative_tracker.py`, and `tests/test_server_runtime.py`, followed by the specified developer smoke gate. No broader mutation, route, WebSocket, persistence, or command-lifecycle work is authorized.
+- **Status:** Active
+- **Current Work Item:** `WORK-20260710-combat-mutation-event-loop-containment-minimal-implementation`
+- **Active Gate:** Minimal implementation and focused validation
+- **Allowed Next Action:** Codex xhigh 5.6 may perform only the bounded implementation defined by `WORK-20260710-combat-mutation-event-loop-containment-minimal-implementation` for `POST /api/dm/combat/start`, `POST /api/dm/combat/set-turn`, and `POST /api/dm/combat/next-turn` in `server_runtime.py`, `dnd_initative_tracker.py`, and `tests/test_server_runtime.py`. No smoke, commit, push, deploy, or broader mutation work is authorized during implementation.
 - <!-- ACTIVE_WORK_STATUS_END -->
 
 ---
@@ -21,6 +21,7 @@ If an item is not marked as **Active** here, it is NOT current work.
 | ID | Title | Status | Goal |
 | --- | --- | --- | --- |
 <!-- ACTIVE_WORK_TABLE_START -->
+| WORK-20260710-combat-mutation-event-loop-containment-minimal-implementation | Combat mutation event-loop containment minimal implementation | Active | Move combat start, set-turn, and next-turn through the existing authoritative queue while preserving synchronous HTTP behavior and offloading the bounded queue wait from the ASGI event loop. |
 <!-- ACTIVE_WORK_TABLE_END -->
 
 ---

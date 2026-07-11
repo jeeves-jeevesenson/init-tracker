@@ -1,5 +1,7 @@
 import asyncio
 import importlib
+import os
+import queue
 import threading
 import time
 import unittest
@@ -27,6 +29,9 @@ from server_runtime import (
     COMMAND_SET_MAP_BACKGROUND_ORDER,
     COMMAND_UPSERT_MAP_HAZARD,
     COMMAND_REMOVE_MAP_HAZARD,
+    COMMAND_COMBAT_START,
+    COMMAND_COMBAT_SET_TURN,
+    COMMAND_COMBAT_NEXT_TURN,
     STATUS_COMPLETED,
     STATUS_FAILED,
 )
@@ -4646,3 +4651,396 @@ class ServerRuntimeFacadeTests(unittest.TestCase):
         response = client.get("/api/dm/combat")
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.json(), payload)
+
+    def _combat_queue_facade(self, combat_result, response_snapshot):
+        class FakeQueue:
+            def __init__(self):
+                self.items = []
+                self.on_put = None
+
+            def put(self, item):
+                self.items.append(item)
+                if self.on_put:
+                    self.on_put(item)
+
+            def qsize(self):
+                return len(self.items)
+
+        class FakeLanController:
+            def __init__(self):
+                self._actions = FakeQueue()
+                self._action_states = {}
+                self._action_states_lock = threading.Lock()
+                self._action_history_limit = 500
+
+        controller = FakeLanController()
+
+        def complete(msg):
+            with controller._action_states_lock:
+                controller._action_states[msg["action_id"]].update({
+                    "status": "completed",
+                    "result": {"status": None},
+                    "combat_result": combat_result,
+                    "response_snapshot": response_snapshot,
+                    "authority_started_at_ns": time.perf_counter_ns(),
+                    "completed_at_ns": time.perf_counter_ns(),
+                })
+
+        controller._actions.on_put = complete
+        return ServerRuntimeFacade(controller), controller
+
+    def _authority_runtime(self, command_type, *, trace_broadcasts=False):
+        from dnd_initative_tracker import InitiativeTracker, LanController
+
+        controller = LanController.__new__(LanController)
+        tracker = InitiativeTracker.__new__(InitiativeTracker)
+        calls = []
+        snapshot_completion_states = []
+
+        class Service:
+            def _record(self, method, result):
+                calls.append((method, threading.get_ident()))
+                if trace_broadcasts:
+                    controller._broadcast_state({})
+                    controller._push_dm_snapshot_to_ws_clients({})
+                return result
+
+            def start_combat(self):
+                return self._record("start_combat", {"ok": True, "snapshot": {"round": 1}})
+
+            def set_turn_here(self, cid):
+                return self._record(
+                    "set_turn_here",
+                    {"ok": True, "cid": cid, "previous_cid": 3, "snapshot": {"active_cid": cid}},
+                )
+
+            def next_turn(self):
+                return self._record("next_turn", {"ok": True, "snapshot": {"active_cid": 9}})
+
+        tracker.combatants = {7: object()}
+        tracker.current_cid = 7
+        tracker.in_combat = True
+        tracker._dm_service = Service()
+        tracker._is_admin_token_valid = lambda token: token == "admin"
+        tracker._lan = controller
+
+        controller._tracker = tracker
+        controller._is_admin_token_valid = lambda token: token == "admin"
+        controller._actions = queue.Queue()
+        controller._action_states = {}
+        controller._action_states_lock = threading.Lock()
+        controller._action_history_limit = 500
+        controller._active_poll_interval_ms = 120
+        controller._polling = False
+        controller._latest_manual_resource_action = {}
+        controller._clients_lock = threading.Lock()
+        controller._clients = {}
+        controller._dm_ws_clients = {}
+        controller._battle_log_subscribers = set()
+        controller._cached_snapshot = {}
+        controller._cached_pcs = []
+        controller._grid_last_sent = (None, None)
+        controller._grid_version = 0
+        controller._last_snapshot = None
+        controller._last_static_check_ts = time.monotonic()
+        controller._static_check_interval_s = 999.0
+        controller._loop = None
+        controller._merge_cached_snapshot_carryover = lambda snap: snap
+        controller._append_lan_log = lambda *args, **kwargs: None
+        controller.toast = lambda *args, **kwargs: None
+        tracker._lan_snapshot = lambda **kwargs: {}
+        tracker._lan_pcs = lambda: []
+        tracker._lan_static_snapshot_cache_status = lambda: (True, "cached", 1)
+        tracker._oplog = lambda *args, **kwargs: None
+        tracker.after = lambda *args, **kwargs: None
+
+        def response_snapshot(**kwargs):
+            action_id = next(iter(controller._action_states))
+            snapshot_completion_states.append(controller._action_states[action_id]["status"])
+            return {"authority_snapshot": command_type, "include_tactical": kwargs.get("include_tactical")}
+
+        controller._dm_console_snapshot = response_snapshot
+        return controller, calls, snapshot_completion_states
+
+    def test_combat_commands_queue_success_and_contract(self):
+        cases = (
+            (COMMAND_COMBAT_START, {"ok": True, "snapshot": {"round": 1}}),
+            (COMMAND_COMBAT_SET_TURN, {"ok": True, "cid": 7, "previous_cid": 3, "snapshot": {}}),
+            (COMMAND_COMBAT_NEXT_TURN, {"ok": True, "snapshot": {"active_cid": 9}}),
+        )
+        for command_type, combat_result in cases:
+            with self.subTest(command_type=command_type):
+                facade, controller = self._combat_queue_facade(combat_result, {"response": command_type})
+                payload = {
+                    "admin_token": "admin",
+                    "include_tactical": True,
+                    "timeout_ms": 5000,
+                    "request_trace_id": "trace-http",
+                    "parent_action_id": "request-action",
+                }
+                if command_type == COMMAND_COMBAT_SET_TURN:
+                    payload["cid"] = 7
+                result = facade.submit_command(RuntimeCommand(command_type=command_type, payload=payload))
+
+                self.assertEqual(result.data["combat_result"], combat_result)
+                self.assertEqual(result.data["response_snapshot"], {"response": command_type})
+                self.assertEqual(len(controller._actions.items), 1)
+                message = controller._actions.items[0]
+                self.assertEqual(message["_trace_id"], "trace-http")
+                self.assertEqual(message["_parent_action_id"], "request-action")
+                for key in ("admin_token", "include_tactical", "timeout_ms", "request_trace_id", "parent_action_id"):
+                    self.assertIn(key, message)
+                self.assertEqual("cid" in message, command_type == COMMAND_COMBAT_SET_TURN)
+
+    def test_combat_mutations_run_once_on_authority_and_snapshot_precedes_completion(self):
+        expected_methods = {
+            COMMAND_COMBAT_START: "start_combat",
+            COMMAND_COMBAT_SET_TURN: "set_turn_here",
+            COMMAND_COMBAT_NEXT_TURN: "next_turn",
+        }
+        main_thread_id = threading.get_ident()
+        for command_type, expected_method in expected_methods.items():
+            with self.subTest(command_type=command_type):
+                controller, calls, completion_states = self._authority_runtime(command_type)
+                action_id = f"action-{command_type}"
+                received_at_ns = time.perf_counter_ns()
+                message = {
+                    "type": command_type,
+                    "action_id": action_id,
+                    "_trace_id": "trace-http",
+                    "parent_action_id": "request-action",
+                    "_received_at_ns": received_at_ns,
+                    "_ws_id": None,
+                    "_claimed_cid": 7 if command_type == COMMAND_COMBAT_SET_TURN else None,
+                    "admin_token": "admin",
+                    "include_tactical": True,
+                    "timeout_ms": 5000,
+                }
+                if command_type == COMMAND_COMBAT_SET_TURN:
+                    message["cid"] = 7
+                controller._action_states[action_id] = {
+                    "status": "pending",
+                    "queue_wait_span_closed": False,
+                    "received_at_ns": received_at_ns,
+                }
+                controller._actions.put(message)
+                authority_thread = threading.Thread(target=controller._tick)
+                authority_thread.start()
+                authority_thread.join(timeout=2)
+
+                self.assertFalse(authority_thread.is_alive())
+                self.assertEqual([method for method, _thread_id in calls], [expected_method])
+                self.assertNotEqual(calls[0][1], main_thread_id)
+                self.assertEqual(completion_states, ["pending"])
+                state = controller._action_states[action_id]
+                self.assertEqual(state["status"], "completed")
+                self.assertEqual(state["authority_thread_id"], calls[0][1])
+                self.assertIsInstance(state.get("combat_result"), dict)
+                self.assertIsInstance(state.get("response_snapshot"), dict)
+
+    def test_combat_command_submission_is_offloaded(self):
+        from dnd_initative_tracker import _dm_combat_command_in_threadpool
+
+        class Runtime:
+            def __init__(self):
+                self.thread_ids = []
+
+            def submit_command(self, command):
+                self.thread_ids.append(threading.get_ident())
+                return RuntimeCommandResult(
+                    success=True,
+                    message="ok",
+                    data={"combat_result": {"ok": True}, "response_snapshot": {"snapshot": True}},
+                )
+
+        runtime = Runtime()
+        route_thread_id = threading.get_ident()
+        command = RuntimeCommand(
+            command_type=COMMAND_COMBAT_START,
+            payload={"request_trace_id": "trace-http", "parent_action_id": "request-action"},
+        )
+        result = asyncio.run(_dm_combat_command_in_threadpool(runtime, command, route="/api/dm/combat/start"))
+
+        self.assertEqual(result.data["response_snapshot"], {"snapshot": True})
+        self.assertEqual(len(runtime.thread_ids), 1)
+        self.assertNotEqual(runtime.thread_ids[0], route_thread_id)
+
+    def test_combat_queue_timeout_has_no_direct_retry(self):
+        from dnd_initative_tracker import _dm_combat_command_in_threadpool
+
+        class Runtime:
+            def __init__(self):
+                self.calls = 0
+
+            def submit_command(self, command):
+                self.calls += 1
+                raise TimeoutError("Command 'combat_start' timed out after 5000ms")
+
+        runtime = Runtime()
+        command = RuntimeCommand(
+            command_type=COMMAND_COMBAT_START,
+            payload={"request_trace_id": "trace-http", "parent_action_id": "request-action"},
+        )
+        with self.assertRaises(TimeoutError):
+            asyncio.run(_dm_combat_command_in_threadpool(runtime, command, route="/api/dm/combat/start"))
+        self.assertEqual(runtime.calls, 1)
+
+    def test_combat_queue_and_direct_modes_preserve_response_shapes(self):
+        from unittest.mock import patch
+        from dnd_initative_tracker import _combat_mutation_queue_mode
+
+        with patch.dict(os.environ, {}, clear=False):
+            os.environ.pop("INIT_TRACKER_COMBAT_MUTATION_QUEUE", None)
+            self.assertEqual(_combat_mutation_queue_mode(), "queue")
+        for value, expected in (("queue", "queue"), ("direct", "direct"), ("invalid", "queue")):
+            with self.subTest(value=value), patch.dict(os.environ, {"INIT_TRACKER_COMBAT_MUTATION_QUEUE": value}):
+                self.assertEqual(_combat_mutation_queue_mode(), expected)
+
+        start_shape = {"ok": True, "snapshot": {}}
+        set_shape = {"ok": True, "cid": 7, "previous_cid": 3, "snapshot": {}}
+        next_shape = {"ok": True, "snapshot": {}}
+        self.assertEqual(set(start_shape), {"ok", "snapshot"})
+        self.assertEqual(set(set_shape), {"ok", "cid", "previous_cid", "snapshot"})
+        self.assertEqual(set(next_shape), {"ok", "snapshot"})
+
+    def test_combat_facade_rejects_missing_transport_results(self):
+        facade, controller = self._combat_queue_facade({"ok": True}, {"snapshot": True})
+        controller._actions.on_put = lambda msg: controller._action_states[msg["action_id"]].update({
+            "status": "completed",
+            "result": {},
+            "completed_at_ns": time.perf_counter_ns(),
+        })
+        command = RuntimeCommand(
+            command_type=COMMAND_COMBAT_START,
+            payload={"admin_token": "admin", "include_tactical": False, "timeout_ms": 5000},
+        )
+        with self.assertRaises(RuntimeError):
+            facade.submit_command(command)
+
+    def test_combat_domain_results_remain_raw_for_route_mapping(self):
+        cases = (
+            (COMMAND_COMBAT_START, {"ok": False, "error": "No combatants."}),
+            (COMMAND_COMBAT_SET_TURN, {"ok": False, "error": "Combatant not found."}),
+            (COMMAND_COMBAT_NEXT_TURN, {"ok": False, "error": "No active combat."}),
+        )
+        for command_type, combat_result in cases:
+            with self.subTest(command_type=command_type):
+                facade, _controller = self._combat_queue_facade(combat_result, {"snapshot": True})
+                payload = {
+                    "admin_token": "admin",
+                    "include_tactical": False,
+                    "timeout_ms": 5000,
+                    "request_trace_id": "trace-http",
+                    "parent_action_id": "request-action",
+                }
+                if command_type == COMMAND_COMBAT_SET_TURN:
+                    payload["cid"] = 999
+                result = facade.submit_command(RuntimeCommand(command_type=command_type, payload=payload))
+                self.assertEqual(result.data["combat_result"], combat_result)
+
+    def test_combat_route_auth_validation_and_fixed_error_mappings_precede_dispatch(self):
+        import inspect
+        from dnd_initative_tracker import LanController
+
+        source = inspect.getsource(LanController.start)
+        route_contracts = (
+            (
+                "async def dm_next_turn",
+                "async def dm_prev_turn",
+                "Combat service failed to advance turn.",
+                "Failed to advance turn.",
+            ),
+            (
+                "async def dm_set_turn",
+                "async def dm_adjust_hp",
+                "Cannot set turn.",
+                "Failed to set turn.",
+            ),
+            (
+                "async def dm_start_combat",
+                "async def dm_end_combat",
+                "Cannot start combat.",
+                "Failed to start combat.",
+            ),
+        )
+        for start_marker, end_marker, domain_detail, failure_detail in route_contracts:
+            with self.subTest(route=start_marker):
+                segment = source[source.index(start_marker):source.index(end_marker, source.index(start_marker))]
+                self.assertLess(segment.index("_check_dm_auth(request)"), segment.index("_dm_combat_command_in_threadpool"))
+                self.assertIn("status_code=503, detail=\"DM combat service unavailable.\"", segment)
+                self.assertIn("except TimeoutError as exc", segment)
+                self.assertIn("status_code=504, detail=str(exc)", segment)
+                self.assertIn(domain_detail, segment)
+                self.assertIn(failure_detail, segment)
+        set_turn = source[source.index("async def dm_set_turn"):source.index("async def dm_adjust_hp")]
+        self.assertLess(set_turn.index("cid = int(cid_raw)"), set_turn.index("_dm_combat_command_in_threadpool"))
+        for detail in ("Invalid payload.", "cid is required.", "cid must be an integer."):
+            self.assertIn(detail, set_turn)
+
+    def test_combat_mutation_trace_correlation(self):
+        from pathlib import Path
+        import json
+        import tempfile
+        from runtime_config import configure_debug_trace, debug_context
+        from dnd_initative_tracker import _dm_combat_command_in_threadpool
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            trace_path = configure_debug_trace(True, log_dir=Path(tmpdir))
+            controller, calls, _completion_states = self._authority_runtime(
+                COMMAND_COMBAT_START,
+                trace_broadcasts=True,
+            )
+            facade = ServerRuntimeFacade(controller)
+            command = RuntimeCommand(
+                command_type=COMMAND_COMBAT_START,
+                payload={
+                    "admin_token": "admin",
+                    "include_tactical": False,
+                    "timeout_ms": 5000,
+                    "request_trace_id": "trace-http",
+                    "parent_action_id": "request-action",
+                },
+            )
+            def run_authority():
+                deadline = time.monotonic() + 2.0
+                while controller._actions.empty() and time.monotonic() < deadline:
+                    time.sleep(0.001)
+                controller._tick()
+
+            authority_thread = threading.Thread(target=run_authority)
+            with debug_context(trace_id="trace-http", action_id="request-action"):
+                authority_thread.start()
+                result = asyncio.run(
+                    _dm_combat_command_in_threadpool(
+                        facade,
+                        command,
+                        route="/api/dm/combat/start",
+                    )
+                )
+            authority_thread.join(timeout=2)
+            self.assertEqual(result.data["combat_result"]["ok"], True)
+            self.assertEqual([method for method, _thread_id in calls], ["start_combat"])
+
+            configure_debug_trace(False)
+            entries = [json.loads(line) for line in Path(trace_path).read_text(encoding="utf-8").splitlines() if line]
+            expected_spans = {
+                "dm.combat.command.threadpool_dispatch_queue",
+                "dm.combat.command.worker_wait",
+                "runtime.command.queue_wait",
+                "runtime.command.execute",
+                "combat.mutation.service_call",
+                "combat.mutation.response_snapshot",
+                "lan.broadcast.schedule",
+                "dm.broadcast.schedule",
+                "dm.combat.command.worker_return",
+                "dm.combat.command.route_resume",
+            }
+            self.assertTrue(expected_spans.issubset({entry.get("span") for entry in entries}))
+            correlated = [entry for entry in entries if entry.get("span") in expected_spans]
+            self.assertTrue(correlated)
+            self.assertEqual({entry.get("trace_id") for entry in correlated}, {"trace-http"})
+            self.assertTrue(all(entry.get("command") == COMMAND_COMBAT_START for entry in correlated))
+            self.assertTrue(all(entry.get("route") == "/api/dm/combat/start" for entry in correlated))
+            self.assertTrue(all(entry.get("method") == "POST" for entry in correlated))
+            self.assertTrue(all(entry.get("parent_action_id") == "request-action" for entry in correlated))
+            self.assertTrue({entry.get("thread_role") for entry in correlated}.issuperset({"asgi", "worker", "authority"}))

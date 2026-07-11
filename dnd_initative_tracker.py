@@ -272,6 +272,100 @@ async def _dm_combat_read_snapshot_in_threadpool(runtime: Any, snap_req: Any) ->
         return await run_in_threadpool(worker_wrapper)
 
 
+def _combat_mutation_queue_mode() -> str:
+    """Return the temporary combat mutation transport mode, failing closed to queue."""
+    return "direct" if os.getenv("INIT_TRACKER_COMBAT_MUTATION_QUEUE", "queue").strip().lower() == "direct" else "queue"
+
+
+async def _dm_combat_command_in_threadpool(
+    runtime: Any,
+    command: Any,
+    *,
+    route: str,
+) -> Any:
+    """Run the facade submission and bounded queue wait outside the ASGI loop."""
+    from starlette.concurrency import run_in_threadpool
+
+    payload = getattr(command, "payload", {}) or {}
+    trace_id = str(payload.get("request_trace_id") or new_trace_id())[:160]
+    parent_action_id = str(payload.get("parent_action_id") or new_action_id())[:160]
+    command_type = str(getattr(command, "command_type", "") or "unknown")
+    scheduled_ns = time.perf_counter_ns()
+    base_fields = {
+        "command": command_type,
+        "route": route,
+        "method": "POST",
+        "parent_action_id": parent_action_id,
+    }
+    debug_event(
+        "span.start",
+        span="dm.combat.command.threadpool_dispatch_queue",
+        thread_role="asgi",
+        outcome="pending",
+        **base_fields,
+    )
+
+    def worker_wrapper() -> Tuple[bool, Any, Optional[BaseException], int]:
+        worker_started_ns = time.perf_counter_ns()
+        with debug_context(trace_id=trace_id, action_id=parent_action_id):
+            debug_event(
+                "span.end",
+                span="dm.combat.command.threadpool_dispatch_queue",
+                duration_ms=round((worker_started_ns - scheduled_ns) / 1_000_000.0, 3),
+                ok=True,
+                thread_role="worker",
+                outcome="dispatched",
+                **base_fields,
+            )
+            try:
+                with timed_span(
+                    "dm.combat.command.worker_wait",
+                    thread_role="worker",
+                    outcome="completed",
+                    **base_fields,
+                ):
+                    result = runtime.submit_command(command)
+                exc = None
+                ok = True
+            except BaseException as caught:
+                result = None
+                exc = caught
+                ok = False
+            worker_return_ns = time.perf_counter_ns()
+            with timed_span(
+                "dm.combat.command.worker_return",
+                thread_role="worker",
+                outcome="completed" if ok else "failed",
+                **base_fields,
+            ):
+                pass
+            return ok, result, exc, worker_return_ns
+
+    ok, result, exc, worker_return_ns = await run_in_threadpool(worker_wrapper)
+    resumed_ns = time.perf_counter_ns()
+    with debug_context(trace_id=trace_id, action_id=parent_action_id):
+        debug_event(
+            "span.start",
+            span="dm.combat.command.route_resume",
+            thread_role="asgi",
+            outcome="pending",
+            **base_fields,
+        )
+        debug_event(
+            "span.end",
+            span="dm.combat.command.route_resume",
+            duration_ms=round((resumed_ns - worker_return_ns) / 1_000_000.0, 3),
+            ok=ok,
+            reason=type(exc).__name__ if exc is not None else None,
+            thread_role="asgi",
+            outcome="completed" if ok else "failed",
+            **base_fields,
+        )
+    if exc is not None:
+        raise exc
+    return result
+
+
 FAIL_OUTCOME_LABELS = {"fail", "failed", "failure", "failed_save", "fail_save"}
 USER_YAML_DIRNAME = "Dnd-Init-Yamls"
 SESSION_SNAPSHOT_SCHEMA_VERSION = 2
@@ -2598,7 +2692,7 @@ class LanController:
 
         from init_tracker_server.host import UvicornServerHost
         from server_app import create_app
-        from server_runtime import RuntimeCommand, COMMAND_UPDATE_SPELL_COLOR, COMMAND_SET_FACING, COMMAND_SET_AURAS_ENABLED, COMMAND_PLACE_COMBATANT, COMMAND_REMOVE_AOE, COMMAND_MOVE_AOE, COMMAND_SET_OBSTACLE, COMMAND_SET_TERRAIN, COMMAND_SET_ELEVATION, COMMAND_SET_MAP_SETTINGS, COMMAND_UPSERT_MAP_BACKGROUND, COMMAND_REMOVE_MAP_BACKGROUND, COMMAND_SET_MAP_BACKGROUND_ORDER, COMMAND_UPSERT_MAP_HAZARD, COMMAND_REMOVE_MAP_HAZARD, COMMAND_UPSERT_MAP_FEATURE, COMMAND_REMOVE_MAP_FEATURE
+        from server_runtime import RuntimeCommand, COMMAND_UPDATE_SPELL_COLOR, COMMAND_SET_FACING, COMMAND_SET_AURAS_ENABLED, COMMAND_PLACE_COMBATANT, COMMAND_REMOVE_AOE, COMMAND_MOVE_AOE, COMMAND_SET_OBSTACLE, COMMAND_SET_TERRAIN, COMMAND_SET_ELEVATION, COMMAND_SET_MAP_SETTINGS, COMMAND_UPSERT_MAP_BACKGROUND, COMMAND_REMOVE_MAP_BACKGROUND, COMMAND_SET_MAP_BACKGROUND_ORDER, COMMAND_UPSERT_MAP_HAZARD, COMMAND_REMOVE_MAP_HAZARD, COMMAND_UPSERT_MAP_FEATURE, COMMAND_REMOVE_MAP_FEATURE, COMMAND_COMBAT_START, COMMAND_COMBAT_SET_TURN, COMMAND_COMBAT_NEXT_TURN
         self._fastapi_app = create_app(lan_controller=self)
         self._runtime = self._fastapi_app.state.runtime
 
@@ -4324,6 +4418,75 @@ class LanController:
             except Exception:
                 raise HTTPException(status_code=500, detail="Failed to read combat snapshot.")
 
+        def _dm_combat_command_payload(
+            request: "Request",
+            *,
+            include_tactical: bool,
+            cid: Optional[int] = None,
+        ) -> Dict[str, Any]:
+            header = request.headers.get("authorization", "")
+            token = ""
+            if header.lower().startswith("bearer "):
+                token = header.split(" ", 1)[1].strip()
+            if not token or not self._is_admin_token_valid(token):
+                token = self._issue_admin_token()
+            correlation = current_debug_correlation()
+            payload = {
+                "admin_token": token,
+                "include_tactical": bool(include_tactical),
+                "timeout_ms": 5000,
+                "request_trace_id": correlation.get("trace_id") or new_trace_id(),
+                "parent_action_id": correlation.get("action_id") or new_action_id(),
+            }
+            if cid is not None:
+                payload["cid"] = int(cid)
+            return payload
+
+        def _dm_next_turn_direct(*, include_tactical: bool) -> Dict[str, Any]:
+            perf_debug = os.getenv("LAN_PERF_DEBUG") == "1"
+            t_start = time.perf_counter() if perf_debug else 0.0
+            result = _dm_service.next_turn()
+            if not result.get("ok"):
+                raise HTTPException(status_code=500, detail="Combat service failed to advance turn.")
+            combat_snapshot = result.get("snapshot")
+            if not isinstance(combat_snapshot, dict):
+                raise HTTPException(status_code=500, detail="Combat service returned an invalid snapshot.")
+            t_next = time.perf_counter() if perf_debug else 0.0
+            snapshot = _dm_console_snapshot(
+                combat_snapshot=combat_snapshot,
+                include_tactical=include_tactical,
+            )
+            if perf_debug:
+                total_ms = (time.perf_counter() - t_start) * 1000.0
+                next_ms = (t_next - t_start) * 1000.0
+                snapshot_ms = total_ms - next_ms
+                self.app._oplog(
+                    f"LAN_PERF dm_next_turn total_ms={total_ms:.2f}"
+                    f" next_turn_ms={next_ms:.2f} snapshot_ms={snapshot_ms:.2f}",
+                    level="info",
+                )
+            return {"ok": True, "snapshot": snapshot}
+
+        def _dm_set_turn_direct(*, cid: int, include_tactical: bool) -> Dict[str, Any]:
+            result = _dm_service.set_turn_here(cid=cid)
+            if not result.get("ok"):
+                raise HTTPException(status_code=400, detail=result.get("error", "Cannot set turn."))
+            return {
+                "ok": True,
+                "cid": result.get("cid"),
+                "previous_cid": result.get("previous_cid"),
+                "snapshot": _dm_console_snapshot(include_tactical=include_tactical),
+            }
+
+        def _dm_start_combat_direct(*, include_tactical: bool) -> Dict[str, Any]:
+            result = _dm_service.start_combat()
+            if not result.get("ok"):
+                raise HTTPException(status_code=400, detail=result.get("error", "Cannot start combat."))
+            return {
+                "ok": True,
+                "snapshot": _dm_console_snapshot(include_tactical=include_tactical),
+            }
+
         @self._fastapi_app.post("/api/dm/combat/next-turn")
         async def dm_next_turn(request: Request):
             """Advance to the next combatant's turn.
@@ -4335,29 +4498,36 @@ class LanController:
             _check_dm_auth(request)
             if _dm_service is None:
                 raise HTTPException(status_code=503, detail="DM combat service unavailable.")
-            perf_debug = os.getenv("LAN_PERF_DEBUG") == "1"
-            t_start = time.perf_counter() if perf_debug else 0.0
+            include_tactical = tactical_map_enabled() or _current_request_wants_tactical_map()
             try:
-                result = _dm_service.next_turn()
+                if _combat_mutation_queue_mode() == "direct":
+                    return _dm_next_turn_direct(include_tactical=include_tactical)
+                command = RuntimeCommand(
+                    command_type=COMMAND_COMBAT_NEXT_TURN,
+                    payload=_dm_combat_command_payload(
+                        request,
+                        include_tactical=include_tactical,
+                    ),
+                )
+                command_result = await _dm_combat_command_in_threadpool(
+                    self._runtime,
+                    command,
+                    route="/api/dm/combat/next-turn",
+                )
+                result = command_result.data.get("combat_result") or {}
                 if not result.get("ok"):
                     raise HTTPException(status_code=500, detail="Combat service failed to advance turn.")
                 combat_snapshot = result.get("snapshot")
                 if not isinstance(combat_snapshot, dict):
                     raise HTTPException(status_code=500, detail="Combat service returned an invalid snapshot.")
-                t_next = time.perf_counter() if perf_debug else 0.0
-                snapshot = _dm_console_snapshot(combat_snapshot=combat_snapshot)
-                if perf_debug:
-                    total_ms = (time.perf_counter() - t_start) * 1000.0
-                    next_ms = (t_next - t_start) * 1000.0
-                    snapshot_ms = total_ms - next_ms
-                    self.app._oplog(
-                        f"LAN_PERF dm_next_turn total_ms={total_ms:.2f}"
-                        f" next_turn_ms={next_ms:.2f} snapshot_ms={snapshot_ms:.2f}",
-                        level="info",
-                    )
+                snapshot = command_result.data.get("response_snapshot")
+                if not isinstance(snapshot, dict):
+                    raise RuntimeError("Combat command returned an invalid response snapshot.")
                 return {"ok": True, "snapshot": snapshot}
             except HTTPException:
                 raise
+            except TimeoutError as exc:
+                raise HTTPException(status_code=504, detail=str(exc))
             except Exception:
                 raise HTTPException(status_code=500, detail="Failed to advance turn.")
 
@@ -4402,17 +4572,38 @@ class LanController:
             except Exception:
                 raise HTTPException(status_code=400, detail="cid must be an integer.")
             try:
-                result = _dm_service.set_turn_here(cid=cid)
+                include_tactical = tactical_map_enabled() or _current_request_wants_tactical_map()
+                if _combat_mutation_queue_mode() == "direct":
+                    return _dm_set_turn_direct(cid=cid, include_tactical=include_tactical)
+                command = RuntimeCommand(
+                    command_type=COMMAND_COMBAT_SET_TURN,
+                    payload=_dm_combat_command_payload(
+                        request,
+                        include_tactical=include_tactical,
+                        cid=cid,
+                    ),
+                )
+                command_result = await _dm_combat_command_in_threadpool(
+                    self._runtime,
+                    command,
+                    route="/api/dm/combat/set-turn",
+                )
+                result = command_result.data.get("combat_result") or {}
                 if not result.get("ok"):
                     raise HTTPException(status_code=400, detail=result.get("error", "Cannot set turn."))
+                snapshot = command_result.data.get("response_snapshot")
+                if not isinstance(snapshot, dict):
+                    raise RuntimeError("Combat command returned an invalid response snapshot.")
                 return {
                     "ok": True,
                     "cid": result.get("cid"),
                     "previous_cid": result.get("previous_cid"),
-                    "snapshot": _dm_console_snapshot(),
+                    "snapshot": snapshot,
                 }
             except HTTPException:
                 raise
+            except TimeoutError as exc:
+                raise HTTPException(status_code=504, detail=str(exc))
             except Exception:
                 raise HTTPException(status_code=500, detail="Failed to set turn.")
 
@@ -4576,12 +4767,32 @@ class LanController:
             if _dm_service is None:
                 raise HTTPException(status_code=503, detail="DM combat service unavailable.")
             try:
-                result = _dm_service.start_combat()
+                include_tactical = tactical_map_enabled() or _current_request_wants_tactical_map()
+                if _combat_mutation_queue_mode() == "direct":
+                    return _dm_start_combat_direct(include_tactical=include_tactical)
+                command = RuntimeCommand(
+                    command_type=COMMAND_COMBAT_START,
+                    payload=_dm_combat_command_payload(
+                        request,
+                        include_tactical=include_tactical,
+                    ),
+                )
+                command_result = await _dm_combat_command_in_threadpool(
+                    self._runtime,
+                    command,
+                    route="/api/dm/combat/start",
+                )
+                result = command_result.data.get("combat_result") or {}
                 if not result.get("ok"):
                     raise HTTPException(status_code=400, detail=result.get("error", "Cannot start combat."))
-                return {"ok": True, "snapshot": _dm_console_snapshot()}
+                snapshot = command_result.data.get("response_snapshot")
+                if not isinstance(snapshot, dict):
+                    raise RuntimeError("Combat command returned an invalid response snapshot.")
+                return {"ok": True, "snapshot": snapshot}
             except HTTPException:
                 raise
+            except TimeoutError as exc:
+                raise HTTPException(status_code=504, detail=str(exc))
             except Exception:
                 raise HTTPException(status_code=500, detail="Failed to start combat.")
 
@@ -7576,6 +7787,39 @@ class LanController:
                             dispatch_fields["slow_queue_wait"] = True
 
                     with debug_context(trace_id=trace_id, action_id=action_id):
+                        combat_mutation = typ in {"combat_start", "combat_set_turn", "combat_next_turn"}
+                        parent_action_id = str(msg.get("parent_action_id") or msg.get("_parent_action_id") or "")[:160]
+                        combat_route = {
+                            "combat_start": "/api/dm/combat/start",
+                            "combat_set_turn": "/api/dm/combat/set-turn",
+                            "combat_next_turn": "/api/dm/combat/next-turn",
+                        }.get(typ)
+                        if combat_mutation:
+                            close_queue_wait_span = False
+                            with self._action_states_lock:
+                                state = self._action_states.get(action_id)
+                                if state is not None:
+                                    state["authority_started_at_ns"] = dispatch_started_ns
+                                    if not state.get("queue_wait_span_closed"):
+                                        state["queue_wait_span_closed"] = True
+                                        close_queue_wait_span = True
+                            if close_queue_wait_span:
+                                debug_event(
+                                    "span.end",
+                                    span="runtime.command.queue_wait",
+                                    duration_ms=queue_wait_ms,
+                                    ok=True,
+                                    command=typ,
+                                    route=combat_route,
+                                    method="POST",
+                                    parent_action_id=parent_action_id or None,
+                                    thread_role="authority",
+                                    outcome="authority_dispatch",
+                                    queue_size=self._actions.qsize(),
+                                    enqueue_to_authority_start_ms=queue_wait_ms,
+                                    timeout_ms=int(msg.get("timeout_ms", 5000)),
+                                    completion_state="dispatching",
+                                )
                         debug_event("ws.action.dispatch.start", **dispatch_fields)
                         try:
                             if typ == "manual_override_resource_pool":
@@ -7602,7 +7846,45 @@ class LanController:
                                                 self._send_action_ack_sync(ws_id, action_id, "completed", res)
                                     continue
                             with timed_span("ws.action.dispatch", **dispatch_fields):
-                                self._tracker._lan_apply_action(msg)
+                                if combat_mutation:
+                                    execute_started_ns = time.perf_counter_ns()
+                                    execute_fields = {
+                                        "command": typ,
+                                        "route": combat_route,
+                                        "method": "POST",
+                                        "parent_action_id": parent_action_id or None,
+                                        "thread_role": "authority",
+                                    }
+                                    debug_event(
+                                        "span.start",
+                                        span="runtime.command.execute",
+                                        outcome="pending",
+                                        **execute_fields,
+                                    )
+                                    try:
+                                        self._tracker._lan_apply_action(msg)
+                                    except Exception as exc:
+                                        debug_event(
+                                            "span.end",
+                                            span="runtime.command.execute",
+                                            duration_ms=round((time.perf_counter_ns() - execute_started_ns) / 1_000_000.0, 3),
+                                            ok=False,
+                                            reason=type(exc).__name__,
+                                            outcome="failed",
+                                            **execute_fields,
+                                        )
+                                        raise
+                                    else:
+                                        debug_event(
+                                            "span.end",
+                                            span="runtime.command.execute",
+                                            duration_ms=round((time.perf_counter_ns() - execute_started_ns) / 1_000_000.0, 3),
+                                            ok=True,
+                                            outcome="completed",
+                                            **execute_fields,
+                                        )
+                                else:
+                                    self._tracker._lan_apply_action(msg)
                         except Exception as exc:
                             with self._action_states_lock:
                                 if action_id in self._action_states:
@@ -8401,13 +8683,25 @@ class LanController:
     # ---------- Server-thread safe broadcast ----------
 
     def _broadcast_state(self, snap: Dict[str, Any]) -> None:
-        if not self._loop:
-            return
-        coro = self._broadcast_state_async(snap, correlation=current_debug_correlation())
-        try:
-            asyncio.run_coroutine_threadsafe(coro, self._loop)
-        except Exception:
-            pass
+        mutation_fields = dict(getattr(self._tracker, "_combat_mutation_trace_fields", {}) or {})
+        schedule_fields = {
+            "command": mutation_fields.pop("command", "state"),
+            "thread_role": "authority",
+            "counts": {"recipient_count": len(self._clients)},
+            **mutation_fields,
+        }
+        with timed_span(
+            "lan.broadcast.schedule",
+            outcome="scheduled" if self._loop else "skipped_no_loop",
+            **schedule_fields,
+        ):
+            if not self._loop:
+                return
+            coro = self._broadcast_state_async(snap, correlation=current_debug_correlation())
+            try:
+                asyncio.run_coroutine_threadsafe(coro, self._loop)
+            except Exception:
+                pass
 
     def _broadcast_payload(self, payload: Dict[str, Any]) -> None:
         if not self._loop:
@@ -8810,13 +9104,25 @@ class LanController:
 
     def _push_dm_snapshot_to_ws_clients(self, snapshot: Dict[str, Any]) -> None:
         """Push a DM-specific snapshot to all connected DM WebSocket clients."""
-        if not self._loop:
-            return
-        coro = self._push_dm_snapshot_async(snapshot, correlation=current_debug_correlation())
-        try:
-            asyncio.run_coroutine_threadsafe(coro, self._loop)
-        except Exception as exc:
-            self._log_lan_exception("DM WS push scheduling failed", exc)
+        mutation_fields = dict(getattr(self._tracker, "_combat_mutation_trace_fields", {}) or {})
+        schedule_fields = {
+            "command": mutation_fields.pop("command", "dm_state"),
+            "thread_role": "authority",
+            "counts": {"recipient_count": len(self._dm_ws_clients)},
+            **mutation_fields,
+        }
+        with timed_span(
+            "dm.broadcast.schedule",
+            outcome="scheduled" if self._loop else "skipped_no_loop",
+            **schedule_fields,
+        ):
+            if not self._loop:
+                return
+            coro = self._push_dm_snapshot_async(snapshot, correlation=current_debug_correlation())
+            try:
+                asyncio.run_coroutine_threadsafe(coro, self._loop)
+            except Exception as exc:
+                self._log_lan_exception("DM WS push scheduling failed", exc)
 
     def _dm_state_message(self, snapshot: Dict[str, Any]) -> Dict[str, Any]:
         """Build the DM websocket message with narrow JSON-safe coercion."""
@@ -43670,7 +43976,10 @@ class InitiativeTracker(base.InitiativeTracker):
             log_warning = None
         claimed = _normalize_cid_value(msg.get("_claimed_cid"), "lan_action.claimed_cid", log_fn=log_warning)
         admin_token = str(msg.get("admin_token") or "").strip()
-        is_admin = bool(admin_token and self._is_admin_token_valid(admin_token))
+        if typ in {"combat_start", "combat_set_turn", "combat_next_turn"}:
+            is_admin = bool(admin_token and self._lan._is_admin_token_valid(admin_token))
+        else:
+            is_admin = bool(admin_token and self._is_admin_token_valid(admin_token))
         is_move = typ == "move"
         move_debugger = getattr(self, "_lan", None)
         def _move_log(event: str, **fields: Any) -> None:
@@ -43688,6 +43997,72 @@ class InitiativeTracker(base.InitiativeTracker):
             getattr(self, "current_cid", None), "lan_action.current_cid", log_fn=log_warning
         )
         in_combat = bool(getattr(self, "in_combat", False))
+        if typ in {"combat_start", "combat_set_turn", "combat_next_turn"}:
+            if not is_admin:
+                raise PermissionError("Combat mutation command requires admin authorization.")
+            service = getattr(self, "_dm_service", None)
+            if service is None:
+                raise RuntimeError("DM combat service unavailable.")
+            action_id = str(msg.get("action_id") or "")
+            parent_action_id = str(msg.get("parent_action_id") or msg.get("_parent_action_id") or "")[:160]
+            route = {
+                "combat_start": "/api/dm/combat/start",
+                "combat_set_turn": "/api/dm/combat/set-turn",
+                "combat_next_turn": "/api/dm/combat/next-turn",
+            }[typ]
+            service_method = {
+                "combat_start": "start_combat",
+                "combat_set_turn": "set_turn_here",
+                "combat_next_turn": "next_turn",
+            }[typ]
+            trace_fields = {
+                "command": typ,
+                "route": route,
+                "method": "POST",
+                "service_method": service_method,
+                "parent_action_id": parent_action_id or None,
+                "thread_role": "authority",
+            }
+            self.__dict__["_combat_mutation_trace_fields"] = trace_fields
+            try:
+                with timed_span(
+                    "combat.mutation.service_call",
+                    outcome="completed",
+                    **trace_fields,
+                ):
+                    if typ == "combat_start":
+                        combat_result = service.start_combat()
+                    elif typ == "combat_set_turn":
+                        combat_result = service.set_turn_here(cid=int(cid))
+                    else:
+                        combat_result = service.next_turn()
+
+                include_tactical = bool(msg.get("include_tactical"))
+                response_kwargs: Dict[str, Any] = {
+                    "include_tactical": include_tactical,
+                    "scope": "dm_combat_mutation_response",
+                }
+                if typ == "combat_next_turn" and isinstance(combat_result, dict):
+                    combat_snapshot = combat_result.get("snapshot")
+                    if isinstance(combat_snapshot, dict):
+                        response_kwargs["combat_snapshot"] = combat_snapshot
+                with timed_span(
+                    "combat.mutation.response_snapshot",
+                    outcome="completed",
+                    **trace_fields,
+                ):
+                    response_snapshot = self._lan._dm_console_snapshot(**response_kwargs)
+
+                if action_id:
+                    with self._lan._action_states_lock:
+                        state = self._lan._action_states.get(action_id)
+                        if state is not None:
+                            state["combat_result"] = combat_result
+                            state["response_snapshot"] = response_snapshot
+                            state["authority_thread_id"] = threading.get_ident()
+            finally:
+                self.__dict__.pop("_combat_mutation_trace_fields", None)
+            return
         if is_move:
             _move_log(
                 "lan_move_apply_start",

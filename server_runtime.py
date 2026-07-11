@@ -3,6 +3,8 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any, Dict, Optional
 
+from runtime_config import current_debug_correlation, debug_context, debug_event, new_trace_id
+
 
 @dataclass(frozen=True)
 class RuntimeCommand:
@@ -74,6 +76,15 @@ COMMAND_UPSERT_MAP_HAZARD = "upsert_map_hazard"
 COMMAND_REMOVE_MAP_HAZARD = "remove_map_hazard"
 COMMAND_UPSERT_MAP_FEATURE = "upsert_map_feature"
 COMMAND_REMOVE_MAP_FEATURE = "remove_map_feature"
+COMMAND_COMBAT_START = "combat_start"
+COMMAND_COMBAT_SET_TURN = "combat_set_turn"
+COMMAND_COMBAT_NEXT_TURN = "combat_next_turn"
+
+_COMBAT_MUTATION_COMMANDS = {
+    COMMAND_COMBAT_START,
+    COMMAND_COMBAT_SET_TURN,
+    COMMAND_COMBAT_NEXT_TURN,
+}
 
 
 SNAPSHOT_TYPE_COMBAT = "combat"
@@ -136,19 +147,44 @@ class ServerRuntimeFacade:
         if not self.lan_controller:
             raise RuntimeError("LanController is not configured on the facade.")
 
+        correlation = current_debug_correlation()
         action_id = f"facade-{uuid.uuid4().hex[:16]}"
-        trace_id = f"trace-{uuid.uuid4().hex[:16]}"
+        trace_id = str(
+            command.payload.get("request_trace_id")
+            or correlation.get("trace_id")
+            or new_trace_id()
+        )[:160]
+        parent_action_id = str(
+            command.payload.get("parent_action_id")
+            or correlation.get("action_id")
+            or ""
+        )[:160]
         received_at_ns = time.perf_counter_ns()
+        is_combat_mutation = command.command_type in _COMBAT_MUTATION_COMMANDS
+        route = {
+            COMMAND_COMBAT_START: "/api/dm/combat/start",
+            COMMAND_COMBAT_SET_TURN: "/api/dm/combat/set-turn",
+            COMMAND_COMBAT_NEXT_TURN: "/api/dm/combat/next-turn",
+        }.get(command.command_type)
+        trace_fields = {
+            "command": command.command_type,
+            "route": route,
+            "method": "POST" if route else None,
+            "parent_action_id": parent_action_id or None,
+            "thread_role": "worker",
+            "timeout_ms": int(timeout_ms),
+        }
 
         # Convert to the dictionary shape expected by the existing LanController._actions / _lan_apply_action flow.
         msg = {
+            **command.payload,
             "type": command.command_type,
             "action_id": action_id,
             "_trace_id": trace_id,
+            "_parent_action_id": parent_action_id,
             "_received_at_ns": received_at_ns,
             "_ws_id": None,
             "_claimed_cid": command.payload.get("cid"),
-            **command.payload
         }
 
         # Register pending action state under lan_controller._action_states_lock
@@ -158,7 +194,10 @@ class ServerRuntimeFacade:
                 "received_at_ns": received_at_ns,
                 "command": command.command_type,
                 "ws_id": None,
-                "cid": command.payload.get("cid")
+                "cid": command.payload.get("cid"),
+                "trace_id": trace_id,
+                "parent_action_id": parent_action_id,
+                "queue_wait_span_closed": False,
             }
             if len(self.lan_controller._action_states) > self.lan_controller._action_history_limit:
                 try:
@@ -168,6 +207,15 @@ class ServerRuntimeFacade:
                     pass
 
         # Enqueue the action onto lan_controller._actions
+        if is_combat_mutation:
+            with debug_context(trace_id=trace_id, action_id=action_id):
+                debug_event(
+                    "span.start",
+                    span="runtime.command.queue_wait",
+                    queue_size=getattr(self.lan_controller._actions, "qsize", lambda: 0)(),
+                    completion_state="pending",
+                    **trace_fields,
+                )
         self.lan_controller._actions.put(msg)
 
         # Wait on the request thread by bounded polling of _action_states until completion or timeout
@@ -194,9 +242,30 @@ class ServerRuntimeFacade:
         metadata = {
             "queue_size": qsize,
             "action_id": action_id,
+            "trace_id": trace_id,
+            "parent_action_id": parent_action_id,
         }
 
         if result_state is None:
+            close_queue_span = False
+            if is_combat_mutation:
+                with self.lan_controller._action_states_lock:
+                    state = self.lan_controller._action_states.get(action_id)
+                    if state is not None and not state.get("queue_wait_span_closed"):
+                        state["queue_wait_span_closed"] = True
+                        close_queue_span = True
+            if close_queue_span:
+                with debug_context(trace_id=trace_id, action_id=action_id):
+                    debug_event(
+                        "span.end",
+                        span="runtime.command.queue_wait",
+                        duration_ms=round(duration_ms, 3),
+                        ok=False,
+                        outcome="timed_out",
+                        queue_size=qsize,
+                        completion_state="timed_out",
+                        **trace_fields,
+                    )
             # Timed out outcome
             self.last_command_trace = RuntimeCommandTrace(
                 command_type=command.command_type,
@@ -211,6 +280,11 @@ class ServerRuntimeFacade:
         completed_at_ns = result_state.get("completed_at_ns")
         if completed_at_ns and received_at_ns:
             metadata["queue_wait_ms"] = (completed_at_ns - received_at_ns) / 1_000_000.0
+        authority_started_at_ns = result_state.get("authority_started_at_ns")
+        if authority_started_at_ns and received_at_ns:
+            metadata["enqueue_to_authority_start_ms"] = (
+                authority_started_at_ns - received_at_ns
+            ) / 1_000_000.0
 
         if result.get("status") == "error":
             # Failed outcome
@@ -236,8 +310,47 @@ class ServerRuntimeFacade:
         return RuntimeCommandResult(
             success=True,
             message=f"Command '{command.command_type}' completed successfully.",
-            data={"result": result}
+            data={"result": result, "action_id": action_id}
         )
+
+    def _submit_combat_mutation(self, command: RuntimeCommand) -> RuntimeCommandResult:
+        import time
+
+        started_at = time.perf_counter()
+        try:
+            timeout_ms = int(command.payload.get("timeout_ms", 5000))
+            queue_result = self._submit_to_lan_queue(command, timeout_ms=timeout_ms)
+            action_id = queue_result.data.get("action_id")
+            if not action_id:
+                raise RuntimeError("Combat command queue did not return an action id.")
+            if not isinstance(queue_result.data.get("result"), dict) or not queue_result.data.get("result"):
+                raise RuntimeError("Combat command queue did not return a result.")
+            with self.lan_controller._action_states_lock:
+                state = self.lan_controller._action_states.get(action_id)
+                combat_result = state.get("combat_result") if state else None
+                response_snapshot = state.get("response_snapshot") if state else None
+            if not isinstance(combat_result, dict):
+                raise RuntimeError("Combat command queue did not return a combat result.")
+            if not isinstance(response_snapshot, dict):
+                raise RuntimeError("Combat command queue did not return a response snapshot.")
+            return RuntimeCommandResult(
+                success=True,
+                message=f"Command '{command.command_type}' completed successfully.",
+                data={
+                    "combat_result": combat_result,
+                    "response_snapshot": response_snapshot,
+                },
+            )
+        except Exception as exc:
+            metadata = self.last_command_trace.metadata if self.last_command_trace else {}
+            self.last_command_trace = RuntimeCommandTrace(
+                command_type=command.command_type,
+                status=STATUS_TIMED_OUT if isinstance(exc, TimeoutError) else STATUS_FAILED,
+                duration_ms=(time.perf_counter() - started_at) * 1000.0,
+                error_class=type(exc).__name__,
+                metadata=metadata,
+            )
+            raise
 
     def _raise_mapped_exception(self, reason: str) -> None:
         if reason == "ValueError":
@@ -253,6 +366,8 @@ class ServerRuntimeFacade:
 
     def submit_command(self, command: RuntimeCommand) -> RuntimeCommandResult:
         """Submit a command to the runtime."""
+        if command.command_type in _COMBAT_MUTATION_COMMANDS:
+            return self._submit_combat_mutation(command)
         if command.command_type == COMMAND_TEST_QUEUE:
             timeout_ms = command.payload.get("timeout_ms", 5000)
             return self._submit_to_lan_queue(command, timeout_ms=timeout_ms)
