@@ -324,3 +324,203 @@ def test_three_surface_cleanup_refuses_unverified_process_ownership():
         "pid": 4321,
     }
     assert process.calls == []
+
+
+class _FakeTracing:
+    def __init__(self):
+        self.start_calls = []
+        self.stop_calls = []
+
+    def start(self, **kwargs):
+        self.start_calls.append(kwargs)
+
+    def stop(self, **kwargs):
+        self.stop_calls.append(kwargs)
+
+
+class _FakeContext:
+    def __init__(self):
+        self.tracing = _FakeTracing()
+
+
+class _FakePage:
+    def __init__(self):
+        self.context = _FakeContext()
+
+
+class _FakeCollector:
+    def __init__(self, root):
+        self.root = root
+        self.timestamp = "20260716_120000"
+        self.screenshots = []
+
+    def get_path(self, filename):
+        return self.root / filename
+
+    def capture_screenshot(self, _page, name):
+        path = self.root / f"{name}.png"
+        self.screenshots.append(str(path))
+
+
+def _fake_three_surface_pages(harness):
+    pages = {
+        "dm": _FakePage(),
+        "dmcontrol": _FakePage(),
+    }
+    pages.update({
+        f"player:{player_id}": _FakePage()
+        for player_id, _name in harness.THREE_SURFACE_PLAYER_IDENTITIES
+    })
+    return pages
+
+
+def test_three_surface_scenario_executes_registered_executor(monkeypatch, tmp_path):
+    harness = _load_browser_smoke_harness()
+    assert harness.THREE_SURFACE_EXECUTORS[harness.THREE_SURFACE_SCENARIO_ID] is (
+        harness.execute_three_surface_workflow
+    )
+    calls = []
+
+    def fake_registered_executor(plan, base_url, pages, collector, config):
+        calls.append((plan, base_url, pages, collector, config))
+        return True, {"executor": "fake-registered-executor"}
+
+    monkeypatch.setitem(
+        harness.THREE_SURFACE_EXECUTORS,
+        harness.THREE_SURFACE_SCENARIO_ID,
+        fake_registered_executor,
+    )
+    scenario = harness.BlackTanThreeSurfaceWorkflowScenario()
+    collector = _FakeCollector(tmp_path)
+
+    result = scenario.run("http://example.invalid", {}, collector, {})
+
+    assert result == (True, {"executor": "fake-registered-executor"})
+    assert len(calls) == 1
+    assert calls[0][0] is scenario.plan
+    assert calls[0][1] == "http://example.invalid"
+
+
+def test_three_surface_executor_runs_ordered_plan_once(monkeypatch, tmp_path):
+    harness = _load_browser_smoke_harness()
+    plan = harness.build_three_surface_workflow_plan()
+    pages = _fake_three_surface_pages(harness)
+    collector = _FakeCollector(tmp_path)
+    executed = []
+
+    def fake_step(step, plan_arg, base_url, pages_arg, collector_arg, config, state):
+        assert plan_arg is plan
+        assert base_url == "http://example.invalid"
+        assert pages_arg is pages
+        assert collector_arg is collector
+        executed.append((step["order"], step["step_id"]))
+
+    monkeypatch.setattr(harness, "_execute_three_surface_step", fake_step)
+
+    success, evidence = harness.execute_three_surface_workflow(
+        plan,
+        "http://example.invalid",
+        pages,
+        collector,
+        {
+            "port_ownership": {"port": 8787, "verified": True, "pid": 1234},
+            "cleanup_disposition": {"status": "owned-process-cleaned", "cleaned": True},
+        },
+    )
+
+    expected = [(step["order"], step["step_id"]) for step in plan["steps"]]
+    assert success is True
+    assert executed == expected
+    assert len(executed) == len(set(executed))
+    assert evidence["executed_step_count"] == len(plan["steps"])
+    assert [timing["order"] for timing in evidence["ordered_step_timings"]] == [
+        step["order"] for step in plan["steps"]
+    ]
+    assert all(timing["duration_ms"] >= 0 for timing in evidence["ordered_step_timings"])
+    assert all(timing["status"] == "pass" for timing in evidence["ordered_step_timings"])
+    assert evidence["artifacts"]["browser_trace"].endswith("browser-trace.zip")
+    assert set(evidence["artifacts"]["role_traces"]) == set(pages)
+    assert all(page.context.tracing.start_calls for page in pages.values())
+    assert all(page.context.tracing.stop_calls for page in pages.values())
+
+
+def test_three_surface_executor_failure_records_terminal_evidence(monkeypatch, tmp_path):
+    harness = _load_browser_smoke_harness()
+    plan = harness.build_three_surface_workflow_plan()
+    pages = _fake_three_surface_pages(harness)
+    collector = _FakeCollector(tmp_path)
+    failing_step = "open-toolbox"
+
+    def fake_step(step, *_args):
+        if step["step_id"] == failing_step:
+            raise harness.ThreeSurfaceTerminalFailure(
+                "selector-failure",
+                {"selector": "#openToolboxBtn", "detail": "x" * 800},
+            )
+
+    monkeypatch.setattr(harness, "_execute_three_surface_step", fake_step)
+
+    success, evidence = harness.execute_three_surface_workflow(
+        plan,
+        "http://example.invalid",
+        pages,
+        collector,
+        {
+            "server_log": str(tmp_path / "server.log"),
+            "debug_trace": str(tmp_path / "debug.jsonl"),
+            "port_ownership": {"port": 8787, "verified": True, "pid": 1234},
+            "cleanup_disposition": {"status": "owned-process-cleaned", "cleaned": True},
+        },
+    )
+
+    assert success is False
+    assert evidence["terminal_classification"] == "fail"
+    assert evidence["failure_step_id"] == failing_step
+    assert evidence["executed_step_count"] == 5
+    assert evidence["ordered_step_timings"][-1]["status"] == "fail"
+    assert "selector-failure" in evidence["failure_detail"]
+    assert evidence["failure_detail"].startswith("selector-failure:")
+    assert len(evidence["failure_detail"]) <= 512
+    assert evidence["artifacts"]["screenshots"]
+    assert evidence["artifacts"]["browser_trace"].endswith("browser-trace.zip")
+    assert set(evidence["artifacts"]["role_traces"]) == set(pages)
+    assert evidence["artifacts"]["server_log"].endswith("server.log")
+    assert evidence["artifacts"]["debug_trace"].endswith("debug.jsonl")
+    assert evidence["port_ownership"]["verified"] is True
+    assert evidence["cleanup_disposition"]["status"] == "owned-process-cleaned"
+
+
+def test_three_surface_executor_never_retries_after_failure(monkeypatch, tmp_path):
+    harness = _load_browser_smoke_harness()
+    plan = harness.build_three_surface_workflow_plan()
+    pages = _fake_three_surface_pages(harness)
+    collector = _FakeCollector(tmp_path)
+    executed = []
+
+    def fake_step(step, *_args):
+        executed.append(step["step_id"])
+        if step["step_id"] == "reset-ui-workflow":
+            raise harness.ThreeSurfaceTerminalFailure(
+                "fixture-precondition-mismatch",
+                "reset contract mismatch",
+            )
+
+    monkeypatch.setattr(harness, "_execute_three_surface_step", fake_step)
+
+    success, evidence = harness.execute_three_surface_workflow(
+        plan,
+        "http://example.invalid",
+        pages,
+        collector,
+        {},
+    )
+
+    assert success is False
+    assert executed == ["pin-contract-expectation", "reset-ui-workflow"]
+    assert executed.count("reset-ui-workflow") == 1
+    assert evidence["executed_step_count"] == 2
+    assert evidence["retry"] is False
+    assert evidence["rewrite_expectation"] is False
+    assert harness.THREE_SURFACE_PRECONDITION_DIGEST == (
+        "sha256:67668370769a7a7f81c820550d4a10033bde8e297b2da1d05d55819cade90873"
+    )

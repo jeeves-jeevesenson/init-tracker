@@ -16,6 +16,7 @@ import time
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Dict, List, Optional
+from urllib.parse import urlsplit
 
 import requests
 from playwright.sync_api import sync_playwright, Page, BrowserContext, Browser
@@ -271,6 +272,24 @@ def build_three_surface_workflow_plan() -> Dict[str, Any]:
 
 
 def _bounded_failure_detail(value: Any, limit: int = 512) -> str:
+    if isinstance(value, dict) and value.get("reason"):
+        reason = str(value["reason"])
+        subordinate = {key: item for key, item in value.items() if key != "reason"}
+        prefix = f"{reason}:"
+        subordinate_detail = json.dumps(
+            subordinate,
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+            default=str,
+        )
+        subordinate_limit = max(0, limit - len(prefix))
+        if len(subordinate_detail) > subordinate_limit:
+            if subordinate_limit >= 3:
+                subordinate_detail = f"{subordinate_detail[:subordinate_limit - 3]}..."
+            else:
+                subordinate_detail = subordinate_detail[:subordinate_limit]
+        return f"{prefix}{subordinate_detail}"
     if isinstance(value, str):
         detail = value
     else:
@@ -473,6 +492,683 @@ def cleanup_owned_process(process: Any, ownership: Optional[Dict[str, Any]]) -> 
         "pid": process_pid,
     }
 
+
+class ThreeSurfaceTerminalFailure(RuntimeError):
+    """A fail-closed three-surface outcome that must not be retried."""
+
+    def __init__(self, reason: str, detail: Any):
+        super().__init__(_bounded_failure_detail(detail))
+        self.reason = reason
+        self.detail = detail
+
+
+def _three_surface_page(step: Dict[str, Any], pages: Dict[str, Page]) -> Page:
+    surface = step.get("surface")
+    if surface == "/dm":
+        role = "dm"
+    elif surface == "/dmcontrol":
+        role = "dmcontrol"
+    elif surface == "/":
+        player_id = step.get("player_id")
+        if player_id:
+            role = f"player:{player_id}"
+        else:
+            role = f"player:{THREE_SURFACE_PLAYER_IDENTITIES[-1][0]}"
+    else:
+        raise ThreeSurfaceTerminalFailure(
+            "browser-error",
+            {"error": "step-has-no-browser-surface", "step_id": step.get("step_id")},
+        )
+    try:
+        return pages[role]
+    except KeyError as exc:
+        raise ThreeSurfaceTerminalFailure(
+            "browser-error",
+            {"error": "missing-browser-role", "role": role, "step_id": step.get("step_id")},
+        ) from exc
+
+
+def _wait_for_visible(page: Page, selector: str, step_id: str, timeout: int = 10000) -> None:
+    try:
+        page.wait_for_selector(selector, state="visible", timeout=timeout)
+    except Exception as exc:
+        raise ThreeSurfaceTerminalFailure(
+            "selector-failure",
+            {"step_id": step_id, "selector": selector, "error": str(exc)},
+        ) from exc
+
+
+def _click_selector(page: Page, selector: str, step_id: str) -> None:
+    _wait_for_visible(page, selector, step_id)
+    try:
+        page.click(selector)
+    except Exception as exc:
+        raise ThreeSurfaceTerminalFailure(
+            "selector-failure",
+            {"step_id": step_id, "selector": selector, "error": str(exc)},
+        ) from exc
+
+
+def _click_mapped_position(
+    page: Page,
+    selector: str,
+    position: Dict[str, int],
+    step_id: str,
+) -> None:
+    _wait_for_visible(page, selector, step_id)
+    try:
+        coordinates = page.evaluate(
+            """([canvasSelector, col, row]) => {
+                const canvas = document.querySelector(canvasSelector);
+                if (!canvas) throw new Error(`missing canvas ${canvasSelector}`);
+                if (typeof zoom !== 'number' || typeof panX !== 'number' || typeof panY !== 'number') {
+                    throw new Error('map transform is unavailable');
+                }
+                const rect = canvas.getBoundingClientRect();
+                return {
+                    x: rect.left + col * zoom + panX + zoom / 2,
+                    y: rect.top + row * zoom + panY + zoom / 2
+                };
+            }""",
+            [selector, position["col"], position["row"]],
+        )
+        page.mouse.move(coordinates["x"], coordinates["y"])
+        page.mouse.down()
+        page.mouse.up()
+    except ThreeSurfaceTerminalFailure:
+        raise
+    except Exception as exc:
+        raise ThreeSurfaceTerminalFailure(
+            "browser-error",
+            {"step_id": step_id, "selector": selector, "error": str(exc)},
+        ) from exc
+
+
+def _record_fixture_response(
+    step: Dict[str, Any],
+    base_url: str,
+    state: Dict[str, Any],
+    config: Dict[str, Any],
+) -> None:
+    operation = step["request"]["operation"]
+    post = config.get("three_surface_http_post", requests.post)
+    try:
+        response = post(
+            f"{base_url}{step['path']}",
+            json=step["request"],
+            timeout=config.get("fixture_timeout_seconds", 30),
+        )
+        payload = response.json()
+    except Exception as exc:
+        raise ThreeSurfaceTerminalFailure(
+            "browser-error",
+            {"step_id": step["step_id"], "operation": operation, "error": str(exc)},
+        ) from exc
+
+    if not isinstance(payload, dict):
+        raise ThreeSurfaceTerminalFailure(
+            "fixture-precondition-mismatch",
+            {"step_id": step["step_id"], "operation": operation, "error": "fixture-response-not-object"},
+        )
+    status_code = getattr(response, "status_code", None)
+    state["fixture_responses"][operation] = payload
+    state["fixture_evidence"][operation] = {
+        "request": dict(step["request"]),
+        "status_code": status_code,
+        "response": payload,
+    }
+    if isinstance(status_code, int) and status_code >= 400 and payload.get("ok") is not False:
+        raise ThreeSurfaceTerminalFailure(
+            "fixture-precondition-mismatch",
+            {"step_id": step["step_id"], "operation": operation, "status_code": status_code},
+        )
+
+
+def _enforce_fixture_barrier(step: Dict[str, Any], state: Dict[str, Any]) -> None:
+    operation = (
+        "reset-ui-workflow"
+        if step["step_id"] == "validate-reset-contract"
+        else "verify-ui-workflow"
+    )
+    response = state["fixture_responses"].get(operation)
+    if response is None:
+        raise ThreeSurfaceTerminalFailure(
+            "fixture-precondition-mismatch",
+            {"step_id": step["step_id"], "operation": operation, "error": "missing-fixture-response"},
+        )
+    result = classify_three_surface_contract_response(response, operation)
+    state["fixture_evidence"][operation]["classification"] = result
+    if not result["ok"]:
+        raise ThreeSurfaceTerminalFailure(
+            result["reason"],
+            {"step_id": step["step_id"], "detail": result["failure_detail"]},
+        )
+    if operation == "verify-ui-workflow":
+        state["player_cid_map"] = dict(response["player_cid_map"])
+        state["enemy_cid_map"] = dict(response["enemy_cid_map"])
+        state["player_positions"] = {
+            item["player_id"]: dict(item["position"])
+            for item in response["players"]
+        }
+        state["enemy_positions"] = {
+            item["enemy_slug"]: dict(item["position"])
+            for item in response["enemies"]
+        }
+
+
+def _execute_player_action(step: Dict[str, Any], page: Page, state: Dict[str, Any]) -> None:
+    player_id = step["player_id"]
+    player_index = [identity for identity, _name in THREE_SURFACE_PLAYER_IDENTITIES].index(player_id)
+    enemy_slug = THREE_SURFACE_ENEMY_IDENTITIES[player_index % len(THREE_SURFACE_ENEMY_IDENTITIES)][0]
+    target_position = state["enemy_positions"][enemy_slug]
+    step_id = step["step_id"]
+
+    if step["action"] == "attack-mapped-target":
+        attack_open, canvas, resolve = step["selectors"]
+        _click_selector(page, attack_open, step_id)
+        _click_mapped_position(page, canvas, target_position, step_id)
+        _click_selector(page, resolve, step_id)
+        return
+
+    cast_open, cast_preset, cast_name, cast_slot, cast_submit, canvas, resolve = step["selectors"]
+    _click_selector(page, cast_open, step_id)
+    for selector in (cast_preset, cast_name, cast_slot, cast_submit):
+        _wait_for_visible(page, selector, step_id)
+    try:
+        page.evaluate(
+            """([presetSelector, nameSelector, slotSelector]) => {
+                const preset = document.querySelector(presetSelector);
+                const name = document.querySelector(nameSelector);
+                const slot = document.querySelector(slotSelector);
+                if (!preset || !name || !slot) throw new Error('spell controls unavailable');
+                const option = Array.from(preset.options || []).find(item => item.value && !item.disabled);
+                if (!option) throw new Error('spell preset unavailable');
+                preset.value = option.value;
+                preset.dispatchEvent(new Event('change', {bubbles: true}));
+                name.value = 'A7 three-surface spell';
+                name.dispatchEvent(new Event('input', {bubbles: true}));
+                if (slot.options) {
+                    const slotOption = Array.from(slot.options).find(item => item.value === '1')
+                        || Array.from(slot.options).find(item => item.value && !item.disabled);
+                    if (!slotOption) throw new Error('spell slot unavailable');
+                    slot.value = slotOption.value;
+                } else {
+                    slot.value = '1';
+                }
+                slot.dispatchEvent(new Event('change', {bubbles: true}));
+            }""",
+            [cast_preset, cast_name, cast_slot],
+        )
+        page.click(cast_submit)
+    except Exception as exc:
+        raise ThreeSurfaceTerminalFailure(
+            "selector-failure",
+            {"step_id": step_id, "selector": cast_preset, "error": str(exc)},
+        ) from exc
+    _click_mapped_position(page, canvas, target_position, step_id)
+    _click_selector(page, resolve, step_id)
+
+
+def _execute_enemy_action(step: Dict[str, Any], page: Page, state: Dict[str, Any]) -> None:
+    enemy_slug = step["enemy_slug"]
+    enemy_index = [identity for identity, _name in THREE_SURFACE_ENEMY_IDENTITIES].index(enemy_slug)
+    player_id = THREE_SURFACE_PLAYER_IDENTITIES[enemy_index % len(THREE_SURFACE_PLAYER_IDENTITIES)][0]
+    expected_cid = state["enemy_cid_map"][enemy_slug]
+    step_id = step["step_id"]
+    try:
+        active_cid = page.evaluate("window.__dmcontrolSmoke.activeActorCid()")
+        if str(active_cid) != str(expected_cid):
+            raise ThreeSurfaceTerminalFailure(
+                "visible-state-inconsistency",
+                {"step_id": step_id, "expected_active_cid": expected_cid, "actual_active_cid": active_cid},
+            )
+        actions = page.evaluate("window.__dmcontrolSmoke.availableActions()")
+        chosen = next(
+            (action for action in actions if isinstance(action, dict) and action.get("executable")),
+            None,
+        )
+        if chosen is None or not chosen.get("id"):
+            raise ThreeSurfaceTerminalFailure(
+                "visible-state-inconsistency",
+                {"step_id": step_id, "error": "no-executable-enemy-action"},
+            )
+        action_selector = step["action_selector_template"].replace(
+            "<capability-id>",
+            str(chosen["id"]),
+        )
+        _wait_for_visible(page, action_selector, step_id)
+        page.evaluate("(id) => selectCapability(id)", chosen["id"])
+        if chosen.get("action_type") == "composite":
+            page.evaluate("(id) => startSequence(id)", chosen["id"])
+            composite = page.evaluate("window.__dmcontrolSmoke.compositeState()")
+            sub_action = next(
+                (item for item in composite.get("steps", []) if item.get("executable")),
+                None,
+            ) if isinstance(composite, dict) else None
+            if sub_action is None:
+                raise ThreeSurfaceTerminalFailure(
+                    "visible-state-inconsistency",
+                    {"step_id": step_id, "error": "no-executable-composite-step"},
+                )
+            page.evaluate("(id) => selectCapability(id)", sub_action["id"])
+
+        target_preview = page.evaluate("window.__dmcontrolSmoke.targetPreviewMode()")
+        aoe_state = page.evaluate("window.__dmcontrolSmoke.aoeState()")
+        if (isinstance(target_preview, dict) and target_preview.get("active")) or (
+            isinstance(aoe_state, dict) and aoe_state.get("active")
+        ):
+            _click_mapped_position(page, '[data-testid="dmcontrol-map-canvas"]', state["player_positions"][player_id], step_id)
+
+        modal = page.evaluate("window.__dmcontrolSmoke.modalSummary()")
+        if isinstance(modal, dict) and modal.get("active"):
+            _click_selector(page, step["apply_selector"], step_id)
+    except ThreeSurfaceTerminalFailure:
+        raise
+    except Exception as exc:
+        raise ThreeSurfaceTerminalFailure(
+            "browser-error",
+            {"step_id": step_id, "error": str(exc)},
+        ) from exc
+
+
+def _assert_visible_state(
+    step: Dict[str, Any],
+    pages: Dict[str, Page],
+    collector: ArtifactCollector,
+    state: Dict[str, Any],
+) -> None:
+    if step["surface"] == "/":
+        role_pages = [
+            (f"player:{player_id}", pages[f"player:{player_id}"])
+            for player_id, _name in THREE_SURFACE_PLAYER_IDENTITIES
+        ]
+    else:
+        role = "dm" if step["surface"] == "/dm" else "dmcontrol"
+        role_pages = [(role, pages[role])]
+
+    for role, page in role_pages:
+        for selector in step["selectors"]:
+            _wait_for_visible(page, selector, step["step_id"])
+        try:
+            if step["surface"] == "/dm":
+                visible_values = {
+                    selector: page.locator(selector).inner_text().strip()
+                    for selector in ("#roundVal", "#turnVal", "#activeName", "#upNextName")
+                }
+                if any(not value for value in visible_values.values()):
+                    raise ThreeSurfaceTerminalFailure(
+                        "visible-state-inconsistency",
+                        {"step_id": step["step_id"], "visible_values": visible_values},
+                    )
+            elif step["surface"] == "/":
+                player_id = role.split(":", 1)[1]
+                expected_name = dict(THREE_SURFACE_PLAYER_IDENTITIES)[player_id]
+                actual_identity = page.locator("#me").inner_text().strip()
+                if expected_name.casefold() not in actual_identity.casefold():
+                    raise ThreeSurfaceTerminalFailure(
+                        "visible-state-inconsistency",
+                        {
+                            "step_id": step["step_id"],
+                            "player_id": player_id,
+                            "expected_name": expected_name,
+                            "actual_identity": actual_identity,
+                        },
+                    )
+                if state["player_cid_map"].get(player_id) is None:
+                    raise ThreeSurfaceTerminalFailure(
+                        "visible-state-inconsistency",
+                        {"step_id": step["step_id"], "player_id": player_id, "error": "missing-runtime-cid"},
+                    )
+        except ThreeSurfaceTerminalFailure:
+            raise
+        except Exception as exc:
+            raise ThreeSurfaceTerminalFailure(
+                "browser-error",
+                {"step_id": step["step_id"], "role": role, "error": str(exc)},
+            ) from exc
+        for smoke_api in step.get("smoke_apis", ()):
+            try:
+                result = page.evaluate(smoke_api)
+            except Exception as exc:
+                raise ThreeSurfaceTerminalFailure(
+                    "browser-error",
+                    {"step_id": step["step_id"], "smoke_api": smoke_api, "error": str(exc)},
+                ) from exc
+            inconsistent = result is None or result is False
+            if smoke_api.endswith("state()"):
+                inconsistent = inconsistent or not isinstance(result, dict)
+            if smoke_api.endswith("roundOrTurn()"):
+                inconsistent = inconsistent or not isinstance(result, dict) or any(
+                    result.get(field) is None for field in ("round", "turn")
+                )
+            if inconsistent:
+                raise ThreeSurfaceTerminalFailure(
+                    "visible-state-inconsistency",
+                    {"step_id": step["step_id"], "smoke_api": smoke_api, "result": result},
+                )
+        try:
+            collector.capture_screenshot(page, f"{step['step_id']}-{role.replace(':', '-')}")
+        except Exception as exc:
+            raise ThreeSurfaceTerminalFailure(
+                "browser-error",
+                {"step_id": step["step_id"], "artifact": "screenshot", "role": role, "error": str(exc)},
+            ) from exc
+
+
+def _execute_three_surface_step(
+    step: Dict[str, Any],
+    plan: Dict[str, Any],
+    base_url: str,
+    pages: Dict[str, Page],
+    collector: ArtifactCollector,
+    config: Dict[str, Any],
+    state: Dict[str, Any],
+) -> None:
+    action = step["action"]
+    step_id = step["step_id"]
+    if action == "validate-expectation":
+        expected = step["required_versions"]
+        actual = {
+            "schema_version": plan["contract"].get("schema_version"),
+            "reset_version": plan["contract"].get("reset_version"),
+            "precondition_digest": plan["contract"].get("expected_precondition_digest"),
+        }
+        if actual != expected:
+            raise ThreeSurfaceTerminalFailure(
+                "fixture-precondition-mismatch",
+                {"step_id": step_id, "expected": expected, "actual": actual},
+            )
+        return
+    if action == "post-json":
+        _record_fixture_response(step, base_url, state, config)
+        return
+    if action == "terminal-contract-barrier":
+        _enforce_fixture_barrier(step, state)
+        return
+
+    page = _three_surface_page(step, pages)
+    if action == "goto":
+        try:
+            page.goto(f"{base_url}{step['path']}", wait_until="domcontentloaded")
+            if step["surface"] == "/dmcontrol":
+                page.wait_for_function(
+                    "window.__dmcontrolSmoke && window.__dmcontrolSmoke.ready()",
+                    timeout=15000,
+                )
+        except Exception as exc:
+            raise ThreeSurfaceTerminalFailure(
+                "browser-error",
+                {"step_id": step_id, "path": step["path"], "error": str(exc)},
+            ) from exc
+        return
+    if action == "click":
+        if step.get("root_selector"):
+            _wait_for_visible(page, step["root_selector"], step_id)
+        _click_selector(page, step["selector"], step_id)
+        return
+    if action == "select-and-click":
+        _wait_for_visible(page, step["selector"], step_id)
+        if not state["enemy_options_validated"]:
+            try:
+                options = page.eval_on_selector_all(
+                    f"{step['selector']} option",
+                    """options => options
+                        .map(option => option.value)
+                        .filter(value => value.startsWith('black-and-tan-'))""",
+                )
+            except Exception as exc:
+                raise ThreeSurfaceTerminalFailure(
+                    "browser-error",
+                    {"step_id": step_id, "selector": step["selector"], "error": str(exc)},
+                ) from exc
+            expected_options = [slug for slug, _name in THREE_SURFACE_ENEMY_IDENTITIES]
+            if options != expected_options:
+                raise ThreeSurfaceTerminalFailure(
+                    "visible-state-inconsistency",
+                    {"step_id": step_id, "expected_enemy_options": expected_options, "actual_enemy_options": options},
+                )
+            state["enemy_options_validated"] = True
+        try:
+            page.select_option(step["selector"], step["value"])
+            page.fill(step["count_selector"], str(step["count"]))
+            if step["ally"]:
+                page.check(step["ally_selector"])
+            else:
+                page.uncheck(step["ally_selector"])
+            page.click(step["submit_selector"])
+        except Exception as exc:
+            raise ThreeSurfaceTerminalFailure(
+                "selector-failure",
+                {"step_id": step_id, "selector": step["selector"], "error": str(exc)},
+            ) from exc
+        return
+    if action == "claim-mapped-player":
+        cid = state["player_cid_map"][step["player_id"]]
+        claim_selector = step["selector_template"].replace("<cid>", str(cid))
+        _click_selector(page, claim_selector, step_id)
+        _click_selector(page, step["confirm_selector"], step_id)
+        _wait_for_visible(page, step["identity_selector"], step_id)
+        return
+    if action in ("attack-mapped-target", "cast-spell-at-mapped-target"):
+        _execute_player_action(step, page, state)
+        return
+    if action == "execute-active-action":
+        _execute_enemy_action(step, page, state)
+        return
+    if action == "evaluate":
+        try:
+            page.evaluate(step["smoke_api"])
+        except Exception as exc:
+            raise ThreeSurfaceTerminalFailure(
+                "browser-error",
+                {"step_id": step_id, "smoke_api": step["smoke_api"], "error": str(exc)},
+            ) from exc
+        return
+    if action == "assert-visible-state":
+        _assert_visible_state(step, pages, collector, state)
+        return
+    raise ThreeSurfaceTerminalFailure(
+        "browser-error",
+        {"step_id": step_id, "error": f"unsupported-plan-action:{action}"},
+    )
+
+
+def _start_three_surface_traces(
+    pages: Dict[str, Page],
+    collector: ArtifactCollector,
+    state: Dict[str, Any],
+) -> None:
+    contexts: Dict[int, Dict[str, Any]] = {}
+    for role, page in pages.items():
+        context = getattr(page, "context", None)
+        tracing = getattr(context, "tracing", None)
+        if tracing is None:
+            raise ThreeSurfaceTerminalFailure(
+                "browser-error",
+                {"role": role, "error": "browser-context-tracing-unavailable"},
+            )
+        context_key = id(context)
+        if context_key in contexts:
+            state["role_traces"][role] = contexts[context_key]["path"]
+            continue
+        safe_role = "".join(character if character.isalnum() else "-" for character in role)
+        filename = "browser-trace.zip" if role == "dm" else f"role-trace-{safe_role}.zip"
+        trace_path = collector.get_path(filename)
+        try:
+            tracing.start(screenshots=True, snapshots=True, sources=True)
+        except Exception as exc:
+            raise ThreeSurfaceTerminalFailure(
+                "browser-error",
+                {"role": role, "artifact": "browser-trace", "error": str(exc)},
+            ) from exc
+        record = {"role": role, "tracing": tracing, "path": str(trace_path)}
+        contexts[context_key] = record
+        state["started_traces"].append(record)
+        state["role_traces"][role] = str(trace_path)
+        if role == "dm":
+            state["browser_trace"] = str(trace_path)
+
+
+def _stop_three_surface_traces(state: Dict[str, Any]) -> List[Dict[str, Any]]:
+    failures: List[Dict[str, Any]] = []
+    for record in state["started_traces"]:
+        try:
+            record["tracing"].stop(path=record["path"])
+        except Exception as exc:
+            failures.append({"role": record["role"], "error": str(exc)})
+    return failures
+
+
+def execute_three_surface_workflow(
+    plan: Dict[str, Any],
+    base_url: str,
+    pages: Dict[str, Page],
+    collector: ArtifactCollector,
+    config: Dict[str, Any],
+) -> tuple[bool, Dict[str, Any]]:
+    """Execute the registered A7 three-surface plan exactly once and fail closed."""
+    steps = list(plan.get("steps", []))
+    expected_orders = list(range(1, len(steps) + 1))
+    if plan.get("scenario_id") != THREE_SURFACE_SCENARIO_ID or [step.get("order") for step in steps] != expected_orders:
+        failure = ThreeSurfaceTerminalFailure(
+            "fixture-precondition-mismatch",
+            {"error": "invalid-three-surface-plan-order-or-identity"},
+        )
+    else:
+        failure = None
+    state: Dict[str, Any] = {
+        "fixture_responses": {},
+        "fixture_evidence": {},
+        "player_cid_map": {},
+        "enemy_cid_map": {},
+        "player_positions": {},
+        "enemy_positions": {},
+        "enemy_options_validated": False,
+        "started_traces": [],
+        "role_traces": {},
+        "browser_trace": None,
+    }
+    step_timings: List[Dict[str, Any]] = []
+    failure_step_id: Optional[str] = None
+
+    try:
+        if failure is None:
+            try:
+                _start_three_surface_traces(pages, collector, state)
+            except ThreeSurfaceTerminalFailure as exc:
+                failure = exc
+            except Exception as exc:
+                failure = ThreeSurfaceTerminalFailure(
+                    "browser-error",
+                    {"artifact": "browser-trace", "error": str(exc)},
+                )
+        for step in steps:
+            if failure is not None:
+                break
+            failure_step_id = step["step_id"]
+            started_at = datetime.datetime.now(datetime.timezone.utc)
+            started = time.perf_counter()
+            try:
+                browser_errors = config.get("browser_errors", [])
+                if browser_errors:
+                    raise ThreeSurfaceTerminalFailure(
+                        "browser-error",
+                        {"step_id": step["step_id"], "errors": browser_errors[:8]},
+                    )
+                _execute_three_surface_step(step, plan, base_url, pages, collector, config, state)
+                settle_ms = config.get("three_surface_step_settle_ms", 0)
+                if settle_ms and step.get("surface") in ("/dm", "/dmcontrol", "/"):
+                    _three_surface_page(step, pages).wait_for_timeout(settle_ms)
+                if browser_errors:
+                    raise ThreeSurfaceTerminalFailure(
+                        "browser-error",
+                        {"step_id": step["step_id"], "errors": browser_errors[:8]},
+                    )
+            except ThreeSurfaceTerminalFailure as exc:
+                failure = exc
+            except Exception as exc:
+                failure = ThreeSurfaceTerminalFailure(
+                    "browser-error",
+                    {"step_id": step["step_id"], "error": str(exc)},
+                )
+            finally:
+                finished_at = datetime.datetime.now(datetime.timezone.utc)
+                step_timings.append({
+                    "order": step["order"],
+                    "step_id": step["step_id"],
+                    "surface": step["surface"],
+                    "action": step["action"],
+                    "started_at": started_at.isoformat(),
+                    "finished_at": finished_at.isoformat(),
+                    "duration_ms": round((time.perf_counter() - started) * 1000, 3),
+                    "status": "fail" if failure is not None else "pass",
+                })
+            slow_mo_ms = config.get("slow_mo_ms", 0)
+            if failure is None and slow_mo_ms:
+                time.sleep(slow_mo_ms / 1000.0)
+    finally:
+        if failure is not None:
+            try:
+                failed_step = next(
+                    (step for step in steps if step.get("step_id") == failure_step_id),
+                    None,
+                )
+                if failed_step and failed_step.get("surface") in ("/dm", "/dmcontrol", "/"):
+                    page = _three_surface_page(failed_step, pages)
+                    collector.capture_screenshot(page, f"terminal-{failure.reason}-{failure_step_id}")
+            except Exception:
+                pass
+        trace_failures = _stop_three_surface_traces(state)
+        if trace_failures:
+            cleanup_failure = ThreeSurfaceTerminalFailure(
+                "cleanup-uncertainty",
+                {"artifact": "browser-trace", "failures": trace_failures[:8]},
+            )
+            if failure is None:
+                failure = cleanup_failure
+                failure_step_id = None
+            else:
+                failure = ThreeSurfaceTerminalFailure(
+                    failure.reason,
+                    {"primary": failure.detail, "cleanup_uncertainty": cleanup_failure.detail},
+                )
+
+    terminal_classification = "pass" if failure is None else "fail"
+    evidence = build_three_surface_evidence(
+        run_id=collector.timestamp,
+        terminal_classification=terminal_classification,
+        step_timings=step_timings,
+        screenshots=collector.screenshots,
+        browser_trace=state["browser_trace"],
+        server_log=config.get("server_log"),
+        debug_trace=config.get("debug_trace"),
+        fixture_evidence=state["fixture_evidence"],
+        port_ownership=config.get("port_ownership"),
+        cleanup_disposition=config.get(
+            "cleanup_disposition",
+            {"status": "pending-harness-cleanup", "cleaned": False},
+        ),
+        failure_detail="" if failure is None else {
+            "reason": failure.reason,
+            "step_id": failure_step_id,
+            "detail": failure.detail,
+        },
+        role_traces=state["role_traces"],
+    )
+    evidence.update({
+        "executor": "registered-three-surface-executor/v1",
+        "executed_step_count": len(step_timings),
+        "failure_step_id": failure_step_id if failure is not None else None,
+        "retry": False,
+        "rewrite_expectation": False,
+    })
+    return failure is None, evidence
+
+
+THREE_SURFACE_EXECUTORS = {
+    THREE_SURFACE_SCENARIO_ID: execute_three_surface_workflow,
+}
+
 @dataclass
 class BrowserRole:
     """Represents a browser instance role in a scenario."""
@@ -493,7 +1189,7 @@ class Scenario:
 
 
 class BlackTanThreeSurfaceWorkflowScenario(Scenario):
-    """Data-first A7 plan; execution remains an explicitly injected later-gate concern."""
+    """Registered executor for the deterministic A7 three-surface workflow."""
 
     def __init__(self):
         super().__init__(
@@ -511,17 +1207,9 @@ class BlackTanThreeSurfaceWorkflowScenario(Scenario):
         self.plan = build_three_surface_workflow_plan()
 
     def run(self, base_url: str, pages: Dict[str, Page], collector: ArtifactCollector, config: Dict[str, Any]) -> tuple[bool, Dict[str, Any]]:
-        executor = config.get("three_surface_executor")
+        executor = THREE_SURFACE_EXECUTORS.get(self.id)
         if not callable(executor):
-            evidence = build_three_surface_evidence(
-                run_id=collector.timestamp,
-                terminal_classification="fail",
-                step_timings=[],
-                screenshots=collector.screenshots,
-                failure_detail="three-surface-executor-not-authorized-or-configured",
-                cleanup_disposition={"status": "no-owned-process", "cleaned": False},
-            )
-            return False, evidence
+            raise RuntimeError(f"No registered executor for scenario '{self.id}'")
         return executor(self.plan, base_url, pages, collector, config)
 
 class ScorcherIgniteGroundScenario(Scenario):
@@ -1014,6 +1702,66 @@ class ServerHandle:
             logging.error("Refusing cleanup because process ownership is not verified.")
         return self.cleanup_disposition
 
+
+def _port_ownership_snapshot(base_url: str, server: ServerHandle) -> Dict[str, Any]:
+    parsed = urlsplit(base_url)
+    port = parsed.port
+    if port is None:
+        port = 443 if parsed.scheme == "https" else 80
+    return {
+        "base_url": base_url,
+        "port": port,
+        **dict(server.process_ownership),
+    }
+
+
+def _finalize_three_surface_cleanup(
+    success: bool,
+    summary_ext: Dict[str, Any],
+    collector: ArtifactCollector,
+    server: ServerHandle,
+    cleanup_disposition: Dict[str, Any],
+    error_msg: Optional[str],
+) -> tuple[bool, Dict[str, Any]]:
+    if summary_ext.get("evidence_schema_version") != "a7-three-surface-evidence/v1":
+        summary_ext = build_three_surface_evidence(
+            run_id=collector.timestamp,
+            terminal_classification="fail",
+            step_timings=[],
+            screenshots=collector.screenshots,
+            server_log=str(server.stdout_path) if server.stdout_path else None,
+            port_ownership=_port_ownership_snapshot(server.base_url, server),
+            cleanup_disposition=cleanup_disposition,
+            failure_detail={"reason": "browser-error", "detail": error_msg or "harness-error"},
+        )
+        summary_ext.update({
+            "executor": "registered-three-surface-executor/v1",
+            "executed_step_count": 0,
+            "failure_step_id": None,
+            "retry": False,
+            "rewrite_expectation": False,
+        })
+        success = False
+
+    summary_ext["port_ownership"] = _port_ownership_snapshot(server.base_url, server)
+    summary_ext["cleanup_disposition"] = dict(cleanup_disposition)
+    cleanup_status = cleanup_disposition.get("status")
+    accepted_statuses = {
+        "no-owned-process",
+        "owned-process-already-exited",
+        "owned-process-cleaned",
+    }
+    if cleanup_status not in accepted_statuses:
+        success = False
+        summary_ext["terminal_classification"] = "fail"
+        summary_ext["failure_detail"] = _bounded_failure_detail({
+            "primary": summary_ext.get("failure_detail"),
+            "reason": "cleanup-uncertainty",
+            "cleanup_disposition": cleanup_disposition,
+        })
+    return success, summary_ext
+
+
 def setup_logging():
     logging.basicConfig(
         level=logging.INFO,
@@ -1065,6 +1813,7 @@ def main():
 
     success = False
     error_msg = None
+    summary_ext: Dict[str, Any] = {}
 
     try:
         server.start(collector)
@@ -1075,6 +1824,7 @@ def main():
 
             role_pages: Dict[str, Page] = {}
             contexts: List[BrowserContext] = []
+            browser_errors: List[Dict[str, str]] = []
 
             for role in scenario.roles:
                 context = browser.new_context(
@@ -1085,13 +1835,31 @@ def main():
                 role_pages[role.name] = page
 
                 # Setup error collection
-                page.on("pageerror", lambda err, r=role.name: logging.error(f"Page Error [{r}]: {err}"))
-                page.on("console", lambda msg, r=role.name: logging.debug(f"Console [{r}]: {msg.text}") if msg.type != "error" else logging.error(f"Console Error [{r}]: {msg.text}"))
+                def record_page_error(error: Any, role_name: str = role.name) -> None:
+                    detail = _bounded_failure_detail(error)
+                    browser_errors.append({"role": role_name, "type": "pageerror", "detail": detail})
+                    logging.error(f"Page Error [{role_name}]: {detail}")
+
+                def record_console(message: Any, role_name: str = role.name) -> None:
+                    if message.type == "error":
+                        detail = _bounded_failure_detail(message.text)
+                        browser_errors.append({"role": role_name, "type": "console-error", "detail": detail})
+                        logging.error(f"Console Error [{role_name}]: {detail}")
+                    else:
+                        logging.debug(f"Console [{role_name}]: {message.text}")
+
+                page.on("pageerror", record_page_error)
+                page.on("console", record_console)
 
             config = {
                 "max_rounds": args.max_rounds,
                 "max_turns": args.max_turns,
-                "slow_mo_ms": args.slow_mo_ms
+                "slow_mo_ms": args.slow_mo_ms,
+                "browser_errors": browser_errors,
+                "server_log": str(server.stdout_path) if server.stdout_path else None,
+                "port_ownership": _port_ownership_snapshot(args.base_url, server),
+                "cleanup_disposition": dict(server.cleanup_disposition),
+                "three_surface_step_settle_ms": 100,
             }
 
             try:
@@ -1117,7 +1885,25 @@ def main():
         logging.error(f"Harness error: {e}")
         error_msg = str(e)
     finally:
-        server.stop()
+        try:
+            cleanup_disposition = server.stop()
+        except Exception as exc:
+            cleanup_disposition = {
+                "status": "cleanup-error",
+                "cleaned": False,
+                "failure_detail": _bounded_failure_detail(exc),
+            }
+            logging.error(f"Server cleanup failed: {exc}")
+
+    if scenario.id == THREE_SURFACE_SCENARIO_ID:
+        success, summary_ext = _finalize_three_surface_cleanup(
+            success,
+            summary_ext,
+            collector,
+            server,
+            cleanup_disposition,
+            error_msg,
+        )
 
     # Write summary
     summary = {
