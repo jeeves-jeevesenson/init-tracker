@@ -10,8 +10,8 @@ If an item is not marked as **Active** here, it is NOT current work.
 <!-- ACTIVE_WORK_STATUS_START -->
 - **Status:** Active
 - **Current Work Item:** `WORK-20260715-a7-browser-automation`
-- **Active Gate:** A7-G13 autonomous host stabilization controlled stop; application scope required
-- **Allowed Next Action:** Developer/orchestrator review of `docs/work_items/A7-G13-autonomous-host-stabilization-result.md` and preparation of a new bounded application correction for `dnd_initative_tracker.py` with focused coverage in `tests/test_server_runtime.py`. G13 is closed. No implementation, test, browser, server, runtime, endpoint, localhost, network, push, deployment, restart, scheduler, production, or service-mutation action is authorized.
+- **Active Gate:** A7-G15 runtime mapping correction authorized; not started
+- **Allowed Next Action:** Execute one bounded A7-G15 correction in exactly `dnd_initative_tracker.py` and `tests/test_server_runtime.py`, including focused test execution. The implementation and test authorization applies to G15 only. Browser, server, runtime, endpoint, localhost, network, push, deployment, restart, scheduler, production, and service-mutation action remain unauthorized.
 - <!-- ACTIVE_WORK_STATUS_END -->
 
 ---
@@ -21,8 +21,64 @@ If an item is not marked as **Active** here, it is NOT current work.
 | ID | Title | Status | Goal |
 | --- | --- | --- | --- |
 <!-- ACTIVE_WORK_TABLE_START -->
-| WORK-20260715-a7-browser-automation | A7 browser-driven human-workflow automation | Active | G13 reached a controlled stop after two changed-code browser attempts. The normal click and response wait worked, but the versioned application fixture cannot classify the valid post-start state: the required ten PCs and nine enemies are joined by Owl and Raven summons, and all enemy `monster_slug` fields are null. Application correction scope is required. |
+| WORK-20260715-a7-browser-automation | A7 browser-driven human-workflow automation | Active | G13 reached a controlled stop that proved the post-combat fixture-mapping defect. G14 completed the documentation-only authorization. G15 is authorized but not started, with implementation and focused tests limited to `dnd_initative_tracker.py` and `tests/test_server_runtime.py`. |
 <!-- ACTIVE_WORK_TABLE_END -->
+
+---
+
+## A7-G14 Runtime Mapping Correction Authorization
+
+G13 is recorded as a controlled stop that proved the application-owned
+post-combat fixture-mapping defect. After successful combat start, the live
+runtime contains all ten canonical fixture players, all nine canonical
+configured enemies, and the valid Owl and Raven summons. The current verifier
+cannot recognize that valid 19-fixture-actor mapping within 21 live runtime
+units because it classifies enemies solely through nullable `monster_slug`
+values and includes the summons in its fixture counts.
+
+G14 made this documentation-only authorization and did not implement or
+validate the correction. G15 is authorized under this exact correction
+contract:
+
+- Post-combat fixture verification must identify the ten canonical fixture
+  players and nine canonical configured enemies through stable
+  fixture/runtime identity, not solely through nullable `monster_slug` values.
+- Owl and Raven summons are valid runtime units but are not canonical fixture
+  actors and must not cause a fixture-count mismatch.
+- Verification after successful combat start must accept the canonical
+  10-player, 9-enemy, 19-fixture-actor mapping even when total live runtime
+  units equal 21.
+- Missing, duplicated, or incorrectly mapped canonical fixture actors must
+  still fail closed.
+- Preserve the fixture schema/version, expected digest, reset behavior, HTTP
+  409 fail-closed semantics, and `mutated:false` mismatch behavior.
+- Do not alter combat mechanics, summons, initiative, enemy creation, player
+  creation, runtime counts, or browser behavior.
+- Add focused server-runtime tests for the accepted post-start mapping and at
+  least one missing or incorrectly mapped canonical-enemy failure.
+
+The G15 edit boundary is exactly `dnd_initative_tracker.py` and
+`tests/test_server_runtime.py`.
+
+```text
+A7_GATE=A7-G15
+A7_STATE=runtime-mapping-correction-authorized
+A7_G13_STATE=controlled-stop
+A7_G14_STATE=completed
+A7_G15_STATE=authorized-not-started
+A7_G15_ALLOWED_FILES=dnd_initative_tracker.py,tests/test_server_runtime.py
+A7_IMPLEMENTATION_AUTHORIZED=true
+A7_TEST_EXECUTION_AUTHORIZED=true
+A7_BROWSER_EXECUTION_AUTHORIZED=false
+A7_RUNTIME_EXECUTION_AUTHORIZED=false
+A7_NETWORK_AUTHORIZED=false
+A7_PUSH_AUTHORIZED=false
+A7_DEPLOYMENT_AUTHORIZED=false
+A7_RESTART_AUTHORIZED=false
+A7_SCHEDULER_AUTHORIZED=false
+A7_PRODUCTION_AUTHORIZED=false
+A7_SERVICE_MUTATION_AUTHORIZED=false
+```
 
 ---
 

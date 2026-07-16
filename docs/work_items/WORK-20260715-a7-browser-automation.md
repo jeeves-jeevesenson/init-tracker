@@ -4,9 +4,9 @@ Date: `2026-07-15 UTC`
 
 Work item: `WORK-20260715-a7-browser-automation`
 
-Active gate: `A7-G13`
+Active gate: `A7-G15`
 
-State: `autonomous-host-stabilization-controlled-stop`
+State: `runtime-mapping-correction-authorized`
 
 Approval: `developer-yolo-host-access-2026-07-16`
 
@@ -26,7 +26,9 @@ starting bytes. G13 is now running in the developer's externally sandboxed
 host-access VM to reapply that correction, perform exact focused validation,
 positively verify port ownership, and execute the deterministic workflow. G13
 reached a controlled stop after proving that the remaining fixture mismatch is
-application-owned and requires additional application-file scope.
+application-owned and requires additional application-file scope. G14 recorded
+that controlled stop and completed a documentation-only authorization for one
+bounded G15 correction. G15 is authorized but not started.
 
 The deterministic workflow remains:
 
@@ -150,15 +152,23 @@ but every enemy exposes `monster_slug: null`. The versioned verifier in
 actual counts 21 players, zero enemies, and 21 total. The durable result is
 `docs/work_items/A7-G13-autonomous-host-stabilization-result.md`.
 
+G14 accepted G13 as a controlled stop that proved the post-combat
+fixture-mapping defect and authorized one bounded G15 correction. G14 changed
+only the two target ledgers; it did not implement or validate the correction.
+The exact G15 file boundary is `dnd_initative_tracker.py` and
+`tests/test_server_runtime.py`.
+
 ## Current authorization boundary
 
 ```text
-A7_GATE=A7-G13
-A7_STATE=autonomous-host-stabilization-controlled-stop
+A7_GATE=A7-G15
+A7_STATE=runtime-mapping-correction-authorized
 A7_G13_STATE=controlled-stop
-A7_G13_RESULT=docs/work_items/A7-G13-autonomous-host-stabilization-result.md
-A7_IMPLEMENTATION_AUTHORIZED=false
-A7_TEST_EXECUTION_AUTHORIZED=false
+A7_G14_STATE=completed
+A7_G15_STATE=authorized-not-started
+A7_G15_ALLOWED_FILES=dnd_initative_tracker.py,tests/test_server_runtime.py
+A7_IMPLEMENTATION_AUTHORIZED=true
+A7_TEST_EXECUTION_AUTHORIZED=true
 A7_BROWSER_EXECUTION_AUTHORIZED=false
 A7_RUNTIME_EXECUTION_AUTHORIZED=false
 A7_NETWORK_AUTHORIZED=false
@@ -170,16 +180,34 @@ A7_PRODUCTION_AUTHORIZED=false
 A7_SERVICE_MUTATION_AUTHORIZED=false
 ```
 
-G13 is closed. The unaccepted harness/test candidates were restored to their
-starting bytes, the owned server was cleaned up safely, and all implementation,
-test, browser, runtime, localhost, and network authorization is closed. Push,
-deployment, scheduler, production, restart, and service mutation remain
-unauthorized.
+G13 is closed at a controlled stop, and G14 is complete. The `true`
+implementation and test values authorize the later G15 task only; they did not
+authorize source/test edits or test execution during G14. Browser, server,
+runtime, endpoint, localhost, network, push, deployment, scheduler, production,
+restart, and service mutation remain unauthorized.
+
+G15 must satisfy this correction contract:
+
+- Post-combat fixture verification must identify the ten canonical fixture
+  players and nine canonical configured enemies through stable
+  fixture/runtime identity, not solely through nullable `monster_slug` values.
+- Owl and Raven summons are valid runtime units but are not canonical fixture
+  actors and must not cause a fixture-count mismatch.
+- Verification after successful combat start must accept the canonical
+  10-player, 9-enemy, 19-fixture-actor mapping even when total live runtime
+  units equal 21.
+- Missing, duplicated, or incorrectly mapped canonical fixture actors must
+  still fail closed.
+- Preserve the fixture schema/version, expected digest, reset behavior, HTTP
+  409 fail-closed semantics, and `mutated:false` mismatch behavior.
+- Do not alter combat mechanics, summons, initiative, enemy creation, player
+  creation, runtime counts, or browser behavior.
+- Add focused server-runtime tests for the accepted post-start mapping and at
+  least one missing or incorrectly mapped canonical-enemy failure.
 
 ## Next safe action
 
-Developer/orchestrator review and preparation of a new bounded application
-correction for `dnd_initative_tracker.py` with focused coverage in
-`tests/test_server_runtime.py`. The correction must reconcile the versioned
-fixture's exact identity contract with normal post-start summons and missing
-runtime `monster_slug` values before another browser gate is opened.
+Execute the bounded A7-G15 correction in exactly `dnd_initative_tracker.py` and
+`tests/test_server_runtime.py`, then run only its focused authorized tests and
+required bounded validation. Do not run a browser, server, runtime, endpoint,
+localhost, or network action, and do not open another browser gate.
