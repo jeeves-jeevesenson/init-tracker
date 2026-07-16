@@ -4,9 +4,9 @@ Date: `2026-07-15 UTC`
 
 Work item: `WORK-20260715-a7-browser-automation`
 
-Active gate: `A7-G8`
+Active gate: `A7-G10`
 
-State: `pilot-retry-not-prepared`
+State: `enemy-option-set-correction-authorized`
 
 Approval: `developer-explicit-approval-2026-07-15`
 
@@ -14,8 +14,10 @@ Approval: `developer-explicit-approval-2026-07-15`
 
 Establish deterministic browser-driven coverage for the accepted A6
 three-surface human workflow while preserving explicit, one-shot gate control.
-The bounded G7 harness-ordering correction is accepted. The next pilot gate
-remains unopened.
+The bounded G7 harness-ordering correction is accepted. G8 then received the
+complete enemy identity set but failed solely on an exact-order harness
+requirement. One bounded two-file G10 set-validation correction is authorized
+but not started.
 
 The deterministic workflow remains:
 
@@ -94,21 +96,38 @@ The accepted validation is:
 The accepted G7 result is
 `docs/work_items/A7-G7-ordering-correction-result.md`.
 
+A7-G8 received all nine required unique enemy slugs. It failed solely because
+the harness required one exact option order even though the actual and
+required identity sets matched. No monster-add request occurred before the
+terminal failure. No application defect was proven, G8 consumed its one
+authorized attempt, and G8 retry remains unauthorized.
+
+A7-G9 records that terminal diagnosis and authorizes one bounded G10
+correction. G10 may edit exactly:
+
+- `scripts/validation/browser-smoke-harness.py`
+- `tests/test_browser_smoke_harness.py`
+
+The correction must validate enemy options by exact unique identity set, not
+presentation order. It must fail on any missing, extra, or duplicate slug,
+while preserving selection of the requested slug by value and one click. All
+other plan steps, the fixture contract, evidence schema, terminal behavior,
+no-retry rules, cleanup rules, CLI behavior, and headless default must remain
+unchanged. Focused tests must prove reordered complete options pass and
+missing, extra, or duplicate options fail.
+
 ## Current authorization boundary
 
 ```text
-A7_GATE=A7-G8
-A7_STATE=pilot-retry-not-prepared
-A7_G5_STATE=failed
-A7_G5_RETRY_AUTHORIZED=false
-A7_G6_STATE=completed
-A7_G7_STATE=completed
-A7_G7_RESULT=docs/work_items/A7-G7-ordering-correction-result.md
-A7_G7_TARGET_COMMIT=83ab9e8
-A7_G7_VALIDATION=pycompile-and-16-focused-tests-passed
-A7_G8_STATE=not-opened
-A7_IMPLEMENTATION_AUTHORIZED=false
-A7_TEST_EXECUTION_AUTHORIZED=false
+A7_GATE=A7-G10
+A7_STATE=enemy-option-set-correction-authorized
+A7_G8_STATE=failed
+A7_G8_RETRY_AUTHORIZED=false
+A7_G9_STATE=completed
+A7_G10_STATE=authorized-not-started
+A7_G10_ALLOWED_FILES=scripts/validation/browser-smoke-harness.py,tests/test_browser_smoke_harness.py
+A7_IMPLEMENTATION_AUTHORIZED=true
+A7_TEST_EXECUTION_AUTHORIZED=true
 A7_BROWSER_EXECUTION_AUTHORIZED=false
 A7_RUNTIME_EXECUTION_AUTHORIZED=false
 A7_NETWORK_AUTHORIZED=false
@@ -120,12 +139,14 @@ A7_PRODUCTION_AUTHORIZED=false
 A7_SERVICE_MUTATION_AUTHORIZED=false
 ```
 
-No browser, server, runtime, endpoint, localhost, network, dependency, pilot,
-push, deployment, restart, scheduler, production, or service action occurred
-during this documentation-only acceptance. No cleanup action occurred. All
-implementation and execution boundaries are closed.
+This authorization is only a ledger transition for the later G10 task. No
+correction was implemented and no focused test was executed during G9. No
+browser, server, runtime, endpoint, localhost, network, dependency, artifact,
+retry, push, deployment, restart, scheduler, production, service, or cleanup
+action occurred.
 
 ## Next safe action
 
-The next safe action is orchestrator acceptance and preparation of one new
-one-shot pilot packet. Do not authorize or prepare that pilot here.
+The next safe action is the bounded G10 correction in the two allowed files
+and its focused tests. Do not implement or test the correction as part of G9,
+and do not run a G8 retry.
