@@ -10,8 +10,8 @@ If an item is not marked as **Active** here, it is NOT current work.
 <!-- ACTIVE_WORK_STATUS_START -->
 - **Status:** Active
 - **Current Work Item:** `WORK-20260715-a7-browser-automation`
-- **Active Gate:** A7-G1 browser harness evidence foundation
-- **Allowed Next Action:** Codex may perform only the bounded A7-G1 implementation authorized by the orchestrator task packet `CODEX-20260715-a7-browser-harness-implementation-g1`: edit exactly `scripts/validation/browser-smoke-harness.py` and `tests/test_browser_smoke_harness.py`, then run only the packet's exact focused non-browser test selection and bounded two-file diff check. Browser/server execution, endpoint or network access, dependency installation, app-code edits, stress testing, broad tests, push, deployment, restart, scheduler, production, and service mutation remain forbidden. A focused commit may be created only after both exact validations pass and may contain only the two authorized files.
+- **Active Gate:** A7-G1C fixture-contract and browser-harness foundation
+- **Allowed Next Action:** Perform only the approved A7-G1C four-file implementation boundary: edit exactly `dnd_initative_tracker.py`, `scripts/validation/browser-smoke-harness.py`, `tests/test_server_runtime.py`, and `tests/test_browser_smoke_harness.py`. Test execution is limited to focused fake/mock non-browser coverage in the two authorized test files. No HTML, CSS, or JavaScript asset edit is authorized. Browser, server, target-runtime, endpoint, network, dependency-install, stress-scenario, broad-test, generated-artifact, cleanup, push, deployment, restart, scheduler, production, and service-mutation actions remain forbidden.
 - <!-- ACTIVE_WORK_STATUS_END -->
 
 ---
@@ -21,8 +21,89 @@ If an item is not marked as **Active** here, it is NOT current work.
 | ID | Title | Status | Goal |
 | --- | --- | --- | --- |
 <!-- ACTIVE_WORK_TABLE_START -->
-| WORK-20260715-a7-browser-automation | A7 browser-driven human-workflow automation | Active | A7-G1 browser harness evidence foundation: extend the existing Python Playwright smoke harness and focused fake/mock tests for the deterministic A6 three-surface workflow and durable coordinator evidence without launching a browser or server. |
+| WORK-20260715-a7-browser-automation | A7 browser-driven human-workflow automation | Active | A7-G1C fixture-contract and browser-harness foundation: add the versioned fail-closed reset/verify contract and deterministic three-surface harness foundation within the exact approved four-file boundary, without launching a browser, server, or target runtime. |
 <!-- ACTIVE_WORK_TABLE_END -->
+
+---
+
+## A7-G1C Authorization Boundary
+
+The completed A7-G1B selector and UI-contract discovery is accepted from
+`orchestrator:docs/work_items/A7-G1B-ui-contract-discovery-result.md` at
+orchestrator commit `7f62ff9`. The original A7-G1 remains blocked on its
+missing verified selectors and reset contract, and A7-G1A remains stopped at
+its scope boundary. A7-G1C is the approved successor boundary.
+
+```text
+A7_GATE=A7-G1C
+A7_STATE=implementation-boundary-approved
+A7_G1_STATE=blocked
+A7_G1_BLOCKER=missing-verified-selectors-and-reset-contract
+A7_G1A_STATE=stopped-scope-boundary
+A7_G1A_BLOCKER=ui-assets-outside-authorized-pathspec
+A7_G1B_STATE=completed
+A7_G1B_RESULT=orchestrator:docs/work_items/A7-G1B-ui-contract-discovery-result.md
+A7_G1B_RESULT_COMMIT=7f62ff9
+A7_G1C_STATE=approved
+A7_G1C_SCOPE=fixture-contract-and-browser-harness-foundation
+A7_IMPLEMENTATION_AUTHORIZED=true
+A7_TEST_EXECUTION_AUTHORIZED=true
+A7_BROWSER_EXECUTION_AUTHORIZED=false
+A7_RUNTIME_EXECUTION_AUTHORIZED=false
+A7_DEPENDENCY_INSTALL_AUTHORIZED=false
+A7_NETWORK_AUTHORIZED=false
+A7_PUSH_AUTHORIZED=false
+A7_DEPLOYMENT_AUTHORIZED=false
+A7_RESTART_AUTHORIZED=false
+A7_SCHEDULER_AUTHORIZED=false
+A7_PRODUCTION_AUTHORIZED=false
+A7_SERVICE_MUTATION_AUTHORIZED=false
+```
+
+Implementation edits are authorized exactly to:
+
+- `dnd_initative_tracker.py`;
+- `scripts/validation/browser-smoke-harness.py`;
+- `tests/test_server_runtime.py`; and
+- `tests/test_browser_smoke_harness.py`.
+
+The proven UI contract is:
+
+- `/dm` uses the existing stable selectors `#openToolboxBtn`,
+  `#encounterPlayerList`, `#selectAllPlayersBtn`, `#addPlayersBtn`,
+  `#monsterSlugSelect`, `#addMonsterBtn`, and `#startCombatBtn`.
+- The black-and-tan enemy option values are exactly these nine ordered slugs:
+  `black-and-tan-captain`, `black-and-tan-constable`,
+  `black-and-tan-field-medic`, `black-and-tan-lieutenant`,
+  `black-and-tan-major`, `black-and-tan-rifleman`,
+  `black-and-tan-vda-scorcher`, `black-and-tan-shield-trooper`, and
+  `black-and-tan-suppression-gunner`.
+- `/dmcontrol` exposes existing action test IDs,
+  `window.__dmcontrolSmoke`, `selectCapability(id)`, `startSequence(id)`,
+  `handleCombatControl()`, and `#modalApplyBtn`.
+- `/` is backed by `assets/web/lan/index.html` and exposes
+  `#claimList [data-claim-cid]`, `#claimConfirm`, `#attackOverlayToggle`,
+  `#castSpellModalOpen`, `#castSubmit`, `#attackResolveSubmit`,
+  `#spellResolveSubmit`, and `#endTurn`.
+- No HTML, CSS, or JavaScript asset edit is authorized.
+
+The fixture contract must add schema version
+`a7-ui-reset-contract/v1`, reset version `blank-combat/v1`, a canonical
+precondition digest, stable ordered player IDs, stable ordered enemy slugs,
+and stable runtime CID mappings. The ordered player IDs are `pc:dorian`,
+`pc:eldramar`, `pc:fred`, `pc:john-twilight`, `pc:johnny-morris`,
+`pc:malagrou`, `pc:old-man`, `pc:throat-goat`, `pc:vicnor`, and
+`pc:stikhiya`. Verification must map each player ID and enemy slug to its
+exact runtime CID and position without mutation. Contract or precondition
+mismatch must return HTTP 409 before any mutation with `mutated: false`.
+
+The harness must treat contract or precondition mismatch as terminal failure,
+perform no later workflow action, make no retry, and never update its
+expectations from the response. Browser/server execution remains forbidden
+during implementation. The approximately-200-enemy multi-target-spell stress
+scenario remains unopened. All push, deployment, restart, scheduler,
+production, service-mutation, dependency-install, and network prohibitions
+remain in force.
 
 ---
 
