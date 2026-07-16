@@ -10,8 +10,8 @@ If an item is not marked as **Active** here, it is NOT current work.
 <!-- ACTIVE_WORK_STATUS_START -->
 - **Status:** Active
 - **Current Work Item:** `WORK-20260715-a7-browser-automation`
-- **Active Gate:** A7-G12 controlled stop; port ownership unavailable
-- **Allowed Next Action:** Developer/orchestrator review and one docs-only commit of the four allowed G11/G12 ledger/result files with message `Record A7 autonomous stabilization stop.`; Codex could not create it because this execution sandbox mounts `.git` read-only. A new bounded packet may be prepared only after an execution environment can positively prove port 8787 ownership and keep the owned server and browser in the same localhost namespace. No implementation, test, browser, server, runtime, endpoint, localhost, network, push, deployment, restart, scheduler, production, or service-mutation action is authorized.
+- **Active Gate:** A7-G13 autonomous host stabilization controlled stop; application scope required
+- **Allowed Next Action:** Developer/orchestrator review of `docs/work_items/A7-G13-autonomous-host-stabilization-result.md` and preparation of a new bounded application correction for `dnd_initative_tracker.py` with focused coverage in `tests/test_server_runtime.py`. G13 is closed. No implementation, test, browser, server, runtime, endpoint, localhost, network, push, deployment, restart, scheduler, production, or service-mutation action is authorized.
 - <!-- ACTIVE_WORK_STATUS_END -->
 
 ---
@@ -21,8 +21,49 @@ If an item is not marked as **Active** here, it is NOT current work.
 | ID | Title | Status | Goal |
 | --- | --- | --- | --- |
 <!-- ACTIVE_WORK_TABLE_START -->
-| WORK-20260715-a7-browser-automation | A7 browser-driven human-workflow automation | Active | G11 proved a harness normal-click obstruction at `start-combat`. G12 validated a bounded correction, but the browser was not run because the owned server could not bind port 8787 and the occupying listener was outside the visible namespace. The candidate source/test changes were restored. The four docs await the required developer/orchestrator-owned stop commit because Codex's `.git` mount is read-only. |
+| WORK-20260715-a7-browser-automation | A7 browser-driven human-workflow automation | Active | G13 reached a controlled stop after two changed-code browser attempts. The normal click and response wait worked, but the versioned application fixture cannot classify the valid post-start state: the required ten PCs and nine enemies are joined by Owl and Raven summons, and all enemy `monster_slug` fields are null. Application correction scope is required. |
 <!-- ACTIVE_WORK_TABLE_END -->
+
+---
+
+## A7-G13 Autonomous Host Stabilization Controlled Stop
+
+G13 positively verified a free host port, started one same-user repository
+server, and ran two changed-code browser attempts. Attempt 1 proved that an
+ordinary start-combat click must await its POST response before fixture
+verification. That bounded harness correction passed its required focused
+validation. Attempt 2 proved the remaining failure is application-owned:
+after a successful combat start, the valid runtime contains the required ten
+PCs, all nine required Black-and-Tan enemies, and the expected Owl and Raven
+start summons. The versioned verifier nevertheless requires exactly 19 total
+combatants and classifies enemies solely by `monster_slug`, while the live
+enemy records expose `monster_slug: null`. It returns `ui_setup_mismatch` with
+actual counts 21 players, zero enemies, and 21 total.
+
+The unaccepted harness/test candidates were restored to their starting bytes.
+The owned server was stopped with Ctrl+C; its shell, Python, and tee processes
+terminated, and port 8787 is free. The durable result is
+`docs/work_items/A7-G13-autonomous-host-stabilization-result.md`. A new bounded
+application correction requires `dnd_initative_tracker.py` and focused tests
+in `tests/test_server_runtime.py`.
+
+```text
+A7_GATE=A7-G13
+A7_STATE=autonomous-host-stabilization-controlled-stop
+A7_G13_STATE=controlled-stop
+A7_G13_RESULT=docs/work_items/A7-G13-autonomous-host-stabilization-result.md
+A7_IMPLEMENTATION_AUTHORIZED=false
+A7_TEST_EXECUTION_AUTHORIZED=false
+A7_BROWSER_EXECUTION_AUTHORIZED=false
+A7_RUNTIME_EXECUTION_AUTHORIZED=false
+A7_NETWORK_AUTHORIZED=false
+A7_PUSH_AUTHORIZED=false
+A7_DEPLOYMENT_AUTHORIZED=false
+A7_RESTART_AUTHORIZED=false
+A7_SCHEDULER_AUTHORIZED=false
+A7_PRODUCTION_AUTHORIZED=false
+A7_SERVICE_MUTATION_AUTHORIZED=false
+```
 
 ---
 

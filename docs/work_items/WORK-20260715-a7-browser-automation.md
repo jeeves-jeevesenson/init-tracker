@@ -4,11 +4,11 @@ Date: `2026-07-15 UTC`
 
 Work item: `WORK-20260715-a7-browser-automation`
 
-Active gate: `A7-G12`
+Active gate: `A7-G13`
 
-State: `autonomous-stabilization-controlled-stop`
+State: `autonomous-host-stabilization-controlled-stop`
 
-Approval: `developer-standing-autonomy-2026-07-16`
+Approval: `developer-yolo-host-access-2026-07-16`
 
 ## Goal
 
@@ -22,7 +22,11 @@ sent, so this proves a harness interaction defect rather than an application
 defect. G12 validated the bounded normal-click correction but reached a
 controlled stop before browser execution because port 8787 ownership could not
 be verified. The candidate harness/test changes were restored to their
-starting bytes.
+starting bytes. G13 is now running in the developer's externally sandboxed
+host-access VM to reapply that correction, perform exact focused validation,
+positively verify port ownership, and execute the deterministic workflow. G13
+reached a controlled stop after proving that the remaining fixture mismatch is
+application-owned and requires additional application-file scope.
 
 The deterministic workflow remains:
 
@@ -135,21 +139,24 @@ the toolbox remained open. No start-combat request was emitted. The durable
 result is `docs/work_items/A7-G11-pilot-failure-result.md`; no application
 defect was proven.
 
+G13 ran two changed-code browser attempts. The first proved and corrected a
+harness race: fixture verification began while the successful combat-start
+POST was still in flight. The second awaited HTTP 200 from combat start and
+then proved an application fixture defect. The live post-start state contains
+the required ten PCs and all nine required enemies plus Owl and Raven summons,
+but every enemy exposes `monster_slug: null`. The versioned verifier in
+`dnd_initative_tracker.py` requires exactly 19 combatants and uses only
+`monster_slug` to classify enemies, so it returned `ui_setup_mismatch` with
+actual counts 21 players, zero enemies, and 21 total. The durable result is
+`docs/work_items/A7-G13-autonomous-host-stabilization-result.md`.
+
 ## Current authorization boundary
 
 ```text
-A7_GATE=A7-G12
-A7_STATE=autonomous-stabilization-controlled-stop
-A7_G11_STATE=failed
-A7_G11_RESULT=docs/work_items/A7-G11-pilot-failure-result.md
-A7_G11_FAILURE_STEP=start-combat
-A7_G11_ROOT_CAUSE=harness-normal-click-obstructed-by-toolbox-header
-A7_G11_APPLICATION_DEFECT_PROVEN=false
-A7_G12_STATE=controlled-stop
-A7_G12_APPROVAL=developer-standing-autonomy-2026-07-16
-A7_G12_RESULT=docs/work_items/A7-G12-autonomous-stabilization-result.md
-A7_G12_STOP_CONDITION=port-ownership-cannot-be-verified
-A7_G12_BROWSER_RESULT=not-run
+A7_GATE=A7-G13
+A7_STATE=autonomous-host-stabilization-controlled-stop
+A7_G13_STATE=controlled-stop
+A7_G13_RESULT=docs/work_items/A7-G13-autonomous-host-stabilization-result.md
 A7_IMPLEMENTATION_AUTHORIZED=false
 A7_TEST_EXECUTION_AUTHORIZED=false
 A7_BROWSER_EXECUTION_AUTHORIZED=false
@@ -163,21 +170,16 @@ A7_PRODUCTION_AUTHORIZED=false
 A7_SERVICE_MUTATION_AUTHORIZED=false
 ```
 
-G12 stopped before browser execution. The verified owned Python/tee children
-were stopped and reaped; no unverified process was killed, replaced, or
-adopted. All implementation, test, browser, runtime, localhost, and network
-authorization is now closed. Push, deployment, scheduler, production, restart,
-and service mutation remain unauthorized.
+G13 is closed. The unaccepted harness/test candidates were restored to their
+starting bytes, the owned server was cleaned up safely, and all implementation,
+test, browser, runtime, localhost, and network authorization is closed. Push,
+deployment, scheduler, production, restart, and service mutation remain
+unauthorized.
 
 ## Next safe action
 
-The orchestrator must first provide an execution environment that can
-positively verify port 8787 ownership and keep the owned server and browser in
-the same localhost namespace. Before preparing that packet, the
-developer/orchestrator must create the pending four-file docs-only commit with
-message `Record A7 autonomous stabilization stop.`; Codex could not stage it
-because this execution sandbox mounts `.git` read-only. A new bounded packet
-may then reauthorize the same two-file normal-click correction, its exact
-focused validation, and one headless browser attempt. No implementation,
-test, browser, server, runtime, localhost, or network action is currently
-authorized.
+Developer/orchestrator review and preparation of a new bounded application
+correction for `dnd_initative_tracker.py` with focused coverage in
+`tests/test_server_runtime.py`. The correction must reconcile the versioned
+fixture's exact identity contract with normal post-start summons and missing
+runtime `monster_slug` values before another browser gate is opened.
