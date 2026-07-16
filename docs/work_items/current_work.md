@@ -10,8 +10,8 @@ If an item is not marked as **Active** here, it is NOT current work.
 <!-- ACTIVE_WORK_STATUS_START -->
 - **Status:** Active
 - **Current Work Item:** `WORK-20260715-a7-browser-automation`
-- **Active Gate:** A7-G11 not opened; pilot retry not prepared
-- **Allowed Next Action:** Orchestrator acceptance and preparation of one new one-shot browser pilot packet. No pilot, retry, implementation, test, browser, server, runtime, endpoint, localhost, network, push, deployment, restart, scheduler, production, or service-mutation action is authorized.
+- **Active Gate:** A7-G12 controlled stop; port ownership unavailable
+- **Allowed Next Action:** Developer/orchestrator review and one docs-only commit of the four allowed G11/G12 ledger/result files with message `Record A7 autonomous stabilization stop.`; Codex could not create it because this execution sandbox mounts `.git` read-only. A new bounded packet may be prepared only after an execution environment can positively prove port 8787 ownership and keep the owned server and browser in the same localhost namespace. No implementation, test, browser, server, runtime, endpoint, localhost, network, push, deployment, restart, scheduler, production, or service-mutation action is authorized.
 - <!-- ACTIVE_WORK_STATUS_END -->
 
 ---
@@ -21,8 +21,69 @@ If an item is not marked as **Active** here, it is NOT current work.
 | ID | Title | Status | Goal |
 | --- | --- | --- | --- |
 <!-- ACTIVE_WORK_TABLE_START -->
-| WORK-20260715-a7-browser-automation | A7 browser-driven human-workflow automation | Active | G10 corrected enemy-option validation at commit `8db48ee`: presentation order is ignored while the exact unique identity set remains required. G11 is not opened, and the next one-shot browser pilot is not prepared or authorized. |
+| WORK-20260715-a7-browser-automation | A7 browser-driven human-workflow automation | Active | G11 proved a harness normal-click obstruction at `start-combat`. G12 validated a bounded correction, but the browser was not run because the owned server could not bind port 8787 and the occupying listener was outside the visible namespace. The candidate source/test changes were restored. The four docs await the required developer/orchestrator-owned stop commit because Codex's `.git` mount is read-only. |
 <!-- ACTIVE_WORK_TABLE_END -->
+
+---
+
+## A7-G12 Autonomous Stabilization Controlled Stop
+
+G11 run `20260716_145717` passed reset/fixture validation, added all ten
+players and all nine required enemies, and passed steps 1 through 17. Its
+single `start-combat` plan step then timed out after approximately 30 seconds.
+`#startCombatBtn` was visible, enabled, and stable, but the still-open
+`.toolbox-header` intercepted normal pointer events. No combat-start HTTP
+request was sent. This proves a harness interaction defect and does not prove
+an application defect. The durable G11 result is
+`docs/work_items/A7-G11-pilot-failure-result.md`.
+
+The developer granted standing autonomy on 2026-07-16 for bounded G12
+diagnosis, evidence-backed harness/test correction, focused validation, owned
+localhost server execution, headless browser execution, evidence inspection,
+durable reporting, workflow repetition only after validated corrections, and
+one focused commit after terminal pass. The required correction and both new
+focused tests were implemented and passed the exact 22-node validation, but
+the candidate source/test changes were restored after the controlled stop.
+
+No G12 browser attempt ran. The owned server later reported that it could not
+bind any address on port 8787. The occupying listener was outside the command
+sandbox's visible PID/network namespace, so its identity and ownership could
+not be verified. No unverified process was killed, replaced, or adopted. The
+verified owned Python/tee children were stopped and reaped. The durable G12
+result is `docs/work_items/A7-G12-autonomous-stabilization-result.md`. The
+approximately-200-enemy stress scenario remains unopened.
+
+The required full diff check passed. The subsequent four-file staging attempt
+failed before staging because this Codex execution sandbox mounts `.git`
+read-only and could not create `.git/index.lock`. No commit was created and no
+repository metadata changed. The developer/orchestrator must create the
+docs-only commit with message `Record A7 autonomous stabilization stop.`.
+
+```text
+A7_GATE=A7-G12
+A7_STATE=autonomous-stabilization-controlled-stop
+A7_G11_STATE=failed
+A7_G11_RESULT=docs/work_items/A7-G11-pilot-failure-result.md
+A7_G11_FAILURE_STEP=start-combat
+A7_G11_ROOT_CAUSE=harness-normal-click-obstructed-by-toolbox-header
+A7_G11_APPLICATION_DEFECT_PROVEN=false
+A7_G12_STATE=controlled-stop
+A7_G12_APPROVAL=developer-standing-autonomy-2026-07-16
+A7_G12_RESULT=docs/work_items/A7-G12-autonomous-stabilization-result.md
+A7_G12_STOP_CONDITION=port-ownership-cannot-be-verified
+A7_G12_BROWSER_RESULT=not-run
+A7_IMPLEMENTATION_AUTHORIZED=false
+A7_TEST_EXECUTION_AUTHORIZED=false
+A7_BROWSER_EXECUTION_AUTHORIZED=false
+A7_RUNTIME_EXECUTION_AUTHORIZED=false
+A7_NETWORK_AUTHORIZED=false
+A7_PUSH_AUTHORIZED=false
+A7_DEPLOYMENT_AUTHORIZED=false
+A7_RESTART_AUTHORIZED=false
+A7_SCHEDULER_AUTHORIZED=false
+A7_PRODUCTION_AUTHORIZED=false
+A7_SERVICE_MUTATION_AUTHORIZED=false
+```
 
 ---
 

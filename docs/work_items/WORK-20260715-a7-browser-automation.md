@@ -4,20 +4,25 @@ Date: `2026-07-15 UTC`
 
 Work item: `WORK-20260715-a7-browser-automation`
 
-Active gate: `A7-G11`
+Active gate: `A7-G12`
 
-State: `pilot-retry-not-prepared`
+State: `autonomous-stabilization-controlled-stop`
 
-Approval: `developer-explicit-approval-2026-07-15`
+Approval: `developer-standing-autonomy-2026-07-16`
 
 ## Goal
 
 Establish deterministic browser-driven coverage for the accepted A6
 three-surface human workflow while preserving explicit, one-shot gate control.
-The bounded G7 harness-ordering correction is accepted. G8 then received all
-nine required enemy slugs but failed on irrelevant option order; no
-application defect was proven. The G10 set-validation correction is accepted
-at commit `8db48ee`. The next browser pilot remains unopened and unauthorized.
+The bounded G7 harness-ordering correction and G10 set-validation correction
+are accepted. G11 passed steps 1 through 17, including the reset contract and
+all player/enemy additions, then failed at `start-combat` because the still-open
+toolbox intercepted normal pointer events. No combat-start HTTP request was
+sent, so this proves a harness interaction defect rather than an application
+defect. G12 validated the bounded normal-click correction but reached a
+controlled stop before browser execution because port 8787 ownership could not
+be verified. The candidate harness/test changes were restored to their
+starting bytes.
 
 The deterministic workflow remains:
 
@@ -123,19 +128,28 @@ The accepted validation is:
 The accepted G10 result is
 `docs/work_items/A7-G10-enemy-option-set-correction-result.md`.
 
+G11 run `20260716_145717` passed the first 17 steps and failed on its single
+`start-combat` step after approximately 30 seconds. The button was visible,
+enabled, and stable, but `.toolbox-header` intercepted its pointer events while
+the toolbox remained open. No start-combat request was emitted. The durable
+result is `docs/work_items/A7-G11-pilot-failure-result.md`; no application
+defect was proven.
+
 ## Current authorization boundary
 
 ```text
-A7_GATE=A7-G11
-A7_STATE=pilot-retry-not-prepared
-A7_G8_STATE=failed
-A7_G8_RETRY_AUTHORIZED=false
-A7_G9_STATE=completed
-A7_G10_STATE=completed
-A7_G10_RESULT=docs/work_items/A7-G10-enemy-option-set-correction-result.md
-A7_G10_TARGET_COMMIT=8db48ee
-A7_G10_VALIDATION=pycompile-and-20-focused-tests-passed
-A7_G11_STATE=not-opened
+A7_GATE=A7-G12
+A7_STATE=autonomous-stabilization-controlled-stop
+A7_G11_STATE=failed
+A7_G11_RESULT=docs/work_items/A7-G11-pilot-failure-result.md
+A7_G11_FAILURE_STEP=start-combat
+A7_G11_ROOT_CAUSE=harness-normal-click-obstructed-by-toolbox-header
+A7_G11_APPLICATION_DEFECT_PROVEN=false
+A7_G12_STATE=controlled-stop
+A7_G12_APPROVAL=developer-standing-autonomy-2026-07-16
+A7_G12_RESULT=docs/work_items/A7-G12-autonomous-stabilization-result.md
+A7_G12_STOP_CONDITION=port-ownership-cannot-be-verified
+A7_G12_BROWSER_RESULT=not-run
 A7_IMPLEMENTATION_AUTHORIZED=false
 A7_TEST_EXECUTION_AUTHORIZED=false
 A7_BROWSER_EXECUTION_AUTHORIZED=false
@@ -149,11 +163,21 @@ A7_PRODUCTION_AUTHORIZED=false
 A7_SERVICE_MUTATION_AUTHORIZED=false
 ```
 
-No browser, server, runtime, network, push, deploy, restart, scheduler,
-production, or service action occurred.
+G12 stopped before browser execution. The verified owned Python/tee children
+were stopped and reaped; no unverified process was killed, replaced, or
+adopted. All implementation, test, browser, runtime, localhost, and network
+authorization is now closed. Push, deployment, scheduler, production, restart,
+and service mutation remain unauthorized.
 
 ## Next safe action
 
-The next safe action is orchestrator acceptance and preparation of one new
-one-shot browser pilot packet. A7-G11 is not opened, and no browser pilot or
-retry is authorized.
+The orchestrator must first provide an execution environment that can
+positively verify port 8787 ownership and keep the owned server and browser in
+the same localhost namespace. Before preparing that packet, the
+developer/orchestrator must create the pending four-file docs-only commit with
+message `Record A7 autonomous stabilization stop.`; Codex could not stage it
+because this execution sandbox mounts `.git` read-only. A new bounded packet
+may then reauthorize the same two-file normal-click correction, its exact
+focused validation, and one headless browser attempt. No implementation,
+test, browser, server, runtime, localhost, or network action is currently
+authorized.
