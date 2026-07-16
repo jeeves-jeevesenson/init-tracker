@@ -10,8 +10,8 @@ If an item is not marked as **Active** here, it is NOT current work.
 <!-- ACTIVE_WORK_STATUS_START -->
 - **Status:** Active
 - **Current Work Item:** `WORK-20260715-a7-browser-automation`
-- **Active Gate:** A7-G16 browser preparation not opened
-- **Allowed Next Action:** Orchestrator acceptance and preparation of one autonomous host-access three-surface browser stabilization run. A7-G16 is not opened, and implementation, test, browser, server, runtime, endpoint, localhost, network, push, deployment, restart, scheduler, production, and service-mutation action remain unauthorized.
+- **Active Gate:** A7-G17 autonomous browser stabilization controlled stop
+- **Allowed Next Action:** Developer/orchestrator review of the G17 application-defect evidence and authorization of the additional application file scope required to keep a claimed player surface synchronized after another player successfully ends its turn. All implementation, test, browser, runtime, network, push, deployment, restart, scheduler, production, and service-mutation action is closed.
 - <!-- ACTIVE_WORK_STATUS_END -->
 
 ---
@@ -21,8 +21,41 @@ If an item is not marked as **Active** here, it is NOT current work.
 | ID | Title | Status | Goal |
 | --- | --- | --- | --- |
 <!-- ACTIVE_WORK_TABLE_START -->
-| WORK-20260715-a7-browser-automation | A7 browser-driven human-workflow automation | Active | G15 corrected and validated the post-combat fixture mapping at implementation commit `8abb324`. The correction is accepted, all execution authorization is closed, and A7-G16 remains unopened pending orchestrator preparation of one autonomous host-access three-surface browser stabilization run. |
+| WORK-20260715-a7-browser-automation | A7 browser-driven human-workflow automation | Active | G17 reached a controlled stop after a successful player `end_turn` mutation advanced backend authority to John Twilight while John's connected player surface remained stale on Malagrou. Candidate harness/test changes were restored, evidence was preserved, and all execution authorization is closed pending an application-scope decision. |
 <!-- ACTIVE_WORK_TABLE_END -->
+
+---
+
+## A7-G17 Autonomous Browser Stabilization Controlled Stop
+
+G17 completed sixteen changed-code browser attempts. The final attempt proved
+an application-owned player-surface synchronization defect: Malagrou's normal,
+enabled End Turn click completed successfully in backend authority and advanced
+the combat API to John Twilight, but John's already-connected player surface
+did not apply that state and left End Turn disabled until the bounded wait
+expired. Working around the stale surface would violate the application-defect
+boundary. All candidate harness/test changes were restored to their exact
+starting bytes, the owned server was stopped and reaped, port 8787 was proven
+free, and the durable result is recorded at
+`docs/work_items/A7-G17-autonomous-browser-stabilization-result.md`.
+
+```text
+A7_GATE=A7-G17
+A7_STATE=autonomous-browser-stabilization-controlled-stop
+A7_G17_STATE=controlled-stop
+A7_G17_RESULT=docs/work_items/A7-G17-autonomous-browser-stabilization-result.md
+A7_IMPLEMENTATION_AUTHORIZED=false
+A7_TEST_EXECUTION_AUTHORIZED=false
+A7_BROWSER_EXECUTION_AUTHORIZED=false
+A7_RUNTIME_EXECUTION_AUTHORIZED=false
+A7_NETWORK_AUTHORIZED=false
+A7_PUSH_AUTHORIZED=false
+A7_DEPLOYMENT_AUTHORIZED=false
+A7_RESTART_AUTHORIZED=false
+A7_SCHEDULER_AUTHORIZED=false
+A7_PRODUCTION_AUTHORIZED=false
+A7_SERVICE_MUTATION_AUTHORIZED=false
+```
 
 ---
 

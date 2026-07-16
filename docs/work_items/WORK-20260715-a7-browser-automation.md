@@ -4,11 +4,11 @@ Date: `2026-07-15 UTC`
 
 Work item: `WORK-20260715-a7-browser-automation`
 
-Active gate: `A7-G16`
+Active gate: `A7-G17`
 
-State: `runtime-mapping-correction-accepted-awaiting-browser-preparation`
+State: `autonomous-browser-stabilization-controlled-stop`
 
-Approval: `developer-yolo-host-access-2026-07-16`
+Approval: `developer-standing-yolo-host-access-2026-07-16`
 
 ## Goal
 
@@ -27,8 +27,11 @@ host-access VM and reached a controlled stop after proving that the remaining
 fixture mismatch was application-owned and required additional application
 file scope. G14 recorded that controlled stop and completed a documentation-only
 authorization for one bounded G15 correction. G15 is now completed and
-accepted at implementation commit `8abb324`. All execution authorization is
-closed pending orchestrator preparation of the next autonomous browser attempt.
+accepted at implementation commit `8abb324`. G17 completed sixteen changed-code
+browser attempts and reached a controlled stop after proving an application-
+owned live player-surface synchronization defect. The final backend mutation
+successfully advanced combat authority from Malagrou to John Twilight, while
+John's connected player surface remained stale and left End Turn disabled.
 
 The deterministic workflow remains:
 
@@ -186,13 +189,10 @@ The accepted G15 result is
 ## Current authorization boundary
 
 ```text
-A7_GATE=A7-G16
-A7_STATE=runtime-mapping-correction-accepted-awaiting-browser-preparation
-A7_G15_STATE=completed
-A7_G15_RESULT=docs/work_items/A7-G15-runtime-mapping-correction-result.md
-A7_G15_TARGET_COMMIT=8abb324
-A7_G15_VALIDATION=pycompile-and-3-focused-tests-passed
-A7_G16_STATE=not-opened
+A7_GATE=A7-G17
+A7_STATE=autonomous-browser-stabilization-controlled-stop
+A7_G17_STATE=controlled-stop
+A7_G17_RESULT=docs/work_items/A7-G17-autonomous-browser-stabilization-result.md
 A7_IMPLEMENTATION_AUTHORIZED=false
 A7_TEST_EXECUTION_AUTHORIZED=false
 A7_BROWSER_EXECUTION_AUTHORIZED=false
@@ -206,17 +206,16 @@ A7_PRODUCTION_AUTHORIZED=false
 A7_SERVICE_MUTATION_AUTHORIZED=false
 ```
 
-G13 is closed at a controlled stop, G14 is complete, and G15 is completed and
-accepted. No implementation, test, browser, server, runtime, endpoint,
-localhost, network, push, deployment, scheduler, production, restart, or
-service-mutation action is authorized. A7-G16 is not opened.
-
-No browser, server, runtime, network, push, deploy, restart, scheduler,
-production, or service action occurred during this documentation-only
-acceptance. The approximately-200-enemy stress scenario remains unopened.
+G13 is closed at a controlled stop, G14 is complete, G15 is completed and
+accepted, and G17 is closed at a controlled stop. Candidate harness/test
+changes were restored to their exact starting bytes. Implementation, test,
+browser, server, runtime, endpoint, localhost, network, push, deployment,
+scheduler, production, restart, and service mutation are unauthorized. The
+approximately-200-enemy stress scenario remains unopened.
 
 ## Next safe action
 
-Orchestrator acceptance and preparation of one autonomous host-access
-three-surface browser stabilization run. A7-G16 remains unopened until that
-preparation is complete.
+Developer/orchestrator review of the G17 evidence and authorization of the
+additional application file scope required to correct live player-surface
+state application after a successful turn transition. Do not reopen browser or
+runtime execution until that application decision is recorded.
