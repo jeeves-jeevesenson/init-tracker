@@ -369,6 +369,15 @@ def _black_tan_combatant_value(combatant: Any, key: str, default: Any = None) ->
     return getattr(combatant, key, default)
 
 
+def _black_tan_runtime_monster_slug(combatant: Any) -> str:
+    slug = str(_black_tan_combatant_value(combatant, "monster_slug", "") or "").strip().lower()
+    if slug:
+        return slug
+    monster_spec = _black_tan_combatant_value(combatant, "monster_spec")
+    filename = str(_black_tan_combatant_value(monster_spec, "filename", "") or "").strip()
+    return Path(filename).stem.strip().lower() if filename else ""
+
+
 def _black_tan_position(positions: Dict[Any, Any], cid: int) -> Optional[Dict[str, int]]:
     raw = positions.get(cid, positions.get(str(cid)))
     if isinstance(raw, dict):
@@ -394,7 +403,7 @@ def _black_tan_verify_contract_state(state: Dict[str, Any]) -> Tuple[int, Dict[s
     else:
         combatant_items = []
 
-    normalized: List[Tuple[int, str, str, Any]] = []
+    normalized: List[Tuple[int, str, str, bool, bool, Optional[int]]] = []
     malformed_count = 0
     for raw_cid, combatant in combatant_items:
         cid_value = raw_cid if raw_cid is not None else _black_tan_combatant_value(combatant, "cid")
@@ -404,13 +413,22 @@ def _black_tan_verify_contract_state(state: Dict[str, Any]) -> Tuple[int, Dict[s
             malformed_count += 1
             continue
         name = str(_black_tan_combatant_value(combatant, "name", "") or "")
-        slug = str(_black_tan_combatant_value(combatant, "monster_slug", "") or "")
-        normalized.append((cid, name, slug, combatant))
+        slug = _black_tan_runtime_monster_slug(combatant)
+        is_pc_value = _black_tan_combatant_value(combatant, "is_pc")
+        is_pc = bool(is_pc_value) if is_pc_value is not None else not bool(slug)
+        raw_summon_owner = _black_tan_combatant_value(combatant, "summoned_by_cid")
+        has_summon_owner = raw_summon_owner is not None
+        try:
+            summon_owner = int(raw_summon_owner) if has_summon_owner else None
+        except (TypeError, ValueError):
+            summon_owner = None
+        normalized.append((cid, name, slug, is_pc, has_summon_owner, summon_owner))
 
+    fixture_combatants = [item for item in normalized if not item[4]]
     actual_counts = {
-        "player_count": sum(1 for _cid, _name, slug, _combatant in normalized if not slug),
-        "enemy_count": sum(1 for _cid, _name, slug, _combatant in normalized if slug),
-        "combatant_count": len(normalized) + malformed_count,
+        "player_count": sum(1 for item in fixture_combatants if item[3]),
+        "enemy_count": sum(1 for item in fixture_combatants if not item[3]),
+        "combatant_count": len(fixture_combatants) + malformed_count,
     }
     expected_counts = {"player_count": 10, "enemy_count": 9, "combatant_count": 19}
     positions = state.get("positions") if isinstance(state.get("positions"), dict) else {}
@@ -425,7 +443,7 @@ def _black_tan_verify_contract_state(state: Dict[str, Any]) -> Tuple[int, Dict[s
         mismatches.append(_black_tan_bounded_mismatch("combatant_cids", "integer CIDs", malformed_count))
 
     for player_id, expected_name in BLACK_TAN_UI_PLAYER_IDENTITIES:
-        matches = [item for item in normalized if not item[2] and item[1] == expected_name]
+        matches = [item for item in fixture_combatants if item[3] and item[1] == expected_name]
         if len(matches) != 1:
             mismatches.append(_black_tan_bounded_mismatch(
                 f"player:{player_id}", "exactly one matching combatant", len(matches),
@@ -448,9 +466,9 @@ def _black_tan_verify_contract_state(state: Dict[str, Any]) -> Tuple[int, Dict[s
 
     for enemy_slug, expected_name in BLACK_TAN_UI_ENEMY_IDENTITIES:
         # Production encounter creation numbers runtime monster names (for example,
-        # "Black and Tan Captain 1"). The slug is the immutable identity; the
-        # response name is the canonical monster-spec display name.
-        matches = [item for item in normalized if item[2] == enemy_slug]
+        # "Black and Tan Captain 1"). The monster spec filename remains the
+        # immutable identity when the post-start monster_slug is null.
+        matches = [item for item in fixture_combatants if not item[3] and item[2] == enemy_slug]
         if len(matches) != 1:
             mismatches.append(_black_tan_bounded_mismatch(
                 f"enemy:{enemy_slug}", "exactly one matching combatant slug", len(matches),
@@ -474,9 +492,17 @@ def _black_tan_verify_contract_state(state: Dict[str, Any]) -> Tuple[int, Dict[s
     all_cids = [item[0] for item in normalized]
     if len(set(all_cids)) != len(all_cids):
         mismatches.append(_black_tan_bounded_mismatch("runtime_cids", "unique", "duplicate CIDs"))
-    if set(all_cids) != matched_cids:
+    player_cids = {entry["cid"] for entry in player_records}
+    valid_summon_cids = {
+        item[0]
+        for item in normalized
+        if item[4] and item[2] in {"owl", "raven"} and item[5] in player_cids
+    }
+    if set(all_cids) != matched_cids | valid_summon_cids:
         mismatches.append(_black_tan_bounded_mismatch(
-            "ordered_identity_set", "exact 10 players and 9 enemies", "missing or unexpected combatants",
+            "ordered_identity_set",
+            "exact 10 players and 9 enemies plus valid Owl/Raven summons",
+            "missing or unexpected combatants",
         ))
 
     if mismatches:

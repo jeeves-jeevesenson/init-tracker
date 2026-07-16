@@ -5071,6 +5071,136 @@ def _a7_black_tan_contract_request(operation="reset-ui-workflow"):
     }
 
 
+def _a7_post_start_fixture_state():
+    from types import SimpleNamespace
+    from dnd_initative_tracker import (
+        BLACK_TAN_UI_ENEMY_IDENTITIES,
+        BLACK_TAN_UI_PLAYER_IDENTITIES,
+    )
+
+    combatants = {}
+    positions = {}
+    player_cid_map = {}
+    enemy_cid_map = {}
+    for index, (player_id, name) in enumerate(BLACK_TAN_UI_PLAYER_IDENTITIES, start=1):
+        cid = 100 + index
+        combatants[cid] = SimpleNamespace(
+            cid=cid,
+            name=name,
+            is_pc=True,
+            monster_slug=None,
+            monster_spec=None,
+        )
+        positions[cid] = (index, index + 1)
+        player_cid_map[player_id] = cid
+    for index, (enemy_slug, name) in enumerate(BLACK_TAN_UI_ENEMY_IDENTITIES, start=1):
+        cid = 200 + index
+        combatants[cid] = SimpleNamespace(
+            cid=cid,
+            name=f"{name} 1",
+            is_pc=False,
+            monster_slug=None,
+            monster_spec=SimpleNamespace(filename=f"Monsters/{enemy_slug}.yaml"),
+        )
+        positions[cid] = (20 + index, index + 2)
+        enemy_cid_map[enemy_slug] = cid
+
+    for cid, name, slug, owner_cid in (
+        (301, "Owl", "owl", player_cid_map["pc:dorian"]),
+        (302, "Raven", "raven", player_cid_map["pc:eldramar"]),
+    ):
+        combatants[cid] = SimpleNamespace(
+            cid=cid,
+            name=name,
+            is_pc=False,
+            monster_slug=None,
+            monster_spec=SimpleNamespace(filename=f"Monsters/{slug}.yaml"),
+            summoned_by_cid=owner_cid,
+        )
+        positions[cid] = (cid - 300, 20)
+
+    return {
+        "combatants": combatants,
+        "positions": positions,
+        "in_combat": True,
+        "snapshot": None,
+    }, player_cid_map, enemy_cid_map
+
+
+def test_a7_fixture_validation_accepts_post_start_canonical_mapping_with_summons():
+    from dnd_initative_tracker import _execute_black_tan_fixture_contract
+
+    state, expected_player_map, expected_enemy_map = _a7_post_start_fixture_state()
+    status, response = _execute_black_tan_fixture_contract(
+        _a7_black_tan_contract_request("verify-ui-workflow"),
+        debugging_enabled=True,
+        reset_state=lambda: {},
+        read_state=lambda: state,
+    )
+
+    assert len(state["combatants"]) == 21
+    assert status == 200
+    assert response["mutated"] is False
+    assert response["player_count"] == 10
+    assert response["enemy_count"] == 9
+    assert response["combatant_count"] == 19
+    assert response["player_cid_map"] == expected_player_map
+    assert response["enemy_cid_map"] == expected_enemy_map
+    assert 301 not in response["player_cids"] + response["enemy_cids"]
+    assert 302 not in response["player_cids"] + response["enemy_cids"]
+
+
+def test_a7_fixture_validation_rejects_missing_canonical_enemy():
+    from dnd_initative_tracker import _execute_black_tan_fixture_contract
+
+    state, _player_map, enemy_map = _a7_post_start_fixture_state()
+    missing_cid = enemy_map["black-and-tan-suppression-gunner"]
+    state["combatants"].pop(missing_cid)
+    state["positions"].pop(missing_cid)
+    status, response = _execute_black_tan_fixture_contract(
+        _a7_black_tan_contract_request("verify-ui-workflow"),
+        debugging_enabled=True,
+        reset_state=lambda: {},
+        read_state=lambda: state,
+    )
+
+    assert status == 409
+    assert response["error"] == "ui_setup_mismatch"
+    assert response["mutated"] is False
+    assert response["actual_counts"] == {
+        "player_count": 10,
+        "enemy_count": 8,
+        "combatant_count": 18,
+    }
+    assert any(
+        detail["field"] == "enemy:black-and-tan-suppression-gunner"
+        for detail in response["mismatch_details"]
+    )
+
+
+def test_a7_fixture_validation_rejects_incorrect_canonical_enemy_mapping():
+    from types import SimpleNamespace
+    from dnd_initative_tracker import _execute_black_tan_fixture_contract
+
+    state, _player_map, enemy_map = _a7_post_start_fixture_state()
+    captain = state["combatants"][enemy_map["black-and-tan-captain"]]
+    captain.monster_spec = SimpleNamespace(filename="Monsters/black-and-tan-constable.yaml")
+    status, response = _execute_black_tan_fixture_contract(
+        _a7_black_tan_contract_request("verify-ui-workflow"),
+        debugging_enabled=True,
+        reset_state=lambda: {},
+        read_state=lambda: state,
+    )
+
+    assert status == 409
+    assert response["error"] == "ui_setup_mismatch"
+    assert response["mutated"] is False
+    assert response["actual_counts"] == response["expected_counts"]
+    mismatch_fields = {detail["field"] for detail in response["mismatch_details"]}
+    assert "enemy:black-and-tan-captain" in mismatch_fields
+    assert "enemy:black-and-tan-constable" in mismatch_fields
+
+
 def test_black_tan_fixture_contract_success_is_versioned_and_stable():
     from dnd_initative_tracker import (
         BLACK_TAN_UI_PRECONDITION_DIGEST,
