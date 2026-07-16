@@ -10,8 +10,8 @@ If an item is not marked as **Active** here, it is NOT current work.
 <!-- ACTIVE_WORK_STATUS_START -->
 - **Status:** Active
 - **Current Work Item:** `WORK-20260715-a7-browser-automation`
-- **Active Gate:** A7-G10 enemy-option set correction authorized, not started
-- **Allowed Next Action:** One bounded correction may edit only `scripts/validation/browser-smoke-harness.py` and `tests/test_browser_smoke_harness.py`, followed by focused tests for the authorized set-validation behavior. G8 retry, browser, server, runtime, endpoint, localhost, network, push, deployment, restart, scheduler, production, and service-mutation actions remain forbidden.
+- **Active Gate:** A7-G11 not opened; pilot retry not prepared
+- **Allowed Next Action:** Orchestrator acceptance and preparation of one new one-shot browser pilot packet. No pilot, retry, implementation, test, browser, server, runtime, endpoint, localhost, network, push, deployment, restart, scheduler, production, or service-mutation action is authorized.
 - <!-- ACTIVE_WORK_STATUS_END -->
 
 ---
@@ -21,41 +21,50 @@ If an item is not marked as **Active** here, it is NOT current work.
 | ID | Title | Status | Goal |
 | --- | --- | --- | --- |
 <!-- ACTIVE_WORK_TABLE_START -->
-| WORK-20260715-a7-browser-automation | A7 browser-driven human-workflow automation | Active | A7-G8 received all nine required unique enemy slugs and failed solely because the harness required one exact option order; no monster-add request occurred, no application defect was proven, and one bounded two-file G10 correction is authorized but not started. |
+| WORK-20260715-a7-browser-automation | A7 browser-driven human-workflow automation | Active | G10 corrected enemy-option validation at commit `8db48ee`: presentation order is ignored while the exact unique identity set remains required. G11 is not opened, and the next one-shot browser pilot is not prepared or authorized. |
 <!-- ACTIVE_WORK_TABLE_END -->
 
 ---
 
-## A7-G9 Enemy-Option Set-Correction Authorization
+## A7-G10 Enemy-Option Set Correction Acceptance
 
-The A7-G8 one-shot pilot received all nine required unique enemy slugs. It
-failed solely because the harness required one exact option order even though
-the returned and required identity sets matched. No monster-add request
-occurred, no application defect was proven, and G8 retry remains unauthorized.
+The A7-G8 one-shot pilot received all nine required enemy slugs but failed on
+irrelevant option order. No application defect was proven, and G8 retry
+remains unauthorized.
 
-A7-G10 authorizes one bounded correction that may edit exactly:
+A7-G10 is completed at implementation commit `8db48ee`. Exactly these files
+changed:
 
 - `scripts/validation/browser-smoke-harness.py`
 - `tests/test_browser_smoke_harness.py`
 
-The correction must validate enemy options by exact unique identity set, not
-presentation order, and must fail on any missing, extra, or duplicate slug. It
-must preserve selecting the requested slug by value and clicking once. It
-must also preserve every other plan step, the fixture contract, evidence
-schema, terminal behavior, no-retry rules, cleanup rules, CLI behavior, and
-headless default. Focused tests must prove that reordered complete options
-pass and that missing, extra, or duplicate options fail.
+Enemy-option presentation order is now ignored. The harness requires the
+exact unique identity set. Missing, extra, and duplicate slugs still fail.
+Requested slugs are selected by value, and each enemy-addition step clicks
+once. All unrelated behavior remains unchanged.
+
+The accepted validation is:
+
+- `py_compile` passed;
+- exactly 20 focused tests passed in `1.74 seconds`; and
+- two-file diff validation passed.
+
+The accepted G10 result is
+`docs/work_items/A7-G10-enemy-option-set-correction-result.md`.
 
 ```text
-A7_GATE=A7-G10
-A7_STATE=enemy-option-set-correction-authorized
+A7_GATE=A7-G11
+A7_STATE=pilot-retry-not-prepared
 A7_G8_STATE=failed
 A7_G8_RETRY_AUTHORIZED=false
 A7_G9_STATE=completed
-A7_G10_STATE=authorized-not-started
-A7_G10_ALLOWED_FILES=scripts/validation/browser-smoke-harness.py,tests/test_browser_smoke_harness.py
-A7_IMPLEMENTATION_AUTHORIZED=true
-A7_TEST_EXECUTION_AUTHORIZED=true
+A7_G10_STATE=completed
+A7_G10_RESULT=docs/work_items/A7-G10-enemy-option-set-correction-result.md
+A7_G10_TARGET_COMMIT=8db48ee
+A7_G10_VALIDATION=pycompile-and-20-focused-tests-passed
+A7_G11_STATE=not-opened
+A7_IMPLEMENTATION_AUTHORIZED=false
+A7_TEST_EXECUTION_AUTHORIZED=false
 A7_BROWSER_EXECUTION_AUTHORIZED=false
 A7_RUNTIME_EXECUTION_AUTHORIZED=false
 A7_NETWORK_AUTHORIZED=false
@@ -67,15 +76,13 @@ A7_PRODUCTION_AUTHORIZED=false
 A7_SERVICE_MUTATION_AUTHORIZED=false
 ```
 
-This authorization is only the ledger transition for a later G10 task. No
-correction was implemented and no test was executed during G9. No browser,
-server, runtime, endpoint, localhost, network, dependency, artifact, retry,
-push, deployment, restart, scheduler, production, service, or cleanup action
-occurred. The approximately-200-enemy multi-target-spell stress scenario
-remains unopened.
+No browser, server, runtime, network, push, deploy, restart, scheduler,
+production, or service action occurred. The approximately-200-enemy
+multi-target-spell stress scenario remains unopened.
 
-The next safe action is the bounded G10 two-file correction and focused-test
-task. Do not implement or test that correction as part of G9.
+The next safe action is orchestrator acceptance and preparation of one new
+one-shot browser pilot packet. A7-G11 is not opened, and no pilot or retry is
+authorized.
 
 ---
 
