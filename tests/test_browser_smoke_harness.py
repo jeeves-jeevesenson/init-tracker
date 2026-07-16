@@ -201,6 +201,26 @@ def test_three_surface_plan_uses_verified_selectors_and_ordered_steps():
     assert any(step.get("smoke_api") == "handleCombatControl()" for step in plan["steps"])
 
 
+def test_three_surface_roster_setup_precedes_encounter_tab():
+    harness = _load_browser_smoke_harness()
+    plan = harness.build_three_surface_workflow_plan()
+    step_ids = [step["step_id"] for step in plan["steps"]]
+    open_toolbox_index = step_ids.index("open-toolbox")
+    expected_setup_order = [
+        "open-toolbox",
+        "select-all-roster-players",
+        "add-all-roster-players",
+        "open-encounter",
+    ]
+    expected_enemy_order = [
+        f"add-enemy-{enemy_slug}"
+        for enemy_slug, _name in harness.THREE_SURFACE_ENEMY_IDENTITIES
+    ]
+
+    assert step_ids[open_toolbox_index:open_toolbox_index + 4] == expected_setup_order
+    assert step_ids[open_toolbox_index + 4:open_toolbox_index + 13] == expected_enemy_order
+
+
 def test_three_surface_plan_requires_versioned_fixture_contract():
     harness = _load_browser_smoke_harness()
     request = harness.three_surface_fixture_request("verify-ui-workflow")
@@ -442,6 +462,43 @@ def test_three_surface_executor_runs_ordered_plan_once(monkeypatch, tmp_path):
     assert set(evidence["artifacts"]["role_traces"]) == set(pages)
     assert all(page.context.tracing.start_calls for page in pages.values())
     assert all(page.context.tracing.stop_calls for page in pages.values())
+
+
+def test_three_surface_corrected_setup_steps_execute_once(monkeypatch, tmp_path):
+    harness = _load_browser_smoke_harness()
+    plan = harness.build_three_surface_workflow_plan()
+    pages = _fake_three_surface_pages(harness)
+    collector = _FakeCollector(tmp_path)
+    executed = []
+
+    def fake_step(step, *_args):
+        executed.append(step["step_id"])
+
+    monkeypatch.setattr(harness, "_execute_three_surface_step", fake_step)
+
+    success, _evidence = harness.execute_three_surface_workflow(
+        plan,
+        "http://example.invalid",
+        pages,
+        collector,
+        {},
+    )
+
+    corrected_setup_steps = [
+        "open-toolbox",
+        "select-all-roster-players",
+        "add-all-roster-players",
+        "open-encounter",
+        *(
+            f"add-enemy-{enemy_slug}"
+            for enemy_slug, _name in harness.THREE_SURFACE_ENEMY_IDENTITIES
+        ),
+    ]
+    assert success is True
+    assert [step_id for step_id in executed if step_id in corrected_setup_steps] == (
+        corrected_setup_steps
+    )
+    assert all(executed.count(step_id) == 1 for step_id in corrected_setup_steps)
 
 
 def test_three_surface_executor_failure_records_terminal_evidence(monkeypatch, tmp_path):

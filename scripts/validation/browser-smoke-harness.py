@@ -126,7 +126,6 @@ def build_three_surface_workflow_plan() -> Dict[str, Any]:
     )
     add_step("navigate-dm", "/dm", "goto", path="/dm")
     add_step("open-toolbox", "/dm", "click", selector="#openToolboxBtn")
-    add_step("open-encounter", "/dm", "click", selector="#tab-encounter")
     add_step(
         "select-all-roster-players",
         "/dm",
@@ -136,6 +135,7 @@ def build_three_surface_workflow_plan() -> Dict[str, Any]:
         expected_players=_three_surface_players(),
     )
     add_step("add-all-roster-players", "/dm", "click", selector="#addPlayersBtn")
+    add_step("open-encounter", "/dm", "click", selector="#tab-encounter")
     for enemy_slug, enemy_name in THREE_SURFACE_ENEMY_IDENTITIES:
         add_step(
             f"add-enemy-{enemy_slug}",
