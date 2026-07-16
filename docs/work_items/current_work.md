@@ -10,8 +10,8 @@ If an item is not marked as **Active** here, it is NOT current work.
 <!-- ACTIVE_WORK_STATUS_START -->
 - **Status:** Active
 - **Current Work Item:** `WORK-20260715-a7-browser-automation`
-- **Active Gate:** A7-G15 runtime mapping correction authorized; not started
-- **Allowed Next Action:** Execute one bounded A7-G15 correction in exactly `dnd_initative_tracker.py` and `tests/test_server_runtime.py`, including focused test execution. The implementation and test authorization applies to G15 only. Browser, server, runtime, endpoint, localhost, network, push, deployment, restart, scheduler, production, and service-mutation action remain unauthorized.
+- **Active Gate:** A7-G16 browser preparation not opened
+- **Allowed Next Action:** Orchestrator acceptance and preparation of one autonomous host-access three-surface browser stabilization run. A7-G16 is not opened, and implementation, test, browser, server, runtime, endpoint, localhost, network, push, deployment, restart, scheduler, production, and service-mutation action remain unauthorized.
 - <!-- ACTIVE_WORK_STATUS_END -->
 
 ---
@@ -21,54 +21,49 @@ If an item is not marked as **Active** here, it is NOT current work.
 | ID | Title | Status | Goal |
 | --- | --- | --- | --- |
 <!-- ACTIVE_WORK_TABLE_START -->
-| WORK-20260715-a7-browser-automation | A7 browser-driven human-workflow automation | Active | G13 reached a controlled stop that proved the post-combat fixture-mapping defect. G14 completed the documentation-only authorization. G15 is authorized but not started, with implementation and focused tests limited to `dnd_initative_tracker.py` and `tests/test_server_runtime.py`. |
+| WORK-20260715-a7-browser-automation | A7 browser-driven human-workflow automation | Active | G15 corrected and validated the post-combat fixture mapping at implementation commit `8abb324`. The correction is accepted, all execution authorization is closed, and A7-G16 remains unopened pending orchestrator preparation of one autonomous host-access three-surface browser stabilization run. |
 <!-- ACTIVE_WORK_TABLE_END -->
 
 ---
 
-## A7-G14 Runtime Mapping Correction Authorization
+## A7-G15 Runtime Mapping Correction Acceptance
 
-G13 is recorded as a controlled stop that proved the application-owned
-post-combat fixture-mapping defect. After successful combat start, the live
-runtime contains all ten canonical fixture players, all nine canonical
-configured enemies, and the valid Owl and Raven summons. The current verifier
-cannot recognize that valid 19-fixture-actor mapping within 21 live runtime
-units because it classifies enemies solely through nullable `monster_slug`
-values and includes the summons in its fixture counts.
+G15 is completed and accepted at implementation commit `8abb324`. Exactly
+these implementation files changed:
 
-G14 made this documentation-only authorization and did not implement or
-validate the correction. G15 is authorized under this exact correction
-contract:
+- `dnd_initative_tracker.py`
+- `tests/test_server_runtime.py`
 
-- Post-combat fixture verification must identify the ten canonical fixture
-  players and nine canonical configured enemies through stable
-  fixture/runtime identity, not solely through nullable `monster_slug` values.
-- Owl and Raven summons are valid runtime units but are not canonical fixture
-  actors and must not cause a fixture-count mismatch.
-- Verification after successful combat start must accept the canonical
-  10-player, 9-enemy, 19-fixture-actor mapping even when total live runtime
-  units equal 21.
-- Missing, duplicated, or incorrectly mapped canonical fixture actors must
-  still fail closed.
-- Preserve the fixture schema/version, expected digest, reset behavior, HTTP
-  409 fail-closed semantics, and `mutated:false` mismatch behavior.
-- Do not alter combat mechanics, summons, initiative, enemy creation, player
-  creation, runtime counts, or browser behavior.
-- Add focused server-runtime tests for the accepted post-start mapping and at
-  least one missing or incorrectly mapped canonical-enemy failure.
+The root cause was fixture verification relying on nullable `monster_slug`
+values and counting Owl and Raven summons as canonical fixture actors.
+Configured enemies now fall back to stable `monster_spec.filename` identity,
+and canonical players are matched through PC identity and canonical name. Owl
+and Raven summons owned by mapped canonical players remain valid runtime units
+but are excluded from canonical fixture counts.
 
-The G15 edit boundary is exactly `dnd_initative_tracker.py` and
-`tests/test_server_runtime.py`.
+The canonical expected mapping remains 10 players, 9 enemies, and 19 actors.
+Missing, duplicate, incorrectly mapped, or unexpected actors fail closed. HTTP
+409 and `mutated:false` mismatch behavior remain preserved.
+
+The accepted validation is:
+
+- `py_compile` passed;
+- exactly three focused tests passed in `0.38 seconds`; and
+- the two-file diff check passed.
+
+The durable result is
+`docs/work_items/A7-G15-runtime-mapping-correction-result.md`.
 
 ```text
-A7_GATE=A7-G15
-A7_STATE=runtime-mapping-correction-authorized
-A7_G13_STATE=controlled-stop
-A7_G14_STATE=completed
-A7_G15_STATE=authorized-not-started
-A7_G15_ALLOWED_FILES=dnd_initative_tracker.py,tests/test_server_runtime.py
-A7_IMPLEMENTATION_AUTHORIZED=true
-A7_TEST_EXECUTION_AUTHORIZED=true
+A7_GATE=A7-G16
+A7_STATE=runtime-mapping-correction-accepted-awaiting-browser-preparation
+A7_G15_STATE=completed
+A7_G15_RESULT=docs/work_items/A7-G15-runtime-mapping-correction-result.md
+A7_G15_TARGET_COMMIT=8abb324
+A7_G15_VALIDATION=pycompile-and-3-focused-tests-passed
+A7_G16_STATE=not-opened
+A7_IMPLEMENTATION_AUTHORIZED=false
+A7_TEST_EXECUTION_AUTHORIZED=false
 A7_BROWSER_EXECUTION_AUTHORIZED=false
 A7_RUNTIME_EXECUTION_AUTHORIZED=false
 A7_NETWORK_AUTHORIZED=false
@@ -79,6 +74,13 @@ A7_SCHEDULER_AUTHORIZED=false
 A7_PRODUCTION_AUTHORIZED=false
 A7_SERVICE_MUTATION_AUTHORIZED=false
 ```
+
+No browser, server, runtime, network, push, deploy, restart, scheduler,
+production, or service action occurred. The approximately-200-enemy stress
+scenario remains unopened.
+
+The next safe action is orchestrator acceptance and preparation of one
+autonomous host-access three-surface browser stabilization run.
 
 ---
 
