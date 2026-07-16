@@ -23,12 +23,462 @@ from playwright.sync_api import sync_playwright, Page, BrowserContext, Browser
 # Constants
 DEFAULT_ARTIFACT_ROOT = Path("logs/browser-smoke")
 DEFAULT_BASE_URL = "http://localhost:8787"
+THREE_SURFACE_SCENARIO_ID = "black-tan-three-surface-workflow"
+THREE_SURFACE_SCHEMA_VERSION = "a7-ui-reset-contract/v1"
+THREE_SURFACE_RESET_VERSION = "blank-combat/v1"
+THREE_SURFACE_PRECONDITION_DIGEST = (
+    "sha256:67668370769a7a7f81c820550d4a10033bde8e297b2da1d05d55819cade90873"
+)
+THREE_SURFACE_PLAYER_IDENTITIES = (
+    ("pc:dorian", "Dorian"),
+    ("pc:eldramar", "Eldramar"),
+    ("pc:fred", "Fred"),
+    ("pc:john-twilight", "John Twilight"),
+    ("pc:johnny-morris", "Johnny Morris"),
+    ("pc:malagrou", "Malagrou"),
+    ("pc:old-man", "Old Man"),
+    ("pc:throat-goat", "Throat Goat"),
+    ("pc:vicnor", "Vicnor"),
+    ("pc:stikhiya", "стихия"),
+)
+THREE_SURFACE_ENEMY_IDENTITIES = (
+    ("black-and-tan-captain", "Black and Tan Captain"),
+    ("black-and-tan-constable", "Black and Tan Constable"),
+    ("black-and-tan-field-medic", "Black and Tan Field Medic"),
+    ("black-and-tan-lieutenant", "Black and Tan Lieutenant"),
+    ("black-and-tan-major", "Black and Tan Major"),
+    ("black-and-tan-rifleman", "Black and Tan Rifleman"),
+    ("black-and-tan-vda-scorcher", "Black and Tan VDA Scorcher"),
+    ("black-and-tan-shield-trooper", "Black and Tan Shield Trooper"),
+    ("black-and-tan-suppression-gunner", "Black and Tan Suppression Gunner"),
+)
+
+
+def _three_surface_players() -> List[Dict[str, str]]:
+    return [
+        {"player_id": player_id, "name": name}
+        for player_id, name in THREE_SURFACE_PLAYER_IDENTITIES
+    ]
+
+
+def _three_surface_enemies() -> List[Dict[str, str]]:
+    return [
+        {"enemy_slug": enemy_slug, "name": name}
+        for enemy_slug, name in THREE_SURFACE_ENEMY_IDENTITIES
+    ]
+
+
+def three_surface_fixture_request(operation: str) -> Dict[str, Any]:
+    if operation not in ("reset-ui-workflow", "verify-ui-workflow"):
+        raise ValueError(f"Unsupported three-surface fixture operation: {operation}")
+    return {
+        "schema_version": THREE_SURFACE_SCHEMA_VERSION,
+        "operation": operation,
+        "reset_version": THREE_SURFACE_RESET_VERSION,
+        "expected_precondition_digest": THREE_SURFACE_PRECONDITION_DIGEST,
+        "players": _three_surface_players(),
+        "enemies": _three_surface_enemies(),
+    }
+
+
+def build_three_surface_workflow_plan() -> Dict[str, Any]:
+    """Build the stable G1B-proven selector/API plan without touching a browser."""
+    steps: List[Dict[str, Any]] = []
+
+    def add_step(step_id: str, surface: str, action: str, **details: Any) -> None:
+        steps.append({
+            "order": len(steps) + 1,
+            "step_id": step_id,
+            "surface": surface,
+            "action": action,
+            **details,
+        })
+
+    add_step(
+        "pin-contract-expectation",
+        "fixture",
+        "validate-expectation",
+        browser_interaction=False,
+        required_versions={
+            "schema_version": THREE_SURFACE_SCHEMA_VERSION,
+            "reset_version": THREE_SURFACE_RESET_VERSION,
+            "precondition_digest": THREE_SURFACE_PRECONDITION_DIGEST,
+        },
+        required_mappings=("player_cid_map", "enemy_cid_map", "players.position", "enemies.position"),
+    )
+    add_step(
+        "reset-ui-workflow",
+        "fixture",
+        "post-json",
+        browser_interaction=False,
+        path="/api/dev/smoke-fixtures/black-tan-combat-exploration",
+        request=three_surface_fixture_request("reset-ui-workflow"),
+    )
+    add_step(
+        "validate-reset-contract",
+        "fixture",
+        "terminal-contract-barrier",
+        browser_interaction=False,
+        terminal_reasons=("fixture-precondition-mismatch", "ui-setup-mismatch"),
+        retry=False,
+        rewrite_expectation=False,
+    )
+    add_step("navigate-dm", "/dm", "goto", path="/dm")
+    add_step("open-toolbox", "/dm", "click", selector="#openToolboxBtn")
+    add_step("open-encounter", "/dm", "click", selector="#tab-encounter")
+    add_step(
+        "select-all-roster-players",
+        "/dm",
+        "click",
+        root_selector="#encounterPlayerList",
+        selector="#selectAllPlayersBtn",
+        expected_players=_three_surface_players(),
+    )
+    add_step("add-all-roster-players", "/dm", "click", selector="#addPlayersBtn")
+    for enemy_slug, enemy_name in THREE_SURFACE_ENEMY_IDENTITIES:
+        add_step(
+            f"add-enemy-{enemy_slug}",
+            "/dm",
+            "select-and-click",
+            selector="#monsterSlugSelect",
+            value=enemy_slug,
+            count_selector="#monsterCount",
+            count=1,
+            ally_selector="#monsterAlly",
+            ally=False,
+            submit_selector="#addMonsterBtn",
+            expected_name=enemy_name,
+        )
+    add_step("start-combat", "/dm", "click", selector="#startCombatBtn")
+    add_step(
+        "verify-ui-workflow",
+        "fixture",
+        "post-json",
+        browser_interaction=False,
+        path="/api/dev/smoke-fixtures/black-tan-combat-exploration",
+        request=three_surface_fixture_request("verify-ui-workflow"),
+    )
+    add_step(
+        "validate-complete-runtime-mappings",
+        "fixture",
+        "terminal-contract-barrier",
+        browser_interaction=False,
+        required_player_ids=[player_id for player_id, _name in THREE_SURFACE_PLAYER_IDENTITIES],
+        required_enemy_slugs=[enemy_slug for enemy_slug, _name in THREE_SURFACE_ENEMY_IDENTITIES],
+        require_positions=True,
+        retry=False,
+        rewrite_expectation=False,
+    )
+    add_step("navigate-dmcontrol", "/dmcontrol", "goto", path="/dmcontrol")
+    for player_id, _name in THREE_SURFACE_PLAYER_IDENTITIES:
+        add_step(f"navigate-player-{player_id}", "/", "goto", path="/", player_id=player_id)
+        add_step(
+            f"claim-player-{player_id}",
+            "/",
+            "claim-mapped-player",
+            player_id=player_id,
+            selector_template='#claimList [data-claim-cid="<cid>"]',
+            confirm_selector="#claimConfirm",
+            identity_selector="#me",
+        )
+
+    for index, (player_id, _name) in enumerate(THREE_SURFACE_PLAYER_IDENTITIES):
+        if index % 2 == 0:
+            add_step(
+                f"player-attack-{player_id}",
+                "/",
+                "attack-mapped-target",
+                player_id=player_id,
+                selectors=("#attackOverlayToggle", "#c", "#attackResolveSubmit"),
+                target_mapping="enemy_slug_to_cid_and_position",
+            )
+        else:
+            add_step(
+                f"player-spell-{player_id}",
+                "/",
+                "cast-spell-at-mapped-target",
+                player_id=player_id,
+                selectors=(
+                    "#castSpellModalOpen", "#castPreset", "#castName", "#castSlotLevel",
+                    "#castSubmit", "#c", "#spellResolveSubmit",
+                ),
+                target_mapping="enemy_slug_to_cid_and_position",
+            )
+        add_step(f"advance-player-turn-{player_id}", "/", "click", selector="#endTurn", player_id=player_id)
+
+    for enemy_slug, _name in THREE_SURFACE_ENEMY_IDENTITIES:
+        add_step(
+            f"enemy-action-{enemy_slug}",
+            "/dmcontrol",
+            "execute-active-action",
+            enemy_slug=enemy_slug,
+            smoke_apis=(
+                "window.__dmcontrolSmoke.availableActions()",
+                "selectCapability(id)",
+                "startSequence(id)",
+                "window.__dmcontrolSmoke.modalSummary()",
+            ),
+            action_selector_template='[data-testid="dmcontrol-action-card-<capability-id>"]',
+            apply_selector="#modalApplyBtn",
+            target_mapping="player_id_to_cid_and_position",
+        )
+        add_step(
+            f"advance-enemy-turn-{enemy_slug}",
+            "/dmcontrol",
+            "evaluate",
+            smoke_api="handleCombatControl()",
+            enemy_slug=enemy_slug,
+        )
+
+    add_step(
+        "assert-dm-visible-state",
+        "/dm",
+        "assert-visible-state",
+        selectors=("#combatBadge", "#roundVal", "#turnVal", "#activeName", "#upNextName", "#combatantList .combatant-row[data-cid]"),
+    )
+    add_step(
+        "assert-dmcontrol-visible-state",
+        "/dmcontrol",
+        "assert-visible-state",
+        selectors=("#combatStatus", '[data-testid="dmcontrol-map-canvas"]', '[data-testid="dmcontrol-active-actor-panel"]'),
+        smoke_apis=("window.__dmcontrolSmoke.state()", "window.__dmcontrolSmoke.roundOrTurn()"),
+    )
+    add_step(
+        "assert-player-visible-state",
+        "/",
+        "assert-visible-state",
+        selectors=("#connFullText", "#me", "#turn", "#playerHpBarLabel", "#action", "#mapViewTurnOrder", "#mapViewTurnOrderStatus", "#c"),
+    )
+
+    return {
+        "scenario_id": THREE_SURFACE_SCENARIO_ID,
+        "surfaces": (
+            {"role": "dm", "path": "/dm"},
+            {"role": "dmcontrol", "path": "/dmcontrol"},
+            {"role": "player", "path": "/"},
+        ),
+        "contract": three_surface_fixture_request("verify-ui-workflow"),
+        "ordered_players": _three_surface_players(),
+        "ordered_enemies": _three_surface_enemies(),
+        "round_policy": {
+            "rounds": 1,
+            "runtime_actor_resolution": "strict pinned identity/CID maps",
+            "player_action_pattern": "attack,spell alternating by ordered player identity",
+            "enemy_action_policy": "first executable action from verified smoke API",
+        },
+        "steps": steps,
+    }
+
+
+def _bounded_failure_detail(value: Any, limit: int = 512) -> str:
+    if isinstance(value, str):
+        detail = value
+    else:
+        detail = json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":"), default=str)
+    return detail if len(detail) <= limit else f"{detail[:limit - 3]}..."
+
+
+def validate_three_surface_fixture_contract(
+    response: Dict[str, Any],
+    operation: str,
+) -> Dict[str, Any]:
+    """Strictly validate a reset/verify response against pinned expectations."""
+    expected_players = _three_surface_players()
+    expected_enemies = _three_surface_enemies()
+    mismatches: List[str] = []
+
+    if not isinstance(response, dict):
+        response = {}
+        mismatches.append("response:not-object")
+    for field, expected in (
+        ("schema_version", THREE_SURFACE_SCHEMA_VERSION),
+        ("reset_version", THREE_SURFACE_RESET_VERSION),
+        ("precondition_digest", THREE_SURFACE_PRECONDITION_DIGEST),
+        ("operation", operation),
+    ):
+        if response.get(field) != expected:
+            mismatches.append(f"{field}:mismatch")
+
+    raw_players = response.get("players")
+    raw_enemies = response.get("enemies")
+    if operation == "reset-ui-workflow":
+        if raw_players != expected_players:
+            mismatches.append("players:ordered-identity-mismatch")
+        if raw_enemies != expected_enemies:
+            mismatches.append("enemies:ordered-identity-mismatch")
+        if any(response.get(field) != 0 for field in ("player_count", "enemy_count", "combatant_count")):
+            mismatches.append("counts:expected-zero")
+        if response.get("player_cid_map") != {} or response.get("enemy_cid_map") != {}:
+            mismatches.append("mappings:expected-empty")
+        if response.get("mutated") is not True or response.get("in_combat") is not False:
+            mismatches.append("reset-state:mismatch")
+    elif operation == "verify-ui-workflow":
+        player_projection = [
+            {"player_id": item.get("player_id"), "name": item.get("name")}
+            for item in raw_players
+        ] if isinstance(raw_players, list) else []
+        enemy_projection = [
+            {"enemy_slug": item.get("enemy_slug"), "name": item.get("name")}
+            for item in raw_enemies
+        ] if isinstance(raw_enemies, list) else []
+        if player_projection != expected_players:
+            mismatches.append("players:ordered-identity-mismatch")
+        if enemy_projection != expected_enemies:
+            mismatches.append("enemies:ordered-identity-mismatch")
+        if response.get("player_count") != 10 or response.get("enemy_count") != 9 or response.get("combatant_count") != 19:
+            mismatches.append("counts:mismatch")
+        player_map = response.get("player_cid_map")
+        enemy_map = response.get("enemy_cid_map")
+        expected_player_ids = [player_id for player_id, _name in THREE_SURFACE_PLAYER_IDENTITIES]
+        expected_enemy_slugs = [enemy_slug for enemy_slug, _name in THREE_SURFACE_ENEMY_IDENTITIES]
+        if not isinstance(player_map, dict) or list(player_map) != expected_player_ids:
+            mismatches.append("player_cid_map:incomplete-or-unordered")
+        if not isinstance(enemy_map, dict) or list(enemy_map) != expected_enemy_slugs:
+            mismatches.append("enemy_cid_map:incomplete-or-unordered")
+        seen_cids: List[int] = []
+        for collection, identity_key, mapping in (
+            (raw_players, "player_id", player_map),
+            (raw_enemies, "enemy_slug", enemy_map),
+        ):
+            if not isinstance(collection, list) or not isinstance(mapping, dict):
+                continue
+            for item in collection:
+                cid = item.get("cid") if isinstance(item, dict) else None
+                position = item.get("position") if isinstance(item, dict) else None
+                identity = item.get(identity_key) if isinstance(item, dict) else None
+                if isinstance(cid, bool) or not isinstance(cid, int) or mapping.get(identity) != cid:
+                    mismatches.append(f"{identity_key}:cid-mismatch")
+                    continue
+                seen_cids.append(cid)
+                if not isinstance(position, dict) or any(
+                    isinstance(position.get(axis), bool) or not isinstance(position.get(axis), int)
+                    for axis in ("col", "row")
+                ):
+                    mismatches.append(f"{identity_key}:position-mismatch")
+        if len(seen_cids) != 19 or len(set(seen_cids)) != 19:
+            mismatches.append("runtime_cids:not-complete-and-unique")
+        if response.get("mutated") is not False:
+            mismatches.append("verification:must-not-mutate")
+    else:
+        mismatches.append("operation:unsupported")
+
+    if mismatches:
+        reason = "ui-setup-mismatch" if response.get("error") == "ui_setup_mismatch" else "fixture-precondition-mismatch"
+        return {
+            "ok": False,
+            "terminal": True,
+            "terminal_classification": "fail",
+            "reason": reason,
+            "retry": False,
+            "rewrite_expectation": False,
+            "later_workflow_steps": 0,
+            "failure_detail": _bounded_failure_detail(mismatches[:12]),
+        }
+    return {
+        "ok": True,
+        "terminal": False,
+        "terminal_classification": "continue",
+        "reason": None,
+        "retry": False,
+        "rewrite_expectation": False,
+    }
+
+
+def classify_three_surface_contract_response(response: Dict[str, Any], operation: str) -> Dict[str, Any]:
+    if isinstance(response, dict) and response.get("ok") is False:
+        error = response.get("error")
+        reason = "ui-setup-mismatch" if error == "ui_setup_mismatch" else "fixture-precondition-mismatch"
+        return {
+            "ok": False,
+            "terminal": True,
+            "terminal_classification": "fail",
+            "reason": reason,
+            "retry": False,
+            "rewrite_expectation": False,
+            "later_workflow_steps": 0,
+            "failure_detail": _bounded_failure_detail({
+                "error": error or "contract_mismatch",
+                "mismatch_details": response.get("mismatch_details", [])[:8]
+                if isinstance(response.get("mismatch_details"), list) else [],
+            }),
+        }
+    return validate_three_surface_fixture_contract(response, operation)
+
+
+def build_three_surface_evidence(
+    *,
+    run_id: str,
+    terminal_classification: str,
+    step_timings: List[Dict[str, Any]],
+    screenshots: Optional[List[str]] = None,
+    browser_trace: Optional[str] = None,
+    server_log: Optional[str] = None,
+    debug_trace: Optional[str] = None,
+    fixture_evidence: Optional[Dict[str, Any]] = None,
+    port_ownership: Optional[Dict[str, Any]] = None,
+    cleanup_disposition: Optional[Dict[str, Any]] = None,
+    failure_detail: Any = "",
+    role_traces: Optional[Dict[str, str]] = None,
+) -> Dict[str, Any]:
+    return {
+        "evidence_schema_version": "a7-three-surface-evidence/v1",
+        "task_id": "CODEX-20260715-a7-browser-contract-implementation-g1c",
+        "gate_id": "A7-G1C",
+        "scenario_id": THREE_SURFACE_SCENARIO_ID,
+        "run_id": str(run_id),
+        "terminal_classification": terminal_classification,
+        "ordered_step_timings": list(step_timings),
+        "artifacts": {
+            "screenshots": list(screenshots or []),
+            "browser_trace": browser_trace,
+            "server_log": server_log,
+            "debug_trace": debug_trace,
+            "role_traces": dict(role_traces or {}),
+        },
+        "fixture_evidence": dict(fixture_evidence or {}),
+        "port_ownership": dict(port_ownership or {}),
+        "cleanup_disposition": dict(cleanup_disposition or {}),
+        "failure_detail": _bounded_failure_detail(failure_detail),
+    }
+
+
+def cleanup_owned_process(process: Any, ownership: Optional[Dict[str, Any]]) -> Dict[str, Any]:
+    """Stop only a process whose PID is positively tied to this harness handle."""
+    process_pid = getattr(process, "pid", None) if process is not None else None
+    verified = bool(ownership and ownership.get("verified") is True)
+    owned_pid = ownership.get("pid") if isinstance(ownership, dict) else None
+    if process is None:
+        return {"status": "no-owned-process", "cleaned": False}
+    if not verified or process_pid is None or owned_pid != process_pid:
+        return {
+            "status": "refused-unverified-process-ownership",
+            "cleaned": False,
+            "pid": process_pid,
+        }
+    if process.poll() is not None:
+        return {"status": "owned-process-already-exited", "cleaned": False, "pid": process_pid}
+
+    process.terminate()
+    try:
+        process.wait(timeout=5)
+        forced = False
+    except subprocess.TimeoutExpired:
+        process.kill()
+        process.wait(timeout=5)
+        forced = True
+    return {
+        "status": "owned-process-cleaned",
+        "cleaned": True,
+        "forced": forced,
+        "pid": process_pid,
+    }
 
 @dataclass
 class BrowserRole:
     """Represents a browser instance role in a scenario."""
     name: str  # e.g., 'dm', 'player1'
     context_metadata: Dict[str, Any] = field(default_factory=dict)
+
 
 class Scenario:
     """Base class for all smoke scenarios."""
@@ -40,6 +490,39 @@ class Scenario:
     def run(self, base_url: str, pages: Dict[str, Page], collector: ArtifactCollector, config: Dict[str, Any]) -> tuple[bool, Dict[str, Any]]:
         """Runs the scenario. To be implemented by subclasses in Gate 4+."""
         raise NotImplementedError(f"Scenario '{self.id}' not implemented")
+
+
+class BlackTanThreeSurfaceWorkflowScenario(Scenario):
+    """Data-first A7 plan; execution remains an explicitly injected later-gate concern."""
+
+    def __init__(self):
+        super().__init__(
+            THREE_SURFACE_SCENARIO_ID,
+            "Black and Tan deterministic /dm, /dmcontrol, and / workflow",
+        )
+        self.roles = [
+            BrowserRole("dm", {"path": "/dm"}),
+            BrowserRole("dmcontrol", {"path": "/dmcontrol"}),
+            *[
+                BrowserRole(f"player:{player_id}", {"path": "/", "player_id": player_id})
+                for player_id, _name in THREE_SURFACE_PLAYER_IDENTITIES
+            ],
+        ]
+        self.plan = build_three_surface_workflow_plan()
+
+    def run(self, base_url: str, pages: Dict[str, Page], collector: ArtifactCollector, config: Dict[str, Any]) -> tuple[bool, Dict[str, Any]]:
+        executor = config.get("three_surface_executor")
+        if not callable(executor):
+            evidence = build_three_surface_evidence(
+                run_id=collector.timestamp,
+                terminal_classification="fail",
+                step_timings=[],
+                screenshots=collector.screenshots,
+                failure_detail="three-surface-executor-not-authorized-or-configured",
+                cleanup_disposition={"status": "no-owned-process", "cleaned": False},
+            )
+            return False, evidence
+        return executor(self.plan, base_url, pages, collector, config)
 
 class ScorcherIgniteGroundScenario(Scenario):
     """
@@ -462,6 +945,15 @@ class ServerHandle:
         self.process: Optional[subprocess.Popen] = None
         self.stdout_path: Optional[Path] = None
         self.stderr_path: Optional[Path] = None
+        self.process_ownership: Dict[str, Any] = {
+            "verified": False,
+            "pid": None,
+            "source": "external" if is_external else "not-started",
+        }
+        self.cleanup_disposition: Dict[str, Any] = {
+            "status": "not-attempted",
+            "cleaned": False,
+        }
 
     def start(self, collector: Optional[ArtifactCollector] = None):
         if self.is_external:
@@ -491,6 +983,12 @@ class ServerHandle:
             stderr=stderr_file,
             text=True
         )
+        self.process_ownership = {
+            "verified": True,
+            "pid": self.process.pid,
+            "source": "harness-popen-handle",
+            "command": list(cmd),
+        }
 
         # Wait for server to start
         logging.info("Waiting for server to start...")
@@ -509,13 +1007,12 @@ class ServerHandle:
         raise RuntimeError("Timed out waiting for server to start.")
 
     def stop(self):
-        if self.process:
+        if self.process is not None:
             logging.info("Stopping local server...")
-            self.process.terminate()
-            try:
-                self.process.wait(timeout=5)
-            except subprocess.TimeoutExpired:
-                self.process.kill()
+        self.cleanup_disposition = cleanup_owned_process(self.process, self.process_ownership)
+        if self.cleanup_disposition["status"] == "refused-unverified-process-ownership":
+            logging.error("Refusing cleanup because process ownership is not verified.")
+        return self.cleanup_disposition
 
 def setup_logging():
     logging.basicConfig(
@@ -542,6 +1039,7 @@ def main():
     registry = Registry()
     registry.register(ScorcherIgniteGroundScenario())
     registry.register(BlackTanCombatExplorationScenario())
+    registry.register(BlackTanThreeSurfaceWorkflowScenario())
 
     if args.list_scenarios:
         scenarios = registry.list_all()

@@ -186,6 +186,358 @@ def _current_request_wants_tactical_map() -> bool:
     )
 
 
+BLACK_TAN_UI_SCHEMA_VERSION = "a7-ui-reset-contract/v1"
+BLACK_TAN_UI_RESET_VERSION = "blank-combat/v1"
+BLACK_TAN_UI_PLAYER_IDENTITIES: Tuple[Tuple[str, str], ...] = (
+    ("pc:dorian", "Dorian"),
+    ("pc:eldramar", "Eldramar"),
+    ("pc:fred", "Fred"),
+    ("pc:john-twilight", "John Twilight"),
+    ("pc:johnny-morris", "Johnny Morris"),
+    ("pc:malagrou", "Malagrou"),
+    ("pc:old-man", "Old Man"),
+    ("pc:throat-goat", "Throat Goat"),
+    ("pc:vicnor", "Vicnor"),
+    ("pc:stikhiya", "стихия"),
+)
+BLACK_TAN_UI_ENEMY_IDENTITIES: Tuple[Tuple[str, str], ...] = (
+    ("black-and-tan-captain", "Black and Tan Captain"),
+    ("black-and-tan-constable", "Black and Tan Constable"),
+    ("black-and-tan-field-medic", "Black and Tan Field Medic"),
+    ("black-and-tan-lieutenant", "Black and Tan Lieutenant"),
+    ("black-and-tan-major", "Black and Tan Major"),
+    ("black-and-tan-rifleman", "Black and Tan Rifleman"),
+    ("black-and-tan-vda-scorcher", "Black and Tan VDA Scorcher"),
+    ("black-and-tan-shield-trooper", "Black and Tan Shield Trooper"),
+    ("black-and-tan-suppression-gunner", "Black and Tan Suppression Gunner"),
+)
+
+
+def _black_tan_ui_players() -> List[Dict[str, str]]:
+    return [
+        {"player_id": player_id, "name": name}
+        for player_id, name in BLACK_TAN_UI_PLAYER_IDENTITIES
+    ]
+
+
+def _black_tan_ui_enemies() -> List[Dict[str, str]]:
+    return [
+        {"enemy_slug": enemy_slug, "name": name}
+        for enemy_slug, name in BLACK_TAN_UI_ENEMY_IDENTITIES
+    ]
+
+
+def _black_tan_ui_precondition_document() -> Dict[str, Any]:
+    """Return the exact normalized input to the A7 precondition digest."""
+    return {
+        "schema_version": BLACK_TAN_UI_SCHEMA_VERSION,
+        "reset_version": BLACK_TAN_UI_RESET_VERSION,
+        "players": _black_tan_ui_players(),
+        "enemy_slugs": [slug for slug, _name in BLACK_TAN_UI_ENEMY_IDENTITIES],
+    }
+
+
+def _black_tan_ui_precondition_digest() -> str:
+    canonical = json.dumps(
+        _black_tan_ui_precondition_document(),
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    ).encode("utf-8")
+    return f"sha256:{hashlib.sha256(canonical).hexdigest()}"
+
+
+BLACK_TAN_UI_PRECONDITION_DIGEST = _black_tan_ui_precondition_digest()
+_BLACK_TAN_UI_OPERATIONS = ("reset-ui-workflow", "verify-ui-workflow")
+_BLACK_TAN_FIXTURE_ID = "black-tan-combat-exploration"
+
+
+def _black_tan_fixture_contract_mode(payload: Optional[Dict[str, Any]]) -> str:
+    """Keep bodyless requests on the historical seed-and-start path."""
+    return "legacy" if payload is None else "versioned"
+
+
+def _black_tan_bounded_mismatch(field: str, expected: Any, actual: Any) -> Dict[str, str]:
+    def _bounded(value: Any) -> str:
+        text = str(value)
+        return text if len(text) <= 160 else f"{text[:157]}..."
+
+    return {
+        "field": str(field)[:80],
+        "expected": _bounded(expected),
+        "actual": _bounded(actual),
+    }
+
+
+def _black_tan_precondition_mismatch(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    requested_schema = payload.get("schema_version")
+    requested_reset = payload.get("reset_version")
+    requested_digest = payload.get("expected_precondition_digest")
+    requested_operation = payload.get("operation")
+    mismatches: List[Dict[str, str]] = []
+
+    if requested_schema != BLACK_TAN_UI_SCHEMA_VERSION:
+        mismatches.append(_black_tan_bounded_mismatch(
+            "schema_version", BLACK_TAN_UI_SCHEMA_VERSION, requested_schema,
+        ))
+    if requested_reset != BLACK_TAN_UI_RESET_VERSION:
+        mismatches.append(_black_tan_bounded_mismatch(
+            "reset_version", BLACK_TAN_UI_RESET_VERSION, requested_reset,
+        ))
+    if requested_digest != BLACK_TAN_UI_PRECONDITION_DIGEST:
+        mismatches.append(_black_tan_bounded_mismatch(
+            "expected_precondition_digest", BLACK_TAN_UI_PRECONDITION_DIGEST, requested_digest,
+        ))
+    if requested_operation not in _BLACK_TAN_UI_OPERATIONS:
+        mismatches.append(_black_tan_bounded_mismatch(
+            "operation", "reset-ui-workflow|verify-ui-workflow", requested_operation,
+        ))
+
+    expected_players = _black_tan_ui_players()
+    if "players" in payload and payload.get("players") != expected_players:
+        mismatches.append(_black_tan_bounded_mismatch(
+            "players", "ordered immutable 10-player identity contract", "ordered identities differ",
+        ))
+
+    expected_enemies = _black_tan_ui_enemies()
+    if "enemies" in payload and payload.get("enemies") != expected_enemies:
+        mismatches.append(_black_tan_bounded_mismatch(
+            "enemies", "ordered immutable 9-enemy identity contract", "ordered identities differ",
+        ))
+    expected_enemy_slugs = [slug for slug, _name in BLACK_TAN_UI_ENEMY_IDENTITIES]
+    if "enemy_slugs" in payload and payload.get("enemy_slugs") != expected_enemy_slugs:
+        mismatches.append(_black_tan_bounded_mismatch(
+            "enemy_slugs", "ordered immutable 9-enemy slug contract", "ordered slugs differ",
+        ))
+
+    if not mismatches:
+        return None
+    return {
+        "ok": False,
+        "error": "precondition_mismatch",
+        "schema_version": BLACK_TAN_UI_SCHEMA_VERSION,
+        "reset_version": BLACK_TAN_UI_RESET_VERSION,
+        "expected_schema_version": BLACK_TAN_UI_SCHEMA_VERSION,
+        "actual_schema_version": requested_schema,
+        "expected_reset_version": BLACK_TAN_UI_RESET_VERSION,
+        "actual_reset_version": requested_reset,
+        "expected_precondition_digest": requested_digest,
+        "actual_precondition_digest": BLACK_TAN_UI_PRECONDITION_DIGEST,
+        "mismatch_details": mismatches[:6],
+        "mutated": False,
+    }
+
+
+def _black_tan_contract_common(operation: str, snapshot: Any = None) -> Dict[str, Any]:
+    players = _black_tan_ui_players()
+    enemies = _black_tan_ui_enemies()
+    return {
+        "ok": True,
+        "fixture_id": _BLACK_TAN_FIXTURE_ID,
+        "schema_version": BLACK_TAN_UI_SCHEMA_VERSION,
+        "operation": operation,
+        "reset_version": BLACK_TAN_UI_RESET_VERSION,
+        "precondition_digest": BLACK_TAN_UI_PRECONDITION_DIGEST,
+        "players": players,
+        "enemies": enemies,
+        "player_names": [entry["name"] for entry in players],
+        "monster_names": [entry["name"] for entry in enemies],
+        "dmcontrol_url": "/dmcontrol",
+        "snapshot": snapshot,
+    }
+
+
+def _black_tan_reset_contract_success(snapshot: Any = None) -> Dict[str, Any]:
+    response = _black_tan_contract_common("reset-ui-workflow", snapshot)
+    response.update({
+        "player_cids": [],
+        "enemy_cids": [],
+        "player_cid_map": {},
+        "enemy_cid_map": {},
+        "player_count": 0,
+        "enemy_count": 0,
+        "combatant_count": 0,
+        "in_combat": False,
+        "mutated": True,
+    })
+    return response
+
+
+def _black_tan_combatant_value(combatant: Any, key: str, default: Any = None) -> Any:
+    if isinstance(combatant, dict):
+        return combatant.get(key, default)
+    return getattr(combatant, key, default)
+
+
+def _black_tan_position(positions: Dict[Any, Any], cid: int) -> Optional[Dict[str, int]]:
+    raw = positions.get(cid, positions.get(str(cid)))
+    if isinstance(raw, dict):
+        col, row = raw.get("col"), raw.get("row")
+    elif isinstance(raw, (list, tuple)) and len(raw) == 2:
+        col, row = raw
+    else:
+        return None
+    if isinstance(col, bool) or isinstance(row, bool):
+        return None
+    try:
+        return {"col": int(col), "row": int(row)}
+    except (TypeError, ValueError):
+        return None
+
+
+def _black_tan_verify_contract_state(state: Dict[str, Any]) -> Tuple[int, Dict[str, Any]]:
+    raw_combatants = state.get("combatants")
+    if isinstance(raw_combatants, dict):
+        combatant_items = list(raw_combatants.items())
+    elif isinstance(raw_combatants, list):
+        combatant_items = [(_black_tan_combatant_value(item, "cid"), item) for item in raw_combatants]
+    else:
+        combatant_items = []
+
+    normalized: List[Tuple[int, str, str, Any]] = []
+    malformed_count = 0
+    for raw_cid, combatant in combatant_items:
+        cid_value = raw_cid if raw_cid is not None else _black_tan_combatant_value(combatant, "cid")
+        try:
+            cid = int(cid_value)
+        except (TypeError, ValueError):
+            malformed_count += 1
+            continue
+        name = str(_black_tan_combatant_value(combatant, "name", "") or "")
+        slug = str(_black_tan_combatant_value(combatant, "monster_slug", "") or "")
+        normalized.append((cid, name, slug, combatant))
+
+    actual_counts = {
+        "player_count": sum(1 for _cid, _name, slug, _combatant in normalized if not slug),
+        "enemy_count": sum(1 for _cid, _name, slug, _combatant in normalized if slug),
+        "combatant_count": len(normalized) + malformed_count,
+    }
+    expected_counts = {"player_count": 10, "enemy_count": 9, "combatant_count": 19}
+    positions = state.get("positions") if isinstance(state.get("positions"), dict) else {}
+    mismatches: List[Dict[str, str]] = []
+    player_records: List[Dict[str, Any]] = []
+    enemy_records: List[Dict[str, Any]] = []
+    matched_cids: Set[int] = set()
+
+    if actual_counts != expected_counts:
+        mismatches.append(_black_tan_bounded_mismatch("counts", expected_counts, actual_counts))
+    if malformed_count:
+        mismatches.append(_black_tan_bounded_mismatch("combatant_cids", "integer CIDs", malformed_count))
+
+    for player_id, expected_name in BLACK_TAN_UI_PLAYER_IDENTITIES:
+        matches = [item for item in normalized if not item[2] and item[1] == expected_name]
+        if len(matches) != 1:
+            mismatches.append(_black_tan_bounded_mismatch(
+                f"player:{player_id}", "exactly one matching combatant", len(matches),
+            ))
+            continue
+        cid = matches[0][0]
+        position = _black_tan_position(positions, cid)
+        if position is None:
+            mismatches.append(_black_tan_bounded_mismatch(
+                f"player_position:{player_id}", "integer col/row", "missing or invalid",
+            ))
+            continue
+        matched_cids.add(cid)
+        player_records.append({
+            "player_id": player_id,
+            "name": expected_name,
+            "cid": cid,
+            "position": position,
+        })
+
+    for enemy_slug, expected_name in BLACK_TAN_UI_ENEMY_IDENTITIES:
+        # Production encounter creation numbers runtime monster names (for example,
+        # "Black and Tan Captain 1"). The slug is the immutable identity; the
+        # response name is the canonical monster-spec display name.
+        matches = [item for item in normalized if item[2] == enemy_slug]
+        if len(matches) != 1:
+            mismatches.append(_black_tan_bounded_mismatch(
+                f"enemy:{enemy_slug}", "exactly one matching combatant slug", len(matches),
+            ))
+            continue
+        cid = matches[0][0]
+        position = _black_tan_position(positions, cid)
+        if position is None:
+            mismatches.append(_black_tan_bounded_mismatch(
+                f"enemy_position:{enemy_slug}", "integer col/row", "missing or invalid",
+            ))
+            continue
+        matched_cids.add(cid)
+        enemy_records.append({
+            "enemy_slug": enemy_slug,
+            "name": expected_name,
+            "cid": cid,
+            "position": position,
+        })
+
+    all_cids = [item[0] for item in normalized]
+    if len(set(all_cids)) != len(all_cids):
+        mismatches.append(_black_tan_bounded_mismatch("runtime_cids", "unique", "duplicate CIDs"))
+    if set(all_cids) != matched_cids:
+        mismatches.append(_black_tan_bounded_mismatch(
+            "ordered_identity_set", "exact 10 players and 9 enemies", "missing or unexpected combatants",
+        ))
+
+    if mismatches:
+        return 409, {
+            "ok": False,
+            "error": "ui_setup_mismatch",
+            "schema_version": BLACK_TAN_UI_SCHEMA_VERSION,
+            "reset_version": BLACK_TAN_UI_RESET_VERSION,
+            "expected_schema_version": BLACK_TAN_UI_SCHEMA_VERSION,
+            "actual_schema_version": BLACK_TAN_UI_SCHEMA_VERSION,
+            "expected_reset_version": BLACK_TAN_UI_RESET_VERSION,
+            "actual_reset_version": BLACK_TAN_UI_RESET_VERSION,
+            "expected_precondition_digest": BLACK_TAN_UI_PRECONDITION_DIGEST,
+            "actual_precondition_digest": BLACK_TAN_UI_PRECONDITION_DIGEST,
+            "expected_counts": expected_counts,
+            "actual_counts": actual_counts,
+            "mismatch_details": mismatches[:8],
+            "mutated": False,
+        }
+
+    response = _black_tan_contract_common("verify-ui-workflow", state.get("snapshot"))
+    response.update({
+        "players": player_records,
+        "enemies": enemy_records,
+        "player_cids": [entry["cid"] for entry in player_records],
+        "enemy_cids": [entry["cid"] for entry in enemy_records],
+        "player_cid_map": {entry["player_id"]: entry["cid"] for entry in player_records},
+        "enemy_cid_map": {entry["enemy_slug"]: entry["cid"] for entry in enemy_records},
+        **expected_counts,
+        "in_combat": bool(state.get("in_combat")),
+        "mutated": False,
+    })
+    return 200, response
+
+
+def _execute_black_tan_fixture_contract(
+    payload: Dict[str, Any],
+    *,
+    debugging_enabled: bool,
+    reset_state: Callable[[], Dict[str, Any]],
+    read_state: Callable[[], Dict[str, Any]],
+) -> Tuple[int, Dict[str, Any]]:
+    """Validate fail-closed before invoking either the reset or read callback."""
+    if not debugging_enabled:
+        return 403, {
+            "detail": "Debugging mode is not enabled.",
+            "mutated": False,
+        }
+
+    mismatch = _black_tan_precondition_mismatch(payload)
+    if mismatch is not None:
+        return 409, mismatch
+
+    if payload["operation"] == "reset-ui-workflow":
+        reset_result = reset_state()
+        snapshot = reset_result.get("snapshot") if isinstance(reset_result, dict) else None
+        return 200, _black_tan_reset_contract_success(snapshot)
+
+    return _black_tan_verify_contract_state(read_state())
+
+
 _DM_COMBAT_TACTICAL_READ_LOCKS: Dict[Any, asyncio.Lock] = {}
 
 
@@ -2673,7 +3025,7 @@ class LanController:
         # Lazy imports so the base app still works without these deps installed.
         try:
             from fastapi import Body, FastAPI, HTTPException, Request, WebSocket, WebSocketDisconnect
-            from fastapi.responses import FileResponse, HTMLResponse, RedirectResponse, Response, StreamingResponse
+            from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, RedirectResponse, Response, StreamingResponse
             from fastapi.staticfiles import StaticFiles
             import uvicorn
             # Expose these in module globals so FastAPI's type resolver can see 'em even from nested defs.
@@ -5699,19 +6051,61 @@ class LanController:
                 raise HTTPException(status_code=500, detail=f"Failed to seed fixture: {exc}")
 
         @self._fastapi_app.post("/api/dev/smoke-fixtures/black-tan-combat-exploration")
-        async def dev_smoke_fixture_black_tan_combat_exploration(request: Request):
-            """Seed a deterministic /dmcontrol state for all players vs all Black and Tans."""
+        async def dev_smoke_fixture_black_tan_combat_exploration(
+            request: Request,
+            payload: Optional[Dict[str, Any]] = Body(default=None),
+        ):
+            """Seed legacy combat or reset/verify the versioned three-surface setup."""
             from runtime_config import debugging_env_enabled
-            if not debugging_env_enabled():
+            debugging_enabled = debugging_env_enabled()
+            if not debugging_enabled:
                 raise HTTPException(status_code=403, detail="Debugging mode is not enabled.")
 
             try:
-                # 1. Reset everything
-                self._dm_service.end_combat()
-
                 t = self.app
+
+                if _black_tan_fixture_contract_mode(payload) == "versioned":
+                    def _reset_ui_state() -> Dict[str, Any]:
+                        self._dm_service.end_combat()
+                        with self._dm_service._lock:
+                            cids = list(t.combatants.keys())
+                            cleanup = getattr(t, "_remove_combatants_with_lan_cleanup", None)
+                            if callable(cleanup):
+                                cleanup(cids)
+                            else:
+                                t.combatants.clear()
+                                t.current_cid = None
+                            t._dm_create_blank_map(cols=30, rows=30)
+                        return {"snapshot": _dm_console_snapshot(include_tactical=True)}
+
+                    def _read_ui_state() -> Dict[str, Any]:
+                        with self._dm_service._lock:
+                            combatants = dict(t.combatants)
+                            positions = dict(getattr(t, "_lan_positions", {}) or {})
+                            in_combat = bool(getattr(t, "in_combat", False))
+                        return {
+                            "combatants": combatants,
+                            "positions": positions,
+                            "in_combat": in_combat,
+                            # Verification is strictly read-only. Keep the historical
+                            # compatibility key without invoking snapshot builders that
+                            # may hydrate or seed tactical state as a side effect.
+                            "snapshot": None,
+                        }
+
+                    status_code, response = _execute_black_tan_fixture_contract(
+                        payload,
+                        debugging_enabled=debugging_enabled,
+                        reset_state=_reset_ui_state,
+                        read_state=_read_ui_state,
+                    )
+                    if status_code != 200:
+                        return JSONResponse(status_code=status_code, content=response)
+                    return response
+
+                # Bodyless compatibility: retain the historical seed-and-start behavior.
+                self._dm_service.end_combat()
                 with self._dm_service._lock:
-                    # Clear all combatants
                     cids = list(t.combatants.keys())
                     cleanup = getattr(t, "_remove_combatants_with_lan_cleanup", None)
                     if callable(cleanup):
@@ -5720,66 +6114,42 @@ class LanController:
                         t.combatants.clear()
                         t.current_cid = None
 
-                    # 2. Add Players (10)
-                    player_names = [
-                        "Dorian", "Eldramar", "Fred", "John Twilight", "Johnny Morris",
-                        "Malagrou", "Old Man", "Throat Goat", "Vicnor", "стихия"
-                    ]
+                    player_names = [name for _player_id, name in BLACK_TAN_UI_PLAYER_IDENTITIES]
                     p_result = self._dm_service.add_player_profile_combatants(player_names)
                     if not p_result.get("ok"):
                         raise Exception(f"Failed to add players: {p_result.get('error')}")
 
-                    # 3. Add Black and Tan Monsters (9)
-                    monster_slugs = [
-                        "black-and-tan-captain", "black-and-tan-constable", "black-and-tan-field-medic",
-                        "black-and-tan-lieutenant", "black-and-tan-major", "black-and-tan-rifleman",
-                        "black-and-tan-vda-scorcher", "black-and-tan-shield-trooper",
-                        "black-and-tan-suppression-gunner"
+                    monster_slugs = [slug for slug, _name in BLACK_TAN_UI_ENEMY_IDENTITIES]
+                    monster_entries = [
+                        {"name": slug.replace("black-and-tan-", "").title(), "monster_slug": slug}
+                        for slug in monster_slugs
                     ]
-                    monster_entries = [{"name": slug.replace("black-and-tan-", "").title(), "monster_slug": slug} for slug in monster_slugs]
                     m_result = self._dm_service.add_monster_spec_combatants(monster_entries)
                     if not m_result.get("ok"):
                         raise Exception(f"Failed to add monsters: {m_result.get('error')}")
 
-                    # 4. Initialize Map
                     t._dm_create_blank_map(cols=30, rows=30)
-
-                    # 5. Place combatants deterministically
-                    # Players on the left (cols 2-3)
-                    player_cids = []
-                    for entry in p_result.get("created", []):
-                        player_cids.append(entry["cid"])
+                    player_cids = [entry["cid"] for entry in p_result.get("created", [])]
                     for i, cid in enumerate(player_cids):
-                        col = 2 + (i % 2)
-                        row = 2 + (i // 2) * 2
-                        t._dm_place_combatant_on_map(cid, col, row)
+                        t._dm_place_combatant_on_map(cid, 2 + (i % 2), 2 + (i // 2) * 2)
 
-                    # Monsters on the right (cols 26-27)
-                    monster_cids = []
-                    for entry in m_result.get("added", []):
-                        monster_cids.append(entry["cid"])
-
+                    monster_cids = [entry["cid"] for entry in m_result.get("added", [])]
                     for i, cid in enumerate(monster_cids):
-                        col = 26 + (i % 2)
-                        row = 2 + (i // 2) * 2
-                        t._dm_place_combatant_on_map(cid, col, row)
+                        t._dm_place_combatant_on_map(cid, 26 + (i % 2), 2 + (i // 2) * 2)
 
-                    # 6. Start combat (Initialize initiative)
                     self._dm_service.start_combat()
-
-                    # 7. Set active turn to first player
                     if player_cids:
                         self._dm_service.set_turn_here(cid=player_cids[0])
 
                 return {
                     "ok": True,
-                    "fixture_id": "black-tan-combat-exploration",
+                    "fixture_id": _BLACK_TAN_FIXTURE_ID,
                     "player_count": len(player_cids),
                     "monster_count": len(monster_cids),
                     "player_names": player_names,
-                    "monster_names": [e["name"] for e in monster_entries],
+                    "monster_names": [entry["name"] for entry in monster_entries],
                     "dmcontrol_url": "/dmcontrol",
-                    "snapshot": _dm_console_snapshot(include_tactical=True)
+                    "snapshot": _dm_console_snapshot(include_tactical=True),
                 }
 
             except Exception as exc:

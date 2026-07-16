@@ -5044,3 +5044,211 @@ class ServerRuntimeFacadeTests(unittest.TestCase):
             self.assertTrue(all(entry.get("method") == "POST" for entry in correlated))
             self.assertTrue(all(entry.get("parent_action_id") == "request-action" for entry in correlated))
             self.assertTrue({entry.get("thread_role") for entry in correlated}.issuperset({"asgi", "worker", "authority"}))
+
+
+def _a7_black_tan_contract_request(operation="reset-ui-workflow"):
+    from dnd_initative_tracker import (
+        BLACK_TAN_UI_ENEMY_IDENTITIES,
+        BLACK_TAN_UI_PLAYER_IDENTITIES,
+        BLACK_TAN_UI_PRECONDITION_DIGEST,
+        BLACK_TAN_UI_RESET_VERSION,
+        BLACK_TAN_UI_SCHEMA_VERSION,
+    )
+
+    return {
+        "schema_version": BLACK_TAN_UI_SCHEMA_VERSION,
+        "operation": operation,
+        "reset_version": BLACK_TAN_UI_RESET_VERSION,
+        "expected_precondition_digest": BLACK_TAN_UI_PRECONDITION_DIGEST,
+        "players": [
+            {"player_id": player_id, "name": name}
+            for player_id, name in BLACK_TAN_UI_PLAYER_IDENTITIES
+        ],
+        "enemies": [
+            {"enemy_slug": enemy_slug, "name": name}
+            for enemy_slug, name in BLACK_TAN_UI_ENEMY_IDENTITIES
+        ],
+    }
+
+
+def test_black_tan_fixture_contract_success_is_versioned_and_stable():
+    from dnd_initative_tracker import (
+        BLACK_TAN_UI_PRECONDITION_DIGEST,
+        _black_tan_fixture_contract_mode,
+        _execute_black_tan_fixture_contract,
+    )
+
+    calls = []
+
+    def reset_state():
+        calls.append("reset")
+        return {"snapshot": {"combatants": [], "grid": {"cols": 30, "rows": 30}}}
+
+    def read_state():
+        calls.append("read")
+        return {}
+
+    status, response = _execute_black_tan_fixture_contract(
+        _a7_black_tan_contract_request(),
+        debugging_enabled=True,
+        reset_state=reset_state,
+        read_state=read_state,
+    )
+
+    assert status == 200
+    assert calls == ["reset"]
+    assert BLACK_TAN_UI_PRECONDITION_DIGEST == (
+        "sha256:67668370769a7a7f81c820550d4a10033bde8e297b2da1d05d55819cade90873"
+    )
+    assert response["schema_version"] == "a7-ui-reset-contract/v1"
+    assert response["reset_version"] == "blank-combat/v1"
+    assert response["precondition_digest"] == BLACK_TAN_UI_PRECONDITION_DIGEST
+    assert response["operation"] == "reset-ui-workflow"
+    assert response["mutated"] is True
+    assert response["player_count"] == response["enemy_count"] == response["combatant_count"] == 0
+    assert response["player_cids"] == response["enemy_cids"] == []
+    assert response["player_cid_map"] == response["enemy_cid_map"] == {}
+    assert response["in_combat"] is False
+    assert response["fixture_id"] == "black-tan-combat-exploration"
+    assert response["dmcontrol_url"] == "/dmcontrol"
+    assert len(response["player_names"]) == 10
+    assert len(response["monster_names"]) == 9
+    assert response["snapshot"]["grid"] == {"cols": 30, "rows": 30}
+    assert _black_tan_fixture_contract_mode(None) == "legacy"
+
+    status, refusal = _execute_black_tan_fixture_contract(
+        _a7_black_tan_contract_request(),
+        debugging_enabled=False,
+        reset_state=reset_state,
+        read_state=read_state,
+    )
+    assert status == 403
+    assert refusal == {"detail": "Debugging mode is not enabled.", "mutated": False}
+    assert calls == ["reset"]
+
+
+def test_black_tan_fixture_contract_precondition_mismatch_returns_409_without_mutation():
+    from dnd_initative_tracker import (
+        BLACK_TAN_UI_PRECONDITION_DIGEST,
+        _execute_black_tan_fixture_contract,
+    )
+
+    base_request = _a7_black_tan_contract_request()
+    mismatched_requests = []
+    for field, value in (
+        ("schema_version", "a7-ui-reset-contract/v0"),
+        ("reset_version", "blank-combat/v0"),
+        ("expected_precondition_digest", "sha256:" + "0" * 64),
+    ):
+        request = dict(base_request)
+        request[field] = value
+        mismatched_requests.append(request)
+    identity_mismatch = dict(base_request)
+    identity_mismatch["players"] = list(reversed(base_request["players"]))
+    mismatched_requests.append(identity_mismatch)
+
+    mutator_calls = []
+    reader_calls = []
+    for request in mismatched_requests:
+        status, response = _execute_black_tan_fixture_contract(
+            request,
+            debugging_enabled=True,
+            reset_state=lambda: mutator_calls.append("reset") or {},
+            read_state=lambda: reader_calls.append("read") or {},
+        )
+        assert status == 409
+        assert response["ok"] is False
+        assert response["error"] == "precondition_mismatch"
+        assert response["mutated"] is False
+        assert response["actual_precondition_digest"] == BLACK_TAN_UI_PRECONDITION_DIGEST
+        assert response["expected_schema_version"] == "a7-ui-reset-contract/v1"
+        assert response["expected_reset_version"] == "blank-combat/v1"
+        assert 1 <= len(response["mismatch_details"]) <= 6
+
+    assert mutator_calls == []
+    assert reader_calls == []
+
+
+def test_black_tan_fixture_contract_returns_complete_stable_identity_mappings():
+    from types import SimpleNamespace
+    from dnd_initative_tracker import (
+        BLACK_TAN_UI_ENEMY_IDENTITIES,
+        BLACK_TAN_UI_PLAYER_IDENTITIES,
+        BLACK_TAN_UI_PRECONDITION_DIGEST,
+        _execute_black_tan_fixture_contract,
+    )
+
+    combatants = {}
+    positions = {}
+    expected_player_map = {}
+    expected_enemy_map = {}
+    for index, (player_id, name) in enumerate(BLACK_TAN_UI_PLAYER_IDENTITIES, start=1):
+        cid = 100 + index
+        combatants[cid] = SimpleNamespace(cid=cid, name=name, monster_slug="")
+        positions[cid] = (index, index + 1)
+        expected_player_map[player_id] = cid
+    for index, (enemy_slug, name) in enumerate(BLACK_TAN_UI_ENEMY_IDENTITIES, start=1):
+        cid = 200 + index
+        combatants[cid] = SimpleNamespace(cid=cid, name=name, monster_slug=enemy_slug)
+        positions[cid] = (20 + index, index + 2)
+        expected_enemy_map[enemy_slug] = cid
+
+    reset_calls = []
+
+    def read_state():
+        return {
+            "combatants": combatants,
+            "positions": positions,
+            "in_combat": True,
+            "snapshot": {"active_cid": 101},
+        }
+
+    status, response = _execute_black_tan_fixture_contract(
+        _a7_black_tan_contract_request("verify-ui-workflow"),
+        debugging_enabled=True,
+        reset_state=lambda: reset_calls.append("reset") or {},
+        read_state=read_state,
+    )
+
+    assert status == 200
+    assert reset_calls == []
+    assert response["mutated"] is False
+    assert response["precondition_digest"] == BLACK_TAN_UI_PRECONDITION_DIGEST
+    assert response["player_count"] == 10
+    assert response["enemy_count"] == 9
+    assert response["combatant_count"] == 19
+    assert response["player_cid_map"] == expected_player_map
+    assert response["enemy_cid_map"] == expected_enemy_map
+    assert [entry["player_id"] for entry in response["players"]] == list(expected_player_map)
+    assert [entry["enemy_slug"] for entry in response["enemies"]] == list(expected_enemy_map)
+    assert response["players"][0] == {
+        "player_id": "pc:dorian",
+        "name": "Dorian",
+        "cid": 101,
+        "position": {"col": 1, "row": 2},
+    }
+    assert response["enemies"][-1] == {
+        "enemy_slug": "black-and-tan-suppression-gunner",
+        "name": "Black and Tan Suppression Gunner",
+        "cid": 209,
+        "position": {"col": 29, "row": 11},
+    }
+
+    mismatched_positions = dict(positions)
+    mismatched_positions.pop(101)
+    status, refusal = _execute_black_tan_fixture_contract(
+        _a7_black_tan_contract_request("verify-ui-workflow"),
+        debugging_enabled=True,
+        reset_state=lambda: reset_calls.append("reset") or {},
+        read_state=lambda: {
+            "combatants": combatants,
+            "positions": mismatched_positions,
+            "in_combat": True,
+        },
+    )
+    assert status == 409
+    assert refusal["error"] == "ui_setup_mismatch"
+    assert refusal["mutated"] is False
+    assert refusal["expected_counts"] == refusal["actual_counts"]
+    assert len(refusal["mismatch_details"]) <= 8
+    assert reset_calls == []
