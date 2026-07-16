@@ -13,6 +13,7 @@ import os
 import subprocess
 import sys
 import time
+from collections import Counter
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Dict, List, Optional
@@ -922,10 +923,28 @@ def _execute_three_surface_step(
                     {"step_id": step_id, "selector": step["selector"], "error": str(exc)},
                 ) from exc
             expected_options = [slug for slug, _name in THREE_SURFACE_ENEMY_IDENTITIES]
-            if options != expected_options:
+            option_counts = Counter(options)
+            expected_option_set = set(expected_options)
+            missing_options = [
+                slug for slug in expected_options
+                if slug not in option_counts
+            ]
+            extra_options = sorted(set(option_counts) - expected_option_set)
+            duplicate_options = sorted(
+                slug for slug, count in option_counts.items()
+                if count > 1
+            )
+            if missing_options or extra_options or duplicate_options:
                 raise ThreeSurfaceTerminalFailure(
                     "visible-state-inconsistency",
-                    {"step_id": step_id, "expected_enemy_options": expected_options, "actual_enemy_options": options},
+                    {
+                        "step_id": step_id,
+                        "expected_enemy_options": expected_options,
+                        "actual_enemy_options": options,
+                        "missing_enemy_slugs": missing_options,
+                        "extra_enemy_slugs": extra_options,
+                        "duplicate_enemy_slugs": duplicate_options,
+                    },
                 )
             state["enemy_options_validated"] = True
         try:

@@ -368,6 +368,39 @@ class _FakePage:
         self.context = _FakeContext()
 
 
+class _FakeEnemyOptionPage(_FakePage):
+    def __init__(self, option_values):
+        super().__init__()
+        self.option_values = list(option_values)
+        self.select_calls = []
+        self.fill_calls = []
+        self.check_calls = []
+        self.uncheck_calls = []
+        self.click_calls = []
+
+    def wait_for_selector(self, _selector, **_kwargs):
+        return None
+
+    def eval_on_selector_all(self, selector, _expression):
+        assert selector == "#monsterSlugSelect option"
+        return list(self.option_values)
+
+    def select_option(self, selector, value):
+        self.select_calls.append((selector, value))
+
+    def fill(self, selector, value):
+        self.fill_calls.append((selector, value))
+
+    def check(self, selector):
+        self.check_calls.append(selector)
+
+    def uncheck(self, selector):
+        self.uncheck_calls.append(selector)
+
+    def click(self, selector):
+        self.click_calls.append(selector)
+
+
 class _FakeCollector:
     def __init__(self, root):
         self.root = root
@@ -392,6 +425,37 @@ def _fake_three_surface_pages(harness):
         for player_id, _name in harness.THREE_SURFACE_PLAYER_IDENTITIES
     })
     return pages
+
+
+def _three_surface_enemy_steps(plan):
+    return [
+        step for step in plan["steps"]
+        if step["step_id"].startswith("add-enemy-")
+    ]
+
+
+def _execute_enemy_option_step(harness, plan, step, page, state):
+    harness._execute_three_surface_step(
+        step,
+        plan,
+        "http://example.invalid",
+        {"dm": page},
+        None,
+        {},
+        state,
+    )
+
+
+def _enemy_option_failure(harness, option_values):
+    plan = harness.build_three_surface_workflow_plan()
+    step = _three_surface_enemy_steps(plan)[0]
+    page = _FakeEnemyOptionPage(option_values)
+    state = {"enemy_options_validated": False}
+    try:
+        _execute_enemy_option_step(harness, plan, step, page, state)
+    except harness.ThreeSurfaceTerminalFailure as exc:
+        return exc, page, state
+    raise AssertionError("enemy-option validation unexpectedly passed")
 
 
 def test_three_surface_scenario_executes_registered_executor(monkeypatch, tmp_path):
@@ -499,6 +563,88 @@ def test_three_surface_corrected_setup_steps_execute_once(monkeypatch, tmp_path)
         corrected_setup_steps
     )
     assert all(executed.count(step_id) == 1 for step_id in corrected_setup_steps)
+
+
+def test_three_surface_enemy_options_accept_reordered_complete_set():
+    harness = _load_browser_smoke_harness()
+    plan = harness.build_three_surface_workflow_plan()
+    enemy_steps = _three_surface_enemy_steps(plan)
+    expected_slugs = [
+        slug for slug, _name in harness.THREE_SURFACE_ENEMY_IDENTITIES
+    ]
+    page = _FakeEnemyOptionPage(list(reversed(expected_slugs)))
+    state = {"enemy_options_validated": False}
+
+    for step in enemy_steps:
+        _execute_enemy_option_step(harness, plan, step, page, state)
+
+    assert state["enemy_options_validated"] is True
+    assert page.select_calls == [
+        ("#monsterSlugSelect", slug) for slug in expected_slugs
+    ]
+    assert page.fill_calls == [("#monsterCount", "1")] * len(enemy_steps)
+    assert page.check_calls == []
+    assert page.uncheck_calls == ["#monsterAlly"] * len(enemy_steps)
+    assert page.click_calls == ["#addMonsterBtn"] * len(enemy_steps)
+
+
+def test_three_surface_enemy_options_reject_missing_slug():
+    harness = _load_browser_smoke_harness()
+    expected_slugs = [
+        slug for slug, _name in harness.THREE_SURFACE_ENEMY_IDENTITIES
+    ]
+
+    failure, page, state = _enemy_option_failure(harness, expected_slugs[1:])
+
+    assert failure.reason == "visible-state-inconsistency"
+    assert failure.detail["missing_enemy_slugs"] == [expected_slugs[0]]
+    assert failure.detail["extra_enemy_slugs"] == []
+    assert failure.detail["duplicate_enemy_slugs"] == []
+    assert state["enemy_options_validated"] is False
+    assert page.select_calls == []
+    assert page.click_calls == []
+
+
+def test_three_surface_enemy_options_reject_extra_slug():
+    harness = _load_browser_smoke_harness()
+    expected_slugs = [
+        slug for slug, _name in harness.THREE_SURFACE_ENEMY_IDENTITIES
+    ]
+    extra_slug = "black-and-tan-unexpected"
+
+    failure, page, state = _enemy_option_failure(
+        harness,
+        [*expected_slugs, extra_slug],
+    )
+
+    assert failure.reason == "visible-state-inconsistency"
+    assert failure.detail["missing_enemy_slugs"] == []
+    assert failure.detail["extra_enemy_slugs"] == [extra_slug]
+    assert failure.detail["duplicate_enemy_slugs"] == []
+    assert state["enemy_options_validated"] is False
+    assert page.select_calls == []
+    assert page.click_calls == []
+
+
+def test_three_surface_enemy_options_reject_duplicate_slug():
+    harness = _load_browser_smoke_harness()
+    expected_slugs = [
+        slug for slug, _name in harness.THREE_SURFACE_ENEMY_IDENTITIES
+    ]
+    duplicate_slug = expected_slugs[0]
+
+    failure, page, state = _enemy_option_failure(
+        harness,
+        [*expected_slugs, duplicate_slug],
+    )
+
+    assert failure.reason == "visible-state-inconsistency"
+    assert failure.detail["missing_enemy_slugs"] == []
+    assert failure.detail["extra_enemy_slugs"] == []
+    assert failure.detail["duplicate_enemy_slugs"] == [duplicate_slug]
+    assert state["enemy_options_validated"] is False
+    assert page.select_calls == []
+    assert page.click_calls == []
 
 
 def test_three_surface_executor_failure_records_terminal_evidence(monkeypatch, tmp_path):
