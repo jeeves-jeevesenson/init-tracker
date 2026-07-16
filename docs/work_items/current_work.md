@@ -10,8 +10,8 @@ If an item is not marked as **Active** here, it is NOT current work.
 <!-- ACTIVE_WORK_STATUS_START -->
 - **Status:** Active
 - **Current Work Item:** `WORK-20260715-a7-browser-automation`
-- **Active Gate:** A7-G5 pilot retry not opened
-- **Allowed Next Action:** Orchestrator acceptance and preparation of one new one-shot pilot packet. This target-ledger acceptance does not authorize or prepare that retry. Implementation, test, browser, runtime, endpoint, localhost, network, push, deployment, restart, scheduler, production, and service-mutation actions remain forbidden.
+- **Active Gate:** A7-G7 ordering correction authorized, not started
+- **Allowed Next Action:** A later bounded G7 correction may edit only `scripts/validation/browser-smoke-harness.py` and `tests/test_browser_smoke_harness.py`, then run focused tests for the authorized ordering change. Browser, server, runtime, endpoint, localhost, network, retry, push, deployment, restart, scheduler, production, and service-mutation actions remain forbidden.
 - <!-- ACTIVE_WORK_STATUS_END -->
 
 ---
@@ -21,41 +21,43 @@ If an item is not marked as **Active** here, it is NOT current work.
 | ID | Title | Status | Goal |
 | --- | --- | --- | --- |
 <!-- ACTIVE_WORK_TABLE_START -->
-| WORK-20260715-a7-browser-automation | A7 browser-driven human-workflow automation | Active | A7-G4 executor correction accepted at target commit `19c0446`; A7-G5 is not opened, and the next one-shot pilot packet is neither authorized nor prepared. |
+| WORK-20260715-a7-browser-automation | A7 browser-driven human-workflow automation | Active | A7-G5 ended in a terminal harness-ordering failure with no application defect proven and no retry authorized; A7-G7 authorizes one later bounded two-file ordering correction, not yet started. |
 <!-- ACTIVE_WORK_TABLE_END -->
 
 ---
 
-## A7-G5 Authorization Boundary
+## A7-G7 Ordering-Correction Authorization Boundary
 
-The A7-G3 one-shot pilot failed because the three-surface executor was not
-configured; it stopped at the fail-closed executor placeholder before the
-existing workflow plan ran, and no application defect was proven. The A7-G4
-executor correction is accepted at target commit `19c0446`.
+The A7-G5 one-shot pilot ended in a terminal harness-ordering failure. The
+plan clicked `#tab-encounter` before operating the setup-panel roster
+controls. `#encounterPlayerList` existed, but the encounter-tab transition
+had hidden its setup panel before the harness tried to select the roster.
+This proves a harness-ordering defect, not an application defect. No retry is
+authorized.
 
-Exactly these implementation files changed in A7-G4:
+A later G7 correction is authorized to edit exactly:
 
 - `scripts/validation/browser-smoke-harness.py`
 - `tests/test_browser_smoke_harness.py`
 
-The registered executor now runs the existing deterministic three-surface
-plan once, preserves no-retry behavior, and records terminal evidence.
-Failure-detail formatting preserves the outer terminal reason before bounded
-subordinate detail. `py_compile` passed, exactly 14 focused tests passed in
-`1.69 seconds`, and two-file `git diff --check` validation passed.
+The correction must move `open-encounter` after `add-all-roster-players` and
+before enemy setup. It must preserve every other plan step, selector, fixture
+contract, evidence rule, no-retry rule, cleanup rule, and the headless
+default. Focused tests must prove that roster actions precede
+`open-encounter` and that the corrected plan executes each setup step once.
+G7 is authorized but has not started; this transition does not implement the
+correction or execute its tests.
 
 ```text
-A7_GATE=A7-G5
-A7_STATE=pilot-retry-not-prepared
-A7_G3_STATE=failed
-A7_G3_RETRY_AUTHORIZED=false
-A7_G4_STATE=completed
-A7_G4_RESULT=docs/work_items/A7-G4-executor-correction-result.md
-A7_G4_TARGET_COMMIT=19c0446
-A7_G4_VALIDATION=pycompile-and-14-focused-tests-passed
-A7_G5_STATE=not-opened
-A7_IMPLEMENTATION_AUTHORIZED=false
-A7_TEST_EXECUTION_AUTHORIZED=false
+A7_GATE=A7-G7
+A7_STATE=ordering-correction-authorized
+A7_G5_STATE=failed
+A7_G5_RETRY_AUTHORIZED=false
+A7_G6_STATE=completed
+A7_G7_STATE=authorized-not-started
+A7_G7_ALLOWED_FILES=scripts/validation/browser-smoke-harness.py,tests/test_browser_smoke_harness.py
+A7_IMPLEMENTATION_AUTHORIZED=true
+A7_TEST_EXECUTION_AUTHORIZED=true
 A7_BROWSER_EXECUTION_AUTHORIZED=false
 A7_RUNTIME_EXECUTION_AUTHORIZED=false
 A7_NETWORK_AUTHORIZED=false
@@ -67,15 +69,16 @@ A7_PRODUCTION_AUTHORIZED=false
 A7_SERVICE_MUTATION_AUTHORIZED=false
 ```
 
-No browser, server, pilot, endpoint, localhost, network, dependency, push,
-deployment, restart, scheduler, production, or service action occurred during
-the accepted G4 correction or this documentation-only target-ledger
-acceptance. The approximately-200-enemy multi-target-spell stress scenario
+No source, test, browser, server, runtime, endpoint, localhost, network,
+dependency, artifact, retry, push, deployment, restart, scheduler,
+production, or service-mutation action occurred during this documentation-only
+transition. The approximately-200-enemy multi-target-spell stress scenario
 remains unopened.
 
-The next safe action is orchestrator acceptance and preparation of one new
-one-shot pilot packet. This target-ledger acceptance does not authorize or
-prepare that retry.
+The next safe action is a separately invoked G7 implementation pass restricted
+to the two authorized files and focused test execution described above. Do not
+retry G5 or begin browser, server, runtime, endpoint, localhost, or network
+execution.
 
 ---
 
