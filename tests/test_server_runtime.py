@@ -5406,6 +5406,7 @@ def _a7_player_turn_sync_fixture():
             self.tracker = tracker
             self.prompts = Prompts()
             self.end_turn_calls = []
+            self.next_cid = 320
 
         @staticmethod
         def allow_prompt_claim_override(_msg, **_kwargs):
@@ -5413,8 +5414,8 @@ def _a7_player_turn_sync_fixture():
 
         def end_turn(self, **kwargs):
             self.end_turn_calls.append(dict(kwargs))
-            self.tracker.current_cid = 320
-            return {"ok": True, "active_cid": 320}
+            self.tracker.current_cid = self.next_cid
+            return {"ok": True, "active_cid": self.next_cid}
 
     tracker = InitiativeTracker.__new__(InitiativeTracker)
     controller = LanController.__new__(LanController)
@@ -5555,6 +5556,328 @@ process.stdout.write(JSON.stringify({{
         timeout=5,
     )
     return json.loads(completed.stdout)
+
+
+def _a7_later_turn_fanout_fixture():
+    from types import SimpleNamespace
+
+    tracker, controller, original_sockets, commands, toasts = _a7_player_turn_sync_fixture()
+    socket_type = type(next(iter(original_sockets.values())))
+    sockets = {
+        2001: socket_type(),
+        2002: socket_type(),
+        2003: socket_type(),
+    }
+    actors = [
+        {"cid": 21, "name": "Suppression Gunner", "role": "enemy"},
+        {"cid": 10, "name": "Vicnor", "role": "pc"},
+        {"cid": 13, "name": "Captain", "role": "enemy"},
+        {"cid": 9, "name": "Throat Goat", "role": "pc"},
+        {"cid": 4, "name": "Fred", "role": "pc"},
+        {"cid": 18, "name": "Rifleman", "role": "enemy"},
+        {"cid": 2, "name": "Eldramar", "role": "pc"},
+        {"cid": 3, "name": "Owl", "role": "ally", "summoned_by_cid": 2},
+    ]
+    turn_order = [actor["cid"] for actor in actors]
+
+    tracker.combatants = {
+        actor["cid"]: SimpleNamespace(**actor) for actor in actors
+    }
+    tracker.current_cid = 9
+    tracker.in_combat = True
+    tracker._lan_combat_snapshot_version = 10
+    tracker._player_profiles_payload = lambda: {}
+    tracker.__dict__.pop("_combat_mutation_trace_fields", None)
+    commands.next_cid = 4
+    commands.end_turn_calls.clear()
+
+    controller._clients = dict(sockets)
+    controller._dm_ws_clients = {}
+    controller._view_only_clients = set()
+    controller._ws_send_locks = {}
+    controller._clients_meta = {}
+    controller._client_hosts = {
+        2001: "vicnor.test",
+        2002: "throat-goat.test",
+        2003: "fred.test",
+    }
+    controller._claims = {2001: 10, 2002: 9, 2003: 4}
+    controller._cid_to_ws = {10: {2001}, 9: {2002}, 4: {2003}}
+    controller._cid_to_host = {
+        10: {"vicnor.test"},
+        9: {"throat-goat.test"},
+        4: {"fred.test"},
+    }
+    controller._client_ids = {
+        2001: "vicnor-client",
+        2002: "throat-goat-client",
+        2003: "fred-client",
+    }
+    controller._client_id_to_ws = {
+        "vicnor-client": {2001},
+        "throat-goat-client": {2002},
+        "fred-client": {2003},
+    }
+    controller._client_id_claims = {
+        "vicnor-client": 10,
+        "throat-goat-client": 9,
+        "fred-client": 4,
+    }
+    controller._client_claim_revs = {
+        "vicnor-client": 5,
+        "throat-goat-client": 8,
+        "fred-client": 13,
+    }
+    controller._ws_claim_revs = {2001: 5, 2002: 8, 2003: 13}
+    controller._cached_pcs = [
+        {"cid": 10, "name": "Vicnor"},
+        {"cid": 9, "name": "Throat Goat"},
+        {"cid": 4, "name": "Fred"},
+        {"cid": 2, "name": "Eldramar"},
+    ]
+    controller._cached_snapshot = {
+        "active_cid": 21,
+        "round_num": 1,
+        "turn_order": turn_order,
+        "units": actors,
+    }
+    controller._last_snapshot = dict(controller._cached_snapshot)
+    controller._loop = None
+
+    return tracker, controller, sockets, commands, toasts
+
+
+def _a7_later_turn_snapshot(controller, active_cid):
+    import copy
+
+    return {
+        "active_cid": active_cid,
+        "round_num": 1,
+        "turn_order": list(controller._cached_snapshot["turn_order"]),
+        "units": copy.deepcopy(controller._cached_snapshot["units"]),
+    }
+
+
+def _a7_run_scheduled_state_fanout(controller, callbacks):
+    loop = asyncio.new_event_loop()
+    ready = threading.Event()
+
+    def run_loop():
+        asyncio.set_event_loop(loop)
+        ready.set()
+        loop.run_forever()
+
+    thread = threading.Thread(target=run_loop, name="a7-fanout-loop")
+    thread.start()
+    assert ready.wait(timeout=2)
+    controller._loop = loop
+
+    async def initialize_send_locks():
+        controller._ws_send_locks = {
+            ws_id: asyncio.Lock() for ws_id in controller._clients
+        }
+
+    async def wait_for_message_count(expected):
+        for _ in range(200):
+            if all(len(ws.messages) >= expected for ws in controller._clients.values()):
+                return
+            await asyncio.sleep(0.005)
+        raise AssertionError(f"fanout did not reach every client at message {expected}")
+
+    try:
+        asyncio.run_coroutine_threadsafe(initialize_send_locks(), loop).result(timeout=2)
+        for expected, callback in enumerate(callbacks, start=1):
+            callback()
+            asyncio.run_coroutine_threadsafe(
+                wait_for_message_count(expected), loop
+            ).result(timeout=3)
+    finally:
+        controller._loop = None
+        loop.call_soon_threadsafe(loop.stop)
+        thread.join(timeout=10)
+        assert not thread.is_alive()
+        loop.close()
+
+
+def _a7_force_snapshot_callbacks(tracker, controller, snapshots):
+    import copy
+
+    pcs = copy.deepcopy(controller._cached_pcs)
+    tracker._lan_static_snapshot_cache_status = lambda: (True, "", 1)
+    tracker._lan_merge_cached_static_snapshot = lambda snap: (snap, True)
+    tracker._lan_pcs = lambda: copy.deepcopy(pcs)
+    tracker._debug_trace_counts = lambda: {
+        "combatant_count": len(tracker.combatants),
+        "player_count": len(pcs),
+        "monster_count": len(tracker.combatants) - len(pcs),
+        "map_aoe_count": 0,
+        "pending_prompt_count": 0,
+        "pending_reaction_count": 0,
+        "websocket_client_count": len(controller._clients),
+        "dm_websocket_client_count": 0,
+        "total_websocket_client_count": len(controller._clients),
+    }
+
+    callbacks = []
+    for snapshot in snapshots:
+        captured = copy.deepcopy(snapshot)
+
+        def force_state(captured=captured):
+            tracker._lan_snapshot = lambda **_kwargs: copy.deepcopy(captured)
+            tracker._lan_force_state_broadcast()
+
+        callbacks.append(force_state)
+    return callbacks
+
+
+def test_a7_later_turn_fanout_updates_all_connected_claimed_players():
+    tracker, controller, sockets, commands, _toasts = _a7_later_turn_fanout_fixture()
+    earlier_snapshots = [
+        _a7_later_turn_snapshot(controller, cid) for cid in (21, 10, 13, 9)
+    ]
+    tracker._lan_apply_action(
+        {"type": "end_turn", "cid": 9, "_claimed_cid": 9, "_ws_id": 2002}
+    )
+    assert tracker.current_cid == 4
+    assert len(commands.end_turn_calls) == 1
+    authoritative = _a7_later_turn_snapshot(controller, 4)
+
+    callbacks = _a7_force_snapshot_callbacks(
+        tracker, controller, [*earlier_snapshots, authoritative]
+    )
+    _a7_run_scheduled_state_fanout(controller, callbacks)
+
+    for socket in sockets.values():
+        assert [message["combat_version"] for message in socket.messages] == [11, 12, 13, 14, 15]
+        assert [message["state"]["active_cid"] for message in socket.messages] == [21, 10, 13, 9, 4]
+    fred_client = _a7_reduce_player_messages(
+        sockets[2003].messages,
+        initial_state=_a7_later_turn_snapshot(controller, 21),
+        claimed_cid=4,
+        last_version=10,
+    )
+    assert fred_client["version"] == 15
+    assert fred_client["state"]["active_cid"] == 4
+    assert fred_client["end_turn_disabled"] is False
+
+
+def test_a7_personalized_fred_envelope_matches_authoritative_snapshot():
+    tracker, controller, sockets, _commands, _toasts = _a7_later_turn_fanout_fixture()
+    authoritative = _a7_later_turn_snapshot(controller, 4)
+    controller._cached_snapshot = _a7_later_turn_snapshot(controller, 21)
+    tracker._lan_combat_snapshot_version = 15
+
+    _a7_run_scheduled_state_fanout(
+        controller,
+        [lambda: controller._broadcast_state(authoritative, combat_version=15)],
+    )
+
+    fred_message = sockets[2003].messages[0]
+    assert fred_message["combat_version"] == 15
+    assert fred_message["state"]["active_cid"] == authoritative["active_cid"] == 4
+    assert fred_message["state"]["turn_order"] == authoritative["turn_order"]
+    assert fred_message["you"] == {
+        "claimed_cid": 4,
+        "claimed_name": "Fred",
+        "claim_rev": 13,
+        "pending_prompts": [],
+        "pending_prompt": None,
+    }
+    assert {
+        (message.messages[0]["combat_version"], message.messages[0]["state"]["active_cid"])
+        for message in sockets.values()
+    } == {(15, 4)}
+
+
+def test_a7_stale_personalized_envelope_cannot_regress_active_actor():
+    _tracker, controller, sockets, _commands, _toasts = _a7_later_turn_fanout_fixture()
+    authoritative = _a7_later_turn_snapshot(controller, 4)
+    _a7_run_scheduled_state_fanout(
+        controller,
+        [lambda: controller._broadcast_state(authoritative, combat_version=15)],
+    )
+    stale = {
+        "type": "state",
+        "combat_version": 14,
+        "state": _a7_later_turn_snapshot(controller, 21),
+        "you": {"claimed_cid": 4, "claimed_name": "Fred", "claim_rev": 13},
+    }
+    stale_unversioned = {
+        "type": "state",
+        "state": _a7_later_turn_snapshot(controller, 21),
+        "you": {"claimed_cid": 4, "claimed_name": "Fred", "claim_rev": 13},
+    }
+
+    reduced = _a7_reduce_player_messages(
+        [sockets[2003].messages[0], stale, stale_unversioned],
+        initial_state=_a7_later_turn_snapshot(controller, 21),
+        claimed_cid=4,
+        last_version=13,
+    )
+    assert reduced["applied"] == [True, False, False]
+    assert reduced["version"] == 15
+    assert reduced["state"]["active_cid"] == 4
+    assert reduced["end_turn_disabled"] is False
+
+
+def test_a7_later_turn_fanout_preserves_claim_and_command_behavior():
+    tracker, controller, sockets, commands, toasts = _a7_later_turn_fanout_fixture()
+    original_claims = dict(controller._claims)
+    original_client_claims = dict(controller._client_id_claims)
+
+    tracker._lan_apply_action(
+        {"type": "end_turn", "cid": 4, "_claimed_cid": 4, "_ws_id": 2003}
+    )
+    assert commands.end_turn_calls == []
+    assert toasts == [(2003, "Not yer turn yet, matey.")]
+
+    tracker._lan_apply_action(
+        {"type": "end_turn", "cid": 9, "_claimed_cid": 9, "_ws_id": 2002}
+    )
+    authoritative = _a7_later_turn_snapshot(controller, 4)
+    _a7_run_scheduled_state_fanout(
+        controller,
+        _a7_force_snapshot_callbacks(tracker, controller, [authoritative]),
+    )
+
+    assert tracker.current_cid == 4
+    assert len(commands.end_turn_calls) == 1
+    assert commands.end_turn_calls[0]["claimed_cid"] == 9
+    assert commands.end_turn_calls[0]["current_cid"] == 9
+    assert controller._claims == original_claims
+    assert controller._client_id_claims == original_client_claims
+    assert controller._build_you_payload(2002)["claim_rev"] == 8
+    assert controller._build_you_payload(2003)["claimed_cid"] == 4
+    assert controller._build_you_payload(2003)["claim_rev"] == 13
+    assert sockets[2003].messages[0]["you"]["claimed_cid"] == 4
+
+
+def test_a7_later_turn_fanout_exercises_server_client_reducer_contract():
+    tracker, controller, sockets, _commands, _toasts = _a7_later_turn_fanout_fixture()
+    tracker._lan_apply_action(
+        {"type": "end_turn", "cid": 9, "_claimed_cid": 9, "_ws_id": 2002}
+    )
+    authoritative = _a7_later_turn_snapshot(controller, tracker.current_cid)
+    callbacks = _a7_force_snapshot_callbacks(tracker, controller, [authoritative])
+
+    assert "_combat_mutation_trace_fields" not in tracker.__dict__
+    _a7_run_scheduled_state_fanout(controller, callbacks)
+
+    assert tracker._lan_combat_snapshot_version == 11
+    assert controller._last_snapshot["active_cid"] == 4
+    assert all(len(socket.messages) == 1 for socket in sockets.values())
+    fred_message = sockets[2003].messages[0]
+    reduced = _a7_reduce_player_messages(
+        [fred_message],
+        initial_state=_a7_later_turn_snapshot(controller, 21),
+        claimed_cid=4,
+        last_version=10,
+    )
+    assert fred_message["combat_version"] == 11
+    assert fred_message["state"]["active_cid"] == 4
+    assert reduced["applied"] == [True]
+    assert reduced["state"]["active_cid"] == 4
+    assert reduced["end_turn_disabled"] is False
 
 
 def test_a7_connected_claimed_player_applies_next_active_actor_after_other_player_ends_turn():

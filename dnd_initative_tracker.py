@@ -9101,7 +9101,7 @@ class LanController:
         snap: Dict[str, Any],
         combat_version: Optional[int] = None,
     ) -> None:
-        mutation_fields = dict(getattr(self._tracker, "_combat_mutation_trace_fields", {}) or {})
+        mutation_fields = dict(self._tracker.__dict__.get("_combat_mutation_trace_fields") or {})
         schedule_fields = {
             "command": mutation_fields.pop("command", "state"),
             "thread_role": "authority",
