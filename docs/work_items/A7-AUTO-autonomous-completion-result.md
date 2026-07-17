@@ -61,8 +61,11 @@ They confirm that authoritative `turn_order` includes living summons while
   committed as `Authorize A7 autonomous completion loop.`
 - Summon turn-advancement correction is validated and committed as
   `Correct A7 summon turn advancement.`
-- Browser attempt 1 proved one harness defect; its correction and accumulated
-  37-node focused validation pass and are ready for a focused commit.
+- Browser attempt 1 proved one harness defect; its correction is committed as
+  `Handle A7 multi-target spell selection.`
+- Browser attempt 2 proved the remaining dialog-handling half of that
+  interaction; its correction and the accumulated 37-node focused validation
+  pass and are ready for a focused commit.
 - Browser completion remains in progress.
 
 ## Summon Turn-Advancement Correction
@@ -138,6 +141,44 @@ Evidence:
   `terminal-visible-state-inconsistency-player-spell-pc:throat-goat.png`;
 - Throat Goat role trace: `role-trace-player-pc-throat-goat.zip`;
 - summary: `summary.json` and `summary.md`.
+
+## Browser Attempt 2: `20260717_000209`
+
+Attempt 2 used the exact browser command against the same positively verified
+owned server. It passed 51 ordered steps and failed at step 52,
+`player-spell-pc:throat-goat`, after `11663.443 ms`.
+
+The first correction normally clicked the visible target-set control, but the
+buffered multi-target product flow uses two browser confirmations: one when
+Cast is clicked and another when the buffered target set is confirmed. The
+harness's original one-shot dialog handler had already accepted the first
+confirmation. The second was therefore auto-dismissed. The debug trace records
+no Throat Goat `cast_spell`, `spell_target_request`, or attack request after
+the normal target click, which separates the harness interaction failure from
+backend application behavior.
+
+The correction registers an ordinary dialog accept immediately around the
+normal visible `#spellTargetSelectionConfirm` click. The focused regression now
+proves the dialog is accepted, the product reveals the attack-resolution
+modal, and the harness normally clicks `#attackResolveSubmit`. It uses no
+force click, DOM bypass, JavaScript click, or hit-testing bypass.
+
+Validation passed exactly:
+
+- browser-harness and focused-test `py_compile`;
+- the retained 36 nodes plus the extended multi-target regression:
+  `37 passed in 1.80s`;
+- the required five-file `git diff --check` command.
+
+Evidence:
+
+- artifact run:
+  `logs/smoke/CODEX-20260716-a7-autonomous-completion_browser-artifacts/black-tan-three-surface-workflow/20260717_000209/`;
+- terminal screenshot:
+  `terminal-visible-state-inconsistency-player-spell-pc:throat-goat.png`;
+- Throat Goat role trace: `role-trace-player-pc-throat-goat.zip`;
+- summary: `summary.json` and `summary.md`;
+- bounded backend evidence: `logs/debug-trace-20260716-235622.jsonl`.
 
 ## Evidence
 

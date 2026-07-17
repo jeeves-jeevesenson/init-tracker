@@ -51,6 +51,14 @@ resolution modal without confirming that selection. The harness now normally
 clicks the visible enabled control before resolving the resulting attack or
 spell modal. Its exact new regression and the accumulated 37-node set pass.
 
+Browser attempt `20260717_000209` passed 51 steps and proved that the buffered
+multi-target flow presents a second normal browser confirmation when the
+visible target selection is confirmed. The earlier one-shot dialog handler had
+already accepted the Cast confirmation, so the target-set confirmation was
+auto-dismissed and no spell command reached the server. The harness now scopes
+an ordinary dialog accept to the normal target-confirm click; the extended
+regression and the full 37-node set pass.
+
 ```text
 A7_GATE=A7-AUTO
 A7_STATE=autonomous-completion-running

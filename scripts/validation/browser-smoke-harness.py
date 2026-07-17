@@ -694,6 +694,7 @@ def _finish_targeted_spell(
     try:
         while time.monotonic() < deadline:
             if target_selection_confirm.is_visible():
+                page.once("dialog", lambda dialog: dialog.accept())
                 _click_selector(page, "#spellTargetSelectionConfirm:not([disabled])", step_id)
                 continue
             if attack_modal.is_visible():

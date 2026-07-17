@@ -1239,6 +1239,10 @@ def test_three_surface_multi_target_spell_confirms_visible_target_selection():
             self.target_selection_confirm = _SpellLocator(visible=True)
             self.note = _SpellLocator(text="Select targets (0/3) for Eldritch Blast.")
             self.clicks = []
+            self.dialog_events = []
+
+        def once(self, event, handler):
+            self.dialog_events.append((event, handler))
 
         def locator(self, selector):
             return {
@@ -1257,6 +1261,18 @@ def test_three_surface_multi_target_spell_confirms_visible_target_selection():
         def click(self, selector):
             self.clicks.append(selector)
             if selector == "#spellTargetSelectionConfirm:not([disabled])":
+                class _Dialog:
+                    def __init__(self):
+                        self.accepted = False
+
+                    def accept(self):
+                        self.accepted = True
+
+                dialog = _Dialog()
+                event, handler = self.dialog_events.pop(0)
+                assert event == "dialog"
+                handler(dialog)
+                assert dialog.accepted is True
                 self.target_selection_confirm.visible = False
                 self.attack_modal.visible = True
 
@@ -1275,6 +1291,7 @@ def test_three_surface_multi_target_spell_confirms_visible_target_selection():
         "#spellTargetSelectionConfirm:not([disabled])",
         "#attackResolveSubmit",
     ]
+    assert page.dialog_events == []
 
 
 def test_three_surface_enemy_action_waits_for_dmcontrol_active_cid(monkeypatch):
