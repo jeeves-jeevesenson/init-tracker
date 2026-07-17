@@ -10,8 +10,8 @@ If an item is not marked as **Active** here, it is NOT current work.
 <!-- ACTIVE_WORK_STATUS_START -->
 - **Status:** Active
 - **Current Work Item:** `WORK-20260715-a7-browser-automation`
-- **Active Gate:** A7-G25
-- **Allowed Next Action:** Developer/orchestrator inspection of the G25 application-owned summon-turn skip and preparation of one separately authorized bounded application/test correction. Browser, server, runtime, endpoint, localhost, network, push, deployment, restart, scheduler, production, and service-mutation action is closed.
+- **Active Gate:** A7-G27
+- **Allowed Next Action:** One later bounded G27 summon turn-advancement correction in exactly `dnd_initative_tracker.py` and `tests/test_server_runtime.py`, with focused test execution only. G27 is authorized but not started. Browser, server, runtime, endpoint, localhost, network, push, deployment, restart, scheduler, production, and service-mutation action remains closed.
 - <!-- ACTIVE_WORK_STATUS_END -->
 
 ---
@@ -21,8 +21,107 @@ If an item is not marked as **Active** here, it is NOT current work.
 | ID | Title | Status | Goal |
 | --- | --- | --- | --- |
 <!-- ACTIVE_WORK_TABLE_START -->
-| WORK-20260715-a7-browser-automation | A7 browser-driven human-workflow automation | Active | G25 retained one validated Fire Bolt spell-attack resolution correction, then stopped after proving that the application skipped a living Raven summon in the authoritative turn order. |
+| WORK-20260715-a7-browser-automation | A7 browser-driven human-workflow automation | Active | G26 diagnosed the application-owned blanket summon turn exclusion and authorized one later two-file G27 correction with focused runtime coverage. |
 <!-- ACTIVE_WORK_TABLE_END -->
+
+## A7-G26 Summon Turn-Advancement Authorization
+
+G26 is completed as the documentation-only authorization task
+`CODEX-20260716-a7-authorize-summon-turn-advancement-g26`. Bounded inspection
+confirmed that one later G27 implementation remains sufficient in exactly:
+
+- `dnd_initative_tracker.py`
+- `tests/test_server_runtime.py`
+
+The successful player End Turn path first normalizes the requested, claimed,
+and current CIDs in `_lan_apply_action()`. Existing claim, presence, summon-
+owner control, and active-turn checks reject unauthorized or non-active
+commands before the action delegates to the player-command service with the
+current authoritative `current_cid`. A successful End Turn reaches the
+tracker's `_next_turn()` authority. That method retains the ending CID, runs
+end-turn cleanup and logging, and advances through
+`_advance_to_next_turn_candidate()` into `_next_normal_turn_candidate()`.
+
+Normal next-entry selection is derived from `_display_order()`, the same
+authoritative order used to publish `turn_order`. The defect is the eligibility
+filter applied to that order: `_should_skip_turn()` returns true for every
+combatant with a non-null `summoned_by_cid`, so
+`_next_normal_turn_candidate()` removes every summon before choosing the next
+CID. In contrast, `_lan_snapshot()` includes the complete display-derived
+order and publishes summon identity and owner metadata with the unit. Raven
+therefore remained living, present, condition-free, and listed between
+Stikhiya and Captain while backend selection advanced directly from `cid=32`
+to `cid=34` instead of selecting Raven `cid=33`.
+
+G27 must remove only that blanket owner-metadata exclusion. Summon ownership
+must continue to authorize the owning player's control and remain intact in
+the resulting state; fixture verification's separate exclusion of Owl and
+Raven from canonical fixture counts must not make them globally ineligible
+runtime actors. Existing eligibility behavior must remain intact for actors
+that are absent from the authoritative display order, removed, dead,
+disabled, cadence-scheduled, on an explicit shared turn, or otherwise skipped
+under existing combat rules. No CID- or fixture-name-specific sequence is
+authorized.
+
+After selection, the existing authority continues to assign `current_cid`,
+maintain the normal/cadence turn kind, increment turn numbering, wrap and
+increment the round when appropriate, run start-of-turn auto-skip and hooks,
+record turn history, and rebuild the authoritative view. The resulting
+snapshot derives `active_cid` from `current_cid`, retains the authoritative
+`turn_order`, round and unit ownership metadata, advances the combat version,
+updates the cached snapshot, and uses the existing personalized player and DM
+WebSocket fanout. G27 must preserve those mutation, snapshot, authority, and
+broadcast seams.
+
+The later G27 behavior contract is:
+
+1. A living, present, condition-free Owl or Raven in authoritative
+   `turn_order` becomes active exactly once at its listed position.
+2. Stikhiya `cid=32` ending turn advances to Raven `cid=33`, not Captain
+   `cid=34`; Raven ending turn then advances to the actor following Raven.
+3. Summons are not globally filtered merely because fixture verification
+   treats them as additional runtime units.
+4. Existing dead, removed, disabled, and otherwise explicit ineligibility
+   skipping remains correct, as does ordinary player and enemy advancement.
+5. Round wrapping, turn numbering, initiative order, `active_cid`, command
+   authority, summon ownership, combat versions, snapshots, and WebSocket
+   fanout remain unchanged except for selecting an eligible listed summon.
+6. Summon creation, spell behavior, fixture verification, and the retained
+   browser harness remain unchanged.
+
+The focused G27 coverage must exercise the real player End Turn and
+authoritative advancement path, not a helper in isolation or source-text
+assertions, and prove:
+
+1. Stikhiya advances to a living Raven in the authoritative order.
+2. Raven becomes active exactly once and then advances to Captain.
+3. A living Owl in an equivalent position is not skipped.
+4. Existing dead or removed summon skipping remains correct.
+5. Ordinary non-summon advancement and round wrapping remain correct.
+6. The resulting authoritative snapshot, combat version, command authority,
+   and existing fanout path remain coherent.
+
+G26 does not begin G27 and does not authorize any other file or execution
+surface.
+
+```text
+A7_GATE=A7-G27
+A7_STATE=summon-turn-advancement-correction-authorized
+A7_G26_STATE=completed
+A7_G27_STATE=authorized-not-started
+A7_G27_ALLOWED_FILES=dnd_initative_tracker.py,tests/test_server_runtime.py
+A7_IMPLEMENTATION_AUTHORIZED=true
+A7_TEST_EXECUTION_AUTHORIZED=true
+A7_BROWSER_EXECUTION_AUTHORIZED=false
+A7_RUNTIME_EXECUTION_AUTHORIZED=false
+A7_NETWORK_AUTHORIZED=false
+A7_PUSH_AUTHORIZED=false
+A7_DEPLOYMENT_AUTHORIZED=false
+A7_RESTART_AUTHORIZED=false
+A7_SCHEDULER_AUTHORIZED=false
+A7_PRODUCTION_AUTHORIZED=false
+A7_SERVICE_MUTATION_AUTHORIZED=false
+```
 
 ## A7-G25 Autonomous Browser Continuation Controlled Stop
 
