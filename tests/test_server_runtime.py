@@ -5382,3 +5382,285 @@ def test_black_tan_fixture_contract_returns_complete_stable_identity_mappings():
     assert refusal["expected_counts"] == refusal["actual_counts"]
     assert len(refusal["mismatch_details"]) <= 8
     assert reset_calls == []
+
+
+def _a7_player_turn_sync_fixture():
+    import json
+    from types import SimpleNamespace
+    from dnd_initative_tracker import InitiativeTracker, LanController
+
+    class CaptureWebSocket:
+        def __init__(self):
+            self.messages = []
+
+        async def send_text(self, text):
+            self.messages.append(json.loads(text))
+
+    class Prompts:
+        @staticmethod
+        def player_visible_prompts_for_actor(_claimed_cid):
+            return []
+
+    class PlayerCommands:
+        def __init__(self, tracker):
+            self.tracker = tracker
+            self.prompts = Prompts()
+            self.end_turn_calls = []
+
+        @staticmethod
+        def allow_prompt_claim_override(_msg, **_kwargs):
+            return False
+
+        def end_turn(self, **kwargs):
+            self.end_turn_calls.append(dict(kwargs))
+            self.tracker.current_cid = 320
+            return {"ok": True, "active_cid": 320}
+
+    tracker = InitiativeTracker.__new__(InitiativeTracker)
+    controller = LanController.__new__(LanController)
+    controller._tracker = tracker
+    tracker._lan = controller
+    tracker._lan_combat_snapshot_version = 0
+    tracker._combat_mutation_trace_fields = {}
+    tracker._oplog = lambda *_args, **_kwargs: None
+    tracker._is_admin_token_valid = lambda _token: False
+    tracker._summon_can_be_controlled_by = lambda _claimed, _cid: False
+    tracker._is_valid_summon_turn_for_controller = (
+        lambda claimed, cid, current: claimed == cid == current
+    )
+    tracker.combatants = {
+        322: SimpleNamespace(cid=322, name="Malagrou"),
+        320: SimpleNamespace(cid=320, name="John Twilight"),
+    }
+    tracker.current_cid = 322
+    tracker.in_combat = True
+    commands = PlayerCommands(tracker)
+    tracker._player_commands = commands
+
+    sockets = {1001: CaptureWebSocket(), 1002: CaptureWebSocket()}
+    controller._clients_lock = threading.RLock()
+    controller._clients = dict(sockets)
+    controller._dm_ws_clients = {}
+    controller._view_only_clients = set()
+    controller._ws_send_locks = {}
+    controller._clients_meta = {}
+    controller._client_hosts = {1001: "malagrou.test", 1002: "john.test"}
+    controller._claims = {1001: 322, 1002: 320}
+    controller._cid_to_ws = {322: {1001}, 320: {1002}}
+    controller._cid_to_host = {322: {"malagrou.test"}, 320: {"john.test"}}
+    controller._client_ids = {1001: "malagrou-client", 1002: "john-client"}
+    controller._client_id_to_ws = {
+        "malagrou-client": {1001},
+        "john-client": {1002},
+    }
+    controller._client_id_claims = {
+        "malagrou-client": 322,
+        "john-client": 320,
+    }
+    controller._client_claim_revs = {
+        "malagrou-client": 4,
+        "john-client": 7,
+    }
+    controller._ws_claim_revs = {1001: 4, 1002: 7}
+    controller._cached_pcs = [
+        {"cid": 322, "name": "Malagrou"},
+        {"cid": 320, "name": "John Twilight"},
+    ]
+    controller._cached_snapshot = {
+        "active_cid": 322,
+        "round_num": 1,
+        "turn_order": [322, 320],
+        "player_profiles": {},
+        "units": [
+            {"cid": 322, "name": "Malagrou"},
+            {"cid": 320, "name": "John Twilight"},
+        ],
+    }
+    controller._log_lan_exception = lambda *_args, **_kwargs: None
+    controller._append_lan_log = lambda *_args, **_kwargs: None
+    toasts = []
+    controller.toast = lambda ws_id, text: toasts.append((ws_id, text))
+    return tracker, controller, sockets, commands, toasts
+
+
+def _a7_broadcast_player_state(controller, snapshot, combat_version):
+    async def broadcast():
+        controller._ws_send_locks = {
+            ws_id: asyncio.Lock() for ws_id in controller._clients
+        }
+        await controller._broadcast_state_async(
+            snapshot,
+            combat_version=combat_version,
+        )
+
+    asyncio.run(broadcast())
+
+
+def _a7_broadcast_player_payload(controller, payload):
+    async def broadcast():
+        controller._ws_send_locks = {
+            ws_id: asyncio.Lock() for ws_id in controller._clients
+        }
+        await controller._broadcast_payload_async(payload)
+
+    asyncio.run(broadcast())
+
+
+def _a7_reduce_player_messages(messages, *, initial_state, claimed_cid, last_version=None):
+    import json
+    from pathlib import Path
+    import subprocess
+
+    html = Path("assets/web/lan/index.html").read_text(encoding="utf-8")
+    start_marker = "// A7_COMBAT_STATE_REDUCER_START"
+    end_marker = "// A7_COMBAT_STATE_REDUCER_END"
+    start = html.index(start_marker) + len(start_marker)
+    end = html.index(end_marker, start)
+    reducer_source = html[start:end]
+    script = f"""
+const fs = require("fs");
+{reducer_source}
+const input = JSON.parse(fs.readFileSync(0, "utf8"));
+let state = input.initial_state;
+let version = input.last_version;
+const applied = [];
+for (const message of input.messages) {{
+  const result = reduceCombatStateEnvelope(state, message, version);
+  applied.push(result.applied);
+  state = result.state;
+  version = result.version;
+}}
+const activeCid = state && state.active_cid !== undefined ? Number(state.active_cid) : null;
+const claimedCid = Number(input.claimed_cid);
+process.stdout.write(JSON.stringify({{
+  state,
+  version,
+  applied,
+  end_turn_disabled: activeCid === null || activeCid !== claimedCid,
+}}));
+"""
+    completed = subprocess.run(
+        ["node", "-e", script],
+        input=json.dumps(
+            {
+                "messages": messages,
+                "initial_state": initial_state,
+                "claimed_cid": claimed_cid,
+                "last_version": last_version,
+            }
+        ),
+        text=True,
+        capture_output=True,
+        check=True,
+        timeout=5,
+    )
+    return json.loads(completed.stdout)
+
+
+def test_a7_connected_claimed_player_applies_next_active_actor_after_other_player_ends_turn():
+    tracker, controller, sockets, commands, _toasts = _a7_player_turn_sync_fixture()
+    tracker._lan_apply_action(
+        {"type": "end_turn", "cid": 322, "_claimed_cid": 322, "_ws_id": 1001}
+    )
+    assert tracker.current_cid == 320
+    assert commands.end_turn_calls == [
+        {
+            "cid": 322,
+            "claimed_cid": 322,
+            "current_cid": 322,
+            "ws_id": 1001,
+            "is_admin": False,
+        }
+    ]
+
+    authoritative = {
+        "active_cid": 320,
+        "round_num": 1,
+        "turn_order": [322, 320],
+        "units": [
+            {"cid": 322, "name": "Malagrou"},
+            {"cid": 320, "name": "John Twilight"},
+        ],
+    }
+    version = controller._next_combat_state_version()
+    _a7_broadcast_player_state(controller, authoritative, version)
+
+    assert all(len(socket.messages) == 1 for socket in sockets.values())
+    john_message = sockets[1002].messages[0]
+    malagrou_message = sockets[1001].messages[0]
+    assert john_message["combat_version"] == version
+    assert john_message["you"]["claimed_cid"] == 320
+    assert malagrou_message["you"]["claimed_cid"] == 322
+
+    stale_state = {
+        "active_cid": 322,
+        "round_num": 1,
+        "turn_order": [322, 320],
+        "units": authoritative["units"],
+    }
+    john_client = _a7_reduce_player_messages(
+        [john_message], initial_state=stale_state, claimed_cid=320
+    )
+    malagrou_client = _a7_reduce_player_messages(
+        [malagrou_message], initial_state=stale_state, claimed_cid=322
+    )
+    assert john_client["state"]["active_cid"] == 320
+    assert john_client["end_turn_disabled"] is False
+    assert malagrou_client["state"]["active_cid"] == 320
+    assert malagrou_client["end_turn_disabled"] is True
+
+
+def test_a7_connected_player_rejects_stale_active_actor_state():
+    _tracker, controller, sockets, _commands, _toasts = _a7_player_turn_sync_fixture()
+    previous = {
+        "active_cid": 322,
+        "round_num": 1,
+        "turn_order": [322, 320],
+        "units": controller._cached_snapshot["units"],
+    }
+    current = dict(previous, active_cid=320)
+    turn_update = {
+        "type": "turn_update",
+        "combat_version": 9,
+        **controller._build_turn_update(previous, current),
+    }
+    _a7_broadcast_player_payload(controller, turn_update)
+    _a7_broadcast_player_state(controller, previous, combat_version=8)
+
+    john_messages = sockets[1002].messages
+    assert [message["combat_version"] for message in john_messages] == [9, 8]
+    reduced = _a7_reduce_player_messages(
+        john_messages,
+        initial_state=previous,
+        claimed_cid=320,
+        last_version=7,
+    )
+    assert reduced["applied"] == [True, False]
+    assert reduced["version"] == 9
+    assert reduced["state"]["active_cid"] == 320
+    assert reduced["end_turn_disabled"] is False
+
+
+def test_a7_player_turn_sync_preserves_claim_and_command_behavior():
+    tracker, controller, _sockets, commands, toasts = _a7_player_turn_sync_fixture()
+    original_claims = dict(controller._claims)
+    original_client_claims = dict(controller._client_id_claims)
+
+    tracker._lan_apply_action(
+        {"type": "end_turn", "cid": 320, "_claimed_cid": 320, "_ws_id": 1002}
+    )
+    assert commands.end_turn_calls == []
+    assert toasts == [(1002, "Not yer turn yet, matey.")]
+
+    tracker._lan_apply_action(
+        {"type": "end_turn", "cid": 322, "_claimed_cid": 322, "_ws_id": 1001}
+    )
+    assert len(commands.end_turn_calls) == 1
+    assert commands.end_turn_calls[0]["claimed_cid"] == 322
+    assert commands.end_turn_calls[0]["current_cid"] == 322
+    assert controller._claims == original_claims
+    assert controller._client_id_claims == original_client_claims
+    assert controller._build_you_payload(1001)["claimed_cid"] == 322
+    assert controller._build_you_payload(1001)["claim_rev"] == 4
+    assert controller._build_you_payload(1002)["claimed_cid"] == 320
+    assert controller._build_you_payload(1002)["claim_rev"] == 7

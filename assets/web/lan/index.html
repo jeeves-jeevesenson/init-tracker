@@ -5326,9 +5326,51 @@ __DAMAGE_TYPE_OPTIONS__
   const canvas = document.getElementById("c");
   const ctx = canvas.getContext("2d");
 
+  // A7_COMBAT_STATE_REDUCER_START
+  function normalizeCombatStateVersion(value){
+    if (value === null || value === undefined || value === "") return null;
+    const parsed = Number(value);
+    if (!Number.isFinite(parsed) || parsed < 0) return null;
+    return Math.floor(parsed);
+  }
+
+  function reduceCombatStateEnvelope(currentState, message, lastVersion){
+    const previousVersion = normalizeCombatStateVersion(lastVersion);
+    const incomingVersion = normalizeCombatStateVersion(message?.combat_version);
+    if (incomingVersion === null && previousVersion !== null){
+      return {applied: false, state: currentState, version: previousVersion};
+    }
+    if (incomingVersion !== null && previousVersion !== null && incomingVersion < previousVersion){
+      return {applied: false, state: currentState, version: previousVersion};
+    }
+
+    let nextState = currentState;
+    if (message?.type === "state"){
+      nextState = (message.state && typeof message.state === "object") ? message.state : {};
+    } else if (message?.type === "turn_update"){
+      nextState = (currentState && typeof currentState === "object") ? {...currentState} : {};
+      if (Object.prototype.hasOwnProperty.call(message, "active_cid")){
+        nextState.active_cid = message.active_cid;
+      }
+      if (Object.prototype.hasOwnProperty.call(message, "round_num")){
+        nextState.round_num = message.round_num;
+      }
+      if (Object.prototype.hasOwnProperty.call(message, "turn_order")){
+        nextState.turn_order = message.turn_order;
+      }
+    }
+    return {
+      applied: true,
+      state: nextState,
+      version: incomingVersion === null ? previousVersion : incomingVersion,
+    };
+  }
+  // A7_COMBAT_STATE_REDUCER_END
+
   let ws = null;
   let wsGeneration = 0;
   let state = null;
+  let lastCombatStateVersion = null;
   let planningSnapshotLocked = false;
   let planningChatOpen = false;
   let planningChatMessages = [];
@@ -17600,6 +17642,7 @@ __DAMAGE_TYPE_OPTIONS__
     }
     const socketGeneration = wsGeneration + 1;
     wsGeneration = socketGeneration;
+    lastCombatStateVersion = null;
     reconnectRecoveryStateSeen = false;
     reconnectRecoveryClaimSeen = false;
     reconnectRecoveryGridSeen = false;
@@ -17805,6 +17848,9 @@ __DAMAGE_TYPE_OPTIONS__
       } else if (msg.type === "preset_error"){
         setPresetStatus(msg.error || "Preset error.", 2500);
       } else if (msg.type === "state"){
+        const combatEnvelope = reduceCombatStateEnvelope(state, msg, lastCombatStateVersion);
+        if (!combatEnvelope.applied) return;
+        lastCombatStateVersion = combatEnvelope.version;
         stateUpdateCounter += 1;
         const oldSpellPresets = state?.spell_presets;
         const oldPlayerSpells = state?.player_spells;
@@ -17819,7 +17865,7 @@ __DAMAGE_TYPE_OPTIONS__
         const oldHazards = state?.hazards;
         const oldStructures = state?.structures;
         const oldElevation = state?.elevation_cells;
-        state = (msg.state && typeof msg.state === "object") ? msg.state : {};
+        state = combatEnvelope.state;
         // Preserve static data from previous state if not in new message
         // Only preserve if old values exist and new values are undefined or empty
         if ((!state.spell_presets || state.spell_presets.length === 0) && Array.isArray(oldSpellPresets) && oldSpellPresets.length > 0){
@@ -17952,16 +17998,10 @@ __DAMAGE_TYPE_OPTIONS__
         handleAutoClaimStateUpdate();
         maybeFinishReconnectRecovery();
       } else if (msg.type === "turn_update"){
-        if (!state){ state = {}; }
-        if ("active_cid" in msg){
-          state.active_cid = msg.active_cid;
-        }
-        if ("round_num" in msg){
-          state.round_num = msg.round_num;
-        }
-        if ("turn_order" in msg){
-          state.turn_order = msg.turn_order;
-        }
+        const combatEnvelope = reduceCombatStateEnvelope(state, msg, lastCombatStateVersion);
+        if (!combatEnvelope.applied) return;
+        lastCombatStateVersion = combatEnvelope.version;
+        state = combatEnvelope.state;
         scheduleUiFlush({hud:true, draw:true, mount:true, turnAlert:true});
       } else if (msg.type === "units_snapshot"){
         if (!state){ state = {}; }

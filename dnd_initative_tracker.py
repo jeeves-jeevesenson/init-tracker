@@ -2571,6 +2571,17 @@ class LanController:
         self._rules_toc_cache_payload: Optional[Dict[str, Any]] = None
         self._init_admin_auth()
 
+    def _current_combat_state_version(self) -> int:
+        try:
+            return max(0, int(self._tracker.__dict__.get("_lan_combat_snapshot_version", 0) or 0))
+        except Exception:
+            return 0
+
+    def _next_combat_state_version(self) -> int:
+        version = self._current_combat_state_version() + 1
+        self._tracker.__dict__["_lan_combat_snapshot_version"] = version
+        return version
+
     @property
     def tracker(self) -> "InitiativeTracker":
         return self._tracker
@@ -4081,6 +4092,7 @@ class LanController:
                         state_payload = self._json_dumps({
                             "type": "state",
                             "state": self._dynamic_snapshot_payload(),
+                            "combat_version": self._current_combat_state_version(),
                             "pcs": self._pcs_payload(),
                             "you": you_data
                         })
@@ -8426,7 +8438,13 @@ class LanController:
             else:
                 turn_update = self._build_turn_update(prev_snap, snap)
                 if turn_update:
-                    self._broadcast_payload({"type": "turn_update", **turn_update})
+                    self._broadcast_payload(
+                        {
+                            "type": "turn_update",
+                            "combat_version": self._next_combat_state_version(),
+                            **turn_update,
+                        }
+                    )
 
                 units_snapshot, unit_updates = self._build_unit_updates(prev_snap, snap)
                 if units_snapshot is not None:
@@ -9078,7 +9096,11 @@ class LanController:
 
     # ---------- Server-thread safe broadcast ----------
 
-    def _broadcast_state(self, snap: Dict[str, Any]) -> None:
+    def _broadcast_state(
+        self,
+        snap: Dict[str, Any],
+        combat_version: Optional[int] = None,
+    ) -> None:
         mutation_fields = dict(getattr(self._tracker, "_combat_mutation_trace_fields", {}) or {})
         schedule_fields = {
             "command": mutation_fields.pop("command", "state"),
@@ -9093,7 +9115,15 @@ class LanController:
         ):
             if not self._loop:
                 return
-            coro = self._broadcast_state_async(snap, correlation=current_debug_correlation())
+            coro = self._broadcast_state_async(
+                snap,
+                combat_version=(
+                    self._current_combat_state_version()
+                    if combat_version is None
+                    else int(combat_version)
+                ),
+                correlation=current_debug_correlation(),
+            )
             try:
                 asyncio.run_coroutine_threadsafe(coro, self._loop)
             except Exception:
@@ -9112,6 +9142,7 @@ class LanController:
         self,
         snap: Dict[str, Any],
         *,
+        combat_version: Optional[int] = None,
         correlation: Optional[Dict[str, str]] = None,
     ) -> None:
         with debug_context(
@@ -9134,7 +9165,7 @@ class LanController:
             try:
                 with timed_span("lan.broadcast.state", **span_fields):
                     try:
-                        state_data = self._dynamic_snapshot_payload()
+                        state_data = self._dynamic_snapshot_payload(snap)
                         pcs_data = self._pcs_payload()
                     except Exception as exc:
                         self.app._oplog(f"LAN state broadcast serialization failed: {exc}", level="warning")
@@ -9161,6 +9192,11 @@ class LanController:
                             payload_obj = with_action_correlation({
                                 "type": "state",
                                 "state": payload_state,
+                                "combat_version": (
+                                    self._current_combat_state_version()
+                                    if combat_version is None
+                                    else int(combat_version)
+                                ),
                                 "pcs": pcs_data,
                                 "you": you_data,
                             })
@@ -9909,6 +9945,7 @@ class LanController:
                 {
                     "type": "state",
                     "state": state_payload,
+                    "combat_version": self._current_combat_state_version(),
                     "pcs": self._pcs_payload(),
                     "you": you_data
                 },
@@ -10161,8 +10198,9 @@ class LanController:
     def _best_lan_url(self) -> str:
         return self.preferred_url() or self._computed_http_url()
 
-    def _cached_snapshot_payload(self) -> Dict[str, Any]:
-        snap = dict(self._cached_snapshot)
+    def _cached_snapshot_payload(self, snapshot: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+        source = snapshot if isinstance(snapshot, dict) else self._cached_snapshot
+        snap = dict(source)
         units = snap.get("units")
         if isinstance(units, list):
             with self._clients_lock:
@@ -10596,9 +10634,9 @@ class LanController:
             "is_admin": bool(is_admin),
         }
 
-    def _dynamic_snapshot_payload(self) -> Dict[str, Any]:
+    def _dynamic_snapshot_payload(self, snapshot: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
         """Return dynamic state without static data (for regular broadcasts)."""
-        snap = self._cached_snapshot_payload()
+        snap = self._cached_snapshot_payload(snapshot)
         snap["claims"] = self._claims_payload()
         # Remove static fields to reduce payload size
         snap.pop("spell_presets", None)
@@ -22484,8 +22522,7 @@ class InitiativeTracker(base.InitiativeTracker):
             )
             return
 
-        combat_version = int(self.__dict__.get("_lan_combat_snapshot_version", 0) or 0) + 1
-        self.__dict__["_lan_combat_snapshot_version"] = combat_version
+        combat_version = self._lan._next_combat_state_version()
         span_counts = self._debug_trace_counts()
         if lan_recipient_count is not None:
             span_counts["recipient_count"] = int(lan_recipient_count)
@@ -22540,7 +22577,7 @@ class InitiativeTracker(base.InitiativeTracker):
                 except Exception:
                     pass
             if has_lan_recipients:
-                self._lan._broadcast_state(snap)
+                self._lan._broadcast_state(snap, combat_version=combat_version)
             else:
                 debug_event(
                     "broadcast.skipped_no_clients",
