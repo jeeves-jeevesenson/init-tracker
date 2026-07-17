@@ -10,8 +10,8 @@ If an item is not marked as **Active** here, it is NOT current work.
 <!-- ACTIVE_WORK_STATUS_START -->
 - **Status:** Active
 - **Current Work Item:** `WORK-20260715-a7-browser-automation`
-- **Active Gate:** A7-G24 not opened
-- **Allowed Next Action:** Orchestrator acceptance and preparation of one autonomous host-access browser run beginning from the retained G21 harness implementation at `389b0a1`. G24 remains unopened, and browser, server, runtime, endpoint, localhost, network, push, deployment, restart, scheduler, production, and service-mutation action remains closed.
+- **Active Gate:** A7-G25
+- **Allowed Next Action:** Developer/orchestrator inspection of the G25 application-owned summon-turn skip and preparation of one separately authorized bounded application/test correction. Browser, server, runtime, endpoint, localhost, network, push, deployment, restart, scheduler, production, and service-mutation action is closed.
 - <!-- ACTIVE_WORK_STATUS_END -->
 
 ---
@@ -21,8 +21,48 @@ If an item is not marked as **Active** here, it is NOT current work.
 | ID | Title | Status | Goal |
 | --- | --- | --- | --- |
 <!-- ACTIVE_WORK_TABLE_START -->
-| WORK-20260715-a7-browser-automation | A7 browser-driven human-workflow automation | Active | G23 corrected the later-turn connected-player fanout defect at `03597ee` and is accepted. G24 remains unopened pending orchestrator preparation of one autonomous host-access browser run from the retained G21 harness at `389b0a1`. |
+| WORK-20260715-a7-browser-automation | A7 browser-driven human-workflow automation | Active | G25 retained one validated Fire Bolt spell-attack resolution correction, then stopped after proving that the application skipped a living Raven summon in the authoritative turn order. |
 <!-- ACTIVE_WORK_TABLE_END -->
+
+## A7-G25 Autonomous Browser Continuation Controlled Stop
+
+G25 ran two changed-code browser attempts. Attempt 1 proved and corrected a
+harness defect: Fire Bolt opened `#attackResolveModal.show`, but the launch
+note `Casted Fire Bolt.` was incorrectly accepted as a terminal spell result.
+The retained correction resolves the visible spell-attack modal through the
+ordinary `#attackResolveSubmit` control, preserves the immediate successful-
+save path, and passed the accumulated explicit 36-node focused validation.
+
+Attempt 2 then proved an application-owned turn-order defect. Stikhiya's
+single End Turn command for `cid=32` completed successfully, built combat
+version `33`, and broadcast to all ten connected player sessions. The pinned
+authoritative order placed the living Raven `cid=33` next, followed by Captain
+`cid=34`, but backend battle authority skipped directly to Captain. The exact
+post-failure `GET /api/dm/combat` returned `200`, round 1/turn 4,
+`active_cid:34`, while Raven remained present at 2/2 HP without conditions and
+still occupied the preceding turn-order slot. No application file was edited
+and unchanged code was not retried.
+
+The durable result is
+`docs/work_items/A7-G25-autonomous-browser-continuation-result.md`.
+
+```text
+A7_GATE=A7-G25
+A7_STATE=autonomous-browser-continuation-controlled-stop
+A7_G25_STATE=controlled-stop
+A7_G25_RESULT=docs/work_items/A7-G25-autonomous-browser-continuation-result.md
+A7_IMPLEMENTATION_AUTHORIZED=false
+A7_TEST_EXECUTION_AUTHORIZED=false
+A7_BROWSER_EXECUTION_AUTHORIZED=false
+A7_RUNTIME_EXECUTION_AUTHORIZED=false
+A7_NETWORK_AUTHORIZED=false
+A7_PUSH_AUTHORIZED=false
+A7_DEPLOYMENT_AUTHORIZED=false
+A7_RESTART_AUTHORIZED=false
+A7_SCHEDULER_AUTHORIZED=false
+A7_PRODUCTION_AUTHORIZED=false
+A7_SERVICE_MUTATION_AUTHORIZED=false
+```
 
 ## A7-G23 Later-Turn Fanout Correction Acceptance
 

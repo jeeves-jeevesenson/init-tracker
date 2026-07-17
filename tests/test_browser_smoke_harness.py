@@ -1165,6 +1165,57 @@ def test_three_surface_successful_spell_save_is_immediate_result():
     )
 
 
+def test_three_surface_spell_attack_waits_for_attack_resolution_modal():
+    harness = _load_browser_smoke_harness()
+
+    class _SpellLocator:
+        def __init__(self, *, visible=False, text=""):
+            self.visible = visible
+            self.text = text
+
+        def is_visible(self):
+            return self.visible
+
+        def text_content(self):
+            return self.text
+
+    class _DelayedAttackResolutionPage:
+        def __init__(self):
+            self.attack_modal = _SpellLocator(visible=False)
+            self.spell_modal = _SpellLocator(visible=False)
+            self.note = _SpellLocator(text="Casted Fire Bolt.")
+            self.clicks = []
+            self.polls = []
+
+        def locator(self, selector):
+            return {
+                "#attackResolveModal.show": self.attack_modal,
+                "#spellResolveModal.show": self.spell_modal,
+                "#note": self.note,
+            }[selector]
+
+        def wait_for_timeout(self, timeout):
+            self.polls.append(timeout)
+            self.attack_modal.visible = True
+
+        def wait_for_selector(self, selector, **_kwargs):
+            assert selector == "#attackResolveSubmit"
+
+        def click(self, selector):
+            self.clicks.append(selector)
+
+    page = _DelayedAttackResolutionPage()
+    harness._finish_targeted_spell(
+        page,
+        "#spellResolveSubmit",
+        "Fire Bolt",
+        "player-spell-pc:eldramar",
+    )
+
+    assert page.polls == [100]
+    assert page.clicks == ["#attackResolveSubmit"]
+
+
 def test_three_surface_enemy_action_waits_for_dmcontrol_active_cid(monkeypatch):
     harness = _load_browser_smoke_harness()
     plan = harness.build_three_surface_workflow_plan()

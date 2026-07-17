@@ -686,16 +686,20 @@ def _finish_targeted_spell(
     timeout: int = 10000,
 ) -> None:
     deadline = time.monotonic() + timeout / 1000
-    modal = page.locator("#spellResolveModal.show")
+    attack_modal = page.locator("#attackResolveModal.show")
+    spell_modal = page.locator("#spellResolveModal.show")
     note = page.locator("#note")
     last_note = ""
     try:
         while time.monotonic() < deadline:
-            if modal.is_visible():
+            if attack_modal.is_visible():
+                _click_selector(page, "#attackResolveSubmit", step_id)
+                return
+            if spell_modal.is_visible():
                 _click_selector(page, resolve_selector, step_id)
                 return
             last_note = str(note.text_content() or "").strip()
-            if spell_name.lower() in last_note.lower():
+            if last_note.casefold().startswith(f"{spell_name.casefold()}:"):
                 return
             page.wait_for_timeout(100)
     except ThreeSurfaceTerminalFailure:

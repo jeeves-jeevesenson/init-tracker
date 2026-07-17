@@ -4,11 +4,51 @@ Date: `2026-07-15 UTC`
 
 Work item: `WORK-20260715-a7-browser-automation`
 
-Active gate: `A7-G24`
+Active gate: `A7-G25`
 
-State: `later-turn-fanout-correction-accepted-awaiting-browser-preparation`
+State: `autonomous-browser-continuation-controlled-stop`
 
 Approval: `developer-standing-yolo-host-access-2026-07-16`
+
+## A7-G25 autonomous browser continuation controlled stop
+
+G25 ran two changed-code browser attempts from the retained G21 harness and
+accepted G23 fanout correction. Attempt 1 proved that the harness accepted the
+launch-only note `Casted Fire Bolt.` while `#attackResolveModal.show` remained
+open. The retained correction resolves that visible modal through the ordinary
+`#attackResolveSubmit` button and preserves the immediate successful-save
+path. The accumulated explicit focused validation passed all 36 nodes.
+
+Attempt 2 ran the validated changed code, then stopped at the application-
+defect boundary. Stikhiya's one successful End Turn command for
+`cid=32` produced combat version `33` and a successful ten-recipient fanout.
+The initial authoritative order placed Raven `cid=33` immediately before
+Captain `cid=34`, but backend authority skipped directly to Captain. The exact
+post-failure response returned `active_cid:34`, round 1/turn 4, while Raven
+remained alive at 2/2 HP, condition-free, and still present in that preceding
+turn-order slot. No application file was edited, and unchanged code was not
+retried.
+
+The durable result is
+`docs/work_items/A7-G25-autonomous-browser-continuation-result.md`.
+
+```text
+A7_GATE=A7-G25
+A7_STATE=autonomous-browser-continuation-controlled-stop
+A7_G25_STATE=controlled-stop
+A7_G25_RESULT=docs/work_items/A7-G25-autonomous-browser-continuation-result.md
+A7_IMPLEMENTATION_AUTHORIZED=false
+A7_TEST_EXECUTION_AUTHORIZED=false
+A7_BROWSER_EXECUTION_AUTHORIZED=false
+A7_RUNTIME_EXECUTION_AUTHORIZED=false
+A7_NETWORK_AUTHORIZED=false
+A7_PUSH_AUTHORIZED=false
+A7_DEPLOYMENT_AUTHORIZED=false
+A7_RESTART_AUTHORIZED=false
+A7_SCHEDULER_AUTHORIZED=false
+A7_PRODUCTION_AUTHORIZED=false
+A7_SERVICE_MUTATION_AUTHORIZED=false
+```
 
 ## Goal
 
@@ -42,8 +82,12 @@ bounded G23 correction and its focused tests in the exact three-file
 application/test boundary. G23 corrected the later-turn connected-player
 fanout defect and is accepted at implementation commit `03597ee`.
 `assets/web/lan/index.html` required no change. The retained G21 browser
-harness progress remains committed at `389b0a1`. G24 is not opened; browser,
-server, runtime, endpoint, localhost, and network execution remains closed.
+harness progress remains committed at `389b0a1`. G25 retained one validated
+Fire Bolt spell-attack resolution correction and reached a controlled stop
+after proving that backend authority skipped a living Raven summon in the
+authoritative turn order. Further browser, server, runtime, endpoint,
+localhost, and network execution is closed pending a separately authorized
+application/test correction.
 
 The deterministic workflow remains:
 
