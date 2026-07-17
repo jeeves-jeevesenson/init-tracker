@@ -4,9 +4,9 @@ Date: `2026-07-15 UTC`
 
 Work item: `WORK-20260715-a7-browser-automation`
 
-Active gate: `A7-G17`
+Active gate: `A7-G19`
 
-State: `autonomous-browser-stabilization-controlled-stop`
+State: `player-turn-sync-correction-authorized`
 
 Approval: `developer-standing-yolo-host-access-2026-07-16`
 
@@ -29,9 +29,11 @@ file scope. G14 recorded that controlled stop and completed a documentation-only
 authorization for one bounded G15 correction. G15 is now completed and
 accepted at implementation commit `8abb324`. G17 completed sixteen changed-code
 browser attempts and reached a controlled stop after proving an application-
-owned live player-surface synchronization defect. The final backend mutation
+owned live player-surface synchronization defect. G18 accepted that defect and
+authorized one later bounded G19 correction. The final G17 backend mutation
 successfully advanced combat authority from Malagrou to John Twilight, while
-John's connected player surface remained stale and left End Turn disabled.
+John's connected claimed player surface remained stale and left End Turn
+disabled.
 
 The deterministic workflow remains:
 
@@ -186,15 +188,64 @@ The accepted validation is:
 The accepted G15 result is
 `docs/work_items/A7-G15-runtime-mapping-correction-result.md`.
 
+G17 started from target commit `c0b3ef4` and ended at target result commit
+`d450a71`. Sixteen browser attempts ran, and no unchanged-code retry occurred.
+Attempts 1 through 15 exposed evidence-backed harness defects and advanced
+execution. Focused validation grew from 23 to 35 passing exact nodes. Every
+candidate compile and two-file diff check passed. G17 restored the harness/test
+candidates under its controlled-stop policy. Future browser packets must
+preserve and commit individually validated harness progress when a later
+application defect is encountered, rather than discarding all prior proven
+corrections.
+
+Attempt 16 proved an application defect at
+`player-spell-pc:john-twilight`. Malagrou's enabled End Turn click completed
+normally. The debug trace recorded `player_command.end_turn` for Malagrou
+`cid=322` with `ok:true`. Backend combat authority advanced to John Twilight
+`cid=320`. John's already-connected claimed player surface remained stale on
+Malagrou; John's `#endTurn` remained disabled and timed out. Port ownership and
+cleanup were positively verified. No push, deployment, scheduler, production,
+restart, or service mutation occurred.
+
+G18 inspected the player page's state-application and turn-control ownership,
+the backend LAN snapshot/broadcast and player-command seams, and the existing
+runtime-test seams. Inspection confirms that the exact three-file future G19
+boundary is sufficient and that no additional source or test file is required:
+
+- `assets/web/lan/index.html`
+- `dnd_initative_tracker.py`
+- `tests/test_server_runtime.py`
+
+G18 authorizes one later G19 correction with this exact contract:
+
+1. After one player successfully ends a turn, every already-connected claimed
+   player surface must apply the new backend-authoritative active actor.
+2. John Twilight's claimed surface must transition from the prior actor to
+   John without reload, reconnect, reclaim, or manual interaction.
+3. Enabled and disabled turn controls must reflect the newly authoritative
+   actor.
+4. Preserve claim ownership, combat mutation authority, initiative order,
+   WebSocket/session behavior, and existing player commands.
+5. Reject or ignore stale or out-of-order client state rather than regressing
+   to an older active actor.
+6. Do not add polling merely to mask a missing state broadcast.
+7. Do not alter combat rules, action economy, spell behavior, turn order, or
+   player identity.
+8. Add focused coverage proving that an already-connected claimed player
+   applies the next active actor after another player ends turn, stale or
+   out-of-order state cannot overwrite the newer active actor, and existing
+   claim and command behavior remains intact.
+
 ## Current authorization boundary
 
 ```text
-A7_GATE=A7-G17
-A7_STATE=autonomous-browser-stabilization-controlled-stop
-A7_G17_STATE=controlled-stop
-A7_G17_RESULT=docs/work_items/A7-G17-autonomous-browser-stabilization-result.md
-A7_IMPLEMENTATION_AUTHORIZED=false
-A7_TEST_EXECUTION_AUTHORIZED=false
+A7_GATE=A7-G19
+A7_STATE=player-turn-sync-correction-authorized
+A7_G18_STATE=completed
+A7_G19_STATE=authorized-not-started
+A7_G19_ALLOWED_FILES=assets/web/lan/index.html,dnd_initative_tracker.py,tests/test_server_runtime.py
+A7_IMPLEMENTATION_AUTHORIZED=true
+A7_TEST_EXECUTION_AUTHORIZED=true
 A7_BROWSER_EXECUTION_AUTHORIZED=false
 A7_RUNTIME_EXECUTION_AUTHORIZED=false
 A7_NETWORK_AUTHORIZED=false
@@ -207,15 +258,16 @@ A7_SERVICE_MUTATION_AUTHORIZED=false
 ```
 
 G13 is closed at a controlled stop, G14 is complete, G15 is completed and
-accepted, and G17 is closed at a controlled stop. Candidate harness/test
-changes were restored to their exact starting bytes. Implementation, test,
-browser, server, runtime, endpoint, localhost, network, push, deployment,
-scheduler, production, restart, and service mutation are unauthorized. The
-approximately-200-enemy stress scenario remains unopened.
+accepted, G17 is accepted at its controlled stop, and G18 is complete. The
+implementation and test flags authorize only the later bounded G19 task in the
+exact three-file boundary. They did not authorize implementation or test
+execution during G18. Browser, server, runtime, endpoint, localhost, network,
+push, deployment, scheduler, production, restart, and service mutation remain
+unauthorized. The approximately-200-enemy stress scenario remains unopened.
 
 ## Next safe action
 
-Developer/orchestrator review of the G17 evidence and authorization of the
-additional application file scope required to correct live player-surface
-state application after a successful turn transition. Do not reopen browser or
-runtime execution until that application decision is recorded.
+Execute one later bounded G19 correction and focused-test pass in exactly
+`assets/web/lan/index.html`, `dnd_initative_tracker.py`, and
+`tests/test_server_runtime.py`. Do not run browser or runtime execution unless
+a later gate explicitly authorizes it.
