@@ -688,10 +688,14 @@ def _finish_targeted_spell(
     deadline = time.monotonic() + timeout / 1000
     attack_modal = page.locator("#attackResolveModal.show")
     spell_modal = page.locator("#spellResolveModal.show")
+    target_selection_confirm = page.locator("#spellTargetSelectionConfirm:not([disabled])")
     note = page.locator("#note")
     last_note = ""
     try:
         while time.monotonic() < deadline:
+            if target_selection_confirm.is_visible():
+                _click_selector(page, "#spellTargetSelectionConfirm:not([disabled])", step_id)
+                continue
             if attack_modal.is_visible():
                 _click_selector(page, "#attackResolveSubmit", step_id)
                 return

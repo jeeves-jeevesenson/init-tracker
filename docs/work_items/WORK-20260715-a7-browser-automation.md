@@ -29,6 +29,14 @@ player End Turn dispatch and authoritative advance path for Raven, Raven's one
 turn, Owl, removed summons, ordinary round wrapping, snapshot versioning, and
 WebSocket fanout. The autonomous browser completion loop is now active.
 
+Browser attempt `20260716_235735` passed 48 steps, including Owl's corrected
+summon turn, then proved a harness defect at Throat Goat's Eldritch Blast. The
+visible multi-target UI had one valid target and an enabled
+`#spellTargetSelectionConfirm`, but the harness waited for a resolution modal
+without confirming the selection. The harness now normally clicks that visible
+enabled control before resolving the resulting attack or spell modal. The
+exact new regression and accumulated 37-node focused validation pass.
+
 ```text
 A7_GATE=A7-AUTO
 A7_STATE=autonomous-completion-running

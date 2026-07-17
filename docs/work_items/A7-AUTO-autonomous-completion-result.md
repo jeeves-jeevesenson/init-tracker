@@ -59,9 +59,11 @@ They confirm that authoritative `turn_order` includes living summons while
 
 - Durable autonomous authorization was validated with `git diff --check` and
   committed as `Authorize A7 autonomous completion loop.`
-- Summon turn-advancement correction is validated and ready for its focused
-  commit.
-- Autonomous browser completion attempts are pending.
+- Summon turn-advancement correction is validated and committed as
+  `Correct A7 summon turn advancement.`
+- Browser attempt 1 proved one harness defect; its correction and accumulated
+  37-node focused validation pass and are ready for a focused commit.
+- Browser completion remains in progress.
 
 ## Summon Turn-Advancement Correction
 
@@ -95,6 +97,47 @@ Focused validation then passed exactly:
 - `timeout 30s .venv/bin/python3 -m py_compile dnd_initative_tracker.py tests/test_server_runtime.py`;
 - the six required `tests/test_server_runtime.py` nodes: `6 passed in 0.45s`;
 - `timeout 10s git diff --check -- dnd_initative_tracker.py tests/test_server_runtime.py`.
+
+## Browser Attempt 1: `20260716_235735`
+
+Attempt 1 used the exact browser command against the positively verified owned
+server. It passed 48 ordered steps, including the corrected authoritative Owl
+summon transition, and failed at step 49,
+`player-spell-pc:throat-goat`, after `11491.625 ms`.
+
+The terminal screenshot and role trace show the product's visible multi-target
+selection UI for Eldritch Blast. One valid enemy target was selected, the UI
+showed `1/3`, and the normal `#spellTargetSelectionConfirm` control was visible
+and enabled. The harness had clicked the mapped target and then immediately
+waited for an attack or spell resolution modal. Since the product correctly
+requires the visible selection confirmation before starting resolution, the
+last note remained `Select targets (0/3) for Eldritch Blast.` and the harness
+timed out. This is a harness defect; no application correction or product
+decision is required.
+
+The correction makes `_finish_targeted_spell()` normally click the visible,
+enabled `#spellTargetSelectionConfirm` before continuing to the existing
+attack-modal, spell-modal, or immediate-result branches. It uses no force
+click, DOM bypass, JavaScript click, or hit-testing bypass. The focused
+regression reproduces the visible selection, makes the normal click reveal the
+attack modal, and proves the ordinary `#attackResolveSubmit` click follows.
+
+Validation passed exactly:
+
+- browser-harness and focused-test `py_compile`;
+- the retained 36 nodes plus
+  `test_three_surface_multi_target_spell_confirms_visible_target_selection`:
+  `37 passed in 1.85s`;
+- the required five-file `git diff --check` command.
+
+Evidence:
+
+- artifact run:
+  `logs/smoke/CODEX-20260716-a7-autonomous-completion_browser-artifacts/black-tan-three-surface-workflow/20260716_235735/`;
+- terminal screenshot:
+  `terminal-visible-state-inconsistency-player-spell-pc:throat-goat.png`;
+- Throat Goat role trace: `role-trace-player-pc-throat-goat.zip`;
+- summary: `summary.json` and `summary.md`.
 
 ## Evidence
 

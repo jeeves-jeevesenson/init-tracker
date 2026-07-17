@@ -1183,6 +1183,7 @@ def test_three_surface_spell_attack_waits_for_attack_resolution_modal():
         def __init__(self):
             self.attack_modal = _SpellLocator(visible=False)
             self.spell_modal = _SpellLocator(visible=False)
+            self.target_selection_confirm = _SpellLocator(visible=False)
             self.note = _SpellLocator(text="Casted Fire Bolt.")
             self.clicks = []
             self.polls = []
@@ -1191,6 +1192,7 @@ def test_three_surface_spell_attack_waits_for_attack_resolution_modal():
             return {
                 "#attackResolveModal.show": self.attack_modal,
                 "#spellResolveModal.show": self.spell_modal,
+                "#spellTargetSelectionConfirm:not([disabled])": self.target_selection_confirm,
                 "#note": self.note,
             }[selector]
 
@@ -1214,6 +1216,65 @@ def test_three_surface_spell_attack_waits_for_attack_resolution_modal():
 
     assert page.polls == [100]
     assert page.clicks == ["#attackResolveSubmit"]
+
+
+def test_three_surface_multi_target_spell_confirms_visible_target_selection():
+    harness = _load_browser_smoke_harness()
+
+    class _SpellLocator:
+        def __init__(self, *, visible=False, text=""):
+            self.visible = visible
+            self.text = text
+
+        def is_visible(self):
+            return self.visible
+
+        def text_content(self):
+            return self.text
+
+    class _MultiTargetSpellPage:
+        def __init__(self):
+            self.attack_modal = _SpellLocator(visible=False)
+            self.spell_modal = _SpellLocator(visible=False)
+            self.target_selection_confirm = _SpellLocator(visible=True)
+            self.note = _SpellLocator(text="Select targets (0/3) for Eldritch Blast.")
+            self.clicks = []
+
+        def locator(self, selector):
+            return {
+                "#attackResolveModal.show": self.attack_modal,
+                "#spellResolveModal.show": self.spell_modal,
+                "#spellTargetSelectionConfirm:not([disabled])": self.target_selection_confirm,
+                "#note": self.note,
+            }[selector]
+
+        def wait_for_selector(self, selector, **_kwargs):
+            assert selector in {
+                "#spellTargetSelectionConfirm:not([disabled])",
+                "#attackResolveSubmit",
+            }
+
+        def click(self, selector):
+            self.clicks.append(selector)
+            if selector == "#spellTargetSelectionConfirm:not([disabled])":
+                self.target_selection_confirm.visible = False
+                self.attack_modal.visible = True
+
+        def wait_for_timeout(self, _timeout):
+            raise AssertionError("visible target selection should advance without polling")
+
+    page = _MultiTargetSpellPage()
+    harness._finish_targeted_spell(
+        page,
+        "#spellResolveSubmit",
+        "Eldritch Blast",
+        "player-spell-pc:throat-goat",
+    )
+
+    assert page.clicks == [
+        "#spellTargetSelectionConfirm:not([disabled])",
+        "#attackResolveSubmit",
+    ]
 
 
 def test_three_surface_enemy_action_waits_for_dmcontrol_active_cid(monkeypatch):

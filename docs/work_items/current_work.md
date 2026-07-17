@@ -43,6 +43,14 @@ real End Turn regressions pass, covering Raven, Owl, summon removal, ordinary
 round wrapping, snapshot versioning, and WebSocket fanout. The autonomous
 browser completion loop is the active next action.
 
+Browser attempt `20260716_235735` passed 48 steps, including Owl's corrected
+summon turn, then proved a harness defect at Throat Goat's Eldritch Blast. The
+product displayed its enabled multi-target `#spellTargetSelectionConfirm`
+control after one valid target was selected, but the harness waited for a
+resolution modal without confirming that selection. The harness now normally
+clicks the visible enabled control before resolving the resulting attack or
+spell modal. Its exact new regression and the accumulated 37-node set pass.
+
 ```text
 A7_GATE=A7-AUTO
 A7_STATE=autonomous-completion-running
