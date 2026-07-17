@@ -92,6 +92,94 @@ class ServerRuntimeFacadeTests(unittest.TestCase):
         self.assertIsInstance(result.error, dict)
         self.assertEqual(result.error.get("code"), code)
 
+    def test_browser_entry_route_registrar_inventory_is_stable(self):
+        from fastapi import FastAPI
+        from init_tracker_server.browser_routes import (
+            BROWSER_ENTRY_ROUTE_INVENTORY,
+            BrowserEntryRouteHandlers,
+            register_browser_entry_routes,
+        )
+
+        expected_inventory = (
+            ("GET", "/", "index"),
+            ("GET", "/planning", "planning"),
+            ("GET", "/new_character", "new_character"),
+            ("GET", "/edit_character", "edit_character"),
+            ("GET", "/shop_admin", "shop_admin"),
+            ("GET", "/shop", "shop"),
+            ("GET", "/config", "config_redirect"),
+            ("GET", "/sw.js", "service_worker"),
+        )
+        self.assertEqual(
+            tuple(
+                (route.method, route.path, route.endpoint_name)
+                for route in BROWSER_ENTRY_ROUTE_INVENTORY
+            ),
+            expected_inventory,
+        )
+
+        async def handler():
+            return None
+
+        handlers = BrowserEntryRouteHandlers(
+            index=handler,
+            planning=handler,
+            new_character=handler,
+            edit_character=handler,
+            shop_admin=handler,
+            shop=handler,
+            config_redirect=handler,
+            service_worker=handler,
+        )
+        app = FastAPI()
+        register_browser_entry_routes(app, handlers)
+
+        registered_routes = {
+            (route.path, method): route.name
+            for route in app.routes
+            for method in (getattr(route, "methods", None) or ())
+        }
+        self.assertEqual(
+            tuple(
+                (route.method, route.path, registered_routes[(route.path, route.method)])
+                for route in BROWSER_ENTRY_ROUTE_INVENTORY
+            ),
+            expected_inventory,
+        )
+
+    def test_browser_entry_route_registrar_rejects_duplicate_paths(self):
+        from fastapi import FastAPI
+        from init_tracker_server.browser_routes import (
+            BrowserEntryRouteHandlers,
+            register_browser_entry_routes,
+        )
+
+        async def handler():
+            return None
+
+        app = FastAPI()
+
+        @app.get("/shop")
+        async def existing_shop():
+            return None
+
+        routes_before_registration = tuple(app.routes)
+        handlers = BrowserEntryRouteHandlers(
+            index=handler,
+            planning=handler,
+            new_character=handler,
+            edit_character=handler,
+            shop_admin=handler,
+            shop=handler,
+            config_redirect=handler,
+            service_worker=handler,
+        )
+
+        with self.assertRaisesRegex(ValueError, r"GET /shop: path/method collision"):
+            register_browser_entry_routes(app, handlers)
+
+        self.assertEqual(tuple(app.routes), routes_before_registration)
+
     class _DmCombatRouteRuntime:
         def __init__(self, result=None, exc=None, delay_seconds=0.0):
             self.result = result
