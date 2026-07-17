@@ -10,8 +10,8 @@ If an item is not marked as **Active** here, it is NOT current work.
 <!-- ACTIVE_WORK_STATUS_START -->
 - **Status:** Active
 - **Current Work Item:** `WORK-20260715-a7-browser-automation`
-- **Active Gate:** A7-G21 controlled stop awaiting application correction authorization
-- **Allowed Next Action:** Orchestrator acceptance of the G21 controlled-stop evidence and preparation of one bounded connected-player synchronization correction. All implementation, test, browser, runtime, endpoint, localhost, network, push, deployment, restart, scheduler, production, and service-mutation action is closed.
+- **Active Gate:** A7-G23 later-turn fanout correction authorized, not started
+- **Allowed Next Action:** One bounded G23 implementation and its focused tests in exactly `assets/web/lan/index.html`, `dnd_initative_tracker.py`, and `tests/test_server_runtime.py`. Browser, server, runtime, endpoint, localhost, network, push, deployment, restart, scheduler, production, and service-mutation action remains closed.
 - <!-- ACTIVE_WORK_STATUS_END -->
 
 ---
@@ -21,8 +21,84 @@ If an item is not marked as **Active** here, it is NOT current work.
 | ID | Title | Status | Goal |
 | --- | --- | --- | --- |
 <!-- ACTIVE_WORK_TABLE_START -->
-| WORK-20260715-a7-browser-automation | A7 browser-driven human-workflow automation | Active | G21 retained all validated harness progress and stopped after proving that Throat Goat's successful End Turn advanced backend authority to Fred while Fred's connected claimed surface remained stale on Suppression Gunner. Application correction authorization is required. |
+| WORK-20260715-a7-browser-automation | A7 browser-driven human-workflow automation | Active | G22 completed the documentation-only authorization for one later bounded G23 correction of the proven later-turn connected-player fanout/application defect. G23 is authorized but not started, and the retained G21 browser harness remains outside its exact three-file boundary. |
 <!-- ACTIVE_WORK_TABLE_END -->
+
+## A7-G22 Later-Turn Fanout Authorization
+
+G22 is completed as a documentation-only gate. It authorizes one later
+bounded G23 implementation and its focused tests in exactly:
+
+- `assets/web/lan/index.html`
+- `dnd_initative_tracker.py`
+- `tests/test_server_runtime.py`
+
+G23 must trace the real authoritative transition through every one of these
+stages:
+
+1. successful player end-turn mutation;
+2. combat-version advancement;
+3. captured authoritative snapshot;
+4. per-connection/personalized WebSocket fanout;
+5. message version and active actor received by each claimed player;
+6. LAN reducer acceptance or rejection; and
+7. rendered active actor and turn-control state.
+
+The G23 behavior contract is:
+
+- Every already-connected claimed player must receive and apply every newer
+  authoritative active-actor transition.
+- This must continue working after multiple actors, enemy turns, summons, and
+  earlier player turns, not only the first player-to-player transition.
+- Fred's claimed page must transition from Suppression Gunner `cid=21` to Fred
+  `cid=4` without reload, reconnect, reclaim, polling, or manual interaction.
+- All envelopes representing one authoritative snapshot must carry the
+  correct combat version and active actor.
+- Personalized claim payload generation must not rebuild or substitute stale
+  combat state.
+- A stale, lower-version, or otherwise older envelope must not regress the
+  active actor.
+- Claim ownership and claim revisions must remain independent from combat-
+  state ordering.
+- Reconnect behavior, command authority, turn order, action economy, combat
+  rules, summons, spell behavior, and existing player commands must remain
+  preserved.
+- Polling must not be added as a workaround.
+- The retained G21 browser harness must not be modified in G23.
+
+Required focused G23 coverage must prove:
+
+1. multiple already-connected claimed players receive a later authoritative
+   turn transition after several intervening actors;
+2. a personalized message for Fred carries the same newer combat version and
+   active actor as the authoritative captured snapshot;
+3. an older or stale personalized envelope cannot overwrite the later actor;
+4. claim ownership and existing command behavior remain intact; and
+5. the test exercises the actual server fanout/client reducer contract, not
+   merely a search of source text.
+
+```text
+A7_GATE=A7-G23
+A7_STATE=later-turn-fanout-correction-authorized
+A7_G22_STATE=completed
+A7_G23_STATE=authorized-not-started
+A7_G23_ALLOWED_FILES=assets/web/lan/index.html,dnd_initative_tracker.py,tests/test_server_runtime.py
+A7_IMPLEMENTATION_AUTHORIZED=true
+A7_TEST_EXECUTION_AUTHORIZED=true
+A7_BROWSER_EXECUTION_AUTHORIZED=false
+A7_RUNTIME_EXECUTION_AUTHORIZED=false
+A7_NETWORK_AUTHORIZED=false
+A7_PUSH_AUTHORIZED=false
+A7_DEPLOYMENT_AUTHORIZED=false
+A7_RESTART_AUTHORIZED=false
+A7_SCHEDULER_AUTHORIZED=false
+A7_PRODUCTION_AUTHORIZED=false
+A7_SERVICE_MUTATION_AUTHORIZED=false
+```
+
+This authorization does not begin G23. It authorizes no browser, server,
+runtime, endpoint, localhost, network, push, deployment, restart, scheduler,
+production, or service action.
 
 ## A7-G21 Autonomous Browser Stabilization Controlled Stop
 
