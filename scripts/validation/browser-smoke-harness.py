@@ -16,7 +16,7 @@ import time
 from collections import Counter
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 from urllib.parse import urlsplit
 
 import requests
@@ -43,6 +43,16 @@ THREE_SURFACE_PLAYER_IDENTITIES = (
     ("pc:vicnor", "Vicnor"),
     ("pc:stikhiya", "стихия"),
 )
+THREE_SURFACE_TARGETED_SPELLS = {
+    "pc:eldramar": "Fire Bolt",
+    "pc:throat-goat": "Eldritch Blast",
+    "pc:stikhiya": "Sacred Flame",
+}
+THREE_SURFACE_ATTACK_STAGING_POSITIONS = {
+    "pc:dorian": {"col": 16, "row": 16},
+    "pc:old-man": {"col": 14, "row": 13},
+    "pc:vicnor": {"col": 17, "row": 16},
+}
 THREE_SURFACE_ENEMY_IDENTITIES = (
     ("black-and-tan-captain", "Black and Tan Captain"),
     ("black-and-tan-constable", "Black and Tan Constable"),
@@ -201,8 +211,8 @@ def build_three_surface_workflow_plan() -> Dict[str, Any]:
                 "cast-spell-at-mapped-target",
                 player_id=player_id,
                 selectors=(
-                    "#castSpellModalOpen", "#castPreset", "#castName", "#castSlotLevel",
-                    "#castSubmit", "#c", "#spellResolveSubmit",
+                    "#castSpellModalOpen", "#castSpellPresetList",
+                    ".cast-preview-cast-btn", "#c", "#spellResolveSubmit",
                 ),
                 target_mapping="enemy_slug_to_cid_and_position",
             )
@@ -550,32 +560,88 @@ def _click_selector(page: Page, selector: str, step_id: str) -> None:
         ) from exc
 
 
+def _dismiss_visible_turn_alert(page: Page, step_id: str) -> None:
+    try:
+        page.wait_for_timeout(250)
+        if page.locator("#turnModal.show").is_visible():
+            _click_selector(page, "#turnModalOk", step_id)
+    except ThreeSurfaceTerminalFailure:
+        raise
+    except Exception as exc:
+        raise ThreeSurfaceTerminalFailure(
+            "browser-error",
+            {"step_id": step_id, "selector": "#turnModalOk", "error": str(exc)},
+        ) from exc
+
+
 def _click_mapped_position(
     page: Page,
     selector: str,
     position: Dict[str, int],
     step_id: str,
+    grid: Dict[str, int],
+    initial_zoom: int,
 ) -> None:
-    _wait_for_visible(page, selector, step_id)
+    x, y = _mapped_screen_position(
+        page,
+        selector,
+        position,
+        step_id,
+        grid,
+        initial_zoom,
+    )
     try:
-        coordinates = page.evaluate(
-            """([canvasSelector, col, row]) => {
-                const canvas = document.querySelector(canvasSelector);
-                if (!canvas) throw new Error(`missing canvas ${canvasSelector}`);
-                if (typeof zoom !== 'number' || typeof panX !== 'number' || typeof panY !== 'number') {
-                    throw new Error('map transform is unavailable');
-                }
-                const rect = canvas.getBoundingClientRect();
-                return {
-                    x: rect.left + col * zoom + panX + zoom / 2,
-                    y: rect.top + row * zoom + panY + zoom / 2
-                };
-            }""",
-            [selector, position["col"], position["row"]],
-        )
-        page.mouse.move(coordinates["x"], coordinates["y"])
+        page.mouse.move(x, y)
         page.mouse.down()
         page.mouse.up()
+    except Exception as exc:
+        raise ThreeSurfaceTerminalFailure(
+            "browser-error",
+            {"step_id": step_id, "selector": selector, "error": str(exc)},
+        ) from exc
+
+
+def _mapped_screen_position(
+    page: Page,
+    selector: str,
+    position: Dict[str, int],
+    step_id: str,
+    grid: Dict[str, int],
+    initial_zoom: int,
+) -> Tuple[float, float]:
+    _wait_for_visible(page, selector, step_id)
+    try:
+        box = page.locator(selector).bounding_box()
+        cols = int(grid["cols"])
+        rows = int(grid["rows"])
+        col = int(position["col"])
+        row = int(position["row"])
+        if (
+            box is None
+            or cols <= 0
+            or rows <= 0
+            or not 0 <= col < cols
+            or not 0 <= row < rows
+            or initial_zoom <= 0
+        ):
+            raise ValueError("invalid visible canvas or mapped grid position")
+        pad = 24
+        scale_x = (box["width"] - pad * 2) / (cols * initial_zoom)
+        scale_y = (box["height"] - pad * 2) / (rows * initial_zoom)
+        scale = min(1.0, max(0.35, min(scale_x, scale_y)))
+        zoom = int(initial_zoom * scale)
+        if zoom <= 0:
+            raise ValueError("invalid fitted map zoom")
+        pan_x = int((box["width"] - cols * zoom) / 2)
+        pan_y = int((box["height"] - rows * zoom) / 2)
+        x = box["x"] + pan_x + col * zoom + zoom / 2
+        y = box["y"] + pan_y + row * zoom + zoom / 2
+        if not (
+            box["x"] <= x <= box["x"] + box["width"]
+            and box["y"] <= y <= box["y"] + box["height"]
+        ):
+            raise ValueError("mapped grid position is outside visible canvas")
+        return x, y
     except ThreeSurfaceTerminalFailure:
         raise
     except Exception as exc:
@@ -583,6 +649,72 @@ def _click_mapped_position(
             "browser-error",
             {"step_id": step_id, "selector": selector, "error": str(exc)},
         ) from exc
+
+
+def _drag_mapped_position(
+    page: Page,
+    selector: str,
+    start_position: Dict[str, int],
+    end_position: Dict[str, int],
+    step_id: str,
+    grid: Dict[str, int],
+    initial_zoom: int,
+) -> None:
+    start_x, start_y = _mapped_screen_position(
+        page, selector, start_position, step_id, grid, initial_zoom,
+    )
+    end_x, end_y = _mapped_screen_position(
+        page, selector, end_position, step_id, grid, initial_zoom,
+    )
+    try:
+        page.mouse.move(start_x, start_y)
+        page.mouse.down()
+        page.mouse.move(end_x, end_y)
+        page.mouse.up()
+    except Exception as exc:
+        raise ThreeSurfaceTerminalFailure(
+            "browser-error",
+            {"step_id": step_id, "selector": selector, "error": str(exc)},
+        ) from exc
+
+
+def _finish_targeted_spell(
+    page: Page,
+    resolve_selector: str,
+    spell_name: str,
+    step_id: str,
+    timeout: int = 10000,
+) -> None:
+    deadline = time.monotonic() + timeout / 1000
+    modal = page.locator("#spellResolveModal.show")
+    note = page.locator("#note")
+    last_note = ""
+    try:
+        while time.monotonic() < deadline:
+            if modal.is_visible():
+                _click_selector(page, resolve_selector, step_id)
+                return
+            last_note = str(note.text_content() or "").strip()
+            if spell_name.lower() in last_note.lower():
+                return
+            page.wait_for_timeout(100)
+    except ThreeSurfaceTerminalFailure:
+        raise
+    except Exception as exc:
+        raise ThreeSurfaceTerminalFailure(
+            "browser-error",
+            {"step_id": step_id, "selector": resolve_selector, "error": str(exc)},
+        ) from exc
+    raise ThreeSurfaceTerminalFailure(
+        "visible-state-inconsistency",
+        {
+            "step_id": step_id,
+            "selector": resolve_selector,
+            "spell_name": spell_name,
+            "last_note": last_note,
+            "error": "spell-result-or-resolve-modal-not-observed",
+        },
+    )
 
 
 def _record_fixture_response(
@@ -655,59 +787,380 @@ def _enforce_fixture_barrier(step: Dict[str, Any], state: Dict[str, Any]) -> Non
             item["enemy_slug"]: dict(item["position"])
             for item in response["enemies"]
         }
+    else:
+        grid = (
+            response.get("snapshot", {})
+            .get("tactical_map", {})
+            .get("grid", {})
+        )
+        if not isinstance(grid, dict) or not grid.get("cols") or not grid.get("rows"):
+            raise ThreeSurfaceTerminalFailure(
+                "fixture-precondition-mismatch",
+                {"step_id": step["step_id"], "error": "reset-grid-contract-missing"},
+            )
+        state["grid"] = {
+            "cols": int(grid["cols"]),
+            "rows": int(grid["rows"]),
+        }
+
+
+def _order_three_surface_runtime_actions(
+    steps: List[Dict[str, Any]],
+    base_url: str,
+    config: Dict[str, Any],
+    state: Dict[str, Any],
+) -> None:
+    get = config.get("three_surface_http_get", requests.get)
+    try:
+        response = get(
+            f"{base_url}/api/dm/combat",
+            timeout=config.get("fixture_timeout_seconds", 30),
+        )
+        payload = response.json()
+    except Exception as exc:
+        raise ThreeSurfaceTerminalFailure(
+            "browser-error",
+            {"step_id": "resolve-runtime-turn-order", "error": str(exc)},
+        ) from exc
+
+    status_code = getattr(response, "status_code", None)
+    if (
+        not isinstance(payload, dict)
+        or (isinstance(status_code, int) and status_code >= 400)
+        or payload.get("in_combat") is not True
+    ):
+        raise ThreeSurfaceTerminalFailure(
+            "visible-state-inconsistency",
+            {
+                "step_id": "resolve-runtime-turn-order",
+                "status_code": status_code,
+                "error": "live-combat-snapshot-unavailable",
+            },
+        )
+
+    turn_order = payload.get("turn_order")
+    active_cid = payload.get("active_cid")
+    combatants = payload.get("combatants")
+    if (
+        not isinstance(turn_order, list)
+        or not turn_order
+        or len({str(cid) for cid in turn_order}) != len(turn_order)
+        or str(turn_order[0]) != str(active_cid)
+        or not isinstance(combatants, list)
+    ):
+        raise ThreeSurfaceTerminalFailure(
+            "visible-state-inconsistency",
+            {
+                "step_id": "resolve-runtime-turn-order",
+                "active_cid": active_cid,
+                "turn_order": turn_order,
+                "error": "invalid-live-turn-order",
+            },
+        )
+
+    player_by_cid = {
+        str(cid): player_id
+        for player_id, cid in state["player_cid_map"].items()
+    }
+    enemy_by_cid = {
+        str(cid): enemy_slug
+        for enemy_slug, cid in state["enemy_cid_map"].items()
+    }
+    combatant_by_cid = {
+        str(item.get("cid")): item
+        for item in combatants
+        if isinstance(item, dict) and item.get("cid") is not None
+    }
+    canonical_cids = set(player_by_cid) | set(enemy_by_cid)
+    actual_cids = {str(cid) for cid in turn_order}
+    if not canonical_cids.issubset(actual_cids):
+        raise ThreeSurfaceTerminalFailure(
+            "visible-state-inconsistency",
+            {
+                "step_id": "resolve-runtime-turn-order",
+                "missing_cids": sorted(canonical_cids - actual_cids),
+                "error": "canonical-actor-missing-from-turn-order",
+            },
+        )
+
+    player_pairs: Dict[str, List[Dict[str, Any]]] = {}
+    enemy_pairs: Dict[str, List[Dict[str, Any]]] = {}
+    for player_id in state["player_cid_map"]:
+        player_pairs[player_id] = [
+            step for step in steps
+            if step.get("player_id") == player_id
+            and step.get("action") in (
+                "attack-mapped-target",
+                "cast-spell-at-mapped-target",
+                "click",
+            )
+            and step["step_id"].startswith(("player-", "advance-player-turn-"))
+        ]
+    for enemy_slug in state["enemy_cid_map"]:
+        enemy_pairs[enemy_slug] = [
+            step for step in steps
+            if step.get("enemy_slug") == enemy_slug
+            and step.get("action") in ("execute-active-action", "evaluate")
+        ]
+    if any(len(pair) != 2 for pair in (*player_pairs.values(), *enemy_pairs.values())):
+        raise ThreeSurfaceTerminalFailure(
+            "fixture-precondition-mismatch",
+            {"step_id": "resolve-runtime-turn-order", "error": "actor-action-pair-mismatch"},
+        )
+
+    runtime_steps: List[Dict[str, Any]] = []
+    skipped_summons: List[Dict[str, Any]] = []
+    for cid in turn_order:
+        cid_key = str(cid)
+        if cid_key in player_by_cid:
+            runtime_steps.extend(player_pairs[player_by_cid[cid_key]])
+            continue
+        if cid_key in enemy_by_cid:
+            runtime_steps.extend(enemy_pairs[enemy_by_cid[cid_key]])
+            continue
+        combatant = combatant_by_cid.get(cid_key)
+        if (
+            combatant is None
+            or combatant.get("role") != "ally"
+            or combatant.get("name") not in ("Owl", "Raven")
+        ):
+            raise ThreeSurfaceTerminalFailure(
+                "visible-state-inconsistency",
+                {
+                    "step_id": "resolve-runtime-turn-order",
+                    "cid": cid,
+                    "combatant": combatant,
+                    "error": "unexpected-runtime-actor",
+                },
+            )
+        skipped_summons.append({
+            "cid": cid,
+            "name": combatant["name"],
+            "role": combatant["role"],
+        })
+        runtime_steps.append({
+            "step_id": f"advance-summon-turn-{combatant['name'].casefold()}-{cid}",
+            "surface": "/dmcontrol",
+            "action": "advance-verified-summon",
+            "runtime_cid": cid,
+            "runtime_name": combatant["name"],
+        })
+
+    if sorted(item["name"] for item in skipped_summons) != ["Owl", "Raven"]:
+        raise ThreeSurfaceTerminalFailure(
+            "visible-state-inconsistency",
+            {
+                "step_id": "resolve-runtime-turn-order",
+                "summons": skipped_summons,
+                "error": "verified-start-summons-mismatch",
+            },
+        )
+
+    action_start = next(
+        index for index, step in enumerate(steps)
+        if step.get("action") in ("attack-mapped-target", "cast-spell-at-mapped-target")
+    )
+    action_end = next(
+        index for index, step in enumerate(steps[action_start:], start=action_start)
+        if step["step_id"] == "assert-dm-visible-state"
+    )
+    steps[action_start:action_end] = runtime_steps
+    for order, step in enumerate(steps, start=1):
+        step["order"] = order
+    state["runtime_turn_order_evidence"] = {
+        "status_code": status_code,
+        "active_cid": active_cid,
+        "turn_order": list(turn_order),
+        "skipped_summons": skipped_summons,
+        "runtime_step_ids": [step["step_id"] for step in runtime_steps],
+    }
+
+
+def _nearest_three_surface_enemy_slug(
+    player_id: str,
+    state: Dict[str, Any],
+    player_position: Optional[Dict[str, int]] = None,
+) -> str:
+    origin = player_position or state["player_positions"][player_id]
+    candidates = []
+    for identity_order, (enemy_slug, _name) in enumerate(THREE_SURFACE_ENEMY_IDENTITIES):
+        enemy_position = state["enemy_positions"][enemy_slug]
+        distance = max(
+            abs(int(enemy_position["col"]) - int(origin["col"])),
+            abs(int(enemy_position["row"]) - int(origin["row"])),
+        )
+        candidates.append((distance, identity_order, enemy_slug))
+    if not candidates:
+        raise ThreeSurfaceTerminalFailure(
+            "visible-state-inconsistency",
+            {"player_id": player_id, "error": "no-mapped-enemy-target"},
+        )
+    return min(candidates)[2]
 
 
 def _execute_player_action(step: Dict[str, Any], page: Page, state: Dict[str, Any]) -> None:
     player_id = step["player_id"]
-    player_index = [identity for identity, _name in THREE_SURFACE_PLAYER_IDENTITIES].index(player_id)
-    enemy_slug = THREE_SURFACE_ENEMY_IDENTITIES[player_index % len(THREE_SURFACE_ENEMY_IDENTITIES)][0]
-    target_position = state["enemy_positions"][enemy_slug]
     step_id = step["step_id"]
+    _wait_for_visible(page, "#endTurn:not([disabled])", step_id)
+    _dismiss_visible_turn_alert(page, step_id)
 
-    if step["action"] == "attack-mapped-target":
-        attack_open, canvas, resolve = step["selectors"]
+    targeted_spell = THREE_SURFACE_TARGETED_SPELLS.get(player_id)
+    use_attack = step["action"] == "attack-mapped-target" or targeted_spell is None
+    state.setdefault("runtime_player_action_modes", []).append({
+        "player_id": player_id,
+        "planned_action": step["action"],
+        "executed_action": "attack-mapped-target" if use_attack else "cast-spell-at-mapped-target",
+        "spell_name": targeted_spell,
+    })
+
+    if use_attack:
+        if step["action"] == "attack-mapped-target":
+            attack_open, canvas, resolve = step["selectors"]
+        else:
+            attack_open, canvas, resolve = (
+                "#attackOverlayToggle", "#c", "#attackResolveSubmit",
+            )
+        staging_position = THREE_SURFACE_ATTACK_STAGING_POSITIONS.get(player_id)
+        if staging_position is not None:
+            _drag_mapped_position(
+                page,
+                canvas,
+                state["player_positions"][player_id],
+                staging_position,
+                step_id,
+                state["grid"],
+                32,
+            )
+            page.wait_for_timeout(500)
+        enemy_slug = _nearest_three_surface_enemy_slug(
+            player_id,
+            state,
+            player_position=staging_position,
+        )
+        target_position = state["enemy_positions"][enemy_slug]
         _click_selector(page, attack_open, step_id)
-        _click_mapped_position(page, canvas, target_position, step_id)
+        _dismiss_visible_turn_alert(page, step_id)
+        _click_mapped_position(
+            page,
+            canvas,
+            target_position,
+            step_id,
+            state["grid"],
+            32,
+        )
         _click_selector(page, resolve, step_id)
         return
 
-    cast_open, cast_preset, cast_name, cast_slot, cast_submit, canvas, resolve = step["selectors"]
+    enemy_slug = _nearest_three_surface_enemy_slug(player_id, state)
+    target_position = state["enemy_positions"][enemy_slug]
+    cast_open, preset_list, cast_submit, canvas, resolve = step["selectors"]
     _click_selector(page, cast_open, step_id)
-    for selector in (cast_preset, cast_name, cast_slot, cast_submit):
-        _wait_for_visible(page, selector, step_id)
+    _wait_for_visible(page, preset_list, step_id)
+    preset_selector = (
+        f'{preset_list} .spellbook-item:has-text("{targeted_spell}")'
+    )
+    _click_selector(page, preset_selector, step_id)
+    _wait_for_visible(page, cast_submit, step_id)
     try:
-        page.evaluate(
-            """([presetSelector, nameSelector, slotSelector]) => {
-                const preset = document.querySelector(presetSelector);
-                const name = document.querySelector(nameSelector);
-                const slot = document.querySelector(slotSelector);
-                if (!preset || !name || !slot) throw new Error('spell controls unavailable');
-                const option = Array.from(preset.options || []).find(item => item.value && !item.disabled);
-                if (!option) throw new Error('spell preset unavailable');
-                preset.value = option.value;
-                preset.dispatchEvent(new Event('change', {bubbles: true}));
-                name.value = 'A7 three-surface spell';
-                name.dispatchEvent(new Event('input', {bubbles: true}));
-                if (slot.options) {
-                    const slotOption = Array.from(slot.options).find(item => item.value === '1')
-                        || Array.from(slot.options).find(item => item.value && !item.disabled);
-                    if (!slotOption) throw new Error('spell slot unavailable');
-                    slot.value = slotOption.value;
-                } else {
-                    slot.value = '1';
-                }
-                slot.dispatchEvent(new Event('change', {bubbles: true}));
-            }""",
-            [cast_preset, cast_name, cast_slot],
-        )
+        page.once("dialog", lambda dialog: dialog.accept())
         page.click(cast_submit)
     except Exception as exc:
         raise ThreeSurfaceTerminalFailure(
             "selector-failure",
-            {"step_id": step_id, "selector": cast_preset, "error": str(exc)},
+            {"step_id": step_id, "selector": cast_submit, "error": str(exc)},
         ) from exc
-    _click_mapped_position(page, canvas, target_position, step_id)
-    _click_selector(page, resolve, step_id)
+    _dismiss_visible_turn_alert(page, step_id)
+    _click_mapped_position(
+        page,
+        canvas,
+        target_position,
+        step_id,
+        state["grid"],
+        32,
+    )
+    _finish_targeted_spell(page, resolve, targeted_spell, step_id)
+
+
+def _wait_for_matching_dmcontrol_capabilities(
+    page: Page,
+    expected_cid: Any,
+    step_id: str,
+    state: Dict[str, Any],
+) -> List[Dict[str, Any]]:
+    get = state["three_surface_http_get"]
+    try:
+        response = get(
+            f"{state['base_url']}/api/dm/monster-capabilities/{expected_cid}",
+            timeout=state["fixture_timeout_seconds"],
+        )
+        payload = response.json()
+    except Exception as exc:
+        raise ThreeSurfaceTerminalFailure(
+            "browser-error",
+            {"step_id": step_id, "expected_active_cid": expected_cid, "error": str(exc)},
+        ) from exc
+
+    status_code = getattr(response, "status_code", None)
+    summary = payload.get("summary") if isinstance(payload, dict) else None
+    groups = summary.get("groups") if isinstance(summary, dict) else None
+    expected_ids = [
+        str(action.get("id"))
+        for actions in groups.values()
+        if isinstance(actions, list)
+        for action in actions
+        if isinstance(action, dict) and action.get("id") is not None
+    ] if isinstance(groups, dict) else []
+    if (
+        not isinstance(payload, dict)
+        or payload.get("ok") is not True
+        or not isinstance(status_code, int)
+        or status_code >= 400
+        or str(summary.get("combatant_id")) != str(expected_cid)
+        or not expected_ids
+        or len(expected_ids) != len(set(expected_ids))
+    ):
+        raise ThreeSurfaceTerminalFailure(
+            "visible-state-inconsistency",
+            {
+                "step_id": step_id,
+                "expected_active_cid": expected_cid,
+                "status_code": status_code,
+                "error": "invalid-active-capability-contract",
+            },
+        )
+
+    try:
+        page.wait_for_function(
+            """([expectedCid, expectedIds]) => {
+                const smoke = window.__dmcontrolSmoke;
+                if (!smoke || String(smoke.activeActorCid()) !== String(expectedCid)) return false;
+                const actualIds = smoke.availableActions()
+                    .map(action => String(action.id))
+                    .sort();
+                const requiredIds = [...expectedIds].map(String).sort();
+                return actualIds.length === requiredIds.length
+                    && actualIds.every((value, index) => value === requiredIds[index]);
+            }""",
+            arg=[expected_cid, expected_ids],
+            timeout=10000,
+        )
+        actions = page.evaluate("window.__dmcontrolSmoke.availableActions()")
+    except Exception as exc:
+        raise ThreeSurfaceTerminalFailure(
+            "visible-state-inconsistency",
+            {
+                "step_id": step_id,
+                "expected_active_cid": expected_cid,
+                "expected_action_ids": expected_ids,
+                "error": str(exc),
+            },
+        ) from exc
+    state["runtime_capability_sync"].append({
+        "cid": expected_cid,
+        "status_code": status_code,
+        "action_ids": expected_ids,
+    })
+    return actions
 
 
 def _execute_enemy_action(step: Dict[str, Any], page: Page, state: Dict[str, Any]) -> None:
@@ -717,13 +1170,12 @@ def _execute_enemy_action(step: Dict[str, Any], page: Page, state: Dict[str, Any
     expected_cid = state["enemy_cid_map"][enemy_slug]
     step_id = step["step_id"]
     try:
-        active_cid = page.evaluate("window.__dmcontrolSmoke.activeActorCid()")
-        if str(active_cid) != str(expected_cid):
-            raise ThreeSurfaceTerminalFailure(
-                "visible-state-inconsistency",
-                {"step_id": step_id, "expected_active_cid": expected_cid, "actual_active_cid": active_cid},
-            )
-        actions = page.evaluate("window.__dmcontrolSmoke.availableActions()")
+        actions = _wait_for_matching_dmcontrol_capabilities(
+            page,
+            expected_cid,
+            step_id,
+            state,
+        )
         chosen = next(
             (action for action in actions if isinstance(action, dict) and action.get("executable")),
             None,
@@ -758,7 +1210,14 @@ def _execute_enemy_action(step: Dict[str, Any], page: Page, state: Dict[str, Any
         if (isinstance(target_preview, dict) and target_preview.get("active")) or (
             isinstance(aoe_state, dict) and aoe_state.get("active")
         ):
-            _click_mapped_position(page, '[data-testid="dmcontrol-map-canvas"]', state["player_positions"][player_id], step_id)
+            _click_mapped_position(
+                page,
+                '[data-testid="dmcontrol-map-canvas"]',
+                state["player_positions"][player_id],
+                step_id,
+                state["grid"],
+                40,
+            )
 
         modal = page.evaluate("window.__dmcontrolSmoke.modalSummary()")
         if isinstance(modal, dict) and modal.get("active"):
@@ -905,6 +1364,29 @@ def _execute_three_surface_step(
     if action == "click":
         if step.get("root_selector"):
             _wait_for_visible(page, step["root_selector"], step_id)
+        if step_id == "start-combat":
+            _click_selector(page, "#closeToolboxBtn", step_id)
+            try:
+                with page.expect_response(
+                    lambda response: (
+                        response.request.method == "POST"
+                        and urlsplit(response.url).path == "/api/dm/combat/start"
+                        and response.ok
+                    )
+                ):
+                    _click_selector(page, step["selector"], step_id)
+            except ThreeSurfaceTerminalFailure:
+                raise
+            except Exception as exc:
+                raise ThreeSurfaceTerminalFailure(
+                    "browser-error",
+                    {
+                        "step_id": step_id,
+                        "request": "POST /api/dm/combat/start",
+                        "error": str(exc),
+                    },
+                ) from exc
+            return
         _click_selector(page, step["selector"], step_id)
         return
     if action == "select-and-click":
@@ -973,6 +1455,25 @@ def _execute_three_surface_step(
         return
     if action == "execute-active-action":
         _execute_enemy_action(step, page, state)
+        return
+    if action == "advance-verified-summon":
+        try:
+            page.wait_for_function(
+                """expectedCid => window.__dmcontrolSmoke
+                    && String(window.__dmcontrolSmoke.activeActorCid()) === String(expectedCid)""",
+                arg=step["runtime_cid"],
+                timeout=10000,
+            )
+            page.evaluate("handleCombatControl()")
+        except Exception as exc:
+            raise ThreeSurfaceTerminalFailure(
+                "visible-state-inconsistency",
+                {
+                    "step_id": step_id,
+                    "expected_active_cid": step["runtime_cid"],
+                    "error": str(exc),
+                },
+            ) from exc
         return
     if action == "evaluate":
         try:
@@ -1046,7 +1547,7 @@ def execute_three_surface_workflow(
     config: Dict[str, Any],
 ) -> tuple[bool, Dict[str, Any]]:
     """Execute the registered A7 three-surface plan exactly once and fail closed."""
-    steps = list(plan.get("steps", []))
+    steps = [dict(step) for step in plan.get("steps", [])]
     expected_orders = list(range(1, len(steps) + 1))
     if plan.get("scenario_id") != THREE_SURFACE_SCENARIO_ID or [step.get("order") for step in steps] != expected_orders:
         failure = ThreeSurfaceTerminalFailure(
@@ -1062,10 +1563,16 @@ def execute_three_surface_workflow(
         "enemy_cid_map": {},
         "player_positions": {},
         "enemy_positions": {},
+        "grid": {},
         "enemy_options_validated": False,
         "started_traces": [],
         "role_traces": {},
         "browser_trace": None,
+        "runtime_turn_order_evidence": {},
+        "base_url": base_url,
+        "three_surface_http_get": config.get("three_surface_http_get", requests.get),
+        "fixture_timeout_seconds": config.get("fixture_timeout_seconds", 30),
+        "runtime_capability_sync": [],
     }
     step_timings: List[Dict[str, Any]] = []
     failure_step_id: Optional[str] = None
@@ -1095,6 +1602,17 @@ def execute_three_surface_workflow(
                         {"step_id": step["step_id"], "errors": browser_errors[:8]},
                     )
                 _execute_three_surface_step(step, plan, base_url, pages, collector, config, state)
+                if (
+                    step["step_id"] == "claim-player-pc:stikhiya"
+                    and state["player_cid_map"]
+                    and state["enemy_cid_map"]
+                ):
+                    _order_three_surface_runtime_actions(
+                        steps,
+                        base_url,
+                        config,
+                        state,
+                    )
                 settle_ms = config.get("three_surface_step_settle_ms", 0)
                 if settle_ms and step.get("surface") in ("/dm", "/dmcontrol", "/"):
                     _three_surface_page(step, pages).wait_for_timeout(settle_ms)
@@ -1180,6 +1698,8 @@ def execute_three_surface_workflow(
         "failure_step_id": failure_step_id if failure is not None else None,
         "retry": False,
         "rewrite_expectation": False,
+        "runtime_turn_order": state["runtime_turn_order_evidence"],
+        "runtime_capability_sync": state["runtime_capability_sync"],
     })
     return failure is None, evidence
 

@@ -727,3 +727,509 @@ def test_three_surface_executor_never_retries_after_failure(monkeypatch, tmp_pat
     assert harness.THREE_SURFACE_PRECONDITION_DIGEST == (
         "sha256:67668370769a7a7f81c820550d4a10033bde8e297b2da1d05d55819cade90873"
     )
+
+
+class _FakeStartCombatPage(_FakePage):
+    def __init__(self):
+        super().__init__()
+        self.events = []
+        self.click_calls = []
+        self.response_predicate = None
+
+    def wait_for_selector(self, selector, **kwargs):
+        self.events.append(("wait", selector, kwargs))
+
+    def click(self, selector):
+        self.events.append(("click", selector))
+        self.click_calls.append(selector)
+
+    def expect_response(self, predicate):
+        self.events.append(("expect-response",))
+        self.response_predicate = predicate
+        events = self.events
+
+        class _ResponseContext:
+            def __enter__(self):
+                events.append(("response-enter",))
+                return self
+
+            def __exit__(self, exc_type, exc, traceback):
+                events.append(("response-exit",))
+                return False
+
+        return _ResponseContext()
+
+
+def _execute_start_combat_step(harness, page):
+    plan = harness.build_three_surface_workflow_plan()
+    step = next(item for item in plan["steps"] if item["step_id"] == "start-combat")
+    harness._execute_three_surface_step(
+        step,
+        plan,
+        "http://example.invalid",
+        {"dm": page},
+        None,
+        {},
+        {},
+    )
+
+
+def test_three_surface_start_combat_closes_toolbox_before_single_start_click():
+    harness = _load_browser_smoke_harness()
+    page = _FakeStartCombatPage()
+
+    _execute_start_combat_step(harness, page)
+
+    assert page.click_calls == ["#closeToolboxBtn", "#startCombatBtn"]
+
+
+def test_three_surface_start_combat_uses_normal_clicks_without_force_or_dom_bypass():
+    harness = _load_browser_smoke_harness()
+    page = _FakeStartCombatPage()
+
+    _execute_start_combat_step(harness, page)
+
+    assert page.click_calls == ["#closeToolboxBtn", "#startCombatBtn"]
+    assert not hasattr(page, "evaluate")
+    assert not hasattr(page, "dispatch_event")
+
+
+def test_three_surface_start_combat_waits_for_successful_response_before_returning():
+    harness = _load_browser_smoke_harness()
+    page = _FakeStartCombatPage()
+
+    _execute_start_combat_step(harness, page)
+
+    event_names = [event[0] for event in page.events]
+    assert event_names.index("response-enter") < page.events.index(("click", "#startCombatBtn"))
+    assert event_names.index("response-exit") > page.events.index(("click", "#startCombatBtn"))
+
+    class _Request:
+        method = "POST"
+
+    class _Response:
+        request = _Request()
+        url = "http://example.invalid/api/dm/combat/start"
+        ok = True
+
+    assert page.response_predicate(_Response()) is True
+
+
+class _FakeJsonResponse:
+    def __init__(self, payload, status_code=200):
+        self.payload = payload
+        self.status_code = status_code
+
+    def json(self):
+        return self.payload
+
+
+def test_three_surface_runtime_actions_follow_live_authoritative_order():
+    harness = _load_browser_smoke_harness()
+    plan = harness.build_three_surface_workflow_plan()
+    steps = [dict(step) for step in plan["steps"]]
+    fixture = _complete_three_surface_verification_response(harness)
+    player_cids = list(fixture["player_cid_map"].values())
+    enemy_cids = list(fixture["enemy_cid_map"].values())
+    raven_cid = 301
+    owl_cid = 302
+    turn_order = [
+        player_cids[0],
+        raven_cid,
+        enemy_cids[0],
+        player_cids[1],
+        owl_cid,
+        *player_cids[2:],
+        *enemy_cids[1:],
+    ]
+    payload = {
+        "in_combat": True,
+        "active_cid": turn_order[0],
+        "turn_order": turn_order,
+        "combatants": [
+            {"cid": raven_cid, "name": "Raven", "role": "ally"},
+            {"cid": owl_cid, "name": "Owl", "role": "ally"},
+        ],
+    }
+    state = {
+        "player_cid_map": fixture["player_cid_map"],
+        "enemy_cid_map": fixture["enemy_cid_map"],
+    }
+
+    harness._order_three_surface_runtime_actions(
+        steps,
+        "http://example.invalid",
+        {"three_surface_http_get": lambda *_args, **_kwargs: _FakeJsonResponse(payload)},
+        state,
+    )
+
+    runtime_ids = state["runtime_turn_order_evidence"]["runtime_step_ids"]
+    assert runtime_ids[:6] == [
+        "player-attack-pc:dorian",
+        "advance-player-turn-pc:dorian",
+        f"advance-summon-turn-raven-{raven_cid}",
+        "enemy-action-black-and-tan-captain",
+        "advance-enemy-turn-black-and-tan-captain",
+        "player-spell-pc:eldramar",
+    ]
+    assert state["runtime_turn_order_evidence"]["active_cid"] == player_cids[0]
+    assert sorted(
+        item["name"] for item in state["runtime_turn_order_evidence"]["skipped_summons"]
+    ) == ["Owl", "Raven"]
+
+
+def test_three_surface_mapped_positions_use_visible_canvas_geometry():
+    harness = _load_browser_smoke_harness()
+
+    class _CanvasLocator:
+        def bounding_box(self):
+            return {"x": 100, "y": 50, "width": 1000, "height": 700}
+
+    class _GeometryPage:
+        def __init__(self):
+            self.waits = []
+
+        def wait_for_selector(self, selector, **kwargs):
+            self.waits.append((selector, kwargs))
+
+        def locator(self, selector):
+            assert selector == "#c"
+            return _CanvasLocator()
+
+    page = _GeometryPage()
+    x, y = harness._mapped_screen_position(
+        page,
+        "#c",
+        {"col": 16, "row": 12},
+        "mapped-position",
+        {"cols": 30, "rows": 20},
+        32,
+    )
+
+    assert 100 <= x <= 1100
+    assert 50 <= y <= 750
+    assert page.waits == [("#c", {"state": "visible", "timeout": 10000})]
+    assert not hasattr(page, "evaluate")
+
+
+def test_three_surface_turn_alert_interacts_only_with_visible_modal():
+    harness = _load_browser_smoke_harness()
+
+    class _VisibleState:
+        def __init__(self, visible):
+            self.visible = visible
+
+        def is_visible(self):
+            return self.visible
+
+    class _TurnAlertPage:
+        def __init__(self):
+            self.visible = False
+            self.clicks = []
+
+        def wait_for_timeout(self, timeout):
+            assert timeout == 250
+
+        def locator(self, selector):
+            assert selector == "#turnModal.show"
+            return _VisibleState(self.visible)
+
+        def wait_for_selector(self, selector, **_kwargs):
+            assert selector == "#turnModalOk"
+
+        def click(self, selector):
+            self.clicks.append(selector)
+
+    page = _TurnAlertPage()
+    harness._dismiss_visible_turn_alert(page, "turn-alert")
+    page.visible = True
+    harness._dismiss_visible_turn_alert(page, "turn-alert")
+
+    assert page.clicks == ["#turnModalOk"]
+
+
+def test_three_surface_active_capabilities_use_keyword_wait_argument():
+    harness = _load_browser_smoke_harness()
+    expected_actions = [{"id": "baton", "executable": True}]
+
+    class _CapabilityPage:
+        def __init__(self):
+            self.wait = None
+
+        def wait_for_function(self, expression, *, arg, timeout):
+            self.wait = (expression, arg, timeout)
+
+        def evaluate(self, expression):
+            assert expression == "window.__dmcontrolSmoke.availableActions()"
+            return expected_actions
+
+    page = _CapabilityPage()
+    state = {
+        "three_surface_http_get": lambda *_args, **_kwargs: _FakeJsonResponse({
+            "ok": True,
+            "summary": {
+                "combatant_id": 119,
+                "groups": {"actions": [{"id": "baton"}]},
+            },
+        }),
+        "base_url": "http://example.invalid",
+        "fixture_timeout_seconds": 30,
+        "runtime_capability_sync": [],
+    }
+
+    actions = harness._wait_for_matching_dmcontrol_capabilities(
+        page, 119, "enemy-action", state,
+    )
+
+    assert actions == expected_actions
+    assert page.wait[1:] == ([119, ["baton"]], 10000)
+    assert state["runtime_capability_sync"] == [
+        {"cid": 119, "status_code": 200, "action_ids": ["baton"]}
+    ]
+
+
+def test_three_surface_target_selection_uses_nearest_in_range_enemy():
+    harness = _load_browser_smoke_harness()
+    positions = {
+        enemy_slug: {"col": 20 + index, "row": 20 + index}
+        for index, (enemy_slug, _name) in enumerate(harness.THREE_SURFACE_ENEMY_IDENTITIES)
+    }
+    nearest_slug = harness.THREE_SURFACE_ENEMY_IDENTITIES[-1][0]
+    positions[nearest_slug] = {"col": 6, "row": 5}
+    state = {
+        "player_positions": {"pc:dorian": {"col": 5, "row": 5}},
+        "enemy_positions": positions,
+    }
+
+    assert harness._nearest_three_surface_enemy_slug("pc:dorian", state) == nearest_slug
+
+
+def test_three_surface_spell_plan_uses_visible_current_controls():
+    harness = _load_browser_smoke_harness()
+    plan = harness.build_three_surface_workflow_plan()
+    spell_steps = [
+        step for step in plan["steps"]
+        if step["action"] == "cast-spell-at-mapped-target"
+    ]
+
+    assert spell_steps
+    assert all(step["selectors"] == (
+        "#castSpellModalOpen",
+        "#castSpellPresetList",
+        ".cast-preview-cast-btn",
+        "#c",
+        "#spellResolveSubmit",
+    ) for step in spell_steps)
+    assert harness.THREE_SURFACE_TARGETED_SPELLS == {
+        "pc:eldramar": "Fire Bolt",
+        "pc:throat-goat": "Eldritch Blast",
+        "pc:stikhiya": "Sacred Flame",
+    }
+
+
+def test_three_surface_noncaster_spell_step_falls_back_to_attack(monkeypatch):
+    harness = _load_browser_smoke_harness()
+    plan = harness.build_three_surface_workflow_plan()
+    step = next(
+        item for item in plan["steps"]
+        if item["step_id"] == "player-spell-pc:john-twilight"
+    )
+    clicks = []
+    mapped = []
+    monkeypatch.setattr(harness, "_wait_for_visible", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(harness, "_dismiss_visible_turn_alert", lambda *_args: None)
+    monkeypatch.setattr(harness, "_click_selector", lambda _page, selector, _step: clicks.append(selector))
+    monkeypatch.setattr(harness, "_nearest_three_surface_enemy_slug", lambda *_args, **_kwargs: "enemy")
+    monkeypatch.setattr(
+        harness,
+        "_click_mapped_position",
+        lambda _page, selector, position, _step, grid, zoom: mapped.append(
+            (selector, position, grid, zoom)
+        ),
+    )
+    state = {
+        "player_positions": {"pc:john-twilight": {"col": 1, "row": 1}},
+        "enemy_positions": {"enemy": {"col": 2, "row": 2}},
+        "grid": {"cols": 30, "rows": 20},
+    }
+
+    harness._execute_player_action(step, object(), state)
+
+    assert clicks == ["#attackOverlayToggle", "#attackResolveSubmit"]
+    assert mapped == [("#c", {"col": 2, "row": 2}, state["grid"], 32)]
+    assert state["runtime_player_action_modes"][-1]["executed_action"] == "attack-mapped-target"
+
+
+def test_three_surface_melee_attacks_drag_to_staging_position(monkeypatch):
+    harness = _load_browser_smoke_harness()
+    plan = harness.build_three_surface_workflow_plan()
+    step = next(
+        item for item in plan["steps"]
+        if item["step_id"] == "player-attack-pc:dorian"
+    )
+    drags = []
+    monkeypatch.setattr(harness, "_wait_for_visible", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(harness, "_dismiss_visible_turn_alert", lambda *_args: None)
+    monkeypatch.setattr(harness, "_click_selector", lambda *_args: None)
+    monkeypatch.setattr(harness, "_click_mapped_position", lambda *_args: None)
+    monkeypatch.setattr(harness, "_nearest_three_surface_enemy_slug", lambda *_args, **_kwargs: "enemy")
+    monkeypatch.setattr(
+        harness,
+        "_drag_mapped_position",
+        lambda _page, selector, start, end, _step, grid, zoom: drags.append(
+            (selector, start, end, grid, zoom)
+        ),
+    )
+
+    class _MovementPage:
+        def wait_for_timeout(self, timeout):
+            assert timeout == 500
+
+    state = {
+        "player_positions": {"pc:dorian": {"col": 1, "row": 1}},
+        "enemy_positions": {"enemy": {"col": 16, "row": 15}},
+        "grid": {"cols": 30, "rows": 20},
+    }
+
+    harness._execute_player_action(step, _MovementPage(), state)
+
+    assert drags == [(
+        "#c",
+        {"col": 1, "row": 1},
+        harness.THREE_SURFACE_ATTACK_STAGING_POSITIONS["pc:dorian"],
+        state["grid"],
+        32,
+    )]
+
+
+def test_three_surface_player_action_waits_for_enabled_turn(monkeypatch):
+    harness = _load_browser_smoke_harness()
+    plan = harness.build_three_surface_workflow_plan()
+    step = next(
+        item for item in plan["steps"]
+        if item["step_id"] == "player-attack-pc:fred"
+    )
+    waits = []
+    monkeypatch.setattr(
+        harness,
+        "_wait_for_visible",
+        lambda _page, selector, step_id, timeout=10000: waits.append(
+            (selector, step_id, timeout)
+        ),
+    )
+    monkeypatch.setattr(harness, "_dismiss_visible_turn_alert", lambda *_args: None)
+    monkeypatch.setattr(harness, "_click_selector", lambda *_args: None)
+    monkeypatch.setattr(harness, "_click_mapped_position", lambda *_args: None)
+    monkeypatch.setattr(harness, "_nearest_three_surface_enemy_slug", lambda *_args, **_kwargs: "enemy")
+    state = {
+        "player_positions": {"pc:fred": {"col": 1, "row": 1}},
+        "enemy_positions": {"enemy": {"col": 2, "row": 2}},
+        "grid": {"cols": 30, "rows": 20},
+    }
+
+    harness._execute_player_action(step, object(), state)
+
+    assert waits[0] == ("#endTurn:not([disabled])", "player-attack-pc:fred", 10000)
+
+
+def test_three_surface_successful_spell_save_is_immediate_result():
+    harness = _load_browser_smoke_harness()
+
+    class _SpellLocator:
+        def __init__(self, *, visible=False, text=""):
+            self.visible = visible
+            self.text = text
+
+        def is_visible(self):
+            return self.visible
+
+        def text_content(self):
+            return self.text
+
+    class _ImmediateSavePage:
+        def __init__(self):
+            self.modal = _SpellLocator(visible=False)
+            self.note = _SpellLocator(text="Sacred Flame: target saved successfully")
+
+        def locator(self, selector):
+            return self.modal if selector == "#spellResolveModal.show" else self.note
+
+        def wait_for_timeout(self, _timeout):
+            raise AssertionError("immediate result should not poll again")
+
+    harness._finish_targeted_spell(
+        _ImmediateSavePage(),
+        "#spellResolveSubmit",
+        "Sacred Flame",
+        "player-spell-pc:stikhiya",
+    )
+
+
+def test_three_surface_enemy_action_waits_for_dmcontrol_active_cid(monkeypatch):
+    harness = _load_browser_smoke_harness()
+    plan = harness.build_three_surface_workflow_plan()
+    step = next(
+        item for item in plan["steps"]
+        if item["step_id"] == "enemy-action-black-and-tan-captain"
+    )
+    expected_cid = 286
+    barriers = []
+    monkeypatch.setattr(
+        harness,
+        "_wait_for_matching_dmcontrol_capabilities",
+        lambda _page, cid, step_id, _state: (
+            barriers.append((cid, step_id))
+            or [{"id": "pistol", "executable": True}]
+        ),
+    )
+    monkeypatch.setattr(harness, "_wait_for_visible", lambda *_args, **_kwargs: None)
+
+    class _EnemyPage:
+        def evaluate(self, expression, *_args):
+            if expression == "window.__dmcontrolSmoke.targetPreviewMode()":
+                return {"active": False}
+            if expression == "window.__dmcontrolSmoke.aoeState()":
+                return {"active": False}
+            if expression == "window.__dmcontrolSmoke.modalSummary()":
+                return {"active": False}
+            return None
+
+    harness._execute_enemy_action(
+        step,
+        _EnemyPage(),
+        {"enemy_cid_map": {step["enemy_slug"]: expected_cid}},
+    )
+
+    assert barriers == [(expected_cid, step["step_id"])]
+
+
+def test_three_surface_summon_advance_waits_for_active_transition():
+    harness = _load_browser_smoke_harness()
+    events = []
+
+    class _SummonPage:
+        def wait_for_function(self, expression, *, arg, timeout):
+            events.append(("wait", expression, arg, timeout))
+
+        def evaluate(self, expression):
+            events.append(("evaluate", expression))
+
+    step = {
+        "step_id": "advance-summon-turn-raven-306",
+        "surface": "/dmcontrol",
+        "action": "advance-verified-summon",
+        "runtime_cid": 306,
+    }
+    harness._execute_three_surface_step(
+        step,
+        {"steps": [step]},
+        "http://example.invalid",
+        {"dmcontrol": _SummonPage()},
+        None,
+        {},
+        {},
+    )
+
+    assert events[0][0] == "wait"
+    assert events[0][2:] == (306, 10000)
+    assert events[1] == ("evaluate", "handleCombatControl()")

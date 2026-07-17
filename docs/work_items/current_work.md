@@ -10,8 +10,8 @@ If an item is not marked as **Active** here, it is NOT current work.
 <!-- ACTIVE_WORK_STATUS_START -->
 - **Status:** Active
 - **Current Work Item:** `WORK-20260715-a7-browser-automation`
-- **Active Gate:** A7-G20 awaiting browser preparation, not opened
-- **Allowed Next Action:** Orchestrator acceptance and preparation of one autonomous host-access three-surface browser stabilization packet. All implementation, test, browser, runtime, endpoint, localhost, network, push, deployment, restart, scheduler, production, and service-mutation action remains closed.
+- **Active Gate:** A7-G21 controlled stop awaiting application correction authorization
+- **Allowed Next Action:** Orchestrator acceptance of the G21 controlled-stop evidence and preparation of one bounded connected-player synchronization correction. All implementation, test, browser, runtime, endpoint, localhost, network, push, deployment, restart, scheduler, production, and service-mutation action is closed.
 - <!-- ACTIVE_WORK_STATUS_END -->
 
 ---
@@ -21,8 +21,30 @@ If an item is not marked as **Active** here, it is NOT current work.
 | ID | Title | Status | Goal |
 | --- | --- | --- | --- |
 <!-- ACTIVE_WORK_TABLE_START -->
-| WORK-20260715-a7-browser-automation | A7 browser-driven human-workflow automation | Active | G19 corrected the connected-player turn synchronization defect and is accepted at implementation commit `43620b2`. All execution authorization is closed, and G20 remains not opened pending orchestrator preparation of one autonomous host-access three-surface browser stabilization packet. |
+| WORK-20260715-a7-browser-automation | A7 browser-driven human-workflow automation | Active | G21 retained all validated harness progress and stopped after proving that Throat Goat's successful End Turn advanced backend authority to Fred while Fred's connected claimed surface remained stale on Suppression Gunner. Application correction authorization is required. |
 <!-- ACTIVE_WORK_TABLE_END -->
+
+## A7-G21 Autonomous Browser Stabilization Controlled Stop
+
+```text
+A7_GATE=A7-G21
+A7_STATE=autonomous-browser-stabilization-controlled-stop
+A7_G21_STATE=controlled-stop
+A7_G21_RESULT=docs/work_items/A7-G21-autonomous-browser-stabilization-result.md
+A7_G21_BROWSER_RESULT=fail-application-defect
+A7_G21_VALIDATION=focused-validation-passed
+A7_IMPLEMENTATION_AUTHORIZED=false
+A7_TEST_EXECUTION_AUTHORIZED=false
+A7_BROWSER_EXECUTION_AUTHORIZED=false
+A7_RUNTIME_EXECUTION_AUTHORIZED=false
+A7_NETWORK_AUTHORIZED=false
+A7_PUSH_AUTHORIZED=false
+A7_DEPLOYMENT_AUTHORIZED=false
+A7_RESTART_AUTHORIZED=false
+A7_SCHEDULER_AUTHORIZED=false
+A7_PRODUCTION_AUTHORIZED=false
+A7_SERVICE_MUTATION_AUTHORIZED=false
+```
 
 ---
 

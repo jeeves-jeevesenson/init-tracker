@@ -4,9 +4,9 @@ Date: `2026-07-15 UTC`
 
 Work item: `WORK-20260715-a7-browser-automation`
 
-Active gate: `A7-G20`
+Active gate: `A7-G21`
 
-State: `player-turn-sync-correction-accepted-awaiting-browser-preparation`
+State: `autonomous-browser-stabilization-controlled-stop`
 
 Approval: `developer-standing-yolo-host-access-2026-07-16`
 
@@ -31,9 +31,14 @@ accepted at implementation commit `8abb324`. G17 completed sixteen changed-code
 browser attempts and reached a controlled stop after proving an application-
 owned live player-surface synchronization defect. G18 accepted that defect and
 authorized one later bounded G19 correction. G19 completed that correction and
-is accepted at implementation commit `43620b2`. All execution authorization is
-now closed, and G20 remains not opened pending orchestrator preparation of one
-autonomous host-access three-surface browser stabilization packet.
+is accepted at implementation commit `43620b2`. G21 reconstructed and retained
+all evidence-validated G17 harness progress, passed the exact 35-node focused
+validation, and ran one changed-code browser attempt. Backend authority
+advanced from Throat Goat to Fred after a successful player End Turn command,
+but Fred's connected claimed surface remained stale on Suppression Gunner and
+kept End Turn disabled. G21 therefore stopped at the application-defect
+boundary. All execution authorization is closed pending another bounded
+application correction decision.
 
 The deterministic workflow remains:
 
@@ -271,13 +276,12 @@ The accepted G19 result is
 ## Current authorization boundary
 
 ```text
-A7_GATE=A7-G20
-A7_STATE=player-turn-sync-correction-accepted-awaiting-browser-preparation
-A7_G19_STATE=completed
-A7_G19_RESULT=docs/work_items/A7-G19-player-turn-sync-correction-result.md
-A7_G19_TARGET_COMMIT=43620b2
-A7_G19_VALIDATION=pycompile-3-focused-tests-js-syntax-and-diff-check-passed
-A7_G20_STATE=not-opened
+A7_GATE=A7-G21
+A7_STATE=autonomous-browser-stabilization-controlled-stop
+A7_G21_STATE=controlled-stop
+A7_G21_RESULT=docs/work_items/A7-G21-autonomous-browser-stabilization-result.md
+A7_G21_BROWSER_RESULT=fail-application-defect
+A7_G21_VALIDATION=focused-validation-passed
 A7_IMPLEMENTATION_AUTHORIZED=false
 A7_TEST_EXECUTION_AUTHORIZED=false
 A7_BROWSER_EXECUTION_AUTHORIZED=false
@@ -292,16 +296,16 @@ A7_SERVICE_MUTATION_AUTHORIZED=false
 ```
 
 G13 is closed at a controlled stop, G14 is complete, G15 is completed and
-accepted, G17 is accepted at its controlled stop, G18 is complete, and G19 is
-completed and accepted. All implementation, test, browser, server, runtime,
-endpoint, localhost, network, push, deployment, scheduler, production,
-restart, and service-mutation action remains unauthorized. G20 is not opened.
-The approximately-200-enemy stress scenario remains unopened.
+accepted, G17 is accepted at its controlled stop, G18 is complete, G19 is
+completed and accepted, and G21 is closed at an application-defect controlled
+stop. All implementation, test, browser, server, runtime, endpoint, localhost,
+network, push, deployment, scheduler, production, restart, and service-
+mutation action is unauthorized. The approximately-200-enemy stress scenario
+remains unopened.
 
 ## Next safe action
 
-The next safe action is orchestrator acceptance and preparation of one
-autonomous host-access three-surface browser stabilization packet. That future
-packet must preserve and commit independently validated harness progress even
-when a later application defect causes a controlled stop. G20 remains not
-opened.
+The next safe action is orchestrator acceptance of the G21 evidence and
+preparation of one bounded application correction for connected-player state
+application and authoritative LAN broadcast/version delivery. The retained
+G21 harness/test progress must remain intact. No browser retry is authorized.
