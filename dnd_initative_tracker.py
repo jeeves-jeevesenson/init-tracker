@@ -3079,6 +3079,7 @@ class LanController:
             )
             return
 
+        from init_tracker_server.browser_routes import BrowserEntryRouteHandlers, register_browser_entry_routes
         from init_tracker_server.host import UvicornServerHost
         from server_app import create_app
         from server_runtime import RuntimeCommand, COMMAND_UPDATE_SPELL_COLOR, COMMAND_SET_FACING, COMMAND_SET_AURAS_ENABLED, COMMAND_PLACE_COMBATANT, COMMAND_REMOVE_AOE, COMMAND_MOVE_AOE, COMMAND_SET_OBSTACLE, COMMAND_SET_TERRAIN, COMMAND_SET_ELEVATION, COMMAND_SET_MAP_SETTINGS, COMMAND_UPSERT_MAP_BACKGROUND, COMMAND_REMOVE_MAP_BACKGROUND, COMMAND_SET_MAP_BACKGROUND_ORDER, COMMAND_UPSERT_MAP_HAZARD, COMMAND_REMOVE_MAP_HAZARD, COMMAND_UPSERT_MAP_FEATURE, COMMAND_REMOVE_MAP_FEATURE, COMMAND_COMBAT_START, COMMAND_COMBAT_SET_TURN, COMMAND_COMBAT_NEXT_TURN
@@ -3267,7 +3268,6 @@ class LanController:
                     level="warning",
                 )
 
-        @self._fastapi_app.get("/")
         async def index():
             push_key = self.cfg.vapid_public_key
             push_key_value = json.dumps(push_key) if push_key else "undefined"
@@ -3277,7 +3277,6 @@ class LanController:
             html = html.replace("__LAN_BASE_URL__", "undefined" if base_url is None else json.dumps(base_url))
             return HTMLResponse(html)
 
-        @self._fastapi_app.get("/planning")
         async def planning():
             push_key = self.cfg.vapid_public_key
             push_key_value = json.dumps(push_key) if push_key else "undefined"
@@ -3287,36 +3286,44 @@ class LanController:
             html = html.replace("__LAN_BASE_URL__", "undefined" if base_url is None else json.dumps(base_url))
             return HTMLResponse(html)
 
-        @self._fastapi_app.get("/new_character")
         async def new_character():
             if not web_entrypoint.exists():
                 raise HTTPException(status_code=404, detail="New character page missing.")
             html = _inject_asset_version(web_entrypoint.read_text(encoding="utf-8"))
             return HTMLResponse(html)
 
-        @self._fastapi_app.get("/edit_character")
         async def edit_character():
             return HTMLResponse(load_edit_character_html())
 
-        @self._fastapi_app.get("/shop_admin")
         async def shop_admin():
             return HTMLResponse(load_shop_admin_html())
 
-        @self._fastapi_app.get("/shop")
         async def shop():
             return HTMLResponse(load_shop_html())
 
-        @self._fastapi_app.get("/config")
         async def config_redirect():
             return RedirectResponse("/edit_character", status_code=302)
 
-        @self._fastapi_app.get("/sw.js")
         async def service_worker():
             return Response(
                 SERVICE_WORKER_JS,
                 media_type="application/javascript",
                 headers={"Cache-Control": "no-store"},
             )
+
+        register_browser_entry_routes(
+            self._fastapi_app,
+            BrowserEntryRouteHandlers(
+                index=index,
+                planning=planning,
+                new_character=new_character,
+                edit_character=edit_character,
+                shop_admin=shop_admin,
+                shop=shop,
+                config_redirect=config_redirect,
+                service_worker=service_worker,
+            ),
+        )
 
         @self._fastapi_app.get("/rules.pdf")
         async def rules_pdf(request: Request):

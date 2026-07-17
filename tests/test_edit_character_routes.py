@@ -95,6 +95,32 @@ class EditCharacterRoutesTests(unittest.TestCase):
         self.assertEqual(response.status_code, 302)
         self.assertTrue(response.headers.get("location", "").endswith("/edit_character"))
 
+    def test_browser_entry_route_inventory_is_registered_once(self):
+        client = self._build_test_client()
+        expected_inventory = [
+            ("/", "index"),
+            ("/planning", "planning"),
+            ("/new_character", "new_character"),
+            ("/edit_character", "edit_character"),
+            ("/shop_admin", "shop_admin"),
+            ("/shop", "shop"),
+            ("/config", "config_redirect"),
+            ("/sw.js", "service_worker"),
+        ]
+        inventory_paths = {path for path, _endpoint_name in expected_inventory}
+        registered_routes = [
+            route
+            for route in client.app.routes
+            if route.path in inventory_paths and "GET" in (getattr(route, "methods", None) or ())
+        ]
+
+        self.assertEqual(
+            [(route.path, route.name) for route in registered_routes],
+            expected_inventory,
+        )
+        for route, (_path, endpoint_name) in zip(registered_routes, expected_inventory):
+            self.assertEqual(route.endpoint.__name__, endpoint_name)
+
     def test_upload_character_yaml_route_accepts_payload(self):
         client = self._build_test_client()
 
