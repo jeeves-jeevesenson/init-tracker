@@ -64,8 +64,11 @@ They confirm that authoritative `turn_order` includes living summons while
 - Browser attempt 1 proved one harness defect; its correction is committed as
   `Handle A7 multi-target spell selection.`
 - Browser attempt 2 proved the remaining dialog-handling half of that
-  interaction; its correction and the accumulated 37-node focused validation
-  pass and are ready for a focused commit.
+  interaction; its correction is committed as
+  `Handle A7 multi-target spell confirmation.`
+- Browser attempt 3 completed the full round and proved one optional-selector
+  harness defect; its correction and the accumulated 38-node focused
+  validation pass and are ready for a focused commit.
 - Browser completion remains in progress.
 
 ## Summon Turn-Advancement Correction
@@ -179,6 +182,49 @@ Evidence:
 - Throat Goat role trace: `role-trace-player-pc-throat-goat.zip`;
 - summary: `summary.json` and `summary.md`;
 - bounded backend evidence: `logs/debug-trace-20260716-235622.jsonl`.
+
+## Browser Attempt 3: `20260717_000637`
+
+Attempt 3 used the exact browser command against the same positively verified
+owned server. It passed 83 ordered steps, including the complete authoritative
+round, both Owl and Raven summon turns, all planned player/enemy attacks and
+spells, and the DM plus DM-control final visible-state assertions. It failed at
+the final step, `assert-player-visible-state`, after `10223.919 ms`.
+
+The player evidence showed the claimed identity, connection, turn field, HP,
+action state, visible turn-order chip bar, and canvas. The required
+`#mapViewTurnOrderStatus` element contained current text but was hidden. That
+element is explicitly controlled by the product's optional `showStatus`
+map-view setting (`map-view-hide-status`); requiring it to be visible makes the
+harness reject a supported presentation configuration. The separate visible
+`#turn` field and `#mapViewTurnOrder` chip bar already provide the required turn
+state.
+
+The correction removes only the optional status element from the final player
+selector list. All ten player pages must still show connection, claimed
+identity, turn, HP, action, the turn-order bar, and canvas, and the harness
+still checks each mapped player identity. The focused regression proves the
+required turn field and order bar remain while the optional status selector is
+absent.
+
+Validation passed exactly:
+
+- browser-harness and focused-test `py_compile`;
+- the retained 36 nodes, the multi-target regression, and
+  `test_three_surface_player_final_assertion_ignores_optional_hidden_turn_status`:
+  `38 passed in 1.79s`;
+- the required five-file `git diff --check` command.
+
+Evidence:
+
+- artifact run:
+  `logs/smoke/CODEX-20260716-a7-autonomous-completion_browser-artifacts/black-tan-three-surface-workflow/20260717_000637/`;
+- successful DM screenshot: `assert-dm-visible-state-dm.png`;
+- successful DM-control screenshot:
+  `assert-dmcontrol-visible-state-dmcontrol.png`;
+- terminal player screenshot:
+  `terminal-selector-failure-assert-player-visible-state.png`;
+- all role traces plus `summary.json` and `summary.md`.
 
 ## Evidence
 

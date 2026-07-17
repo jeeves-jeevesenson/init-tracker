@@ -59,6 +59,14 @@ auto-dismissed and no spell command reached the server. The harness now scopes
 an ordinary dialog accept to the normal target-confirm click; the extended
 regression and the full 37-node set pass.
 
+Browser attempt `20260717_000637` passed 83 steps: a full authoritative round,
+both summon turns, all attacks and spells, and the DM plus DM-control final
+assertions. Its only failure was requiring the configurable hidden
+`#mapViewTurnOrderStatus` element on player pages. The final player assertion
+still requires the visible turn field and turn-order chip bar but no longer
+requires that optional status element. The exact new regression and accumulated
+38-node set pass.
+
 ```text
 A7_GATE=A7-AUTO
 A7_STATE=autonomous-completion-running

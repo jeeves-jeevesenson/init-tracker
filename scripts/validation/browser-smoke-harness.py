@@ -259,7 +259,7 @@ def build_three_surface_workflow_plan() -> Dict[str, Any]:
         "assert-player-visible-state",
         "/",
         "assert-visible-state",
-        selectors=("#connFullText", "#me", "#turn", "#playerHpBarLabel", "#action", "#mapViewTurnOrder", "#mapViewTurnOrderStatus", "#c"),
+        selectors=("#connFullText", "#me", "#turn", "#playerHpBarLabel", "#action", "#mapViewTurnOrder", "#c"),
     )
 
     return {

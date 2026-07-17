@@ -201,6 +201,19 @@ def test_three_surface_plan_uses_verified_selectors_and_ordered_steps():
     assert any(step.get("smoke_api") == "handleCombatControl()" for step in plan["steps"])
 
 
+def test_three_surface_player_final_assertion_ignores_optional_hidden_turn_status():
+    harness = _load_browser_smoke_harness()
+    plan = harness.build_three_surface_workflow_plan()
+    step = next(
+        item for item in plan["steps"]
+        if item["step_id"] == "assert-player-visible-state"
+    )
+
+    assert "#turn" in step["selectors"]
+    assert "#mapViewTurnOrder" in step["selectors"]
+    assert "#mapViewTurnOrderStatus" not in step["selectors"]
+
+
 def test_three_surface_roster_setup_precedes_encounter_tab():
     harness = _load_browser_smoke_harness()
     plan = harness.build_three_surface_workflow_plan()
