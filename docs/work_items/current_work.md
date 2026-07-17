@@ -36,6 +36,13 @@ unopened.
 The cumulative result is
 `docs/work_items/A7-AUTO-autonomous-completion-result.md`.
 
+The summon turn-advancement correction is validated. Normal candidate
+selection no longer treats `summoned_by_cid` alone as an exclusion, while the
+existing cadence and shared-mount exclusions remain unchanged. The six exact
+real End Turn regressions pass, covering Raven, Owl, summon removal, ordinary
+round wrapping, snapshot versioning, and WebSocket fanout. The autonomous
+browser completion loop is the active next action.
+
 ```text
 A7_GATE=A7-AUTO
 A7_STATE=autonomous-completion-running

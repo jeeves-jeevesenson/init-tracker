@@ -57,10 +57,44 @@ They confirm that authoritative `turn_order` includes living summons while
 
 ## Progress
 
-- Durable autonomous authorization recorded; initial validation and commit are
-  pending.
-- Summon turn-advancement correction is pending.
+- Durable autonomous authorization was validated with `git diff --check` and
+  committed as `Authorize A7 autonomous completion loop.`
+- Summon turn-advancement correction is validated and ready for its focused
+  commit.
 - Autonomous browser completion attempts are pending.
+
+## Summon Turn-Advancement Correction
+
+The application root cause was the blanket `summoned_by_cid` branch in
+`_should_skip_turn()`. `_lan_snapshot()` published the complete display-derived
+order, but `_next_normal_turn_candidate()` filtered every summon from that
+same order before selecting the next active CID. The correction removes only
+that owner-metadata exclusion. Cadence actors and shared-turn mounts retain
+their existing explicit exclusions, removed actors remain absent from the
+authoritative display order, and start-of-turn condition handling remains
+unchanged.
+
+Six exact regressions now drive the real `_lan_apply_action()` player End Turn
+dispatch through `PlayerCommandService`, `_next_turn_via_service()`, and the
+authoritative `_next_turn()` candidate path. They prove Stikhiya advances to a
+living Raven, Raven acts once before Captain, an equivalently positioned Owl
+is eligible, a removed zero-HP summon remains ineligible, ordinary advancement
+and round wrapping remain authoritative, and the corrected transition retains
+combat-version increment plus scheduled personalized WebSocket fanout.
+
+The first exact six-node run produced five passes and one test-fixture timeout.
+The version/fanout fixture entered unrelated spell/capability hydration during
+broadcast serialization and exceeded its bounded wait. The fixture was
+narrowed to its dynamic state, PC, and `you` payload seams while preserving the
+real End Turn, authoritative selection, version increment, broadcast
+scheduling, and WebSocket sends. No production behavior changed for this
+fixture correction.
+
+Focused validation then passed exactly:
+
+- `timeout 30s .venv/bin/python3 -m py_compile dnd_initative_tracker.py tests/test_server_runtime.py`;
+- the six required `tests/test_server_runtime.py` nodes: `6 passed in 0.45s`;
+- `timeout 10s git diff --check -- dnd_initative_tracker.py tests/test_server_runtime.py`.
 
 ## Evidence
 

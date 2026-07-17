@@ -5987,3 +5987,288 @@ def test_a7_player_turn_sync_preserves_claim_and_command_behavior():
     assert controller._build_you_payload(1001)["claim_rev"] == 4
     assert controller._build_you_payload(1002)["claimed_cid"] == 320
     assert controller._build_you_payload(1002)["claim_rev"] == 7
+
+
+def _a7_authoritative_summon_turn_fixture(
+    *,
+    order=(32, 33, 34),
+    summon_cid=33,
+    summon_name="Raven",
+    capture_broadcast=True,
+    tracker=None,
+    lan=None,
+):
+    from types import SimpleNamespace
+    from dnd_initative_tracker import InitiativeTracker
+
+    class CaptureLan:
+        def __init__(self):
+            self.toasts = []
+            self.broadcasts = []
+
+        def _append_lan_log(self, *_args, **_kwargs):
+            return None
+
+        def toast(self, ws_id, message):
+            self.toasts.append((ws_id, message))
+
+    if tracker is None:
+        tracker = InitiativeTracker.__new__(InitiativeTracker)
+    if lan is None:
+        lan = CaptureLan()
+
+    names = {
+        10: "First",
+        20: "Middle",
+        30: "Last",
+        32: "Stikhiya",
+        33: "Raven",
+        34: "Black and Tan Captain",
+        43: "Owl",
+    }
+    combatants = {}
+    for index, cid in enumerate(order):
+        is_summon = int(cid) == int(summon_cid)
+        combatants[int(cid)] = SimpleNamespace(
+            cid=int(cid),
+            name=summon_name if is_summon else names.get(int(cid), f"Actor {cid}"),
+            is_pc=not is_summon,
+            initiative=100 - index,
+            nat20=False,
+            dex=10,
+            hp=10,
+            max_hp=10,
+            condition_stacks=[],
+            summoned_by_cid=99 if is_summon else None,
+            turn_schedule_mode="normal",
+            mounted_by_cid=None,
+            mount_shared_turn=False,
+        )
+
+    tracker.combatants = combatants
+    tracker.current_cid = int(order[0])
+    tracker.start_cid = int(order[0])
+    tracker.round_num = 1
+    tracker.turn_num = 1
+    tracker.in_combat = True
+    tracker._current_turn_kind = "normal"
+    tracker._normal_turns_completed = 0
+    tracker._cadence_counters = {}
+    tracker._cadence_pending_queue = []
+    tracker._cadence_resume_normal_cid = None
+    tracker._turn_history = []
+    tracker._monster_sequence_state = {}
+    tracker._monster_modifier_state = {}
+    tracker._monster_resource_state = {}
+    tracker._lan_aoes = {}
+    tracker._pending_reaction_offers = {}
+    tracker._name_role_memory = {
+        str(actor.name): ("pc" if actor.is_pc else "ally")
+        for actor in combatants.values()
+    }
+    tracker._lan = lan
+    tracker._dm_service = None
+    tracker._lan_combat_snapshot_version = 40
+    tracker.__dict__.pop("_player_commands", None)
+
+    order_ids = [int(cid) for cid in order]
+    tracker._display_order = lambda: [
+        tracker.combatants[cid] for cid in order_ids if cid in tracker.combatants
+    ]
+    tracker._expire_reaction_offers = lambda force=False: None
+    tracker._log = lambda *_args, **_kwargs: None
+    tracker._end_turn_cleanup = lambda *_args, **_kwargs: None
+    tracker._log_turn_end = lambda *_args, **_kwargs: None
+    tracker._log_turn_start = lambda *_args, **_kwargs: None
+    tracker._enter_turn_with_auto_skip = (
+        lambda starting=False: tracker.__dict__.setdefault("_a7_started_cids", []).append(
+            tracker.current_cid
+        )
+    )
+    tracker._rebuild_table = lambda *_args, **_kwargs: None
+    tracker._claimed_cids_snapshot = lambda: {32, 99}
+    tracker._should_show_dm_up_alert = lambda *_args, **_kwargs: False
+    tracker._tick_polymorph_durations = lambda: None
+    tracker._oplog = lambda *_args, **_kwargs: None
+    tracker._is_admin_token_valid = lambda _token: False
+
+    def snapshot():
+        ordered = tracker._display_order()
+        return {
+            "active_cid": tracker.current_cid,
+            "round_num": tracker.round_num,
+            "turn_order": [actor.cid for actor in ordered],
+            "units": [
+                {
+                    "cid": actor.cid,
+                    "name": actor.name,
+                    "role": "pc" if actor.is_pc else "ally",
+                    "summoned_by_cid": actor.summoned_by_cid,
+                }
+                for actor in ordered
+            ],
+        }
+
+    if capture_broadcast:
+        def force_broadcast(*_args, **_kwargs):
+            tracker._lan_combat_snapshot_version += 1
+            lan.broadcasts.append(
+                {
+                    "combat_version": tracker._lan_combat_snapshot_version,
+                    "state": snapshot(),
+                }
+            )
+
+        tracker._lan_force_state_broadcast = force_broadcast
+
+    return tracker, lan, snapshot
+
+
+def _a7_end_authoritative_player_turn(tracker, *, cid, claimed_cid=None, ws_id=7001):
+    tracker._lan_apply_action(
+        {
+            "type": "end_turn",
+            "cid": int(cid),
+            "_claimed_cid": int(cid if claimed_cid is None else claimed_cid),
+            "_ws_id": ws_id,
+        }
+    )
+
+
+def test_a7_player_end_turn_advances_to_living_raven_in_authoritative_order():
+    tracker, lan, _snapshot = _a7_authoritative_summon_turn_fixture()
+
+    _a7_end_authoritative_player_turn(tracker, cid=32)
+
+    assert tracker.current_cid == 33
+    assert tracker.turn_num == 2
+    assert tracker.round_num == 1
+    assert tracker.combatants[33].summoned_by_cid == 99
+    assert lan.broadcasts[-1]["state"]["active_cid"] == 33
+    assert lan.broadcasts[-1]["state"]["turn_order"] == [32, 33, 34]
+
+
+def test_a7_raven_acts_once_then_advances_to_following_actor():
+    tracker, lan, _snapshot = _a7_authoritative_summon_turn_fixture()
+
+    _a7_end_authoritative_player_turn(tracker, cid=32)
+    _a7_end_authoritative_player_turn(tracker, cid=33, claimed_cid=99, ws_id=7002)
+
+    assert tracker.__dict__["_a7_started_cids"] == [33, 34]
+    assert tracker.current_cid == 34
+    assert tracker.turn_num == 3
+    assert tracker.round_num == 1
+    assert [entry["state"]["active_cid"] for entry in lan.broadcasts] == [33, 34]
+
+
+def test_a7_player_end_turn_advances_to_living_owl_in_authoritative_order():
+    tracker, lan, _snapshot = _a7_authoritative_summon_turn_fixture(
+        order=(32, 43, 34),
+        summon_cid=43,
+        summon_name="Owl",
+    )
+
+    _a7_end_authoritative_player_turn(tracker, cid=32)
+
+    assert tracker.current_cid == 43
+    assert tracker.combatants[43].name == "Owl"
+    assert tracker.combatants[43].summoned_by_cid == 99
+    assert lan.broadcasts[-1]["state"]["active_cid"] == 43
+
+
+def test_a7_dead_or_removed_summon_remains_ineligible_for_turn():
+    tracker, lan, _snapshot = _a7_authoritative_summon_turn_fixture()
+    dead_raven = tracker.combatants[33]
+    dead_raven.hp = 0
+    tracker.combatants.pop(33)
+
+    _a7_end_authoritative_player_turn(tracker, cid=32)
+
+    assert dead_raven.hp == 0
+    assert 33 not in tracker.combatants
+    assert tracker.current_cid == 34
+    assert lan.broadcasts[-1]["state"]["turn_order"] == [32, 34]
+
+
+def test_a7_non_summon_advancement_and_round_wrap_remain_authoritative():
+    tracker, lan, _snapshot = _a7_authoritative_summon_turn_fixture(
+        order=(10, 20, 30),
+        summon_cid=-1,
+    )
+    tracker.current_cid = 20
+    tracker.start_cid = 10
+
+    _a7_end_authoritative_player_turn(tracker, cid=20)
+    _a7_end_authoritative_player_turn(tracker, cid=30, ws_id=7002)
+
+    assert [entry["state"]["active_cid"] for entry in lan.broadcasts] == [30, 10]
+    assert tracker.current_cid == 10
+    assert tracker.turn_num == 3
+    assert tracker.round_num == 2
+
+
+def test_a7_summon_advancement_preserves_snapshot_version_and_fanout():
+    tracker, controller, sockets, _commands, _toasts = _a7_player_turn_sync_fixture()
+    tracker, controller, snapshot = _a7_authoritative_summon_turn_fixture(
+        tracker=tracker,
+        lan=controller,
+        capture_broadcast=False,
+    )
+
+    controller._claims = {1001: 32, 1002: 34}
+    controller._cid_to_ws = {32: {1001}, 34: {1002}}
+    controller._cid_to_host = {32: {"stikhiya.test"}, 34: {"captain.test"}}
+    controller._client_id_claims = {"stikhiya-client": 32, "captain-client": 34}
+    controller._client_id_to_ws = {"stikhiya-client": {1001}, "captain-client": {1002}}
+    controller._client_ids = {1001: "stikhiya-client", 1002: "captain-client"}
+    controller._client_hosts = {1001: "stikhiya.test", 1002: "captain.test"}
+    controller._client_claim_revs = {"stikhiya-client": 4, "captain-client": 7}
+    controller._ws_claim_revs = {1001: 4, 1002: 7}
+    controller._cached_pcs = [
+        {"cid": 32, "name": "Stikhiya"},
+        {"cid": 34, "name": "Black and Tan Captain"},
+    ]
+    controller._cached_snapshot = snapshot()
+    controller._last_snapshot = snapshot()
+    controller._dynamic_snapshot_payload = lambda snap: dict(snap)
+    controller._pcs_payload = lambda: list(controller._cached_pcs)
+    controller._build_you_payload = lambda ws_id: {
+        "claimed_cid": controller._claims.get(ws_id),
+        "claimed_name": (
+            "Stikhiya" if controller._claims.get(ws_id) == 32
+            else "Black and Tan Captain"
+        ),
+        "claim_rev": controller._ws_claim_revs.get(ws_id, 0),
+        "pending_prompts": [],
+        "pending_prompt": None,
+    }
+    tracker._lan_static_snapshot_cache_status = lambda: (True, "cached", 1)
+    tracker._lan_merge_cached_static_snapshot = lambda snap: (snap, True)
+    tracker._lan_pcs = lambda: list(controller._cached_pcs)
+    tracker._lan_snapshot = lambda **_kwargs: snapshot()
+    tracker._debug_trace_counts = lambda: {
+        "combatant_count": 3,
+        "player_count": 2,
+        "monster_count": 1,
+        "map_aoe_count": 0,
+        "pending_prompt_count": 0,
+        "pending_reaction_count": 0,
+        "websocket_client_count": 2,
+        "dm_websocket_client_count": 0,
+        "total_websocket_client_count": 2,
+    }
+
+    _a7_run_scheduled_state_fanout(
+        controller,
+        [lambda: _a7_end_authoritative_player_turn(tracker, cid=32)],
+    )
+
+    assert tracker.current_cid == 33
+    assert tracker._lan_combat_snapshot_version == 41
+    assert controller._cached_snapshot["active_cid"] == 33
+    assert controller._cached_snapshot["turn_order"] == [32, 33, 34]
+    for socket in sockets.values():
+        assert len(socket.messages) == 1
+        assert socket.messages[0]["combat_version"] == 41
+        assert socket.messages[0]["state"]["active_cid"] == 33
+        assert socket.messages[0]["state"]["turn_order"] == [32, 33, 34]

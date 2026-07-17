@@ -22,6 +22,13 @@ remains unopened.
 The cumulative result is
 `docs/work_items/A7-AUTO-autonomous-completion-result.md`.
 
+The summon turn-advancement correction is validated. `_should_skip_turn()` no
+longer excludes an actor merely because it has `summoned_by_cid`; cadence and
+shared-mount exclusions are unchanged. Six exact regressions exercise the real
+player End Turn dispatch and authoritative advance path for Raven, Raven's one
+turn, Owl, removed summons, ordinary round wrapping, snapshot versioning, and
+WebSocket fanout. The autonomous browser completion loop is now active.
+
 ```text
 A7_GATE=A7-AUTO
 A7_STATE=autonomous-completion-running

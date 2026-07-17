@@ -12941,9 +12941,6 @@ class InitiativeTracker(base.InitiativeTracker):
             return False
         if str(getattr(combatant, "turn_schedule_mode", "") or "").strip().lower() == "cadence":
             return True
-        summon_owner = _normalize_cid_value(getattr(combatant, "summoned_by_cid", None), "turn.skip.summon.owner")
-        if summon_owner is not None:
-            return True
         mounted_by = _normalize_cid_value(getattr(combatant, "mounted_by_cid", None), "turn.skip.mounted_by")
         return mounted_by is not None and bool(getattr(combatant, "mount_shared_turn", False))
 
