@@ -10,9 +10,9 @@ Gate: `A7-AUTO`
 
 Starting commit: `f661b55104f6f0a10c1b64f4a9510b8196996894`
 
-State: `running`
+State: `completed`
 
-Browser result: `pending`
+Browser result: `pass`
 
 ## Authorization
 
@@ -26,15 +26,16 @@ remain prohibited.
 
 ```text
 A7_GATE=A7-AUTO
-A7_STATE=autonomous-completion-running
-A7_AUTO_STATE=running
+A7_STATE=autonomous-three-surface-workflow-completed
+A7_AUTO_STATE=completed
+A7_AUTO_BROWSER_RESULT=pass
 A7_AUTO_APPROVAL=developer-standing-end-to-end-yolo-2026-07-16
 A7_AUTO_ALLOWED_FILES=dnd_initative_tracker.py,assets/web/lan/index.html,scripts/validation/browser-smoke-harness.py,tests/test_server_runtime.py,tests/test_browser_smoke_harness.py,docs/work_items/current_work.md,docs/work_items/WORK-20260715-a7-browser-automation.md,docs/work_items/A7-AUTO-autonomous-completion-result.md
-A7_IMPLEMENTATION_AUTHORIZED=true
-A7_TEST_EXECUTION_AUTHORIZED=true
-A7_BROWSER_EXECUTION_AUTHORIZED=true
-A7_RUNTIME_EXECUTION_AUTHORIZED=true
-A7_NETWORK_AUTHORIZED=true
+A7_IMPLEMENTATION_AUTHORIZED=false
+A7_TEST_EXECUTION_AUTHORIZED=false
+A7_BROWSER_EXECUTION_AUTHORIZED=false
+A7_RUNTIME_EXECUTION_AUTHORIZED=false
+A7_NETWORK_AUTHORIZED=false
 A7_PUSH_AUTHORIZED=false
 A7_DEPLOYMENT_AUTHORIZED=false
 A7_RESTART_AUTHORIZED=false
@@ -58,18 +59,19 @@ They confirm that authoritative `turn_order` includes living summons while
 ## Progress
 
 - Durable autonomous authorization was validated with `git diff --check` and
-  committed as `Authorize A7 autonomous completion loop.`
+  committed as `14a364a` (`Authorize A7 autonomous completion loop.`).
 - Summon turn-advancement correction is validated and committed as
-  `Correct A7 summon turn advancement.`
+  `35e9eb6` (`Correct A7 summon turn advancement.`).
 - Browser attempt 1 proved one harness defect; its correction is committed as
-  `Handle A7 multi-target spell selection.`
+  `a4c11f5` (`Handle A7 multi-target spell selection.`).
 - Browser attempt 2 proved the remaining dialog-handling half of that
   interaction; its correction is committed as
-  `Handle A7 multi-target spell confirmation.`
+  `49ac1ab` (`Handle A7 multi-target spell confirmation.`).
 - Browser attempt 3 completed the full round and proved one optional-selector
-  harness defect; its correction and the accumulated 38-node focused
-  validation pass and are ready for a focused commit.
-- Browser completion remains in progress.
+  harness defect; its correction is committed as `9245152`
+  (`Respect optional A7 player turn status.`).
+- Browser attempt 4 passed all 84 ordered workflow steps. The terminal state
+  is recorded by `Complete A7 autonomous three-surface browser workflow.`
 
 ## Summon Turn-Advancement Correction
 
@@ -226,7 +228,56 @@ Evidence:
   `terminal-selector-failure-assert-player-visible-state.png`;
 - all role traces plus `summary.json` and `summary.md`.
 
+## Browser Attempt 4: `20260717_001106`
+
+Attempt 4 used the exact browser command against the same positively verified
+owned server after the accumulated 38-node focused validation passed in
+`1.69s`. It passed all 84 ordered steps. The scenario completed a full
+authoritative round, exercised both Owl and Raven summon turns exactly once,
+completed all planned player and enemy attacks and spells, and passed the DM,
+DM-control, and all ten claimed-player final visible-state assertions.
+
+The browser command exited zero and the run summary records `status: pass`,
+`executed_step_count: 84`, and no failure step or retry. No unchanged-code
+retry, stress scenario, broad suite, full test file, collection-only run,
+force click, DOM bypass, JavaScript click, or polling workaround was used.
+
+Evidence:
+
+- artifact run:
+  `logs/smoke/CODEX-20260716-a7-autonomous-completion_browser-artifacts/black-tan-three-surface-workflow/20260717_001106/`;
+- `summary.json` and `summary.md`;
+- `browser-trace.zip`, DM-control role trace, and all ten player role traces;
+- DM, DM-control, and all ten player final screenshots;
+- smoke server log:
+  `logs/smoke/CODEX-20260716-a7-autonomous-completion_smoke-server_20260716-235622.log`;
+- owned-server debug trace: `logs/debug-trace-20260716-235622.jsonl`.
+
+## Runtime Ownership and Cleanup
+
+Before startup, both `ss` and `lsof` proved port 8787 free. The exact server
+command created owned process group and session `105455`: shell PID `105455`,
+repository virtual-environment Python listener PID `105456`, and tee PID
+`105457`. User, working directory, command line, environment, listener PID,
+and repository path were positively verified before browser execution.
+
+After the passing attempt, one graceful SIGINT stopped the owned group. The
+execution session closed, `ps` found no remaining member of process group
+`105455`, `/proc` entries for all three owned PIDs were absent, `ss` showed no
+8787 listener, and `lsof` found no TCP listener on port 8787. No SIGKILL,
+unverified-process adoption, or service mutation occurred.
+
+## Final Focused Validation
+
+- exact application `py_compile`: passed;
+- six exact summon-advancement runtime nodes: `6 passed in 0.45s`;
+- exact browser-harness/test `py_compile` before every attempt: passed;
+- retained 36 browser-harness nodes plus the two exact new regression nodes:
+  `38 passed in 1.69s` immediately before the passing attempt;
+- required focused `git diff --check` commands after each candidate: passed;
+- exact black-tan three-surface browser scenario: `84/84` steps passed.
+
 ## Evidence
 
-Generated A7-AUTO evidence will be retained only under the authorized smoke
-server log, browser artifact root, and owned-server debug trace paths.
+Generated A7-AUTO evidence is retained only under the authorized smoke server
+log, browser artifact root, and owned-server debug trace paths listed above.

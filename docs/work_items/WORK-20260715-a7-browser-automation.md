@@ -6,7 +6,7 @@ Work item: `WORK-20260715-a7-browser-automation`
 
 Active gate: `A7-AUTO`
 
-State: `autonomous-completion-running`
+State: `autonomous-three-surface-workflow-completed`
 
 Approval: `developer-standing-end-to-end-yolo-2026-07-16`
 
@@ -27,7 +27,7 @@ longer excludes an actor merely because it has `summoned_by_cid`; cadence and
 shared-mount exclusions are unchanged. Six exact regressions exercise the real
 player End Turn dispatch and authoritative advance path for Raven, Raven's one
 turn, Owl, removed summons, ordinary round wrapping, snapshot versioning, and
-WebSocket fanout. The autonomous browser completion loop is now active.
+WebSocket fanout.
 
 Browser attempt `20260716_235735` passed 48 steps, including Owl's corrected
 summon turn, then proved a harness defect at Throat Goat's Eldritch Blast. The
@@ -53,17 +53,24 @@ assertion continues to require the visible turn field and turn-order chip bar
 but no longer requires the optional status element. The exact new regression
 and accumulated 38-node focused validation pass.
 
+Browser attempt `20260717_001106` passed all 84 ordered steps, including the
+full authoritative round, both summon turns, all planned player and enemy
+attacks and spells, and the final visible-state assertions on DM, DM-control,
+and all ten claimed player surfaces. The server was stopped with graceful
+SIGINT; the owned process group and PIDs are gone and port 8787 is free.
+
 ```text
 A7_GATE=A7-AUTO
-A7_STATE=autonomous-completion-running
-A7_AUTO_STATE=running
+A7_STATE=autonomous-three-surface-workflow-completed
+A7_AUTO_STATE=completed
+A7_AUTO_BROWSER_RESULT=pass
 A7_AUTO_APPROVAL=developer-standing-end-to-end-yolo-2026-07-16
 A7_AUTO_ALLOWED_FILES=dnd_initative_tracker.py,assets/web/lan/index.html,scripts/validation/browser-smoke-harness.py,tests/test_server_runtime.py,tests/test_browser_smoke_harness.py,docs/work_items/current_work.md,docs/work_items/WORK-20260715-a7-browser-automation.md,docs/work_items/A7-AUTO-autonomous-completion-result.md
-A7_IMPLEMENTATION_AUTHORIZED=true
-A7_TEST_EXECUTION_AUTHORIZED=true
-A7_BROWSER_EXECUTION_AUTHORIZED=true
-A7_RUNTIME_EXECUTION_AUTHORIZED=true
-A7_NETWORK_AUTHORIZED=true
+A7_IMPLEMENTATION_AUTHORIZED=false
+A7_TEST_EXECUTION_AUTHORIZED=false
+A7_BROWSER_EXECUTION_AUTHORIZED=false
+A7_RUNTIME_EXECUTION_AUTHORIZED=false
+A7_NETWORK_AUTHORIZED=false
 A7_PUSH_AUTHORIZED=false
 A7_DEPLOYMENT_AUTHORIZED=false
 A7_RESTART_AUTHORIZED=false

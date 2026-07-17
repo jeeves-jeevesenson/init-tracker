@@ -8,10 +8,10 @@ If an item is not marked as **Active** here, it is NOT current work.
 ## Current Status
 
 <!-- ACTIVE_WORK_STATUS_START -->
-- **Status:** Active
+- **Status:** Completed
 - **Current Work Item:** `WORK-20260715-a7-browser-automation`
 - **Active Gate:** A7-AUTO
-- **Allowed Next Action:** Complete the black-tan three-surface browser workflow under the developer's standing end-to-end A7-AUTO authorization. Implementation, focused tests, one owned localhost runtime, and headless browser execution are open only within the exact recorded file and evidence boundaries; push, deployment, restart, scheduler, production, and service mutation remain closed.
+- **Allowed Next Action:** None under A7-AUTO. The black-tan three-surface browser workflow completed successfully; all implementation, test, browser, runtime, and network authorizations are closed. Push, deployment, restart, scheduler, production, and service mutation remain closed.
 - <!-- ACTIVE_WORK_STATUS_END -->
 
 ---
@@ -21,7 +21,7 @@ If an item is not marked as **Active** here, it is NOT current work.
 | ID | Title | Status | Goal |
 | --- | --- | --- | --- |
 <!-- ACTIVE_WORK_TABLE_START -->
-| WORK-20260715-a7-browser-automation | A7 browser-driven human-workflow automation | Active | A7-AUTO is running the summon correction and autonomous browser completion loop through terminal workflow pass or a defined human boundary. |
+| WORK-20260715-a7-browser-automation | A7 browser-driven human-workflow automation | Completed | A7-AUTO corrected summon advancement and completed the 84-step black-tan three-surface browser workflow. |
 <!-- ACTIVE_WORK_TABLE_END -->
 
 ## A7-AUTO Autonomous Completion
@@ -40,8 +40,7 @@ The summon turn-advancement correction is validated. Normal candidate
 selection no longer treats `summoned_by_cid` alone as an exclusion, while the
 existing cadence and shared-mount exclusions remain unchanged. The six exact
 real End Turn regressions pass, covering Raven, Owl, summon removal, ordinary
-round wrapping, snapshot versioning, and WebSocket fanout. The autonomous
-browser completion loop is the active next action.
+round wrapping, snapshot versioning, and WebSocket fanout.
 
 Browser attempt `20260716_235735` passed 48 steps, including Owl's corrected
 summon turn, then proved a harness defect at Throat Goat's Eldritch Blast. The
@@ -67,17 +66,24 @@ still requires the visible turn field and turn-order chip bar but no longer
 requires that optional status element. The exact new regression and accumulated
 38-node set pass.
 
+Browser attempt `20260717_001106` passed all 84 ordered steps, including both
+summon turns, all planned player and enemy attacks and spells, and the final
+visible-state assertions on DM, DM-control, and all ten claimed player
+surfaces. The owned server then exited under graceful SIGINT; its process
+group and all three owned PIDs are absent, and port 8787 is free.
+
 ```text
 A7_GATE=A7-AUTO
-A7_STATE=autonomous-completion-running
-A7_AUTO_STATE=running
+A7_STATE=autonomous-three-surface-workflow-completed
+A7_AUTO_STATE=completed
+A7_AUTO_BROWSER_RESULT=pass
 A7_AUTO_APPROVAL=developer-standing-end-to-end-yolo-2026-07-16
 A7_AUTO_ALLOWED_FILES=dnd_initative_tracker.py,assets/web/lan/index.html,scripts/validation/browser-smoke-harness.py,tests/test_server_runtime.py,tests/test_browser_smoke_harness.py,docs/work_items/current_work.md,docs/work_items/WORK-20260715-a7-browser-automation.md,docs/work_items/A7-AUTO-autonomous-completion-result.md
-A7_IMPLEMENTATION_AUTHORIZED=true
-A7_TEST_EXECUTION_AUTHORIZED=true
-A7_BROWSER_EXECUTION_AUTHORIZED=true
-A7_RUNTIME_EXECUTION_AUTHORIZED=true
-A7_NETWORK_AUTHORIZED=true
+A7_IMPLEMENTATION_AUTHORIZED=false
+A7_TEST_EXECUTION_AUTHORIZED=false
+A7_BROWSER_EXECUTION_AUTHORIZED=false
+A7_RUNTIME_EXECUTION_AUTHORIZED=false
+A7_NETWORK_AUTHORIZED=false
 A7_PUSH_AUTHORIZED=false
 A7_DEPLOYMENT_AUTHORIZED=false
 A7_RESTART_AUTHORIZED=false
