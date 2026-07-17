@@ -10,8 +10,8 @@ If an item is not marked as **Active** here, it is NOT current work.
 <!-- ACTIVE_WORK_STATUS_START -->
 - **Status:** Active
 - **Current Work Item:** `WORK-20260715-a7-browser-automation`
-- **Active Gate:** A7-G19 player-turn synchronization correction authorized, not started
-- **Allowed Next Action:** One later bounded G19 implementation and focused-test pass in exactly `assets/web/lan/index.html`, `dnd_initative_tracker.py`, and `tests/test_server_runtime.py`. Browser, server, runtime, endpoint, localhost, network, push, deployment, restart, scheduler, production, and service-mutation action remains closed.
+- **Active Gate:** A7-G20 awaiting browser preparation, not opened
+- **Allowed Next Action:** Orchestrator acceptance and preparation of one autonomous host-access three-surface browser stabilization packet. All implementation, test, browser, runtime, endpoint, localhost, network, push, deployment, restart, scheduler, production, and service-mutation action remains closed.
 - <!-- ACTIVE_WORK_STATUS_END -->
 
 ---
@@ -21,70 +21,56 @@ If an item is not marked as **Active** here, it is NOT current work.
 | ID | Title | Status | Goal |
 | --- | --- | --- | --- |
 <!-- ACTIVE_WORK_TABLE_START -->
-| WORK-20260715-a7-browser-automation | A7 browser-driven human-workflow automation | Active | G18 accepted the proven G17 connected-player active-turn synchronization defect and authorized one later G19 correction in exactly `assets/web/lan/index.html`, `dnd_initative_tracker.py`, and `tests/test_server_runtime.py`. Implementation and focused tests are authorized only for that later bounded task; all browser and operational execution remains closed. |
+| WORK-20260715-a7-browser-automation | A7 browser-driven human-workflow automation | Active | G19 corrected the connected-player turn synchronization defect and is accepted at implementation commit `43620b2`. All execution authorization is closed, and G20 remains not opened pending orchestrator preparation of one autonomous host-access three-surface browser stabilization packet. |
 <!-- ACTIVE_WORK_TABLE_END -->
 
 ---
 
-## A7-G18 Player Turn Synchronization Authorization
+## A7-G19 Player Turn Synchronization Correction Acceptance
 
-G18 is completed as a documentation-only authorization gate. G17 started from
-target commit `c0b3ef4` and ended at target result commit `d450a71`. Sixteen
-browser attempts ran, and no unchanged-code retry occurred. Attempts 1 through
-15 exposed evidence-backed harness defects and advanced execution. Focused
-validation grew from 23 to 35 passing exact nodes, and every candidate compile
-and two-file diff check passed. G17 restored the harness/test candidates under
-its controlled-stop policy. Future browser packets must preserve and commit
-individually validated harness progress when a later application defect is
-encountered, rather than discarding all prior proven corrections.
-
-Attempt 16 proved an application defect at
-`player-spell-pc:john-twilight`. Malagrou's enabled End Turn click completed
-normally. The debug trace recorded `player_command.end_turn` for Malagrou
-`cid=322` with `ok:true`, and backend combat authority advanced to John
-Twilight `cid=320`. John's already-connected claimed player surface remained
-stale on Malagrou; John's `#endTurn` remained disabled and timed out. Port
-ownership and cleanup were positively verified. No push, deployment,
-scheduler, production, restart, or service mutation occurred.
-
-Inspection confirms that the exact three-file future G19 boundary is
-sufficient and that no additional source or test file is required:
+G19 is completed and accepted at implementation commit `43620b2`. Exactly
+these files changed:
 
 - `assets/web/lan/index.html`
 - `dnd_initative_tracker.py`
 - `tests/test_server_runtime.py`
 
-One later G19 correction is authorized with this exact contract:
+The root cause was that combat snapshot versioning was trace-only,
+authoritative state and `turn_update` envelopes lacked an ordering revision,
+scheduled broadcasts rebuilt payloads from mutable cached state rather than
+their captured authoritative snapshot, and the player client applied every
+arriving envelope unconditionally. Stale state could therefore replace a
+newer active actor.
 
-1. After one player successfully ends a turn, every already-connected claimed
-   player surface must apply the new backend-authoritative active actor.
-2. John Twilight's claimed surface must transition from the prior actor to
-   John without reload, reconnect, reclaim, or manual interaction.
-3. Enabled and disabled turn controls must reflect the newly authoritative
-   actor.
-4. Preserve claim ownership, combat mutation authority, initiative order,
-   WebSocket/session behavior, and existing player commands.
-5. Reject or ignore stale or out-of-order client state rather than regressing
-   to an older active actor.
-6. Do not add polling merely to mask a missing state broadcast.
-7. Do not alter combat rules, action economy, spell behavior, turn order, or
-   player identity.
-8. Add focused coverage proving that an already-connected claimed player
-   applies the next active actor after another player ends turn, stale or
-   out-of-order state cannot overwrite the newer active actor, and existing
-   claim and command behavior remains intact.
+The existing monotonic combat version is now included in initial, recovery,
+full-state, and turn-update messages. Authoritative full broadcasts and
+polling-channel turn changes advance it. Full broadcasts serialize the
+captured authoritative snapshot. The LAN client rejects lower-version state
+and rejects unversioned state after versioned state has been applied.
+Reconnect resets only the ordering baseline, while claim revision and
+ownership remain independent. Turn controls, command authority, initiative
+order, player identity, and personalized claim payloads remain preserved.
 
-The implementation and test flags below authorize only the later bounded G19
-task. They do not authorize implementation or test execution during G18.
+The accepted validation is:
+
+- `py_compile` passed;
+- exactly three focused tests passed in `0.87 seconds`;
+- the three-file diff check passed; and
+- the inline JavaScript Node syntax check passed.
+
+The durable result is
+`docs/work_items/A7-G19-player-turn-sync-correction-result.md`.
 
 ```text
-A7_GATE=A7-G19
-A7_STATE=player-turn-sync-correction-authorized
-A7_G18_STATE=completed
-A7_G19_STATE=authorized-not-started
-A7_G19_ALLOWED_FILES=assets/web/lan/index.html,dnd_initative_tracker.py,tests/test_server_runtime.py
-A7_IMPLEMENTATION_AUTHORIZED=true
-A7_TEST_EXECUTION_AUTHORIZED=true
+A7_GATE=A7-G20
+A7_STATE=player-turn-sync-correction-accepted-awaiting-browser-preparation
+A7_G19_STATE=completed
+A7_G19_RESULT=docs/work_items/A7-G19-player-turn-sync-correction-result.md
+A7_G19_TARGET_COMMIT=43620b2
+A7_G19_VALIDATION=pycompile-3-focused-tests-js-syntax-and-diff-check-passed
+A7_G20_STATE=not-opened
+A7_IMPLEMENTATION_AUTHORIZED=false
+A7_TEST_EXECUTION_AUTHORIZED=false
 A7_BROWSER_EXECUTION_AUTHORIZED=false
 A7_RUNTIME_EXECUTION_AUTHORIZED=false
 A7_NETWORK_AUTHORIZED=false
@@ -95,6 +81,16 @@ A7_SCHEDULER_AUTHORIZED=false
 A7_PRODUCTION_AUTHORIZED=false
 A7_SERVICE_MUTATION_AUTHORIZED=false
 ```
+
+No browser, server, runtime, endpoint, localhost, network, dependency, push,
+deployment, restart, scheduler, production, or service action occurred. The
+approximately-200-enemy stress scenario remains unopened.
+
+The next safe action is orchestrator acceptance and preparation of one
+autonomous host-access three-surface browser stabilization packet. That future
+packet must preserve and commit independently validated harness progress even
+when a later application defect causes a controlled stop. A7-G20 remains not
+opened.
 
 ---
 

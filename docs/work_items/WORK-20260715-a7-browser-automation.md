@@ -4,9 +4,9 @@ Date: `2026-07-15 UTC`
 
 Work item: `WORK-20260715-a7-browser-automation`
 
-Active gate: `A7-G19`
+Active gate: `A7-G20`
 
-State: `player-turn-sync-correction-authorized`
+State: `player-turn-sync-correction-accepted-awaiting-browser-preparation`
 
 Approval: `developer-standing-yolo-host-access-2026-07-16`
 
@@ -30,10 +30,10 @@ authorization for one bounded G15 correction. G15 is now completed and
 accepted at implementation commit `8abb324`. G17 completed sixteen changed-code
 browser attempts and reached a controlled stop after proving an application-
 owned live player-surface synchronization defect. G18 accepted that defect and
-authorized one later bounded G19 correction. The final G17 backend mutation
-successfully advanced combat authority from Malagrou to John Twilight, while
-John's connected claimed player surface remained stale and left End Turn
-disabled.
+authorized one later bounded G19 correction. G19 completed that correction and
+is accepted at implementation commit `43620b2`. All execution authorization is
+now closed, and G20 remains not opened pending orchestrator preparation of one
+autonomous host-access three-surface browser stabilization packet.
 
 The deterministic workflow remains:
 
@@ -236,16 +236,50 @@ G18 authorizes one later G19 correction with this exact contract:
    out-of-order state cannot overwrite the newer active actor, and existing
    claim and command behavior remains intact.
 
+G19 completed the correction at implementation commit `43620b2`. Exactly
+these files changed:
+
+- `assets/web/lan/index.html`
+- `dnd_initative_tracker.py`
+- `tests/test_server_runtime.py`
+
+Combat snapshot versioning was trace-only. Authoritative state and
+`turn_update` envelopes lacked an ordering revision, scheduled broadcasts
+rebuilt payloads from mutable cached state rather than their captured
+authoritative snapshot, and the player client applied every arriving envelope
+unconditionally. Stale state could therefore replace a newer active actor.
+
+The existing monotonic combat version is now included in initial, recovery,
+full-state, and turn-update messages. Authoritative full broadcasts and
+polling-channel turn changes advance it. Full broadcasts serialize the
+captured authoritative snapshot. The LAN client rejects lower-version state
+and rejects unversioned state after versioned state has been applied.
+Reconnect resets only the ordering baseline. Claim revision and ownership
+remain independent. Turn controls, command authority, initiative order,
+player identity, and personalized claim payloads remain preserved.
+
+The accepted validation is:
+
+- `py_compile` passed;
+- exactly three focused tests passed in `0.87 seconds`;
+- the three-file diff check passed; and
+- the inline JavaScript Node syntax check passed.
+
+The accepted G19 result is
+`docs/work_items/A7-G19-player-turn-sync-correction-result.md`.
+
 ## Current authorization boundary
 
 ```text
-A7_GATE=A7-G19
-A7_STATE=player-turn-sync-correction-authorized
-A7_G18_STATE=completed
-A7_G19_STATE=authorized-not-started
-A7_G19_ALLOWED_FILES=assets/web/lan/index.html,dnd_initative_tracker.py,tests/test_server_runtime.py
-A7_IMPLEMENTATION_AUTHORIZED=true
-A7_TEST_EXECUTION_AUTHORIZED=true
+A7_GATE=A7-G20
+A7_STATE=player-turn-sync-correction-accepted-awaiting-browser-preparation
+A7_G19_STATE=completed
+A7_G19_RESULT=docs/work_items/A7-G19-player-turn-sync-correction-result.md
+A7_G19_TARGET_COMMIT=43620b2
+A7_G19_VALIDATION=pycompile-3-focused-tests-js-syntax-and-diff-check-passed
+A7_G20_STATE=not-opened
+A7_IMPLEMENTATION_AUTHORIZED=false
+A7_TEST_EXECUTION_AUTHORIZED=false
 A7_BROWSER_EXECUTION_AUTHORIZED=false
 A7_RUNTIME_EXECUTION_AUTHORIZED=false
 A7_NETWORK_AUTHORIZED=false
@@ -258,16 +292,16 @@ A7_SERVICE_MUTATION_AUTHORIZED=false
 ```
 
 G13 is closed at a controlled stop, G14 is complete, G15 is completed and
-accepted, G17 is accepted at its controlled stop, and G18 is complete. The
-implementation and test flags authorize only the later bounded G19 task in the
-exact three-file boundary. They did not authorize implementation or test
-execution during G18. Browser, server, runtime, endpoint, localhost, network,
-push, deployment, scheduler, production, restart, and service mutation remain
-unauthorized. The approximately-200-enemy stress scenario remains unopened.
+accepted, G17 is accepted at its controlled stop, G18 is complete, and G19 is
+completed and accepted. All implementation, test, browser, server, runtime,
+endpoint, localhost, network, push, deployment, scheduler, production,
+restart, and service-mutation action remains unauthorized. G20 is not opened.
+The approximately-200-enemy stress scenario remains unopened.
 
 ## Next safe action
 
-Execute one later bounded G19 correction and focused-test pass in exactly
-`assets/web/lan/index.html`, `dnd_initative_tracker.py`, and
-`tests/test_server_runtime.py`. Do not run browser or runtime execution unless
-a later gate explicitly authorizes it.
+The next safe action is orchestrator acceptance and preparation of one
+autonomous host-access three-surface browser stabilization packet. That future
+packet must preserve and commit independently validated harness progress even
+when a later application defect causes a controlled stop. G20 remains not
+opened.
