@@ -10,8 +10,8 @@ If an item is not marked as **Active** here, it is NOT current work.
 <!-- ACTIVE_WORK_STATUS_START -->
 - **Status:** Active
 - **Current Work Item:** `WORK-20260715-a7-browser-automation`
-- **Active Gate:** A7-G27
-- **Allowed Next Action:** One later bounded G27 summon turn-advancement correction in exactly `dnd_initative_tracker.py` and `tests/test_server_runtime.py`, with focused test execution only. G27 is authorized but not started. Browser, server, runtime, endpoint, localhost, network, push, deployment, restart, scheduler, production, and service-mutation action remains closed.
+- **Active Gate:** A7-AUTO
+- **Allowed Next Action:** Complete the black-tan three-surface browser workflow under the developer's standing end-to-end A7-AUTO authorization. Implementation, focused tests, one owned localhost runtime, and headless browser execution are open only within the exact recorded file and evidence boundaries; push, deployment, restart, scheduler, production, and service mutation remain closed.
 - <!-- ACTIVE_WORK_STATUS_END -->
 
 ---
@@ -21,8 +21,39 @@ If an item is not marked as **Active** here, it is NOT current work.
 | ID | Title | Status | Goal |
 | --- | --- | --- | --- |
 <!-- ACTIVE_WORK_TABLE_START -->
-| WORK-20260715-a7-browser-automation | A7 browser-driven human-workflow automation | Active | G26 diagnosed the application-owned blanket summon turn exclusion and authorized one later two-file G27 correction with focused runtime coverage. |
+| WORK-20260715-a7-browser-automation | A7 browser-driven human-workflow automation | Active | A7-AUTO is running the summon correction and autonomous browser completion loop through terminal workflow pass or a defined human boundary. |
 <!-- ACTIVE_WORK_TABLE_END -->
+
+## A7-AUTO Autonomous Completion
+
+Task `CODEX-20260716-a7-autonomous-completion` supersedes the separate G27-and-
+later authorization, acceptance, and browser-continuation handoffs. The
+developer's standing end-to-end authorization opens the bounded summon turn-
+advancement correction, exact focused validation, and changed-code-only
+browser completion loop. The approximately-200-enemy stress scenario remains
+unopened.
+
+The cumulative result is
+`docs/work_items/A7-AUTO-autonomous-completion-result.md`.
+
+```text
+A7_GATE=A7-AUTO
+A7_STATE=autonomous-completion-running
+A7_AUTO_STATE=running
+A7_AUTO_APPROVAL=developer-standing-end-to-end-yolo-2026-07-16
+A7_AUTO_ALLOWED_FILES=dnd_initative_tracker.py,assets/web/lan/index.html,scripts/validation/browser-smoke-harness.py,tests/test_server_runtime.py,tests/test_browser_smoke_harness.py,docs/work_items/current_work.md,docs/work_items/WORK-20260715-a7-browser-automation.md,docs/work_items/A7-AUTO-autonomous-completion-result.md
+A7_IMPLEMENTATION_AUTHORIZED=true
+A7_TEST_EXECUTION_AUTHORIZED=true
+A7_BROWSER_EXECUTION_AUTHORIZED=true
+A7_RUNTIME_EXECUTION_AUTHORIZED=true
+A7_NETWORK_AUTHORIZED=true
+A7_PUSH_AUTHORIZED=false
+A7_DEPLOYMENT_AUTHORIZED=false
+A7_RESTART_AUTHORIZED=false
+A7_SCHEDULER_AUTHORIZED=false
+A7_PRODUCTION_AUTHORIZED=false
+A7_SERVICE_MUTATION_AUTHORIZED=false
+```
 
 ## A7-G26 Summon Turn-Advancement Authorization
 

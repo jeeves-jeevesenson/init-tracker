@@ -4,11 +4,42 @@ Date: `2026-07-15 UTC`
 
 Work item: `WORK-20260715-a7-browser-automation`
 
-Active gate: `A7-G27`
+Active gate: `A7-AUTO`
 
-State: `summon-turn-advancement-correction-authorized`
+State: `autonomous-completion-running`
 
-Approval: `developer-standing-yolo-host-access-2026-07-16`
+Approval: `developer-standing-end-to-end-yolo-2026-07-16`
+
+## A7-AUTO autonomous completion
+
+Task `CODEX-20260716-a7-autonomous-completion` supersedes the separate G27-and-
+later authorization, acceptance, and browser-continuation handoffs. It owns
+the bounded summon turn-advancement correction, exact focused validation, and
+changed-code-only three-surface browser completion loop through terminal pass
+or a defined stop condition. The approximately-200-enemy stress scenario
+remains unopened.
+
+The cumulative result is
+`docs/work_items/A7-AUTO-autonomous-completion-result.md`.
+
+```text
+A7_GATE=A7-AUTO
+A7_STATE=autonomous-completion-running
+A7_AUTO_STATE=running
+A7_AUTO_APPROVAL=developer-standing-end-to-end-yolo-2026-07-16
+A7_AUTO_ALLOWED_FILES=dnd_initative_tracker.py,assets/web/lan/index.html,scripts/validation/browser-smoke-harness.py,tests/test_server_runtime.py,tests/test_browser_smoke_harness.py,docs/work_items/current_work.md,docs/work_items/WORK-20260715-a7-browser-automation.md,docs/work_items/A7-AUTO-autonomous-completion-result.md
+A7_IMPLEMENTATION_AUTHORIZED=true
+A7_TEST_EXECUTION_AUTHORIZED=true
+A7_BROWSER_EXECUTION_AUTHORIZED=true
+A7_RUNTIME_EXECUTION_AUTHORIZED=true
+A7_NETWORK_AUTHORIZED=true
+A7_PUSH_AUTHORIZED=false
+A7_DEPLOYMENT_AUTHORIZED=false
+A7_RESTART_AUTHORIZED=false
+A7_SCHEDULER_AUTHORIZED=false
+A7_PRODUCTION_AUTHORIZED=false
+A7_SERVICE_MUTATION_AUTHORIZED=false
+```
 
 ## A7-G26 summon turn-advancement authorization
 
