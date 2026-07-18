@@ -731,7 +731,7 @@ class ServerRuntimeFacadeTests(unittest.TestCase):
                 self.assertTrue(hasattr(runtime, name))
                 self.assertEqual(getattr(runtime, name), getattr(server_runtime, name))
 
-    def test_runtime_host_lifecycle_contract(self):
+    def test_runtime_host_constructs_then_starts_once_in_order(self):
         from init_tracker_server.runtime_host import (
             RuntimeHost,
             RuntimeHostAdapter,
@@ -744,13 +744,11 @@ class ServerRuntimeFacadeTests(unittest.TestCase):
                 self.identity = identity
 
         events = []
-        created = []
         host_ref = {}
 
         def runtime_factory():
-            runtime = FakeRuntime(len(created) + 1)
-            created.append(runtime)
-            events.append(("create", host_ref["host"].state, runtime.identity))
+            runtime = FakeRuntime("only")
+            events.append(("construct", host_ref["host"].state, runtime.identity))
             return runtime
 
         def start_runtime(runtime):
@@ -778,8 +776,8 @@ class ServerRuntimeFacadeTests(unittest.TestCase):
         self.assertEqual(
             events,
             [
-                ("create", RuntimeHostState.STARTING, 1),
-                ("start", RuntimeHostState.STARTING, 1),
+                ("construct", RuntimeHostState.STARTING, "only"),
+                ("start", RuntimeHostState.STARTING, "only"),
             ],
         )
 
@@ -787,37 +785,146 @@ class ServerRuntimeFacadeTests(unittest.TestCase):
         host.stop()
         self.assertIs(host.state, RuntimeHostState.STOPPED)
         self.assertIsNone(host.runtime)
-        self.assertEqual(events[-1], ("stop", RuntimeHostState.STOPPING, 1))
+        self.assertEqual(events[-1], ("stop", RuntimeHostState.STOPPING, "only"))
 
-        second_runtime = host.start()
-        self.assertIsNot(second_runtime, first_runtime)
-        self.assertEqual(second_runtime.identity, 2)
+        with self.assertRaisesRegex(
+            RuntimeHostLifecycleError,
+            "cannot restart a stopped runtime host lifecycle",
+        ):
+            host.start()
+        self.assertEqual(
+            events,
+            [
+                ("construct", RuntimeHostState.STARTING, "only"),
+                ("start", RuntimeHostState.STARTING, "only"),
+                ("stop", RuntimeHostState.STOPPING, "only"),
+            ],
+        )
+
+    def test_runtime_host_duplicate_and_concurrent_start_are_idempotent(self):
+        from init_tracker_server.runtime_host import RuntimeHostAdapter, RuntimeHostState
+
+        runtime = object()
+        factory_entered = threading.Event()
+        release_factory = threading.Event()
+        callers_ready = threading.Barrier(2)
+        events = []
+        results = []
+        errors = []
+
+        def runtime_factory():
+            events.append("construct")
+            factory_entered.set()
+            if not release_factory.wait(timeout=1):
+                raise AssertionError("test did not release runtime factory")
+            return runtime
+
+        def start_runtime(created_runtime):
+            events.append(("start", created_runtime))
+
+        host = RuntimeHostAdapter(
+            runtime_factory,
+            start_runtime=start_runtime,
+            stop_runtime=lambda created_runtime: None,
+        )
+
+        def call_start():
+            try:
+                callers_ready.wait(timeout=1)
+                results.append(host.start())
+            except BaseException as error:
+                errors.append(error)
+
+        threads = [threading.Thread(target=call_start) for _ in range(2)]
+        for thread in threads:
+            thread.start()
+
+        self.assertTrue(factory_entered.wait(timeout=1))
+        release_factory.set()
+        for thread in threads:
+            thread.join(timeout=1)
+            self.assertFalse(thread.is_alive())
+
+        self.assertEqual(errors, [])
+        self.assertEqual(len(results), 2)
+        self.assertTrue(all(result is runtime for result in results))
+        self.assertIs(host.start(), runtime)
+        self.assertEqual(events, ["construct", ("start", runtime)])
         self.assertIs(host.state, RuntimeHostState.RUNNING)
 
+    def test_runtime_host_construction_failure_is_observable_and_not_retried(self):
+        from init_tracker_server.runtime_host import RuntimeHostAdapter, RuntimeHostState
+
+        construction_error = RuntimeError("construction failed")
+        events = []
+
+        def runtime_factory():
+            events.append("construct")
+            raise construction_error
+
+        host = RuntimeHostAdapter(
+            runtime_factory,
+            start_runtime=lambda runtime: events.append("start"),
+            stop_runtime=lambda runtime: events.append("stop"),
+        )
+
+        with self.assertRaises(RuntimeError) as first_error:
+            host.start()
+        with self.assertRaises(RuntimeError) as duplicate_error:
+            host.start()
+
+        self.assertIs(first_error.exception, construction_error)
+        self.assertIs(duplicate_error.exception, construction_error)
+        self.assertEqual(events, ["construct"])
+        self.assertIs(host.state, RuntimeHostState.FAILED)
+        self.assertIs(host.last_error, construction_error)
+        self.assertIsNone(host.runtime)
+
+    def test_runtime_host_startup_failure_is_observable_and_not_retried(self):
+        from init_tracker_server.runtime_host import RuntimeHostAdapter, RuntimeHostState
+
         rollback_events = []
+        startup_error = RuntimeError("startup failed")
+
+        class FakeRuntime:
+            identity = "failed-start"
 
         def fail_start(runtime):
             rollback_events.append(("start", runtime.identity))
-            raise RuntimeError("startup failed")
+            raise startup_error
 
         def rollback_start(runtime):
             rollback_events.append(("stop", runtime.identity))
 
         failed_start_host = RuntimeHostAdapter(
-            lambda: FakeRuntime("failed-start"),
+            lambda: FakeRuntime(),
             start_runtime=fail_start,
             stop_runtime=rollback_start,
         )
-        with self.assertRaisesRegex(RuntimeError, "startup failed") as start_error:
+        with self.assertRaises(RuntimeError) as start_error:
+            failed_start_host.start()
+        with self.assertRaises(RuntimeError) as duplicate_error:
             failed_start_host.start()
 
         self.assertIs(failed_start_host.state, RuntimeHostState.FAILED)
-        self.assertIs(failed_start_host.last_error, start_error.exception)
+        self.assertIs(start_error.exception, startup_error)
+        self.assertIs(duplicate_error.exception, startup_error)
+        self.assertIs(failed_start_host.last_error, startup_error)
         self.assertIsNone(failed_start_host.runtime)
         self.assertEqual(
             rollback_events,
             [("start", "failed-start"), ("stop", "failed-start")],
         )
+
+    def test_runtime_host_shutdown_failure_can_be_retried(self):
+        from init_tracker_server.runtime_host import (
+            RuntimeHostAdapter,
+            RuntimeHostLifecycleError,
+            RuntimeHostState,
+        )
+
+        class FakeRuntime:
+            identity = "failed-stop"
 
         stop_attempts = []
 
@@ -827,7 +934,7 @@ class ServerRuntimeFacadeTests(unittest.TestCase):
                 raise RuntimeError("shutdown failed")
 
         failed_stop_host = RuntimeHostAdapter(
-            lambda: FakeRuntime("failed-stop"),
+            lambda: FakeRuntime(),
             start_runtime=lambda runtime: None,
             stop_runtime=retryable_stop,
         )

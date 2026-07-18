@@ -7,7 +7,7 @@ to a process entry point or an ASGI lifespan remains the caller's responsibility
 from __future__ import annotations
 
 from enum import Enum
-from threading import RLock
+from threading import Condition, RLock
 from typing import Callable, Generic, Optional, Protocol, TypeVar, runtime_checkable
 
 
@@ -56,10 +56,12 @@ class RuntimeHost(Protocol[RuntimeT_co]):
 class RuntimeHostAdapter(Generic[RuntimeT]):
     """Adapt injected runtime construction/start/stop hooks to ``RuntimeHost``.
 
-    ``start`` and ``stop`` are idempotent in their stable success states.  A
-    stopped adapter can be started again, in which case the factory creates a
-    fresh runtime.  Startup failure triggers best-effort rollback.  If shutdown
-    fails, the runtime is retained so that a later ``stop`` call can retry it.
+    Each adapter is a one-shot lifecycle: its factory and startup hook are each
+    called at most once.  Duplicate and concurrent ``start`` calls share the
+    first startup attempt, returning the same runtime on success or observing
+    the same error on failure.  Startup failure triggers best-effort rollback.
+    If shutdown fails, the runtime is retained so that a later ``stop`` call can
+    retry it.
     """
 
     def __init__(
@@ -82,7 +84,10 @@ class RuntimeHostAdapter(Generic[RuntimeT]):
         self._state = RuntimeHostState.NEW
         self._runtime: Optional[RuntimeT] = None
         self._last_error: Optional[BaseException] = None
+        self._startup_error: Optional[BaseException] = None
+        self._start_attempted = False
         self._lock = RLock()
+        self._condition = Condition(self._lock)
 
     @property
     def state(self) -> RuntimeHostState:
@@ -100,7 +105,10 @@ class RuntimeHostAdapter(Generic[RuntimeT]):
             return self._last_error
 
     def start(self) -> RuntimeT:
-        with self._lock:
+        with self._condition:
+            while self._state is RuntimeHostState.STARTING:
+                self._condition.wait()
+
             if self._state is RuntimeHostState.RUNNING:
                 runtime = self._runtime
                 if runtime is None:  # Defensive invariant check.
@@ -108,14 +116,25 @@ class RuntimeHostAdapter(Generic[RuntimeT]):
                         "running host does not have a runtime"
                     )
                 return runtime
-            if self._state in (RuntimeHostState.STARTING, RuntimeHostState.STOPPING):
+            if self._state is RuntimeHostState.STOPPING:
                 raise RuntimeHostLifecycleError(
                     f"cannot start runtime host while it is {self._state.value}"
+                )
+            if self._state is RuntimeHostState.STOPPED:
+                raise RuntimeHostLifecycleError(
+                    "cannot restart a stopped runtime host lifecycle"
+                )
+            if self._startup_error is not None:
+                raise self._startup_error
+            if self._start_attempted:
+                raise RuntimeHostLifecycleError(
+                    "runtime host lifecycle startup was already attempted"
                 )
             if self._runtime is not None:
                 raise RuntimeHostLifecycleError(
                     "cannot start runtime host while a failed runtime still requires stop"
                 )
+            self._start_attempted = True
             self._state = RuntimeHostState.STARTING
             self._last_error = None
 
@@ -136,15 +155,18 @@ class RuntimeHostAdapter(Generic[RuntimeT]):
                             "runtime startup rollback failed with "
                             f"{type(rollback_error).__name__}: {rollback_error}"
                         )
-            with self._lock:
+            with self._condition:
                 self._runtime = retained_runtime
                 self._last_error = start_error
+                self._startup_error = start_error
                 self._state = RuntimeHostState.FAILED
+                self._condition.notify_all()
             raise
 
-        with self._lock:
+        with self._condition:
             self._runtime = runtime
             self._state = RuntimeHostState.RUNNING
+            self._condition.notify_all()
             return runtime
 
     def stop(self) -> None:
