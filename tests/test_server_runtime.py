@@ -847,6 +847,116 @@ class ServerRuntimeFacadeTests(unittest.TestCase):
         self.assertIsNone(failed_stop_host.runtime)
         self.assertIsNone(failed_stop_host.last_error)
 
+    def test_runtime_host_lifespan_integration(self):
+        import sys
+        from types import SimpleNamespace
+        from unittest.mock import patch
+
+        from init_tracker_server.app import create_app
+        from init_tracker_server.runtime_host import RuntimeHostAdapter, RuntimeHostState
+        import serve_headless
+
+        app = create_app(lan_controller=object())
+        runtime = app.state.runtime
+        runtime_host = app.state.runtime_host
+        asgi_events = []
+        runtime_start = runtime.start
+        runtime_shutdown = runtime.shutdown
+
+        def record_runtime_start():
+            asgi_events.append(("start", app.state.ready))
+            runtime_start()
+
+        def record_runtime_shutdown():
+            asgi_events.append(("shutdown", app.state.ready))
+            runtime_shutdown()
+
+        runtime.start = record_runtime_start
+        runtime.shutdown = record_runtime_shutdown
+
+        async def exercise_asgi_lifespan():
+            self.assertIs(runtime_host.state, RuntimeHostState.NEW)
+            self.assertIsNone(runtime_host.runtime)
+            self.assertFalse(app.state.ready)
+
+            async with app.router.lifespan_context(app):
+                asgi_events.append(("serving", app.state.ready))
+                self.assertIs(runtime_host.state, RuntimeHostState.RUNNING)
+                self.assertIs(runtime_host.runtime, runtime)
+                self.assertIs(app.state.runtime, runtime)
+
+            self.assertIs(runtime_host.state, RuntimeHostState.STOPPED)
+            self.assertIsNone(runtime_host.runtime)
+            self.assertIs(app.state.runtime, runtime)
+            self.assertFalse(app.state.ready)
+
+        asyncio.run(exercise_asgi_lifespan())
+        self.assertEqual(
+            asgi_events,
+            [("start", False), ("serving", True), ("shutdown", False)],
+        )
+
+        headless_events = []
+        created_hosts = []
+
+        class FakeLan:
+            def __init__(self):
+                self.cfg = SimpleNamespace(host="127.0.0.1", port=8000)
+                self._polling = True
+
+            def _best_lan_url(self):
+                return "http://127.0.0.1:8000/"
+
+            def stop(self):
+                headless_events.append(("lan.stop", self._polling))
+
+        class FakeHeadlessRuntime:
+            def __init__(self):
+                headless_events.append(("construct", None))
+                self._lan = FakeLan()
+
+            def mainloop(self):
+                headless_events.append(("mainloop", None))
+
+            def quit(self):
+                headless_events.append(("quit", None))
+
+        fake_tracker_module = SimpleNamespace(
+            InitiativeTracker=FakeHeadlessRuntime,
+            POC_AUTO_START_LAN=True,
+        )
+        real_runtime_host_adapter = RuntimeHostAdapter
+
+        def recording_runtime_host_adapter(*args, **kwargs):
+            host = real_runtime_host_adapter(*args, **kwargs)
+            created_hosts.append(host)
+            return host
+
+        with (
+            patch.dict(os.environ, {}, clear=False),
+            patch.dict(sys.modules, {"dnd_initative_tracker": fake_tracker_module}),
+            patch.object(serve_headless, "RuntimeHostAdapter", recording_runtime_host_adapter),
+            patch.object(serve_headless.runtime_cfg, "ensure_dirs"),
+            patch.object(serve_headless, "configure_debug_trace"),
+            patch.object(serve_headless.signal, "signal"),
+        ):
+            result = serve_headless.main(["--no-auto-lan", "--no-debugging"])
+
+        self.assertEqual(result, 0)
+        self.assertFalse(fake_tracker_module.POC_AUTO_START_LAN)
+        self.assertEqual(len(created_hosts), 1)
+        self.assertIs(created_hosts[0].state, RuntimeHostState.STOPPED)
+        self.assertIsNone(created_hosts[0].runtime)
+        self.assertEqual(
+            headless_events,
+            [
+                ("construct", None),
+                ("mainloop", None),
+                ("lan.stop", False),
+                ("quit", None),
+            ],
+        )
+
     def test_spell_color_command_execution(self):
         # 1. facade executes the spell-color command using a fake app/controller hook
         mock_app = MagicMock()

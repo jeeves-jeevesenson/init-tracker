@@ -25,7 +25,9 @@ import argparse
 import os
 import signal
 import sys
-from typing import Optional, Sequence
+from typing import Callable, Optional, Sequence, TypeVar
+
+from init_tracker_server.runtime_host import RuntimeHostAdapter
 
 from runtime_config import (
     config as runtime_cfg,
@@ -34,6 +36,9 @@ from runtime_config import (
     debugging_env_enabled,
     parse_bool_value,
 )
+
+
+HeadlessRuntimeT = TypeVar("HeadlessRuntimeT")
 
 
 def _force_headless_env() -> None:
@@ -65,6 +70,16 @@ def _shutdown(app) -> None:
         app.quit()
     except Exception:
         pass
+
+
+def _build_headless_runtime_host(
+    runtime_factory: Callable[[], HeadlessRuntimeT],
+) -> RuntimeHostAdapter[HeadlessRuntimeT]:
+    return RuntimeHostAdapter(
+        runtime_factory,
+        start_runtime=lambda _runtime: None,
+        stop_runtime=_shutdown,
+    )
 
 
 def _parse_debugging_value(raw: str) -> bool:
@@ -130,11 +145,12 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     if args.no_auto_lan:
         tracker_mod.POC_AUTO_START_LAN = False
 
-    app = tracker_mod.InitiativeTracker()
+    runtime_host = _build_headless_runtime_host(tracker_mod.InitiativeTracker)
+    app = runtime_host.start()
     _override_lan_cfg(app, args.host, args.port)
 
     def _handle_signal(_signum, _frame):
-        _shutdown(app)
+        runtime_host.stop()
 
     for sig in (signal.SIGINT, signal.SIGTERM):
         try:
@@ -158,7 +174,9 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     try:
         app.mainloop()
     except KeyboardInterrupt:
-        _shutdown(app)
+        pass
+    finally:
+        runtime_host.stop()
     return 0
 
 

@@ -7,19 +7,19 @@ from fastapi import FastAPI
 from fastapi.responses import JSONResponse
 
 from .runtime import ServerRuntimeFacade
+from .runtime_host import RuntimeHostAdapter
 
 
 @asynccontextmanager
 async def app_lifespan(app: FastAPI):
-    # Set the readiness flag on startup
-    if hasattr(app.state, "runtime") and app.state.runtime is not None:
-        app.state.runtime.start()
-    app.state.ready = True
-    yield
-    # Clear the readiness flag on shutdown
-    app.state.ready = False
-    if hasattr(app.state, "runtime") and app.state.runtime is not None:
-        app.state.runtime.shutdown()
+    runtime_host = app.state.runtime_host
+    try:
+        runtime_host.start()
+        app.state.ready = True
+        yield
+    finally:
+        app.state.ready = False
+        runtime_host.stop()
 
 
 def create_app(lan_controller: Optional[Any] = None) -> FastAPI:
@@ -27,7 +27,13 @@ def create_app(lan_controller: Optional[Any] = None) -> FastAPI:
     app = FastAPI(lifespan=app_lifespan)
     app.state.ready = False
     app.state.lan_controller = lan_controller
-    app.state.runtime = ServerRuntimeFacade(lan_controller=lan_controller)
+    runtime = ServerRuntimeFacade(lan_controller=lan_controller)
+    app.state.runtime = runtime
+    app.state.runtime_host = RuntimeHostAdapter(
+        lambda: runtime,
+        start_runtime=lambda current_runtime: current_runtime.start(),
+        stop_runtime=lambda current_runtime: current_runtime.shutdown(),
+    )
 
     # Bounded health/readiness endpoints
     @app.get("/health")
