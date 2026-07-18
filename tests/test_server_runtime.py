@@ -731,6 +731,122 @@ class ServerRuntimeFacadeTests(unittest.TestCase):
                 self.assertTrue(hasattr(runtime, name))
                 self.assertEqual(getattr(runtime, name), getattr(server_runtime, name))
 
+    def test_runtime_host_lifecycle_contract(self):
+        from init_tracker_server.runtime_host import (
+            RuntimeHost,
+            RuntimeHostAdapter,
+            RuntimeHostLifecycleError,
+            RuntimeHostState,
+        )
+
+        class FakeRuntime:
+            def __init__(self, identity):
+                self.identity = identity
+
+        events = []
+        created = []
+        host_ref = {}
+
+        def runtime_factory():
+            runtime = FakeRuntime(len(created) + 1)
+            created.append(runtime)
+            events.append(("create", host_ref["host"].state, runtime.identity))
+            return runtime
+
+        def start_runtime(runtime):
+            events.append(("start", host_ref["host"].state, runtime.identity))
+
+        def stop_runtime(runtime):
+            events.append(("stop", host_ref["host"].state, runtime.identity))
+
+        host = RuntimeHostAdapter(
+            runtime_factory,
+            start_runtime=start_runtime,
+            stop_runtime=stop_runtime,
+        )
+        host_ref["host"] = host
+
+        self.assertIsInstance(host, RuntimeHost)
+        self.assertIs(host.state, RuntimeHostState.NEW)
+        self.assertIsNone(host.runtime)
+        self.assertIsNone(host.last_error)
+
+        first_runtime = host.start()
+        self.assertIs(host.state, RuntimeHostState.RUNNING)
+        self.assertIs(host.runtime, first_runtime)
+        self.assertIs(host.start(), first_runtime)
+        self.assertEqual(
+            events,
+            [
+                ("create", RuntimeHostState.STARTING, 1),
+                ("start", RuntimeHostState.STARTING, 1),
+            ],
+        )
+
+        host.stop()
+        host.stop()
+        self.assertIs(host.state, RuntimeHostState.STOPPED)
+        self.assertIsNone(host.runtime)
+        self.assertEqual(events[-1], ("stop", RuntimeHostState.STOPPING, 1))
+
+        second_runtime = host.start()
+        self.assertIsNot(second_runtime, first_runtime)
+        self.assertEqual(second_runtime.identity, 2)
+        self.assertIs(host.state, RuntimeHostState.RUNNING)
+
+        rollback_events = []
+
+        def fail_start(runtime):
+            rollback_events.append(("start", runtime.identity))
+            raise RuntimeError("startup failed")
+
+        def rollback_start(runtime):
+            rollback_events.append(("stop", runtime.identity))
+
+        failed_start_host = RuntimeHostAdapter(
+            lambda: FakeRuntime("failed-start"),
+            start_runtime=fail_start,
+            stop_runtime=rollback_start,
+        )
+        with self.assertRaisesRegex(RuntimeError, "startup failed") as start_error:
+            failed_start_host.start()
+
+        self.assertIs(failed_start_host.state, RuntimeHostState.FAILED)
+        self.assertIs(failed_start_host.last_error, start_error.exception)
+        self.assertIsNone(failed_start_host.runtime)
+        self.assertEqual(
+            rollback_events,
+            [("start", "failed-start"), ("stop", "failed-start")],
+        )
+
+        stop_attempts = []
+
+        def retryable_stop(runtime):
+            stop_attempts.append(runtime.identity)
+            if len(stop_attempts) == 1:
+                raise RuntimeError("shutdown failed")
+
+        failed_stop_host = RuntimeHostAdapter(
+            lambda: FakeRuntime("failed-stop"),
+            start_runtime=lambda runtime: None,
+            stop_runtime=retryable_stop,
+        )
+        failed_stop_runtime = failed_stop_host.start()
+        with self.assertRaisesRegex(RuntimeError, "shutdown failed") as stop_error:
+            failed_stop_host.stop()
+
+        self.assertIs(failed_stop_host.state, RuntimeHostState.FAILED)
+        self.assertIs(failed_stop_host.runtime, failed_stop_runtime)
+        self.assertIs(failed_stop_host.last_error, stop_error.exception)
+        with self.assertRaises(RuntimeHostLifecycleError):
+            failed_stop_host.start()
+
+        failed_stop_host.stop()
+        self.assertEqual(stop_attempts, ["failed-stop", "failed-stop"])
+        self.assertIs(failed_stop_host.state, RuntimeHostState.STOPPED)
+        self.assertIsNone(failed_stop_host.runtime)
+        self.assertIsNone(failed_stop_host.last_error)
+
     def test_spell_color_command_execution(self):
         # 1. facade executes the spell-color command using a fake app/controller hook
         mock_app = MagicMock()
