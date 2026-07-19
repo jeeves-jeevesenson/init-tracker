@@ -22,7 +22,7 @@ class UvicornServerHostRuntimeError(UvicornServerHostError):
 
 
 class UvicornServerHost:
-    """Own the Uvicorn server/thread mechanics for a registered ASGI app."""
+    """Own one Uvicorn server/thread lifecycle for a registered ASGI app."""
 
     def __init__(
         self,
@@ -79,46 +79,45 @@ class UvicornServerHost:
             return self._runtime_error or self._wait_error
 
     def start(self) -> threading.Thread:
-        with self._lock:
-            if self._thread is not None and self._thread.is_alive():
-                return self._thread
-
         import uvicorn
 
-        def run_server() -> None:
-            try:
-                loop = asyncio.new_event_loop()
-                asyncio.set_event_loop(loop)
-                with self._lock:
-                    self._loop = loop
-
-                config = uvicorn.Config(
-                    self.app,
-                    host=self.host,
-                    port=self.port,
-                    log_level=self.log_level,
-                    access_log=self.access_log,
-                )
-                server = uvicorn.Server(config)
-                with self._lock:
-                    self._server = server
-                    self._deliver_stop_request_locked()
-                if self._on_server_ready is not None:
-                    self._on_server_ready(loop, server)
-                loop.run_until_complete(server.serve())
-            except BaseException as runtime_error:
-                with self._lock:
-                    self._runtime_error = runtime_error
-
-        thread = threading.Thread(
-            target=run_server,
-            name=self.thread_name,
-            daemon=True,
-        )
         with self._lock:
+            if self._thread is not None:
+                return self._thread
+
+            def run_server() -> None:
+                try:
+                    loop = asyncio.new_event_loop()
+                    asyncio.set_event_loop(loop)
+                    with self._lock:
+                        self._loop = loop
+
+                    config = uvicorn.Config(
+                        self.app,
+                        host=self.host,
+                        port=self.port,
+                        log_level=self.log_level,
+                        access_log=self.access_log,
+                    )
+                    server = uvicorn.Server(config)
+                    with self._lock:
+                        self._server = server
+                        self._deliver_stop_request_locked()
+                    if self._on_server_ready is not None:
+                        self._on_server_ready(loop, server)
+                    loop.run_until_complete(server.serve())
+                except BaseException as runtime_error:
+                    with self._lock:
+                        self._runtime_error = runtime_error
+
+            thread = threading.Thread(
+                target=run_server,
+                name=self.thread_name,
+                daemon=True,
+            )
             self._thread = thread
-        thread.start()
-        return thread
+            thread.start()
+            return thread
 
     def request_stop(self) -> bool:
         """Latch and deliver the server stop signal at most once."""

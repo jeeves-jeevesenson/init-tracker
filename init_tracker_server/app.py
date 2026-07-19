@@ -19,7 +19,18 @@ async def app_lifespan(app: FastAPI):
         raise RuntimeHostLifecycleError(
             "application runtime lifespan has already been entered"
         )
+    previous_runtime_host = app.state.runtime_host
+    if (
+        previous_runtime_host is not None
+        and previous_runtime_host.runtime is not None
+    ):
+        raise RuntimeHostLifecycleError(
+            "previous application runtime lifespan has not stopped"
+        )
     app.state.runtime_lifespan_entered = True
+    app.state.ready = False
+    app.state.runtime = None
+    app.state.runtime_stop_error = None
 
     def create_runtime() -> ServerRuntimeFacade:
         runtime = ServerRuntimeFacade(lan_controller=app.state.lan_controller)
@@ -40,21 +51,24 @@ async def app_lifespan(app: FastAPI):
     )
     app.state.runtime_host = runtime_host
     try:
-        runtime_host.start()
-    except BaseException:
-        app.state.ready = False
-        raise
-
-    app.state.ready = True
-    try:
-        yield
-    finally:
-        app.state.ready = False
         try:
-            runtime_host.stop(timeout=app.state.runtime_stop_timeout_seconds)
-        except BaseException as stop_error:
-            app.state.runtime_stop_error = stop_error
+            runtime_host.start()
+        except BaseException:
+            app.state.ready = False
             raise
+
+        app.state.ready = True
+        try:
+            yield
+        finally:
+            app.state.ready = False
+            try:
+                runtime_host.stop(timeout=app.state.runtime_stop_timeout_seconds)
+            except BaseException as stop_error:
+                app.state.runtime_stop_error = stop_error
+                raise
+    finally:
+        app.state.runtime_lifespan_entered = False
 
 
 def create_app(lan_controller: Optional[Any] = None) -> FastAPI:

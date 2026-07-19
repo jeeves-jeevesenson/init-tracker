@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import sys
+import threading
 import types
 import unittest
 from unittest.mock import patch
@@ -151,6 +152,73 @@ class ServerHostTests(unittest.TestCase):
         self.assertEqual(len(FakeThread.instances), 1)
         self.assertEqual(len(self.configs), 1)
         self.assertEqual(len(self.servers), 1)
+
+    def test_concurrent_start_creates_exactly_one_worker(self):
+        loop = FakeLoop()
+        import_barrier = threading.Barrier(2)
+        real_import = __import__
+        real_thread_type = threading.Thread
+        results = []
+        errors = []
+
+        class DeferredFakeThread(FakeThread):
+            def start(self) -> None:
+                self.started = True
+
+        def synchronized_import(name, globals=None, locals=None, fromlist=(), level=0):
+            if name == "uvicorn":
+                import_barrier.wait(timeout=1)
+                return self.fake_uvicorn
+            return real_import(name, globals, locals, fromlist, level)
+
+        with (
+            patch("builtins.__import__", side_effect=synchronized_import),
+            patch.object(host_module.threading, "Thread", DeferredFakeThread),
+        ):
+            server_host = UvicornServerHost(object(), host="127.0.0.1", port=18801)
+
+            def call_start():
+                try:
+                    results.append(server_host.start())
+                except BaseException as error:
+                    errors.append(error)
+
+            callers = [real_thread_type(target=call_start) for _ in range(2)]
+            for caller in callers:
+                caller.start()
+            for caller in callers:
+                caller.join(timeout=1)
+                self.assertFalse(caller.is_alive())
+
+        self.assertEqual(errors, [])
+        self.assertEqual(len(results), 2)
+        self.assertIs(results[0], results[1])
+        self.assertIs(server_host.thread, results[0])
+        self.assertEqual(len(FakeThread.instances), 1)
+        self.assertEqual(len(self.configs), 0)
+        self.assertEqual(len(self.servers), 0)
+
+    def test_start_reuses_completed_worker_without_restarting_lifecycle(self):
+        loop = FakeLoop()
+
+        with (
+            patch.dict(sys.modules, {"uvicorn": self.fake_uvicorn}),
+            patch.object(host_module.asyncio, "new_event_loop", return_value=loop),
+            patch.object(host_module.asyncio, "set_event_loop"),
+            patch.object(host_module.threading, "Thread", FakeThread),
+        ):
+            server_host = UvicornServerHost(object(), host="127.0.0.1", port=18801)
+            first_thread = server_host.start()
+            server_host.wait(timeout=0.5)
+            repeated_thread = server_host.start()
+
+        self.assertIs(repeated_thread, first_thread)
+        self.assertFalse(first_thread.is_alive())
+        self.assertEqual(first_thread.join_calls, [0.5])
+        self.assertEqual(len(FakeThread.instances), 1)
+        self.assertEqual(len(self.configs), 1)
+        self.assertEqual(len(self.servers), 1)
+        self.assertEqual(self.servers[0].serve_calls, 1)
 
     def test_stop_requests_once_and_joins_worker_with_bound(self):
         loop = FakeLoop()

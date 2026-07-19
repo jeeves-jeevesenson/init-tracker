@@ -859,6 +859,73 @@ class ServerRuntimeFacadeTests(unittest.TestCase):
         self.assertEqual(events, ["construct", ("start", runtime)])
         self.assertIs(host.state, RuntimeHostState.RUNNING)
 
+    def test_runtime_host_duplicate_and_concurrent_stop_are_idempotent(self):
+        from init_tracker_server.runtime_host import RuntimeHostAdapter, RuntimeHostState
+
+        runtime = object()
+        stop_entered = threading.Event()
+        release_stop = threading.Event()
+        callers_ready = threading.Barrier(3)
+        events = []
+        errors = []
+
+        def runtime_factory():
+            events.append("construct")
+            return runtime
+
+        def start_runtime(created_runtime):
+            events.append(("start", created_runtime))
+
+        def stop_runtime(created_runtime):
+            events.append(("stop", created_runtime))
+            stop_entered.set()
+            if not release_stop.wait(timeout=1):
+                raise AssertionError("test did not release runtime stop")
+
+        host = RuntimeHostAdapter(
+            runtime_factory,
+            start_runtime=start_runtime,
+            stop_runtime=stop_runtime,
+        )
+        self.assertIs(host.start(), runtime)
+
+        def call_stop():
+            try:
+                callers_ready.wait(timeout=1)
+                host.stop(timeout=1)
+            except BaseException as error:
+                errors.append(error)
+
+        callers = [threading.Thread(target=call_stop) for _ in range(2)]
+        for caller in callers:
+            caller.start()
+        callers_ready.wait(timeout=1)
+        self.assertTrue(stop_entered.wait(timeout=1))
+        self.assertIs(host.state, RuntimeHostState.STOPPING)
+        self.assertIs(host.runtime, runtime)
+        self.assertEqual(
+            events,
+            ["construct", ("start", runtime), ("stop", runtime)],
+        )
+
+        release_stop.set()
+        for caller in callers:
+            caller.join(timeout=1)
+            self.assertFalse(caller.is_alive())
+
+        host.stop(timeout=0.01)
+        self.assertEqual(errors, [])
+        self.assertTrue(host.stop_requested)
+        self.assertIs(host.state, RuntimeHostState.STOPPED)
+        self.assertIsNone(host.runtime)
+        self.assertIsNone(host.last_error)
+        self.assertIsNotNone(host.stop_thread)
+        self.assertFalse(host.stop_thread.is_alive())
+        self.assertEqual(
+            events,
+            ["construct", ("start", runtime), ("stop", runtime)],
+        )
+
     def test_runtime_host_construction_failure_is_observable_and_not_retried(self):
         from init_tracker_server.runtime_host import RuntimeHostAdapter, RuntimeHostState
 
@@ -1246,38 +1313,44 @@ class ServerRuntimeFacadeTests(unittest.TestCase):
             self.assertFalse(app.state.ready)
             self.assertIsNone(app.state.runtime)
             self.assertIsNone(app.state.runtime_host)
+            completed_lifecycles = []
 
-            async with app.router.lifespan_context(app):
-                asgi_events.append(("serving", app.state.ready))
-                runtime = app.state.runtime
-                runtime_host = app.state.runtime_host
-                self.assertIs(runtime_host.state, RuntimeHostState.RUNNING)
-                self.assertIs(runtime_host.runtime, runtime)
-                self.assertIs(runtime.lan_controller, lan_controller)
-                self.assertEqual(runtime.start_calls, 1)
-                self.assertEqual(runtime.shutdown_calls, 0)
-                self.assertIs(lan_controller.runtime, runtime)
-                self.assertTrue(app.state.ready)
-
-            runtime = app.state.runtime
-            runtime_host = app.state.runtime_host
-            self.assertIs(runtime_host.state, RuntimeHostState.STOPPED)
-            self.assertIsNone(runtime_host.runtime)
-            self.assertIs(app.state.runtime, runtime)
-            self.assertEqual(runtime.start_calls, 1)
-            self.assertEqual(runtime.shutdown_calls, 1)
-            self.assertFalse(app.state.ready)
-            self.assertIsNone(app.state.runtime_stop_error)
-            self.assertIsNotNone(runtime_host.stop_thread)
-            self.assertFalse(runtime_host.stop_thread.is_alive())
-            asgi_events.append(("lifespan_exited", app.state.ready))
-
-            with self.assertRaisesRegex(
-                RuntimeHostLifecycleError,
-                "application runtime lifespan has already been entered",
-            ):
+            for _cycle in range(2):
                 async with app.router.lifespan_context(app):
-                    self.fail("application lifespan must be entered exactly once")
+                    asgi_events.append(("serving", app.state.ready))
+                    runtime = app.state.runtime
+                    runtime_host = app.state.runtime_host
+                    self.assertIs(runtime_host.state, RuntimeHostState.RUNNING)
+                    self.assertIs(runtime_host.runtime, runtime)
+                    self.assertIs(runtime.lan_controller, lan_controller)
+                    self.assertEqual(runtime.start_calls, 1)
+                    self.assertEqual(runtime.shutdown_calls, 0)
+                    self.assertIs(lan_controller.runtime, runtime)
+                    self.assertTrue(app.state.ready)
+                    self.assertTrue(app.state.runtime_lifespan_entered)
+
+                    with self.assertRaisesRegex(
+                        RuntimeHostLifecycleError,
+                        "application runtime lifespan has already been entered",
+                    ):
+                        async with app.router.lifespan_context(app):
+                            self.fail("concurrent application lifespan must be rejected")
+
+                self.assertIs(runtime_host.state, RuntimeHostState.STOPPED)
+                self.assertIsNone(runtime_host.runtime)
+                self.assertIs(app.state.runtime, runtime)
+                self.assertEqual(runtime.start_calls, 1)
+                self.assertEqual(runtime.shutdown_calls, 1)
+                self.assertFalse(app.state.ready)
+                self.assertFalse(app.state.runtime_lifespan_entered)
+                self.assertIsNone(app.state.runtime_stop_error)
+                self.assertIsNotNone(runtime_host.stop_thread)
+                self.assertFalse(runtime_host.stop_thread.is_alive())
+                completed_lifecycles.append((runtime, runtime_host))
+                asgi_events.append(("lifespan_exited", app.state.ready))
+
+            self.assertIsNot(completed_lifecycles[0][0], completed_lifecycles[1][0])
+            self.assertIsNot(completed_lifecycles[0][1], completed_lifecycles[1][1])
 
         with (
             patch("init_tracker_server.app.ServerRuntimeFacade", FakeAsgiRuntime),
@@ -1288,10 +1361,10 @@ class ServerRuntimeFacadeTests(unittest.TestCase):
         ):
             asyncio.run(exercise_asgi_lifespan())
 
-        self.assertEqual(len(created_hosts), 1)
+        self.assertEqual(len(created_hosts), 2)
         self.assertEqual(
             asgi_events,
-            [
+            2 * [
                 ("construct", False),
                 ("start", False),
                 ("warm_up", False),
