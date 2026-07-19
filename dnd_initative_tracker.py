@@ -2478,6 +2478,7 @@ class LanController:
         self._loop: Optional[asyncio.AbstractEventLoop] = None
         self._uvicorn_server = None
         self._server_host = None
+        self._runtime = None
         self._admin_password_hash: Optional[bytes] = None
         self._admin_password_salt: Optional[bytes] = None
         self._admin_tokens: Dict[str, float] = {}
@@ -3054,6 +3055,38 @@ class LanController:
         found = bool(path)
         self._append_lan_log(f"{prefix} filename={filename} found={found}", level="info")
 
+    def warm_up(self, runtime: Any) -> None:
+        """Seed runtime-facing caches before package readiness is published."""
+        self._runtime = runtime
+        try:
+            # Seed with static data so the first connecting WS client receives
+            # populated spell_presets / player_profiles / player_spells instead
+            # of waiting for the first include_static broadcast.
+            self._cached_snapshot = self.app._lan_snapshot(
+                include_static=True,
+                hydrate_static=True,
+                scope="lan_startup_seed",
+            )
+            self._cached_pcs = list(
+                self.app._lan_pcs()
+                if hasattr(self.app, "_lan_pcs")
+                else self.app._lan_claimable()
+            )
+        except Exception as warm_up_error:
+            try:
+                self._cached_snapshot = self.app._lan_snapshot(
+                    include_static=False,
+                    hydrate_static=False,
+                    scope="lan_startup_fallback",
+                )
+            except Exception as fallback_error:
+                if hasattr(warm_up_error, "add_note"):
+                    warm_up_error.add_note(
+                        "LAN startup fallback warm-up failed with "
+                        f"{type(fallback_error).__name__}: {fallback_error}"
+                    )
+                raise warm_up_error
+
     def start(self, quiet: bool = False) -> None:
         if self._server_thread and self._server_thread.is_alive():
             self.app._oplog("LAN server already runnin'.")
@@ -3084,7 +3117,6 @@ class LanController:
         from server_app import create_app
         from server_runtime import RuntimeCommand, COMMAND_UPDATE_SPELL_COLOR, COMMAND_SET_FACING, COMMAND_SET_AURAS_ENABLED, COMMAND_PLACE_COMBATANT, COMMAND_REMOVE_AOE, COMMAND_MOVE_AOE, COMMAND_SET_OBSTACLE, COMMAND_SET_TERRAIN, COMMAND_SET_ELEVATION, COMMAND_SET_MAP_SETTINGS, COMMAND_UPSERT_MAP_BACKGROUND, COMMAND_REMOVE_MAP_BACKGROUND, COMMAND_SET_MAP_BACKGROUND_ORDER, COMMAND_UPSERT_MAP_HAZARD, COMMAND_REMOVE_MAP_HAZARD, COMMAND_UPSERT_MAP_FEATURE, COMMAND_REMOVE_MAP_FEATURE, COMMAND_COMBAT_START, COMMAND_COMBAT_SET_TURN, COMMAND_COMBAT_NEXT_TURN
         self._fastapi_app = create_app(lan_controller=self)
-        self._runtime = self._fastapi_app.state.runtime
 
         @self._fastapi_app.middleware("http")
         async def set_current_request_path_middleware(request: Request, call_next):
@@ -7866,27 +7898,6 @@ class LanController:
         # ── End DM Console routes ──────────────────────────────────────────
 
         # Start uvicorn server in a thread (with its own event loop).
-        try:
-            # Seed with static data so the first connecting WS client receives
-            # populated spell_presets / player_profiles / player_spells instead
-            # of waiting for the first include_static broadcast.
-            self._cached_snapshot = self.app._lan_snapshot(
-                include_static=True,
-                hydrate_static=True,
-                scope="lan_startup_seed",
-            )
-            self._cached_pcs = list(
-                self.app._lan_pcs() if hasattr(self.app, "_lan_pcs") else self.app._lan_claimable()
-            )
-        except Exception:
-            try:
-                self._cached_snapshot = self.app._lan_snapshot(
-                    include_static=False,
-                    hydrate_static=False,
-                    scope="lan_startup_fallback",
-                )
-            except Exception:
-                pass
         def _store_server_host_runtime(loop, server):
             self._loop = loop
             self._uvicorn_server = server

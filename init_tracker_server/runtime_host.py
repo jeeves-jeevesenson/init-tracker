@@ -20,6 +20,7 @@ class RuntimeHostState(str, Enum):
 
     NEW = "new"
     STARTING = "starting"
+    WARMING_UP = "warming_up"
     RUNNING = "running"
     STOPPING = "stopping"
     STOPPED = "stopped"
@@ -56,12 +57,12 @@ class RuntimeHost(Protocol[RuntimeT_co]):
 class RuntimeHostAdapter(Generic[RuntimeT]):
     """Adapt injected runtime construction/start/stop hooks to ``RuntimeHost``.
 
-    Each adapter is a one-shot lifecycle: its factory and startup hook are each
-    called at most once.  Duplicate and concurrent ``start`` calls share the
-    first startup attempt, returning the same runtime on success or observing
-    the same error on failure.  Startup failure triggers best-effort rollback.
-    If shutdown fails, the runtime is retained so that a later ``stop`` call can
-    retry it.
+    Each adapter is a one-shot lifecycle: its factory, startup hook, and optional
+    warm-up hook are each called at most once.  Duplicate and concurrent
+    ``start`` calls share the first startup attempt, returning the same runtime
+    on success or observing the same error on failure.  Start or warm-up failure
+    triggers best-effort rollback.  If shutdown fails, the runtime is retained
+    so that a later ``stop`` call can retry it.
     """
 
     def __init__(
@@ -69,17 +70,21 @@ class RuntimeHostAdapter(Generic[RuntimeT]):
         runtime_factory: Callable[[], RuntimeT],
         *,
         start_runtime: Callable[[RuntimeT], None],
+        warm_up_runtime: Optional[Callable[[RuntimeT], None]] = None,
         stop_runtime: Callable[[RuntimeT], None],
     ) -> None:
         if not callable(runtime_factory):
             raise TypeError("runtime_factory must be callable")
         if not callable(start_runtime):
             raise TypeError("start_runtime must be callable")
+        if warm_up_runtime is not None and not callable(warm_up_runtime):
+            raise TypeError("warm_up_runtime must be callable")
         if not callable(stop_runtime):
             raise TypeError("stop_runtime must be callable")
 
         self._runtime_factory = runtime_factory
         self._start_runtime = start_runtime
+        self._warm_up_runtime = warm_up_runtime
         self._stop_runtime = stop_runtime
         self._state = RuntimeHostState.NEW
         self._runtime: Optional[RuntimeT] = None
@@ -106,7 +111,10 @@ class RuntimeHostAdapter(Generic[RuntimeT]):
 
     def start(self) -> RuntimeT:
         with self._condition:
-            while self._state is RuntimeHostState.STARTING:
+            while self._state in (
+                RuntimeHostState.STARTING,
+                RuntimeHostState.WARMING_UP,
+            ):
                 self._condition.wait()
 
             if self._state is RuntimeHostState.RUNNING:
@@ -138,14 +146,26 @@ class RuntimeHostAdapter(Generic[RuntimeT]):
             self._state = RuntimeHostState.STARTING
             self._last_error = None
 
+        runtime: Optional[RuntimeT] = None
+        start_attempted = False
         try:
             runtime = self._runtime_factory()
             if runtime is None:
                 raise RuntimeHostLifecycleError("runtime_factory returned None")
+            start_attempted = True
             self._start_runtime(runtime)
+            with self._condition:
+                self._runtime = runtime
+                self._state = RuntimeHostState.WARMING_UP
+                self._condition.notify_all()
+            if self._warm_up_runtime is not None:
+                self._warm_up_runtime(runtime)
         except BaseException as start_error:
             retained_runtime: Optional[RuntimeT] = None
-            if "runtime" in locals() and runtime is not None:
+            if runtime is not None and start_attempted:
+                with self._condition:
+                    self._runtime = runtime
+                    self._state = RuntimeHostState.STOPPING
                 try:
                     self._stop_runtime(runtime)
                 except BaseException as rollback_error:
@@ -164,14 +184,21 @@ class RuntimeHostAdapter(Generic[RuntimeT]):
             raise
 
         with self._condition:
-            self._runtime = runtime
             self._state = RuntimeHostState.RUNNING
             self._condition.notify_all()
+            if runtime is None:  # Defensive invariant check.
+                raise RuntimeHostLifecycleError(
+                    "runtime host startup completed without a runtime"
+                )
             return runtime
 
     def stop(self) -> None:
         with self._lock:
-            if self._state in (RuntimeHostState.STARTING, RuntimeHostState.STOPPING):
+            if self._state in (
+                RuntimeHostState.STARTING,
+                RuntimeHostState.WARMING_UP,
+                RuntimeHostState.STOPPING,
+            ):
                 raise RuntimeHostLifecycleError(
                     f"cannot stop runtime host while it is {self._state.value}"
                 )

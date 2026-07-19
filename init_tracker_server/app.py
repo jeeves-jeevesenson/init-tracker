@@ -23,15 +23,27 @@ async def app_lifespan(app: FastAPI):
         app.state.runtime = runtime
         return runtime
 
+    def warm_up_runtime(runtime: ServerRuntimeFacade) -> None:
+        lan_controller = app.state.lan_controller
+        warm_up = getattr(lan_controller, "warm_up", None)
+        if callable(warm_up):
+            warm_up(runtime)
+
     runtime_host = RuntimeHostAdapter(
         create_runtime,
         start_runtime=lambda current_runtime: current_runtime.start(),
+        warm_up_runtime=warm_up_runtime,
         stop_runtime=lambda current_runtime: current_runtime.shutdown(),
     )
     app.state.runtime_host = runtime_host
     try:
         runtime_host.start()
-        app.state.ready = True
+    except BaseException:
+        app.state.ready = False
+        raise
+
+    app.state.ready = True
+    try:
         yield
     finally:
         app.state.ready = False

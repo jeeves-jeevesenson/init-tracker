@@ -731,7 +731,7 @@ class ServerRuntimeFacadeTests(unittest.TestCase):
                 self.assertTrue(hasattr(runtime, name))
                 self.assertEqual(getattr(runtime, name), getattr(server_runtime, name))
 
-    def test_runtime_host_constructs_then_starts_once_in_order(self):
+    def test_runtime_host_constructs_starts_and_warms_once_in_order(self):
         from init_tracker_server.runtime_host import (
             RuntimeHost,
             RuntimeHostAdapter,
@@ -754,12 +754,17 @@ class ServerRuntimeFacadeTests(unittest.TestCase):
         def start_runtime(runtime):
             events.append(("start", host_ref["host"].state, runtime.identity))
 
+        def warm_up_runtime(runtime):
+            events.append(("warm_up", host_ref["host"].state, runtime.identity))
+            self.assertIs(host_ref["host"].runtime, runtime)
+
         def stop_runtime(runtime):
             events.append(("stop", host_ref["host"].state, runtime.identity))
 
         host = RuntimeHostAdapter(
             runtime_factory,
             start_runtime=start_runtime,
+            warm_up_runtime=warm_up_runtime,
             stop_runtime=stop_runtime,
         )
         host_ref["host"] = host
@@ -778,6 +783,7 @@ class ServerRuntimeFacadeTests(unittest.TestCase):
             [
                 ("construct", RuntimeHostState.STARTING, "only"),
                 ("start", RuntimeHostState.STARTING, "only"),
+                ("warm_up", RuntimeHostState.WARMING_UP, "only"),
             ],
         )
 
@@ -797,6 +803,7 @@ class ServerRuntimeFacadeTests(unittest.TestCase):
             [
                 ("construct", RuntimeHostState.STARTING, "only"),
                 ("start", RuntimeHostState.STARTING, "only"),
+                ("warm_up", RuntimeHostState.WARMING_UP, "only"),
                 ("stop", RuntimeHostState.STOPPING, "only"),
             ],
         )
@@ -916,6 +923,138 @@ class ServerRuntimeFacadeTests(unittest.TestCase):
             [("start", "failed-start"), ("stop", "failed-start")],
         )
 
+    def test_runtime_host_failure_matrix_rolls_back_only_created_started_runtime(self):
+        from init_tracker_server.runtime_host import RuntimeHostAdapter, RuntimeHostState
+
+        for failed_stage, expected_events in (
+            ("construct", ["construct"]),
+            ("start", ["construct", "start", "stop"]),
+            ("warm_up", ["construct", "start", "warm_up", "stop"]),
+        ):
+            with self.subTest(failed_stage=failed_stage):
+                original_error = RuntimeError(f"{failed_stage} failed")
+                runtime = object()
+                events = []
+
+                def runtime_factory():
+                    events.append("construct")
+                    if failed_stage == "construct":
+                        raise original_error
+                    return runtime
+
+                def start_runtime(created_runtime):
+                    self.assertIs(created_runtime, runtime)
+                    events.append("start")
+                    if failed_stage == "start":
+                        raise original_error
+
+                def warm_up_runtime(created_runtime):
+                    self.assertIs(created_runtime, runtime)
+                    events.append("warm_up")
+                    if failed_stage == "warm_up":
+                        raise original_error
+
+                def stop_runtime(created_runtime):
+                    self.assertIs(created_runtime, runtime)
+                    events.append("stop")
+
+                host = RuntimeHostAdapter(
+                    runtime_factory,
+                    start_runtime=start_runtime,
+                    warm_up_runtime=warm_up_runtime,
+                    stop_runtime=stop_runtime,
+                )
+
+                with self.assertRaises(RuntimeError) as raised:
+                    host.start()
+
+                self.assertIs(raised.exception, original_error)
+                self.assertIs(host.last_error, original_error)
+                self.assertIs(host.state, RuntimeHostState.FAILED)
+                self.assertIsNone(host.runtime)
+                self.assertEqual(events, expected_events)
+
+    def test_runtime_host_rollback_failure_retains_runtime_without_masking_warm_up_error(self):
+        from init_tracker_server.runtime_host import RuntimeHostAdapter, RuntimeHostState
+
+        runtime = object()
+        warm_up_error = RuntimeError("warm-up failed")
+        rollback_error = RuntimeError("rollback failed")
+        stop_calls = []
+
+        def fail_warm_up(created_runtime):
+            self.assertIs(created_runtime, runtime)
+            raise warm_up_error
+
+        def fail_rollback(created_runtime):
+            stop_calls.append(created_runtime)
+            raise rollback_error
+
+        host = RuntimeHostAdapter(
+            lambda: runtime,
+            start_runtime=lambda created_runtime: None,
+            warm_up_runtime=fail_warm_up,
+            stop_runtime=fail_rollback,
+        )
+
+        with self.assertRaises(RuntimeError) as raised:
+            host.start()
+
+        self.assertIs(raised.exception, warm_up_error)
+        self.assertIs(host.last_error, warm_up_error)
+        self.assertIs(host.state, RuntimeHostState.FAILED)
+        self.assertIs(host.runtime, runtime)
+        self.assertEqual(stop_calls, [runtime])
+        self.assertTrue(
+            any("rollback failed" in note for note in getattr(warm_up_error, "__notes__", ()))
+        )
+
+    def test_runtime_host_failure_cleanup_leaves_no_owned_worker_thread(self):
+        from init_tracker_server.runtime_host import RuntimeHostAdapter
+
+        for failed_stage in ("start", "warm_up"):
+            with self.subTest(failed_stage=failed_stage):
+                original_error = RuntimeError(f"{failed_stage} failed")
+                stop_requested = threading.Event()
+                worker_started = threading.Event()
+
+                def worker_main():
+                    worker_started.set()
+                    stop_requested.wait(timeout=1)
+
+                worker = threading.Thread(
+                    target=worker_main,
+                    name=f"runtime-host-{failed_stage}-worker",
+                    daemon=True,
+                )
+
+                def start_runtime(runtime):
+                    worker.start()
+                    self.assertTrue(worker_started.wait(timeout=1))
+                    if failed_stage == "start":
+                        raise original_error
+
+                def warm_up_runtime(runtime):
+                    if failed_stage == "warm_up":
+                        raise original_error
+
+                def stop_runtime(runtime):
+                    stop_requested.set()
+                    worker.join(timeout=1)
+
+                host = RuntimeHostAdapter(
+                    object,
+                    start_runtime=start_runtime,
+                    warm_up_runtime=warm_up_runtime,
+                    stop_runtime=stop_runtime,
+                )
+
+                with self.assertRaises(RuntimeError) as raised:
+                    host.start()
+
+                self.assertIs(raised.exception, original_error)
+                self.assertFalse(worker.is_alive())
+
     def test_runtime_host_shutdown_failure_can_be_retried(self):
         from init_tracker_server.runtime_host import (
             RuntimeHostAdapter,
@@ -967,8 +1106,14 @@ class ServerRuntimeFacadeTests(unittest.TestCase):
         )
         import serve_headless
 
-        lan_controller = object()
         asgi_events = []
+
+        class FakeAsgiLanController:
+            def warm_up(self, runtime):
+                asgi_events.append(("warm_up", app.state.ready))
+                self.runtime = runtime
+
+        lan_controller = FakeAsgiLanController()
 
         class FakeAsgiRuntime:
             def __init__(self, *, lan_controller):
@@ -1015,6 +1160,7 @@ class ServerRuntimeFacadeTests(unittest.TestCase):
                 self.assertIs(runtime.lan_controller, lan_controller)
                 self.assertEqual(runtime.start_calls, 1)
                 self.assertEqual(runtime.shutdown_calls, 0)
+                self.assertIs(lan_controller.runtime, runtime)
                 self.assertTrue(app.state.ready)
 
             runtime = app.state.runtime
@@ -1048,6 +1194,7 @@ class ServerRuntimeFacadeTests(unittest.TestCase):
             [
                 ("construct", False),
                 ("start", False),
+                ("warm_up", False),
                 ("serving", True),
                 ("shutdown", False),
             ],
@@ -1112,6 +1259,119 @@ class ServerRuntimeFacadeTests(unittest.TestCase):
                 ("lan.stop", False),
                 ("quit", None),
             ],
+        )
+
+    def test_lan_controller_warm_up_preserves_seed_and_fallback_outputs(self):
+        from dnd_initative_tracker import LanController
+
+        runtime = object()
+        seed_snapshot = {"seed": "static"}
+        fallback_snapshot = {"seed": "fallback"}
+
+        class SeedApp:
+            def __init__(self):
+                self.snapshot_calls = []
+
+            def _lan_snapshot(self, **kwargs):
+                self.snapshot_calls.append(kwargs)
+                return seed_snapshot
+
+            def _lan_pcs(self):
+                return ({"name": "Aela"}, {"name": "Borin"})
+
+        seeded_controller = object.__new__(LanController)
+        seeded_controller._tracker = SeedApp()
+        seeded_controller._runtime = None
+        seeded_controller._cached_snapshot = {}
+        seeded_controller._cached_pcs = []
+
+        seeded_controller.warm_up(runtime)
+
+        self.assertIs(seeded_controller._runtime, runtime)
+        self.assertIs(seeded_controller._cached_snapshot, seed_snapshot)
+        self.assertEqual(
+            seeded_controller._cached_pcs,
+            [{"name": "Aela"}, {"name": "Borin"}],
+        )
+        self.assertEqual(
+            seeded_controller.app.snapshot_calls,
+            [
+                {
+                    "include_static": True,
+                    "hydrate_static": True,
+                    "scope": "lan_startup_seed",
+                }
+            ],
+        )
+
+        seed_error = RuntimeError("static seed failed")
+
+        class FallbackApp:
+            def __init__(self):
+                self.snapshot_calls = []
+
+            def _lan_snapshot(self, **kwargs):
+                self.snapshot_calls.append(kwargs)
+                if kwargs["include_static"]:
+                    raise seed_error
+                return fallback_snapshot
+
+            def _lan_claimable(self):
+                raise AssertionError("fallback warm-up must not replace cached PCs")
+
+        fallback_controller = object.__new__(LanController)
+        fallback_controller._tracker = FallbackApp()
+        fallback_controller._runtime = None
+        fallback_controller._cached_snapshot = {}
+        fallback_controller._cached_pcs = [{"name": "Existing"}]
+
+        fallback_controller.warm_up(runtime)
+
+        self.assertIs(fallback_controller._runtime, runtime)
+        self.assertIs(fallback_controller._cached_snapshot, fallback_snapshot)
+        self.assertEqual(fallback_controller._cached_pcs, [{"name": "Existing"}])
+        self.assertEqual(
+            fallback_controller.app.snapshot_calls,
+            [
+                {
+                    "include_static": True,
+                    "hydrate_static": True,
+                    "scope": "lan_startup_seed",
+                },
+                {
+                    "include_static": False,
+                    "hydrate_static": False,
+                    "scope": "lan_startup_fallback",
+                },
+            ],
+        )
+
+    def test_lan_controller_warm_up_preserves_primary_error_when_fallback_fails(self):
+        from dnd_initative_tracker import LanController
+
+        seed_error = RuntimeError("static seed failed")
+        fallback_error = RuntimeError("fallback seed failed")
+
+        class FailingApp:
+            def _lan_snapshot(self, **kwargs):
+                if kwargs["include_static"]:
+                    raise seed_error
+                raise fallback_error
+
+        controller = object.__new__(LanController)
+        controller._tracker = FailingApp()
+        controller._runtime = None
+        controller._cached_snapshot = {}
+        controller._cached_pcs = []
+        runtime = object()
+
+        with self.assertRaises(RuntimeError) as raised:
+            controller.warm_up(runtime)
+
+        self.assertIs(raised.exception, seed_error)
+        self.assertIs(controller._runtime, runtime)
+        self.assertTrue(
+            any("fallback seed failed" in note for note in getattr(seed_error, "__notes__", ()))
         )
 
     def test_spell_color_command_execution(self):
