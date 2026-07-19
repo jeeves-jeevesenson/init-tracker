@@ -2409,6 +2409,7 @@ class LanUrlSettings:
 
 class LanController:
     """Runs a FastAPI+WebSocket server in a background thread and bridges actions into the Tk thread."""
+    _WARM_UP_OWNER_TIMEOUT_SECONDS = 60.0
     _ACTION_MESSAGE_TYPES = (
         "move",
         "cycle_movement_mode",
@@ -2479,6 +2480,7 @@ class LanController:
         self._uvicorn_server = None
         self._server_host = None
         self._runtime = None
+        self._tracker_thread_id = threading.get_ident()
         self._admin_password_hash: Optional[bytes] = None
         self._admin_password_salt: Optional[bytes] = None
         self._admin_tokens: Dict[str, float] = {}
@@ -3056,7 +3058,34 @@ class LanController:
         self._append_lan_log(f"{prefix} filename={filename} found={found}", level="info")
 
     def warm_up(self, runtime: Any) -> None:
-        """Seed runtime-facing caches before package readiness is published."""
+        """Seed runtime-facing caches on the tracker thread before readiness."""
+        tracker_thread_id = getattr(self, "_tracker_thread_id", None)
+        if tracker_thread_id is None or tracker_thread_id == threading.get_ident():
+            self._warm_up_on_tracker_thread(runtime)
+            return
+
+        completed = threading.Event()
+        errors: List[BaseException] = []
+
+        def run_warm_up() -> None:
+            try:
+                self._warm_up_on_tracker_thread(runtime)
+            except BaseException as error:
+                errors.append(error)
+            finally:
+                completed.set()
+
+        self.app.after(0, run_warm_up)
+        if not completed.wait(timeout=self._WARM_UP_OWNER_TIMEOUT_SECONDS):
+            raise TimeoutError(
+                "LAN startup warm-up did not complete on the tracker thread within "
+                f"{self._WARM_UP_OWNER_TIMEOUT_SECONDS:g} seconds"
+            )
+        if errors:
+            raise errors[0]
+
+    def _warm_up_on_tracker_thread(self, runtime: Any) -> None:
+        self._tracker_thread_id = threading.get_ident()
         self._runtime = runtime
         try:
             # Seed with static data so the first connecting WS client receives

@@ -1724,6 +1724,64 @@ class ServerRuntimeFacadeTests(unittest.TestCase):
             ],
         )
 
+    def test_lan_controller_warm_up_runs_cache_builders_on_tracker_thread(self):
+        from dnd_initative_tracker import LanController
+
+        owner_thread_id = threading.get_ident()
+        scheduled_callbacks = queue.Queue()
+        snapshot = {"seed": "static"}
+        pcs = [{"cid": 7, "name": "Aela"}]
+
+        class OwnerThreadApp:
+            def __init__(self):
+                self.call_threads = []
+
+            def after(self, delay_ms, callback):
+                self.call_threads.append(("after", threading.get_ident(), delay_ms))
+                scheduled_callbacks.put(callback)
+
+            def _lan_snapshot(self, **_kwargs):
+                self.call_threads.append(("snapshot", threading.get_ident()))
+                return snapshot
+
+            def _lan_pcs(self):
+                self.call_threads.append(("pcs", threading.get_ident()))
+                return pcs
+
+        controller = object.__new__(LanController)
+        controller._tracker = OwnerThreadApp()
+        controller._runtime = None
+        controller._tracker_thread_id = owner_thread_id
+        controller._cached_snapshot = {}
+        controller._cached_pcs = []
+        runtime = object()
+        worker_errors = []
+
+        def warm_up_from_asgi_thread():
+            try:
+                controller.warm_up(runtime)
+            except BaseException as error:
+                worker_errors.append(error)
+
+        worker = threading.Thread(target=warm_up_from_asgi_thread)
+        worker.start()
+        callback = scheduled_callbacks.get(timeout=1)
+        self.assertTrue(worker.is_alive())
+
+        callback()
+        worker.join(timeout=1)
+
+        self.assertFalse(worker.is_alive())
+        self.assertEqual(worker_errors, [])
+        self.assertIs(controller._runtime, runtime)
+        self.assertIs(controller._cached_snapshot, snapshot)
+        self.assertEqual(controller._cached_pcs, pcs)
+        self.assertNotEqual(controller.app.call_threads[0][1], owner_thread_id)
+        self.assertEqual(
+            controller.app.call_threads[1:],
+            [("snapshot", owner_thread_id), ("pcs", owner_thread_id)],
+        )
+
     def test_lan_controller_warm_up_preserves_primary_error_when_fallback_fails(self):
         from dnd_initative_tracker import LanController
 
