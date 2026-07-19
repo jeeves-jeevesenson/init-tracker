@@ -7,12 +7,28 @@ from fastapi import FastAPI
 from fastapi.responses import JSONResponse
 
 from .runtime import ServerRuntimeFacade
-from .runtime_host import RuntimeHostAdapter
+from .runtime_host import RuntimeHostAdapter, RuntimeHostLifecycleError
 
 
 @asynccontextmanager
 async def app_lifespan(app: FastAPI):
-    runtime_host = app.state.runtime_host
+    if app.state.runtime_lifespan_entered:
+        raise RuntimeHostLifecycleError(
+            "application runtime lifespan has already been entered"
+        )
+    app.state.runtime_lifespan_entered = True
+
+    def create_runtime() -> ServerRuntimeFacade:
+        runtime = ServerRuntimeFacade(lan_controller=app.state.lan_controller)
+        app.state.runtime = runtime
+        return runtime
+
+    runtime_host = RuntimeHostAdapter(
+        create_runtime,
+        start_runtime=lambda current_runtime: current_runtime.start(),
+        stop_runtime=lambda current_runtime: current_runtime.shutdown(),
+    )
+    app.state.runtime_host = runtime_host
     try:
         runtime_host.start()
         app.state.ready = True
@@ -27,13 +43,9 @@ def create_app(lan_controller: Optional[Any] = None) -> FastAPI:
     app = FastAPI(lifespan=app_lifespan)
     app.state.ready = False
     app.state.lan_controller = lan_controller
-    runtime = ServerRuntimeFacade(lan_controller=lan_controller)
-    app.state.runtime = runtime
-    app.state.runtime_host = RuntimeHostAdapter(
-        lambda: runtime,
-        start_runtime=lambda current_runtime: current_runtime.start(),
-        stop_runtime=lambda current_runtime: current_runtime.shutdown(),
-    )
+    app.state.runtime_lifespan_entered = False
+    app.state.runtime = None
+    app.state.runtime_host = None
 
     # Bounded health/readiness endpoints
     @app.get("/health")

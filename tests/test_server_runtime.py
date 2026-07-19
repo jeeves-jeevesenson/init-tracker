@@ -960,47 +960,97 @@ class ServerRuntimeFacadeTests(unittest.TestCase):
         from unittest.mock import patch
 
         from init_tracker_server.app import create_app
-        from init_tracker_server.runtime_host import RuntimeHostAdapter, RuntimeHostState
+        from init_tracker_server.runtime_host import (
+            RuntimeHostAdapter,
+            RuntimeHostLifecycleError,
+            RuntimeHostState,
+        )
         import serve_headless
 
-        app = create_app(lan_controller=object())
-        runtime = app.state.runtime
-        runtime_host = app.state.runtime_host
+        lan_controller = object()
         asgi_events = []
-        runtime_start = runtime.start
-        runtime_shutdown = runtime.shutdown
 
-        def record_runtime_start():
-            asgi_events.append(("start", app.state.ready))
-            runtime_start()
+        class FakeAsgiRuntime:
+            def __init__(self, *, lan_controller):
+                self.lan_controller = lan_controller
+                self.start_calls = 0
+                self.shutdown_calls = 0
+                asgi_events.append(("construct", app.state.ready))
 
-        def record_runtime_shutdown():
-            asgi_events.append(("shutdown", app.state.ready))
-            runtime_shutdown()
+            def start(self):
+                self.start_calls += 1
+                asgi_events.append(("start", app.state.ready))
+                self.assert_owned_before_readiness()
 
-        runtime.start = record_runtime_start
-        runtime.shutdown = record_runtime_shutdown
+            def shutdown(self):
+                self.shutdown_calls += 1
+                asgi_events.append(("shutdown", app.state.ready))
+
+            def assert_owned_before_readiness(self):
+                self_test.assertIs(app.state.runtime, self)
+                self_test.assertIsNotNone(app.state.runtime_host)
+                self_test.assertFalse(app.state.ready)
+
+        self_test = self
+        app = create_app(lan_controller=lan_controller)
+        created_hosts = []
+        real_runtime_host_adapter = RuntimeHostAdapter
+
+        def recording_asgi_runtime_host_adapter(*args, **kwargs):
+            host = real_runtime_host_adapter(*args, **kwargs)
+            created_hosts.append(host)
+            return host
 
         async def exercise_asgi_lifespan():
-            self.assertIs(runtime_host.state, RuntimeHostState.NEW)
-            self.assertIsNone(runtime_host.runtime)
             self.assertFalse(app.state.ready)
+            self.assertIsNone(app.state.runtime)
+            self.assertIsNone(app.state.runtime_host)
 
             async with app.router.lifespan_context(app):
                 asgi_events.append(("serving", app.state.ready))
+                runtime = app.state.runtime
+                runtime_host = app.state.runtime_host
                 self.assertIs(runtime_host.state, RuntimeHostState.RUNNING)
                 self.assertIs(runtime_host.runtime, runtime)
-                self.assertIs(app.state.runtime, runtime)
+                self.assertIs(runtime.lan_controller, lan_controller)
+                self.assertEqual(runtime.start_calls, 1)
+                self.assertEqual(runtime.shutdown_calls, 0)
+                self.assertTrue(app.state.ready)
 
+            runtime = app.state.runtime
+            runtime_host = app.state.runtime_host
             self.assertIs(runtime_host.state, RuntimeHostState.STOPPED)
             self.assertIsNone(runtime_host.runtime)
             self.assertIs(app.state.runtime, runtime)
+            self.assertEqual(runtime.start_calls, 1)
+            self.assertEqual(runtime.shutdown_calls, 1)
             self.assertFalse(app.state.ready)
 
-        asyncio.run(exercise_asgi_lifespan())
+            with self.assertRaisesRegex(
+                RuntimeHostLifecycleError,
+                "application runtime lifespan has already been entered",
+            ):
+                async with app.router.lifespan_context(app):
+                    self.fail("application lifespan must be entered exactly once")
+
+        with (
+            patch("init_tracker_server.app.ServerRuntimeFacade", FakeAsgiRuntime),
+            patch(
+                "init_tracker_server.app.RuntimeHostAdapter",
+                recording_asgi_runtime_host_adapter,
+            ),
+        ):
+            asyncio.run(exercise_asgi_lifespan())
+
+        self.assertEqual(len(created_hosts), 1)
         self.assertEqual(
             asgi_events,
-            [("start", False), ("serving", True), ("shutdown", False)],
+            [
+                ("construct", False),
+                ("start", False),
+                ("serving", True),
+                ("shutdown", False),
+            ],
         )
 
         headless_events = []

@@ -1,6 +1,10 @@
 import unittest
+from unittest.mock import patch
+
 from fastapi.testclient import TestClient
+
 from init_tracker_server.app import create_app as package_create_app
+from init_tracker_server.runtime_host import RuntimeHostState
 from server_app import create_app as compat_create_app
 
 
@@ -10,6 +14,8 @@ class ServerHealthTests(unittest.TestCase):
         app = create_app()
         self.assertFalse(app.state.ready)
         self.assertIsNone(app.state.lan_controller)
+        self.assertIsNone(app.state.runtime)
+        self.assertIsNone(app.state.runtime_host)
 
         # Test endpoints in ready state (lifespan triggered inside TestClient context)
         with TestClient(app) as client:
@@ -35,6 +41,7 @@ class ServerHealthTests(unittest.TestCase):
 
         # Out of the TestClient context, lifespan shutdown is triggered
         self.assertFalse(app.state.ready)
+        self.assertIs(app.state.runtime_host.state, RuntimeHostState.STOPPED)
 
     def test_app_factory_and_endpoints(self):
         for name, create_app in (
@@ -64,3 +71,34 @@ class ServerHealthTests(unittest.TestCase):
                 response = client.get("/ready")
                 self.assertEqual(response.status_code, 503)
                 self.assertEqual(response.json(), {"status": "not ready"})
+
+    def test_readiness_remains_false_when_runtime_startup_fails(self):
+        startup_error = RuntimeError("startup failed")
+
+        class FailingRuntime:
+            def __init__(self, *, lan_controller):
+                self.lan_controller = lan_controller
+                self.start_calls = 0
+                self.shutdown_calls = 0
+
+            def start(self):
+                self.start_calls += 1
+                raise startup_error
+
+            def shutdown(self):
+                self.shutdown_calls += 1
+
+        with patch(
+            "init_tracker_server.app.ServerRuntimeFacade",
+            FailingRuntime,
+        ):
+            app = package_create_app(lan_controller=object())
+            with self.assertRaises(RuntimeError) as raised:
+                with TestClient(app):
+                    self.fail("failed startup must not enter the serving lifespan")
+
+        self.assertIs(raised.exception, startup_error)
+        self.assertFalse(app.state.ready)
+        self.assertIs(app.state.runtime_host.state, RuntimeHostState.FAILED)
+        self.assertEqual(app.state.runtime.start_calls, 1)
+        self.assertEqual(app.state.runtime.shutdown_calls, 1)
